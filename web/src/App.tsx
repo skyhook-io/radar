@@ -1,5 +1,6 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { TopologyGraph } from './components/topology/TopologyGraph'
+import { TopologyFilterSidebar } from './components/topology/TopologyFilterSidebar'
 import { EventsTray } from './components/events/EventsTray'
 import { EventsView } from './components/events/EventsView'
 import { ResourceDrawer } from './components/resource-drawer/ResourceDrawer'
@@ -9,7 +10,13 @@ import { ResourceDetailPage } from './components/resource/ResourceDetailPage'
 import { useEventSource } from './hooks/useEventSource'
 import { useClusterInfo, useNamespaces } from './api/client'
 import { ChevronDown, RefreshCw, Layers, FolderTree, Network, List, Clock } from 'lucide-react'
-import type { TopologyNode, GroupingMode, MainView, SelectedResource } from './types'
+import type { TopologyNode, GroupingMode, MainView, SelectedResource, NodeKind, Topology } from './types'
+
+// All possible node kinds for initial visibility
+const ALL_NODE_KINDS: NodeKind[] = [
+  'Internet', 'Ingress', 'Service', 'Deployment', 'DaemonSet', 'StatefulSet',
+  'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'HPA', 'Job', 'CronJob', 'Namespace'
+]
 
 function App() {
   // Initialize state from URL
@@ -35,6 +42,9 @@ function App() {
   const [groupingMode, setGroupingMode] = useState<GroupingMode>(getInitialState().grouping)
   // Resource detail page state (for events view drill-down)
   const [detailResource, setDetailResource] = useState<SelectedResource | null>(null)
+  // Topology filter state
+  const [visibleKinds, setVisibleKinds] = useState<Set<NodeKind>>(() => new Set(ALL_NODE_KINDS))
+  const [filterSidebarCollapsed, setFilterSidebarCollapsed] = useState(false)
 
   // Fetch cluster info and namespaces
   const { data: clusterInfo } = useClusterInfo()
@@ -88,6 +98,54 @@ function App() {
     setDetailResource(null)
   }, [mainView, namespace])
 
+  // Filter topology based on visible kinds
+  const filteredTopology = useMemo((): Topology | null => {
+    if (!topology) return null
+
+    const filteredNodes = topology.nodes.filter(node => visibleKinds.has(node.kind))
+    const filteredNodeIds = new Set(filteredNodes.map(n => n.id))
+
+    // Keep edges where both source and target are visible
+    // Also respect skipIfKindVisible - hide shortcut edges when intermediate kind is shown
+    const filteredEdges = topology.edges.filter(edge => {
+      // Both endpoints must be visible
+      if (!filteredNodeIds.has(edge.source) || !filteredNodeIds.has(edge.target)) {
+        return false
+      }
+      // If this is a shortcut edge, hide it when the intermediate kind is visible
+      if (edge.skipIfKindVisible && visibleKinds.has(edge.skipIfKindVisible as NodeKind)) {
+        return false
+      }
+      return true
+    })
+
+    return {
+      nodes: filteredNodes,
+      edges: filteredEdges,
+    }
+  }, [topology, visibleKinds])
+
+  // Filter handlers
+  const handleToggleKind = useCallback((kind: NodeKind) => {
+    setVisibleKinds(prev => {
+      const next = new Set(prev)
+      if (next.has(kind)) {
+        next.delete(kind)
+      } else {
+        next.add(kind)
+      }
+      return next
+    })
+  }, [])
+
+  const handleShowAllKinds = useCallback(() => {
+    setVisibleKinds(new Set(ALL_NODE_KINDS))
+  }, [])
+
+  const handleHideAllKinds = useCallback(() => {
+    setVisibleKinds(new Set())
+  }, [])
+
   return (
     <div className="flex flex-col h-screen bg-slate-900">
       {/* Header */}
@@ -101,7 +159,7 @@ function App() {
 
           {clusterInfo && (
             <div className="flex items-center gap-2">
-              <span className="px-2 py-1 bg-slate-700 rounded text-sm font-medium text-indigo-300 truncate max-w-[200px]" title={clusterInfo.context || clusterInfo.cluster}>
+              <span className="px-2 py-1 bg-slate-700 rounded text-sm font-medium text-indigo-300" title={clusterInfo.context || clusterInfo.cluster}>
                 {clusterInfo.context || clusterInfo.cluster}
               </span>
               <span className="text-xs text-slate-500 hidden lg:inline">
@@ -170,49 +228,6 @@ function App() {
 
         {/* Right: Controls */}
         <div className="flex items-center gap-3">
-          {/* Topology-specific controls */}
-          {mainView === 'topology' && (
-            <>
-              {/* Topology mode toggle */}
-              <div className="flex items-center gap-1 bg-slate-700 rounded-lg p-0.5">
-                <button
-                  onClick={() => setTopologyMode('full')}
-                  className={`px-2 py-1 text-xs rounded-md transition-colors ${
-                    topologyMode === 'full'
-                      ? 'bg-slate-600 text-white'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Full
-                </button>
-                <button
-                  onClick={() => setTopologyMode('traffic')}
-                  className={`px-2 py-1 text-xs rounded-md transition-colors ${
-                    topologyMode === 'traffic'
-                      ? 'bg-slate-600 text-white'
-                      : 'text-slate-400 hover:text-white'
-                  }`}
-                >
-                  Traffic
-                </button>
-              </div>
-
-              {/* Grouping selector */}
-              <div className="flex items-center gap-1.5">
-                <FolderTree className="w-3.5 h-3.5 text-slate-400" />
-                <select
-                  value={groupingMode}
-                  onChange={(e) => setGroupingMode(e.target.value as GroupingMode)}
-                  className="appearance-none bg-slate-700 text-white text-xs rounded px-2 py-1 pr-6 border border-slate-600 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-                >
-                  <option value="none">No Grouping</option>
-                  <option value="namespace">By Namespace</option>
-                  <option value="app">By App Label</option>
-                </select>
-              </div>
-            </>
-          )}
-
           {/* Namespace selector - compact */}
           <div className="relative">
             <select
@@ -237,14 +252,66 @@ function App() {
         {/* Topology view */}
         {mainView === 'topology' && (
           <>
+            {/* Filter sidebar */}
+            <TopologyFilterSidebar
+              nodes={topology?.nodes || []}
+              visibleKinds={visibleKinds}
+              onToggleKind={handleToggleKind}
+              onShowAll={handleShowAllKinds}
+              onHideAll={handleHideAllKinds}
+              collapsed={filterSidebarCollapsed}
+              onToggleCollapse={() => setFilterSidebarCollapsed(prev => !prev)}
+            />
+
             <div className="flex-1 relative">
               <TopologyGraph
-                topology={topology}
+                topology={filteredTopology}
                 viewMode={topologyMode}
                 groupingMode={groupingMode}
                 onNodeClick={handleNodeClick}
                 selectedNodeId={selectedNode?.id}
               />
+
+              {/* Topology controls overlay - top right */}
+              <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
+                {/* Grouping selector */}
+                <div className="flex items-center gap-1.5 px-2 py-1.5 bg-slate-800/90 backdrop-blur border border-slate-700 rounded-lg">
+                  <FolderTree className="w-3.5 h-3.5 text-slate-400" />
+                  <select
+                    value={groupingMode}
+                    onChange={(e) => setGroupingMode(e.target.value as GroupingMode)}
+                    className="appearance-none bg-transparent text-white text-xs focus:outline-none cursor-pointer"
+                  >
+                    <option value="none" className="bg-slate-800">No Grouping</option>
+                    <option value="namespace" className="bg-slate-800">By Namespace</option>
+                    <option value="app" className="bg-slate-800">By App Label</option>
+                  </select>
+                </div>
+
+                {/* View mode toggle */}
+                <div className="flex items-center gap-0.5 p-1 bg-slate-800/90 backdrop-blur border border-slate-700 rounded-lg">
+                  <button
+                    onClick={() => setTopologyMode('full')}
+                    className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                      topologyMode === 'full'
+                        ? 'bg-indigo-500 text-white'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                    }`}
+                  >
+                    Full
+                  </button>
+                  <button
+                    onClick={() => setTopologyMode('traffic')}
+                    className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                      topologyMode === 'traffic'
+                        ? 'bg-indigo-500 text-white'
+                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                    }`}
+                  >
+                    Traffic
+                  </button>
+                </div>
+              </div>
             </div>
 
             {/* Events tray (only in topology view) */}

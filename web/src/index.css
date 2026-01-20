@@ -27,6 +27,11 @@ body {
   cursor: pointer;
 }
 
+/* Override default group node background - we handle it in GroupNode component */
+.react-flow__node-group {
+  background: transparent !important;
+}
+
 .react-flow__edge-path {
   stroke-width: 2;
 }

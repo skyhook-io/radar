@@ -7,6 +7,7 @@ import {
   MiniMap,
   useNodesState,
   useEdgesState,
+  useReactFlow,
   type Node,
   type Edge,
   type NodeTypes,
@@ -411,9 +412,46 @@ export function TopologyGraph({
           nodeColor={(node) => getNodeColor(node.data?.kind as string || node.data?.type as string || '')}
           maskColor="rgba(15, 23, 42, 0.8)"
         />
-{/* Search temporarily disabled for debugging */}
+        <ViewportController structureKey={structureKey} />
       </ReactFlow>
     </ReactFlowProvider>
   )
+}
+
+// Animation duration for viewport transitions
+const VIEWPORT_ANIMATION_DURATION = 400
+
+// Inner component to handle animated viewport transitions
+// Must be inside ReactFlow to use useReactFlow hook
+function ViewportController({ structureKey }: { structureKey: string }) {
+  const { fitView } = useReactFlow()
+  const prevStructureKeyRef = useRef<string>('')
+  const isInitialMount = useRef(true)
+
+  useEffect(() => {
+    // Skip animation on initial mount (fitView prop handles that)
+    if (isInitialMount.current) {
+      isInitialMount.current = false
+      prevStructureKeyRef.current = structureKey
+      return
+    }
+
+    // Only animate when structure actually changes
+    if (structureKey !== prevStructureKeyRef.current) {
+      prevStructureKeyRef.current = structureKey
+
+      // Small delay to let the new nodes render, then animate to fit
+      const timeoutId = setTimeout(() => {
+        fitView({
+          padding: 0.15,
+          duration: VIEWPORT_ANIMATION_DURATION,
+        })
+      }, 50)
+
+      return () => clearTimeout(timeoutId)
+    }
+  }, [structureKey, fitView])
+
+  return null
 }
 

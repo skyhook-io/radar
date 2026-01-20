@@ -19,11 +19,11 @@ const elkOptionsHierarchical = {
   'elk.spacing.componentComponent': '60',
 }
 
-// Group padding - space for header + internal spacing
+// Group padding - space for header + internal spacing (must account for border)
 const GROUP_PADDING = {
-  top: 60,    // Space for larger group header
+  top: 70,    // Space for group header (~50px) + margin
   left: 24,
-  bottom: 24,
+  bottom: 32,
   right: 24,
 }
 
@@ -118,10 +118,11 @@ export function buildHierarchicalElkGraph(
       const isCollapsed = collapsedGroups.has(groupId)
 
       if (isCollapsed) {
-        // Collapsed group is a single node
+        // Collapsed group is a single node - width based on label length
+        const collapsedWidth = Math.max(280, groupKey.length * 12 + 100)
         children.push({
           id: groupId,
-          width: 280,
+          width: collapsedWidth,
           height: 90,
           labels: [{ text: groupKey }],
         })
@@ -142,15 +143,19 @@ export function buildHierarchicalElkGraph(
           }
         }
 
+        // Calculate minimum width based on label length (approx 10px per char + padding)
+        const minWidth = Math.max(300, groupKey.length * 12 + 120)
+
         children.push({
           id: groupId,
           children: groupChildren,
           layoutOptions: {
-            'elk.padding': `[top=${GROUP_PADDING.top},left=${GROUP_PADDING.left},bottom=${GROUP_PADDING.bottom},right=${GROUP_PADDING.right}]`,
+            'elk.padding': `[left=${GROUP_PADDING.left}, top=${GROUP_PADDING.top}, right=${GROUP_PADDING.right}, bottom=${GROUP_PADDING.bottom}]`,
             'elk.algorithm': 'layered',
             'elk.direction': 'RIGHT',
             'elk.spacing.nodeNode': '15',
             'elk.layered.spacing.nodeNodeBetweenLayers': '30',
+            'elk.nodeSize.minimum': `(${minWidth}, 100)`,
           },
           labels: [{ text: groupKey }],
         })

@@ -35,6 +35,7 @@ export interface TopologyEdge {
   target: string
   type: EdgeType
   label?: string
+  skipIfKindVisible?: string // Hide this edge if this kind is visible (for shortcut edges)
 }
 
 export interface Topology {

@@ -15,6 +15,8 @@ interface GroupNodeData {
 export const GroupNode = memo(function GroupNode({
   id,
   data,
+  width,
+  height,
 }: NodeProps & { data: GroupNodeData }) {
   const { type, name, label, nodeCount, collapsed, onToggleCollapse } = data
 
@@ -134,32 +136,33 @@ export const GroupNode = memo(function GroupNode({
         className="!bg-transparent !border-0 !w-0 !h-0"
       />
 
+      {/* Container with border - use explicit dimensions from props */}
       <div
         className={clsx(
-          'w-full h-full rounded-xl border-2',
+          'absolute top-0 left-0 rounded-xl border-2 box-border isolate overflow-hidden',
           getBorderColor(),
-          'bg-slate-900/30'
+          'bg-slate-800/40'
         )}
+        style={{ width: width || '100%', height: height || '100%' }}
       >
-        {/* Header bar - fixed at top */}
+        {/* Header bar - no margin, let overflow-hidden clip to border radius */}
         <div
           className={clsx(
-            'absolute top-0 left-0 right-0 flex items-center gap-3 px-4 py-3 rounded-t-xl cursor-pointer',
+            'flex items-center gap-3 px-4 py-3 cursor-pointer',
             getHeaderBgColor()
           )}
           onClick={() => onToggleCollapse(id)}
         >
-          <ChevronDown className={clsx('w-5 h-5', getIconColor())} />
-          <Icon className={clsx('w-6 h-6', getIconColor())} />
-          <span className={clsx('text-xl font-semibold', getLabelColor())}>{name}</span>
+          <ChevronDown className={clsx('w-5 h-5 flex-shrink-0', getIconColor())} />
+          <Icon className={clsx('w-6 h-6 flex-shrink-0', getIconColor())} />
+          <span className={clsx('text-xl font-semibold truncate', getLabelColor())}>{name}</span>
           {label && (
-            <span className="text-sm text-slate-400">({label})</span>
+            <span className="text-sm text-slate-400 truncate">({label})</span>
           )}
-          <span className="ml-auto text-sm text-slate-400 bg-slate-800/60 px-3 py-1 rounded-lg">
-            {nodeCount} {nodeCount === 1 ? 'resource' : 'resources'}
+          <span className="ml-auto flex-shrink-0 text-sm text-slate-400 bg-slate-800/60 px-3 py-1 rounded-lg">
+            {nodeCount}
           </span>
         </div>
-        {/* Children are positioned below the header by ELK padding */}
       </div>
 
       <Handle

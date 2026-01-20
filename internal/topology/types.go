@@ -53,11 +53,12 @@ type Node struct {
 
 // Edge represents a connection between two nodes
 type Edge struct {
-	ID     string   `json:"id"`
-	Source string   `json:"source"`
-	Target string   `json:"target"`
-	Type   EdgeType `json:"type"`
-	Label  string   `json:"label,omitempty"`
+	ID                string   `json:"id"`
+	Source            string   `json:"source"`
+	Target            string   `json:"target"`
+	Type              EdgeType `json:"type"`
+	Label             string   `json:"label,omitempty"`
+	SkipIfKindVisible string   `json:"skipIfKindVisible,omitempty"` // Hide this edge if this kind is visible (for shortcut edges)
 }
 
 // Topology represents the complete graph

@@ -46,6 +46,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	// Track IDs for linking
 	deploymentIDs := make(map[string]string)
 	replicaSetIDs := make(map[string]string)
+	replicaSetToDeployment := make(map[string]string) // rsKey -> deploymentID (for shortcut edges)
 	serviceIDs := make(map[string]string)
 
 	// Track ConfigMap/Secret references from workloads
@@ -206,6 +207,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 							Target: rsID,
 							Type:   EdgeManages,
 						})
+						// Track for shortcut edges (Deployment -> Pod)
+						rsKey := rs.Namespace + "/" + rs.Name
+						replicaSetToDeployment[rsKey] = ownerID
 					}
 				}
 			}
@@ -306,6 +310,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 								Target: podID,
 								Type:   EdgeManages,
 							})
+							// Add shortcut edge: Deployment -> Pod (for when ReplicaSet is filtered out)
+							if deployID, ok := replicaSetToDeployment[ownerKey]; ok {
+								edges = append(edges, Edge{
+									ID:                fmt.Sprintf("%s-to-%s-shortcut", deployID, podID),
+									Source:            deployID,
+									Target:            podID,
+									Type:              EdgeManages,
+									SkipIfKindVisible: string(KindReplicaSet),
+								})
+							}
 						}
 					case "DaemonSet":
 						ownerID := fmt.Sprintf("daemonset-%s-%s", pod.Namespace, ownerRef.Name)
@@ -405,6 +419,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 								Target: podGroupID,
 								Type:   EdgeManages,
 							})
+							// Add shortcut edge: Deployment -> PodGroup (for when ReplicaSet is filtered out)
+							if deployID, ok := replicaSetToDeployment[ownerKey]; ok {
+								edges = append(edges, Edge{
+									ID:                fmt.Sprintf("%s-to-%s-shortcut", deployID, podGroupID),
+									Source:            deployID,
+									Target:            podGroupID,
+									Type:              EdgeManages,
+									SkipIfKindVisible: string(KindReplicaSet),
+								})
+							}
 						}
 					case "DaemonSet":
 						ownerID := fmt.Sprintf("daemonset-%s-%s", firstPod.Namespace, ownerRef.Name)
