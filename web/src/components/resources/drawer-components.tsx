@@ -1,0 +1,466 @@
+import { useState } from 'react'
+import { ChevronDown, ChevronRight, Copy, Check, Tag } from 'lucide-react'
+import { clsx } from 'clsx'
+import { formatAge } from './resource-utils'
+
+// ============================================================================
+// UI COMPONENTS
+// ============================================================================
+
+export function KeyValueBadge({ k, v }: { k: string; v: string }) {
+  return (
+    <span className="px-2 py-0.5 bg-slate-700 rounded text-xs text-slate-300">
+      {k}={v}
+    </span>
+  )
+}
+
+export function KeyValueBadgeList({ items }: { items: Record<string, unknown> | undefined | null }) {
+  if (!items || Object.keys(items).length === 0) return null
+  return (
+    <div className="flex flex-wrap gap-1">
+      {Object.entries(items).map(([k, v]) => (
+        <KeyValueBadge key={k} k={k} v={String(v)} />
+      ))}
+    </div>
+  )
+}
+
+interface SectionProps {
+  title: string
+  icon?: React.ComponentType<{ className?: string }>
+  children: React.ReactNode
+  defaultExpanded?: boolean
+}
+
+export function Section({ title, icon: Icon, children, defaultExpanded = true }: SectionProps) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+
+  return (
+    <div className="border-b border-slate-700/50 pb-4 last:border-0">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 w-full text-left mb-2 hover:text-white transition-colors"
+      >
+        {expanded ? <ChevronDown className="w-4 h-4 text-slate-500" /> : <ChevronRight className="w-4 h-4 text-slate-500" />}
+        {Icon && <Icon className="w-4 h-4 text-slate-400" />}
+        <span className="text-sm font-medium text-slate-300">{title}</span>
+      </button>
+      {expanded && <div className="pl-6">{children}</div>}
+    </div>
+  )
+}
+
+interface ExpandableSectionProps {
+  title: string
+  children: React.ReactNode
+  defaultExpanded?: boolean
+}
+
+export function ExpandableSection({ title, children, defaultExpanded = true }: ExpandableSectionProps) {
+  const [expanded, setExpanded] = useState(defaultExpanded)
+
+  return (
+    <div>
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors mb-1"
+      >
+        {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        {title}
+      </button>
+      {expanded && <div className="ml-5">{children}</div>}
+    </div>
+  )
+}
+
+export function PropertyList({ children }: { children: React.ReactNode }) {
+  return <div className="space-y-2">{children}</div>
+}
+
+interface PropertyProps {
+  label: string
+  value: unknown
+  copyable?: boolean
+  onCopy?: (text: string, key: string) => void
+  copied?: string | null
+}
+
+export function Property({ label, value, copyable, onCopy, copied }: PropertyProps) {
+  if (value === undefined || value === null || value === '') return null
+  const strValue = String(value)
+
+  return (
+    <div className="flex items-start gap-2 text-sm">
+      <span className="text-slate-500 w-28 shrink-0">{label}</span>
+      <span className="text-white break-all flex-1">{strValue}</span>
+      {copyable && onCopy && (
+        <button
+          onClick={() => onCopy(strValue, label)}
+          className="p-0.5 text-slate-500 hover:text-white shrink-0"
+        >
+          {copied === label ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ============================================================================
+// COMMON SECTIONS
+// ============================================================================
+
+export function ConditionsSection({ conditions }: { conditions?: any[] }) {
+  if (!conditions || conditions.length === 0) return null
+
+  return (
+    <Section title={`Conditions (${conditions.length})`} defaultExpanded={conditions.length <= 4}>
+      <div className="space-y-2">
+        {conditions.map((cond: any, i: number) => (
+          <div key={i} className="flex items-start gap-2 text-sm">
+            <span className={clsx(
+              'w-4 h-4 rounded-full flex items-center justify-center text-xs shrink-0 mt-0.5',
+              cond.status === 'True' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+            )}>
+              {cond.status === 'True' ? '✓' : '✗'}
+            </span>
+            <div>
+              <div className="text-white">{cond.type}</div>
+              {cond.message && <div className="text-xs text-slate-500">{cond.message}</div>}
+            </div>
+          </div>
+        ))}
+      </div>
+    </Section>
+  )
+}
+
+export function LabelsSection({ data }: { data: any }) {
+  const labels = data.metadata?.labels
+  if (!labels || Object.keys(labels).length === 0) return null
+  const count = Object.keys(labels).length
+
+  return (
+    <Section title={`Labels (${count})`} icon={Tag} defaultExpanded={count <= 5}>
+      <KeyValueBadgeList items={labels} />
+    </Section>
+  )
+}
+
+export function AnnotationsSection({ data }: { data: any }) {
+  const annotations = data.metadata?.annotations
+  if (!annotations || Object.keys(annotations).length === 0) return null
+  const count = Object.keys(annotations).length
+
+  return (
+    <Section title={`Annotations (${count})`} defaultExpanded={count <= 3}>
+      <div className="space-y-1 max-h-48 overflow-y-auto">
+        {Object.entries(annotations).map(([k, v]) => (
+          <div key={k} className="text-xs">
+            <span className="text-slate-500">{k}:</span>
+            <span className="text-slate-300 ml-1 break-all">{v as string}</span>
+          </div>
+        ))}
+      </div>
+    </Section>
+  )
+}
+
+export function MetadataSection({ data }: { data: any }) {
+  const meta = data.metadata
+  if (!meta) return null
+
+  return (
+    <Section title="Metadata" defaultExpanded>
+      <PropertyList>
+        <Property label="UID" value={meta.uid} />
+        <Property label="Resource Version" value={meta.resourceVersion} />
+        <Property label="Generation" value={meta.generation} />
+        <Property label="Created" value={meta.creationTimestamp ? formatAge(meta.creationTimestamp) : '-'} />
+      </PropertyList>
+    </Section>
+  )
+}
+
+export function PodTemplateSection({ template }: { template: any }) {
+  if (!template) return null
+  const containers = template.spec?.containers || []
+
+  return (
+    <div className="space-y-2">
+      {containers.map((c: any, i: number) => (
+        <div key={i} className="bg-slate-700/30 rounded p-2 text-sm">
+          <div className="font-medium text-white">{c.name}</div>
+          <div className="text-xs text-slate-400 truncate" title={c.image}>{c.image}</div>
+          {c.ports && (
+            <div className="text-xs text-slate-500 mt-1">
+              Ports: {c.ports.map((p: any) => `${p.containerPort}/${p.protocol || 'TCP'}`).join(', ')}
+            </div>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+
+export function getKindColor(kind: string): string {
+  const k = kind.toLowerCase()
+  if (k.includes('pod')) return 'bg-lime-500/20 text-lime-400 border-lime-500/30'
+  if (k.includes('deployment')) return 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+  if (k.includes('service')) return 'bg-blue-500/20 text-blue-400 border-blue-500/30'
+  if (k.includes('ingress')) return 'bg-violet-500/20 text-violet-400 border-violet-500/30'
+  if (k.includes('configmap')) return 'bg-amber-500/20 text-amber-400 border-amber-500/30'
+  if (k.includes('secret')) return 'bg-red-500/20 text-red-400 border-red-500/30'
+  if (k.includes('daemonset')) return 'bg-teal-500/20 text-teal-400 border-teal-500/30'
+  if (k.includes('statefulset')) return 'bg-cyan-500/20 text-cyan-400 border-cyan-500/30'
+  if (k.includes('replicaset')) return 'bg-green-500/20 text-green-400 border-green-500/30'
+  if (k.includes('hpa')) return 'bg-pink-500/20 text-pink-400 border-pink-500/30'
+  if (k.includes('job')) return 'bg-orange-500/20 text-orange-400 border-orange-500/30'
+  return 'bg-slate-500/20 text-slate-400 border-slate-500/30'
+}
+
+export function formatKindName(kind: string): string {
+  const k = kind.toLowerCase()
+  const names: Record<string, string> = {
+    pods: 'Pod', deployments: 'Deployment', daemonsets: 'DaemonSet', statefulsets: 'StatefulSet',
+    replicasets: 'ReplicaSet', services: 'Service', ingresses: 'Ingress', configmaps: 'ConfigMap',
+    secrets: 'Secret', jobs: 'Job', cronjobs: 'CronJob', hpas: 'HPA',
+  }
+  return names[k] || kind
+}
+
+// Type for copy handler
+export type CopyHandler = (text: string, key: string) => void
+
+// ============================================================================
+// RELATED RESOURCES SECTION
+// ============================================================================
+
+import type { TimelineEvent, Relationships, ResourceRef } from '../../types'
+import { Link } from 'lucide-react'
+
+interface RelatedResourcesSectionProps {
+  relationships: Relationships | undefined
+  onNavigate?: (ref: ResourceRef) => void
+}
+
+export function RelatedResourcesSection({ relationships, onNavigate }: RelatedResourcesSectionProps) {
+  if (!relationships) return null
+
+  const hasRelationships =
+    relationships.owner ||
+    (relationships.children && relationships.children.length > 0) ||
+    (relationships.services && relationships.services.length > 0) ||
+    (relationships.ingresses && relationships.ingresses.length > 0) ||
+    (relationships.pods && relationships.pods.length > 0) ||
+    (relationships.configRefs && relationships.configRefs.length > 0) ||
+    relationships.hpa ||
+    relationships.scaleTarget
+
+  if (!hasRelationships) return null
+
+  return (
+    <Section title="Related Resources" icon={Link} defaultExpanded>
+      <div className="space-y-3">
+        {/* Owner (parent resource) */}
+        {relationships.owner && (
+          <RelationshipGroup label="Owner" refs={[relationships.owner]} onNavigate={onNavigate} />
+        )}
+
+        {/* Children (managed resources) */}
+        {relationships.children && relationships.children.length > 0 && (
+          <RelationshipGroup label="Children" refs={relationships.children} onNavigate={onNavigate} />
+        )}
+
+        {/* Services exposing this resource */}
+        {relationships.services && relationships.services.length > 0 && (
+          <RelationshipGroup label="Services" refs={relationships.services} onNavigate={onNavigate} />
+        )}
+
+        {/* Ingresses routing to this resource */}
+        {relationships.ingresses && relationships.ingresses.length > 0 && (
+          <RelationshipGroup label="Ingresses" refs={relationships.ingresses} onNavigate={onNavigate} />
+        )}
+
+        {/* Pods selected/exposed by this Service */}
+        {relationships.pods && relationships.pods.length > 0 && (
+          <RelationshipGroup label="Pods" refs={relationships.pods} onNavigate={onNavigate} />
+        )}
+
+        {/* ConfigMaps/Secrets used */}
+        {relationships.configRefs && relationships.configRefs.length > 0 && (
+          <RelationshipGroup label="Configuration" refs={relationships.configRefs} onNavigate={onNavigate} />
+        )}
+
+        {/* HPA scaling this workload */}
+        {relationships.hpa && (
+          <RelationshipGroup label="Autoscaler" refs={[relationships.hpa]} onNavigate={onNavigate} />
+        )}
+
+        {/* What this HPA scales */}
+        {relationships.scaleTarget && (
+          <RelationshipGroup label="Scale Target" refs={[relationships.scaleTarget]} onNavigate={onNavigate} />
+        )}
+      </div>
+    </Section>
+  )
+}
+
+interface RelationshipGroupProps {
+  label: string
+  refs: ResourceRef[]
+  onNavigate?: (ref: ResourceRef) => void
+}
+
+function RelationshipGroup({ label, refs, onNavigate }: RelationshipGroupProps) {
+  if (!refs || refs.length === 0) return null
+
+  return (
+    <div>
+      <div className="text-xs text-slate-500 mb-1">{label}</div>
+      <div className="flex flex-wrap gap-1">
+        {refs.map((ref, i) => (
+          <ResourceRefBadge key={`${ref.kind}-${ref.namespace}-${ref.name}-${i}`} ref={ref} onClick={onNavigate} />
+        ))}
+      </div>
+    </div>
+  )
+}
+
+interface ResourceRefBadgeProps {
+  ref: ResourceRef
+  onClick?: (ref: ResourceRef) => void
+}
+
+function ResourceRefBadge({ ref, onClick }: ResourceRefBadgeProps) {
+  const kindClass = getKindColor(ref.kind)
+  const kindName = formatKindForRef(ref.kind)
+
+  if (onClick) {
+    return (
+      <button
+        onClick={() => onClick(ref)}
+        className={clsx(
+          'px-2 py-0.5 text-xs rounded border transition-colors hover:brightness-125',
+          kindClass
+        )}
+        title={`${ref.kind}: ${ref.namespace}/${ref.name}`}
+      >
+        <span className="opacity-60">{kindName}/</span>
+        {ref.name}
+      </button>
+    )
+  }
+
+  return (
+    <span
+      className={clsx('px-2 py-0.5 text-xs rounded border', kindClass)}
+      title={`${ref.kind}: ${ref.namespace}/${ref.name}`}
+    >
+      <span className="opacity-60">{kindName}/</span>
+      {ref.name}
+    </span>
+  )
+}
+
+function formatKindForRef(kind: string): string {
+  const k = kind.toLowerCase()
+  const shortNames: Record<string, string> = {
+    deployment: 'deploy',
+    daemonset: 'ds',
+    statefulset: 'sts',
+    replicaset: 'rs',
+    configmap: 'cm',
+    service: 'svc',
+    ingress: 'ing',
+    secret: 'secret',
+    pod: 'pod',
+    job: 'job',
+    cronjob: 'cj',
+    hpa: 'hpa',
+  }
+  return shortNames[k] || k
+}
+
+// ============================================================================
+// EVENTS SECTION
+// ============================================================================
+
+interface EventsSectionProps {
+  events: TimelineEvent[]
+  isLoading?: boolean
+}
+
+export function EventsSection({ events, isLoading }: EventsSectionProps) {
+  if (isLoading) {
+    return (
+      <Section title="Recent Events" defaultExpanded>
+        <div className="text-sm text-slate-500">Loading events...</div>
+      </Section>
+    )
+  }
+
+  if (!events || events.length === 0) {
+    return (
+      <Section title="Recent Events" defaultExpanded={false}>
+        <div className="text-sm text-slate-500">No recent events</div>
+      </Section>
+    )
+  }
+
+  return (
+    <Section title={`Recent Events (${events.length})`} defaultExpanded>
+      <div className="space-y-2 max-h-64 overflow-y-auto">
+        {events.map((event, i) => (
+          <div
+            key={event.id || i}
+            className={clsx(
+              'p-2 rounded text-sm border-l-2',
+              event.eventType === 'Warning' || event.type === 'change' && event.operation === 'delete'
+                ? 'bg-red-500/10 border-red-500'
+                : event.type === 'k8s_event'
+                ? 'bg-blue-500/10 border-blue-500'
+                : 'bg-slate-700/30 border-slate-500'
+            )}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="font-medium text-white">
+                {event.type === 'k8s_event' ? event.reason : event.operation}
+              </span>
+              <span className="text-xs text-slate-500">
+                {formatEventTime(event.timestamp)}
+              </span>
+            </div>
+            {event.message && (
+              <div className="text-xs text-slate-400 mt-1 line-clamp-2">
+                {event.message}
+              </div>
+            )}
+            {event.type === 'change' && event.diff?.summary && (
+              <div className="text-xs text-slate-400 mt-1">
+                {event.diff.summary}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </Section>
+  )
+}
+
+function formatEventTime(timestamp: string): string {
+  const date = new Date(timestamp)
+  const now = new Date()
+  const diffMs = now.getTime() - date.getTime()
+  const diffMins = Math.floor(diffMs / 60000)
+  const diffHours = Math.floor(diffMins / 60)
+
+  if (diffMins < 1) return 'just now'
+  if (diffMins < 60) return `${diffMins}m ago`
+  if (diffHours < 24) return `${diffHours}h ago`
+  return date.toLocaleDateString()
+}

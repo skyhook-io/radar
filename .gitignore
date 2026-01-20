@@ -1,0 +1,27 @@
+# Binaries
+explorer
+*.exe
+
+# Go
+vendor/
+
+# Node
+web/node_modules/
+web/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.log
+
+# Local config
+.env
+.env.local

@@ -1,0 +1,62 @@
+import { Globe } from 'lucide-react'
+import { Section, PropertyList, Property, KeyValueBadgeList, CopyHandler } from '../drawer-components'
+
+interface ServiceRendererProps {
+  data: any
+  onCopy: CopyHandler
+  copied: string | null
+}
+
+export function ServiceRenderer({ data, onCopy, copied }: ServiceRendererProps) {
+  const spec = data.spec || {}
+  const ports = spec.ports || []
+  const lbIngress = data.status?.loadBalancer?.ingress || []
+
+  return (
+    <>
+      <Section title="Service" icon={Globe}>
+        <PropertyList>
+          <Property label="Type" value={spec.type || 'ClusterIP'} />
+          <Property label="Cluster IP" value={spec.clusterIP} copyable onCopy={onCopy} copied={copied} />
+          {spec.externalIPs?.length > 0 && (
+            <Property label="External IPs" value={spec.externalIPs.join(', ')} copyable onCopy={onCopy} copied={copied} />
+          )}
+          {lbIngress.length > 0 && (
+            <Property
+              label="Load Balancer"
+              value={lbIngress[0].ip || lbIngress[0].hostname}
+              copyable
+              onCopy={onCopy}
+              copied={copied}
+            />
+          )}
+          <Property label="Session Affinity" value={spec.sessionAffinity} />
+          <Property label="External Traffic" value={spec.externalTrafficPolicy} />
+        </PropertyList>
+      </Section>
+
+      <Section title="Ports" defaultExpanded>
+        <div className="space-y-2">
+          {ports.map((port: any, i: number) => (
+            <div key={i} className="bg-slate-700/30 rounded p-2 text-sm">
+              <div className="flex items-center justify-between">
+                <span className="text-white font-medium">{port.name || `port-${i}`}</span>
+                <span className="text-slate-400">{port.protocol || 'TCP'}</span>
+              </div>
+              <div className="text-xs text-slate-400 mt-1">
+                {port.port} {port.targetPort !== port.port && `→ ${port.targetPort}`}
+                {port.nodePort && ` (NodePort: ${port.nodePort})`}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      {spec.selector && (
+        <Section title="Selector">
+          <KeyValueBadgeList items={spec.selector} />
+        </Section>
+      )}
+    </>
+  )
+}

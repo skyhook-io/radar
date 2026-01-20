@@ -1,0 +1,47 @@
+# Air - Live reload for Go apps
+# https://github.com/air-verse/air
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  # Build command
+  cmd = "go build -o ./tmp/explorer ./cmd/explorer"
+  # Binary to run
+  bin = "./tmp/explorer --dev --no-browser --kubeconfig ~/.kube/config"
+  # Watch these extensions
+  include_ext = ["go", "tpl", "tmpl", "html"]
+  # Exclude directories
+  exclude_dir = ["assets", "tmp", "vendor", "web", "node_modules", "internal/static"]
+  # Exclude files
+  exclude_file = []
+  # Exclude regex
+  exclude_regex = ["_test.go"]
+  # Exclude unchanged files
+  exclude_unchanged = true
+  # Follow symlinks
+  follow_symlink = false
+  # Delay before rebuild (ms)
+  delay = 500
+  # Stop old binary before building
+  stop_on_error = true
+  # Send interrupt signal before kill
+  send_interrupt = true
+  # Delay after interrupt (ms)
+  kill_delay = 500
+
+[log]
+  # Show log time
+  time = false
+  # Only show main log
+  main_only = false
+
+[color]
+  main = "magenta"
+  watcher = "cyan"
+  build = "yellow"
+  runner = "green"
+
+[misc]
+  # Delete tmp directory on exit
+  clean_on_exit = true
