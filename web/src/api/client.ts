@@ -169,3 +169,63 @@ export function useResourceEvents(kind: string, namespace: string, name: string)
     refetchInterval: 15000, // Refresh every 15 seconds
   })
 }
+
+// Pod logs types
+export interface LogsResponse {
+  podName: string
+  namespace: string
+  containers: string[]
+  logs: Record<string, string> // container -> logs
+}
+
+export interface LogStreamEvent {
+  event: 'connected' | 'log' | 'end' | 'error'
+  data: {
+    timestamp?: string
+    content?: string
+    container?: string
+    pod?: string
+    namespace?: string
+    reason?: string
+    error?: string
+  }
+}
+
+// Fetch pod logs (non-streaming)
+export function usePodLogs(namespace: string, podName: string, options?: {
+  container?: string
+  tailLines?: number
+  previous?: boolean
+}) {
+  const params = new URLSearchParams()
+  if (options?.container) params.set('container', options.container)
+  if (options?.tailLines) params.set('tailLines', String(options.tailLines))
+  if (options?.previous) params.set('previous', 'true')
+  const queryString = params.toString()
+
+  return useQuery<LogsResponse>({
+    queryKey: ['pod-logs', namespace, podName, options?.container, options?.tailLines, options?.previous],
+    queryFn: () => fetchJSON(`/pods/${namespace}/${podName}/logs${queryString ? `?${queryString}` : ''}`),
+    enabled: Boolean(namespace && podName),
+    staleTime: 5000, // Allow refetch after 5 seconds
+  })
+}
+
+// Create SSE connection for streaming logs
+export function createLogStream(
+  namespace: string,
+  podName: string,
+  options?: {
+    container?: string
+    tailLines?: number
+    previous?: boolean
+  }
+): EventSource {
+  const params = new URLSearchParams()
+  if (options?.container) params.set('container', options.container)
+  if (options?.tailLines) params.set('tailLines', String(options.tailLines))
+  if (options?.previous) params.set('previous', 'true')
+  const queryString = params.toString()
+
+  return new EventSource(`${API_BASE}/pods/${namespace}/${podName}/logs/stream${queryString ? `?${queryString}` : ''}`)
+}

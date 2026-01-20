@@ -272,25 +272,21 @@ import { useToast } from '../ui/Toast'
 function ActionsBar({ resource, data }: { resource: SelectedResource; data: any }) {
   const { showCopied } = useToast()
   const kind = resource.kind.toLowerCase()
-  const actions: Array<{ icon: any; label: string; onClick: () => void; disabled?: boolean }> = []
+  const actions: Array<{ icon: any; label: string; command: string; commandLabel: string; disabled?: boolean }> = []
 
   // Pod-specific actions
   if (kind === 'pods') {
     actions.push({
       icon: FileText,
       label: 'Logs',
-      onClick: () => {
-        const cmd = `kubectl logs ${resource.name} -n ${resource.namespace} -f`
-        showCopied(cmd, 'Logs command copied')
-      },
+      command: `kubectl logs ${resource.name} -n ${resource.namespace} -f`,
+      commandLabel: 'Logs command copied',
     })
     actions.push({
       icon: Terminal,
       label: 'Shell',
-      onClick: () => {
-        const cmd = `kubectl exec -it ${resource.name} -n ${resource.namespace} -- sh`
-        showCopied(cmd, 'Shell command copied')
-      },
+      command: `kubectl exec -it ${resource.name} -n ${resource.namespace} -- sh`,
+      commandLabel: 'Shell command copied',
     })
   }
 
@@ -301,10 +297,8 @@ function ActionsBar({ resource, data }: { resource: SelectedResource; data: any 
       actions.push({
         icon: ExternalLink,
         label: 'Port Forward',
-        onClick: () => {
-          const cmd = `kubectl port-forward svc/${resource.name} ${port}:${port} -n ${resource.namespace}`
-          showCopied(cmd, 'Port-forward command copied')
-        },
+        command: `kubectl port-forward svc/${resource.name} ${port}:${port} -n ${resource.namespace}`,
+        commandLabel: 'Port-forward command copied',
       })
     }
   }
@@ -314,10 +308,8 @@ function ActionsBar({ resource, data }: { resource: SelectedResource; data: any 
     actions.push({
       icon: RefreshCw,
       label: 'Restart',
-      onClick: () => {
-        const cmd = `kubectl rollout restart ${kind.slice(0, -1)} ${resource.name} -n ${resource.namespace}`
-        showCopied(cmd, 'Restart command copied')
-      },
+      command: `kubectl rollout restart ${kind.slice(0, -1)} ${resource.name} -n ${resource.namespace}`,
+      commandLabel: 'Restart command copied',
     })
   }
 
@@ -326,19 +318,15 @@ function ActionsBar({ resource, data }: { resource: SelectedResource; data: any 
     actions.push({
       icon: Play,
       label: 'Trigger',
-      onClick: () => {
-        const cmd = `kubectl create job --from=cronjob/${resource.name} ${resource.name}-manual-$(date +%s) -n ${resource.namespace}`
-        showCopied(cmd, 'Trigger command copied')
-      },
+      command: `kubectl create job --from=cronjob/${resource.name} ${resource.name}-manual-$(date +%s) -n ${resource.namespace}`,
+      commandLabel: 'Trigger command copied',
     })
     const suspended = data?.spec?.suspend
     actions.push({
       icon: suspended ? Play : Pause,
       label: suspended ? 'Resume' : 'Suspend',
-      onClick: () => {
-        const cmd = `kubectl patch cronjob ${resource.name} -n ${resource.namespace} -p '{"spec":{"suspend":${!suspended}}}'`
-        showCopied(cmd, `${suspended ? 'Resume' : 'Suspend'} command copied`)
-      },
+      command: `kubectl patch cronjob ${resource.name} -n ${resource.namespace} -p '{"spec":{"suspend":${!suspended}}}'`,
+      commandLabel: `${suspended ? 'Resume' : 'Suspend'} command copied`,
     })
   }
 
@@ -347,22 +335,18 @@ function ActionsBar({ resource, data }: { resource: SelectedResource; data: any 
     actions.push({
       icon: FileText,
       label: 'Logs',
-      onClick: () => {
-        const cmd = `kubectl logs job/${resource.name} -n ${resource.namespace} -f`
-        showCopied(cmd, 'Logs command copied')
-      },
+      command: `kubectl logs job/${resource.name} -n ${resource.namespace} -f`,
+      commandLabel: 'Logs command copied',
     })
   }
 
   // Delete action for all
+  const kindSingular = kind.endsWith('s') ? kind.slice(0, -1) : kind
   actions.push({
     icon: Trash2,
     label: 'Delete',
-    onClick: () => {
-      const kindSingular = kind.endsWith('s') ? kind.slice(0, -1) : kind
-      const cmd = `kubectl delete ${kindSingular} ${resource.name} -n ${resource.namespace}`
-      showCopied(cmd, 'Delete command copied')
-    },
+    command: `kubectl delete ${kindSingular} ${resource.name} -n ${resource.namespace}`,
+    commandLabel: 'Delete command copied',
   })
 
   if (actions.length === 0) return null
@@ -372,7 +356,7 @@ function ActionsBar({ resource, data }: { resource: SelectedResource; data: any 
       {actions.map((action, i) => (
         <button
           key={i}
-          onClick={action.onClick}
+          onClick={(e) => showCopied(action.command, action.commandLabel, e)}
           disabled={action.disabled}
           className="flex items-center gap-1.5 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors disabled:opacity-50"
         >
@@ -388,23 +372,44 @@ function ActionsBar({ resource, data }: { resource: SelectedResource; data: any 
 // YAML VIEW
 // ============================================================================
 
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter'
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism'
+
 function YamlView({ data, onCopy, copied }: { data: any; onCopy: (text: string) => void; copied: boolean }) {
-  const yaml = JSON.stringify(data, null, 2)
+  const json = JSON.stringify(data, null, 2)
   return (
     <div className="p-4">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm font-medium text-slate-400">Raw YAML</span>
+        <span className="text-sm font-medium text-slate-400">Raw JSON</span>
         <button
-          onClick={() => onCopy(yaml)}
+          onClick={() => onCopy(json)}
           className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded"
         >
           {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
           Copy
         </button>
       </div>
-      <pre className="bg-slate-900 rounded-lg p-3 text-xs text-slate-300 overflow-auto max-h-[calc(100vh-250px)]">
-        {yaml}
-      </pre>
+      <div className="rounded-lg overflow-hidden max-h-[calc(100vh-250px)] overflow-auto">
+        <SyntaxHighlighter
+          language="json"
+          style={oneDark}
+          showLineNumbers
+          customStyle={{
+            margin: 0,
+            padding: '12px',
+            fontSize: '12px',
+            background: '#0f172a',
+          }}
+          lineNumberStyle={{
+            minWidth: '2.5em',
+            paddingRight: '1em',
+            color: '#475569',
+            userSelect: 'none',
+          }}
+        >
+          {json}
+        </SyntaxHighlighter>
+      </div>
     </div>
   )
 }

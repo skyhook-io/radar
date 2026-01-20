@@ -1,7 +1,9 @@
-import { Server, HardDrive } from 'lucide-react'
+import { useState } from 'react'
+import { Server, HardDrive, FileText, ChevronDown, ChevronRight } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler } from '../drawer-components'
 import { formatResources } from '../resource-utils'
+import { LogsViewer } from '../../logs/LogsViewer'
 
 interface PodRendererProps {
   data: any
@@ -85,8 +87,49 @@ export function PodRenderer({ data, onCopy, copied }: PodRendererProps) {
         </div>
       </Section>
 
+      {/* Logs */}
+      <LogsSection
+        namespace={data.metadata?.namespace}
+        podName={data.metadata?.name}
+        containers={containers.map((c: any) => c.name)}
+      />
+
       {/* Conditions */}
       <ConditionsSection conditions={data.status?.conditions} />
     </>
+  )
+}
+
+// Collapsible Logs Section
+function LogsSection({ namespace, podName, containers }: { namespace: string; podName: string; containers: string[] }) {
+  const [expanded, setExpanded] = useState(false)
+
+  if (!namespace || !podName || containers.length === 0) return null
+
+  return (
+    <div className="border border-slate-700/50 rounded-lg overflow-hidden">
+      <button
+        onClick={() => setExpanded(!expanded)}
+        className="flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-slate-700/30 transition-colors"
+      >
+        {expanded ? (
+          <ChevronDown className="w-4 h-4 text-slate-400" />
+        ) : (
+          <ChevronRight className="w-4 h-4 text-slate-400" />
+        )}
+        <FileText className="w-4 h-4 text-slate-400" />
+        <span className="text-sm font-medium text-white">Logs</span>
+      </button>
+
+      {expanded && (
+        <div className="h-80 border-t border-slate-700/50">
+          <LogsViewer
+            namespace={namespace}
+            podName={podName}
+            containers={containers}
+          />
+        </div>
+      )}
+    </div>
   )
 }
