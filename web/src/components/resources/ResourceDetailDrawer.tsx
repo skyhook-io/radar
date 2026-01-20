@@ -406,6 +406,7 @@ function YamlView({ data, onCopy, copied }: { data: any; onCopy: (text: string) 
             color: '#475569',
             userSelect: 'none',
           }}
+          lineProps={{ style: { background: 'transparent' } }}
         >
           {json}
         </SyntaxHighlighter>

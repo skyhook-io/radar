@@ -323,8 +323,8 @@ function RelationshipGroup({ label, refs, onNavigate }: RelationshipGroupProps) 
     <div>
       <div className="text-xs text-slate-500 mb-1">{label}</div>
       <div className="flex flex-wrap gap-1">
-        {refs.map((ref, i) => (
-          <ResourceRefBadge key={`${ref.kind}-${ref.namespace}-${ref.name}-${i}`} ref={ref} onClick={onNavigate} />
+        {refs.map((resourceRef, i) => (
+          <ResourceRefBadge key={`${resourceRef.kind}-${resourceRef.namespace}-${resourceRef.name}-${i}`} resourceRef={resourceRef} onClick={onNavigate} />
         ))}
       </div>
     </div>
@@ -332,26 +332,26 @@ function RelationshipGroup({ label, refs, onNavigate }: RelationshipGroupProps) 
 }
 
 interface ResourceRefBadgeProps {
-  ref: ResourceRef
+  resourceRef: ResourceRef
   onClick?: (ref: ResourceRef) => void
 }
 
-function ResourceRefBadge({ ref, onClick }: ResourceRefBadgeProps) {
-  const kindClass = getKindColor(ref.kind)
-  const kindName = formatKindForRef(ref.kind)
+function ResourceRefBadge({ resourceRef, onClick }: ResourceRefBadgeProps) {
+  const kindClass = getKindColor(resourceRef.kind)
+  const kindName = formatKindForRef(resourceRef.kind)
 
   if (onClick) {
     return (
       <button
-        onClick={() => onClick(ref)}
+        onClick={() => onClick(resourceRef)}
         className={clsx(
           'px-2 py-0.5 text-xs rounded border transition-colors hover:brightness-125',
           kindClass
         )}
-        title={`${ref.kind}: ${ref.namespace}/${ref.name}`}
+        title={`${resourceRef.kind}: ${resourceRef.namespace}/${resourceRef.name}`}
       >
         <span className="opacity-60">{kindName}/</span>
-        {ref.name}
+        {resourceRef.name}
       </button>
     )
   }
@@ -359,10 +359,10 @@ function ResourceRefBadge({ ref, onClick }: ResourceRefBadgeProps) {
   return (
     <span
       className={clsx('px-2 py-0.5 text-xs rounded border', kindClass)}
-      title={`${ref.kind}: ${ref.namespace}/${ref.name}`}
+      title={`${resourceRef.kind}: ${resourceRef.namespace}/${resourceRef.name}`}
     >
       <span className="opacity-60">{kindName}/</span>
-      {ref.name}
+      {resourceRef.name}
     </span>
   )
 }
