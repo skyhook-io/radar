@@ -104,15 +104,15 @@ export const GroupNode = memo(function GroupNode({
           )}
           onClick={() => onToggleCollapse(id)}
         >
-          <div className="flex items-center gap-3">
-            <ChevronRight className={clsx('w-5 h-5', getIconColor())} />
-            <Icon className={clsx('w-6 h-6', getIconColor())} />
-            <span className={clsx('text-xl font-semibold', getLabelColor())}>{name}</span>
+          <div className="flex items-center gap-4">
+            <ChevronRight className={clsx('w-8 h-8', getIconColor())} />
+            <Icon className={clsx('w-9 h-9', getIconColor())} />
+            <span className={clsx('text-4xl font-bold', getLabelColor())}>{name}</span>
             {label && (
               <span className="text-sm text-slate-400">({label})</span>
             )}
           </div>
-          <div className="mt-2 text-sm text-slate-400">
+          <div className="mt-3 text-xl text-slate-400">
             {nodeCount} {nodeCount === 1 ? 'resource' : 'resources'}
           </div>
         </div>
@@ -148,18 +148,18 @@ export const GroupNode = memo(function GroupNode({
         {/* Header bar - no margin, let overflow-hidden clip to border radius */}
         <div
           className={clsx(
-            'flex items-center gap-3 px-4 py-3 cursor-pointer',
+            'flex items-center gap-4 px-6 py-5 cursor-pointer',
             getHeaderBgColor()
           )}
           onClick={() => onToggleCollapse(id)}
         >
-          <ChevronDown className={clsx('w-5 h-5 flex-shrink-0', getIconColor())} />
-          <Icon className={clsx('w-6 h-6 flex-shrink-0', getIconColor())} />
-          <span className={clsx('text-xl font-semibold truncate', getLabelColor())}>{name}</span>
+          <ChevronDown className={clsx('w-8 h-8 flex-shrink-0', getIconColor())} />
+          <Icon className={clsx('w-9 h-9 flex-shrink-0', getIconColor())} />
+          <span className={clsx('text-4xl font-bold truncate', getLabelColor())}>{name}</span>
           {label && (
             <span className="text-sm text-slate-400 truncate">({label})</span>
           )}
-          <span className="ml-auto flex-shrink-0 text-sm text-slate-400 bg-slate-800/60 px-3 py-1 rounded-lg">
+          <span className="ml-auto flex-shrink-0 text-xl font-semibold text-slate-300 bg-slate-800/60 px-4 py-2 rounded-xl">
             {nodeCount}
           </span>
         </div>

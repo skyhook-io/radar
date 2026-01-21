@@ -18,6 +18,7 @@ const (
 	KindHPA           NodeKind = "HPA"
 	KindJob           NodeKind = "Job"
 	KindCronJob       NodeKind = "CronJob"
+	KindPVC           NodeKind = "PVC"
 	KindNamespace     NodeKind = "Namespace"
 )
 
@@ -77,21 +78,25 @@ const (
 
 // BuildOptions configures topology building
 type BuildOptions struct {
-	Namespace        string   // Filter to specific namespace (empty = all)
-	ViewMode         ViewMode // How to display topology
-	MaxIndividualPods int     // Above this, pods are grouped (default: 5)
-	IncludeSecrets    bool    // Include Secret nodes
-	IncludeConfigMaps bool    // Include ConfigMap nodes
+	Namespace         string   // Filter to specific namespace (empty = all)
+	ViewMode          ViewMode // How to display topology
+	MaxIndividualPods int      // Above this, pods are grouped (default: 5)
+	IncludeSecrets    bool     // Include Secret nodes
+	IncludeConfigMaps bool     // Include ConfigMap nodes
+	IncludePVCs       bool     // Include PersistentVolumeClaim nodes
+	IncludeReplicaSets bool    // Include ReplicaSet nodes (noisy intermediate objects)
 }
 
 // DefaultBuildOptions returns sensible defaults
 func DefaultBuildOptions() BuildOptions {
 	return BuildOptions{
-		Namespace:         "",
-		ViewMode:          ViewModeResources,
-		MaxIndividualPods: 5,
-		IncludeSecrets:    false, // Secrets are sensitive
-		IncludeConfigMaps: true,
+		Namespace:          "",
+		ViewMode:           ViewModeResources,
+		MaxIndividualPods:  5,
+		IncludeSecrets:     false, // Secrets are sensitive
+		IncludeConfigMaps:  true,
+		IncludePVCs:        true,
+		IncludeReplicaSets: false, // Hidden by default - noisy intermediate between Deployment and Pod
 	}
 }
 

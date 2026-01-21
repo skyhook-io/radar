@@ -43,6 +43,18 @@ type SSEEvent struct {
 	Data  any    `json:"data"`
 }
 
+// safeSend sends an event to a channel, recovering from panic if the channel is closed
+func safeSend(ch chan SSEEvent, event SSEEvent) {
+	defer func() {
+		recover() // Ignore panic from send on closed channel
+	}()
+	select {
+	case ch <- event:
+	default:
+		// Channel full, skip
+	}
+}
+
 // NewSSEBroadcaster creates a new SSE broadcaster
 func NewSSEBroadcaster() *SSEBroadcaster {
 	return &SSEBroadcaster{
@@ -235,11 +247,7 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 		}
 
 		for _, ch := range channels {
-			select {
-			case ch <- event:
-			default:
-				// Client channel full, skip
-			}
+			safeSend(ch, event)
 		}
 	}
 }
@@ -270,11 +278,7 @@ func (b *SSEBroadcaster) Broadcast(event SSEEvent) {
 	defer b.mu.RUnlock()
 
 	for ch := range b.clients {
-		select {
-		case ch <- event:
-		default:
-			// Channel full, skip
-		}
+		safeSend(ch, event)
 	}
 }
 

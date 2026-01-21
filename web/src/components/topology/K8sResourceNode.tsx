@@ -13,6 +13,7 @@ import {
   Clock,
   CalendarClock,
   Database,
+  HardDrive,
   ChevronDown,
   ChevronUp,
   Boxes,
@@ -36,6 +37,7 @@ export const NODE_DIMENSIONS: Record<NodeKind, { width: number; height: number }
   HPA: { width: 160, height: 48 },
   Job: { width: 180, height: 56 },
   CronJob: { width: 200, height: 56 },
+  PVC: { width: 200, height: 48 },
   Namespace: { width: 180, height: 48 },
 }
 
@@ -68,6 +70,8 @@ function getIcon(kind: NodeKind) {
       return Clock
     case 'CronJob':
       return CalendarClock
+    case 'PVC':
+      return HardDrive
     case 'Namespace':
       return Database
     default:
@@ -115,6 +119,8 @@ function getIconColor(kind: NodeKind): string {
     case 'Job':
     case 'CronJob':
       return 'text-purple-400'
+    case 'PVC':
+      return 'text-cyan-400'
     default:
       return 'text-slate-400'
   }
@@ -150,6 +156,11 @@ function getSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string 
       return `${nodeData.keys ?? 0} keys`
     case 'Secret':
       return `${nodeData.keys ?? 0} keys`
+    case 'PVC': {
+      const storage = (nodeData.storage as string) || ''
+      const phase = (nodeData.phase as string) || ''
+      return storage ? `${storage} (${phase})` : phase
+    }
     case 'PodGroup': {
       const count = (nodeData.podCount as number) || 0
       const healthy = (nodeData.healthy as number) || 0

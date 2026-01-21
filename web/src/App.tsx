@@ -1,49 +1,112 @@
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { TopologyGraph } from './components/topology/TopologyGraph'
 import { TopologyFilterSidebar } from './components/topology/TopologyFilterSidebar'
-import { EventsTray } from './components/events/EventsTray'
 import { EventsView } from './components/events/EventsView'
-import { ResourceDrawer } from './components/resource-drawer/ResourceDrawer'
 import { ResourcesView } from './components/resources/ResourcesView'
 import { ResourceDetailDrawer } from './components/resources/ResourceDetailDrawer'
 import { ResourceDetailPage } from './components/resource/ResourceDetailPage'
+import { HelmView } from './components/helm/HelmView'
+import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { useEventSource } from './hooks/useEventSource'
 import { useClusterInfo, useNamespaces } from './api/client'
-import { ChevronDown, RefreshCw, Layers, FolderTree, Network, List, Clock } from 'lucide-react'
-import type { TopologyNode, GroupingMode, MainView, SelectedResource, NodeKind, Topology } from './types'
+import { ChevronDown, RefreshCw, Layers, FolderTree, Network, List, Clock, Package } from 'lucide-react'
+import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, Topology } from './types'
 
-// All possible node kinds for initial visibility
+// All possible node kinds
 const ALL_NODE_KINDS: NodeKind[] = [
   'Internet', 'Ingress', 'Service', 'Deployment', 'DaemonSet', 'StatefulSet',
-  'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'HPA', 'Job', 'CronJob', 'Namespace'
+  'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'HPA', 'Job', 'CronJob', 'PVC', 'Namespace'
 ]
+
+// Default visible kinds (ReplicaSet hidden by default - noisy intermediate object)
+const DEFAULT_VISIBLE_KINDS: NodeKind[] = [
+  'Internet', 'Ingress', 'Service', 'Deployment', 'DaemonSet', 'StatefulSet',
+  'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'HPA', 'Job', 'CronJob', 'PVC', 'Namespace'
+]
+
+// Convert node kind to plural API resource name
+function kindToApiResource(kind: NodeKind): string {
+  const kindMap: Record<string, string> = {
+    'Pod': 'pods',
+    'PodGroup': 'pods', // PodGroup represents multiple pods
+    'Service': 'services',
+    'Deployment': 'deployments',
+    'DaemonSet': 'daemonsets',
+    'StatefulSet': 'statefulsets',
+    'ReplicaSet': 'replicasets',
+    'Ingress': 'ingresses',
+    'ConfigMap': 'configmaps',
+    'Secret': 'secrets',
+    'HPA': 'hpas',
+    'Job': 'jobs',
+    'CronJob': 'cronjobs',
+    'PVC': 'persistentvolumeclaims',
+    'Namespace': 'namespaces',
+  }
+  return kindMap[kind] || kind.toLowerCase() + 's'
+}
+
+// Convert API resource name back to topology node ID prefix
+function apiResourceToNodeIdPrefix(apiResource: string): string {
+  const prefixMap: Record<string, string> = {
+    'pods': 'pod',
+    'services': 'service',
+    'deployments': 'deployment',
+    'daemonsets': 'daemonset',
+    'statefulsets': 'statefulset',
+    'replicasets': 'replicaset',
+    'ingresses': 'ingress',
+    'configmaps': 'configmap',
+    'secrets': 'secret',
+    'hpas': 'hpa',
+    'jobs': 'job',
+    'cronjobs': 'cronjob',
+    'persistentvolumeclaims': 'pvc',
+    'namespaces': 'namespace',
+  }
+  return prefixMap[apiResource] || apiResource.replace(/s$/, '')
+}
+
+// Parse resource param from URL (format: "Kind/namespace/name")
+function parseResourceParam(param: string | null): SelectedResource | null {
+  if (!param) return null
+  const parts = param.split('/')
+  if (parts.length < 3) return null
+  const [kind, ns, ...nameParts] = parts
+  return { kind, namespace: ns, name: nameParts.join('/') }
+}
+
+// Encode resource to URL param
+function encodeResourceParam(resource: SelectedResource): string {
+  return `${resource.kind}/${resource.namespace}/${resource.name}`
+}
 
 function App() {
   // Initialize state from URL
   const getInitialState = () => {
     const params = new URLSearchParams(window.location.search)
     const ns = params.get('namespace') || ''
+    const resource = parseResourceParam(params.get('resource'))
     return {
       namespace: ns,
       mainView: (params.get('view') as MainView) || 'topology',
       topologyMode: (params.get('mode') as 'full' | 'traffic') || 'full',
-      showEvents: params.get('events') === 'true',
       // Default to namespace grouping when viewing all namespaces
       grouping: (params.get('group') as GroupingMode) || (ns === '' ? 'namespace' : 'none'),
+      detailResource: resource,
     }
   }
 
   const [namespace, setNamespace] = useState<string>(getInitialState().namespace)
-  const [selectedNode, setSelectedNode] = useState<TopologyNode | null>(null)
   const [selectedResource, setSelectedResource] = useState<SelectedResource | null>(null)
-  const [showEvents, setShowEvents] = useState(getInitialState().showEvents)
+  const [selectedHelmRelease, setSelectedHelmRelease] = useState<SelectedHelmRelease | null>(null)
   const [mainView, setMainView] = useState<MainView>(getInitialState().mainView)
   const [topologyMode, setTopologyMode] = useState<'full' | 'traffic'>(getInitialState().topologyMode)
   const [groupingMode, setGroupingMode] = useState<GroupingMode>(getInitialState().grouping)
   // Resource detail page state (for events view drill-down)
-  const [detailResource, setDetailResource] = useState<SelectedResource | null>(null)
+  const [detailResource, setDetailResource] = useState<SelectedResource | null>(getInitialState().detailResource)
   // Topology filter state
-  const [visibleKinds, setVisibleKinds] = useState<Set<NodeKind>>(() => new Set(ALL_NODE_KINDS))
+  const [visibleKinds, setVisibleKinds] = useState<Set<NodeKind>>(() => new Set(DEFAULT_VISIBLE_KINDS))
   const [filterSidebarCollapsed, setFilterSidebarCollapsed] = useState(false)
 
   // Fetch cluster info and namespaces
@@ -51,16 +114,22 @@ function App() {
   const { data: namespaces } = useNamespaces()
 
   // SSE connection for real-time updates
-  const { topology, events, connected, reconnect } = useEventSource(namespace, topologyMode)
+  const { topology, connected, reconnect } = useEventSource(namespace, topologyMode)
 
-  // Handle node selection
+  // Handle node selection - convert TopologyNode to SelectedResource for the drawer
   const handleNodeClick = useCallback((node: TopologyNode) => {
-    setSelectedNode(node)
-  }, [])
+    // Skip Internet node - it's not a real resource
+    if (node.kind === 'Internet') return
 
-  // Close drawer
-  const handleCloseDrawer = useCallback(() => {
-    setSelectedNode(null)
+    // For PodGroup, we can't open a single resource drawer
+    // TODO: Could show a list of pods in the group
+    if (node.kind === 'PodGroup') return
+
+    setSelectedResource({
+      kind: kindToApiResource(node.kind),
+      namespace: (node.data.namespace as string) || '',
+      name: node.name,
+    })
   }, [])
 
   // Update URL when state changes
@@ -69,17 +138,52 @@ function App() {
     if (namespace) params.set('namespace', namespace)
     if (mainView !== 'topology') params.set('view', mainView)
     if (topologyMode !== 'full') params.set('mode', topologyMode)
-    if (!showEvents) params.set('events', 'false')
     if (groupingMode !== 'none' && (namespace !== '' || groupingMode !== 'namespace')) {
       params.set('group', groupingMode)
+    }
+    // Add resource param for events detail view
+    if (mainView === 'events' && detailResource) {
+      params.set('resource', encodeResourceParam(detailResource))
     }
 
     const newUrl = params.toString()
       ? `${window.location.pathname}?${params.toString()}`
       : window.location.pathname
 
-    window.history.replaceState({}, '', newUrl)
-  }, [namespace, mainView, topologyMode, showEvents, groupingMode])
+    // Use pushState for resource navigation (allows back button), replaceState for other changes
+    const currentUrl = window.location.pathname + window.location.search
+    if (newUrl !== currentUrl) {
+      // Check if only the resource changed (for back/forward support)
+      const currentParams = new URLSearchParams(window.location.search)
+      const currentResource = currentParams.get('resource')
+      const newResource = params.get('resource')
+      const isResourceChange = currentResource !== newResource &&
+        currentParams.get('view') === params.get('view')
+
+      if (isResourceChange) {
+        window.history.pushState({ resource: newResource }, '', newUrl)
+      } else {
+        window.history.replaceState({}, '', newUrl)
+      }
+    }
+  }, [namespace, mainView, topologyMode, groupingMode, detailResource])
+
+  // Handle browser back/forward navigation
+  useEffect(() => {
+    const handlePopState = () => {
+      const params = new URLSearchParams(window.location.search)
+      const resource = parseResourceParam(params.get('resource'))
+      const view = (params.get('view') as MainView) || 'topology'
+
+      // Update state from URL
+      setMainView(view)
+      setDetailResource(resource)
+      setNamespace(params.get('namespace') || '')
+    }
+
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
 
   // Auto-adjust grouping when namespace changes
   useEffect(() => {
@@ -93,10 +197,30 @@ function App() {
   }, [namespace])
 
   // Clear resource selection when changing views or namespace
+  // But preserve selectedResource when navigating TO resources view (e.g., from Helm deep link)
+  // And don't clear detailResource if we're navigating to events view (could be from URL)
+  const prevMainView = useRef(mainView)
   useEffect(() => {
-    setSelectedResource(null)
+    const navigatingToResources = mainView === 'resources' && prevMainView.current !== 'resources'
+    prevMainView.current = mainView
+
+    // Don't clear selectedResource when navigating TO resources view (deep link from Helm)
+    if (!navigatingToResources) {
+      setSelectedResource(null)
+    }
+    setSelectedHelmRelease(null)
+    // Only clear detailResource when leaving events view or changing namespace
+    if (mainView !== 'events') {
+      setDetailResource(null)
+    }
+  }, [mainView])
+
+  // Clear detail resource when namespace changes (separate effect)
+  useEffect(() => {
     setDetailResource(null)
-  }, [mainView, namespace])
+    setSelectedResource(null)
+    setSelectedHelmRelease(null)
+  }, [namespace])
 
   // Filter topology based on visible kinds
   const filteredTopology = useMemo((): Topology | null => {
@@ -224,6 +348,17 @@ function App() {
             <Clock className="w-4 h-4" />
             <span className="hidden sm:inline">Events</span>
           </button>
+          <button
+            onClick={() => setMainView('helm')}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm rounded-md transition-colors ${
+              mainView === 'helm'
+                ? 'bg-indigo-500 text-white'
+                : 'text-slate-400 hover:text-white hover:bg-slate-600'
+            }`}
+          >
+            <Package className="w-4 h-4" />
+            <span className="hidden sm:inline">Helm</span>
+          </button>
         </div>
 
         {/* Right: Controls */}
@@ -269,7 +404,7 @@ function App() {
                 viewMode={topologyMode}
                 groupingMode={groupingMode}
                 onNodeClick={handleNodeClick}
-                selectedNodeId={selectedNode?.id}
+                selectedNodeId={selectedResource ? `${apiResourceToNodeIdPrefix(selectedResource.kind)}-${selectedResource.namespace}-${selectedResource.name}` : undefined}
               />
 
               {/* Topology controls overlay - top right */}
@@ -313,22 +448,6 @@ function App() {
                 </div>
               </div>
             </div>
-
-            {/* Events tray (only in topology view) */}
-            {showEvents && (
-              <EventsTray
-                events={events}
-                onClose={() => setShowEvents(false)}
-                onEventClick={(event) => {
-                  // Find and select the related node
-                  const nodeId = `${event.kind.toLowerCase()}-${event.namespace}-${event.name}`
-                  const node = topology?.nodes.find((n) => n.id === nodeId)
-                  if (node) {
-                    setSelectedNode(node)
-                  }
-                }}
-              />
-            )}
           </>
         )}
 
@@ -361,34 +480,40 @@ function App() {
             onNavigateToResource={(kind, ns, name) => setDetailResource({ kind, namespace: ns, name })}
           />
         )}
+
+        {/* Helm view */}
+        {mainView === 'helm' && (
+          <HelmView
+            namespace={namespace}
+            selectedRelease={selectedHelmRelease}
+            onReleaseClick={(ns, name) => {
+              setSelectedHelmRelease({ namespace: ns, name })
+            }}
+          />
+        )}
       </div>
 
-      {/* Resource drawer (topology view) */}
-      {selectedNode && (
-        <ResourceDrawer node={selectedNode} onClose={handleCloseDrawer} />
-      )}
-
-      {/* Resource detail drawer (resources view) */}
-      {mainView === 'resources' && selectedResource && (
+      {/* Resource detail drawer (shared by topology and resources views) */}
+      {selectedResource && (
         <ResourceDetailDrawer
           resource={selectedResource}
           onClose={() => setSelectedResource(null)}
+          onNavigate={(res) => setSelectedResource(res)}
         />
       )}
 
-      {/* Events toggle button (when tray is closed, only in topology view) */}
-      {mainView === 'topology' && !showEvents && (
-        <button
-          onClick={() => setShowEvents(true)}
-          className="fixed bottom-4 right-4 px-4 py-2 bg-slate-700 text-white rounded-lg shadow-lg hover:bg-slate-600 transition-colors flex items-center gap-2"
-        >
-          Events
-          {events.length > 0 && (
-            <span className="bg-indigo-500 text-white text-xs px-2 py-0.5 rounded-full">
-              {events.length}
-            </span>
-          )}
-        </button>
+      {/* Helm release drawer */}
+      {mainView === 'helm' && selectedHelmRelease && (
+        <HelmReleaseDrawer
+          release={selectedHelmRelease}
+          onClose={() => setSelectedHelmRelease(null)}
+          onNavigateToResource={(kind, ns, name) => {
+            // Navigate to resources view and select the resource
+            setSelectedHelmRelease(null)
+            setMainView('resources')
+            setSelectedResource({ kind, namespace: ns, name })
+          }}
+        />
       )}
     </div>
   )

@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/labels"
@@ -45,13 +46,21 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// Track IDs for linking
 	deploymentIDs := make(map[string]string)
+	statefulSetIDs := make(map[string]string)
 	replicaSetIDs := make(map[string]string)
 	replicaSetToDeployment := make(map[string]string) // rsKey -> deploymentID (for shortcut edges)
 	serviceIDs := make(map[string]string)
+	jobIDs := make(map[string]string)
+	cronJobIDs := make(map[string]string)
+	jobToCronJob := make(map[string]string) // jobKey -> cronJobID (for shortcut edges)
 
-	// Track ConfigMap/Secret references from workloads
+	// Track ConfigMap/Secret/PVC references from workloads
+	// Maps workloadID -> set of resource names
 	workloadConfigMapRefs := make(map[string]map[string]bool)
 	workloadSecretRefs := make(map[string]map[string]bool)
+	workloadPVCRefs := make(map[string]map[string]bool)
+	// Track workload namespaces for cross-namespace validation
+	workloadNamespaces := make(map[string]string) // workloadID -> namespace
 
 	// 1. Add Deployment nodes
 	deployments, err := b.cache.Deployments().List(labels.Everything())
@@ -81,13 +90,19 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				},
 			})
 
-			// Track ConfigMap/Secret references
+			// Track ConfigMap/Secret/PVC references
 			refs := extractWorkloadReferences(deploy.Spec.Template.Spec)
+			if len(refs.configMaps) > 0 || len(refs.secrets) > 0 || len(refs.pvcs) > 0 {
+				workloadNamespaces[deployID] = deploy.Namespace
+			}
 			if len(refs.configMaps) > 0 {
 				workloadConfigMapRefs[deployID] = refs.configMaps
 			}
 			if len(refs.secrets) > 0 {
 				workloadSecretRefs[deployID] = refs.secrets
+			}
+			if len(refs.pvcs) > 0 {
+				workloadPVCRefs[deployID] = refs.pvcs
 			}
 		}
 	}
@@ -119,11 +134,17 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 
 			refs := extractWorkloadReferences(ds.Spec.Template.Spec)
+			if len(refs.configMaps) > 0 || len(refs.secrets) > 0 || len(refs.pvcs) > 0 {
+				workloadNamespaces[dsID] = ds.Namespace
+			}
 			if len(refs.configMaps) > 0 {
 				workloadConfigMapRefs[dsID] = refs.configMaps
 			}
 			if len(refs.secrets) > 0 {
 				workloadSecretRefs[dsID] = refs.secrets
+			}
+			if len(refs.pvcs) > 0 {
+				workloadPVCRefs[dsID] = refs.pvcs
 			}
 		}
 	}
@@ -137,6 +158,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			}
 
 			stsID := fmt.Sprintf("statefulset-%s-%s", sts.Namespace, sts.Name)
+			statefulSetIDs[sts.Namespace+"/"+sts.Name] = stsID
 
 			ready := sts.Status.ReadyReplicas
 			total := *sts.Spec.Replicas
@@ -155,16 +177,122 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			})
 
 			refs := extractWorkloadReferences(sts.Spec.Template.Spec)
+			if len(refs.configMaps) > 0 || len(refs.secrets) > 0 || len(refs.pvcs) > 0 {
+				workloadNamespaces[stsID] = sts.Namespace
+			}
 			if len(refs.configMaps) > 0 {
 				workloadConfigMapRefs[stsID] = refs.configMaps
 			}
 			if len(refs.secrets) > 0 {
 				workloadSecretRefs[stsID] = refs.secrets
 			}
+			if len(refs.pvcs) > 0 {
+				workloadPVCRefs[stsID] = refs.pvcs
+			}
 		}
 	}
 
-	// 4. Add ReplicaSet nodes (active ones)
+	// 4. Add CronJob nodes
+	cronjobs, err := b.cache.CronJobs().List(labels.Everything())
+	if err == nil {
+		for _, cj := range cronjobs {
+			if opts.Namespace != "" && cj.Namespace != opts.Namespace {
+				continue
+			}
+
+			cjID := fmt.Sprintf("cronjob-%s-%s", cj.Namespace, cj.Name)
+			cronJobIDs[cj.Namespace+"/"+cj.Name] = cjID
+
+			// Determine status based on last schedule time and active jobs
+			status := StatusHealthy
+			if len(cj.Status.Active) > 0 {
+				status = StatusDegraded // Running
+			}
+
+			nodes = append(nodes, Node{
+				ID:     cjID,
+				Kind:   KindCronJob,
+				Name:   cj.Name,
+				Status: status,
+				Data: map[string]any{
+					"namespace":        cj.Namespace,
+					"schedule":         cj.Spec.Schedule,
+					"suspend":          cj.Spec.Suspend != nil && *cj.Spec.Suspend,
+					"activeJobs":       len(cj.Status.Active),
+					"lastScheduleTime": cj.Status.LastScheduleTime,
+					"labels":           cj.Labels,
+				},
+			})
+		}
+	}
+
+	// 5. Add Job nodes
+	jobs, err := b.cache.Jobs().List(labels.Everything())
+	if err == nil {
+		for _, job := range jobs {
+			if opts.Namespace != "" && job.Namespace != opts.Namespace {
+				continue
+			}
+
+			jobID := fmt.Sprintf("job-%s-%s", job.Namespace, job.Name)
+			jobIDs[job.Namespace+"/"+job.Name] = jobID
+
+			// Determine status
+			status := getJobStatus(job)
+
+			nodes = append(nodes, Node{
+				ID:     jobID,
+				Kind:   KindJob,
+				Name:   job.Name,
+				Status: status,
+				Data: map[string]any{
+					"namespace":   job.Namespace,
+					"completions": job.Spec.Completions,
+					"parallelism": job.Spec.Parallelism,
+					"succeeded":   job.Status.Succeeded,
+					"failed":      job.Status.Failed,
+					"active":      job.Status.Active,
+					"labels":      job.Labels,
+				},
+			})
+
+			// Track ConfigMap/Secret/PVC references
+			refs := extractWorkloadReferences(job.Spec.Template.Spec)
+			if len(refs.configMaps) > 0 || len(refs.secrets) > 0 || len(refs.pvcs) > 0 {
+				workloadNamespaces[jobID] = job.Namespace
+			}
+			if len(refs.configMaps) > 0 {
+				workloadConfigMapRefs[jobID] = refs.configMaps
+			}
+			if len(refs.secrets) > 0 {
+				workloadSecretRefs[jobID] = refs.secrets
+			}
+			if len(refs.pvcs) > 0 {
+				workloadPVCRefs[jobID] = refs.pvcs
+			}
+
+			// Connect to owner CronJob
+			for _, ownerRef := range job.OwnerReferences {
+				if ownerRef.Kind == "CronJob" {
+					ownerKey := job.Namespace + "/" + ownerRef.Name
+					if ownerID, ok := cronJobIDs[ownerKey]; ok {
+						edges = append(edges, Edge{
+							ID:     fmt.Sprintf("%s-to-%s", ownerID, jobID),
+							Source: ownerID,
+							Target: jobID,
+							Type:   EdgeManages,
+						})
+						// Track for shortcut edges (CronJob -> Pod)
+						jobKey := job.Namespace + "/" + job.Name
+						jobToCronJob[jobKey] = ownerID
+					}
+				}
+			}
+		}
+	}
+
+	// 6. Add ReplicaSet nodes (active ones) - if enabled
+	// Even if not shown, we still track them for shortcut edges
 	replicasets, err := b.cache.ReplicaSets().List(labels.Everything())
 	if err == nil {
 		for _, rs := range replicasets {
@@ -180,36 +308,47 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			rsID := fmt.Sprintf("replicaset-%s-%s", rs.Namespace, rs.Name)
 			replicaSetIDs[rs.Namespace+"/"+rs.Name] = rsID
 
-			ready := rs.Status.ReadyReplicas
-			total := *rs.Spec.Replicas
-
-			nodes = append(nodes, Node{
-				ID:     rsID,
-				Kind:   KindReplicaSet,
-				Name:   rs.Name,
-				Status: getDeploymentStatus(ready, total),
-				Data: map[string]any{
-					"namespace":     rs.Namespace,
-					"readyReplicas": ready,
-					"totalReplicas": total,
-					"labels":        rs.Labels,
-				},
-			})
-
-			// Connect to owner Deployment
+			// Track owner for shortcut edges regardless of visibility
 			for _, ownerRef := range rs.OwnerReferences {
 				if ownerRef.Kind == "Deployment" {
 					ownerKey := rs.Namespace + "/" + ownerRef.Name
 					if ownerID, ok := deploymentIDs[ownerKey]; ok {
-						edges = append(edges, Edge{
-							ID:     fmt.Sprintf("%s-to-%s", ownerID, rsID),
-							Source: ownerID,
-							Target: rsID,
-							Type:   EdgeManages,
-						})
-						// Track for shortcut edges (Deployment -> Pod)
 						rsKey := rs.Namespace + "/" + rs.Name
 						replicaSetToDeployment[rsKey] = ownerID
+					}
+				}
+			}
+
+			// Only add node and edges if ReplicaSets are enabled
+			if opts.IncludeReplicaSets {
+				ready := rs.Status.ReadyReplicas
+				total := *rs.Spec.Replicas
+
+				nodes = append(nodes, Node{
+					ID:     rsID,
+					Kind:   KindReplicaSet,
+					Name:   rs.Name,
+					Status: getDeploymentStatus(ready, total),
+					Data: map[string]any{
+						"namespace":     rs.Namespace,
+						"readyReplicas": ready,
+						"totalReplicas": total,
+						"labels":        rs.Labels,
+					},
+				})
+
+				// Connect to owner Deployment
+				for _, ownerRef := range rs.OwnerReferences {
+					if ownerRef.Kind == "Deployment" {
+						ownerKey := rs.Namespace + "/" + ownerRef.Name
+						if ownerID, ok := deploymentIDs[ownerKey]; ok {
+							edges = append(edges, Edge{
+								ID:     fmt.Sprintf("%s-to-%s", ownerID, rsID),
+								Source: ownerID,
+								Target: rsID,
+								Type:   EdgeManages,
+							})
+						}
 					}
 				}
 			}
@@ -303,21 +442,24 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					ownerKey := pod.Namespace + "/" + ownerRef.Name
 					switch ownerRef.Kind {
 					case "ReplicaSet":
-						if ownerID, ok := replicaSetIDs[ownerKey]; ok {
-							edges = append(edges, Edge{
-								ID:     fmt.Sprintf("%s-to-%s", ownerID, podID),
-								Source: ownerID,
-								Target: podID,
-								Type:   EdgeManages,
-							})
-							// Add shortcut edge: Deployment -> Pod (for when ReplicaSet is filtered out)
+						if opts.IncludeReplicaSets {
+							// ReplicaSets visible: connect Pod to ReplicaSet
+							if ownerID, ok := replicaSetIDs[ownerKey]; ok {
+								edges = append(edges, Edge{
+									ID:     fmt.Sprintf("%s-to-%s", ownerID, podID),
+									Source: ownerID,
+									Target: podID,
+									Type:   EdgeManages,
+								})
+							}
+						} else {
+							// ReplicaSets hidden: use shortcut edge directly to Deployment
 							if deployID, ok := replicaSetToDeployment[ownerKey]; ok {
 								edges = append(edges, Edge{
-									ID:                fmt.Sprintf("%s-to-%s-shortcut", deployID, podID),
-									Source:            deployID,
-									Target:            podID,
-									Type:              EdgeManages,
-									SkipIfKindVisible: string(KindReplicaSet),
+									ID:     fmt.Sprintf("%s-to-%s", deployID, podID),
+									Source: deployID,
+									Target: podID,
+									Type:   EdgeManages,
 								})
 							}
 						}
@@ -337,6 +479,25 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 							Target: podID,
 							Type:   EdgeManages,
 						})
+					case "Job":
+						if ownerID, ok := jobIDs[ownerKey]; ok {
+							edges = append(edges, Edge{
+								ID:     fmt.Sprintf("%s-to-%s", ownerID, podID),
+								Source: ownerID,
+								Target: podID,
+								Type:   EdgeManages,
+							})
+							// Add shortcut edge: CronJob -> Pod (for when Job is filtered out)
+							if cronJobID, ok := jobToCronJob[ownerKey]; ok {
+								edges = append(edges, Edge{
+									ID:                fmt.Sprintf("%s-to-%s-shortcut", cronJobID, podID),
+									Source:            cronJobID,
+									Target:            podID,
+									Type:              EdgeManages,
+									SkipIfKindVisible: string(KindJob),
+								})
+							}
+						}
 					}
 				}
 			} else {
@@ -412,21 +573,24 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					ownerKey := firstPod.Namespace + "/" + ownerRef.Name
 					switch ownerRef.Kind {
 					case "ReplicaSet":
-						if ownerID, ok := replicaSetIDs[ownerKey]; ok {
-							edges = append(edges, Edge{
-								ID:     fmt.Sprintf("%s-to-%s", ownerID, podGroupID),
-								Source: ownerID,
-								Target: podGroupID,
-								Type:   EdgeManages,
-							})
-							// Add shortcut edge: Deployment -> PodGroup (for when ReplicaSet is filtered out)
+						if opts.IncludeReplicaSets {
+							// ReplicaSets visible: connect PodGroup to ReplicaSet
+							if ownerID, ok := replicaSetIDs[ownerKey]; ok {
+								edges = append(edges, Edge{
+									ID:     fmt.Sprintf("%s-to-%s", ownerID, podGroupID),
+									Source: ownerID,
+									Target: podGroupID,
+									Type:   EdgeManages,
+								})
+							}
+						} else {
+							// ReplicaSets hidden: use shortcut edge directly to Deployment
 							if deployID, ok := replicaSetToDeployment[ownerKey]; ok {
 								edges = append(edges, Edge{
-									ID:                fmt.Sprintf("%s-to-%s-shortcut", deployID, podGroupID),
-									Source:            deployID,
-									Target:            podGroupID,
-									Type:              EdgeManages,
-									SkipIfKindVisible: string(KindReplicaSet),
+									ID:     fmt.Sprintf("%s-to-%s", deployID, podGroupID),
+									Source: deployID,
+									Target: podGroupID,
+									Type:   EdgeManages,
 								})
 							}
 						}
@@ -446,13 +610,32 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 							Target: podGroupID,
 							Type:   EdgeManages,
 						})
+					case "Job":
+						if ownerID, ok := jobIDs[ownerKey]; ok {
+							edges = append(edges, Edge{
+								ID:     fmt.Sprintf("%s-to-%s", ownerID, podGroupID),
+								Source: ownerID,
+								Target: podGroupID,
+								Type:   EdgeManages,
+							})
+							// Add shortcut edge: CronJob -> PodGroup (for when Job is filtered out)
+							if cronJobID, ok := jobToCronJob[ownerKey]; ok {
+								edges = append(edges, Edge{
+									ID:                fmt.Sprintf("%s-to-%s-shortcut", cronJobID, podGroupID),
+									Source:            cronJobID,
+									Target:            podGroupID,
+									Type:              EdgeManages,
+									SkipIfKindVisible: string(KindJob),
+								})
+							}
+						}
 					}
 				}
 			}
 		}
 	}
 
-	// 6. Add Service nodes
+	// 8. Add Service nodes
 	services, err := b.cache.Services().List(labels.Everything())
 	if err == nil {
 		for _, svc := range services {
@@ -563,11 +746,15 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					continue
 				}
 
-				// Only include ConfigMaps that are referenced
+				// Only include ConfigMaps that are referenced by workloads in the same namespace
 				cmID := fmt.Sprintf("configmap-%s-%s", cm.Namespace, cm.Name)
 				isReferenced := false
 
 				for workloadID, refs := range workloadConfigMapRefs {
+					// Only match if workload is in the same namespace as the ConfigMap
+					if workloadNamespaces[workloadID] != cm.Namespace {
+						continue
+					}
 					if refs[cm.Name] {
 						isReferenced = true
 						edges = append(edges, Edge{
@@ -596,7 +783,116 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// 9. Add HPA nodes
+	// 9. Add Secret nodes (if enabled)
+	if opts.IncludeSecrets {
+		secrets, err := b.cache.Secrets().List(labels.Everything())
+		if err == nil {
+			for _, secret := range secrets {
+				if opts.Namespace != "" && secret.Namespace != opts.Namespace {
+					continue
+				}
+
+				// Only include Secrets that are referenced by workloads in the same namespace
+				secretID := fmt.Sprintf("secret-%s-%s", secret.Namespace, secret.Name)
+				isReferenced := false
+
+				for workloadID, refs := range workloadSecretRefs {
+					// Only match if workload is in the same namespace as the Secret
+					if workloadNamespaces[workloadID] != secret.Namespace {
+						continue
+					}
+					if refs[secret.Name] {
+						isReferenced = true
+						edges = append(edges, Edge{
+							ID:     fmt.Sprintf("%s-to-%s", secretID, workloadID),
+							Source: secretID,
+							Target: workloadID,
+							Type:   EdgeConfigures,
+						})
+					}
+				}
+
+				if isReferenced {
+					nodes = append(nodes, Node{
+						ID:     secretID,
+						Kind:   KindSecret,
+						Name:   secret.Name,
+						Status: StatusHealthy,
+						Data: map[string]any{
+							"namespace": secret.Namespace,
+							"type":      string(secret.Type),
+							"keys":      len(secret.Data),
+							"labels":    secret.Labels,
+						},
+					})
+				}
+			}
+		}
+	}
+
+	// 10. Add PVC nodes (if enabled)
+	if opts.IncludePVCs {
+		pvcs, err := b.cache.PersistentVolumeClaims().List(labels.Everything())
+		if err == nil {
+			for _, pvc := range pvcs {
+				if opts.Namespace != "" && pvc.Namespace != opts.Namespace {
+					continue
+				}
+
+				// Only include PVCs that are referenced by workloads in the same namespace
+				pvcID := fmt.Sprintf("pvc-%s-%s", pvc.Namespace, pvc.Name)
+				isReferenced := false
+
+				for workloadID, refs := range workloadPVCRefs {
+					// Only match if workload is in the same namespace as the PVC
+					if workloadNamespaces[workloadID] != pvc.Namespace {
+						continue
+					}
+					if refs[pvc.Name] {
+						isReferenced = true
+						edges = append(edges, Edge{
+							ID:     fmt.Sprintf("%s-to-%s", pvcID, workloadID),
+							Source: pvcID,
+							Target: workloadID,
+							Type:   EdgeUses,
+						})
+					}
+				}
+
+				if isReferenced {
+					// Get storage info
+					var storageSize string
+					if pvc.Spec.Resources.Requests != nil {
+						if storage, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
+							storageSize = storage.String()
+						}
+					}
+
+					var storageClass string
+					if pvc.Spec.StorageClassName != nil {
+						storageClass = *pvc.Spec.StorageClassName
+					}
+
+					nodes = append(nodes, Node{
+						ID:     pvcID,
+						Kind:   KindPVC,
+						Name:   pvc.Name,
+						Status: getPVCStatus(pvc.Status.Phase),
+						Data: map[string]any{
+							"namespace":    pvc.Namespace,
+							"storageClass": storageClass,
+							"accessModes":  pvc.Spec.AccessModes,
+							"storage":      storageSize,
+							"phase":        string(pvc.Status.Phase),
+							"labels":       pvc.Labels,
+						},
+					})
+				}
+			}
+		}
+	}
+
+	// 11. Add HPA nodes
 	hpas, err := b.cache.HorizontalPodAutoscalers().List(labels.Everything())
 	if err == nil {
 		for _, hpa := range hpas {
@@ -623,11 +919,16 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			// Connect to target
 			targetKind := hpa.Spec.ScaleTargetRef.Kind
 			targetName := hpa.Spec.ScaleTargetRef.Name
+			targetKey := hpa.Namespace + "/" + targetName
 
 			var targetID string
 			switch targetKind {
 			case "Deployment":
-				targetID = deploymentIDs[hpa.Namespace+"/"+targetName]
+				targetID = deploymentIDs[targetKey]
+			case "StatefulSet":
+				targetID = statefulSetIDs[targetKey]
+			case "ReplicaSet":
+				targetID = replicaSetIDs[targetKey]
 			}
 
 			if targetID != "" {
@@ -1021,6 +1322,36 @@ func getDeploymentStatus(ready, total int32) HealthStatus {
 	return StatusUnhealthy
 }
 
+func getJobStatus(job *batchv1.Job) HealthStatus {
+	// Check completion conditions
+	for _, cond := range job.Status.Conditions {
+		if cond.Type == batchv1.JobComplete && cond.Status == corev1.ConditionTrue {
+			return StatusHealthy
+		}
+		if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+			return StatusUnhealthy
+		}
+	}
+	// Still running
+	if job.Status.Active > 0 {
+		return StatusDegraded
+	}
+	return StatusUnknown
+}
+
+func getPVCStatus(phase corev1.PersistentVolumeClaimPhase) HealthStatus {
+	switch phase {
+	case corev1.ClaimBound:
+		return StatusHealthy
+	case corev1.ClaimPending:
+		return StatusDegraded
+	case corev1.ClaimLost:
+		return StatusUnhealthy
+	default:
+		return StatusUnknown
+	}
+}
+
 func matchesSelector(labels, selector map[string]string) bool {
 	if len(selector) == 0 {
 		return false
@@ -1036,12 +1367,14 @@ func matchesSelector(labels, selector map[string]string) bool {
 type workloadRefs struct {
 	configMaps map[string]bool
 	secrets    map[string]bool
+	pvcs       map[string]bool
 }
 
 func extractWorkloadReferences(spec corev1.PodSpec) workloadRefs {
 	refs := workloadRefs{
 		configMaps: make(map[string]bool),
 		secrets:    make(map[string]bool),
+		pvcs:       make(map[string]bool),
 	}
 
 	// From containers
@@ -1073,6 +1406,9 @@ func extractWorkloadReferences(spec corev1.PodSpec) workloadRefs {
 		}
 		if volume.Secret != nil {
 			refs.secrets[volume.Secret.SecretName] = true
+		}
+		if volume.PersistentVolumeClaim != nil {
+			refs.pvcs[volume.PersistentVolumeClaim.ClaimName] = true
 		}
 	}
 
