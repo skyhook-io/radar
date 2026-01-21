@@ -7,7 +7,7 @@ export function getStatusColor(status: string): string {
     return 'bg-green-500/20 text-green-400'
   }
   if (statusLower === 'superseded') {
-    return 'bg-slate-500/20 text-slate-400'
+    return 'bg-theme-hover/50 text-theme-text-secondary'
   }
   if (statusLower === 'failed') {
     return 'bg-red-500/20 text-red-400'
@@ -19,9 +19,9 @@ export function getStatusColor(status: string): string {
     return 'bg-orange-500/20 text-orange-400'
   }
   if (statusLower === 'uninstalled') {
-    return 'bg-slate-500/20 text-slate-400'
+    return 'bg-theme-hover/50 text-theme-text-secondary'
   }
-  return 'bg-slate-500/20 text-slate-400'
+  return 'bg-theme-hover/50 text-theme-text-secondary'
 }
 
 // Format age from ISO date string

@@ -5,7 +5,7 @@ import { kindToPlural } from './helm-utils'
 
 // Status color mapping
 function getStatusColor(status?: string): string {
-  if (!status) return 'bg-slate-600/50 text-slate-400'
+  if (!status) return 'bg-theme-hover/50 text-theme-text-secondary'
 
   const statusLower = status.toLowerCase()
 
@@ -29,7 +29,7 @@ function getStatusColor(status?: string): string {
     return 'bg-blue-500/20 text-blue-400'
   }
 
-  return 'bg-slate-600/50 text-slate-400'
+  return 'bg-theme-hover/50 text-theme-text-secondary'
 }
 
 interface OwnedResourcesProps {
@@ -94,8 +94,8 @@ function computeHealthSummary(resources: HelmOwnedResource[]) {
 export function OwnedResources({ resources, onNavigate }: OwnedResourcesProps) {
   if (!resources || resources.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-32 text-slate-500 gap-2">
-        <Link2 className="w-8 h-8 text-slate-600" />
+      <div className="flex flex-col items-center justify-center h-32 text-theme-text-tertiary gap-2">
+        <Link2 className="w-8 h-8 text-theme-text-disabled" />
         <span>No owned resources</span>
       </div>
     )
@@ -108,7 +108,7 @@ export function OwnedResources({ resources, onNavigate }: OwnedResourcesProps) {
     <div className="p-4 space-y-4">
       {/* Health summary */}
       <div className="flex items-center justify-between">
-        <div className="text-sm text-slate-400">
+        <div className="text-sm text-theme-text-secondary">
           {resources.length} resource{resources.length !== 1 ? 's' : ''} created by this release
         </div>
         <div className="flex items-center gap-2">
@@ -134,11 +134,11 @@ export function OwnedResources({ resources, onNavigate }: OwnedResourcesProps) {
         const Icon = getIconForKind(kind)
 
         return (
-          <div key={kind} className="bg-slate-700/30 rounded-lg p-3">
+          <div key={kind} className="bg-theme-elevated/30 rounded-lg p-3">
             <div className="flex items-center gap-2 mb-2">
-              <Icon className="w-4 h-4 text-slate-400" />
-              <span className="text-sm font-medium text-slate-300">{kind}</span>
-              <span className="text-xs text-slate-500">({items.length})</span>
+              <Icon className="w-4 h-4 text-theme-text-secondary" />
+              <span className="text-sm font-medium text-theme-text-secondary">{kind}</span>
+              <span className="text-xs text-theme-text-tertiary">({items.length})</span>
             </div>
             <div className="space-y-1">
               {items.map((resource) => (
@@ -178,21 +178,21 @@ function ResourceItem({ resource, onNavigate }: ResourceItemProps) {
       className={clsx(
         'flex items-center justify-between p-2 rounded text-sm',
         canNavigate
-          ? 'cursor-pointer hover:bg-slate-700/50 group'
-          : 'bg-slate-800/50'
+          ? 'cursor-pointer hover:bg-theme-elevated/50 group'
+          : 'bg-theme-surface/50'
       )}
     >
       <div className="flex items-center gap-2 min-w-0 flex-1">
-        <span className="text-white truncate">{resource.name}</span>
+        <span className="text-theme-text-primary truncate">{resource.name}</span>
         {resource.namespace && (
-          <span className="text-xs text-slate-500 shrink-0">{resource.namespace}</span>
+          <span className="text-xs text-theme-text-tertiary shrink-0">{resource.namespace}</span>
         )}
       </div>
 
       <div className="flex items-center gap-2 shrink-0">
         {/* Ready count (e.g., 3/3) */}
         {resource.ready && (
-          <span className="text-xs text-slate-400 font-mono">{resource.ready}</span>
+          <span className="text-xs text-theme-text-secondary font-mono">{resource.ready}</span>
         )}
 
         {/* Status badge */}
@@ -213,7 +213,7 @@ function ResourceItem({ resource, onNavigate }: ResourceItemProps) {
         )}
 
         {canNavigate && (
-          <ExternalLink className="w-3.5 h-3.5 text-slate-500 opacity-0 group-hover:opacity-100 transition-opacity" />
+          <ExternalLink className="w-3.5 h-3.5 text-theme-text-tertiary opacity-0 group-hover:opacity-100 transition-opacity" />
         )}
       </div>
     </div>

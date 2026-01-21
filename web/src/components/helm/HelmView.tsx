@@ -43,32 +43,32 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         {/* Toolbar */}
-        <div className="flex items-center gap-4 px-4 py-3 border-b border-slate-700 bg-slate-800/50 shrink-0">
-          <div className="flex items-center gap-2 text-slate-400">
+        <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0">
+          <div className="flex items-center gap-2 text-theme-text-secondary">
             <Package className="w-5 h-5" />
             <span className="font-medium">Helm Releases</span>
             {releases && (
-              <span className="text-xs bg-slate-700 px-2 py-0.5 rounded">
+              <span className="text-xs bg-theme-elevated px-2 py-0.5 rounded">
                 {releases.length}
               </span>
             )}
             {!isFullyLoaded && (
-              <RefreshCw className="w-3.5 h-3.5 animate-spin text-slate-500" />
+              <RefreshCw className="w-3.5 h-3.5 animate-spin text-theme-text-tertiary" />
             )}
           </div>
           <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
             <input
               type="text"
               placeholder="Search releases..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full max-w-md pl-10 pr-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
           <button
             onClick={() => refetch()}
-            className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg"
+            className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg"
             title="Refresh"
           >
             <RefreshCw className="w-4 h-4" />
@@ -78,12 +78,12 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
         {/* Table */}
         <div className="flex-1 overflow-auto">
           {isLoading ? (
-            <div className="flex items-center justify-center h-full text-slate-500">
+            <div className="flex items-center justify-center h-full text-theme-text-tertiary">
               Loading...
             </div>
           ) : filteredReleases.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-2">
-              <Package className="w-12 h-12 text-slate-600" />
+            <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary gap-2">
+              <Package className="w-12 h-12 text-theme-text-disabled" />
               <span>No Helm releases found</span>
               {searchTerm && (
                 <button
@@ -96,32 +96,32 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
             </div>
           ) : (
             <table className="w-full table-fixed">
-              <thead className="bg-slate-800 sticky top-0 z-10">
+              <thead className="bg-theme-surface sticky top-0 z-10">
                 <tr>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide">
+                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide">
                     Name
                   </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide w-32">
+                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-32">
                     Namespace
                   </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide w-48">
+                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-48">
                     Chart
                   </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide w-24 hidden xl:table-cell">
+                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-24 hidden xl:table-cell">
                     App Version
                   </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide w-28">
+                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-28">
                     Status
                   </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide w-20">
+                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-20">
                     Rev
                   </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-slate-400 uppercase tracking-wide w-24">
+                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-24">
                     Updated
                   </th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-700/50">
+              <tbody className="table-divide-subtle">
                 {filteredReleases.map((release) => (
                   <ReleaseRow
                     key={`${release.namespace}-${release.name}`}
@@ -158,13 +158,13 @@ function ReleaseRow({ release, upgradeInfo, isSelected, onClick }: ReleaseRowPro
         'cursor-pointer transition-colors',
         isSelected
           ? 'bg-blue-500/20 hover:bg-blue-500/30'
-          : 'hover:bg-slate-800/50'
+          : 'hover:bg-theme-surface/50'
       )}
     >
       <td className="px-4 py-3">
         <div className="flex items-center gap-2">
-          <Package className="w-4 h-4 text-slate-500 flex-shrink-0" />
-          <span className="text-sm text-white font-medium truncate">{release.name}</span>
+          <Package className="w-4 h-4 text-theme-text-tertiary flex-shrink-0" />
+          <span className="text-sm text-theme-text-primary font-medium truncate">{release.name}</span>
           {upgradeInfo?.updateAvailable && (
             <Tooltip content={`Upgrade available: ${release.chartVersion} → ${upgradeInfo.latestVersion}`}>
               <span className="flex items-center gap-0.5 px-1.5 py-0.5 text-xs font-medium rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 shrink-0">
@@ -175,17 +175,17 @@ function ReleaseRow({ release, upgradeInfo, isSelected, onClick }: ReleaseRowPro
         </div>
       </td>
       <td className="px-4 py-3 w-32">
-        <span className="text-sm text-slate-400">{release.namespace}</span>
+        <span className="text-sm text-theme-text-secondary">{release.namespace}</span>
       </td>
       <td className="px-4 py-3 w-48">
         <Tooltip content={`${release.chart}-${release.chartVersion}`}>
-          <span className="text-sm text-slate-400 truncate block">
+          <span className="text-sm text-theme-text-secondary truncate block">
             {truncate(`${release.chart}-${release.chartVersion}`, 35)}
           </span>
         </Tooltip>
       </td>
       <td className="px-4 py-3 w-24 hidden xl:table-cell">
-        <span className="text-sm text-slate-400">{release.appVersion || '-'}</span>
+        <span className="text-sm text-theme-text-secondary">{release.appVersion || '-'}</span>
       </td>
       <td className="px-4 py-3 w-28">
         <span
@@ -198,11 +198,11 @@ function ReleaseRow({ release, upgradeInfo, isSelected, onClick }: ReleaseRowPro
         </span>
       </td>
       <td className="px-4 py-3 w-20">
-        <span className="text-sm text-slate-400">{release.revision}</span>
+        <span className="text-sm text-theme-text-secondary">{release.revision}</span>
       </td>
       <td className="px-4 py-3 w-24">
         <Tooltip content={release.updated}>
-          <span className="text-sm text-slate-400">
+          <span className="text-sm text-theme-text-secondary">
             {formatAge(release.updated)}
           </span>
         </Tooltip>

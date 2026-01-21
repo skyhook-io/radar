@@ -7,6 +7,31 @@ export default {
   theme: {
     extend: {
       colors: {
+        // Theme-aware colors (use CSS variables)
+        'theme': {
+          'base': 'var(--bg-base)',
+          'surface': 'var(--bg-surface)',
+          'elevated': 'var(--bg-elevated)',
+          'hover': 'var(--bg-hover)',
+          'active': 'var(--bg-active)',
+        },
+        'theme-text': {
+          'primary': 'var(--text-primary)',
+          'secondary': 'var(--text-secondary)',
+          'tertiary': 'var(--text-tertiary)',
+          'disabled': 'var(--text-disabled)',
+        },
+        'theme-border': {
+          DEFAULT: 'var(--border-default)',
+          'light': 'var(--border-light)',
+          'subtle': 'var(--border-subtle)',
+        },
+        'accent': {
+          DEFAULT: 'var(--accent)',
+          'light': 'var(--accent-light)',
+          'muted': 'var(--accent-muted)',
+          'text': 'var(--accent-text)',
+        },
         // Skyhook brand colors
         'skyhook': {
           DEFAULT: '#2D7AFF',
@@ -35,6 +60,17 @@ export default {
         'k8s-hpa': '#ec4899',
         'k8s-job': '#a855f7',
         'k8s-cronjob': '#d946ef',
+      },
+      boxShadow: {
+        'theme-sm': 'var(--shadow-sm)',
+        'theme-md': 'var(--shadow-md)',
+        'theme-lg': 'var(--shadow-lg)',
+      },
+      ringColor: {
+        'accent': 'var(--accent)',
+      },
+      ringOffsetColor: {
+        'theme-base': 'var(--bg-base)',
       },
     },
   },

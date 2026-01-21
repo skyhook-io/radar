@@ -144,22 +144,22 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
     : logLines
 
   return (
-    <div className="flex flex-col h-full bg-slate-900">
+    <div className="flex flex-col h-full bg-theme-base">
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-700 bg-slate-800">
+      <div className="flex items-center gap-2 px-3 py-2 border-b border-theme-border bg-theme-surface">
         {/* Container selector */}
         {containers.length > 1 && (
           <div className="relative">
             <select
               value={selectedContainer}
               onChange={(e) => setSelectedContainer(e.target.value)}
-              className="appearance-none bg-slate-700 text-white text-xs rounded px-2 py-1.5 pr-6 border border-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
+              className="appearance-none bg-theme-elevated text-theme-text-primary text-xs rounded px-2 py-1.5 pr-6 border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500"
             >
               {containers.map(c => (
                 <option key={c} value={c}>{c}</option>
               ))}
             </select>
-            <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none" />
+            <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-text-secondary pointer-events-none" />
           </div>
         )}
 
@@ -168,8 +168,8 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
           onClick={isStreaming ? stopStreaming : startStreaming}
           className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors ${
             isStreaming
-              ? 'bg-green-600 text-white hover:bg-green-700'
-              : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+              ? 'bg-green-600 text-theme-text-primary hover:bg-green-700'
+              : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover'
           }`}
           title={isStreaming ? 'Stop streaming' : 'Start streaming'}
         >
@@ -181,19 +181,19 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
         <button
           onClick={() => refetch()}
           disabled={isLoading || isStreaming}
-          className="flex items-center gap-1.5 px-2 py-1.5 text-xs rounded bg-slate-700 text-slate-300 hover:bg-slate-600 disabled:opacity-50 disabled:cursor-not-allowed"
+          className="flex items-center gap-1.5 px-2 py-1.5 text-xs rounded bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover disabled:opacity-50 disabled:cursor-not-allowed"
           title="Refresh logs"
         >
           <RotateCcw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
         </button>
 
         {/* Previous logs toggle */}
-        <label className="flex items-center gap-1.5 text-xs text-slate-400 cursor-pointer">
+        <label className="flex items-center gap-1.5 text-xs text-theme-text-secondary cursor-pointer">
           <input
             type="checkbox"
             checked={showPrevious}
             onChange={(e) => setShowPrevious(e.target.checked)}
-            className="w-3 h-3 rounded border-slate-600 bg-slate-700 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+            className="w-3 h-3 rounded border-theme-border-light bg-theme-elevated text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
           />
           <span>Previous</span>
         </label>
@@ -202,7 +202,7 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
         <select
           value={tailLines}
           onChange={(e) => setTailLines(Number(e.target.value))}
-          className="appearance-none bg-slate-700 text-white text-xs rounded px-2 py-1.5 pr-5 border border-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-500"
+          className="appearance-none bg-theme-elevated text-theme-text-primary text-xs rounded px-2 py-1.5 pr-5 border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500"
         >
           <option value={100}>100 lines</option>
           <option value={500}>500 lines</option>
@@ -216,7 +216,7 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
         <button
           onClick={() => setShowSearch(!showSearch)}
           className={`p-1.5 rounded transition-colors ${
-            showSearch ? 'bg-blue-600 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'
+            showSearch ? 'bg-blue-600 text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
           }`}
           title="Search logs"
         >
@@ -226,7 +226,7 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
         {/* Download */}
         <button
           onClick={downloadLogs}
-          className="p-1.5 rounded text-slate-400 hover:text-white hover:bg-slate-700"
+          className="p-1.5 rounded text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated"
           title="Download logs"
         >
           <Download className="w-4 h-4" />
@@ -235,24 +235,24 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
 
       {/* Search bar */}
       {showSearch && (
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-slate-700 bg-slate-800/50">
-          <Search className="w-4 h-4 text-slate-400" />
+        <div className="flex items-center gap-2 px-3 py-2 border-b border-theme-border bg-theme-surface/50">
+          <Search className="w-4 h-4 text-theme-text-secondary" />
           <input
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             placeholder="Search logs..."
-            className="flex-1 bg-transparent text-white text-sm placeholder-slate-500 focus:outline-none"
+            className="flex-1 bg-transparent text-theme-text-primary text-sm placeholder-theme-text-disabled focus:outline-none"
             autoFocus
           />
           {searchQuery && (
             <>
-              <span className="text-xs text-slate-500">
+              <span className="text-xs text-theme-text-tertiary">
                 {filteredLines.length} / {logLines.length}
               </span>
               <button
                 onClick={() => setSearchQuery('')}
-                className="p-1 rounded text-slate-400 hover:text-white"
+                className="p-1 rounded text-theme-text-secondary hover:text-theme-text-primary"
               >
                 <X className="w-3 h-3" />
               </button>
@@ -268,14 +268,14 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
         className="flex-1 overflow-auto font-mono text-xs"
       >
         {isLoading && logLines.length === 0 ? (
-          <div className="flex items-center justify-center h-full text-slate-500">
+          <div className="flex items-center justify-center h-full text-theme-text-tertiary">
             <div className="flex items-center gap-2">
               <RotateCcw className="w-4 h-4 animate-spin" />
               <span>Loading logs...</span>
             </div>
           </div>
         ) : filteredLines.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-500 gap-2">
+          <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary gap-2">
             <Terminal className="w-8 h-8" />
             <span>No logs available</span>
           </div>
@@ -297,7 +297,7 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
               logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight
             }
           }}
-          className="absolute bottom-4 right-4 px-3 py-1.5 bg-blue-600 text-white text-xs rounded-full shadow-lg hover:bg-blue-700"
+          className="absolute bottom-4 right-4 px-3 py-1.5 bg-blue-600 text-theme-text-primary text-xs rounded-full shadow-lg hover:bg-blue-700"
         >
           Scroll to bottom
         </button>
@@ -317,10 +317,10 @@ function LogLineItem({ line, searchQuery }: { line: LogLine; searchQuery: string
     : line.content
 
   return (
-    <div className="flex hover:bg-slate-800/50 group leading-5">
+    <div className="flex hover:bg-theme-surface/50 group leading-5">
       {/* Timestamp */}
       {line.timestamp && (
-        <span className="text-slate-500 select-none pr-2 whitespace-nowrap">
+        <span className="text-theme-text-tertiary select-none pr-2 whitespace-nowrap">
           {formatTimestamp(line.timestamp)}
         </span>
       )}
@@ -369,9 +369,9 @@ function getLogLevelColor(content: string): string {
     return 'text-yellow-400'
   }
   if (lower.includes('debug') || lower.includes('trace')) {
-    return 'text-slate-400'
+    return 'text-theme-text-secondary'
   }
-  return 'text-slate-200'
+  return 'text-theme-text-primary'
 }
 
 // Highlight search matches in text

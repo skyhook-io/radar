@@ -376,7 +376,7 @@ export function TopologyGraph({
 
   if (!topology || topology.nodes.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-slate-400">
+      <div className="flex-1 flex items-center justify-center text-theme-text-secondary">
         <div className="text-center">
           <p className="text-lg">No resources found</p>
           <p className="text-sm mt-2">
@@ -404,11 +404,11 @@ export function TopologyGraph({
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#334155" />
         <Controls
-          className="bg-slate-800 border border-slate-700 rounded-lg"
+          className="bg-theme-surface border border-theme-border rounded-lg"
           showInteractive={false}
         />
         <MiniMap
-          className="bg-slate-800 border border-slate-700 rounded-lg"
+          className="bg-theme-surface border border-theme-border rounded-lg"
           nodeColor={(node) => getNodeColor(node.data?.kind as string || node.data?.type as string || '')}
           maskColor="rgba(15, 23, 42, 0.8)"
         />

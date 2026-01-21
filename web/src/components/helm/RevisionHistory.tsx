@@ -31,8 +31,8 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
 
   if (!history || history.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-32 text-slate-500 gap-2">
-        <History className="w-8 h-8 text-slate-600" />
+      <div className="flex flex-col items-center justify-center h-32 text-theme-text-tertiary gap-2">
+        <History className="w-8 h-8 text-theme-text-disabled" />
         <span>No revision history</span>
       </div>
     )
@@ -49,7 +49,7 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
           </div>
           <button
             onClick={() => setSelectedForCompare(null)}
-            className="text-xs text-slate-400 hover:text-white"
+            className="text-xs text-theme-text-secondary hover:text-theme-text-primary"
           >
             Cancel
           </button>
@@ -66,17 +66,17 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
             <div
               key={revision.revision}
               className={clsx(
-                'relative bg-slate-700/30 rounded-lg p-4 border transition-colors',
+                'relative bg-theme-elevated/30 rounded-lg p-4 border transition-colors',
                 isCurrent
                   ? 'border-green-500/50'
                   : isSelectedForCompare
                   ? 'border-blue-500/50 bg-blue-500/10'
-                  : 'border-transparent hover:border-slate-600'
+                  : 'border-transparent hover:border-theme-border-light'
               )}
             >
               {/* Timeline connector */}
               {index < history.length - 1 && (
-                <div className="absolute left-7 top-14 bottom-0 w-0.5 bg-slate-600 -mb-2" />
+                <div className="absolute left-7 top-14 bottom-0 w-0.5 bg-theme-hover -mb-2" />
               )}
 
               <div className="flex items-start gap-3">
@@ -85,8 +85,8 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
                   className={clsx(
                     'w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold shrink-0 z-10',
                     isCurrent
-                      ? 'bg-green-500 text-white'
-                      : 'bg-slate-600 text-slate-300'
+                      ? 'bg-green-500 text-theme-text-primary'
+                      : 'bg-theme-hover text-theme-text-secondary'
                   )}
                 >
                   {revision.revision}
@@ -95,7 +95,7 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
                 {/* Revision details */}
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium text-white">{revision.chart}</span>
+                    <span className="text-sm font-medium text-theme-text-primary">{revision.chart}</span>
                     <span className={clsx('px-1.5 py-0.5 text-xs font-medium rounded', getStatusColor(revision.status))}>
                       {revision.status}
                     </span>
@@ -106,20 +106,20 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
                     )}
                   </div>
 
-                  <div className="flex items-center gap-4 mt-1 text-xs text-slate-500">
+                  <div className="flex items-center gap-4 mt-1 text-xs text-theme-text-tertiary">
                     <span title={revision.updated}>{formatDate(revision.updated)}</span>
                     <span>{formatAge(revision.updated)} ago</span>
                   </div>
 
                   {revision.description && (
-                    <p className="mt-2 text-sm text-slate-400 truncate">{revision.description}</p>
+                    <p className="mt-2 text-sm text-theme-text-secondary truncate">{revision.description}</p>
                   )}
 
                   {/* Actions */}
                   <div className="flex items-center gap-2 mt-3">
                     <button
                       onClick={() => onViewRevision(revision.revision)}
-                      className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded"
+                      className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
                     >
                       <Eye className="w-3.5 h-3.5" />
                       View Manifest
@@ -129,8 +129,8 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
                       className={clsx(
                         'flex items-center gap-1 px-2 py-1 text-xs rounded',
                         isSelectedForCompare
-                          ? 'bg-blue-500 text-white'
-                          : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                          ? 'bg-blue-500 text-theme-text-primary'
+                          : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
                       )}
                     >
                       {isSelectedForCompare ? (

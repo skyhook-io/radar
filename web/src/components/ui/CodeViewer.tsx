@@ -66,7 +66,7 @@ export function CodeViewer({
       {showCopyButton && (
         <button
           onClick={handleCopy}
-          className="absolute top-2 right-2 z-10 flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white bg-slate-800/80 hover:bg-slate-700 rounded backdrop-blur-sm"
+          className="absolute top-2 right-2 z-10 flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary bg-theme-surface/80 hover:bg-theme-elevated rounded backdrop-blur-sm"
         >
           {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
           Copy
@@ -78,7 +78,7 @@ export function CodeViewer({
         style={{ maxHeight }}
       >
         {highlighting ? (
-          <div className="p-4 text-slate-500 text-sm font-mono">Loading...</div>
+          <div className="p-4 text-theme-text-tertiary text-sm font-mono">Loading...</div>
         ) : (
           <div
             className={`shiki-viewer text-xs ${showLineNumbers ? 'with-line-numbers' : ''}`}

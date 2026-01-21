@@ -89,7 +89,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
     <div
       className={clsx(
         'flex items-start gap-3 p-3 rounded-lg shadow-xl border animate-in',
-        'bg-slate-800 border-slate-700',
+        'bg-theme-surface border-theme-border',
         'w-[400px] max-w-[calc(100vw-32px)]'
       )}
       style={style}
@@ -109,11 +109,11 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-white">{toast.message}</span>
+          <span className="text-sm font-medium text-theme-text-primary">{toast.message}</span>
           <Check className="w-3.5 h-3.5 text-green-400 shrink-0" />
         </div>
         {toast.command && (
-          <code className="block mt-1.5 text-xs text-slate-300 font-mono bg-slate-900 rounded px-2 py-1.5 whitespace-pre-wrap break-all">
+          <code className="block mt-1.5 text-xs text-theme-text-secondary font-mono bg-theme-base rounded px-2 py-1.5 whitespace-pre-wrap break-all">
             {toast.command}
           </code>
         )}
@@ -122,7 +122,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       {/* Dismiss button */}
       <button
         onClick={onDismiss}
-        className="p-1 text-slate-500 hover:text-white rounded hover:bg-slate-700 shrink-0"
+        className="p-1 text-theme-text-tertiary hover:text-theme-text-primary rounded hover:bg-theme-elevated shrink-0"
       >
         <X className="w-4 h-4" />
       </button>

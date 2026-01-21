@@ -12,13 +12,13 @@ export interface StatusBadge {
   level: HealthLevel
 }
 
-// Color classes for different health levels
+// Color classes for different health levels (theme-aware)
 export const healthColors: Record<HealthLevel, string> = {
-  healthy: 'bg-green-500/20 text-green-400',
-  degraded: 'bg-yellow-500/20 text-yellow-400',
-  unhealthy: 'bg-red-500/20 text-red-400',
-  unknown: 'bg-slate-500/20 text-slate-400',
-  neutral: 'bg-blue-500/20 text-blue-400',
+  healthy: 'status-healthy',
+  degraded: 'status-degraded',
+  unhealthy: 'status-unhealthy',
+  unknown: 'status-unknown',
+  neutral: 'status-neutral',
 }
 
 // ============================================================================
@@ -286,7 +286,7 @@ export function isReplicaSetActive(rs: any): boolean {
 export function getServiceStatus(service: any): StatusBadge {
   const type = service.spec?.type || 'ClusterIP'
   const color = type === 'LoadBalancer' || type === 'NodePort'
-    ? 'bg-violet-500/20 text-violet-400'
+    ? 'status-violet'
     : healthColors.neutral
   return { text: type, color, level: 'neutral' }
 }
@@ -348,15 +348,15 @@ export function getServiceSelector(service: any): string {
 export function getServiceEndpointsStatus(service: any): { status: string; color: string } {
   const type = service.spec?.type
   if (type === 'ExternalName') {
-    return { status: 'External', color: 'bg-violet-500/20 text-violet-400' }
+    return { status: 'External', color: 'status-violet' }
   }
   const selector = service.spec?.selector || {}
   const hasSelector = Object.keys(selector).length > 0
   if (!hasSelector) {
-    return { status: 'None', color: 'bg-slate-500/20 text-slate-400' }
+    return { status: 'None', color: 'status-unknown' }
   }
   // If it has a selector, it should have endpoints (we assume active since we can't check endpoints from service alone)
-  return { status: 'Active', color: 'bg-green-500/20 text-green-400' }
+  return { status: 'Active', color: 'status-healthy' }
 }
 
 // ============================================================================
@@ -458,16 +458,16 @@ export function getConfigMapSize(cm: any): string {
 export function getSecretType(secret: any): { type: string; color: string } {
   const type = secret.type || 'Opaque'
   const typeMap: Record<string, { type: string; color: string }> = {
-    'Opaque': { type: 'Opaque', color: 'bg-slate-500/20 text-slate-400' },
-    'kubernetes.io/tls': { type: 'TLS', color: 'bg-blue-500/20 text-blue-400' },
-    'kubernetes.io/dockercfg': { type: 'Docker', color: 'bg-purple-500/20 text-purple-400' },
-    'kubernetes.io/dockerconfigjson': { type: 'Docker', color: 'bg-purple-500/20 text-purple-400' },
-    'kubernetes.io/basic-auth': { type: 'Basic Auth', color: 'bg-orange-500/20 text-orange-400' },
-    'kubernetes.io/ssh-auth': { type: 'SSH', color: 'bg-cyan-500/20 text-cyan-400' },
-    'kubernetes.io/service-account-token': { type: 'SA Token', color: 'bg-green-500/20 text-green-400' },
-    'bootstrap.kubernetes.io/token': { type: 'Bootstrap', color: 'bg-green-500/20 text-green-400' },
+    'Opaque': { type: 'Opaque', color: 'status-unknown' },
+    'kubernetes.io/tls': { type: 'TLS', color: 'status-neutral' },
+    'kubernetes.io/dockercfg': { type: 'Docker', color: 'status-purple' },
+    'kubernetes.io/dockerconfigjson': { type: 'Docker', color: 'status-purple' },
+    'kubernetes.io/basic-auth': { type: 'Basic Auth', color: 'status-orange' },
+    'kubernetes.io/ssh-auth': { type: 'SSH', color: 'status-cyan' },
+    'kubernetes.io/service-account-token': { type: 'SA Token', color: 'status-healthy' },
+    'bootstrap.kubernetes.io/token': { type: 'Bootstrap', color: 'status-healthy' },
   }
-  return typeMap[type] || { type: type.split('/').pop() || type, color: 'bg-slate-500/20 text-slate-400' }
+  return typeMap[type] || { type: type.split('/').pop() || type, color: 'status-unknown' }
 }
 
 export function getSecretKeyCount(secret: any): number {

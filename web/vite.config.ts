@@ -23,4 +23,6 @@ export default defineConfig({
     outDir: 'dist',
     emptyOutDir: true,
   },
+  // Handle client-side routing - serve index.html for all routes
+  appType: 'spa',
 })

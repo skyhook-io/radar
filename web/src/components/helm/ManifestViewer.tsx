@@ -12,7 +12,7 @@ interface ManifestViewerProps {
 export function ManifestViewer({ manifest, isLoading, revision, onCopy, copied }: ManifestViewerProps) {
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-32 text-slate-500">
+      <div className="flex items-center justify-center h-32 text-theme-text-tertiary">
         Loading manifest...
       </div>
     )
@@ -20,8 +20,8 @@ export function ManifestViewer({ manifest, isLoading, revision, onCopy, copied }
 
   if (!manifest) {
     return (
-      <div className="flex flex-col items-center justify-center h-32 text-slate-500 gap-2">
-        <Code className="w-8 h-8 text-slate-600" />
+      <div className="flex flex-col items-center justify-center h-32 text-theme-text-tertiary gap-2">
+        <Code className="w-8 h-8 text-theme-text-disabled" />
         <span>No manifest available</span>
       </div>
     )
@@ -33,17 +33,17 @@ export function ManifestViewer({ manifest, isLoading, revision, onCopy, copied }
     <div className="p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-slate-300">Rendered Manifest</span>
+          <span className="text-sm font-medium text-theme-text-secondary">Rendered Manifest</span>
           {revision && (
-            <span className="px-2 py-0.5 text-xs bg-slate-700 text-slate-400 rounded">
+            <span className="px-2 py-0.5 text-xs bg-theme-elevated text-theme-text-secondary rounded">
               Revision {revision}
             </span>
           )}
-          <span className="text-xs text-slate-500">{lineCount} lines</span>
+          <span className="text-xs text-theme-text-tertiary">{lineCount} lines</span>
         </div>
         <button
           onClick={() => onCopy(manifest)}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded"
+          className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
         >
           {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
           Copy

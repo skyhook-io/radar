@@ -41,7 +41,7 @@ export const GroupNode = memo(function GroupNode({
       case 'label':
         return 'border-amber-500/40'
       default:
-        return 'border-slate-500/40'
+        return 'border-theme-border'
     }
   }
 
@@ -54,7 +54,7 @@ export const GroupNode = memo(function GroupNode({
       case 'label':
         return 'bg-amber-500/20'
       default:
-        return 'bg-slate-500/20'
+        return 'bg-theme-hover/50'
     }
   }
 
@@ -67,7 +67,7 @@ export const GroupNode = memo(function GroupNode({
       case 'label':
         return 'text-amber-300'
       default:
-        return 'text-slate-300'
+        return 'text-theme-text-secondary'
     }
   }
 
@@ -80,7 +80,7 @@ export const GroupNode = memo(function GroupNode({
       case 'label':
         return 'text-amber-400'
       default:
-        return 'text-slate-400'
+        return 'text-theme-text-secondary'
     }
   }
 
@@ -109,10 +109,10 @@ export const GroupNode = memo(function GroupNode({
             <Icon className={clsx('w-9 h-9', getIconColor())} />
             <span className={clsx('text-4xl font-bold', getLabelColor())}>{name}</span>
             {label && (
-              <span className="text-sm text-slate-400">({label})</span>
+              <span className="text-sm text-theme-text-secondary">({label})</span>
             )}
           </div>
-          <div className="mt-3 text-xl text-slate-400">
+          <div className="mt-3 text-xl text-theme-text-secondary">
             {nodeCount} {nodeCount === 1 ? 'resource' : 'resources'}
           </div>
         </div>
@@ -141,7 +141,7 @@ export const GroupNode = memo(function GroupNode({
         className={clsx(
           'absolute top-0 left-0 rounded-xl border-2 box-border isolate overflow-hidden',
           getBorderColor(),
-          'bg-slate-800/40'
+          'bg-theme-surface/40'
         )}
         style={{ width: width || '100%', height: height || '100%' }}
       >
@@ -157,9 +157,9 @@ export const GroupNode = memo(function GroupNode({
           <Icon className={clsx('w-9 h-9 flex-shrink-0', getIconColor())} />
           <span className={clsx('text-4xl font-bold truncate', getLabelColor())}>{name}</span>
           {label && (
-            <span className="text-sm text-slate-400 truncate">({label})</span>
+            <span className="text-sm text-theme-text-secondary truncate">({label})</span>
           )}
-          <span className="ml-auto flex-shrink-0 text-xl font-semibold text-slate-300 bg-slate-800/60 px-4 py-2 rounded-xl">
+          <span className="ml-auto flex-shrink-0 text-xl font-semibold text-theme-text-secondary bg-theme-surface/60 px-4 py-2 rounded-xl">
             {nodeCount}
           </span>
         </div>

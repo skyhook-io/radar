@@ -19,19 +19,19 @@ export function ConfigMapRenderer({ data }: ConfigMapRendererProps) {
             const isLarge = value.length > 500
             return (
               <ExpandableSection key={key} title={`${key} (${formatBytes(value.length)})`} defaultExpanded={!isLarge}>
-                <pre className="bg-slate-900 rounded p-2 text-xs text-slate-300 overflow-x-auto max-h-60 whitespace-pre-wrap">
+                <pre className="bg-theme-base rounded p-2 text-xs text-theme-text-secondary overflow-x-auto max-h-60 whitespace-pre-wrap">
                   {value}
                 </pre>
               </ExpandableSection>
             )
           })}
           {binaryDataKeys.map((key) => (
-            <div key={key} className="text-sm text-slate-400">
+            <div key={key} className="text-sm text-theme-text-secondary">
               {key} <span className="text-xs">(binary)</span>
             </div>
           ))}
           {dataKeys.length === 0 && binaryDataKeys.length === 0 && (
-            <div className="text-sm text-slate-500">No data</div>
+            <div className="text-sm text-theme-text-tertiary">No data</div>
           )}
         </div>
       </Section>

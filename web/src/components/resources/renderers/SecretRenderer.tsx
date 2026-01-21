@@ -40,25 +40,25 @@ export function SecretRenderer({ data }: SecretRendererProps) {
       <Section title="Data" defaultExpanded>
         <div className="space-y-2">
           {dataKeys.map((key) => (
-            <div key={key} className="bg-slate-700/30 rounded p-2">
+            <div key={key} className="bg-theme-elevated/30 rounded p-2">
               <div className="flex items-center justify-between">
-                <span className="text-sm text-white">{key}</span>
+                <span className="text-sm text-theme-text-primary">{key}</span>
                 <button
                   onClick={() => toggleReveal(key)}
-                  className="text-xs text-slate-400 hover:text-white"
+                  className="text-xs text-theme-text-secondary hover:text-theme-text-primary"
                 >
                   {revealed.has(key) ? 'Hide' : 'Reveal'}
                 </button>
               </div>
               {revealed.has(key) && (
-                <pre className="mt-2 bg-slate-900 rounded p-2 text-xs text-slate-300 overflow-x-auto max-h-40 whitespace-pre-wrap">
+                <pre className="mt-2 bg-theme-base rounded p-2 text-xs text-theme-text-secondary overflow-x-auto max-h-40 whitespace-pre-wrap">
                   {decodeBase64(data.data[key])}
                 </pre>
               )}
             </div>
           ))}
           {dataKeys.length === 0 && (
-            <div className="text-sm text-slate-500">No data</div>
+            <div className="text-sm text-theme-text-tertiary">No data</div>
           )}
         </div>
       </Section>

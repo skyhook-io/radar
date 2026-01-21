@@ -38,12 +38,12 @@ export function ServiceRenderer({ data, onCopy, copied }: ServiceRendererProps) 
       <Section title="Ports" defaultExpanded>
         <div className="space-y-2">
           {ports.map((port: any, i: number) => (
-            <div key={i} className="bg-slate-700/30 rounded p-2 text-sm">
+            <div key={i} className="bg-theme-elevated/30 rounded p-2 text-sm">
               <div className="flex items-center justify-between">
-                <span className="text-white font-medium">{port.name || `port-${i}`}</span>
-                <span className="text-slate-400">{port.protocol || 'TCP'}</span>
+                <span className="text-theme-text-primary font-medium">{port.name || `port-${i}`}</span>
+                <span className="text-theme-text-secondary">{port.protocol || 'TCP'}</span>
               </div>
-              <div className="text-xs text-slate-400 mt-1">
+              <div className="text-xs text-theme-text-secondary mt-1">
                 {port.port} {port.targetPort !== port.port && `→ ${port.targetPort}`}
                 {port.nodePort && ` (NodePort: ${port.nodePort})`}
               </div>
