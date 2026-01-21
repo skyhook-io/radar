@@ -55,7 +55,7 @@ function getKindColor(kind: string): string {
     case 'Secret':
       return 'text-red-400'
     default:
-      return 'text-slate-400'
+      return 'text-theme-text-secondary'
   }
 }
 
@@ -173,11 +173,11 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode }: TopologySe
       {/* Search trigger button */}
       <button
         onClick={handleOpen}
-        className="absolute top-4 left-4 z-10 flex items-center gap-2 px-3 py-2 bg-slate-800/90 backdrop-blur border border-slate-700 rounded-lg text-slate-400 hover:text-white hover:border-slate-600 transition-colors"
+        className="absolute top-4 left-4 z-10 flex items-center gap-2 px-3 py-2 bg-theme-surface/90 backdrop-blur border border-theme-border rounded-lg text-theme-text-secondary hover:text-theme-text-primary hover:border-theme-border-light transition-colors"
       >
         <Search className="w-4 h-4" />
         <span className="text-sm">Search</span>
-        <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 text-xs bg-slate-700 rounded border border-slate-600">
+        <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 text-xs bg-theme-elevated rounded border border-theme-border-light">
           <span className="text-[10px]">⌘</span>K
         </kbd>
       </button>
@@ -187,15 +187,15 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode }: TopologySe
         <div className="absolute inset-0 z-50 flex items-start justify-center pt-[10vh]">
           {/* Backdrop */}
           <div
-            className="absolute inset-0 bg-slate-900/60 backdrop-blur-sm"
+            className="absolute inset-0 bg-theme-base/60 backdrop-blur-sm"
             onClick={handleClose}
           />
 
           {/* Search panel */}
-          <div className="relative w-full max-w-lg mx-4 bg-slate-800 border border-slate-700 rounded-xl shadow-2xl overflow-hidden">
+          <div className="relative w-full max-w-lg mx-4 bg-theme-surface border border-theme-border rounded-xl shadow-2xl overflow-hidden">
             {/* Search input */}
-            <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-700">
-              <Search className="w-5 h-5 text-slate-400" />
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border">
+              <Search className="w-5 h-5 text-theme-text-secondary" />
               <input
                 ref={inputRef}
                 type="text"
@@ -203,18 +203,18 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode }: TopologySe
                 onChange={(e) => setQuery(e.target.value)}
                 onKeyDown={handleInputKeyDown}
                 placeholder="Search resources by name, kind, or namespace..."
-                className="flex-1 bg-transparent text-white placeholder-slate-500 outline-none text-sm"
+                className="flex-1 bg-transparent text-theme-text-primary placeholder-theme-text-disabled outline-none text-sm"
                 autoFocus
               />
               {query && (
                 <button
                   onClick={() => setQuery('')}
-                  className="p-1 text-slate-400 hover:text-white"
+                  className="p-1 text-theme-text-secondary hover:text-theme-text-primary"
                 >
                   <X className="w-4 h-4" />
                 </button>
               )}
-              <kbd className="px-1.5 py-0.5 text-xs text-slate-500 bg-slate-700 rounded border border-slate-600">
+              <kbd className="px-1.5 py-0.5 text-xs text-theme-text-tertiary bg-theme-elevated rounded border border-theme-border-light">
                 ESC
               </kbd>
             </div>
@@ -222,7 +222,7 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode }: TopologySe
             {/* Results */}
             <div ref={resultsRef} className="max-h-[60vh] overflow-y-auto">
               {query && filteredNodes.length === 0 && (
-                <div className="px-4 py-8 text-center text-slate-500">
+                <div className="px-4 py-8 text-center text-theme-text-tertiary">
                   <Search className="w-8 h-8 mx-auto mb-2 opacity-50" />
                   <p>No resources found for "{query}"</p>
                 </div>
@@ -240,28 +240,28 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode }: TopologySe
                     onMouseEnter={() => setSelectedIndex(index)}
                     className={clsx(
                       'w-full flex items-center gap-3 px-4 py-3 text-left transition-colors',
-                      isSelected ? 'bg-slate-700/50' : 'hover:bg-slate-700/30'
+                      isSelected ? 'bg-theme-elevated/50' : 'hover:bg-theme-elevated/30'
                     )}
                   >
                     <div className={clsx(
                       'flex items-center justify-center w-8 h-8 rounded-lg',
-                      isSelected ? 'bg-blue-500/20' : 'bg-slate-700/50'
+                      isSelected ? 'bg-blue-500/20' : 'bg-theme-elevated/50'
                     )}>
                       <Icon className={clsx('w-4 h-4', getKindColor(node.kind))} />
                     </div>
 
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2">
-                        <span className="font-medium text-white truncate">{node.name}</span>
+                        <span className="font-medium text-theme-text-primary truncate">{node.name}</span>
                         <span className={clsx(
                           'px-1.5 py-0.5 text-xs rounded',
-                          'bg-slate-700 text-slate-400'
+                          'bg-theme-elevated text-theme-text-secondary'
                         )}>
                           {node.kind}
                         </span>
                       </div>
                       {namespace && (
-                        <div className="text-xs text-slate-500 truncate">
+                        <div className="text-xs text-theme-text-tertiary truncate">
                           {namespace}
                         </div>
                       )}
@@ -269,7 +269,7 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode }: TopologySe
 
                     <ChevronRight className={clsx(
                       'w-4 h-4 transition-opacity',
-                      isSelected ? 'text-slate-400 opacity-100' : 'opacity-0'
+                      isSelected ? 'text-theme-text-secondary opacity-100' : 'opacity-0'
                     )} />
                   </button>
                 )
@@ -278,15 +278,15 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode }: TopologySe
 
             {/* Footer hint */}
             {filteredNodes.length > 0 && (
-              <div className="px-4 py-2 border-t border-slate-700 bg-slate-800/50">
-                <div className="flex items-center gap-4 text-xs text-slate-500">
+              <div className="px-4 py-2 border-t border-theme-border bg-theme-surface/50">
+                <div className="flex items-center gap-4 text-xs text-theme-text-tertiary">
                   <span className="flex items-center gap-1">
-                    <kbd className="px-1 py-0.5 bg-slate-700 rounded">↑</kbd>
-                    <kbd className="px-1 py-0.5 bg-slate-700 rounded">↓</kbd>
+                    <kbd className="px-1 py-0.5 bg-theme-elevated rounded">↑</kbd>
+                    <kbd className="px-1 py-0.5 bg-theme-elevated rounded">↓</kbd>
                     <span>Navigate</span>
                   </span>
                   <span className="flex items-center gap-1">
-                    <kbd className="px-1.5 py-0.5 bg-slate-700 rounded">Enter</kbd>
+                    <kbd className="px-1.5 py-0.5 bg-theme-elevated rounded">Enter</kbd>
                     <span>Zoom to resource</span>
                   </span>
                 </div>
@@ -295,12 +295,12 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode }: TopologySe
 
             {/* Empty state with hints */}
             {!query && (
-              <div className="px-4 py-6 text-center text-slate-500">
+              <div className="px-4 py-6 text-center text-theme-text-tertiary">
                 <p className="text-sm mb-3">Search for resources in the topology</p>
                 <div className="flex flex-wrap justify-center gap-2 text-xs">
-                  <span className="px-2 py-1 bg-slate-700/50 rounded">nginx</span>
-                  <span className="px-2 py-1 bg-slate-700/50 rounded">service/api</span>
-                  <span className="px-2 py-1 bg-slate-700/50 rounded">production</span>
+                  <span className="px-2 py-1 bg-theme-elevated/50 rounded">nginx</span>
+                  <span className="px-2 py-1 bg-theme-elevated/50 rounded">service/api</span>
+                  <span className="px-2 py-1 bg-theme-elevated/50 rounded">production</span>
                 </div>
               </div>
             )}

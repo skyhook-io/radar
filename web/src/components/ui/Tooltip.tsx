@@ -124,7 +124,7 @@ export function Tooltip({
           <span
             ref={tooltipRef}
             className={clsx(
-              'fixed z-[9999] px-2 py-1 text-xs text-white bg-slate-900 rounded shadow-lg',
+              'fixed z-[9999] px-2 py-1 text-xs text-theme-text-primary bg-theme-base rounded shadow-lg',
               'whitespace-nowrap pointer-events-none',
               className
             )}

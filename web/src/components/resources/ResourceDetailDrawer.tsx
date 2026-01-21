@@ -136,7 +136,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate }: Resource
 
   return (
     <div
-      className="fixed right-0 bg-slate-800 border-l border-slate-700 flex flex-col shadow-2xl z-40"
+      className="fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-2xl z-40"
       style={{ width: drawerWidth, top: headerHeight, height: `calc(100vh - ${headerHeight}px)` }}
     >
       {/* Resize handle - wider for easier grab, hidden on mobile */}
@@ -165,9 +165,9 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate }: Resource
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
         {isLoading ? (
-          <div className="flex items-center justify-center h-32 text-slate-500">Loading...</div>
+          <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Loading...</div>
         ) : !resourceData ? (
-          <div className="flex items-center justify-center h-32 text-slate-500">Resource not found</div>
+          <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Resource not found</div>
         ) : showYaml ? (
           <YamlView data={resourceData} onCopy={(text) => copyToClipboard(text, 'yaml')} copied={copied === 'yaml'} />
         ) : (
@@ -205,7 +205,7 @@ function DrawerHeader({ resource, resourceData, showYaml, setShowYaml, isRefetch
   const status = getResourceStatus(resource.kind, resourceData)
 
   return (
-    <div className="border-b border-slate-700 shrink-0">
+    <div className="border-b border-theme-border shrink-0">
       {/* Top row: badges and controls */}
       <div className="flex items-center justify-between px-4 pt-3 pb-2">
         <div className="flex items-center gap-2 flex-wrap">
@@ -223,7 +223,7 @@ function DrawerHeader({ resource, resourceData, showYaml, setShowYaml, isRefetch
             onClick={() => setShowYaml(!showYaml)}
             className={clsx(
               'px-2 py-1 text-xs rounded transition-colors',
-              showYaml ? 'bg-blue-500 text-white' : 'text-slate-400 hover:text-white hover:bg-slate-700'
+              showYaml ? 'bg-blue-500 text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
             )}
             title="Toggle YAML view"
           >
@@ -232,12 +232,12 @@ function DrawerHeader({ resource, resourceData, showYaml, setShowYaml, isRefetch
           <button
             onClick={() => onRefetch()}
             disabled={isRefetching}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded disabled:opacity-50"
+            className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
             title="Refresh"
           >
             <RefreshCw className={clsx('w-4 h-4', isRefetching && 'animate-spin')} />
           </button>
-          <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded" title="Close (Esc)">
+          <button onClick={onClose} className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded" title="Close (Esc)">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -246,16 +246,16 @@ function DrawerHeader({ resource, resourceData, showYaml, setShowYaml, isRefetch
       {/* Name and namespace */}
       <div className="px-4 pb-3">
         <div className="flex items-center gap-2">
-          <h2 className="text-lg font-semibold text-white truncate">{resource.name}</h2>
+          <h2 className="text-lg font-semibold text-theme-text-primary truncate">{resource.name}</h2>
           <button
             onClick={() => onCopy(resource.name)}
-            className="p-1 text-slate-400 hover:text-white hover:bg-slate-700 rounded shrink-0"
+            className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
             title="Copy name"
           >
             {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
           </button>
         </div>
-        <p className="text-sm text-slate-500">{resource.namespace}</p>
+        <p className="text-sm text-theme-text-tertiary">{resource.namespace}</p>
       </div>
 
       {/* Actions bar */}
@@ -359,7 +359,7 @@ function ActionsBar({ resource, data }: { resource: SelectedResource; data: any 
           key={i}
           onClick={(e) => showCopied(action.command, action.commandLabel, e)}
           disabled={action.disabled}
-          className="flex items-center gap-1.5 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded transition-colors disabled:opacity-50"
         >
           <action.icon className="w-3.5 h-3.5" />
           {action.label}
@@ -380,10 +380,10 @@ function YamlView({ data, onCopy, copied }: { data: any; onCopy: (text: string) 
   return (
     <div className="p-4">
       <div className="flex items-center justify-between mb-2">
-        <span className="text-sm font-medium text-slate-400">Raw JSON</span>
+        <span className="text-sm font-medium text-theme-text-secondary">Raw JSON</span>
         <button
           onClick={() => onCopy(json)}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded"
+          className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
         >
           {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
           Copy

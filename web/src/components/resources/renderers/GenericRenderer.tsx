@@ -47,7 +47,7 @@ export function GenericRenderer({ data }: GenericRendererProps) {
       {/* Raw Spec (for complex nested structures) */}
       {hasNestedObjects(spec) && (
         <ExpandableSection title="Full Specification" defaultExpanded={false}>
-          <pre className="text-xs text-slate-400 bg-slate-900/50 p-3 rounded overflow-x-auto max-h-64 overflow-y-auto">
+          <pre className="text-xs text-theme-text-secondary bg-theme-base/50 p-3 rounded overflow-x-auto max-h-64 overflow-y-auto">
             {JSON.stringify(spec, null, 2)}
           </pre>
         </ExpandableSection>
@@ -56,7 +56,7 @@ export function GenericRenderer({ data }: GenericRendererProps) {
       {/* Raw Status (for complex nested structures) */}
       {hasNestedObjects(status) && Object.keys(status).length > 0 && (
         <ExpandableSection title="Full Status" defaultExpanded={false}>
-          <pre className="text-xs text-slate-400 bg-slate-900/50 p-3 rounded overflow-x-auto max-h-64 overflow-y-auto">
+          <pre className="text-xs text-theme-text-secondary bg-theme-base/50 p-3 rounded overflow-x-auto max-h-64 overflow-y-auto">
             {JSON.stringify(status, null, 2)}
           </pre>
         </ExpandableSection>
@@ -153,18 +153,18 @@ function GenericConditionsSection({ conditions }: { conditions: any[] }) {
               </span>
               <div className="flex-1 min-w-0">
                 <div className="flex items-center gap-2">
-                  <span className="text-white font-medium">{cond.type}</span>
+                  <span className="text-theme-text-primary font-medium">{cond.type}</span>
                   {cond.reason && (
-                    <span className="text-xs text-slate-500">({cond.reason})</span>
+                    <span className="text-xs text-theme-text-tertiary">({cond.reason})</span>
                   )}
                 </div>
                 {cond.message && (
-                  <div className="text-xs text-slate-400 mt-0.5 break-words">
+                  <div className="text-xs text-theme-text-secondary mt-0.5 break-words">
                     {cond.message}
                   </div>
                 )}
                 {cond.lastTransitionTime && (
-                  <div className="text-xs text-slate-500 mt-0.5">
+                  <div className="text-xs text-theme-text-tertiary mt-0.5">
                     Last transition: {formatTimestamp(cond.lastTransitionTime)}
                   </div>
                 )}

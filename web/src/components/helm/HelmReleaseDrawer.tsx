@@ -200,7 +200,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
 
   return (
     <div
-      className="fixed right-0 bg-slate-800 border-l border-slate-700 flex flex-col shadow-2xl z-40"
+      className="fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-2xl z-40"
       style={{ width: drawerWidth, top: headerHeight, height: `calc(100vh - ${headerHeight}px)` }}
     >
       {/* Resize handle */}
@@ -214,7 +214,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
       />
 
       {/* Header */}
-      <div className="border-b border-slate-700 shrink-0">
+      <div className="border-b border-theme-border shrink-0">
         <div className="flex items-center justify-between px-4 pt-3 pb-2">
           <div className="flex items-center gap-2 flex-wrap">
             <span className="px-2 py-0.5 text-xs font-medium rounded border border-purple-500/50 bg-purple-500/20 text-purple-300">
@@ -227,7 +227,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
             )}
             {/* Upgrade indicator */}
             {upgradeLoading ? (
-              <span className="px-2 py-0.5 text-xs font-medium rounded bg-slate-600/50 text-slate-400 animate-pulse">
+              <span className="px-2 py-0.5 text-xs font-medium rounded bg-theme-hover/50 text-theme-text-secondary animate-pulse">
                 checking...
               </span>
             ) : upgradeInfo?.updateAvailable ? (
@@ -249,19 +249,19 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
             <button
               onClick={() => refetch()}
               disabled={isRefetching}
-              className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded disabled:opacity-50"
+              className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
               title="Refresh"
             >
               <RefreshCw className={clsx('w-4 h-4', isRefetching && 'animate-spin')} />
             </button>
             <button
               onClick={() => setShowUninstallConfirm(true)}
-              className="p-1.5 text-slate-400 hover:text-red-400 hover:bg-red-500/10 rounded"
+              className="p-1.5 text-theme-text-secondary hover:text-red-400 hover:bg-red-500/10 rounded"
               title="Uninstall release"
             >
               <Trash2 className="w-4 h-4" />
             </button>
-            <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded" title="Close (Esc)">
+            <button onClick={onClose} className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded" title="Close (Esc)">
               <X className="w-4 h-4" />
             </button>
           </div>
@@ -271,16 +271,16 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
         <div className="px-4 pb-3">
           <div className="flex items-center gap-2">
             <Package className="w-5 h-5 text-purple-400" />
-            <h2 className="text-lg font-semibold text-white truncate">{release.name}</h2>
+            <h2 className="text-lg font-semibold text-theme-text-primary truncate">{release.name}</h2>
             <button
               onClick={() => copyToClipboard(release.name, 'name')}
-              className="p-1 text-slate-400 hover:text-white hover:bg-slate-700 rounded shrink-0"
+              className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
               title="Copy name"
             >
               {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
             </button>
           </div>
-          <p className="text-sm text-slate-500">{release.namespace}</p>
+          <p className="text-sm text-theme-text-tertiary">{release.namespace}</p>
         </div>
 
         {/* Tabs */}
@@ -292,8 +292,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
               className={clsx(
                 'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors whitespace-nowrap',
                 activeTab === tab.id
-                  ? 'bg-slate-700 text-white'
-                  : 'text-slate-400 hover:text-white hover:bg-slate-700/50'
+                  ? 'bg-theme-elevated text-theme-text-primary'
+                  : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated/50'
               )}
             >
               <tab.icon className="w-3.5 h-3.5" />
@@ -306,9 +306,9 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
       {/* Content */}
       <div className="flex-1 overflow-y-auto">
         {isLoading ? (
-          <div className="flex items-center justify-center h-32 text-slate-500">Loading...</div>
+          <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Loading...</div>
         ) : !releaseDetail ? (
-          <div className="flex items-center justify-center h-32 text-slate-500">Release not found</div>
+          <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Release not found</div>
         ) : (
           <>
             {activeTab === 'overview' && (
@@ -430,54 +430,54 @@ function OverviewTab({ release, onCopy, copied }: OverviewTabProps) {
   return (
     <div className="p-4 space-y-4">
       {/* Chart info */}
-      <div className="bg-slate-700/30 rounded-lg p-4">
-        <h3 className="text-sm font-medium text-slate-300 mb-3">Chart Information</h3>
+      <div className="bg-theme-elevated/30 rounded-lg p-4">
+        <h3 className="text-sm font-medium text-theme-text-secondary mb-3">Chart Information</h3>
         <dl className="grid grid-cols-2 gap-3 text-sm">
           <div>
-            <dt className="text-slate-500">Chart</dt>
-            <dd className="text-white font-medium">{release.chart}</dd>
+            <dt className="text-theme-text-tertiary">Chart</dt>
+            <dd className="text-theme-text-primary font-medium">{release.chart}</dd>
           </div>
           <div>
-            <dt className="text-slate-500">Chart Version</dt>
-            <dd className="text-white">{release.chartVersion}</dd>
+            <dt className="text-theme-text-tertiary">Chart Version</dt>
+            <dd className="text-theme-text-primary">{release.chartVersion}</dd>
           </div>
           <div>
-            <dt className="text-slate-500">App Version</dt>
-            <dd className="text-white">{release.appVersion || '-'}</dd>
+            <dt className="text-theme-text-tertiary">App Version</dt>
+            <dd className="text-theme-text-primary">{release.appVersion || '-'}</dd>
           </div>
           <div>
-            <dt className="text-slate-500">Revision</dt>
-            <dd className="text-white">{release.revision}</dd>
+            <dt className="text-theme-text-tertiary">Revision</dt>
+            <dd className="text-theme-text-primary">{release.revision}</dd>
           </div>
           <div className="col-span-2">
-            <dt className="text-slate-500">Updated</dt>
-            <dd className="text-white">{formatDate(release.updated)}</dd>
+            <dt className="text-theme-text-tertiary">Updated</dt>
+            <dd className="text-theme-text-primary">{formatDate(release.updated)}</dd>
           </div>
         </dl>
       </div>
 
       {/* Description */}
       {release.description && (
-        <div className="bg-slate-700/30 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-2">Description</h3>
-          <p className="text-sm text-slate-400">{release.description}</p>
+        <div className="bg-theme-elevated/30 rounded-lg p-4">
+          <h3 className="text-sm font-medium text-theme-text-secondary mb-2">Description</h3>
+          <p className="text-sm text-theme-text-secondary">{release.description}</p>
         </div>
       )}
 
       {/* Notes */}
       {release.notes && (
-        <div className="bg-slate-700/30 rounded-lg p-4">
+        <div className="bg-theme-elevated/30 rounded-lg p-4">
           <div className="flex items-center justify-between mb-2">
-            <h3 className="text-sm font-medium text-slate-300">Release Notes</h3>
+            <h3 className="text-sm font-medium text-theme-text-secondary">Release Notes</h3>
             <button
               onClick={() => onCopy(release.notes, 'notes')}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded"
+              className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
             >
               {copied === 'notes' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
               Copy
             </button>
           </div>
-          <pre className="text-xs text-slate-400 whitespace-pre-wrap font-mono bg-slate-900/50 rounded p-3 max-h-64 overflow-auto">
+          <pre className="text-xs text-theme-text-secondary whitespace-pre-wrap font-mono bg-theme-base/50 rounded p-3 max-h-64 overflow-auto">
             {release.notes}
           </pre>
         </div>
@@ -485,27 +485,27 @@ function OverviewTab({ release, onCopy, copied }: OverviewTabProps) {
 
       {/* Dependencies */}
       {release.dependencies && release.dependencies.length > 0 && (
-        <div className="bg-slate-700/30 rounded-lg p-4">
+        <div className="bg-theme-elevated/30 rounded-lg p-4">
           <div className="flex items-center gap-2 mb-3">
-            <GitFork className="w-4 h-4 text-slate-400" />
-            <h3 className="text-sm font-medium text-slate-300">Chart Dependencies</h3>
+            <GitFork className="w-4 h-4 text-theme-text-secondary" />
+            <h3 className="text-sm font-medium text-theme-text-secondary">Chart Dependencies</h3>
           </div>
           <div className="space-y-2">
             {release.dependencies.map((dep, i) => (
-              <div key={i} className="flex items-center justify-between bg-slate-900/50 rounded p-2 text-sm">
+              <div key={i} className="flex items-center justify-between bg-theme-base/50 rounded p-2 text-sm">
                 <div className="flex items-center gap-2">
-                  <span className="text-white font-medium">{dep.name}</span>
-                  <span className="text-slate-500">{dep.version}</span>
+                  <span className="text-theme-text-primary font-medium">{dep.name}</span>
+                  <span className="text-theme-text-tertiary">{dep.version}</span>
                 </div>
                 <div className="flex items-center gap-2">
                   {dep.condition && (
-                    <span className="text-xs text-slate-500">{dep.condition}</span>
+                    <span className="text-xs text-theme-text-tertiary">{dep.condition}</span>
                   )}
                   <span className={clsx(
                     'px-1.5 py-0.5 text-xs rounded',
                     dep.enabled
                       ? 'bg-green-500/20 text-green-400'
-                      : 'bg-slate-600/50 text-slate-400'
+                      : 'bg-theme-hover/50 text-theme-text-secondary'
                   )}>
                     {dep.enabled ? 'enabled' : 'disabled'}
                   </span>
@@ -518,21 +518,21 @@ function OverviewTab({ release, onCopy, copied }: OverviewTabProps) {
 
       {/* README */}
       {release.readme && (
-        <div className="bg-slate-700/30 rounded-lg p-4">
+        <div className="bg-theme-elevated/30 rounded-lg p-4">
           <div className="flex items-center justify-between mb-2">
             <div className="flex items-center gap-2">
-              <BookOpen className="w-4 h-4 text-slate-400" />
-              <h3 className="text-sm font-medium text-slate-300">Chart README</h3>
+              <BookOpen className="w-4 h-4 text-theme-text-secondary" />
+              <h3 className="text-sm font-medium text-theme-text-secondary">Chart README</h3>
             </div>
             <button
               onClick={() => onCopy(release.readme!, 'readme')}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded"
+              className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
             >
               {copied === 'readme' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
               Copy
             </button>
           </div>
-          <pre className="text-xs text-slate-400 whitespace-pre-wrap font-mono bg-slate-900/50 rounded p-3 max-h-96 overflow-auto">
+          <pre className="text-xs text-theme-text-secondary whitespace-pre-wrap font-mono bg-theme-base/50 rounded p-3 max-h-96 overflow-auto">
             {release.readme}
           </pre>
         </div>
@@ -549,7 +549,7 @@ interface HooksTabProps {
 function HooksTab({ hooks }: HooksTabProps) {
   if (hooks.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-48 text-slate-500">
+      <div className="flex flex-col items-center justify-center h-48 text-theme-text-tertiary">
         <Anchor className="w-8 h-8 mb-2 opacity-50" />
         <p>No hooks defined for this release</p>
       </div>
@@ -557,7 +557,7 @@ function HooksTab({ hooks }: HooksTabProps) {
   }
 
   const getHookStatusColor = (status?: string) => {
-    if (!status) return 'bg-slate-600/50 text-slate-400'
+    if (!status) return 'bg-theme-hover/50 text-theme-text-secondary'
     switch (status.toLowerCase()) {
       case 'succeeded':
         return 'bg-green-500/20 text-green-400'
@@ -566,7 +566,7 @@ function HooksTab({ hooks }: HooksTabProps) {
       case 'running':
         return 'bg-blue-500/20 text-blue-400'
       default:
-        return 'bg-slate-600/50 text-slate-400'
+        return 'bg-theme-hover/50 text-theme-text-secondary'
     }
   }
 
@@ -575,25 +575,25 @@ function HooksTab({ hooks }: HooksTabProps) {
     if (event.includes('install')) return 'bg-green-500/20 text-green-400 border-green-500/30'
     if (event.includes('upgrade')) return 'bg-blue-500/20 text-blue-400 border-blue-500/30'
     if (event.includes('rollback')) return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
-    return 'bg-slate-600/50 text-slate-400 border-slate-500/30'
+    return 'bg-theme-hover/50 text-theme-text-secondary border-theme-border'
   }
 
   return (
     <div className="p-4 space-y-3">
-      <p className="text-sm text-slate-400 mb-4">
+      <p className="text-sm text-theme-text-secondary mb-4">
         Helm hooks are executed at specific points during the release lifecycle.
       </p>
       {hooks.map((hook, i) => (
-        <div key={i} className="bg-slate-700/30 rounded-lg p-4">
+        <div key={i} className="bg-theme-elevated/30 rounded-lg p-4">
           <div className="flex items-start justify-between mb-2">
             <div>
               <div className="flex items-center gap-2">
-                <span className="text-white font-medium">{hook.name}</span>
-                <span className="px-1.5 py-0.5 text-xs rounded bg-slate-600/50 text-slate-300">
+                <span className="text-theme-text-primary font-medium">{hook.name}</span>
+                <span className="px-1.5 py-0.5 text-xs rounded bg-theme-hover/50 text-theme-text-secondary">
                   {hook.kind}
                 </span>
               </div>
-              <div className="flex items-center gap-2 mt-1 text-xs text-slate-500">
+              <div className="flex items-center gap-2 mt-1 text-xs text-theme-text-tertiary">
                 <span>Weight: {hook.weight}</span>
               </div>
             </div>

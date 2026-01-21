@@ -41,7 +41,7 @@ function getOperationColor(operation: string): string {
     case 'delete':
       return 'text-red-400 bg-red-500/10'
     default:
-      return 'text-slate-400 bg-slate-500/10'
+      return 'text-theme-text-secondary bg-theme-hover/30'
   }
 }
 
@@ -60,7 +60,7 @@ function getKindColor(kind: string): string {
     case 'Event':
       return 'text-yellow-400'
     default:
-      return 'text-slate-400'
+      return 'text-theme-text-secondary'
   }
 }
 
@@ -70,19 +70,19 @@ export const EventsTray = memo(function EventsTray({
   onEventClick,
 }: EventsTrayProps) {
   return (
-    <div className="w-80 bg-slate-800 border-l border-slate-700 flex flex-col">
+    <div className="w-80 bg-theme-surface border-l border-theme-border flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-slate-700">
-        <h2 className="font-semibold text-white flex items-center gap-2">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-theme-border">
+        <h2 className="font-semibold text-theme-text-primary flex items-center gap-2">
           <AlertCircle className="w-4 h-4 text-blue-400" />
           Events
-          <span className="text-xs text-slate-400 font-normal">
+          <span className="text-xs text-theme-text-secondary font-normal">
             ({events.length})
           </span>
         </h2>
         <button
           onClick={onClose}
-          className="p-1 text-slate-400 hover:text-white hover:bg-slate-700 rounded"
+          className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
         >
           <X className="w-4 h-4" />
         </button>
@@ -91,19 +91,19 @@ export const EventsTray = memo(function EventsTray({
       {/* Events list */}
       <div className="flex-1 overflow-y-auto">
         {events.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-400">
+          <div className="flex flex-col items-center justify-center h-full text-theme-text-secondary">
             <AlertCircle className="w-8 h-8 mb-2 opacity-50" />
             <p className="text-sm">No recent events</p>
           </div>
         ) : (
-          <div className="divide-y divide-slate-700">
+          <div className="table-divide-subtle">
             {events.map((event, index) => {
               const Icon = getOperationIcon(event.operation)
               return (
                 <button
                   key={`${event.kind}-${event.namespace}-${event.name}-${event.timestamp}-${index}`}
                   onClick={() => onEventClick(event)}
-                  className="w-full px-4 py-3 text-left hover:bg-slate-700/50 transition-colors"
+                  className="w-full px-4 py-3 text-left hover:bg-theme-elevated/50 transition-colors"
                 >
                   <div className="flex items-start gap-3">
                     <div
@@ -124,21 +124,21 @@ export const EventsTray = memo(function EventsTray({
                         >
                           {event.kind}
                         </span>
-                        <span className="text-xs text-slate-500">
+                        <span className="text-xs text-theme-text-tertiary">
                           {event.operation}
                         </span>
                       </div>
-                      <p className="text-sm text-white truncate mt-0.5">
+                      <p className="text-sm text-theme-text-primary truncate mt-0.5">
                         {event.name}
                       </p>
                       <div className="flex items-center gap-2 mt-1">
                         {event.namespace && (
-                          <span className="text-xs text-slate-500">
+                          <span className="text-xs text-theme-text-tertiary">
                             {event.namespace}
                           </span>
                         )}
                         {event.timestamp && (
-                          <span className="text-xs text-slate-500">
+                          <span className="text-xs text-theme-text-tertiary">
                             {formatTimeAgo(event.timestamp)}
                           </span>
                         )}

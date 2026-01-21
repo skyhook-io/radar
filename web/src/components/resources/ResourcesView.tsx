@@ -384,13 +384,37 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
     resourceNs?: string,
     resourceName?: string
   ) => {
-    const params = new URLSearchParams()
+    // Preserve existing params (like namespace from App)
+    const params = new URLSearchParams(window.location.search)
+
+    // Set/update resources-specific params
     params.set('kind', kindInfo.kind)
-    if (kindInfo.group) params.set('group', kindInfo.group)
-    if (search) params.set('search', search)
-    if (status) params.set('status', status)
-    if (problems.length > 0) params.set('problems', problems.join(','))
-    if (resourceNs && resourceName) params.set('resource', `${resourceNs}/${resourceName}`)
+    if (kindInfo.group) {
+      params.set('group', kindInfo.group)
+    } else {
+      params.delete('group')
+    }
+    if (search) {
+      params.set('search', search)
+    } else {
+      params.delete('search')
+    }
+    if (status) {
+      params.set('status', status)
+    } else {
+      params.delete('status')
+    }
+    if (problems.length > 0) {
+      params.set('problems', problems.join(','))
+    } else {
+      params.delete('problems')
+    }
+    if (resourceNs && resourceName) {
+      params.set('resource', `${resourceNs}/${resourceName}`)
+    } else {
+      params.delete('resource')
+    }
+
     const newURL = `${window.location.pathname}?${params.toString()}`
     window.history.replaceState({}, '', newURL)
   }, [])
@@ -846,9 +870,9 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
   return (
     <div className="flex h-full">
       {/* Sidebar - Resource Types */}
-      <div className="w-72 bg-slate-800 border-r border-slate-700 overflow-y-auto shrink-0">
-        <div className="p-3 border-b border-slate-700">
-          <h2 className="text-sm font-medium text-slate-400 uppercase tracking-wide">
+      <div className="w-72 bg-theme-surface border-r border-theme-border overflow-y-auto shrink-0">
+        <div className="p-3 border-b border-theme-border">
+          <h2 className="text-sm font-medium text-theme-text-secondary uppercase tracking-wide">
             Resources
           </h2>
         </div>
@@ -861,7 +885,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                 <div key={category.name} className="mb-2">
                   <button
                     onClick={() => toggleCategory(category.name)}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-slate-500 hover:text-slate-300 uppercase tracking-wide"
+                    className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary uppercase tracking-wide"
                   >
                     {isExpanded ? (
                       <ChevronDown className="w-3 h-3" />
@@ -870,7 +894,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                     )}
                     <span className="flex-1 text-left">{category.name}</span>
                     {!isExpanded && (
-                      <span className="text-xs px-1.5 py-0.5 rounded bg-slate-700 text-slate-400 font-normal normal-case">
+                      <span className="text-xs px-1.5 py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case">
                         {category.total}
                       </span>
                     )}
@@ -910,14 +934,14 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                     'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors',
                     isSelected
                       ? 'bg-blue-500/20 text-blue-300'
-                      : 'text-slate-400 hover:bg-slate-700 hover:text-white'
+                      : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
                   )}
                 >
                   <Icon className="w-4 h-4 flex-shrink-0" />
                   <span className="flex-1 text-left">{type.label}</span>
                   <span className={clsx(
                     'text-xs px-2 py-0.5 rounded',
-                    isSelected ? 'bg-blue-500/30' : 'bg-slate-700'
+                    isSelected ? 'bg-blue-500/30' : 'bg-theme-elevated'
                   )}>
                     {count}
                   </span>
@@ -930,7 +954,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
           {hiddenKindsCount > 0 || hiddenGroupsCount > 0 || showEmptyKinds ? (
             <button
               onClick={() => setShowEmptyKinds(!showEmptyKinds)}
-              className="w-full flex items-center gap-2 px-3 py-2 mt-2 text-xs text-slate-500 hover:text-slate-300 border-t border-slate-700"
+              className="w-full flex items-center gap-2 px-3 py-2 mt-2 text-xs text-theme-text-tertiary hover:text-theme-text-secondary border-t border-theme-border"
             >
               {showEmptyKinds ? (
                 <>
@@ -954,15 +978,15 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
       {/* Main Content - Resource Table */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         {/* Toolbar */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-700 bg-slate-800/50 shrink-0">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0">
           <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
             <input
               type="text"
               placeholder="Search resources..."
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full max-w-md pl-10 pr-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
 
@@ -975,7 +999,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                   'flex items-center gap-2 px-3 py-2 rounded-lg text-sm transition-colors',
                   hasActiveFilters
                     ? 'bg-blue-500/20 text-blue-300 hover:bg-blue-500/30'
-                    : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                    : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
                 )}
               >
                 <Filter className="w-4 h-4" />
@@ -988,13 +1012,13 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
               </button>
 
               {showFilterDropdown && (
-                <div className="absolute right-0 top-full mt-2 w-64 bg-slate-800 border border-slate-700 rounded-lg shadow-xl z-50">
-                  <div className="p-3 border-b border-slate-700 flex items-center justify-between">
-                    <span className="text-sm font-medium text-white">Filters</span>
+                <div className="absolute right-0 top-full mt-2 w-64 bg-theme-surface border border-theme-border rounded-lg shadow-xl z-50">
+                  <div className="p-3 border-b border-theme-border flex items-center justify-between">
+                    <span className="text-sm font-medium text-theme-text-primary">Filters</span>
                     {hasActiveFilters && (
                       <button
                         onClick={clearFilters}
-                        className="text-xs text-slate-400 hover:text-white"
+                        className="text-xs text-theme-text-secondary hover:text-theme-text-primary"
                       >
                         Clear all
                       </button>
@@ -1005,7 +1029,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                     {/* Status/Phase filter */}
                     {filterOptions.type === 'pods' && filterOptions.phases.length > 0 && (
                       <div>
-                        <label className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-2 block">
+                        <label className="text-xs font-medium text-theme-text-secondary uppercase tracking-wide mb-2 block">
                           Phase
                         </label>
                         <div className="flex flex-wrap gap-1.5">
@@ -1017,7 +1041,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                                 'px-2 py-1 text-xs rounded transition-colors',
                                 statusFilter === value
                                   ? 'bg-blue-500/30 text-blue-300'
-                                  : 'bg-slate-700 text-slate-400 hover:text-white'
+                                  : 'bg-theme-elevated text-theme-text-secondary hover:text-theme-text-primary'
                               )}
                             >
                               {value} ({count})
@@ -1030,7 +1054,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                     {/* Problem filter (pods only) */}
                     {filterOptions.type === 'pods' && filterOptions.problems.length > 0 && (
                       <div>
-                        <label className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-2 block">
+                        <label className="text-xs font-medium text-theme-text-secondary uppercase tracking-wide mb-2 block">
                           Problems
                         </label>
                         <div className="flex flex-wrap gap-1.5">
@@ -1042,7 +1066,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                                 'px-2 py-1 text-xs rounded transition-colors',
                                 problemFilters.includes(value)
                                   ? 'bg-red-500/30 text-red-300'
-                                  : 'bg-slate-700 text-slate-400 hover:text-white'
+                                  : 'bg-theme-elevated text-theme-text-secondary hover:text-theme-text-primary'
                               )}
                             >
                               {value} ({count})
@@ -1055,7 +1079,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                     {/* Workload health filter */}
                     {filterOptions.type === 'workload' && filterOptions.health.length > 0 && (
                       <div>
-                        <label className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-2 block">
+                        <label className="text-xs font-medium text-theme-text-secondary uppercase tracking-wide mb-2 block">
                           Health
                         </label>
                         <div className="flex flex-wrap gap-1.5">
@@ -1070,7 +1094,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                                     : value === 'Degraded' ? 'bg-yellow-500/30 text-yellow-300'
                                     : value === 'Unhealthy' ? 'bg-red-500/30 text-red-300'
                                     : 'bg-blue-500/30 text-blue-300'
-                                  : 'bg-slate-700 text-slate-400 hover:text-white'
+                                  : 'bg-theme-elevated text-theme-text-secondary hover:text-theme-text-primary'
                               )}
                             >
                               {value} ({count})
@@ -1083,7 +1107,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                     {/* Node conditions filter */}
                     {filterOptions.type === 'nodes' && filterOptions.conditions.length > 0 && (
                       <div>
-                        <label className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-2 block">
+                        <label className="text-xs font-medium text-theme-text-secondary uppercase tracking-wide mb-2 block">
                           Conditions
                         </label>
                         <div className="flex flex-wrap gap-1.5">
@@ -1095,7 +1119,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                                 'px-2 py-1 text-xs rounded transition-colors',
                                 statusFilter === value
                                   ? 'bg-red-500/30 text-red-300'
-                                  : 'bg-slate-700 text-slate-400 hover:text-white'
+                                  : 'bg-theme-elevated text-theme-text-secondary hover:text-theme-text-primary'
                               )}
                             >
                               {value.replace(/([A-Z])/g, ' $1').trim()} ({count})
@@ -1116,7 +1140,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
               {statusFilter && (
                 <span className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-500/20 text-blue-300 rounded">
                   {statusFilter}
-                  <button onClick={() => setStatusFilter('')} className="hover:text-white">
+                  <button onClick={() => setStatusFilter('')} className="hover:text-theme-text-primary">
                     <X className="w-3 h-3" />
                   </button>
                 </span>
@@ -1124,7 +1148,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
               {problemFilters.map(p => (
                 <span key={p} className="flex items-center gap-1 px-2 py-1 text-xs bg-red-500/20 text-red-300 rounded">
                   {p}
-                  <button onClick={() => toggleProblemFilter(p)} className="hover:text-white">
+                  <button onClick={() => toggleProblemFilter(p)} className="hover:text-theme-text-primary">
                     <X className="w-3 h-3" />
                   </button>
                 </span>
@@ -1133,14 +1157,14 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
           )}
 
           {lastUpdated && (
-            <div className="flex items-center gap-1.5 text-xs text-slate-500">
+            <div className="flex items-center gap-1.5 text-xs text-theme-text-tertiary">
               <Clock className="w-3.5 h-3.5" />
               <span>Updated {formatAge(lastUpdated.toISOString())}</span>
             </div>
           )}
           <button
             onClick={() => refetch()}
-            className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg"
+            className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg"
             title="Refresh"
           >
             <RefreshCw className="w-4 h-4" />
@@ -1150,16 +1174,16 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
         {/* Table */}
         <div className="flex-1 overflow-auto">
           {isLoading ? (
-            <div className="flex items-center justify-center h-full text-slate-500">
+            <div className="flex items-center justify-center h-full text-theme-text-tertiary">
               Loading...
             </div>
           ) : filteredResources.length === 0 ? (
-            <div className="flex items-center justify-center h-full text-slate-500">
+            <div className="flex items-center justify-center h-full text-theme-text-tertiary">
               No {selectedKind.kind} found
             </div>
           ) : (
             <table className="w-full table-fixed">
-              <thead className="bg-slate-800 sticky top-0 z-10">
+              <thead className="bg-theme-surface sticky top-0 z-10">
                 <tr>
                   {columns.map((col) => {
                     const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version'].includes(col.key)
@@ -1171,14 +1195,14 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                           'text-left px-4 py-3 text-xs font-medium uppercase tracking-wide',
                           col.key !== 'name' && col.width,
                           col.hideOnMobile && 'hidden xl:table-cell',
-                          isSortable ? 'text-slate-400 hover:text-slate-200 cursor-pointer select-none' : 'text-slate-400'
+                          isSortable ? 'text-theme-text-secondary hover:text-theme-text-primary cursor-pointer select-none' : 'text-theme-text-secondary'
                         )}
                         onClick={isSortable ? () => handleSort(col.key) : undefined}
                       >
                         <div className="flex items-center gap-1">
                           <span>{col.label}</span>
                           {isSortable && (
-                            <span className="text-slate-500">
+                            <span className="text-theme-text-tertiary">
                               {isSorted ? (
                                 sortDirection === 'asc' ? (
                                   <ChevronUp className="w-3.5 h-3.5" />
@@ -1196,7 +1220,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                   })}
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-700/50">
+              <tbody className="table-divide-subtle">
                 {filteredResources.map((resource: any) => {
                   const isSelected = selectedResource?.kind === selectedKind.name &&
                     selectedResource?.namespace === resource.metadata?.namespace &&
@@ -1238,7 +1262,7 @@ function ResourceTypeButton({ resource, count, isSelected, onClick }: ResourceTy
         'w-full flex items-center gap-3 px-3 py-1.5 rounded-lg text-sm transition-colors',
         isSelected
           ? 'bg-blue-500/20 text-blue-300'
-          : 'text-slate-400 hover:bg-slate-700 hover:text-white'
+          : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
       )}
     >
       <Icon className="w-4 h-4 flex-shrink-0" />
@@ -1249,7 +1273,7 @@ function ResourceTypeButton({ resource, count, isSelected, onClick }: ResourceTy
       </Tooltip>
       <span className={clsx(
         'text-xs px-1.5 py-0.5 rounded min-w-[1.5rem] text-center',
-        isSelected ? 'bg-blue-500/30' : 'bg-slate-700'
+        isSelected ? 'bg-blue-500/30' : 'bg-theme-elevated'
       )}>
         {count}
       </span>
@@ -1273,7 +1297,7 @@ function ResourceRow({ resource, kind, columns, isSelected, onClick }: ResourceR
         'cursor-pointer transition-colors',
         isSelected
           ? 'bg-blue-500/20 hover:bg-blue-500/30'
-          : 'hover:bg-slate-800/50'
+          : 'hover:bg-theme-surface/50'
       )}
     >
       {columns.map((col) => (
@@ -1305,7 +1329,7 @@ function CellContent({ resource, kind, column }: CellContentProps) {
   if (column === 'name') {
     return (
       <Tooltip content={meta.name}>
-        <span className="text-sm text-white font-medium truncate block">
+        <span className="text-sm text-theme-text-primary font-medium truncate block">
           {meta.name}
         </span>
       </Tooltip>
@@ -1314,12 +1338,12 @@ function CellContent({ resource, kind, column }: CellContentProps) {
   if (column === 'namespace') {
     return (
       <Tooltip content={meta.namespace}>
-        <span className="text-sm text-slate-400 truncate block">{meta.namespace || '-'}</span>
+        <span className="text-sm text-theme-text-secondary truncate block">{meta.namespace || '-'}</span>
       </Tooltip>
     )
   }
   if (column === 'age') {
-    return <span className="text-sm text-slate-400">{formatAge(meta.creationTimestamp)}</span>
+    return <span className="text-sm text-theme-text-secondary">{formatAge(meta.creationTimestamp)}</span>
   }
 
   // Kind-specific columns
@@ -1363,7 +1387,7 @@ function GenericCell({ resource, column }: { resource: any; column: string }) {
     case 'status': {
       // Try to extract status from common patterns
       const status = resource.status
-      if (!status) return <span className="text-sm text-slate-500">-</span>
+      if (!status) return <span className="text-sm text-theme-text-tertiary">-</span>
 
       // Check for phase (common in many CRDs)
       if (status.phase) {
@@ -1373,9 +1397,9 @@ function GenericCell({ resource, column }: { resource: any; column: string }) {
         return (
           <span className={clsx(
             'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
-            isHealthy ? 'bg-green-500/20 text-green-400' :
-            isWarning ? 'bg-yellow-500/20 text-yellow-400' :
-            'bg-red-500/20 text-red-400'
+            isHealthy ? 'status-healthy' :
+            isWarning ? 'status-degraded' :
+            'status-unhealthy'
           )}>
             {phase}
           </span>
@@ -1390,7 +1414,7 @@ function GenericCell({ resource, column }: { resource: any; column: string }) {
           return (
             <span className={clsx(
               'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
-              isReady ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'
+              isReady ? 'status-healthy' : 'status-degraded'
             )}>
               {isReady ? 'Ready' : 'Not Ready'}
             </span>
@@ -1401,16 +1425,16 @@ function GenericCell({ resource, column }: { resource: any; column: string }) {
       // Check for state field
       if (status.state) {
         return (
-          <span className="text-sm text-slate-400 truncate">
+          <span className="text-sm text-theme-text-secondary truncate">
             {String(status.state)}
           </span>
         )
       }
 
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
     }
     default:
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }
 
@@ -1428,7 +1452,7 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
       const allReady = ready === total && total > 0
       // Completed pods (Succeeded) show neutral color, not red
       const color = isCompleted
-        ? 'text-slate-400'
+        ? 'text-theme-text-secondary'
         : allReady
           ? 'text-green-400'
           : ready > 0
@@ -1463,7 +1487,7 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
       return (
         <span className={clsx(
           'text-sm',
-          restarts > 5 ? 'text-red-400 font-medium' : restarts > 0 ? 'text-yellow-400' : 'text-slate-400'
+          restarts > 5 ? 'text-red-400 font-medium' : restarts > 0 ? 'text-yellow-400' : 'text-theme-text-secondary'
         )}>
           {restarts}
         </span>
@@ -1473,12 +1497,12 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
       const nodeName = resource.spec?.nodeName || '-'
       return (
         <Tooltip content={nodeName}>
-          <span className="text-sm text-slate-400 truncate block">{nodeName}</span>
+          <span className="text-sm text-theme-text-secondary truncate block">{nodeName}</span>
         </Tooltip>
       )
     }
     default:
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }
 
@@ -1494,23 +1518,23 @@ function WorkloadCell({ resource, column }: { resource: any; kind: string; colum
       return (
         <span className={clsx(
           'text-sm font-medium',
-          desired === 0 ? 'text-slate-400' : allReady ? 'text-green-400' : ready > 0 ? 'text-yellow-400' : 'text-red-400'
+          desired === 0 ? 'text-theme-text-secondary' : allReady ? 'text-green-400' : ready > 0 ? 'text-yellow-400' : 'text-red-400'
         )}>
           {ready}/{desired}
         </span>
       )
     }
     case 'upToDate':
-      return <span className="text-sm text-slate-400">{status.updatedReplicas || 0}</span>
+      return <span className="text-sm text-theme-text-secondary">{status.updatedReplicas || 0}</span>
     case 'available':
-      return <span className="text-sm text-slate-400">{status.availableReplicas || 0}</span>
+      return <span className="text-sm text-theme-text-secondary">{status.availableReplicas || 0}</span>
     case 'images': {
       const images = getWorkloadImages(resource)
-      if (images.length === 0) return <span className="text-sm text-slate-500">-</span>
+      if (images.length === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
       const display = images.length === 1 ? truncate(images[0], 40) : `${truncate(images[0], 30)} +${images.length - 1}`
       return (
         <Tooltip content={images.join('\n')}>
-          <span className="text-sm text-slate-400 truncate">
+          <span className="text-sm text-theme-text-secondary truncate">
             {display}
           </span>
         </Tooltip>
@@ -1518,7 +1542,7 @@ function WorkloadCell({ resource, column }: { resource: any; kind: string; colum
     }
     case 'conditions': {
       const { conditions, hasIssues } = getWorkloadConditions(resource)
-      if (conditions.length === 0) return <span className="text-sm text-slate-500">-</span>
+      if (conditions.length === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
       const display = conditions.join(', ')
       return (
         <Tooltip content={display}>
@@ -1534,7 +1558,7 @@ function WorkloadCell({ resource, column }: { resource: any; kind: string; colum
       )
     }
     default:
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }
 
@@ -1543,7 +1567,7 @@ function DaemonSetCell({ resource, column }: { resource: any; column: string }) 
 
   switch (column) {
     case 'desired':
-      return <span className="text-sm text-slate-400">{status.desiredNumberScheduled || 0}</span>
+      return <span className="text-sm text-theme-text-secondary">{status.desiredNumberScheduled || 0}</span>
     case 'ready': {
       const desired = status.desiredNumberScheduled || 0
       const ready = status.numberReady || 0
@@ -1558,11 +1582,11 @@ function DaemonSetCell({ resource, column }: { resource: any; column: string }) 
       )
     }
     case 'upToDate':
-      return <span className="text-sm text-slate-400">{status.updatedNumberScheduled || 0}</span>
+      return <span className="text-sm text-theme-text-secondary">{status.updatedNumberScheduled || 0}</span>
     case 'available':
-      return <span className="text-sm text-slate-400">{status.numberAvailable || 0}</span>
+      return <span className="text-sm text-theme-text-secondary">{status.numberAvailable || 0}</span>
     default:
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }
 
@@ -1578,7 +1602,7 @@ function ReplicaSetCell({ resource, column }: { resource: any; column: string })
       return (
         <span className={clsx(
           'text-sm font-medium',
-          desired === 0 ? 'text-slate-400' : allReady ? 'text-green-400' : ready > 0 ? 'text-yellow-400' : 'text-red-400'
+          desired === 0 ? 'text-theme-text-secondary' : allReady ? 'text-green-400' : ready > 0 ? 'text-yellow-400' : 'text-red-400'
         )}>
           {ready}/{desired}
         </span>
@@ -1586,21 +1610,21 @@ function ReplicaSetCell({ resource, column }: { resource: any; column: string })
     }
     case 'owner': {
       const owner = getReplicaSetOwner(resource)
-      return <span className="text-sm text-slate-400 truncate">{owner || '-'}</span>
+      return <span className="text-sm text-theme-text-secondary truncate">{owner || '-'}</span>
     }
     case 'status': {
       const isActive = isReplicaSetActive(resource)
       return (
         <span className={clsx(
           'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
-          isActive ? 'bg-blue-500/20 text-blue-400' : 'bg-slate-500/20 text-slate-400'
+          isActive ? 'status-neutral' : 'status-unknown'
         )}>
           {isActive ? 'Active' : 'Old'}
         </span>
       )
     }
     default:
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }
 
@@ -1618,7 +1642,7 @@ function ServiceCell({ resource, column }: { resource: any; column: string }) {
       const selector = getServiceSelector(resource)
       return (
         <Tooltip content={selector}>
-          <span className="text-sm text-slate-400 truncate">
+          <span className="text-sm text-theme-text-secondary truncate">
             {selector}
           </span>
         </Tooltip>
@@ -1633,10 +1657,10 @@ function ServiceCell({ resource, column }: { resource: any; column: string }) {
       )
     }
     case 'clusterIP':
-      return <span className="text-sm text-slate-400 font-mono">{resource.spec?.clusterIP || '-'}</span>
+      return <span className="text-sm text-theme-text-secondary font-mono">{resource.spec?.clusterIP || '-'}</span>
     case 'externalIP': {
       const external = getServiceExternalIP(resource)
-      if (!external) return <span className="text-sm text-slate-500">-</span>
+      if (!external) return <span className="text-sm text-theme-text-tertiary">-</span>
       return (
         <Tooltip content={external}>
           <div className="flex items-center gap-1">
@@ -1648,10 +1672,10 @@ function ServiceCell({ resource, column }: { resource: any; column: string }) {
     }
     case 'ports': {
       const ports = getServicePorts(resource)
-      return <span className="text-sm text-slate-400">{ports}</span>
+      return <span className="text-sm text-theme-text-secondary">{ports}</span>
     }
     default:
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }
 
@@ -1659,13 +1683,13 @@ function IngressCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'class': {
       const ingressClass = getIngressClass(resource)
-      return <span className="text-sm text-slate-400">{ingressClass || '-'}</span>
+      return <span className="text-sm text-theme-text-secondary">{ingressClass || '-'}</span>
     }
     case 'hosts': {
       const hosts = getIngressHosts(resource)
       return (
         <Tooltip content={hosts}>
-          <span className="text-sm text-slate-400 truncate">{hosts}</span>
+          <span className="text-sm text-theme-text-secondary truncate">{hosts}</span>
         </Tooltip>
       )
     }
@@ -1673,7 +1697,7 @@ function IngressCell({ resource, column }: { resource: any; column: string }) {
       const rules = getIngressRules(resource)
       return (
         <Tooltip content={rules}>
-          <span className="text-sm text-slate-400 truncate">{rules}</span>
+          <span className="text-sm text-theme-text-secondary truncate">{rules}</span>
         </Tooltip>
       )
     }
@@ -1686,15 +1710,15 @@ function IngressCell({ resource, column }: { resource: any; column: string }) {
           </span>
         </Tooltip>
       ) : (
-        <span className="text-sm text-slate-500">-</span>
+        <span className="text-sm text-theme-text-tertiary">-</span>
       )
     }
     case 'address': {
       const address = getIngressAddress(resource)
-      return <span className="text-sm text-slate-400 truncate">{address || 'Pending'}</span>
+      return <span className="text-sm text-theme-text-secondary truncate">{address || 'Pending'}</span>
     }
     default:
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }
 
@@ -1704,10 +1728,10 @@ function ConfigMapCell({ resource, column }: { resource: any; column: string }) 
       const { count, preview } = getConfigMapKeys(resource)
       return (
         <div className="flex items-center gap-2">
-          <span className="text-sm text-slate-400">{count}</span>
+          <span className="text-sm text-theme-text-secondary">{count}</span>
           {count > 0 && (
             <Tooltip content={preview}>
-              <span className="text-xs text-slate-500 truncate">
+              <span className="text-xs text-theme-text-tertiary truncate">
                 ({preview})
               </span>
             </Tooltip>
@@ -1717,10 +1741,10 @@ function ConfigMapCell({ resource, column }: { resource: any; column: string }) 
     }
     case 'size': {
       const size = getConfigMapSize(resource)
-      return <span className="text-sm text-slate-400">{size}</span>
+      return <span className="text-sm text-theme-text-secondary">{size}</span>
     }
     default:
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }
 
@@ -1736,10 +1760,10 @@ function SecretCell({ resource, column }: { resource: any; column: string }) {
     }
     case 'keys': {
       const count = getSecretKeyCount(resource)
-      return <span className="text-sm text-slate-400">{count}</span>
+      return <span className="text-sm text-theme-text-secondary">{count}</span>
     }
     default:
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }
 
@@ -1759,7 +1783,7 @@ function JobCell({ resource, column }: { resource: any; column: string }) {
       return (
         <span className={clsx(
           'text-sm font-medium',
-          allDone ? 'text-green-400' : succeeded > 0 ? 'text-yellow-400' : 'text-slate-400'
+          allDone ? 'text-green-400' : succeeded > 0 ? 'text-yellow-400' : 'text-theme-text-secondary'
         )}>
           {succeeded}/{total}
         </span>
@@ -1767,10 +1791,10 @@ function JobCell({ resource, column }: { resource: any; column: string }) {
     }
     case 'duration': {
       const duration = getJobDuration(resource)
-      return <span className="text-sm text-slate-400">{duration || '-'}</span>
+      return <span className="text-sm text-theme-text-secondary">{duration || '-'}</span>
     }
     default:
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }
 
@@ -1780,8 +1804,8 @@ function CronJobCell({ resource, column }: { resource: any; column: string }) {
       const { cron, readable } = getCronJobSchedule(resource)
       return (
         <div className="flex flex-col">
-          <span className="text-sm text-slate-400 font-mono">{cron}</span>
-          <span className="text-xs text-slate-500">{readable}</span>
+          <span className="text-sm text-theme-text-secondary font-mono">{cron}</span>
+          <span className="text-xs text-theme-text-tertiary">{readable}</span>
         </div>
       )
     }
@@ -1795,10 +1819,10 @@ function CronJobCell({ resource, column }: { resource: any; column: string }) {
     }
     case 'lastRun': {
       const lastRun = getCronJobLastRun(resource)
-      return <span className="text-sm text-slate-400">{lastRun || 'Never'}</span>
+      return <span className="text-sm text-theme-text-secondary">{lastRun || 'Never'}</span>
     }
     default:
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }
 
@@ -1806,14 +1830,14 @@ function HPACell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
     case 'target': {
       const target = getHPATarget(resource)
-      return <span className="text-sm text-slate-400 truncate">{target}</span>
+      return <span className="text-sm text-theme-text-secondary truncate">{target}</span>
     }
     case 'replicas': {
       const { current, min, max } = getHPAReplicas(resource)
       return (
-        <span className="text-sm text-slate-400">
-          <span className="text-white font-medium">{current}</span>
-          <span className="text-slate-500"> ({min}-{max})</span>
+        <span className="text-sm text-theme-text-secondary">
+          <span className="text-theme-text-primary font-medium">{current}</span>
+          <span className="text-theme-text-tertiary"> ({min}-{max})</span>
         </span>
       )
     }
@@ -1823,7 +1847,7 @@ function HPACell({ resource, column }: { resource: any; column: string }) {
       if (cpu !== undefined) parts.push(`CPU: ${cpu}%`)
       if (memory !== undefined) parts.push(`Mem: ${memory}%`)
       if (custom > 0) parts.push(`+${custom} custom`)
-      return <span className="text-sm text-slate-400">{parts.join(', ') || '-'}</span>
+      return <span className="text-sm text-theme-text-secondary">{parts.join(', ') || '-'}</span>
     }
     case 'status': {
       const status = getHPAStatus(resource)
@@ -1834,7 +1858,7 @@ function HPACell({ resource, column }: { resource: any; column: string }) {
       )
     }
     default:
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }
 
@@ -1860,7 +1884,7 @@ function NodeCell({ resource, column }: { resource: any; column: string }) {
     }
     case 'roles': {
       const roles = getNodeRoles(resource)
-      return <span className="text-sm text-slate-400">{roles}</span>
+      return <span className="text-sm text-theme-text-secondary">{roles}</span>
     }
     case 'conditions': {
       const { problems, healthy } = getNodeConditions(resource)
@@ -1878,16 +1902,16 @@ function NodeCell({ resource, column }: { resource: any; column: string }) {
     case 'taints': {
       const { text, count } = getNodeTaints(resource)
       return (
-        <span className={clsx('text-sm', count > 0 ? 'text-yellow-400' : 'text-slate-400')}>
+        <span className={clsx('text-sm', count > 0 ? 'text-yellow-400' : 'text-theme-text-secondary')}>
           {text}
         </span>
       )
     }
     case 'version': {
       const version = getNodeVersion(resource)
-      return <span className="text-sm text-slate-400">{version}</span>
+      return <span className="text-sm text-theme-text-secondary">{version}</span>
     }
     default:
-      return <span className="text-sm text-slate-500">-</span>
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }

@@ -22,7 +22,7 @@ export function ValuesViewer({
 }: ValuesViewerProps) {
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-32 text-slate-500">
+      <div className="flex items-center justify-center h-32 text-theme-text-tertiary">
         Loading values...
       </div>
     )
@@ -35,11 +35,11 @@ export function ValuesViewer({
     return (
       <div className="p-4">
         <div className="flex items-center justify-between mb-3">
-          <span className="text-sm font-medium text-slate-300">Values</span>
+          <span className="text-sm font-medium text-theme-text-secondary">Values</span>
           <ToggleButton showAll={showAllValues} onToggle={onToggleAllValues} />
         </div>
-        <div className="flex flex-col items-center justify-center h-32 text-slate-500 gap-2">
-          <Settings className="w-8 h-8 text-slate-600" />
+        <div className="flex flex-col items-center justify-center h-32 text-theme-text-tertiary gap-2">
+          <Settings className="w-8 h-8 text-theme-text-disabled" />
           <span>{showAllValues ? 'No computed values' : 'No user-supplied values'}</span>
         </div>
       </div>
@@ -52,7 +52,7 @@ export function ValuesViewer({
     <div className="p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-slate-300">
+          <span className="text-sm font-medium text-theme-text-secondary">
             {showAllValues ? 'All Values (Computed)' : 'User-Supplied Values'}
           </span>
         </div>
@@ -60,7 +60,7 @@ export function ValuesViewer({
           <ToggleButton showAll={showAllValues} onToggle={onToggleAllValues} />
           <button
             onClick={() => onCopy(yaml)}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded"
+            className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
           >
             {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
             Copy
@@ -80,12 +80,12 @@ export function ValuesViewer({
 
 function ToggleButton({ showAll, onToggle }: { showAll: boolean; onToggle: (show: boolean) => void }) {
   return (
-    <div className="flex items-center bg-slate-700/50 rounded-md p-0.5 text-xs">
+    <div className="flex items-center bg-theme-elevated/50 rounded-md p-0.5 text-xs">
       <button
         onClick={() => onToggle(false)}
         className={clsx(
           'px-2 py-1 rounded transition-colors',
-          !showAll ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white'
+          !showAll ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
         )}
       >
         User
@@ -94,7 +94,7 @@ function ToggleButton({ showAll, onToggle }: { showAll: boolean; onToggle: (show
         onClick={() => onToggle(true)}
         className={clsx(
           'px-2 py-1 rounded transition-colors',
-          showAll ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white'
+          showAll ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
         )}
       >
         All

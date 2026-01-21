@@ -89,7 +89,7 @@ function getStatusBarColor(status: HealthStatus): string {
     case 'unhealthy':
       return 'bg-red-500'
     default:
-      return 'bg-slate-500'
+      return 'bg-theme-hover'
   }
 }
 
@@ -122,7 +122,7 @@ function getIconColor(kind: NodeKind): string {
     case 'PVC':
       return 'text-cyan-400'
     default:
-      return 'text-slate-400'
+      return 'text-theme-text-secondary'
   }
 }
 
@@ -245,7 +245,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
       <div
         className={clsx(
           'relative rounded-lg overflow-hidden',
-          'bg-slate-800 border border-slate-600',
+          'bg-theme-surface border border-theme-border-light',
           'shadow-md shadow-black/20',
           'transition-all duration-150',
           selected && 'ring-2 ring-blue-400 border-blue-400',
@@ -271,7 +271,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
           {/* Header row: icon + kind label + expand/collapse + status dot */}
           <div className="flex items-center gap-1.5 mb-0.5">
             <Icon className={clsx('w-3.5 h-3.5', getIconColor(kind))} />
-            <span className="text-[10px] uppercase tracking-wide text-slate-500 font-medium">
+            <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary font-medium">
               {isPodGroup ? 'Pod Group' : kind}
             </span>
             {/* Expand/Collapse button for PodGroup */}
@@ -281,10 +281,10 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                   e.stopPropagation()
                   onExpand(id)
                 }}
-                className="ml-auto p-0.5 hover:bg-slate-700 rounded transition-colors"
+                className="ml-auto p-0.5 hover:bg-theme-elevated rounded transition-colors"
                 title="Expand to show individual pods"
               >
-                <ChevronDown className="w-3.5 h-3.5 text-slate-400" />
+                <ChevronDown className="w-3.5 h-3.5 text-theme-text-secondary" />
               </button>
             )}
             {canCollapse && (
@@ -293,10 +293,10 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                   e.stopPropagation()
                   onCollapse(id)
                 }}
-                className="ml-auto p-0.5 hover:bg-slate-700 rounded transition-colors"
+                className="ml-auto p-0.5 hover:bg-theme-elevated rounded transition-colors"
                 title="Collapse back to group"
               >
-                <ChevronUp className="w-3.5 h-3.5 text-slate-400" />
+                <ChevronUp className="w-3.5 h-3.5 text-theme-text-secondary" />
               </button>
             )}
             <span
@@ -309,13 +309,13 @@ export const K8sResourceNode = memo(function K8sResourceNode({
           </div>
 
           {/* Name */}
-          <div className="text-sm font-medium text-white truncate pr-1">
+          <div className="text-sm font-medium text-theme-text-primary truncate pr-1">
             {name}
           </div>
 
           {/* Subtitle */}
           {subtitle && (
-            <div className="text-xs text-slate-400 truncate mt-0.5">
+            <div className="text-xs text-theme-text-secondary truncate mt-0.5">
               {subtitle}
             </div>
           )}

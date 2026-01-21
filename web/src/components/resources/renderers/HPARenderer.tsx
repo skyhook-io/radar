@@ -32,13 +32,13 @@ export function HPARenderer({ data }: HPARendererProps) {
               const current = metric.resource?.current?.averageUtilization || metric.resource?.current?.averageValue
               const target = spec.metrics?.[i]?.resource?.target?.averageUtilization || spec.metrics?.[i]?.resource?.target?.averageValue
               return (
-                <div key={i} className="bg-slate-700/30 rounded p-2">
+                <div key={i} className="bg-theme-elevated/30 rounded p-2">
                   <div className="flex items-center justify-between text-sm">
-                    <span className="text-white">{metric.resource?.name || metric.type}</span>
-                    <span className="text-slate-400">{current}{typeof current === 'number' ? '%' : ''} / {target}{typeof target === 'number' ? '%' : ''}</span>
+                    <span className="text-theme-text-primary">{metric.resource?.name || metric.type}</span>
+                    <span className="text-theme-text-secondary">{current}{typeof current === 'number' ? '%' : ''} / {target}{typeof target === 'number' ? '%' : ''}</span>
                   </div>
                   {typeof current === 'number' && typeof target === 'number' && (
-                    <div className="mt-2 h-2 bg-slate-600 rounded overflow-hidden">
+                    <div className="mt-2 h-2 bg-theme-hover rounded overflow-hidden">
                       <div
                         className={clsx(
                           'h-full transition-all',

@@ -174,22 +174,22 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
   return (
     <div className="flex flex-col h-full w-full">
       {/* Toolbar */}
-      <div className="flex items-center gap-4 px-4 py-3 border-b border-slate-700 bg-slate-800/50 flex-wrap">
+      <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 flex-wrap">
         {/* Search */}
         <div className="flex-1 relative min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
           <input
             ref={searchInputRef}
             type="text"
             placeholder="Search... (/ or ⌘K)"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full max-w-md pl-10 pr-4 py-2 bg-slate-700 border border-slate-600 rounded-lg text-sm text-white placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
         </div>
 
         {/* Event type filter */}
-        <div className="flex items-center gap-1 bg-slate-700 rounded-lg p-1">
+        <div className="flex items-center gap-1 bg-theme-elevated rounded-lg p-1">
           <FilterButton
             active={eventTypeFilter === 'all'}
             onClick={() => setEventTypeFilter('all')}
@@ -224,7 +224,7 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
         <select
           value={kindFilter}
           onChange={(e) => setKindFilter(e.target.value)}
-          className="appearance-none bg-slate-700 text-white text-sm rounded-lg px-3 py-2 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="appearance-none bg-theme-elevated text-theme-text-primary text-sm rounded-lg px-3 py-2 border border-theme-border-light focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
           <option value="">All Kinds</option>
           {RESOURCE_KINDS.map((kind) => (
@@ -238,7 +238,7 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
         <select
           value={timeRange}
           onChange={(e) => setTimeRange(e.target.value as TimeRange)}
-          className="appearance-none bg-slate-700 text-white text-sm rounded-lg px-3 py-2 border border-slate-600 focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="appearance-none bg-theme-elevated text-theme-text-primary text-sm rounded-lg px-3 py-2 border border-theme-border-light focus:outline-none focus:ring-2 focus:ring-blue-500"
         >
           {TIME_RANGES.map((range) => (
             <option key={range.value} value={range.value}>
@@ -249,12 +249,12 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
 
         {/* View toggle */}
         {onViewChange && (
-          <div className="flex items-center gap-1 bg-slate-700 rounded-lg p-1">
+          <div className="flex items-center gap-1 bg-theme-elevated rounded-lg p-1">
             <button
               onClick={() => onViewChange('list')}
               className={clsx(
                 'p-2 rounded-md transition-colors',
-                currentView === 'list' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white'
+                currentView === 'list' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
               )}
               title="List view"
             >
@@ -264,7 +264,7 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
               onClick={() => onViewChange('swimlane')}
               className={clsx(
                 'p-2 rounded-md transition-colors',
-                currentView === 'swimlane' ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white'
+                currentView === 'swimlane' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
               )}
               title="Timeline view"
             >
@@ -276,7 +276,7 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
         {/* Refresh */}
         <button
           onClick={() => refetch()}
-          className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg"
+          className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg"
           title="Refresh"
         >
           <RefreshCw className="w-4 h-4" />
@@ -286,12 +286,12 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
       {/* Timeline content */}
       <div className="flex-1 overflow-auto">
         {isLoading ? (
-          <div className="flex items-center justify-center h-full text-slate-500">
+          <div className="flex items-center justify-center h-full text-theme-text-tertiary">
             <RefreshCw className="w-5 h-5 animate-spin mr-2" />
             Loading timeline...
           </div>
         ) : filteredEvents.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-500">
+          <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
             <Clock className="w-12 h-12 mb-4 opacity-50" />
             <p className="text-lg">No events found</p>
             <p className="text-sm mt-2">
@@ -306,15 +306,15 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
               <div key={group.label}>
                 {/* Time period header */}
                 <div className="flex items-center gap-2 mb-3">
-                  <Clock className="w-4 h-4 text-slate-500" />
-                  <span className="text-sm font-medium text-slate-400">{group.label}</span>
-                  <span className="text-xs text-slate-600">
+                  <Clock className="w-4 h-4 text-theme-text-tertiary" />
+                  <span className="text-sm font-medium text-theme-text-secondary">{group.label}</span>
+                  <span className="text-xs text-theme-text-disabled">
                     ({group.events.length} event{group.events.length !== 1 ? 's' : ''})
                   </span>
                 </div>
 
                 {/* Events list */}
-                <div className="space-y-2 ml-6 border-l-2 border-slate-700 pl-4">
+                <div className="space-y-2 ml-6 border-l-2 border-theme-border pl-4">
                   {group.events.map((event) => (
                     <EventCard
                       key={event.id}
@@ -355,7 +355,7 @@ function FilterButton({ active, onClick, icon, label, count, color }: FilterButt
       onClick={onClick}
       className={clsx(
         'px-3 py-1.5 text-sm rounded-md transition-colors flex items-center gap-2',
-        active ? (color ? colorClasses[color] : 'bg-slate-600 text-white') : 'text-slate-400 hover:text-white'
+        active ? (color ? colorClasses[color] : 'bg-theme-hover text-theme-text-primary') : 'text-theme-text-secondary hover:text-theme-text-primary'
       )}
     >
       {icon}
@@ -364,7 +364,7 @@ function FilterButton({ active, onClick, icon, label, count, color }: FilterButt
         <span
           className={clsx(
             'text-xs px-1.5 rounded',
-            color ? `bg-${color}-500/30` : 'bg-slate-500/30'
+            color ? `bg-${color}-500/30` : 'bg-theme-hover/50'
           )}
         >
           {count}
@@ -397,13 +397,13 @@ function EventCard({ event, expanded, onToggle, onResourceClick }: EventCardProp
         case 'update':
           return 'bg-blue-500/5 border-blue-500/30 hover:border-blue-500/50'
         default:
-          return 'bg-slate-800/50 border-slate-700 hover:border-slate-600'
+          return 'bg-theme-surface/50 border-theme-border hover:border-theme-border-light'
       }
     }
     if (isWarning) {
       return 'bg-amber-500/5 border-amber-500/30 hover:border-amber-500/50'
     }
-    return 'bg-slate-800/50 border-slate-700 hover:border-slate-600'
+    return 'bg-theme-surface/50 border-theme-border hover:border-theme-border-light'
   }
 
   const getIcon = () => {
@@ -416,7 +416,7 @@ function EventCard({ event, expanded, onToggle, onResourceClick }: EventCardProp
         case 'update':
           return <RefreshCw className="w-4 h-4 text-blue-400" />
         default:
-          return <CheckCircle className="w-4 h-4 text-slate-400" />
+          return <CheckCircle className="w-4 h-4 text-theme-text-secondary" />
       }
     }
     if (isWarning) {
@@ -445,14 +445,14 @@ function EventCard({ event, expanded, onToggle, onResourceClick }: EventCardProp
                   e.stopPropagation()
                   onResourceClick?.(event.kind, event.namespace, event.name)
                 }}
-                className="flex items-center gap-2 hover:bg-slate-700/50 rounded px-1 -ml-1 transition-colors group"
+                className="flex items-center gap-2 hover:bg-theme-elevated/50 rounded px-1 -ml-1 transition-colors group"
               >
-                <span className="text-xs px-1.5 py-0.5 bg-slate-700 rounded text-slate-300 group-hover:bg-slate-600">
+                <span className="text-xs px-1.5 py-0.5 bg-theme-elevated rounded text-theme-text-secondary group-hover:bg-theme-hover">
                   {event.kind}
                 </span>
-                <span className="text-sm font-medium text-white truncate group-hover:text-blue-300">{event.name}</span>
+                <span className="text-sm font-medium text-theme-text-primary truncate group-hover:text-blue-300">{event.name}</span>
               </button>
-              {event.namespace && <span className="text-xs text-slate-500">in {event.namespace}</span>}
+              {event.namespace && <span className="text-xs text-theme-text-tertiary">in {event.namespace}</span>}
             </div>
 
             {/* Event details */}
@@ -485,10 +485,10 @@ function EventCard({ event, expanded, onToggle, onResourceClick }: EventCardProp
                 </>
               ) : (
                 <>
-                  <span className={clsx('text-sm font-medium', isWarning ? 'text-amber-300' : 'text-slate-300')}>
+                  <span className={clsx('text-sm font-medium', isWarning ? 'text-amber-300' : 'text-theme-text-secondary')}>
                     {event.reason}
                   </span>
-                  <span className="text-sm text-slate-400">
+                  <span className="text-sm text-theme-text-secondary">
                     {event.message && event.message.length > 80 && !expanded
                       ? `${event.message.slice(0, 80)}...`
                       : event.message}
@@ -500,25 +500,25 @@ function EventCard({ event, expanded, onToggle, onResourceClick }: EventCardProp
 
           {/* Time and count */}
           <div className="flex-shrink-0 text-right">
-            <div className="text-xs text-slate-500">{time}</div>
+            <div className="text-xs text-theme-text-tertiary">{time}</div>
             {event.count && event.count > 1 && (
-              <div className="text-xs text-slate-600 mt-1">x{event.count}</div>
+              <div className="text-xs text-theme-text-disabled mt-1">x{event.count}</div>
             )}
           </div>
 
           {/* Expand indicator */}
           <ChevronRight
-            className={clsx('w-4 h-4 text-slate-600 transition-transform flex-shrink-0', expanded && 'rotate-90')}
+            className={clsx('w-4 h-4 text-theme-text-disabled transition-transform flex-shrink-0', expanded && 'rotate-90')}
           />
         </div>
 
         {/* Expanded details */}
         {expanded && (
-          <div className="mt-3 pt-3 border-t border-slate-700/50 space-y-3">
+          <div className="mt-3 pt-3 border-t-subtle space-y-3">
             {/* Diff viewer for changes */}
             {isChange && event.diff && (
               <div>
-                <div className="text-xs text-slate-500 mb-2">Changes:</div>
+                <div className="text-xs text-theme-text-tertiary mb-2">Changes:</div>
                 <DiffViewer diff={event.diff} />
               </div>
             )}
@@ -526,20 +526,20 @@ function EventCard({ event, expanded, onToggle, onResourceClick }: EventCardProp
             {/* Full message for K8s events */}
             {!isChange && event.message && event.message.length > 80 && (
               <div>
-                <div className="text-xs text-slate-500 mb-1">Full message:</div>
-                <p className="text-sm text-slate-400 whitespace-pre-wrap">{event.message}</p>
+                <div className="text-xs text-theme-text-tertiary mb-1">Full message:</div>
+                <p className="text-sm text-theme-text-secondary whitespace-pre-wrap">{event.message}</p>
               </div>
             )}
 
             {/* Metadata */}
             <div className="grid grid-cols-2 gap-4 text-xs">
               <div>
-                <span className="text-slate-500">Timestamp:</span>
-                <span className="ml-2 text-slate-400">{new Date(event.timestamp).toLocaleString()}</span>
+                <span className="text-theme-text-tertiary">Timestamp:</span>
+                <span className="ml-2 text-theme-text-secondary">{new Date(event.timestamp).toLocaleString()}</span>
               </div>
               <div>
-                <span className="text-slate-500">Type:</span>
-                <span className="ml-2 text-slate-400">{isChange ? `Change (${event.operation})` : event.eventType}</span>
+                <span className="text-theme-text-tertiary">Type:</span>
+                <span className="ml-2 text-theme-text-secondary">{isChange ? `Change (${event.operation})` : event.eventType}</span>
               </div>
             </div>
           </div>

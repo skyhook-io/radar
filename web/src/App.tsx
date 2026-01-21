@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { TopologyGraph } from './components/topology/TopologyGraph'
 import { TopologyFilterSidebar } from './components/topology/TopologyFilterSidebar'
 import { EventsView } from './components/events/EventsView'
@@ -9,7 +10,8 @@ import { HelmView } from './components/helm/HelmView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { useEventSource } from './hooks/useEventSource'
 import { useClusterInfo, useNamespaces } from './api/client'
-import { ChevronDown, RefreshCw, FolderTree, Network, List, Clock, Package } from 'lucide-react'
+import { ChevronDown, RefreshCw, FolderTree, Network, List, Clock, Package, Sun, Moon } from 'lucide-react'
+import { useTheme } from './context/ThemeContext'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, Topology } from './types'
 
 // All possible node kinds
@@ -81,26 +83,61 @@ function encodeResourceParam(resource: SelectedResource): string {
   return `${resource.kind}/${resource.namespace}/${resource.name}`
 }
 
+// Extract view from URL path
+function getViewFromPath(pathname: string): MainView {
+  const path = pathname.replace(/^\//, '').split('/')[0]
+  if (path === 'topology' || path === '') return 'topology'
+  if (path === 'resources') return 'resources'
+  if (path === 'events') return 'events'
+  if (path === 'helm') return 'helm'
+  return 'topology'
+}
+
 function App() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [searchParams, setSearchParams] = useSearchParams()
+
   // Initialize state from URL
   const getInitialState = () => {
-    const params = new URLSearchParams(window.location.search)
-    const ns = params.get('namespace') || ''
-    const resource = parseResourceParam(params.get('resource'))
+    const ns = searchParams.get('namespace') || ''
+    const resource = parseResourceParam(searchParams.get('resource'))
     return {
       namespace: ns,
-      mainView: (params.get('view') as MainView) || 'topology',
-      topologyMode: (params.get('mode') as 'full' | 'traffic') || 'full',
+      topologyMode: (searchParams.get('mode') as 'full' | 'traffic') || 'full',
       // Default to namespace grouping when viewing all namespaces
-      grouping: (params.get('group') as GroupingMode) || (ns === '' ? 'namespace' : 'none'),
+      grouping: (searchParams.get('group') as GroupingMode) || (ns === '' ? 'namespace' : 'none'),
       detailResource: resource,
     }
   }
 
+  // Get mainView from URL path
+  const mainView = getViewFromPath(location.pathname)
+
+  // Set mainView by navigating to the path
+  const setMainView = useCallback((view: MainView) => {
+    const path = `/${view}`
+
+    // Clean up view-specific params
+    const newParams = new URLSearchParams(searchParams)
+
+    // Remove topology-only params when leaving topology
+    if (view !== 'topology') {
+      newParams.delete('mode')
+      newParams.delete('group')
+    }
+
+    // Remove events-only params when leaving events
+    if (view !== 'events') {
+      newParams.delete('resource')
+    }
+
+    navigate({ pathname: path, search: newParams.toString() })
+  }, [navigate, searchParams])
+
   const [namespace, setNamespace] = useState<string>(getInitialState().namespace)
   const [selectedResource, setSelectedResource] = useState<SelectedResource | null>(null)
   const [selectedHelmRelease, setSelectedHelmRelease] = useState<SelectedHelmRelease | null>(null)
-  const [mainView, setMainView] = useState<MainView>(getInitialState().mainView)
   const [topologyMode, setTopologyMode] = useState<'full' | 'traffic'>(getInitialState().topologyMode)
   const [groupingMode, setGroupingMode] = useState<GroupingMode>(getInitialState().grouping)
   // Resource detail page state (for events view drill-down)
@@ -132,58 +169,52 @@ function App() {
     })
   }, [])
 
-  // Update URL when state changes
+  // Update URL query params when state changes (path is handled by setMainView)
   useEffect(() => {
-    const params = new URLSearchParams()
-    if (namespace) params.set('namespace', namespace)
-    if (mainView !== 'topology') params.set('view', mainView)
-    if (topologyMode !== 'full') params.set('mode', topologyMode)
+    const params = new URLSearchParams(searchParams)
+
+    // Update namespace param
+    if (namespace) {
+      params.set('namespace', namespace)
+    } else {
+      params.delete('namespace')
+    }
+
+    // Update mode param
+    if (topologyMode !== 'full') {
+      params.set('mode', topologyMode)
+    } else {
+      params.delete('mode')
+    }
+
+    // Update group param
     if (groupingMode !== 'none' && (namespace !== '' || groupingMode !== 'namespace')) {
       params.set('group', groupingMode)
+    } else {
+      params.delete('group')
     }
+
     // Add resource param for events detail view
     if (mainView === 'events' && detailResource) {
       params.set('resource', encodeResourceParam(detailResource))
+    } else {
+      params.delete('resource')
     }
 
-    const newUrl = params.toString()
-      ? `${window.location.pathname}?${params.toString()}`
-      : window.location.pathname
-
-    // Use pushState for resource navigation (allows back button), replaceState for other changes
-    const currentUrl = window.location.pathname + window.location.search
-    if (newUrl !== currentUrl) {
-      // Check if only the resource changed (for back/forward support)
-      const currentParams = new URLSearchParams(window.location.search)
-      const currentResource = currentParams.get('resource')
-      const newResource = params.get('resource')
-      const isResourceChange = currentResource !== newResource &&
-        currentParams.get('view') === params.get('view')
-
-      if (isResourceChange) {
-        window.history.pushState({ resource: newResource }, '', newUrl)
-      } else {
-        window.history.replaceState({}, '', newUrl)
-      }
+    // Only update if params changed
+    if (params.toString() !== searchParams.toString()) {
+      setSearchParams(params, { replace: true })
     }
-  }, [namespace, mainView, topologyMode, groupingMode, detailResource])
+  }, [namespace, topologyMode, groupingMode, detailResource, mainView, searchParams, setSearchParams])
 
-  // Handle browser back/forward navigation
+  // Sync state from URL when navigating (back/forward)
   useEffect(() => {
-    const handlePopState = () => {
-      const params = new URLSearchParams(window.location.search)
-      const resource = parseResourceParam(params.get('resource'))
-      const view = (params.get('view') as MainView) || 'topology'
+    const ns = searchParams.get('namespace') || ''
+    const resource = parseResourceParam(searchParams.get('resource'))
 
-      // Update state from URL
-      setMainView(view)
-      setDetailResource(resource)
-      setNamespace(params.get('namespace') || '')
-    }
-
-    window.addEventListener('popstate', handlePopState)
-    return () => window.removeEventListener('popstate', handlePopState)
-  }, [])
+    if (ns !== namespace) setNamespace(ns)
+    if (JSON.stringify(resource) !== JSON.stringify(detailResource)) setDetailResource(resource)
+  }, [searchParams])
 
   // Auto-adjust grouping when namespace changes
   useEffect(() => {
@@ -271,22 +302,20 @@ function App() {
   }, [])
 
   return (
-    <div className="flex flex-col h-screen bg-slate-900">
+    <div className="flex flex-col h-screen bg-theme-base">
       {/* Header */}
-      <header className="flex items-center justify-between px-4 py-2 bg-slate-800 border-b border-slate-700">
+      <header className="flex items-center justify-between px-4 py-2 bg-theme-surface border-b border-theme-border">
         {/* Left: Logo + Cluster info */}
         <div className="flex items-center gap-4">
-          <h1 className="flex items-center gap-1.5">
-            <img src="/assets/skyhook/logotype-white-color.svg" alt="Skyhook" className="h-5 w-auto" />
-            <span className="text-xl font-normal text-white">Explorer</span>
-          </h1>
+          <Logo />
+          <span className="text-xl font-normal text-theme-text-primary">Explorer</span>
 
           {clusterInfo && (
             <div className="flex items-center gap-2">
-              <span className="px-2 py-1 bg-slate-700 rounded text-sm font-medium text-blue-300" title={clusterInfo.context || clusterInfo.cluster}>
+              <span className="px-2 py-1 bg-theme-elevated rounded text-sm font-medium text-blue-300" title={clusterInfo.context || clusterInfo.cluster}>
                 {clusterInfo.context || clusterInfo.cluster}
               </span>
-              <span className="text-xs text-slate-500 hidden lg:inline">
+              <span className="text-xs text-theme-text-tertiary hidden lg:inline">
                 {clusterInfo.platform} · {clusterInfo.kubernetesVersion}
               </span>
               {/* Connection status - next to cluster name */}
@@ -296,13 +325,13 @@ function App() {
                     connected ? 'bg-green-500' : 'bg-red-500'
                   }`}
                 />
-                <span className="text-xs text-slate-500 hidden sm:inline">
+                <span className="text-xs text-theme-text-tertiary hidden sm:inline">
                   {connected ? 'Connected' : 'Disconnected'}
                 </span>
                 {!connected && (
                   <button
                     onClick={reconnect}
-                    className="p-1 text-slate-400 hover:text-white"
+                    className="p-1 text-theme-text-secondary hover:text-theme-text-primary"
                     title="Reconnect"
                   >
                     <RefreshCw className="w-3 h-3" />
@@ -314,13 +343,13 @@ function App() {
         </div>
 
         {/* Center: View tabs */}
-        <div className="flex items-center gap-1 bg-slate-700/50 rounded-lg p-1">
+        <div className="flex items-center gap-1 bg-theme-elevated/50 rounded-lg p-1">
           <button
             onClick={() => setMainView('topology')}
             className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm rounded-md transition-colors ${
               mainView === 'topology'
-                ? 'bg-blue-500 text-white'
-                : 'text-slate-400 hover:text-white hover:bg-slate-600'
+                ? 'bg-blue-500 text-theme-text-primary'
+                : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover'
             }`}
           >
             <Network className="w-4 h-4" />
@@ -330,8 +359,8 @@ function App() {
             onClick={() => setMainView('resources')}
             className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm rounded-md transition-colors ${
               mainView === 'resources'
-                ? 'bg-blue-500 text-white'
-                : 'text-slate-400 hover:text-white hover:bg-slate-600'
+                ? 'bg-blue-500 text-theme-text-primary'
+                : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover'
             }`}
           >
             <List className="w-4 h-4" />
@@ -341,8 +370,8 @@ function App() {
             onClick={() => setMainView('events')}
             className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm rounded-md transition-colors ${
               mainView === 'events'
-                ? 'bg-blue-500 text-white'
-                : 'text-slate-400 hover:text-white hover:bg-slate-600'
+                ? 'bg-blue-500 text-theme-text-primary'
+                : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover'
             }`}
           >
             <Clock className="w-4 h-4" />
@@ -352,8 +381,8 @@ function App() {
             onClick={() => setMainView('helm')}
             className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm rounded-md transition-colors ${
               mainView === 'helm'
-                ? 'bg-blue-500 text-white'
-                : 'text-slate-400 hover:text-white hover:bg-slate-600'
+                ? 'bg-blue-500 text-theme-text-primary'
+                : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover'
             }`}
           >
             <Package className="w-4 h-4" />
@@ -368,7 +397,7 @@ function App() {
             <select
               value={namespace}
               onChange={(e) => setNamespace(e.target.value)}
-              className="appearance-none bg-slate-700 text-white text-xs rounded px-2 py-1 pr-6 border border-slate-600 focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-[100px]"
+              className="appearance-none bg-theme-elevated text-theme-text-primary text-xs rounded px-2 py-1 pr-6 border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-[100px]"
             >
               <option value="">All Namespaces</option>
               {namespaces?.map((ns) => (
@@ -377,8 +406,11 @@ function App() {
                 </option>
               ))}
             </select>
-            <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-slate-400 pointer-events-none" />
+            <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-text-secondary pointer-events-none" />
           </div>
+
+          {/* Theme toggle */}
+          <ThemeToggle />
         </div>
       </header>
 
@@ -410,27 +442,27 @@ function App() {
               {/* Topology controls overlay - top right */}
               <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
                 {/* Grouping selector */}
-                <div className="flex items-center gap-1.5 px-2 py-1.5 bg-slate-800/90 backdrop-blur border border-slate-700 rounded-lg">
-                  <FolderTree className="w-3.5 h-3.5 text-slate-400" />
+                <div className="flex items-center gap-1.5 px-2 py-1.5 bg-theme-surface/90 backdrop-blur border border-theme-border rounded-lg">
+                  <FolderTree className="w-3.5 h-3.5 text-theme-text-secondary" />
                   <select
                     value={groupingMode}
                     onChange={(e) => setGroupingMode(e.target.value as GroupingMode)}
-                    className="appearance-none bg-transparent text-white text-xs focus:outline-none cursor-pointer"
+                    className="appearance-none bg-transparent text-theme-text-primary text-xs focus:outline-none cursor-pointer"
                   >
-                    <option value="none" className="bg-slate-800">No Grouping</option>
-                    <option value="namespace" className="bg-slate-800">By Namespace</option>
-                    <option value="app" className="bg-slate-800">By App Label</option>
+                    <option value="none" className="bg-theme-surface">No Grouping</option>
+                    <option value="namespace" className="bg-theme-surface">By Namespace</option>
+                    <option value="app" className="bg-theme-surface">By App Label</option>
                   </select>
                 </div>
 
                 {/* View mode toggle */}
-                <div className="flex items-center gap-0.5 p-1 bg-slate-800/90 backdrop-blur border border-slate-700 rounded-lg">
+                <div className="flex items-center gap-0.5 p-1 bg-theme-surface/90 backdrop-blur border border-theme-border rounded-lg">
                   <button
                     onClick={() => setTopologyMode('full')}
                     className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
                       topologyMode === 'full'
-                        ? 'bg-blue-500 text-white'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                        ? 'bg-blue-500 text-theme-text-primary'
+                        : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
                     }`}
                   >
                     Full
@@ -439,8 +471,8 @@ function App() {
                     onClick={() => setTopologyMode('traffic')}
                     className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
                       topologyMode === 'traffic'
-                        ? 'bg-blue-500 text-white'
-                        : 'text-slate-400 hover:text-white hover:bg-slate-700'
+                        ? 'bg-blue-500 text-theme-text-primary'
+                        : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
                     }`}
                   >
                     Traffic
@@ -516,6 +548,35 @@ function App() {
         />
       )}
     </div>
+  )
+}
+
+// Skyhook logo that switches based on theme
+function Logo() {
+  const { theme } = useTheme()
+  const logoSrc = theme === 'dark'
+    ? '/assets/skyhook/logotype-white-color.svg'
+    : '/assets/skyhook/logotype-dark-color.svg'
+
+  return <img src={logoSrc} alt="Skyhook" className="h-5 w-auto" />
+}
+
+// Theme toggle button component
+function ThemeToggle() {
+  const { theme, toggleTheme } = useTheme()
+
+  return (
+    <button
+      onClick={toggleTheme}
+      className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+      title={`Switch to ${theme === 'dark' ? 'light' : 'dark'} mode`}
+    >
+      {theme === 'dark' ? (
+        <Sun className="w-4 h-4" />
+      ) : (
+        <Moon className="w-4 h-4" />
+      )}
+    </button>
   )
 }
 

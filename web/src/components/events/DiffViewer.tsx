@@ -15,7 +15,7 @@ export const DiffViewer = memo(function DiffViewer({ diff, compact = false }: Di
 
   if (compact) {
     return (
-      <div className="text-xs text-slate-400 flex items-center gap-1">
+      <div className="text-xs text-theme-text-secondary flex items-center gap-1">
         <RefreshCw className="w-3 h-3" />
         <span>{diff.summary || `${diff.fields.length} field(s) changed`}</span>
       </div>
@@ -26,7 +26,7 @@ export const DiffViewer = memo(function DiffViewer({ diff, compact = false }: Di
     <div className="space-y-2">
       {/* Summary */}
       {diff.summary && (
-        <div className="text-sm font-medium text-slate-300 flex items-center gap-2">
+        <div className="text-sm font-medium text-theme-text-secondary flex items-center gap-2">
           <RefreshCw className="w-4 h-4 text-blue-400" />
           {diff.summary}
         </div>
@@ -52,9 +52,9 @@ function FieldChangeRow({ field }: FieldChangeRowProps) {
   const isModified = !isAdded && !isRemoved
 
   return (
-    <div className="rounded bg-slate-800/50 border border-slate-700 px-3 py-2">
+    <div className="rounded bg-theme-surface/50 border border-theme-border px-3 py-2">
       {/* Field path */}
-      <div className="text-xs font-mono text-slate-500 mb-1">{field.path}</div>
+      <div className="text-xs font-mono text-theme-text-tertiary mb-1">{field.path}</div>
 
       {/* Values */}
       <div className="flex items-center gap-2 text-sm">
@@ -77,7 +77,7 @@ function FieldChangeRow({ field }: FieldChangeRowProps) {
             <span className="text-red-400 line-through">
               {formatValue(field.oldValue)}
             </span>
-            <ArrowRight className="w-3.5 h-3.5 text-slate-500 flex-shrink-0" />
+            <ArrowRight className="w-3.5 h-3.5 text-theme-text-tertiary flex-shrink-0" />
             <span className="text-green-400">
               {formatValue(field.newValue)}
             </span>

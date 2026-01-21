@@ -9,7 +9,7 @@ import { formatAge } from './resource-utils'
 
 export function KeyValueBadge({ k, v }: { k: string; v: string }) {
   return (
-    <span className="px-2 py-0.5 bg-slate-700 rounded text-xs text-slate-300">
+    <span className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary">
       {k}={v}
     </span>
   )
@@ -37,14 +37,14 @@ export function Section({ title, icon: Icon, children, defaultExpanded = true }:
   const [expanded, setExpanded] = useState(defaultExpanded)
 
   return (
-    <div className="border-b border-slate-700/50 pb-4 last:border-0">
+    <div className="border-b-subtle pb-4 last:border-0">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 w-full text-left mb-2 hover:text-white transition-colors"
+        className="flex items-center gap-2 w-full text-left mb-2 hover:text-theme-text-primary transition-colors"
       >
-        {expanded ? <ChevronDown className="w-4 h-4 text-slate-500" /> : <ChevronRight className="w-4 h-4 text-slate-500" />}
-        {Icon && <Icon className="w-4 h-4 text-slate-400" />}
-        <span className="text-sm font-medium text-slate-300">{title}</span>
+        {expanded ? <ChevronDown className="w-4 h-4 text-theme-text-tertiary" /> : <ChevronRight className="w-4 h-4 text-theme-text-tertiary" />}
+        {Icon && <Icon className="w-4 h-4 text-theme-text-secondary" />}
+        <span className="text-sm font-medium text-theme-text-secondary">{title}</span>
       </button>
       {expanded && <div className="pl-6">{children}</div>}
     </div>
@@ -64,7 +64,7 @@ export function ExpandableSection({ title, children, defaultExpanded = true }: E
     <div>
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 text-sm text-slate-400 hover:text-white transition-colors mb-1"
+        className="flex items-center gap-2 text-sm text-theme-text-secondary hover:text-theme-text-primary transition-colors mb-1"
       >
         {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
         {title}
@@ -92,12 +92,12 @@ export function Property({ label, value, copyable, onCopy, copied }: PropertyPro
 
   return (
     <div className="flex items-start gap-2 text-sm">
-      <span className="text-slate-500 w-28 shrink-0">{label}</span>
-      <span className="text-white break-all flex-1">{strValue}</span>
+      <span className="text-theme-text-tertiary w-28 shrink-0">{label}</span>
+      <span className="text-theme-text-primary break-all flex-1">{strValue}</span>
       {copyable && onCopy && (
         <button
           onClick={() => onCopy(strValue, label)}
-          className="p-0.5 text-slate-500 hover:text-white shrink-0"
+          className="p-0.5 text-theme-text-tertiary hover:text-theme-text-primary shrink-0"
         >
           {copied === label ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
         </button>
@@ -125,8 +125,8 @@ export function ConditionsSection({ conditions }: { conditions?: any[] }) {
               {cond.status === 'True' ? '✓' : '✗'}
             </span>
             <div>
-              <div className="text-white">{cond.type}</div>
-              {cond.message && <div className="text-xs text-slate-500">{cond.message}</div>}
+              <div className="text-theme-text-primary">{cond.type}</div>
+              {cond.message && <div className="text-xs text-theme-text-tertiary">{cond.message}</div>}
             </div>
           </div>
         ))}
@@ -157,8 +157,8 @@ export function AnnotationsSection({ data }: { data: any }) {
       <div className="space-y-1 max-h-48 overflow-y-auto">
         {Object.entries(annotations).map(([k, v]) => (
           <div key={k} className="text-xs">
-            <span className="text-slate-500">{k}:</span>
-            <span className="text-slate-300 ml-1 break-all">{v as string}</span>
+            <span className="text-theme-text-tertiary">{k}:</span>
+            <span className="text-theme-text-secondary ml-1 break-all">{v as string}</span>
           </div>
         ))}
       </div>
@@ -189,11 +189,11 @@ export function PodTemplateSection({ template }: { template: any }) {
   return (
     <div className="space-y-2">
       {containers.map((c: any, i: number) => (
-        <div key={i} className="bg-slate-700/30 rounded p-2 text-sm">
-          <div className="font-medium text-white">{c.name}</div>
-          <div className="text-xs text-slate-400 truncate" title={c.image}>{c.image}</div>
+        <div key={i} className="bg-theme-elevated/30 rounded p-2 text-sm">
+          <div className="font-medium text-theme-text-primary">{c.name}</div>
+          <div className="text-xs text-theme-text-secondary truncate" title={c.image}>{c.image}</div>
           {c.ports && (
-            <div className="text-xs text-slate-500 mt-1">
+            <div className="text-xs text-theme-text-tertiary mt-1">
               Ports: {c.ports.map((p: any) => `${p.containerPort}/${p.protocol || 'TCP'}`).join(', ')}
             </div>
           )}
@@ -338,7 +338,7 @@ function RelationshipGroup({ label, refs, onNavigate }: RelationshipGroupProps) 
 
   return (
     <div>
-      <div className="text-xs text-slate-500 mb-1">{label}</div>
+      <div className="text-xs text-theme-text-tertiary mb-1">{label}</div>
       <div className="flex flex-wrap gap-1">
         {refs.map((resourceRef, i) => (
           <ResourceRefBadge key={`${resourceRef.kind}-${resourceRef.namespace}-${resourceRef.name}-${i}`} resourceRef={resourceRef} onClick={onNavigate} />
@@ -416,7 +416,7 @@ export function EventsSection({ events, isLoading }: EventsSectionProps) {
   if (isLoading) {
     return (
       <Section title="Recent Events" defaultExpanded>
-        <div className="text-sm text-slate-500">Loading events...</div>
+        <div className="text-sm text-theme-text-tertiary">Loading events...</div>
       </Section>
     )
   }
@@ -424,7 +424,7 @@ export function EventsSection({ events, isLoading }: EventsSectionProps) {
   if (!events || events.length === 0) {
     return (
       <Section title="Recent Events" defaultExpanded={false}>
-        <div className="text-sm text-slate-500">No recent events</div>
+        <div className="text-sm text-theme-text-tertiary">No recent events</div>
       </Section>
     )
   }
@@ -441,24 +441,24 @@ export function EventsSection({ events, isLoading }: EventsSectionProps) {
                 ? 'bg-red-500/10 border-red-500'
                 : event.type === 'k8s_event'
                 ? 'bg-blue-500/10 border-blue-500'
-                : 'bg-slate-700/30 border-slate-500'
+                : 'bg-theme-elevated/30 border-theme-border'
             )}
           >
             <div className="flex items-center justify-between gap-2">
-              <span className="font-medium text-white">
+              <span className="font-medium text-theme-text-primary">
                 {event.type === 'k8s_event' ? event.reason : event.operation}
               </span>
-              <span className="text-xs text-slate-500">
+              <span className="text-xs text-theme-text-tertiary">
                 {formatEventTime(event.timestamp)}
               </span>
             </div>
             {event.message && (
-              <div className="text-xs text-slate-400 mt-1 line-clamp-2">
+              <div className="text-xs text-theme-text-secondary mt-1 line-clamp-2">
                 {event.message}
               </div>
             )}
             {event.type === 'change' && event.diff?.summary && (
-              <div className="text-xs text-slate-400 mt-1">
+              <div className="text-xs text-theme-text-secondary mt-1">
                 {event.diff.summary}
               </div>
             )}

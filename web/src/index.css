@@ -2,18 +2,124 @@
 @tailwind components;
 @tailwind utilities;
 
+/* ============================================
+   THEME SYSTEM - Central Color Definitions
+   ============================================ */
+
 :root {
+  /* Font settings */
   font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
   line-height: 1.5;
   font-weight: 400;
-  color-scheme: dark;
-  color: rgba(255, 255, 255, 0.87);
-  background-color: #0f172a;
+
+  /* Skyhook Brand */
+  --color-brand: #2D7AFF;
+  --color-brand-light: #5A9AFF;
+  --color-brand-dark: #1A5FCC;
+
+  /* Semantic Status Colors (same for both themes) */
+  --color-success: #22C55E;
+  --color-success-light: #4ADE80;
+  --color-success-dark: #16A34A;
+  --color-warning: #F59E0B;
+  --color-warning-light: #FBBF24;
+  --color-warning-dark: #D97706;
+  --color-error: #EF4444;
+  --color-error-light: #F87171;
+  --color-error-dark: #DC2626;
+  --color-info: #3B82F6;
 }
+
+/* Dark Theme (default) */
+:root,
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  /* Backgrounds */
+  --bg-base: #0f172a;        /* slate-900 - main background */
+  --bg-surface: #1e293b;     /* slate-800 - cards, panels */
+  --bg-elevated: #334155;    /* slate-700 - elevated elements */
+  --bg-hover: #475569;       /* slate-600 - hover states */
+  --bg-active: #1e3a5f;      /* blue tinted - active/selected */
+
+  /* Text */
+  --text-primary: #f8fafc;   /* slate-50 - headings, primary text */
+  --text-secondary: #cbd5e1; /* slate-300 - body text */
+  --text-tertiary: #94a3b8;  /* slate-400 - muted text */
+  --text-disabled: #64748b;  /* slate-500 - disabled text */
+
+  /* Borders */
+  --border-default: #334155; /* slate-700 */
+  --border-light: #475569;   /* slate-600 */
+  --border-subtle: rgba(255, 255, 255, 0.02);  /* very subtle white for table dividers */
+  --border-focus: var(--color-brand);
+
+  /* Accent (uses brand) */
+  --accent: var(--color-brand);
+  --accent-light: var(--color-brand-light);
+  --accent-muted: rgba(45, 122, 255, 0.2);
+  --accent-text: #93c5fd;    /* blue-300 */
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+
+  /* Scrollbar */
+  --scrollbar-track: #1e293b;
+  --scrollbar-thumb: #475569;
+  --scrollbar-thumb-hover: #64748b;
+}
+
+/* Light Theme */
+[data-theme="light"] {
+  color-scheme: light;
+
+  /* Backgrounds */
+  --bg-base: #f8fafc;        /* slate-50 - main background */
+  --bg-surface: #ffffff;     /* white - cards, panels */
+  --bg-elevated: #f1f5f9;    /* slate-100 - elevated elements */
+  --bg-hover: #e2e8f0;       /* slate-200 - hover states */
+  --bg-active: #dbeafe;      /* blue-100 - active/selected */
+
+  /* Text */
+  --text-primary: #0f172a;   /* slate-900 - headings, primary text */
+  --text-secondary: #475569; /* slate-600 - body text */
+  --text-tertiary: #64748b;  /* slate-500 - muted text */
+  --text-disabled: #94a3b8;  /* slate-400 - disabled text */
+
+  /* Borders */
+  --border-default: #e2e8f0; /* slate-200 */
+  --border-light: #cbd5e1;   /* slate-300 */
+  --border-subtle: rgba(0, 0, 0, 0.06);  /* very subtle black for table dividers */
+  --border-focus: var(--color-brand);
+
+  /* Accent (uses brand) */
+  --accent: var(--color-brand);
+  --accent-light: var(--color-brand-dark);
+  --accent-muted: rgba(45, 122, 255, 0.1);
+  --accent-text: #1d4ed8;    /* blue-700 */
+
+  /* Shadows */
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
+  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+
+  /* Scrollbar */
+  --scrollbar-track: #f1f5f9;
+  --scrollbar-thumb: #cbd5e1;
+  --scrollbar-thumb-hover: #94a3b8;
+}
+
+/* ============================================
+   BASE STYLES
+   ============================================ */
 
 body {
   margin: 0;
   min-height: 100vh;
+  background-color: var(--bg-base);
+  color: var(--text-primary);
 }
 
 #root {
@@ -22,7 +128,49 @@ body {
   flex-direction: column;
 }
 
-/* React Flow customizations */
+/* ============================================
+   SUBTLE BORDERS (theme-aware)
+   ============================================ */
+
+/* Table row dividers */
+[data-theme="dark"] .table-divide-subtle > * + * {
+  border-top-color: rgba(255, 255, 255, 0.07);
+}
+
+[data-theme="light"] .table-divide-subtle > * + *,
+:root:not([data-theme]) .table-divide-subtle > * + * {
+  border-top-color: rgba(0, 0, 0, 0.08);
+}
+
+.table-divide-subtle > * + * {
+  border-top-width: 1px;
+  border-top-style: solid;
+}
+
+/* Subtle bottom border for rows */
+[data-theme="dark"] .border-b-subtle {
+  border-bottom: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+[data-theme="light"] .border-b-subtle,
+:root:not([data-theme]) .border-b-subtle {
+  border-bottom: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+/* Subtle top border */
+[data-theme="dark"] .border-t-subtle {
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+[data-theme="light"] .border-t-subtle,
+:root:not([data-theme]) .border-t-subtle {
+  border-top: 1px solid rgba(0, 0, 0, 0.08);
+}
+
+/* ============================================
+   REACT FLOW CUSTOMIZATIONS
+   ============================================ */
+
 .react-flow__node {
   cursor: pointer;
 }
@@ -40,27 +188,27 @@ body {
   display: none;
 }
 
-/* React Flow Controls - Dark Theme */
+/* React Flow Controls */
 .react-flow__controls {
-  background: #1e293b;
-  border: 1px solid #334155;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
-  box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
+  box-shadow: var(--shadow-md);
 }
 
 .react-flow__controls-button {
-  background: #1e293b;
+  background: var(--bg-surface);
   border: none;
-  border-bottom: 1px solid #334155;
-  color: #94a3b8;
+  border-bottom: 1px solid var(--border-default);
+  color: var(--text-tertiary);
   width: 28px;
   height: 28px;
   padding: 5px;
 }
 
 .react-flow__controls-button:hover {
-  background: #334155;
-  color: #f1f5f9;
+  background: var(--bg-elevated);
+  color: var(--text-primary);
 }
 
 .react-flow__controls-button:last-child {
@@ -71,37 +219,47 @@ body {
   fill: currentColor;
 }
 
-/* React Flow MiniMap - Dark Theme */
+/* React Flow MiniMap */
 .react-flow__minimap {
-  background: #1e293b;
-  border: 1px solid #334155;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-default);
   border-radius: 8px;
 }
 
-.react-flow__minimap-mask {
+[data-theme="dark"] .react-flow__minimap-mask {
   fill: rgba(15, 23, 42, 0.8);
 }
 
-/* Custom scrollbar */
+[data-theme="light"] .react-flow__minimap-mask {
+  fill: rgba(248, 250, 252, 0.8);
+}
+
+/* ============================================
+   CUSTOM SCROLLBAR
+   ============================================ */
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #1e293b;
+  background: var(--scrollbar-track);
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #475569;
+  background: var(--scrollbar-thumb);
   border-radius: 4px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #64748b;
+  background: var(--scrollbar-thumb-hover);
 }
 
-/* Toast animations */
+/* ============================================
+   ANIMATIONS
+   ============================================ */
+
 @keyframes slide-in-from-right {
   from {
     transform: translateX(100%);
@@ -132,4 +290,124 @@ body {
 
 .fade-in {
   animation: slide-in-from-right 0.2s ease-out;
+}
+
+/* ============================================
+   UTILITY CLASSES (theme-aware)
+   ============================================ */
+
+/* Backgrounds */
+.bg-theme-base { background-color: var(--bg-base); }
+.bg-theme-surface { background-color: var(--bg-surface); }
+.bg-theme-elevated { background-color: var(--bg-elevated); }
+.bg-theme-hover { background-color: var(--bg-hover); }
+.bg-theme-active { background-color: var(--bg-active); }
+
+/* Text */
+.text-theme-primary { color: var(--text-primary); }
+.text-theme-secondary { color: var(--text-secondary); }
+.text-theme-tertiary { color: var(--text-tertiary); }
+.text-theme-disabled { color: var(--text-disabled); }
+
+/* Borders */
+.border-theme { border-color: var(--border-default); }
+.border-theme-light { border-color: var(--border-light); }
+
+/* Accent */
+.bg-accent { background-color: var(--accent); }
+.bg-accent-muted { background-color: var(--accent-muted); }
+.text-accent { color: var(--accent); }
+.text-accent-text { color: var(--accent-text); }
+.border-accent { border-color: var(--accent); }
+
+/* Interactive states */
+.hover\:bg-theme-hover:hover { background-color: var(--bg-hover); }
+.hover\:bg-theme-elevated:hover { background-color: var(--bg-elevated); }
+.focus\:ring-accent:focus { --tw-ring-color: var(--accent); }
+
+/* ============================================
+   STATUS BADGE COLORS (theme-aware)
+   ============================================ */
+
+/* Healthy/Success - green */
+.status-healthy {
+  background-color: rgba(34, 197, 94, 0.15);
+  color: #16a34a; /* green-600 */
+}
+[data-theme="dark"] .status-healthy {
+  background-color: rgba(34, 197, 94, 0.2);
+  color: #4ade80; /* green-400 */
+}
+
+/* Degraded/Warning - yellow/amber */
+.status-degraded {
+  background-color: rgba(245, 158, 11, 0.15);
+  color: #d97706; /* amber-600 */
+}
+[data-theme="dark"] .status-degraded {
+  background-color: rgba(245, 158, 11, 0.2);
+  color: #fbbf24; /* amber-400 */
+}
+
+/* Unhealthy/Error - red */
+.status-unhealthy {
+  background-color: rgba(239, 68, 68, 0.15);
+  color: #dc2626; /* red-600 */
+}
+[data-theme="dark"] .status-unhealthy {
+  background-color: rgba(239, 68, 68, 0.2);
+  color: #f87171; /* red-400 */
+}
+
+/* Neutral/Info - blue */
+.status-neutral {
+  background-color: rgba(59, 130, 246, 0.15);
+  color: #2563eb; /* blue-600 */
+}
+[data-theme="dark"] .status-neutral {
+  background-color: rgba(59, 130, 246, 0.2);
+  color: #60a5fa; /* blue-400 */
+}
+
+/* Unknown/Muted - gray */
+.status-unknown {
+  background-color: var(--bg-elevated);
+  color: var(--text-secondary);
+}
+
+/* Special status colors */
+.status-violet {
+  background-color: rgba(139, 92, 246, 0.15);
+  color: #7c3aed; /* violet-600 */
+}
+[data-theme="dark"] .status-violet {
+  background-color: rgba(139, 92, 246, 0.2);
+  color: #a78bfa; /* violet-400 */
+}
+
+.status-purple {
+  background-color: rgba(168, 85, 247, 0.15);
+  color: #9333ea; /* purple-600 */
+}
+[data-theme="dark"] .status-purple {
+  background-color: rgba(168, 85, 247, 0.2);
+  color: #c084fc; /* purple-400 */
+}
+
+.status-orange {
+  background-color: rgba(249, 115, 22, 0.15);
+  color: #ea580c; /* orange-600 */
+}
+[data-theme="dark"] .status-orange {
+  background-color: rgba(249, 115, 22, 0.2);
+  color: #fb923c; /* orange-400 */
+}
+
+.status-cyan {
+  background-color: rgba(6, 182, 212, 0.15);
+  color: #0891b2; /* cyan-600 */
+}
+[data-theme="dark"] .status-cyan {
+  background-color: rgba(6, 182, 212, 0.2);
+  color: #22d3ee; /* cyan-400 */
 }

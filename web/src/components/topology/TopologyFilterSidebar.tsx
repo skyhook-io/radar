@@ -104,10 +104,10 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
 
   if (collapsed) {
     return (
-      <div className="flex flex-col items-center py-3 px-1 bg-slate-800/90 backdrop-blur border-r border-slate-700">
+      <div className="flex flex-col items-center py-3 px-1 bg-theme-surface/90 backdrop-blur border-r border-theme-border">
         <button
           onClick={onToggleCollapse}
-          className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+          className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg transition-colors"
           title="Expand filters"
         >
           <ChevronRight className="w-4 h-4" />
@@ -122,8 +122,8 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
                 className={clsx(
                   'p-1.5 rounded transition-colors',
                   isVisible
-                    ? 'bg-slate-700 text-white'
-                    : 'text-slate-500 hover:text-slate-300'
+                    ? 'bg-theme-elevated text-theme-text-primary'
+                    : 'text-theme-text-tertiary hover:text-theme-text-secondary'
                 )}
                 title={kind}
               >
@@ -132,7 +132,7 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
             )
           })}
           {availableKinds.length > 6 && (
-            <span className="text-xs text-slate-500 text-center">
+            <span className="text-xs text-theme-text-tertiary text-center">
               +{availableKinds.length - 6}
             </span>
           )}
@@ -142,13 +142,13 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
   }
 
   return (
-    <div className="w-56 flex flex-col bg-slate-800/90 backdrop-blur border-r border-slate-700 overflow-hidden">
+    <div className="w-56 flex flex-col bg-theme-surface/90 backdrop-blur border-r border-theme-border overflow-hidden">
       {/* Header */}
-      <div className="flex items-center justify-between px-3 py-2 border-b border-slate-700">
-        <span className="text-sm font-medium text-slate-300">Filters</span>
+      <div className="flex items-center justify-between px-3 py-2 border-b border-theme-border">
+        <span className="text-sm font-medium text-theme-text-secondary">Filters</span>
         <button
           onClick={onToggleCollapse}
-          className="p-1 text-slate-400 hover:text-white hover:bg-slate-700 rounded transition-colors"
+          className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded transition-colors"
           title="Collapse sidebar"
         >
           <ChevronLeft className="w-4 h-4" />
@@ -156,15 +156,15 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
       </div>
 
       {/* Quick actions */}
-      <div className="flex gap-1 px-3 py-2 border-b border-slate-700">
+      <div className="flex gap-1 px-3 py-2 border-b border-theme-border">
         <button
           onClick={onShowAll}
           disabled={allVisible}
           className={clsx(
             'flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs rounded transition-colors',
             allVisible
-              ? 'bg-slate-700/50 text-slate-500 cursor-not-allowed'
-              : 'bg-slate-700 text-slate-300 hover:bg-slate-600 hover:text-white'
+              ? 'bg-theme-elevated/50 text-theme-text-tertiary cursor-not-allowed'
+              : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
           )}
         >
           <Eye className="w-3 h-3" />
@@ -176,8 +176,8 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
           className={clsx(
             'flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-xs rounded transition-colors',
             noneVisible
-              ? 'bg-slate-700/50 text-slate-500 cursor-not-allowed'
-              : 'bg-slate-700 text-slate-300 hover:bg-slate-600 hover:text-white'
+              ? 'bg-theme-elevated/50 text-theme-text-tertiary cursor-not-allowed'
+              : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
           )}
         >
           <EyeOff className="w-3 h-3" />
@@ -193,7 +193,7 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
 
           return (
             <div key={category.id} className="px-2 py-2">
-              <div className="text-xs font-medium text-slate-500 uppercase tracking-wider px-1 mb-1">
+              <div className="text-xs font-medium text-theme-text-tertiary uppercase tracking-wider px-1 mb-1">
                 {category.label}
               </div>
               <div className="space-y-0.5">
@@ -208,15 +208,15 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
                       className={clsx(
                         'w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors',
                         isVisible
-                          ? 'bg-slate-700/70 text-white'
-                          : 'text-slate-400 hover:bg-slate-700/40 hover:text-slate-300'
+                          ? 'bg-theme-elevated/70 text-theme-text-primary'
+                          : 'text-theme-text-secondary hover:bg-theme-elevated/40 hover:text-theme-text-secondary'
                       )}
                     >
-                      <Icon className={clsx('w-4 h-4 flex-shrink-0', isVisible ? color : 'text-slate-500')} />
+                      <Icon className={clsx('w-4 h-4 flex-shrink-0', isVisible ? color : 'text-theme-text-tertiary')} />
                       <span className="flex-1 text-sm truncate">{label}</span>
                       <span className={clsx(
                         'text-xs px-1.5 py-0.5 rounded',
-                        isVisible ? 'bg-slate-600 text-slate-300' : 'bg-slate-700/50 text-slate-500'
+                        isVisible ? 'bg-theme-hover text-theme-text-secondary' : 'bg-theme-elevated/50 text-theme-text-tertiary'
                       )}>
                         {count}
                       </span>
@@ -230,8 +230,8 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
       </div>
 
       {/* Footer stats */}
-      <div className="px-3 py-2 border-t border-slate-700 bg-slate-800/50">
-        <div className="text-xs text-slate-500">
+      <div className="px-3 py-2 border-t border-theme-border bg-theme-surface/50">
+        <div className="text-xs text-theme-text-tertiary">
           Showing {availableKinds.filter(k => visibleKinds.has(k.kind)).reduce((sum, k) => sum + (kindCounts.get(k.kind) || 0), 0)} of {nodes.length} resources
         </div>
       </div>

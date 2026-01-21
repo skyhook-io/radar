@@ -139,14 +139,14 @@ export function ResourceDetailPage({
   const warningCount = resourceEvents.filter(isProblematicEvent).length
 
   return (
-    <div className="flex flex-col h-full w-full bg-slate-900">
+    <div className="flex flex-col h-full w-full bg-theme-base">
       {/* Header */}
-      <div className="flex-shrink-0 border-b border-slate-700 bg-slate-800">
+      <div className="flex-shrink-0 border-b border-theme-border bg-theme-surface">
         {/* Top bar with back button, title, actions */}
         <div className="px-4 py-3 flex items-center gap-4">
           <button
             onClick={onBack}
-            className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg transition-colors"
+            className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg transition-colors"
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
@@ -162,8 +162,8 @@ export function ResourceDetailPage({
                 </span>
               )}
             </div>
-            <h1 className="text-lg font-semibold text-white truncate">{name}</h1>
-            <p className="text-sm text-slate-400">{namespace}</p>
+            <h1 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
+            <p className="text-sm text-theme-text-secondary">{namespace}</p>
           </div>
 
           <div className="flex items-center gap-2">
@@ -174,11 +174,11 @@ export function ResourceDetailPage({
 
         {/* Metadata bar */}
         {metadata.length > 0 && (
-          <div className="px-4 py-2 bg-slate-800/50 border-t border-slate-700/50 flex flex-wrap gap-x-6 gap-y-1">
+          <div className="px-4 py-2 bg-theme-surface/50 border-t border-theme-border/50 flex flex-wrap gap-x-6 gap-y-1">
             {metadata.map((item, i) => (
               <div key={i} className="flex items-center gap-2 text-sm">
-                <span className="text-slate-500">{item.label}:</span>
-                <span className="text-slate-300 font-mono text-xs">{item.value}</span>
+                <span className="text-theme-text-tertiary">{item.label}:</span>
+                <span className="text-theme-text-secondary font-mono text-xs">{item.value}</span>
               </div>
             ))}
           </div>
@@ -197,14 +197,14 @@ export function ResourceDetailPage({
             <TabButton active={activeTab === 'pods'} onClick={() => setActiveTab('pods')}>
               <Container className="w-4 h-4" />
               Logs
-              <span className="ml-1 px-1.5 py-0.5 text-xs bg-slate-700 rounded">{pods.length}</span>
+              <span className="ml-1 px-1.5 py-0.5 text-xs bg-theme-elevated rounded">{pods.length}</span>
             </TabButton>
           )}
           <TabButton active={activeTab === 'events'} onClick={() => setActiveTab('events')}>
             <Clock className="w-4 h-4" />
             Events
             {resourceEvents.length > 0 && (
-              <span className="ml-1 px-1.5 py-0.5 text-xs bg-slate-700 rounded">{resourceEvents.length}</span>
+              <span className="ml-1 px-1.5 py-0.5 text-xs bg-theme-elevated rounded">{resourceEvents.length}</span>
             )}
           </TabButton>
           <TabButton active={activeTab === 'yaml'} onClick={() => setActiveTab('yaml')}>
@@ -393,7 +393,7 @@ function KindBadge({ kind }: { kind: string }) {
     CronJob: 'bg-teal-900/50 text-teal-400',
   }
   return (
-    <span className={clsx('text-xs px-2 py-0.5 rounded font-medium', colors[kind] || 'bg-slate-700 text-slate-300')}>
+    <span className={clsx('text-xs px-2 py-0.5 rounded font-medium', colors[kind] || 'bg-theme-elevated text-theme-text-secondary')}>
       {kind}
     </span>
   )
@@ -404,7 +404,7 @@ function HealthBadge({ state }: { state: string }) {
     healthy: { bg: 'bg-green-500/20', text: 'text-green-400', icon: CheckCircle },
     degraded: { bg: 'bg-yellow-500/20', text: 'text-yellow-400', icon: AlertCircle },
     unhealthy: { bg: 'bg-red-500/20', text: 'text-red-400', icon: AlertCircle },
-    unknown: { bg: 'bg-slate-500/20', text: 'text-slate-400', icon: Clock },
+    unknown: { bg: 'bg-theme-hover/50', text: 'text-theme-text-secondary', icon: Clock },
   }
   const { bg, text, icon: Icon } = config[state] || config.unknown
   return (
@@ -422,8 +422,8 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
       className={clsx(
         'flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 transition-colors',
         active
-          ? 'text-white border-blue-500'
-          : 'text-slate-400 border-transparent hover:text-white hover:border-slate-600'
+          ? 'text-theme-text-primary border-blue-500'
+          : 'text-theme-text-secondary border-transparent hover:text-theme-text-primary hover:border-theme-border-light'
       )}
     >
       {children}
@@ -440,14 +440,14 @@ function TimeRangeSelector({ value, onChange }: { value: TimeRange; onChange: (v
     { value: '24h', label: '24h' },
   ]
   return (
-    <div className="flex items-center gap-0.5 p-0.5 bg-slate-700 rounded-lg">
+    <div className="flex items-center gap-0.5 p-0.5 bg-theme-elevated rounded-lg">
       {options.map(opt => (
         <button
           key={opt.value}
           onClick={() => onChange(opt.value)}
           className={clsx(
             'px-2 py-1 text-xs rounded-md transition-colors',
-            value === opt.value ? 'bg-slate-600 text-white' : 'text-slate-400 hover:text-white'
+            value === opt.value ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
           )}
         >
           {opt.label}
@@ -472,14 +472,14 @@ function ActionsDropdown({ kind }: { kind: string; namespace: string; name: stri
     <div className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="p-2 text-slate-400 hover:text-white hover:bg-slate-700 rounded-lg"
+        className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg"
       >
         <MoreVertical className="w-5 h-5" />
       </button>
       {open && (
         <>
           <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
-          <div className="absolute right-0 top-full mt-1 z-50 w-48 bg-slate-800 border border-slate-700 rounded-lg shadow-xl py-1">
+          <div className="absolute right-0 top-full mt-1 z-50 w-48 bg-theme-surface border border-theme-border rounded-lg shadow-xl py-1">
             {actions.map((action, i) => (
               <button
                 key={i}
@@ -488,10 +488,10 @@ function ActionsDropdown({ kind }: { kind: string; namespace: string; name: stri
                 className={clsx(
                   'w-full px-3 py-2 text-sm text-left flex items-center gap-2 transition-colors',
                   action.disabled
-                    ? 'text-slate-600 cursor-not-allowed'
+                    ? 'text-theme-text-disabled cursor-not-allowed'
                     : action.danger
                     ? 'text-red-400 hover:bg-red-900/30'
-                    : 'text-slate-300 hover:bg-slate-700'
+                    : 'text-theme-text-secondary hover:bg-theme-elevated'
                 )}
               >
                 <action.icon className="w-4 h-4" />
@@ -527,10 +527,10 @@ function MiniTimeline({ events, timeRange }: { events: TimelineEvent[]; timeRang
   }).filter(e => e.x >= 0 && e.x <= 100)
 
   return (
-    <div className="px-4 py-2 border-t border-slate-700/50">
-      <div className="relative h-6 bg-slate-700/30 rounded overflow-hidden">
+    <div className="px-4 py-2 border-t border-theme-border/50">
+      <div className="relative h-6 bg-theme-elevated/30 rounded overflow-hidden">
         {/* Health bar background - gradient from past to now */}
-        <div className="absolute inset-0 bg-gradient-to-r from-slate-700/50 to-slate-600/30" />
+        <div className="absolute inset-0 bg-gradient-to-r from-theme-hover/50 to-theme-hover/30" />
 
         {/* Event markers */}
         {eventPositions.map((ep, i) => {
@@ -554,10 +554,10 @@ function MiniTimeline({ events, timeRange }: { events: TimelineEvent[]; timeRang
         })}
 
         {/* Time labels */}
-        <div className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-slate-500">
+        <div className="absolute left-2 top-1/2 -translate-y-1/2 text-xs text-theme-text-tertiary">
           -{timeRange}
         </div>
-        <div className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500">
+        <div className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-theme-text-tertiary">
           Now
         </div>
       </div>
@@ -584,7 +584,7 @@ function OverviewTab({
 }) {
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full text-slate-500">
+      <div className="flex items-center justify-center h-full text-theme-text-tertiary">
         <RefreshCw className="w-5 h-5 animate-spin mr-2" />
         Loading...
       </div>
@@ -620,13 +620,13 @@ function OverviewTab({
         )}
 
         {/* Recent Activity */}
-        <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+        <div className="bg-theme-surface/50 border border-theme-border rounded-lg p-4">
+          <h3 className="text-sm font-medium text-theme-text-secondary mb-3 flex items-center gap-2">
             <Activity className="w-4 h-4" />
             Recent Activity
           </h3>
           {recentEvents.length === 0 ? (
-            <p className="text-sm text-slate-500">No recent events</p>
+            <p className="text-sm text-theme-text-tertiary">No recent events</p>
           ) : (
             <div className="space-y-2">
               {recentEvents.map(event => (
@@ -640,13 +640,13 @@ function OverviewTab({
                   )} />
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-slate-300">{event.reason || event.operation}</span>
+                      <span className="text-theme-text-secondary">{event.reason || event.operation}</span>
                       {event.kind !== kind && (
-                        <span className="text-xs px-1 py-0.5 bg-slate-700 rounded text-slate-400">{event.kind}</span>
+                        <span className="text-xs px-1 py-0.5 bg-theme-elevated rounded text-theme-text-secondary">{event.kind}</span>
                       )}
                     </div>
-                    {event.diff?.summary && <p className="text-slate-500 text-xs truncate">{event.diff.summary}</p>}
-                    <p className="text-slate-600 text-xs">{new Date(event.timestamp).toLocaleTimeString()}</p>
+                    {event.diff?.summary && <p className="text-theme-text-tertiary text-xs truncate">{event.diff.summary}</p>}
+                    <p className="text-theme-text-disabled text-xs">{new Date(event.timestamp).toLocaleTimeString()}</p>
                   </div>
                 </div>
               ))}
@@ -655,8 +655,8 @@ function OverviewTab({
         </div>
 
         {/* Related Resources */}
-        <div className="bg-slate-800/50 border border-slate-700 rounded-lg p-4">
-          <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+        <div className="bg-theme-surface/50 border border-theme-border rounded-lg p-4">
+          <h3 className="text-sm font-medium text-theme-text-secondary mb-3 flex items-center gap-2">
             <Layers className="w-4 h-4" />
             Related Resources
           </h3>
@@ -665,8 +665,8 @@ function OverviewTab({
 
         {/* Resource Status (for workloads) */}
         {resource?.status && (
-          <div className="lg:col-span-2 bg-slate-800/50 border border-slate-700 rounded-lg p-4">
-            <h3 className="text-sm font-medium text-slate-300 mb-3 flex items-center gap-2">
+          <div className="lg:col-span-2 bg-theme-surface/50 border border-theme-border rounded-lg p-4">
+            <h3 className="text-sm font-medium text-theme-text-secondary mb-3 flex items-center gap-2">
               <Server className="w-4 h-4" />
               Status
             </h3>
@@ -682,7 +682,7 @@ function StatusGrid({ status, kind }: { status: any; kind: string }) {
   const items: { label: string; value: string | number; color?: string }[] = []
 
   if (['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)) {
-    items.push({ label: 'Ready', value: status.readyReplicas || 0, color: status.readyReplicas > 0 ? 'text-green-400' : 'text-slate-400' })
+    items.push({ label: 'Ready', value: status.readyReplicas || 0, color: status.readyReplicas > 0 ? 'text-green-400' : 'text-theme-text-secondary' })
     items.push({ label: 'Available', value: status.availableReplicas || 0 })
     items.push({ label: 'Updated', value: status.updatedReplicas || 0 })
     if (status.unavailableReplicas) {
@@ -717,15 +717,15 @@ function StatusGrid({ status, kind }: { status: any; kind: string }) {
   }
 
   if (items.length === 0) {
-    return <p className="text-sm text-slate-500">No status information available</p>
+    return <p className="text-sm text-theme-text-tertiary">No status information available</p>
   }
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
       {items.map((item, i) => (
         <div key={i}>
-          <p className="text-xs text-slate-500">{item.label}</p>
-          <p className={clsx('text-lg font-semibold', item.color || 'text-white')}>{item.value}</p>
+          <p className="text-xs text-theme-text-tertiary">{item.label}</p>
+          <p className={clsx('text-lg font-semibold', item.color || 'text-theme-text-primary')}>{item.value}</p>
         </div>
       ))}
     </div>
@@ -742,11 +742,11 @@ function RelatedResources({
   onNavigate?: (kind: string, namespace: string, name: string) => void
 }) {
   if (isLoading) {
-    return <p className="text-sm text-slate-500">Loading relationships...</p>
+    return <p className="text-sm text-theme-text-tertiary">Loading relationships...</p>
   }
 
   if (!relationships) {
-    return <p className="text-sm text-slate-500">No related resources</p>
+    return <p className="text-sm text-theme-text-tertiary">No related resources</p>
   }
 
   const sections: { title: string; items: ResourceRef[] }[] = []
@@ -759,24 +759,24 @@ function RelatedResources({
   if (relationships.pods?.length) sections.push({ title: 'Pods', items: relationships.pods.slice(0, 5) })
 
   if (sections.length === 0) {
-    return <p className="text-sm text-slate-500">No related resources</p>
+    return <p className="text-sm text-theme-text-tertiary">No related resources</p>
   }
 
   return (
     <div className="space-y-3">
       {sections.map(section => (
         <div key={section.title}>
-          <p className="text-xs text-slate-500 mb-1">{section.title}</p>
+          <p className="text-xs text-theme-text-tertiary mb-1">{section.title}</p>
           <div className="space-y-1">
             {section.items.map(item => (
               <button
                 key={`${item.kind}/${item.namespace}/${item.name}`}
                 onClick={() => onNavigate?.(item.kind, item.namespace, item.name)}
-                className="w-full text-left px-2 py-1.5 rounded hover:bg-slate-700/50 flex items-center gap-2 group"
+                className="w-full text-left px-2 py-1.5 rounded hover:bg-theme-elevated/50 flex items-center gap-2 group"
               >
                 <KindBadge kind={item.kind} />
-                <span className="text-sm text-slate-300 truncate flex-1 group-hover:text-white">{item.name}</span>
-                <ChevronRight className="w-3 h-3 text-slate-600 group-hover:text-slate-400" />
+                <span className="text-sm text-theme-text-secondary truncate flex-1 group-hover:text-theme-text-primary">{item.name}</span>
+                <ChevronRight className="w-3 h-3 text-theme-text-disabled group-hover:text-theme-text-secondary" />
               </button>
             ))}
           </div>
@@ -806,7 +806,7 @@ function LogsTab({
 
   if (pods.length === 0) {
     return (
-      <div className="flex flex-col items-center justify-center h-full text-slate-500">
+      <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
         <Terminal className="w-12 h-12 mb-4 opacity-50" />
         <p>No pods available</p>
       </div>
@@ -817,7 +817,7 @@ function LogsTab({
     <div className="h-full flex flex-col">
       {/* Pod selector - horizontal tabs */}
       {pods.length > 1 && (
-        <div className="flex-shrink-0 border-b border-slate-700 bg-slate-800/50 px-4 py-2 flex gap-2 overflow-x-auto">
+        <div className="flex-shrink-0 border-b border-theme-border bg-theme-surface/50 px-4 py-2 flex gap-2 overflow-x-auto">
           {pods.map(pod => (
             <button
               key={pod.name}
@@ -825,8 +825,8 @@ function LogsTab({
               className={clsx(
                 'px-3 py-1.5 text-sm rounded-lg whitespace-nowrap transition-colors',
                 selectedPod === pod.name
-                  ? 'bg-blue-500 text-white'
-                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                  ? 'bg-blue-500 text-theme-text-primary'
+                  : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover'
               )}
             >
               {pod.name.length > 40 ? '...' + pod.name.slice(-37) : pod.name}
@@ -891,19 +891,19 @@ function PodLogsPanel({
   return (
     <div className="flex flex-col h-full">
       {/* Controls bar - always shown for container selector, follow, refresh */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-slate-700 bg-slate-800/50">
+      <div className="flex items-center justify-between px-4 py-2 border-b border-theme-border bg-theme-surface/50">
         <div className="flex items-center gap-3">
           {showHeader && (
             <>
-              <Terminal className="w-4 h-4 text-slate-400" />
-              <span className="text-sm font-medium text-white">{podName}</span>
+              <Terminal className="w-4 h-4 text-theme-text-secondary" />
+              <span className="text-sm font-medium text-theme-text-primary">{podName}</span>
             </>
           )}
           {containers.length > 1 && (
             <select
               value={container}
               onChange={(e) => setContainer(e.target.value)}
-              className="text-xs bg-slate-700 border border-slate-600 rounded px-2 py-1 text-white"
+              className="text-xs bg-theme-elevated border border-theme-border-light rounded px-2 py-1 text-theme-text-primary"
             >
               {containers.map(c => (
                 <option key={c} value={c}>{c}</option>
@@ -916,14 +916,14 @@ function PodLogsPanel({
             onClick={() => setFollow(!follow)}
             className={clsx(
               'px-2 py-1 text-xs rounded transition-colors',
-              follow ? 'bg-blue-500 text-white' : 'bg-slate-700 text-slate-400 hover:text-white'
+              follow ? 'bg-blue-500 text-theme-text-primary' : 'bg-theme-elevated text-theme-text-secondary hover:text-theme-text-primary'
             )}
           >
             {follow ? 'Following' : 'Follow'}
           </button>
           <button
             onClick={() => refetch()}
-            className="p-1 text-slate-400 hover:text-white"
+            className="p-1 text-theme-text-secondary hover:text-theme-text-primary"
             title="Refresh"
           >
             <RefreshCw className="w-4 h-4" />
@@ -931,7 +931,7 @@ function PodLogsPanel({
           {showHeader && (
             <button
               onClick={onClose}
-              className="p-1 text-slate-400 hover:text-white"
+              className="p-1 text-theme-text-secondary hover:text-theme-text-primary"
             >
               ×
             </button>
@@ -940,14 +940,14 @@ function PodLogsPanel({
       </div>
       <pre
         ref={logsRef}
-        className="flex-1 overflow-auto p-4 text-xs font-mono text-slate-300 bg-slate-950"
+        className="flex-1 overflow-auto p-4 text-xs font-mono text-theme-text-secondary bg-theme-base"
       >
         {isLoading ? (
-          <span className="text-slate-500">Loading logs...</span>
+          <span className="text-theme-text-tertiary">Loading logs...</span>
         ) : logs ? (
           logs
         ) : (
-          <span className="text-slate-500">No logs available</span>
+          <span className="text-theme-text-tertiary">No logs available</span>
         )}
       </pre>
     </div>
@@ -987,7 +987,7 @@ function EventsTab({
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full text-slate-500">
+      <div className="flex items-center justify-center h-full text-theme-text-tertiary">
         <RefreshCw className="w-5 h-5 animate-spin mr-2" />
         Loading events...
       </div>
@@ -1014,13 +1014,13 @@ function EventsTab({
     <div className="h-full flex flex-col">
       {/* Filter bar */}
       {routineCount > 0 && (
-        <div className="px-4 py-2 border-b border-slate-700 flex items-center justify-end">
-          <label className="flex items-center gap-2 text-xs text-slate-400 cursor-pointer hover:text-slate-300">
+        <div className="px-4 py-2 border-b border-theme-border flex items-center justify-end">
+          <label className="flex items-center gap-2 text-xs text-theme-text-secondary cursor-pointer hover:text-theme-text-secondary">
             <input
               type="checkbox"
               checked={showRoutine}
               onChange={(e) => onToggleRoutine(e.target.checked)}
-              className="w-3.5 h-3.5 rounded border-slate-600 bg-slate-700 text-blue-500"
+              className="w-3.5 h-3.5 rounded border-theme-border-light bg-theme-elevated text-blue-500"
             />
             {showRoutine ? <Eye className="w-3.5 h-3.5" /> : <EyeOff className="w-3.5 h-3.5" />}
             Show routine events ({routineCount})
@@ -1031,16 +1031,16 @@ function EventsTab({
       {/* Events list */}
       <div className="flex-1 overflow-auto">
         {events.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-full text-slate-500">
+          <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
             <Clock className="w-12 h-12 mb-4 opacity-50" />
             <p className="text-lg">No events</p>
             <p className="text-sm">Events will appear here as things change</p>
           </div>
         ) : (
-          <div className="divide-y divide-slate-700/30">
+          <div className="table-divide-subtle">
             {groupedEvents.map(group => (
               <div key={group.date}>
-                <div className="sticky top-0 bg-slate-900/95 backdrop-blur px-4 py-2 text-xs font-medium text-slate-500 border-b border-slate-700/30">
+                <div className="sticky top-0 bg-theme-base/95 backdrop-blur px-4 py-2 text-xs font-medium text-theme-text-tertiary border-b border-theme-border/30">
                   {group.date}
                 </div>
                 <div>
@@ -1055,7 +1055,7 @@ function EventsTab({
                           onClick={() => hasDiff && toggleEvent(event.id)}
                           className={clsx(
                             'w-full px-4 py-3 flex items-start gap-4 text-left transition-colors',
-                            isExpanded ? 'bg-slate-800/50' : 'hover:bg-slate-800/30',
+                            isExpanded ? 'bg-theme-surface/50' : 'hover:bg-theme-surface/30',
                             !isOwn && 'pl-8',
                             !hasDiff && 'cursor-default'
                           )}
@@ -1068,12 +1068,12 @@ function EventsTab({
                                   'text-xs px-1.5 py-0.5 rounded',
                                   event.kind === 'ReplicaSet' ? 'bg-violet-900/50 text-violet-400' :
                                   event.kind === 'Pod' ? 'bg-green-900/50 text-green-400' :
-                                  'bg-slate-700 text-slate-400'
+                                  'bg-theme-elevated text-theme-text-secondary'
                                 )}>
                                   {event.kind}
                                 </span>
                               )}
-                              <span className="text-sm font-medium text-white">
+                              <span className="text-sm font-medium text-theme-text-primary">
                                 {event.type === 'change' ? event.operation : event.reason}
                               </span>
                               {event.healthState && event.healthState !== 'unknown' && (
@@ -1088,19 +1088,19 @@ function EventsTab({
                                 </span>
                               )}
                             </div>
-                            {!isOwn && <p className="text-xs text-slate-500 mb-1">{event.name}</p>}
-                            {event.diff?.summary && <p className="text-sm text-slate-400">{event.diff.summary}</p>}
-                            {event.message && <p className="text-sm text-slate-400 line-clamp-2">{event.message}</p>}
-                            <p className="text-xs text-slate-500 mt-1">{new Date(event.timestamp).toLocaleTimeString()}</p>
+                            {!isOwn && <p className="text-xs text-theme-text-tertiary mb-1">{event.name}</p>}
+                            {event.diff?.summary && <p className="text-sm text-theme-text-secondary">{event.diff.summary}</p>}
+                            {event.message && <p className="text-sm text-theme-text-secondary line-clamp-2">{event.message}</p>}
+                            <p className="text-xs text-theme-text-tertiary mt-1">{new Date(event.timestamp).toLocaleTimeString()}</p>
                           </div>
                           {hasDiff && (
-                            <ChevronRight className={clsx('w-4 h-4 text-slate-500 transition-transform flex-shrink-0', isExpanded && 'rotate-90')} />
+                            <ChevronRight className={clsx('w-4 h-4 text-theme-text-tertiary transition-transform flex-shrink-0', isExpanded && 'rotate-90')} />
                           )}
                         </button>
 
                         {/* Inline diff - shown when expanded */}
                         {isExpanded && event.diff && (
-                          <div className="px-4 pb-4 pl-16 bg-slate-800/30">
+                          <div className="px-4 pb-4 pl-16 bg-theme-surface/30">
                             <DiffViewer diff={event.diff} />
                           </div>
                         )}
@@ -1128,13 +1128,13 @@ function EventIcon({ event }: { event: TimelineEvent }) {
   }[event.operation || 'update'] : isProblematic ? {
     bg: 'bg-amber-500', icon: AlertCircle
   } : {
-    bg: 'bg-slate-500', icon: CheckCircle
+    bg: 'bg-theme-hover', icon: CheckCircle
   }
 
   const Icon = config?.icon || Clock
 
   return (
-    <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center text-white flex-shrink-0', config?.bg || 'bg-slate-500')}>
+    <div className={clsx('w-8 h-8 rounded-full flex items-center justify-center text-theme-text-primary flex-shrink-0', config?.bg || 'bg-theme-hover')}>
       <Icon className="w-4 h-4" />
     </div>
   )
@@ -1145,7 +1145,7 @@ function YamlTab({ resource, isLoading }: { resource: any; isLoading: boolean })
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full text-slate-500">
+      <div className="flex items-center justify-center h-full text-theme-text-tertiary">
         <RefreshCw className="w-5 h-5 animate-spin mr-2" />
         Loading...
       </div>
@@ -1162,16 +1162,16 @@ function YamlTab({ resource, isLoading }: { resource: any; isLoading: boolean })
 
   return (
     <div className="h-full flex flex-col">
-      <div className="px-4 py-2 border-b border-slate-700 flex items-center justify-end">
+      <div className="px-4 py-2 border-b border-theme-border flex items-center justify-end">
         <button
           onClick={handleCopy}
-          className="flex items-center gap-1.5 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded"
+          className="flex items-center gap-1.5 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
         >
           {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
           {copied ? 'Copied!' : 'Copy'}
         </button>
       </div>
-      <pre className="flex-1 overflow-auto p-4 text-xs font-mono text-slate-300 bg-slate-950">
+      <pre className="flex-1 overflow-auto p-4 text-xs font-mono text-theme-text-secondary bg-theme-base">
         {yaml || 'No data available'}
       </pre>
     </div>

@@ -12,7 +12,7 @@ interface ManifestDiffViewerProps {
 export function ManifestDiffViewer({ diff, isLoading, revision1, revision2, onClose }: ManifestDiffViewerProps) {
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-32 text-slate-500">
+      <div className="flex items-center justify-center h-32 text-theme-text-tertiary">
         Computing diff...
       </div>
     )
@@ -21,8 +21,8 @@ export function ManifestDiffViewer({ diff, isLoading, revision1, revision2, onCl
   if (!diff) {
     return (
       <div className="p-4">
-        <div className="flex flex-col items-center justify-center h-32 text-slate-500 gap-2">
-          <GitCompare className="w-8 h-8 text-slate-600" />
+        <div className="flex flex-col items-center justify-center h-32 text-theme-text-tertiary gap-2">
+          <GitCompare className="w-8 h-8 text-theme-text-disabled" />
           <span>No differences found</span>
         </div>
       </div>
@@ -33,21 +33,21 @@ export function ManifestDiffViewer({ diff, isLoading, revision1, revision2, onCl
     <div className="p-4">
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <GitCompare className="w-4 h-4 text-slate-400" />
-          <span className="text-sm font-medium text-slate-300">
+          <GitCompare className="w-4 h-4 text-theme-text-secondary" />
+          <span className="text-sm font-medium text-theme-text-secondary">
             Comparing Revision {revision1} → {revision2}
           </span>
         </div>
         <button
           onClick={onClose}
-          className="flex items-center gap-1 px-2 py-1 text-xs text-slate-400 hover:text-white hover:bg-slate-700 rounded"
+          className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
         >
           <X className="w-3.5 h-3.5" />
           Close
         </button>
       </div>
 
-      <div className="rounded-lg overflow-hidden max-h-[calc(100vh-300px)] overflow-auto bg-slate-900/50 font-mono text-xs">
+      <div className="rounded-lg overflow-hidden max-h-[calc(100vh-300px)] overflow-auto bg-theme-base/50 font-mono text-xs">
         <div className="p-3">
           {diff.split('\n').map((line, index) => (
             <DiffLine key={index} line={line} />
@@ -56,7 +56,7 @@ export function ManifestDiffViewer({ diff, isLoading, revision1, revision2, onCl
       </div>
 
       {/* Legend */}
-      <div className="flex items-center gap-4 mt-3 text-xs text-slate-500">
+      <div className="flex items-center gap-4 mt-3 text-xs text-theme-text-tertiary">
         <div className="flex items-center gap-1">
           <span className="w-3 h-3 bg-red-500/20 border border-red-500/50 rounded" />
           <span>Removed</span>
@@ -81,8 +81,8 @@ function DiffLine({ line }: { line: string }) {
         'whitespace-pre',
         isAddition && 'bg-green-500/10 text-green-400',
         isRemoval && 'bg-red-500/10 text-red-400',
-        isHeader && 'text-slate-500 font-bold',
-        !isAddition && !isRemoval && !isHeader && 'text-slate-400'
+        isHeader && 'text-theme-text-tertiary font-bold',
+        !isAddition && !isRemoval && !isHeader && 'text-theme-text-secondary'
       )}
     >
       {line || ' '}

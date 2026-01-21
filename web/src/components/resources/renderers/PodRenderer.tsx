@@ -40,9 +40,9 @@ export function PodRenderer({ data, onCopy, copied }: PodRendererProps) {
             const restarts = status?.restartCount || 0
 
             return (
-              <div key={i} className="bg-slate-700/30 rounded-lg p-3">
+              <div key={i} className="bg-theme-elevated/30 rounded-lg p-3">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-white">{container.name}</span>
+                  <span className="text-sm font-medium text-theme-text-primary">{container.name}</span>
                   <div className="flex items-center gap-2">
                     <span className={clsx(
                       'px-2 py-0.5 text-xs rounded',
@@ -60,7 +60,7 @@ export function PodRenderer({ data, onCopy, copied }: PodRendererProps) {
                     </span>
                   </div>
                 </div>
-                <div className="text-xs text-slate-400 space-y-1">
+                <div className="text-xs text-theme-text-secondary space-y-1">
                   <div className="truncate" title={container.image}>Image: {container.image}</div>
                   {restarts > 0 && (
                     <div className={restarts > 5 ? 'text-red-400' : 'text-yellow-400'}>
@@ -107,22 +107,22 @@ function LogsSection({ namespace, podName, containers }: { namespace: string; po
   if (!namespace || !podName || containers.length === 0) return null
 
   return (
-    <div className="border border-slate-700/50 rounded-lg overflow-hidden">
+    <div className="border border-theme-border/50 rounded-lg overflow-hidden">
       <button
         onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-slate-700/30 transition-colors"
+        className="flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-theme-elevated/30 transition-colors"
       >
         {expanded ? (
-          <ChevronDown className="w-4 h-4 text-slate-400" />
+          <ChevronDown className="w-4 h-4 text-theme-text-secondary" />
         ) : (
-          <ChevronRight className="w-4 h-4 text-slate-400" />
+          <ChevronRight className="w-4 h-4 text-theme-text-secondary" />
         )}
-        <FileText className="w-4 h-4 text-slate-400" />
-        <span className="text-sm font-medium text-white">Logs</span>
+        <FileText className="w-4 h-4 text-theme-text-secondary" />
+        <span className="text-sm font-medium text-theme-text-primary">Logs</span>
       </button>
 
       {expanded && (
-        <div className="h-80 border-t border-slate-700/50">
+        <div className="h-80 border-t border-theme-border/50">
           <LogsViewer
             namespace={namespace}
             podName={podName}
