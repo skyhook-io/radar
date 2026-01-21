@@ -1,6 +1,8 @@
 # GoReleaser configuration for Skyhook Explorer
 # Documentation: https://goreleaser.com
 
+version: 2
+
 before:
   hooks:
     # Build frontend before Go compilation (gets embedded)
@@ -96,10 +98,10 @@ release:
 # Homebrew tap (publishes to skyhook-io/homebrew-skyhook-cli)
 brews:
   - name: skyhook-explorer
-    tap:
+    repository:
       owner: skyhook-io
       name: homebrew-skyhook-cli
-    folder: Formula
+    directory: Formula
     homepage: "https://github.com/skyhook-io/explorer"
     description: "Kubernetes cluster visualization and topology explorer"
     license: "Apache-2.0"
