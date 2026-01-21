@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"sync"
 
+	"k8s.io/client-go/discovery"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/clientcmd"
@@ -13,13 +15,15 @@ import (
 )
 
 var (
-	k8sClient      *kubernetes.Clientset
-	k8sConfig      *rest.Config
-	initOnce       sync.Once
-	initErr        error
-	kubeconfigPath string
-	contextName    string
-	clusterName    string
+	k8sClient       *kubernetes.Clientset
+	k8sConfig       *rest.Config
+	discoveryClient *discovery.DiscoveryClient
+	dynamicClient   dynamic.Interface
+	initOnce        sync.Once
+	initErr         error
+	kubeconfigPath  string
+	contextName     string
+	clusterName     string
 )
 
 // InitOptions configures the K8s client initialization
@@ -92,6 +96,18 @@ func doInit(opts InitOptions) error {
 		return fmt.Errorf("failed to create k8s clientset: %w", err)
 	}
 
+	// Create discovery client for API resource discovery
+	discoveryClient, err = discovery.NewDiscoveryClientForConfig(config)
+	if err != nil {
+		return fmt.Errorf("failed to create discovery client: %w", err)
+	}
+
+	// Create dynamic client for CRD access
+	dynamicClient, err = dynamic.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("failed to create dynamic client: %w", err)
+	}
+
 	return nil
 }
 
@@ -103,6 +119,16 @@ func GetClient() *kubernetes.Clientset {
 // GetConfig returns the K8s rest config
 func GetConfig() *rest.Config {
 	return k8sConfig
+}
+
+// GetDiscoveryClient returns the K8s discovery client for API resource discovery
+func GetDiscoveryClient() *discovery.DiscoveryClient {
+	return discoveryClient
+}
+
+// GetDynamicClient returns the K8s dynamic client for CRD access
+func GetDynamicClient() dynamic.Interface {
+	return dynamicClient
 }
 
 // GetKubeconfigPath returns the path to the kubeconfig file used

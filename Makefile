@@ -30,14 +30,14 @@ embed:
 # Quick rebuild and restart
 restart: frontend embed backend kill
 	@sleep 1
-	./explorer --kubeconfig ~/.kube/config --no-browser &
+	./explorer --kubeconfig ~/.kube/config --no-browser --persist-history &
 	@sleep 4
 	@echo "Server running at http://localhost:8080"
 
 # Frontend-only rebuild and restart (faster - no Go recompile)
 restart-fe: frontend embed kill
 	@sleep 1
-	./explorer --kubeconfig ~/.kube/config --no-browser &
+	./explorer --kubeconfig ~/.kube/config --no-browser --persist-history &
 	@sleep 4
 	@echo "Server running at http://localhost:8080"
 
@@ -64,11 +64,11 @@ watch-backend:
 
 # Run built binary
 run:
-	./explorer --kubeconfig ~/.kube/config
+	./explorer --kubeconfig ~/.kube/config --persist-history
 
 # Run in dev mode (serve frontend from web/dist instead of embedded)
 run-dev:
-	./explorer --kubeconfig ~/.kube/config --dev
+	./explorer --kubeconfig ~/.kube/config --dev --persist-history
 
 ## Utility targets
 
