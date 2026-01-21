@@ -4,10 +4,9 @@
 before:
   hooks:
     # Build frontend before Go compilation (gets embedded)
-    - npm install --prefix web
-    - npm run build --prefix web
+    - sh -c "cd web && npm install && npm run build"
     - mkdir -p internal/static/dist
-    - cp -r web/dist/* internal/static/dist/
+    - sh -c "cp -r web/dist/* internal/static/dist/"
 
 builds:
   - id: explorer
