@@ -1,4 +1,4 @@
-.PHONY: build clean dev frontend backend test lint help restart restart-fe kill watch-backend watch-frontend
+.PHONY: build install clean dev frontend backend test lint help restart restart-fe kill watch-backend watch-frontend release
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -X main.version=$(VERSION)
@@ -9,14 +9,21 @@ LDFLAGS := -X main.version=$(VERSION)
 build: frontend embed backend
 	@echo "Build complete: ./explorer"
 
+# Build and install to /usr/local/bin
+install: build
+	@echo "Installing to /usr/local/bin/kubectl-explore..."
+	@cp explorer /usr/local/bin/kubectl-explore || sudo cp explorer /usr/local/bin/kubectl-explore
+	@echo "Installed! Run 'kubectl explore' or 'kubectl-explore'"
+
 # Build Go backend with embedded frontend
 backend:
 	@echo "Building Go backend..."
 	go build -ldflags "$(LDFLAGS)" -o explorer ./cmd/explorer
 
-# Build frontend
+# Build frontend (auto-installs deps if needed)
 frontend:
 	@echo "Building frontend..."
+	@test -d web/node_modules || (echo "Installing npm dependencies..." && cd web && npm install)
 	cd web && npm run build
 
 # Copy built frontend to embed directory
@@ -114,12 +121,19 @@ fmt:
 docker:
 	docker build -t skyhook/explorer:$(VERSION) .
 
+# Release
+release:
+	./release.sh
+
+
+
 # Help
 help:
 	@echo "Skyhook Explorer - Kubernetes Topology Visualizer"
 	@echo ""
 	@echo "Build:"
 	@echo "  make build      - Build everything (frontend + embedded binary)"
+	@echo "  make install    - Build and install to /usr/local/bin"
 	@echo "  make frontend   - Build frontend only"
 	@echo "  make backend    - Build backend only"
 	@echo "  make restart    - Rebuild and restart server"

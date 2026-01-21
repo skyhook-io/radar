@@ -1,0 +1,110 @@
+# GoReleaser configuration for Skyhook Explorer
+# Documentation: https://goreleaser.com
+
+before:
+  hooks:
+    # Build frontend before Go compilation (gets embedded)
+    - npm install --prefix web
+    - npm run build --prefix web
+    - mkdir -p internal/static/dist
+    - cp -r web/dist/* internal/static/dist/
+
+builds:
+  - id: explorer
+    main: ./cmd/explorer
+    binary: kubectl-explore
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X main.version={{.Version}}
+    ignore:
+      - goos: windows
+        goarch: arm64
+
+archives:
+  - id: default
+    format: tar.gz
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    format_overrides:
+      - goos: windows
+        format: zip
+    files:
+      - LICENSE*
+      - README*
+
+checksum:
+  name_template: 'checksums.txt'
+
+snapshot:
+  name_template: "{{ incpatch .Version }}-next"
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^test:'
+      - '^chore:'
+      - Merge pull request
+      - Merge branch
+
+release:
+  github:
+    owner: skyhook-io
+    name: explorer
+  draft: false
+  prerelease: auto
+  name_template: "v{{.Version}}"
+  header: |
+    ## Skyhook Explorer v{{.Version}}
+
+    Kubernetes cluster visualization and topology explorer.
+
+    ### Installation
+
+    **macOS (Apple Silicon):**
+    ```bash
+    curl -LO https://github.com/skyhook-io/explorer/releases/download/v{{.Version}}/explorer_{{.Version}}_darwin_arm64.tar.gz
+    tar -xzf explorer_{{.Version}}_darwin_arm64.tar.gz
+    sudo mv kubectl-explore /usr/local/bin/
+    ```
+
+    **macOS (Intel):**
+    ```bash
+    curl -LO https://github.com/skyhook-io/explorer/releases/download/v{{.Version}}/explorer_{{.Version}}_darwin_amd64.tar.gz
+    tar -xzf explorer_{{.Version}}_darwin_amd64.tar.gz
+    sudo mv kubectl-explore /usr/local/bin/
+    ```
+
+    **Linux (amd64):**
+    ```bash
+    curl -LO https://github.com/skyhook-io/explorer/releases/download/v{{.Version}}/explorer_{{.Version}}_linux_amd64.tar.gz
+    tar -xzf explorer_{{.Version}}_linux_amd64.tar.gz
+    sudo mv kubectl-explore /usr/local/bin/
+    ```
+
+    Then run: `kubectl explore` or `kubectl-explore`
+
+# Homebrew tap (publishes to skyhook-io/homebrew-skyhook-cli)
+brews:
+  - name: skyhook-explorer
+    tap:
+      owner: skyhook-io
+      name: homebrew-skyhook-cli
+    folder: Formula
+    homepage: "https://github.com/skyhook-io/explorer"
+    description: "Kubernetes cluster visualization and topology explorer"
+    license: "Apache-2.0"
+    install: |
+      bin.install "kubectl-explore"
+    test: |
+      system "#{bin}/kubectl-explore", "--version"
