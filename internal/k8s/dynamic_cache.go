@@ -27,6 +27,7 @@ type DynamicResourceCache struct {
 var (
 	dynamicResourceCache *DynamicResourceCache
 	dynamicCacheOnce     sync.Once
+	dynamicCacheMu       sync.Mutex
 )
 
 // InitDynamicResourceCache initializes the dynamic resource cache
@@ -58,6 +59,25 @@ func InitDynamicResourceCache() error {
 // GetDynamicResourceCache returns the singleton dynamic cache instance
 func GetDynamicResourceCache() *DynamicResourceCache {
 	return dynamicResourceCache
+}
+
+// ResetDynamicResourceCache stops and clears the dynamic resource cache
+// This must be called before ReinitDynamicResourceCache when switching contexts
+func ResetDynamicResourceCache() {
+	dynamicCacheMu.Lock()
+	defer dynamicCacheMu.Unlock()
+
+	if dynamicResourceCache != nil {
+		dynamicResourceCache.Stop()
+		dynamicResourceCache = nil
+	}
+	dynamicCacheOnce = sync.Once{}
+}
+
+// ReinitDynamicResourceCache reinitializes the dynamic cache after a context switch
+// Must call ResetDynamicResourceCache first
+func ReinitDynamicResourceCache() error {
+	return InitDynamicResourceCache()
 }
 
 // EnsureWatching starts watching a resource type if not already watching

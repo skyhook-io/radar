@@ -125,6 +125,15 @@ export interface ClusterInfo {
   namespaceCount: number
 }
 
+// Context info for context switching
+export interface ContextInfo {
+  name: string
+  cluster: string
+  user: string
+  namespace: string
+  isCurrent: boolean
+}
+
 // Namespace
 export interface Namespace {
   name: string
@@ -132,7 +141,7 @@ export interface Namespace {
 }
 
 // Main view type (which screen we're on)
-export type MainView = 'topology' | 'resources' | 'events' | 'helm'
+export type MainView = 'topology' | 'resources' | 'timeline' | 'helm'
 
 // Topology view mode (for backwards compatibility, also exported as ViewMode)
 export type TopologyMode = 'full' | 'traffic'

@@ -150,3 +150,127 @@ func GetClusterName() string {
 func IsInCluster() bool {
 	return kubeconfigPath == ""
 }
+
+// ContextInfo represents information about a kubeconfig context
+type ContextInfo struct {
+	Name      string `json:"name"`
+	Cluster   string `json:"cluster"`
+	User      string `json:"user"`
+	Namespace string `json:"namespace"`
+	IsCurrent bool   `json:"isCurrent"`
+}
+
+// GetAvailableContexts returns all available contexts from the kubeconfig
+func GetAvailableContexts() ([]ContextInfo, error) {
+	if IsInCluster() {
+		// In-cluster mode - only one "context" available
+		return []ContextInfo{
+			{
+				Name:      "in-cluster",
+				Cluster:   "in-cluster",
+				User:      "service-account",
+				Namespace: "",
+				IsCurrent: true,
+			},
+		}, nil
+	}
+
+	kubeconfig := kubeconfigPath
+	if kubeconfig == "" {
+		return nil, fmt.Errorf("kubeconfig path not set")
+	}
+
+	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
+	configOverrides := &clientcmd.ConfigOverrides{}
+	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+
+	rawConfig, err := kubeConfig.RawConfig()
+	if err != nil {
+		return nil, fmt.Errorf("failed to load kubeconfig: %w", err)
+	}
+
+	// Use Explorer's in-memory contextName to determine current context
+	// This allows Explorer to switch contexts without modifying the kubeconfig file
+	currentCtx := contextName
+	if currentCtx == "" {
+		// Fall back to kubeconfig's current-context if we haven't switched yet
+		currentCtx = rawConfig.CurrentContext
+	}
+
+	contexts := make([]ContextInfo, 0, len(rawConfig.Contexts))
+	for name, ctx := range rawConfig.Contexts {
+		contexts = append(contexts, ContextInfo{
+			Name:      name,
+			Cluster:   ctx.Cluster,
+			User:      ctx.AuthInfo,
+			Namespace: ctx.Namespace,
+			IsCurrent: name == currentCtx,
+		})
+	}
+
+	return contexts, nil
+}
+
+// SwitchContext switches the K8s client to use a different context
+// This reinitializes all clients (k8sClient, discoveryClient, dynamicClient)
+func SwitchContext(name string) error {
+	if IsInCluster() {
+		return fmt.Errorf("cannot switch context when running in-cluster")
+	}
+
+	kubeconfig := kubeconfigPath
+	if kubeconfig == "" {
+		return fmt.Errorf("kubeconfig path not set")
+	}
+
+	// Build config with the new context
+	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
+	configOverrides := &clientcmd.ConfigOverrides{CurrentContext: name}
+	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
+
+	// Verify the context exists
+	rawConfig, err := kubeConfig.RawConfig()
+	if err != nil {
+		return fmt.Errorf("failed to load kubeconfig: %w", err)
+	}
+
+	ctx, ok := rawConfig.Contexts[name]
+	if !ok {
+		return fmt.Errorf("context %q not found in kubeconfig", name)
+	}
+
+	// Build the REST config for the new context
+	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
+		loadingRules,
+		configOverrides,
+	).ClientConfig()
+	if err != nil {
+		return fmt.Errorf("failed to build config for context %q: %w", name, err)
+	}
+
+	// Create new clients
+	newK8sClient, err := kubernetes.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("failed to create k8s client for context %q: %w", name, err)
+	}
+
+	newDiscoveryClient, err := discovery.NewDiscoveryClientForConfig(config)
+	if err != nil {
+		return fmt.Errorf("failed to create discovery client for context %q: %w", name, err)
+	}
+
+	newDynamicClient, err := dynamic.NewForConfig(config)
+	if err != nil {
+		return fmt.Errorf("failed to create dynamic client for context %q: %w", name, err)
+	}
+
+	// Update global variables
+	k8sConfig = config
+	k8sClient = newK8sClient
+	discoveryClient = newDiscoveryClient
+	dynamicClient = newDynamicClient
+	contextName = name
+	clusterName = ctx.Cluster
+
+	return nil
+}

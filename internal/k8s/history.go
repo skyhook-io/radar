@@ -81,6 +81,7 @@ type ChangeHistory struct {
 var (
 	changeHistory     *ChangeHistory
 	changeHistoryOnce sync.Once
+	historyMu         sync.Mutex
 )
 
 // InitChangeHistory initializes the global change history store
@@ -102,6 +103,22 @@ func InitChangeHistory(maxSize int, persistPath string) {
 // GetChangeHistory returns the global change history instance
 func GetChangeHistory() *ChangeHistory {
 	return changeHistory
+}
+
+// ResetChangeHistory clears the change history instance
+// This must be called before ReinitChangeHistory when switching contexts
+func ResetChangeHistory() {
+	historyMu.Lock()
+	defer historyMu.Unlock()
+
+	changeHistory = nil
+	changeHistoryOnce = sync.Once{}
+}
+
+// ReinitChangeHistory reinitializes change history after a context switch
+// Must call ResetChangeHistory first
+func ReinitChangeHistory(maxSize int, persistPath string) {
+	InitChangeHistory(maxSize, persistPath)
 }
 
 // resourceKey generates a unique key for a resource

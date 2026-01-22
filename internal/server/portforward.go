@@ -50,6 +50,28 @@ var pfManager = &PortForwardManager{
 	sessions: make(map[string]*PortForwardSession),
 }
 
+// GetPortForwardCount returns the number of active port forward sessions
+func GetPortForwardCount() int {
+	pfManager.mu.RLock()
+	defer pfManager.mu.RUnlock()
+	return len(pfManager.sessions)
+}
+
+// StopAllPortForwards stops all active port forward sessions
+func StopAllPortForwards() {
+	pfManager.mu.Lock()
+	defer pfManager.mu.Unlock()
+
+	for id, session := range pfManager.sessions {
+		log.Printf("Stopping port forward %s (%s/%s)", id, session.Namespace, session.PodName)
+		if session.cancel != nil {
+			session.cancel()
+		}
+		session.Status = "stopped"
+		delete(pfManager.sessions, id)
+	}
+}
+
 // handleListPortForwards returns all active port forward sessions
 func (s *Server) handleListPortForwards(w http.ResponseWriter, r *http.Request) {
 	pfManager.mu.RLock()

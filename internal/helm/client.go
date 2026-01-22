@@ -30,8 +30,9 @@ type Client struct {
 }
 
 var (
-	globalClient *Client
-	clientOnce   sync.Once
+	globalClient   *Client
+	clientOnce     sync.Once
+	helmClientMu   sync.Mutex
 )
 
 // Initialize sets up the global Helm client
@@ -55,6 +56,23 @@ func Initialize(kubeconfig string) error {
 func GetClient() *Client {
 	return globalClient
 }
+
+// ResetClient clears the Helm client instance
+// This must be called before ReinitClient when switching contexts
+func ResetClient() {
+	helmClientMu.Lock()
+	defer helmClientMu.Unlock()
+
+	globalClient = nil
+	clientOnce = sync.Once{}
+}
+
+// ReinitClient reinitializes the Helm client after a context switch
+// Must call ResetClient first
+func ReinitClient(kubeconfig string) error {
+	return Initialize(kubeconfig)
+}
+
 
 // getActionConfig creates a new action configuration for the given namespace
 func (c *Client) getActionConfig(namespace string) (*action.Configuration, error) {

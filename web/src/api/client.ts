@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type {
   Topology,
   ClusterInfo,
+  ContextInfo,
   Namespace,
   TimelineEvent,
   TimeRange,
@@ -480,6 +481,53 @@ export function useHelmUpgrade() {
       queryClient.invalidateQueries({ queryKey: ['helm-release', variables.namespace, variables.name] })
       queryClient.invalidateQueries({ queryKey: ['helm-upgrade-info', variables.namespace, variables.name] })
       queryClient.invalidateQueries({ queryKey: ['helm-batch-upgrade-info'] })
+    },
+  })
+}
+
+// ============================================================================
+// Context Switching API hooks
+// ============================================================================
+
+// List all available kubeconfig contexts
+export function useContexts() {
+  return useQuery<ContextInfo[]>({
+    queryKey: ['contexts'],
+    queryFn: () => fetchJSON('/contexts'),
+    staleTime: 30000, // 30 seconds
+  })
+}
+
+// Session counts for context switch confirmation
+export interface SessionCounts {
+  portForwards: number
+  execSessions: number
+  total: number
+}
+
+// Fetch current session counts (port forwards + exec sessions)
+export async function fetchSessionCounts(): Promise<SessionCounts> {
+  return fetchJSON('/sessions')
+}
+
+// Switch to a different context
+export function useSwitchContext() {
+  const queryClient = useQueryClient()
+
+  return useMutation<ClusterInfo, Error, { name: string }>({
+    mutationFn: async ({ name }) => {
+      const response = await fetch(`${API_BASE}/contexts/${encodeURIComponent(name)}`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json()
+    },
+    onSuccess: () => {
+      // Invalidate all queries to force refetch with new context
+      queryClient.invalidateQueries()
     },
   })
 }

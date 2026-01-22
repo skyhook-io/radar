@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { TopologyGraph } from './components/topology/TopologyGraph'
 import { TopologyFilterSidebar } from './components/topology/TopologyFilterSidebar'
-import { EventsView } from './components/events/EventsView'
+import { TimelineView } from './components/timeline/TimelineView'
 import { ResourcesView } from './components/resources/ResourcesView'
 import { ResourceDetailDrawer } from './components/resources/ResourceDetailDrawer'
 import { ResourceDetailPage } from './components/resource/ResourceDetailPage'
@@ -10,8 +10,11 @@ import { HelmView } from './components/helm/HelmView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardManager, usePortForwardCount } from './components/portforward/PortForwardManager'
 import { DockProvider, BottomDock, useDock } from './components/dock'
+import { ContextSwitcher } from './components/ContextSwitcher'
+import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
 import { useEventSource } from './hooks/useEventSource'
 import { useClusterInfo, useNamespaces } from './api/client'
+import { Loader2 } from 'lucide-react'
 import { ChevronDown, RefreshCw, FolderTree, Network, List, Clock, Package, Sun, Moon } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, Topology } from './types'
@@ -90,7 +93,7 @@ function getViewFromPath(pathname: string): MainView {
   const path = pathname.replace(/^\//, '').split('/')[0]
   if (path === 'topology' || path === '') return 'topology'
   if (path === 'resources') return 'resources'
-  if (path === 'events') return 'events'
+  if (path === 'timeline') return 'timeline'
   if (path === 'helm') return 'helm'
   return 'topology'
 }
@@ -129,8 +132,8 @@ function AppInner() {
       newParams.delete('group')
     }
 
-    // Remove events-only params when leaving events
-    if (view !== 'events') {
+    // Remove timeline-only params when leaving timeline
+    if (view !== 'timeline') {
       newParams.delete('resource')
     }
 
@@ -142,18 +145,43 @@ function AppInner() {
   const [selectedHelmRelease, setSelectedHelmRelease] = useState<SelectedHelmRelease | null>(null)
   const [topologyMode, setTopologyMode] = useState<'full' | 'traffic'>(getInitialState().topologyMode)
   const [groupingMode, setGroupingMode] = useState<GroupingMode>(getInitialState().grouping)
-  // Resource detail page state (for events view drill-down)
+  // Resource detail page state (for timeline view drill-down)
   const [detailResource, setDetailResource] = useState<SelectedResource | null>(getInitialState().detailResource)
   // Topology filter state
   const [visibleKinds, setVisibleKinds] = useState<Set<NodeKind>>(() => new Set(DEFAULT_VISIBLE_KINDS))
   const [filterSidebarCollapsed, setFilterSidebarCollapsed] = useState(false)
 
+  // Compute effective grouping mode:
+  // - All namespaces: must use 'namespace' or 'app' (no 'none')
+  // - Single namespace with 'none': use 'namespace' internally but hide header
+  const isSingleNamespace = namespace !== ''
+  const effectiveGroupingMode: GroupingMode = useMemo(() => {
+    if (!isSingleNamespace && groupingMode === 'none') {
+      // All namespaces view - force namespace grouping
+      return 'namespace'
+    }
+    if (isSingleNamespace && groupingMode === 'none') {
+      // Single namespace with "no grouping" - use namespace grouping for layout
+      return 'namespace'
+    }
+    return groupingMode
+  }, [isSingleNamespace, groupingMode])
+
+  // Hide group header when viewing single namespace with "no grouping" selected
+  const hideGroupHeader = isSingleNamespace && groupingMode === 'none'
+
   // Fetch cluster info and namespaces
   const { data: clusterInfo } = useClusterInfo()
   const { data: namespaces } = useNamespaces()
 
+  // Context switch state
+  const { isSwitching, targetContext, progressMessage, updateProgress, endSwitch } = useContextSwitch()
+
   // SSE connection for real-time updates
-  const { topology, connected, reconnect } = useEventSource(namespace, topologyMode)
+  const { topology, connected, reconnect } = useEventSource(namespace, topologyMode, {
+    onContextSwitchComplete: endSwitch,
+    onContextSwitchProgress: updateProgress,
+  })
 
   // Handle node selection - convert TopologyNode to SelectedResource for the drawer
   const handleNodeClick = useCallback((node: TopologyNode) => {
@@ -196,8 +224,8 @@ function AppInner() {
       params.delete('group')
     }
 
-    // Add resource param for events detail view
-    if (mainView === 'events' && detailResource) {
+    // Add resource param for timeline detail view
+    if (mainView === 'timeline' && detailResource) {
       params.set('resource', encodeResourceParam(detailResource))
     } else {
       params.delete('resource')
@@ -231,7 +259,7 @@ function AppInner() {
 
   // Clear resource selection when changing views or namespace
   // But preserve selectedResource when navigating TO resources view (e.g., from Helm deep link)
-  // And don't clear detailResource if we're navigating to events view (could be from URL)
+  // And don't clear detailResource if we're navigating to timeline view (could be from URL)
   const prevMainView = useRef(mainView)
   useEffect(() => {
     const navigatingToResources = mainView === 'resources' && prevMainView.current !== 'resources'
@@ -242,8 +270,8 @@ function AppInner() {
       setSelectedResource(null)
     }
     setSelectedHelmRelease(null)
-    // Only clear detailResource when leaving events view or changing namespace
-    if (mainView !== 'events') {
+    // Only clear detailResource when leaving timeline view or changing namespace
+    if (mainView !== 'timeline') {
       setDetailResource(null)
     }
   }, [mainView])
@@ -312,36 +340,34 @@ function AppInner() {
           <Logo />
           <span className="text-xl font-normal text-theme-text-primary">Explorer</span>
 
-          {clusterInfo && (
-            <div className="flex items-center gap-2">
-              <span className="px-2 py-1 bg-theme-elevated rounded text-sm font-medium text-blue-300" title={clusterInfo.context || clusterInfo.cluster}>
-                {clusterInfo.context || clusterInfo.cluster}
-              </span>
+          <div className="flex items-center gap-2">
+            <ContextSwitcher />
+            {clusterInfo && (
               <span className="text-xs text-theme-text-tertiary hidden lg:inline">
                 {clusterInfo.platform} · {clusterInfo.kubernetesVersion}
               </span>
-              {/* Connection status - next to cluster name */}
-              <div className="flex items-center gap-1.5 ml-1">
-                <span
-                  className={`w-2 h-2 rounded-full ${
-                    connected ? 'bg-green-500' : 'bg-red-500'
-                  }`}
-                />
-                <span className="text-xs text-theme-text-tertiary hidden sm:inline">
-                  {connected ? 'Connected' : 'Disconnected'}
-                </span>
-                {!connected && (
-                  <button
-                    onClick={reconnect}
-                    className="p-1 text-theme-text-secondary hover:text-theme-text-primary"
-                    title="Reconnect"
-                  >
-                    <RefreshCw className="w-3 h-3" />
-                  </button>
-                )}
-              </div>
+            )}
+            {/* Connection status - next to cluster name */}
+            <div className="flex items-center gap-1.5 ml-1">
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  connected ? 'bg-green-500' : 'bg-red-500'
+                }`}
+              />
+              <span className="text-xs text-theme-text-tertiary hidden sm:inline">
+                {connected ? 'Connected' : 'Disconnected'}
+              </span>
+              {!connected && (
+                <button
+                  onClick={reconnect}
+                  className="p-1 text-theme-text-secondary hover:text-theme-text-primary"
+                  title="Reconnect"
+                >
+                  <RefreshCw className="w-3 h-3" />
+                </button>
+              )}
             </div>
-          )}
+          </div>
         </div>
 
         {/* Center: View tabs */}
@@ -369,15 +395,15 @@ function AppInner() {
             <span className="hidden sm:inline">Resources</span>
           </button>
           <button
-            onClick={() => setMainView('events')}
+            onClick={() => setMainView('timeline')}
             className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm rounded-md transition-colors ${
-              mainView === 'events'
+              mainView === 'timeline'
                 ? 'bg-blue-500 text-theme-text-primary'
                 : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover'
             }`}
           >
             <Clock className="w-4 h-4" />
-            <span className="hidden sm:inline">Events</span>
+            <span className="hidden sm:inline">Timeline</span>
           </button>
           <button
             onClick={() => setMainView('helm')}
@@ -416,8 +442,50 @@ function AppInner() {
         </div>
       </header>
 
+      {/* Context switching overlay */}
+      {isSwitching && (
+        <div className="flex-1 flex items-center justify-center bg-theme-base">
+          <div className="flex flex-col items-center gap-4 text-theme-text-secondary">
+            <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
+            <div className="text-center">
+              <div className="text-sm font-medium text-theme-text-primary">Switching context</div>
+              {targetContext && (
+                <div className="text-xs mt-2 text-theme-text-tertiary">
+                  {targetContext.provider ? (
+                    <span className="flex items-center justify-center gap-1.5">
+                      <span className="text-blue-400 font-medium">{targetContext.provider}</span>
+                      {targetContext.account && (
+                        <>
+                          <span className="text-theme-text-tertiary/50">•</span>
+                          <span>{targetContext.account}</span>
+                        </>
+                      )}
+                      {targetContext.region && (
+                        <>
+                          <span className="text-theme-text-tertiary/50">•</span>
+                          <span>{targetContext.region}</span>
+                        </>
+                      )}
+                      <span className="text-theme-text-tertiary/50">•</span>
+                      <span className="text-theme-text-secondary font-medium">{targetContext.clusterName}</span>
+                    </span>
+                  ) : (
+                    <span>{targetContext.raw}</span>
+                  )}
+                </div>
+              )}
+              {progressMessage && (
+                <div className="text-xs mt-3 text-theme-text-tertiary animate-pulse">
+                  {progressMessage}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main content */}
-      <div className="flex-1 flex overflow-hidden">
+      {!isSwitching && <div className="flex-1 flex overflow-hidden">
         {/* Topology view */}
         {mainView === 'topology' && (
           <>
@@ -436,7 +504,8 @@ function AppInner() {
               <TopologyGraph
                 topology={filteredTopology}
                 viewMode={topologyMode}
-                groupingMode={groupingMode}
+                groupingMode={effectiveGroupingMode}
+                hideGroupHeader={hideGroupHeader}
                 onNodeClick={handleNodeClick}
                 selectedNodeId={selectedResource ? `${apiResourceToNodeIdPrefix(selectedResource.kind)}-${selectedResource.namespace}-${selectedResource.name}` : undefined}
               />
@@ -451,7 +520,9 @@ function AppInner() {
                     onChange={(e) => setGroupingMode(e.target.value as GroupingMode)}
                     className="appearance-none bg-transparent text-theme-text-primary text-xs focus:outline-none cursor-pointer"
                   >
-                    <option value="none" className="bg-theme-surface">No Grouping</option>
+                    {isSingleNamespace && (
+                      <option value="none" className="bg-theme-surface">No Grouping</option>
+                    )}
                     <option value="namespace" className="bg-theme-surface">By Namespace</option>
                     <option value="app" className="bg-theme-surface">By App Label</option>
                   </select>
@@ -497,16 +568,16 @@ function AppInner() {
           />
         )}
 
-        {/* Events view */}
-        {mainView === 'events' && !detailResource && (
-          <EventsView
+        {/* Timeline view */}
+        {mainView === 'timeline' && !detailResource && (
+          <TimelineView
             namespace={namespace}
             onResourceClick={(kind, ns, name) => setDetailResource({ kind, namespace: ns, name })}
           />
         )}
 
-        {/* Resource detail page (drill-down from events) */}
-        {mainView === 'events' && detailResource && (
+        {/* Resource detail page (drill-down from timeline) */}
+        {mainView === 'timeline' && detailResource && (
           <ResourceDetailPage
             kind={detailResource.kind}
             namespace={detailResource.namespace}
@@ -526,7 +597,7 @@ function AppInner() {
             }}
           />
         )}
-      </div>
+      </div>}
 
       {/* Resource detail drawer (shared by topology and resources views) */}
       {selectedResource && (
@@ -570,12 +641,14 @@ function DockSpacer() {
   return <div style={{ height: isExpanded ? 300 : 36 }} />
 }
 
-// Main App component wrapped with DockProvider
+// Main App component wrapped with providers
 function App() {
   return (
-    <DockProvider>
-      <AppInner />
-    </DockProvider>
+    <ContextSwitchProvider>
+      <DockProvider>
+        <AppInner />
+      </DockProvider>
+    </ContextSwitchProvider>
   )
 }
 

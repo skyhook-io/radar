@@ -23,6 +23,45 @@ var upgrader = websocket.Upgrader{
 	},
 }
 
+// ExecSession tracks an active exec WebSocket connection
+type ExecSession struct {
+	ID        string `json:"id"`
+	Namespace string `json:"namespace"`
+	Pod       string `json:"pod"`
+	Container string `json:"container"`
+	conn      *websocket.Conn
+}
+
+// execSessionManager tracks active exec sessions
+type execSessionManager struct {
+	sessions map[string]*ExecSession
+	mu       sync.RWMutex
+	nextID   int
+}
+
+var execManager = &execSessionManager{
+	sessions: make(map[string]*ExecSession),
+}
+
+// GetExecSessionCount returns the number of active exec sessions
+func GetExecSessionCount() int {
+	execManager.mu.RLock()
+	defer execManager.mu.RUnlock()
+	return len(execManager.sessions)
+}
+
+// StopAllExecSessions closes all active exec WebSocket connections
+func StopAllExecSessions() {
+	execManager.mu.Lock()
+	defer execManager.mu.Unlock()
+
+	for id, session := range execManager.sessions {
+		log.Printf("Closing exec session %s (%s/%s)", id, session.Namespace, session.Pod)
+		session.conn.Close()
+		delete(execManager.sessions, id)
+	}
+}
+
 // TerminalMessage represents a message between client and server
 type TerminalMessage struct {
 	Type string `json:"type"` // "input", "resize", "output", "error"
@@ -83,7 +122,30 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 		log.Printf("WebSocket upgrade error: %v", err)
 		return
 	}
-	defer conn.Close()
+
+	// Register the session
+	execManager.mu.Lock()
+	execManager.nextID++
+	sessionID := fmt.Sprintf("exec-%d", execManager.nextID)
+	session := &ExecSession{
+		ID:        sessionID,
+		Namespace: namespace,
+		Pod:       podName,
+		Container: container,
+		conn:      conn,
+	}
+	execManager.sessions[sessionID] = session
+	execManager.mu.Unlock()
+	log.Printf("Exec session %s started (%s/%s)", sessionID, namespace, podName)
+
+	// Ensure cleanup on exit
+	defer func() {
+		execManager.mu.Lock()
+		delete(execManager.sessions, sessionID)
+		execManager.mu.Unlock()
+		conn.Close()
+		log.Printf("Exec session %s ended (%s/%s)", sessionID, namespace, podName)
+	}()
 
 	// Get K8s client and config
 	client := k8s.GetClient()

@@ -47,6 +47,7 @@ type ResourceChange struct {
 var (
 	resourceCache *ResourceCache
 	cacheOnce     sync.Once
+	cacheMu       sync.Mutex
 )
 
 // dropManagedFields reduces memory usage by removing heavy metadata
@@ -196,6 +197,25 @@ func InitResourceCache() error {
 // GetResourceCache returns the singleton cache instance
 func GetResourceCache() *ResourceCache {
 	return resourceCache
+}
+
+// ResetResourceCache stops and clears the resource cache
+// This must be called before ReinitResourceCache when switching contexts
+func ResetResourceCache() {
+	cacheMu.Lock()
+	defer cacheMu.Unlock()
+
+	if resourceCache != nil {
+		resourceCache.Stop()
+		resourceCache = nil
+	}
+	cacheOnce = sync.Once{}
+}
+
+// ReinitResourceCache reinitializes the resource cache after a context switch
+// Must call ResetResourceCache first
+func ReinitResourceCache() error {
+	return InitResourceCache()
 }
 
 // addChangeHandlers registers event handlers for change notifications

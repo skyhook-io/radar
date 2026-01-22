@@ -26,28 +26,34 @@ import (
 
 // Server is the Explorer HTTP server
 type Server struct {
-	router      *chi.Mux
-	broadcaster *SSEBroadcaster
-	port        int
-	devMode     bool
-	staticFS    fs.FS
+	router       *chi.Mux
+	broadcaster  *SSEBroadcaster
+	port         int
+	devMode      bool
+	staticFS     fs.FS
+	historyLimit int
+	historyPath  string
 }
 
 // Config holds server configuration
 type Config struct {
-	Port       int
-	DevMode    bool      // Serve frontend from filesystem instead of embedded
-	StaticFS   embed.FS  // Embedded frontend files
-	StaticRoot string    // Path within StaticFS
+	Port         int
+	DevMode      bool     // Serve frontend from filesystem instead of embedded
+	StaticFS     embed.FS // Embedded frontend files
+	StaticRoot   string   // Path within StaticFS
+	HistoryLimit int      // Max history entries (for context switch reinit)
+	HistoryPath  string   // History file path (for context switch reinit)
 }
 
 // New creates a new server instance
 func New(cfg Config) *Server {
 	s := &Server{
-		router:      chi.NewRouter(),
-		broadcaster: NewSSEBroadcaster(),
-		port:        cfg.Port,
-		devMode:     cfg.DevMode,
+		router:       chi.NewRouter(),
+		broadcaster:  NewSSEBroadcaster(),
+		port:         cfg.Port,
+		devMode:      cfg.DevMode,
+		historyLimit: cfg.HistoryLimit,
+		historyPath:  cfg.HistoryPath,
 	}
 
 	// Set up static file system
@@ -106,9 +112,16 @@ func (s *Server) setupRoutes() {
 		r.Delete("/portforwards/{id}", s.handleStopPortForward)
 		r.Get("/portforwards/available/{type}/{namespace}/{name}", s.handleGetAvailablePorts)
 
+		// Active sessions (for context switch confirmation)
+		r.Get("/sessions", s.handleGetSessions)
+
 		// Helm routes
 		helmHandlers := helm.NewHandlers()
 		helmHandlers.RegisterRoutes(r)
+
+		// Context routes
+		r.Get("/contexts", s.handleListContexts)
+		r.Post("/contexts/{name}", s.handleSwitchContext)
 	})
 
 	// Static files (frontend) - SPA fallback to index.html
@@ -749,6 +762,77 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Session management handlers
+
+// SessionCounts returns counts of active sessions
+type SessionCounts struct {
+	PortForwards int `json:"portForwards"`
+	ExecSessions int `json:"execSessions"`
+	Total        int `json:"total"`
+}
+
+func (s *Server) handleGetSessions(w http.ResponseWriter, r *http.Request) {
+	pf := GetPortForwardCount()
+	exec := GetExecSessionCount()
+	s.writeJSON(w, SessionCounts{
+		PortForwards: pf,
+		ExecSessions: exec,
+		Total:        pf + exec,
+	})
+}
+
+// StopAllSessions terminates all active port forwards and exec sessions
+func StopAllSessions() {
+	log.Println("Stopping all active sessions...")
+	StopAllPortForwards()
+	StopAllExecSessions()
+}
+
+// Context switching handlers
+
+func (s *Server) handleListContexts(w http.ResponseWriter, r *http.Request) {
+	contexts, err := k8s.GetAvailableContexts()
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, contexts)
+}
+
+func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+	if name == "" {
+		s.writeError(w, http.StatusBadRequest, "context name is required")
+		return
+	}
+
+	// Check if we're in-cluster mode
+	if k8s.IsInCluster() {
+		s.writeError(w, http.StatusBadRequest, "cannot switch context when running in-cluster")
+		return
+	}
+
+	// Stop all active sessions before switching
+	StopAllSessions()
+
+	// Perform the context switch
+	if err := k8s.PerformContextSwitch(name, s.historyLimit, s.historyPath); err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Return the new cluster info
+	info, err := k8s.GetClusterInfo(r.Context())
+	if err != nil {
+		// Context switched successfully but couldn't get info - still return success
+		s.writeJSON(w, map[string]string{"status": "ok", "context": name})
+		return
+	}
+
+	s.writeJSON(w, info)
 }
 
 // Helper methods

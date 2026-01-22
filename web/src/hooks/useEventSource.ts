@@ -8,14 +8,24 @@ interface UseEventSourceReturn {
   reconnect: () => void
 }
 
+interface UseEventSourceOptions {
+  onContextSwitchComplete?: () => void
+  onContextSwitchProgress?: (message: string) => void
+}
+
 const MAX_EVENTS = 100 // Keep last 100 events
 
-export function useEventSource(namespace: string, viewMode: ViewMode = 'full'): UseEventSourceReturn {
+export function useEventSource(
+  namespace: string,
+  viewMode: ViewMode = 'full',
+  options?: UseEventSourceOptions
+): UseEventSourceReturn {
   const [topology, setTopology] = useState<Topology | null>(null)
   const [events, setEvents] = useState<K8sEvent[]>([])
   const [connected, setConnected] = useState(false)
   const eventSourceRef = useRef<EventSource | null>(null)
   const reconnectTimeoutRef = useRef<number | null>(null)
+  const waitingForTopologyAfterSwitch = useRef(false)
 
   const connect = useCallback(() => {
     // Clean up existing connection
@@ -62,6 +72,11 @@ export function useEventSource(namespace: string, viewMode: ViewMode = 'full'): 
       try {
         const data = JSON.parse(event.data) as Topology
         setTopology(data)
+        // If we were waiting for topology after a context switch, signal completion
+        if (waitingForTopologyAfterSwitch.current) {
+          waitingForTopologyAfterSwitch.current = false
+          options?.onContextSwitchComplete?.()
+        }
       } catch (e) {
         console.error('Failed to parse topology:', e)
       }
@@ -81,6 +96,31 @@ export function useEventSource(namespace: string, viewMode: ViewMode = 'full'): 
     // Handle heartbeat (just log, keeps connection alive)
     es.addEventListener('heartbeat', () => {
       // Connection is alive
+    })
+
+    // Handle context switch progress events
+    es.addEventListener('context_switch_progress', (event) => {
+      try {
+        const data = JSON.parse(event.data) as { message: string }
+        options?.onContextSwitchProgress?.(data.message)
+      } catch (e) {
+        console.error('Failed to parse context_switch_progress event:', e)
+      }
+    })
+
+    // Handle context changed event - clear state while new data loads
+    es.addEventListener('context_changed', (event) => {
+      try {
+        const data = JSON.parse(event.data) as { context: string }
+        console.log('Context changed to:', data.context)
+        // Clear topology and events - new data will come via topology event
+        setTopology(null)
+        setEvents([])
+        // Mark that we're waiting for new topology data
+        waitingForTopologyAfterSwitch.current = true
+      } catch (e) {
+        console.error('Failed to parse context_changed event:', e)
+      }
     })
   }, [namespace, viewMode])
 

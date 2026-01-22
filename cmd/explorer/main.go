@@ -104,12 +104,17 @@ func main() {
 		log.Printf("Warning: Failed to initialize Helm client: %v", err)
 	}
 
+	// Register Helm reset/reinit functions for context switching
+	k8s.RegisterHelmFuncs(helm.ResetClient, helm.ReinitClient)
+
 	// Create and start server
 	cfg := server.Config{
-		Port:       *port,
-		DevMode:    *devMode,
-		StaticFS:   static.FS,
-		StaticRoot: "dist",
+		Port:         *port,
+		DevMode:      *devMode,
+		StaticFS:     static.FS,
+		StaticRoot:   "dist",
+		HistoryLimit: *historyLimit,
+		HistoryPath:  historyPath,
 	}
 
 	srv := server.New(cfg)

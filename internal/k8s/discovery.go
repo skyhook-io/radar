@@ -34,6 +34,7 @@ type ResourceDiscovery struct {
 var (
 	resourceDiscovery *ResourceDiscovery
 	discoveryOnce     sync.Once
+	discoveryMu       sync.Mutex
 )
 
 // coreAPIGroups are groups that ship with Kubernetes core
@@ -74,6 +75,22 @@ func InitResourceDiscovery() error {
 // GetResourceDiscovery returns the singleton discovery instance
 func GetResourceDiscovery() *ResourceDiscovery {
 	return resourceDiscovery
+}
+
+// ResetResourceDiscovery clears the resource discovery instance
+// This must be called before ReinitResourceDiscovery when switching contexts
+func ResetResourceDiscovery() {
+	discoveryMu.Lock()
+	defer discoveryMu.Unlock()
+
+	resourceDiscovery = nil
+	discoveryOnce = sync.Once{}
+}
+
+// ReinitResourceDiscovery reinitializes resource discovery after a context switch
+// Must call ResetResourceDiscovery first
+func ReinitResourceDiscovery() error {
+	return InitResourceDiscovery()
 }
 
 // refresh fetches all API resources from the cluster

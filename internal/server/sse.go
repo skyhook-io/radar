@@ -70,9 +70,48 @@ func (b *SSEBroadcaster) Start() {
 	// Build initial topology cache
 	b.initCachedTopology()
 
+	// Register for context switch notifications
+	b.registerContextSwitchCallback()
+
 	go b.run()
 	go b.watchResourceChanges()
 	go b.heartbeat()
+}
+
+// registerContextSwitchCallback registers for context switch notifications
+// When context switches, we clear the cached topology and notify clients
+func (b *SSEBroadcaster) registerContextSwitchCallback() {
+	// Register for progress updates during context switch
+	k8s.OnContextSwitchProgress(func(message string) {
+		b.Broadcast(SSEEvent{
+			Event: "context_switch_progress",
+			Data: map[string]any{
+				"message": message,
+			},
+		})
+	})
+
+	// Register for context switch completion
+	k8s.OnContextSwitch(func(newContext string) {
+		log.Printf("SSE broadcaster: context switched to %q, clearing cached topology", newContext)
+
+		// Clear cached topology
+		b.cachedTopologyMu.Lock()
+		b.cachedTopology = nil
+		b.cachedTopologyMu.Unlock()
+
+		// Broadcast context_changed event to all clients
+		b.Broadcast(SSEEvent{
+			Event: "context_changed",
+			Data: map[string]any{
+				"context": newContext,
+			},
+		})
+
+		// Broadcast the new topology so clients can complete the switch
+		// Run in goroutine to not block the context switch
+		go b.broadcastTopologyUpdate()
+	})
 }
 
 // initCachedTopology builds the initial topology cache
