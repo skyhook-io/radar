@@ -32,12 +32,14 @@ builds:
 
 archives:
   - id: default
-    format: tar.gz
+    formats:
+      - tar.gz
     name_template: >-
       {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
     format_overrides:
       - goos: windows
-        format: zip
+        formats:
+          - zip
     files:
       - LICENSE*
       - README*
@@ -46,7 +48,7 @@ checksum:
   name_template: 'checksums.txt'
 
 snapshot:
-  name_template: "{{ incpatch .Version }}-next"
+  version_template: "{{ incpatch .Version }}-next"
 
 changelog:
   sort: asc
@@ -72,30 +74,36 @@ release:
 
     ### Installation
 
-    **macOS (Apple Silicon):**
+    **Homebrew:**
+    ```bash
+    brew tap skyhook-io/skyhook-cli
+    brew install skyhook-explorer
+    ```
+
+    **Manual (macOS Apple Silicon):**
     ```bash
     curl -LO https://github.com/skyhook-io/explorer/releases/download/v{{.Version}}/explorer_{{.Version}}_darwin_arm64.tar.gz
     tar -xzf explorer_{{.Version}}_darwin_arm64.tar.gz
-    sudo mv kubectl-explore /usr/local/bin/
+    sudo mv kubectl-explorer /usr/local/bin/
     ```
 
-    **macOS (Intel):**
+    **Manual (macOS Intel):**
     ```bash
     curl -LO https://github.com/skyhook-io/explorer/releases/download/v{{.Version}}/explorer_{{.Version}}_darwin_amd64.tar.gz
     tar -xzf explorer_{{.Version}}_darwin_amd64.tar.gz
-    sudo mv kubectl-explore /usr/local/bin/
+    sudo mv kubectl-explorer /usr/local/bin/
     ```
 
-    **Linux (amd64):**
+    **Manual (Linux amd64):**
     ```bash
     curl -LO https://github.com/skyhook-io/explorer/releases/download/v{{.Version}}/explorer_{{.Version}}_linux_amd64.tar.gz
     tar -xzf explorer_{{.Version}}_linux_amd64.tar.gz
-    sudo mv kubectl-explore /usr/local/bin/
+    sudo mv kubectl-explorer /usr/local/bin/
     ```
 
-    Then run: `kubectl explore` or `kubectl-explore`
+    Then run: `kubectl explorer` or `skyhook-explorer`
 
-# Homebrew tap (publishes to skyhook-io/homebrew-skyhook-cli)
+# Homebrew formula (publishes to skyhook-io/homebrew-skyhook-cli)
 brews:
   - name: skyhook-explorer
     repository:
