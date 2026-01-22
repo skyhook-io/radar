@@ -4,7 +4,7 @@
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 
-Real-time Kubernetes cluster visualization and management in your browser.
+**Real-time Kubernetes cluster visualization in your browser.** Explore your cluster's topology, browse resources, track events, and manage Helm releases — all from a single, zero-install UI.
 
 <p align="center">
   <img src="docs/screenshot.png" alt="Skyhook Explorer Screenshot" width="800">
@@ -40,26 +40,39 @@ Real-time Kubernetes cluster visualization and management in your browser.
 - **Platform detection** - Automatic detection of GKE, EKS, AKS, minikube, kind
 - **CRD support** - Dynamic discovery and display of Custom Resource Definitions
 - **Zero cluster modification** - Read-only by default, no agents to install
+- **Dark/Light mode** - Easy on the eyes, day or night
+
+---
 
 ## Installation
 
-### Using kubectl plugin (Krew)
+### Quick Install (Recommended)
 
 ```bash
-kubectl krew install explorer
-kubectl explorer
+curl -fsSL https://raw.githubusercontent.com/skyhook-io/explorer/main/install.sh | bash
 ```
 
-### Using Homebrew (macOS)
+### Using Homebrew (macOS/Linux)
 
 ```bash
 brew install skyhook-io/tap/explorer
 skyhook-explorer
+
+# Also works as kubectl plugin
+kubectl explorer
 ```
 
 ### Direct Download
 
-Download the latest release from [GitHub Releases](https://github.com/skyhook-io/explorer/releases).
+Download the latest release for your platform from [GitHub Releases](https://github.com/skyhook-io/explorer/releases):
+
+| Platform | Architecture | Download |
+|----------|--------------|----------|
+| macOS | Apple Silicon (M1/M2/M3) | `explorer_*_darwin_arm64.tar.gz` |
+| macOS | Intel | `explorer_*_darwin_amd64.tar.gz` |
+| Linux | x86_64 | `explorer_*_linux_amd64.tar.gz` |
+| Linux | ARM64 | `explorer_*_linux_arm64.tar.gz` |
+| Windows | x86_64 | `explorer_*_windows_amd64.zip` |
 
 ### Docker
 
@@ -67,13 +80,24 @@ Download the latest release from [GitHub Releases](https://github.com/skyhook-io
 docker run -v ~/.kube:/root/.kube -p 9280:9280 ghcr.io/skyhook-io/explorer
 ```
 
-## Quick Start
+### Build from Source
 
 ```bash
-# Basic usage - opens browser automatically
+git clone https://github.com/skyhook-io/explorer.git
+cd explorer
+make build
+./explorer
+```
+
+---
+
+## Usage
+
+```bash
+# Basic usage — opens browser automatically
 skyhook-explorer
 
-# Specify namespace
+# Specify initial namespace
 skyhook-explorer --namespace production
 
 # Custom port
@@ -85,22 +109,113 @@ skyhook-explorer --kubeconfig /path/to/kubeconfig
 # Don't auto-open browser
 skyhook-explorer --no-browser
 
-# Enable persistent change history
+# Enable change history persistence
 skyhook-explorer --persist-history --history-limit 5000
 ```
 
-## CLI Options
+### CLI Flags
 
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--kubeconfig` | `~/.kube/config` | Path to kubeconfig file |
-| `--namespace` | _(all)_ | Initial namespace filter |
+| `--namespace` | (all) | Initial namespace filter |
 | `--port` | `9280` | Server port |
 | `--no-browser` | `false` | Don't auto-open browser |
-| `--dev` | `false` | Development mode |
-| `--persist-history` | `false` | Persist change history to file |
-| `--history-limit` | `1000` | Maximum changes to retain |
+| `--dev` | `false` | Development mode (serve frontend from filesystem) |
+| `--persist-history` | `false` | Persist change history to `~/.skyhook-explorer/history.jsonl` |
+| `--history-limit` | `1000` | Maximum changes to retain in history |
 | `--version` | | Show version and exit |
+
+---
+
+## View Modes
+
+Skyhook Explorer provides four main views to help you understand and manage your cluster:
+
+### 1. Topology View
+
+Interactive graph visualization showing how your Kubernetes resources are connected.
+
+<!-- TODO: Add screenshot -->
+<p align="center">
+  <img src="docs/screenshots/topology-view.png" alt="Topology View" width="800">
+  <br><em>Topology View — Visualize resource relationships</em>
+</p>
+
+**Features:**
+- Real-time updates via Server-Sent Events (SSE)
+- Two sub-modes: **Full** (complete resource hierarchy) and **Traffic** (network flow path)
+- Grouping options: by namespace, by app label, or ungrouped
+- Filter by resource kind (Pods, Deployments, Services, etc.)
+- Click any node to see detailed resource information
+- Collapsible groups for cleaner visualization
+- Auto-layout powered by ELK.js
+
+---
+
+### 2. Resources View
+
+Comprehensive resource browser with a familiar table interface.
+
+<!-- TODO: Add screenshot -->
+<p align="center">
+  <img src="docs/screenshots/resources-view.png" alt="Resources View" width="800">
+  <br><em>Resources View — Browse and filter all cluster resources</em>
+</p>
+
+**Features:**
+- Browse all Kubernetes resource types (including CRDs)
+- Smart columns per resource kind (e.g., Ready/Status for Pods, Replicas for Deployments)
+- Search by name or namespace
+- Filter by status, health, or problems (e.g., CrashLoopBackOff, ImagePullBackOff)
+- Sort by any column
+- Click any resource to open detail drawer with:
+  - YAML manifest
+  - Related resources
+  - Container logs (for Pods)
+  - Events
+
+---
+
+### 3. Events View
+
+Timeline of Kubernetes events and resource changes.
+
+<!-- TODO: Add screenshot -->
+<p align="center">
+  <img src="docs/screenshots/events-view.png" alt="Events View" width="800">
+  <br><em>Events View — Track cluster activity in real-time</em>
+</p>
+
+**Features:**
+- Unified timeline combining K8s Events and resource changes
+- Filter by event type (All, Warnings only)
+- Click any event to drill down into resource details
+- Recent activity summary showing most active resources
+- Resource change diffs showing what changed (replicas, images, etc.)
+- Real-time updates as new events occur
+
+---
+
+### 4. Helm View
+
+Manage Helm releases deployed in your cluster.
+
+<!-- TODO: Add screenshot -->
+<p align="center">
+  <img src="docs/screenshots/helm-view.png" alt="Helm View" width="800">
+  <br><em>Helm View — Manage your Helm deployments</em>
+</p>
+
+**Features:**
+- List all Helm releases across namespaces
+- View release status, chart version, and app version
+- Inspect release values (user-supplied and computed)
+- View release history and revisions
+- Navigate to resources created by the release
+- Filter by namespace
+
+---
 
 ## API Reference
 
@@ -158,98 +273,205 @@ The Explorer exposes a REST API for programmatic access:
 | `POST /api/helm/releases/{ns}/{name}/rollback` | Rollback release |
 | `DELETE /api/helm/releases/{ns}/{name}` | Uninstall release |
 
-See the [Wiki](../../wiki) for complete API documentation.
+---
 
 ## Architecture
 
 ```
-┌─────────────────┐              ┌───────────────────┐
-│    Browser      │◄──HTTP/SSE──►│  Explorer Binary  │
-│  (React + UI)   │◄──WebSocket─►│  (Go + Embedded)  │
-└─────────────────┘              └───────────────────┘
-                                         │
-                                ┌────────┴────────┐
-                                │   Kubernetes    │
-                                │   API Server    │
-                                └─────────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Your Machine                                │
+│                                                                     │
+│   ┌─────────────────┐              ┌───────────────────────────┐   │
+│   │     Browser     │◄────SSE─────►│    Explorer Binary        │   │
+│   │  (React + UI)   │◄───REST─────►│  (Go + Embedded Frontend) │   │
+│   │                 │◄──WebSocket──►│                           │   │
+│   └─────────────────┘              └───────────────────────────┘   │
+│                                              │                      │
+└──────────────────────────────────────────────│──────────────────────┘
+                                               │
+                                      ┌────────┴────────┐
+                                      │   Kubernetes    │
+                                      │   API Server    │
+                                      └─────────────────┘
 ```
 
-The Explorer uses Kubernetes SharedInformers for efficient, watch-based caching. Changes are pushed to the browser via Server-Sent Events (SSE) for real-time updates. Pod terminal access uses WebSocket connections for bidirectional communication.
+**Key design decisions:**
+
+- **SharedInformers** — Efficient watch-based caching with 50-100x latency improvement over direct API calls
+- **Server-Sent Events (SSE)** — Real-time push updates to the browser without polling
+- **WebSocket** — Bidirectional communication for pod terminal access
+- **Embedded Frontend** — Single binary deployment with `go:embed`
+- **Read-Only by Default** — No cluster modifications unless explicitly enabled
+
+---
 
 ## Supported Resources
 
-- **Workloads**: Deployments, DaemonSets, StatefulSets, ReplicaSets, Pods, Jobs, CronJobs
-- **Networking**: Services, Ingresses
-- **Configuration**: ConfigMaps, Secrets (names only)
-- **Storage**: PersistentVolumeClaims
-- **Autoscaling**: HorizontalPodAutoscalers
-- **Cluster**: Nodes, Namespaces
-- **Custom**: Any CRD via dynamic discovery
+| Category | Resources |
+|----------|-----------|
+| **Workloads** | Deployments, DaemonSets, StatefulSets, ReplicaSets, Pods, Jobs, CronJobs |
+| **Networking** | Services, Ingresses, NetworkPolicies, Endpoints |
+| **Configuration** | ConfigMaps, Secrets (names only, values hidden) |
+| **Storage** | PersistentVolumeClaims, PersistentVolumes, StorageClasses |
+| **Autoscaling** | HorizontalPodAutoscalers |
+| **Cluster** | Nodes, Namespaces, ServiceAccounts, Events |
+| **CRDs** | Any Custom Resource Definition in your cluster |
+
+---
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Escape` | Close panel/modal |
+| `?` | Show keyboard shortcuts |
+| `/` | Focus search |
+| `r` | Refresh topology |
+| `f` | Fit view to screen |
+| `1` | Traffic view |
+| `2` | Resources view |
+
+**Navigation:** Pan (drag), Zoom (scroll), Select (click), Multi-select (Shift+click)
+
+---
 
 ## Development
 
 ### Prerequisites
 
-- Go 1.22+
-- Node.js 20+
-- npm
+- **Go 1.22+** — Backend server
+- **Node.js 20+** — Frontend build
+- **npm** — Package management
+- **kubectl** — Kubernetes CLI (configured with cluster access)
 
-### Build from Source
+### Project Structure
+
+```
+explorer/
+├── cmd/explorer/          # CLI entry point
+├── internal/
+│   ├── k8s/              # Kubernetes client, caching, informers
+│   ├── server/           # HTTP server, REST API, SSE
+│   ├── topology/         # Graph construction logic
+│   ├── helm/             # Helm client integration
+│   └── static/           # Embedded frontend (built)
+├── web/                   # React frontend source
+│   ├── src/
+│   │   ├── api/          # API client + React Query hooks
+│   │   ├── components/   # React components
+│   │   │   ├── topology/   # Graph visualization
+│   │   │   ├── resources/  # Resource browser
+│   │   │   ├── events/     # Events timeline
+│   │   │   └── helm/       # Helm management
+│   │   ├── hooks/        # Custom React hooks
+│   │   └── types.ts      # TypeScript types
+│   └── package.json
+├── deploy/               # Docker, Helm chart, Krew manifest
+├── Makefile              # Build commands
+└── README.md
+```
+
+### Quick Start
 
 ```bash
-# Clone the repository
+# Clone the repo
 git clone https://github.com/skyhook-io/explorer.git
 cd explorer
 
-# Build everything (frontend + backend)
-make build
+# Install dependencies
+make deps
 
-# Run
-./explorer
+# Start development (two terminals)
+# Terminal 1: Frontend with hot reload
+make watch-frontend
+
+# Terminal 2: Backend with hot reload
+make watch-backend
 ```
 
-### Development Mode
+Frontend runs on `http://localhost:9273` (Vite dev server)
+Backend runs on `http://localhost:9280` (Go server)
 
-Run backend and frontend separately for hot reload:
+The frontend proxies API calls to the backend automatically.
+
+### Make Commands
 
 ```bash
-# Terminal 1: Backend with hot reload (port 9280)
-make watch-backend
+# Build
+make build            # Build everything (frontend + embedded binary)
+make frontend         # Build frontend only
+make backend          # Build backend only (requires frontend built)
+make install          # Build and install to /usr/local/bin
 
-# Terminal 2: Frontend with hot reload (port 9273)
-make watch-frontend
+# Development
+make watch-frontend   # Vite dev server with HMR (port 9273)
+make watch-backend    # Go with air hot reload (port 9280)
+make restart          # Rebuild and restart server
+make restart-fe       # Frontend-only rebuild (faster)
+
+# Run
+make run              # Run built binary
+make run-dev          # Run in dev mode (frontend from filesystem)
+
+# Quality
+make test             # Run Go tests
+make lint             # Run Go linter
+make tsc              # TypeScript type check
+make fmt              # Format Go code
+
+# Utilities
+make deps             # Install all dependencies
+make install-tools    # Install dev tools (air)
+make clean            # Clean build artifacts
+make kill             # Kill running server on port 9280
+make docker           # Build Docker image
+
+# Help
+make help             # Show all available commands
 ```
 
-The Vite dev server proxies `/api` requests to the backend automatically.
+### Building for Production
 
-### Makefile Targets
+```bash
+# Full production build
+make build
 
-| Target | Description |
-|--------|-------------|
-| `make build` | Build frontend + embedded binary |
-| `make frontend` | Build frontend only |
-| `make backend` | Build backend only |
-| `make watch-frontend` | Vite dev server (port 9273) |
-| `make watch-backend` | Go with Air hot reload (port 9280) |
-| `make test` | Run all tests |
-| `make docker` | Build Docker image |
+# This produces ./explorer binary with:
+# - Frontend embedded via go:embed
+# - Optimized and minified assets
+# - Single portable binary
+```
 
-## Documentation
+### Running Tests
 
-- [Wiki Home](../../wiki) - Full documentation
-- [Getting Started](../../wiki/Getting-Started) - Installation and first steps
-- [User Guide](../../wiki/User-Guide) - Using the web interface
-- [API Reference](../../wiki/API-Reference) - Complete API documentation
-- [Development Guide](../../wiki/Development) - Contributing and local setup
+```bash
+# Go tests
+make test
 
-## License
+# Type check frontend
+make tsc
+```
 
-Apache 2.0 - see [LICENSE](LICENSE)
+---
 
 ## Contributing
 
-Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details.
+Contributions are welcome! Please read our [Contributing Guide](CONTRIBUTING.md) for details on:
+
+- Code of Conduct
+- Development workflow
+- Pull request process
+- Coding standards
+
+---
+
+## License
+
+Apache 2.0 — see [LICENSE](LICENSE)
+
+---
 
 ## Related Projects
 
-- [Skyhook](https://skyhook.io) - The platform for Kubernetes made simple
+- [Skyhook](https://skyhook.io) — The platform that makes Kubernetes simple
+- [skyhook-connector](https://github.com/skyhook-dev/skyhook-connector) — In-cluster agent for Skyhook platform

@@ -1,0 +1,10 @@
+# Screenshot placeholders
+
+Add the following screenshots:
+- topology-view.png - Topology graph visualization
+- resources-view.png - Resource browser table view
+- events-view.png - Events timeline view
+- helm-view.png - Helm releases management
+
+Also add to docs/:
+- screenshot.png - Main hero screenshot for README

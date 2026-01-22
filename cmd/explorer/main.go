@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -8,12 +9,16 @@ import (
 	"os/exec"
 	"os/signal"
 	"runtime"
+	"strings"
 	"syscall"
+	"time"
 
 	"github.com/skyhook-io/skyhook-explorer/internal/helm"
 	"github.com/skyhook-io/skyhook-explorer/internal/k8s"
 	"github.com/skyhook-io/skyhook-explorer/internal/server"
 	"github.com/skyhook-io/skyhook-explorer/internal/static"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/klog/v2"
 )
 
 var (
@@ -37,6 +42,13 @@ func main() {
 		os.Exit(0)
 	}
 
+	// Suppress verbose client-go logs (reflector errors, traces, etc.)
+	klog.InitFlags(nil)
+	_ = flag.Set("v", "0")
+	_ = flag.Set("logtostderr", "false")
+	_ = flag.Set("alsologtostderr", "false")
+	klog.SetOutput(os.Stderr)
+
 	log.Printf("Skyhook Explorer %s starting...", version)
 
 	// Initialize K8s client
@@ -51,6 +63,12 @@ func main() {
 		log.Printf("Using kubeconfig: %s", kubepath)
 	} else {
 		log.Printf("Using in-cluster config")
+	}
+
+	// Preflight check: verify cluster connectivity before starting informers
+	if err := checkClusterAccess(); err != nil {
+		// Error already printed with helpful message
+		os.Exit(1)
 	}
 
 	// Initialize change history (before resource cache so it can receive events)
@@ -147,4 +165,115 @@ func openBrowser(url string) {
 		log.Printf("Failed to open browser: %v", err)
 		log.Printf("Please open manually: %s", url)
 	}
+}
+
+// checkClusterAccess verifies connectivity to the Kubernetes cluster before starting informers.
+// Returns a user-friendly error if authentication or connection fails.
+func checkClusterAccess() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	clientset := k8s.GetClient()
+	if clientset == nil {
+		return fmt.Errorf("kubernetes client not initialized")
+	}
+
+	// Try to list namespaces as a basic connectivity check
+	_, err := clientset.CoreV1().Namespaces().List(ctx, metav1.ListOptions{Limit: 1})
+	if err == nil {
+		return nil
+	}
+
+	errStr := err.Error()
+	errLower := strings.ToLower(errStr)
+
+	// Detect authentication/authorization errors
+	if strings.Contains(errLower, "unauthorized") ||
+		strings.Contains(errLower, "forbidden") ||
+		strings.Contains(errLower, "authentication required") ||
+		strings.Contains(errLower, "token has expired") ||
+		strings.Contains(errLower, "credentials") ||
+		strings.Contains(errLower, "exec plugin") ||
+		strings.Contains(errLower, "gke-gcloud-auth-plugin") {
+
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "✗ Cluster authentication failed")
+		fmt.Fprintln(os.Stderr, "")
+
+		// Detect cloud provider and give specific hints
+		kubepath := k8s.GetKubeconfigPath()
+		if strings.Contains(errLower, "gke") || strings.Contains(errLower, "gcloud") ||
+			strings.Contains(kubepath, "gke") {
+			fmt.Fprintln(os.Stderr, "  This looks like a GKE cluster. Try:")
+			fmt.Fprintln(os.Stderr, "    gcloud container clusters get-credentials <cluster-name> --region <region>")
+		} else if strings.Contains(errLower, "eks") || strings.Contains(kubepath, "eks") {
+			fmt.Fprintln(os.Stderr, "  This looks like an EKS cluster. Try:")
+			fmt.Fprintln(os.Stderr, "    aws eks update-kubeconfig --name <cluster-name> --region <region>")
+		} else if strings.Contains(errLower, "aks") || strings.Contains(kubepath, "aks") {
+			fmt.Fprintln(os.Stderr, "  This looks like an AKS cluster. Try:")
+			fmt.Fprintln(os.Stderr, "    az aks get-credentials --name <cluster-name> --resource-group <rg>")
+		} else {
+			fmt.Fprintln(os.Stderr, "  Your cluster credentials may have expired or are invalid.")
+			fmt.Fprintln(os.Stderr, "  Refresh your kubeconfig or re-authenticate to your cluster.")
+		}
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintf(os.Stderr, "  Context: %s\n", getCurrentContext())
+		fmt.Fprintln(os.Stderr, "")
+		return fmt.Errorf("authentication failed")
+	}
+
+	// Detect connection errors
+	if strings.Contains(errLower, "connection refused") ||
+		strings.Contains(errLower, "no such host") ||
+		strings.Contains(errLower, "i/o timeout") ||
+		strings.Contains(errLower, "context deadline exceeded") ||
+		strings.Contains(errLower, "dial tcp") ||
+		strings.Contains(errLower, "tls handshake timeout") {
+
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "✗ Cannot connect to Kubernetes cluster")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintln(os.Stderr, "  Possible causes:")
+		fmt.Fprintln(os.Stderr, "    • Cluster is not running or unreachable")
+		fmt.Fprintln(os.Stderr, "    • VPN required but not connected")
+		fmt.Fprintln(os.Stderr, "    • Firewall blocking the connection")
+		fmt.Fprintln(os.Stderr, "    • kubeconfig points to wrong cluster")
+		fmt.Fprintln(os.Stderr, "")
+		fmt.Fprintf(os.Stderr, "  Context: %s\n", getCurrentContext())
+		if cluster := k8s.GetClusterName(); cluster != "" {
+			fmt.Fprintf(os.Stderr, "  Cluster: %s\n", cluster)
+		}
+		fmt.Fprintln(os.Stderr, "")
+		return fmt.Errorf("connection failed")
+	}
+
+	// Generic error
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintln(os.Stderr, "✗ Failed to access Kubernetes cluster")
+	fmt.Fprintln(os.Stderr, "")
+	fmt.Fprintf(os.Stderr, "  Error: %s\n", truncateError(errStr, 200))
+	fmt.Fprintln(os.Stderr, "")
+	return fmt.Errorf("cluster access failed")
+}
+
+// getCurrentContext returns the current kubeconfig context name
+func getCurrentContext() string {
+	if ctx := k8s.GetContextName(); ctx != "" {
+		return ctx
+	}
+	// Fallback to kubectl if k8s client doesn't have it
+	cmd := exec.Command("kubectl", "config", "current-context")
+	out, err := cmd.Output()
+	if err != nil {
+		return "(unknown)"
+	}
+	return strings.TrimSpace(string(out))
+}
+
+// truncateError shortens an error message if it's too long
+func truncateError(s string, maxLen int) string {
+	if len(s) <= maxLen {
+		return s
+	}
+	return s[:maxLen] + "..."
 }
