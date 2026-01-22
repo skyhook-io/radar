@@ -411,3 +411,29 @@ body {
   background-color: rgba(6, 182, 212, 0.2);
   color: #22d3ee; /* cyan-400 */
 }
+
+/* ============================================
+   XTERM TERMINAL STYLES
+   ============================================ */
+
+/* Override any potential centering and ensure proper layout */
+.xterm,
+.xterm-viewport,
+.xterm-screen {
+  text-align: left !important;
+  margin: 0 !important;
+}
+
+/* Prevent xterm from growing beyond its container */
+.xterm {
+  position: absolute !important;
+  top: 0 !important;
+  left: 0 !important;
+  right: 0 !important;
+  bottom: 0 !important;
+  overflow: hidden !important;
+}
+
+.xterm-screen canvas {
+  margin: 0 !important;
+}

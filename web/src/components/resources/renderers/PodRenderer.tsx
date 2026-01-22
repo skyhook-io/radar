@@ -1,9 +1,9 @@
-import { useState } from 'react'
-import { Server, HardDrive, FileText, ChevronDown, ChevronRight } from 'lucide-react'
+import { Server, HardDrive, Terminal as TerminalIcon, FileText } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler } from '../drawer-components'
 import { formatResources } from '../resource-utils'
-import { LogsViewer } from '../../logs/LogsViewer'
+import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
+import { useOpenTerminal, useOpenLogs } from '../../dock'
 
 interface PodRendererProps {
   data: any
@@ -14,6 +14,36 @@ interface PodRendererProps {
 export function PodRenderer({ data, onCopy, copied }: PodRendererProps) {
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
+
+  const namespace = data.metadata?.namespace
+  const podName = data.metadata?.name
+  const isRunning = data.status?.phase === 'Running'
+
+  const openTerminal = useOpenTerminal()
+  const openLogs = useOpenLogs()
+
+  const handleOpenTerminal = (containerName?: string) => {
+    const container = containerName || containers[0]?.name
+    if (namespace && podName && container) {
+      openTerminal({
+        namespace,
+        podName,
+        containerName: container,
+        containers: containers.map((c: { name: string }) => c.name),
+      })
+    }
+  }
+
+  const handleOpenLogs = (containerName?: string) => {
+    if (namespace && podName) {
+      openLogs({
+        namespace,
+        podName,
+        containers: containers.map((c: { name: string }) => c.name),
+        containerName,
+      })
+    }
+  }
 
   return (
     <>
@@ -44,6 +74,22 @@ export function PodRenderer({ data, onCopy, copied }: PodRendererProps) {
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-theme-text-primary">{container.name}</span>
                   <div className="flex items-center gap-2">
+                    {stateKey === 'running' && (
+                      <button
+                        onClick={() => handleOpenTerminal(container.name)}
+                        className="p-1 text-slate-400 hover:text-blue-400 hover:bg-slate-600/50 rounded transition-colors"
+                        title={`Open terminal in ${container.name}`}
+                      >
+                        <TerminalIcon className="w-4 h-4" />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => handleOpenLogs(container.name)}
+                      className="p-1 text-slate-400 hover:text-blue-400 hover:bg-slate-600/50 rounded transition-colors"
+                      title={`View logs for ${container.name}`}
+                    >
+                      <FileText className="w-4 h-4" />
+                    </button>
                     <span className={clsx(
                       'px-2 py-0.5 text-xs rounded',
                       isReady ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
@@ -67,8 +113,20 @@ export function PodRenderer({ data, onCopy, copied }: PodRendererProps) {
                       Restarts: {restarts}
                     </div>
                   )}
-                  {container.ports && (
-                    <div>Ports: {container.ports.map((p: any) => `${p.containerPort}/${p.protocol || 'TCP'}`).join(', ')}</div>
+                  {container.ports && container.ports.length > 0 && (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span>Ports:</span>
+                      {container.ports.map((p: any, pi: number) => (
+                        <PortForwardInlineButton
+                          key={pi}
+                          namespace={namespace}
+                          podName={podName}
+                          port={p.containerPort}
+                          protocol={p.protocol || 'TCP'}
+                          disabled={!isRunning}
+                        />
+                      ))}
+                    </div>
                   )}
                   {(container.resources?.requests || container.resources?.limits) && (
                     <div className="flex gap-4 mt-1">
@@ -87,49 +145,8 @@ export function PodRenderer({ data, onCopy, copied }: PodRendererProps) {
         </div>
       </Section>
 
-      {/* Logs */}
-      <LogsSection
-        namespace={data.metadata?.namespace}
-        podName={data.metadata?.name}
-        containers={containers.map((c: any) => c.name)}
-      />
-
       {/* Conditions */}
       <ConditionsSection conditions={data.status?.conditions} />
     </>
-  )
-}
-
-// Collapsible Logs Section
-function LogsSection({ namespace, podName, containers }: { namespace: string; podName: string; containers: string[] }) {
-  const [expanded, setExpanded] = useState(false)
-
-  if (!namespace || !podName || containers.length === 0) return null
-
-  return (
-    <div className="border border-theme-border/50 rounded-lg overflow-hidden">
-      <button
-        onClick={() => setExpanded(!expanded)}
-        className="flex items-center gap-2 w-full px-3 py-2 text-left hover:bg-theme-elevated/30 transition-colors"
-      >
-        {expanded ? (
-          <ChevronDown className="w-4 h-4 text-theme-text-secondary" />
-        ) : (
-          <ChevronRight className="w-4 h-4 text-theme-text-secondary" />
-        )}
-        <FileText className="w-4 h-4 text-theme-text-secondary" />
-        <span className="text-sm font-medium text-theme-text-primary">Logs</span>
-      </button>
-
-      {expanded && (
-        <div className="h-80 border-t border-theme-border/50">
-          <LogsViewer
-            namespace={namespace}
-            podName={podName}
-            containers={containers}
-          />
-        </div>
-      )}
-    </div>
   )
 }

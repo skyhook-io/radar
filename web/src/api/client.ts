@@ -244,6 +244,80 @@ export function createLogStream(
 }
 
 // ============================================================================
+// Port Forwarding
+// ============================================================================
+
+export interface AvailablePort {
+  port: number
+  protocol: string
+  containerName?: string
+  name?: string
+}
+
+export function useAvailablePorts(type: 'pod' | 'service', namespace: string, name: string) {
+  return useQuery<{ ports: AvailablePort[] }>({
+    queryKey: ['available-ports', type, namespace, name],
+    queryFn: () => fetchJSON(`/portforwards/available/${type}/${namespace}/${name}`),
+    enabled: Boolean(namespace && name),
+    staleTime: 30000,
+  })
+}
+
+// ============================================================================
+// Resource Update/Delete mutations
+// ============================================================================
+
+// Update a resource with new YAML
+export function useUpdateResource() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ kind, namespace, name, yaml }: { kind: string; namespace: string; name: string; yaml: string }) => {
+      const response = await fetch(`${API_BASE}/resources/${kind}/${namespace}/${name}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'text/plain' },
+        body: yaml,
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json()
+    },
+    onSuccess: (_, variables) => {
+      // Invalidate queries to refresh data
+      queryClient.invalidateQueries({ queryKey: ['resource', variables.kind, variables.namespace, variables.name] })
+      queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
+      queryClient.invalidateQueries({ queryKey: ['topology'] })
+    },
+  })
+}
+
+// Delete a resource
+export function useDeleteResource() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ kind, namespace, name }: { kind: string; namespace: string; name: string }) => {
+      const response = await fetch(`${API_BASE}/resources/${kind}/${namespace}/${name}`, {
+        method: 'DELETE',
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      // DELETE returns 204 No Content, no body to parse
+      return { success: true }
+    },
+    onSuccess: (_, variables) => {
+      // Invalidate queries to refresh data
+      queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
+      queryClient.invalidateQueries({ queryKey: ['topology'] })
+    },
+  })
+}
+
+// ============================================================================
 // Helm API hooks
 // ============================================================================
 

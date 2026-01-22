@@ -8,6 +8,8 @@ import { ResourceDetailDrawer } from './components/resources/ResourceDetailDrawe
 import { ResourceDetailPage } from './components/resource/ResourceDetailPage'
 import { HelmView } from './components/helm/HelmView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
+import { PortForwardManager, usePortForwardCount } from './components/portforward/PortForwardManager'
+import { DockProvider, BottomDock, useDock } from './components/dock'
 import { useEventSource } from './hooks/useEventSource'
 import { useClusterInfo, useNamespaces } from './api/client'
 import { ChevronDown, RefreshCw, FolderTree, Network, List, Clock, Package, Sun, Moon } from 'lucide-react'
@@ -93,7 +95,7 @@ function getViewFromPath(pathname: string): MainView {
   return 'topology'
 }
 
-function App() {
+function AppInner() {
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
@@ -491,6 +493,7 @@ function App() {
             onResourceClick={(kind, ns, name) => {
               setSelectedResource({ kind, namespace: ns, name })
             }}
+            onKindChange={() => setSelectedResource(null)}
           />
         )}
 
@@ -547,7 +550,32 @@ function App() {
           }}
         />
       )}
+
+      {/* Port Forward Manager */}
+      <PortForwardManagerWrapper />
+
+      {/* Bottom Dock for Terminal/Logs */}
+      <BottomDock />
+
+      {/* Spacer for dock */}
+      <DockSpacer />
     </div>
+  )
+}
+
+// Spacer component that adds padding when dock is open
+function DockSpacer() {
+  const { tabs, isExpanded } = useDock()
+  if (tabs.length === 0) return null
+  return <div style={{ height: isExpanded ? 300 : 36 }} />
+}
+
+// Main App component wrapped with DockProvider
+function App() {
+  return (
+    <DockProvider>
+      <AppInner />
+    </DockProvider>
   )
 }
 
@@ -577,6 +605,21 @@ function ThemeToggle() {
         <Moon className="w-4 h-4" />
       )}
     </button>
+  )
+}
+
+// Wrapper component that conditionally renders PortForwardManager
+function PortForwardManagerWrapper() {
+  const [minimized, setMinimized] = useState(false)
+  const count = usePortForwardCount()
+
+  if (count === 0) return null
+
+  return (
+    <PortForwardManager
+      minimized={minimized}
+      onToggleMinimize={() => setMinimized(!minimized)}
+    />
   )
 }
 

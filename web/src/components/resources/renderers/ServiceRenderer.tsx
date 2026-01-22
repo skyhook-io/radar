@@ -1,5 +1,6 @@
 import { Globe } from 'lucide-react'
 import { Section, PropertyList, Property, KeyValueBadgeList, CopyHandler } from '../drawer-components'
+import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 
 interface ServiceRendererProps {
   data: any
@@ -11,6 +12,8 @@ export function ServiceRenderer({ data, onCopy, copied }: ServiceRendererProps) 
   const spec = data.spec || {}
   const ports = spec.ports || []
   const lbIngress = data.status?.loadBalancer?.ingress || []
+  const namespace = data.metadata?.namespace
+  const serviceName = data.metadata?.name
 
   return (
     <>
@@ -41,7 +44,14 @@ export function ServiceRenderer({ data, onCopy, copied }: ServiceRendererProps) 
             <div key={i} className="bg-theme-elevated/30 rounded p-2 text-sm">
               <div className="flex items-center justify-between">
                 <span className="text-theme-text-primary font-medium">{port.name || `port-${i}`}</span>
-                <span className="text-theme-text-secondary">{port.protocol || 'TCP'}</span>
+                <div className="flex items-center gap-2">
+                  <PortForwardInlineButton
+                    namespace={namespace}
+                    serviceName={serviceName}
+                    port={port.port}
+                    protocol={port.protocol || 'TCP'}
+                  />
+                </div>
               </div>
               <div className="text-xs text-theme-text-secondary mt-1">
                 {port.port} {port.targetPort !== port.port && `→ ${port.targetPort}`}

@@ -327,6 +327,7 @@ interface ResourcesViewProps {
   namespace: string
   selectedResource?: SelectedResource | null
   onResourceClick?: (kind: string, namespace: string, name: string) => void
+  onKindChange?: () => void // Called when user changes resource type in sidebar
 }
 
 // Default selected kind
@@ -361,7 +362,7 @@ function getInitialFiltersFromURL() {
 // Sort state type
 type SortDirection = 'asc' | 'desc' | null
 
-export function ResourcesView({ namespace, selectedResource, onResourceClick }: ResourcesViewProps) {
+export function ResourcesView({ namespace, selectedResource, onResourceClick, onKindChange }: ResourcesViewProps) {
   const initialFilters = getInitialFiltersFromURL()
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(getInitialKindFromURL)
   const [searchTerm, setSearchTerm] = useState(initialFilters.search)
@@ -907,7 +908,10 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
                           resource={resource}
                           count={counts?.[resource.kind] ?? 0}
                           isSelected={selectedKind.kind === resource.kind}
-                          onClick={() => setSelectedKind({ name: resource.name, kind: resource.kind, group: resource.group })}
+                          onClick={() => {
+                            setSelectedKind({ name: resource.name, kind: resource.kind, group: resource.group })
+                            onKindChange?.()
+                          }}
                         />
                       ))}
                     </div>
@@ -929,7 +933,10 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick }: 
               return (
                 <button
                   key={type.kind}
-                  onClick={() => setSelectedKind({ name: type.kind, kind: type.label, group: '' })}
+                  onClick={() => {
+                    setSelectedKind({ name: type.kind, kind: type.label, group: '' })
+                    onKindChange?.()
+                  }}
                   className={clsx(
                     'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors',
                     isSelected

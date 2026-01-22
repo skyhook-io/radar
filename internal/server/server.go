@@ -5,6 +5,7 @@ import (
 	"embed"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"log"
 	"net/http"
@@ -72,7 +73,7 @@ func (s *Server) setupRoutes() {
 	// CORS for development
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:*", "http://127.0.0.1:*"},
-		AllowedMethods:   []string{"GET", "POST", "OPTIONS"},
+		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
 		AllowedHeaders:   []string{"Accept", "Content-Type"},
 		AllowCredentials: true,
 	}))
@@ -86,6 +87,8 @@ func (s *Server) setupRoutes() {
 		r.Get("/api-resources", s.handleAPIResources)
 		r.Get("/resources/{kind}", s.handleListResources)
 		r.Get("/resources/{kind}/{namespace}/{name}", s.handleGetResource)
+		r.Put("/resources/{kind}/{namespace}/{name}", s.handleUpdateResource)
+		r.Delete("/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)
 		r.Get("/events", s.handleEvents)
 		r.Get("/events/stream", s.broadcaster.HandleSSE)
 		r.Get("/changes", s.handleChanges)
@@ -94,18 +97,55 @@ func (s *Server) setupRoutes() {
 		r.Get("/pods/{namespace}/{name}/logs", s.handlePodLogs)
 		r.Get("/pods/{namespace}/{name}/logs/stream", s.handlePodLogsStream)
 
+		// Pod exec (terminal)
+		r.Get("/pods/{namespace}/{name}/exec", s.handlePodExec)
+
+		// Port forwarding
+		r.Get("/portforwards", s.handleListPortForwards)
+		r.Post("/portforwards", s.handleStartPortForward)
+		r.Delete("/portforwards/{id}", s.handleStopPortForward)
+		r.Get("/portforwards/available/{type}/{namespace}/{name}", s.handleGetAvailablePorts)
+
 		// Helm routes
 		helmHandlers := helm.NewHandlers()
 		helmHandlers.RegisterRoutes(r)
 	})
 
-	// Static files (frontend)
+	// Static files (frontend) - SPA fallback to index.html
 	if s.staticFS != nil {
-		r.Handle("/*", http.FileServer(http.FS(s.staticFS)))
+		r.Handle("/*", spaHandler(http.FS(s.staticFS)))
 	} else if s.devMode {
 		// In dev mode, serve from web/dist
-		r.Handle("/*", http.FileServer(http.Dir("web/dist")))
+		r.Handle("/*", spaHandler(http.Dir("web/dist")))
 	}
+}
+
+// spaHandler serves static files, falling back to index.html for SPA routing
+func spaHandler(fsys http.FileSystem) http.Handler {
+	fileServer := http.FileServer(fsys)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path := r.URL.Path
+
+		// Try to open the file
+		f, err := fsys.Open(path)
+		if err != nil {
+			// File doesn't exist - serve index.html for SPA routing
+			r.URL.Path = "/"
+			fileServer.ServeHTTP(w, r)
+			return
+		}
+		defer f.Close()
+
+		// Check if it's a directory (and not the root)
+		stat, err := f.Stat()
+		if err != nil || (stat.IsDir() && path != "/") {
+			// For directories without index.html, serve root index.html
+			r.URL.Path = "/"
+		}
+
+		fileServer.ServeHTTP(w, r)
+	})
 }
 
 // Start starts the server
@@ -653,6 +693,62 @@ func (s *Server) handleChangeChildren(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, children)
+}
+
+// handleUpdateResource updates a Kubernetes resource from YAML
+func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
+	kind := chi.URLParam(r, "kind")
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	// Read request body (YAML content)
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "failed to read request body")
+		return
+	}
+	defer r.Body.Close()
+
+	// Update the resource
+	result, err := k8s.UpdateResource(r.Context(), k8s.UpdateResourceOptions{
+		Kind:      kind,
+		Namespace: namespace,
+		Name:      name,
+		YAML:      string(body),
+	})
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			s.writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "invalid YAML") || strings.Contains(err.Error(), "mismatch") {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, result)
+}
+
+// handleDeleteResource deletes a Kubernetes resource
+func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
+	kind := chi.URLParam(r, "kind")
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	err := k8s.DeleteResource(r.Context(), kind, namespace, name)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			s.writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // Helper methods

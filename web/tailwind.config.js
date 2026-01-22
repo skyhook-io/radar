@@ -66,6 +66,17 @@ export default {
         'theme-md': 'var(--shadow-md)',
         'theme-lg': 'var(--shadow-lg)',
       },
+      animation: {
+        'fade-in-out': 'fadeInOut 2s ease-in-out forwards',
+      },
+      keyframes: {
+        fadeInOut: {
+          '0%': { opacity: '0', transform: 'translateY(-8px)' },
+          '15%': { opacity: '1', transform: 'translateY(0)' },
+          '85%': { opacity: '1', transform: 'translateY(0)' },
+          '100%': { opacity: '0', transform: 'translateY(-8px)' },
+        },
+      },
       ringColor: {
         'accent': 'var(--accent)',
       },
