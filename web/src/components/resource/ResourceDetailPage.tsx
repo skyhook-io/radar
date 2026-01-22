@@ -25,7 +25,7 @@ import {
 } from 'lucide-react'
 import type { TimelineEvent, TimeRange, ResourceRef, Relationships } from '../../types'
 import { useChanges, useResourceWithRelationships, usePodLogs } from '../../api/client'
-import { DiffViewer } from '../events/DiffViewer'
+import { DiffViewer } from '../timeline/DiffViewer'
 
 // Known noisy resources that update constantly
 const NOISY_NAME_PATTERNS = [
@@ -65,7 +65,7 @@ function isProblematicEvent(event: TimelineEvent): boolean {
   return false
 }
 
-type TabType = 'overview' | 'pods' | 'events' | 'yaml'
+type TabType = 'overview' | 'pods' | 'activity' | 'yaml'
 
 interface ResourceDetailPageProps {
   kind: string
@@ -200,9 +200,9 @@ export function ResourceDetailPage({
               <span className="ml-1 px-1.5 py-0.5 text-xs bg-theme-elevated rounded">{pods.length}</span>
             </TabButton>
           )}
-          <TabButton active={activeTab === 'events'} onClick={() => setActiveTab('events')}>
+          <TabButton active={activeTab === 'activity'} onClick={() => setActiveTab('activity')}>
             <Clock className="w-4 h-4" />
-            Events
+            Activity
             {resourceEvents.length > 0 && (
               <span className="ml-1 px-1.5 py-0.5 text-xs bg-theme-elevated rounded">{resourceEvents.length}</span>
             )}
@@ -234,8 +234,8 @@ export function ResourceDetailPage({
             onSelectPod={setSelectedPod}
           />
         )}
-        {activeTab === 'events' && (
-          <EventsTab
+        {activeTab === 'activity' && (
+          <ActivityTab
             events={resourceEvents}
             isLoading={eventsLoading}
             showRoutine={showRoutineEvents}
@@ -954,7 +954,7 @@ function PodLogsPanel({
   )
 }
 
-function EventsTab({
+function ActivityTab({
   events,
   isLoading,
   showRoutine,
@@ -971,10 +971,10 @@ function EventsTab({
   resourceKind: string
   resourceName: string
 }) {
-  const [expandedEvents, setExpandedEvents] = useState<Set<string>>(new Set())
+  const [expandedItems, setExpandedItems] = useState<Set<string>>(new Set())
 
-  const toggleEvent = (id: string) => {
-    setExpandedEvents(prev => {
+  const toggleItem = (id: string) => {
+    setExpandedItems(prev => {
       const next = new Set(prev)
       if (next.has(id)) {
         next.delete(id)
@@ -989,23 +989,23 @@ function EventsTab({
     return (
       <div className="flex items-center justify-center h-full text-theme-text-tertiary">
         <RefreshCw className="w-5 h-5 animate-spin mr-2" />
-        Loading events...
+        Loading activity...
       </div>
     )
   }
 
-  // Group events by day
-  const groupedEvents = useMemo(() => {
-    const groups: { date: string; events: TimelineEvent[] }[] = []
+  // Group activity by day
+  const groupedActivity = useMemo(() => {
+    const groups: { date: string; items: TimelineEvent[] }[] = []
     let currentDate = ''
 
     for (const event of events) {
       const date = new Date(event.timestamp).toLocaleDateString()
       if (date !== currentDate) {
         currentDate = date
-        groups.push({ date, events: [] })
+        groups.push({ date, items: [] })
       }
-      groups[groups.length - 1].events.push(event)
+      groups[groups.length - 1].items.push(event)
     }
     return groups
   }, [events])
@@ -1028,31 +1028,31 @@ function EventsTab({
         </div>
       )}
 
-      {/* Events list */}
+      {/* Activity list */}
       <div className="flex-1 overflow-auto">
         {events.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
             <Clock className="w-12 h-12 mb-4 opacity-50" />
-            <p className="text-lg">No events</p>
-            <p className="text-sm">Events will appear here as things change</p>
+            <p className="text-lg">No activity</p>
+            <p className="text-sm">Activity will appear here as things change</p>
           </div>
         ) : (
           <div className="table-divide-subtle">
-            {groupedEvents.map(group => (
+            {groupedActivity.map(group => (
               <div key={group.date}>
                 <div className="sticky top-0 bg-theme-base/95 backdrop-blur px-4 py-2 text-xs font-medium text-theme-text-tertiary border-b border-theme-border/30">
                   {group.date}
                 </div>
                 <div>
-                  {group.events.map(event => {
+                  {group.items.map(event => {
                     const isOwn = event.kind === resourceKind && event.name === resourceName
-                    const isExpanded = expandedEvents.has(event.id)
+                    const isExpanded = expandedItems.has(event.id)
                     const hasDiff = event.diff && event.diff.fields.length > 0
 
                     return (
                       <div key={event.id}>
                         <button
-                          onClick={() => hasDiff && toggleEvent(event.id)}
+                          onClick={() => hasDiff && toggleItem(event.id)}
                           className={clsx(
                             'w-full px-4 py-3 flex items-start gap-4 text-left transition-colors',
                             isExpanded ? 'bg-theme-surface/50' : 'hover:bg-theme-surface/30',

@@ -1,22 +1,22 @@
 import { useState } from 'react'
-import { EventsTimeline } from './EventsTimeline'
+import { TimelineList } from './TimelineList'
 import { TimelineSwimlanes } from './TimelineSwimlanes'
 import { useChanges, useTopology } from '../../api/client'
 import type { TimeRange } from '../../types'
 
-interface EventsViewProps {
+interface TimelineViewProps {
   namespace: string
   onResourceClick?: (kind: string, namespace: string, name: string) => void
 }
 
-export type EventsViewMode = 'list' | 'swimlane'
+export type TimelineViewMode = 'list' | 'swimlane'
 
-export function EventsView({ namespace, onResourceClick }: EventsViewProps) {
-  const [viewMode, setViewMode] = useState<EventsViewMode>('swimlane')
+export function TimelineView({ namespace, onResourceClick }: TimelineViewProps) {
+  const [viewMode, setViewMode] = useState<TimelineViewMode>('swimlane')
   const [timeRange] = useState<TimeRange>('1h')
 
-  // Fetch events for swimlane view (shared with timeline)
-  const { data: events, isLoading } = useChanges({
+  // Fetch activity for swimlane view (shared with list)
+  const { data: activity, isLoading } = useChanges({
     namespace: namespace || undefined,
     timeRange,
     includeK8sEvents: true,
@@ -30,7 +30,7 @@ export function EventsView({ namespace, onResourceClick }: EventsViewProps) {
   if (viewMode === 'swimlane') {
     return (
       <TimelineSwimlanes
-        events={events || []}
+        events={activity || []}
         isLoading={isLoading}
         filterTimeRange={timeRange}
         onResourceClick={onResourceClick}
@@ -42,7 +42,7 @@ export function EventsView({ namespace, onResourceClick }: EventsViewProps) {
   }
 
   return (
-    <EventsTimeline
+    <TimelineList
       namespace={namespace}
       currentView={viewMode}
       onViewChange={setViewMode}
@@ -50,10 +50,3 @@ export function EventsView({ namespace, onResourceClick }: EventsViewProps) {
     />
   )
 }
-
-// ViewToggle component - temporarily unused while events view is being reworked
-// interface ViewToggleProps {
-//   viewMode: EventsViewMode
-//   onChange: (mode: EventsViewMode) => void
-// }
-// function ViewToggle({ viewMode, onChange }: ViewToggleProps) { ... }

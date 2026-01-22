@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-Skyhook Explorer is an open-source Kubernetes cluster visualization tool that provides real-time topology views, event monitoring, pod terminal access, log streaming, port forwarding, and Helm release management. It runs as a kubectl plugin (`kubectl-explorer`) or standalone binary and opens a web UI in the browser.
+Skyhook Explorer is an open-source Kubernetes cluster visualization tool that provides real-time topology views, activity timeline monitoring, pod terminal access, log streaming, port forwarding, and Helm release management. It runs as a kubectl plugin (`kubectl-explorer`) or standalone binary and opens a web UI in the browser.
 
 ## Architecture
 
@@ -64,7 +64,7 @@ skyhook-explorer/
 │   │   ├── api/               # API client + SSE hooks
 │   │   ├── components/
 │   │   │   ├── dock/          # Bottom dock with terminal/logs tabs
-│   │   │   ├── events/        # Events timeline view
+│   │   │   ├── timeline/      # Timeline view (activity & changes)
 │   │   │   ├── helm/          # Helm release management UI
 │   │   │   ├── logs/          # Logs viewer component
 │   │   │   ├── portforward/   # Port forward manager

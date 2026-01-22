@@ -17,14 +17,14 @@ import { useChanges } from '../../api/client'
 import { DiffViewer, DiffBadge } from './DiffViewer'
 import type { TimelineEvent, TimeRange } from '../../types'
 
-interface EventsTimelineProps {
+interface TimelineListProps {
   namespace: string
   onViewChange?: (view: 'list' | 'swimlane') => void
   currentView?: 'list' | 'swimlane'
   onResourceClick?: (kind: string, namespace: string, name: string) => void
 }
 
-type EventTypeFilter = 'all' | 'changes' | 'k8s_events' | 'warnings'
+type ActivityTypeFilter = 'all' | 'changes' | 'k8s_events' | 'warnings'
 
 const TIME_RANGES: { value: TimeRange; label: string }[] = [
   { value: '5m', label: '5 min' },
@@ -46,12 +46,12 @@ const RESOURCE_KINDS = [
   'StatefulSet',
 ]
 
-export function EventsTimeline({ namespace, onViewChange, currentView = 'list', onResourceClick }: EventsTimelineProps) {
+export function TimelineList({ namespace, onViewChange, currentView = 'list', onResourceClick }: TimelineListProps) {
   const [searchTerm, setSearchTerm] = useState('')
-  const [eventTypeFilter, setEventTypeFilter] = useState<EventTypeFilter>('all')
+  const [activityTypeFilter, setActivityTypeFilter] = useState<ActivityTypeFilter>('all')
   const [timeRange, setTimeRange] = useState<TimeRange>('1h')
   const [kindFilter, setKindFilter] = useState<string>('')
-  const [expandedEvent, setExpandedEvent] = useState<string | null>(null)
+  const [expandedItem, setExpandedItem] = useState<string | null>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
 
   // Keyboard shortcut: / or Cmd/Ctrl+K to focus search
@@ -77,38 +77,38 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
   }, [])
 
   // Fetch unified timeline
-  const { data: events, isLoading, refetch } = useChanges({
+  const { data: activity, isLoading, refetch } = useChanges({
     namespace: namespace || undefined,
     kind: kindFilter || undefined,
     timeRange,
-    includeK8sEvents: eventTypeFilter !== 'changes',
+    includeK8sEvents: activityTypeFilter !== 'changes',
     limit: 500,
   })
 
-  // Filter events
-  const filteredEvents = useMemo(() => {
-    if (!events) return []
+  // Filter activity
+  const filteredActivity = useMemo(() => {
+    if (!activity) return []
 
-    return events.filter((event) => {
-      // Filter by event type
-      if (eventTypeFilter === 'changes' && event.type !== 'change') return false
-      if (eventTypeFilter === 'k8s_events' && event.type !== 'k8s_event') return false
-      if (eventTypeFilter === 'warnings') {
+    return activity.filter((item) => {
+      // Filter by activity type
+      if (activityTypeFilter === 'changes' && item.type !== 'change') return false
+      if (activityTypeFilter === 'k8s_events' && item.type !== 'k8s_event') return false
+      if (activityTypeFilter === 'warnings') {
         // Warnings filter includes: K8s Warning events + unhealthy/degraded changes
-        const isK8sWarning = event.eventType === 'Warning'
-        const isUnhealthyChange = event.type === 'change' && (event.healthState === 'unhealthy' || event.healthState === 'degraded')
+        const isK8sWarning = item.eventType === 'Warning'
+        const isUnhealthyChange = item.type === 'change' && (item.healthState === 'unhealthy' || item.healthState === 'degraded')
         if (!isK8sWarning && !isUnhealthyChange) return false
       }
 
       // Filter by search term
       if (searchTerm) {
         const term = searchTerm.toLowerCase()
-        const matchesName = event.name.toLowerCase().includes(term)
-        const matchesKind = event.kind.toLowerCase().includes(term)
-        const matchesNamespace = event.namespace?.toLowerCase().includes(term)
-        const matchesReason = event.reason?.toLowerCase().includes(term)
-        const matchesMessage = event.message?.toLowerCase().includes(term)
-        const matchesSummary = event.diff?.summary?.toLowerCase().includes(term)
+        const matchesName = item.name.toLowerCase().includes(term)
+        const matchesKind = item.kind.toLowerCase().includes(term)
+        const matchesNamespace = item.namespace?.toLowerCase().includes(term)
+        const matchesReason = item.reason?.toLowerCase().includes(term)
+        const matchesMessage = item.message?.toLowerCase().includes(term)
+        const matchesSummary = item.diff?.summary?.toLowerCase().includes(term)
 
         if (!matchesName && !matchesKind && !matchesNamespace && !matchesReason && !matchesMessage && !matchesSummary) {
           return false
@@ -117,11 +117,11 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
 
       return true
     })
-  }, [events, eventTypeFilter, searchTerm])
+  }, [activity, activityTypeFilter, searchTerm])
 
-  // Group events by time period
-  const groupedEvents = useMemo(() => {
-    const groups: { label: string; events: TimelineEvent[] }[] = []
+  // Group activity by time period
+  const groupedActivity = useMemo(() => {
+    const groups: { label: string; items: TimelineEvent[] }[] = []
     const now = Date.now()
 
     const last5min: TimelineEvent[] = []
@@ -130,46 +130,46 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
     const today: TimelineEvent[] = []
     const older: TimelineEvent[] = []
 
-    for (const event of filteredEvents) {
-      const eventTime = new Date(event.timestamp).getTime()
-      const diffMs = now - eventTime
+    for (const item of filteredActivity) {
+      const itemTime = new Date(item.timestamp).getTime()
+      const diffMs = now - itemTime
       const diffMins = diffMs / 60000
       const diffHours = diffMins / 60
 
       if (diffMins < 5) {
-        last5min.push(event)
+        last5min.push(item)
       } else if (diffMins < 30) {
-        last30min.push(event)
+        last30min.push(item)
       } else if (diffHours < 1) {
-        lastHour.push(event)
+        lastHour.push(item)
       } else if (diffHours < 24) {
-        today.push(event)
+        today.push(item)
       } else {
-        older.push(event)
+        older.push(item)
       }
     }
 
-    if (last5min.length > 0) groups.push({ label: 'Last 5 minutes', events: last5min })
-    if (last30min.length > 0) groups.push({ label: 'Last 30 minutes', events: last30min })
-    if (lastHour.length > 0) groups.push({ label: 'Last hour', events: lastHour })
-    if (today.length > 0) groups.push({ label: 'Today', events: today })
-    if (older.length > 0) groups.push({ label: 'Older', events: older })
+    if (last5min.length > 0) groups.push({ label: 'Last 5 minutes', items: last5min })
+    if (last30min.length > 0) groups.push({ label: 'Last 30 minutes', items: last30min })
+    if (lastHour.length > 0) groups.push({ label: 'Last hour', items: lastHour })
+    if (today.length > 0) groups.push({ label: 'Today', items: today })
+    if (older.length > 0) groups.push({ label: 'Older', items: older })
 
     return groups
-  }, [filteredEvents])
+  }, [filteredActivity])
 
   // Count stats
   const stats = useMemo(() => {
-    if (!events) return { total: 0, changes: 0, warnings: 0 }
+    if (!activity) return { total: 0, changes: 0, warnings: 0 }
     return {
-      total: events.length,
-      changes: events.filter((e) => e.type === 'change').length,
-      warnings: events.filter((e) =>
+      total: activity.length,
+      changes: activity.filter((e) => e.type === 'change').length,
+      warnings: activity.filter((e) =>
         e.eventType === 'Warning' ||
         (e.type === 'change' && (e.healthState === 'unhealthy' || e.healthState === 'degraded'))
       ).length,
     }
-  }, [events])
+  }, [activity])
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -188,35 +188,35 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
           />
         </div>
 
-        {/* Event type filter */}
+        {/* Activity type filter */}
         <div className="flex items-center gap-1 bg-theme-elevated rounded-lg p-1">
           <FilterButton
-            active={eventTypeFilter === 'all'}
-            onClick={() => setEventTypeFilter('all')}
+            active={activityTypeFilter === 'all'}
+            onClick={() => setActivityTypeFilter('all')}
             icon={<Filter className="w-3 h-3" />}
             label="All"
           />
           <FilterButton
-            active={eventTypeFilter === 'changes'}
-            onClick={() => setEventTypeFilter('changes')}
+            active={activityTypeFilter === 'changes'}
+            onClick={() => setActivityTypeFilter('changes')}
             icon={<RefreshCw className="w-3 h-3" />}
             label="Changes"
             count={stats.changes}
             color="blue"
           />
           <FilterButton
-            active={eventTypeFilter === 'warnings'}
-            onClick={() => setEventTypeFilter('warnings')}
+            active={activityTypeFilter === 'warnings'}
+            onClick={() => setActivityTypeFilter('warnings')}
             icon={<AlertCircle className="w-3 h-3" />}
             label="Warnings"
             count={stats.warnings}
             color="amber"
           />
           <FilterButton
-            active={eventTypeFilter === 'k8s_events'}
-            onClick={() => setEventTypeFilter('k8s_events')}
+            active={activityTypeFilter === 'k8s_events'}
+            onClick={() => setActivityTypeFilter('k8s_events')}
             icon={<CheckCircle className="w-3 h-3" />}
-            label="Events"
+            label="K8s Events"
           />
         </div>
 
@@ -266,7 +266,7 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
                 'p-2 rounded-md transition-colors',
                 currentView === 'swimlane' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
               )}
-              title="Timeline view"
+              title="Swimlane view"
             >
               <GanttChart className="w-4 h-4" />
             </button>
@@ -290,37 +290,37 @@ export function EventsTimeline({ namespace, onViewChange, currentView = 'list', 
             <RefreshCw className="w-5 h-5 animate-spin mr-2" />
             Loading timeline...
           </div>
-        ) : filteredEvents.length === 0 ? (
+        ) : filteredActivity.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
             <Clock className="w-12 h-12 mb-4 opacity-50" />
-            <p className="text-lg">No events found</p>
+            <p className="text-lg">No activity found</p>
             <p className="text-sm mt-2">
-              {searchTerm || eventTypeFilter !== 'all' || kindFilter
+              {searchTerm || activityTypeFilter !== 'all' || kindFilter
                 ? 'Try adjusting your filters'
-                : 'Events will appear here when cluster activity occurs'}
+                : 'Activity will appear here when cluster changes occur'}
             </p>
           </div>
         ) : (
           <div className="p-4 space-y-6">
-            {groupedEvents.map((group) => (
+            {groupedActivity.map((group) => (
               <div key={group.label}>
                 {/* Time period header */}
                 <div className="flex items-center gap-2 mb-3">
                   <Clock className="w-4 h-4 text-theme-text-tertiary" />
                   <span className="text-sm font-medium text-theme-text-secondary">{group.label}</span>
                   <span className="text-xs text-theme-text-disabled">
-                    ({group.events.length} event{group.events.length !== 1 ? 's' : ''})
+                    ({group.items.length} item{group.items.length !== 1 ? 's' : ''})
                   </span>
                 </div>
 
-                {/* Events list */}
+                {/* Activity list */}
                 <div className="space-y-2 ml-6 border-l-2 border-theme-border pl-4">
-                  {group.events.map((event) => (
-                    <EventCard
-                      key={event.id}
-                      event={event}
-                      expanded={expandedEvent === event.id}
-                      onToggle={() => setExpandedEvent(expandedEvent === event.id ? null : event.id)}
+                  {group.items.map((item) => (
+                    <ActivityCard
+                      key={item.id}
+                      item={item}
+                      expanded={expandedItem === item.id}
+                      onToggle={() => setExpandedItem(expandedItem === item.id ? null : item.id)}
                       onResourceClick={onResourceClick}
                     />
                   ))}
@@ -374,22 +374,22 @@ function FilterButton({ active, onClick, icon, label, count, color }: FilterButt
   )
 }
 
-interface EventCardProps {
-  event: TimelineEvent
+interface ActivityCardProps {
+  item: TimelineEvent
   expanded: boolean
   onToggle: () => void
   onResourceClick?: (kind: string, namespace: string, name: string) => void
 }
 
-function EventCard({ event, expanded, onToggle, onResourceClick }: EventCardProps) {
-  const isChange = event.type === 'change'
-  const isWarning = event.eventType === 'Warning'
-  const time = formatTime(event.timestamp)
+function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCardProps) {
+  const isChange = item.type === 'change'
+  const isWarning = item.eventType === 'Warning'
+  const time = formatTime(item.timestamp)
 
   // Determine card styling based on type
   const getCardStyle = () => {
     if (isChange) {
-      switch (event.operation) {
+      switch (item.operation) {
         case 'add':
           return 'bg-green-500/5 border-green-500/30 hover:border-green-500/50'
         case 'delete':
@@ -408,7 +408,7 @@ function EventCard({ event, expanded, onToggle, onResourceClick }: EventCardProp
 
   const getIcon = () => {
     if (isChange) {
-      switch (event.operation) {
+      switch (item.operation) {
         case 'add':
           return <Plus className="w-4 h-4 text-green-400" />
         case 'delete':
@@ -443,55 +443,55 @@ function EventCard({ event, expanded, onToggle, onResourceClick }: EventCardProp
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  onResourceClick?.(event.kind, event.namespace, event.name)
+                  onResourceClick?.(item.kind, item.namespace, item.name)
                 }}
                 className="flex items-center gap-2 hover:bg-theme-elevated/50 rounded px-1 -ml-1 transition-colors group"
               >
                 <span className="text-xs px-1.5 py-0.5 bg-theme-elevated rounded text-theme-text-secondary group-hover:bg-theme-hover">
-                  {event.kind}
+                  {item.kind}
                 </span>
-                <span className="text-sm font-medium text-theme-text-primary truncate group-hover:text-blue-300">{event.name}</span>
+                <span className="text-sm font-medium text-theme-text-primary truncate group-hover:text-blue-300">{item.name}</span>
               </button>
-              {event.namespace && <span className="text-xs text-theme-text-tertiary">in {event.namespace}</span>}
+              {item.namespace && <span className="text-xs text-theme-text-tertiary">in {item.namespace}</span>}
             </div>
 
-            {/* Event details */}
+            {/* Activity details */}
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               {isChange ? (
                 <>
                   <span
                     className={clsx(
                       'text-sm font-medium',
-                      event.operation === 'add' && 'text-green-400',
-                      event.operation === 'update' && 'text-blue-400',
-                      event.operation === 'delete' && 'text-red-400'
+                      item.operation === 'add' && 'text-green-400',
+                      item.operation === 'update' && 'text-blue-400',
+                      item.operation === 'delete' && 'text-red-400'
                     )}
                   >
-                    {event.operation}
+                    {item.operation}
                   </span>
-                  {event.diff && <DiffBadge diff={event.diff} />}
-                  {event.healthState && event.healthState !== 'unknown' && (
+                  {item.diff && <DiffBadge diff={item.diff} />}
+                  {item.healthState && item.healthState !== 'unknown' && (
                     <span
                       className={clsx(
                         'text-xs px-1.5 py-0.5 rounded',
-                        event.healthState === 'healthy' && 'bg-green-500/20 text-green-400',
-                        event.healthState === 'degraded' && 'bg-yellow-500/20 text-yellow-400',
-                        event.healthState === 'unhealthy' && 'bg-red-500/20 text-red-400'
+                        item.healthState === 'healthy' && 'bg-green-500/20 text-green-400',
+                        item.healthState === 'degraded' && 'bg-yellow-500/20 text-yellow-400',
+                        item.healthState === 'unhealthy' && 'bg-red-500/20 text-red-400'
                       )}
                     >
-                      {event.healthState}
+                      {item.healthState}
                     </span>
                   )}
                 </>
               ) : (
                 <>
                   <span className={clsx('text-sm font-medium', isWarning ? 'text-amber-300' : 'text-theme-text-secondary')}>
-                    {event.reason}
+                    {item.reason}
                   </span>
                   <span className="text-sm text-theme-text-secondary">
-                    {event.message && event.message.length > 80 && !expanded
-                      ? `${event.message.slice(0, 80)}...`
-                      : event.message}
+                    {item.message && item.message.length > 80 && !expanded
+                      ? `${item.message.slice(0, 80)}...`
+                      : item.message}
                   </span>
                 </>
               )}
@@ -501,8 +501,8 @@ function EventCard({ event, expanded, onToggle, onResourceClick }: EventCardProp
           {/* Time and count */}
           <div className="flex-shrink-0 text-right">
             <div className="text-xs text-theme-text-tertiary">{time}</div>
-            {event.count && event.count > 1 && (
-              <div className="text-xs text-theme-text-disabled mt-1">x{event.count}</div>
+            {item.count && item.count > 1 && (
+              <div className="text-xs text-theme-text-disabled mt-1">x{item.count}</div>
             )}
           </div>
 
@@ -516,18 +516,18 @@ function EventCard({ event, expanded, onToggle, onResourceClick }: EventCardProp
         {expanded && (
           <div className="mt-3 pt-3 border-t-subtle space-y-3">
             {/* Diff viewer for changes */}
-            {isChange && event.diff && (
+            {isChange && item.diff && (
               <div>
                 <div className="text-xs text-theme-text-tertiary mb-2">Changes:</div>
-                <DiffViewer diff={event.diff} />
+                <DiffViewer diff={item.diff} />
               </div>
             )}
 
             {/* Full message for K8s events */}
-            {!isChange && event.message && event.message.length > 80 && (
+            {!isChange && item.message && item.message.length > 80 && (
               <div>
                 <div className="text-xs text-theme-text-tertiary mb-1">Full message:</div>
-                <p className="text-sm text-theme-text-secondary whitespace-pre-wrap">{event.message}</p>
+                <p className="text-sm text-theme-text-secondary whitespace-pre-wrap">{item.message}</p>
               </div>
             )}
 
@@ -535,11 +535,11 @@ function EventCard({ event, expanded, onToggle, onResourceClick }: EventCardProp
             <div className="grid grid-cols-2 gap-4 text-xs">
               <div>
                 <span className="text-theme-text-tertiary">Timestamp:</span>
-                <span className="ml-2 text-theme-text-secondary">{new Date(event.timestamp).toLocaleString()}</span>
+                <span className="ml-2 text-theme-text-secondary">{new Date(item.timestamp).toLocaleString()}</span>
               </div>
               <div>
                 <span className="text-theme-text-tertiary">Type:</span>
-                <span className="ml-2 text-theme-text-secondary">{isChange ? `Change (${event.operation})` : event.eventType}</span>
+                <span className="ml-2 text-theme-text-secondary">{isChange ? `Change (${item.operation})` : item.eventType}</span>
               </div>
             </div>
           </div>
