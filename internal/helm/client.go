@@ -2,8 +2,10 @@ package helm
 
 import (
 	"bytes"
+	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -21,6 +23,11 @@ import (
 	"helm.sh/helm/v3/pkg/repo"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 )
+
+// HTTP client for ArtifactHub requests
+var httpClient = &http.Client{
+	Timeout: 30 * time.Second,
+}
 
 // Client provides access to Helm releases
 type Client struct {
@@ -82,7 +89,8 @@ func (c *Client) getActionConfig(namespace string) (*action.Configuration, error
 	actionConfig := new(action.Configuration)
 
 	// Use RESTClientGetter for kubeconfig
-	configFlags := genericclioptions.NewConfigFlags(true)
+	// NOTE: Use false for usePersistentConfig to avoid caching issues during context switches
+	configFlags := genericclioptions.NewConfigFlags(false)
 	if c.kubeconfig != "" {
 		configFlags.KubeConfig = &c.kubeconfig
 	}
@@ -373,69 +381,154 @@ func enrichResourcesWithStatus(resources []OwnedResource) {
 	}
 }
 
-// computeDiff generates a simple unified diff between two manifests
+// computeDiff generates a unified diff between two manifests using LCS algorithm
 func computeDiff(manifest1, manifest2 string, rev1, rev2 int) string {
+	var result bytes.Buffer
+	result.WriteString(fmt.Sprintf("--- Revision %d\n", rev1))
+	result.WriteString(fmt.Sprintf("+++ Revision %d\n", rev2))
+
 	lines1 := strings.Split(manifest1, "\n")
 	lines2 := strings.Split(manifest2, "\n")
 
-	var diff bytes.Buffer
-	diff.WriteString(fmt.Sprintf("--- Revision %d\n", rev1))
-	diff.WriteString(fmt.Sprintf("+++ Revision %d\n", rev2))
+	result.WriteString(computeUnifiedDiff(lines1, lines2))
 
-	// Simple line-by-line diff (could use a proper diff library for better results)
-	// For now, show all lines with their status
+	return result.String()
+}
+
+// computeUnifiedDiff creates a unified diff from two sets of lines
+func computeUnifiedDiff(lines1, lines2 []string) string {
+	var result bytes.Buffer
+
+	// Use LCS-based diff algorithm
+	lcs := computeLCS(lines1, lines2)
+
 	i, j := 0, 0
+	lcsIdx := 0
+
+	// Track hunks for unified diff format
+	var hunkLines []string
+	hunkStart1, hunkStart2 := 1, 1
+	hunkLen1, hunkLen2 := 0, 0
+	contextLines := 3
+	pendingContext := []string{}
+
+	flushHunk := func() {
+		if len(hunkLines) > 0 {
+			result.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n",
+				hunkStart1, hunkLen1, hunkStart2, hunkLen2))
+			for _, line := range hunkLines {
+				result.WriteString(line)
+				result.WriteString("\n")
+			}
+			hunkLines = nil
+			hunkLen1, hunkLen2 = 0, 0
+		}
+	}
+
 	for i < len(lines1) || j < len(lines2) {
-		if i < len(lines1) && j < len(lines2) {
-			if lines1[i] == lines2[j] {
-				diff.WriteString(" " + lines1[i] + "\n")
-				i++
-				j++
-			} else {
-				// Look ahead to find matching line
-				foundMatch := false
-				for k := j; k < len(lines2) && k < j+10; k++ {
-					if lines1[i] == lines2[k] {
-						// Output added lines
-						for l := j; l < k; l++ {
-							diff.WriteString("+" + lines2[l] + "\n")
-						}
-						j = k
-						foundMatch = true
-						break
-					}
-				}
-				if !foundMatch {
-					for k := i; k < len(lines1) && k < i+10; k++ {
-						if lines2[j] == lines1[k] {
-							// Output removed lines
-							for l := i; l < k; l++ {
-								diff.WriteString("-" + lines1[l] + "\n")
-							}
-							i = k
-							foundMatch = true
-							break
-						}
-					}
-				}
-				if !foundMatch {
-					// Lines are different
-					diff.WriteString("-" + lines1[i] + "\n")
-					diff.WriteString("+" + lines2[j] + "\n")
-					i++
-					j++
+		if lcsIdx < len(lcs) && i < len(lines1) && j < len(lines2) &&
+			lines1[i] == lcs[lcsIdx] && lines2[j] == lcs[lcsIdx] {
+			// Common line
+			if len(hunkLines) > 0 {
+				// Add context to current hunk
+				hunkLines = append(hunkLines, " "+lines1[i])
+				hunkLen1++
+				hunkLen2++
+				pendingContext = append(pendingContext, " "+lines1[i])
+				if len(pendingContext) > contextLines {
+					// Too much context, might need to end hunk
+					flushHunk()
+					pendingContext = nil
+					hunkStart1 = i + 2
+					hunkStart2 = j + 2
 				}
 			}
-		} else if i < len(lines1) {
-			diff.WriteString("-" + lines1[i] + "\n")
 			i++
-		} else {
-			diff.WriteString("+" + lines2[j] + "\n")
+			j++
+			lcsIdx++
+		} else if i < len(lines1) && (lcsIdx >= len(lcs) || lines1[i] != lcs[lcsIdx]) {
+			// Line removed
+			if len(hunkLines) == 0 {
+				// Start new hunk with context
+				hunkStart1 = max(1, i-contextLines+1)
+				hunkStart2 = max(1, j-contextLines+1)
+				// Add leading context
+				for k := max(0, i-contextLines); k < i; k++ {
+					if k < len(lines1) {
+						hunkLines = append(hunkLines, " "+lines1[k])
+						hunkLen1++
+						hunkLen2++
+					}
+				}
+			}
+			pendingContext = nil
+			hunkLines = append(hunkLines, "-"+lines1[i])
+			hunkLen1++
+			i++
+		} else if j < len(lines2) {
+			// Line added
+			if len(hunkLines) == 0 {
+				hunkStart1 = max(1, i-contextLines+1)
+				hunkStart2 = max(1, j-contextLines+1)
+				// Add leading context
+				for k := max(0, i-contextLines); k < i; k++ {
+					if k < len(lines1) {
+						hunkLines = append(hunkLines, " "+lines1[k])
+						hunkLen1++
+						hunkLen2++
+					}
+				}
+			}
+			pendingContext = nil
+			hunkLines = append(hunkLines, "+"+lines2[j])
+			hunkLen2++
 			j++
 		}
 	}
 
-	return diff.String()
+	flushHunk()
+	return result.String()
+}
+
+// computeLCS computes the Longest Common Subsequence of two string slices
+func computeLCS(a, b []string) []string {
+	m, n := len(a), len(b)
+	if m == 0 || n == 0 {
+		return nil
+	}
+
+	// Build LCS table
+	dp := make([][]int, m+1)
+	for i := range dp {
+		dp[i] = make([]int, n+1)
+	}
+
+	for i := 1; i <= m; i++ {
+		for j := 1; j <= n; j++ {
+			if a[i-1] == b[j-1] {
+				dp[i][j] = dp[i-1][j-1] + 1
+			} else {
+				dp[i][j] = max(dp[i-1][j], dp[i][j-1])
+			}
+		}
+	}
+
+	// Backtrack to find LCS
+	lcs := make([]string, 0, dp[m][n])
+	i, j := m, n
+	for i > 0 && j > 0 {
+		if a[i-1] == b[j-1] {
+			lcs = append([]string{a[i-1]}, lcs...)
+			i--
+			j--
+		} else if dp[i-1][j] > dp[i][j-1] {
+			i--
+		} else {
+			j--
+		}
+	}
+
+	return lcs
 }
 
 // extractHooks extracts hook information from a release
@@ -837,4 +930,1028 @@ func (c *Client) BatchCheckUpgrades(namespace string) (*BatchUpgradeInfo, error)
 	}
 
 	return result, nil
+}
+
+// PreviewValuesChange previews the effect of new values on a release via dry-run
+func (c *Client) PreviewValuesChange(namespace, name string, newValues map[string]any) (*ValuesPreviewResponse, error) {
+	actionConfig, err := c.getActionConfig(namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	// Get the current release
+	getAction := action.NewGet(actionConfig)
+	rel, err := getAction.Run(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current release: %w", err)
+	}
+
+	// Get current user-supplied values
+	getValuesAction := action.NewGetValues(actionConfig)
+	currentValues, err := getValuesAction.Run(name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get current values: %w", err)
+	}
+
+	// Get current manifest
+	currentManifest := rel.Manifest
+
+	// Perform a dry-run upgrade with the new values
+	upgradeAction := action.NewUpgrade(actionConfig)
+	upgradeAction.Namespace = namespace
+	upgradeAction.DryRun = true
+	upgradeAction.DryRunOption = "client"
+	upgradeAction.ResetValues = true // Use only the provided values, don't merge
+
+	// Run the dry-run upgrade
+	newRel, err := upgradeAction.Run(name, rel.Chart, newValues)
+	if err != nil {
+		return nil, fmt.Errorf("failed to preview values change: %w", err)
+	}
+
+	// Compute the manifest diff
+	diff := computeDiff(currentManifest, newRel.Manifest, rel.Version, rel.Version)
+
+	return &ValuesPreviewResponse{
+		CurrentValues: currentValues,
+		NewValues:     newValues,
+		ManifestDiff:  diff,
+	}, nil
+}
+
+// ApplyValues upgrades a release with new values (same chart version)
+func (c *Client) ApplyValues(namespace, name string, newValues map[string]any) error {
+	actionConfig, err := c.getActionConfig(namespace)
+	if err != nil {
+		return err
+	}
+
+	// Get the current release to reuse its chart
+	getAction := action.NewGet(actionConfig)
+	rel, err := getAction.Run(name)
+	if err != nil {
+		return fmt.Errorf("failed to get current release: %w", err)
+	}
+
+	// Create upgrade action
+	upgradeAction := action.NewUpgrade(actionConfig)
+	upgradeAction.Namespace = namespace
+	upgradeAction.Wait = true
+	upgradeAction.Timeout = 300 * time.Second
+	upgradeAction.ResetValues = true // Use only the provided values, don't merge
+
+	// Run the upgrade with the existing chart and new values
+	_, err = upgradeAction.Run(name, rel.Chart, newValues)
+	if err != nil {
+		return fmt.Errorf("failed to apply values: %w", err)
+	}
+
+	return nil
+}
+
+// ============================================================================
+// Chart Browser Methods
+// ============================================================================
+
+// ListRepositories returns all configured Helm repositories
+func (c *Client) ListRepositories() ([]HelmRepository, error) {
+	repoFile := c.settings.RepositoryConfig
+	f, err := repo.LoadFile(repoFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return []HelmRepository{}, nil
+		}
+		return nil, fmt.Errorf("failed to load repo file: %w", err)
+	}
+
+	repos := make([]HelmRepository, 0, len(f.Repositories))
+	cacheDir := c.settings.RepositoryCache
+
+	for _, r := range f.Repositories {
+		hr := HelmRepository{
+			Name: r.Name,
+			URL:  r.URL,
+		}
+
+		// Check index file for last updated time
+		indexPath := filepath.Join(cacheDir, r.Name+"-index.yaml")
+		if info, err := os.Stat(indexPath); err == nil {
+			hr.LastUpdated = info.ModTime()
+		}
+
+		repos = append(repos, hr)
+	}
+
+	return repos, nil
+}
+
+// UpdateRepository updates the index for a specific repository
+func (c *Client) UpdateRepository(repoName string) error {
+	repoFile := c.settings.RepositoryConfig
+	f, err := repo.LoadFile(repoFile)
+	if err != nil {
+		return fmt.Errorf("failed to load repo file: %w", err)
+	}
+
+	var repoEntry *repo.Entry
+	for _, r := range f.Repositories {
+		if r.Name == repoName {
+			repoEntry = r
+			break
+		}
+	}
+
+	if repoEntry == nil {
+		return fmt.Errorf("repository %s not found", repoName)
+	}
+
+	// Create chart repository and download index
+	chartRepo, err := repo.NewChartRepository(repoEntry, nil)
+	if err != nil {
+		return fmt.Errorf("failed to create chart repository: %w", err)
+	}
+
+	chartRepo.CachePath = c.settings.RepositoryCache
+
+	_, err = chartRepo.DownloadIndexFile()
+	if err != nil {
+		return fmt.Errorf("failed to download index: %w", err)
+	}
+
+	return nil
+}
+
+// SearchCharts searches for charts across all repositories
+func (c *Client) SearchCharts(query string, allVersions bool) (*ChartSearchResult, error) {
+	repoFile := c.settings.RepositoryConfig
+	f, err := repo.LoadFile(repoFile)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return &ChartSearchResult{Charts: []ChartInfo{}}, nil
+		}
+		return nil, fmt.Errorf("failed to load repo file: %w", err)
+	}
+
+	cacheDir := c.settings.RepositoryCache
+	queryLower := strings.ToLower(query)
+
+	var charts []ChartInfo
+	seen := make(map[string]bool) // Track seen chart names (for !allVersions)
+
+	for _, r := range f.Repositories {
+		indexPath := filepath.Join(cacheDir, r.Name+"-index.yaml")
+		indexFile, err := repo.LoadIndexFile(indexPath)
+		if err != nil {
+			continue
+		}
+
+		for chartName, versions := range indexFile.Entries {
+			// Filter by query if provided
+			if query != "" {
+				nameLower := strings.ToLower(chartName)
+				if !strings.Contains(nameLower, queryLower) {
+					// Also check description
+					matches := false
+					for _, v := range versions {
+						if strings.Contains(strings.ToLower(v.Description), queryLower) {
+							matches = true
+							break
+						}
+					}
+					if !matches {
+						continue
+					}
+				}
+			}
+
+			if allVersions {
+				for _, v := range versions {
+					charts = append(charts, chartVersionToInfo(v, r.Name))
+				}
+			} else {
+				// Only include latest version
+				key := r.Name + "/" + chartName
+				if !seen[key] && len(versions) > 0 {
+					seen[key] = true
+					charts = append(charts, chartVersionToInfo(versions[0], r.Name))
+				}
+			}
+		}
+	}
+
+	// Sort by name
+	sort.Slice(charts, func(i, j int) bool {
+		if charts[i].Repository != charts[j].Repository {
+			return charts[i].Repository < charts[j].Repository
+		}
+		if charts[i].Name != charts[j].Name {
+			return charts[i].Name < charts[j].Name
+		}
+		return compareVersions(charts[i].Version, charts[j].Version) > 0
+	})
+
+	return &ChartSearchResult{
+		Charts: charts,
+		Total:  len(charts),
+	}, nil
+}
+
+// GetChartDetail returns detailed information about a specific chart version
+func (c *Client) GetChartDetail(repoName, chartName, version string) (*ChartDetail, error) {
+	repoFile := c.settings.RepositoryConfig
+	f, err := repo.LoadFile(repoFile)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load repo file: %w", err)
+	}
+
+	// Find the repository
+	var repoEntry *repo.Entry
+	for _, r := range f.Repositories {
+		if r.Name == repoName {
+			repoEntry = r
+			break
+		}
+	}
+
+	if repoEntry == nil {
+		return nil, fmt.Errorf("repository %s not found", repoName)
+	}
+
+	// Load index
+	cacheDir := c.settings.RepositoryCache
+	indexPath := filepath.Join(cacheDir, repoName+"-index.yaml")
+	indexFile, err := repo.LoadIndexFile(indexPath)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load index file: %w", err)
+	}
+
+	// Find the chart version
+	versions, ok := indexFile.Entries[chartName]
+	if !ok || len(versions) == 0 {
+		return nil, fmt.Errorf("chart %s not found in repository %s", chartName, repoName)
+	}
+
+	var chartVersion *repo.ChartVersion
+	if version == "" || version == "latest" {
+		chartVersion = versions[0]
+	} else {
+		for _, v := range versions {
+			if v.Version == version {
+				chartVersion = v
+				break
+			}
+		}
+	}
+
+	if chartVersion == nil {
+		return nil, fmt.Errorf("version %s not found for chart %s", version, chartName)
+	}
+
+	// Download and load the chart to get README and values
+	chartURL := chartVersion.URLs[0]
+	if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+		chartURL = strings.TrimSuffix(repoEntry.URL, "/") + "/" + chartURL
+	}
+
+	// Use ChartPathOptions to locate/download
+	actionConfig, err := c.getActionConfig("")
+	if err != nil {
+		return nil, err
+	}
+
+	client := action.NewInstall(actionConfig)
+	client.Version = chartVersion.Version
+
+	cp, err := client.ChartPathOptions.LocateChart(chartURL, c.settings)
+	if err != nil {
+		// If we can't download, return basic info from index
+		return &ChartDetail{
+			ChartInfo: chartVersionToInfo(chartVersion, repoName),
+		}, nil
+	}
+
+	chart, err := loader.Load(cp)
+	if err != nil {
+		return &ChartDetail{
+			ChartInfo: chartVersionToInfo(chartVersion, repoName),
+		}, nil
+	}
+
+	// Build detail response
+	detail := &ChartDetail{
+		ChartInfo: chartVersionToInfo(chartVersion, repoName),
+	}
+
+	// Extract README
+	for _, f := range chart.Files {
+		name := strings.ToLower(f.Name)
+		if name == "readme.md" || name == "readme.txt" || name == "readme" {
+			detail.Readme = string(f.Data)
+			break
+		}
+	}
+
+	// Get default values
+	if chart.Values != nil {
+		detail.Values = chart.Values
+	}
+
+	// Get values schema if present
+	if chart.Schema != nil {
+		detail.ValuesSchema = string(chart.Schema)
+	}
+
+	// Get maintainers
+	if chart.Metadata.Maintainers != nil {
+		for _, m := range chart.Metadata.Maintainers {
+			detail.Maintainers = append(detail.Maintainers, Maintainer{
+				Name:  m.Name,
+				Email: m.Email,
+				URL:   m.URL,
+			})
+		}
+	}
+
+	// Get sources and keywords
+	detail.Sources = chart.Metadata.Sources
+	detail.Keywords = chart.Metadata.Keywords
+
+	return detail, nil
+}
+
+// Install installs a new Helm release
+func (c *Client) Install(req *InstallRequest) (*HelmRelease, error) {
+	actionConfig, err := c.getActionConfig(req.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	var chartURL string
+
+	// Check if the repository is a URL (for ArtifactHub installs) or a local repo name
+	isRepoURL := strings.HasPrefix(req.Repository, "http://") || strings.HasPrefix(req.Repository, "https://")
+
+	if isRepoURL {
+		// Direct URL - fetch the repository index to find the chart
+		repoURL := strings.TrimSuffix(req.Repository, "/")
+
+		// Try to fetch the index.yaml from the repo to find the chart URL
+		indexURL := repoURL + "/index.yaml"
+		resp, err := httpClient.Get(indexURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch repository index: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			return nil, fmt.Errorf("repository %s returned status %d", req.Repository, resp.StatusCode)
+		}
+
+		// Save to temp file and load (repo package doesn't have LoadIndexFromBytes)
+		tmpFile, err := os.CreateTemp("", "helm-index-*.yaml")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create temp file: %w", err)
+		}
+		defer os.Remove(tmpFile.Name())
+		defer tmpFile.Close()
+
+		indexBytes := new(bytes.Buffer)
+		indexBytes.ReadFrom(resp.Body)
+		if _, err := tmpFile.Write(indexBytes.Bytes()); err != nil {
+			return nil, fmt.Errorf("failed to write temp index: %w", err)
+		}
+		tmpFile.Close()
+
+		indexFile, err := repo.LoadIndexFile(tmpFile.Name())
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse repository index: %w", err)
+		}
+
+		// Find the chart version
+		versions, ok := indexFile.Entries[req.ChartName]
+		if !ok || len(versions) == 0 {
+			return nil, fmt.Errorf("chart %s not found in repository", req.ChartName)
+		}
+
+		var chartVersion *repo.ChartVersion
+		if req.Version == "" || req.Version == "latest" {
+			chartVersion = versions[0]
+		} else {
+			for _, v := range versions {
+				if v.Version == req.Version {
+					chartVersion = v
+					break
+				}
+			}
+		}
+
+		if chartVersion == nil {
+			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
+		}
+
+		// Build chart URL
+		chartURL = chartVersion.URLs[0]
+		if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+			chartURL = repoURL + "/" + chartURL
+		}
+	} else {
+		// Local repository name - use existing logic
+		repoFile := c.settings.RepositoryConfig
+		f, err := repo.LoadFile(repoFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load repo file: %w", err)
+		}
+
+		// Find repository
+		var repoEntry *repo.Entry
+		for _, r := range f.Repositories {
+			if r.Name == req.Repository {
+				repoEntry = r
+				break
+			}
+		}
+
+		if repoEntry == nil {
+			return nil, fmt.Errorf("repository %s not found", req.Repository)
+		}
+
+		// Load index and find chart
+		cacheDir := c.settings.RepositoryCache
+		indexPath := filepath.Join(cacheDir, req.Repository+"-index.yaml")
+		indexFile, err := repo.LoadIndexFile(indexPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load index file: %w", err)
+		}
+
+		versions, ok := indexFile.Entries[req.ChartName]
+		if !ok || len(versions) == 0 {
+			return nil, fmt.Errorf("chart %s not found", req.ChartName)
+		}
+
+		var chartVersion *repo.ChartVersion
+		if req.Version == "" || req.Version == "latest" {
+			chartVersion = versions[0]
+		} else {
+			for _, v := range versions {
+				if v.Version == req.Version {
+					chartVersion = v
+					break
+				}
+			}
+		}
+
+		if chartVersion == nil {
+			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
+		}
+
+		// Build chart URL
+		chartURL = chartVersion.URLs[0]
+		if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+			chartURL = strings.TrimSuffix(repoEntry.URL, "/") + "/" + chartURL
+		}
+	}
+
+	// Create install action
+	installAction := action.NewInstall(actionConfig)
+	installAction.ReleaseName = req.ReleaseName
+	installAction.Namespace = req.Namespace
+	installAction.CreateNamespace = req.CreateNamespace
+	installAction.Wait = true
+	installAction.Timeout = 300 * time.Second
+	installAction.Version = req.Version
+
+	// Locate/download chart
+	cp, err := installAction.ChartPathOptions.LocateChart(chartURL, c.settings)
+	if err != nil {
+		return nil, fmt.Errorf("failed to locate chart: %w", err)
+	}
+
+	// Load chart
+	chart, err := loader.Load(cp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load chart: %w", err)
+	}
+
+	// Run install
+	rel, err := installAction.Run(chart, req.Values)
+	if err != nil {
+		return nil, fmt.Errorf("install failed: %w", err)
+	}
+
+	return &HelmRelease{
+		Name:         rel.Name,
+		Namespace:    rel.Namespace,
+		Chart:        rel.Chart.Metadata.Name,
+		ChartVersion: rel.Chart.Metadata.Version,
+		AppVersion:   rel.Chart.Metadata.AppVersion,
+		Status:       rel.Info.Status.String(),
+		Revision:     rel.Version,
+		Updated:      rel.Info.LastDeployed.Time,
+	}, nil
+}
+
+// InstallWithProgress installs a new Helm release and streams progress updates
+func (c *Client) InstallWithProgress(req *InstallRequest, progressCh chan<- InstallProgress) (*HelmRelease, error) {
+	sendProgress := func(phase, message, detail string) {
+		select {
+		case progressCh <- InstallProgress{Phase: phase, Message: message, Detail: detail}:
+		default:
+			// Channel full or closed, skip
+		}
+	}
+
+	actionConfig, err := c.getActionConfig(req.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	var chartURL string
+
+	// Check if the repository is a URL (for ArtifactHub installs) or a local repo name
+	isRepoURL := strings.HasPrefix(req.Repository, "http://") || strings.HasPrefix(req.Repository, "https://")
+
+	if isRepoURL {
+		sendProgress("fetching", "Fetching repository index...", req.Repository)
+
+		repoURL := strings.TrimSuffix(req.Repository, "/")
+		indexURL := repoURL + "/index.yaml"
+		resp, err := httpClient.Get(indexURL)
+		if err != nil {
+			return nil, fmt.Errorf("failed to fetch repository index: %w", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != 200 {
+			return nil, fmt.Errorf("repository %s returned status %d", req.Repository, resp.StatusCode)
+		}
+
+		sendProgress("parsing", "Parsing repository index...", "")
+
+		tmpFile, err := os.CreateTemp("", "helm-index-*.yaml")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create temp file: %w", err)
+		}
+		defer os.Remove(tmpFile.Name())
+		defer tmpFile.Close()
+
+		indexBytes := new(bytes.Buffer)
+		indexBytes.ReadFrom(resp.Body)
+		if _, err := tmpFile.Write(indexBytes.Bytes()); err != nil {
+			return nil, fmt.Errorf("failed to write temp index: %w", err)
+		}
+		tmpFile.Close()
+
+		indexFile, err := repo.LoadIndexFile(tmpFile.Name())
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse repository index: %w", err)
+		}
+
+		versions, ok := indexFile.Entries[req.ChartName]
+		if !ok || len(versions) == 0 {
+			return nil, fmt.Errorf("chart %s not found in repository", req.ChartName)
+		}
+
+		var chartVersion *repo.ChartVersion
+		if req.Version == "" || req.Version == "latest" {
+			chartVersion = versions[0]
+		} else {
+			for _, v := range versions {
+				if v.Version == req.Version {
+					chartVersion = v
+					break
+				}
+			}
+		}
+
+		if chartVersion == nil {
+			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
+		}
+
+		chartURL = chartVersion.URLs[0]
+		if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+			chartURL = repoURL + "/" + chartURL
+		}
+	} else {
+		sendProgress("resolving", "Resolving chart from local repository...", req.Repository)
+
+		repoFile := c.settings.RepositoryConfig
+		f, err := repo.LoadFile(repoFile)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load repo file: %w", err)
+		}
+
+		var repoEntry *repo.Entry
+		for _, r := range f.Repositories {
+			if r.Name == req.Repository {
+				repoEntry = r
+				break
+			}
+		}
+
+		if repoEntry == nil {
+			return nil, fmt.Errorf("repository %s not found", req.Repository)
+		}
+
+		cacheDir := c.settings.RepositoryCache
+		indexPath := filepath.Join(cacheDir, req.Repository+"-index.yaml")
+		indexFile, err := repo.LoadIndexFile(indexPath)
+		if err != nil {
+			return nil, fmt.Errorf("failed to load index file: %w", err)
+		}
+
+		versions, ok := indexFile.Entries[req.ChartName]
+		if !ok || len(versions) == 0 {
+			return nil, fmt.Errorf("chart %s not found", req.ChartName)
+		}
+
+		var chartVersion *repo.ChartVersion
+		if req.Version == "" || req.Version == "latest" {
+			chartVersion = versions[0]
+		} else {
+			for _, v := range versions {
+				if v.Version == req.Version {
+					chartVersion = v
+					break
+				}
+			}
+		}
+
+		if chartVersion == nil {
+			return nil, fmt.Errorf("version %s not found for chart %s", req.Version, req.ChartName)
+		}
+
+		chartURL = chartVersion.URLs[0]
+		if !strings.HasPrefix(chartURL, "http://") && !strings.HasPrefix(chartURL, "https://") {
+			chartURL = strings.TrimSuffix(repoEntry.URL, "/") + "/" + chartURL
+		}
+	}
+
+	sendProgress("downloading", fmt.Sprintf("Downloading chart %s-%s...", req.ChartName, req.Version), chartURL)
+
+	installAction := action.NewInstall(actionConfig)
+	installAction.ReleaseName = req.ReleaseName
+	installAction.Namespace = req.Namespace
+	installAction.CreateNamespace = req.CreateNamespace
+	installAction.Wait = true
+	installAction.Timeout = 300 * time.Second
+	installAction.Version = req.Version
+
+	cp, err := installAction.ChartPathOptions.LocateChart(chartURL, c.settings)
+	if err != nil {
+		return nil, fmt.Errorf("failed to locate chart: %w", err)
+	}
+
+	sendProgress("loading", "Loading chart...", cp)
+
+	chart, err := loader.Load(cp)
+	if err != nil {
+		return nil, fmt.Errorf("failed to load chart: %w", err)
+	}
+
+	sendProgress("installing", fmt.Sprintf("Installing %s to namespace %s...", req.ReleaseName, req.Namespace), "")
+
+	if req.CreateNamespace {
+		sendProgress("installing", fmt.Sprintf("Creating namespace %s if needed...", req.Namespace), "")
+	}
+
+	rel, err := installAction.Run(chart, req.Values)
+	if err != nil {
+		return nil, fmt.Errorf("install failed: %w", err)
+	}
+
+	sendProgress("complete", fmt.Sprintf("Successfully installed %s", req.ReleaseName), "")
+
+	return &HelmRelease{
+		Name:         rel.Name,
+		Namespace:    rel.Namespace,
+		Chart:        rel.Chart.Metadata.Name,
+		ChartVersion: rel.Chart.Metadata.Version,
+		AppVersion:   rel.Chart.Metadata.AppVersion,
+		Status:       rel.Info.Status.String(),
+		Revision:     rel.Version,
+		Updated:      rel.Info.LastDeployed.Time,
+	}, nil
+}
+
+// Helper function to convert chart version to ChartInfo
+func chartVersionToInfo(v *repo.ChartVersion, repoName string) ChartInfo {
+	return ChartInfo{
+		Name:        v.Name,
+		Version:     v.Version,
+		AppVersion:  v.AppVersion,
+		Description: v.Description,
+		Icon:        v.Icon,
+		Repository:  repoName,
+		Home:        v.Home,
+		Deprecated:  v.Deprecated,
+	}
+}
+
+// ============================================================================
+// ArtifactHub Integration
+// ============================================================================
+
+const artifactHubBaseURL = "https://artifacthub.io/api/v1"
+
+// SearchArtifactHub searches for charts on ArtifactHub
+// sort can be: "relevance" (default), "stars", or "last_updated"
+func SearchArtifactHub(query string, offset, limit int, official, verified bool, sort string) (*ArtifactHubSearchResult, error) {
+	// Build query URL
+	url := fmt.Sprintf("%s/packages/search?kind=0&ts_query_web=%s&offset=%d&limit=%d",
+		artifactHubBaseURL, query, offset, limit)
+
+	// Add sort parameter (ArtifactHub uses "sort" query param)
+	if sort != "" && sort != "relevance" {
+		url += "&sort=" + sort
+	}
+
+	// Add filters
+	if official {
+		url += "&official=true"
+	}
+	if verified {
+		url += "&verified_publisher=true"
+	}
+
+	// Make HTTP request
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to search ArtifactHub: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("ArtifactHub returned status %d", resp.StatusCode)
+	}
+
+	// Parse response
+	var apiResp artifactHubSearchResponse
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("failed to parse ArtifactHub response: %w", err)
+	}
+
+	// Convert to our types
+	result := &ArtifactHubSearchResult{
+		Charts: make([]ArtifactHubChart, 0, len(apiResp.Packages)),
+		Total:  len(apiResp.Packages),
+	}
+
+	for _, pkg := range apiResp.Packages {
+		chart := convertArtifactHubPackage(pkg)
+		result.Charts = append(result.Charts, chart)
+	}
+
+	return result, nil
+}
+
+// GetArtifactHubChart gets detailed chart info from ArtifactHub
+func GetArtifactHubChart(repoName, chartName, version string) (*ArtifactHubChartDetail, error) {
+	url := fmt.Sprintf("%s/packages/helm/%s/%s", artifactHubBaseURL, repoName, chartName)
+	if version != "" && version != "latest" {
+		url += "/" + version
+	}
+
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return nil, fmt.Errorf("failed to get chart from ArtifactHub: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == 404 {
+		return nil, fmt.Errorf("chart %s/%s not found on ArtifactHub", repoName, chartName)
+	}
+	if resp.StatusCode != 200 {
+		return nil, fmt.Errorf("ArtifactHub returned status %d", resp.StatusCode)
+	}
+
+	var apiResp artifactHubPackageDetail
+	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+		return nil, fmt.Errorf("failed to parse ArtifactHub response: %w", err)
+	}
+
+	detail := convertArtifactHubDetail(apiResp)
+
+	// If values not included in main response, fetch separately using package ID
+	if detail.Values == "" && detail.PackageID != "" {
+		chartVersion := version
+		if chartVersion == "" || chartVersion == "latest" {
+			chartVersion = detail.Version
+		}
+		if values, err := GetArtifactHubValuesByPackageID(detail.PackageID, chartVersion); err == nil && values != "" {
+			detail.Values = values
+		}
+	}
+
+	return detail, nil
+}
+
+// GetArtifactHubReadme gets the README for a chart
+func GetArtifactHubReadme(repoName, chartName, version string) (string, error) {
+	url := fmt.Sprintf("%s/packages/helm/%s/%s/%s/readme", artifactHubBaseURL, repoName, chartName, version)
+
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to get README: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", nil // README not available
+	}
+
+	body := new(bytes.Buffer)
+	body.ReadFrom(resp.Body)
+	return body.String(), nil
+}
+
+// GetArtifactHubValuesByPackageID gets the default values for a chart using its package ID
+func GetArtifactHubValuesByPackageID(packageID, version string) (string, error) {
+	// ArtifactHub uses package ID in the values URL: /api/v1/packages/{packageId}/{version}/values
+	url := fmt.Sprintf("%s/packages/%s/%s/values", artifactHubBaseURL, packageID, version)
+
+	resp, err := httpClient.Get(url)
+	if err != nil {
+		return "", fmt.Errorf("failed to get values: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != 200 {
+		return "", nil // Values not available
+	}
+
+	// Check content type - should be text/plain or application/x-yaml, not text/html
+	contentType := resp.Header.Get("Content-Type")
+	if strings.Contains(contentType, "text/html") {
+		return "", nil // Got HTML instead of YAML, values not available
+	}
+
+	body := new(bytes.Buffer)
+	body.ReadFrom(resp.Body)
+	content := body.String()
+
+	// Double-check: if content looks like HTML, reject it
+	if strings.HasPrefix(strings.TrimSpace(content), "<!DOCTYPE") || strings.HasPrefix(strings.TrimSpace(content), "<html") {
+		return "", nil
+	}
+
+	return content, nil
+}
+
+// Internal types for ArtifactHub API responses
+
+type artifactHubSearchResponse struct {
+	Packages []artifactHubPackage `json:"packages"`
+}
+
+type artifactHubPackage struct {
+	PackageID              string                    `json:"package_id"`
+	Name                   string                    `json:"name"`
+	NormalizedName         string                    `json:"normalized_name"`
+	LogoImageID            string                    `json:"logo_image_id,omitempty"`
+	Stars                  int                       `json:"stars"`
+	Description            string                    `json:"description,omitempty"`
+	Version                string                    `json:"version"`
+	AppVersion             string                    `json:"app_version,omitempty"`
+	Deprecated             bool                      `json:"deprecated"`
+	Signed                 bool                      `json:"signed"`
+	HasValuesSchema        bool                      `json:"has_values_schema"`
+	SecurityReportSummary  *artifactHubSecurityReport `json:"security_report_summary,omitempty"`
+	ProductionOrgsCount    int                       `json:"production_organizations_count"`
+	TS                     int64                     `json:"ts"` // Unix timestamp
+	Repository             artifactHubRepo           `json:"repository"`
+	License                string                    `json:"license,omitempty"`
+}
+
+type artifactHubRepo struct {
+	Name              string `json:"name"`
+	URL               string `json:"url"`
+	Official          bool   `json:"official"`
+	VerifiedPublisher bool   `json:"verified_publisher"`
+	OrganizationName  string `json:"organization_name,omitempty"`
+	DisplayName       string `json:"organization_display_name,omitempty"`
+}
+
+type artifactHubSecurityReport struct {
+	Critical int `json:"critical,omitempty"`
+	High     int `json:"high,omitempty"`
+	Medium   int `json:"medium,omitempty"`
+	Low      int `json:"low,omitempty"`
+	Unknown  int `json:"unknown,omitempty"`
+}
+
+type artifactHubPackageDetail struct {
+	artifactHubPackage
+	Readme           string                    `json:"readme,omitempty"`
+	DefaultValues    string                    `json:"default_values,omitempty"`
+	ValuesSchema     map[string]any            `json:"values_schema,omitempty"`
+	HomeURL          string                    `json:"home_url,omitempty"`
+	Maintainers      []artifactHubMaintainer   `json:"maintainers,omitempty"`
+	Links            []artifactHubLink         `json:"links,omitempty"`
+	AvailableVersions []artifactHubVersion     `json:"available_versions,omitempty"`
+	Install          string                    `json:"install,omitempty"`
+	Keywords         []string                  `json:"keywords,omitempty"`
+}
+
+type artifactHubMaintainer struct {
+	Name  string `json:"name"`
+	Email string `json:"email,omitempty"`
+}
+
+type artifactHubLink struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+type artifactHubVersion struct {
+	Version string `json:"version"`
+	TS      int64  `json:"ts"`
+}
+
+// Converters
+
+func convertArtifactHubPackage(pkg artifactHubPackage) ArtifactHubChart {
+	chart := ArtifactHubChart{
+		PackageID:   pkg.PackageID,
+		Name:        pkg.Name,
+		Version:     pkg.Version,
+		AppVersion:  pkg.AppVersion,
+		Description: pkg.Description,
+		Deprecated:  pkg.Deprecated,
+		Stars:       pkg.Stars,
+		License:     pkg.License,
+		UpdatedAt:   pkg.TS,
+		Signed:      pkg.Signed,
+		HasSchema:   pkg.HasValuesSchema,
+		OrgCount:    pkg.ProductionOrgsCount,
+		Repository: ArtifactHubRepository{
+			Name:              pkg.Repository.Name,
+			URL:               pkg.Repository.URL,
+			Official:          pkg.Repository.Official,
+			VerifiedPublisher: pkg.Repository.VerifiedPublisher,
+			OrganizationName:  pkg.Repository.OrganizationName,
+		},
+	}
+
+	// Build logo URL if available
+	if pkg.LogoImageID != "" {
+		chart.LogoURL = fmt.Sprintf("https://artifacthub.io/image/%s", pkg.LogoImageID)
+	}
+
+	// Convert security info
+	if pkg.SecurityReportSummary != nil {
+		chart.Security = &ArtifactHubSecurity{
+			Critical: pkg.SecurityReportSummary.Critical,
+			High:     pkg.SecurityReportSummary.High,
+			Medium:   pkg.SecurityReportSummary.Medium,
+			Low:      pkg.SecurityReportSummary.Low,
+			Unknown:  pkg.SecurityReportSummary.Unknown,
+		}
+	}
+
+	return chart
+}
+
+func convertArtifactHubDetail(pkg artifactHubPackageDetail) *ArtifactHubChartDetail {
+	detail := &ArtifactHubChartDetail{
+		ArtifactHubChart: convertArtifactHubPackage(pkg.artifactHubPackage),
+		Readme:           pkg.Readme,
+		Values:           pkg.DefaultValues,
+		Install:          pkg.Install,
+	}
+
+	detail.HomeURL = pkg.HomeURL
+	detail.Keywords = pkg.Keywords
+
+	// Convert values schema to string if present
+	if pkg.ValuesSchema != nil {
+		if schemaBytes, err := json.Marshal(pkg.ValuesSchema); err == nil {
+			detail.ValuesSchema = string(schemaBytes)
+		}
+	}
+
+	// Convert maintainers
+	for _, m := range pkg.Maintainers {
+		detail.Maintainers = append(detail.Maintainers, ArtifactHubMaintainer{
+			Name:  m.Name,
+			Email: m.Email,
+		})
+	}
+
+	// Convert links
+	for _, l := range pkg.Links {
+		detail.Links = append(detail.Links, ArtifactHubLink{
+			Name: l.Name,
+			URL:  l.URL,
+		})
+	}
+
+	// Convert available versions
+	for _, v := range pkg.AvailableVersions {
+		detail.Versions = append(detail.Versions, ArtifactHubVersionSummary{
+			Version:   v.Version,
+			CreatedAt: v.TS,
+		})
+	}
+
+	return detail
 }

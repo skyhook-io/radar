@@ -5,6 +5,7 @@ export type NodeKind =
   | 'Ingress'
   | 'Service'
   | 'Deployment'
+  | 'Rollout'
   | 'DaemonSet'
   | 'StatefulSet'
   | 'ReplicaSet'
@@ -72,30 +73,107 @@ export interface OwnerInfo {
   name: string
 }
 
-// Unified timeline event (from /api/changes)
+// Event source types for the new timeline API
+export type EventSource = 'informer' | 'k8s_event' | 'historical'
+
+// Event types for the new timeline API
+export type EventType = 'add' | 'update' | 'delete' | 'Normal' | 'Warning'
+
+// Unified timeline event (from /api/timeline - new format)
+// Also compatible with legacy /api/changes endpoint
 export interface TimelineEvent {
   id: string
-  type: 'change' | 'k8s_event'
   timestamp: string // ISO date string
+  source?: EventSource // New field for source type
+
+  // Resource identity
   kind: string
   namespace: string
   name: string
-  // For changes
-  operation?: 'add' | 'update' | 'delete'
-  diff?: DiffInfo
-  healthState?: 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
-  owner?: OwnerInfo // Owner/controller for managed resources
-  isHistorical?: boolean // True if extracted from resource metadata/status (not observed in real-time)
-  // For k8s_event and historical events
-  reason?: string // Event reason or historical event description (e.g., "created", "started")
+  uid?: string
+
+  // Event details
+  eventType?: EventType // New unified event type field
+  reason?: string
   message?: string
-  eventType?: 'Normal' | 'Warning'
+
+  // Rich context
+  diff?: DiffInfo
+  healthState?: HealthStatus
+  owner?: OwnerInfo
+  labels?: Record<string, string> // For app-label grouping
+
+  // K8s Event specific
   count?: number
+
+  // Legacy compatibility fields
+  type?: 'change' | 'k8s_event' // Legacy: maps to source
+  operation?: 'add' | 'update' | 'delete' // Legacy: maps to eventType
+  isHistorical?: boolean // Legacy: now indicated by source === 'historical'
+
+  // Correlation
+  correlationId?: string
 }
 
-// Check if a resource kind is a top-level workload (not managed)
+// Timeline event group (from /api/timeline with grouping)
+export interface EventGroup {
+  id: string
+  kind: string
+  name: string
+  namespace: string
+  events: TimelineEvent[]
+  children?: EventGroup[]
+  healthState?: HealthStatus
+  eventCount: number
+}
+
+// Timeline API response (from /api/timeline)
+export interface TimelineResponse {
+  groups?: EventGroup[]
+  ungrouped?: TimelineEvent[]
+  meta: TimelineMeta
+}
+
+// Timeline metadata
+export interface TimelineMeta {
+  totalEvents: number
+  groupCount?: number
+  queryTimeMs?: number
+  hasMore?: boolean
+  nextCursor?: string
+}
+
+// Timeline grouping mode
+export type TimelineGroupingMode = 'none' | 'owner' | 'app' | 'namespace'
+
+// Filter preset for timeline queries
+export interface FilterPreset {
+  name: string
+  excludeKinds?: string[]
+  includeKinds?: string[]
+  excludeNamePatterns?: string[]
+  excludeOperations?: EventType[]
+  includeEventTypes?: EventType[]
+  includeManaged?: boolean
+}
+
+// Timeline store stats
+export interface TimelineStats {
+  totalEvents: number
+  oldestEvent?: string
+  newestEvent?: string
+  storageBytes?: number
+  seenResources?: number
+}
+
+// Check if a resource kind is a top-level workload (representative in timeline)
+// These are the "root" resources that own/manage others
 export function isWorkloadKind(kind: string): boolean {
-  return ['Deployment', 'DaemonSet', 'StatefulSet', 'Service', 'Ingress', 'ConfigMap', 'Secret', 'Job', 'CronJob'].includes(kind)
+  return [
+    'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet',
+    'Service', 'Job', 'CronJob',
+    'Workflow', 'CronWorkflow', // Argo Workflows
+  ].includes(kind)
 }
 
 // Check if a resource kind is typically managed by another
@@ -297,3 +375,154 @@ export interface UpgradeInfo {
 export interface BatchUpgradeInfo {
   releases: Record<string, UpgradeInfo>
 }
+
+// Request body for applying new values to a release
+export interface ApplyValuesRequest {
+  values: Record<string, unknown>
+}
+
+// Response for previewing values changes
+export interface ValuesPreviewResponse {
+  currentValues: Record<string, unknown>
+  newValues: Record<string, unknown>
+  manifestDiff: string
+}
+
+// ============================================================================
+// Chart Browser Types
+// ============================================================================
+
+// Configured Helm repository
+export interface HelmRepository {
+  name: string
+  url: string
+  lastUpdated?: string // ISO date string
+}
+
+// Basic chart information
+export interface ChartInfo {
+  name: string
+  version: string
+  appVersion?: string
+  description?: string
+  icon?: string
+  repository: string
+  home?: string
+  deprecated?: boolean
+}
+
+// Detailed chart information
+export interface ChartDetail extends ChartInfo {
+  readme?: string
+  values?: Record<string, unknown>
+  valuesSchema?: string
+  maintainers?: ChartMaintainer[]
+  sources?: string[]
+  keywords?: string[]
+}
+
+// Chart maintainer
+export interface ChartMaintainer {
+  name: string
+  email?: string
+  url?: string
+}
+
+// Chart search result
+export interface ChartSearchResult {
+  charts: ChartInfo[]
+  total: number
+}
+
+// Request body for installing a new chart
+export interface InstallChartRequest {
+  releaseName: string
+  namespace: string
+  chartName: string
+  version: string
+  repository: string
+  values?: Record<string, unknown>
+  createNamespace?: boolean
+}
+
+// ============================================================================
+// ArtifactHub Types
+// ============================================================================
+
+// ArtifactHub chart with rich metadata
+export interface ArtifactHubChart {
+  packageId: string
+  name: string
+  version: string
+  appVersion?: string
+  description?: string
+  logoUrl?: string
+  homeUrl?: string
+  deprecated?: boolean
+  repository: ArtifactHubRepository
+  stars: number
+  license?: string
+  createdAt?: number // Unix timestamp
+  updatedAt?: number // Unix timestamp
+  signed?: boolean
+  security?: ArtifactHubSecurity
+  productionOrgsCount?: number
+  hasValuesSchema?: boolean
+  keywords?: string[]
+}
+
+// ArtifactHub repository info
+export interface ArtifactHubRepository {
+  name: string
+  url: string
+  official?: boolean
+  verifiedPublisher?: boolean
+  organizationName?: string
+}
+
+// ArtifactHub security report summary
+export interface ArtifactHubSecurity {
+  critical?: number
+  high?: number
+  medium?: number
+  low?: number
+  unknown?: number
+}
+
+// ArtifactHub search result
+export interface ArtifactHubSearchResult {
+  charts: ArtifactHubChart[]
+  total: number
+}
+
+// ArtifactHub chart detail (extended)
+export interface ArtifactHubChartDetail extends ArtifactHubChart {
+  readme?: string
+  values?: string // Default values as YAML string
+  valuesSchema?: string
+  maintainers?: ArtifactHubMaintainer[]
+  links?: ArtifactHubLink[]
+  availableVersions?: ArtifactHubVersionSummary[]
+  install?: string // Install instructions
+}
+
+// ArtifactHub maintainer
+export interface ArtifactHubMaintainer {
+  name: string
+  email?: string
+}
+
+// ArtifactHub link
+export interface ArtifactHubLink {
+  name: string
+  url: string
+}
+
+// ArtifactHub version summary
+export interface ArtifactHubVersionSummary {
+  version: string
+  ts?: number // Unix timestamp
+}
+
+// Chart source type for UI toggling
+export type ChartSource = 'local' | 'artifacthub'

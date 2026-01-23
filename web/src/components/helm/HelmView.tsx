@@ -1,10 +1,14 @@
 import { useState, useMemo } from 'react'
-import { Package, Search, RefreshCw, ArrowUpCircle } from 'lucide-react'
+import { Package, Search, RefreshCw, ArrowUpCircle, LayoutGrid, List } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo } from '../../api/client'
-import type { HelmRelease, SelectedHelmRelease, UpgradeInfo } from '../../types'
+import type { HelmRelease, SelectedHelmRelease, UpgradeInfo, ChartSource } from '../../types'
 import { getStatusColor, formatAge, truncate } from './helm-utils'
 import { Tooltip } from '../ui/Tooltip'
+import { ChartBrowser } from './ChartBrowser'
+import { InstallWizard } from './InstallWizard'
+
+type ViewTab = 'releases' | 'charts'
 
 interface HelmViewProps {
   namespace: string
@@ -13,7 +17,9 @@ interface HelmViewProps {
 }
 
 export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmViewProps) {
+  const [activeTab, setActiveTab] = useState<ViewTab>('releases')
   const [searchTerm, setSearchTerm] = useState('')
+  const [selectedChart, setSelectedChart] = useState<{ repo: string; chart: string; version: string; source: ChartSource } | null>(null)
 
   const { data: releases, isLoading, refetch } = useHelmReleases(namespace || undefined)
 
@@ -38,107 +44,173 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
     )
   }, [releases, searchTerm])
 
+  const handleChartSelect = (repo: string, chart: string, version: string, source: ChartSource) => {
+    setSelectedChart({ repo, chart, version, source })
+  }
+
+  const handleInstallSuccess = (releaseNamespace: string, releaseName: string) => {
+    setSelectedChart(null)
+    setActiveTab('releases')
+    refetch()
+    // Navigate to the new release
+    onReleaseClick?.(releaseNamespace, releaseName)
+  }
+
   return (
-    <div className="flex h-full">
+    <div className="flex h-full w-full">
       {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        {/* Toolbar */}
-        <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0">
-          <div className="flex items-center gap-2 text-theme-text-secondary">
-            <Package className="w-5 h-5" />
-            <span className="font-medium">Helm Releases</span>
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0 w-full">
+        {/* Tab bar */}
+        <div className="flex items-center gap-1 px-4 pt-3 border-b border-theme-border bg-theme-surface/50">
+          <button
+            onClick={() => setActiveTab('releases')}
+            className={clsx(
+              'flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors',
+              activeTab === 'releases'
+                ? 'text-theme-text-primary border-blue-500'
+                : 'text-theme-text-secondary border-transparent hover:text-theme-text-primary hover:border-theme-border'
+            )}
+          >
+            <List className="w-4 h-4" />
+            Installed
             {releases && (
-              <span className="text-xs bg-theme-elevated px-2 py-0.5 rounded">
+              <span className="text-xs bg-theme-elevated px-1.5 py-0.5 rounded">
                 {releases.length}
               </span>
             )}
-            {!isFullyLoaded && (
-              <RefreshCw className="w-3.5 h-3.5 animate-spin text-theme-text-tertiary" />
-            )}
-          </div>
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
-            <input
-              type="text"
-              placeholder="Search releases..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
+          </button>
           <button
-            onClick={() => refetch()}
-            className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg"
-            title="Refresh"
+            onClick={() => setActiveTab('charts')}
+            className={clsx(
+              'flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors',
+              activeTab === 'charts'
+                ? 'text-theme-text-primary border-blue-500'
+                : 'text-theme-text-secondary border-transparent hover:text-theme-text-primary hover:border-theme-border'
+            )}
           >
-            <RefreshCw className="w-4 h-4" />
+            <LayoutGrid className="w-4 h-4" />
+            Catalog
           </button>
         </div>
 
-        {/* Table */}
-        <div className="flex-1 overflow-auto">
-          {isLoading ? (
-            <div className="flex items-center justify-center h-full text-theme-text-tertiary">
-              Loading...
+        {activeTab === 'releases' ? (
+          <>
+            {/* Releases Toolbar */}
+            <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0">
+              <div className="flex items-center gap-2 text-theme-text-secondary">
+                <Package className="w-5 h-5" />
+                <span className="font-medium">Helm Releases</span>
+                {!isFullyLoaded && (
+                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-theme-text-tertiary" />
+                )}
+              </div>
+              <div className="flex-1 relative">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
+                <input
+                  type="text"
+                  placeholder="Search releases..."
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
+                />
+              </div>
+              <button
+                onClick={() => refetch()}
+                className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg"
+                title="Refresh"
+              >
+                <RefreshCw className="w-4 h-4" />
+              </button>
             </div>
-          ) : filteredReleases.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary gap-2">
-              <Package className="w-12 h-12 text-theme-text-disabled" />
-              <span>No Helm releases found</span>
-              {searchTerm && (
-                <button
-                  onClick={() => setSearchTerm('')}
-                  className="text-blue-400 hover:text-blue-300 text-sm"
-                >
-                  Clear search
-                </button>
+
+            {/* Releases Table */}
+            <div className="flex-1 overflow-auto">
+              {isLoading ? (
+                <div className="flex items-center justify-center h-full text-theme-text-tertiary">
+                  Loading...
+                </div>
+              ) : filteredReleases.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary gap-2">
+                  <Package className="w-12 h-12 text-theme-text-disabled" />
+                  <span>No Helm releases found</span>
+                  {searchTerm && (
+                    <button
+                      onClick={() => setSearchTerm('')}
+                      className="text-blue-400 hover:text-blue-300 text-sm"
+                    >
+                      Clear search
+                    </button>
+                  )}
+                  {!searchTerm && (
+                    <button
+                      onClick={() => setActiveTab('charts')}
+                      className="mt-2 px-4 py-2 text-sm text-blue-400 hover:text-blue-300 border border-blue-500/30 rounded-lg hover:bg-blue-500/10 transition-colors"
+                    >
+                      Browse charts to install
+                    </button>
+                  )}
+                </div>
+              ) : (
+                <table className="w-full table-fixed">
+                  <thead className="bg-theme-surface sticky top-0 z-10">
+                    <tr>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide">
+                        Name
+                      </th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-32">
+                        Namespace
+                      </th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-48">
+                        Chart
+                      </th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-24 hidden xl:table-cell">
+                        App Version
+                      </th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-28">
+                        Status
+                      </th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-20">
+                        Rev
+                      </th>
+                      <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-24">
+                        Updated
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="table-divide-subtle">
+                    {filteredReleases.map((release) => (
+                      <ReleaseRow
+                        key={`${release.namespace}-${release.name}`}
+                        release={release}
+                        upgradeInfo={upgradeInfo?.releases[`${release.namespace}/${release.name}`]}
+                        isSelected={
+                          selectedRelease?.namespace === release.namespace &&
+                          selectedRelease?.name === release.name
+                        }
+                        onClick={() => onReleaseClick?.(release.namespace, release.name)}
+                      />
+                    ))}
+                  </tbody>
+                </table>
               )}
             </div>
-          ) : (
-            <table className="w-full table-fixed">
-              <thead className="bg-theme-surface sticky top-0 z-10">
-                <tr>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide">
-                    Name
-                  </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-32">
-                    Namespace
-                  </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-48">
-                    Chart
-                  </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-24 hidden xl:table-cell">
-                    App Version
-                  </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-28">
-                    Status
-                  </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-20">
-                    Rev
-                  </th>
-                  <th className="text-left px-4 py-3 text-xs font-medium text-theme-text-secondary uppercase tracking-wide w-24">
-                    Updated
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="table-divide-subtle">
-                {filteredReleases.map((release) => (
-                  <ReleaseRow
-                    key={`${release.namespace}-${release.name}`}
-                    release={release}
-                    upgradeInfo={upgradeInfo?.releases[`${release.namespace}/${release.name}`]}
-                    isSelected={
-                      selectedRelease?.namespace === release.namespace &&
-                      selectedRelease?.name === release.name
-                    }
-                    onClick={() => onReleaseClick?.(release.namespace, release.name)}
-                  />
-                ))}
-              </tbody>
-            </table>
-          )}
-        </div>
+          </>
+        ) : (
+          <ChartBrowser onChartSelect={handleChartSelect} />
+        )}
       </div>
+
+      {/* Install wizard modal */}
+      {selectedChart && (
+        <InstallWizard
+          repo={selectedChart.repo}
+          chartName={selectedChart.chart}
+          version={selectedChart.version}
+          source={selectedChart.source}
+          onClose={() => setSelectedChart(null)}
+          onSuccess={handleInstallSuccess}
+        />
+      )}
     </div>
   )
 }

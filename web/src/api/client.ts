@@ -1,11 +1,17 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import type {
   Topology,
   ClusterInfo,
   ContextInfo,
   Namespace,
   TimelineEvent,
+  TimelineResponse,
+  TimelineGroupingMode,
+  TimelineStats,
+  FilterPreset,
   TimeRange,
+  EventGroup,
   ResourceWithRelationships,
   HelmRelease,
   HelmReleaseDetail,
@@ -13,6 +19,13 @@ import type {
   ManifestDiff,
   UpgradeInfo,
   BatchUpgradeInfo,
+  ValuesPreviewResponse,
+  HelmRepository,
+  ChartSearchResult,
+  ChartDetail,
+  InstallChartRequest,
+  ArtifactHubSearchResult,
+  ArtifactHubChartDetail,
 } from '../types'
 
 const API_BASE = '/api'
@@ -182,6 +195,296 @@ export function useResourceEvents(kind: string, namespace: string, name: string)
     enabled: Boolean(kind && namespace && name),
     refetchInterval: 15000, // Refresh every 15 seconds
   })
+}
+
+// ============================================================================
+// New Timeline API (with grouping and filter presets)
+// ============================================================================
+
+export interface UseTimelineOptions {
+  namespace?: string
+  kinds?: string[]
+  timeRange?: TimeRange
+  groupBy?: TimelineGroupingMode
+  filter?: string // Filter preset name (default, all, warnings-only, workloads)
+  includeManaged?: boolean
+  includeK8sEvents?: boolean
+  limit?: number
+}
+
+// New timeline API with grouping support
+export function useTimeline(options: UseTimelineOptions = {}) {
+  const {
+    namespace,
+    kinds,
+    timeRange = '1h',
+    groupBy = 'none',
+    filter = 'default',
+    includeManaged = false,
+    includeK8sEvents = true,
+    limit = 200,
+  } = options
+
+  const params = new URLSearchParams()
+  if (namespace) params.set('namespace', namespace)
+  if (kinds?.length) params.set('kinds', kinds.join(','))
+  if (groupBy !== 'none') params.set('group_by', groupBy)
+  if (filter) params.set('filter', filter)
+  if (includeManaged) params.set('include_managed', 'true')
+  if (!includeK8sEvents) params.set('include_k8s_events', 'false')
+  params.set('limit', String(limit))
+
+  const sinceDate = getTimeRangeDate(timeRange)
+  if (sinceDate) {
+    params.set('since', sinceDate.toISOString())
+  }
+
+  const queryString = params.toString()
+
+  return useQuery<TimelineResponse>({
+    queryKey: ['timeline', namespace, kinds, timeRange, groupBy, filter, includeManaged, includeK8sEvents, limit],
+    queryFn: () => fetchJSON(`/timeline${queryString ? `?${queryString}` : ''}`),
+    refetchInterval: 10000, // Refresh every 10 seconds
+  })
+}
+
+// Get timeline with flat events (no grouping) - convenience wrapper
+export function useTimelineFlat(options: Omit<UseTimelineOptions, 'groupBy'> = {}) {
+  const result = useTimeline({ ...options, groupBy: 'none' })
+
+  return {
+    ...result,
+    // Flatten the response to just events for easier consumption
+    data: result.data?.ungrouped ?? [],
+  }
+}
+
+// Get available filter presets
+export function useTimelineFilters() {
+  return useQuery<Record<string, FilterPreset>>({
+    queryKey: ['timeline-filters'],
+    queryFn: () => fetchJSON('/timeline/filters'),
+    staleTime: 3600000, // 1 hour - filters don't change often
+  })
+}
+
+// Get timeline store statistics
+export function useTimelineStats() {
+  return useQuery<TimelineStats>({
+    queryKey: ['timeline-stats'],
+    queryFn: () => fetchJSON('/timeline/stats'),
+    staleTime: 60000, // 1 minute
+  })
+}
+
+// Get child events for a resource using new timeline API
+export function useTimelineChildren(kind: string, namespace: string, name: string, timeRange: TimeRange = '1h') {
+  const sinceDate = getTimeRangeDate(timeRange)
+  const params = new URLSearchParams()
+  if (sinceDate) {
+    params.set('since', sinceDate.toISOString())
+  }
+
+  return useQuery<TimelineEvent[]>({
+    queryKey: ['timeline-children', kind, namespace, name, timeRange],
+    queryFn: () => fetchJSON(`/timeline/${kind}/${namespace}/${name}/children?${params.toString()}`),
+    enabled: Boolean(kind && namespace && name),
+    refetchInterval: 15000,
+  })
+}
+
+// Timeline SSE stream event types
+export interface TimelineStreamEvent {
+  event: 'initial' | 'event' | 'group_update' | 'heartbeat'
+  data: TimelineResponse | { event: TimelineEvent; groupId?: string } | { groupId: string; healthState: string } | { time: number }
+}
+
+// Create SSE connection for timeline stream
+export function createTimelineStream(options?: {
+  namespace?: string
+  groupBy?: TimelineGroupingMode
+  filter?: string
+  onInitial?: (response: TimelineResponse) => void
+  onEvent?: (event: TimelineEvent, groupId?: string) => void
+  onGroupUpdate?: (groupId: string, healthState: string) => void
+  onError?: (error: Error) => void
+}): () => void {
+  const params = new URLSearchParams()
+  if (options?.namespace) params.set('namespace', options.namespace)
+  if (options?.groupBy && options.groupBy !== 'none') params.set('group_by', options.groupBy)
+  if (options?.filter) params.set('filter', options.filter)
+
+  const queryString = params.toString()
+  const url = `${API_BASE}/timeline/stream${queryString ? `?${queryString}` : ''}`
+
+  const eventSource = new EventSource(url)
+
+  eventSource.addEventListener('initial', (e) => {
+    try {
+      const data = JSON.parse(e.data) as TimelineResponse
+      options?.onInitial?.(data)
+    } catch (err) {
+      console.error('Failed to parse initial timeline data:', err)
+    }
+  })
+
+  eventSource.addEventListener('event', (e) => {
+    try {
+      const data = JSON.parse(e.data) as { event: TimelineEvent; groupId?: string }
+      options?.onEvent?.(data.event, data.groupId)
+    } catch (err) {
+      console.error('Failed to parse timeline event:', err)
+    }
+  })
+
+  eventSource.addEventListener('group_update', (e) => {
+    try {
+      const data = JSON.parse(e.data) as { groupId: string; healthState: string }
+      options?.onGroupUpdate?.(data.groupId, data.healthState)
+    } catch (err) {
+      console.error('Failed to parse group update:', err)
+    }
+  })
+
+  eventSource.onerror = () => {
+    options?.onError?.(new Error('Timeline SSE connection error'))
+  }
+
+  // Return cleanup function
+  return () => {
+    eventSource.close()
+  }
+}
+
+// React hook for timeline stream with automatic reconnection and state management
+export interface UseTimelineStreamOptions {
+  namespace?: string
+  groupBy?: TimelineGroupingMode
+  filter?: string
+  enabled?: boolean
+}
+
+export interface UseTimelineStreamResult {
+  groups: EventGroup[]
+  ungrouped: TimelineEvent[]
+  isConnected: boolean
+  error: Error | null
+  totalEvents: number
+}
+
+export function useTimelineStream(options: UseTimelineStreamOptions = {}): UseTimelineStreamResult {
+  const { namespace, groupBy = 'none', filter, enabled = true } = options
+
+  const [groups, setGroups] = useState<EventGroup[]>([])
+  const [ungrouped, setUngrouped] = useState<TimelineEvent[]>([])
+  const [isConnected, setIsConnected] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
+  const [totalEvents, setTotalEvents] = useState(0)
+
+  // Use ref to track cleanup function
+  const cleanupRef = useRef<(() => void) | null>(null)
+
+  // Handle initial data from SSE
+  const handleInitial = useCallback((response: TimelineResponse) => {
+    setGroups(response.groups || [])
+    setUngrouped(response.ungrouped || [])
+    setTotalEvents(response.meta.totalEvents)
+    setIsConnected(true)
+    setError(null)
+  }, [])
+
+  // Handle new events from SSE
+  const handleEvent = useCallback((event: TimelineEvent, groupId?: string) => {
+    if (groupId && groupBy !== 'none') {
+      // Find and update the appropriate group
+      setGroups(prevGroups => {
+        const newGroups = [...prevGroups]
+        const groupIndex = newGroups.findIndex(g => g.id === groupId)
+
+        if (groupIndex >= 0) {
+          // Add event to existing group
+          const group = { ...newGroups[groupIndex] }
+          group.events = [event, ...group.events]
+          group.eventCount = group.events.length
+          newGroups[groupIndex] = group
+        } else {
+          // Create new group for this event
+          const newGroup: EventGroup = {
+            id: groupId,
+            kind: event.kind,
+            name: event.name,
+            namespace: event.namespace,
+            events: [event],
+            eventCount: 1,
+            healthState: event.healthState,
+          }
+          newGroups.unshift(newGroup)
+        }
+
+        return newGroups
+      })
+    } else {
+      // Add to ungrouped list
+      setUngrouped(prev => [event, ...prev])
+    }
+
+    setTotalEvents(prev => prev + 1)
+  }, [groupBy])
+
+  // Handle group updates (health state changes)
+  const handleGroupUpdate = useCallback((groupId: string, healthState: string) => {
+    setGroups(prevGroups => {
+      return prevGroups.map(group => {
+        if (group.id === groupId) {
+          return { ...group, healthState: healthState as EventGroup['healthState'] }
+        }
+        return group
+      })
+    })
+  }, [])
+
+  // Handle errors
+  const handleError = useCallback((err: Error) => {
+    setError(err)
+    setIsConnected(false)
+  }, [])
+
+  // Set up SSE connection
+  useEffect(() => {
+    if (!enabled) {
+      return
+    }
+
+    // Clean up any existing connection
+    if (cleanupRef.current) {
+      cleanupRef.current()
+    }
+
+    const cleanup = createTimelineStream({
+      namespace,
+      groupBy,
+      filter,
+      onInitial: handleInitial,
+      onEvent: handleEvent,
+      onGroupUpdate: handleGroupUpdate,
+      onError: handleError,
+    })
+
+    cleanupRef.current = cleanup
+
+    return () => {
+      cleanup()
+      cleanupRef.current = null
+    }
+  }, [namespace, groupBy, filter, enabled, handleInitial, handleEvent, handleGroupUpdate, handleError])
+
+  return {
+    groups,
+    ungrouped,
+    isConnected,
+    error,
+    totalEvents,
+  }
 }
 
 // Pod logs types
@@ -485,6 +788,247 @@ export function useHelmUpgrade() {
   })
 }
 
+// Preview values change (dry-run upgrade)
+export function useHelmPreviewValues() {
+  return useMutation<ValuesPreviewResponse, Error, { namespace: string; name: string; values: Record<string, unknown> }>({
+    mutationFn: async ({ namespace, name, values }) => {
+      const response = await fetch(`${API_BASE}/helm/releases/${namespace}/${name}/values/preview`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values }),
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json()
+    },
+  })
+}
+
+// Apply new values to a release
+export function useHelmApplyValues() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ namespace, name, values }: { namespace: string; name: string; values: Record<string, unknown> }) => {
+      const response = await fetch(`${API_BASE}/helm/releases/${namespace}/${name}/values`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ values }),
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json()
+    },
+    onSuccess: (_, variables) => {
+      // Invalidate queries to refresh data
+      queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
+      queryClient.invalidateQueries({ queryKey: ['helm-release', variables.namespace, variables.name] })
+      queryClient.invalidateQueries({ queryKey: ['helm-values', variables.namespace, variables.name] })
+    },
+  })
+}
+
+// ============================================================================
+// Chart Browser API hooks
+// ============================================================================
+
+// List configured Helm repositories
+export function useHelmRepositories() {
+  return useQuery<HelmRepository[]>({
+    queryKey: ['helm-repositories'],
+    queryFn: () => fetchJSON('/helm/repositories'),
+  })
+}
+
+// Update a repository index
+export function useUpdateRepository() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (repoName: string) => {
+      const response = await fetch(`${API_BASE}/helm/repositories/${repoName}/update`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['helm-repositories'] })
+      queryClient.invalidateQueries({ queryKey: ['helm-charts'] })
+    },
+  })
+}
+
+// Search charts across all repositories
+export function useSearchCharts(query: string, allVersions = false, enabled = true) {
+  return useQuery<ChartSearchResult>({
+    queryKey: ['helm-charts', query, allVersions],
+    queryFn: () => {
+      const params = new URLSearchParams()
+      if (query) params.set('query', query)
+      if (allVersions) params.set('allVersions', 'true')
+      return fetchJSON(`/helm/charts?${params.toString()}`)
+    },
+    enabled,
+  })
+}
+
+// Get chart detail
+export function useChartDetail(repo: string, chart: string, version?: string, enabled = true) {
+  return useQuery<ChartDetail>({
+    queryKey: ['helm-chart-detail', repo, chart, version],
+    queryFn: () => {
+      const path = version
+        ? `/helm/charts/${repo}/${chart}/${version}`
+        : `/helm/charts/${repo}/${chart}`
+      return fetchJSON(path)
+    },
+    enabled: enabled && Boolean(repo && chart),
+  })
+}
+
+// Install a new chart (non-streaming)
+export function useInstallChart() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async (req: InstallChartRequest) => {
+      const response = await fetch(`${API_BASE}/helm/releases`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(req),
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json() as Promise<HelmRelease>
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
+    },
+  })
+}
+
+// Install progress event types
+export interface InstallProgressEvent {
+  type: 'progress' | 'complete' | 'error'
+  phase?: string
+  message?: string
+  detail?: string
+  release?: HelmRelease
+}
+
+// Install a chart with progress streaming via SSE
+export function installChartWithProgress(
+  req: InstallChartRequest,
+  onProgress: (event: InstallProgressEvent) => void
+): Promise<HelmRelease> {
+  return new Promise((resolve, reject) => {
+    // Use fetch with streaming response since we need to POST
+    fetch(`${API_BASE}/helm/releases/install-stream`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req),
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+          reject(new Error(error.error || `HTTP ${response.status}`))
+          return
+        }
+
+        const reader = response.body?.getReader()
+        if (!reader) {
+          reject(new Error('No response body'))
+          return
+        }
+
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+
+          // Parse SSE events from buffer
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || '' // Keep incomplete line in buffer
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6)) as InstallProgressEvent
+                onProgress(data)
+
+                if (data.type === 'complete' && data.release) {
+                  resolve(data.release)
+                } else if (data.type === 'error') {
+                  reject(new Error(data.message || 'Install failed'))
+                }
+              } catch {
+                // Ignore parse errors
+              }
+            }
+          }
+        }
+      })
+      .catch(reject)
+  })
+}
+
+// ============================================================================
+// ArtifactHub API hooks
+// ============================================================================
+
+// Sort options for ArtifactHub search
+export type ArtifactHubSortOption = 'relevance' | 'stars' | 'last_updated'
+
+// Search charts on ArtifactHub
+export function useArtifactHubSearch(
+  query: string,
+  options?: { offset?: number; limit?: number; official?: boolean; verified?: boolean; sort?: ArtifactHubSortOption },
+  enabled = true
+) {
+  const params = new URLSearchParams()
+  if (query) params.set('query', query)
+  if (options?.offset) params.set('offset', String(options.offset))
+  if (options?.limit) params.set('limit', String(options.limit))
+  if (options?.official) params.set('official', 'true')
+  if (options?.verified) params.set('verified', 'true')
+  if (options?.sort && options.sort !== 'relevance') params.set('sort', options.sort)
+
+  return useQuery<ArtifactHubSearchResult>({
+    queryKey: ['artifacthub-search', query, options?.offset, options?.limit, options?.official, options?.verified, options?.sort],
+    queryFn: () => fetchJSON(`/helm/artifacthub/search?${params.toString()}`),
+    enabled: enabled && query.length > 0,
+    staleTime: 60000, // 1 minute
+  })
+}
+
+// Get chart detail from ArtifactHub
+export function useArtifactHubChart(repoName: string, chartName: string, version?: string, enabled = true) {
+  const path = version
+    ? `/helm/artifacthub/charts/${repoName}/${chartName}/${version}`
+    : `/helm/artifacthub/charts/${repoName}/${chartName}`
+
+  return useQuery<ArtifactHubChartDetail>({
+    queryKey: ['artifacthub-chart', repoName, chartName, version],
+    queryFn: () => fetchJSON(path),
+    enabled: enabled && Boolean(repoName && chartName),
+    staleTime: 60000,
+  })
+}
+
 // ============================================================================
 // Context Switching API hooks
 // ============================================================================
@@ -526,7 +1070,9 @@ export function useSwitchContext() {
       return response.json()
     },
     onSuccess: () => {
-      // Invalidate all queries to force refetch with new context
+      // Clear all query cache to ensure fresh data from new context
+      // Using removeQueries + invalidateQueries ensures no stale data is served
+      queryClient.removeQueries()
       queryClient.invalidateQueries()
     },
   })

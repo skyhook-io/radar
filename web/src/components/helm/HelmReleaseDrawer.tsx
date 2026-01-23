@@ -3,6 +3,7 @@ import { X, Copy, Check, RefreshCw, Package, Code, History, FileText, Settings, 
 import { clsx } from 'clsx'
 import { useHelmRelease, useHelmManifest, useHelmValues, useHelmManifestDiff, useHelmUpgradeInfo, useHelmRollback, useHelmUninstall, useHelmUpgrade } from '../../api/client'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { Markdown } from '../ui/Markdown'
 import type { SelectedHelmRelease, HelmHook, ChartDependency } from '../../types'
 import { formatDate } from './helm-utils'
 import { getHelmStatusColor } from '../../utils/badge-colors'
@@ -22,7 +23,7 @@ type TabId = 'overview' | 'history' | 'manifest' | 'values' | 'resources' | 'hoo
 
 const MIN_WIDTH = 500
 const MAX_WIDTH_PERCENT = 0.8
-const DEFAULT_WIDTH = 800
+const DEFAULT_WIDTH = 1000
 
 export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: HelmReleaseDrawerProps) {
   const [activeTab, setActiveTab] = useState<TabId>('overview')
@@ -341,6 +342,9 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
                 onToggleAllValues={setShowAllValues}
                 onCopy={(text) => copyToClipboard(text, 'values')}
                 copied={copied === 'values'}
+                namespace={release.namespace}
+                name={release.name}
+                onApplySuccess={() => refetch()}
               />
             )}
             {activeTab === 'resources' && (
@@ -478,9 +482,9 @@ function OverviewTab({ release, onCopy, copied }: OverviewTabProps) {
               Copy
             </button>
           </div>
-          <pre className="text-xs text-theme-text-secondary whitespace-pre-wrap font-mono bg-theme-base/50 rounded p-3 max-h-64 overflow-auto">
-            {release.notes}
-          </pre>
+          <div className="text-xs bg-theme-base/50 rounded p-3 max-h-64 overflow-auto">
+            <Markdown>{release.notes}</Markdown>
+          </div>
         </div>
       )}
 
@@ -533,9 +537,9 @@ function OverviewTab({ release, onCopy, copied }: OverviewTabProps) {
               Copy
             </button>
           </div>
-          <pre className="text-xs text-theme-text-secondary whitespace-pre-wrap font-mono bg-theme-base/50 rounded p-3 max-h-96 overflow-auto">
-            {release.readme}
-          </pre>
+          <div className="text-xs bg-theme-base/50 rounded p-3 max-h-96 overflow-auto">
+            <Markdown>{release.readme}</Markdown>
+          </div>
         </div>
       )}
     </div>

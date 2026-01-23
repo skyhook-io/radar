@@ -100,3 +100,170 @@ type BatchUpgradeInfo struct {
 	// Map of "namespace/name" to UpgradeInfo
 	Releases map[string]*UpgradeInfo `json:"releases"`
 }
+
+// ApplyValuesRequest is the request body for applying new values to a release
+type ApplyValuesRequest struct {
+	Values map[string]any `json:"values"`
+}
+
+// ValuesPreviewResponse contains the preview of a values change
+type ValuesPreviewResponse struct {
+	CurrentValues map[string]any `json:"currentValues"`
+	NewValues     map[string]any `json:"newValues"`
+	ManifestDiff  string         `json:"manifestDiff"`
+}
+
+// HelmRepository represents a configured Helm repository
+type HelmRepository struct {
+	Name        string    `json:"name"`
+	URL         string    `json:"url"`
+	LastUpdated time.Time `json:"lastUpdated,omitempty"`
+}
+
+// ChartInfo contains basic information about a Helm chart
+type ChartInfo struct {
+	Name        string `json:"name"`
+	Version     string `json:"version"`
+	AppVersion  string `json:"appVersion,omitempty"`
+	Description string `json:"description,omitempty"`
+	Icon        string `json:"icon,omitempty"`
+	Repository  string `json:"repository"`
+	Home        string `json:"home,omitempty"`
+	Deprecated  bool   `json:"deprecated,omitempty"`
+}
+
+// ChartDetail contains detailed information about a chart version
+type ChartDetail struct {
+	ChartInfo
+	Readme       string         `json:"readme,omitempty"`
+	Values       map[string]any `json:"values,omitempty"`
+	ValuesSchema string         `json:"valuesSchema,omitempty"`
+	Maintainers  []Maintainer   `json:"maintainers,omitempty"`
+	Sources      []string       `json:"sources,omitempty"`
+	Keywords     []string       `json:"keywords,omitempty"`
+}
+
+// Maintainer represents a chart maintainer
+type Maintainer struct {
+	Name  string `json:"name"`
+	Email string `json:"email,omitempty"`
+	URL   string `json:"url,omitempty"`
+}
+
+// InstallRequest is the request body for installing a new chart
+type InstallRequest struct {
+	ReleaseName     string         `json:"releaseName"`
+	Namespace       string         `json:"namespace"`
+	ChartName       string         `json:"chartName"`
+	Version         string         `json:"version"`
+	Repository      string         `json:"repository"`
+	Values          map[string]any `json:"values,omitempty"`
+	CreateNamespace bool           `json:"createNamespace,omitempty"`
+}
+
+// ChartSearchResult contains search results for charts
+type ChartSearchResult struct {
+	Charts []ChartInfo `json:"charts"`
+	Total  int         `json:"total"`
+}
+
+// ============================================================================
+// ArtifactHub Types
+// ============================================================================
+
+// ArtifactHubChart represents a chart from ArtifactHub with rich metadata
+type ArtifactHubChart struct {
+	PackageID   string                  `json:"packageId"`
+	Name        string                  `json:"name"`
+	Version     string                  `json:"version"`
+	AppVersion  string                  `json:"appVersion,omitempty"`
+	Description string                  `json:"description,omitempty"`
+	LogoURL     string                  `json:"logoUrl,omitempty"`
+	HomeURL     string                  `json:"homeUrl,omitempty"`
+	Deprecated  bool                    `json:"deprecated,omitempty"`
+	Repository  ArtifactHubRepository   `json:"repository"`
+	Stars       int                     `json:"stars"`
+	License     string                  `json:"license,omitempty"`
+	CreatedAt   int64                   `json:"createdAt,omitempty"`   // Unix timestamp
+	UpdatedAt   int64                   `json:"updatedAt,omitempty"`   // Unix timestamp
+	Signed      bool                    `json:"signed,omitempty"`
+	Security    *ArtifactHubSecurity    `json:"security,omitempty"`
+	OrgCount    int                     `json:"productionOrgsCount,omitempty"` // Production organizations using this
+	HasSchema   bool                    `json:"hasValuesSchema,omitempty"`
+	Keywords    []string                `json:"keywords,omitempty"`
+}
+
+// ArtifactHubRepository contains repository info from ArtifactHub
+type ArtifactHubRepository struct {
+	Name             string `json:"name"`
+	URL              string `json:"url"`
+	Official         bool   `json:"official,omitempty"`
+	VerifiedPublisher bool  `json:"verifiedPublisher,omitempty"`
+	OrganizationName string `json:"organizationName,omitempty"`
+}
+
+// ArtifactHubSecurity contains security report summary
+type ArtifactHubSecurity struct {
+	Critical int `json:"critical,omitempty"`
+	High     int `json:"high,omitempty"`
+	Medium   int `json:"medium,omitempty"`
+	Low      int `json:"low,omitempty"`
+	Unknown  int `json:"unknown,omitempty"`
+}
+
+// ArtifactHubSearchResult contains search results from ArtifactHub
+type ArtifactHubSearchResult struct {
+	Charts []ArtifactHubChart `json:"charts"`
+	Total  int                `json:"total"`
+	Facets []ArtifactHubFacet `json:"facets,omitempty"`
+}
+
+// ArtifactHubFacet represents a search facet (for filtering)
+type ArtifactHubFacet struct {
+	Title   string                  `json:"title"`
+	Options []ArtifactHubFacetOption `json:"options"`
+}
+
+// ArtifactHubFacetOption represents a facet option
+type ArtifactHubFacetOption struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Total int    `json:"total"`
+}
+
+// ArtifactHubChartDetail contains detailed chart info from ArtifactHub
+type ArtifactHubChartDetail struct {
+	ArtifactHubChart
+	Readme       string                      `json:"readme,omitempty"`
+	Values       string                      `json:"values,omitempty"`      // Default values as string
+	ValuesSchema string                      `json:"valuesSchema,omitempty"`
+	Maintainers  []ArtifactHubMaintainer     `json:"maintainers,omitempty"`
+	Links        []ArtifactHubLink           `json:"links,omitempty"`
+	Versions     []ArtifactHubVersionSummary `json:"availableVersions,omitempty"`
+	Install      string                      `json:"install,omitempty"` // Install instructions
+}
+
+// ArtifactHubMaintainer represents a chart maintainer
+type ArtifactHubMaintainer struct {
+	Name  string `json:"name"`
+	Email string `json:"email,omitempty"`
+}
+
+// ArtifactHubLink represents a useful link for the chart
+type ArtifactHubLink struct {
+	Name string `json:"name"`
+	URL  string `json:"url"`
+}
+
+// ArtifactHubVersionSummary contains version summary info
+type ArtifactHubVersionSummary struct {
+	Version   string `json:"version"`
+	CreatedAt int64  `json:"ts,omitempty"`
+}
+
+// InstallProgress represents progress during a Helm install
+type InstallProgress struct {
+	Phase   string `json:"phase"`   // e.g., "downloading", "installing", "waiting"
+	Message string `json:"message"` // Human-readable status message
+	Detail  string `json:"detail,omitempty"` // Additional detail (e.g., command output)
+}
