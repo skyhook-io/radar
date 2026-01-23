@@ -90,6 +90,13 @@ func (c *Client) getActionConfig(namespace string) (*action.Configuration, error
 		configFlags.Namespace = &namespace
 	}
 
+	// Use Explorer's current context (in-memory) instead of kubeconfig's current-context
+	// This ensures Helm uses the same context as the rest of Explorer after context switches
+	currentContext := k8s.GetContextName()
+	if currentContext != "" && currentContext != "in-cluster" {
+		configFlags.Context = &currentContext
+	}
+
 	if err := actionConfig.Init(configFlags, namespace, "secrets", log.Printf); err != nil {
 		return nil, fmt.Errorf("failed to initialize helm action config: %w", err)
 	}

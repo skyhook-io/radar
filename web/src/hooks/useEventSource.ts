@@ -11,6 +11,7 @@ interface UseEventSourceReturn {
 interface UseEventSourceOptions {
   onContextSwitchComplete?: () => void
   onContextSwitchProgress?: (message: string) => void
+  onContextChanged?: (context: string) => void
 }
 
 const MAX_EVENTS = 100 // Keep last 100 events
@@ -118,6 +119,8 @@ export function useEventSource(
         setEvents([])
         // Mark that we're waiting for new topology data
         waitingForTopologyAfterSwitch.current = true
+        // Notify caller to invalidate caches (e.g., helm releases, resources)
+        options?.onContextChanged?.(data.context)
       } catch (e) {
         console.error('Failed to parse context_changed event:', e)
       }

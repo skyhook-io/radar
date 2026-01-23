@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { TopologyGraph } from './components/topology/TopologyGraph'
 import { TopologyFilterSidebar } from './components/topology/TopologyFilterSidebar'
@@ -177,10 +178,18 @@ function AppInner() {
   // Context switch state
   const { isSwitching, targetContext, progressMessage, updateProgress, endSwitch } = useContextSwitch()
 
+  // Query client for cache invalidation
+  const queryClient = useQueryClient()
+
   // SSE connection for real-time updates
   const { topology, connected, reconnect } = useEventSource(namespace, topologyMode, {
     onContextSwitchComplete: endSwitch,
     onContextSwitchProgress: updateProgress,
+    onContextChanged: () => {
+      // Invalidate all React Query caches when cluster context changes
+      // This ensures helm releases, resources, etc. are refetched from the new cluster
+      queryClient.invalidateQueries()
+    },
   })
 
   // Handle node selection - convert TopologyNode to SelectedResource for the drawer
