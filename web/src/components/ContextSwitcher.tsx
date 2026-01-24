@@ -1,9 +1,15 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { ChevronDown, Check, Loader2, Server, AlertTriangle } from 'lucide-react'
+import { ChevronDown, Check, Loader2, Server, AlertTriangle, XCircle } from 'lucide-react'
 import { useContexts, useSwitchContext, useClusterInfo, fetchSessionCounts, type SessionCounts } from '../api/client'
 import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useDock } from '../components/dock'
 import type { ContextInfo } from '../types'
+
+interface SwitchError {
+  contextName: string
+  clusterName: string
+  message: string
+}
 
 interface ContextSwitcherProps {
   className?: string
@@ -92,12 +98,13 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
   const [showConfirm, setShowConfirm] = useState(false)
   const [pendingSwitch, setPendingSwitch] = useState<ParsedContext | null>(null)
   const [sessionCounts, setSessionCounts] = useState<SessionCounts | null>(null)
+  const [switchError, setSwitchError] = useState<SwitchError | null>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
   const { data: contexts, isLoading: contextsLoading } = useContexts()
   const { data: clusterInfo } = useClusterInfo()
   const switchContext = useSwitchContext()
-  const { startSwitch } = useContextSwitch()
+  const { startSwitch, endSwitch } = useContextSwitch()
   const { tabs } = useDock()
 
   // Parse, group, and sort contexts
@@ -196,6 +203,9 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
 
   // Actually perform the context switch
   const performSwitch = async (parsed: ParsedContext) => {
+    // Clear any previous error
+    setSwitchError(null)
+
     startSwitch({
       raw: parsed.raw,
       provider: parsed.provider,
@@ -205,8 +215,17 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
     })
     try {
       await switchContext.mutateAsync({ name: parsed.context.name })
+      // Success - endSwitch is called by the overlay when it detects success
     } catch (error) {
       console.error('Failed to switch context:', error)
+      // On error, end the switch state so the overlay goes away
+      endSwitch()
+      // Show error dialog with context details
+      setSwitchError({
+        contextName: parsed.context.name,
+        clusterName: parsed.clusterName,
+        message: error instanceof Error ? error.message : 'Unknown error',
+      })
     }
   }
 
@@ -225,8 +244,10 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
     setSessionCounts(null)
   }
 
-  // Get current context name
-  const currentContextName = clusterInfo?.context || contexts?.find(c => c.isCurrent)?.name || 'Unknown'
+  // Get current context info - parse it to extract cluster name
+  const currentContextRaw = clusterInfo?.context || contexts?.find(c => c.isCurrent)?.name || 'Unknown'
+  const currentParsed = useMemo(() => parseContextName(currentContextRaw), [currentContextRaw])
+  const currentDisplayName = currentParsed.clusterName
 
   // Check if in-cluster mode (only one context named "in-cluster")
   const isInClusterMode = contexts?.length === 1 && contexts[0].name === 'in-cluster'
@@ -255,15 +276,15 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
           transition-colors cursor-pointer
           disabled:opacity-50 disabled:cursor-not-allowed
         `}
-        title={clusterInfo?.cluster || 'Click to switch context'}
+        title={currentContextRaw}
       >
         {switchContext.isPending ? (
           <Loader2 className="w-3.5 h-3.5 animate-spin" />
         ) : (
           <Server className="w-3.5 h-3.5 text-blue-400" />
         )}
-        <span className="max-w-[150px] truncate">
-          {switchContext.isPending ? 'Switching...' : currentContextName}
+        <span className="max-w-[180px] truncate">
+          {switchContext.isPending ? 'Switching...' : currentDisplayName}
         </span>
         <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
@@ -400,6 +421,40 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
                 className="px-3 py-1.5 text-sm rounded-md bg-amber-500 hover:bg-amber-600 text-white transition-colors"
               >
                 Switch Anyway
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Error dialog when context switch fails */}
+      {switchError && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50">
+          <div className="bg-theme-surface border border-theme-border rounded-lg shadow-xl max-w-md mx-4 overflow-hidden">
+            <div className="px-4 py-3 border-b border-red-500/30 bg-red-500/10 flex items-center gap-2">
+              <XCircle className="w-5 h-5 text-red-400" />
+              <span className="font-medium text-theme-text-primary">Connection Failed</span>
+            </div>
+            <div className="px-4 py-4">
+              <p className="text-sm text-theme-text-secondary mb-3">
+                Failed to switch to cluster <span className="font-medium text-theme-text-primary">{switchError.clusterName}</span>
+              </p>
+              <div className="bg-theme-base rounded-md p-3 mb-4">
+                <p className="text-xs text-red-400 font-mono break-all">
+                  {switchError.message}
+                </p>
+              </div>
+              <p className="text-xs text-theme-text-tertiary">
+                The cluster may be unreachable, or your credentials may have expired.
+                Try running <code className="bg-theme-elevated px-1 py-0.5 rounded text-theme-text-secondary">kubectl get nodes</code> to verify connectivity.
+              </p>
+            </div>
+            <div className="px-4 py-3 border-t border-theme-border flex justify-end">
+              <button
+                onClick={() => setSwitchError(null)}
+                className="px-4 py-1.5 text-sm rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-primary transition-colors"
+              >
+                OK
               </button>
             </div>
           </div>
