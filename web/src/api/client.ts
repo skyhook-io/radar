@@ -110,6 +110,7 @@ export interface UseChangesOptions {
   namespace?: string
   kind?: string
   timeRange?: TimeRange
+  filter?: string // Filter preset name ('default', 'all', 'warnings-only', 'workloads')
   includeK8sEvents?: boolean
   includeManaged?: boolean
   limit?: number
@@ -135,11 +136,12 @@ function getTimeRangeDate(range: TimeRange): Date | null {
 }
 
 export function useChanges(options: UseChangesOptions = {}) {
-  const { namespace, kind, timeRange = '1h', includeK8sEvents = true, includeManaged = false, limit = 200 } = options
+  const { namespace, kind, timeRange = '1h', filter = 'all', includeK8sEvents = true, includeManaged = false, limit = 200 } = options
 
   const params = new URLSearchParams()
   if (namespace) params.set('namespace', namespace)
   if (kind) params.set('kind', kind)
+  if (filter) params.set('filter', filter)
   if (!includeK8sEvents) params.set('include_k8s_events', 'false')
   if (includeManaged) params.set('include_managed', 'true')
   params.set('limit', String(limit))
@@ -152,9 +154,9 @@ export function useChanges(options: UseChangesOptions = {}) {
   const queryString = params.toString()
 
   return useQuery<TimelineEvent[]>({
-    queryKey: ['changes', namespace, kind, timeRange, includeK8sEvents, includeManaged, limit],
+    queryKey: ['changes', namespace, kind, timeRange, filter, includeK8sEvents, includeManaged, limit],
     queryFn: () => fetchJSON(`/changes${queryString ? `?${queryString}` : ''}`),
-    refetchInterval: 10000, // Refresh every 10 seconds
+    refetchInterval: 60000, // SSE handles real-time updates; this is a fallback
   })
 }
 
@@ -244,7 +246,7 @@ export function useTimeline(options: UseTimelineOptions = {}) {
   return useQuery<TimelineResponse>({
     queryKey: ['timeline', namespace, kinds, timeRange, groupBy, filter, includeManaged, includeK8sEvents, limit],
     queryFn: () => fetchJSON(`/timeline${queryString ? `?${queryString}` : ''}`),
-    refetchInterval: 10000, // Refresh every 10 seconds
+    refetchInterval: 60000, // SSE handles real-time updates; this is a fallback
   })
 }
 
@@ -615,6 +617,103 @@ export function useDeleteResource() {
     },
     onSuccess: (_, variables) => {
       // Invalidate queries to refresh data
+      queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
+      queryClient.invalidateQueries({ queryKey: ['topology'] })
+    },
+  })
+}
+
+// ============================================================================
+// CronJob operations
+// ============================================================================
+
+// Trigger a CronJob (create a Job from it)
+export function useTriggerCronJob() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ namespace, name }: { namespace: string; name: string }) => {
+      const response = await fetch(`${API_BASE}/cronjobs/${namespace}/${name}/trigger`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['resources', 'cronjobs'] })
+      queryClient.invalidateQueries({ queryKey: ['resources', 'jobs'] })
+      queryClient.invalidateQueries({ queryKey: ['topology'] })
+    },
+  })
+}
+
+// Suspend a CronJob
+export function useSuspendCronJob() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ namespace, name }: { namespace: string; name: string }) => {
+      const response = await fetch(`${API_BASE}/cronjobs/${namespace}/${name}/suspend`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['resources', 'cronjobs'] })
+      queryClient.invalidateQueries({ queryKey: ['topology'] })
+    },
+  })
+}
+
+// Resume a suspended CronJob
+export function useResumeCronJob() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ namespace, name }: { namespace: string; name: string }) => {
+      const response = await fetch(`${API_BASE}/cronjobs/${namespace}/${name}/resume`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['resources', 'cronjobs'] })
+      queryClient.invalidateQueries({ queryKey: ['topology'] })
+    },
+  })
+}
+
+// ============================================================================
+// Workload operations
+// ============================================================================
+
+// Restart a workload (Deployment, StatefulSet, DaemonSet, Rollout)
+export function useRestartWorkload() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ kind, namespace, name }: { kind: string; namespace: string; name: string }) => {
+      const response = await fetch(`${API_BASE}/workloads/${kind}/${namespace}/${name}/restart`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json()
+    },
+    onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
     },
@@ -1054,20 +1153,37 @@ export async function fetchSessionCounts(): Promise<SessionCounts> {
   return fetchJSON('/sessions')
 }
 
+// Context switch timeout in milliseconds (should be longer than backend timeout)
+const CONTEXT_SWITCH_TIMEOUT = 45000 // 45 seconds
+
 // Switch to a different context
 export function useSwitchContext() {
   const queryClient = useQueryClient()
 
   return useMutation<ClusterInfo, Error, { name: string }>({
     mutationFn: async ({ name }) => {
-      const response = await fetch(`${API_BASE}/contexts/${encodeURIComponent(name)}`, {
-        method: 'POST',
-      })
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
-        throw new Error(error.error || `HTTP ${response.status}`)
+      const controller = new AbortController()
+      const timeoutId = setTimeout(() => controller.abort(), CONTEXT_SWITCH_TIMEOUT)
+
+      try {
+        const response = await fetch(`${API_BASE}/contexts/${encodeURIComponent(name)}`, {
+          method: 'POST',
+          signal: controller.signal,
+        })
+        clearTimeout(timeoutId)
+
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+          throw new Error(error.error || `HTTP ${response.status}`)
+        }
+        return response.json()
+      } catch (error) {
+        clearTimeout(timeoutId)
+        if (error instanceof Error && error.name === 'AbortError') {
+          throw new Error('Context switch timed out. The cluster may be unreachable.')
+        }
+        throw error
       }
-      return response.json()
     },
     onSuccess: () => {
       // Clear all query cache to ensure fresh data from new context

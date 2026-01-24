@@ -17,7 +17,8 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { stringify as yamlStringify } from 'yaml'
-import { useResource, useResourceEvents, useUpdateResource } from '../../api/client'
+import { useResource, useResourceEvents, useUpdateResource, useDeleteResource, useTriggerCronJob, useSuspendCronJob, useResumeCronJob, useRestartWorkload } from '../../api/client'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
 import type { SelectedResource, Relationships, ResourceRef } from '../../types'
 import {
   getPodStatus,
@@ -352,7 +353,7 @@ function DrawerHeader({ resource, resourceData, showYaml, setShowYaml, isRefetch
       </div>
 
       {/* Actions bar */}
-      <ActionsBar resource={resource} data={resourceData} />
+      <ActionsBar resource={resource} data={resourceData} onClose={onClose} />
     </div>
   )
 }
@@ -361,11 +362,41 @@ function DrawerHeader({ resource, resourceData, showYaml, setShowYaml, isRefetch
 // ACTIONS BAR - Interactive buttons that change based on resource kind
 // ============================================================================
 
-function ActionsBar({ resource, data }: { resource: SelectedResource; data: any }) {
+interface ActionsBarProps {
+  resource: SelectedResource
+  data: any
+  onClose: () => void
+}
+
+function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
   const { showCopied } = useToast()
   const openTerminal = useOpenTerminal()
   const openLogs = useOpenLogs()
   const kind = resource.kind.toLowerCase()
+
+  // Delete confirmation state
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const deleteMutation = useDeleteResource()
+
+  // CronJob mutations
+  const triggerCronJobMutation = useTriggerCronJob()
+  const suspendCronJobMutation = useSuspendCronJob()
+  const resumeCronJobMutation = useResumeCronJob()
+
+  // Workload restart mutation
+  const restartWorkloadMutation = useRestartWorkload()
+
+  const handleDeleteConfirm = () => {
+    deleteMutation.mutate(
+      { kind: resource.kind, namespace: resource.namespace, name: resource.name },
+      {
+        onSuccess: () => {
+          setShowDeleteConfirm(false)
+          onClose()
+        },
+      }
+    )
+  }
 
   const isRunning = kind === 'pods' ? data?.status?.phase === 'Running' : true
   const containers = data?.spec?.containers?.map((c: any) => c.name) || []
@@ -433,18 +464,19 @@ function ActionsBar({ resource, data }: { resource: SelectedResource; data: any 
         />
       )}
 
-      {/* Workload actions - restart command */}
-      {['deployments', 'statefulsets', 'daemonsets'].includes(kind) && (
+      {/* Workload actions - restart */}
+      {['deployments', 'statefulsets', 'daemonsets', 'rollouts'].includes(kind) && (
         <button
-          onClick={(e) => showCopied(
-            `kubectl rollout restart ${kind.slice(0, -1)} ${resource.name} -n ${resource.namespace}`,
-            'Restart command copied',
-            e
-          )}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+          onClick={() => restartWorkloadMutation.mutate({
+            kind: resource.kind,
+            namespace: resource.namespace,
+            name: resource.name,
+          })}
+          disabled={restartWorkloadMutation.isPending}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors disabled:opacity-50"
         >
-          <RefreshCw className="w-3.5 h-3.5" />
-          Restart
+          <RefreshCw className={`w-3.5 h-3.5 ${restartWorkloadMutation.isPending ? 'animate-spin' : ''}`} />
+          {restartWorkloadMutation.isPending ? 'Restarting...' : 'Restart'}
         </button>
       )}
 
@@ -452,30 +484,41 @@ function ActionsBar({ resource, data }: { resource: SelectedResource; data: any 
       {kind === 'cronjobs' && (
         <>
           <button
-            onClick={(e) => showCopied(
-              `kubectl create job --from=cronjob/${resource.name} ${resource.name}-manual-$(date +%s) -n ${resource.namespace}`,
-              'Trigger command copied',
-              e
-            )}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+            onClick={() => triggerCronJobMutation.mutate({
+              namespace: resource.namespace,
+              name: resource.name,
+            })}
+            disabled={triggerCronJobMutation.isPending}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50"
           >
-            <Play className="w-3.5 h-3.5" />
-            Trigger
+            <Play className={`w-3.5 h-3.5 ${triggerCronJobMutation.isPending ? 'animate-pulse' : ''}`} />
+            {triggerCronJobMutation.isPending ? 'Triggering...' : 'Trigger'}
           </button>
-          <button
-            onClick={(e) => {
-              const suspended = data?.spec?.suspend
-              showCopied(
-                `kubectl patch cronjob ${resource.name} -n ${resource.namespace} -p '{"spec":{"suspend":${!suspended}}}'`,
-                `${suspended ? 'Resume' : 'Suspend'} command copied`,
-                e
-              )
-            }}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
-          >
-            {data?.spec?.suspend ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
-            {data?.spec?.suspend ? 'Resume' : 'Suspend'}
-          </button>
+          {data?.spec?.suspend ? (
+            <button
+              onClick={() => resumeCronJobMutation.mutate({
+                namespace: resource.namespace,
+                name: resource.name,
+              })}
+              disabled={resumeCronJobMutation.isPending}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
+            >
+              <Play className="w-3.5 h-3.5" />
+              {resumeCronJobMutation.isPending ? 'Resuming...' : 'Resume'}
+            </button>
+          ) : (
+            <button
+              onClick={() => suspendCronJobMutation.mutate({
+                namespace: resource.namespace,
+                name: resource.name,
+              })}
+              disabled={suspendCronJobMutation.isPending}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors disabled:opacity-50"
+            >
+              <Pause className="w-3.5 h-3.5" />
+              {suspendCronJobMutation.isPending ? 'Suspending...' : 'Suspend'}
+            </button>
+          )}
         </>
       )}
 
@@ -496,19 +539,25 @@ function ActionsBar({ resource, data }: { resource: SelectedResource; data: any 
 
       {/* Delete action for all - shown as secondary/danger style */}
       <button
-        onClick={(e) => {
-          const kindSingular = kind.endsWith('s') ? kind.slice(0, -1) : kind
-          showCopied(
-            `kubectl delete ${kindSingular} ${resource.name} -n ${resource.namespace}`,
-            'Delete command copied',
-            e
-          )
-        }}
+        onClick={() => setShowDeleteConfirm(true)}
         className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-400 hover:text-white hover:bg-red-600 border border-red-400/50 hover:border-red-600 rounded-lg transition-colors"
       >
         <Trash2 className="w-3.5 h-3.5" />
         Delete
       </button>
+
+      {/* Delete confirmation dialog */}
+      <ConfirmDialog
+        open={showDeleteConfirm}
+        onClose={() => setShowDeleteConfirm(false)}
+        onConfirm={handleDeleteConfirm}
+        title="Delete Resource"
+        message={`Are you sure you want to delete "${resource.name}"?`}
+        details={`This will permanently delete the ${formatKindName(resource.kind)} "${resource.name}" from the "${resource.namespace}" namespace.`}
+        confirmLabel="Delete"
+        variant="danger"
+        isLoading={deleteMutation.isPending}
+      />
     </div>
   )
 }
