@@ -43,6 +43,7 @@ export interface TopologyEdge {
 export interface Topology {
   nodes: TopologyNode[]
   edges: TopologyEdge[]
+  warnings?: string[] // Warnings about resources that failed to load
 }
 
 // K8s Event (from SSE stream)
@@ -79,12 +80,12 @@ export type EventSource = 'informer' | 'k8s_event' | 'historical'
 // Event types for the new timeline API
 export type EventType = 'add' | 'update' | 'delete' | 'Normal' | 'Warning'
 
-// Unified timeline event (from /api/timeline - new format)
-// Also compatible with legacy /api/changes endpoint
+// Unified timeline event (from /api/changes and /api/timeline)
+// Uses the canonical format from timeline.TimelineEvent in the backend
 export interface TimelineEvent {
   id: string
   timestamp: string // ISO date string
-  source?: EventSource // New field for source type
+  source: EventSource // Where event originated: 'informer', 'k8s_event', 'historical'
 
   // Resource identity
   kind: string
@@ -92,8 +93,12 @@ export interface TimelineEvent {
   name: string
   uid?: string
 
+  // Resource metadata - when the resource was actually created in K8s
+  // This is different from timestamp which is when we observed the event
+  createdAt?: string // ISO date string
+
   // Event details
-  eventType?: EventType // New unified event type field
+  eventType: EventType // 'add', 'update', 'delete', 'Normal', 'Warning'
   reason?: string
   message?: string
 
@@ -106,13 +111,28 @@ export interface TimelineEvent {
   // K8s Event specific
   count?: number
 
-  // Legacy compatibility fields
-  type?: 'change' | 'k8s_event' // Legacy: maps to source
-  operation?: 'add' | 'update' | 'delete' // Legacy: maps to eventType
-  isHistorical?: boolean // Legacy: now indicated by source === 'historical'
-
   // Correlation
   correlationId?: string
+}
+
+// Helper to check if event is a change (vs K8s event)
+export function isChangeEvent(event: TimelineEvent): boolean {
+  return event.source === 'informer' || event.source === 'historical'
+}
+
+// Helper to check if event is a K8s Event object
+export function isK8sEvent(event: TimelineEvent): boolean {
+  return event.source === 'k8s_event'
+}
+
+// Helper to check if event is historical (reconstructed from metadata)
+export function isHistoricalEvent(event: TimelineEvent): boolean {
+  return event.source === 'historical'
+}
+
+// Helper to check if event is an add/update/delete operation
+export function isOperation(eventType: EventType): eventType is 'add' | 'update' | 'delete' {
+  return eventType === 'add' || eventType === 'update' || eventType === 'delete'
 }
 
 // Timeline event group (from /api/timeline with grouping)
@@ -222,8 +242,9 @@ export interface Namespace {
 export type MainView = 'topology' | 'resources' | 'timeline' | 'helm'
 
 // Topology view mode (for backwards compatibility, also exported as ViewMode)
-export type TopologyMode = 'full' | 'traffic'
-export type ViewMode = 'full' | 'traffic'
+// NOTE: Must match Go backend constants in internal/topology/types.go
+export type TopologyMode = 'resources' | 'traffic'
+export type ViewMode = 'resources' | 'traffic'
 
 // Grouping mode
 export type GroupingMode = 'none' | 'namespace' | 'app' | 'label'
@@ -291,6 +312,10 @@ export interface HelmRelease {
   status: string
   revision: number
   updated: string // ISO date string
+  // Health summary from owned resources
+  resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
+  healthIssue?: string    // Primary issue if unhealthy (e.g., "OOMKilled")
+  healthSummary?: string  // Brief summary like "2/3 pods ready"
 }
 
 export interface HelmRevision {
@@ -343,6 +368,8 @@ export interface HelmOwnedResource {
   status?: string   // Running, Pending, Failed, Active, etc.
   ready?: string    // e.g., "3/3" for deployments
   message?: string  // Status message or reason
+  summary?: string  // Brief status like "0/3 OOMKilled"
+  issue?: string    // Primary issue if unhealthy (e.g., "OOMKilled")
 }
 
 export interface HelmValues {
@@ -526,3 +553,113 @@ export interface ArtifactHubVersionSummary {
 
 // Chart source type for UI toggling
 export type ChartSource = 'local' | 'artifacthub'
+
+// ============================================================================
+// Traffic Types
+// ============================================================================
+
+// Traffic endpoint (source or destination in a flow)
+export interface TrafficEndpoint {
+  name: string
+  namespace: string
+  kind: string // Pod, Service, External
+  ip?: string
+  labels?: Record<string, string>
+  workload?: string
+  port?: number
+}
+
+// Traffic flow between two endpoints
+export interface TrafficFlow {
+  source: TrafficEndpoint
+  destination: TrafficEndpoint
+  protocol: string // tcp, udp, http, grpc
+  port: number
+  l7Protocol?: string // HTTP, gRPC, DNS
+  httpMethod?: string
+  httpPath?: string
+  httpStatus?: number
+  bytesSent: number
+  bytesRecv: number
+  connections: number
+  verdict: string // forwarded, dropped, error
+  lastSeen: string // ISO date string
+}
+
+// Aggregated flow by service pair
+export interface AggregatedFlow {
+  source: TrafficEndpoint
+  destination: TrafficEndpoint
+  protocol: string
+  port: number
+  flowCount: number
+  bytesSent: number
+  bytesRecv: number
+  connections: number
+  lastSeen: string
+  requestCount?: number
+  errorCount?: number
+  avgLatencyMs?: number
+}
+
+// Cluster info for traffic detection
+export interface TrafficClusterInfo {
+  platform: string // gke, eks, aks, generic
+  cni: string // cilium, calico, flannel, vpc-cni, azure-cni
+  dataplaneV2: boolean
+  clusterName?: string
+  k8sVersion?: string
+}
+
+// Traffic source status
+export interface TrafficSourceStatus {
+  name: string
+  status: 'available' | 'not_found' | 'error'
+  version?: string
+  native: boolean
+  message?: string
+}
+
+// Helm chart info for one-click install
+export interface TrafficHelmChartInfo {
+  repo: string
+  repoUrl: string
+  chartName: string
+  version?: string
+}
+
+// Recommendation for installing a traffic source
+export interface TrafficRecommendation {
+  name: string
+  reason: string
+  installCommand?: string // For non-Helm installs (e.g., gcloud commands)
+  docsUrl?: string
+  // Helm chart info (for one-click install via Helm view)
+  helmChart?: TrafficHelmChartInfo
+  // Alternative option (for cases with two good choices)
+  alternativeName?: string
+  alternativeReason?: string
+  alternativeDocsUrl?: string
+}
+
+// Response from GET /api/traffic/sources
+export interface TrafficSourcesResponse {
+  cluster: TrafficClusterInfo
+  detected: TrafficSourceStatus[]
+  notDetected: string[]
+  recommended?: TrafficRecommendation
+}
+
+// Response from GET /api/traffic/flows
+export interface TrafficFlowsResponse {
+  source: string
+  timestamp: string
+  flows: TrafficFlow[]
+  aggregated: AggregatedFlow[]
+}
+
+// Wizard state for traffic setup
+export type TrafficWizardState = 'detecting' | 'not_found' | 'wizard' | 'checking' | 'ready'
+
+// Main view type now includes 'traffic'
+export type ExtendedMainView = MainView | 'traffic'

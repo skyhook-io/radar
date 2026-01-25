@@ -17,48 +17,26 @@ import {
   Check,
 } from 'lucide-react'
 import type { TimelineEvent, TimeRange, ResourceRef, Relationships } from '../../types'
-import { isChangeEvent, isHistoricalEvent, isK8sEvent } from '../../types'
-import { useChanges, useResourceWithRelationships, usePodLogs, useDeleteResource } from '../../api/client'
+import { isChangeEvent, isHistoricalEvent } from '../../types'
+import { useChanges, useResourceWithRelationships, usePodLogs, useDeleteResource, useTopology } from '../../api/client'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { getKindBadgeColor, getHealthBadgeColor } from '../../utils/badge-colors'
-
-// Known noisy resources that update constantly
-const NOISY_NAME_PATTERNS = [
-  /^kube-scheduler$/,
-  /^kube-controller-manager$/,
-  /-leader-election$/,
-  /-lock$/,
-  /-lease$/,
-]
-
-const NOISY_KINDS = new Set(['Lease', 'Endpoints', 'EndpointSlice', 'Event'])
-
-function isRoutineEvent(event: TimelineEvent): boolean {
-  if (event.kind === 'Event' && isChangeEvent(event)) return true
-  if (event.eventType !== 'update') return false
-  if (NOISY_KINDS.has(event.kind)) return true
-  if (NOISY_NAME_PATTERNS.some(pattern => pattern.test(event.name))) return true
-  if (event.kind === 'ConfigMap') {
-    if (event.name.endsWith('-lock') || event.name.endsWith('-lease') || event.name.endsWith('-leader')) {
-      return true
-    }
-  }
-  return false
-}
-
-const PROBLEMATIC_REASONS = new Set([
-  'BackOff', 'CrashLoopBackOff', 'Failed', 'FailedScheduling', 'FailedMount',
-  'FailedAttachVolume', 'FailedCreate', 'FailedDelete', 'Unhealthy', 'Killing',
-  'Evicted', 'OOMKilling', 'OOMKilled', 'NodeNotReady', 'NetworkNotReady',
-  'FailedSync', 'FailedValidation', 'InvalidImageName', 'ErrImagePull',
-  'ImagePullBackOff', 'FailedPreStopHook', 'FailedPostStartHook',
-])
-
-function isProblematicEvent(event: TimelineEvent): boolean {
-  if (event.eventType === 'Warning') return true
-  if (event.reason && PROBLEMATIC_REASONS.has(event.reason)) return true
-  return false
-}
+import { buildResourceHierarchy, getAllEventsFromHierarchy, isProblematicEvent, type ResourceLane } from '../../utils/resource-hierarchy'
+import {
+  ZOOM_LEVELS,
+  type ZoomLevel,
+  formatAxisTime,
+  isRoutineEvent,
+  EventMarker,
+  EventDotLegend,
+  HealthSpanLegend,
+  HealthSpan,
+  ZoomControls,
+  buildHealthSpans,
+  timeToX,
+  calculateTimeRange,
+} from '../timeline/shared'
+import { stringify as yamlStringify } from 'yaml'
 
 type TabType = 'events' | 'logs' | 'info' | 'yaml'
 
@@ -79,7 +57,7 @@ export function ResourceDetailPage({
 }: ResourceDetailPageProps) {
   const [activeTab, setActiveTab] = useState<TabType>('events')
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
-  const [timeRange, setTimeRange] = useState<TimeRange>('1h')
+  const [zoom, setZoom] = useState<ZoomLevel>(1) // 1 hour default
   const [selectedPod, setSelectedPod] = useState<string | null>(null)
   const [showRoutineEvents, setShowRoutineEvents] = useState(false)
 
@@ -88,36 +66,53 @@ export function ResourceDetailPage({
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
 
-  // Fetch events
+  // Fetch topology for hierarchy building
+  const { data: topology } = useTopology(namespace, 'resources')
+
+  // Convert zoom level to TimeRange for API
+  const timeRange: TimeRange = zoom <= 0.5 ? '30m' : zoom <= 1 ? '1h' : zoom <= 6 ? '6h' : zoom <= 24 ? '24h' : 'all'
+
+  // Fetch events - fetch from all namespaces to capture related resources in other namespaces
   const { data: allEvents, isLoading: eventsLoading } = useChanges({
     namespace,
     timeRange,
     includeK8sEvents: true,
     includeManaged: true,
-    limit: 500,
+    limit: 1000, // Increased limit to capture more related events
   })
 
-  // Filter events to this resource and children
-  const resourceEvents = useMemo(() => {
+  // Build resource hierarchy using the shared utility
+  // This finds all related events (transitive children, topology relationships, app labels)
+  const resourceLanes = useMemo(() => {
     if (!allEvents) return []
-    let events = allEvents.filter(e =>
-      (e.kind === kind && e.namespace === namespace && e.name === name) ||
-      (e.owner?.kind === kind && e.owner?.name === name)
-    )
-    if (!showRoutineEvents) {
-      events = events.filter(e => !isRoutineEvent(e))
-    }
-    return events
-  }, [allEvents, kind, namespace, name, showRoutineEvents])
+    // Filter routine events before building hierarchy (unless showing routine events)
+    const filteredEvents = showRoutineEvents ? allEvents : allEvents.filter(e => !isRoutineEvent(e))
+    return buildResourceHierarchy({
+      events: filteredEvents,
+      topology,
+      rootResource: { kind, namespace, name },
+      groupByApp: true,
+    })
+  }, [allEvents, topology, kind, namespace, name, showRoutineEvents])
 
+  // Get all events flattened for stats and compatibility
+  const resourceEvents = useMemo(() => {
+    return getAllEventsFromHierarchy(resourceLanes)
+  }, [resourceLanes])
+
+  // Count routine events that would be shown in the hierarchy
   const routineEventCount = useMemo(() => {
     if (!allEvents) return 0
-    const relevant = allEvents.filter(e =>
-      (e.kind === kind && e.namespace === namespace && e.name === name) ||
-      (e.owner?.kind === kind && e.owner?.name === name)
-    )
-    return relevant.filter(isRoutineEvent).length
-  }, [allEvents, kind, namespace, name])
+    // Build hierarchy without routine filter to count how many would be excluded
+    const fullLanes = buildResourceHierarchy({
+      events: allEvents,
+      topology,
+      rootResource: { kind, namespace, name },
+      groupByApp: true,
+    })
+    const allHierarchyEvents = getAllEventsFromHierarchy(fullLanes)
+    return allHierarchyEvents.filter(isRoutineEvent).length
+  }, [allEvents, topology, kind, namespace, name])
 
   // Extract metadata from resource
   const metadata = useMemo(() => extractMetadata(kind, resource), [kind, resource])
@@ -129,24 +124,29 @@ export function ResourceDetailPage({
   const warningCount = resourceEvents.filter(isProblematicEvent).length
   const stats = useMemo(() => extractStats(kind, resource, resourceEvents), [kind, resource, resourceEvents])
 
-  // Get child resources for timeline swimlanes
+  // Get child resources from the hierarchy for timeline swimlanes and logs tab
+  // Extract all Pod children from the hierarchy
   const childPods = useMemo(() => {
-    if (!allEvents) return []
-    // Find unique pods that are children of this resource
-    const podMap = new Map<string, TimelineEvent[]>()
-    for (const e of allEvents) {
-      if (e.kind === 'Pod' && e.owner?.kind === kind && e.owner?.name === name) {
-        const key = `${e.namespace}/${e.name}`
-        if (!podMap.has(key)) podMap.set(key, [])
-        podMap.get(key)!.push(e)
+    if (resourceLanes.length === 0) return []
+    const rootLane = resourceLanes[0]
+    const pods: { name: string; namespace: string; events: TimelineEvent[] }[] = []
+
+    // Helper to recursively collect pod lanes
+    const collectPods = (lane: ResourceLane) => {
+      if (lane.kind === 'Pod') {
+        pods.push({ name: lane.name, namespace: lane.namespace, events: lane.events })
       }
+      lane.children?.forEach(collectPods)
     }
-    return Array.from(podMap.entries()).map(([key, events]) => ({
-      name: key.split('/')[1],
-      namespace: key.split('/')[0],
-      events,
-    }))
-  }, [allEvents, kind, name])
+
+    // Collect from children (not the root itself unless it's a Pod)
+    rootLane.children?.forEach(collectPods)
+    if (rootLane.kind === 'Pod') {
+      pods.push({ name: rootLane.name, namespace: rootLane.namespace, events: rootLane.events })
+    }
+
+    return pods
+  }, [resourceLanes])
 
   return (
     <div className="flex flex-col h-full w-full bg-theme-base">
@@ -235,10 +235,10 @@ export function ResourceDetailPage({
         {activeTab === 'events' && (
           <EventsTab
             events={resourceEvents}
-            childPods={childPods}
+            resourceLanes={resourceLanes}
             isLoading={eventsLoading}
-            timeRange={timeRange}
-            onTimeRangeChange={setTimeRange}
+            zoom={zoom}
+            onZoomChange={setZoom}
             showRoutine={showRoutineEvents}
             routineCount={routineEventCount}
             onToggleRoutine={setShowRoutineEvents}
@@ -492,32 +492,6 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
   )
 }
 
-function TimeRangeSelector({ value, onChange }: { value: TimeRange; onChange: (v: TimeRange) => void }) {
-  const options: { value: TimeRange; label: string }[] = [
-    { value: '5m', label: '5m' },
-    { value: '30m', label: '30m' },
-    { value: '1h', label: '1h' },
-    { value: '6h', label: '6h' },
-    { value: '24h', label: '24h' },
-  ]
-  return (
-    <div className="flex items-center gap-0.5 p-0.5 bg-theme-elevated rounded-lg">
-      {options.map(opt => (
-        <button
-          key={opt.value}
-          onClick={() => onChange(opt.value)}
-          className={clsx(
-            'px-2 py-1 text-xs rounded-md transition-colors',
-            value === opt.value ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
-          )}
-        >
-          {opt.label}
-        </button>
-      ))}
-    </div>
-  )
-}
-
 function ActionsDropdown({ kind, namespace, name, onBack }: { kind: string; namespace: string; name: string; onBack: () => void }) {
   const [open, setOpen] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -598,10 +572,10 @@ function ActionsDropdown({ kind, namespace, name, onBack }: { kind: string; name
 // New Events tab with Komodor-style timeline
 function EventsTab({
   events,
-  childPods,
+  resourceLanes,
   isLoading,
-  timeRange,
-  onTimeRangeChange,
+  zoom,
+  onZoomChange,
   showRoutine,
   routineCount,
   onToggleRoutine,
@@ -611,10 +585,10 @@ function EventsTab({
   onSelectEvent,
 }: {
   events: TimelineEvent[]
-  childPods: { name: string; namespace: string; events: TimelineEvent[] }[]
+  resourceLanes: ResourceLane[]
   isLoading: boolean
-  timeRange: TimeRange
-  onTimeRangeChange: (range: TimeRange) => void
+  zoom: ZoomLevel
+  onZoomChange: (zoom: ZoomLevel) => void
   showRoutine: boolean
   routineCount: number
   onToggleRoutine: (show: boolean) => void
@@ -634,10 +608,8 @@ function EventsTab({
   const [visibleRowRange, setVisibleRowRange] = useState<{ first: number; last: number } | null>(null)
 
   // Scroll to selected event when it changes (from timeline click)
-  // Find the first row with matching event ID
   useEffect(() => {
     if (selectedEventId) {
-      // Find the first row index with this event ID
       const eventIndex = events.findIndex(e => e.id === selectedEventId)
       if (eventIndex >= 0) {
         const row = rowRefs.current.get(eventIndex)
@@ -683,7 +655,6 @@ function EventsTab({
       }
     )
 
-    // Observe all rows after a short delay to let refs populate
     const timeoutId = setTimeout(() => {
       rowRefs.current.forEach((row) => observer.observe(row))
     }, 100)
@@ -695,8 +666,7 @@ function EventsTab({
   }, [events])
 
   // Calculate visible time range from visible row indices
-  // This ensures we get the full time span of visible rows, not just individual event timestamps
-  const visibleTimeRange = useMemo(() => {
+  const visibleTimeRangeFromRows = useMemo(() => {
     if (!visibleRowRange || events.length === 0) return null
 
     const visibleEvents = events.slice(visibleRowRange.first, visibleRowRange.last + 1)
@@ -706,9 +676,8 @@ function EventsTab({
     const start = Math.min(...timestamps)
     const end = Math.max(...timestamps)
 
-    // Add some padding to make the range more visible
     const timeSpan = end - start
-    const padding = Math.max(timeSpan * 0.1, 60000) // At least 1 minute padding
+    const padding = Math.max(timeSpan * 0.1, 60000)
 
     return {
       start: start - padding,
@@ -716,89 +685,122 @@ function EventsTab({
     }
   }, [events, visibleRowRange])
 
-  const timeRangeMs: Record<TimeRange, number> = {
-    '5m': 5 * 60 * 1000,
-    '30m': 30 * 60 * 1000,
-    '1h': 60 * 60 * 1000,
-    '6h': 6 * 60 * 60 * 1000,
-    '24h': 24 * 60 * 60 * 1000,
-    'all': 24 * 60 * 60 * 1000,
-  }
-
+  // Time calculations using shared utilities
   const now = Date.now()
-  const windowMs = timeRangeMs[timeRange]
-  const startTime = now - windowMs
+  const { start: startTime, windowMs } = calculateTimeRange(zoom, now)
 
-  // Build health spans from events
-  const buildHealthSpans = (evts: TimelineEvent[]) => {
-    if (evts.length === 0) return []
+  // Zoom controls
+  const zoomIndex = ZOOM_LEVELS.indexOf(zoom)
+  const canZoomIn = zoomIndex > 0
+  const canZoomOut = zoomIndex < ZOOM_LEVELS.length - 1
 
-    // Sort by timestamp
-    const sorted = [...evts].sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
-
-    const spans: { start: number; end: number; health: string; label?: string }[] = []
-    let currentHealth = 'unknown'
-    let spanStart = startTime
-
-    for (const evt of sorted) {
-      const ts = new Date(evt.timestamp).getTime()
-      if (ts < startTime) continue
-
-      const newHealth = evt.healthState || (isProblematicEvent(evt) ? 'unhealthy' : 'healthy')
-
-      if (newHealth !== currentHealth && currentHealth !== 'unknown') {
-        spans.push({ start: spanStart, end: ts, health: currentHealth })
-        spanStart = ts
-      }
-      currentHealth = newHealth
+  const handleZoomIn = () => {
+    if (canZoomIn) {
+      onZoomChange(ZOOM_LEVELS[zoomIndex - 1])
     }
-
-    // Close final span
-    if (currentHealth !== 'unknown') {
-      spans.push({ start: spanStart, end: now, health: currentHealth })
-    }
-
-    return spans
   }
 
-  // Build swimlanes data - merge k8s events into their respective resource lanes
-  const mainResourceEvents = events.filter(e => e.kind === resourceKind && e.name === resourceName)
+  const handleZoomOut = () => {
+    if (canZoomOut) {
+      onZoomChange(ZOOM_LEVELS[zoomIndex + 1])
+    }
+  }
 
-  const swimlanes = [
-    {
-      id: 'main',
-      label: `${resourceKind}: ${resourceName}`,
-      spans: buildHealthSpans(mainResourceEvents.filter(e => isChangeEvent(e))),
-      events: mainResourceEvents,
-    },
-    ...childPods.slice(0, 3).map(pod => {
-      // Merge pod's change events with any k8s events for this pod
-      const podK8sEvents = events.filter(e => isK8sEvent(e) && e.kind === 'Pod' && e.name === pod.name)
-      const allPodEvents = [...pod.events, ...podK8sEvents]
-      return {
-        id: `pod-${pod.name}`,
-        label: `Pod: ${pod.name.length > 40 ? pod.name.slice(0, 20) + '...' + pod.name.slice(-17) : pod.name}`,
-        spans: buildHealthSpans(pod.events),
-        events: allPodEvents,
-      }
-    }),
-  ]
+  // Local timeToX helper
+  const localTimeToX = (ts: number) => timeToX(ts, startTime, windowMs)
+
+  // Build swimlanes from the hierarchical resource lanes
+  const swimlanes = useMemo(() => {
+    type SwimLane = {
+      id: string
+      label: string
+      spans: { start: number; end: number; health: string }[]
+      events: TimelineEvent[]
+      createdAt?: number
+      createdBeforeWindow: boolean
+    }
+
+    if (resourceLanes.length === 0) {
+      const mainResourceEvents = events.filter(e => e.kind === resourceKind && e.name === resourceName)
+      const healthResult = buildHealthSpans(mainResourceEvents.filter(e => isChangeEvent(e)), startTime, now, mainResourceEvents)
+      return [{
+        id: 'main',
+        label: `${resourceKind}: ${resourceName}`,
+        spans: healthResult.spans,
+        events: mainResourceEvents,
+        createdAt: healthResult.createdAt,
+        createdBeforeWindow: healthResult.createdBeforeWindow,
+      }]
+    }
+
+    const rootLane = resourceLanes[0]
+    const lanes: SwimLane[] = []
+
+    // Add the root lane
+    // Pass all events as 4th param so buildHealthSpans can extract createdAt from K8s Events too
+    const rootHealthResult = buildHealthSpans(rootLane.events.filter(e => isChangeEvent(e)), startTime, now, rootLane.events)
+    lanes.push({
+      id: rootLane.id,
+      label: `${rootLane.kind}: ${rootLane.name.length > 40 ? rootLane.name.slice(0, 20) + '...' + rootLane.name.slice(-17) : rootLane.name}`,
+      spans: rootHealthResult.spans,
+      events: rootLane.events,
+      createdAt: rootHealthResult.createdAt,
+      createdBeforeWindow: rootHealthResult.createdBeforeWindow,
+    })
+
+    // Flatten children recursively
+    const flattenChildren = (lane: ResourceLane): ResourceLane[] => {
+      const children = lane.children || []
+      return children.flatMap(child => [child, ...flattenChildren(child)])
+    }
+
+    const allChildren = flattenChildren(rootLane)
+
+    // Sort by kind priority then by event count
+    const kindPriority: Record<string, number> = {
+      Service: 1, Deployment: 2, Rollout: 2, StatefulSet: 2, DaemonSet: 2,
+      ReplicaSet: 3, ConfigMap: 4, Secret: 4, Ingress: 5, Pod: 6
+    }
+
+    allChildren.sort((a, b) => {
+      const aPriority = kindPriority[a.kind] || 10
+      const bPriority = kindPriority[b.kind] || 10
+      if (aPriority !== bPriority) return aPriority - bPriority
+      return b.events.length - a.events.length
+    })
+
+    // Take up to 6 children for display
+    for (const child of allChildren.slice(0, 6)) {
+      const childHealthResult = buildHealthSpans(child.events.filter(e => isChangeEvent(e)), startTime, now, child.events)
+      lanes.push({
+        id: child.id,
+        label: `${child.kind}: ${child.name.length > 40 ? child.name.slice(0, 20) + '...' + child.name.slice(-17) : child.name}`,
+        spans: childHealthResult.spans,
+        events: child.events,
+        createdAt: childHealthResult.createdAt,
+        createdBeforeWindow: childHealthResult.createdBeforeWindow,
+      })
+    }
+
+    return lanes
+  }, [resourceLanes, events, resourceKind, resourceName, startTime, now])
 
   // Time axis ticks
   const tickCount = 8
   const ticks = Array.from({ length: tickCount + 1 }, (_, i) => {
     const t = startTime + (windowMs * i) / tickCount
-    return { time: t, label: new Date(t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) }
+    return { time: t, label: formatAxisTime(new Date(t)) }
   })
 
-  const timeToX = (ts: number) => ((ts - startTime) / windowMs) * 100
-
   // Format time range display
-  const formatTimeRange = () => {
+  const formatTimeRangeDisplay = () => {
     const start = new Date(startTime)
     const end = new Date(now)
     return `${start.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })} → ${end.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`
   }
+
+  // Now marker position
+  const nowX = localTimeToX(now)
 
   if (isLoading) {
     return (
@@ -828,13 +830,37 @@ function EventsTab({
           )}
         </div>
         <div className="flex items-center gap-3">
-          <TimeRangeSelector value={timeRange} onChange={onTimeRangeChange} />
-          <span className="text-xs text-theme-text-tertiary">{formatTimeRange()}</span>
+          <ZoomControls
+            zoom={zoom}
+            onZoomIn={handleZoomIn}
+            onZoomOut={handleZoomOut}
+            canZoomIn={canZoomIn}
+            canZoomOut={canZoomOut}
+          />
+          <span className="text-xs text-theme-text-tertiary">{formatTimeRangeDisplay()}</span>
         </div>
       </div>
 
+      {/* Legend bar */}
+      <div className="flex-shrink-0 px-4 py-1.5 border-b border-theme-border bg-theme-surface/30 flex items-center justify-between">
+        <HealthSpanLegend />
+        <EventDotLegend />
+      </div>
+
       {/* Swimlane Timeline */}
-      <div className="flex-shrink-0 border-b border-theme-border bg-theme-base">
+      <div className="flex-shrink-0 border-b border-theme-border bg-theme-base relative">
+        {/* "Now" marker - positioned across all swimlanes */}
+        {nowX >= 0 && nowX <= 100 && (
+          <div
+            className="absolute top-0 bottom-0 w-0.5 bg-purple-500/50 z-20 pointer-events-none"
+            style={{ left: `calc(256px + (100% - 256px) * ${nowX / 100})` }}
+          >
+            <span className="absolute -top-4 left-1/2 -translate-x-1/2 text-xs text-purple-500 font-medium whitespace-nowrap">
+              now
+            </span>
+          </div>
+        )}
+
         {swimlanes.map((lane) => (
           <div key={lane.id} className="flex border-b border-theme-border/50 last:border-b-0">
             {/* Lane label */}
@@ -843,60 +869,48 @@ function EventsTab({
             </div>
             {/* Lane track */}
             <div className="flex-1 relative h-10 bg-theme-base">
-              {/* Visible range indicator - shows which time range is visible in the list */}
-              {visibleTimeRange && (
+              {/* Visible range indicator */}
+              {visibleTimeRangeFromRows && (
                 <div
                   className="absolute top-0 bottom-0 bg-blue-500/10 border-x border-blue-500/30 pointer-events-none"
                   style={{
-                    left: `${Math.max(0, timeToX(visibleTimeRange.start))}%`,
-                    width: `${Math.max(2, Math.min(100, timeToX(visibleTimeRange.end)) - Math.max(0, timeToX(visibleTimeRange.start)))}%`,
+                    left: `${Math.max(0, localTimeToX(visibleTimeRangeFromRows.start))}%`,
+                    width: `${Math.max(2, Math.min(100, localTimeToX(visibleTimeRangeFromRows.end)) - Math.max(0, localTimeToX(visibleTimeRangeFromRows.start)))}%`,
                   }}
                 />
               )}
 
-              {/* Health spans as colored bars */}
+              {/* Health spans - only shown when resource exists */}
               {lane.spans.map((span, i) => {
-                const left = Math.max(0, timeToX(span.start))
-                const right = Math.min(100, timeToX(span.end))
+                const left = Math.max(0, localTimeToX(span.start))
+                const right = Math.min(100, localTimeToX(span.end))
                 const width = right - left
-                if (width <= 0) return null
+                // Show "created before window" indicator on the first span if resource existed before visible window
+                const showCreatedBefore = i === 0 && lane.createdBeforeWindow && lane.createdAt
                 return (
-                  <div
+                  <HealthSpan
                     key={i}
-                    className={clsx(
-                      'absolute top-1 bottom-1 rounded-sm',
-                      span.health === 'healthy' ? 'bg-green-500/60' :
-                      span.health === 'degraded' ? 'bg-yellow-500/60' :
-                      'bg-red-500/60'
-                    )}
-                    style={{ left: `${left}%`, width: `${width}%` }}
+                    health={span.health}
+                    left={left}
+                    width={width}
                     title={`${span.health} (${new Date(span.start).toLocaleTimeString()} - ${new Date(span.end).toLocaleTimeString()})`}
+                    createdBefore={showCreatedBefore ? new Date(lane.createdAt!) : undefined}
                   />
                 )
               })}
 
-              {/* Event markers */}
+              {/* Event markers - using shared EventMarker component */}
               {lane.events.map((evt, i) => {
-                const x = timeToX(new Date(evt.timestamp).getTime())
+                const x = localTimeToX(new Date(evt.timestamp).getTime())
                 if (x < 0 || x > 100) return null
-                const isWarning = isProblematicEvent(evt)
-                const isSelected = selectedEventId === evt.id
-                const isHovered = hoveredEventId === evt.id
                 return (
-                  <button
-                    key={i}
-                    onClick={() => onSelectEvent(evt.id)}
-                    onMouseEnter={() => setHoveredEventId(evt.id)}
-                    onMouseLeave={() => setHoveredEventId(null)}
-                    className={clsx(
-                      'absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-full border-2 transition-all',
-                      isWarning ? 'bg-amber-500 border-amber-300' : 'bg-blue-500 border-blue-300',
-                      isSelected ? 'w-4 h-4 ring-2 ring-blue-400 z-10' :
-                      isHovered ? 'w-3.5 h-3.5 ring-2 ring-blue-300/50 z-10' :
-                      'w-2.5 h-2.5 hover:w-3.5 hover:h-3.5'
-                    )}
-                    style={{ left: `${x}%` }}
-                    title={`${evt.reason || evt.eventType} - ${new Date(evt.timestamp).toLocaleTimeString()}`}
+                  <EventMarker
+                    key={`${evt.id}-${i}`}
+                    event={evt}
+                    x={x}
+                    selected={selectedEventId === evt.id}
+                    onClick={() => onSelectEvent(selectedEventId === evt.id ? null : evt.id)}
+                    small
                   />
                 )
               })}
@@ -909,7 +923,7 @@ function EventsTab({
           <div className="w-64 flex-shrink-0 bg-theme-surface/50 border-r border-theme-border" />
           <div className="flex-1 relative h-6 bg-theme-elevated/30">
             {ticks.map((tick, i) => {
-              const x = timeToX(tick.time)
+              const x = localTimeToX(tick.time)
               return (
                 <div
                   key={i}
@@ -1387,7 +1401,7 @@ function YamlTab({ resource, isLoading }: { resource: any; isLoading: boolean })
     )
   }
 
-  const yaml = resource ? JSON.stringify(resource, null, 2) : ''
+  const yaml = resource ? yamlStringify(resource) : ''
 
   const handleCopy = () => {
     navigator.clipboard.writeText(yaml)

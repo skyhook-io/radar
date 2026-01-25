@@ -13,6 +13,7 @@ import { PortForwardManager, usePortForwardCount } from './components/portforwar
 import { DockProvider, BottomDock, useDock } from './components/dock'
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
+import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { useEventSource } from './hooks/useEventSource'
 import { useClusterInfo, useNamespaces } from './api/client'
 import { Loader2 } from 'lucide-react'
@@ -28,7 +29,7 @@ const ALL_NODE_KINDS: NodeKind[] = [
 
 // Default visible kinds (ReplicaSet hidden by default - noisy intermediate object)
 const DEFAULT_VISIBLE_KINDS: NodeKind[] = [
-  'Internet', 'Ingress', 'Service', 'Deployment', 'DaemonSet', 'StatefulSet',
+  'Internet', 'Ingress', 'Service', 'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet',
   'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'HPA', 'Job', 'CronJob', 'PVC', 'Namespace'
 ]
 
@@ -39,6 +40,7 @@ function kindToApiResource(kind: NodeKind): string {
     'PodGroup': 'pods', // PodGroup represents multiple pods
     'Service': 'services',
     'Deployment': 'deployments',
+    'Rollout': 'rollouts',
     'DaemonSet': 'daemonsets',
     'StatefulSet': 'statefulsets',
     'ReplicaSet': 'replicasets',
@@ -110,7 +112,7 @@ function AppInner() {
     const resource = parseResourceParam(searchParams.get('resource'))
     return {
       namespace: ns,
-      topologyMode: (searchParams.get('mode') as 'full' | 'traffic') || 'full',
+      topologyMode: (searchParams.get('mode') as 'resources' | 'traffic') || 'resources',
       // Default to namespace grouping when viewing all namespaces
       grouping: (searchParams.get('group') as GroupingMode) || (ns === '' ? 'namespace' : 'none'),
       detailResource: resource,
@@ -144,10 +146,26 @@ function AppInner() {
   const [namespace, setNamespace] = useState<string>(getInitialState().namespace)
   const [selectedResource, setSelectedResource] = useState<SelectedResource | null>(null)
   const [selectedHelmRelease, setSelectedHelmRelease] = useState<SelectedHelmRelease | null>(null)
-  const [topologyMode, setTopologyMode] = useState<'full' | 'traffic'>(getInitialState().topologyMode)
+  const [topologyMode, setTopologyMode] = useState<'resources' | 'traffic'>(getInitialState().topologyMode)
   const [groupingMode, setGroupingMode] = useState<GroupingMode>(getInitialState().grouping)
   // Resource detail page state (for timeline view drill-down)
-  const [detailResource, setDetailResource] = useState<SelectedResource | null>(getInitialState().detailResource)
+  const [detailResource, setDetailResourceState] = useState<SelectedResource | null>(getInitialState().detailResource)
+
+  // Wrapper to handle detail resource navigation with proper history
+  const setDetailResource = useCallback((resource: SelectedResource | null) => {
+    if (resource) {
+      // Navigating INTO detail view - push new history entry
+      const params = new URLSearchParams(searchParams)
+      params.set('resource', encodeResourceParam(resource))
+      navigate({ pathname: '/timeline', search: params.toString() })
+    } else {
+      // Navigating OUT of detail view - use browser back if possible, or just clear param
+      const params = new URLSearchParams(searchParams)
+      params.delete('resource')
+      navigate({ pathname: '/timeline', search: params.toString() })
+    }
+    setDetailResourceState(resource)
+  }, [navigate, searchParams])
   // Topology filter state
   const [visibleKinds, setVisibleKinds] = useState<Set<NodeKind>>(() => new Set(DEFAULT_VISIBLE_KINDS))
   const [filterSidebarCollapsed, setFilterSidebarCollapsed] = useState(false)
@@ -186,8 +204,10 @@ function AppInner() {
     onContextSwitchComplete: endSwitch,
     onContextSwitchProgress: updateProgress,
     onContextChanged: () => {
-      // Invalidate all React Query caches when cluster context changes
+      // Clear all React Query caches when cluster context changes
       // This ensures helm releases, resources, etc. are refetched from the new cluster
+      // removeQueries clears cached data, invalidateQueries triggers refetch
+      queryClient.removeQueries()
       queryClient.invalidateQueries()
     },
   })
@@ -220,7 +240,7 @@ function AppInner() {
     }
 
     // Update mode param
-    if (topologyMode !== 'full') {
+    if (topologyMode !== 'resources') {
       params.set('mode', topologyMode)
     } else {
       params.delete('mode')
@@ -233,18 +253,14 @@ function AppInner() {
       params.delete('group')
     }
 
-    // Add resource param for timeline detail view
-    if (mainView === 'timeline' && detailResource) {
-      params.set('resource', encodeResourceParam(detailResource))
-    } else {
-      params.delete('resource')
-    }
+    // Note: resource param for timeline detail view is handled by setDetailResource wrapper
+    // to ensure proper history push/pop behavior
 
     // Only update if params changed
     if (params.toString() !== searchParams.toString()) {
       setSearchParams(params, { replace: true })
     }
-  }, [namespace, topologyMode, groupingMode, detailResource, mainView, searchParams, setSearchParams])
+  }, [namespace, topologyMode, groupingMode, mainView, searchParams, setSearchParams])
 
   // Sync state from URL when navigating (back/forward)
   useEffect(() => {
@@ -252,7 +268,8 @@ function AppInner() {
     const resource = parseResourceParam(searchParams.get('resource'))
 
     if (ns !== namespace) setNamespace(ns)
-    if (JSON.stringify(resource) !== JSON.stringify(detailResource)) setDetailResource(resource)
+    // Use raw setter to avoid triggering navigate() again
+    if (JSON.stringify(resource) !== JSON.stringify(detailResource)) setDetailResourceState(resource)
   }, [searchParams])
 
   // Auto-adjust grouping when namespace changes
@@ -281,13 +298,13 @@ function AppInner() {
     setSelectedHelmRelease(null)
     // Only clear detailResource when leaving timeline view or changing namespace
     if (mainView !== 'timeline') {
-      setDetailResource(null)
+      setDetailResourceState(null)
     }
   }, [mainView])
 
   // Clear detail resource when namespace changes (separate effect)
   useEffect(() => {
-    setDetailResource(null)
+    setDetailResourceState(null)
     setSelectedResource(null)
     setSelectedHelmRelease(null)
   }, [namespace])
@@ -346,8 +363,10 @@ function AppInner() {
       <header className="flex items-center justify-between px-4 py-2 bg-theme-surface border-b border-theme-border">
         {/* Left: Logo + Cluster info */}
         <div className="flex items-center gap-4">
-          <Logo />
-          <span className="text-xl font-normal text-theme-text-primary">Explorer</span>
+          <div className="flex items-center gap-2.5">
+            <Logo />
+            <span className="text-xl text-theme-text-primary leading-none -translate-y-0.5" style={{ fontFamily: "'DM Sans', sans-serif", fontWeight: 520 }}>explorer</span>
+          </div>
 
           <div className="flex items-center gap-2">
             <ContextSwitcher />
@@ -437,7 +456,7 @@ function AppInner() {
               className="appearance-none bg-theme-elevated text-theme-text-primary text-xs rounded px-2 py-1 pr-6 border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500 min-w-[100px]"
             >
               <option value="">All Namespaces</option>
-              {namespaces?.map((ns) => (
+              {namespaces?.slice().sort((a, b) => a.name.localeCompare(b.name)).map((ns) => (
                 <option key={ns.name} value={ns.name}>
                   {ns.name}
                 </option>
@@ -495,6 +514,7 @@ function AppInner() {
 
       {/* Main content */}
       {!isSwitching && <div className="flex-1 flex overflow-hidden">
+        <ErrorBoundary>
         {/* Topology view */}
         {mainView === 'topology' && (
           <>
@@ -540,14 +560,14 @@ function AppInner() {
                 {/* View mode toggle */}
                 <div className="flex items-center gap-0.5 p-1 bg-theme-surface/90 backdrop-blur border border-theme-border rounded-lg">
                   <button
-                    onClick={() => setTopologyMode('full')}
+                    onClick={() => setTopologyMode('resources')}
                     className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
-                      topologyMode === 'full'
+                      topologyMode === 'resources'
                         ? 'bg-blue-500 text-theme-text-primary'
                         : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
                     }`}
                   >
-                    Full
+                    Resources
                   </button>
                   <button
                     onClick={() => setTopologyMode('traffic')}
@@ -588,6 +608,7 @@ function AppInner() {
         {/* Resource detail page (drill-down from timeline) */}
         {mainView === 'timeline' && detailResource && (
           <ResourceDetailPage
+            key={`${detailResource.kind}/${detailResource.namespace}/${detailResource.name}`}
             kind={detailResource.kind}
             namespace={detailResource.namespace}
             name={detailResource.name}
@@ -596,16 +617,18 @@ function AppInner() {
           />
         )}
 
-        {/* Helm view */}
+        {/* Helm view - always show all namespaces since releases span multiple ns */}
         {mainView === 'helm' && (
           <HelmView
-            namespace={namespace}
+            namespace=""
             selectedRelease={selectedHelmRelease}
             onReleaseClick={(ns, name) => {
               setSelectedHelmRelease({ namespace: ns, name })
             }}
           />
         )}
+
+        </ErrorBoundary>
       </div>}
 
       {/* Resource detail drawer (shared by topology and resources views) */}

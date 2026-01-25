@@ -23,7 +23,18 @@ import (
 	listerscorev1 "k8s.io/client-go/listers/core/v1"
 	listersnetworkingv1 "k8s.io/client-go/listers/networking/v1"
 	"k8s.io/client-go/tools/cache"
+
+	explorerErrors "github.com/skyhook-io/skyhook-explorer/internal/errors"
+	"github.com/skyhook-io/skyhook-explorer/internal/timeline"
 )
+
+// DebugEvents enables verbose event debugging when true (set via --debug-events flag)
+var DebugEvents bool
+
+// initialSyncComplete is set to true after the initial cache sync completes.
+// During initial sync, "add" events are skipped since they represent existing
+// resources, not new creations. Only adds after sync are recorded.
+var initialSyncComplete bool
 
 // ResourceCache provides fast, eventually-consistent access to K8s resources
 // using SharedInformers. Optimized for small-mid sized clusters.
@@ -96,7 +107,8 @@ func InitResourceCache() error {
 	var initErr error
 	cacheOnce.Do(func() {
 		if k8sClient == nil {
-			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
+			initErr = explorerErrors.New(explorerErrors.ErrK8sClientNotInitialized,
+				"cannot create resource cache: k8s client not initialized")
 			return
 		}
 
@@ -107,7 +119,7 @@ func InitResourceCache() error {
 		)
 
 		stopCh := make(chan struct{})
-		changes := make(chan ResourceChange, 1000)
+		changes := make(chan ResourceChange, 10000)
 
 		// Core resources
 		svcInf := factory.Core().V1().Services().Informer()
@@ -135,23 +147,32 @@ func InitResourceCache() error {
 		// Autoscaling resources
 		hpaInf := factory.Autoscaling().V2().HorizontalPodAutoscalers().Informer()
 
-		// Add event handlers
-		addChangeHandlers(svcInf, "Service", changes)
-		addChangeHandlers(podInf, "Pod", changes)
-		addChangeHandlers(nodeInf, "Node", changes)
-		addChangeHandlers(nsInf, "Namespace", changes)
-		addChangeHandlers(cmInf, "ConfigMap", changes)
-		addChangeHandlers(secretInf, "Secret", changes)
-		addChangeHandlers(eventInf, "Event", changes)
-		addChangeHandlers(pvcInf, "PersistentVolumeClaim", changes)
-		addChangeHandlers(depInf, "Deployment", changes)
-		addChangeHandlers(dsInf, "DaemonSet", changes)
-		addChangeHandlers(stsInf, "StatefulSet", changes)
-		addChangeHandlers(rsInf, "ReplicaSet", changes)
-		addChangeHandlers(ingInf, "Ingress", changes)
-		addChangeHandlers(jobInf, "Job", changes)
-		addChangeHandlers(cronJobInf, "CronJob", changes)
-		addChangeHandlers(hpaInf, "HorizontalPodAutoscaler", changes)
+		// Add event handlers - collect errors to fail fast on registration issues
+		handlerErrors := []error{
+			addChangeHandlers(svcInf, "Service", changes),
+			addChangeHandlers(podInf, "Pod", changes),
+			addChangeHandlers(nodeInf, "Node", changes),
+			addChangeHandlers(nsInf, "Namespace", changes),
+			addChangeHandlers(cmInf, "ConfigMap", changes),
+			addChangeHandlers(secretInf, "Secret", changes),
+			addK8sEventHandlers(eventInf, changes), // K8s Events get special handling
+			addChangeHandlers(pvcInf, "PersistentVolumeClaim", changes),
+			addChangeHandlers(depInf, "Deployment", changes),
+			addChangeHandlers(dsInf, "DaemonSet", changes),
+			addChangeHandlers(stsInf, "StatefulSet", changes),
+			addChangeHandlers(rsInf, "ReplicaSet", changes),
+			addChangeHandlers(ingInf, "Ingress", changes),
+			addChangeHandlers(jobInf, "Job", changes),
+			addChangeHandlers(cronJobInf, "CronJob", changes),
+			addChangeHandlers(hpaInf, "HorizontalPodAutoscaler", changes),
+		}
+		for _, err := range handlerErrors {
+			if err != nil {
+				initErr = explorerErrors.Wrap(explorerErrors.ErrCacheHandlerFailed,
+					"failed to register event handlers", err)
+				return
+			}
+		}
 
 		// Start all informers
 		factory.Start(stopCh)
@@ -179,11 +200,15 @@ func InitResourceCache() error {
 			hpaInf.HasSynced,
 		) {
 			close(stopCh)
-			initErr = fmt.Errorf("failed to sync resource caches")
+			initErr = explorerErrors.New(explorerErrors.ErrCacheSyncFailed,
+				"failed to sync resource caches")
 			return
 		}
 
 		log.Printf("Resource caches synced successfully in %v", time.Since(syncStart))
+
+		// Mark initial sync as complete - now we can start recording "add" events
+		initialSyncComplete = true
 
 		resourceCache = &ResourceCache{
 			factory: factory,
@@ -210,6 +235,7 @@ func ResetResourceCache() {
 		resourceCache = nil
 	}
 	cacheOnce = sync.Once{}
+	initialSyncComplete = false
 }
 
 // ReinitResourceCache reinitializes the resource cache after a context switch
@@ -219,8 +245,9 @@ func ReinitResourceCache() error {
 }
 
 // addChangeHandlers registers event handlers for change notifications
-func addChangeHandlers(inf cache.SharedIndexInformer, kind string, ch chan<- ResourceChange) {
-	_, _ = inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+// Returns an error if handler registration fails (rare, but indicates a broken informer)
+func addChangeHandlers(inf cache.SharedIndexInformer, kind string, ch chan<- ResourceChange) error {
+	_, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
 		AddFunc: func(obj any) {
 			enqueueChange(ch, kind, obj, nil, "add")
 		},
@@ -231,9 +258,204 @@ func addChangeHandlers(inf cache.SharedIndexInformer, kind string, ch chan<- Res
 			enqueueChange(ch, kind, obj, nil, "delete")
 		},
 	})
+	if err != nil {
+		return fmt.Errorf("failed to register %s event handler: %w", kind, err)
+	}
+	return nil
 }
 
-// enqueueChange sends a change notification and records to history
+// addK8sEventHandlers registers special handlers for K8s Events
+// K8s Events are stored in the timeline store as "k8s_event" source type
+// Returns an error if handler registration fails
+func addK8sEventHandlers(inf cache.SharedIndexInformer, ch chan<- ResourceChange) error {
+	_, err := inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj any) {
+			// Still send to the change channel for SSE broadcasting
+			meta, ok := obj.(metav1.Object)
+			if !ok {
+				return
+			}
+			change := ResourceChange{
+				Kind:      "Event",
+				Namespace: meta.GetNamespace(),
+				Name:      meta.GetName(),
+				UID:       string(meta.GetUID()),
+				Operation: "add",
+			}
+			select {
+			case ch <- change:
+			default:
+				// Channel full, drop event
+				timeline.RecordDrop("Event", meta.GetNamespace(), meta.GetName(),
+					timeline.DropReasonChannelFull, "add")
+				if DebugEvents {
+					log.Printf("[DEBUG] K8s Event channel full, dropped: Event/%s/%s", meta.GetNamespace(), meta.GetName())
+				}
+			}
+
+			// Record K8s Event to timeline store
+			recordK8sEventToTimeline(obj)
+		},
+		UpdateFunc: func(oldObj, newObj any) {
+			// K8s Events update when count changes - record to timeline
+			meta, ok := newObj.(metav1.Object)
+			if !ok {
+				return
+			}
+			change := ResourceChange{
+				Kind:      "Event",
+				Namespace: meta.GetNamespace(),
+				Name:      meta.GetName(),
+				UID:       string(meta.GetUID()),
+				Operation: "update",
+			}
+			select {
+			case ch <- change:
+			default:
+				// Channel full, drop event
+				timeline.RecordDrop("Event", meta.GetNamespace(), meta.GetName(),
+					timeline.DropReasonChannelFull, "update")
+				if DebugEvents {
+					log.Printf("[DEBUG] K8s Event channel full, dropped: Event/%s/%s op=update", meta.GetNamespace(), meta.GetName())
+				}
+			}
+
+			// Update K8s Event in timeline store (with new count)
+			recordK8sEventToTimeline(newObj)
+		},
+		DeleteFunc: func(obj any) {
+			meta, ok := obj.(metav1.Object)
+			if !ok {
+				if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+					meta, ok = tombstone.Obj.(metav1.Object)
+					if !ok {
+						return
+					}
+				} else {
+					return
+				}
+			}
+			change := ResourceChange{
+				Kind:      "Event",
+				Namespace: meta.GetNamespace(),
+				Name:      meta.GetName(),
+				UID:       string(meta.GetUID()),
+				Operation: "delete",
+			}
+			select {
+			case ch <- change:
+			default:
+				// Channel full, drop event
+				timeline.RecordDrop("Event", meta.GetNamespace(), meta.GetName(),
+					timeline.DropReasonChannelFull, "delete")
+				if DebugEvents {
+					log.Printf("[DEBUG] K8s Event channel full, dropped: Event/%s/%s op=delete", meta.GetNamespace(), meta.GetName())
+				}
+			}
+			// Note: We don't need to delete K8s events from timeline store
+			// as they represent things that happened and should remain in history
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to register Event handler: %w", err)
+	}
+	return nil
+}
+
+// recordK8sEventToTimeline records a K8s Event to the timeline store
+func recordK8sEventToTimeline(obj any) {
+	event, ok := obj.(*corev1.Event)
+	if !ok {
+		return
+	}
+
+	store := timeline.GetStore()
+	if store == nil {
+		return
+	}
+
+	// Track K8s Event recording in metrics when debug mode is enabled
+	if DebugEvents {
+		timeline.IncrementReceived("K8sEvent:" + event.InvolvedObject.Kind)
+	}
+
+	// Lookup owner reference for the involved object
+	var owner *timeline.OwnerInfo
+	cache := GetResourceCache()
+	if cache != nil {
+		if event.InvolvedObject.Kind == "Pod" {
+			if pod, err := cache.Pods().Pods(event.Namespace).Get(event.InvolvedObject.Name); err == nil && pod != nil {
+				for _, ref := range pod.OwnerReferences {
+					if ref.Controller != nil && *ref.Controller {
+						owner = &timeline.OwnerInfo{Kind: ref.Kind, Name: ref.Name}
+						break
+					}
+				}
+			}
+		} else if event.InvolvedObject.Kind == "ReplicaSet" {
+			if rs, err := cache.ReplicaSets().ReplicaSets(event.Namespace).Get(event.InvolvedObject.Name); err == nil && rs != nil {
+				for _, ref := range rs.OwnerReferences {
+					if ref.Controller != nil && *ref.Controller {
+						owner = &timeline.OwnerInfo{Kind: ref.Kind, Name: ref.Name}
+						break
+					}
+				}
+			}
+		}
+	}
+
+	// Create timeline event using the converter
+	timelineEvent := timeline.NewK8sEventTimelineEvent(event, owner)
+
+	// Record to store with broadcast to SSE subscribers
+	ctx := context.Background()
+	if err := timeline.RecordEventWithBroadcast(ctx, timelineEvent); err != nil {
+		log.Printf("Warning: failed to record K8s event to timeline store: %v", err)
+	} else if DebugEvents {
+		timeline.IncrementRecorded("K8sEvent:" + event.InvolvedObject.Kind)
+	}
+}
+
+// isNoisyResource returns true if this resource generates constant updates that aren't interesting
+// This prevents the history buffer from being flooded with lease renewals, heartbeats, etc.
+func isNoisyResource(kind, name, op string) bool {
+	// Only filter updates - adds and deletes are always interesting
+	if op != "update" {
+		return false
+	}
+
+	// Noisy resource kinds (constant background updates)
+	switch kind {
+	case "Lease", "Endpoints", "EndpointSlice", "Event":
+		return true
+	}
+
+	// Noisy ConfigMaps (leader election, heartbeats, status tracking)
+	if kind == "ConfigMap" {
+		noisyPatterns := []string{
+			"-lock", "-lease", "-leader-election", "-heartbeat",
+			"cluster-kubestore", "cluster-autoscaler-status",
+			"datadog-token", "datadog-operator-lock", "datadog-leader-election",
+			"kube-root-ca.certs",
+		}
+		for _, pattern := range noisyPatterns {
+			if strings.Contains(name, pattern) {
+				return true
+			}
+		}
+	}
+
+	// Noisy Secrets (token rotation)
+	if kind == "Secret" {
+		if strings.HasSuffix(name, "-token") || strings.Contains(name, "leader-election") {
+			return true
+		}
+	}
+
+	return false
+}
+
+// enqueueChange sends a change notification and records to both legacy history and timeline store
 func enqueueChange(ch chan<- ResourceChange, kind string, obj any, oldObj any, op string) {
 	meta, ok := obj.(metav1.Object)
 	if !ok {
@@ -248,10 +470,33 @@ func enqueueChange(ch chan<- ResourceChange, kind string, obj any, oldObj any, o
 		}
 	}
 
-	// Record to change history for timeline (with diff computation)
-	var record *ChangeRecord
-	if history := GetChangeHistory(); history != nil {
-		record = history.RecordChange(kind, meta.GetNamespace(), meta.GetName(), op, oldObj, obj)
+	// Track event received
+	timeline.IncrementReceived(kind)
+
+	// Debug: log adds for core workload resources
+	if DebugEvents && op == "add" && (kind == "Pod" || kind == "Deployment" || kind == "Service") {
+		log.Printf("[DEBUG] enqueueChange: %s add %s/%s", kind, meta.GetNamespace(), meta.GetName())
+	}
+
+	// Skip recording noisy resources to preserve history buffer for interesting events
+	skipHistory := isNoisyResource(kind, meta.GetName(), op)
+	if skipHistory {
+		timeline.RecordDrop(kind, meta.GetNamespace(), meta.GetName(),
+			timeline.DropReasonNoisyFilter, op)
+		if DebugEvents {
+			log.Printf("[DEBUG] Filtered noisy resource: %s/%s/%s op=%s", kind, meta.GetNamespace(), meta.GetName(), op)
+		}
+	}
+
+	// Record to timeline store
+	if !skipHistory {
+		recordToTimelineStore(kind, meta.GetNamespace(), meta.GetName(), string(meta.GetUID()), op, oldObj, obj)
+	}
+
+	// Compute diff for updates
+	var diff *DiffInfo
+	if op == "update" && oldObj != nil && obj != nil {
+		diff = ComputeDiff(kind, oldObj, obj)
 	}
 
 	change := ResourceChange{
@@ -260,11 +505,7 @@ func enqueueChange(ch chan<- ResourceChange, kind string, obj any, oldObj any, o
 		Name:      meta.GetName(),
 		UID:       string(meta.GetUID()),
 		Operation: op,
-	}
-
-	// Attach diff info if available
-	if record != nil && record.Diff != nil {
-		change.Diff = record.Diff
+		Diff:      diff,
 	}
 
 	// Non-blocking send
@@ -272,7 +513,248 @@ func enqueueChange(ch chan<- ResourceChange, kind string, obj any, oldObj any, o
 	case ch <- change:
 	default:
 		// Channel full, drop event
+		timeline.RecordDrop(kind, meta.GetNamespace(), meta.GetName(),
+			timeline.DropReasonChannelFull, op)
+		if DebugEvents {
+			log.Printf("[DEBUG] Change channel full, dropped: %s/%s/%s op=%s", kind, meta.GetNamespace(), meta.GetName(), op)
+		}
 	}
+}
+
+// recordToTimelineStore records an event to the timeline store
+func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj any) {
+	store := timeline.GetStore()
+	if store == nil {
+		return
+	}
+
+	// Check if we've already seen this resource (for dedup on restart)
+	// For "add", we check if seen and skip if so. We mark as seen AFTER successful append
+	// to avoid the race where a failed append leaves the resource marked as seen.
+	if op == "add" {
+		if store.IsResourceSeen(kind, namespace, name) {
+			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonAlreadySeen, op)
+			if DebugEvents {
+				log.Printf("[DEBUG] Already seen, skipping: %s/%s/%s", kind, namespace, name)
+			}
+			return
+		}
+		// Don't mark as seen yet - do it after successful append
+	} else if op == "delete" {
+		store.ClearResourceSeen(kind, namespace, name)
+	}
+	// For "update", we don't need to track seen state - updates are always recorded
+
+	// Determine the object to analyze
+	obj := newObj
+	if obj == nil {
+		obj = oldObj
+	}
+
+	// Extract owner reference
+	owner := timeline.ExtractOwner(obj)
+
+	// Extract labels for grouping
+	labels := timeline.ExtractLabels(obj)
+
+	// Determine health state
+	healthState := timeline.DetermineHealthState(kind, obj)
+
+	// Extract creationTimestamp from resource metadata
+	var createdAt *time.Time
+	if obj != nil {
+		if meta, ok := obj.(metav1.Object); ok {
+			ct := meta.GetCreationTimestamp().Time
+			if !ct.IsZero() {
+				createdAt = &ct
+			}
+		}
+	}
+
+	// Compute diff for updates
+	var diff *timeline.DiffInfo
+	if op == "update" && oldObj != nil && newObj != nil {
+		if localDiff := ComputeDiff(kind, oldObj, newObj); localDiff != nil {
+			diff = &timeline.DiffInfo{
+				Fields:  make([]timeline.FieldChange, len(localDiff.Fields)),
+				Summary: localDiff.Summary,
+			}
+			for i, f := range localDiff.Fields {
+				diff.Fields[i] = timeline.FieldChange{
+					Path:     f.Path,
+					OldValue: f.OldValue,
+					NewValue: f.NewValue,
+				}
+			}
+		}
+	}
+
+	// Create the timeline event
+	event := timeline.NewInformerEvent(
+		kind, namespace, name, uid,
+		timeline.OperationToEventType(op),
+		healthState,
+		diff,
+		owner,
+		labels,
+		createdAt,
+	)
+
+	// For "add" operations, also extract historical events from resource status
+	// and record them to the timeline store
+	var events []timeline.TimelineEvent
+	if op == "add" && newObj != nil {
+		historicalEvents := extractTimelineHistoricalEvents(kind, namespace, name, newObj, owner)
+		events = append(events, historicalEvents...)
+	}
+
+	// Skip recording the "add" event if it's just a sync (resource already existed).
+	// We detect this by comparing the resource's creationTimestamp with current time.
+	// If the resource is older than 30 seconds, it's a sync event, not a real create.
+	// We still record historical events extracted from status (PodScheduled, ContainersReady, etc.)
+	if op == "add" {
+		isSyncEvent := false
+
+		// Method 1: Check initialSyncComplete flag (fast path during startup)
+		if !initialSyncComplete {
+			isSyncEvent = true
+		}
+
+		// Method 2: Check creationTimestamp (handles race conditions and context switches)
+		if !isSyncEvent && obj != nil {
+			if meta, ok := obj.(metav1.Object); ok {
+				creationTime := meta.GetCreationTimestamp().Time
+				age := time.Since(creationTime)
+				// If resource is older than 30 seconds, it's a sync, not a real create
+				if age > 30*time.Second {
+					isSyncEvent = true
+					if DebugEvents {
+						log.Printf("[DEBUG] Skipping stale add event (age=%v): %s/%s/%s", age, kind, namespace, name)
+					}
+				}
+			}
+		}
+
+		if isSyncEvent {
+			if DebugEvents {
+				log.Printf("[DEBUG] Skipping sync add event: %s/%s/%s (extracted %d historical events)", kind, namespace, name, len(events))
+			}
+			// Only record historical events, not the add event
+			if len(events) > 0 {
+				ctx := context.Background()
+				if err := timeline.RecordEventsWithBroadcast(ctx, events); err != nil {
+					log.Printf("Warning: failed to record historical events: %v", err)
+				}
+			}
+			return
+		}
+	}
+
+	events = append(events, event)
+
+	// Record all events to the store with broadcast to SSE subscribers
+	ctx := context.Background()
+	if err := timeline.RecordEventsWithBroadcast(ctx, events); err != nil {
+		log.Printf("Warning: failed to record to timeline store: %v", err)
+		timeline.RecordDrop(kind, namespace, name, timeline.DropReasonStoreFailed, op)
+		return
+	}
+
+	// Track successful recording
+	timeline.IncrementRecorded(kind)
+
+	// Mark resource as seen AFTER successful append to avoid race condition
+	// where a failed append leaves the resource marked as seen
+	if op == "add" {
+		store.MarkResourceSeen(kind, namespace, name)
+	}
+}
+
+// extractTimelineHistoricalEvents extracts historical events from resource metadata/status for the timeline store
+func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owner *timeline.OwnerInfo) []timeline.TimelineEvent {
+	var events []timeline.TimelineEvent
+
+	switch kind {
+	case "Pod":
+		if pod, ok := obj.(*corev1.Pod); ok {
+			// Pod creation
+			if !pod.CreationTimestamp.IsZero() {
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					pod.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner))
+			}
+			// Pod started
+			if pod.Status.StartTime != nil && !pod.Status.StartTime.IsZero() {
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					pod.Status.StartTime.Time, "started", "", timeline.HealthDegraded, owner))
+			}
+			// Check conditions
+			for _, cond := range pod.Status.Conditions {
+				if cond.LastTransitionTime.IsZero() {
+					continue
+				}
+				health := timeline.HealthUnknown
+				if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+					health = timeline.HealthHealthy
+				} else if cond.Status == corev1.ConditionFalse {
+					health = timeline.HealthDegraded
+				}
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					cond.LastTransitionTime.Time, string(cond.Type), cond.Message, health, owner))
+			}
+		}
+
+	case "Deployment":
+		if deploy, ok := obj.(*appsv1.Deployment); ok {
+			if !deploy.CreationTimestamp.IsZero() {
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					deploy.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner))
+			}
+			// Check conditions
+			for _, cond := range deploy.Status.Conditions {
+				if cond.LastTransitionTime.IsZero() {
+					continue
+				}
+				health := timeline.HealthUnknown
+				if cond.Type == appsv1.DeploymentAvailable && cond.Status == corev1.ConditionTrue {
+					health = timeline.HealthHealthy
+				} else if cond.Status == corev1.ConditionFalse {
+					health = timeline.HealthDegraded
+				}
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					cond.LastTransitionTime.Time, string(cond.Type), cond.Message, health, owner))
+			}
+		}
+
+	case "Service":
+		if svc, ok := obj.(*corev1.Service); ok {
+			if !svc.CreationTimestamp.IsZero() {
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					svc.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner))
+			}
+		}
+
+	case "Job":
+		if job, ok := obj.(*batchv1.Job); ok {
+			if !job.CreationTimestamp.IsZero() {
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					job.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner))
+			}
+			if job.Status.StartTime != nil && !job.Status.StartTime.IsZero() {
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					job.Status.StartTime.Time, "started", "", timeline.HealthDegraded, owner))
+			}
+			if job.Status.CompletionTime != nil && !job.Status.CompletionTime.IsZero() {
+				health := timeline.HealthHealthy
+				if job.Status.Failed > 0 {
+					health = timeline.HealthUnhealthy
+				}
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					job.Status.CompletionTime.Time, "completed", "", health, owner))
+			}
+		}
+	}
+
+	return events
 }
 
 // Listers
@@ -391,6 +873,14 @@ func (c *ResourceCache) HorizontalPodAutoscalers() listersautoscalingv2.Horizont
 
 // Changes returns the channel for resource change notifications
 func (c *ResourceCache) Changes() <-chan ResourceChange {
+	if c == nil {
+		return nil
+	}
+	return c.changes
+}
+
+// ChangesRaw returns the bidirectional channel for internal use (e.g., sharing with dynamic cache)
+func (c *ResourceCache) ChangesRaw() chan ResourceChange {
 	if c == nil {
 		return nil
 	}
@@ -519,6 +1009,8 @@ type ResourceStatus struct {
 	Status  string // Running, Pending, Failed, Succeeded, Active, etc.
 	Ready   string // e.g., "3/3" for deployments
 	Message string // Status message or reason
+	Summary string // Brief human-readable status like "3/5 ready" or "0/3 OOMKilled"
+	Issue   string // Primary issue if unhealthy (e.g., "OOMKilled", "CrashLoopBackOff")
 }
 
 // GetResourceStatus looks up a resource and returns its status
@@ -535,10 +1027,19 @@ func (c *ResourceCache) GetResourceStatus(kind, namespace, name string) *Resourc
 		if err != nil {
 			return nil
 		}
+		issue := getPodIssue(pod)
+		status := string(pod.Status.Phase)
+		summary := status
+		if issue != "" {
+			summary = issue
+			status = issue
+		}
 		return &ResourceStatus{
-			Status:  string(pod.Status.Phase),
+			Status:  status,
 			Ready:   getPodReadyCount(pod),
 			Message: getPodStatusMessage(pod),
+			Summary: summary,
+			Issue:   issue,
 		}
 
 	case "deployment", "deployments":
@@ -553,10 +1054,27 @@ func (c *ResourceCache) GetResourceStatus(kind, namespace, name string) *Resourc
 		} else if dep.Status.Replicas == 0 {
 			status = "Scaled to 0"
 		}
-		return &ResourceStatus{
-			Status: status,
-			Ready:  ready,
+
+		result := &ResourceStatus{
+			Status:  status,
+			Ready:   ready,
+			Summary: ready + " ready",
 		}
+
+		// Check pod-level issues for unhealthy deployments
+		if dep.Status.ReadyReplicas < dep.Status.Replicas && dep.Status.Replicas > 0 {
+			pods := c.getPodsForWorkload(namespace, dep.Spec.Selector)
+			if len(pods) > 0 {
+				issueSummary := getPodsIssueSummary(pods)
+				if issueSummary.TopIssue != "" {
+					result.Status = issueSummary.TopIssue
+					result.Issue = issueSummary.TopIssue
+					result.Summary = issueSummary.FormatStatusSummary()
+				}
+			}
+		}
+
+		return result
 
 	case "statefulset", "statefulsets":
 		sts, err := c.StatefulSets().StatefulSets(namespace).Get(name)
@@ -574,10 +1092,27 @@ func (c *ResourceCache) GetResourceStatus(kind, namespace, name string) *Resourc
 		} else if replicas == 0 {
 			status = "Scaled to 0"
 		}
-		return &ResourceStatus{
-			Status: status,
-			Ready:  ready,
+
+		result := &ResourceStatus{
+			Status:  status,
+			Ready:   ready,
+			Summary: ready + " ready",
 		}
+
+		// Check pod-level issues for unhealthy statefulsets
+		if sts.Status.ReadyReplicas < replicas && replicas > 0 {
+			pods := c.getPodsForWorkload(namespace, sts.Spec.Selector)
+			if len(pods) > 0 {
+				issueSummary := getPodsIssueSummary(pods)
+				if issueSummary.TopIssue != "" {
+					result.Status = issueSummary.TopIssue
+					result.Issue = issueSummary.TopIssue
+					result.Summary = issueSummary.FormatStatusSummary()
+				}
+			}
+		}
+
+		return result
 
 	case "daemonset", "daemonsets":
 		ds, err := c.DaemonSets().DaemonSets(namespace).Get(name)
@@ -589,10 +1124,28 @@ func (c *ResourceCache) GetResourceStatus(kind, namespace, name string) *Resourc
 		if ds.Status.NumberReady == ds.Status.DesiredNumberScheduled && ds.Status.DesiredNumberScheduled > 0 {
 			status = "Running"
 		}
-		return &ResourceStatus{
-			Status: status,
-			Ready:  ready,
+
+		// Check pod-level issues for better status reporting
+		result := &ResourceStatus{
+			Status:  status,
+			Ready:   ready,
+			Summary: ready + " ready",
 		}
+
+		// Get pods owned by this DaemonSet
+		if ds.Status.NumberReady < ds.Status.DesiredNumberScheduled {
+			pods := c.getPodsForWorkload(namespace, ds.Spec.Selector)
+			if len(pods) > 0 {
+				issueSummary := getPodsIssueSummary(pods)
+				if issueSummary.TopIssue != "" {
+					result.Status = issueSummary.TopIssue
+					result.Issue = issueSummary.TopIssue
+					result.Summary = issueSummary.FormatStatusSummary()
+				}
+			}
+		}
+
+		return result
 
 	case "replicaset", "replicasets":
 		rs, err := c.ReplicaSets().ReplicaSets(namespace).Get(name)
@@ -662,9 +1215,14 @@ func (c *ResourceCache) GetResourceStatus(kind, namespace, name string) *Resourc
 		} else if job.Status.Failed > 0 {
 			status = "Failed"
 		}
+		// Completions defaults to 1 when nil
+		completions := int32(1)
+		if job.Spec.Completions != nil {
+			completions = *job.Spec.Completions
+		}
 		return &ResourceStatus{
 			Status: status,
-			Ready:  fmt.Sprintf("%d/%d", job.Status.Succeeded, *job.Spec.Completions),
+			Ready:  fmt.Sprintf("%d/%d", job.Status.Succeeded, completions),
 		}
 
 	case "cronjob", "cronjobs":
@@ -735,4 +1293,138 @@ func getPodStatusMessage(pod *corev1.Pod) string {
 		}
 	}
 	return ""
+}
+
+// getPodIssue returns the primary issue affecting a pod (if any)
+// Returns empty string if pod is healthy
+func getPodIssue(pod *corev1.Pod) string {
+	// Check init containers first
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if issue := getContainerIssue(&cs); issue != "" {
+			return issue
+		}
+	}
+	// Check main containers
+	for _, cs := range pod.Status.ContainerStatuses {
+		if issue := getContainerIssue(&cs); issue != "" {
+			return issue
+		}
+	}
+	// Check pod conditions
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodScheduled && cond.Status == corev1.ConditionFalse {
+			if cond.Reason != "" {
+				return cond.Reason // e.g., "Unschedulable"
+			}
+		}
+	}
+	return ""
+}
+
+// getContainerIssue extracts the issue from a container status
+func getContainerIssue(cs *corev1.ContainerStatus) string {
+	// Check current state first
+	if cs.State.Waiting != nil {
+		reason := cs.State.Waiting.Reason
+		if reason != "" && reason != "PodInitializing" && reason != "ContainerCreating" {
+			return reason // CrashLoopBackOff, ImagePullBackOff, etc.
+		}
+	}
+	if cs.State.Terminated != nil && cs.State.Terminated.ExitCode != 0 {
+		if cs.State.Terminated.Reason != "" {
+			return cs.State.Terminated.Reason // OOMKilled, Error, etc.
+		}
+	}
+	// Check last state for recent failures
+	if cs.LastTerminationState.Terminated != nil {
+		if cs.LastTerminationState.Terminated.Reason == "OOMKilled" {
+			return "OOMKilled"
+		}
+	}
+	return ""
+}
+
+// PodIssueSummary holds aggregated pod issue information
+type PodIssueSummary struct {
+	Total     int
+	Ready     int
+	Issues    map[string]int // issue -> count (e.g., "OOMKilled" -> 3)
+	TopIssue  string         // Most common issue
+	TopCount  int            // Count of most common issue
+}
+
+// getPodsIssueSummary analyzes a list of pods and returns issue summary
+func getPodsIssueSummary(pods []*corev1.Pod) *PodIssueSummary {
+	summary := &PodIssueSummary{
+		Total:  len(pods),
+		Issues: make(map[string]int),
+	}
+
+	for _, pod := range pods {
+		// Count ready pods
+		if pod.Status.Phase == corev1.PodRunning {
+			allReady := true
+			for _, cs := range pod.Status.ContainerStatuses {
+				if !cs.Ready {
+					allReady = false
+					break
+				}
+			}
+			if allReady {
+				summary.Ready++
+			}
+		}
+
+		// Track issues
+		if issue := getPodIssue(pod); issue != "" {
+			summary.Issues[issue]++
+			if summary.Issues[issue] > summary.TopCount {
+				summary.TopIssue = issue
+				summary.TopCount = summary.Issues[issue]
+			}
+		}
+	}
+
+	return summary
+}
+
+// FormatStatusSummary creates a brief human-readable status string
+func (s *PodIssueSummary) FormatStatusSummary() string {
+	if s.Total == 0 {
+		return "No pods"
+	}
+	if s.TopIssue != "" {
+		return fmt.Sprintf("%d/%d %s", s.Ready, s.Total, s.TopIssue)
+	}
+	if s.Ready == s.Total {
+		return fmt.Sprintf("%d/%d ready", s.Ready, s.Total)
+	}
+	return fmt.Sprintf("%d/%d ready", s.Ready, s.Total)
+}
+
+// getPodsForWorkload returns pods matching the given label selector in a namespace
+func (c *ResourceCache) getPodsForWorkload(namespace string, selector *metav1.LabelSelector) []*corev1.Pod {
+	if c == nil || selector == nil {
+		return nil
+	}
+
+	allPods, err := c.Pods().Pods(namespace).List(labels.Everything())
+	if err != nil {
+		return nil
+	}
+
+	// Convert LabelSelector to Selector
+	labelSelector, err := metav1.LabelSelectorAsSelector(selector)
+	if err != nil {
+		return nil
+	}
+
+	var matchingPods []*corev1.Pod
+	for _, pod := range allPods {
+		if labelSelector.Matches(labels.Set(pod.Labels)) {
+			matchingPods = append(matchingPods, pod)
+		}
+	}
+
+	return matchingPods
 }

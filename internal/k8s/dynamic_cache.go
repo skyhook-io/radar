@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
 	"sync"
 	"time"
 
@@ -13,15 +14,19 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
+
+	"github.com/skyhook-io/skyhook-explorer/internal/timeline"
 )
 
 // DynamicResourceCache provides on-demand caching for CRDs and other dynamic resources
 type DynamicResourceCache struct {
-	factory   dynamicinformer.DynamicSharedInformerFactory
-	informers map[schema.GroupVersionResource]cache.SharedIndexInformer
-	stopCh    chan struct{}
-	stopOnce  sync.Once
-	mu        sync.RWMutex
+	factory      dynamicinformer.DynamicSharedInformerFactory
+	informers    map[schema.GroupVersionResource]cache.SharedIndexInformer
+	syncComplete map[schema.GroupVersionResource]bool // Track which informers have completed initial sync
+	stopCh       chan struct{}
+	stopOnce     sync.Once
+	mu           sync.RWMutex
+	changes      chan ResourceChange // Channel for change notifications (shared with typed cache)
 }
 
 var (
@@ -31,7 +36,8 @@ var (
 )
 
 // InitDynamicResourceCache initializes the dynamic resource cache
-func InitDynamicResourceCache() error {
+// If changeCh is provided, change notifications will be sent to it (for SSE)
+func InitDynamicResourceCache(changeCh chan ResourceChange) error {
 	var initErr error
 	dynamicCacheOnce.Do(func() {
 		client := GetDynamicClient()
@@ -46,9 +52,11 @@ func InitDynamicResourceCache() error {
 		)
 
 		dynamicResourceCache = &DynamicResourceCache{
-			factory:   factory,
-			informers: make(map[schema.GroupVersionResource]cache.SharedIndexInformer),
-			stopCh:    make(chan struct{}),
+			factory:      factory,
+			informers:    make(map[schema.GroupVersionResource]cache.SharedIndexInformer),
+			syncComplete: make(map[schema.GroupVersionResource]bool),
+			stopCh:       make(chan struct{}),
+			changes:      changeCh,
 		}
 
 		log.Println("Dynamic resource cache initialized")
@@ -76,8 +84,8 @@ func ResetDynamicResourceCache() {
 
 // ReinitDynamicResourceCache reinitializes the dynamic cache after a context switch
 // Must call ResetDynamicResourceCache first
-func ReinitDynamicResourceCache() error {
-	return InitDynamicResourceCache()
+func ReinitDynamicResourceCache(changeCh chan ResourceChange) error {
+	return InitDynamicResourceCache(changeCh)
 }
 
 // EnsureWatching starts watching a resource type if not already watching
@@ -106,6 +114,12 @@ func (d *DynamicResourceCache) EnsureWatching(gvr schema.GroupVersionResource) e
 	informer := d.factory.ForResource(gvr).Informer()
 	d.informers[gvr] = informer
 
+	// Get the kind name from discovery (e.g., "Rollout" from "rollouts")
+	kind := gvrToKind(gvr)
+
+	// Add event handlers for change tracking (timeline + SSE)
+	d.addDynamicChangeHandlers(informer, kind, gvr)
+
 	// Start the informer
 	go informer.Run(d.stopCh)
 
@@ -119,10 +133,125 @@ func (d *DynamicResourceCache) EnsureWatching(gvr schema.GroupVersionResource) e
 		} else {
 			log.Printf("Dynamic resource synced: %s.%s/%s", gvr.Resource, gvr.Group, gvr.Version)
 		}
+
+		// Mark this informer as sync complete - now we can record ADD events for it
+		d.mu.Lock()
+		d.syncComplete[gvr] = true
+		d.mu.Unlock()
 	}()
 
 	log.Printf("Started watching dynamic resource: %s.%s/%s", gvr.Resource, gvr.Group, gvr.Version)
 	return nil
+}
+
+// gvrToKind converts a GVR to a kind name using resource discovery
+// Falls back to capitalizing the singular resource name
+func gvrToKind(gvr schema.GroupVersionResource) string {
+	discovery := GetResourceDiscovery()
+	if discovery != nil {
+		if kind := discovery.GetKindForGVR(gvr); kind != "" {
+			return kind
+		}
+	}
+	// Fallback: capitalize and singularize the resource name
+	// e.g., "rollouts" -> "Rollout"
+	name := gvr.Resource
+	if len(name) > 1 && name[len(name)-1] == 's' {
+		name = name[:len(name)-1]
+	}
+	if len(name) > 0 {
+		return strings.ToUpper(name[:1]) + name[1:]
+	}
+	return name
+}
+
+// addDynamicChangeHandlers registers event handlers for change notifications on dynamic resources
+func (d *DynamicResourceCache) addDynamicChangeHandlers(inf cache.SharedIndexInformer, kind string, gvr schema.GroupVersionResource) {
+	_, _ = inf.AddEventHandler(cache.ResourceEventHandlerFuncs{
+		AddFunc: func(obj any) {
+			d.enqueueDynamicChange(kind, gvr, obj, nil, "add")
+		},
+		UpdateFunc: func(oldObj, newObj any) {
+			d.enqueueDynamicChange(kind, gvr, newObj, oldObj, "update")
+		},
+		DeleteFunc: func(obj any) {
+			d.enqueueDynamicChange(kind, gvr, obj, nil, "delete")
+		},
+	})
+}
+
+// enqueueDynamicChange records a change and sends notification for dynamic (unstructured) resources
+func (d *DynamicResourceCache) enqueueDynamicChange(kind string, gvr schema.GroupVersionResource, obj any, oldObj any, op string) {
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		// Handle tombstone for deleted objects
+		if tombstone, ok := obj.(cache.DeletedFinalStateUnknown); ok {
+			u, ok = tombstone.Obj.(*unstructured.Unstructured)
+			if !ok {
+				return
+			}
+		} else {
+			return
+		}
+	}
+
+	namespace := u.GetNamespace()
+	name := u.GetName()
+	uid := string(u.GetUID())
+
+	// Track event received
+	timeline.IncrementReceived(kind)
+
+	// Skip ADD events during initial sync - they represent existing resources, not new creations
+	if op == "add" {
+		d.mu.RLock()
+		synced := d.syncComplete[gvr]
+		d.mu.RUnlock()
+
+		if !synced {
+			if DebugEvents {
+				log.Printf("[DEBUG] Skipping dynamic initial sync add event: %s/%s/%s", kind, namespace, name)
+			}
+			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonAlreadySeen, op)
+			return
+		}
+	}
+
+	// Compute diff for updates
+	var diff *DiffInfo
+	if op == "update" && oldObj != nil && obj != nil {
+		diff = ComputeDiff(kind, oldObj, obj)
+	}
+
+	// Record to timeline store
+	recordToTimelineStore(kind, namespace, name, uid, op, oldObj, obj)
+
+	// Send to change channel for SSE if configured
+	if d.changes != nil {
+		change := ResourceChange{
+			Kind:      kind,
+			Namespace: namespace,
+			Name:      name,
+			UID:       uid,
+			Operation: op,
+			Diff:      diff,
+		}
+
+		// Non-blocking send
+		select {
+		case d.changes <- change:
+		default:
+			// Channel full, drop event
+			timeline.RecordDrop(kind, namespace, name,
+				timeline.DropReasonChannelFull, op)
+			if DebugEvents {
+				log.Printf("[DEBUG] Dynamic change channel full, dropped: %s/%s/%s op=%s", kind, namespace, name, op)
+			}
+		}
+	}
+
+	// Track successful recording (for dynamic resources that get sent to SSE)
+	timeline.IncrementRecorded(kind)
 }
 
 // WaitForSync waits for a resource's cache to be synced (with timeout)
@@ -399,6 +528,40 @@ func (d *DynamicResourceCache) Stop() {
 		close(d.stopCh)
 		d.factory.Shutdown()
 	})
+}
+
+// WarmupCommonCRDs starts watching common CRDs (Rollouts, Workflows, etc.) at startup
+// This ensures they appear in the initial timeline before the first topology request
+func WarmupCommonCRDs() {
+	cache := GetDynamicResourceCache()
+	if cache == nil {
+		return
+	}
+
+	discovery := GetResourceDiscovery()
+	if discovery == nil {
+		return
+	}
+
+	// Common CRDs that should be warmed up for timeline visibility
+	commonCRDs := []string{
+		"Rollout",      // Argo Rollouts
+		"Workflow",     // Argo Workflows
+		"CronWorkflow", // Argo Workflows
+		"Certificate",  // cert-manager
+	}
+
+	var gvrs []schema.GroupVersionResource
+	for _, kind := range commonCRDs {
+		if gvr, ok := discovery.GetGVR(kind); ok {
+			gvrs = append(gvrs, gvr)
+			log.Printf("Warming up CRD: %s", kind)
+		}
+	}
+
+	if len(gvrs) > 0 {
+		cache.WarmupParallel(gvrs, 10*time.Second)
+	}
 }
 
 // stripManagedFieldsUnstructured removes managed fields from unstructured objects

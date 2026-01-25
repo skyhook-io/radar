@@ -142,7 +142,7 @@ func TestClusterConnection(ctx context.Context) error {
 // 3. Tests connectivity to ensure cluster is reachable
 // 4. Reinitializes all caches
 // 5. Notifies all registered callbacks
-func PerformContextSwitch(newContext string, historyLimit int, historyPath string) error {
+func PerformContextSwitch(newContext string) error {
 	log.Printf("Performing context switch to %q", newContext)
 	reportProgress("Stopping caches...")
 
@@ -156,8 +156,6 @@ func PerformContextSwitch(newContext string, historyLimit int, historyPath strin
 	log.Println("Stopping resource discovery...")
 	ResetResourceDiscovery()
 
-	log.Println("Stopping change history...")
-	ResetChangeHistory()
 
 	// Reset timeline store if registered
 	contextSwitchMu.RLock()
@@ -241,9 +239,6 @@ func PerformContextSwitch(newContext string, historyLimit int, historyPath strin
 		}
 	}
 
-	reportProgress("Loading change history...")
-	log.Println("Reinitializing change history...")
-	ReinitChangeHistory(historyLimit, historyPath)
 
 	// Reinit Helm client if registered
 	contextSwitchMu.RLock()

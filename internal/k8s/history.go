@@ -3,333 +3,24 @@ package k8s
 import (
 	"encoding/json"
 	"fmt"
-	"os"
-	"path/filepath"
-	"sync"
-	"time"
+	"strings"
 
-	"github.com/google/uuid"
+	"github.com/skyhook-io/skyhook-explorer/internal/timeline"
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// ChangeRecord represents a recorded resource change with optional diff
-type ChangeRecord struct {
-	ID           string     `json:"id"`
-	Kind         string     `json:"kind"`
-	Namespace    string     `json:"namespace"`
-	Name         string     `json:"name"`
-	Operation    string     `json:"operation"` // add, update, delete
-	Timestamp    time.Time  `json:"timestamp"`
-	Diff         *DiffInfo  `json:"diff,omitempty"`
-	HealthState  string     `json:"healthState"` // healthy, degraded, unhealthy, unknown
-	Owner        *OwnerInfo `json:"owner,omitempty"`
-	IsHistorical bool       `json:"isHistorical,omitempty"` // True if extracted from resource metadata/status
-	Reason       string     `json:"reason,omitempty"`       // Description for historical events (e.g., "created", "started", "completed")
-}
+// Type aliases - these types are defined in the timeline package
+type OwnerInfo = timeline.OwnerInfo
+type DiffInfo = timeline.DiffInfo
+type FieldChange = timeline.FieldChange
 
-// OwnerInfo represents the owner/controller of a resource
-type OwnerInfo struct {
-	Kind string `json:"kind"`
-	Name string `json:"name"`
-}
-
-// IsManaged returns true if this resource is managed by another (RS, Pod)
-func (c *ChangeRecord) IsManaged() bool {
-	return c.Owner != nil || c.Kind == "ReplicaSet" || c.Kind == "Pod" || c.Kind == "Event"
-}
-
-// IsToplevelWorkload returns true if this is a top-level workload
-func (c *ChangeRecord) IsToplevelWorkload() bool {
-	switch c.Kind {
-	case "Deployment", "DaemonSet", "StatefulSet", "Service", "Ingress", "ConfigMap", "Secret", "Job", "CronJob":
-		return true
-	}
-	return false
-}
-
-// DiffInfo contains the diff details for an update operation
-type DiffInfo struct {
-	Fields  []FieldChange `json:"fields"`
-	Summary string        `json:"summary"`
-}
-
-// FieldChange represents a single field that changed
-type FieldChange struct {
-	Path     string `json:"path"`
-	OldValue any    `json:"oldValue"`
-	NewValue any    `json:"newValue"`
-}
-
-// ChangeHistory stores resource changes in a ring buffer
-type ChangeHistory struct {
-	records       []ChangeRecord
-	maxSize       int
-	head          int // next write position
-	count         int
-	mu            sync.RWMutex
-	previousSpecs map[string]any // key: kind/namespace/name -> previous spec for diff
-	specMu        sync.RWMutex
-	persistPath   string // if set, persist to this file
-	seenResources map[string]bool // resources seen in loaded history (to skip duplicate adds on sync)
-	seenMu        sync.RWMutex
-}
-
-var (
-	changeHistory     *ChangeHistory
-	changeHistoryOnce sync.Once
-	historyMu         sync.Mutex
-)
-
-// InitChangeHistory initializes the global change history store
-func InitChangeHistory(maxSize int, persistPath string) {
-	changeHistoryOnce.Do(func() {
-		changeHistory = &ChangeHistory{
-			records:       make([]ChangeRecord, maxSize),
-			maxSize:       maxSize,
-			previousSpecs: make(map[string]any),
-			persistPath:   persistPath,
-			seenResources: make(map[string]bool),
-		}
-		if persistPath != "" {
-			changeHistory.loadFromFile()
-		}
-	})
-}
-
-// GetChangeHistory returns the global change history instance
-func GetChangeHistory() *ChangeHistory {
-	return changeHistory
-}
-
-// ResetChangeHistory clears the change history instance
-// This must be called before ReinitChangeHistory when switching contexts
-func ResetChangeHistory() {
-	historyMu.Lock()
-	defer historyMu.Unlock()
-
-	changeHistory = nil
-	changeHistoryOnce = sync.Once{}
-}
-
-// ReinitChangeHistory reinitializes change history after a context switch
-// Must call ResetChangeHistory first
-func ReinitChangeHistory(maxSize int, persistPath string) {
-	InitChangeHistory(maxSize, persistPath)
-}
-
-// resourceKey generates a unique key for a resource
-func resourceKey(kind, namespace, name string) string {
-	return fmt.Sprintf("%s/%s/%s", kind, namespace, name)
-}
-
-// RecordChange records a resource change and computes diff if applicable
-func (h *ChangeHistory) RecordChange(kind, namespace, name, operation string, oldObj, newObj any) *ChangeRecord {
-	if h == nil {
-		return nil
-	}
-
-	key := resourceKey(kind, namespace, name)
-
-	// Skip "add" for resources we've already seen (avoids duplicate adds on restart)
-	if operation == "add" {
-		h.seenMu.RLock()
-		seen := h.seenResources[key]
-		h.seenMu.RUnlock()
-		if seen {
-			return nil
-		}
-	}
-
-	// Track seen resources
-	h.seenMu.Lock()
-	if operation == "delete" {
-		delete(h.seenResources, key)
-	} else {
-		h.seenResources[key] = true
-	}
-	h.seenMu.Unlock()
-
-	record := ChangeRecord{
-		ID:          uuid.New().String(),
-		Kind:        kind,
-		Namespace:   namespace,
-		Name:        name,
-		Operation:   operation,
-		Timestamp:   time.Now(),
-		HealthState: "unknown",
-	}
-
-	// Compute diff for updates
-	if operation == "update" && oldObj != nil && newObj != nil {
-		record.Diff = h.computeDiff(kind, oldObj, newObj)
-	}
-
-	// Determine health state from new object
-	if newObj != nil {
-		record.HealthState = determineHealthState(kind, newObj)
-	}
-
-	// Extract owner reference
-	obj := newObj
-	if obj == nil {
-		obj = oldObj
-	}
-	if obj != nil {
-		record.Owner = extractOwner(obj)
-	}
-
-	// Store current spec for future diffs
-	if operation != "delete" && newObj != nil {
-		h.specMu.Lock()
-		h.previousSpecs[key] = extractKeySpec(kind, newObj)
-		h.specMu.Unlock()
-	} else if operation == "delete" {
-		h.specMu.Lock()
-		delete(h.previousSpecs, key)
-		h.specMu.Unlock()
-	}
-
-	// For "add" operations, extract historical events from the resource
-	// These are timestamps embedded in the resource's metadata/status
-	var historicalEvents []ChangeRecord
-	if operation == "add" && newObj != nil {
-		historicalEvents = extractHistoricalEvents(kind, namespace, name, newObj, record.Owner)
-	}
-
-	// Add historical events first (they have older timestamps), then the current record
-	h.mu.Lock()
-	for _, histEvent := range historicalEvents {
-		h.records[h.head] = histEvent
-		h.head = (h.head + 1) % h.maxSize
-		if h.count < h.maxSize {
-			h.count++
-		}
-	}
-	h.records[h.head] = record
-	h.head = (h.head + 1) % h.maxSize
-	if h.count < h.maxSize {
-		h.count++
-	}
-	h.mu.Unlock()
-
-	// Persist if enabled
-	if h.persistPath != "" {
-		for _, histEvent := range historicalEvents {
-			h.appendToFile(histEvent)
-		}
-		h.appendToFile(record)
-	}
-
-	return &record
-}
-
-// GetChangesOptions configures the GetChanges query
-type GetChangesOptions struct {
-	Namespace      string
-	Kind           string
-	Since          time.Time
-	Limit          int
-	IncludeManaged bool // If false, filter out ReplicaSets, Pods, etc.
-}
-
-// GetChanges retrieves changes matching the given filters
-func (h *ChangeHistory) GetChanges(opts GetChangesOptions) []ChangeRecord {
-	if h == nil {
-		return nil
-	}
-
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	limit := opts.Limit
-	if limit <= 0 {
-		limit = 200
-	}
-
-	results := make([]ChangeRecord, 0, limit)
-
-	// Iterate backwards from most recent
-	for i := 0; i < h.count && len(results) < limit; i++ {
-		idx := (h.head - 1 - i + h.maxSize) % h.maxSize
-		record := h.records[idx]
-
-		// Skip empty records
-		if record.ID == "" {
-			continue
-		}
-
-		// Skip if before since time
-		if !opts.Since.IsZero() && record.Timestamp.Before(opts.Since) {
-			continue
-		}
-
-		// Filter by namespace
-		if opts.Namespace != "" && record.Namespace != opts.Namespace {
-			continue
-		}
-
-		// Filter by kind
-		if opts.Kind != "" && record.Kind != opts.Kind {
-			continue
-		}
-
-		// Filter out managed resources unless explicitly requested
-		if !opts.IncludeManaged && record.IsManaged() {
-			continue
-		}
-
-		results = append(results, record)
-	}
-
-	return results
-}
-
-// GetChangesForOwner retrieves changes for resources owned by the given owner
-func (h *ChangeHistory) GetChangesForOwner(ownerKind, ownerNamespace, ownerName string, since time.Time, limit int) []ChangeRecord {
-	if h == nil {
-		return nil
-	}
-
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-
-	if limit <= 0 {
-		limit = 100
-	}
-
-	results := make([]ChangeRecord, 0, limit)
-
-	for i := 0; i < h.count && len(results) < limit; i++ {
-		idx := (h.head - 1 - i + h.maxSize) % h.maxSize
-		record := h.records[idx]
-
-		if record.ID == "" {
-			continue
-		}
-
-		if !since.IsZero() && record.Timestamp.Before(since) {
-			continue
-		}
-
-		if record.Namespace != ownerNamespace {
-			continue
-		}
-
-		// Check if this record's owner matches
-		if record.Owner != nil && record.Owner.Kind == ownerKind && record.Owner.Name == ownerName {
-			results = append(results, record)
-		}
-	}
-
-	return results
-}
-
-// computeDiff computes the diff between old and new objects based on kind
-func (h *ChangeHistory) computeDiff(kind string, oldObj, newObj any) *DiffInfo {
+// ComputeDiff computes the diff between old and new objects based on kind
+// Returns nil if no meaningful changes detected or kind not supported
+func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
 	var changes []FieldChange
 	var summaryParts []string
 
@@ -350,6 +41,14 @@ func (h *ChangeHistory) computeDiff(kind string, oldObj, newObj any) *DiffInfo {
 		changes, summaryParts = diffDaemonSet(oldObj, newObj)
 	case "StatefulSet":
 		changes, summaryParts = diffStatefulSet(oldObj, newObj)
+	case "HorizontalPodAutoscaler":
+		changes, summaryParts = diffHPA(oldObj, newObj)
+	case "Job":
+		changes, summaryParts = diffJob(oldObj, newObj)
+	case "Node":
+		changes, summaryParts = diffNode(oldObj, newObj)
+	case "PersistentVolumeClaim":
+		changes, summaryParts = diffPVC(oldObj, newObj)
 	default:
 		return nil
 	}
@@ -431,6 +130,43 @@ func diffDeployment(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, "resources changed")
 	}
 
+	// Check paused state
+	if oldDep.Spec.Paused != newDep.Spec.Paused {
+		changes = append(changes, FieldChange{
+			Path:     "spec.paused",
+			OldValue: oldDep.Spec.Paused,
+			NewValue: newDep.Spec.Paused,
+		})
+		if newDep.Spec.Paused {
+			summary = append(summary, "rollout paused")
+		} else {
+			summary = append(summary, "rollout resumed")
+		}
+	}
+
+	// Check ready replicas (rollout progress)
+	if oldDep.Status.ReadyReplicas != newDep.Status.ReadyReplicas {
+		changes = append(changes, FieldChange{
+			Path:     "status.readyReplicas",
+			OldValue: oldDep.Status.ReadyReplicas,
+			NewValue: newDep.Status.ReadyReplicas,
+		})
+		summary = append(summary, fmt.Sprintf("ready: %d→%d", oldDep.Status.ReadyReplicas, newDep.Status.ReadyReplicas))
+	}
+
+	// Check updated replicas (new version rollout)
+	if oldDep.Status.UpdatedReplicas != newDep.Status.UpdatedReplicas {
+		changes = append(changes, FieldChange{
+			Path:     "status.updatedReplicas",
+			OldValue: oldDep.Status.UpdatedReplicas,
+			NewValue: newDep.Status.UpdatedReplicas,
+		})
+		// Only add to summary if not already showing ready replicas change
+		if oldDep.Status.ReadyReplicas == newDep.Status.ReadyReplicas {
+			summary = append(summary, fmt.Sprintf("updated: %d→%d", oldDep.Status.UpdatedReplicas, newDep.Status.UpdatedReplicas))
+		}
+	}
+
 	return changes, summary
 }
 
@@ -467,7 +203,90 @@ func diffPod(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("restarts: %d→%d", oldRestarts, newRestarts))
 	}
 
+	// Check for OOMKilled in any container
+	for _, cs := range newPod.Status.ContainerStatuses {
+		if cs.LastTerminationState.Terminated != nil && cs.LastTerminationState.Terminated.Reason == "OOMKilled" {
+			// Check if this is a new OOM (not in old status)
+			var wasOOM bool
+			for _, oldCS := range oldPod.Status.ContainerStatuses {
+				if oldCS.Name == cs.Name && oldCS.LastTerminationState.Terminated != nil &&
+					oldCS.LastTerminationState.Terminated.Reason == "OOMKilled" &&
+					oldCS.LastTerminationState.Terminated.FinishedAt == cs.LastTerminationState.Terminated.FinishedAt {
+					wasOOM = true
+					break
+				}
+			}
+			if !wasOOM {
+				changes = append(changes, FieldChange{
+					Path:     fmt.Sprintf("status.containerStatuses[%s].lastState", cs.Name),
+					OldValue: nil,
+					NewValue: "OOMKilled",
+				})
+				summary = append(summary, fmt.Sprintf("%s: OOMKilled", cs.Name))
+			}
+		}
+	}
+
+	// Check container state transitions (Running, Waiting, Terminated)
+	for _, newCS := range newPod.Status.ContainerStatuses {
+		for _, oldCS := range oldPod.Status.ContainerStatuses {
+			if oldCS.Name != newCS.Name {
+				continue
+			}
+			oldState := getContainerState(oldCS)
+			newState := getContainerState(newCS)
+			if oldState != newState && oldState != "" && newState != "" {
+				changes = append(changes, FieldChange{
+					Path:     fmt.Sprintf("status.containerStatuses[%s].state", newCS.Name),
+					OldValue: oldState,
+					NewValue: newState,
+				})
+				summary = append(summary, fmt.Sprintf("%s: %s→%s", newCS.Name, oldState, newState))
+			}
+		}
+	}
+
+	// Check for node assignment (scheduling)
+	if oldPod.Spec.NodeName == "" && newPod.Spec.NodeName != "" {
+		changes = append(changes, FieldChange{
+			Path:     "spec.nodeName",
+			OldValue: "",
+			NewValue: newPod.Spec.NodeName,
+		})
+		summary = append(summary, fmt.Sprintf("scheduled to %s", newPod.Spec.NodeName))
+	}
+
+	// Check for IP assignment
+	if oldPod.Status.PodIP == "" && newPod.Status.PodIP != "" {
+		changes = append(changes, FieldChange{
+			Path:     "status.podIP",
+			OldValue: "",
+			NewValue: newPod.Status.PodIP,
+		})
+		summary = append(summary, fmt.Sprintf("IP: %s", newPod.Status.PodIP))
+	}
+
 	return changes, summary
+}
+
+// getContainerState returns a string describing the container's current state
+func getContainerState(cs corev1.ContainerStatus) string {
+	if cs.State.Running != nil {
+		return "Running"
+	}
+	if cs.State.Waiting != nil {
+		if cs.State.Waiting.Reason != "" {
+			return cs.State.Waiting.Reason
+		}
+		return "Waiting"
+	}
+	if cs.State.Terminated != nil {
+		if cs.State.Terminated.Reason != "" {
+			return cs.State.Terminated.Reason
+		}
+		return "Terminated"
+	}
+	return ""
 }
 
 // diffService computes diff for Service resources
@@ -513,7 +332,58 @@ func diffService(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, "selector changed")
 	}
 
+	// Check LoadBalancer status (IP/hostname assignment)
+	oldLBAddrs := getLBAddresses(oldSvc.Status.LoadBalancer.Ingress)
+	newLBAddrs := getLBAddresses(newSvc.Status.LoadBalancer.Ingress)
+	if !equalStringSlices(oldLBAddrs, newLBAddrs) {
+		if len(oldLBAddrs) == 0 && len(newLBAddrs) > 0 {
+			changes = append(changes, FieldChange{
+				Path:     "status.loadBalancer.ingress",
+				OldValue: nil,
+				NewValue: newLBAddrs,
+			})
+			summary = append(summary, fmt.Sprintf("LB ready: %s", joinStrings(newLBAddrs, ", ")))
+		} else if len(newLBAddrs) == 0 && len(oldLBAddrs) > 0 {
+			changes = append(changes, FieldChange{
+				Path:     "status.loadBalancer.ingress",
+				OldValue: oldLBAddrs,
+				NewValue: nil,
+			})
+			summary = append(summary, "LB removed")
+		} else {
+			changes = append(changes, FieldChange{
+				Path:     "status.loadBalancer.ingress",
+				OldValue: oldLBAddrs,
+				NewValue: newLBAddrs,
+			})
+			summary = append(summary, "LB addresses changed")
+		}
+	}
+
+	// Check ExternalIPs
+	if !equalStringSlices(oldSvc.Spec.ExternalIPs, newSvc.Spec.ExternalIPs) {
+		changes = append(changes, FieldChange{
+			Path:     "spec.externalIPs",
+			OldValue: oldSvc.Spec.ExternalIPs,
+			NewValue: newSvc.Spec.ExternalIPs,
+		})
+		summary = append(summary, "externalIPs changed")
+	}
+
 	return changes, summary
+}
+
+// getLBAddresses extracts IP/hostname addresses from LoadBalancer ingress
+func getLBAddresses(ingress []corev1.LoadBalancerIngress) []string {
+	var addrs []string
+	for _, ing := range ingress {
+		if ing.IP != "" {
+			addrs = append(addrs, ing.IP)
+		} else if ing.Hostname != "" {
+			addrs = append(addrs, ing.Hostname)
+		}
+	}
+	return addrs
 }
 
 // diffConfigMap computes diff for ConfigMap resources
@@ -596,7 +466,71 @@ func diffIngress(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("tls: %d→%d", oldTLS, newTLS))
 	}
 
+	// Check LoadBalancer status (address assignment)
+	oldLBAddrs := getIngressLBAddresses(oldIng.Status.LoadBalancer.Ingress)
+	newLBAddrs := getIngressLBAddresses(newIng.Status.LoadBalancer.Ingress)
+	if !equalStringSlices(oldLBAddrs, newLBAddrs) {
+		if len(oldLBAddrs) == 0 && len(newLBAddrs) > 0 {
+			changes = append(changes, FieldChange{
+				Path:     "status.loadBalancer.ingress",
+				OldValue: nil,
+				NewValue: newLBAddrs,
+			})
+			summary = append(summary, fmt.Sprintf("LB ready: %s", joinStrings(newLBAddrs, ", ")))
+		} else if len(newLBAddrs) == 0 && len(oldLBAddrs) > 0 {
+			changes = append(changes, FieldChange{
+				Path:     "status.loadBalancer.ingress",
+				OldValue: oldLBAddrs,
+				NewValue: nil,
+			})
+			summary = append(summary, "LB removed")
+		} else {
+			changes = append(changes, FieldChange{
+				Path:     "status.loadBalancer.ingress",
+				OldValue: oldLBAddrs,
+				NewValue: newLBAddrs,
+			})
+			summary = append(summary, "LB addresses changed")
+		}
+	}
+
+	// Check hosts
+	oldHosts := getIngressHosts(oldIng.Spec.Rules)
+	newHosts := getIngressHosts(newIng.Spec.Rules)
+	if !equalStringSlices(oldHosts, newHosts) {
+		changes = append(changes, FieldChange{
+			Path:     "spec.rules[*].host",
+			OldValue: oldHosts,
+			NewValue: newHosts,
+		})
+		summary = append(summary, "hosts changed")
+	}
+
 	return changes, summary
+}
+
+// getIngressLBAddresses extracts IP/hostname addresses from Ingress LoadBalancer status
+func getIngressLBAddresses(ingress []networkingv1.IngressLoadBalancerIngress) []string {
+	var addrs []string
+	for _, ing := range ingress {
+		if ing.IP != "" {
+			addrs = append(addrs, ing.IP)
+		} else if ing.Hostname != "" {
+			addrs = append(addrs, ing.Hostname)
+		}
+	}
+	return addrs
+}
+
+// getIngressHosts extracts hosts from Ingress rules
+func getIngressHosts(rules []networkingv1.IngressRule) []string {
+	var hosts []string
+	for _, rule := range rules {
+		if rule.Host != "" {
+			hosts = append(hosts, rule.Host)
+		}
+	}
+	return hosts
 }
 
 // diffReplicaSet computes diff for ReplicaSet resources
@@ -678,6 +612,38 @@ func diffDaemonSet(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("desired: %d→%d", oldDS.Status.DesiredNumberScheduled, newDS.Status.DesiredNumberScheduled))
 	}
 
+	// Check ready pods
+	if oldDS.Status.NumberReady != newDS.Status.NumberReady {
+		changes = append(changes, FieldChange{
+			Path:     "status.numberReady",
+			OldValue: oldDS.Status.NumberReady,
+			NewValue: newDS.Status.NumberReady,
+		})
+		summary = append(summary, fmt.Sprintf("ready: %d→%d", oldDS.Status.NumberReady, newDS.Status.NumberReady))
+	}
+
+	// Check updated pods (rollout progress)
+	if oldDS.Status.UpdatedNumberScheduled != newDS.Status.UpdatedNumberScheduled {
+		changes = append(changes, FieldChange{
+			Path:     "status.updatedNumberScheduled",
+			OldValue: oldDS.Status.UpdatedNumberScheduled,
+			NewValue: newDS.Status.UpdatedNumberScheduled,
+		})
+		summary = append(summary, fmt.Sprintf("updated: %d→%d nodes", oldDS.Status.UpdatedNumberScheduled, newDS.Status.UpdatedNumberScheduled))
+	}
+
+	// Check unavailable
+	if oldDS.Status.NumberUnavailable != newDS.Status.NumberUnavailable {
+		changes = append(changes, FieldChange{
+			Path:     "status.numberUnavailable",
+			OldValue: oldDS.Status.NumberUnavailable,
+			NewValue: newDS.Status.NumberUnavailable,
+		})
+		if newDS.Status.NumberUnavailable > 0 {
+			summary = append(summary, fmt.Sprintf("unavailable: %d", newDS.Status.NumberUnavailable))
+		}
+	}
+
 	return changes, summary
 }
 
@@ -692,7 +658,7 @@ func diffStatefulSet(oldObj, newObj any) ([]FieldChange, []string) {
 	var changes []FieldChange
 	var summary []string
 
-	// Check replicas
+	// Check replicas (spec)
 	oldReplicas := int32(1)
 	newReplicas := int32(1)
 	if oldSTS.Spec.Replicas != nil {
@@ -726,99 +692,305 @@ func diffStatefulSet(oldObj, newObj any) ([]FieldChange, []string) {
 		}
 	}
 
+	// Check ready replicas
+	if oldSTS.Status.ReadyReplicas != newSTS.Status.ReadyReplicas {
+		changes = append(changes, FieldChange{
+			Path:     "status.readyReplicas",
+			OldValue: oldSTS.Status.ReadyReplicas,
+			NewValue: newSTS.Status.ReadyReplicas,
+		})
+		summary = append(summary, fmt.Sprintf("ready: %d→%d", oldSTS.Status.ReadyReplicas, newSTS.Status.ReadyReplicas))
+	}
+
+	// Check updated replicas (rolling update progress)
+	if oldSTS.Status.UpdatedReplicas != newSTS.Status.UpdatedReplicas {
+		changes = append(changes, FieldChange{
+			Path:     "status.updatedReplicas",
+			OldValue: oldSTS.Status.UpdatedReplicas,
+			NewValue: newSTS.Status.UpdatedReplicas,
+		})
+		if oldSTS.Status.ReadyReplicas == newSTS.Status.ReadyReplicas {
+			summary = append(summary, fmt.Sprintf("updated: %d→%d", oldSTS.Status.UpdatedReplicas, newSTS.Status.UpdatedReplicas))
+		}
+	}
+
+	// Check current revision vs update revision
+	if oldSTS.Status.CurrentRevision != newSTS.Status.CurrentRevision {
+		changes = append(changes, FieldChange{
+			Path:     "status.currentRevision",
+			OldValue: oldSTS.Status.CurrentRevision,
+			NewValue: newSTS.Status.CurrentRevision,
+		})
+		summary = append(summary, "revision updated")
+	}
+
 	return changes, summary
 }
 
+// diffHPA computes diff for HorizontalPodAutoscaler resources
+func diffHPA(oldObj, newObj any) ([]FieldChange, []string) {
+	oldHPA, ok1 := oldObj.(*autoscalingv2.HorizontalPodAutoscaler)
+	newHPA, ok2 := newObj.(*autoscalingv2.HorizontalPodAutoscaler)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	// Check min replicas
+	oldMin := int32(1)
+	newMin := int32(1)
+	if oldHPA.Spec.MinReplicas != nil {
+		oldMin = *oldHPA.Spec.MinReplicas
+	}
+	if newHPA.Spec.MinReplicas != nil {
+		newMin = *newHPA.Spec.MinReplicas
+	}
+	if oldMin != newMin {
+		changes = append(changes, FieldChange{
+			Path:     "spec.minReplicas",
+			OldValue: oldMin,
+			NewValue: newMin,
+		})
+		summary = append(summary, fmt.Sprintf("minReplicas: %d→%d", oldMin, newMin))
+	}
+
+	// Check max replicas
+	if oldHPA.Spec.MaxReplicas != newHPA.Spec.MaxReplicas {
+		changes = append(changes, FieldChange{
+			Path:     "spec.maxReplicas",
+			OldValue: oldHPA.Spec.MaxReplicas,
+			NewValue: newHPA.Spec.MaxReplicas,
+		})
+		summary = append(summary, fmt.Sprintf("maxReplicas: %d→%d", oldHPA.Spec.MaxReplicas, newHPA.Spec.MaxReplicas))
+	}
+
+	// Check current replicas (scaling event)
+	if oldHPA.Status.CurrentReplicas != newHPA.Status.CurrentReplicas {
+		changes = append(changes, FieldChange{
+			Path:     "status.currentReplicas",
+			OldValue: oldHPA.Status.CurrentReplicas,
+			NewValue: newHPA.Status.CurrentReplicas,
+		})
+		direction := "scaled up"
+		if newHPA.Status.CurrentReplicas < oldHPA.Status.CurrentReplicas {
+			direction = "scaled down"
+		}
+		summary = append(summary, fmt.Sprintf("%s: %d→%d", direction, oldHPA.Status.CurrentReplicas, newHPA.Status.CurrentReplicas))
+	}
+
+	// Check desired replicas (scaling decision)
+	if oldHPA.Status.DesiredReplicas != newHPA.Status.DesiredReplicas {
+		changes = append(changes, FieldChange{
+			Path:     "status.desiredReplicas",
+			OldValue: oldHPA.Status.DesiredReplicas,
+			NewValue: newHPA.Status.DesiredReplicas,
+		})
+		if oldHPA.Status.CurrentReplicas == newHPA.Status.CurrentReplicas {
+			// Only show desired if current didn't change (otherwise it's redundant)
+			summary = append(summary, fmt.Sprintf("target: %d→%d replicas", oldHPA.Status.DesiredReplicas, newHPA.Status.DesiredReplicas))
+		}
+	}
+
+	return changes, summary
+}
+
+// diffJob computes diff for Job resources
+func diffJob(oldObj, newObj any) ([]FieldChange, []string) {
+	oldJob, ok1 := oldObj.(*batchv1.Job)
+	newJob, ok2 := newObj.(*batchv1.Job)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	// Check active pods
+	if oldJob.Status.Active != newJob.Status.Active {
+		changes = append(changes, FieldChange{
+			Path:     "status.active",
+			OldValue: oldJob.Status.Active,
+			NewValue: newJob.Status.Active,
+		})
+		summary = append(summary, fmt.Sprintf("active: %d→%d", oldJob.Status.Active, newJob.Status.Active))
+	}
+
+	// Check succeeded pods
+	if oldJob.Status.Succeeded != newJob.Status.Succeeded {
+		changes = append(changes, FieldChange{
+			Path:     "status.succeeded",
+			OldValue: oldJob.Status.Succeeded,
+			NewValue: newJob.Status.Succeeded,
+		})
+		summary = append(summary, fmt.Sprintf("succeeded: %d→%d", oldJob.Status.Succeeded, newJob.Status.Succeeded))
+	}
+
+	// Check failed pods
+	if oldJob.Status.Failed != newJob.Status.Failed {
+		changes = append(changes, FieldChange{
+			Path:     "status.failed",
+			OldValue: oldJob.Status.Failed,
+			NewValue: newJob.Status.Failed,
+		})
+		summary = append(summary, fmt.Sprintf("failed: %d→%d", oldJob.Status.Failed, newJob.Status.Failed))
+	}
+
+	// Check completion
+	if oldJob.Status.CompletionTime == nil && newJob.Status.CompletionTime != nil {
+		changes = append(changes, FieldChange{
+			Path:     "status.completionTime",
+			OldValue: nil,
+			NewValue: newJob.Status.CompletionTime.Time,
+		})
+		summary = append(summary, "completed")
+	}
+
+	// Check suspended
+	oldSuspended := oldJob.Spec.Suspend != nil && *oldJob.Spec.Suspend
+	newSuspended := newJob.Spec.Suspend != nil && *newJob.Spec.Suspend
+	if oldSuspended != newSuspended {
+		changes = append(changes, FieldChange{
+			Path:     "spec.suspend",
+			OldValue: oldSuspended,
+			NewValue: newSuspended,
+		})
+		if newSuspended {
+			summary = append(summary, "suspended")
+		} else {
+			summary = append(summary, "resumed")
+		}
+	}
+
+	return changes, summary
+}
+
+// diffNode computes diff for Node resources
+func diffNode(oldObj, newObj any) ([]FieldChange, []string) {
+	oldNode, ok1 := oldObj.(*corev1.Node)
+	newNode, ok2 := newObj.(*corev1.Node)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	// Check unschedulable (cordon/uncordon)
+	if oldNode.Spec.Unschedulable != newNode.Spec.Unschedulable {
+		changes = append(changes, FieldChange{
+			Path:     "spec.unschedulable",
+			OldValue: oldNode.Spec.Unschedulable,
+			NewValue: newNode.Spec.Unschedulable,
+		})
+		if newNode.Spec.Unschedulable {
+			summary = append(summary, "cordoned")
+		} else {
+			summary = append(summary, "uncordoned")
+		}
+	}
+
+	// Check taints
+	oldTaints := getTaintKeys(oldNode.Spec.Taints)
+	newTaints := getTaintKeys(newNode.Spec.Taints)
+	if !equalStringSlices(oldTaints, newTaints) {
+		changes = append(changes, FieldChange{
+			Path:     "spec.taints",
+			OldValue: oldTaints,
+			NewValue: newTaints,
+		})
+		added := diffStringSlices(newTaints, oldTaints)
+		removed := diffStringSlices(oldTaints, newTaints)
+		if len(added) > 0 {
+			summary = append(summary, fmt.Sprintf("taints added: %v", added))
+		}
+		if len(removed) > 0 {
+			summary = append(summary, fmt.Sprintf("taints removed: %v", removed))
+		}
+	}
+
+	// Check Ready condition
+	oldReady := getNodeConditionStatus(oldNode, corev1.NodeReady)
+	newReady := getNodeConditionStatus(newNode, corev1.NodeReady)
+	if oldReady != newReady {
+		changes = append(changes, FieldChange{
+			Path:     "status.conditions[Ready]",
+			OldValue: oldReady,
+			NewValue: newReady,
+		})
+		summary = append(summary, fmt.Sprintf("Ready: %s→%s", oldReady, newReady))
+	}
+
+	return changes, summary
+}
+
+// diffPVC computes diff for PersistentVolumeClaim resources
+func diffPVC(oldObj, newObj any) ([]FieldChange, []string) {
+	oldPVC, ok1 := oldObj.(*corev1.PersistentVolumeClaim)
+	newPVC, ok2 := newObj.(*corev1.PersistentVolumeClaim)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	// Check phase
+	if oldPVC.Status.Phase != newPVC.Status.Phase {
+		changes = append(changes, FieldChange{
+			Path:     "status.phase",
+			OldValue: string(oldPVC.Status.Phase),
+			NewValue: string(newPVC.Status.Phase),
+		})
+		summary = append(summary, fmt.Sprintf("phase: %s→%s", oldPVC.Status.Phase, newPVC.Status.Phase))
+	}
+
+	// Check volume binding
+	if oldPVC.Spec.VolumeName == "" && newPVC.Spec.VolumeName != "" {
+		changes = append(changes, FieldChange{
+			Path:     "spec.volumeName",
+			OldValue: "",
+			NewValue: newPVC.Spec.VolumeName,
+		})
+		summary = append(summary, fmt.Sprintf("bound to %s", newPVC.Spec.VolumeName))
+	}
+
+	// Check capacity change (resize)
+	oldCap := oldPVC.Status.Capacity[corev1.ResourceStorage]
+	newCap := newPVC.Status.Capacity[corev1.ResourceStorage]
+	if !oldCap.IsZero() && !newCap.IsZero() && oldCap.Cmp(newCap) != 0 {
+		changes = append(changes, FieldChange{
+			Path:     "status.capacity.storage",
+			OldValue: oldCap.String(),
+			NewValue: newCap.String(),
+		})
+		summary = append(summary, fmt.Sprintf("capacity: %s→%s", oldCap.String(), newCap.String()))
+	}
+
+	return changes, summary
+}
+
+// getTaintKeys extracts taint keys from a list of taints
+func getTaintKeys(taints []corev1.Taint) []string {
+	keys := make([]string, len(taints))
+	for i, t := range taints {
+		keys[i] = t.Key
+	}
+	return keys
+}
+
+// getNodeConditionStatus gets the status of a specific node condition
+func getNodeConditionStatus(node *corev1.Node, condType corev1.NodeConditionType) string {
+	for _, cond := range node.Status.Conditions {
+		if cond.Type == condType {
+			return string(cond.Status)
+		}
+	}
+	return "Unknown"
+}
+
 // Helper functions
-
-// extractOwner gets the controller owner reference from an object
-// For K8s Events, it extracts the involvedObject instead
-func extractOwner(obj any) *OwnerInfo {
-	// Special case: K8s Events use involvedObject, not ownerReferences
-	if event, ok := obj.(*corev1.Event); ok {
-		if event.InvolvedObject.Kind != "" && event.InvolvedObject.Name != "" {
-			return &OwnerInfo{
-				Kind: event.InvolvedObject.Kind,
-				Name: event.InvolvedObject.Name,
-			}
-		}
-		return nil
-	}
-
-	meta, ok := obj.(metav1.Object)
-	if !ok {
-		return nil
-	}
-
-	for _, ref := range meta.GetOwnerReferences() {
-		if ref.Controller != nil && *ref.Controller {
-			return &OwnerInfo{
-				Kind: ref.Kind,
-				Name: ref.Name,
-			}
-		}
-	}
-	return nil
-}
-
-func determineHealthState(kind string, obj any) string {
-	switch kind {
-	case "Pod":
-		if pod, ok := obj.(*corev1.Pod); ok {
-			switch pod.Status.Phase {
-			case corev1.PodRunning:
-				// Check if all containers are ready
-				for _, cs := range pod.Status.ContainerStatuses {
-					if !cs.Ready {
-						return "degraded"
-					}
-				}
-				return "healthy"
-			case corev1.PodSucceeded:
-				return "healthy"
-			case corev1.PodFailed:
-				return "unhealthy"
-			case corev1.PodPending:
-				return "degraded"
-			}
-		}
-	case "Deployment":
-		if dep, ok := obj.(*appsv1.Deployment); ok {
-			desired := int32(1)
-			if dep.Spec.Replicas != nil {
-				desired = *dep.Spec.Replicas
-			}
-			if dep.Status.ReadyReplicas == desired && dep.Status.AvailableReplicas == desired {
-				return "healthy"
-			}
-			if dep.Status.ReadyReplicas > 0 {
-				return "degraded"
-			}
-			return "unhealthy"
-		}
-	case "ReplicaSet":
-		if rs, ok := obj.(*appsv1.ReplicaSet); ok {
-			desired := int32(1)
-			if rs.Spec.Replicas != nil {
-				desired = *rs.Spec.Replicas
-			}
-			if rs.Status.ReadyReplicas == desired {
-				return "healthy"
-			}
-			if rs.Status.ReadyReplicas > 0 {
-				return "degraded"
-			}
-			return "unhealthy"
-		}
-	}
-	return "unknown"
-}
-
-func extractKeySpec(_ string, obj any) any {
-	// Return a simplified version of the spec for future diff comparison
-	// This is stored in memory, so we keep it minimal
-	return obj
-}
 
 func getContainerImages(containers []corev1.Container) map[string]string {
 	images := make(map[string]string)
@@ -932,252 +1104,48 @@ func truncateImage(image string) string {
 	return image
 }
 
-// extractHistoricalEvents extracts meaningful timestamps from a resource's metadata/status
-// Returns a list of historical events that should be added to the timeline
-func extractHistoricalEvents(kind, namespace, name string, obj any, owner *OwnerInfo) []ChangeRecord {
-	var events []ChangeRecord
-
-	// Helper to create a historical record
-	makeRecord := func(ts time.Time, reason, healthState string) ChangeRecord {
-		return ChangeRecord{
-			ID:           uuid.New().String(),
-			Kind:         kind,
-			Namespace:    namespace,
-			Name:         name,
-			Operation:    "update", // Historical events are shown as updates
-			Timestamp:    ts,
-			HealthState:  healthState,
-			Owner:        owner,
-			IsHistorical: true,
-			Reason:       reason,
-		}
+func joinStrings(parts []string, sep string) string {
+	if len(parts) == 0 {
+		return ""
 	}
-
-	switch kind {
-	case "Pod":
-		if pod, ok := obj.(*corev1.Pod); ok {
-			// Pod creation
-			if !pod.CreationTimestamp.IsZero() {
-				events = append(events, makeRecord(pod.CreationTimestamp.Time, "created", "unknown"))
-			}
-			// Pod started
-			if pod.Status.StartTime != nil && !pod.Status.StartTime.IsZero() {
-				events = append(events, makeRecord(pod.Status.StartTime.Time, "started", "degraded"))
-			}
-			// Container started/terminated times
-			for _, cs := range pod.Status.ContainerStatuses {
-				if cs.State.Running != nil && !cs.State.Running.StartedAt.IsZero() {
-					events = append(events, makeRecord(cs.State.Running.StartedAt.Time, "container started", "healthy"))
-				}
-				if cs.State.Terminated != nil {
-					if !cs.State.Terminated.StartedAt.IsZero() {
-						events = append(events, makeRecord(cs.State.Terminated.StartedAt.Time, "container started", "degraded"))
-					}
-					if !cs.State.Terminated.FinishedAt.IsZero() {
-						state := "unhealthy"
-						if cs.State.Terminated.ExitCode == 0 {
-							state = "healthy"
-						}
-						events = append(events, makeRecord(cs.State.Terminated.FinishedAt.Time, "container finished", state))
-					}
-				}
-			}
-			// Pod conditions
-			for _, cond := range pod.Status.Conditions {
-				if !cond.LastTransitionTime.IsZero() && cond.Status == corev1.ConditionTrue {
-					reason := string(cond.Type)
-					events = append(events, makeRecord(cond.LastTransitionTime.Time, reason, "healthy"))
-				}
-			}
-		}
-
-	case "Deployment":
-		if deploy, ok := obj.(*appsv1.Deployment); ok {
-			// Creation
-			if !deploy.CreationTimestamp.IsZero() {
-				events = append(events, makeRecord(deploy.CreationTimestamp.Time, "created", "unknown"))
-			}
-			// Conditions (Available, Progressing)
-			for _, cond := range deploy.Status.Conditions {
-				if !cond.LastTransitionTime.IsZero() && cond.Status == corev1.ConditionTrue {
-					state := "healthy"
-					if cond.Type == appsv1.DeploymentProgressing {
-						state = "degraded"
-					}
-					events = append(events, makeRecord(cond.LastTransitionTime.Time, string(cond.Type), state))
-				}
-			}
-		}
-
-	case "ReplicaSet":
-		if rs, ok := obj.(*appsv1.ReplicaSet); ok {
-			if !rs.CreationTimestamp.IsZero() {
-				events = append(events, makeRecord(rs.CreationTimestamp.Time, "created", "unknown"))
-			}
-		}
-
-	case "DaemonSet":
-		if ds, ok := obj.(*appsv1.DaemonSet); ok {
-			if !ds.CreationTimestamp.IsZero() {
-				events = append(events, makeRecord(ds.CreationTimestamp.Time, "created", "unknown"))
-			}
-		}
-
-	case "StatefulSet":
-		if sts, ok := obj.(*appsv1.StatefulSet); ok {
-			if !sts.CreationTimestamp.IsZero() {
-				events = append(events, makeRecord(sts.CreationTimestamp.Time, "created", "unknown"))
-			}
-		}
-
-	case "Service":
-		if svc, ok := obj.(*corev1.Service); ok {
-			if !svc.CreationTimestamp.IsZero() {
-				events = append(events, makeRecord(svc.CreationTimestamp.Time, "created", "unknown"))
-			}
-		}
-
-	case "Ingress":
-		if ing, ok := obj.(*networkingv1.Ingress); ok {
-			if !ing.CreationTimestamp.IsZero() {
-				events = append(events, makeRecord(ing.CreationTimestamp.Time, "created", "unknown"))
-			}
-		}
-
-	case "ConfigMap":
-		if cm, ok := obj.(*corev1.ConfigMap); ok {
-			if !cm.CreationTimestamp.IsZero() {
-				events = append(events, makeRecord(cm.CreationTimestamp.Time, "created", "unknown"))
-			}
-		}
-
-	case "Job":
-		if job, ok := obj.(*batchv1.Job); ok {
-			if !job.CreationTimestamp.IsZero() {
-				events = append(events, makeRecord(job.CreationTimestamp.Time, "created", "unknown"))
-			}
-			if job.Status.StartTime != nil && !job.Status.StartTime.IsZero() {
-				events = append(events, makeRecord(job.Status.StartTime.Time, "started", "degraded"))
-			}
-			if job.Status.CompletionTime != nil && !job.Status.CompletionTime.IsZero() {
-				state := "healthy"
-				if job.Status.Failed > 0 {
-					state = "unhealthy"
-				}
-				events = append(events, makeRecord(job.Status.CompletionTime.Time, "completed", state))
-			}
-		}
-
-	case "CronJob":
-		if cj, ok := obj.(*batchv1.CronJob); ok {
-			if !cj.CreationTimestamp.IsZero() {
-				events = append(events, makeRecord(cj.CreationTimestamp.Time, "created", "unknown"))
-			}
-			if cj.Status.LastScheduleTime != nil && !cj.Status.LastScheduleTime.IsZero() {
-				events = append(events, makeRecord(cj.Status.LastScheduleTime.Time, "scheduled", "degraded"))
-			}
-			if cj.Status.LastSuccessfulTime != nil && !cj.Status.LastSuccessfulTime.IsZero() {
-				events = append(events, makeRecord(cj.Status.LastSuccessfulTime.Time, "succeeded", "healthy"))
-			}
-		}
+	result := parts[0]
+	for i := 1; i < len(parts); i++ {
+		result += sep + parts[i]
 	}
-
-	return events
+	return result
 }
 
-// File persistence
-
-func (h *ChangeHistory) loadFromFile() {
-	if h.persistPath == "" {
-		return
+// extractPrimaryIssue extracts the primary issue from a diff summary string
+// Returns the most significant issue (OOMKilled, CrashLoopBackOff, etc.) or empty string
+func extractPrimaryIssue(summary string) string {
+	if summary == "" {
+		return ""
 	}
 
-	data, err := os.ReadFile(h.persistPath)
-	if err != nil {
-		return // File doesn't exist yet
+	// Priority order of issues to detect
+	priorityIssues := []string{
+		"OOMKilled",
+		"CrashLoopBackOff",
+		"ImagePullBackOff",
+		"ErrImagePull",
+		"CreateContainerConfigError",
+		"CreateContainerError",
+		"InvalidImageName",
+		"RunContainerError",
+		"PreStartHookError",
+		"PostStartHookError",
+		"Unschedulable",
+		"FailedScheduling",
+		"FailedMount",
+		"NodeNotReady",
+		"Evicted",
 	}
 
-	// Parse JSON lines
-	var records []ChangeRecord
-	for _, line := range splitLines(data) {
-		if len(line) == 0 {
-			continue
-		}
-		var record ChangeRecord
-		if err := json.Unmarshal(line, &record); err == nil {
-			records = append(records, record)
-		}
-	}
-
-	// Load most recent records up to maxSize
-	h.mu.Lock()
-	defer h.mu.Unlock()
-
-	start := 0
-	if len(records) > h.maxSize {
-		start = len(records) - h.maxSize
-	}
-
-	// Track which resources have been seen (for skipping duplicate adds on sync)
-	// Process all records to get final state of each resource
-	h.seenMu.Lock()
-	for _, record := range records {
-		key := resourceKey(record.Kind, record.Namespace, record.Name)
-		if record.Operation == "delete" {
-			delete(h.seenResources, key)
-		} else {
-			h.seenResources[key] = true
+	for _, issue := range priorityIssues {
+		if strings.Contains(summary, issue) {
+			return issue
 		}
 	}
-	h.seenMu.Unlock()
 
-	for i := start; i < len(records); i++ {
-		h.records[h.head] = records[i]
-		h.head = (h.head + 1) % h.maxSize
-		if h.count < h.maxSize {
-			h.count++
-		}
-	}
-}
-
-func (h *ChangeHistory) appendToFile(record ChangeRecord) {
-	if h.persistPath == "" {
-		return
-	}
-
-	// Ensure directory exists
-	dir := filepath.Dir(h.persistPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		return
-	}
-
-	// Append JSON line
-	data, err := json.Marshal(record)
-	if err != nil {
-		return
-	}
-
-	f, err := os.OpenFile(h.persistPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
-	if err != nil {
-		return
-	}
-	defer f.Close()
-
-	f.Write(data)
-	f.WriteString("\n")
-}
-
-func splitLines(data []byte) [][]byte {
-	var lines [][]byte
-	start := 0
-	for i, b := range data {
-		if b == '\n' {
-			lines = append(lines, data[start:i])
-			start = i + 1
-		}
-	}
-	if start < len(data) {
-		lines = append(lines, data[start:])
-	}
-	return lines
+	return ""
 }

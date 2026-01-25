@@ -16,6 +16,7 @@ import { clsx } from 'clsx'
 import { useChanges } from '../../api/client'
 import { DiffViewer, DiffBadge } from './DiffViewer'
 import type { TimelineEvent, TimeRange } from '../../types'
+import { isChangeEvent, isK8sEvent, isHistoricalEvent, isOperation } from '../../types'
 import { getOperationColor, getHealthBadgeColor } from '../../utils/badge-colors'
 
 interface TimelineListProps {
@@ -92,13 +93,13 @@ export function TimelineList({ namespace, onViewChange, currentView = 'list', on
 
     return activity.filter((item) => {
       // Filter by activity type
-      if (activityTypeFilter === 'changes' && item.type !== 'change') return false
-      if (activityTypeFilter === 'k8s_events' && item.type !== 'k8s_event') return false
+      if (activityTypeFilter === 'changes' && !isChangeEvent(item)) return false
+      if (activityTypeFilter === 'k8s_events' && !isK8sEvent(item)) return false
       if (activityTypeFilter === 'warnings') {
         // Warnings filter includes: K8s Warning events + unhealthy/degraded changes
-        const isK8sWarning = item.eventType === 'Warning'
-        const isUnhealthyChange = item.type === 'change' && (item.healthState === 'unhealthy' || item.healthState === 'degraded')
-        if (!isK8sWarning && !isUnhealthyChange) return false
+        const isWarning = item.eventType === 'Warning'
+        const isUnhealthyChange = isChangeEvent(item) && (item.healthState === 'unhealthy' || item.healthState === 'degraded')
+        if (!isWarning && !isUnhealthyChange) return false
       }
 
       // Filter by search term
@@ -120,9 +121,82 @@ export function TimelineList({ namespace, onViewChange, currentView = 'list', on
     })
   }, [activity, activityTypeFilter, searchTerm])
 
+  // Aggregated event group type
+  type AggregatedItem = {
+    type: 'single'
+    item: TimelineEvent
+  } | {
+    type: 'aggregated'
+    first: TimelineEvent
+    last: TimelineEvent
+    count: number
+    reason: string
+  }
+
+  // Aggregate repeated events for the same resource with the same reason
+  const aggregateEvents = (items: TimelineEvent[]): AggregatedItem[] => {
+    if (items.length === 0) return []
+
+    // Group events by resource+reason
+    const groups = new Map<string, TimelineEvent[]>()
+    const singleEvents: TimelineEvent[] = []
+
+    for (const item of items) {
+      // Only aggregate K8s Warning events or changes with a specific reason
+      const reason = item.reason || ''
+      const shouldAggregate = (
+        item.eventType === 'Warning' ||
+        (isChangeEvent(item) && reason && ['OOMKilled', 'CrashLoopBackOff', 'BackOff', 'FailedScheduling', 'Unhealthy'].includes(reason))
+      )
+
+      if (shouldAggregate && reason) {
+        const key = `${item.kind}:${item.namespace}:${item.name}:${reason}`
+        const existing = groups.get(key) || []
+        existing.push(item)
+        groups.set(key, existing)
+      } else {
+        singleEvents.push(item)
+      }
+    }
+
+    // Convert to aggregated items
+    const result: AggregatedItem[] = []
+
+    // Process aggregated groups
+    for (const events of groups.values()) {
+      if (events.length >= 2) {
+        // Sort by time (oldest first)
+        events.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime())
+        result.push({
+          type: 'aggregated',
+          first: events[0],
+          last: events[events.length - 1],
+          count: events.length,
+          reason: events[0].reason || '',
+        })
+      } else {
+        result.push({ type: 'single', item: events[0] })
+      }
+    }
+
+    // Add single events
+    for (const item of singleEvents) {
+      result.push({ type: 'single', item })
+    }
+
+    // Sort all by most recent (last event time)
+    result.sort((a, b) => {
+      const timeA = a.type === 'aggregated' ? new Date(a.last.timestamp).getTime() : new Date(a.item.timestamp).getTime()
+      const timeB = b.type === 'aggregated' ? new Date(b.last.timestamp).getTime() : new Date(b.item.timestamp).getTime()
+      return timeB - timeA
+    })
+
+    return result
+  }
+
   // Group activity by time period
   const groupedActivity = useMemo(() => {
-    const groups: { label: string; items: TimelineEvent[] }[] = []
+    const groups: { label: string; items: AggregatedItem[] }[] = []
     const now = Date.now()
 
     const last5min: TimelineEvent[] = []
@@ -150,11 +224,11 @@ export function TimelineList({ namespace, onViewChange, currentView = 'list', on
       }
     }
 
-    if (last5min.length > 0) groups.push({ label: 'Last 5 minutes', items: last5min })
-    if (last30min.length > 0) groups.push({ label: 'Last 30 minutes', items: last30min })
-    if (lastHour.length > 0) groups.push({ label: 'Last hour', items: lastHour })
-    if (today.length > 0) groups.push({ label: 'Today', items: today })
-    if (older.length > 0) groups.push({ label: 'Older', items: older })
+    if (last5min.length > 0) groups.push({ label: 'Last 5 minutes', items: aggregateEvents(last5min) })
+    if (last30min.length > 0) groups.push({ label: 'Last 30 minutes', items: aggregateEvents(last30min) })
+    if (lastHour.length > 0) groups.push({ label: 'Last hour', items: aggregateEvents(lastHour) })
+    if (today.length > 0) groups.push({ label: 'Today', items: aggregateEvents(today) })
+    if (older.length > 0) groups.push({ label: 'Older', items: aggregateEvents(older) })
 
     return groups
   }, [filteredActivity])
@@ -164,10 +238,10 @@ export function TimelineList({ namespace, onViewChange, currentView = 'list', on
     if (!activity) return { total: 0, changes: 0, warnings: 0 }
     return {
       total: activity.length,
-      changes: activity.filter((e) => e.type === 'change').length,
+      changes: activity.filter((e) => isChangeEvent(e)).length,
       warnings: activity.filter((e) =>
         e.eventType === 'Warning' ||
-        (e.type === 'change' && (e.healthState === 'unhealthy' || e.healthState === 'degraded'))
+        (isChangeEvent(e) && (e.healthState === 'unhealthy' || e.healthState === 'degraded'))
       ).length,
     }
   }, [activity])
@@ -300,6 +374,7 @@ export function TimelineList({ namespace, onViewChange, currentView = 'list', on
                 ? 'Try adjusting your filters'
                 : 'Activity will appear here when cluster changes occur'}
             </p>
+            {namespace && <p className="text-sm mt-1 text-theme-text-disabled">Searching in namespace: {namespace}</p>}
           </div>
         ) : (
           <div className="p-4 space-y-6">
@@ -316,14 +391,27 @@ export function TimelineList({ namespace, onViewChange, currentView = 'list', on
 
                 {/* Activity list */}
                 <div className="space-y-2 ml-6 border-l-2 border-theme-border pl-4">
-                  {group.items.map((item) => (
-                    <ActivityCard
-                      key={item.id}
-                      item={item}
-                      expanded={expandedItem === item.id}
-                      onToggle={() => setExpandedItem(expandedItem === item.id ? null : item.id)}
-                      onResourceClick={onResourceClick}
-                    />
+                  {group.items.map((aggItem) => (
+                    aggItem.type === 'aggregated' ? (
+                      <AggregatedActivityCard
+                        key={`agg-${aggItem.first.id}-${aggItem.last.id}`}
+                        first={aggItem.first}
+                        last={aggItem.last}
+                        count={aggItem.count}
+                        reason={aggItem.reason}
+                        expanded={expandedItem === aggItem.first.id}
+                        onToggle={() => setExpandedItem(expandedItem === aggItem.first.id ? null : aggItem.first.id)}
+                        onResourceClick={onResourceClick}
+                      />
+                    ) : (
+                      <ActivityCard
+                        key={aggItem.item.id}
+                        item={aggItem.item}
+                        expanded={expandedItem === aggItem.item.id}
+                        onToggle={() => setExpandedItem(expandedItem === aggItem.item.id ? null : aggItem.item.id)}
+                        onResourceClick={onResourceClick}
+                      />
+                    )
                   ))}
                 </div>
               </div>
@@ -383,14 +471,15 @@ interface ActivityCardProps {
 }
 
 function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCardProps) {
-  const isChange = item.type === 'change'
+  const isChange = isChangeEvent(item)
+  const isHistorical = isHistoricalEvent(item)
   const isWarning = item.eventType === 'Warning'
   const time = formatTime(item.timestamp)
 
   // Determine card styling based on type
   const getCardStyle = () => {
     if (isChange) {
-      switch (item.operation) {
+      switch (item.eventType) {
         case 'add':
           return 'bg-green-500/5 border-green-500/30 hover:border-green-500/50'
         case 'delete':
@@ -409,7 +498,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
 
   const getIcon = () => {
     if (isChange) {
-      switch (item.operation) {
+      switch (item.eventType) {
         case 'add':
           return <Plus className="w-4 h-4 text-green-400" />
         case 'delete':
@@ -460,13 +549,18 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
             <div className="mt-1 flex items-center gap-2 flex-wrap">
               {isChange ? (
                 <>
-                  <span className={clsx('text-sm font-medium', item.operation && getOperationColor(item.operation))}>
-                    {item.operation}
+                  <span className={clsx('text-sm font-medium', isOperation(item.eventType) && getOperationColor(item.eventType))}>
+                    {isHistorical && item.reason ? item.reason : item.eventType}
                   </span>
                   {item.diff && <DiffBadge diff={item.diff} />}
                   {item.healthState && item.healthState !== 'unknown' && (
                     <span className={clsx('text-xs px-1.5 py-0.5 rounded', getHealthBadgeColor(item.healthState))}>
                       {item.healthState}
+                    </span>
+                  )}
+                  {isHistorical && item.message && (
+                    <span className="text-sm text-theme-text-secondary truncate max-w-md">
+                      {item.message.length > 60 ? `${item.message.slice(0, 60)}...` : item.message}
                     </span>
                   )}
                 </>
@@ -510,8 +604,8 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
               </div>
             )}
 
-            {/* Full message for K8s events */}
-            {!isChange && item.message && item.message.length > 80 && (
+            {/* Full message for K8s events and historical events */}
+            {item.message && item.message.length > 60 && (
               <div>
                 <div className="text-xs text-theme-text-tertiary mb-1">Full message:</div>
                 <p className="text-sm text-theme-text-secondary whitespace-pre-wrap">{item.message}</p>
@@ -526,7 +620,133 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
               </div>
               <div>
                 <span className="text-theme-text-tertiary">Type:</span>
-                <span className="ml-2 text-theme-text-secondary">{isChange ? `Change (${item.operation})` : item.eventType}</span>
+                <span className="ml-2 text-theme-text-secondary">{isChange ? `Change (${item.eventType})` : item.eventType}</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// Component for aggregated repeated events (e.g., multiple OOMKilled)
+interface AggregatedActivityCardProps {
+  first: TimelineEvent
+  last: TimelineEvent
+  count: number
+  reason: string
+  expanded: boolean
+  onToggle: () => void
+  onResourceClick?: (kind: string, namespace: string, name: string) => void
+}
+
+function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle, onResourceClick }: AggregatedActivityCardProps) {
+  const isWarning = first.eventType === 'Warning'
+  const firstTime = formatTime(first.timestamp)
+  const lastTime = formatTime(last.timestamp)
+
+  // Card styling - warning/unhealthy style for aggregated events
+  const cardStyle = isWarning
+    ? 'bg-amber-500/5 border-amber-500/30 hover:border-amber-500/50'
+    : 'bg-red-500/5 border-red-500/30 hover:border-red-500/50'
+
+  // Dot color based on severity
+  const dotColor = isWarning ? 'bg-amber-500' : 'bg-red-500'
+  const textColor = isWarning ? 'text-amber-400' : 'text-red-400'
+
+  return (
+    <div
+      className={clsx('rounded-lg border transition-all cursor-pointer', cardStyle)}
+      onClick={onToggle}
+    >
+      <div className="p-3">
+        {/* Header row */}
+        <div className="flex items-start gap-3">
+          {/* Aggregation visualization: first dot - line - last dot */}
+          <div className="flex flex-col items-center flex-shrink-0 mt-0.5">
+            {/* First occurrence dot */}
+            <div className={clsx('w-2.5 h-2.5 rounded-full', dotColor)} title={`First: ${firstTime}`} />
+            {/* Connecting line */}
+            <div className={clsx('w-0.5 h-4 my-0.5', isWarning ? 'bg-amber-500/40' : 'bg-red-500/40')} />
+            {/* Last occurrence dot */}
+            <div className={clsx('w-2.5 h-2.5 rounded-full', dotColor)} title={`Last: ${lastTime}`} />
+          </div>
+
+          {/* Content */}
+          <div className="flex-1 min-w-0">
+            {/* Resource info */}
+            <div className="flex items-center gap-2 flex-wrap">
+              <button
+                onClick={(e) => {
+                  e.stopPropagation()
+                  onResourceClick?.(first.kind, first.namespace, first.name)
+                }}
+                className="flex items-center gap-2 hover:bg-theme-elevated/50 rounded px-1 -ml-1 transition-colors group"
+              >
+                <span className="text-xs px-1.5 py-0.5 bg-theme-elevated rounded text-theme-text-secondary group-hover:bg-theme-hover">
+                  {first.kind}
+                </span>
+                <span className="text-sm font-medium text-theme-text-primary truncate group-hover:text-blue-300">{first.name}</span>
+              </button>
+              {first.namespace && <span className="text-xs text-theme-text-tertiary">in {first.namespace}</span>}
+            </div>
+
+            {/* Aggregated event details */}
+            <div className="mt-1 flex items-center gap-2 flex-wrap">
+              <span className={clsx('text-sm font-medium', textColor)}>
+                {reason}
+              </span>
+              <span className={clsx(
+                'text-xs px-1.5 py-0.5 rounded font-medium',
+                isWarning ? 'bg-amber-500/20 text-amber-400' : 'bg-red-500/20 text-red-400'
+              )}>
+                x{count}
+              </span>
+              <span className="text-xs text-theme-text-tertiary">
+                {firstTime} → {lastTime}
+              </span>
+            </div>
+          </div>
+
+          {/* Expand indicator */}
+          <ChevronRight
+            className={clsx('w-4 h-4 text-theme-text-disabled transition-transform flex-shrink-0', expanded && 'rotate-90')}
+          />
+        </div>
+
+        {/* Expanded details */}
+        {expanded && (
+          <div className="mt-3 pt-3 border-t-subtle space-y-3">
+            {/* First occurrence */}
+            <div className="flex items-start gap-2">
+              <div className={clsx('w-2 h-2 rounded-full mt-1.5 flex-shrink-0', dotColor)} />
+              <div>
+                <div className="text-xs text-theme-text-tertiary">First occurrence</div>
+                <div className="text-sm text-theme-text-secondary">
+                  {new Date(first.timestamp).toLocaleString()}
+                </div>
+                {first.message && (
+                  <p className="text-xs text-theme-text-tertiary mt-1 whitespace-pre-wrap">
+                    {first.message.length > 150 ? `${first.message.slice(0, 150)}...` : first.message}
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Last occurrence */}
+            <div className="flex items-start gap-2">
+              <div className={clsx('w-2 h-2 rounded-full mt-1.5 flex-shrink-0', dotColor)} />
+              <div>
+                <div className="text-xs text-theme-text-tertiary">Last occurrence ({count}x total)</div>
+                <div className="text-sm text-theme-text-secondary">
+                  {new Date(last.timestamp).toLocaleString()}
+                </div>
+                {last.message && (
+                  <p className="text-xs text-theme-text-tertiary mt-1 whitespace-pre-wrap">
+                    {last.message.length > 150 ? `${last.message.slice(0, 150)}...` : last.message}
+                  </p>
+                )}
               </div>
             </div>
           </div>

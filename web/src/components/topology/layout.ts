@@ -413,7 +413,7 @@ export async function applyHierarchicalLayout(
   _collapsedGroups: Set<string>,
   onToggleCollapse: (groupId: string) => void,
   hideGroupHeader: boolean = false
-): Promise<{ nodes: Node[]; positions: Map<string, { x: number; y: number }> }> {
+): Promise<{ nodes: Node[]; positions: Map<string, { x: number; y: number }>; error?: string }> {
   try {
     const padding = hideGroupHeader ? GROUP_PADDING_NO_HEADER : GROUP_PADDING
 
@@ -658,7 +658,8 @@ export async function applyHierarchicalLayout(
 
     return { nodes, positions }
   } catch (err) {
+    const errorMessage = err instanceof Error ? err.message : String(err)
     console.error('ELK hierarchical layout error:', err)
-    return { nodes: [], positions: new Map() }
+    return { nodes: [], positions: new Map(), error: `Layout failed: ${errorMessage}` }
   }
 }

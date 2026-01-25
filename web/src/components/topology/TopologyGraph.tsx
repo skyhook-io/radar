@@ -8,13 +8,17 @@ import {
   useNodesState,
   useEdgesState,
   useReactFlow,
+  useOnViewportChange,
   type Node,
   type Edge,
   type NodeTypes,
+  type Viewport,
   BackgroundVariant,
   MarkerType,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
+
+import { AlertTriangle, RotateCw } from 'lucide-react'
 
 import { K8sResourceNode } from './K8sResourceNode'
 import { GroupNode } from './GroupNode'
@@ -81,6 +85,7 @@ function buildEdges(
   nodeToGroup?: Map<string, string>
 ): Edge[] {
   const edges: Edge[] = []
+  const seenEdgeIds = new Set<string>() // O(1) duplicate detection
 
   // Build reverse lookup if not provided
   const nodeGroupMap = nodeToGroup || new Map<string, string>()
@@ -112,9 +117,10 @@ function buildEdges(
     // Skip self-loops (both ends in same collapsed group)
     if (source === target) continue
 
-    // Skip duplicate edges
+    // Skip duplicate edges (O(1) with Set)
     const edgeId = `${source}-${target}-${edge.type}`
-    if (edges.find(e => e.id === edgeId)) continue
+    if (seenEdgeIds.has(edgeId)) continue
+    seenEdgeIds.add(edgeId)
 
     const edgeColor = getEdgeColor(edge.type, isTrafficView)
     const isTrafficEdge = edge.type === 'routes-to' || edge.type === 'exposes'
@@ -171,6 +177,8 @@ export function TopologyGraph({
   const [edges, setEdges, onEdgesChange] = useEdgesState([] as Edge[])
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [expandedPodGroups, setExpandedPodGroups] = useState<Set<string>>(new Set())
+  const [layoutError, setLayoutError] = useState<string | null>(null)
+  const [layoutRetryCount, setLayoutRetryCount] = useState(0)
   const prevStructureRef = useRef<string>('')
 
   // Toggle group collapse
@@ -229,7 +237,7 @@ export function TopologyGraph({
 
     // Add individual pod nodes
     for (const pod of pods) {
-      const podId = `pod-${pod.namespace}-${pod.name}`
+      const podId = `pod/${pod.namespace}/${pod.name}`
       newNodes.push({
         id: podId,
         kind: 'Pod',
@@ -359,8 +367,8 @@ export function TopologyGraph({
     const nodeIds = workingNodes.map(n => n.id).sort().join(',')
     const collapsed = Array.from(collapsedGroups).sort().join(',')
     const expanded = Array.from(expandedPodGroups).sort().join(',')
-    return `${nodeIds}|${collapsed}|${expanded}|${groupingMode}`
-  }, [workingNodes, collapsedGroups, expandedPodGroups, groupingMode])
+    return `${viewMode}|${nodeIds}|${collapsed}|${expanded}|${groupingMode}|${layoutRetryCount}`
+  }, [viewMode, workingNodes, collapsedGroups, expandedPodGroups, groupingMode, layoutRetryCount])
 
   // Layout when structure changes - use hierarchical ELK layout
   useEffect(() => {
@@ -384,6 +392,9 @@ export function TopologyGraph({
         collapsedGroups
       )
 
+      // Track if this effect was cancelled (deps changed or unmount)
+      let cancelled = false
+
       // Apply layout and get positioned nodes
       applyHierarchicalLayout(
         elkGraph,
@@ -393,7 +404,17 @@ export function TopologyGraph({
         collapsedGroups,
         handleToggleCollapse,
         hideGroupHeader
-      ).then(({ nodes: layoutedNodes }) => {
+      ).then(({ nodes: layoutedNodes, error }) => {
+        // Skip state updates if effect was cancelled
+        if (cancelled) return
+
+        // Handle layout errors
+        if (error) {
+          console.error('Layout error:', error)
+          setLayoutError(error)
+          return
+        }
+        setLayoutError(null)
         // Add expand/collapse handlers to pod-related nodes
         const nodesWithHandlers = layoutedNodes.map(node => {
           const isPodGroup = node.data?.kind === 'PodGroup'
@@ -424,10 +445,12 @@ export function TopologyGraph({
         )
         setEdges(builtEdges)
       })
+
+      return () => { cancelled = true }
     }
     // Note: When structure hasn't changed, nodes keep their positions
     // Data updates happen via selected state effect
-  }, [workingNodes, workingEdges, structureKey, groupingMode, hideGroupHeader, collapsedGroups, handleToggleCollapse, isTrafficView, expandedPodGroups, handleExpandPodGroup, handleCollapsePodGroup, setNodes, setEdges])
+  }, [workingNodes, workingEdges, structureKey, groupingMode, hideGroupHeader, collapsedGroups, handleToggleCollapse, isTrafficView, expandedPodGroups, handleExpandPodGroup, handleCollapsePodGroup, setNodes, setEdges, layoutRetryCount])
 
   // Handle node click
   const handleNodeClick = useCallback(
@@ -476,8 +499,74 @@ export function TopologyGraph({
     )
   }
 
+  // Show layout error if we have topology data but layout failed
+  if (layoutError && nodes.length === 0) {
+    return (
+      <div className="flex-1 flex items-center justify-center text-theme-text-secondary">
+        <div className="text-center max-w-md">
+          <p className="text-lg text-amber-400">Layout Error</p>
+          <p className="text-sm mt-2">
+            Failed to compute topology layout. The graph has {topology.nodes.length} nodes.
+          </p>
+          <p className="text-xs mt-2 text-theme-text-tertiary font-mono bg-theme-surface-secondary p-2 rounded">
+            {layoutError}
+          </p>
+          <button
+            onClick={() => {
+              setLayoutError(null)
+              setLayoutRetryCount(c => c + 1)
+            }}
+            className="mt-4 inline-flex items-center gap-2 px-3 py-1.5 text-sm bg-theme-surface hover:bg-theme-elevated border border-theme-border rounded-lg transition-colors"
+          >
+            <RotateCw className="w-4 h-4" />
+            Retry Layout
+          </button>
+        </div>
+      </div>
+    )
+  }
+
   return (
     <ReactFlowProvider>
+      {/* Warning banner for partial topology data */}
+      {topology?.warnings && topology.warnings.length > 0 && (
+        <div className="absolute top-2 left-2 right-2 z-10 bg-amber-500/10 border border-amber-500/30 rounded-lg p-2 backdrop-blur-sm">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <span className="font-medium text-amber-400">Warning:</span>
+              <span className="text-theme-text-secondary ml-1">
+                Some resources failed to load. Data may be incomplete.
+              </span>
+              <details className="mt-1">
+                <summary className="text-xs text-amber-400/80 cursor-pointer hover:text-amber-400">
+                  Show details ({topology.warnings.length})
+                </summary>
+                <ul className="mt-1 text-xs text-theme-text-tertiary space-y-0.5">
+                  {topology.warnings.map((w, i) => (
+                    <li key={i} className="font-mono">{w}</li>
+                  ))}
+                </ul>
+              </details>
+            </div>
+          </div>
+        </div>
+      )}
+      {/* Layout error banner - shown even when stale nodes exist */}
+      {layoutError && nodes.length > 0 && (
+        <div className="absolute top-2 left-2 right-2 z-10 bg-red-500/10 border border-red-500/30 rounded-lg p-2 backdrop-blur-sm">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+            <div className="text-sm">
+              <span className="font-medium text-red-400">Layout Error:</span>
+              <span className="text-theme-text-secondary ml-1">
+                Failed to update layout. Showing previous view.
+              </span>
+              <p className="mt-1 text-xs text-theme-text-tertiary font-mono">{layoutError}</p>
+            </div>
+          </div>
+        </div>
+      )}
       <ReactFlow
         nodes={nodes}
         edges={edges}
@@ -519,21 +608,24 @@ function ViewportController({ structureKey }: { structureKey: string }) {
 
   // Update CSS variable for header offset based on zoom
   // This allows child nodes to move up when header shrinks (zoomed in)
-  useEffect(() => {
-    const updateZoomOffset = () => {
-      const { zoom } = getViewport()
-      // Match the headerScale formula from GroupNode
-      const headerScale = Math.max(0.35, Math.min(1, 0.5 / zoom))
-      // At scale 1.0, offset is 0. At scale 0.35, offset is ~45px (header shrinks by ~45px)
-      const headerOffset = (1 - headerScale) * 70
-      document.documentElement.style.setProperty('--group-header-offset', `${-headerOffset}px`)
-    }
+  const updateZoomOffset = useCallback((viewport: Viewport) => {
+    const { zoom } = viewport
+    // Match the headerScale formula from GroupNode
+    const headerScale = Math.max(0.35, Math.min(1, 0.5 / zoom))
+    // At scale 1.0, offset is 0. At scale 0.35, offset is ~45px (header shrinks by ~45px)
+    const headerOffset = (1 - headerScale) * 70
+    document.documentElement.style.setProperty('--group-header-offset', `${-headerOffset}px`)
+  }, [])
 
-    // Update on mount and periodically (zoom changes don't fire events we can easily hook)
-    updateZoomOffset()
-    const interval = setInterval(updateZoomOffset, 100)
-    return () => clearInterval(interval)
-  }, [getViewport])
+  // Use ReactFlow's viewport change hook instead of polling
+  useOnViewportChange({
+    onChange: updateZoomOffset,
+  })
+
+  // Update on initial mount
+  useEffect(() => {
+    updateZoomOffset(getViewport())
+  }, [updateZoomOffset, getViewport])
 
   useEffect(() => {
     // Skip animation on initial mount (fitView prop handles that)
@@ -561,4 +653,3 @@ function ViewportController({ structureKey }: { structureKey: string }) {
 
   return null
 }
-

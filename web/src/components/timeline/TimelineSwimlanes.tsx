@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import { clsx } from 'clsx'
 import {
   AlertCircle,
+  AlertTriangle,
   RefreshCw,
   ZoomIn,
   ZoomOut,
@@ -12,159 +13,156 @@ import {
   GanttChart,
   ArrowUpDown,
   Clock,
+  MemoryStick,
+  Package,
+  Ban,
+  Box,
+  Gauge,
+  HardDrive,
+  Timer,
+  RotateCcw,
 } from 'lucide-react'
-import type { TimelineEvent, TimeRange, Topology } from '../../types'
-import { isWorkloadKind } from '../../types'
+import type { TimelineEvent, Topology } from '../../types'
+import { isChangeEvent, isHistoricalEvent, isOperation } from '../../types'
 import { DiffViewer } from './DiffViewer'
 import { getOperationColor, getHealthBadgeColor, getEventTypeColor } from '../../utils/badge-colors'
+import { Tooltip } from '../ui/Tooltip'
+import { buildResourceHierarchy, isProblematicEvent, type ResourceLane as BaseResourceLane } from '../../utils/resource-hierarchy'
+import {
+  formatAxisTime,
+  formatFullTime,
+  isRoutineEvent,
+  buildHealthSpans,
+  HealthSpan,
+  timeToX as sharedTimeToX,
+} from './shared'
 
 interface TimelineSwimlanesProps {
   events: TimelineEvent[]
   isLoading?: boolean
-  filterTimeRange?: TimeRange
   onResourceClick?: (kind: string, namespace: string, name: string) => void
   viewMode?: 'list' | 'swimlane'
   onViewModeChange?: (mode: 'list' | 'swimlane') => void
   topology?: Topology
+  namespace?: string
 }
 
-interface ResourceLane {
-  id: string
-  kind: string
-  namespace: string
-  name: string
-  events: TimelineEvent[]
-  isWorkload: boolean
-  children?: ResourceLane[] // Child resources (Pods, ReplicaSets)
-  childEventCount?: number // Total events across all children
+interface ResourceLane extends BaseResourceLane {
+  scoreBreakdown?: ScoreBreakdown // Debug: interestingness score breakdown
 }
 
-function formatAxisTime(date: Date): string {
-  return date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-}
-
-function formatFullTime(date: Date): string {
-  return date.toLocaleString()
-}
-
-// Event reasons that indicate problems even if eventType is "Normal"
-const PROBLEMATIC_REASONS = new Set([
-  'BackOff', 'CrashLoopBackOff', 'Failed', 'FailedScheduling', 'FailedMount',
-  'FailedAttachVolume', 'FailedCreate', 'FailedDelete', 'Unhealthy', 'Killing',
-  'Evicted', 'OOMKilling', 'OOMKilled', 'NodeNotReady', 'NetworkNotReady',
-  'FailedSync', 'FailedValidation', 'InvalidImageName', 'ErrImagePull',
-  'ImagePullBackOff', 'FailedPreStopHook', 'FailedPostStartHook',
-])
-
-// Check if an event is actually problematic (warning or error condition)
-function isProblematicEvent(event: TimelineEvent): boolean {
-  if (event.eventType === 'Warning') return true
-  if (event.reason && PROBLEMATIC_REASONS.has(event.reason)) return true
-  return false
-}
-
-// Known noisy resources that update constantly (leases, locks, status tracking)
-const NOISY_NAME_PATTERNS = [
-  /^kube-scheduler$/,
-  /^kube-controller-manager$/,
-  /-leader-election$/,
-  /-lock$/,
-  /-lease$/,
-  /^cluster-autoscaler-status$/,
-  /^cluster-kubestore$/,
-  /^datadog-leader-election$/,
-  /^cert-manager-controller$/,
-]
-
-// Event kind = K8s Event objects themselves (not their content) - always noise
-// Their content is captured via k8s_event type, tracking their lifecycle is useless
-const NOISY_KINDS = new Set(['Lease', 'Endpoints', 'EndpointSlice', 'Event'])
-
-// Check if an event is "routine noise" (constant heartbeats, lease updates, etc.)
-function isRoutineEvent(event: TimelineEvent): boolean {
-  // K8s Event objects - their lifecycle (add/update/delete) is always noise
-  // We capture their content via k8s_event type, not by tracking the Event resource
-  if (event.kind === 'Event' && event.type === 'change') return true
-
-  // Only filter update operations for other kinds - adds and deletes are interesting
-  if (event.operation !== 'update') return false
-
-  // Known noisy resource kinds (for updates)
-  if (NOISY_KINDS.has(event.kind)) return true
-
-  // Known noisy resource name patterns
-  if (NOISY_NAME_PATTERNS.some(pattern => pattern.test(event.name))) return true
-
-  // ConfigMaps with noisy suffixes
-  if (event.kind === 'ConfigMap') {
-    if (event.name.endsWith('-lock') ||
-        event.name.endsWith('-lease') ||
-        event.name.endsWith('-leader') ||
-        event.name.includes('kubestore')) {
-      return true
-    }
-  }
-
-  return false
+// Score breakdown for debugging
+interface ScoreBreakdown {
+  total: number
+  kind: number
+  problematic: number
+  variety: number
+  addDelete: number
+  children: number
+  empty: number
+  systemNs: number
+  recent5m: number
+  recent30m: number
+  noisy: number
+  details: string
 }
 
 // Calculate "interestingness" score for sorting lanes
 // Higher score = more interesting = should appear higher in list
 function calculateInterestingness(lane: ResourceLane): number {
-  let score = 0
-  const allEvents = [...lane.events, ...(lane.children?.flatMap(c => c.events) || [])]
-
-  // 1. Resource type priority (workloads are more interesting than config)
-  const kindScores: Record<string, number> = {
-    Deployment: 100, StatefulSet: 100, DaemonSet: 100,
-    Service: 90, Ingress: 90,
-    Pod: 70, ReplicaSet: 50,
-    Job: 80, CronJob: 80,
-    HPA: 60,
-    ConfigMap: 20, Secret: 10, PVC: 30,
-  }
-  score += kindScores[lane.kind] || 40
-
-  // 2. Problematic events (warnings, BackOff, etc.) are very interesting (+50 each, max 200)
-  const problematicCount = allEvents.filter(e => isProblematicEvent(e)).length
-  score += Math.min(problematicCount * 50, 200)
-
-  // 3. Event variety is interesting (mix of add/update/delete vs just updates)
-  const operations = new Set(allEvents.map(e => e.operation).filter(Boolean))
-  score += operations.size * 15 // Up to 45 for all three types
-
-  // 4. Add/delete events are more interesting than updates
-  const addCount = allEvents.filter(e => e.operation === 'add').length
-  const deleteCount = allEvents.filter(e => e.operation === 'delete').length
-  score += addCount * 10 + deleteCount * 15
-
-  // 5. Having children (grouped resources) is interesting
-  if (lane.children && lane.children.length > 0) {
-    score += 30 + Math.min(lane.children.length * 5, 50)
-  }
-
-  // 6. System namespaces are less interesting
-  const systemNamespaces = ['kube-system', 'kube-public', 'kube-node-lease', 'gke-managed-system']
-  if (systemNamespaces.includes(lane.namespace)) {
-    score -= 50
-  }
-
-  // 7. Recency bonus (events in last 5 minutes)
-  const fiveMinutesAgo = Date.now() - 5 * 60 * 1000
-  const recentEvents = allEvents.filter(e => new Date(e.timestamp).getTime() > fiveMinutesAgo)
-  score += Math.min(recentEvents.length * 5, 30)
-
-  // 8. Penalty for excessive repeated updates (noisy resources)
-  const updateCount = allEvents.filter(e => e.operation === 'update').length
-  if (updateCount > 10 && operations.size === 1) {
-    // Many updates but no variety = noisy, penalize
-    score -= Math.min(updateCount * 2, 60)
-  }
-
-  return score
+  return calculateInterestingnessWithBreakdown(lane).total
 }
 
-export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterTimeRange = '1h', onResourceClick, viewMode, onViewModeChange, topology }: TimelineSwimlanesProps) {
+function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdown {
+  const allEvents = [...lane.events, ...(lane.children?.flatMap(c => c.events) || [])]
+  const breakdown: ScoreBreakdown = {
+    total: 0, kind: 0, problematic: 0, variety: 0, addDelete: 0,
+    children: 0, empty: 0, systemNs: 0, recent5m: 0, recent30m: 0, noisy: 0, details: ''
+  }
+
+  // 1. Base: Kind priority (tiebreaker, lower values than before)
+  const kindScores: Record<string, number> = {
+    Deployment: 50, Rollout: 50, StatefulSet: 50, DaemonSet: 50,
+    Service: 45, Ingress: 45,
+    Job: 40, CronJob: 40, Workflow: 40, CronWorkflow: 40,
+    Pod: 30,
+    HPA: 25,
+    ReplicaSet: 20,
+    ConfigMap: 10, Secret: 10, PVC: 10,
+  }
+  breakdown.kind = kindScores[lane.kind] || 15
+
+  // 2. Primary: Recency (dominates) - events in last 5 minutes
+  const now = Date.now()
+  const fiveMinutesAgo = now - 5 * 60 * 1000
+  const thirtyMinutesAgo = now - 30 * 60 * 1000
+
+  const eventsLast5m = allEvents.filter(e => new Date(e.timestamp).getTime() > fiveMinutesAgo)
+  const eventsLast30m = allEvents.filter(e => {
+    const t = new Date(e.timestamp).getTime()
+    return t > thirtyMinutesAgo && t <= fiveMinutesAgo
+  })
+
+  breakdown.recent5m = Math.min(eventsLast5m.length * 30, 150)
+  breakdown.recent30m = Math.min(eventsLast30m.length * 10, 50)
+
+  // 3. Secondary: Problems (important signal) - +40 each, max 200
+  const problematicCount = allEvents.filter(e => isProblematicEvent(e)).length
+  breakdown.problematic = Math.min(problematicCount * 40, 200)
+
+  // 4. Tertiary: Activity type
+  const operations = new Set(allEvents.map(e => e.eventType).filter(t => isOperation(t as any)))
+  breakdown.variety = operations.size * 10 // Up to 30 for all three types
+
+  // Add/delete with caps
+  const addCount = allEvents.filter(e => e.eventType === 'add').length
+  const deleteCount = allEvents.filter(e => e.eventType === 'delete').length
+  breakdown.addDelete = Math.min(addCount * 3, 30) + Math.min(deleteCount * 5, 30)
+
+  // 5. Children bonus (flat, just organizational)
+  if (lane.children && lane.children.length > 0) {
+    breakdown.children = 10
+  }
+
+  // 6. Empty lane penalty (parent with 0 own events)
+  if (lane.events.length === 0) {
+    breakdown.empty = -30
+  }
+
+  // 7. System namespaces penalty
+  const systemNamespaces = ['kube-system', 'kube-public', 'kube-node-lease', 'gke-managed-system']
+  if (systemNamespaces.includes(lane.namespace)) {
+    breakdown.systemNs = -30
+  }
+
+  // 8. Noisy penalty (many updates with no variety)
+  const updateCount = allEvents.filter(e => e.eventType === 'update').length
+  if (updateCount > 10 && operations.size === 1) {
+    breakdown.noisy = -Math.min(updateCount, 40)
+  }
+
+  breakdown.total = breakdown.kind + breakdown.problematic + breakdown.variety +
+    breakdown.addDelete + breakdown.children + breakdown.empty + breakdown.systemNs +
+    breakdown.recent5m + breakdown.recent30m + breakdown.noisy
+
+  // Build details string
+  const parts: string[] = []
+  parts.push(`kind:${breakdown.kind}`)
+  if (breakdown.recent5m) parts.push(`5m:${breakdown.recent5m}`)
+  if (breakdown.recent30m) parts.push(`30m:${breakdown.recent30m}`)
+  if (breakdown.problematic) parts.push(`warn:${breakdown.problematic}`)
+  if (breakdown.variety) parts.push(`var:${breakdown.variety}`)
+  if (breakdown.addDelete) parts.push(`a/d:${breakdown.addDelete}`)
+  if (breakdown.children) parts.push(`child:${breakdown.children}`)
+  if (breakdown.empty) parts.push(`empty:${breakdown.empty}`)
+  if (breakdown.systemNs) parts.push(`sys:${breakdown.systemNs}`)
+  if (breakdown.noisy) parts.push(`noisy:${breakdown.noisy}`)
+  breakdown.details = parts.join(' ')
+
+  return breakdown
+}
+
+export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespace }: TimelineSwimlanesProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [zoom, setZoom] = useState(1)
@@ -178,9 +176,13 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
   const [showRoutineUpdates, setShowRoutineUpdates] = useState(false)
   const [groupByApp, setGroupByApp] = useState(true) // Group by app.kubernetes.io/name label
 
-  // Stable lane ordering - tracks the order lanes were first seen
-  const [laneOrder, setLaneOrder] = useState<Map<string, number>>(new Map())
+  // Stable lane ordering - use ref to avoid render loop (lanes depends on order, order depends on lanes)
+  const laneOrderRef = useRef<Map<string, number>>(new Map())
   const [sortVersion, setSortVersion] = useState(0) // Increment to re-sort lanes
+
+  // Stable "now" time - captured once on mount, only changes when user interacts
+  // This prevents the time window from auto-shifting and causing re-renders
+  const [stableNow] = useState(() => Date.now())
 
   // Auto-adjust zoom based on event distribution (only once on initial load)
   useEffect(() => {
@@ -267,319 +269,35 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
   }, [events])
 
   // Build hierarchical lanes using owner references + topology edges
+  // Uses the shared utility from utils/resource-hierarchy.ts
   const lanes = useMemo(() => {
-    const laneMap = new Map<string, ResourceLane>()
-
-    // Helper: convert topology node ID to lane ID format
-    const nodeIdToLaneId = (nodeId: string): string | null => {
-      const parts = nodeId.split('-')
-      if (parts.length < 3) return null
-      const kind = parts[0]
-      const namespace = parts[1]
-      const name = parts.slice(2).join('-')
-      const kindMap: Record<string, string> = {
-        pod: 'Pod', service: 'Service', deployment: 'Deployment',
-        replicaset: 'ReplicaSet', statefulset: 'StatefulSet', daemonset: 'DaemonSet',
-        ingress: 'Ingress', configmap: 'ConfigMap', secret: 'Secret',
-        job: 'Job', cronjob: 'CronJob', hpa: 'HPA', podgroup: 'PodGroup'
-      }
-      return `${kindMap[kind] || kind}/${namespace}/${name}`
-    }
-
-    // Track events that should be attached to their owner instead of their own lane
-    const eventsToAttach: { event: TimelineEvent; ownerLaneId: string }[] = []
-
-    // First pass: create lanes from events (but not for Events with owners)
-    for (const event of filteredEvents) {
-      // K8s Events with an owner (involvedObject) should attach to that resource, not get their own lane
-      if (event.kind === 'Event' && event.owner) {
-        const ownerLaneId = `${event.owner.kind}/${event.namespace}/${event.owner.name}`
-        eventsToAttach.push({ event, ownerLaneId })
-        continue
-      }
-
-      const laneId = `${event.kind}/${event.namespace}/${event.name}`
-      if (!laneMap.has(laneId)) {
-        laneMap.set(laneId, {
-          id: laneId,
-          kind: event.kind,
-          namespace: event.namespace,
-          name: event.name,
-          events: [],
-          isWorkload: isWorkloadKind(event.kind),
-          children: [],
-          childEventCount: 0,
-        })
-      }
-      laneMap.get(laneId)!.events.push(event)
-    }
-
-    // Attach K8s Events to their owner lanes
-    for (const { event, ownerLaneId } of eventsToAttach) {
-      if (laneMap.has(ownerLaneId)) {
-        // Owner exists, attach event to it
-        laneMap.get(ownerLaneId)!.events.push(event)
-      } else {
-        // Owner doesn't exist yet, create lane for it
-        const parts = ownerLaneId.split('/')
-        laneMap.set(ownerLaneId, {
-          id: ownerLaneId,
-          kind: parts[0],
-          namespace: parts[1],
-          name: parts.slice(2).join('/'),
-          events: [event],
-          isWorkload: isWorkloadKind(parts[0]),
-          children: [],
-          childEventCount: 0,
-        })
-      }
-    }
-
-    // Build parent map from BOTH owner references AND topology edges
-    const laneParent = new Map<string, string>() // childLaneId -> parentLaneId
-
-    // Source 1: Owner references from events (most reliable for Deployment→RS→Pod)
-    for (const [laneId, lane] of laneMap) {
-      const eventWithOwner = lane.events.find(e => e.owner)
-      if (eventWithOwner?.owner) {
-        const ownerLaneId = `${eventWithOwner.owner.kind}/${lane.namespace}/${eventWithOwner.owner.name}`
-
-        // Create parent lane if it doesn't exist (parent may have no events)
-        if (!laneMap.has(ownerLaneId)) {
-          laneMap.set(ownerLaneId, {
-            id: ownerLaneId,
-            kind: eventWithOwner.owner.kind,
-            namespace: lane.namespace,
-            name: eventWithOwner.owner.name,
-            events: [],
-            isWorkload: isWorkloadKind(eventWithOwner.owner.kind),
-            children: [],
-            childEventCount: 0,
-          })
-        }
-        laneParent.set(laneId, ownerLaneId)
-      }
-    }
-
-    // Source 2: Topology edges (for Service→Deployment, Ingress→Service, ConfigMap→Deployment)
-    // Only process edges where AT LEAST ONE side exists in laneMap (has events)
-    if (topology?.edges) {
-      for (const edge of topology.edges) {
-        const sourceLaneId = nodeIdToLaneId(edge.source)
-        const targetLaneId = nodeIdToLaneId(edge.target)
-        if (!sourceLaneId || !targetLaneId) continue
-
-        // manages: Deployment→RS→Pod (already covered by owner refs, skip)
-        if (edge.type === 'manages') continue
-
-        // At least one side must have events
-        const sourceExists = laneMap.has(sourceLaneId)
-        const targetExists = laneMap.has(targetLaneId)
-        if (!sourceExists && !targetExists) continue
-
-        // exposes: Service→Deployment (Service is parent of Deployment)
-        // routes-to: Ingress→Service (Ingress is parent of Service)
-        if (edge.type === 'exposes' || edge.type === 'routes-to') {
-          if (!laneParent.has(targetLaneId) && targetExists) {
-            // Create parent lane if needed
-            if (!sourceExists) {
-              const parts = sourceLaneId.split('/')
-              laneMap.set(sourceLaneId, {
-                id: sourceLaneId,
-                kind: parts[0],
-                namespace: parts[1],
-                name: parts.slice(2).join('/'),
-                events: [],
-                isWorkload: isWorkloadKind(parts[0]),
-                children: [],
-                childEventCount: 0,
-              })
-            }
-            laneParent.set(targetLaneId, sourceLaneId)
-          }
-        }
-
-        // configures/uses: ConfigMap→Deployment (Deployment is parent of ConfigMap)
-        if (edge.type === 'configures' || edge.type === 'uses') {
-          if (!laneParent.has(sourceLaneId) && sourceExists) {
-            // Create parent lane if needed
-            if (!targetExists) {
-              const parts = targetLaneId.split('/')
-              laneMap.set(targetLaneId, {
-                id: targetLaneId,
-                kind: parts[0],
-                namespace: parts[1],
-                name: parts.slice(2).join('/'),
-                events: [],
-                isWorkload: isWorkloadKind(parts[0]),
-                children: [],
-                childEventCount: 0,
-              })
-            }
-            laneParent.set(sourceLaneId, targetLaneId)
-          }
-        }
-      }
-    }
-
-    // Source 3: App label grouping (optional)
-    // Group resources that share the same app.kubernetes.io/name or app label
-    if (groupByApp && topology?.nodes) {
-      // Build a map of laneId -> app label from topology nodes
-      const laneAppLabels = new Map<string, string>()
-      for (const node of topology.nodes) {
-        const laneId = nodeIdToLaneId(node.id)
-        if (!laneId) continue
-        const labels = node.data?.labels as Record<string, string> | undefined
-        const appLabel = labels?.['app.kubernetes.io/name'] || labels?.['app']
-        if (appLabel) {
-          laneAppLabels.set(laneId, appLabel)
-        }
-      }
-
-      // Group lanes by app label - find lanes without parents that share an app label
-      const appGroups = new Map<string, string[]>() // appLabel -> laneIds
-      for (const [laneId] of laneMap) {
-        if (laneParent.has(laneId)) continue // Already has a parent
-        const appLabel = laneAppLabels.get(laneId)
-        if (!appLabel) continue
-        if (!appGroups.has(appLabel)) {
-          appGroups.set(appLabel, [])
-        }
-        appGroups.get(appLabel)!.push(laneId)
-      }
-
-      // For each app group with multiple members, pick the best parent
-      // Priority: Service > Ingress > Deployment/StatefulSet/DaemonSet > others
-      for (const [, laneIds] of appGroups) {
-        if (laneIds.length < 2) continue // Need at least 2 to group
-
-        const kindPriority: Record<string, number> = {
-          Service: 1, Ingress: 2,
-          Deployment: 3, StatefulSet: 3, DaemonSet: 3,
-          Job: 4, CronJob: 4,
-          ConfigMap: 5, Secret: 5,
-          ReplicaSet: 6, Pod: 7
-        }
-
-        // Sort by priority to find the best parent
-        const sorted = [...laneIds].sort((a, b) => {
-          const aLane = laneMap.get(a)!
-          const bLane = laneMap.get(b)!
-          const aPriority = kindPriority[aLane.kind] || 10
-          const bPriority = kindPriority[bLane.kind] || 10
-          return aPriority - bPriority
-        })
-
-        // First one becomes parent, rest become children
-        const parentLaneId = sorted[0]
-        for (let i = 1; i < sorted.length; i++) {
-          const childLaneId = sorted[i]
-          // Only set parent if child doesn't already have one
-          if (!laneParent.has(childLaneId)) {
-            laneParent.set(childLaneId, parentLaneId)
-          }
-        }
-      }
-    }
-
-    // Walk up parent chain to find root
-    const findRoot = (laneId: string, visited = new Set<string>()): string => {
-      if (visited.has(laneId)) return laneId
-      visited.add(laneId)
-      const parentId = laneParent.get(laneId)
-      if (parentId && laneMap.has(parentId)) {
-        return findRoot(parentId, visited)
-      }
-      return laneId
-    }
-
-    // Second pass: group children under their root
-    const topLevelLanes: ResourceLane[] = []
-    const childLaneIds = new Set<string>()
-
-    for (const [laneId] of laneMap) {
-      if (!laneParent.has(laneId)) continue
-      const rootId = findRoot(laneId)
-      if (rootId !== laneId && laneMap.has(rootId)) {
-        const root = laneMap.get(rootId)!
-        const child = laneMap.get(laneId)!
-        root.children!.push(child)
-        root.childEventCount = (root.childEventCount || 0) + child.events.length
-        childLaneIds.add(laneId)
-      }
-    }
-
-    // Collect top-level lanes (not children of anyone)
-    for (const [laneId, lane] of laneMap) {
-      if (!childLaneIds.has(laneId)) {
-        // Sort children by kind priority then by latest event
-        if (lane.children && lane.children.length > 0) {
-          const kindPriority: Record<string, number> = {
-            Service: 1, Deployment: 2, StatefulSet: 2, DaemonSet: 2,
-            ReplicaSet: 3, Pod: 4, ConfigMap: 5, Secret: 5
-          }
-          lane.children.sort((a, b) => {
-            const aPriority = kindPriority[a.kind] || 10
-            const bPriority = kindPriority[b.kind] || 10
-            if (aPriority !== bPriority) return aPriority - bPriority
-            const aLatest = Math.max(...a.events.map((e) => new Date(e.timestamp).getTime()))
-            const bLatest = Math.max(...b.events.map((e) => new Date(e.timestamp).getTime()))
-            return bLatest - aLatest
-          })
-        }
-        topLevelLanes.push(lane)
-      }
-    }
-
-    // Stable sort: use existing lane order for known lanes, put new lanes at top
-    return topLevelLanes.sort((a, b) => {
-      const aOrder = laneOrder.get(a.id)
-      const bOrder = laneOrder.get(b.id)
-
-      // Both known: use stable order
-      if (aOrder !== undefined && bOrder !== undefined) {
-        return aOrder - bOrder
-      }
-      // New lanes go to top (sorted by interestingness among themselves)
-      if (aOrder === undefined && bOrder === undefined) {
-        return calculateInterestingness(b) - calculateInterestingness(a)
-      }
-      // New lane (undefined) goes before known lane
-      return aOrder === undefined ? -1 : 1
+    // Build the hierarchy using the shared utility
+    const baseLanes = buildResourceHierarchy({
+      events: filteredEvents,
+      topology,
+      groupByApp,
     })
-  }, [filteredEvents, topology, laneOrder, sortVersion, groupByApp])
 
-  // Track lane order for stable sorting - record order as lanes appear
-  useEffect(() => {
-    setLaneOrder(prev => {
-      const newOrder = new Map(prev)
-      let maxOrder = prev.size > 0 ? Math.max(...prev.values()) : -1
-      let changed = false
+    // Add score breakdown to each lane (specific to swimlanes view)
+    const lanesWithScores: ResourceLane[] = baseLanes.map(lane => ({
+      ...lane,
+      scoreBreakdown: calculateInterestingnessWithBreakdown(lane),
+    }))
 
-      for (const lane of lanes) {
-        if (!newOrder.has(lane.id)) {
-          maxOrder++
-          newOrder.set(lane.id, maxOrder)
-          changed = true
-        }
-      }
-
-      return changed ? newOrder : prev
+    // Sort by interestingness score (highest first)
+    return lanesWithScores.sort((a, b) => {
+      const aScore = a.scoreBreakdown?.total ?? calculateInterestingness(a)
+      const bScore = b.scoreBreakdown?.total ?? calculateInterestingness(b)
+      return bScore - aScore
     })
-  }, [lanes])
+  }, [filteredEvents, topology, sortVersion, groupByApp])
 
   // Re-sort lanes by interestingness score
   const handleRefreshSort = useCallback(() => {
     // Reset lane order to force re-sort by interestingness
-    const newOrder = new Map<string, number>()
-    const sorted = [...lanes].sort((a, b) => {
-      return calculateInterestingness(b) - calculateInterestingness(a)
-    })
-    sorted.forEach((lane, idx) => newOrder.set(lane.id, idx))
-    setLaneOrder(newOrder)
+    laneOrderRef.current = new Map()
     setSortVersion(v => v + 1)
-  }, [lanes])
+  }, [])
 
   // Toggle lane expansion
   const toggleLane = useCallback((laneId: string) => {
@@ -596,12 +314,23 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
 
   // Calculate visible time range
   const visibleTimeRange = useMemo(() => {
-    const now = Date.now()
     const windowMs = zoom * 60 * 60 * 1000
-    const end = now - panOffset
+    const end = stableNow - panOffset
     const start = end - windowMs
-    return { start, end, windowMs }
-  }, [zoom, panOffset])
+    return { start, end, windowMs, now: stableNow }
+  }, [zoom, panOffset, stableNow])
+
+  // Filter out lanes with no events in the visible time window
+  const visibleLanes = useMemo(() => {
+    const { start, end } = visibleTimeRange
+    return lanes.filter(lane => {
+      const allLaneEvents = lane.allEventsSorted || []
+      return allLaneEvents.some(e => {
+        const t = new Date(e.timestamp).getTime()
+        return t >= start && t <= end
+      })
+    })
+  }, [lanes, visibleTimeRange])
 
   // Generate time axis ticks
   const axisTicks = useMemo(() => {
@@ -619,8 +348,12 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
       intervalMs = 30 * 60 * 1000
     } else if (zoom <= 6) {
       intervalMs = 60 * 60 * 1000
+    } else if (zoom <= 24) {
+      intervalMs = 2 * 60 * 60 * 1000 // 2 hour intervals
+    } else if (zoom <= 72) {
+      intervalMs = 6 * 60 * 60 * 1000 // 6 hour intervals for up to 3 days
     } else {
-      intervalMs = 2 * 60 * 60 * 1000
+      intervalMs = 24 * 60 * 60 * 1000 // 1 day intervals for larger windows
     }
 
     const firstTick = Math.ceil(start / intervalMs) * intervalMs
@@ -644,9 +377,18 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
     [visibleTimeRange]
   )
 
-  // Zoom handlers
-  const handleZoomIn = () => setZoom((z) => Math.max(0.25, z / 1.5))
-  const handleZoomOut = () => setZoom((z) => Math.min(24, z * 1.5))
+  // Predefined zoom levels (in hours): 15m, 30m, 1h, 2h, 4h, 8h, 12h, 1d, 2d, 3d, 7d
+  const ZOOM_LEVELS = [0.25, 0.5, 1, 2, 4, 8, 12, 24, 48, 72, 168]
+
+  // Zoom handlers - snap to predefined levels
+  const handleZoomIn = () => setZoom((z) => {
+    const idx = ZOOM_LEVELS.findIndex(level => level >= z)
+    return ZOOM_LEVELS[Math.max(0, idx - 1)]
+  })
+  const handleZoomOut = () => setZoom((z) => {
+    const idx = ZOOM_LEVELS.findIndex(level => level > z)
+    return ZOOM_LEVELS[Math.min(ZOOM_LEVELS.length - 1, idx === -1 ? ZOOM_LEVELS.length - 1 : idx)]
+  })
 
   // Pan with mouse drag
   const handleMouseDown = (e: React.MouseEvent) => {
@@ -686,60 +428,36 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
     }
   }, [isDragging, handleMouseMove, handleMouseUp])
 
-  // Wheel zoom
+  // Wheel zoom - snap to predefined levels
   const handleWheel = useCallback((e: React.WheelEvent) => {
     if (e.ctrlKey || e.metaKey) {
       e.preventDefault()
-      const delta = e.deltaY > 0 ? 1.2 : 0.8
-      setZoom((z) => Math.max(0.25, Math.min(24, z * delta)))
+      setZoom((z) => {
+        const currentIdx = ZOOM_LEVELS.findIndex(level => level >= z)
+        const idx = currentIdx === -1 ? ZOOM_LEVELS.length - 1 : currentIdx
+        if (e.deltaY > 0) {
+          // Zoom out - go to next larger level
+          return ZOOM_LEVELS[Math.min(ZOOM_LEVELS.length - 1, idx + 1)]
+        } else {
+          // Zoom in - go to next smaller level
+          return ZOOM_LEVELS[Math.max(0, idx - 1)]
+        }
+      })
     }
   }, [])
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center h-full text-theme-text-tertiary">
+      <div className="flex items-center justify-center h-full w-full text-theme-text-tertiary">
         <RefreshCw className="w-5 h-5 animate-spin mr-2" />
         Loading timeline...
       </div>
     )
   }
 
-  if (lanes.length === 0) {
-    const hasFilteredEvents = events.length > 0 && filteredEvents.length === 0
-    const hasRoutineOnly = routineEventCount > 0 && routineEventCount === events.length
-
-    return (
-      <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
-        <AlertCircle className="w-12 h-12 mb-4 opacity-50" />
-        {hasFilteredEvents ? (
-          <>
-            <p className="text-lg">No matching events</p>
-            <p className="text-sm mt-1">
-              {searchTerm ? `No results for "${searchTerm}"` : 'Try adjusting your filters'}
-            </p>
-          </>
-        ) : hasRoutineOnly ? (
-          <>
-            <p className="text-lg">Only routine events</p>
-            <p className="text-sm mt-1">
-              {routineEventCount} routine event{routineEventCount !== 1 ? 's' : ''} hidden.{' '}
-              <button
-                onClick={() => setShowRoutineUpdates(true)}
-                className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 underline"
-              >
-                Show them
-              </button>
-            </p>
-          </>
-        ) : (
-          <>
-            <p className="text-lg">No events yet</p>
-            <p className="text-sm mt-1">Events will appear here as resources change</p>
-          </>
-        )}
-      </div>
-    )
-  }
+  // Compute empty state info (but don't early return - we need the toolbar visible)
+  const hasFilteredEvents = visibleLanes.length === 0 && events.length > 0 && filteredEvents.length === 0
+  const hasRoutineOnly = visibleLanes.length === 0 && routineEventCount > 0 && routineEventCount === events.length
 
   return (
     <div className="flex flex-col h-full w-full">
@@ -783,7 +501,7 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
               <ZoomOut className="w-4 h-4" />
             </button>
             <span className="text-xs text-theme-text-tertiary">
-              {zoom < 1 ? `${Math.round(zoom * 60)}m` : `${zoom}h`} window
+              {zoom < 1 ? `${Math.round(zoom * 60)}m` : zoom >= 24 ? `${Math.round(zoom / 24)}d` : `${zoom}h`} window
             </span>
             {panOffset > 0 && (
               <button
@@ -806,39 +524,51 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
           </button>
         </div>
         <div className="flex items-center gap-4">
-          {/* Legend */}
+          {/* Legend with hover tooltips */}
           <div className="flex items-center gap-3 text-xs text-theme-text-secondary">
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-green-500" />add</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-blue-500" />update</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" />delete</span>
-            <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" />warning</span>
+            {/* Event dot legend */}
+            <LegendItem color="bg-green-500" label="created" description="Resource was created" />
+            <LegendItem color="bg-blue-500" label="modified" description="Resource was updated/changed" />
+            <LegendItem color="bg-red-500" label="deleted" description="Resource was removed" />
+            <LegendItem color="bg-amber-500" label="warning" description="Warning event (CrashLoopBackOff, Failed, etc.)" />
+            <LegendItem color="bg-theme-text-tertiary" label="historical" description="Inferred from resource metadata (creation time, etc.)" dashed />
+            {/* Health bar legend - separator and bars */}
+            <span className="w-px h-3 bg-theme-border-light mx-1" />
+            <HealthBarLegendItem color="bg-green-500/60" label="healthy" description="Resource is fully operational" />
+            <HealthBarLegendItem color="bg-blue-500/60" label="rolling" description="Expected degradation during deployment rollout" />
+            <HealthBarLegendItem color="bg-yellow-500/60" label="degraded" description="Unexpected partial availability" />
+            <HealthBarLegendItem color="bg-red-500/60" label="unhealthy" description="Resource is failing or not ready" />
           </div>
           <span className="text-xs text-theme-text-tertiary">
-            {lanes.length} resource{lanes.length !== 1 ? 's' : ''} · {filteredEvents.length} event
+            {visibleLanes.length} resource{visibleLanes.length !== 1 ? 's' : ''} · {filteredEvents.length} event
             {filteredEvents.length !== 1 ? 's' : ''}
             {searchTerm && ` (filtered)`}
           </span>
           {/* Group by app toggle */}
-          <label className="flex items-center gap-1.5 text-xs text-theme-text-secondary cursor-pointer hover:text-theme-text-primary">
-            <input
-              type="checkbox"
-              checked={groupByApp}
-              onChange={(e) => setGroupByApp(e.target.checked)}
-              className="w-3.5 h-3.5 rounded border-theme-border-light bg-theme-elevated text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
-            />
-            <span>Group by app</span>
-          </label>
-          {/* Routine updates toggle */}
-          {routineEventCount > 0 && (
+          <Tooltip content="Group related resources (Deployment, Service, Pod) by their app.kubernetes.io/name label" position="bottom">
             <label className="flex items-center gap-1.5 text-xs text-theme-text-secondary cursor-pointer hover:text-theme-text-primary">
               <input
                 type="checkbox"
-                checked={showRoutineUpdates}
-                onChange={(e) => setShowRoutineUpdates(e.target.checked)}
+                checked={groupByApp}
+                onChange={(e) => setGroupByApp(e.target.checked)}
                 className="w-3.5 h-3.5 rounded border-theme-border-light bg-theme-elevated text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
               />
-              <span>Show routine events ({routineEventCount})</span>
+              <span className="border-b border-dotted border-theme-text-tertiary">Group by app</span>
             </label>
+          </Tooltip>
+          {/* Routine updates toggle */}
+          {routineEventCount > 0 && (
+            <Tooltip content="Include frequently-updating system resources like Leases, Endpoints, and leader-election ConfigMaps" position="bottom">
+              <label className="flex items-center gap-1.5 text-xs text-theme-text-secondary cursor-pointer hover:text-theme-text-primary">
+                <input
+                  type="checkbox"
+                  checked={showRoutineUpdates}
+                  onChange={(e) => setShowRoutineUpdates(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded border-theme-border-light bg-theme-elevated text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                />
+                <span className="border-b border-dotted border-theme-text-tertiary">Show routine events ({routineEventCount})</span>
+              </label>
+            </Tooltip>
           )}
           {/* View toggle */}
           {onViewModeChange && (
@@ -898,15 +628,15 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
                 })}
                 {/* "Now" marker in header */}
                 {(() => {
-                  const nowX = timeToX(Date.now())
+                  const nowX = timeToX(visibleTimeRange.now)
                   if (nowX < 0 || nowX > 100) return null
                   return (
                     <div
                       className="absolute top-0 bottom-0 flex flex-col items-center z-20"
                       style={{ left: `${nowX}%` }}
                     >
-                      <div className="h-2 w-0.5 bg-red-500" />
-                      <span className="text-xs text-red-500 font-medium mt-0.5">Now</span>
+                      <div className="h-2 w-0.5 bg-purple-500" />
+                      <span className="text-xs text-purple-500 font-medium mt-0.5">Now</span>
                     </div>
                   )
                 })()}
@@ -914,20 +644,52 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
             </div>
           </div>
 
-          {/* Swimlanes */}
+          {/* Swimlanes or empty state */}
+          {visibleLanes.length === 0 ? (
+            <div className="flex flex-col items-center justify-center h-64 text-theme-text-tertiary">
+              <AlertCircle className="w-12 h-12 mb-4 opacity-50" />
+              {hasFilteredEvents ? (
+                <>
+                  <p className="text-lg">No matching events</p>
+                  <p className="text-sm mt-1">
+                    {searchTerm ? `No results for "${searchTerm}"` : 'Try adjusting your filters'}
+                  </p>
+                  {namespace && <p className="text-sm mt-1 text-theme-text-disabled">Searching in namespace: {namespace}</p>}
+                </>
+              ) : hasRoutineOnly ? (
+                <>
+                  <p className="text-lg">Only routine events</p>
+                  <p className="text-sm mt-1">
+                    {routineEventCount} routine event{routineEventCount !== 1 ? 's' : ''} hidden.{' '}
+                    <button
+                      onClick={() => setShowRoutineUpdates(true)}
+                      className="text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 underline"
+                    >
+                      Show them
+                    </button>
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-lg">No events yet</p>
+                  <p className="text-sm mt-1">Events will appear here as resources change</p>
+                </>
+              )}
+            </div>
+          ) : (
           <div className="relative">
             {/* "Now" line through swimlanes */}
             {(() => {
-              const nowX = timeToX(Date.now())
+              const nowX = timeToX(visibleTimeRange.now)
               if (nowX < 0 || nowX > 100) return null
               return (
                 <div
-                  className="absolute top-0 bottom-0 w-0.5 bg-red-500/50 z-10 pointer-events-none"
+                  className="absolute top-0 bottom-0 w-0.5 bg-purple-500/50 z-10 pointer-events-none"
                   style={{ left: `calc(320px + (100% - 320px - 32px) * ${nowX / 100})` }}
                 />
               )
             })()}
-            {lanes.map((lane) => {
+            {visibleLanes.map((lane) => {
               const isExpanded = expandedLanes.has(lane.id)
               const hasChildren = lane.children && lane.children.length > 0
 
@@ -968,6 +730,20 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
                                 +{lane.children!.length}
                               </span>
                             )}
+                            {/* Issue count badge */}
+                            {(() => {
+                              const allEvents = lane.allEventsSorted || []
+                              const issueCount = allEvents.filter(e => isCriticalIssue(e)).length
+                              if (issueCount === 0) return null
+                              return (
+                                <Tooltip content={`${issueCount} critical issue${issueCount > 1 ? 's' : ''} (OOMKilled, CrashLoopBackOff, etc.)`} position="top">
+                                  <span className="flex items-center gap-0.5 text-xs px-1 py-0.5 rounded bg-red-500/15 text-red-600 dark:text-red-400">
+                                    <AlertTriangle className="w-3 h-3" />
+                                    {issueCount}
+                                  </span>
+                                </Tooltip>
+                              )
+                            })()}
                           </div>
                           <div className="text-sm text-theme-text-primary break-words group-hover:text-blue-600 dark:group-hover:text-blue-300">
                             {lane.name}
@@ -978,32 +754,30 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
 
                       {/* Events track - ALWAYS shows all events (summary view) */}
                       <div className="flex-1 relative h-12 mr-8">
-                        {/* All events combined: own + children, sorted so important events render on top */}
-                        {[...lane.events, ...(lane.children?.flatMap(c => c.events) || [])]
-                          .sort((a, b) => {
-                            // Priority: updates (0) < adds (1) < deletes (2) < problematic/warnings (3)
-                            // Lower priority renders first (behind), higher renders last (on top)
-                            const getPriority = (e: TimelineEvent) => {
-                              if (isProblematicEvent(e)) return 3
-                              if (e.operation === 'delete') return 2
-                              if (e.operation === 'add') return 1
-                              return 0 // updates and others
-                            }
-                            return getPriority(a) - getPriority(b)
-                          })
-                          .map((event) => {
-                            const x = timeToX(new Date(event.timestamp).getTime())
-                            if (x < 0 || x > 100) return null
-                            return (
-                              <EventMarker
-                                key={event.id}
-                                event={event}
-                                x={x}
-                                selected={selectedEvent?.id === event.id}
-                                onClick={() => setSelectedEvent(selectedEvent?.id === event.id ? null : event)}
-                              />
-                            )
-                          })}
+                        {/* Health bar background layer */}
+                        <HealthBarTrack
+                          events={lane.allEventsSorted || []}
+                          startTime={visibleTimeRange.start}
+                          windowMs={visibleTimeRange.windowMs}
+                          now={visibleTimeRange.now}
+                        />
+                        {/* Event markers layer (on top of health bars) */}
+                        <div className="absolute inset-0 z-10">
+                          {/* All events combined: own + children, pre-sorted in memo so important events render on top */}
+                          {(lane.allEventsSorted || []).map((event, eventIdx) => {
+                              const x = timeToX(new Date(event.timestamp).getTime())
+                              if (x < 0 || x > 100) return null
+                              return (
+                                <EventMarker
+                                  key={`summary-${event.id}-${eventIdx}`}
+                                  event={event}
+                                  x={x}
+                                  selected={selectedEvent?.id === event.id}
+                                  onClick={() => setSelectedEvent(selectedEvent?.id === event.id ? null : event)}
+                                />
+                              )
+                            })}
+                        </div>
                       </div>
                     </div>
                   </div>
@@ -1031,20 +805,30 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
                               </div>
                             </div>
                             <div className="flex-1 relative h-10 mr-8">
-                              {lane.events.map((event) => {
-                                const x = timeToX(new Date(event.timestamp).getTime())
-                                if (x < 0 || x > 100) return null
-                                return (
-                                  <EventMarker
-                                    key={event.id}
-                                    event={event}
-                                    x={x}
-                                    selected={selectedEvent?.id === event.id}
-                                    onClick={() => setSelectedEvent(selectedEvent?.id === event.id ? null : event)}
-                                    small
-                                  />
-                                )
-                              })}
+                              {/* Health bar background layer */}
+                              <HealthBarTrack
+                                events={lane.events}
+                                startTime={visibleTimeRange.start}
+                                windowMs={visibleTimeRange.windowMs}
+                                now={visibleTimeRange.now}
+                              />
+                              {/* Event markers layer */}
+                              <div className="absolute inset-0 z-10">
+                                {lane.events.map((event, eventIdx) => {
+                                  const x = timeToX(new Date(event.timestamp).getTime())
+                                  if (x < 0 || x > 100) return null
+                                  return (
+                                    <EventMarker
+                                      key={`expanded-${event.id}-${eventIdx}`}
+                                      event={event}
+                                      x={x}
+                                      selected={selectedEvent?.id === event.id}
+                                      onClick={() => setSelectedEvent(selectedEvent?.id === event.id ? null : event)}
+                                      small
+                                    />
+                                  )
+                                })}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -1075,20 +859,30 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
 
                             {/* Child events track */}
                             <div className="flex-1 relative h-10 mr-8">
-                              {child.events.map((event) => {
-                                const x = timeToX(new Date(event.timestamp).getTime())
-                                if (x < 0 || x > 100) return null
-                                return (
-                                  <EventMarker
-                                    key={event.id}
-                                    event={event}
-                                    x={x}
-                                    selected={selectedEvent?.id === event.id}
-                                    onClick={() => setSelectedEvent(selectedEvent?.id === event.id ? null : event)}
-                                    small
-                                  />
-                                )
-                              })}
+                              {/* Health bar background layer */}
+                              <HealthBarTrack
+                                events={child.events}
+                                startTime={visibleTimeRange.start}
+                                windowMs={visibleTimeRange.windowMs}
+                                now={visibleTimeRange.now}
+                              />
+                              {/* Event markers layer */}
+                              <div className="absolute inset-0 z-10">
+                                {child.events.map((event, eventIdx) => {
+                                  const x = timeToX(new Date(event.timestamp).getTime())
+                                  if (x < 0 || x > 100) return null
+                                  return (
+                                    <EventMarker
+                                      key={`${child.id}-${event.id}-${eventIdx}`}
+                                      event={event}
+                                      x={x}
+                                      selected={selectedEvent?.id === event.id}
+                                      onClick={() => setSelectedEvent(selectedEvent?.id === event.id ? null : event)}
+                                      small
+                                    />
+                                  )
+                                })}
+                              </div>
                             </div>
                           </div>
                         </div>
@@ -1099,6 +893,7 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
               )
             })}
           </div>
+          )}
         </div>
       </div>
 
@@ -1108,6 +903,187 @@ export function TimelineSwimlanes({ events, isLoading, filterTimeRange: _filterT
       )}
     </div>
   )
+}
+
+// Legend item with hover tooltip
+interface LegendItemProps {
+  color: string
+  label: string
+  description: string
+  dashed?: boolean
+}
+
+function LegendItem({ color, label, description, dashed }: LegendItemProps) {
+  return (
+    <span className="relative flex items-center gap-1 group cursor-help">
+      <span className={clsx(
+        'w-2 h-2 rounded-full',
+        dashed ? 'border border-dashed border-current bg-transparent' : color
+      )} />
+      <span>{label}</span>
+      {/* Hover tooltip */}
+      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 text-xs bg-theme-base text-theme-text-primary rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity duration-75 shadow-lg border border-theme-border-light">
+        {description}
+      </span>
+    </span>
+  )
+}
+
+// Health bar legend item - shows a bar instead of a dot
+function HealthBarLegendItem({ color, label, description }: LegendItemProps) {
+  return (
+    <span className="relative flex items-center gap-1 group cursor-help">
+      <span className={clsx('w-4 h-2 rounded-sm', color)} />
+      <span>{label}</span>
+      {/* Hover tooltip */}
+      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 text-xs bg-theme-base text-theme-text-primary rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity duration-75 shadow-lg border border-theme-border-light">
+        {description}
+      </span>
+    </span>
+  )
+}
+
+// Health bar track component that renders health spans as background
+interface HealthBarTrackProps {
+  events: TimelineEvent[]
+  startTime: number
+  windowMs: number
+  now: number
+}
+
+function HealthBarTrack({ events, startTime, windowMs, now }: HealthBarTrackProps) {
+  // Filter to change events for health state computation
+  const changeEvents = events.filter(e => isChangeEvent(e))
+
+  // Build health spans from events
+  const { spans, createdAt, createdBeforeWindow } = buildHealthSpans(
+    changeEvents,
+    startTime,
+    now,
+    events // All events for createdAt extraction
+  )
+
+  if (spans.length === 0) return null
+
+  return (
+    <div className="absolute inset-0 z-0">
+      {spans.map((span, i) => {
+        const left = sharedTimeToX(span.start, startTime, windowMs)
+        const right = sharedTimeToX(span.end, startTime, windowMs)
+        const width = right - left
+
+        // Skip spans outside visible range
+        if (right < 0 || left > 100) return null
+
+        // Clamp to visible range
+        const clampedLeft = Math.max(0, left)
+        const clampedWidth = Math.min(100 - clampedLeft, width - (clampedLeft - left))
+
+        if (clampedWidth <= 0) return null
+
+        return (
+          <HealthSpan
+            key={i}
+            health={span.health}
+            left={clampedLeft}
+            width={clampedWidth}
+            createdBefore={createdBeforeWindow && i === 0 ? new Date(createdAt!) : undefined}
+          />
+        )
+      })}
+    </div>
+  )
+}
+
+// Critical issue reasons that should be prominently highlighted with icons
+// This should align with PROBLEMATIC_REASONS in resource-hierarchy.ts
+const CRITICAL_ISSUE_REASONS = new Set([
+  // Container state issues
+  'BackOff', 'CrashLoopBackOff', 'Failed', 'Error',
+  'OOMKilling', 'OOMKilled',
+  'CreateContainerConfigError', 'CreateContainerError', 'RunContainerError',
+  'InvalidImageName', 'ErrImagePull', 'ImagePullBackOff',
+  'ContainerStatusUnknown',
+
+  // Pod scheduling/lifecycle issues
+  'FailedScheduling', 'FailedMount', 'FailedAttachVolume',
+  'FailedCreate', 'FailedDelete', 'Unhealthy', 'Killing', 'Evicted',
+  'FailedSync', 'FailedValidation',
+  'FailedPreStopHook', 'FailedPostStartHook',
+  'HostPortConflict', 'InsufficientMemory', 'InsufficientCPU',
+
+  // Node conditions
+  'NodeNotReady', 'NetworkNotReady', 'KubeletNotReady',
+  'MemoryPressure', 'DiskPressure', 'PIDPressure',
+  'NodeStatusUnknown',
+
+  // Deployment/workload issues
+  'ProgressDeadlineExceeded', 'ReplicaFailure',
+  'MinimumReplicasUnavailable',
+
+  // HPA issues
+  'FailedGetScale', 'FailedRescale', 'FailedUpdateScale',
+  'FailedGetResourceMetric', 'FailedComputeMetricsReplicas',
+
+  // PVC/storage issues
+  'ProvisioningFailed', 'FailedBinding', 'VolumeFailedDelete',
+
+  // Job issues
+  'DeadlineExceeded', 'BackoffLimitExceeded',
+])
+
+// Get the appropriate icon for a critical issue
+function getIssueIcon(reason: string | undefined): React.ComponentType<{ className?: string }> | null {
+  if (!reason) return null
+
+  // Memory issues (OOM)
+  if (reason === 'OOMKilled' || reason === 'OOMKilling' ||
+      reason === 'InsufficientMemory' || reason === 'MemoryPressure') return MemoryStick
+
+  // Crash/restart issues
+  if (reason === 'CrashLoopBackOff' || reason === 'BackOff') return RefreshCw
+
+  // Image pull issues
+  if (reason === 'ImagePullBackOff' || reason === 'ErrImagePull' || reason === 'InvalidImageName') return Package
+
+  // Container creation/runtime errors
+  if (reason === 'CreateContainerConfigError' || reason === 'CreateContainerError' ||
+      reason === 'RunContainerError' || reason === 'ContainerStatusUnknown') return Box
+
+  // Scheduling/mount/node issues
+  if (reason === 'FailedScheduling' || reason === 'FailedMount' || reason === 'FailedAttachVolume' ||
+      reason === 'NodeNotReady' || reason === 'NetworkNotReady' || reason === 'KubeletNotReady' ||
+      reason === 'NodeStatusUnknown' || reason === 'HostPortConflict') return Ban
+
+  // Resource pressure (disk, CPU, PID)
+  if (reason === 'DiskPressure' || reason === 'PIDPressure' || reason === 'InsufficientCPU') return Gauge
+
+  // Deployment rollout issues
+  if (reason === 'ProgressDeadlineExceeded' || reason === 'ReplicaFailure' ||
+      reason === 'MinimumReplicasUnavailable') return RotateCcw
+
+  // HPA scaling issues
+  if (reason === 'FailedGetScale' || reason === 'FailedRescale' || reason === 'FailedUpdateScale' ||
+      reason === 'FailedGetResourceMetric' || reason === 'FailedComputeMetricsReplicas') return Gauge
+
+  // PVC/storage issues
+  if (reason === 'ProvisioningFailed' || reason === 'FailedBinding' || reason === 'VolumeFailedDelete') return HardDrive
+
+  // Job timeout issues
+  if (reason === 'DeadlineExceeded' || reason === 'BackoffLimitExceeded') return Timer
+
+  // Probe failures and general unhealthy
+  if (reason === 'Unhealthy') return AlertTriangle
+
+  // General failures - use warning circle
+  if (reason.startsWith('Failed') || reason === 'Evicted' || reason === 'Killing' || reason === 'Error') return AlertCircle
+
+  return null
+}
+
+// Check if event is a critical issue that deserves special highlighting
+function isCriticalIssue(event: TimelineEvent): boolean {
+  return !!(event.reason && CRITICAL_ISSUE_REASONS.has(event.reason))
 }
 
 interface EventMarkerProps {
@@ -1120,9 +1096,11 @@ interface EventMarkerProps {
 }
 
 function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarkerProps) {
-  const isChange = event.type === 'change'
+  const isChange = isChangeEvent(event)
   const isProblematic = isProblematicEvent(event) // Includes warnings + problematic reasons like BackOff
-  const isHistorical = event.isHistorical
+  const isHistorical = isHistoricalEvent(event)
+  const isCritical = isCriticalIssue(event)
+  const IssueIcon = getIssueIcon(event.reason)
 
   const getMarkerStyle = () => {
     // Historical events use outline style (border instead of fill)
@@ -1133,7 +1111,7 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
         return 'bg-amber-500/20 border-2 border-dashed border-amber-500/60'
       }
       if (isChange) {
-        switch (event.operation) {
+        switch (event.eventType) {
           case 'add':
             return 'bg-green-500/20 border-2 border-dashed border-green-500/60'
           case 'delete':
@@ -1145,6 +1123,11 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
       return 'bg-theme-hover/30 border-2 border-dashed border-theme-border-light'
     }
 
+    // Critical issues get red background to stand out
+    if (isCritical) {
+      return 'bg-red-500'
+    }
+
     // Solid fill for real-time events
     const opacity = dimmed ? '/50' : ''
     // Problematic events (warnings, BackOff, etc.) are always amber/orange
@@ -1152,7 +1135,7 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
       return `bg-amber-500${opacity}`
     }
     if (isChange) {
-      switch (event.operation) {
+      switch (event.eventType) {
         case 'add':
           return `bg-green-500${opacity}`
         case 'delete':
@@ -1164,12 +1147,9 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
     return `bg-theme-text-tertiary${opacity}`
   }
 
-  // No icons inside markers - at this size they just create visual noise
-  // Colors alone distinguish event types, and dots overlap cleanly
-
   const markerClasses = getMarkerStyle()
 
-  // Build tooltip text - focus on what happened, not redundant resource info
+  // Build tooltip text - focus on what happened, explain the color meaning
   const getRelativeTime = (timestamp: string) => {
     const diff = Date.now() - new Date(timestamp).getTime()
     const mins = Math.floor(diff / 60000)
@@ -1180,21 +1160,61 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
     return `${Math.floor(hours / 24)}d ago`
   }
 
-  const tooltipLines: string[] = []
-  if (isChange) {
-    tooltipLines.push(`${event.operation?.toUpperCase() || 'change'}`)
-  } else if (event.reason) {
-    tooltipLines.push(event.reason)
+  // Get human-readable operation label with color indicator
+  const getOperationLabel = () => {
+    if (isProblematic) {
+      return `⚠ ${event.reason || 'Warning'}`
+    }
+    if (isChange) {
+      switch (event.eventType) {
+        case 'add': return '● Created'
+        case 'delete': return '● Deleted'
+        case 'update': return '● Modified'
+        default: return '● Changed'
+      }
+    }
+    if (event.reason) {
+      return `● ${event.reason}`
+    }
+    return '● Event'
   }
+
+  const tooltipLines: string[] = []
+  tooltipLines.push(getOperationLabel())
   if (event.message) {
     // Truncate long messages
     const msg = event.message.length > 60 ? event.message.slice(0, 60) + '...' : event.message
     tooltipLines.push(msg)
   }
   tooltipLines.push(getRelativeTime(event.timestamp))
-  if (isHistorical) tooltipLines.push('(from resource metadata)')
+  if (isHistoricalEvent(event)) tooltipLines.push('(from metadata)')
 
   const tooltipText = tooltipLines.join(' · ')
+
+  // Critical issues get larger markers with icons
+  if (isCritical && IssueIcon && !small) {
+    return (
+      <button
+        className={clsx(
+          'absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-full transition-all group flex items-center justify-center',
+          'w-5 h-5',
+          markerClasses,
+          selected ? 'ring-2 ring-white ring-offset-2 ring-offset-theme-base scale-125' : 'hover:scale-110',
+          'z-20 shadow-sm'
+        )}
+        style={{ left: `${x}%` }}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClick()
+        }}
+      >
+        <IssueIcon className="w-3 h-3 text-white" />
+        <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 text-xs bg-theme-base text-theme-text-primary rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity duration-75 shadow-lg border border-theme-border-light">
+          {tooltipText}
+        </span>
+      </button>
+    )
+  }
 
   return (
     <button
@@ -1224,13 +1244,14 @@ interface EventDetailPanelProps {
 }
 
 function EventDetailPanel({ event, onClose }: EventDetailPanelProps) {
-  const isChange = event.type === 'change'
+  const isChange = isChangeEvent(event)
+  const isHistorical = isHistoricalEvent(event)
   const isProblematic = isProblematicEvent(event)
 
   return (
     <div className={clsx(
       "fixed bottom-0 left-0 right-0 z-50 border-t p-4 max-h-72 overflow-auto shadow-2xl",
-      isProblematic ? "border-amber-600 bg-amber-950" : "border-theme-border bg-theme-surface"
+      isProblematic ? "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950" : "border-theme-border bg-theme-surface"
     )}>
       <div className="flex items-start justify-between mb-3">
         <div>
@@ -1242,7 +1263,7 @@ function EventDetailPanel({ event, onClose }: EventDetailPanelProps) {
             {event.namespace && (
               <span className="text-xs text-theme-text-tertiary">in {event.namespace}</span>
             )}
-            {event.isHistorical && (
+            {isHistorical && (
               <span className="text-xs px-1.5 py-0.5 bg-theme-hover rounded text-theme-text-secondary flex items-center gap-1">
                 <Clock className="w-3 h-3" />
                 historical
@@ -1251,7 +1272,7 @@ function EventDetailPanel({ event, onClose }: EventDetailPanelProps) {
           </div>
           <div className="text-xs text-theme-text-tertiary mt-1">
             {formatFullTime(new Date(event.timestamp))}
-            {event.isHistorical && event.reason && (
+            {isHistorical && event.reason && (
               <span className="ml-2 text-theme-text-secondary">({event.reason})</span>
             )}
           </div>
@@ -1268,8 +1289,8 @@ function EventDetailPanel({ event, onClose }: EventDetailPanelProps) {
       {isChange ? (
         <div className="space-y-2">
           <div className="flex items-center gap-2">
-            <span className={clsx('text-sm font-medium', event.operation && getOperationColor(event.operation))}>
-              {event.operation}
+            <span className={clsx('text-sm font-medium', isOperation(event.eventType) && getOperationColor(event.eventType))}>
+              {event.eventType}
             </span>
             {event.healthState && event.healthState !== 'unknown' && (
               <span className={clsx('text-xs px-1.5 py-0.5 rounded', getHealthBadgeColor(event.healthState))}>

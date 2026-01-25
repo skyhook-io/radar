@@ -12,6 +12,9 @@ import (
 	"github.com/skyhook-io/skyhook-explorer/internal/topology"
 )
 
+// MaxSSEClients limits the number of concurrent SSE connections to prevent resource exhaustion
+const MaxSSEClients = 100
+
 // SSEBroadcaster manages Server-Sent Events connections
 type SSEBroadcaster struct {
 	clients    map[chan SSEEvent]ClientInfo
@@ -150,6 +153,12 @@ func (b *SSEBroadcaster) run() {
 
 		case reg := <-b.register:
 			b.mu.Lock()
+			if len(b.clients) >= MaxSSEClients {
+				b.mu.Unlock()
+				log.Printf("SSE client rejected: max clients (%d) reached", MaxSSEClients)
+				close(reg.ch) // Signal rejection by closing the channel
+				continue
+			}
 			b.clients[reg.ch] = ClientInfo{Namespace: reg.namespace, ViewMode: reg.viewMode}
 			b.mu.Unlock()
 			log.Printf("SSE client connected (namespace=%s, view=%s), total clients: %d", reg.namespace, reg.viewMode, len(b.clients))
@@ -324,8 +333,18 @@ func (b *SSEBroadcaster) Broadcast(event SSEEvent) {
 	}
 }
 
-// Subscribe adds a new SSE client
+// Subscribe adds a new SSE client. Returns nil if max clients reached.
 func (b *SSEBroadcaster) Subscribe(namespace, viewMode string) chan SSEEvent {
+	// Check client count before creating the channel to fail fast
+	b.mu.RLock()
+	clientCount := len(b.clients)
+	b.mu.RUnlock()
+
+	if clientCount >= MaxSSEClients {
+		log.Printf("SSE subscription rejected: max clients (%d) reached", MaxSSEClients)
+		return nil
+	}
+
 	ch := make(chan SSEEvent, 10)
 	b.register <- clientRegistration{ch: ch, namespace: namespace, viewMode: viewMode}
 	return ch
@@ -375,6 +394,10 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request) {
 
 	// Subscribe to events
 	eventCh := b.Subscribe(namespace, viewMode)
+	if eventCh == nil {
+		http.Error(w, "Too many SSE connections", http.StatusServiceUnavailable)
+		return
+	}
 	defer b.Unsubscribe(eventCh)
 
 	// Send initial topology immediately

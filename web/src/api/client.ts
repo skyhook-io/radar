@@ -161,6 +161,7 @@ export function useChanges(options: UseChangesOptions = {}) {
   return useQuery<TimelineEvent[]>({
     queryKey: ['changes', namespace, kind, timeRange, filter, includeK8sEvents, includeManaged, limit],
     queryFn: () => fetchJSON(`/changes${queryString ? `?${queryString}` : ''}`),
+    staleTime: 5000, // Consider data stale after 5 seconds to ensure fresh data on navigation
     refetchInterval: 60000, // SSE handles real-time updates; this is a fallback
   })
 }
@@ -595,8 +596,11 @@ export function useUpdateResource() {
       }
       return response.json()
     },
+    meta: {
+      errorMessage: 'Failed to update resource',
+      successMessage: 'Resource updated',
+    },
     onSuccess: (_, variables) => {
-      // Invalidate queries to refresh data
       queryClient.invalidateQueries({ queryKey: ['resource', variables.kind, variables.namespace, variables.name] })
       queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
@@ -620,8 +624,11 @@ export function useDeleteResource() {
       // DELETE returns 204 No Content, no body to parse
       return { success: true }
     },
+    meta: {
+      errorMessage: 'Failed to delete resource',
+      successMessage: 'Resource deleted',
+    },
     onSuccess: (_, variables) => {
-      // Invalidate queries to refresh data
       queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
     },
@@ -647,6 +654,10 @@ export function useTriggerCronJob() {
       }
       return response.json()
     },
+    meta: {
+      errorMessage: 'Failed to trigger CronJob',
+      successMessage: 'CronJob triggered',
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['resources', 'cronjobs'] })
       queryClient.invalidateQueries({ queryKey: ['resources', 'jobs'] })
@@ -670,6 +681,10 @@ export function useSuspendCronJob() {
       }
       return response.json()
     },
+    meta: {
+      errorMessage: 'Failed to suspend CronJob',
+      successMessage: 'CronJob suspended',
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['resources', 'cronjobs'] })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
@@ -691,6 +706,10 @@ export function useResumeCronJob() {
         throw new Error(error.error || `HTTP ${response.status}`)
       }
       return response.json()
+    },
+    meta: {
+      errorMessage: 'Failed to resume CronJob',
+      successMessage: 'CronJob resumed',
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['resources', 'cronjobs'] })
@@ -717,6 +736,10 @@ export function useRestartWorkload() {
         throw new Error(error.error || `HTTP ${response.status}`)
       }
       return response.json()
+    },
+    meta: {
+      errorMessage: 'Failed to restart workload',
+      successMessage: 'Workload restarting',
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
@@ -836,8 +859,11 @@ export function useHelmRollback() {
       }
       return response.json()
     },
+    meta: {
+      errorMessage: 'Rollback failed',
+      successMessage: 'Release rolled back',
+    },
     onSuccess: (_, variables) => {
-      // Invalidate queries to refresh data
       queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
       queryClient.invalidateQueries({ queryKey: ['helm-release', variables.namespace, variables.name] })
     },
@@ -859,8 +885,11 @@ export function useHelmUninstall() {
       }
       return response.json()
     },
+    meta: {
+      errorMessage: 'Uninstall failed',
+      successMessage: 'Release uninstalled',
+    },
     onSuccess: () => {
-      // Invalidate releases list
       queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
       queryClient.invalidateQueries({ queryKey: ['helm-batch-upgrade-info'] })
     },
@@ -882,8 +911,11 @@ export function useHelmUpgrade() {
       }
       return response.json()
     },
+    meta: {
+      errorMessage: 'Upgrade failed',
+      successMessage: 'Release upgraded',
+    },
     onSuccess: (_, variables) => {
-      // Invalidate queries to refresh data
       queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
       queryClient.invalidateQueries({ queryKey: ['helm-release', variables.namespace, variables.name] })
       queryClient.invalidateQueries({ queryKey: ['helm-upgrade-info', variables.namespace, variables.name] })
@@ -927,8 +959,11 @@ export function useHelmApplyValues() {
       }
       return response.json()
     },
+    meta: {
+      errorMessage: 'Failed to apply values',
+      successMessage: 'Values applied',
+    },
     onSuccess: (_, variables) => {
-      // Invalidate queries to refresh data
       queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
       queryClient.invalidateQueries({ queryKey: ['helm-release', variables.namespace, variables.name] })
       queryClient.invalidateQueries({ queryKey: ['helm-values', variables.namespace, variables.name] })
@@ -962,6 +997,10 @@ export function useUpdateRepository() {
         throw new Error(error.error || `HTTP ${response.status}`)
       }
       return response.json()
+    },
+    meta: {
+      errorMessage: 'Failed to update repository',
+      successMessage: 'Repository updated',
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['helm-repositories'] })
@@ -1014,6 +1053,10 @@ export function useInstallChart() {
         throw new Error(error.error || `HTTP ${response.status}`)
       }
       return response.json() as Promise<HelmRelease>
+    },
+    meta: {
+      errorMessage: 'Installation failed',
+      successMessage: 'Chart installed',
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['helm-releases'] })

@@ -21,6 +21,75 @@ import {
 import { clsx } from 'clsx'
 import type { NodeKind, HealthStatus } from '../../types'
 import { healthToSeverity, SEVERITY_DOT } from '../../utils/badge-colors'
+import { Tooltip } from '../ui/Tooltip'
+
+// Get actionable tooltip content for health issues
+function getIssueTooltip(issue: string | undefined): React.ReactNode {
+  if (!issue) return null
+
+  const issueDetails: Record<string, { title: string; description: string; action: string }> = {
+    OOMKilled: {
+      title: 'Out of Memory (OOMKilled)',
+      description: 'Container exceeded its memory limit and was killed by the kernel.',
+      action: 'Increase memory limits or optimize memory usage.',
+    },
+    CrashLoopBackOff: {
+      title: 'CrashLoopBackOff',
+      description: 'Container is repeatedly crashing and Kubernetes is backing off restarts.',
+      action: 'Check container logs for crash reason.',
+    },
+    ImagePullBackOff: {
+      title: 'ImagePullBackOff',
+      description: 'Kubernetes cannot pull the container image.',
+      action: 'Verify image name, tag, and registry credentials.',
+    },
+    ErrImagePull: {
+      title: 'Image Pull Error',
+      description: 'Failed to pull the container image.',
+      action: 'Check image name and registry access.',
+    },
+    CreateContainerConfigError: {
+      title: 'Container Config Error',
+      description: 'Invalid container configuration (e.g., missing ConfigMap/Secret).',
+      action: 'Verify referenced ConfigMaps and Secrets exist.',
+    },
+    Pending: {
+      title: 'Pending',
+      description: 'Pod is waiting to be scheduled to a node.',
+      action: 'Check for resource constraints or node availability.',
+    },
+    FailedScheduling: {
+      title: 'Scheduling Failed',
+      description: 'No suitable node found for this pod.',
+      action: 'Check node resources, taints, tolerations, and affinity rules.',
+    },
+    Evicted: {
+      title: 'Pod Evicted',
+      description: 'Pod was evicted from the node (usually due to resource pressure).',
+      action: 'Check node resource usage and set appropriate resource requests.',
+    },
+  }
+
+  const details = issueDetails[issue]
+  if (!details) {
+    return (
+      <div className="max-w-xs">
+        <div className="font-medium text-red-400">{issue}</div>
+        <div className="text-theme-text-secondary text-[10px] mt-1">Click to view details</div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="max-w-xs">
+      <div className="font-medium text-red-400">{details.title}</div>
+      <div className="text-theme-text-secondary text-[10px] mt-1">{details.description}</div>
+      <div className="text-blue-400 text-[10px] mt-1.5 border-t border-theme-border pt-1.5">
+        💡 {details.action}
+      </div>
+    </div>
+  )
+}
 
 // Node dimensions for ELK layout - sized for typical K8s resource names
 export const NODE_DIMENSIONS: Record<NodeKind, { width: number; height: number }> = {
@@ -156,6 +225,11 @@ function getSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string 
     case 'DaemonSet':
     case 'StatefulSet':
     case 'ReplicaSet': {
+      // Use statusSummary if available (includes issue info like "0/3 OOMKilled")
+      const statusSummary = nodeData.statusSummary as string
+      if (statusSummary) {
+        return statusSummary
+      }
       const ready = nodeData.readyReplicas ?? 0
       const total = nodeData.totalReplicas ?? 0
       return `${ready}/${total} ready`
@@ -226,6 +300,8 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   const isSmallNode = kind === 'ConfigMap' || kind === 'Secret' || kind === 'HPA'
   const canExpand = isPodGroup && onExpand && !isExpanded
   const canCollapse = isPodGroup && onCollapse && isExpanded
+  const statusIssue = nodeData.statusIssue as string | undefined
+  const issueTooltip = getIssueTooltip(statusIssue)
 
   // Special styling for Internet node
   if (isInternet) {
@@ -326,13 +402,25 @@ export const K8sResourceNode = memo(function K8sResourceNode({
                 <ChevronUp className="w-3.5 h-3.5 text-theme-text-secondary" />
               </button>
             )}
-            <span
-              className={clsx(
-                canExpand || canCollapse ? '' : 'ml-auto',
-                'w-1.5 h-1.5 rounded-full',
-                getStatusDotColor(status)
-              )}
-            />
+            {issueTooltip ? (
+              <Tooltip content={issueTooltip} position="right">
+                <span
+                  className={clsx(
+                    canExpand || canCollapse ? '' : 'ml-auto',
+                    'w-1.5 h-1.5 rounded-full cursor-help',
+                    getStatusDotColor(status)
+                  )}
+                />
+              </Tooltip>
+            ) : (
+              <span
+                className={clsx(
+                  canExpand || canCollapse ? '' : 'ml-auto',
+                  'w-1.5 h-1.5 rounded-full',
+                  getStatusDotColor(status)
+                )}
+              />
+            )}
           </div>
 
           {/* Name */}

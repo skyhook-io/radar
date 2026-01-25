@@ -18,7 +18,7 @@ const MAX_EVENTS = 100 // Keep last 100 events
 
 export function useEventSource(
   namespace: string,
-  viewMode: ViewMode = 'full',
+  viewMode: ViewMode = 'resources',
   options?: UseEventSourceOptions
 ): UseEventSourceReturn {
   const [topology, setTopology] = useState<Topology | null>(null)
@@ -27,6 +27,10 @@ export function useEventSource(
   const eventSourceRef = useRef<EventSource | null>(null)
   const reconnectTimeoutRef = useRef<number | null>(null)
   const waitingForTopologyAfterSwitch = useRef(false)
+
+  // Use ref to avoid stale closures while not triggering reconnection on callback changes
+  const optionsRef = useRef(options)
+  optionsRef.current = options
 
   const connect = useCallback(() => {
     // Clean up existing connection
@@ -42,7 +46,7 @@ export function useEventSource(
     if (namespace) {
       params.set('namespace', namespace)
     }
-    if (viewMode && viewMode !== 'full') {
+    if (viewMode && viewMode !== 'resources') {
       params.set('view', viewMode)
     }
     const url = `/api/events/stream${params.toString() ? `?${params}` : ''}`
@@ -76,7 +80,7 @@ export function useEventSource(
         // If we were waiting for topology after a context switch, signal completion
         if (waitingForTopologyAfterSwitch.current) {
           waitingForTopologyAfterSwitch.current = false
-          options?.onContextSwitchComplete?.()
+          optionsRef.current?.onContextSwitchComplete?.()
         }
       } catch (e) {
         console.error('Failed to parse topology:', e)
@@ -103,7 +107,7 @@ export function useEventSource(
     es.addEventListener('context_switch_progress', (event) => {
       try {
         const data = JSON.parse(event.data) as { message: string }
-        options?.onContextSwitchProgress?.(data.message)
+        optionsRef.current?.onContextSwitchProgress?.(data.message)
       } catch (e) {
         console.error('Failed to parse context_switch_progress event:', e)
       }
@@ -120,7 +124,7 @@ export function useEventSource(
         // Mark that we're waiting for new topology data
         waitingForTopologyAfterSwitch.current = true
         // Notify caller to invalidate caches (e.g., helm releases, resources)
-        options?.onContextChanged?.(data.context)
+        optionsRef.current?.onContextChanged?.(data.context)
       } catch (e) {
         console.error('Failed to parse context_changed event:', e)
       }

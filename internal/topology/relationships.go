@@ -94,6 +94,7 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 
 // buildNodeID constructs a node ID from kind, namespace, and name
 // This must match the format used in builder.go
+// Format: kind/namespace/name (using / since it's not allowed in K8s names)
 func buildNodeID(kind, namespace, name string) string {
 	// Normalize kind to match topology builder format
 	k := strings.ToLower(kind)
@@ -119,16 +120,17 @@ func buildNodeID(kind, namespace, name string) string {
 		k = singular
 	}
 
-	return k + "-" + namespace + "-" + name
+	return k + "/" + namespace + "/" + name
 }
 
 // parseNodeID extracts kind, namespace, and name from a node ID
 // Returns nil for PodGroup since it's a UI-only concept, not a real K8s resource
+// Format: kind/namespace/name (using / since it's not allowed in K8s names)
 func parseNodeID(nodeID string) *ResourceRef {
-	// Node IDs are formatted as: kind-namespace-name
-	// e.g., "deployment-default-my-app" or "pod-kube-system-coredns-abc123"
+	// Node IDs are formatted as: kind/namespace/name
+	// e.g., "deployment/default/my-app" or "pod/kube-system/coredns-abc123"
 
-	parts := strings.SplitN(nodeID, "-", 3)
+	parts := strings.SplitN(nodeID, "/", 3)
 	if len(parts) < 3 {
 		return nil
 	}
@@ -141,10 +143,6 @@ func parseNodeID(nodeID string) *ResourceRef {
 	if strings.ToLower(kind) == "podgroup" {
 		return nil
 	}
-
-	// Handle special case where namespace or name contains dashes
-	// We need to be smarter about this - look for known namespace patterns
-	// For now, assume namespace doesn't contain dashes (common case)
 
 	return &ResourceRef{
 		Kind:      normalizeKind(kind),

@@ -58,6 +58,10 @@ export function PortForwardManager({
       if (!res.ok) throw new Error('Failed to stop port forward')
       return res.json()
     },
+    meta: {
+      errorMessage: 'Failed to stop port forward',
+      successMessage: 'Port forward stopped',
+    },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['portforwards'] })
     },
@@ -249,6 +253,10 @@ export function useStartPortForward() {
         throw new Error(error.error || 'Failed to start port forward')
       }
       return res.json() as Promise<PortForwardSession>
+    },
+    meta: {
+      errorMessage: 'Failed to start port forward',
+      successMessage: 'Port forward started',
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['portforwards'] })

@@ -1378,13 +1378,13 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick, on
         </div>
 
         {/* Table */}
-        <div className="flex-1 overflow-auto">
+        <div className="flex-1 overflow-auto relative">
           {isLoading ? (
-            <div className="flex items-center justify-center h-full text-theme-text-tertiary">
+            <div className="absolute inset-0 flex items-center justify-center text-theme-text-tertiary">
               Loading...
             </div>
           ) : filteredResources.length === 0 ? (
-            <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
+            <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text-tertiary">
               <p>No {selectedKind.kind} found</p>
               {searchTerm && <p className="text-sm mt-1">No results for "{searchTerm}"</p>}
               {namespace && <p className="text-sm mt-1 text-theme-text-disabled">Searching in namespace: {namespace}</p>}

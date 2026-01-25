@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"syscall"
@@ -17,6 +18,7 @@ import (
 	"github.com/skyhook-io/skyhook-explorer/internal/k8s"
 	"github.com/skyhook-io/skyhook-explorer/internal/server"
 	"github.com/skyhook-io/skyhook-explorer/internal/static"
+	"github.com/skyhook-io/skyhook-explorer/internal/timeline"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 )
@@ -33,9 +35,15 @@ func main() {
 	noBrowser := flag.Bool("no-browser", false, "Don't auto-open browser")
 	devMode := flag.Bool("dev", false, "Development mode (serve frontend from filesystem)")
 	showVersion := flag.Bool("version", false, "Show version and exit")
-	persistHistory := flag.Bool("persist-history", false, "Persist change history to file")
-	historyLimit := flag.Int("history-limit", 1000, "Maximum number of changes to retain in history")
+	historyLimit := flag.Int("history-limit", 10000, "Maximum number of events to retain in timeline")
+	debugEvents := flag.Bool("debug-events", false, "Enable verbose event debugging (logs all event drops)")
+	// Timeline storage options
+	timelineStorage := flag.String("timeline-storage", "memory", "Timeline storage backend: memory or sqlite")
+	timelineDBPath := flag.String("timeline-db", "", "Path to timeline database file (default: ~/.skyhook-explorer/timeline.db)")
 	flag.Parse()
+
+	// Set debug mode for event tracking
+	k8s.DebugEvents = *debugEvents
 
 	if *showVersion {
 		fmt.Printf("skyhook-explorer %s\n", version)
@@ -71,15 +79,22 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Initialize change history (before resource cache so it can receive events)
-	historyPath := ""
-	if *persistHistory {
-		homeDir, _ := os.UserHomeDir()
-		historyPath = homeDir + "/.skyhook-explorer/history.jsonl"
+	// Initialize timeline event store (unified storage for all events)
+	timelineStoreCfg := timeline.StoreConfig{
+		Type:    timeline.StoreTypeMemory,
+		MaxSize: *historyLimit,
 	}
-	k8s.InitChangeHistory(*historyLimit, historyPath)
-	if *persistHistory {
-		log.Printf("Change history persistence enabled: %s", historyPath)
+	if *timelineStorage == "sqlite" {
+		timelineStoreCfg.Type = timeline.StoreTypeSQLite
+		dbPath := *timelineDBPath
+		if dbPath == "" {
+			homeDir, _ := os.UserHomeDir()
+			dbPath = filepath.Join(homeDir, ".skyhook-explorer", "timeline.db")
+		}
+		timelineStoreCfg.Path = dbPath
+	}
+	if err := timeline.InitStore(timelineStoreCfg); err != nil {
+		log.Fatalf("Failed to initialize timeline store: %v", err)
 	}
 
 	// Initialize resource cache (typed informers for core resources)
@@ -95,9 +110,14 @@ func main() {
 	}
 
 	// Initialize dynamic resource cache (for CRDs)
-	if err := k8s.InitDynamicResourceCache(); err != nil {
+	// Share the change channel with the typed cache so all changes go to SSE
+	changeCh := k8s.GetResourceCache().ChangesRaw()
+	if err := k8s.InitDynamicResourceCache(changeCh); err != nil {
 		log.Printf("Warning: Failed to initialize dynamic resource cache: %v", err)
 	}
+
+	// Warm up dynamic cache for common CRDs so they appear in initial timeline
+	k8s.WarmupCommonCRDs()
 
 	// Initialize Helm client
 	if err := helm.Initialize(k8s.GetKubeconfigPath()); err != nil {
@@ -107,14 +127,17 @@ func main() {
 	// Register Helm reset/reinit functions for context switching
 	k8s.RegisterHelmFuncs(helm.ResetClient, helm.ReinitClient)
 
+	// Register timeline store reset/reinit functions for context switching
+	k8s.RegisterTimelineFuncs(timeline.ResetStore, func() error {
+		return timeline.ReinitStore(timelineStoreCfg)
+	})
+
 	// Create and start server
 	cfg := server.Config{
-		Port:         *port,
-		DevMode:      *devMode,
-		StaticFS:     static.FS,
-		StaticRoot:   "dist",
-		HistoryLimit: *historyLimit,
-		HistoryPath:  historyPath,
+		Port:       *port,
+		DevMode:    *devMode,
+		StaticFS:   static.FS,
+		StaticRoot: "dist",
 	}
 
 	srv := server.New(cfg)
@@ -133,6 +156,8 @@ func main() {
 		if dynCache := k8s.GetDynamicResourceCache(); dynCache != nil {
 			dynCache.Stop()
 		}
+		// Close timeline store
+		timeline.ResetStore()
 		os.Exit(0)
 	}()
 

@@ -1,59 +1,56 @@
 package server
 
 import (
-	"context"
 	"embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"log"
 	"net/http"
-	"sort"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
+	explorerErrors "github.com/skyhook-io/skyhook-explorer/internal/errors"
 	"github.com/skyhook-io/skyhook-explorer/internal/helm"
 	"github.com/skyhook-io/skyhook-explorer/internal/k8s"
+	"github.com/skyhook-io/skyhook-explorer/internal/timeline"
 	"github.com/skyhook-io/skyhook-explorer/internal/topology"
 )
 
 // Server is the Explorer HTTP server
 type Server struct {
-	router       *chi.Mux
-	broadcaster  *SSEBroadcaster
-	port         int
-	devMode      bool
-	staticFS     fs.FS
-	historyLimit int
-	historyPath  string
+	router              *chi.Mux
+	broadcaster         *SSEBroadcaster
+	timelineBroadcaster *TimelineSSEBroadcaster
+	port                int
+	devMode             bool
+	staticFS            fs.FS
 }
 
 // Config holds server configuration
 type Config struct {
-	Port         int
-	DevMode      bool     // Serve frontend from filesystem instead of embedded
-	StaticFS     embed.FS // Embedded frontend files
-	StaticRoot   string   // Path within StaticFS
-	HistoryLimit int      // Max history entries (for context switch reinit)
-	HistoryPath  string   // History file path (for context switch reinit)
+	Port       int
+	DevMode    bool     // Serve frontend from filesystem instead of embedded
+	StaticFS   embed.FS // Embedded frontend files
+	StaticRoot string   // Path within StaticFS
 }
 
 // New creates a new server instance
 func New(cfg Config) *Server {
 	s := &Server{
-		router:       chi.NewRouter(),
-		broadcaster:  NewSSEBroadcaster(),
-		port:         cfg.Port,
-		devMode:      cfg.DevMode,
-		historyLimit: cfg.HistoryLimit,
-		historyPath:  cfg.HistoryPath,
+		router:              chi.NewRouter(),
+		broadcaster:         NewSSEBroadcaster(),
+		timelineBroadcaster: NewTimelineSSEBroadcaster(),
+		port:                cfg.Port,
+		devMode:             cfg.DevMode,
 	}
 
 	// Set up static file system
@@ -99,6 +96,13 @@ func (s *Server) setupRoutes() {
 		r.Get("/events/stream", s.broadcaster.HandleSSE)
 		r.Get("/changes", s.handleChanges)
 		r.Get("/changes/{kind}/{namespace}/{name}/children", s.handleChangeChildren)
+
+		// New timeline API (replaces /changes with grouping and filtering)
+		r.Get("/timeline", s.handleTimeline)
+		r.Get("/timeline/stream", s.timelineBroadcaster.HandleTimelineSSE)
+		r.Get("/timeline/filters", s.handleTimelineFilters)
+		r.Get("/timeline/stats", s.handleTimelineStats)
+		r.Get("/timeline/{kind}/{namespace}/{name}/children", s.handleTimelineChildren)
 		// Pod logs
 		r.Get("/pods/{namespace}/{name}/logs", s.handlePodLogs)
 		r.Get("/pods/{namespace}/{name}/logs/stream", s.handlePodLogsStream)
@@ -115,9 +119,21 @@ func (s *Server) setupRoutes() {
 		// Active sessions (for context switch confirmation)
 		r.Get("/sessions", s.handleGetSessions)
 
+		// CronJob operations
+		r.Post("/cronjobs/{namespace}/{name}/trigger", s.handleTriggerCronJob)
+		r.Post("/cronjobs/{namespace}/{name}/suspend", s.handleSuspendCronJob)
+		r.Post("/cronjobs/{namespace}/{name}/resume", s.handleResumeCronJob)
+
+		// Workload restart
+		r.Post("/workloads/{kind}/{namespace}/{name}/restart", s.handleRestartWorkload)
+
 		// Helm routes
 		helmHandlers := helm.NewHandlers()
 		helmHandlers.RegisterRoutes(r)
+
+		// Debug routes (for event pipeline diagnostics)
+		r.Get("/debug/events", s.handleDebugEvents)
+		r.Get("/debug/events/diagnose", s.handleDebugEventsDiagnose)
 
 		// Context routes
 		r.Get("/contexts", s.handleListContexts)
@@ -164,6 +180,7 @@ func spaHandler(fsys http.FileSystem) http.Handler {
 // Start starts the server
 func (s *Server) Start() error {
 	s.broadcaster.Start()
+	s.timelineBroadcaster.Start()
 
 	addr := fmt.Sprintf(":%d", s.port)
 	log.Printf("Starting Explorer server on http://localhost%s", addr)
@@ -174,6 +191,7 @@ func (s *Server) Start() error {
 // Stop gracefully stops the server
 func (s *Server) Stop() {
 	s.broadcaster.Stop()
+	s.timelineBroadcaster.Stop()
 }
 
 // Handlers
@@ -185,9 +203,21 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		status = "degraded"
 	}
 
+	// Get timeline store stats (informational only - doesn't affect overall status)
+	var timelineStats map[string]any
+	if store := timeline.GetStore(); store != nil {
+		stats := store.Stats()
+		timelineStats = map[string]any{
+			"total_events": stats.TotalEvents,
+			"store_errors": timeline.GetStoreErrorCount(),
+			"total_drops":  timeline.GetTotalDropCount(),
+		}
+	}
+
 	s.writeJSON(w, map[string]any{
 		"status":        status,
 		"resourceCount": cache.GetResourceCount(),
+		"timeline":      timelineStats,
 	})
 }
 
@@ -500,29 +530,15 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, events)
 }
 
-// TimelineEvent represents a unified event in the timeline (either a change or K8s event)
-type TimelineEvent struct {
-	ID          string         `json:"id"`
-	Type        string         `json:"type"` // "change" or "k8s_event"
-	Timestamp   time.Time      `json:"timestamp"`
-	Kind        string         `json:"kind"`
-	Namespace   string         `json:"namespace"`
-	Name        string         `json:"name"`
-	Operation   string         `json:"operation,omitempty"`   // For changes: add, update, delete
-	Diff        *k8s.DiffInfo  `json:"diff,omitempty"`        // For changes with updates
-	HealthState string         `json:"healthState,omitempty"` // For changes
-	Owner       *k8s.OwnerInfo `json:"owner,omitempty"`       // For managed resources
-	Reason      string         `json:"reason,omitempty"`      // For K8s events
-	Message     string         `json:"message,omitempty"`     // For K8s events
-	EventType   string         `json:"eventType,omitempty"`   // For K8s events: Normal, Warning
-	Count       int32          `json:"count,omitempty"`       // For K8s events
-}
 
+// handleChanges returns timeline events using the unified timeline.TimelineEvent format.
+// This is the main timeline API endpoint - it queries the timeline store directly.
 func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	namespace := r.URL.Query().Get("namespace")
 	kind := r.URL.Query().Get("kind")
 	sinceStr := r.URL.Query().Get("since")
 	limitStr := r.URL.Query().Get("limit")
+	filterPreset := r.URL.Query().Get("filter")
 	includeK8sEvents := r.URL.Query().Get("include_k8s_events") != "false" // default true
 	includeManaged := r.URL.Query().Get("include_managed") == "true"       // default false
 
@@ -538,133 +554,41 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	limit := 200
 	if limitStr != "" {
 		if l, err := fmt.Sscanf(limitStr, "%d", &limit); err == nil && l > 0 {
-			if limit > 1000 {
-				limit = 1000
+			if limit > 10000 {
+				limit = 10000
 			}
 		}
 	}
 
-	var timeline []TimelineEvent
-
-	// Get change records from history
-	history := k8s.GetChangeHistory()
-	if history != nil {
-		changes := history.GetChanges(k8s.GetChangesOptions{
-			Namespace:      namespace,
-			Kind:           kind,
-			Since:          since,
-			Limit:          limit,
-			IncludeManaged: includeManaged,
-		})
-		for _, c := range changes {
-			timeline = append(timeline, TimelineEvent{
-				ID:          c.ID,
-				Type:        "change",
-				Timestamp:   c.Timestamp,
-				Kind:        c.Kind,
-				Namespace:   c.Namespace,
-				Name:        c.Name,
-				Operation:   c.Operation,
-				Diff:        c.Diff,
-				HealthState: c.HealthState,
-				Owner:       c.Owner,
-			})
-		}
+	store := timeline.GetStore()
+	if store == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Timeline store not available")
+		return
 	}
 
-	// Get K8s events and merge
-	if includeK8sEvents {
-		cache := k8s.GetResourceCache()
-		if cache != nil {
-			var k8sEvents []*corev1.Event
-			var err error
-
-			if namespace != "" {
-				k8sEvents, err = cache.Events().Events(namespace).List(labels.Everything())
-			} else {
-				k8sEvents, err = cache.Events().List(labels.Everything())
-			}
-
-			if err == nil {
-				for _, e := range k8sEvents {
-					// Filter by kind if specified
-					if kind != "" && e.InvolvedObject.Kind != kind {
-						continue
-					}
-
-					// Use lastTimestamp or firstTimestamp
-					ts := e.LastTimestamp.Time
-					if ts.IsZero() {
-						ts = e.FirstTimestamp.Time
-					}
-					if ts.IsZero() {
-						ts = e.CreationTimestamp.Time
-					}
-
-					// Filter by since
-					if !since.IsZero() && ts.Before(since) {
-						continue
-					}
-
-					// Try to get owner info from the involved object
-					var owner *k8s.OwnerInfo
-					if e.InvolvedObject.Kind == "Pod" {
-						// Look up the pod to get its owner
-						if pod, podErr := cache.Pods().Pods(e.Namespace).Get(e.InvolvedObject.Name); podErr == nil && pod != nil {
-							for _, ref := range pod.OwnerReferences {
-								if ref.Controller != nil && *ref.Controller {
-									owner = &k8s.OwnerInfo{
-										Kind: ref.Kind,
-										Name: ref.Name,
-									}
-									break
-								}
-							}
-						}
-					} else if e.InvolvedObject.Kind == "ReplicaSet" {
-						// Look up the ReplicaSet to get its owner (usually Deployment)
-						if rs, rsErr := cache.ReplicaSets().ReplicaSets(e.Namespace).Get(e.InvolvedObject.Name); rsErr == nil && rs != nil {
-							for _, ref := range rs.OwnerReferences {
-								if ref.Controller != nil && *ref.Controller {
-									owner = &k8s.OwnerInfo{
-										Kind: ref.Kind,
-										Name: ref.Name,
-									}
-									break
-								}
-							}
-						}
-					}
-
-					timeline = append(timeline, TimelineEvent{
-						ID:        string(e.UID),
-						Type:      "k8s_event",
-						Timestamp: ts,
-						Kind:      e.InvolvedObject.Kind,
-						Namespace: e.Namespace,
-						Name:      e.InvolvedObject.Name,
-						Reason:    e.Reason,
-						Message:   e.Message,
-						EventType: e.Type,
-						Count:     e.Count,
-						Owner:     owner,
-					})
-				}
-			}
-		}
+	// Build query options
+	if filterPreset == "" {
+		filterPreset = "default"
+	}
+	opts := timeline.QueryOptions{
+		Namespace:        namespace,
+		Since:            since,
+		Limit:            limit,
+		IncludeManaged:   includeManaged,
+		IncludeK8sEvents: includeK8sEvents,
+		FilterPreset:     filterPreset,
+	}
+	if kind != "" {
+		opts.Kinds = []string{kind}
 	}
 
-	// Sort by timestamp descending (most recent first)
-	sort.Slice(timeline, func(i, j int) bool {
-		return timeline[i].Timestamp.After(timeline[j].Timestamp)
-	})
-
-	// Apply limit
-	if len(timeline) > limit {
-		timeline = timeline[:limit]
+	events, err := store.Query(r.Context(), opts)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
-	s.writeJSON(w, timeline)
+	s.writeJSON(w, events)
 }
 
 // handleChangeChildren returns child resource changes for a given parent workload
@@ -684,25 +608,16 @@ func (s *Server) handleChangeChildren(w http.ResponseWriter, r *http.Request) {
 		since = time.Now().Add(-1 * time.Hour)
 	}
 
-	var children []TimelineEvent
+	store := timeline.GetStore()
+	if store == nil {
+		s.writeJSON(w, []timeline.TimelineEvent{})
+		return
+	}
 
-	history := k8s.GetChangeHistory()
-	if history != nil {
-		changes := history.GetChangesForOwner(ownerKind, namespace, ownerName, since, 100)
-		for _, c := range changes {
-			children = append(children, TimelineEvent{
-				ID:          c.ID,
-				Type:        "change",
-				Timestamp:   c.Timestamp,
-				Kind:        c.Kind,
-				Namespace:   c.Namespace,
-				Name:        c.Name,
-				Operation:   c.Operation,
-				Diff:        c.Diff,
-				HealthState: c.HealthState,
-				Owner:       c.Owner,
-			})
-		}
+	children, err := store.GetChangesForOwner(r.Context(), ownerKind, namespace, ownerName, since, 100)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
 	}
 
 	s.writeJSON(w, children)
@@ -764,6 +679,94 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// handleTriggerCronJob creates a Job from a CronJob
+func (s *Server) handleTriggerCronJob(w http.ResponseWriter, r *http.Request) {
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	result, err := k8s.TriggerCronJob(r.Context(), namespace, name)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			s.writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, map[string]interface{}{
+		"message": "Job created successfully",
+		"jobName": result.GetName(),
+	})
+}
+
+// handleSuspendCronJob suspends a CronJob
+func (s *Server) handleSuspendCronJob(w http.ResponseWriter, r *http.Request) {
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	err := k8s.SetCronJobSuspend(r.Context(), namespace, name, true)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			s.writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, map[string]string{"message": "CronJob suspended"})
+}
+
+// handleResumeCronJob resumes a suspended CronJob
+func (s *Server) handleResumeCronJob(w http.ResponseWriter, r *http.Request) {
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	err := k8s.SetCronJobSuspend(r.Context(), namespace, name, false)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			s.writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, map[string]string{"message": "CronJob resumed"})
+}
+
+// handleRestartWorkload performs a rolling restart on a Deployment, StatefulSet, or DaemonSet
+func (s *Server) handleRestartWorkload(w http.ResponseWriter, r *http.Request) {
+	kind := chi.URLParam(r, "kind")
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	// Validate that this is a restartable workload type
+	validKinds := map[string]bool{
+		"deployments":  true,
+		"statefulsets": true,
+		"daemonsets":   true,
+		"rollouts":     true,
+	}
+	if !validKinds[strings.ToLower(kind)] {
+		s.writeError(w, http.StatusBadRequest, "only Deployments, StatefulSets, DaemonSets, and Rollouts can be restarted")
+		return
+	}
+
+	err := k8s.RestartWorkload(r.Context(), kind, namespace, name)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			s.writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, map[string]string{"message": "Workload restart initiated"})
+}
+
 // Session management handlers
 
 // SessionCounts returns counts of active sessions
@@ -809,6 +812,14 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// URL-decode the context name (handles special chars like : and / in AWS ARNs)
+	decodedName, err := url.PathUnescape(name)
+	if err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid context name encoding")
+		return
+	}
+	name = decodedName
+
 	// Check if we're in-cluster mode
 	if k8s.IsInCluster() {
 		s.writeError(w, http.StatusBadRequest, "cannot switch context when running in-cluster")
@@ -819,7 +830,7 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 	StopAllSessions()
 
 	// Perform the context switch
-	if err := k8s.PerformContextSwitch(name, s.historyLimit, s.historyPath); err != nil {
+	if err := k8s.PerformContextSwitch(name); err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -839,14 +850,73 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(data)
+	if err := json.NewEncoder(w).Encode(data); err != nil {
+		// Can't change HTTP status at this point, but log for debugging
+		log.Printf("Failed to encode JSON response: %v", err)
+	}
 }
 
 func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": message}); err != nil {
+		log.Printf("Failed to encode error response: %v", err)
+	}
 }
 
-// Unused but needed for imports
-var _ = context.Background
+// writeExplorerError writes an ExplorerError as a structured JSON response.
+// It maps error codes to appropriate HTTP status codes.
+func (s *Server) writeExplorerError(w http.ResponseWriter, err error) {
+	var explorerErr *explorerErrors.ExplorerError
+	if !errors.As(err, &explorerErr) {
+		// Not an ExplorerError, use generic internal server error
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	// Map error codes to HTTP status
+	status := http.StatusInternalServerError
+	switch explorerErr.Code {
+	case explorerErrors.ErrBadRequest, explorerErrors.ErrValidation:
+		status = http.StatusBadRequest
+	case explorerErrors.ErrNotFound, explorerErrors.ErrK8sResourceNotFound, explorerErrors.ErrHelmReleaseNotFound:
+		status = http.StatusNotFound
+	case explorerErrors.ErrServiceUnavailable, explorerErrors.ErrCacheNotInitialized, explorerErrors.ErrK8sClientNotInitialized:
+		status = http.StatusServiceUnavailable
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+
+	response := map[string]any{
+		"error": explorerErr.Message,
+		"code":  explorerErr.Code.String(),
+	}
+	if explorerErr.Details != nil {
+		response["details"] = explorerErr.Details
+	}
+	json.NewEncoder(w).Encode(response)
+}
+
+// Debug handlers for event pipeline diagnostics
+
+// handleDebugEvents returns event pipeline metrics and recent drops
+func (s *Server) handleDebugEvents(w http.ResponseWriter, r *http.Request) {
+	response := timeline.GetDebugEventsResponse()
+	s.writeJSON(w, response)
+}
+
+// handleDebugEventsDiagnose diagnoses why events for a specific resource might be missing
+func (s *Server) handleDebugEventsDiagnose(w http.ResponseWriter, r *http.Request) {
+	kind := r.URL.Query().Get("kind")
+	namespace := r.URL.Query().Get("namespace")
+	name := r.URL.Query().Get("name")
+
+	if kind == "" || name == "" {
+		s.writeError(w, http.StatusBadRequest, "kind and name query parameters are required")
+		return
+	}
+
+	response := timeline.GetDiagnosis(kind, namespace, name)
+	s.writeJSON(w, response)
+}
