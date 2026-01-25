@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, useCallback, useRef } from 'react'
 import { useLocation } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueries } from '@tanstack/react-query'
 import {
   Box,
   Search,
@@ -828,34 +828,33 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick, on
     }))
   }, [categories])
 
-  const { data: counts } = useQuery({
-    queryKey: ['resource-counts', namespace, resourcesToCount.map(r => r.kind).join(',')],
-    queryFn: async () => {
-      const results: Record<string, number> = {}
-      await Promise.all(
-        resourcesToCount.map(async (resource) => {
-          try {
-            const params = new URLSearchParams()
-            if (namespace) params.set('namespace', namespace)
-            if (resource.group) params.set('group', resource.group)
-            const res = await fetch(`/api/resources/${resource.name}?${params}`)
-            if (res.ok) {
-              const data = await res.json()
-              // Key by kind (unique) not name (can conflict)
-              results[resource.kind] = Array.isArray(data) ? data.length : 0
-            } else {
-              results[resource.kind] = 0
-            }
-          } catch {
-            results[resource.kind] = 0
-          }
-        })
-      )
-      return results
-    },
-    refetchInterval: 30000,
-    enabled: resourcesToCount.length > 0,
+  // Fetch all resources using useQueries - shares cache with display query
+  // When user clicks a resource type, data is already available from counts fetch
+  const resourceQueries = useQueries({
+    queries: resourcesToCount.map((resource) => ({
+      queryKey: ['resources', resource.name, resource.group, namespace],
+      queryFn: async () => {
+        const params = new URLSearchParams()
+        if (namespace) params.set('namespace', namespace)
+        if (resource.group) params.set('group', resource.group)
+        const res = await fetch(`/api/resources/${resource.name}?${params}`)
+        if (!res.ok) return []
+        return res.json()
+      },
+      staleTime: 30000,
+      refetchInterval: 30000,
+    })),
   })
+
+  // Derive counts from query results - memoized to avoid recalc on every render
+  const counts = useMemo(() => {
+    const results: Record<string, number> = {}
+    resourcesToCount.forEach((resource, index) => {
+      const data = resourceQueries[index]?.data
+      results[resource.kind] = Array.isArray(data) ? data.length : 0
+    })
+    return results
+  }, [resourcesToCount, resourceQueries])
 
   // Calculate category totals, filter empty kinds/groups, and sort (empty categories at bottom)
   const { sortedCategories, hiddenKindsCount, hiddenGroupsCount } = useMemo(() => {

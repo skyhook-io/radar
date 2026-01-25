@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import type { HelmOwnedResource } from '../../types'
 import { kindToPlural } from './helm-utils'
 import { getResourceStatusColor, SEVERITY_BADGE } from '../../utils/badge-colors'
+import { useQueryClient } from '@tanstack/react-query'
 import { useOpenTerminal, useOpenLogs } from '../dock'
 import { useStartPortForward } from '../portforward/PortForwardManager'
 import { useAvailablePorts } from '../../api/client'
@@ -296,6 +297,7 @@ interface PodQuickActionsProps {
 }
 
 function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps) {
+  const queryClient = useQueryClient()
   const openTerminal = useOpenTerminal()
   const openLogs = useOpenLogs()
   const startPortForward = useStartPortForward()
@@ -303,48 +305,52 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
 
   const [isLoadingAction, setIsLoadingAction] = useState(false)
 
-  // For terminal/logs, we need container info. Fetch it lazily.
+  // Fetch pod data using React Query cache - shared with resource views
+  const fetchPodData = useCallback(async () => {
+    return queryClient.fetchQuery({
+      queryKey: ['resource', 'pods', namespace, podName],
+      queryFn: async () => {
+        const response = await fetch(`/api/resources/pods/${namespace}/${podName}`)
+        if (!response.ok) throw new Error('Failed to fetch pod')
+        return response.json()
+      },
+      staleTime: 30000,
+    })
+  }, [queryClient, namespace, podName])
+
   const handleOpenTerminal = useCallback(async () => {
     if (!isRunning) return
     setIsLoadingAction(true)
     try {
-      // Fetch pod to get containers
-      const response = await fetch(`/api/resources/pods/${namespace}/${podName}`)
-      if (response.ok) {
-        const data = await response.json()
-        const containers = data.resource?.spec?.containers || []
-        if (containers.length > 0) {
-          openTerminal({
-            namespace,
-            podName,
-            containerName: containers[0].name,
-            containers: containers.map((c: { name: string }) => c.name),
-          })
-        }
-      }
-    } finally {
-      setIsLoadingAction(false)
-    }
-  }, [namespace, podName, isRunning, openTerminal])
-
-  const handleOpenLogs = useCallback(async () => {
-    setIsLoadingAction(true)
-    try {
-      // Fetch pod to get containers
-      const response = await fetch(`/api/resources/pods/${namespace}/${podName}`)
-      if (response.ok) {
-        const data = await response.json()
-        const containers = data.resource?.spec?.containers || []
-        openLogs({
+      const data = await fetchPodData()
+      const containers = data.resource?.spec?.containers || []
+      if (containers.length > 0) {
+        openTerminal({
           namespace,
           podName,
+          containerName: containers[0].name,
           containers: containers.map((c: { name: string }) => c.name),
         })
       }
     } finally {
       setIsLoadingAction(false)
     }
-  }, [namespace, podName, openLogs])
+  }, [namespace, podName, isRunning, openTerminal, fetchPodData])
+
+  const handleOpenLogs = useCallback(async () => {
+    setIsLoadingAction(true)
+    try {
+      const data = await fetchPodData()
+      const containers = data.resource?.spec?.containers || []
+      openLogs({
+        namespace,
+        podName,
+        containers: containers.map((c: { name: string }) => c.name),
+      })
+    } finally {
+      setIsLoadingAction(false)
+    }
+  }, [namespace, podName, openLogs, fetchPodData])
 
   const handlePortForward = useCallback((port: number) => {
     startPortForward.mutate({

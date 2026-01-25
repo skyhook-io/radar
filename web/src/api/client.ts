@@ -96,12 +96,17 @@ export function useResourceWithRelationships<T>(kind: string, namespace: string,
   })
 }
 
-// List resources
-export function useResources<T>(kind: string, namespace?: string) {
-  const params = namespace ? `?namespace=${namespace}` : ''
+// List resources - queryKey includes group for cache sharing with ResourcesView
+export function useResources<T>(kind: string, namespace?: string, group?: string) {
+  const params = new URLSearchParams()
+  if (namespace) params.set('namespace', namespace)
+  if (group) params.set('group', group)
+  const queryString = params.toString()
+
   return useQuery<T[]>({
-    queryKey: ['resources', kind, namespace],
-    queryFn: () => fetchJSON(`/resources/${kind}${params}`),
+    queryKey: ['resources', kind, group, namespace],
+    queryFn: () => fetchJSON(`/resources/${kind}${queryString ? `?${queryString}` : ''}`),
+    staleTime: 30000, // 30 seconds - matches refetchInterval in ResourcesView
   })
 }
 
