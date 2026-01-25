@@ -385,9 +385,13 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request) {
 		opts.ViewMode = topology.ViewModeTraffic
 	}
 	if topo, err := builder.Build(opts); err == nil {
-		data, _ := json.Marshal(topo)
-		fmt.Fprintf(w, "event: topology\ndata: %s\n\n", data)
-		flusher.Flush()
+		data, marshalErr := json.Marshal(topo)
+		if marshalErr != nil {
+			log.Printf("SSE: failed to marshal initial topology: %v", marshalErr)
+		} else {
+			fmt.Fprintf(w, "event: topology\ndata: %s\n\n", data)
+			flusher.Flush()
+		}
 	}
 
 	// Stream events
@@ -401,6 +405,14 @@ func (b *SSEBroadcaster) HandleSSE(w http.ResponseWriter, r *http.Request) {
 			}
 			data, err := json.Marshal(event.Data)
 			if err != nil {
+				// Log the error and notify client instead of silently dropping
+				log.Printf("SSE: failed to marshal event %q: %v", event.Event, err)
+				errorData, _ := json.Marshal(map[string]string{
+					"error":      "Failed to serialize event data",
+					"event_type": event.Event,
+				})
+				fmt.Fprintf(w, "event: error\ndata: %s\n\n", errorData)
+				flusher.Flush()
 				continue
 			}
 			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event.Event, data)

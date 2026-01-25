@@ -217,6 +217,7 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 
 		var msg TerminalMessage
 		if err := json.Unmarshal(message, &msg); err != nil {
+			log.Printf("WebSocket: invalid terminal message: %v", err)
 			continue
 		}
 
