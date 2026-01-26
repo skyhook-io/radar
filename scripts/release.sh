@@ -71,6 +71,9 @@ check_prerequisites() {
     if [ -z "$GITHUB_TOKEN" ]; then
       if command -v gh &> /dev/null && gh auth status &> /dev/null; then
         export GITHUB_TOKEN=$(gh auth token)
+        if [ -z "$GITHUB_TOKEN" ]; then
+          error "gh auth token returned empty. Try 'gh auth login' to re-authenticate."
+        fi
         info "Using token from gh CLI"
       else
         error "GITHUB_TOKEN not set. Either 'export GITHUB_TOKEN=...' or 'gh auth login'"
@@ -121,18 +124,18 @@ increment_version() {
 
 choose_version() {
   echo "Choose release version:"
-  echo "  1) Patch release ($(increment_version $LATEST_TAG patch))"
-  echo "  2) Minor release ($(increment_version $LATEST_TAG minor))"
-  echo "  3) Major release ($(increment_version $LATEST_TAG major))"
+  echo "  1) Patch release ($(increment_version "$LATEST_TAG" patch))"
+  echo "  2) Minor release ($(increment_version "$LATEST_TAG" minor))"
+  echo "  3) Major release ($(increment_version "$LATEST_TAG" major))"
   echo "  4) Re-release $LATEST_TAG"
   echo "  5) Custom version"
   echo ""
   read -p "Enter choice (1-5): " choice
 
   case $choice in
-    1) VERSION=$(increment_version $LATEST_TAG patch) ;;
-    2) VERSION=$(increment_version $LATEST_TAG minor) ;;
-    3) VERSION=$(increment_version $LATEST_TAG major) ;;
+    1) VERSION=$(increment_version "$LATEST_TAG" patch) ;;
+    2) VERSION=$(increment_version "$LATEST_TAG" minor) ;;
+    3) VERSION=$(increment_version "$LATEST_TAG" major) ;;
     4) VERSION=$LATEST_TAG ;;
     5) read -p "Enter version (e.g., v1.2.3): " VERSION ;;
     *) error "Invalid choice" ;;

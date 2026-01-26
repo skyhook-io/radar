@@ -123,21 +123,46 @@ Example: `explorer.prod-us-east1.example.com`
 
 ## RBAC
 
-Explorer uses its ServiceAccount to access the Kubernetes API. The Helm chart creates a ClusterRole with read-only access to common resources:
+Explorer uses its ServiceAccount to access the Kubernetes API. The Helm chart creates a ClusterRole with **read-only access** to common resources by default:
 
-- Pods, Services, ConfigMaps, Secrets, Events, Namespaces, Nodes
+- Pods, Services, ConfigMaps, Events, Namespaces, Nodes, Endpoints
 - Deployments, DaemonSets, StatefulSets, ReplicaSets
-- Ingresses, Jobs, CronJobs, HPAs, PVCs
-- Pod logs and exec (for terminal access)
+- Ingresses, NetworkPolicies, Jobs, CronJobs, HPAs, PVCs
+- Pod logs (enabled by default)
 
-To customize permissions, override the RBAC in your values:
+### Opt-in Permissions
+
+Some features require additional permissions that are **disabled by default** for security:
+
+| Feature | Value | Description |
+|---------|-------|-------------|
+| Secrets | `rbac.secrets: true` | Show secrets in resource list |
+| Terminal | `rbac.podExec: true` | Shell access to pods |
+| Port Forward | `rbac.portForward: true` | Port forwarding to pods/services |
+| Logs | `rbac.podLogs: true` | View pod logs (enabled by default) |
+
+Enable features as needed:
 
 ```yaml
 # values.yaml
 rbac:
-  create: true
-  # Add custom rules if needed
+  secrets: false      # Keep disabled unless needed
+  podExec: true       # Enable terminal feature
+  podLogs: true       # Enable log viewer (default)
+  portForward: true   # Enable port forwarding
 ```
+
+## Security Considerations
+
+When deploying Explorer in-cluster:
+
+1. **Authentication**: Always enable authentication when exposing via ingress. Use basic auth (shown above) or an auth proxy like oauth2-proxy.
+
+2. **RBAC scope**: The default ClusterRole grants cluster-wide read access. For namespace-restricted access, set `rbac.create: false` and create a custom Role/RoleBinding.
+
+3. **Privileged features**: Terminal (`podExec`) and port forwarding grant significant access. Only enable these in trusted environments or when using per-user authentication.
+
+4. **Network access**: Consider using NetworkPolicies to restrict which pods can reach Explorer.
 
 ## Configuration Reference
 
@@ -151,6 +176,10 @@ See [Helm Chart README](../deploy/helm/skyhook-explorer/README.md) for all avail
 | `ingress.className` | Ingress class | `""` |
 | `service.port` | Service port | `9280` |
 | `timeline.storage` | Event storage (memory/sqlite) | `memory` |
+| `rbac.podLogs` | Enable log viewer | `true` |
+| `rbac.podExec` | Enable terminal feature | `false` |
+| `rbac.portForward` | Enable port forwarding | `false` |
+| `rbac.secrets` | Show secrets in resource list | `false` |
 
 ## Troubleshooting
 

@@ -28,6 +28,22 @@ rbac:
   # Additional rules to add to the ClusterRole
   additionalRules: []
 
+  # Privileged permissions (disabled by default for security)
+  # Enable these based on features you need:
+
+  # Allow reading secrets (shows secrets in resource list)
+  secrets: false
+
+  # Allow pod exec (enables terminal feature)
+  podExec: false
+
+  # Allow pod logs (enables log viewer)
+  # This is relatively safe - only reads logs, no write access
+  podLogs: true
+
+  # Allow port forwarding (enables port forward feature)
+  portForward: false
+
 podAnnotations: {}
 
 podSecurityContext:
@@ -84,6 +100,7 @@ timeline:
   historyLimit: 10000
 
 # Persistence for SQLite timeline storage
+# Required when timeline.storage is "sqlite" (readOnlyRootFilesystem prevents local writes)
 persistence:
   enabled: false
   # storageClassName: ""
