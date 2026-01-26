@@ -1,0 +1,17 @@
+{{- if and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite") -}}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "skyhook-explorer.fullname" . }}
+  labels:
+    {{- include "skyhook-explorer.labels" . | nindent 4 }}
+spec:
+  accessModes:
+    - {{ .Values.persistence.accessMode }}
+  {{- if .Values.persistence.storageClassName }}
+  storageClassName: {{ .Values.persistence.storageClassName | quote }}
+  {{- end }}
+  resources:
+    requests:
+      storage: {{ .Values.persistence.size }}
+{{- end }}

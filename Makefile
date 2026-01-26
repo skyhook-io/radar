@@ -1,7 +1,9 @@
-.PHONY: build install clean dev frontend backend test lint help restart restart-fe kill watch-backend watch-frontend release
+.PHONY: build install clean dev frontend backend test lint help restart restart-fe kill watch-backend watch-frontend
+.PHONY: release release-binaries release-docker docker docker-push
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -X main.version=$(VERSION)
+DOCKER_REPO ?= ghcr.io/skyhook-io/explorer
 
 ## Build targets
 
@@ -117,37 +119,66 @@ tsc:
 fmt:
 	go fmt ./...
 
+# ============================================================================
+# Docker & Helm
+# ============================================================================
+
 # Docker build
 docker:
-	docker build -t skyhook/explorer:$(VERSION) .
+	docker build -t $(DOCKER_REPO):$(VERSION) -t $(DOCKER_REPO):latest .
 
-# Release
+docker-push:
+	docker push $(DOCKER_REPO):$(VERSION)
+	docker push $(DOCKER_REPO):latest
+
+# ============================================================================
+# Release Targets
+# ============================================================================
+
+# Full release: binaries + homebrew (via goreleaser)
+release-binaries:
+	@command -v goreleaser >/dev/null 2>&1 || { echo "Error: goreleaser not found. Install with: brew install goreleaser"; exit 1; }
+	goreleaser release --clean
+
+# Release binaries (dry run - no publish)
+release-binaries-dry:
+	@command -v goreleaser >/dev/null 2>&1 || { echo "Error: goreleaser not found"; exit 1; }
+	goreleaser release --snapshot --clean
+
+# Release Docker image
+release-docker: docker docker-push
+	@echo "Docker image pushed: $(DOCKER_REPO):$(VERSION)"
+
+# Interactive release (prompts for version)
 release:
-	./release.sh
+	@./scripts/release.sh
 
-
-
+# ============================================================================
 # Help
+# ============================================================================
+
 help:
 	@echo "Skyhook Explorer - Kubernetes Topology Visualizer"
 	@echo ""
-	@echo "Build:"
-	@echo "  make build      - Build everything (frontend + embedded binary)"
-	@echo "  make install    - Build and install to /usr/local/bin"
-	@echo "  make frontend   - Build frontend only"
-	@echo "  make backend    - Build backend only"
-	@echo "  make restart    - Rebuild and restart server"
-	@echo ""
-	@echo "Development (hot reload):"
+	@echo "Development:"
+	@echo "  make build           - Build CLI binary (frontend + embedded)"
 	@echo "  make watch-frontend  - Vite dev server with HMR (port 9273)"
 	@echo "  make watch-backend   - Go with air hot reload (port 9280)"
+	@echo "  make run             - Run built binary"
+	@echo "  make test            - Run tests"
 	@echo ""
-	@echo "Run:"
-	@echo "  make run        - Run built binary"
-	@echo "  make run-dev    - Run in dev mode (frontend from filesystem)"
+	@echo "Docker & In-Cluster:"
+	@echo "  make docker          - Build Docker image"
+	@echo "  make docker-push     - Push to GHCR"
+	@echo ""
+	@echo "Release:"
+	@echo "  make release              - Interactive release (prompts for version)"
+	@echo "  make release-binaries     - Release CLI via goreleaser (GitHub + Homebrew)"
+	@echo "  make release-binaries-dry - Dry run (no publish)"
+	@echo "  make release-docker       - Build and push Docker image"
 	@echo ""
 	@echo "Utility:"
 	@echo "  make deps       - Install all dependencies"
-	@echo "  make kill       - Kill running server"
+	@echo "  make install    - Install CLI to /usr/local/bin"
 	@echo "  make clean      - Clean build artifacts"
-	@echo "  make test       - Run tests"
+	@echo "  make kill       - Kill running server"

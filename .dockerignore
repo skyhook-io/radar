@@ -1,0 +1,43 @@
+# Git
+.git
+.gitignore
+
+# Build artifacts
+explorer
+dist/
+web/node_modules/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Documentation
+*.md
+!README.md
+docs/
+
+# Test files
+*_test.go
+test/
+coverage/
+
+# Local configs
+.env
+.env.local
+*.log
+
+# Release artifacts
+release/
+deploy/
+
+# CI/CD
+.github/
+.goreleaser.yaml
+
+# Temporary files
+tmp/
+.tmp/
+.air.toml

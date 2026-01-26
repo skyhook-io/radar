@@ -89,6 +89,18 @@ make build
 ./explorer
 ```
 
+### In-Cluster Deployment
+
+Deploy Explorer to your Kubernetes cluster for shared team access:
+
+```bash
+helm install explorer ./deploy/helm/skyhook-explorer \
+  --namespace skyhook-explorer \
+  --create-namespace
+```
+
+See [In-Cluster Deployment Guide](docs/in-cluster.md) for ingress, authentication, and DNS setup.
+
 ---
 
 ## Usage
@@ -338,119 +350,19 @@ The Explorer exposes a REST API for programmatic access:
 
 ## Development
 
-### Prerequisites
+For developers contributing to Explorer or building custom versions, see the **[Development Guide](DEVELOPMENT.md)**.
 
-- **Go 1.22+** — Backend server
-- **Node.js 20+** — Frontend build
-- **npm** — Package management
-- **kubectl** — Kubernetes CLI (configured with cluster access)
-
-### Project Structure
-
-```
-explorer/
-├── cmd/explorer/          # CLI entry point
-├── internal/
-│   ├── k8s/              # Kubernetes client, caching, informers
-│   ├── server/           # HTTP server, REST API, SSE
-│   ├── topology/         # Graph construction logic
-│   ├── helm/             # Helm client integration
-│   └── static/           # Embedded frontend (built)
-├── web/                   # React frontend source
-│   ├── src/
-│   │   ├── api/          # API client + React Query hooks
-│   │   ├── components/   # React components
-│   │   │   ├── topology/   # Graph visualization
-│   │   │   ├── resources/  # Resource browser
-│   │   │   ├── events/     # Events timeline
-│   │   │   └── helm/       # Helm management
-│   │   ├── hooks/        # Custom React hooks
-│   │   └── types.ts      # TypeScript types
-│   └── package.json
-├── deploy/               # Docker, Helm chart, Krew manifest
-├── Makefile              # Build commands
-└── README.md
-```
-
-### Quick Start
-
+Quick start:
 ```bash
-# Clone the repo
 git clone https://github.com/skyhook-io/explorer.git
 cd explorer
-
-# Install dependencies
 make deps
 
-# Start development (two terminals)
-# Terminal 1: Frontend with hot reload
+# Terminal 1: Frontend (port 9273)
 make watch-frontend
 
-# Terminal 2: Backend with hot reload
+# Terminal 2: Backend (port 9280)
 make watch-backend
-```
-
-Frontend runs on `http://localhost:9273` (Vite dev server)
-Backend runs on `http://localhost:9280` (Go server)
-
-The frontend proxies API calls to the backend automatically.
-
-### Make Commands
-
-```bash
-# Build
-make build            # Build everything (frontend + embedded binary)
-make frontend         # Build frontend only
-make backend          # Build backend only (requires frontend built)
-make install          # Build and install to /usr/local/bin
-
-# Development
-make watch-frontend   # Vite dev server with HMR (port 9273)
-make watch-backend    # Go with air hot reload (port 9280)
-make restart          # Rebuild and restart server
-make restart-fe       # Frontend-only rebuild (faster)
-
-# Run
-make run              # Run built binary
-make run-dev          # Run in dev mode (frontend from filesystem)
-
-# Quality
-make test             # Run Go tests
-make lint             # Run Go linter
-make tsc              # TypeScript type check
-make fmt              # Format Go code
-
-# Utilities
-make deps             # Install all dependencies
-make install-tools    # Install dev tools (air)
-make clean            # Clean build artifacts
-make kill             # Kill running server on port 9280
-make docker           # Build Docker image
-
-# Help
-make help             # Show all available commands
-```
-
-### Building for Production
-
-```bash
-# Full production build
-make build
-
-# This produces ./explorer binary with:
-# - Frontend embedded via go:embed
-# - Optimized and minified assets
-# - Single portable binary
-```
-
-### Running Tests
-
-```bash
-# Go tests
-make test
-
-# Type check frontend
-make tsc
 ```
 
 ---
