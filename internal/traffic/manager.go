@@ -261,8 +261,10 @@ func (m *Manager) detectCNI(ctx context.Context, platform string) (string, bool)
 // generateRecommendation creates a recommendation based on cluster info
 func (m *Manager) generateRecommendation(info *ClusterInfo, detected []SourceStatus) *Recommendation {
 	// If any source is already available, no recommendation needed
-	if len(detected) > 0 {
-		return nil
+	for _, s := range detected {
+		if s.Status == "available" {
+			return nil
+		}
 	}
 
 	switch info.CNI {
