@@ -191,6 +191,9 @@ func PerformContextSwitch(newContext string) error {
 		return fmt.Errorf("failed to switch context: %w", err)
 	}
 
+	// Invalidate capabilities cache - RBAC permissions may differ between clusters
+	InvalidateCapabilitiesCache()
+
 	// Step 2.5: Test connectivity before proceeding with cache initialization
 	// This prevents hanging if the cluster is unreachable
 	reportProgress("Testing cluster connectivity...")
