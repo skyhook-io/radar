@@ -15,6 +15,7 @@ interface InstallWizardProps {
   chartName: string
   version: string
   source: ChartSource
+  repoUrl?: string  // Direct repo URL (overrides ArtifactHub lookup)
   onClose: () => void
   onSuccess: (namespace: string, releaseName: string) => void
 }
@@ -29,7 +30,7 @@ interface ProgressEntry {
   timestamp: Date
 }
 
-export function InstallWizard({ repo, chartName, version, source, onClose, onSuccess }: InstallWizardProps) {
+export function InstallWizard({ repo, chartName, version, source, repoUrl, onClose, onSuccess }: InstallWizardProps) {
   const [step, setStep] = useState<WizardStep>('info')
   const [releaseName, setReleaseName] = useState(chartName)
   const [namespace, setNamespace] = useState(chartName)
@@ -91,7 +92,8 @@ export function InstallWizard({ repo, chartName, version, source, onClose, onSuc
     }
 
     // For ArtifactHub charts, we need to use the repository URL
-    const repository = isLocal ? repo : (artifactHubDetail?.repository.url || repo)
+    // If repoUrl is provided directly, use it (for non-ArtifactHub external repos)
+    const repository = repoUrl || (isLocal ? repo : (artifactHubDetail?.repository.url || repo))
 
     // Switch to installing step
     setStep('installing')

@@ -135,6 +135,15 @@ func (s *Server) setupRoutes() {
 		r.Get("/debug/events", s.handleDebugEvents)
 		r.Get("/debug/events/diagnose", s.handleDebugEventsDiagnose)
 
+		// Traffic routes
+		r.Get("/traffic/sources", s.handleGetTrafficSources)
+		r.Get("/traffic/flows", s.handleGetTrafficFlows)
+		r.Get("/traffic/flows/stream", s.handleTrafficFlowsStream)
+		r.Get("/traffic/source", s.handleGetActiveTrafficSource)
+		r.Post("/traffic/source", s.handleSetTrafficSource)
+		r.Post("/traffic/connect", s.handleTrafficConnect)
+		r.Get("/traffic/connection", s.handleTrafficConnectionStatus)
+
 		// Context routes
 		r.Get("/contexts", s.handleListContexts)
 		r.Post("/contexts/{name}", s.handleSwitchContext)

@@ -8,6 +8,7 @@ import { ResourcesView } from './components/resources/ResourcesView'
 import { ResourceDetailDrawer } from './components/resources/ResourceDetailDrawer'
 import { ResourceDetailPage } from './components/resource/ResourceDetailPage'
 import { HelmView } from './components/helm/HelmView'
+import { TrafficView } from './components/traffic/TrafficView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardManager, usePortForwardCount } from './components/portforward/PortForwardManager'
 import { DockProvider, BottomDock, useDock } from './components/dock'
@@ -17,7 +18,7 @@ import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { useEventSource } from './hooks/useEventSource'
 import { useClusterInfo, useNamespaces } from './api/client'
 import { Loader2 } from 'lucide-react'
-import { ChevronDown, RefreshCw, FolderTree, Network, List, Clock, Package, Sun, Moon } from 'lucide-react'
+import { ChevronDown, RefreshCw, FolderTree, Network, List, Clock, Package, Sun, Moon, Activity } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, Topology } from './types'
 
@@ -91,13 +92,17 @@ function encodeResourceParam(resource: SelectedResource): string {
   return `${resource.kind}/${resource.namespace}/${resource.name}`
 }
 
+// Extended MainView type that includes traffic
+type ExtendedMainView = MainView | 'traffic'
+
 // Extract view from URL path
-function getViewFromPath(pathname: string): MainView {
+function getViewFromPath(pathname: string): ExtendedMainView {
   const path = pathname.replace(/^\//, '').split('/')[0]
   if (path === 'topology' || path === '') return 'topology'
   if (path === 'resources') return 'resources'
   if (path === 'timeline') return 'timeline'
   if (path === 'helm') return 'helm'
+  if (path === 'traffic') return 'traffic'
   return 'topology'
 }
 
@@ -123,7 +128,7 @@ function AppInner() {
   const mainView = getViewFromPath(location.pathname)
 
   // Set mainView by navigating to the path
-  const setMainView = useCallback((view: MainView) => {
+  const setMainView = useCallback((view: ExtendedMainView) => {
     const path = `/${view}`
 
     // Clean up view-specific params
@@ -444,6 +449,17 @@ function AppInner() {
             <Package className="w-4 h-4" />
             <span className="hidden sm:inline">Helm</span>
           </button>
+          <button
+            onClick={() => setMainView('traffic')}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm rounded-md transition-colors ${
+              mainView === 'traffic'
+                ? 'bg-blue-500 text-theme-text-primary'
+                : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover'
+            }`}
+          >
+            <Activity className="w-4 h-4" />
+            <span className="hidden sm:inline">Traffic</span>
+          </button>
         </div>
 
         {/* Right: Controls */}
@@ -626,6 +642,11 @@ function AppInner() {
               setSelectedHelmRelease({ namespace: ns, name })
             }}
           />
+        )}
+
+        {/* Traffic view */}
+        {mainView === 'traffic' && (
+          <TrafficView namespace={namespace} />
         )}
 
         </ErrorBoundary>

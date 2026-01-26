@@ -19,6 +19,7 @@ import (
 	"github.com/skyhook-io/skyhook-explorer/internal/server"
 	"github.com/skyhook-io/skyhook-explorer/internal/static"
 	"github.com/skyhook-io/skyhook-explorer/internal/timeline"
+	"github.com/skyhook-io/skyhook-explorer/internal/traffic"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/klog/v2"
 )
@@ -130,6 +131,16 @@ func main() {
 	// Register timeline store reset/reinit functions for context switching
 	k8s.RegisterTimelineFuncs(timeline.ResetStore, func() error {
 		return timeline.ReinitStore(timelineStoreCfg)
+	})
+
+	// Initialize traffic source manager with full config for port-forward support
+	if err := traffic.InitializeWithConfig(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName()); err != nil {
+		log.Printf("Warning: Failed to initialize traffic manager: %v", err)
+	}
+
+	// Register traffic reset/reinit functions for context switching
+	k8s.RegisterTrafficFuncs(traffic.Reset, func() error {
+		return traffic.ReinitializeWithConfig(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
 	})
 
 	// Create and start server

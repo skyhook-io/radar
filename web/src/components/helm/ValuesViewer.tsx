@@ -48,8 +48,8 @@ export function ValuesViewer({
 
   // Start editing mode
   const handleStartEdit = useCallback(() => {
-    if (!values?.userSupplied) return
-    const yamlStr = jsonToYaml(values.userSupplied)
+    // Allow editing even with no user-supplied values (start with empty YAML)
+    const yamlStr = values?.userSupplied ? jsonToYaml(values.userSupplied) : ''
     setEditedYaml(yamlStr)
     setYamlError(null)
     setIsEditing(true)
