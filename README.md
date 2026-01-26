@@ -137,6 +137,7 @@ skyhook-explorer --timeline-storage sqlite
 | `--timeline-storage` | `memory` | Timeline storage backend: `memory` or `sqlite` |
 | `--timeline-db` | `~/.skyhook-explorer/timeline.db` | Path to SQLite database (when using sqlite storage) |
 | `--history-limit` | `10000` | Maximum events to retain in timeline |
+| `--debug-events` | `false` | Enable verbose event debugging (logs all event drops) |
 | `--version` | | Show version and exit |
 
 ---

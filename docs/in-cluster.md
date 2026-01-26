@@ -125,7 +125,7 @@ Example: `explorer.prod-us-east1.example.com`
 
 Explorer uses its ServiceAccount to access the Kubernetes API. The Helm chart creates a ClusterRole with **read-only access** to common resources by default:
 
-- Pods, Services, ConfigMaps, Events, Namespaces, Nodes, Endpoints
+- Pods, Services, ConfigMaps, Events, Namespaces, Nodes, ServiceAccounts, Endpoints
 - Deployments, DaemonSets, StatefulSets, ReplicaSets
 - Ingresses, NetworkPolicies, Jobs, CronJobs, HPAs, PVCs
 - Pod logs (enabled by default)
