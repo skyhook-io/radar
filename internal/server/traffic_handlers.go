@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"time"
@@ -49,9 +50,12 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 	opts.Namespace = namespace
 
 	if sinceStr != "" {
-		if duration, err := time.ParseDuration(sinceStr); err == nil {
-			opts.Since = duration
+		duration, err := time.ParseDuration(sinceStr)
+		if err != nil {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid 'since' duration format: %s (expected format like '5m', '1h')", sinceStr))
+			return
 		}
+		opts.Since = duration
 	}
 
 	response, err := manager.GetFlows(ctx, opts)
@@ -64,12 +68,16 @@ func (s *Server) handleGetTrafficFlows(w http.ResponseWriter, r *http.Request) {
 	// Aggregate flows by service pair
 	aggregated := traffic.AggregateFlows(response.Flows)
 
-	s.writeJSON(w, map[string]interface{}{
+	result := map[string]interface{}{
 		"source":     response.Source,
 		"timestamp":  response.Timestamp,
 		"flows":      response.Flows,
 		"aggregated": aggregated,
-	})
+	}
+	if response.Warning != "" {
+		result["warning"] = response.Warning
+	}
+	s.writeJSON(w, result)
 }
 
 // handleTrafficFlowsStream provides SSE stream of traffic flows

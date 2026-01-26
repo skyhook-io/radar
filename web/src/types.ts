@@ -656,6 +656,7 @@ export interface TrafficFlowsResponse {
   timestamp: string
   flows: TrafficFlow[]
   aggregated: AggregatedFlow[]
+  warning?: string  // Non-fatal warning (e.g., query errors)
 }
 
 // Wizard state for traffic setup

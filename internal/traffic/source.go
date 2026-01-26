@@ -73,6 +73,7 @@ type FlowsResponse struct {
 	Source    string    `json:"source"`    // Which traffic source provided this data
 	Timestamp time.Time `json:"timestamp"` // When this data was collected
 	Flows     []Flow    `json:"flows"`
+	Warning   string    `json:"warning,omitempty"` // Non-fatal warning (e.g., query errors)
 }
 
 // AggregatedFlow represents flows aggregated by service pair

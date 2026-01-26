@@ -85,7 +85,12 @@ func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 		result, err := source.Detect(ctx)
 		if err != nil {
 			log.Printf("[traffic] Error detecting %s: %v", name, err)
-			response.NotDetected = append(response.NotDetected, name)
+			// Report as error status instead of just "not detected"
+			response.Detected = append(response.Detected, SourceStatus{
+				Name:    name,
+				Status:  "error",
+				Message: err.Error(),
+			})
 			continue
 		}
 

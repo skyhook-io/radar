@@ -744,7 +744,9 @@ export function TrafficView({ namespace }: TrafficViewProps) {
       return
     }
 
-    if (sourcesData.detected.length > 0) {
+    // Only consider sources with status 'available' as ready
+    const availableSources = sourcesData.detected.filter(s => s.status === 'available')
+    if (availableSources.length > 0) {
       setWizardState('ready')
     } else {
       setWizardState('not_found')
@@ -821,43 +823,47 @@ export function TrafficView({ namespace }: TrafficViewProps) {
         <div className="flex items-center justify-between px-4 py-2 border-b border-theme-border bg-theme-surface/50">
           <div className="flex items-center gap-4">
             <h2 className="text-sm font-medium text-theme-text-primary">Traffic Flow</h2>
-            {sourcesData && sourcesData.detected.length > 0 && (
-              <div className="flex items-center gap-2 text-xs text-theme-text-secondary border-l border-theme-border pl-4">
-                {isConnecting ? (
-                  <>
-                    <Loader2 className="h-3 w-3 animate-spin text-blue-400" />
-                    <span className="text-blue-400">Connecting...</span>
-                  </>
-                ) : connectionError ? (
-                  <>
-                    <span className="inline-block w-2 h-2 rounded-full bg-yellow-500" />
-                    <span className="text-yellow-400">{sourcesData.detected[0].name}</span>
-                    <button
-                      onClick={() => {
-                        hasAutoConnectedRef.current = false
-                        setConnectionError(null)
-                      }}
-                      className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-yellow-500/10 text-yellow-400 rounded hover:bg-yellow-500/20"
-                      title="Retry connection"
-                    >
-                      <Plug className="h-3 w-3" />
-                      Retry
-                    </button>
-                  </>
-                ) : (
-                  <>
-                    <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
-                    <span>via {sourcesData.detected[0].name}</span>
-                    {sourcesData.detected[0].native && (
-                      <span className="px-1.5 py-0.5 text-[10px] bg-blue-500/10 text-blue-400 rounded">
-                        Native
-                      </span>
-                    )}
-                    <span className="text-theme-text-tertiary">· network connections observed via eBPF</span>
-                  </>
-                )}
-              </div>
-            )}
+            {(() => {
+              const activeSource = sourcesData?.detected.find(s => s.status === 'available')
+              if (!activeSource) return null
+              return (
+                <div className="flex items-center gap-2 text-xs text-theme-text-secondary border-l border-theme-border pl-4">
+                  {isConnecting ? (
+                    <>
+                      <Loader2 className="h-3 w-3 animate-spin text-blue-400" />
+                      <span className="text-blue-400">Connecting...</span>
+                    </>
+                  ) : connectionError ? (
+                    <>
+                      <span className="inline-block w-2 h-2 rounded-full bg-yellow-500" />
+                      <span className="text-yellow-400">{activeSource.name}</span>
+                      <button
+                        onClick={() => {
+                          hasAutoConnectedRef.current = false
+                          setConnectionError(null)
+                        }}
+                        className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-yellow-500/10 text-yellow-400 rounded hover:bg-yellow-500/20"
+                        title="Retry connection"
+                      >
+                        <Plug className="h-3 w-3" />
+                        Retry
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+                      <span>via {activeSource.name}</span>
+                      {activeSource.native && (
+                        <span className="px-1.5 py-0.5 text-[10px] bg-blue-500/10 text-blue-400 rounded">
+                          Native
+                        </span>
+                      )}
+                      <span className="text-theme-text-tertiary">· network connections observed via eBPF</span>
+                    </>
+                  )}
+                </div>
+              )
+            })()}
           </div>
 
           <div className="flex items-center gap-3">
@@ -923,6 +929,13 @@ export function TrafficView({ namespace }: TrafficViewProps) {
                       >
                         Show all
                       </button>
+                    </p>
+                  </>
+                ) : flowsData?.warning ? (
+                  <>
+                    <p className="text-theme-text-secondary">Unable to fetch traffic data</p>
+                    <p className="text-xs text-yellow-500 max-w-md">
+                      {flowsData.warning}
                     </p>
                   </>
                 ) : (

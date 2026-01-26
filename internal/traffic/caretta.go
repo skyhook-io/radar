@@ -177,6 +177,7 @@ func (c *CarettaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsR
 			Source:    "caretta",
 			Timestamp: time.Now(),
 			Flows:     []Flow{},
+			Warning:   "Prometheus/VictoriaMetrics service not found. Ensure Caretta's metrics backend is deployed.",
 		}, nil
 	}
 
@@ -188,6 +189,7 @@ func (c *CarettaSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsR
 			Source:    "caretta",
 			Timestamp: time.Now(),
 			Flows:     []Flow{},
+			Warning:   fmt.Sprintf("Failed to query Prometheus: %v", err),
 		}, nil
 	}
 

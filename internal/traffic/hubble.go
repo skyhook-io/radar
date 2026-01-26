@@ -178,11 +178,11 @@ func (h *HubbleSource) GetFlows(ctx context.Context, opts FlowOptions) (*FlowsRe
 	flows, err := h.fetchFlowsViaHTTP(ctx, opts)
 	if err != nil {
 		log.Printf("[hubble] HTTP API not available: %v", err)
-		// Return empty flows with instructions
 		return &FlowsResponse{
 			Source:    "hubble",
 			Timestamp: time.Now(),
 			Flows:     []Flow{},
+			Warning:   fmt.Sprintf("Hubble API not reachable: %v", err),
 		}, nil
 	}
 
