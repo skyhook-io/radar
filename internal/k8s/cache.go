@@ -48,7 +48,7 @@ type ResourceCache struct {
 
 // ResourceChange represents a resource change event
 type ResourceChange struct {
-	Kind      string    // "Service", "Deployment", "Pod", etc.
+	Kind      string // "Service", "Deployment", "Pod", etc.
 	Namespace string
 	Name      string
 	UID       string
@@ -1373,11 +1373,11 @@ func getContainerIssue(cs *corev1.ContainerStatus) string {
 
 // PodIssueSummary holds aggregated pod issue information
 type PodIssueSummary struct {
-	Total     int
-	Ready     int
-	Issues    map[string]int // issue -> count (e.g., "OOMKilled" -> 3)
-	TopIssue  string         // Most common issue
-	TopCount  int            // Count of most common issue
+	Total    int
+	Ready    int
+	Issues   map[string]int // issue -> count (e.g., "OOMKilled" -> 3)
+	TopIssue string         // Most common issue
+	TopCount int            // Count of most common issue
 }
 
 // getPodsIssueSummary analyzes a list of pods and returns issue summary

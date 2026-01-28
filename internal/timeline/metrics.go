@@ -244,11 +244,11 @@ type DiagnoseRequest struct {
 
 // DiagnoseResponse is the response from the diagnose endpoint
 type DiagnoseResponse struct {
-	Resource        ResourceInfo   `json:"resource"`
+	Resource        ResourceInfo    `json:"resource"`
 	TimelineEvents  []TimelineEvent `json:"timeline_events"`
-	DropHistory     []DropRecord   `json:"drop_history"`
-	StorePresent    bool           `json:"store_present"`
-	Recommendations []string       `json:"recommendations"`
+	DropHistory     []DropRecord    `json:"drop_history"`
+	StorePresent    bool            `json:"store_present"`
+	Recommendations []string        `json:"recommendations"`
 }
 
 // ResourceInfo identifies a resource being diagnosed

@@ -4,23 +4,23 @@ package topology
 type NodeKind string
 
 const (
-	KindInternet      NodeKind = "Internet"
-	KindIngress       NodeKind = "Ingress"
-	KindService       NodeKind = "Service"
-	KindDeployment    NodeKind = "Deployment"
-	KindRollout       NodeKind = "Rollout"
-	KindDaemonSet     NodeKind = "DaemonSet"
-	KindStatefulSet   NodeKind = "StatefulSet"
-	KindReplicaSet    NodeKind = "ReplicaSet"
-	KindPod           NodeKind = "Pod"
-	KindPodGroup      NodeKind = "PodGroup"
-	KindConfigMap     NodeKind = "ConfigMap"
-	KindSecret        NodeKind = "Secret"
-	KindHPA           NodeKind = "HPA"
-	KindJob           NodeKind = "Job"
-	KindCronJob       NodeKind = "CronJob"
-	KindPVC           NodeKind = "PVC"
-	KindNamespace     NodeKind = "Namespace"
+	KindInternet    NodeKind = "Internet"
+	KindIngress     NodeKind = "Ingress"
+	KindService     NodeKind = "Service"
+	KindDeployment  NodeKind = "Deployment"
+	KindRollout     NodeKind = "Rollout"
+	KindDaemonSet   NodeKind = "DaemonSet"
+	KindStatefulSet NodeKind = "StatefulSet"
+	KindReplicaSet  NodeKind = "ReplicaSet"
+	KindPod         NodeKind = "Pod"
+	KindPodGroup    NodeKind = "PodGroup"
+	KindConfigMap   NodeKind = "ConfigMap"
+	KindSecret      NodeKind = "Secret"
+	KindHPA         NodeKind = "HPA"
+	KindJob         NodeKind = "Job"
+	KindCronJob     NodeKind = "CronJob"
+	KindPVC         NodeKind = "PVC"
+	KindNamespace   NodeKind = "Namespace"
 )
 
 // HealthStatus represents the health status of a node
@@ -46,11 +46,11 @@ const (
 
 // Node represents a node in the topology graph
 type Node struct {
-	ID     string            `json:"id"`
-	Kind   NodeKind          `json:"kind"`
-	Name   string            `json:"name"`
-	Status HealthStatus      `json:"status"`
-	Data   map[string]any    `json:"data"`
+	ID     string         `json:"id"`
+	Kind   NodeKind       `json:"kind"`
+	Name   string         `json:"name"`
+	Status HealthStatus   `json:"status"`
+	Data   map[string]any `json:"data"`
 }
 
 // Edge represents a connection between two nodes
@@ -80,13 +80,13 @@ const (
 
 // BuildOptions configures topology building
 type BuildOptions struct {
-	Namespace         string   // Filter to specific namespace (empty = all)
-	ViewMode          ViewMode // How to display topology
-	MaxIndividualPods int      // Above this, pods are grouped (default: 5)
-	IncludeSecrets    bool     // Include Secret nodes
-	IncludeConfigMaps bool     // Include ConfigMap nodes
-	IncludePVCs       bool     // Include PersistentVolumeClaim nodes
-	IncludeReplicaSets bool    // Include ReplicaSet nodes (noisy intermediate objects)
+	Namespace          string   // Filter to specific namespace (empty = all)
+	ViewMode           ViewMode // How to display topology
+	MaxIndividualPods  int      // Above this, pods are grouped (default: 5)
+	IncludeSecrets     bool     // Include Secret nodes
+	IncludeConfigMaps  bool     // Include ConfigMap nodes
+	IncludePVCs        bool     // Include PersistentVolumeClaim nodes
+	IncludeReplicaSets bool     // Include ReplicaSet nodes (noisy intermediate objects)
 }
 
 // DefaultBuildOptions returns sensible defaults
@@ -111,18 +111,18 @@ type ResourceRef struct {
 
 // Relationships holds computed relationships for a resource
 type Relationships struct {
-	Owner      *ResourceRef  `json:"owner,omitempty"`      // Parent via ownerReference (manages edge)
-	Children   []ResourceRef `json:"children,omitempty"`   // Resources this owns (manages edge)
-	Services   []ResourceRef `json:"services,omitempty"`   // Services selecting/exposing this
-	Ingresses  []ResourceRef `json:"ingresses,omitempty"`  // Ingresses routing to this
-	ConfigRefs []ResourceRef `json:"configRefs,omitempty"` // ConfigMaps/Secrets used by this
-	HPA        *ResourceRef  `json:"hpa,omitempty"`        // HPA scaling this
-	ScaleTarget *ResourceRef `json:"scaleTarget,omitempty"` // For HPA: what it scales
-	Pods       []ResourceRef `json:"pods,omitempty"`       // For Service: pods it routes to
+	Owner       *ResourceRef  `json:"owner,omitempty"`       // Parent via ownerReference (manages edge)
+	Children    []ResourceRef `json:"children,omitempty"`    // Resources this owns (manages edge)
+	Services    []ResourceRef `json:"services,omitempty"`    // Services selecting/exposing this
+	Ingresses   []ResourceRef `json:"ingresses,omitempty"`   // Ingresses routing to this
+	ConfigRefs  []ResourceRef `json:"configRefs,omitempty"`  // ConfigMaps/Secrets used by this
+	HPA         *ResourceRef  `json:"hpa,omitempty"`         // HPA scaling this
+	ScaleTarget *ResourceRef  `json:"scaleTarget,omitempty"` // For HPA: what it scales
+	Pods        []ResourceRef `json:"pods,omitempty"`        // For Service: pods it routes to
 }
 
 // ResourceWithRelationships wraps a K8s resource with computed relationships
 type ResourceWithRelationships struct {
-	Resource      any           `json:"resource"`
+	Resource      any            `json:"resource"`
 	Relationships *Relationships `json:"relationships,omitempty"`
 }

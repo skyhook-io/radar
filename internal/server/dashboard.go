@@ -23,17 +23,17 @@ import (
 
 // DashboardResponse is the aggregated response for the home dashboard
 type DashboardResponse struct {
-	Cluster          DashboardCluster          `json:"cluster"`
-	Health           DashboardHealth           `json:"health"`
-	Problems         []DashboardProblem        `json:"problems"`
-	ResourceCounts   DashboardResourceCounts   `json:"resourceCounts"`
-	RecentEvents     []DashboardEvent          `json:"recentEvents"`
-	RecentChanges    []DashboardChange         `json:"recentChanges"`
-	TopologySummary  DashboardTopologySummary  `json:"topologySummary"`
-	TrafficSummary   *DashboardTrafficSummary  `json:"trafficSummary"`
-	HelmReleases     DashboardHelmSummary      `json:"helmReleases"`
-	Metrics          *DashboardMetrics         `json:"metrics"`
-	TopCRDs          []DashboardCRDCount       `json:"topCRDs"`
+	Cluster         DashboardCluster         `json:"cluster"`
+	Health          DashboardHealth          `json:"health"`
+	Problems        []DashboardProblem       `json:"problems"`
+	ResourceCounts  DashboardResourceCounts  `json:"resourceCounts"`
+	RecentEvents    []DashboardEvent         `json:"recentEvents"`
+	RecentChanges   []DashboardChange        `json:"recentChanges"`
+	TopologySummary DashboardTopologySummary `json:"topologySummary"`
+	TrafficSummary  *DashboardTrafficSummary `json:"trafficSummary"`
+	HelmReleases    DashboardHelmSummary     `json:"helmReleases"`
+	Metrics         *DashboardMetrics        `json:"metrics"`
+	TopCRDs         []DashboardCRDCount      `json:"topCRDs"`
 }
 
 type DashboardCluster struct {
@@ -61,16 +61,16 @@ type DashboardProblem struct {
 }
 
 type DashboardResourceCounts struct {
-	Pods         ResourceCount  `json:"pods"`
-	Deployments  ResourceCount  `json:"deployments"`
-	StatefulSets WorkloadCount  `json:"statefulSets"`
-	DaemonSets   WorkloadCount  `json:"daemonSets"`
-	Services     int            `json:"services"`
-	Ingresses    int            `json:"ingresses"`
-	Nodes        NodeCount      `json:"nodes"`
-	Namespaces   int            `json:"namespaces"`
-	Jobs         JobCount       `json:"jobs"`
-	HelmReleases int            `json:"helmReleases"`
+	Pods         ResourceCount `json:"pods"`
+	Deployments  ResourceCount `json:"deployments"`
+	StatefulSets WorkloadCount `json:"statefulSets"`
+	DaemonSets   WorkloadCount `json:"daemonSets"`
+	Services     int           `json:"services"`
+	Ingresses    int           `json:"ingresses"`
+	Nodes        NodeCount     `json:"nodes"`
+	Namespaces   int           `json:"namespaces"`
+	Jobs         JobCount      `json:"jobs"`
+	HelmReleases int           `json:"helmReleases"`
 }
 
 type WorkloadCount struct {
@@ -144,9 +144,9 @@ type DashboardTopologySummary struct {
 }
 
 type DashboardTrafficSummary struct {
-	Source    string               `json:"source"`
-	FlowCount int                 `json:"flowCount"`
-	TopFlows  []DashboardTopFlow  `json:"topFlows"`
+	Source    string             `json:"source"`
+	FlowCount int                `json:"flowCount"`
+	TopFlows  []DashboardTopFlow `json:"topFlows"`
 }
 
 type DashboardTopFlow struct {
@@ -157,8 +157,8 @@ type DashboardTopFlow struct {
 }
 
 type DashboardHelmSummary struct {
-	Total    int                      `json:"total"`
-	Releases []DashboardHelmRelease   `json:"releases"`
+	Total    int                    `json:"total"`
+	Releases []DashboardHelmRelease `json:"releases"`
 }
 
 type DashboardHelmRelease struct {
@@ -753,9 +753,9 @@ func (s *Server) getDashboardRecentChanges(ctx context.Context, namespace string
 	}
 
 	opts := timeline.QueryOptions{
-		Namespace: namespace,
-		Since:     time.Now().Add(-1 * time.Hour),
-		Limit:     5,
+		Namespace:    namespace,
+		Since:        time.Now().Add(-1 * time.Hour),
+		Limit:        5,
 		FilterPreset: "workloads",
 	}
 

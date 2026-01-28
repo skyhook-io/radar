@@ -49,7 +49,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// Track IDs for linking
 	deploymentIDs := make(map[string]string)
-	rolloutIDs := make(map[string]string)    // Argo Rollouts
+	rolloutIDs := make(map[string]string) // Argo Rollouts
 	statefulSetIDs := make(map[string]string)
 	replicaSetIDs := make(map[string]string)
 	replicaSetToDeployment := make(map[string]string) // rsKey -> deploymentID (for shortcut edges)
@@ -763,46 +763,46 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				log.Printf("WARNING [topology] Failed to list Secrets: %v", err)
 				warnings = append(warnings, fmt.Sprintf("Failed to list Secrets: %v", err))
 			}
-		for _, secret := range secrets {
-			if opts.Namespace != "" && secret.Namespace != opts.Namespace {
-				continue
-			}
-
-			// Only include Secrets that are referenced by workloads in the same namespace
-			secretID := fmt.Sprintf("secret/%s/%s", secret.Namespace, secret.Name)
-			isReferenced := false
-
-			for workloadID, refs := range workloadSecretRefs {
-				// Only match if workload is in the same namespace as the Secret
-				if workloadNamespaces[workloadID] != secret.Namespace {
+			for _, secret := range secrets {
+				if opts.Namespace != "" && secret.Namespace != opts.Namespace {
 					continue
 				}
-				if refs[secret.Name] {
-					isReferenced = true
-					edges = append(edges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", secretID, workloadID),
-						Source: secretID,
-						Target: workloadID,
-						Type:   EdgeConfigures,
+
+				// Only include Secrets that are referenced by workloads in the same namespace
+				secretID := fmt.Sprintf("secret/%s/%s", secret.Namespace, secret.Name)
+				isReferenced := false
+
+				for workloadID, refs := range workloadSecretRefs {
+					// Only match if workload is in the same namespace as the Secret
+					if workloadNamespaces[workloadID] != secret.Namespace {
+						continue
+					}
+					if refs[secret.Name] {
+						isReferenced = true
+						edges = append(edges, Edge{
+							ID:     fmt.Sprintf("%s-to-%s", secretID, workloadID),
+							Source: secretID,
+							Target: workloadID,
+							Type:   EdgeConfigures,
+						})
+					}
+				}
+
+				if isReferenced {
+					nodes = append(nodes, Node{
+						ID:     secretID,
+						Kind:   KindSecret,
+						Name:   secret.Name,
+						Status: StatusHealthy,
+						Data: map[string]any{
+							"namespace": secret.Namespace,
+							"type":      string(secret.Type),
+							"keys":      len(secret.Data),
+							"labels":    secret.Labels,
+						},
 					})
 				}
 			}
-
-			if isReferenced {
-				nodes = append(nodes, Node{
-					ID:     secretID,
-					Kind:   KindSecret,
-					Name:   secret.Name,
-					Status: StatusHealthy,
-					Data: map[string]any{
-						"namespace": secret.Namespace,
-						"type":      string(secret.Type),
-						"keys":      len(secret.Data),
-						"labels":    secret.Labels,
-					},
-				})
-			}
-		}
 		}
 	}
 

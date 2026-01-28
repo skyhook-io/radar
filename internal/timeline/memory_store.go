@@ -9,14 +9,14 @@ import (
 // MemoryStore is an in-memory implementation of EventStore using a ring buffer.
 // Suitable for local development and testing. Events are lost on restart.
 type MemoryStore struct {
-	records     []TimelineEvent
-	maxSize     int
-	head        int // next write position
-	count       int
-	mu          sync.RWMutex
+	records       []TimelineEvent
+	maxSize       int
+	head          int // next write position
+	count         int
+	mu            sync.RWMutex
 	seenResources map[string]bool
-	seenMu      sync.RWMutex
-	filterCache map[string]*CompiledFilter
+	seenMu        sync.RWMutex
+	filterCache   map[string]*CompiledFilter
 }
 
 // NewMemoryStore creates a new in-memory event store

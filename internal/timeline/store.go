@@ -46,10 +46,10 @@ type EventStore interface {
 // QueryOptions configures event queries
 type QueryOptions struct {
 	// Filters
-	Namespace string     // Filter by namespace (empty = all)
-	Kinds     []string   // Filter by resource kinds (empty = all)
-	Since     time.Time  // Filter events after this time
-	Until     time.Time  // Filter events before this time
+	Namespace string        // Filter by namespace (empty = all)
+	Kinds     []string      // Filter by resource kinds (empty = all)
+	Since     time.Time     // Filter events after this time
+	Until     time.Time     // Filter events before this time
 	Sources   []EventSource // Filter by event source (empty = all)
 
 	// Filter preset (overrides individual filters if set)
@@ -64,27 +64,27 @@ type QueryOptions struct {
 	GroupBy GroupingMode // How to group results
 
 	// Include/exclude options
-	IncludeManaged bool // Include ReplicaSets, Pods, Events (default false)
+	IncludeManaged   bool // Include ReplicaSets, Pods, Events (default false)
 	IncludeK8sEvents bool // Include K8s Event resources (default true)
 }
 
 // DefaultQueryOptions returns sensible defaults
 func DefaultQueryOptions() QueryOptions {
 	return QueryOptions{
-		Limit:          200,
-		GroupBy:        GroupByNone,
-		IncludeManaged: false,
+		Limit:            200,
+		GroupBy:          GroupByNone,
+		IncludeManaged:   false,
 		IncludeK8sEvents: true,
 	}
 }
 
 // StoreStats contains statistics about the event store
 type StoreStats struct {
-	TotalEvents     int64     `json:"totalEvents"`
-	OldestEvent     time.Time `json:"oldestEvent,omitempty"`
-	NewestEvent     time.Time `json:"newestEvent,omitempty"`
-	StorageBytes    int64     `json:"storageBytes,omitempty"`
-	SeenResources   int       `json:"seenResources"`
+	TotalEvents   int64     `json:"totalEvents"`
+	OldestEvent   time.Time `json:"oldestEvent,omitempty"`
+	NewestEvent   time.Time `json:"newestEvent,omitempty"`
+	StorageBytes  int64     `json:"storageBytes,omitempty"`
+	SeenResources int       `json:"seenResources"`
 }
 
 // CompiledFilter is a pre-compiled filter for efficient event filtering

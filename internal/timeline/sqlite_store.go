@@ -50,7 +50,7 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	pragmas := []string{
 		"PRAGMA journal_mode=WAL",
 		"PRAGMA synchronous=NORMAL",
-		"PRAGMA cache_size=-64000", // 64MB cache
+		"PRAGMA cache_size=-64000",  // 64MB cache
 		"PRAGMA busy_timeout=10000", // 10 second timeout
 		"PRAGMA temp_store=MEMORY",
 	}

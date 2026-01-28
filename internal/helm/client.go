@@ -37,9 +37,9 @@ type Client struct {
 }
 
 var (
-	globalClient   *Client
-	clientOnce     sync.Once
-	helmClientMu   sync.Mutex
+	globalClient *Client
+	clientOnce   sync.Once
+	helmClientMu sync.Mutex
 )
 
 // Initialize sets up the global Helm client
@@ -79,7 +79,6 @@ func ResetClient() {
 func ReinitClient(kubeconfig string) error {
 	return Initialize(kubeconfig)
 }
-
 
 // getActionConfig creates a new action configuration for the given namespace
 func (c *Client) getActionConfig(namespace string) (*action.Configuration, error) {
@@ -1905,22 +1904,22 @@ type artifactHubSearchResponse struct {
 }
 
 type artifactHubPackage struct {
-	PackageID              string                    `json:"package_id"`
-	Name                   string                    `json:"name"`
-	NormalizedName         string                    `json:"normalized_name"`
-	LogoImageID            string                    `json:"logo_image_id,omitempty"`
-	Stars                  int                       `json:"stars"`
-	Description            string                    `json:"description,omitempty"`
-	Version                string                    `json:"version"`
-	AppVersion             string                    `json:"app_version,omitempty"`
-	Deprecated             bool                      `json:"deprecated"`
-	Signed                 bool                      `json:"signed"`
-	HasValuesSchema        bool                      `json:"has_values_schema"`
-	SecurityReportSummary  *artifactHubSecurityReport `json:"security_report_summary,omitempty"`
-	ProductionOrgsCount    int                       `json:"production_organizations_count"`
-	TS                     int64                     `json:"ts"` // Unix timestamp
-	Repository             artifactHubRepo           `json:"repository"`
-	License                string                    `json:"license,omitempty"`
+	PackageID             string                     `json:"package_id"`
+	Name                  string                     `json:"name"`
+	NormalizedName        string                     `json:"normalized_name"`
+	LogoImageID           string                     `json:"logo_image_id,omitempty"`
+	Stars                 int                        `json:"stars"`
+	Description           string                     `json:"description,omitempty"`
+	Version               string                     `json:"version"`
+	AppVersion            string                     `json:"app_version,omitempty"`
+	Deprecated            bool                       `json:"deprecated"`
+	Signed                bool                       `json:"signed"`
+	HasValuesSchema       bool                       `json:"has_values_schema"`
+	SecurityReportSummary *artifactHubSecurityReport `json:"security_report_summary,omitempty"`
+	ProductionOrgsCount   int                        `json:"production_organizations_count"`
+	TS                    int64                      `json:"ts"` // Unix timestamp
+	Repository            artifactHubRepo            `json:"repository"`
+	License               string                     `json:"license,omitempty"`
 }
 
 type artifactHubRepo struct {
@@ -1942,15 +1941,15 @@ type artifactHubSecurityReport struct {
 
 type artifactHubPackageDetail struct {
 	artifactHubPackage
-	Readme           string                    `json:"readme,omitempty"`
-	DefaultValues    string                    `json:"default_values,omitempty"`
-	ValuesSchema     map[string]any            `json:"values_schema,omitempty"`
-	HomeURL          string                    `json:"home_url,omitempty"`
-	Maintainers      []artifactHubMaintainer   `json:"maintainers,omitempty"`
-	Links            []artifactHubLink         `json:"links,omitempty"`
-	AvailableVersions []artifactHubVersion     `json:"available_versions,omitempty"`
-	Install          string                    `json:"install,omitempty"`
-	Keywords         []string                  `json:"keywords,omitempty"`
+	Readme            string                  `json:"readme,omitempty"`
+	DefaultValues     string                  `json:"default_values,omitempty"`
+	ValuesSchema      map[string]any          `json:"values_schema,omitempty"`
+	HomeURL           string                  `json:"home_url,omitempty"`
+	Maintainers       []artifactHubMaintainer `json:"maintainers,omitempty"`
+	Links             []artifactHubLink       `json:"links,omitempty"`
+	AvailableVersions []artifactHubVersion    `json:"available_versions,omitempty"`
+	Install           string                  `json:"install,omitempty"`
+	Keywords          []string                `json:"keywords,omitempty"`
 }
 
 type artifactHubMaintainer struct {

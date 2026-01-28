@@ -12,23 +12,23 @@ import (
 
 // APIResource represents a discovered API resource type
 type APIResource struct {
-	Group      string `json:"group"`
-	Version    string `json:"version"`
-	Kind       string `json:"kind"`
-	Name       string `json:"name"` // Plural name (e.g., "deployments")
-	Namespaced bool   `json:"namespaced"`
-	IsCRD      bool   `json:"isCrd"`
+	Group      string   `json:"group"`
+	Version    string   `json:"version"`
+	Kind       string   `json:"kind"`
+	Name       string   `json:"name"` // Plural name (e.g., "deployments")
+	Namespaced bool     `json:"namespaced"`
+	IsCRD      bool     `json:"isCrd"`
 	Verbs      []string `json:"verbs"`
 }
 
 // ResourceDiscovery manages discovery and caching of API resources
 type ResourceDiscovery struct {
-	resources    []APIResource
-	resourceMap  map[string]APIResource // keyed by lowercase kind
-	gvrMap       map[string]schema.GroupVersionResource
-	lastRefresh  time.Time
-	cacheTTL     time.Duration
-	mu           sync.RWMutex
+	resources   []APIResource
+	resourceMap map[string]APIResource // keyed by lowercase kind
+	gvrMap      map[string]schema.GroupVersionResource
+	lastRefresh time.Time
+	cacheTTL    time.Duration
+	mu          sync.RWMutex
 }
 
 var (
@@ -39,23 +39,23 @@ var (
 
 // coreAPIGroups are groups that ship with Kubernetes core
 var coreAPIGroups = map[string]bool{
-	"":                          true,
-	"apps":                      true,
-	"batch":                     true,
-	"autoscaling":               true,
-	"networking.k8s.io":         true,
-	"policy":                    true,
-	"rbac.authorization.k8s.io": true,
-	"storage.k8s.io":            true,
+	"":                             true,
+	"apps":                         true,
+	"batch":                        true,
+	"autoscaling":                  true,
+	"networking.k8s.io":            true,
+	"policy":                       true,
+	"rbac.authorization.k8s.io":    true,
+	"storage.k8s.io":               true,
 	"admissionregistration.k8s.io": true,
-	"apiextensions.k8s.io":      true,
-	"certificates.k8s.io":       true,
-	"coordination.k8s.io":       true,
-	"discovery.k8s.io":          true,
-	"events.k8s.io":             true,
+	"apiextensions.k8s.io":         true,
+	"certificates.k8s.io":          true,
+	"coordination.k8s.io":          true,
+	"discovery.k8s.io":             true,
+	"events.k8s.io":                true,
 	"flowcontrol.apiserver.k8s.io": true,
-	"node.k8s.io":               true,
-	"scheduling.k8s.io":         true,
+	"node.k8s.io":                  true,
+	"scheduling.k8s.io":            true,
 }
 
 // InitResourceDiscovery initializes the resource discovery module

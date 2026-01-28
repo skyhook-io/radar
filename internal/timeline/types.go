@@ -64,8 +64,8 @@ const (
 // into a single structure that can be queried and grouped efficiently.
 type TimelineEvent struct {
 	// Core identity
-	ID        string    `json:"id"`
-	Timestamp time.Time `json:"timestamp"`
+	ID        string      `json:"id"`
+	Timestamp time.Time   `json:"timestamp"`
 	Source    EventSource `json:"source"`
 
 	// Resource identity
@@ -147,12 +147,12 @@ func (e *TimelineEvent) GetAppLabel() string {
 
 // EventGroup represents a group of related events in the timeline
 type EventGroup struct {
-	ID        string         `json:"id"`        // e.g., "Deployment/default/nginx"
-	Kind      string         `json:"kind"`
-	Name      string         `json:"name"`
-	Namespace string         `json:"namespace"`
+	ID        string          `json:"id"` // e.g., "Deployment/default/nginx"
+	Kind      string          `json:"kind"`
+	Name      string          `json:"name"`
+	Namespace string          `json:"namespace"`
 	Events    []TimelineEvent `json:"events"`
-	Children  []EventGroup   `json:"children,omitempty"`
+	Children  []EventGroup    `json:"children,omitempty"`
 
 	// Aggregated info
 	HealthState HealthState `json:"healthState,omitempty"` // Worst health of all events
@@ -168,11 +168,11 @@ type TimelineResponse struct {
 
 // TimelineMeta contains metadata about the timeline query result
 type TimelineMeta struct {
-	TotalEvents  int    `json:"totalEvents"`
-	GroupCount   int    `json:"groupCount"`
-	QueryTimeMs  int64  `json:"queryTimeMs"`
-	HasMore      bool   `json:"hasMore"`      // For pagination
-	NextCursor   string `json:"nextCursor,omitempty"`
+	TotalEvents int    `json:"totalEvents"`
+	GroupCount  int    `json:"groupCount"`
+	QueryTimeMs int64  `json:"queryTimeMs"`
+	HasMore     bool   `json:"hasMore"` // For pagination
+	NextCursor  string `json:"nextCursor,omitempty"`
 }
 
 // FilterPreset defines a named filter configuration

@@ -11,15 +11,15 @@ import (
 
 // PodGroup represents a collection of pods grouped by app label or owner
 type PodGroup struct {
-	Key        string            // Unique key: namespace/groupKind/groupName
-	GroupKind  string            // "app", "ReplicaSet", "DaemonSet", etc.
-	GroupName  string            // App name or owner name
-	Namespace  string            // Namespace of the pods
-	Pods       []*corev1.Pod     // Pods in this group
-	ServiceIDs map[string]bool   // Service IDs that route to this group (for traffic view)
-	Healthy    int               // Count of healthy pods
-	Degraded   int               // Count of degraded pods
-	Unhealthy  int               // Count of unhealthy pods
+	Key        string          // Unique key: namespace/groupKind/groupName
+	GroupKind  string          // "app", "ReplicaSet", "DaemonSet", etc.
+	GroupName  string          // App name or owner name
+	Namespace  string          // Namespace of the pods
+	Pods       []*corev1.Pod   // Pods in this group
+	ServiceIDs map[string]bool // Service IDs that route to this group (for traffic view)
+	Healthy    int             // Count of healthy pods
+	Degraded   int             // Count of degraded pods
+	Unhealthy  int             // Count of unhealthy pods
 }
 
 // PodGroupingResult contains the result of grouping pods
@@ -29,10 +29,10 @@ type PodGroupingResult struct {
 
 // PodGroupingOptions configures pod grouping behavior
 type PodGroupingOptions struct {
-	Namespace       string                        // Filter to specific namespace
-	ServiceMatching bool                          // Whether to match pods to services (for traffic view)
+	Namespace       string                                // Filter to specific namespace
+	ServiceMatching bool                                  // Whether to match pods to services (for traffic view)
 	ServicesByNS    map[string]map[string]*corev1.Service // Namespace -> svcKey -> service
-	ServiceIDs      map[string]string             // svcKey -> serviceID
+	ServiceIDs      map[string]string                     // svcKey -> serviceID
 }
 
 // GroupPods groups pods by app label or owner reference

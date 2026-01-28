@@ -25,9 +25,9 @@ type Manager struct {
 }
 
 var (
-	manager   *Manager
-	initOnce  sync.Once
-	initErr   error
+	manager  *Manager
+	initOnce sync.Once
+	initErr  error
 )
 
 // Initialize sets up the traffic manager with the given K8s client
@@ -280,19 +280,19 @@ func (m *Manager) generateRecommendation(info *ClusterInfo, detected []SourceSta
 			}
 		}
 		return &Recommendation{
-			Name:   "hubble",
-			Reason: "Your cluster uses Cilium CNI. Enable Hubble for network observability.",
+			Name:           "hubble",
+			Reason:         "Your cluster uses Cilium CNI. Enable Hubble for network observability.",
 			InstallCommand: `cilium hubble enable --ui`,
-			DocsURL: "https://docs.cilium.io/en/stable/gettingstarted/hubble/",
+			DocsURL:        "https://docs.cilium.io/en/stable/gettingstarted/hubble/",
 		}
 
 	case "gke-native":
 		// GKE without Dataplane V2 - recommend Caretta for existing clusters
 		return &Recommendation{
-			Name:      "caretta",
-			Reason:    "Your GKE cluster uses standard networking. Caretta provides lightweight eBPF-based traffic visibility that works immediately.",
-			HelmChart: carettaHelmChart(),
-			DocsURL:   "https://github.com/groundcover-com/caretta",
+			Name:               "caretta",
+			Reason:             "Your GKE cluster uses standard networking. Caretta provides lightweight eBPF-based traffic visibility that works immediately.",
+			HelmChart:          carettaHelmChart(),
+			DocsURL:            "https://github.com/groundcover-com/caretta",
 			AlternativeName:    "Dataplane V2",
 			AlternativeReason:  "For new GKE clusters, Dataplane V2 provides native Cilium/Hubble integration with better performance and deeper visibility.",
 			AlternativeDocsURL: "https://cloud.google.com/kubernetes-engine/docs/how-to/dataplane-v2",

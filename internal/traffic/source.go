@@ -59,13 +59,13 @@ type Flow struct {
 
 // Endpoint represents a source or destination in a flow
 type Endpoint struct {
-	Name      string            `json:"name"`                // Pod or service name
-	Namespace string            `json:"namespace"`           // Namespace
-	Kind      string            `json:"kind"`                // Pod, Service, External
-	IP        string            `json:"ip,omitempty"`        // IP address
-	Labels    map[string]string `json:"labels,omitempty"`    // K8s labels
-	Workload  string            `json:"workload,omitempty"`  // Parent workload name (Deployment, etc.)
-	Port      int               `json:"port,omitempty"`      // Port number
+	Name      string            `json:"name"`               // Pod or service name
+	Namespace string            `json:"namespace"`          // Namespace
+	Kind      string            `json:"kind"`               // Pod, Service, External
+	IP        string            `json:"ip,omitempty"`       // IP address
+	Labels    map[string]string `json:"labels,omitempty"`   // K8s labels
+	Workload  string            `json:"workload,omitempty"` // Parent workload name (Deployment, etc.)
+	Port      int               `json:"port,omitempty"`     // Port number
 }
 
 // FlowsResponse contains the flows and metadata
@@ -95,20 +95,20 @@ type AggregatedFlow struct {
 
 // ClusterInfo contains cluster platform and CNI information
 type ClusterInfo struct {
-	Platform     string `json:"platform"`     // gke, eks, aks, generic
-	CNI          string `json:"cni"`          // cilium, calico, flannel, vpc-cni, azure-cni, etc.
-	DataplaneV2  bool   `json:"dataplaneV2"`  // GKE-specific: is Dataplane V2 enabled?
-	ClusterName  string `json:"clusterName"`  // Cluster name if available
-	K8sVersion   string `json:"k8sVersion"`   // Kubernetes version
+	Platform    string `json:"platform"`    // gke, eks, aks, generic
+	CNI         string `json:"cni"`         // cilium, calico, flannel, vpc-cni, azure-cni, etc.
+	DataplaneV2 bool   `json:"dataplaneV2"` // GKE-specific: is Dataplane V2 enabled?
+	ClusterName string `json:"clusterName"` // Cluster name if available
+	K8sVersion  string `json:"k8sVersion"`  // Kubernetes version
 }
 
 // SourceStatus represents the status of a detected traffic source
 type SourceStatus struct {
-	Name      string `json:"name"`
-	Status    string `json:"status"` // available, not_found, error
-	Version   string `json:"version,omitempty"`
-	Native    bool   `json:"native"`
-	Message   string `json:"message,omitempty"`
+	Name    string `json:"name"`
+	Status  string `json:"status"` // available, not_found, error
+	Version string `json:"version,omitempty"`
+	Native  bool   `json:"native"`
+	Message string `json:"message,omitempty"`
 }
 
 // Recommendation contains installation recommendations for a traffic source
@@ -135,8 +135,8 @@ type HelmChartInfo struct {
 
 // SourcesResponse is the response for GET /api/traffic/sources
 type SourcesResponse struct {
-	Cluster      ClusterInfo      `json:"cluster"`
-	Detected     []SourceStatus   `json:"detected"`
-	NotDetected  []string         `json:"notDetected"`
-	Recommended  *Recommendation  `json:"recommended,omitempty"`
+	Cluster     ClusterInfo     `json:"cluster"`
+	Detected    []SourceStatus  `json:"detected"`
+	NotDetected []string        `json:"notDetected"`
+	Recommended *Recommendation `json:"recommended,omitempty"`
 }

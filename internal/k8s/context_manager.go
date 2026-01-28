@@ -156,7 +156,6 @@ func PerformContextSwitch(newContext string) error {
 	log.Println("Stopping resource discovery...")
 	ResetResourceDiscovery()
 
-
 	// Reset timeline store if registered
 	contextSwitchMu.RLock()
 	tlResetFunc := timelineResetFunc
@@ -241,7 +240,6 @@ func PerformContextSwitch(newContext string) error {
 			log.Printf("Warning: failed to reinit timeline store: %v", err)
 		}
 	}
-
 
 	// Reinit Helm client if registered
 	contextSwitchMu.RLock()

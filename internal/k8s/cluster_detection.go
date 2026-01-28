@@ -11,9 +11,9 @@ import (
 
 // ClusterInfo contains detected cluster information
 type ClusterInfo struct {
-	Context           string `json:"context"`           // kubeconfig context name
-	Cluster           string `json:"cluster"`           // cluster name from kubeconfig
-	Platform          string `json:"platform"`          // gke, gke-autopilot, eks, aks, minikube, kind, docker-desktop, generic
+	Context           string `json:"context"`  // kubeconfig context name
+	Cluster           string `json:"cluster"`  // cluster name from kubeconfig
+	Platform          string `json:"platform"` // gke, gke-autopilot, eks, aks, minikube, kind, docker-desktop, generic
 	KubernetesVersion string `json:"kubernetesVersion"`
 	NodeCount         int    `json:"nodeCount"`
 	PodCount          int    `json:"podCount"`

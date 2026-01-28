@@ -72,11 +72,11 @@ type OwnedResource struct {
 	Kind      string `json:"kind"`
 	Name      string `json:"name"`
 	Namespace string `json:"namespace"`
-	Status    string `json:"status,omitempty"`    // Running, Pending, Failed, etc.
-	Ready     string `json:"ready,omitempty"`     // e.g., "3/3" for deployments
-	Message   string `json:"message,omitempty"`   // Status message or reason
-	Summary   string `json:"summary,omitempty"`   // Brief status like "0/3 OOMKilled"
-	Issue     string `json:"issue,omitempty"`     // Primary issue if unhealthy
+	Status    string `json:"status,omitempty"`  // Running, Pending, Failed, etc.
+	Ready     string `json:"ready,omitempty"`   // e.g., "3/3" for deployments
+	Message   string `json:"message,omitempty"` // Status message or reason
+	Summary   string `json:"summary,omitempty"` // Brief status like "0/3 OOMKilled"
+	Issue     string `json:"issue,omitempty"`   // Primary issue if unhealthy
 }
 
 // HelmValues represents the values for a release
@@ -179,33 +179,33 @@ type ChartSearchResult struct {
 
 // ArtifactHubChart represents a chart from ArtifactHub with rich metadata
 type ArtifactHubChart struct {
-	PackageID   string                  `json:"packageId"`
-	Name        string                  `json:"name"`
-	Version     string                  `json:"version"`
-	AppVersion  string                  `json:"appVersion,omitempty"`
-	Description string                  `json:"description,omitempty"`
-	LogoURL     string                  `json:"logoUrl,omitempty"`
-	HomeURL     string                  `json:"homeUrl,omitempty"`
-	Deprecated  bool                    `json:"deprecated,omitempty"`
-	Repository  ArtifactHubRepository   `json:"repository"`
-	Stars       int                     `json:"stars"`
-	License     string                  `json:"license,omitempty"`
-	CreatedAt   int64                   `json:"createdAt,omitempty"`   // Unix timestamp
-	UpdatedAt   int64                   `json:"updatedAt,omitempty"`   // Unix timestamp
-	Signed      bool                    `json:"signed,omitempty"`
-	Security    *ArtifactHubSecurity    `json:"security,omitempty"`
-	OrgCount    int                     `json:"productionOrgsCount,omitempty"` // Production organizations using this
-	HasSchema   bool                    `json:"hasValuesSchema,omitempty"`
-	Keywords    []string                `json:"keywords,omitempty"`
+	PackageID   string                `json:"packageId"`
+	Name        string                `json:"name"`
+	Version     string                `json:"version"`
+	AppVersion  string                `json:"appVersion,omitempty"`
+	Description string                `json:"description,omitempty"`
+	LogoURL     string                `json:"logoUrl,omitempty"`
+	HomeURL     string                `json:"homeUrl,omitempty"`
+	Deprecated  bool                  `json:"deprecated,omitempty"`
+	Repository  ArtifactHubRepository `json:"repository"`
+	Stars       int                   `json:"stars"`
+	License     string                `json:"license,omitempty"`
+	CreatedAt   int64                 `json:"createdAt,omitempty"` // Unix timestamp
+	UpdatedAt   int64                 `json:"updatedAt,omitempty"` // Unix timestamp
+	Signed      bool                  `json:"signed,omitempty"`
+	Security    *ArtifactHubSecurity  `json:"security,omitempty"`
+	OrgCount    int                   `json:"productionOrgsCount,omitempty"` // Production organizations using this
+	HasSchema   bool                  `json:"hasValuesSchema,omitempty"`
+	Keywords    []string              `json:"keywords,omitempty"`
 }
 
 // ArtifactHubRepository contains repository info from ArtifactHub
 type ArtifactHubRepository struct {
-	Name             string `json:"name"`
-	URL              string `json:"url"`
-	Official         bool   `json:"official,omitempty"`
-	VerifiedPublisher bool  `json:"verifiedPublisher,omitempty"`
-	OrganizationName string `json:"organizationName,omitempty"`
+	Name              string `json:"name"`
+	URL               string `json:"url"`
+	Official          bool   `json:"official,omitempty"`
+	VerifiedPublisher bool   `json:"verifiedPublisher,omitempty"`
+	OrganizationName  string `json:"organizationName,omitempty"`
 }
 
 // ArtifactHubSecurity contains security report summary
@@ -226,7 +226,7 @@ type ArtifactHubSearchResult struct {
 
 // ArtifactHubFacet represents a search facet (for filtering)
 type ArtifactHubFacet struct {
-	Title   string                  `json:"title"`
+	Title   string                   `json:"title"`
 	Options []ArtifactHubFacetOption `json:"options"`
 }
 
@@ -241,7 +241,7 @@ type ArtifactHubFacetOption struct {
 type ArtifactHubChartDetail struct {
 	ArtifactHubChart
 	Readme       string                      `json:"readme,omitempty"`
-	Values       string                      `json:"values,omitempty"`      // Default values as string
+	Values       string                      `json:"values,omitempty"` // Default values as string
 	ValuesSchema string                      `json:"valuesSchema,omitempty"`
 	Maintainers  []ArtifactHubMaintainer     `json:"maintainers,omitempty"`
 	Links        []ArtifactHubLink           `json:"links,omitempty"`
@@ -269,7 +269,7 @@ type ArtifactHubVersionSummary struct {
 
 // InstallProgress represents progress during a Helm install
 type InstallProgress struct {
-	Phase   string `json:"phase"`   // e.g., "downloading", "installing", "waiting"
-	Message string `json:"message"` // Human-readable status message
+	Phase   string `json:"phase"`            // e.g., "downloading", "installing", "waiting"
+	Message string `json:"message"`          // Human-readable status message
 	Detail  string `json:"detail,omitempty"` // Additional detail (e.g., command output)
 }

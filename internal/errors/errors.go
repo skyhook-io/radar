@@ -25,18 +25,18 @@ const (
 	ErrK8sClusterUnreachable   ErrorCode = 1005
 
 	// Server/HTTP errors (2xxx)
-	ErrBadRequest        ErrorCode = 2001
-	ErrNotFound          ErrorCode = 2002
-	ErrInternalServer    ErrorCode = 2003
-	ErrValidation        ErrorCode = 2004
+	ErrBadRequest         ErrorCode = 2001
+	ErrNotFound           ErrorCode = 2002
+	ErrInternalServer     ErrorCode = 2003
+	ErrValidation         ErrorCode = 2004
 	ErrServiceUnavailable ErrorCode = 2005
-	ErrMarshalFailed     ErrorCode = 2006
+	ErrMarshalFailed      ErrorCode = 2006
 
 	// Cache errors (3xxx)
-	ErrCacheNotInitialized   ErrorCode = 3001
-	ErrCacheSyncFailed       ErrorCode = 3002
-	ErrCacheHandlerFailed    ErrorCode = 3003
-	ErrCacheDynamicNotFound  ErrorCode = 3004
+	ErrCacheNotInitialized  ErrorCode = 3001
+	ErrCacheSyncFailed      ErrorCode = 3002
+	ErrCacheHandlerFailed   ErrorCode = 3003
+	ErrCacheDynamicNotFound ErrorCode = 3004
 
 	// Timeline/storage errors (4xxx)
 	ErrTimelineStoreNotInit ErrorCode = 4001

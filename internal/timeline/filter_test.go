@@ -22,9 +22,9 @@ func TestCompiledFilter_ExcludeKinds(t *testing.T) {
 		expected bool // true = should pass filter
 	}{
 		{"Deployment", true},
-		{"Pod", true},          // Pod passes (not in exclude list)
-		{"Lease", false},       // excluded
-		{"Endpoints", false},   // excluded
+		{"Pod", true},           // Pod passes (not in exclude list)
+		{"Lease", false},        // excluded
+		{"Endpoints", false},    // excluded
 		{"EndpointSlice", true}, // not in exclude list
 	}
 
@@ -55,9 +55,9 @@ func TestCompiledFilter_IncludeKinds(t *testing.T) {
 		{"Deployment", true},
 		{"StatefulSet", true},
 		{"DaemonSet", true},
-		{"Pod", false},         // not in include list
-		{"Service", false},     // not in include list
-		{"ConfigMap", false},   // not in include list
+		{"Pod", false},       // not in include list
+		{"Service", false},   // not in include list
+		{"ConfigMap", false}, // not in include list
 	}
 
 	for _, tt := range tests {
@@ -86,11 +86,11 @@ func TestCompiledFilter_ExcludeNamePatterns(t *testing.T) {
 	}{
 		{"my-app", true},
 		{"nginx-deployment", true},
-		{"controller-lock", false},      // ends with -lock
-		{"leader-lease", false},         // ends with -lease
-		{"kube-proxy", false},           // starts with kube-
-		{"kube-system-lock", false},     // starts with kube-
-		{"my-app-locked", true},         // doesn't match -lock$ pattern
+		{"controller-lock", false},  // ends with -lock
+		{"leader-lease", false},     // ends with -lease
+		{"kube-proxy", false},       // starts with kube-
+		{"kube-system-lock", false}, // starts with kube-
+		{"my-app-locked", true},     // doesn't match -lock$ pattern
 	}
 
 	for _, tt := range tests {

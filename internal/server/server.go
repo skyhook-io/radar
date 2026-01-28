@@ -30,8 +30,8 @@ type Server struct {
 	router      *chi.Mux
 	broadcaster *SSEBroadcaster
 	port        int
-	devMode             bool
-	staticFS            fs.FS
+	devMode     bool
+	staticFS    fs.FS
 }
 
 // Config holds server configuration
@@ -548,7 +548,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 
 	s.writeJSON(w, events)
 }
-
 
 // handleChanges returns timeline events using the unified timeline.TimelineEvent format.
 // This is the main timeline API endpoint - it queries the timeline store directly.

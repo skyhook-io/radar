@@ -433,8 +433,8 @@ func TestSQLiteStore_LabelsStorage(t *testing.T) {
 		Name:      "test-deploy",
 		EventType: EventTypeAdd,
 		Labels: map[string]string{
-			"app":                     "myapp",
-			"app.kubernetes.io/name":  "myapp",
+			"app":                       "myapp",
+			"app.kubernetes.io/name":    "myapp",
 			"app.kubernetes.io/version": "v1",
 		},
 	}
