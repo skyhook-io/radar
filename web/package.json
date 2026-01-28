@@ -40,7 +40,7 @@
     "autoprefixer": "^10.4.17",
     "postcss": "^8.4.33",
     "prettier": "^3.2.4",
-    "tailwindcss": "^3.4.1",
+    "tailwindcss": "^4.1.18",
     "typescript": "^5.3.3",
     "vite": "^7.3.1"
   }
