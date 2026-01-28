@@ -12,7 +12,7 @@ require (
 	k8s.io/apimachinery v0.29.3
 	k8s.io/cli-runtime v0.29.3
 	k8s.io/client-go v0.29.3
-	k8s.io/klog/v2 v2.110.1
+	k8s.io/klog/v2 v2.130.1
 	modernc.org/sqlite v1.44.3
 	sigs.k8s.io/yaml v1.3.0
 )
@@ -50,7 +50,7 @@ require (
 	github.com/felixge/httpsnoop v1.0.3 // indirect
 	github.com/go-errors/errors v1.4.2 // indirect
 	github.com/go-gorp/gorp/v3 v3.1.0 // indirect
-	github.com/go-logr/logr v1.3.0 // indirect
+	github.com/go-logr/logr v1.4.1 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v0.19.6 // indirect
 	github.com/go-openapi/jsonreference v0.20.2 // indirect
