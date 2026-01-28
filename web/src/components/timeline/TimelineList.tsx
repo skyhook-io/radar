@@ -524,7 +524,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
         {/* Header row */}
         <div className="flex items-start gap-3">
           {/* Icon */}
-          <div className="flex-shrink-0 mt-0.5">{getIcon()}</div>
+          <div className="shrink-0 mt-0.5">{getIcon()}</div>
 
           {/* Content */}
           <div className="flex-1 min-w-0">
@@ -580,7 +580,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
           </div>
 
           {/* Time and count */}
-          <div className="flex-shrink-0 text-right">
+          <div className="shrink-0 text-right">
             <div className="text-xs text-theme-text-tertiary">{time}</div>
             {item.count && item.count > 1 && (
               <div className="text-xs text-theme-text-disabled mt-1">x{item.count}</div>
@@ -589,7 +589,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
 
           {/* Expand indicator */}
           <ChevronRight
-            className={clsx('w-4 h-4 text-theme-text-disabled transition-transform flex-shrink-0', expanded && 'rotate-90')}
+            className={clsx('w-4 h-4 text-theme-text-disabled transition-transform shrink-0', expanded && 'rotate-90')}
           />
         </div>
 
@@ -664,7 +664,7 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
         {/* Header row */}
         <div className="flex items-start gap-3">
           {/* Aggregation visualization: first dot - line - last dot */}
-          <div className="flex flex-col items-center flex-shrink-0 mt-0.5">
+          <div className="flex flex-col items-center shrink-0 mt-0.5">
             {/* First occurrence dot */}
             <div className={clsx('w-2.5 h-2.5 rounded-full', dotColor)} title={`First: ${firstTime}`} />
             {/* Connecting line */}
@@ -711,7 +711,7 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
 
           {/* Expand indicator */}
           <ChevronRight
-            className={clsx('w-4 h-4 text-theme-text-disabled transition-transform flex-shrink-0', expanded && 'rotate-90')}
+            className={clsx('w-4 h-4 text-theme-text-disabled transition-transform shrink-0', expanded && 'rotate-90')}
           />
         </div>
 
@@ -720,7 +720,7 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
           <div className="mt-3 pt-3 border-t-subtle space-y-3">
             {/* First occurrence */}
             <div className="flex items-start gap-2">
-              <div className={clsx('w-2 h-2 rounded-full mt-1.5 flex-shrink-0', dotColor)} />
+              <div className={clsx('w-2 h-2 rounded-full mt-1.5 shrink-0', dotColor)} />
               <div>
                 <div className="text-xs text-theme-text-tertiary">First occurrence</div>
                 <div className="text-sm text-theme-text-secondary">
@@ -736,7 +736,7 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
 
             {/* Last occurrence */}
             <div className="flex items-start gap-2">
-              <div className={clsx('w-2 h-2 rounded-full mt-1.5 flex-shrink-0', dotColor)} />
+              <div className={clsx('w-2 h-2 rounded-full mt-1.5 shrink-0', dotColor)} />
               <div>
                 <div className="text-xs text-theme-text-tertiary">Last occurrence ({count}x total)</div>
                 <div className="text-sm text-theme-text-secondary">

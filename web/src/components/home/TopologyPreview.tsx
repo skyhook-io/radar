@@ -151,13 +151,13 @@ export function TopologyPreview({ topology, summary, onNavigate }: TopologyPrevi
       {/* Stats (left) + Schematic (right) */}
       <div className="flex-1 flex items-stretch min-h-0 px-3 py-1.5 gap-2">
         {/* Left: compact stats */}
-        <div className="flex flex-col justify-center gap-0.5 min-w-0 w-[105px] flex-shrink-0">
+        <div className="flex flex-col justify-center gap-0.5 min-w-0 w-[105px] shrink-0">
           {stats ? (
             <>
               {stats.topKinds.map(([kind, count]) => (
                 <div key={kind} className="flex items-center gap-1.5 text-[10px] leading-tight">
                   <span className={clsx(
-                    'w-1.5 h-1.5 rounded-full flex-shrink-0',
+                    'w-1.5 h-1.5 rounded-full shrink-0',
                     kindDotColors[kind] || 'bg-theme-text-tertiary',
                   )} />
                   <span className="text-theme-text-primary font-medium w-5 text-right tabular-nums">{count}</span>

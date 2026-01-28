@@ -576,7 +576,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           {/* Time axis header */}
           <div className="sticky top-0 z-10 bg-theme-surface border-b border-theme-border">
             <div className="flex">
-              <div className="w-80 flex-shrink-0 border-r border-theme-border px-3 py-2">
+              <div className="w-80 shrink-0 border-r border-theme-border px-3 py-2">
                 <span className="text-xs font-medium text-theme-text-secondary">Resource</span>
               </div>
               <div className="flex-1 relative h-8 mr-8">
@@ -654,7 +654,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                   <div className="border-b-subtle">
                     <div className="flex">
                       {/* Lane label */}
-                      <div className="w-80 flex-shrink-0 border-r border-theme-border px-3 py-2 flex items-center gap-1">
+                      <div className="w-80 shrink-0 border-r border-theme-border px-3 py-2 flex items-center gap-1">
                         {/* Expand/collapse button */}
                         {hasChildren ? (
                           <button
@@ -745,7 +745,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                         <div className="border-b-subtle">
                           <div className="flex">
                             <div
-                              className="w-[19.25rem] flex-shrink-0 border-r border-theme-border/50 pl-4 pr-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-theme-elevated/30 group"
+                              className="w-[19.25rem] shrink-0 border-r border-theme-border/50 pl-4 pr-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-theme-elevated/30 group"
                               onClick={() => onResourceClick?.(lane.kind, lane.namespace, lane.name)}
                             >
                               <div className="flex-1 min-w-0">
@@ -797,7 +797,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                           <div className="flex">
                             {/* Child lane label - indented */}
                             <div
-                              className="w-[19.25rem] flex-shrink-0 border-r border-theme-border/50 pl-4 pr-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-theme-elevated/30 group"
+                              className="w-[19.25rem] shrink-0 border-r border-theme-border/50 pl-4 pr-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-theme-elevated/30 group"
                               onClick={() => onResourceClick?.(child.kind, child.namespace, child.name)}
                             >
                               <div className="flex-1 min-w-0">

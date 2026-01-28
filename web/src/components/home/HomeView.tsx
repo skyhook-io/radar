@@ -224,7 +224,7 @@ function problemKindToResource(kind: string): string {
 function ProblemsPanel({ problems, onResourceClick }: ProblemsPanelProps) {
   return (
     <div className="rounded-lg border border-theme-border bg-theme-surface/50 flex flex-col lg:max-h-[calc(100vh-280px)] lg:sticky lg:top-0">
-      <div className="px-3 py-2 border-b border-theme-border flex-shrink-0">
+      <div className="px-3 py-2 border-b border-theme-border shrink-0">
         <h3 className="text-xs font-medium text-theme-text-primary flex items-center gap-1.5">
           <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />
           Problems
@@ -244,18 +244,18 @@ function ProblemsPanel({ problems, onResourceClick }: ProblemsPanelProps) {
               })}
             >
               <span className={clsx(
-                'w-1.5 h-1.5 rounded-full flex-shrink-0',
+                'w-1.5 h-1.5 rounded-full shrink-0',
                 p.status === 'error' ? 'bg-red-500' : 'bg-yellow-500'
               )} />
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-1.5">
                   <span className="text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded">{p.kind}</span>
                   <span className="text-xs text-theme-text-primary truncate font-medium">{p.name}</span>
-                  <span className="text-[10px] text-theme-text-tertiary ml-auto flex-shrink-0">{p.age}</span>
+                  <span className="text-[10px] text-theme-text-tertiary ml-auto shrink-0">{p.age}</span>
                 </div>
                 <div className="flex items-center gap-1.5 mt-0.5">
                   <span className="text-[11px] text-theme-text-secondary truncate">{p.reason}</span>
-                  <span className="text-[10px] text-theme-text-tertiary flex-shrink-0">{p.namespace}</span>
+                  <span className="text-[10px] text-theme-text-tertiary shrink-0">{p.namespace}</span>
                 </div>
               </div>
             </button>

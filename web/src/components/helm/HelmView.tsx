@@ -303,7 +303,7 @@ function ReleaseRow({ release, upgradeInfo, isSelected, onClick }: ReleaseRowPro
     >
       <td className="px-4 py-3">
         <div className="flex items-center gap-2">
-          <Package className="w-4 h-4 text-theme-text-tertiary flex-shrink-0" />
+          <Package className="w-4 h-4 text-theme-text-tertiary shrink-0" />
           <span className="text-sm text-theme-text-primary font-medium truncate">{release.name}</span>
           {getHealthBadge()}
           {upgradeInfo?.updateAvailable && (

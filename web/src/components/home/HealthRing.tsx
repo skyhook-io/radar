@@ -14,7 +14,7 @@ export function HealthRing({ segments, size = 48, strokeWidth = 5, label }: Heal
   const total = segments.reduce((sum, s) => sum + s.value, 0)
   if (total === 0) {
     return (
-      <svg width={size} height={size} viewBox="0 0 100 100" className="flex-shrink-0">
+      <svg width={size} height={size} viewBox="0 0 100 100" className="shrink-0">
         <circle cx="50" cy="50" r="40" fill="none" stroke="currentColor" strokeWidth={strokeWidth} className="text-theme-border" />
         {label && (
           <text x="50" y="50" textAnchor="middle" dominantBaseline="central" className="fill-theme-text-tertiary text-[22px] font-semibold">
@@ -42,7 +42,7 @@ export function HealthRing({ segments, size = 48, strokeWidth = 5, label }: Heal
     })
 
   return (
-    <svg width={size} height={size} viewBox="0 0 100 100" className="flex-shrink-0">
+    <svg width={size} height={size} viewBox="0 0 100 100" className="shrink-0">
       {/* Background ring */}
       <circle cx="50" cy="50" r={radius} fill="none" stroke="currentColor" strokeWidth={strokeWidth} className="text-theme-border opacity-30" />
       {/* Segments */}

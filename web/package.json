@@ -14,6 +14,7 @@
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
     "@tailwindcss/typography": "^0.5.19",
+    "@tailwindcss/vite": "^4.1.18",
     "@tanstack/react-query": "^5.90.20",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
@@ -22,9 +23,9 @@
     "clsx": "^2.1.0",
     "diff": "^8.0.3",
     "elkjs": "^0.11.0",
-    "lucide-react": "^0.312.0",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
+    "lucide-react": "^0.563.0",
+    "react": "^19.2.4",
+    "react-dom": "^19.2.4",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.13.0",
     "remark-gfm": "^4.0.1",
@@ -34,13 +35,12 @@
   },
   "devDependencies": {
     "@types/diff": "^7.0.2",
-    "@types/react": "^18.2.48",
-    "@types/react-dom": "^18.2.18",
+    "@types/react": "^19.2.10",
+    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.2.1",
-    "autoprefixer": "^10.4.17",
     "postcss": "^8.4.33",
     "prettier": "^3.2.4",
-    "tailwindcss": "^3.4.1",
+    "tailwindcss": "^4.1.18",
     "typescript": "^5.3.3",
     "vite": "^7.3.1"
   }

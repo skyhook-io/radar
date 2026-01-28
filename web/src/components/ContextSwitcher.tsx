@@ -330,7 +330,7 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
                         disabled:opacity-50
                       `}
                     >
-                      <div className="flex-shrink-0 w-4 h-4 flex items-center justify-center">
+                      <div className="shrink-0 w-4 h-4 flex items-center justify-center">
                         {item.context.isCurrent ? (
                           <Check className="w-3.5 h-3.5 text-blue-400" />
                         ) : (
@@ -344,12 +344,12 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
                             {item.clusterName}
                           </span>
                           {item.region && (
-                            <span className="flex-shrink-0 text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 rounded">
+                            <span className="shrink-0 text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 rounded">
                               {item.region}
                             </span>
                           )}
                           {item.context.isCurrent && (
-                            <span className="flex-shrink-0 text-[9px] text-blue-400">
+                            <span className="shrink-0 text-[9px] text-blue-400">
                               ●
                             </span>
                           )}

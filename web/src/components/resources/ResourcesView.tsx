@@ -1324,7 +1324,7 @@ export function ResourcesView({ namespace, selectedResource, onResourceClick, on
                       : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
                   )}
                 >
-                  <Icon className="w-4 h-4 flex-shrink-0" />
+                  <Icon className="w-4 h-4 shrink-0" />
                   <span className="flex-1 text-left">{type.label}</span>
                   <span className={clsx(
                     'text-xs px-2 py-0.5 rounded',
@@ -1696,7 +1696,7 @@ function ResourceTypeButton({ resource, count, isSelected, onClick }: ResourceTy
           : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
       )}
     >
-      <Icon className="w-4 h-4 flex-shrink-0" />
+      <Icon className="w-4 h-4 shrink-0" />
       <Tooltip content={resource.kind} position="right">
         <span className="flex-1 text-left truncate">
           {resource.kind}

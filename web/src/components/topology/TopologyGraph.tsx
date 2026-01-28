@@ -539,7 +539,7 @@ export function TopologyGraph({
       {topology?.warnings && topology.warnings.length > 0 && (
         <div className="absolute top-2 left-2 right-2 z-10 bg-amber-500/10 border border-amber-500/30 rounded-lg p-2 backdrop-blur-sm">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
+            <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
             <div className="text-sm">
               <span className="font-medium text-amber-400">Warning:</span>
               <span className="text-theme-text-secondary ml-1">
@@ -563,7 +563,7 @@ export function TopologyGraph({
       {layoutError && nodes.length > 0 && (
         <div className="absolute top-2 left-2 right-2 z-10 bg-red-500/10 border border-red-500/30 rounded-lg p-2 backdrop-blur-sm">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
+            <AlertTriangle className="w-4 h-4 text-red-500 shrink-0 mt-0.5" />
             <div className="text-sm">
               <span className="font-medium text-red-400">Layout Error:</span>
               <span className="text-theme-text-secondary ml-1">

@@ -175,9 +175,9 @@ function MiniLane({ lane, startTime, now, spanMs }: {
   return (
     <div className="flex items-center gap-2 h-5">
       {/* Label */}
-      <div className="w-[6.5rem] flex-shrink-0 flex items-center gap-1 min-w-0">
+      <div className="w-[6.5rem] shrink-0 flex items-center gap-1 min-w-0">
         <span className={clsx(
-          'text-[9px] leading-none px-1 py-0.5 rounded flex-shrink-0',
+          'text-[9px] leading-none px-1 py-0.5 rounded shrink-0',
           hasProblems
             ? 'bg-amber-500/15 text-amber-600 dark:text-amber-400'
             : 'bg-theme-elevated text-theme-text-tertiary',

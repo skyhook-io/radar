@@ -915,7 +915,7 @@ interface InstallingStepProps {
   progressLogs: ProgressEntry[]
   isInstalling: boolean
   installError: string | null
-  progressEndRef: React.RefObject<HTMLDivElement>
+  progressEndRef: React.RefObject<HTMLDivElement | null>
 }
 
 function InstallingStep({

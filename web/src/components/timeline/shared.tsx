@@ -364,7 +364,7 @@ export function TimeAxis({ startTime, endTime, tickCount = 8, labelColumnClass =
 
   return (
     <div className="flex">
-      <div className={clsx('flex-shrink-0 bg-theme-surface/50 border-r border-theme-border', labelColumnClass)} />
+      <div className={clsx('shrink-0 bg-theme-surface/50 border-r border-theme-border', labelColumnClass)} />
       <div className="flex-1 relative h-6 bg-theme-elevated/30">
         {ticks.map((tick, i) => {
           const x = timeToX(tick.time)

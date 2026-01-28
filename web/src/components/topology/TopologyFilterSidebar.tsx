@@ -206,7 +206,7 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
                           : 'text-theme-text-secondary hover:bg-theme-elevated/40 hover:text-theme-text-secondary'
                       )}
                     >
-                      <Icon className={clsx('w-4 h-4 flex-shrink-0', isVisible ? color : 'text-theme-text-tertiary')} />
+                      <Icon className={clsx('w-4 h-4 shrink-0', isVisible ? color : 'text-theme-text-tertiary')} />
                       <span className="flex-1 text-sm truncate">{label}</span>
                       <span className={clsx(
                         'text-xs px-1.5 py-0.5 rounded',

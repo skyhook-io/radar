@@ -133,7 +133,7 @@ export function ResourceDetailPage({
   return (
     <div className="flex flex-col h-full w-full bg-theme-base">
       {/* Compact Header */}
-      <div className="flex-shrink-0 border-b border-theme-border bg-theme-surface">
+      <div className="shrink-0 border-b border-theme-border bg-theme-surface">
         <div className="px-4 py-3 flex items-start gap-4">
           {/* Back + Title */}
           <button
@@ -787,7 +787,7 @@ function EventsTab({
   return (
     <div className="h-full flex flex-col overflow-hidden">
       {/* Timeline toolbar */}
-      <div className="flex-shrink-0 px-4 py-2 border-b border-theme-border bg-theme-surface/50 flex items-center justify-between">
+      <div className="shrink-0 px-4 py-2 border-b border-theme-border bg-theme-surface/50 flex items-center justify-between">
         <span className="text-sm font-medium text-theme-text-secondary">Events ({events.length})</span>
         <div className="flex items-center gap-3">
           <ZoomControls
@@ -802,13 +802,13 @@ function EventsTab({
       </div>
 
       {/* Legend bar */}
-      <div className="flex-shrink-0 px-4 py-1.5 border-b border-theme-border bg-theme-surface/30 flex items-center justify-between">
+      <div className="shrink-0 px-4 py-1.5 border-b border-theme-border bg-theme-surface/30 flex items-center justify-between">
         <HealthSpanLegend />
         <EventDotLegend />
       </div>
 
       {/* Swimlane Timeline */}
-      <div className="flex-shrink-0 border-b border-theme-border bg-theme-base relative">
+      <div className="shrink-0 border-b border-theme-border bg-theme-base relative">
         {/* "Now" marker - positioned across all swimlanes */}
         {nowX >= 0 && nowX <= 100 && (
           <div
@@ -824,7 +824,7 @@ function EventsTab({
         {swimlanes.map((lane) => (
           <div key={lane.id} className="flex border-b border-theme-border/50 last:border-b-0">
             {/* Lane label */}
-            <div className="w-64 flex-shrink-0 px-3 py-2 bg-theme-surface/50 border-r border-theme-border text-xs font-medium text-theme-text-secondary truncate">
+            <div className="w-64 shrink-0 px-3 py-2 bg-theme-surface/50 border-r border-theme-border text-xs font-medium text-theme-text-secondary truncate">
               {lane.label}
             </div>
             {/* Lane track */}
@@ -880,7 +880,7 @@ function EventsTab({
 
         {/* Time axis */}
         <div className="flex">
-          <div className="w-64 flex-shrink-0 bg-theme-surface/50 border-r border-theme-border" />
+          <div className="w-64 shrink-0 bg-theme-surface/50 border-r border-theme-border" />
           <div className="flex-1 relative h-6 bg-theme-elevated/30">
             {ticks.map((tick, i) => {
               const x = localTimeToX(tick.time)
@@ -985,7 +985,7 @@ function EventDot({ event }: { event: TimelineEvent }) {
 
   return (
     <div className={clsx(
-      'w-3 h-3 rounded-full flex-shrink-0',
+      'w-3 h-3 rounded-full shrink-0',
       isWarning ? 'bg-amber-500' :
       isDelete ? 'bg-red-500' :
       isAdd ? 'bg-green-500' :
@@ -1212,7 +1212,7 @@ function LogsTab({
     <div className="h-full flex flex-col">
       {/* Pod selector - horizontal tabs */}
       {pods.length > 1 && (
-        <div className="flex-shrink-0 border-b border-theme-border bg-theme-surface/50 px-4 py-2 flex gap-2 overflow-x-auto">
+        <div className="shrink-0 border-b border-theme-border bg-theme-surface/50 px-4 py-2 flex gap-2 overflow-x-auto">
           {pods.map(pod => (
             <button
               key={pod.name}

@@ -60,14 +60,14 @@ function FieldChangeRow({ field }: FieldChangeRowProps) {
       <div className="flex items-center gap-2 text-sm">
         {isAdded ? (
           <>
-            <Plus className="w-3.5 h-3.5 text-green-400 flex-shrink-0" />
+            <Plus className="w-3.5 h-3.5 text-green-400 shrink-0" />
             <span className="text-green-400">
               {formatValue(field.newValue)}
             </span>
           </>
         ) : isRemoved ? (
           <>
-            <Minus className="w-3.5 h-3.5 text-red-400 flex-shrink-0" />
+            <Minus className="w-3.5 h-3.5 text-red-400 shrink-0" />
             <span className="text-red-400 line-through">
               {formatValue(field.oldValue)}
             </span>
@@ -77,7 +77,7 @@ function FieldChangeRow({ field }: FieldChangeRowProps) {
             <span className="text-red-400 line-through">
               {formatValue(field.oldValue)}
             </span>
-            <ArrowRight className="w-3.5 h-3.5 text-theme-text-tertiary flex-shrink-0" />
+            <ArrowRight className="w-3.5 h-3.5 text-theme-text-tertiary shrink-0" />
             <span className="text-green-400">
               {formatValue(field.newValue)}
             </span>

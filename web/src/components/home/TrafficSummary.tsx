@@ -115,9 +115,9 @@ export function TrafficSummary({ data, onNavigate }: TrafficSummaryProps) {
             {data.topFlows.map((flow, i) => (
               <div key={i} className="flex items-center gap-2 text-xs">
                 <span className="text-theme-text-primary truncate">{flow.src}</span>
-                <ArrowRightLeft className="w-3 h-3 text-theme-text-tertiary flex-shrink-0" />
+                <ArrowRightLeft className="w-3 h-3 text-theme-text-tertiary shrink-0" />
                 <span className="text-theme-text-primary truncate">{flow.dst}</span>
-                <span className="text-xs text-theme-text-tertiary flex-shrink-0 ml-auto">
+                <span className="text-xs text-theme-text-tertiary shrink-0 ml-auto">
                   {flow.connections} conn
                 </span>
               </div>
@@ -126,7 +126,7 @@ export function TrafficSummary({ data, onNavigate }: TrafficSummaryProps) {
         ) : (
           /* No data yet: schematic + description */
           <div className="flex items-stretch gap-2 px-3 py-1.5 h-full">
-            <div className="flex flex-col justify-center gap-1.5 w-[105px] flex-shrink-0">
+            <div className="flex flex-col justify-center gap-1.5 w-[105px] shrink-0">
               <p className="text-[11px] leading-snug text-theme-text-secondary">
                 Visualize live service-to-service network flows and external dependencies
               </p>

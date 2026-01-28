@@ -180,7 +180,7 @@ function ToggleOption({
         className="flex-1 flex items-center gap-2 text-left"
       >
         <Icon className={clsx(
-          'w-3.5 h-3.5 flex-shrink-0',
+          'w-3.5 h-3.5 shrink-0',
           enabled ? 'text-blue-400' : 'text-theme-text-tertiary'
         )} />
         <span className={clsx(
@@ -196,7 +196,7 @@ function ToggleOption({
       <button
         onClick={onToggle}
         className={clsx(
-          'w-7 h-4 rounded-full transition-colors relative flex-shrink-0',
+          'w-7 h-4 rounded-full transition-colors relative shrink-0',
           enabled ? 'bg-blue-500' : 'bg-theme-elevated'
         )}
       >
@@ -493,7 +493,7 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
                   >
                     {isHidden && (
                       <div
-                        className="w-2.5 h-2.5 rounded-sm flex-shrink-0"
+                        className="w-2.5 h-2.5 rounded-sm shrink-0"
                         style={{ backgroundColor: getNamespaceColor(name) }}
                       />
                     )}

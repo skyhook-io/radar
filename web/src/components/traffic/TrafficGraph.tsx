@@ -196,17 +196,17 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
 
       <div className="flex items-center gap-2">
         {isAddonInternet ? (
-          <Globe className="w-4 h-4 text-purple-400 flex-shrink-0" />
+          <Globe className="w-4 h-4 text-purple-400 shrink-0" />
         ) : isInternet ? (
-          <Globe className="w-4 h-4 text-sky-400 flex-shrink-0" />
+          <Globe className="w-4 h-4 text-sky-400 shrink-0" />
         ) : isAddon ? (
-          <div className="w-2 h-2 rounded-full flex-shrink-0 bg-purple-500" />
+          <div className="w-2 h-2 rounded-full shrink-0 bg-purple-500" />
         ) : isAddonNode ? (
-          <div className="w-2 h-2 rounded-full flex-shrink-0 bg-purple-400" />
+          <div className="w-2 h-2 rounded-full shrink-0 bg-purple-400" />
         ) : (
           <div
             className={clsx(
-              'w-2 h-2 rounded-full flex-shrink-0',
+              'w-2 h-2 rounded-full shrink-0',
               data.isHotPath
                 ? 'bg-orange-500'
                 : isExternal
@@ -313,19 +313,19 @@ function TrafficLegend() {
       <div className="font-medium text-theme-text-primary mb-2">Legend</div>
       <div className="space-y-1.5">
         <div className="flex items-center gap-2">
-          <svg width="24" height="8" className="flex-shrink-0">
+          <svg width="24" height="8" className="shrink-0">
             <line x1="0" y1="4" x2="24" y2="4" stroke="#f97316" strokeWidth="2" strokeDasharray="4 2" />
           </svg>
           <span className="text-theme-text-secondary">Hot path (top 10%)</span>
         </div>
         <div className="flex items-center gap-2">
-          <svg width="24" height="8" className="flex-shrink-0">
+          <svg width="24" height="8" className="shrink-0">
             <line x1="0" y1="4" x2="24" y2="4" stroke="#3b82f6" strokeWidth="2" />
           </svg>
           <span className="text-theme-text-secondary">HTTP / gRPC</span>
         </div>
         <div className="flex items-center gap-2">
-          <svg width="24" height="8" className="flex-shrink-0">
+          <svg width="24" height="8" className="shrink-0">
             <line x1="0" y1="4" x2="24" y2="4" stroke="#6b7280" strokeWidth="2" />
           </svg>
           <span className="text-theme-text-secondary">TCP</span>
@@ -535,7 +535,7 @@ function DetailsPanel({
                         <span className="text-theme-text-primary truncate flex-1">
                           {flow.source.name}
                         </span>
-                        <ArrowRight className="h-3 w-3 text-theme-text-tertiary flex-shrink-0" />
+                        <ArrowRight className="h-3 w-3 text-theme-text-tertiary shrink-0" />
                         <span className="text-blue-400 font-mono">:{flow.port}</span>
                       </div>
                       <div className="flex items-center gap-2 text-[10px]">
@@ -569,7 +569,7 @@ function DetailsPanel({
                     .map((flow, i) => (
                     <div key={i} className="text-xs p-2 rounded bg-theme-elevated space-y-1">
                       <div className="flex items-center gap-1.5">
-                        <ArrowRight className="h-3 w-3 text-theme-text-tertiary flex-shrink-0" />
+                        <ArrowRight className="h-3 w-3 text-theme-text-tertiary shrink-0" />
                         <span className="text-theme-text-primary truncate flex-1">
                           {flow.destination.name}
                         </span>
@@ -602,7 +602,7 @@ function DetailsPanel({
             <div className="space-y-2">
               <div className="flex items-center gap-2 text-sm">
                 <span className="text-theme-text-primary truncate">{edgeData.source.split('/').pop()}</span>
-                <ArrowRight className="h-4 w-4 text-theme-text-tertiary flex-shrink-0" />
+                <ArrowRight className="h-4 w-4 text-theme-text-tertiary shrink-0" />
                 <span className="text-theme-text-primary truncate">{edgeData.target.split('/').pop()}</span>
               </div>
 

@@ -68,11 +68,11 @@ export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
                 className="flex items-center justify-between px-3 py-1.5"
               >
                 <div className="flex items-center gap-2 min-w-0">
-                  <span className={clsx('w-1.5 h-1.5 rounded-full flex-shrink-0', getHealthDot(release.resourceHealth))} />
+                  <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', getHealthDot(release.resourceHealth))} />
                   <span className="text-xs text-theme-text-primary truncate">{release.name}</span>
                   <span className="text-[10px] text-theme-text-tertiary">{release.namespace}</span>
                 </div>
-                <div className="flex items-center gap-1.5 flex-shrink-0 ml-2">
+                <div className="flex items-center gap-1.5 shrink-0 ml-2">
                   <span className="text-[10px] text-theme-text-tertiary hidden sm:inline">{release.chart} {release.chartVersion}</span>
                   <span className={clsx('text-[10px] px-1 py-0.5 rounded', getStatusBadgeClass(release.status))}>
                     {release.status}

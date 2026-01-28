@@ -165,11 +165,11 @@ export const GroupNode = memo(function GroupNode({
             }}
           >
             <ChevronDown
-              className="flex-shrink-0"
+              className="shrink-0"
               style={{ width: 32 * headerScale, height: 32 * headerScale, ...getIconStyle() }}
             />
             <Icon
-              className="flex-shrink-0"
+              className="shrink-0"
               style={{ width: 36 * headerScale, height: 36 * headerScale, ...getIconStyle() }}
             />
             <span
@@ -187,7 +187,7 @@ export const GroupNode = memo(function GroupNode({
               </span>
             )}
             <span
-              className="ml-auto flex-shrink-0 font-semibold text-theme-text-secondary bg-theme-surface/60 rounded-xl"
+              className="ml-auto shrink-0 font-semibold text-theme-text-secondary bg-theme-surface/60 rounded-xl"
               style={{
                 fontSize: 20 * headerScale,
                 padding: `${8 * headerScale}px ${16 * headerScale}px`
