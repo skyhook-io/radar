@@ -59,9 +59,8 @@ Download the latest release for your platform from [GitHub Releases](https://git
 Deploy Radar to your Kubernetes cluster for shared team access:
 
 ```bash
-helm install radar ./deploy/helm/radar \
-  --namespace radar \
-  --create-namespace
+helm repo add skyhook https://skyhook-io.github.io/helm-charts
+helm install radar skyhook/radar -n radar --create-namespace
 ```
 
 See the [In-Cluster Deployment Guide](docs/in-cluster.md) for ingress, authentication, and RBAC configuration.

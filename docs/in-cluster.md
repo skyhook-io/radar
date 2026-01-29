@@ -5,16 +5,8 @@ Deploy Radar to your Kubernetes cluster for shared team access.
 ## Quick Start
 
 ```bash
-# Add the Helm repository (coming soon)
-# helm repo add skyhook https://skyhook-io.github.io/helm-charts
-
-# For now, clone and install from source
-git clone https://github.com/skyhook-io/radar.git
-cd radar
-
-helm install radar ./deploy/helm/radar \
-  --namespace radar \
-  --create-namespace
+helm repo add skyhook https://skyhook-io.github.io/helm-charts
+helm install radar skyhook/radar -n radar --create-namespace
 ```
 
 Access via port-forward:
@@ -40,7 +32,7 @@ ingress:
 ```
 
 ```bash
-helm upgrade --install radar ./deploy/helm/radar \
+helm upgrade --install radar skyhook/radar \
   -n radar -f values.yaml
 ```
 
@@ -80,7 +72,7 @@ helm upgrade --install radar ./deploy/helm/radar \
 
 3. **Deploy:**
    ```bash
-   helm upgrade --install radar ./deploy/helm/radar \
+   helm upgrade --install radar skyhook/radar \
      -n radar -f values.yaml
    ```
 
@@ -208,7 +200,8 @@ kubectl get secret radar-basic-auth -n radar -o jsonpath='{.data.auth}' | base64
 ## Upgrading
 
 ```bash
-helm upgrade radar ./deploy/helm/radar -n radar -f values.yaml
+helm repo update skyhook
+helm upgrade radar skyhook/radar -n radar -f values.yaml
 ```
 
 ## Uninstalling

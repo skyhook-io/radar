@@ -2,10 +2,11 @@
 set -e
 
 # Radar Release Script
-# Usage: ./scripts/release.sh [--binaries] [--docker] [--all]
+# Usage: ./scripts/release.sh [--binaries] [--docker] [--helm] [--all]
 
 readonly REPO="https://github.com/skyhook-io/radar"
 readonly DOCKER_REPO="ghcr.io/skyhook-io/radar"
+readonly HELM_CHARTS_REPO="skyhook-io/helm-charts"
 
 # Colors
 RED='\033[0;31m'
@@ -20,6 +21,7 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 # Parse arguments
 RELEASE_BINARIES=false
 RELEASE_DOCKER=false
+RELEASE_HELM=false
 
 if [ $# -eq 0 ]; then
   # Interactive mode
@@ -30,13 +32,15 @@ else
     case $arg in
       --binaries) RELEASE_BINARIES=true ;;
       --docker) RELEASE_DOCKER=true ;;
-      --all) RELEASE_BINARIES=true; RELEASE_DOCKER=true ;;
+      --helm) RELEASE_HELM=true ;;
+      --all) RELEASE_BINARIES=true; RELEASE_DOCKER=true; RELEASE_HELM=true ;;
       --help|-h)
         echo "Usage: $0 [OPTIONS]"
         echo ""
         echo "Options:"
         echo "  --binaries  Release CLI binaries via goreleaser (GitHub + Homebrew)"
         echo "  --docker    Build and push Docker image"
+        echo "  --helm      Update Helm chart in skyhook-io/helm-charts"
         echo "  --all       Release everything"
         echo ""
         echo "Without options, runs in interactive mode."
@@ -92,6 +96,13 @@ check_prerequisites() {
     fi
     if ! docker info &> /dev/null; then
       error "Docker daemon not running"
+    fi
+  fi
+
+  # Helm chart release
+  if [ "$RELEASE_HELM" = true ]; then
+    if ! command -v gh &> /dev/null; then
+      error "gh CLI not found (needed for helm-charts repo)"
     fi
   fi
 
@@ -152,14 +163,16 @@ choose_targets() {
   echo "What would you like to release?"
   echo "  1) CLI binaries only (GitHub releases + Homebrew)"
   echo "  2) Docker image only"
-  echo "  3) CLI + Docker (everything)"
+  echo "  3) Helm chart only"
+  echo "  4) CLI + Docker + Helm (everything)"
   echo ""
-  read -p "Enter choice (1-3): " choice
+  read -p "Enter choice (1-4): " choice
 
   case $choice in
     1) RELEASE_BINARIES=true ;;
     2) RELEASE_DOCKER=true ;;
-    3) RELEASE_BINARIES=true; RELEASE_DOCKER=true ;;
+    3) RELEASE_HELM=true ;;
+    4) RELEASE_BINARIES=true; RELEASE_DOCKER=true; RELEASE_HELM=true ;;
     *) error "Invalid choice" ;;
   esac
 }
@@ -191,14 +204,56 @@ release_binaries() {
 }
 
 release_docker() {
+  local docker_tag=${VERSION#v}  # Strip 'v' prefix for Docker tags
+
   info "Building Docker image..."
-  docker build -t "$DOCKER_REPO:$VERSION" -t "$DOCKER_REPO:latest" .
+  docker build -t "$DOCKER_REPO:$docker_tag" -t "$DOCKER_REPO:latest" .
 
   info "Pushing Docker image..."
-  docker push "$DOCKER_REPO:$VERSION"
+  docker push "$DOCKER_REPO:$docker_tag"
   docker push "$DOCKER_REPO:latest"
 
-  info "Docker image pushed: $DOCKER_REPO:$VERSION"
+  info "Docker image pushed: $DOCKER_REPO:$docker_tag"
+}
+
+release_helm() {
+  info "Updating Helm chart..."
+
+  # Update Chart.yaml with new version
+  local chart_file="deploy/helm/radar/Chart.yaml"
+  local version_no_v=${VERSION#v}
+
+  # Update appVersion (the app version)
+  sed -i '' "s/^appVersion:.*/appVersion: \"$version_no_v\"/" "$chart_file"
+
+  # Update chart version to match
+  sed -i '' "s/^version:.*/version: $version_no_v/" "$chart_file"
+
+  info "Chart.yaml updated to version $version_no_v"
+
+  # Clone helm-charts repo and update
+  local tmp_dir=$(mktemp -d)
+  info "Cloning helm-charts repo..."
+  git clone --quiet "git@github.com:$HELM_CHARTS_REPO.git" "$tmp_dir"
+
+  # Copy chart
+  rm -rf "$tmp_dir/charts/radar"
+  cp -r deploy/helm/radar "$tmp_dir/charts/"
+
+  # Commit and push
+  cd "$tmp_dir"
+  git add charts/radar
+  if git diff --staged --quiet; then
+    warn "No changes to Helm chart"
+  else
+    git commit -m "Update radar chart to $VERSION"
+    git push origin main
+    info "Helm chart pushed to $HELM_CHARTS_REPO"
+  fi
+  cd - > /dev/null
+  rm -rf "$tmp_dir"
+
+  info "Helm chart released (will be published by chart-releaser-action)"
 }
 
 # Main
@@ -232,6 +287,7 @@ main() {
   echo "  Version: $VERSION"
   echo "  Binaries (goreleaser): $RELEASE_BINARIES"
   echo "  Docker: $RELEASE_DOCKER"
+  echo "  Helm chart: $RELEASE_HELM"
   echo "=========================================="
   echo ""
 
@@ -255,6 +311,10 @@ main() {
     release_docker
   fi
 
+  if [ "$RELEASE_HELM" = true ]; then
+    release_helm
+  fi
+
   echo ""
   echo "=========================================="
   info "Release complete!"
@@ -262,6 +322,7 @@ main() {
   echo ""
   echo "  GitHub Release: $REPO/releases/tag/$VERSION"
   [ "$RELEASE_DOCKER" = true ] && echo "  Docker Image: $DOCKER_REPO:$VERSION"
+  [ "$RELEASE_HELM" = true ] && echo "  Helm Chart: helm install radar skyhook/radar --version ${VERSION#v}"
   echo ""
 }
 
