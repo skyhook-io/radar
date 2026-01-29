@@ -1145,47 +1145,56 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
   // Critical issues get larger markers with icons
   if (isCritical && IssueIcon && !small) {
     return (
-      <button
-        className={clsx(
-          'absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-full transition-all group flex items-center justify-center',
-          'w-5 h-5',
-          markerClasses,
-          selected ? 'ring-2 ring-white ring-offset-2 ring-offset-theme-base scale-125' : 'hover:scale-110',
-          'z-20 shadow-sm'
-        )}
-        style={{ left: `${x}%` }}
-        onClick={(e) => {
-          e.stopPropagation()
-          onClick()
-        }}
+      <Tooltip
+        content={tooltipText}
+        position="top"
+        delay={100}
+        wrapperClassName="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-20"
+        wrapperStyle={{ left: `${x}%` }}
       >
-        <IssueIcon className="w-3 h-3 text-white" />
-        <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 text-xs bg-theme-base text-theme-text-primary rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity duration-75 shadow-lg border border-theme-border-light">
-          {tooltipText}
-        </span>
-      </button>
+        <button
+          className={clsx(
+            'rounded-full transition-all flex items-center justify-center',
+            'w-5 h-5',
+            markerClasses,
+            selected ? 'ring-2 ring-white ring-offset-2 ring-offset-theme-base scale-125' : 'hover:scale-110',
+            'shadow-sm'
+          )}
+          onClick={(e) => {
+            e.stopPropagation()
+            onClick()
+          }}
+        >
+          <IssueIcon className="w-3 h-3 text-white" />
+        </button>
+      </Tooltip>
     )
   }
 
   return (
-    <button
-      className={clsx(
-        'absolute top-1/2 -translate-y-1/2 -translate-x-1/2 rounded-full transition-all group',
-        small ? 'w-2.5 h-2.5' : 'w-3 h-3',
-        markerClasses,
-        selected ? 'ring-2 ring-white ring-offset-2 ring-offset-theme-base scale-150' : 'hover:scale-125',
+    <Tooltip
+      content={tooltipText}
+      position="top"
+      delay={100}
+      wrapperClassName={clsx(
+        'absolute top-1/2 -translate-y-1/2 -translate-x-1/2',
         dimmed ? 'z-5' : isHistorical ? 'z-5' : 'z-10'
       )}
-      style={{ left: `${x}%` }}
-      onClick={(e) => {
-        e.stopPropagation()
-        onClick()
-      }}
+      wrapperStyle={{ left: `${x}%` }}
     >
-      <span className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 px-2 py-1 text-xs bg-theme-base text-theme-text-primary rounded whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none z-50 transition-opacity duration-75">
-        {tooltipText}
-      </span>
-    </button>
+      <button
+        className={clsx(
+          'rounded-full transition-all',
+          small ? 'w-2.5 h-2.5' : 'w-3 h-3',
+          markerClasses,
+          selected ? 'ring-2 ring-white ring-offset-2 ring-offset-theme-base scale-150' : 'hover:scale-125'
+        )}
+        onClick={(e) => {
+          e.stopPropagation()
+          onClick()
+        }}
+      />
+    </Tooltip>
   )
 }
 

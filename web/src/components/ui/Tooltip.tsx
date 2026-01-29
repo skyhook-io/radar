@@ -13,6 +13,10 @@ interface TooltipProps {
   className?: string
   /** Whether tooltip is disabled */
   disabled?: boolean
+  /** Additional class for the wrapper span (useful for positioning) */
+  wrapperClassName?: string
+  /** Inline styles for the wrapper span (useful for absolute positioning) */
+  wrapperStyle?: React.CSSProperties
 }
 
 export function Tooltip({
@@ -22,6 +26,8 @@ export function Tooltip({
   position = 'top',
   className,
   disabled = false,
+  wrapperClassName,
+  wrapperStyle,
 }: TooltipProps) {
   const [isVisible, setIsVisible] = useState(false)
   const [coords, setCoords] = useState({ top: 0, left: 0 })
@@ -111,7 +117,8 @@ export function Tooltip({
     <>
       <span
         ref={triggerRef}
-        className="inline-flex max-w-full"
+        className={clsx('inline-flex max-w-full', wrapperClassName)}
+        style={wrapperStyle}
         onMouseEnter={showTooltip}
         onMouseLeave={hideTooltip}
         onFocus={showTooltip}
@@ -124,7 +131,7 @@ export function Tooltip({
           <span
             ref={tooltipRef}
             className={clsx(
-              'fixed z-[9999] px-2 py-1 text-xs text-theme-text-primary bg-theme-base rounded shadow-lg',
+              'fixed z-[9999] px-2 py-1 text-xs text-theme-text-primary bg-theme-base rounded shadow-lg border border-theme-border',
               'whitespace-nowrap pointer-events-none',
               className
             )}
