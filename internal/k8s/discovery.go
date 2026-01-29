@@ -216,6 +216,37 @@ func (d *ResourceDiscovery) GetGVR(kindOrName string) (schema.GroupVersionResour
 	return gvr, ok
 }
 
+// GetGVRWithGroup returns the GroupVersionResource for a kind with a specific API group
+// This is needed to disambiguate resources with the same name in different groups
+// (e.g., "nodes" in core vs "nodemetrics" in metrics.k8s.io)
+func (d *ResourceDiscovery) GetGVRWithGroup(kindOrName string, group string) (schema.GroupVersionResource, bool) {
+	if d == nil {
+		return schema.GroupVersionResource{}, false
+	}
+
+	// If no group specified, fall back to standard lookup
+	if group == "" {
+		return d.GetGVR(kindOrName)
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	// Search through all resources for matching kind/name AND group
+	kindLower := strings.ToLower(kindOrName)
+	for _, res := range d.resources {
+		if (strings.ToLower(res.Kind) == kindLower || strings.ToLower(res.Name) == kindLower) && res.Group == group {
+			return schema.GroupVersionResource{
+				Group:    res.Group,
+				Version:  res.Version,
+				Resource: res.Name,
+			}, true
+		}
+	}
+
+	return schema.GroupVersionResource{}, false
+}
+
 // GetResource returns the APIResource for a given kind or plural name
 func (d *ResourceDiscovery) GetResource(kindOrName string) (APIResource, bool) {
 	if d == nil {

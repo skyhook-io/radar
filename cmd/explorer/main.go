@@ -120,6 +120,9 @@ func main() {
 	// Warm up dynamic cache for common CRDs so they appear in initial timeline
 	k8s.WarmupCommonCRDs()
 
+	// Initialize metrics history collection (polls metrics-server every 30s)
+	k8s.InitMetricsHistory()
+
 	// Initialize Helm client
 	if err := helm.Initialize(k8s.GetKubeconfigPath()); err != nil {
 		log.Printf("Warning: Failed to initialize Helm client: %v", err)

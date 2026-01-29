@@ -104,6 +104,12 @@ func (s *Server) setupRoutes() {
 		// Pod exec (terminal)
 		r.Get("/pods/{namespace}/{name}/exec", s.handlePodExec)
 
+		// Metrics (from metrics.k8s.io API)
+		r.Get("/metrics/pods/{namespace}/{name}", s.handlePodMetrics)
+		r.Get("/metrics/nodes/{name}", s.handleNodeMetrics)
+		r.Get("/metrics/pods/{namespace}/{name}/history", s.handlePodMetricsHistory)
+		r.Get("/metrics/nodes/{name}/history", s.handleNodeMetricsHistory)
+
 		// Port forwarding
 		r.Get("/portforwards", s.handleListPortForwards)
 		r.Post("/portforwards", s.handleStartPortForward)
@@ -439,6 +445,12 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	kind := normalizeKind(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
+	group := r.URL.Query().Get("group") // API group for CRD disambiguation
+
+	// Handle cluster-scoped resources: "_" is used as placeholder for empty namespace
+	if namespace == "_" {
+		namespace = ""
+	}
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {
@@ -488,7 +500,8 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		resource, err = cache.Namespaces().Get(name)
 	default:
 		// Fall back to dynamic cache for CRDs and other unknown resources
-		resource, err = cache.GetDynamic(r.Context(), kind, namespace, name)
+		// Use group to disambiguate when multiple API groups have similar resource names
+		resource, err = cache.GetDynamicWithGroup(r.Context(), kind, namespace, name, group)
 		if err != nil {
 			if strings.Contains(err.Error(), "unknown resource kind") {
 				s.writeError(w, http.StatusBadRequest, err.Error())
@@ -521,6 +534,87 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, response)
+}
+
+// handlePodMetrics fetches metrics for a specific pod from the metrics.k8s.io API
+func (s *Server) handlePodMetrics(w http.ResponseWriter, r *http.Request) {
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	metrics, err := k8s.GetPodMetrics(r.Context(), namespace, name)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			s.writeError(w, http.StatusNotFound, "Pod metrics not found (metrics-server may not be installed)")
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, metrics)
+}
+
+// handleNodeMetrics fetches metrics for a specific node from the metrics.k8s.io API
+func (s *Server) handleNodeMetrics(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+
+	metrics, err := k8s.GetNodeMetrics(r.Context(), name)
+	if err != nil {
+		if strings.Contains(err.Error(), "not found") {
+			s.writeError(w, http.StatusNotFound, "Node metrics not found (metrics-server may not be installed)")
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, metrics)
+}
+
+// handlePodMetricsHistory returns historical metrics for a specific pod
+func (s *Server) handlePodMetricsHistory(w http.ResponseWriter, r *http.Request) {
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	store := k8s.GetMetricsHistory()
+	if store == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Metrics history not available")
+		return
+	}
+
+	history := store.GetPodMetricsHistory(namespace, name)
+	if history == nil {
+		// Return empty history instead of error - metrics may not have been collected yet
+		history = &k8s.PodMetricsHistory{
+			Namespace:  namespace,
+			Name:       name,
+			Containers: []k8s.ContainerMetricsHistory{},
+		}
+	}
+
+	s.writeJSON(w, history)
+}
+
+// handleNodeMetricsHistory returns historical metrics for a specific node
+func (s *Server) handleNodeMetricsHistory(w http.ResponseWriter, r *http.Request) {
+	name := chi.URLParam(r, "name")
+
+	store := k8s.GetMetricsHistory()
+	if store == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Metrics history not available")
+		return
+	}
+
+	history := store.GetNodeMetricsHistory(name)
+	if history == nil {
+		// Return empty history instead of error
+		history = &k8s.NodeMetricsHistory{
+			Name:       name,
+			DataPoints: []k8s.MetricsDataPoint{},
+		}
+	}
+
+	s.writeJSON(w, history)
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

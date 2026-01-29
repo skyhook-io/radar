@@ -16,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/client-go/informers"
 	listersappsv1 "k8s.io/client-go/listers/apps/v1"
 	listersautoscalingv2 "k8s.io/client-go/listers/autoscaling/v2"
@@ -1009,13 +1010,30 @@ func (c *ResourceCache) ListDynamic(ctx context.Context, kind string, namespace 
 
 // GetDynamic returns a single resource of any type using the dynamic cache
 func (c *ResourceCache) GetDynamic(ctx context.Context, kind string, namespace string, name string) (*unstructured.Unstructured, error) {
+	return c.GetDynamicWithGroup(ctx, kind, namespace, name, "")
+}
+
+// GetDynamicWithGroup returns a single resource, using the group to disambiguate
+// when multiple API groups have resources with similar names
+func (c *ResourceCache) GetDynamicWithGroup(ctx context.Context, kind string, namespace string, name string, group string) (*unstructured.Unstructured, error) {
 	discovery := GetResourceDiscovery()
 	if discovery == nil {
 		return nil, fmt.Errorf("resource discovery not initialized")
 	}
 
-	gvr, ok := discovery.GetGVR(kind)
+	var gvr schema.GroupVersionResource
+	var ok bool
+
+	if group != "" {
+		gvr, ok = discovery.GetGVRWithGroup(kind, group)
+	} else {
+		gvr, ok = discovery.GetGVR(kind)
+	}
+
 	if !ok {
+		if group != "" {
+			return nil, fmt.Errorf("unknown resource kind: %s (group: %s)", kind, group)
+		}
 		return nil, fmt.Errorf("unknown resource kind: %s", kind)
 	}
 

@@ -51,13 +51,14 @@ type DashboardHealth struct {
 }
 
 type DashboardProblem struct {
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	Status    string `json:"status"`
-	Reason    string `json:"reason"`
-	Message   string `json:"message"`
-	Age       string `json:"age"`
+	Kind       string `json:"kind"`
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	Status     string `json:"status"`
+	Reason     string `json:"reason"`
+	Message    string `json:"message"`
+	Age        string `json:"age"`
+	AgeSeconds int64  `json:"ageSeconds"` // For sorting: lower = more recent
 }
 
 type DashboardResourceCounts struct {
@@ -70,6 +71,10 @@ type DashboardResourceCounts struct {
 	Nodes        NodeCount     `json:"nodes"`
 	Namespaces   int           `json:"namespaces"`
 	Jobs         JobCount      `json:"jobs"`
+	CronJobs     CronJobCount  `json:"cronJobs"`
+	ConfigMaps   int           `json:"configMaps"`
+	Secrets      int           `json:"secrets"`
+	PVCs         PVCCount      `json:"pvcs"`
 	HelmReleases int           `json:"helmReleases"`
 }
 
@@ -86,8 +91,10 @@ type DashboardMetrics struct {
 
 type MetricSummary struct {
 	UsageMillis    int64 `json:"usageMillis"`
+	RequestsMillis int64 `json:"requestsMillis"`
 	CapacityMillis int64 `json:"capacityMillis"`
 	UsagePercent   int   `json:"usagePercent"`
+	RequestPercent int   `json:"requestPercent"`
 }
 
 type ResourceCount struct {
@@ -111,6 +118,19 @@ type JobCount struct {
 	Active    int `json:"active"`
 	Succeeded int `json:"succeeded"`
 	Failed    int `json:"failed"`
+}
+
+type CronJobCount struct {
+	Total     int `json:"total"`
+	Active    int `json:"active"`
+	Suspended int `json:"suspended"`
+}
+
+type PVCCount struct {
+	Total    int `json:"total"`
+	Bound    int `json:"bound"`
+	Pending  int `json:"pending"`
+	Unbound  int `json:"unbound"`
 }
 
 type DashboardCRDCount struct {
@@ -269,13 +289,15 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 		deps, _ := cache.Deployments().Deployments(namespace).List(labels.Everything())
 		for _, d := range deps {
 			if d.Status.UnavailableReplicas > 0 {
+				ageDur := now.Sub(d.CreationTimestamp.Time)
 				problems = append(problems, DashboardProblem{
-					Kind:      "Deployment",
-					Namespace: d.Namespace,
-					Name:      d.Name,
-					Status:    "error",
-					Reason:    fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, d.Status.Replicas),
-					Age:       formatAge(now.Sub(d.CreationTimestamp.Time)),
+					Kind:       "Deployment",
+					Namespace:  d.Namespace,
+					Name:       d.Name,
+					Status:     "error",
+					Reason:     fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, d.Status.Replicas),
+					Age:        formatAge(ageDur),
+					AgeSeconds: int64(ageDur.Seconds()),
 				})
 			}
 		}
@@ -283,13 +305,15 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 		deps, _ := cache.Deployments().List(labels.Everything())
 		for _, d := range deps {
 			if d.Status.UnavailableReplicas > 0 {
+				ageDur := now.Sub(d.CreationTimestamp.Time)
 				problems = append(problems, DashboardProblem{
-					Kind:      "Deployment",
-					Namespace: d.Namespace,
-					Name:      d.Name,
-					Status:    "error",
-					Reason:    fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, d.Status.Replicas),
-					Age:       formatAge(now.Sub(d.CreationTimestamp.Time)),
+					Kind:       "Deployment",
+					Namespace:  d.Namespace,
+					Name:       d.Name,
+					Status:     "error",
+					Reason:     fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, d.Status.Replicas),
+					Age:        formatAge(ageDur),
+					AgeSeconds: int64(ageDur.Seconds()),
 				})
 			}
 		}
@@ -300,13 +324,15 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 		ssets, _ := cache.StatefulSets().StatefulSets(namespace).List(labels.Everything())
 		for _, ss := range ssets {
 			if ss.Status.ReadyReplicas < ss.Status.Replicas {
+				ageDur := now.Sub(ss.CreationTimestamp.Time)
 				problems = append(problems, DashboardProblem{
-					Kind:      "StatefulSet",
-					Namespace: ss.Namespace,
-					Name:      ss.Name,
-					Status:    "error",
-					Reason:    fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, ss.Status.Replicas),
-					Age:       formatAge(now.Sub(ss.CreationTimestamp.Time)),
+					Kind:       "StatefulSet",
+					Namespace:  ss.Namespace,
+					Name:       ss.Name,
+					Status:     "error",
+					Reason:     fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, ss.Status.Replicas),
+					Age:        formatAge(ageDur),
+					AgeSeconds: int64(ageDur.Seconds()),
 				})
 			}
 		}
@@ -314,13 +340,15 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 		ssets, _ := cache.StatefulSets().List(labels.Everything())
 		for _, ss := range ssets {
 			if ss.Status.ReadyReplicas < ss.Status.Replicas {
+				ageDur := now.Sub(ss.CreationTimestamp.Time)
 				problems = append(problems, DashboardProblem{
-					Kind:      "StatefulSet",
-					Namespace: ss.Namespace,
-					Name:      ss.Name,
-					Status:    "error",
-					Reason:    fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, ss.Status.Replicas),
-					Age:       formatAge(now.Sub(ss.CreationTimestamp.Time)),
+					Kind:       "StatefulSet",
+					Namespace:  ss.Namespace,
+					Name:       ss.Name,
+					Status:     "error",
+					Reason:     fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, ss.Status.Replicas),
+					Age:        formatAge(ageDur),
+					AgeSeconds: int64(ageDur.Seconds()),
 				})
 			}
 		}
@@ -331,13 +359,15 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 		dsets, _ := cache.DaemonSets().DaemonSets(namespace).List(labels.Everything())
 		for _, ds := range dsets {
 			if ds.Status.NumberUnavailable > 0 {
+				ageDur := now.Sub(ds.CreationTimestamp.Time)
 				problems = append(problems, DashboardProblem{
-					Kind:      "DaemonSet",
-					Namespace: ds.Namespace,
-					Name:      ds.Name,
-					Status:    "error",
-					Reason:    fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable),
-					Age:       formatAge(now.Sub(ds.CreationTimestamp.Time)),
+					Kind:       "DaemonSet",
+					Namespace:  ds.Namespace,
+					Name:       ds.Name,
+					Status:     "error",
+					Reason:     fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable),
+					Age:        formatAge(ageDur),
+					AgeSeconds: int64(ageDur.Seconds()),
 				})
 			}
 		}
@@ -345,13 +375,15 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 		dsets, _ := cache.DaemonSets().List(labels.Everything())
 		for _, ds := range dsets {
 			if ds.Status.NumberUnavailable > 0 {
+				ageDur := now.Sub(ds.CreationTimestamp.Time)
 				problems = append(problems, DashboardProblem{
-					Kind:      "DaemonSet",
-					Namespace: ds.Namespace,
-					Name:      ds.Name,
-					Status:    "error",
-					Reason:    fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable),
-					Age:       formatAge(now.Sub(ds.CreationTimestamp.Time)),
+					Kind:       "DaemonSet",
+					Namespace:  ds.Namespace,
+					Name:       ds.Name,
+					Status:     "error",
+					Reason:     fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable),
+					Age:        formatAge(ageDur),
+					AgeSeconds: int64(ageDur.Seconds()),
 				})
 			}
 		}
@@ -375,22 +407,25 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 					break
 				}
 			}
+			ageDur := now.Sub(n.CreationTimestamp.Time)
 			problems = append(problems, DashboardProblem{
-				Kind:   "Node",
-				Name:   n.Name,
-				Status: "error",
-				Reason: reason,
-				Age:    formatAge(now.Sub(n.CreationTimestamp.Time)),
+				Kind:       "Node",
+				Name:       n.Name,
+				Status:     "error",
+				Reason:     reason,
+				Age:        formatAge(ageDur),
+				AgeSeconds: int64(ageDur.Seconds()),
 			})
 		}
 	}
 
-	// Sort: errors first, then warnings, then by age
+	// Sort: errors first, then warnings; within each group sort by age (most recent first)
 	sort.SliceStable(problems, func(i, j int) bool {
 		if problems[i].Status != problems[j].Status {
 			return problems[i].Status == "error"
 		}
-		return false
+		// Within same status, sort by age (lower AgeSeconds = more recent = first)
+		return problems[i].AgeSeconds < problems[j].AgeSeconds
 	})
 
 	return health, problems
@@ -496,16 +531,17 @@ func podToProblem(pod *corev1.Pod, severity string, now time.Time) DashboardProb
 		}
 	}
 
-	age := formatAge(now.Sub(pod.CreationTimestamp.Time))
+	ageDur := now.Sub(pod.CreationTimestamp.Time)
 
 	return DashboardProblem{
-		Kind:      "Pod",
-		Namespace: pod.Namespace,
-		Name:      pod.Name,
-		Status:    severity,
-		Reason:    reason,
-		Message:   truncate(message, 200),
-		Age:       age,
+		Kind:       "Pod",
+		Namespace:  pod.Namespace,
+		Name:       pod.Name,
+		Status:     severity,
+		Reason:     reason,
+		Message:    truncate(message, 200),
+		Age:        formatAge(ageDur),
+		AgeSeconds: int64(ageDur.Seconds()),
 	}
 }
 
@@ -674,6 +710,76 @@ func (s *Server) getDashboardResourceCounts(cache *k8s.ResourceCache, namespace 
 			}
 			counts.Jobs.Succeeded += int(j.Status.Succeeded)
 			counts.Jobs.Failed += int(j.Status.Failed)
+		}
+	}
+
+	// CronJobs
+	if namespace != "" {
+		cronJobs, _ := cache.CronJobs().CronJobs(namespace).List(labels.Everything())
+		counts.CronJobs.Total = len(cronJobs)
+		for _, cj := range cronJobs {
+			if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
+				counts.CronJobs.Suspended++
+			} else if len(cj.Status.Active) > 0 {
+				counts.CronJobs.Active++
+			}
+		}
+	} else {
+		cronJobs, _ := cache.CronJobs().List(labels.Everything())
+		counts.CronJobs.Total = len(cronJobs)
+		for _, cj := range cronJobs {
+			if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
+				counts.CronJobs.Suspended++
+			} else if len(cj.Status.Active) > 0 {
+				counts.CronJobs.Active++
+			}
+		}
+	}
+
+	// ConfigMaps
+	if namespace != "" {
+		cms, _ := cache.ConfigMaps().ConfigMaps(namespace).List(labels.Everything())
+		counts.ConfigMaps = len(cms)
+	} else {
+		cms, _ := cache.ConfigMaps().List(labels.Everything())
+		counts.ConfigMaps = len(cms)
+	}
+
+	// Secrets
+	if namespace != "" {
+		secrets, _ := cache.Secrets().Secrets(namespace).List(labels.Everything())
+		counts.Secrets = len(secrets)
+	} else {
+		secrets, _ := cache.Secrets().List(labels.Everything())
+		counts.Secrets = len(secrets)
+	}
+
+	// PVCs
+	if namespace != "" {
+		pvcs, _ := cache.PersistentVolumeClaims().PersistentVolumeClaims(namespace).List(labels.Everything())
+		counts.PVCs.Total = len(pvcs)
+		for _, pvc := range pvcs {
+			switch pvc.Status.Phase {
+			case corev1.ClaimBound:
+				counts.PVCs.Bound++
+			case corev1.ClaimPending:
+				counts.PVCs.Pending++
+			default:
+				counts.PVCs.Unbound++
+			}
+		}
+	} else {
+		pvcs, _ := cache.PersistentVolumeClaims().List(labels.Everything())
+		counts.PVCs.Total = len(pvcs)
+		for _, pvc := range pvcs {
+			switch pvc.Status.Phase {
+			case corev1.ClaimBound:
+				counts.PVCs.Bound++
+			case corev1.ClaimPending:
+				counts.PVCs.Pending++
+			default:
+				counts.PVCs.Unbound++
+			}
 		}
 	}
 
@@ -985,22 +1091,48 @@ func (s *Server) getDashboardMetrics(ctx context.Context) *DashboardMetrics {
 		memUsageBytes += parseMemoryToBytes(item.Usage.Memory)
 	}
 
+	// Sum requests across all pods
+	var cpuRequestsMillis int64
+	var memRequestsBytes int64
+	pods, _ := cache.Pods().List(labels.Everything())
+	for _, pod := range pods {
+		// Skip completed/failed pods
+		if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+			continue
+		}
+		for _, container := range pod.Spec.Containers {
+			if container.Resources.Requests != nil {
+				if cpu, ok := container.Resources.Requests[corev1.ResourceCPU]; ok {
+					cpuRequestsMillis += cpu.MilliValue()
+				}
+				if mem, ok := container.Resources.Requests[corev1.ResourceMemory]; ok {
+					memRequestsBytes += mem.Value()
+				}
+			}
+		}
+	}
+
 	metrics := &DashboardMetrics{}
 	if cpuCapacityMillis > 0 {
 		metrics.CPU = &MetricSummary{
 			UsageMillis:    cpuUsageMillis,
+			RequestsMillis: cpuRequestsMillis,
 			CapacityMillis: cpuCapacityMillis,
 			UsagePercent:   int(cpuUsageMillis * 100 / cpuCapacityMillis),
+			RequestPercent: int(cpuRequestsMillis * 100 / cpuCapacityMillis),
 		}
 	}
 	if memCapacityBytes > 0 {
 		// Convert bytes to MiB for the "millis" fields (repurposed as MiB)
 		memUsageMiB := memUsageBytes / (1024 * 1024)
+		memRequestsMiB := memRequestsBytes / (1024 * 1024)
 		memCapacityMiB := memCapacityBytes / (1024 * 1024)
 		metrics.Memory = &MetricSummary{
 			UsageMillis:    memUsageMiB,
+			RequestsMillis: memRequestsMiB,
 			CapacityMillis: memCapacityMiB,
 			UsagePercent:   int(memUsageMiB * 100 / memCapacityMiB),
+			RequestPercent: int(memRequestsMiB * 100 / memCapacityMiB),
 		}
 	}
 
@@ -1097,11 +1229,16 @@ func (s *Server) getDashboardCRDCounts(reqCtx context.Context, namespace string)
 		return nil
 	}
 
-	// Filter to CRDs only
+	// Filter to CRDs only, deduplicating by Group+Kind (different versions of same CRD)
+	seen := make(map[string]bool)
 	var crds []k8s.APIResource
 	for _, r := range resources {
 		if r.IsCRD {
-			crds = append(crds, r)
+			key := r.Group + "/" + r.Kind
+			if !seen[key] {
+				seen[key] = true
+				crds = append(crds, r)
+			}
 		}
 	}
 	if len(crds) == 0 {
