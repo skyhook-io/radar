@@ -44,6 +44,50 @@ rbac:
   # Allow port forwarding (enables port forward feature)
   portForward: false
 
+  # CRD access - all common groups enabled by default
+  # Granting RBAC for CRDs that don't exist has no effect.
+  crdGroups:
+    # Set to true to grant read access to ALL CRDs (overrides individual settings below)
+    # Simpler but broader permissions - some orgs may not allow this
+    all: false
+
+    argo: true              # argoproj.io
+    awx: true               # awx.ansible.com
+    certManager: true       # cert-manager.io
+    cloudnativePg: true     # cloudnative-pg.io
+    crossplane: true        # crossplane.io, pkg.crossplane.io
+    descheduler: true       # descheduler.alpha.kubernetes.io
+    envoyGateway: true      # gateway.envoyproxy.io
+    externalDns: true       # externaldns.k8s.io
+    externalSecrets: true   # external-secrets.io
+    flux: true              # *.toolkit.fluxcd.io
+    gatewayApi: true        # gateway.networking.k8s.io
+    gcpMonitoring: true     # monitoring.googleapis.com
+    grafana: true           # monitoring.grafana.com, tempo/loki/grafana.integreatly.org
+    istio: true             # networking.istio.io, security.istio.io
+    karpenter: true         # karpenter.sh, karpenter.k8s.aws
+    keda: true              # keda.sh
+    knative: true           # serving.knative.dev, eventing.knative.dev
+    kubeshark: true         # kubeshark.io
+    kured: true             # kured.io
+    kyverno: true           # kyverno.io, wgpolicyk8s.io, reports.kyverno.io
+    mariadb: true           # mariadb.mmontes.io
+    nginx: true             # nginx.org
+    openshift: true         # observability.openshift.io
+    opentelemetry: true     # opentelemetry.io
+    prometheus: true        # monitoring.coreos.com
+    reflector: true         # reflector.v1.k8s.emberstack.com
+    reloader: true          # reloader.stakater.com
+    sealedSecrets: true     # sealed-secrets.bitnami.com
+    strimzi: true           # strimzi.io, kafka.strimzi.io
+    tekton: true            # tekton.dev
+    traefik: true           # traefik.io, traefik.containo.us
+    velero: true            # velero.io
+
+  # Additional CRD API groups for custom/unlisted CRDs
+  # Example: ["mycompany.io", "custom.example.com"]
+  additionalCrdGroups: []
+
 podAnnotations: {}
 
 podSecurityContext:
