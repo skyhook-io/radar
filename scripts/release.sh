@@ -20,7 +20,24 @@ error() { echo -e "${RED}[ERROR]${NC} $1"; exit 1; }
 
 # Get current version info
 get_version() {
-  git fetch --tags --quiet
+  if ! git fetch --tags 2>&1 | tee /tmp/git-fetch-output.txt | grep -q "would clobber"; then
+    # Fetch succeeded or had non-clobber issues
+    if grep -q "fatal\|error" /tmp/git-fetch-output.txt 2>/dev/null; then
+      error "Failed to fetch tags: $(cat /tmp/git-fetch-output.txt)"
+    fi
+  else
+    echo ""
+    warn "Tag conflict detected:"
+    grep "rejected" /tmp/git-fetch-output.txt
+    echo ""
+    echo "Your local tags are out of sync with remote."
+    echo "To fix, run one of:"
+    echo "  git fetch --tags --force    # Overwrite local tags with remote"
+    echo "  git tag -d <tag-name>       # Delete specific local tag"
+    echo ""
+    error "Please resolve tag conflicts and try again"
+  fi
+
   LATEST_TAG=$(git tag -l 'v*' --sort=-v:refname | head -n1)
   LATEST_TAG=${LATEST_TAG:-v0.0.0}
 }
