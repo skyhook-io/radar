@@ -1,6 +1,7 @@
 import type { DashboardHelmSummary } from '../../api/client'
 import { Package, ArrowRight } from 'lucide-react'
 import { clsx } from 'clsx'
+import { Tooltip } from '../ui/Tooltip'
 
 interface HelmSummaryProps {
   data: DashboardHelmSummary
@@ -72,9 +73,13 @@ export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
                   <span className="text-xs text-theme-text-primary truncate">{release.name}</span>
                   <span className="text-[10px] text-theme-text-tertiary">{release.namespace}</span>
                 </div>
-                <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                  <span className="text-[10px] text-theme-text-tertiary hidden sm:inline">{release.chart} {release.chartVersion}</span>
-                  <span className={clsx('text-[10px] px-1 py-0.5 rounded', getStatusBadgeClass(release.status))}>
+                <div className="flex items-center gap-1.5 ml-2 min-w-0">
+                  <Tooltip content={`${release.chart} ${release.chartVersion}`} delay={100}>
+                    <span className="text-[10px] text-theme-text-tertiary hidden sm:inline truncate max-w-[150px]">
+                      {release.chart} {release.chartVersion}
+                    </span>
+                  </Tooltip>
+                  <span className={clsx('text-[10px] px-1 py-0.5 rounded shrink-0', getStatusBadgeClass(release.status))}>
                     {release.status}
                   </span>
                 </div>
