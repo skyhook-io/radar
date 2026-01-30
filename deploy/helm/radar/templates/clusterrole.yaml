@@ -93,15 +93,183 @@ rules:
       - customresourcedefinitions
     verbs: ["get", "list", "watch"]
 
-  # Common CRDs (Argo, Knative, etc.) - read-only
-  - apiGroups:
-      - argoproj.io
-      - serving.knative.dev
-      - eventing.knative.dev
-      - cert-manager.io
-      - gateway.networking.k8s.io
+  # CRD access
+  {{- if .Values.rbac.crdGroups.all }}
+  # Wildcard access to all CRDs (rbac.crdGroups.all=true)
+  - apiGroups: ["*"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
+  {{- else }}
+  # Per-group CRD access
+  {{- if .Values.rbac.crdGroups.argo }}
+  - apiGroups: ["argoproj.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.awx }}
+  - apiGroups: ["awx.ansible.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.certManager }}
+  - apiGroups: ["cert-manager.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.cloudnativePg }}
+  - apiGroups: ["cloudnative-pg.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.crossplane }}
+  - apiGroups: ["crossplane.io", "pkg.crossplane.io", "apiextensions.crossplane.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.descheduler }}
+  - apiGroups: ["descheduler.alpha.kubernetes.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.envoyGateway }}
+  - apiGroups: ["gateway.envoyproxy.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.externalDns }}
+  - apiGroups: ["externaldns.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.externalSecrets }}
+  - apiGroups: ["external-secrets.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.flux }}
+  - apiGroups: ["source.toolkit.fluxcd.io", "kustomize.toolkit.fluxcd.io", "helm.toolkit.fluxcd.io", "notification.toolkit.fluxcd.io", "image.toolkit.fluxcd.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.gatewayApi }}
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.gcpMonitoring }}
+  - apiGroups: ["monitoring.googleapis.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.grafana }}
+  - apiGroups: ["monitoring.grafana.com", "tempo.grafana.com", "loki.grafana.com", "grafana.integreatly.org"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.istio }}
+  - apiGroups: ["networking.istio.io", "security.istio.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.karpenter }}
+  - apiGroups: ["karpenter.sh", "karpenter.k8s.aws"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.keda }}
+  - apiGroups: ["keda.sh"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.knative }}
+  - apiGroups: ["serving.knative.dev", "eventing.knative.dev"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kubeshark }}
+  - apiGroups: ["kubeshark.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kured }}
+  - apiGroups: ["kured.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.kyverno }}
+  - apiGroups: ["kyverno.io", "wgpolicyk8s.io", "reports.kyverno.io", "openreports.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.mariadb }}
+  - apiGroups: ["mariadb.mmontes.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.nginx }}
+  - apiGroups: ["nginx.org"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.openshift }}
+  - apiGroups: ["observability.openshift.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.opentelemetry }}
+  - apiGroups: ["opentelemetry.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.prometheus }}
+  - apiGroups: ["monitoring.coreos.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.reflector }}
+  - apiGroups: ["reflector.v1.k8s.emberstack.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.reloader }}
+  - apiGroups: ["reloader.stakater.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.sealedSecrets }}
+  - apiGroups: ["sealed-secrets.bitnami.com"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.strimzi }}
+  - apiGroups: ["strimzi.io", "kafka.strimzi.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.tekton }}
+  - apiGroups: ["tekton.dev"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.traefik }}
+  - apiGroups: ["traefik.io", "traefik.containo.us"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.velero }}
+  - apiGroups: ["velero.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- end }}
+
+  {{- with .Values.rbac.additionalCrdGroups }}
+  # Additional CRD groups from additionalCrdGroups
+  - apiGroups:
+    {{- toYaml . | nindent 6 }}
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
 
   {{- with .Values.rbac.additionalRules }}
   {{- toYaml . | nindent 2 }}
