@@ -154,7 +154,7 @@ release-binaries-dry:
 
 # Interactive release (remote via CI or local)
 release:
-	@./scripts/release.sh
+	@exec ./scripts/release.sh </dev/tty
 
 # ============================================================================
 # Help
