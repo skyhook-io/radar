@@ -31,6 +31,7 @@ var (
 func main() {
 	// Parse flags
 	kubeconfig := flag.String("kubeconfig", "", "Path to kubeconfig file (default: ~/.kube/config)")
+	kubeconfigDir := flag.String("kubeconfig-dir", "", "Comma-separated directories containing kubeconfig files (mutually exclusive with --kubeconfig)")
 	namespace := flag.String("namespace", "", "Initial namespace filter (empty = all namespaces)")
 	port := flag.Int("port", 9280, "Server port")
 	noBrowser := flag.Bool("no-browser", false, "Don't auto-open browser")
@@ -60,15 +61,34 @@ func main() {
 
 	log.Printf("Radar %s starting...", version)
 
+	// Validate mutually exclusive flags
+	if *kubeconfig != "" && *kubeconfigDir != "" {
+		log.Fatalf("--kubeconfig and --kubeconfig-dir are mutually exclusive")
+	}
+
+	// Parse kubeconfig directories if provided
+	var kubeconfigDirs []string
+	if *kubeconfigDir != "" {
+		for _, dir := range strings.Split(*kubeconfigDir, ",") {
+			dir = strings.TrimSpace(dir)
+			if dir != "" {
+				kubeconfigDirs = append(kubeconfigDirs, dir)
+			}
+		}
+	}
+
 	// Initialize K8s client
 	err := k8s.Initialize(k8s.InitOptions{
 		KubeconfigPath: *kubeconfig,
+		KubeconfigDirs: kubeconfigDirs,
 	})
 	if err != nil {
 		log.Fatalf("Failed to initialize K8s client: %v", err)
 	}
 
-	if kubepath := k8s.GetKubeconfigPath(); kubepath != "" {
+	if len(kubeconfigDirs) > 0 {
+		log.Printf("Using kubeconfigs from directories: %v", kubeconfigDirs)
+	} else if kubepath := k8s.GetKubeconfigPath(); kubepath != "" {
 		log.Printf("Using kubeconfig: %s", kubepath)
 	} else {
 		log.Printf("Using in-cluster config")

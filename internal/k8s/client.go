@@ -2,8 +2,10 @@ package k8s
 
 import (
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"k8s.io/client-go/discovery"
@@ -22,6 +24,7 @@ var (
 	initOnce        sync.Once
 	initErr         error
 	kubeconfigPath  string
+	kubeconfigPaths []string // Multiple kubeconfig paths when using --kubeconfig-dir
 	contextName     string
 	clusterName     string
 	// clientMu protects access to client variables during context switches.
@@ -32,6 +35,7 @@ var (
 // InitOptions configures the K8s client initialization
 type InitOptions struct {
 	KubeconfigPath string
+	KubeconfigDirs []string // Directories containing kubeconfig files
 }
 
 // Initialize initializes the K8s client with the given options
@@ -57,18 +61,35 @@ func doInit(opts InitOptions) error {
 	config, err = rest.InClusterConfig()
 	if err != nil {
 		// Fall back to kubeconfig (for local development / CLI usage)
-		kubeconfig := opts.KubeconfigPath
-		if kubeconfig == "" {
-			kubeconfig = os.Getenv("KUBECONFIG")
-		}
-		if kubeconfig == "" {
-			if home := homedir.HomeDir(); home != "" {
-				kubeconfig = filepath.Join(home, ".kube", "config")
+		var loadingRules *clientcmd.ClientConfigLoadingRules
+
+		if len(opts.KubeconfigDirs) > 0 {
+			// Multi-kubeconfig mode: discover and merge configs from directories
+			configs, err := discoverKubeconfigs(opts.KubeconfigDirs)
+			if err != nil {
+				return fmt.Errorf("failed to discover kubeconfigs: %w", err)
 			}
+			if len(configs) == 0 {
+				return fmt.Errorf("no valid kubeconfig files found in directories: %v", opts.KubeconfigDirs)
+			}
+			log.Printf("Discovered %d kubeconfig files from %d directories", len(configs), len(opts.KubeconfigDirs))
+			kubeconfigPaths = configs
+			loadingRules = &clientcmd.ClientConfigLoadingRules{Precedence: configs}
+		} else {
+			// Single kubeconfig mode (existing behavior)
+			kubeconfig := opts.KubeconfigPath
+			if kubeconfig == "" {
+				kubeconfig = os.Getenv("KUBECONFIG")
+			}
+			if kubeconfig == "" {
+				if home := homedir.HomeDir(); home != "" {
+					kubeconfig = filepath.Join(home, ".kube", "config")
+				}
+			}
+			kubeconfigPath = kubeconfig
+			loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
 		}
 
-		// Load kubeconfig to get context/cluster names
-		loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
 		configOverrides := &clientcmd.ConfigOverrides{}
 		kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
 
@@ -81,11 +102,13 @@ func doInit(opts InitOptions) error {
 			}
 		}
 
-		config, err = clientcmd.BuildConfigFromFlags("", kubeconfig)
+		config, err = kubeConfig.ClientConfig()
 		if err != nil {
-			return fmt.Errorf("failed to build kubeconfig from %s: %w", kubeconfig, err)
+			if len(kubeconfigPaths) > 0 {
+				return fmt.Errorf("failed to build kubeconfig from %d files: %w", len(kubeconfigPaths), err)
+			}
+			return fmt.Errorf("failed to build kubeconfig from %s: %w", kubeconfigPath, err)
 		}
-		kubeconfigPath = kubeconfig
 	} else {
 		// In-cluster mode
 		contextName = "in-cluster"
@@ -112,6 +135,47 @@ func doInit(opts InitOptions) error {
 	}
 
 	return nil
+}
+
+// discoverKubeconfigs scans directories for valid kubeconfig files
+func discoverKubeconfigs(dirs []string) ([]string, error) {
+	var configs []string
+	for _, dir := range dirs {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			log.Printf("Warning: cannot read kubeconfig directory %s: %v", dir, err)
+			continue // Skip inaccessible dirs
+		}
+		for _, entry := range entries {
+			if entry.IsDir() {
+				continue
+			}
+			// Skip hidden files and common non-config files
+			name := entry.Name()
+			if strings.HasPrefix(name, ".") {
+				continue
+			}
+			path := filepath.Join(dir, name)
+			if isValidKubeconfig(path) {
+				configs = append(configs, path)
+				log.Printf("Found kubeconfig: %s", path)
+			} else {
+				log.Printf("Skipping invalid kubeconfig: %s", path)
+			}
+		}
+	}
+	return configs, nil
+}
+
+// isValidKubeconfig checks if a file is a valid kubeconfig
+func isValidKubeconfig(path string) bool {
+	// Try to load the file as a kubeconfig
+	config, err := clientcmd.LoadFromFile(path)
+	if err != nil {
+		return false
+	}
+	// A valid kubeconfig should have at least one context or cluster
+	return len(config.Contexts) > 0 || len(config.Clusters) > 0
 }
 
 // GetClient returns the K8s clientset
@@ -165,7 +229,7 @@ func GetClusterName() string {
 
 // IsInCluster returns true if running inside a Kubernetes cluster
 func IsInCluster() bool {
-	return kubeconfigPath == ""
+	return kubeconfigPath == "" && len(kubeconfigPaths) == 0
 }
 
 // ContextInfo represents information about a kubeconfig context
@@ -192,12 +256,19 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 		}, nil
 	}
 
-	kubeconfig := kubeconfigPath
-	if kubeconfig == "" {
-		return nil, fmt.Errorf("kubeconfig path not set")
+	var loadingRules *clientcmd.ClientConfigLoadingRules
+	if len(kubeconfigPaths) > 0 {
+		// Multi-kubeconfig mode
+		loadingRules = &clientcmd.ClientConfigLoadingRules{Precedence: kubeconfigPaths}
+	} else {
+		// Single kubeconfig mode
+		kubeconfig := kubeconfigPath
+		if kubeconfig == "" {
+			return nil, fmt.Errorf("kubeconfig path not set")
+		}
+		loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
 	}
 
-	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
 	configOverrides := &clientcmd.ConfigOverrides{}
 	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
 
@@ -235,13 +306,20 @@ func SwitchContext(name string) error {
 		return fmt.Errorf("cannot switch context when running in-cluster")
 	}
 
-	kubeconfig := kubeconfigPath
-	if kubeconfig == "" {
-		return fmt.Errorf("kubeconfig path not set")
+	var loadingRules *clientcmd.ClientConfigLoadingRules
+	if len(kubeconfigPaths) > 0 {
+		// Multi-kubeconfig mode
+		loadingRules = &clientcmd.ClientConfigLoadingRules{Precedence: kubeconfigPaths}
+	} else {
+		// Single kubeconfig mode
+		kubeconfig := kubeconfigPath
+		if kubeconfig == "" {
+			return fmt.Errorf("kubeconfig path not set")
+		}
+		loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
 	}
 
 	// Build config with the new context
-	loadingRules := &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
 	configOverrides := &clientcmd.ConfigOverrides{CurrentContext: name}
 	kubeConfig := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(loadingRules, configOverrides)
 
@@ -257,10 +335,7 @@ func SwitchContext(name string) error {
 	}
 
 	// Build the REST config for the new context
-	config, err := clientcmd.NewNonInteractiveDeferredLoadingClientConfig(
-		loadingRules,
-		configOverrides,
-	).ClientConfig()
+	config, err := kubeConfig.ClientConfig()
 	if err != nil {
 		return fmt.Errorf("failed to build config for context %q: %w", name, err)
 	}
