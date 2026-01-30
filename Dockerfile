@@ -1,6 +1,13 @@
 # Multi-stage Dockerfile for Radar
+#
+# Usage:
+#   Full build (default):  docker build .
+#   Release (pre-built):   docker build --target release .
+#                          (requires radar-amd64/radar-arm64 binaries in context)
 
+# =============================================================================
 # Stage 1: Build frontend
+# =============================================================================
 FROM node:20-alpine AS frontend-builder
 
 WORKDIR /app/web
@@ -13,7 +20,9 @@ RUN npm ci --prefer-offline --no-audit
 COPY web/ ./
 RUN npm run build
 
+# =============================================================================
 # Stage 2: Build Go backend
+# =============================================================================
 FROM golang:1.25-alpine AS backend-builder
 
 # Install build dependencies
@@ -33,6 +42,8 @@ COPY internal/ internal/
 COPY --from=frontend-builder /app/web/dist internal/static/dist/
 
 # Build arguments
+# TARGETOS and TARGETARCH are automatically set by Docker buildx for multi-platform builds
+# Defaults provided for regular docker build (without buildx)
 ARG VERSION=dev
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
@@ -42,26 +53,39 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
     go build -ldflags "-s -w -X main.version=${VERSION}" \
     -o /radar ./cmd/explorer
 
-# Stage 3: Final minimal image
-FROM gcr.io/distroless/static-debian12:nonroot
+# =============================================================================
+# Stage 3a: Full build (default) - copies from build stages
+# =============================================================================
+FROM gcr.io/distroless/static-debian12:nonroot AS full
 
-# Labels
 LABEL org.opencontainers.image.title="Radar"
 LABEL org.opencontainers.image.description="Modern Kubernetes visibility — topology, traffic, and Helm management"
 LABEL org.opencontainers.image.source="https://github.com/skyhook-io/radar"
 LABEL org.opencontainers.image.vendor="Skyhook"
 
-# Copy the binary
 COPY --from=backend-builder /radar /radar
 
-# Expose port
 EXPOSE 9280
-
-# Run as non-root user (distroless nonroot user is 65532)
 USER nonroot:nonroot
+ENTRYPOINT ["/radar"]
+CMD ["--no-browser"]
 
-# Health check compatible with K8s probes
-# Note: distroless doesn't have curl, K8s probes will be used instead
+# =============================================================================
+# Stage 3b: Release build - uses pre-built binaries from goreleaser
+# Much faster for multi-arch since no QEMU compilation needed
+# Requires: radar-amd64 and radar-arm64 in build context
+# =============================================================================
+FROM gcr.io/distroless/static-debian12:nonroot AS release
 
+LABEL org.opencontainers.image.title="Radar"
+LABEL org.opencontainers.image.description="Modern Kubernetes visibility — topology, traffic, and Helm management"
+LABEL org.opencontainers.image.source="https://github.com/skyhook-io/radar"
+LABEL org.opencontainers.image.vendor="Skyhook"
+
+ARG TARGETARCH
+COPY radar-${TARGETARCH} /radar
+
+EXPOSE 9280
+USER nonroot:nonroot
 ENTRYPOINT ["/radar"]
 CMD ["--no-browser"]

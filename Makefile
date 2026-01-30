@@ -1,5 +1,5 @@
 .PHONY: build install clean dev frontend backend test lint help restart restart-fe kill watch-backend watch-frontend
-.PHONY: release release-binaries release-docker docker docker-push
+.PHONY: release release-binaries release-docker docker docker-multiarch docker-push
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -X main.version=$(VERSION)
@@ -123,9 +123,21 @@ fmt:
 # Docker & Helm
 # ============================================================================
 
-# Docker build
+# Docker build (single arch, for local testing)
 docker:
 	docker build -t $(DOCKER_REPO):$(VERSION) -t $(DOCKER_REPO):latest .
+
+# Docker build multi-arch (amd64 + arm64, for production)
+docker-multiarch:
+	@docker buildx inspect radar-builder &>/dev/null || docker buildx create --name radar-builder --use
+	docker buildx use radar-builder
+	docker buildx build \
+		--platform linux/amd64,linux/arm64 \
+		--build-arg VERSION=$(VERSION) \
+		-t $(DOCKER_REPO):$(VERSION) \
+		-t $(DOCKER_REPO):latest \
+		--push \
+		.
 
 docker-push:
 	docker push $(DOCKER_REPO):$(VERSION)
@@ -168,8 +180,9 @@ help:
 	@echo "  make test            - Run tests"
 	@echo ""
 	@echo "Docker & In-Cluster:"
-	@echo "  make docker          - Build Docker image"
-	@echo "  make docker-push     - Push to GHCR"
+	@echo "  make docker           - Build Docker image (local arch)"
+	@echo "  make docker-multiarch - Build multi-arch image (amd64+arm64) and push"
+	@echo "  make docker-push      - Push to GHCR"
 	@echo ""
 	@echo "Release:"
 	@echo "  make release              - Interactive release (prompts for version)"

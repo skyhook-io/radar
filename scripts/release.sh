@@ -206,14 +206,50 @@ release_binaries() {
 release_docker() {
   local docker_tag=${VERSION#v}  # Strip 'v' prefix for Docker tags
 
-  info "Building Docker image..."
-  docker build -t "$DOCKER_REPO:$docker_tag" -t "$DOCKER_REPO:latest" .
+  info "Building multi-arch Docker image (amd64 + arm64)..."
 
-  info "Pushing Docker image..."
-  docker push "$DOCKER_REPO:$docker_tag"
-  docker push "$DOCKER_REPO:latest"
+  # Ensure buildx builder exists
+  if ! docker buildx inspect radar-builder &> /dev/null; then
+    info "Creating buildx builder..."
+    docker buildx create --name radar-builder --use
+  else
+    docker buildx use radar-builder
+  fi
 
-  info "Docker image pushed: $DOCKER_REPO:$docker_tag"
+  # Check if goreleaser binaries exist (from release_binaries step)
+  if [ -f "dist/radar_linux_amd64_v1/kubectl-radar" ] && [ -f "dist/radar_linux_arm64_v8.0/kubectl-radar" ]; then
+    info "Using pre-built binaries from goreleaser (fast path)"
+
+    # Stage binaries with arch-specific names for Dockerfile
+    cp dist/radar_linux_amd64_v1/kubectl-radar radar-amd64
+    cp dist/radar_linux_arm64_v8.0/kubectl-radar radar-arm64
+
+    # Build using --target release (skips compilation, just copies binaries)
+    docker buildx build \
+      --platform linux/amd64,linux/arm64 \
+      --target release \
+      -t "$DOCKER_REPO:$docker_tag" \
+      -t "$DOCKER_REPO:latest" \
+      --push \
+      .
+
+    # Cleanup staged binaries
+    rm -f radar-amd64 radar-arm64
+  else
+    warn "Pre-built binaries not found, falling back to full build (slow)"
+
+    # Full build from source using --target full
+    docker buildx build \
+      --platform linux/amd64,linux/arm64 \
+      --target full \
+      --build-arg VERSION="$docker_tag" \
+      -t "$DOCKER_REPO:$docker_tag" \
+      -t "$DOCKER_REPO:latest" \
+      --push \
+      .
+  fi
+
+  info "Multi-arch Docker image pushed: $DOCKER_REPO:$docker_tag (amd64, arm64)"
 }
 
 release_helm() {
