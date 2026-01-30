@@ -16,6 +16,11 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
 	explorerErrors "github.com/skyhook-io/radar/internal/errors"
@@ -441,6 +446,59 @@ func normalizeKind(kind string) string {
 	return strings.ToLower(kind)
 }
 
+// setTypeMeta sets the APIVersion and Kind fields on typed resources.
+// Kubernetes informers don't populate these fields, but users expect to see them in YAML.
+func setTypeMeta(resource any) {
+	switch r := resource.(type) {
+	case *corev1.Pod:
+		r.APIVersion = "v1"
+		r.Kind = "Pod"
+	case *corev1.Service:
+		r.APIVersion = "v1"
+		r.Kind = "Service"
+	case *corev1.Node:
+		r.APIVersion = "v1"
+		r.Kind = "Node"
+	case *corev1.Namespace:
+		r.APIVersion = "v1"
+		r.Kind = "Namespace"
+	case *corev1.ConfigMap:
+		r.APIVersion = "v1"
+		r.Kind = "ConfigMap"
+	case *corev1.Secret:
+		r.APIVersion = "v1"
+		r.Kind = "Secret"
+	case *corev1.PersistentVolumeClaim:
+		r.APIVersion = "v1"
+		r.Kind = "PersistentVolumeClaim"
+	case *appsv1.Deployment:
+		r.APIVersion = "apps/v1"
+		r.Kind = "Deployment"
+	case *appsv1.DaemonSet:
+		r.APIVersion = "apps/v1"
+		r.Kind = "DaemonSet"
+	case *appsv1.StatefulSet:
+		r.APIVersion = "apps/v1"
+		r.Kind = "StatefulSet"
+	case *appsv1.ReplicaSet:
+		r.APIVersion = "apps/v1"
+		r.Kind = "ReplicaSet"
+	case *networkingv1.Ingress:
+		r.APIVersion = "networking.k8s.io/v1"
+		r.Kind = "Ingress"
+	case *batchv1.Job:
+		r.APIVersion = "batch/v1"
+		r.Kind = "Job"
+	case *batchv1.CronJob:
+		r.APIVersion = "batch/v1"
+		r.Kind = "CronJob"
+	case *autoscalingv2.HorizontalPodAutoscaler:
+		r.APIVersion = "autoscaling/v2"
+		r.Kind = "HorizontalPodAutoscaler"
+	}
+	// Unstructured resources (CRDs) already have APIVersion and Kind set
+}
+
 func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	kind := normalizeKind(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
@@ -520,6 +578,9 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusNotFound, err.Error())
 		return
 	}
+
+	// Set APIVersion and Kind for typed resources (informers don't populate these)
+	setTypeMeta(resource)
 
 	// Get relationships from cached topology
 	var relationships *topology.Relationships

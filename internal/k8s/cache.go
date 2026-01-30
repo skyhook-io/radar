@@ -1042,7 +1042,24 @@ func (c *ResourceCache) GetDynamicWithGroup(ctx context.Context, kind string, na
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
 	}
 
-	return dynamicCache.Get(gvr, namespace, name)
+	u, err := dynamicCache.Get(gvr, namespace, name)
+	if err != nil {
+		return nil, err
+	}
+
+	// Ensure apiVersion and kind are set (informers may not populate these)
+	if u.GetAPIVersion() == "" || u.GetKind() == "" {
+		apiVersion := gvr.Version
+		if gvr.Group != "" {
+			apiVersion = gvr.Group + "/" + gvr.Version
+		}
+		u.SetAPIVersion(apiVersion)
+		if kindName := discovery.GetKindForGVR(gvr); kindName != "" {
+			u.SetKind(kindName)
+		}
+	}
+
+	return u, nil
 }
 
 // ResourceStatus holds status information for a resource

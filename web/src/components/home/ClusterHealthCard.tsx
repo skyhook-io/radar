@@ -68,8 +68,6 @@ export function ClusterHealthCard({
 }: ClusterHealthCardProps) {
   void _topCRDs // Reserved for future CRD display
 
-  const allHealthy = health.warning === 0 && health.error === 0
-
   // Pods ring segments
   const podsTotal = health.healthy + health.warning + health.error
   const podsRingSegments = [
@@ -104,14 +102,7 @@ export function ClusterHealthCard({
   return (
     <div className="rounded-lg border border-theme-border-light bg-theme-surface/50 overflow-hidden">
       {/* Main health section - three columns */}
-      <div className={clsx(
-        'px-6 py-5 border-b',
-        allHealthy
-          ? 'border-green-500/20 bg-green-500/5'
-          : health.error > 0
-            ? 'border-red-500/20 bg-red-500/5'
-            : 'border-yellow-500/20 bg-yellow-500/5'
-      )}>
+      <div className="px-6 py-5 border-b border-theme-border-light">
         <div className="flex items-stretch gap-8">
           {/* Left: Cluster info */}
           <div className="flex flex-col justify-center min-w-[180px] pr-8 border-r border-theme-border/50">
