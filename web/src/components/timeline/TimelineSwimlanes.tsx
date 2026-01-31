@@ -81,6 +81,11 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
 
   // 1. Base: Kind priority (tiebreaker, lower values than before)
   const kindScores: Record<string, number> = {
+    // GitOps controllers - top priority
+    Application: 55, // ArgoCD Application
+    Kustomization: 55, HelmRelease: 55, // FluxCD controllers
+    GitRepository: 52, OCIRepository: 52, HelmRepository: 52, // FluxCD sources
+    // Core workloads
     Deployment: 50, Rollout: 50, StatefulSet: 50, DaemonSet: 50,
     Service: 45, Ingress: 45,
     Job: 40, CronJob: 40, Workflow: 40, CronWorkflow: 40,

@@ -22,6 +22,7 @@ import type {
   ArtifactHubSearchResult,
   ArtifactHubChartDetail,
 } from '../types'
+import type { GitOpsOperationResponse } from '../types/gitops'
 
 const API_BASE = '/api'
 
@@ -1155,6 +1156,159 @@ export function useArtifactHubChart(repoName: string, chartName: string, version
     queryFn: () => fetchJSON(path),
     enabled: enabled && Boolean(repoName && chartName),
     staleTime: 60000,
+  })
+}
+
+// ============================================================================
+// GitOps Mutation Factory
+// ============================================================================
+
+interface GitOpsMutationConfig<TVariables> {
+  getPath: (variables: TVariables) => string
+  errorMessage: string
+  successMessage: string
+  getInvalidateKeys: (variables: TVariables) => (string | undefined)[][]
+}
+
+/**
+ * Factory function for creating GitOps mutation hooks with consistent patterns.
+ * Handles fetch, error handling, meta messages, and query invalidation.
+ */
+function createGitOpsMutation<TVariables>(config: GitOpsMutationConfig<TVariables>) {
+  return function useGitOpsMutation() {
+    const queryClient = useQueryClient()
+    return useMutation<GitOpsOperationResponse, Error, TVariables>({
+      mutationFn: async (variables: TVariables): Promise<GitOpsOperationResponse> => {
+        const response = await fetch(`${API_BASE}${config.getPath(variables)}`, {
+          method: 'POST',
+        })
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+          throw new Error(error.error || `HTTP ${response.status}`)
+        }
+        return response.json() as Promise<GitOpsOperationResponse>
+      },
+      meta: {
+        errorMessage: config.errorMessage,
+        successMessage: config.successMessage,
+      },
+      onSuccess: (_, variables) => {
+        config.getInvalidateKeys(variables).forEach(key =>
+          queryClient.invalidateQueries({ queryKey: key })
+        )
+      },
+    })
+  }
+}
+
+// Common variable types
+type FluxResourceVars = { kind: string; namespace: string; name: string }
+type ArgoAppVars = { namespace: string; name: string }
+
+// Standard invalidation patterns
+const fluxInvalidateKeys = (v: FluxResourceVars) => [
+  ['resources', v.kind],
+  ['resource', v.kind, v.namespace, v.name],
+]
+const argoInvalidateKeys = (v: ArgoAppVars) => [
+  ['resources', 'applications'],
+  ['resource', 'applications', v.namespace, v.name],
+]
+
+// ============================================================================
+// FluxCD API hooks
+// ============================================================================
+
+export const useFluxReconcile = createGitOpsMutation<FluxResourceVars>({
+  getPath: (v) => `/flux/${v.kind}/${v.namespace}/${v.name}/reconcile`,
+  errorMessage: 'Failed to trigger reconciliation',
+  successMessage: 'Reconciliation triggered',
+  getInvalidateKeys: fluxInvalidateKeys,
+})
+
+export const useFluxSuspend = createGitOpsMutation<FluxResourceVars>({
+  getPath: (v) => `/flux/${v.kind}/${v.namespace}/${v.name}/suspend`,
+  errorMessage: 'Failed to suspend resource',
+  successMessage: 'Resource suspended',
+  getInvalidateKeys: fluxInvalidateKeys,
+})
+
+export const useFluxResume = createGitOpsMutation<FluxResourceVars>({
+  getPath: (v) => `/flux/${v.kind}/${v.namespace}/${v.name}/resume`,
+  errorMessage: 'Failed to resume resource',
+  successMessage: 'Resource resumed',
+  getInvalidateKeys: fluxInvalidateKeys,
+})
+
+export const useFluxSyncWithSource = createGitOpsMutation<FluxResourceVars>({
+  getPath: (v) => `/flux/${v.kind}/${v.namespace}/${v.name}/sync-with-source`,
+  errorMessage: 'Failed to sync with source',
+  successMessage: 'Sync with source triggered',
+  getInvalidateKeys: (v) => [
+    ...fluxInvalidateKeys(v),
+    // Also invalidate source resources as they were reconciled too
+    ['resources', 'gitrepositories'],
+    ['resources', 'ocirepositories'],
+    ['resources', 'helmrepositories'],
+  ],
+})
+
+// ============================================================================
+// ArgoCD API hooks
+// ============================================================================
+
+export const useArgoSync = createGitOpsMutation<ArgoAppVars>({
+  getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/sync`,
+  errorMessage: 'Failed to trigger sync',
+  successMessage: 'Sync initiated',
+  getInvalidateKeys: argoInvalidateKeys,
+})
+
+export const useArgoTerminate = createGitOpsMutation<ArgoAppVars>({
+  getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/terminate`,
+  errorMessage: 'Failed to terminate sync',
+  successMessage: 'Sync terminated',
+  getInvalidateKeys: argoInvalidateKeys,
+})
+
+export const useArgoSuspend = createGitOpsMutation<ArgoAppVars>({
+  getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/suspend`,
+  errorMessage: 'Failed to suspend application',
+  successMessage: 'Application suspended',
+  getInvalidateKeys: argoInvalidateKeys,
+})
+
+export const useArgoResume = createGitOpsMutation<ArgoAppVars>({
+  getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/resume`,
+  errorMessage: 'Failed to resume application',
+  successMessage: 'Application resumed',
+  getInvalidateKeys: argoInvalidateKeys,
+})
+
+// useArgoRefresh has a unique parameter (hard), so it's defined separately
+export function useArgoRefresh() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ namespace, name, hard = false }: { namespace: string; name: string; hard?: boolean }) => {
+      const params = hard ? '?type=hard' : ''
+      const response = await fetch(`${API_BASE}/argo/applications/${namespace}/${name}/refresh${params}`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json()
+    },
+    meta: {
+      errorMessage: 'Failed to refresh application',
+      successMessage: 'Application refreshed',
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['resources', 'applications'] })
+      queryClient.invalidateQueries({ queryKey: ['resource', 'applications', variables.namespace, variables.name] })
+    },
   })
 }
 

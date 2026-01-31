@@ -1,6 +1,7 @@
 // Utility functions for resource display in tables
 
 import { formatCPUString, formatMemoryString } from '../../utils/format'
+import type { FluxCondition } from '../../types/gitops'
 
 // ============================================================================
 // STATUS & HEALTH UTILITIES
@@ -922,6 +923,337 @@ export function getCertificateExpiry(cert: any): { text: string; level: HealthLe
     return { text: `${daysUntilExpiry}d`, level: 'degraded' }
   }
   return { text: `${daysUntilExpiry}d`, level: 'healthy' }
+}
+
+// ============================================================================
+// FLUXCD UTILITIES
+// ============================================================================
+
+/**
+ * Generic status function for FluxCD resources that follow the standard Ready condition pattern.
+ * Works for: GitRepository, OCIRepository, HelmRepository, Alert
+ */
+export function getFluxResourceStatus(resource: any): StatusBadge {
+  const conditions: FluxCondition[] = resource.status?.conditions || []
+  const readyCondition = conditions.find((c) => c.type === 'Ready')
+
+  if (resource.spec?.suspend) {
+    return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+  }
+  if (readyCondition?.status === 'True') {
+    return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
+  }
+  if (readyCondition?.status === 'False') {
+    return { text: 'Not Ready', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+  return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+}
+
+// Aliases for specific resource types (all use the same logic)
+export const getGitRepositoryStatus = getFluxResourceStatus
+export const getOCIRepositoryStatus = getFluxResourceStatus
+export const getHelmRepositoryStatus = getFluxResourceStatus
+export const getFluxAlertStatus = getFluxResourceStatus
+
+/**
+ * Kustomization has additional Healthy condition check
+ */
+export function getKustomizationStatus(ks: any): StatusBadge {
+  const conditions: FluxCondition[] = ks.status?.conditions || []
+  const readyCondition = conditions.find((c) => c.type === 'Ready')
+  const healthyCondition = conditions.find((c) => c.type === 'Healthy')
+
+  if (ks.spec?.suspend) {
+    return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+  }
+  if (readyCondition?.status === 'True') {
+    // Check health condition for more nuanced status
+    if (healthyCondition?.status === 'False') {
+      return { text: 'Unhealthy', color: healthColors.degraded, level: 'degraded' }
+    }
+    return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
+  }
+  if (readyCondition?.status === 'False') {
+    return { text: 'Not Ready', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+  return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+}
+
+/**
+ * HelmRelease has Released condition and remediation detection
+ */
+export function getFluxHelmReleaseStatus(hr: any): StatusBadge {
+  const conditions: FluxCondition[] = hr.status?.conditions || []
+  const readyCondition = conditions.find((c) => c.type === 'Ready')
+  const releasedCondition = conditions.find((c) => c.type === 'Released')
+
+  if (hr.spec?.suspend) {
+    return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+  }
+  if (readyCondition?.status === 'True') {
+    return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
+  }
+  if (readyCondition?.status === 'False') {
+    // Check if it's a remediation in progress
+    const reason = readyCondition?.reason || ''
+    if (reason.includes('Remediation') || reason.includes('Retry')) {
+      return { text: 'Remediating', color: healthColors.degraded, level: 'degraded' }
+    }
+    return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+  if (releasedCondition?.status === 'True') {
+    return { text: 'Released', color: healthColors.healthy, level: 'healthy' }
+  }
+  return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+}
+
+// ============================================================================
+// ARGOCD UTILITIES
+// ============================================================================
+
+export function getArgoApplicationStatus(app: any): StatusBadge {
+  const health = app.status?.health?.status
+  const sync = app.status?.sync?.status
+  const opPhase = app.status?.operationState?.phase
+
+  // Check for suspended (no automated sync policy)
+  const hasAutomatedSync = !!app.spec?.syncPolicy?.automated
+  if (health === 'Suspended' || (!hasAutomatedSync && app.metadata?.annotations?.['radar.skyhook.io/suspended-prune'])) {
+    return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
+  }
+
+  // Operation in progress
+  if (opPhase === 'Running') {
+    return { text: 'Syncing', color: healthColors.degraded, level: 'degraded' }
+  }
+
+  // Failed operation
+  if (opPhase === 'Failed' || opPhase === 'Error') {
+    return { text: 'Failed', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+
+  // Health-based status
+  if (health === 'Healthy' && sync === 'Synced') {
+    return { text: 'Healthy', color: healthColors.healthy, level: 'healthy' }
+  }
+  if (health === 'Degraded') {
+    return { text: 'Degraded', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+  if (health === 'Progressing') {
+    return { text: 'Progressing', color: healthColors.degraded, level: 'degraded' }
+  }
+  if (health === 'Missing') {
+    return { text: 'Missing', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+
+  // Sync-based status
+  if (sync === 'OutOfSync') {
+    return { text: 'OutOfSync', color: healthColors.degraded, level: 'degraded' }
+  }
+
+  return { text: health || sync || 'Unknown', color: healthColors.unknown, level: 'unknown' }
+}
+
+// ============================================================================
+// FLUXCD TABLE CELL UTILITIES
+// ============================================================================
+
+export function getGitRepositoryUrl(repo: any): string {
+  return repo.spec?.url || '-'
+}
+
+export function getGitRepositoryRef(repo: any): string {
+  const ref = repo.spec?.ref
+  if (!ref) return '-'
+  if (ref.branch) return ref.branch
+  if (ref.tag) return ref.tag
+  if (ref.semver) return ref.semver
+  if (ref.commit) return ref.commit.substring(0, 7)
+  return '-'
+}
+
+export function getGitRepositoryRevision(repo: any): string {
+  const artifact = repo.status?.artifact
+  if (!artifact?.revision) return '-'
+  // Format: "branch@sha1:abc123..." or just "sha1:abc123"
+  const rev = artifact.revision
+  const shaMatch = rev.match(/sha1:([a-f0-9]+)/)
+  if (shaMatch) return shaMatch[1].substring(0, 7)
+  return rev.substring(0, 12)
+}
+
+export function getOCIRepositoryUrl(repo: any): string {
+  return repo.spec?.url || '-'
+}
+
+export function getOCIRepositoryRef(repo: any): string {
+  const ref = repo.spec?.ref
+  if (!ref) return '-'
+  if (ref.tag) return ref.tag
+  if (ref.semver) return ref.semver
+  if (ref.digest) return ref.digest.substring(0, 12)
+  return '-'
+}
+
+export function getOCIRepositoryRevision(repo: any): string {
+  const artifact = repo.status?.artifact
+  if (!artifact?.revision) return '-'
+  // Usually a digest like "sha256:abc123..."
+  const rev = artifact.revision
+  if (rev.startsWith('sha256:')) return rev.substring(7, 19)
+  return rev.substring(0, 12)
+}
+
+export function getHelmRepositoryUrl(repo: any): string {
+  return repo.spec?.url || '-'
+}
+
+export function getHelmRepositoryType(repo: any): string {
+  return repo.spec?.type || 'default'
+}
+
+export function getKustomizationSource(ks: any): string {
+  const ref = ks.spec?.sourceRef
+  if (!ref) return '-'
+  return `${ref.kind}/${ref.name}`
+}
+
+export function getKustomizationPath(ks: any): string {
+  return ks.spec?.path || './'
+}
+
+export function getKustomizationInventory(ks: any): number {
+  return ks.status?.inventory?.entries?.length || 0
+}
+
+export function getFluxHelmReleaseChart(hr: any): string {
+  const chart = hr.spec?.chart?.spec
+  if (!chart) return '-'
+  return chart.chart || '-'
+}
+
+export function getFluxHelmReleaseVersion(hr: any): string {
+  const chart = hr.spec?.chart?.spec
+  if (!chart?.version) return '*'
+  return chart.version
+}
+
+export function getFluxHelmReleaseRevision(hr: any): number {
+  return hr.status?.lastAttemptedRevision || hr.status?.lastAppliedRevision || 0
+}
+
+export function getFluxAlertProvider(alert: any): string {
+  const ref = alert.spec?.providerRef
+  if (!ref) return '-'
+  return ref.name || '-'
+}
+
+export function getFluxAlertEventCount(alert: any): number {
+  return alert.spec?.eventSources?.length || 0
+}
+
+// ============================================================================
+// ARGOCD TABLE CELL UTILITIES
+// ============================================================================
+
+export function getArgoApplicationProject(app: any): string {
+  return app.spec?.project || 'default'
+}
+
+export function getArgoApplicationSync(app: any): { status: string; color: string } {
+  const sync = app.status?.sync?.status
+  switch (sync) {
+    case 'Synced':
+      return { status: 'Synced', color: healthColors.healthy }
+    case 'OutOfSync':
+      return { status: 'OutOfSync', color: healthColors.degraded }
+    default:
+      return { status: sync || 'Unknown', color: healthColors.unknown }
+  }
+}
+
+export function getArgoApplicationHealth(app: any): { status: string; color: string } {
+  const health = app.status?.health?.status
+  switch (health) {
+    case 'Healthy':
+      return { status: 'Healthy', color: healthColors.healthy }
+    case 'Progressing':
+      return { status: 'Progressing', color: healthColors.degraded }
+    case 'Degraded':
+      return { status: 'Degraded', color: healthColors.unhealthy }
+    case 'Suspended':
+      return { status: 'Suspended', color: healthColors.degraded }
+    case 'Missing':
+      return { status: 'Missing', color: healthColors.unhealthy }
+    default:
+      return { status: health || 'Unknown', color: healthColors.unknown }
+  }
+}
+
+export function getArgoApplicationRepo(app: any): string {
+  // Can be source (single) or sources (multi-source)
+  const source = app.spec?.source || app.spec?.sources?.[0]
+  if (!source?.repoURL) return '-'
+  // Shorten the URL for display
+  const url = source.repoURL
+  try {
+    const parsed = new URL(url)
+    return parsed.pathname.replace(/^\//, '').replace(/\.git$/, '')
+  } catch {
+    return url
+  }
+}
+
+export function getArgoApplicationSetGenerators(appSet: any): string {
+  const generators = appSet.spec?.generators || []
+  if (generators.length === 0) return '-'
+  // Get the type of each generator
+  const types = generators.map((g: any) => {
+    const keys = Object.keys(g)
+    return keys[0] || 'unknown'
+  })
+  return types.join(', ')
+}
+
+export function getArgoApplicationSetTemplate(appSet: any): string {
+  const template = appSet.spec?.template?.metadata?.name
+  return template || '-'
+}
+
+export function getArgoApplicationSetAppCount(appSet: any): number {
+  return appSet.status?.conditions?.find((c: any) => c.type === 'ResourcesUpToDate')
+    ? appSet.status?.applicationStatus?.length || 0
+    : 0
+}
+
+export function getArgoApplicationSetStatus(appSet: any): StatusBadge {
+  const conditions = appSet.status?.conditions || []
+  const errorCondition = conditions.find((c: any) => c.type === 'ErrorOccurred' && c.status === 'True')
+  if (errorCondition) {
+    return { text: 'Error', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+  const resourcesUpToDate = conditions.find((c: any) => c.type === 'ResourcesUpToDate')
+  if (resourcesUpToDate?.status === 'True') {
+    return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
+  }
+  return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+}
+
+export function getArgoAppProjectDescription(project: any): string {
+  return project.spec?.description || '-'
+}
+
+export function getArgoAppProjectDestinations(project: any): number {
+  const destinations = project.spec?.destinations || []
+  // '*' means all, count as 1
+  if (destinations.some((d: any) => d.server === '*' && d.namespace === '*')) return Infinity
+  return destinations.length
+}
+
+export function getArgoAppProjectSources(project: any): number {
+  const sources = project.spec?.sourceRepos || []
+  if (sources.includes('*')) return Infinity
+  return sources.length
 }
 
 // ============================================================================

@@ -85,6 +85,10 @@ export const NODE_DIMENSIONS: Record<NodeKind, { width: number; height: number }
   Service: { width: 260, height: 56 },
   Deployment: { width: 280, height: 56 },
   Rollout: { width: 280, height: 56 },
+  Application: { width: 300, height: 56 }, // ArgoCD Application
+  Kustomization: { width: 300, height: 56 }, // FluxCD Kustomization
+  HelmRelease: { width: 280, height: 56 }, // FluxCD HelmRelease
+  GitRepository: { width: 280, height: 56 }, // FluxCD GitRepository
   DaemonSet: { width: 280, height: 56 },
   StatefulSet: { width: 280, height: 56 },
   ReplicaSet: { width: 280, height: 56 },
@@ -151,6 +155,13 @@ function getIconColor(kind: NodeKind): string {
     case 'StatefulSet':
     case 'ReplicaSet':
       return 'text-emerald-400'
+    case 'Application':
+      return 'text-orange-400' // ArgoCD brand color
+    case 'Kustomization':
+    case 'HelmRelease':
+      return 'text-sky-400' // FluxCD - distinct from ArgoCD
+    case 'GitRepository':
+      return 'text-teal-400' // FluxCD source
     case 'Pod':
     case 'PodGroup':
       return 'text-lime-400'
@@ -186,6 +197,30 @@ function getSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string 
       const ready = nodeData.readyReplicas ?? 0
       const total = nodeData.totalReplicas ?? 0
       return `${ready}/${total} ready`
+    }
+    case 'Application': {
+      // ArgoCD Application - show sync and health status
+      const syncStatus = (nodeData.syncStatus as string) || 'Unknown'
+      const healthStatus = (nodeData.healthStatus as string) || 'Unknown'
+      return `${syncStatus} • ${healthStatus}`
+    }
+    case 'Kustomization': {
+      // FluxCD Kustomization - show ready status and resource count
+      const ready = (nodeData.ready as string) || 'Unknown'
+      const resources = nodeData.resourceCount as number
+      return resources ? `${ready} • ${resources} resources` : ready
+    }
+    case 'HelmRelease': {
+      // FluxCD HelmRelease - show ready status and revision
+      const ready = (nodeData.ready as string) || 'Unknown'
+      const revision = nodeData.revision as number
+      return revision ? `${ready} • rev ${revision}` : ready
+    }
+    case 'GitRepository': {
+      // FluxCD GitRepository - show ready status and branch/revision
+      const ready = (nodeData.ready as string) || 'Unknown'
+      const branch = nodeData.branch as string
+      return branch ? `${ready} • ${branch}` : ready
     }
     case 'Pod':
       return (nodeData.phase as string) || 'Unknown'

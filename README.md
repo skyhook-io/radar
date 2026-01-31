@@ -3,7 +3,7 @@
 **Modern Kubernetes visibility.**
 <br>Local-first. No account. No cloud dependency. Fast.
 
-Topology, event timeline, and service traffic — plus resource browsing and Helm management.
+Topology, event timeline, and service traffic — plus resource browsing, Helm management, and GitOps support for FluxCD and ArgoCD.
 
 [![CI](https://github.com/skyhook-io/radar/actions/workflows/ci.yml/badge.svg)](https://github.com/skyhook-io/radar/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/skyhook-io/radar?logo=github)](https://github.com/skyhook-io/radar/releases/latest)
@@ -12,7 +12,7 @@ Topology, event timeline, and service traffic — plus resource browsing and Hel
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 
-Visualize your cluster topology, browse resources, stream logs, exec into pods, manage Helm releases, and forward ports — all from a single binary with zero cluster-side installation.
+Visualize your cluster topology, browse resources, stream logs, exec into pods, manage Helm releases, monitor GitOps workflows (FluxCD & ArgoCD), and forward ports — all from a single binary with zero cluster-side installation.
 
 <p align="center">
   <img src="docs/screenshot.png" alt="Radar Screenshot" width="800">
@@ -163,6 +163,17 @@ Manage Helm releases deployed in your cluster.
 - Inspect values, compare revisions, view release history
 - Upgrade, rollback, or uninstall releases directly from the UI
 
+### GitOps
+
+Monitor and manage FluxCD and ArgoCD resources with unified status views and actions.
+
+- **FluxCD**: GitRepository, OCIRepository, HelmRepository, Kustomization, HelmRelease, Alert
+- **ArgoCD**: Application, ApplicationSet, AppProject
+- Real-time sync status, health indicators, and reconciliation countdowns
+- Trigger reconciliation, suspend/resume resources, and view managed resource inventory
+- Problem detection with clear alerts for degraded or out-of-sync resources
+- **Note**: Topology connections between GitOps resources and managed workloads only appear when both are in the same cluster. FluxCD typically deploys to its own cluster. ArgoCD often manages remote clusters — connect Radar to the target cluster to see workloads, or to the ArgoCD cluster to see Application status.
+
 ### Traffic
 
 Visualize live network traffic between services using Hubble or Caretta.
@@ -189,6 +200,10 @@ Visualize live network traffic between services using Hubble or Caretta.
 | **Storage** | PersistentVolumeClaims, PersistentVolumes, StorageClasses |
 | **Autoscaling** | HorizontalPodAutoscalers |
 | **Cluster** | Nodes, Namespaces, ServiceAccounts, Events |
+| **GitOps (FluxCD)** | GitRepository, OCIRepository, HelmRepository, Kustomization, HelmRelease, Alert |
+| **GitOps (ArgoCD)** | Application, ApplicationSet, AppProject |
+| **Argo Rollouts** | Rollout |
+| **Argo Workflows** | Workflow, WorkflowTemplate |
 | **CRDs** | Any Custom Resource Definition in your cluster |
 
 ---

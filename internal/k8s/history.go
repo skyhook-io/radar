@@ -11,6 +11,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // Type aliases - these types are defined in the timeline package
@@ -49,6 +50,14 @@ func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
 		changes, summaryParts = diffNode(oldObj, newObj)
 	case "PersistentVolumeClaim":
 		changes, summaryParts = diffPVC(oldObj, newObj)
+	case "Application":
+		changes, summaryParts = diffApplication(oldObj, newObj)
+	case "Kustomization":
+		changes, summaryParts = diffKustomization(oldObj, newObj)
+	case "HelmRelease":
+		changes, summaryParts = diffFluxHelmRelease(oldObj, newObj)
+	case "GitRepository", "OCIRepository", "HelmRepository":
+		changes, summaryParts = diffFluxSource(oldObj, newObj, kind)
 	default:
 		return nil
 	}
@@ -969,6 +978,551 @@ func diffPVC(oldObj, newObj any) ([]FieldChange, []string) {
 	}
 
 	return changes, summary
+}
+
+// diffApplication computes diff for ArgoCD Application resources (CRD)
+func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
+	oldApp, ok1 := oldObj.(*unstructured.Unstructured)
+	newApp, ok2 := newObj.(*unstructured.Unstructured)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	// Extract status fields
+	oldStatus, _, _ := unstructured.NestedMap(oldApp.Object, "status")
+	newStatus, _, _ := unstructured.NestedMap(newApp.Object, "status")
+
+	// Check sync status
+	oldSync, _, _ := unstructured.NestedString(oldStatus, "sync", "status")
+	newSync, _, _ := unstructured.NestedString(newStatus, "sync", "status")
+	if oldSync != newSync && oldSync != "" && newSync != "" {
+		changes = append(changes, FieldChange{
+			Path:     "status.sync.status",
+			OldValue: oldSync,
+			NewValue: newSync,
+		})
+		summary = append(summary, fmt.Sprintf("sync: %s→%s", oldSync, newSync))
+	}
+
+	// Check health status
+	oldHealth, _, _ := unstructured.NestedString(oldStatus, "health", "status")
+	newHealth, _, _ := unstructured.NestedString(newStatus, "health", "status")
+	if oldHealth != newHealth && oldHealth != "" && newHealth != "" {
+		changes = append(changes, FieldChange{
+			Path:     "status.health.status",
+			OldValue: oldHealth,
+			NewValue: newHealth,
+		})
+		summary = append(summary, fmt.Sprintf("health: %s→%s", oldHealth, newHealth))
+	}
+
+	// Check revision (Git commit SHA)
+	oldRevision, _, _ := unstructured.NestedString(oldStatus, "sync", "revision")
+	newRevision, _, _ := unstructured.NestedString(newStatus, "sync", "revision")
+	if oldRevision != newRevision && newRevision != "" {
+		changes = append(changes, FieldChange{
+			Path:     "status.sync.revision",
+			OldValue: truncateRevision(oldRevision),
+			NewValue: truncateRevision(newRevision),
+		})
+		if oldRevision == "" {
+			summary = append(summary, fmt.Sprintf("revision: %s", truncateRevision(newRevision)))
+		} else {
+			summary = append(summary, fmt.Sprintf("revision: %s→%s", truncateRevision(oldRevision), truncateRevision(newRevision)))
+		}
+	}
+
+	// Check operation state (sync operation started/completed)
+	oldOp, oldOpExists, _ := unstructured.NestedMap(oldStatus, "operationState")
+	newOp, newOpExists, _ := unstructured.NestedMap(newStatus, "operationState")
+
+	// Operation started
+	if !oldOpExists && newOpExists {
+		opPhase, _, _ := unstructured.NestedString(newOp, "phase")
+		opMessage, _, _ := unstructured.NestedString(newOp, "message")
+		changes = append(changes, FieldChange{
+			Path:     "status.operationState.phase",
+			OldValue: nil,
+			NewValue: opPhase,
+		})
+		if opPhase == "Running" {
+			summary = append(summary, "sync started")
+		} else if opPhase != "" {
+			summary = append(summary, fmt.Sprintf("operation: %s", opPhase))
+		}
+		if opMessage != "" && opPhase == "Failed" {
+			summary = append(summary, fmt.Sprintf("error: %s", truncateMessage(opMessage)))
+		}
+	}
+
+	// Operation phase changed
+	if oldOpExists && newOpExists {
+		oldPhase, _, _ := unstructured.NestedString(oldOp, "phase")
+		newPhase, _, _ := unstructured.NestedString(newOp, "phase")
+		if oldPhase != newPhase && newPhase != "" {
+			changes = append(changes, FieldChange{
+				Path:     "status.operationState.phase",
+				OldValue: oldPhase,
+				NewValue: newPhase,
+			})
+			switch newPhase {
+			case "Succeeded":
+				summary = append(summary, "sync completed")
+			case "Failed":
+				opMessage, _, _ := unstructured.NestedString(newOp, "message")
+				summary = append(summary, "sync failed")
+				if opMessage != "" {
+					summary = append(summary, fmt.Sprintf("error: %s", truncateMessage(opMessage)))
+				}
+			case "Running":
+				summary = append(summary, "sync in progress")
+			default:
+				summary = append(summary, fmt.Sprintf("operation: %s", newPhase))
+			}
+		}
+	}
+
+	// Operation completed (removed from status)
+	if oldOpExists && !newOpExists {
+		oldPhase, _, _ := unstructured.NestedString(oldOp, "phase")
+		if oldPhase == "Running" {
+			changes = append(changes, FieldChange{
+				Path:     "status.operationState",
+				OldValue: "Running",
+				NewValue: nil,
+			})
+			summary = append(summary, "operation cleared")
+		}
+	}
+
+	// Check sync policy changes (auto-sync enabled/disabled)
+	oldAutoSync, oldAutoExists, _ := unstructured.NestedMap(oldApp.Object, "spec", "syncPolicy", "automated")
+	newAutoSync, newAutoExists, _ := unstructured.NestedMap(newApp.Object, "spec", "syncPolicy", "automated")
+
+	if !oldAutoExists && newAutoExists {
+		changes = append(changes, FieldChange{
+			Path:     "spec.syncPolicy.automated",
+			OldValue: nil,
+			NewValue: newAutoSync,
+		})
+		summary = append(summary, "auto-sync enabled")
+	} else if oldAutoExists && !newAutoExists {
+		changes = append(changes, FieldChange{
+			Path:     "spec.syncPolicy.automated",
+			OldValue: oldAutoSync,
+			NewValue: nil,
+		})
+		summary = append(summary, "auto-sync disabled")
+	}
+
+	// Check target revision change
+	oldTargetRev, _, _ := unstructured.NestedString(oldApp.Object, "spec", "source", "targetRevision")
+	newTargetRev, _, _ := unstructured.NestedString(newApp.Object, "spec", "source", "targetRevision")
+	if oldTargetRev != newTargetRev && newTargetRev != "" {
+		changes = append(changes, FieldChange{
+			Path:     "spec.source.targetRevision",
+			OldValue: oldTargetRev,
+			NewValue: newTargetRev,
+		})
+		summary = append(summary, fmt.Sprintf("target: %s→%s", oldTargetRev, newTargetRev))
+	}
+
+	// Check destination namespace change
+	oldDestNS, _, _ := unstructured.NestedString(oldApp.Object, "spec", "destination", "namespace")
+	newDestNS, _, _ := unstructured.NestedString(newApp.Object, "spec", "destination", "namespace")
+	if oldDestNS != newDestNS && newDestNS != "" {
+		changes = append(changes, FieldChange{
+			Path:     "spec.destination.namespace",
+			OldValue: oldDestNS,
+			NewValue: newDestNS,
+		})
+		summary = append(summary, fmt.Sprintf("destination ns: %s→%s", oldDestNS, newDestNS))
+	}
+
+	return changes, summary
+}
+
+// truncateRevision truncates a git revision to first 7 chars (short SHA)
+func truncateRevision(rev string) string {
+	if len(rev) > 7 {
+		return rev[:7]
+	}
+	return rev
+}
+
+// truncateMessage truncates a message to a reasonable display length
+func truncateMessage(msg string) string {
+	if len(msg) > 50 {
+		return msg[:47] + "..."
+	}
+	return msg
+}
+
+// diffKustomization computes diff for FluxCD Kustomization resources (CRD)
+func diffKustomization(oldObj, newObj any) ([]FieldChange, []string) {
+	oldKs, ok1 := oldObj.(*unstructured.Unstructured)
+	newKs, ok2 := newObj.(*unstructured.Unstructured)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	// Extract status fields
+	oldStatus, _, _ := unstructured.NestedMap(oldKs.Object, "status")
+	newStatus, _, _ := unstructured.NestedMap(newKs.Object, "status")
+
+	// Check ready condition
+	oldReady := getFluxConditionStatus(oldStatus, "Ready")
+	newReady := getFluxConditionStatus(newStatus, "Ready")
+	if oldReady != newReady && oldReady != "" && newReady != "" {
+		changes = append(changes, FieldChange{
+			Path:     "status.conditions[Ready]",
+			OldValue: oldReady,
+			NewValue: newReady,
+		})
+		summary = append(summary, fmt.Sprintf("ready: %s→%s", oldReady, newReady))
+	}
+
+	// Check reconciling condition (sync in progress)
+	oldReconciling := getFluxConditionStatus(oldStatus, "Reconciling")
+	newReconciling := getFluxConditionStatus(newStatus, "Reconciling")
+	if oldReconciling != newReconciling {
+		if newReconciling == "True" {
+			summary = append(summary, "reconciling")
+		} else if oldReconciling == "True" && newReconciling == "False" {
+			summary = append(summary, "reconcile completed")
+		}
+	}
+
+	// Check last applied revision
+	oldRevision, _, _ := unstructured.NestedString(oldStatus, "lastAppliedRevision")
+	newRevision, _, _ := unstructured.NestedString(newStatus, "lastAppliedRevision")
+	if oldRevision != newRevision && newRevision != "" {
+		changes = append(changes, FieldChange{
+			Path:     "status.lastAppliedRevision",
+			OldValue: truncateRevision(oldRevision),
+			NewValue: truncateRevision(newRevision),
+		})
+		if oldRevision == "" {
+			summary = append(summary, fmt.Sprintf("revision: %s", truncateRevision(newRevision)))
+		} else {
+			summary = append(summary, fmt.Sprintf("revision: %s→%s", truncateRevision(oldRevision), truncateRevision(newRevision)))
+		}
+	}
+
+	// Check inventory count (number of managed resources)
+	oldInventory, _, _ := unstructured.NestedSlice(oldStatus, "inventory", "entries")
+	newInventory, _, _ := unstructured.NestedSlice(newStatus, "inventory", "entries")
+	if len(oldInventory) != len(newInventory) {
+		changes = append(changes, FieldChange{
+			Path:     "status.inventory.entries",
+			OldValue: len(oldInventory),
+			NewValue: len(newInventory),
+		})
+		summary = append(summary, fmt.Sprintf("resources: %d→%d", len(oldInventory), len(newInventory)))
+	}
+
+	// Check suspended state
+	oldSuspend, _, _ := unstructured.NestedBool(oldKs.Object, "spec", "suspend")
+	newSuspend, _, _ := unstructured.NestedBool(newKs.Object, "spec", "suspend")
+	if oldSuspend != newSuspend {
+		changes = append(changes, FieldChange{
+			Path:     "spec.suspend",
+			OldValue: oldSuspend,
+			NewValue: newSuspend,
+		})
+		if newSuspend {
+			summary = append(summary, "suspended")
+		} else {
+			summary = append(summary, "resumed")
+		}
+	}
+
+	// Check source reference change
+	oldSourceRef, _, _ := unstructured.NestedString(oldKs.Object, "spec", "sourceRef", "name")
+	newSourceRef, _, _ := unstructured.NestedString(newKs.Object, "spec", "sourceRef", "name")
+	if oldSourceRef != newSourceRef && newSourceRef != "" {
+		changes = append(changes, FieldChange{
+			Path:     "spec.sourceRef.name",
+			OldValue: oldSourceRef,
+			NewValue: newSourceRef,
+		})
+		summary = append(summary, fmt.Sprintf("source: %s→%s", oldSourceRef, newSourceRef))
+	}
+
+	// Check path change
+	oldPath, _, _ := unstructured.NestedString(oldKs.Object, "spec", "path")
+	newPath, _, _ := unstructured.NestedString(newKs.Object, "spec", "path")
+	if oldPath != newPath && newPath != "" {
+		changes = append(changes, FieldChange{
+			Path:     "spec.path",
+			OldValue: oldPath,
+			NewValue: newPath,
+		})
+		summary = append(summary, fmt.Sprintf("path: %s→%s", oldPath, newPath))
+	}
+
+	return changes, summary
+}
+
+// diffFluxHelmRelease computes diff for FluxCD HelmRelease resources (CRD)
+func diffFluxHelmRelease(oldObj, newObj any) ([]FieldChange, []string) {
+	oldHR, ok1 := oldObj.(*unstructured.Unstructured)
+	newHR, ok2 := newObj.(*unstructured.Unstructured)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	// Extract status fields
+	oldStatus, _, _ := unstructured.NestedMap(oldHR.Object, "status")
+	newStatus, _, _ := unstructured.NestedMap(newHR.Object, "status")
+
+	// Check ready condition
+	oldReady := getFluxConditionStatus(oldStatus, "Ready")
+	newReady := getFluxConditionStatus(newStatus, "Ready")
+	if oldReady != newReady && oldReady != "" && newReady != "" {
+		changes = append(changes, FieldChange{
+			Path:     "status.conditions[Ready]",
+			OldValue: oldReady,
+			NewValue: newReady,
+		})
+		summary = append(summary, fmt.Sprintf("ready: %s→%s", oldReady, newReady))
+	}
+
+	// Check last applied revision (Helm chart version)
+	oldRevision, _, _ := unstructured.NestedInt64(oldStatus, "lastAppliedRevision")
+	newRevision, _, _ := unstructured.NestedInt64(newStatus, "lastAppliedRevision")
+	if oldRevision != newRevision && newRevision != 0 {
+		changes = append(changes, FieldChange{
+			Path:     "status.lastAppliedRevision",
+			OldValue: oldRevision,
+			NewValue: newRevision,
+		})
+		summary = append(summary, fmt.Sprintf("revision: %d→%d", oldRevision, newRevision))
+	}
+
+	// Check last released revision
+	oldReleased, _, _ := unstructured.NestedInt64(oldStatus, "lastReleaseRevision")
+	newReleased, _, _ := unstructured.NestedInt64(newStatus, "lastReleaseRevision")
+	if oldReleased != newReleased && newReleased != 0 {
+		changes = append(changes, FieldChange{
+			Path:     "status.lastReleaseRevision",
+			OldValue: oldReleased,
+			NewValue: newReleased,
+		})
+		if oldRevision == newRevision { // Only show if not already showing applied revision
+			summary = append(summary, fmt.Sprintf("released: rev %d→%d", oldReleased, newReleased))
+		}
+	}
+
+	// Check suspended state
+	oldSuspend, _, _ := unstructured.NestedBool(oldHR.Object, "spec", "suspend")
+	newSuspend, _, _ := unstructured.NestedBool(newHR.Object, "spec", "suspend")
+	if oldSuspend != newSuspend {
+		changes = append(changes, FieldChange{
+			Path:     "spec.suspend",
+			OldValue: oldSuspend,
+			NewValue: newSuspend,
+		})
+		if newSuspend {
+			summary = append(summary, "suspended")
+		} else {
+			summary = append(summary, "resumed")
+		}
+	}
+
+	// Check chart version change
+	oldChartVersion, _, _ := unstructured.NestedString(oldHR.Object, "spec", "chart", "spec", "version")
+	newChartVersion, _, _ := unstructured.NestedString(newHR.Object, "spec", "chart", "spec", "version")
+	if oldChartVersion != newChartVersion && newChartVersion != "" {
+		changes = append(changes, FieldChange{
+			Path:     "spec.chart.spec.version",
+			OldValue: oldChartVersion,
+			NewValue: newChartVersion,
+		})
+		summary = append(summary, fmt.Sprintf("chart: %s→%s", oldChartVersion, newChartVersion))
+	}
+
+	// Check upgrade/install failures
+	oldFailures, _, _ := unstructured.NestedInt64(oldStatus, "installFailures")
+	newFailures, _, _ := unstructured.NestedInt64(newStatus, "installFailures")
+	if newFailures > oldFailures {
+		changes = append(changes, FieldChange{
+			Path:     "status.installFailures",
+			OldValue: oldFailures,
+			NewValue: newFailures,
+		})
+		summary = append(summary, fmt.Sprintf("install failures: %d", newFailures))
+	}
+
+	oldUpgradeFailures, _, _ := unstructured.NestedInt64(oldStatus, "upgradeFailures")
+	newUpgradeFailures, _, _ := unstructured.NestedInt64(newStatus, "upgradeFailures")
+	if newUpgradeFailures > oldUpgradeFailures {
+		changes = append(changes, FieldChange{
+			Path:     "status.upgradeFailures",
+			OldValue: oldUpgradeFailures,
+			NewValue: newUpgradeFailures,
+		})
+		summary = append(summary, fmt.Sprintf("upgrade failures: %d", newUpgradeFailures))
+	}
+
+	return changes, summary
+}
+
+// diffFluxSource computes diff for FluxCD source resources (GitRepository, OCIRepository, HelmRepository)
+func diffFluxSource(oldObj, newObj any, kind string) ([]FieldChange, []string) {
+	oldSrc, ok1 := oldObj.(*unstructured.Unstructured)
+	newSrc, ok2 := newObj.(*unstructured.Unstructured)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	// Extract status fields
+	oldStatus, _, _ := unstructured.NestedMap(oldSrc.Object, "status")
+	newStatus, _, _ := unstructured.NestedMap(newSrc.Object, "status")
+
+	// Check ready condition
+	oldReady := getFluxConditionStatus(oldStatus, "Ready")
+	newReady := getFluxConditionStatus(newStatus, "Ready")
+	if oldReady != newReady && oldReady != "" && newReady != "" {
+		changes = append(changes, FieldChange{
+			Path:     "status.conditions[Ready]",
+			OldValue: oldReady,
+			NewValue: newReady,
+		})
+		summary = append(summary, fmt.Sprintf("ready: %s→%s", oldReady, newReady))
+	}
+
+	// Check artifact revision (commit SHA or chart version)
+	oldArtifactRev, _, _ := unstructured.NestedString(oldStatus, "artifact", "revision")
+	newArtifactRev, _, _ := unstructured.NestedString(newStatus, "artifact", "revision")
+	if oldArtifactRev != newArtifactRev && newArtifactRev != "" {
+		changes = append(changes, FieldChange{
+			Path:     "status.artifact.revision",
+			OldValue: truncateSourceRevision(oldArtifactRev),
+			NewValue: truncateSourceRevision(newArtifactRev),
+		})
+		if oldArtifactRev == "" {
+			summary = append(summary, fmt.Sprintf("artifact: %s", truncateSourceRevision(newArtifactRev)))
+		} else {
+			summary = append(summary, fmt.Sprintf("artifact: %s→%s", truncateSourceRevision(oldArtifactRev), truncateSourceRevision(newArtifactRev)))
+		}
+	}
+
+	// Check suspended state
+	oldSuspend, _, _ := unstructured.NestedBool(oldSrc.Object, "spec", "suspend")
+	newSuspend, _, _ := unstructured.NestedBool(newSrc.Object, "spec", "suspend")
+	if oldSuspend != newSuspend {
+		changes = append(changes, FieldChange{
+			Path:     "spec.suspend",
+			OldValue: oldSuspend,
+			NewValue: newSuspend,
+		})
+		if newSuspend {
+			summary = append(summary, "suspended")
+		} else {
+			summary = append(summary, "resumed")
+		}
+	}
+
+	// GitRepository specific: check URL or ref change
+	if kind == "GitRepository" {
+		oldURL, _, _ := unstructured.NestedString(oldSrc.Object, "spec", "url")
+		newURL, _, _ := unstructured.NestedString(newSrc.Object, "spec", "url")
+		if oldURL != newURL && newURL != "" {
+			changes = append(changes, FieldChange{
+				Path:     "spec.url",
+				OldValue: oldURL,
+				NewValue: newURL,
+			})
+			summary = append(summary, "url changed")
+		}
+
+		oldRef, _, _ := unstructured.NestedString(oldSrc.Object, "spec", "ref", "branch")
+		newRef, _, _ := unstructured.NestedString(newSrc.Object, "spec", "ref", "branch")
+		if oldRef != newRef && newRef != "" {
+			changes = append(changes, FieldChange{
+				Path:     "spec.ref.branch",
+				OldValue: oldRef,
+				NewValue: newRef,
+			})
+			summary = append(summary, fmt.Sprintf("branch: %s→%s", oldRef, newRef))
+		}
+	}
+
+	// HelmRepository specific: check URL change
+	if kind == "HelmRepository" {
+		oldURL, _, _ := unstructured.NestedString(oldSrc.Object, "spec", "url")
+		newURL, _, _ := unstructured.NestedString(newSrc.Object, "spec", "url")
+		if oldURL != newURL && newURL != "" {
+			changes = append(changes, FieldChange{
+				Path:     "spec.url",
+				OldValue: oldURL,
+				NewValue: newURL,
+			})
+			summary = append(summary, "url changed")
+		}
+	}
+
+	return changes, summary
+}
+
+// getFluxConditionStatus extracts the status of a named condition from Flux status
+func getFluxConditionStatus(status map[string]any, conditionType string) string {
+	conditions, ok, _ := unstructured.NestedSlice(status, "conditions")
+	if !ok {
+		return ""
+	}
+
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cond["type"] == conditionType {
+			if status, ok := cond["status"].(string); ok {
+				return status
+			}
+		}
+	}
+	return ""
+}
+
+// truncateSourceRevision truncates a source revision (may include branch@sha format)
+func truncateSourceRevision(rev string) string {
+	// Handle "branch@sha:commit" format from FluxCD
+	if idx := strings.Index(rev, "@"); idx != -1 {
+		branch := rev[:idx]
+		rest := rev[idx+1:]
+		// Truncate the SHA part
+		if colonIdx := strings.Index(rest, ":"); colonIdx != -1 {
+			sha := rest[colonIdx+1:]
+			if len(sha) > 7 {
+				sha = sha[:7]
+			}
+			return branch + "@" + sha
+		}
+		if len(rest) > 7 {
+			rest = rest[:7]
+		}
+		return branch + "@" + rest
+	}
+	// Simple revision - just truncate
+	if len(rev) > 12 {
+		return rev[:12]
+	}
+	return rev
 }
 
 // getTaintKeys extracts taint keys from a list of taints

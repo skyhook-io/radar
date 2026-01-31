@@ -545,10 +545,19 @@ func WarmupCommonCRDs() {
 
 	// Common CRDs that should be warmed up for timeline visibility
 	commonCRDs := []string{
-		"Rollout",      // Argo Rollouts
-		"Workflow",     // Argo Workflows
-		"CronWorkflow", // Argo Workflows
-		"Certificate",  // cert-manager
+		"Rollout",        // Argo Rollouts
+		"Workflow",       // Argo Workflows
+		"CronWorkflow",   // Argo Workflows
+		"Certificate",    // cert-manager
+		"GitRepository",  // FluxCD source
+		"OCIRepository",  // FluxCD source
+		"HelmRepository", // FluxCD source
+		"Kustomization",  // FluxCD kustomize
+		"HelmRelease",    // FluxCD helm
+		"Alert",          // FluxCD notification
+		"Application",    // ArgoCD
+		"ApplicationSet", // ArgoCD
+		"AppProject",     // ArgoCD
 	}
 
 	var gvrs []schema.GroupVersionResource

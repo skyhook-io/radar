@@ -25,7 +25,6 @@ import (
 	listersnetworkingv1 "k8s.io/client-go/listers/networking/v1"
 	"k8s.io/client-go/tools/cache"
 
-	explorerErrors "github.com/skyhook-io/radar/internal/errors"
 	"github.com/skyhook-io/radar/internal/timeline"
 )
 
@@ -109,8 +108,7 @@ func InitResourceCache() error {
 	var initErr error
 	cacheOnce.Do(func() {
 		if k8sClient == nil {
-			initErr = explorerErrors.New(explorerErrors.ErrK8sClientNotInitialized,
-				"cannot create resource cache: k8s client not initialized")
+			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
 		}
 
@@ -182,8 +180,7 @@ func InitResourceCache() error {
 		}
 		for _, err := range handlerErrors {
 			if err != nil {
-				initErr = explorerErrors.Wrap(explorerErrors.ErrCacheHandlerFailed,
-					"failed to register event handlers", err)
+				initErr = fmt.Errorf("failed to register event handlers: %w", err)
 				return
 			}
 		}
@@ -223,8 +220,7 @@ func InitResourceCache() error {
 		// Wait for caches to sync
 		if !cache.WaitForCacheSync(stopCh, syncFuncs...) {
 			close(stopCh)
-			initErr = explorerErrors.New(explorerErrors.ErrCacheSyncFailed,
-				"failed to sync resource caches")
+			initErr = fmt.Errorf("failed to sync resource caches")
 			return
 		}
 

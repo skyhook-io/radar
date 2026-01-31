@@ -200,6 +200,280 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
+	// 1c. Add ArgoCD Application nodes (CRD - fetched via dynamic cache)
+	// Note: Application edges are created in a second pass after all resource IDs are populated
+	applicationGVR, hasApplications := k8s.GetResourceDiscovery().GetGVR("Application")
+	applicationIDs := make(map[string]string)                          // ns/name -> applicationID
+	var applicationResources []*unstructured.Unstructured              // Store for second pass
+	applicationDestNamespaces := make(map[string]string)               // appID -> destNamespace
+	if hasApplications && dynamicCache != nil {
+		applications, err := dynamicCache.List(applicationGVR, opts.Namespace)
+		if err != nil {
+			log.Printf("WARNING [topology] Failed to list ArgoCD Applications: %v", err)
+			warnings = append(warnings, fmt.Sprintf("Failed to list ArgoCD Applications: %v", err))
+		}
+		for _, app := range applications {
+			ns := app.GetNamespace()
+			name := app.GetName()
+
+			appID := fmt.Sprintf("application/%s/%s", ns, name)
+			applicationIDs[ns+"/"+name] = appID
+
+			// Extract status fields
+			status, _, _ := unstructured.NestedMap(app.Object, "status")
+			spec, _, _ := unstructured.NestedMap(app.Object, "spec")
+
+			// Get sync and health status
+			syncStatus := "Unknown"
+			healthStatus := "Unknown"
+			if status != nil {
+				if sync, ok, _ := unstructured.NestedMap(status, "sync"); ok && sync != nil {
+					if s, ok := sync["status"].(string); ok {
+						syncStatus = s
+					}
+				}
+				if health, ok, _ := unstructured.NestedMap(status, "health"); ok && health != nil {
+					if h, ok := health["status"].(string); ok {
+						healthStatus = h
+					}
+				}
+			}
+
+			// Map to topology status
+			var nodeStatus HealthStatus
+			switch healthStatus {
+			case "Healthy":
+				nodeStatus = StatusHealthy
+			case "Progressing":
+				nodeStatus = StatusDegraded
+			case "Degraded", "Missing":
+				nodeStatus = StatusUnhealthy
+			default:
+				nodeStatus = StatusUnknown
+			}
+
+			// Get destination info
+			destination := ""
+			destNamespace := ""
+			if spec != nil {
+				if dest, ok, _ := unstructured.NestedMap(spec, "destination"); ok && dest != nil {
+					if server, ok := dest["server"].(string); ok {
+						destination = server
+					} else if name, ok := dest["name"].(string); ok {
+						destination = name
+					}
+					if ns, ok := dest["namespace"].(string); ok {
+						destNamespace = ns
+					}
+				}
+			}
+
+			nodes = append(nodes, Node{
+				ID:     appID,
+				Kind:   KindApplication,
+				Name:   name,
+				Status: nodeStatus,
+				Data: map[string]any{
+					"namespace":         ns,
+					"syncStatus":        syncStatus,
+					"healthStatus":      healthStatus,
+					"destination":       destination,
+					"destNamespace":     destNamespace,
+					"labels":            app.GetLabels(),
+				},
+			})
+
+			// Store for second pass edge creation
+			applicationResources = append(applicationResources, app)
+			applicationDestNamespaces[appID] = destNamespace
+		}
+	}
+
+	// 1d. Add FluxCD Kustomization nodes (CRD - fetched via dynamic cache)
+	// Note: Kustomization edges are created in a second pass after all resource IDs are populated
+	kustomizationGVR, hasKustomizations := k8s.GetResourceDiscovery().GetGVR("Kustomization")
+	kustomizationIDs := make(map[string]string)               // ns/name -> kustomizationID
+	var kustomizationResources []*unstructured.Unstructured   // Store for second pass
+	if hasKustomizations && dynamicCache != nil {
+		kustomizations, err := dynamicCache.List(kustomizationGVR, opts.Namespace)
+		if err != nil {
+			log.Printf("WARNING [topology] Failed to list FluxCD Kustomizations: %v", err)
+			warnings = append(warnings, fmt.Sprintf("Failed to list FluxCD Kustomizations: %v", err))
+		}
+		for _, ks := range kustomizations {
+			ns := ks.GetNamespace()
+			name := ks.GetName()
+
+			ksID := fmt.Sprintf("kustomization/%s/%s", ns, name)
+			kustomizationIDs[ns+"/"+name] = ksID
+
+			// Extract status fields
+			status, _, _ := unstructured.NestedMap(ks.Object, "status")
+
+			// Get ready condition
+			readyStatus, nodeStatus := getFluxReadyStatus(status)
+
+			// Get inventory count
+			resourceCount := 0
+			if status != nil {
+				if inventory, ok, _ := unstructured.NestedSlice(status, "inventory", "entries"); ok {
+					resourceCount = len(inventory)
+				}
+			}
+
+			// Get source reference
+			sourceRef := ""
+			spec, _, _ := unstructured.NestedMap(ks.Object, "spec")
+			if spec != nil {
+				if ref, ok, _ := unstructured.NestedMap(spec, "sourceRef"); ok && ref != nil {
+					kind := ref["kind"]
+					refName := ref["name"]
+					if kind != nil && refName != nil {
+						sourceRef = fmt.Sprintf("%s/%s", kind, refName)
+					}
+				}
+			}
+
+			nodes = append(nodes, Node{
+				ID:     ksID,
+				Kind:   KindKustomization,
+				Name:   name,
+				Status: nodeStatus,
+				Data: map[string]any{
+					"namespace":     ns,
+					"ready":         readyStatus,
+					"resourceCount": resourceCount,
+					"sourceRef":     sourceRef,
+					"labels":        ks.GetLabels(),
+				},
+			})
+
+			// Store for second pass edge creation
+			kustomizationResources = append(kustomizationResources, ks)
+		}
+	}
+
+	// 1e. Add FluxCD GitRepository nodes (CRD - fetched via dynamic cache)
+	gitRepoGVR, hasGitRepos := k8s.GetResourceDiscovery().GetGVR("GitRepository")
+	gitRepoIDs := make(map[string]string) // ns/name -> gitRepoID
+	if hasGitRepos && dynamicCache != nil {
+		gitRepos, err := dynamicCache.List(gitRepoGVR, opts.Namespace)
+		if err != nil {
+			log.Printf("WARNING [topology] Failed to list FluxCD GitRepositories: %v", err)
+			warnings = append(warnings, fmt.Sprintf("Failed to list FluxCD GitRepositories: %v", err))
+		}
+		for _, repo := range gitRepos {
+			ns := repo.GetNamespace()
+			name := repo.GetName()
+
+			repoID := fmt.Sprintf("gitrepository/%s/%s", ns, name)
+			gitRepoIDs[ns+"/"+name] = repoID
+
+			// Extract status fields
+			status, _, _ := unstructured.NestedMap(repo.Object, "status")
+
+			// Get ready condition
+			readyStatus, nodeStatus := getFluxReadyStatus(status)
+
+			// Get branch from spec
+			branch := ""
+			spec, _, _ := unstructured.NestedMap(repo.Object, "spec")
+			if spec != nil {
+				if ref, ok, _ := unstructured.NestedMap(spec, "ref"); ok && ref != nil {
+					if b, ok := ref["branch"].(string); ok {
+						branch = b
+					}
+				}
+			}
+
+			// Get URL
+			url := ""
+			if spec != nil {
+				if u, ok := spec["url"].(string); ok {
+					url = u
+				}
+			}
+
+			nodes = append(nodes, Node{
+				ID:     repoID,
+				Kind:   KindGitRepository,
+				Name:   name,
+				Status: nodeStatus,
+				Data: map[string]any{
+					"namespace": ns,
+					"ready":     readyStatus,
+					"branch":    branch,
+					"url":       url,
+					"labels":    repo.GetLabels(),
+				},
+			})
+		}
+	}
+
+	// 1f. Add FluxCD HelmRelease nodes (CRD - fetched via dynamic cache)
+	helmReleaseGVR, hasHelmReleases := k8s.GetResourceDiscovery().GetGVR("HelmRelease")
+	helmReleaseIDs := make(map[string]string) // ns/name -> helmReleaseID
+	if hasHelmReleases && dynamicCache != nil {
+		helmReleases, err := dynamicCache.List(helmReleaseGVR, opts.Namespace)
+		if err != nil {
+			log.Printf("WARNING [topology] Failed to list FluxCD HelmReleases: %v", err)
+			warnings = append(warnings, fmt.Sprintf("Failed to list FluxCD HelmReleases: %v", err))
+		}
+		for _, hr := range helmReleases {
+			ns := hr.GetNamespace()
+			name := hr.GetName()
+
+			hrID := fmt.Sprintf("helmrelease/%s/%s", ns, name)
+			helmReleaseIDs[ns+"/"+name] = hrID
+
+			// Extract status fields
+			status, _, _ := unstructured.NestedMap(hr.Object, "status")
+
+			// Get ready condition
+			readyStatus, nodeStatus := getFluxReadyStatus(status)
+
+			// Get last release revision
+			revision := 0
+			if status != nil {
+				if rev, ok, _ := unstructured.NestedInt64(status, "lastReleaseRevision"); ok {
+					revision = int(rev)
+				}
+			}
+
+			// Get chart info
+			chartName := ""
+			chartVersion := ""
+			spec, _, _ := unstructured.NestedMap(hr.Object, "spec")
+			if spec != nil {
+				if chart, ok, _ := unstructured.NestedMap(spec, "chart"); ok && chart != nil {
+					if chartSpec, ok, _ := unstructured.NestedMap(chart, "spec"); ok && chartSpec != nil {
+						if n, ok := chartSpec["chart"].(string); ok {
+							chartName = n
+						}
+						if v, ok := chartSpec["version"].(string); ok {
+							chartVersion = v
+						}
+					}
+				}
+			}
+
+			nodes = append(nodes, Node{
+				ID:     hrID,
+				Kind:   KindHelmRelease,
+				Name:   name,
+				Status: nodeStatus,
+				Data: map[string]any{
+					"namespace":    ns,
+					"ready":        readyStatus,
+					"revision":     revision,
+					"chartName":    chartName,
+					"chartVersion": chartVersion,
+					"labels":       hr.GetLabels(),
+				},
+			})
+		}
+	}
+
 	// 2. Add DaemonSet nodes
 	daemonsets, err := b.cache.DaemonSets().List(labels.Everything())
 	if err != nil {
@@ -924,6 +1198,262 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
+	// 12. Second pass: Create ArgoCD Application edges to managed resources
+	// This is done after all resource IDs are populated
+	for _, app := range applicationResources {
+		ns := app.GetNamespace()
+		name := app.GetName()
+		appID := applicationIDs[ns+"/"+name]
+		destNamespace := applicationDestNamespaces[appID]
+
+		status, _, _ := unstructured.NestedMap(app.Object, "status")
+		if status == nil {
+			continue
+		}
+
+		resources, _, _ := unstructured.NestedSlice(status, "resources")
+		for _, res := range resources {
+			resMap, ok := res.(map[string]any)
+			if !ok {
+				continue
+			}
+			resKind, _ := resMap["kind"].(string)
+			resName, _ := resMap["name"].(string)
+			resNS, _ := resMap["namespace"].(string)
+			if resNS == "" {
+				resNS = destNamespace
+			}
+
+			// Build target ID based on kind
+			var targetID string
+			resKey := resNS + "/" + resName
+			switch resKind {
+			case "Deployment":
+				targetID = deploymentIDs[resKey]
+			case "StatefulSet":
+				targetID = statefulSetIDs[resKey]
+			case "DaemonSet":
+				targetID = fmt.Sprintf("daemonset/%s/%s", resNS, resName)
+			case "Service":
+				targetID = serviceIDs[resKey]
+			case "Rollout":
+				targetID = rolloutIDs[resKey]
+			case "Job":
+				targetID = jobIDs[resKey]
+			case "CronJob":
+				targetID = cronJobIDs[resKey]
+			}
+
+			// Only create edge if target exists in current cluster view
+			if targetID != "" {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", appID, targetID),
+					Source: appID,
+					Target: targetID,
+					Type:   EdgeManages,
+				})
+			}
+		}
+	}
+
+	// 13. Second pass: Create FluxCD Kustomization edges to managed resources
+	// Kustomization inventory contains refs like "Deployment/ns/name" or "_namespace_name_Kind"
+	for _, ks := range kustomizationResources {
+		ns := ks.GetNamespace()
+		name := ks.GetName()
+		ksID := kustomizationIDs[ns+"/"+name]
+
+		status, _, _ := unstructured.NestedMap(ks.Object, "status")
+		if status == nil {
+			continue
+		}
+
+		inventory, _, _ := unstructured.NestedSlice(status, "inventory", "entries")
+		for _, entry := range inventory {
+			entryMap, ok := entry.(map[string]any)
+			if !ok {
+				continue
+			}
+			// FluxCD inventory entry has "id" field with format "namespace_name_group_kind" or "id" field
+			entryID, _ := entryMap["id"].(string)
+			if entryID == "" {
+				continue
+			}
+
+			// Parse the inventory ID (format: namespace_name_group_kind)
+			// Example: "default_my-deployment_apps_Deployment"
+			parts := strings.Split(entryID, "_")
+			if len(parts) < 3 {
+				continue
+			}
+
+			resNS := parts[0]
+			resName := parts[1]
+			// Last part is kind, second to last is group (might be empty)
+			resKind := parts[len(parts)-1]
+
+			// Build target ID based on kind
+			var targetID string
+			resKey := resNS + "/" + resName
+			switch resKind {
+			case "Deployment":
+				targetID = deploymentIDs[resKey]
+			case "StatefulSet":
+				targetID = statefulSetIDs[resKey]
+			case "DaemonSet":
+				targetID = fmt.Sprintf("daemonset/%s/%s", resNS, resName)
+			case "Service":
+				targetID = serviceIDs[resKey]
+			case "Rollout":
+				targetID = rolloutIDs[resKey]
+			case "Job":
+				targetID = jobIDs[resKey]
+			case "CronJob":
+				targetID = cronJobIDs[resKey]
+			case "Ingress":
+				targetID = fmt.Sprintf("ingress/%s/%s", resNS, resName)
+			}
+
+			// Only create edge if target exists in current cluster view
+			if targetID != "" {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", ksID, targetID),
+					Source: ksID,
+					Target: targetID,
+					Type:   EdgeManages,
+				})
+			}
+		}
+
+		// Also create edge from GitRepository to Kustomization if source ref exists
+		spec, _, _ := unstructured.NestedMap(ks.Object, "spec")
+		if spec != nil {
+			if sourceRef, ok, _ := unstructured.NestedMap(spec, "sourceRef"); ok && sourceRef != nil {
+				refKind, _ := sourceRef["kind"].(string)
+				refName, _ := sourceRef["name"].(string)
+				refNS, _ := sourceRef["namespace"].(string)
+				if refNS == "" {
+					refNS = ns // Default to same namespace
+				}
+
+				if refKind == "GitRepository" {
+					gitRepoID := gitRepoIDs[refNS+"/"+refName]
+					if gitRepoID != "" {
+						edges = append(edges, Edge{
+							ID:     fmt.Sprintf("%s-to-%s", gitRepoID, ksID),
+							Source: gitRepoID,
+							Target: ksID,
+							Type:   EdgeManages, // GitRepo provides source for Kustomization
+						})
+					}
+				}
+			}
+		}
+	}
+
+	// 14. Create FluxCD HelmRelease edges to managed resources
+	// HelmReleases don't have inventory - match by labels:
+	// - helm.toolkit.fluxcd.io/name (FluxCD-specific, preferred)
+	// - app.kubernetes.io/instance (standard Helm label)
+	for hrKey, hrID := range helmReleaseIDs {
+		parts := strings.Split(hrKey, "/")
+		if len(parts) != 2 {
+			continue
+		}
+		hrNS := parts[0]
+		hrName := parts[1]
+
+		// Find Deployments with matching label
+		for depKey, depID := range deploymentIDs {
+			depParts := strings.Split(depKey, "/")
+			if len(depParts) != 2 {
+				continue
+			}
+			depNS := depParts[0]
+			depName := depParts[1]
+
+			// Must be in same namespace
+			if depNS != hrNS {
+				continue
+			}
+
+			// Check if deployment has matching label
+			dep, err := b.cache.Deployments().Deployments(depNS).Get(depName)
+			if err != nil || dep == nil {
+				continue
+			}
+
+			if matchesHelmRelease(dep.Labels, hrName, hrNS) {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", hrID, depID),
+					Source: hrID,
+					Target: depID,
+					Type:   EdgeManages,
+				})
+			}
+		}
+
+		// Find Services with matching label
+		for svcKey, svcID := range serviceIDs {
+			svcParts := strings.Split(svcKey, "/")
+			if len(svcParts) != 2 {
+				continue
+			}
+			svcNS := svcParts[0]
+			svcName := svcParts[1]
+
+			// Must be in same namespace
+			if svcNS != hrNS {
+				continue
+			}
+
+			// Check if service has matching label
+			svc, err := b.cache.Services().Services(svcNS).Get(svcName)
+			if err != nil || svc == nil {
+				continue
+			}
+
+			if matchesHelmRelease(svc.Labels, hrName, hrNS) {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", hrID, svcID),
+					Source: hrID,
+					Target: svcID,
+					Type:   EdgeManages,
+				})
+			}
+		}
+
+		// Find StatefulSets with matching label
+		for stsKey, stsID := range statefulSetIDs {
+			stsParts := strings.Split(stsKey, "/")
+			if len(stsParts) != 2 {
+				continue
+			}
+			stsNS := stsParts[0]
+			stsName := stsParts[1]
+
+			// Must be in same namespace
+			if stsNS != hrNS {
+				continue
+			}
+
+			// Check if statefulset has matching label
+			sts, err := b.cache.StatefulSets().StatefulSets(stsNS).Get(stsName)
+			if err != nil || sts == nil {
+				continue
+			}
+
+			if matchesHelmRelease(sts.Labels, hrName, hrNS) {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", hrID, stsID),
+					Source: hrID,
+					Target: stsID,
+					Type:   EdgeManages,
+				})
+			}
+		}
+	}
+
 	return &Topology{Nodes: nodes, Edges: edges, Warnings: warnings}, nil
 }
 
@@ -1299,6 +1829,37 @@ func getPVCStatus(phase corev1.PersistentVolumeClaimPhase) HealthStatus {
 	}
 }
 
+// getFluxReadyStatus extracts the Ready condition status from a FluxCD resource's status map.
+// Returns the ready status string ("True", "False", "Unknown") and the corresponding HealthStatus.
+func getFluxReadyStatus(status map[string]any) (string, HealthStatus) {
+	if status == nil {
+		return "Unknown", StatusUnknown
+	}
+	conditions, ok, _ := unstructured.NestedSlice(status, "conditions")
+	if !ok {
+		return "Unknown", StatusUnknown
+	}
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok || cond["type"] != "Ready" {
+			continue
+		}
+		s, ok := cond["status"].(string)
+		if !ok {
+			return "Unknown", StatusUnknown
+		}
+		switch s {
+		case "True":
+			return s, StatusHealthy
+		case "False":
+			return s, StatusUnhealthy
+		default:
+			return s, StatusUnknown
+		}
+	}
+	return "Unknown", StatusUnknown
+}
+
 func matchesSelector(labels, selector map[string]string) bool {
 	if len(selector) == 0 {
 		return false
@@ -1309,6 +1870,28 @@ func matchesSelector(labels, selector map[string]string) bool {
 		}
 	}
 	return true
+}
+
+// matchesHelmRelease checks if a resource's labels indicate it's managed by a FluxCD HelmRelease
+// Checks both FluxCD-specific labels and standard Helm labels
+func matchesHelmRelease(labels map[string]string, hrName, hrNamespace string) bool {
+	// FluxCD adds these labels to resources deployed by HelmRelease
+	// helm.toolkit.fluxcd.io/name: <helmrelease-name>
+	// helm.toolkit.fluxcd.io/namespace: <helmrelease-namespace>
+	fluxName := labels["helm.toolkit.fluxcd.io/name"]
+	fluxNS := labels["helm.toolkit.fluxcd.io/namespace"]
+	if fluxName == hrName && (fluxNS == "" || fluxNS == hrNamespace) {
+		return true
+	}
+
+	// Fallback to standard Helm label (app.kubernetes.io/instance)
+	// This is set by charts that follow Helm best practices
+	instanceLabel := labels["app.kubernetes.io/instance"]
+	if instanceLabel == hrName {
+		return true
+	}
+
+	return false
 }
 
 type workloadRefs struct {

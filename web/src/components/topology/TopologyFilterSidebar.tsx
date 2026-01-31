@@ -16,8 +16,14 @@ const RESOURCE_KINDS: {
   label: string
   icon: LucideIcon
   color: string
-  category: 'workloads' | 'networking' | 'config' | 'scaling'
+  category: 'gitops' | 'workloads' | 'networking' | 'config' | 'scaling'
 }[] = [
+  // GitOps (ArgoCD + FluxCD)
+  { kind: 'Application', label: 'Application', icon: getTopologyIcon('Application'), color: 'text-orange-400', category: 'gitops' },
+  { kind: 'Kustomization', label: 'Kustomization', icon: getTopologyIcon('Kustomization'), color: 'text-sky-400', category: 'gitops' },
+  { kind: 'HelmRelease', label: 'HelmRelease', icon: getTopologyIcon('HelmRelease'), color: 'text-sky-400', category: 'gitops' },
+  { kind: 'GitRepository', label: 'GitRepository', icon: getTopologyIcon('GitRepository'), color: 'text-teal-400', category: 'gitops' },
+
   // Networking
   { kind: 'Ingress', label: 'Ingress', icon: getTopologyIcon('Ingress'), color: 'text-purple-400', category: 'networking' },
   { kind: 'Service', label: 'Service', icon: getTopologyIcon('Service'), color: 'text-blue-400', category: 'networking' },
@@ -42,6 +48,7 @@ const RESOURCE_KINDS: {
 ]
 
 const CATEGORIES = [
+  { id: 'gitops', label: 'GitOps' },
   { id: 'networking', label: 'Networking' },
   { id: 'workloads', label: 'Workloads' },
   { id: 'config', label: 'Configuration' },

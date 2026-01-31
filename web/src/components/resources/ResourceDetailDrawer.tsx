@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { stringify as yamlStringify } from 'yaml'
-import { useResource, useResourceEvents, useUpdateResource, useDeleteResource, useTriggerCronJob, useSuspendCronJob, useResumeCronJob, useRestartWorkload } from '../../api/client'
+import { useResource, useResourceEvents, useUpdateResource, useDeleteResource, useTriggerCronJob, useSuspendCronJob, useResumeCronJob, useRestartWorkload, useFluxReconcile, useFluxSyncWithSource, useFluxSuspend, useFluxResume, useArgoSync, useArgoRefresh, useArgoSuspend, useArgoResume } from '../../api/client'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import type { SelectedResource, Relationships, ResourceRef } from '../../types'
 import {
@@ -40,6 +40,13 @@ import {
   getHTTPRouteStatus,
   getSealedSecretStatus,
   getPDBStatus,
+  getGitRepositoryStatus,
+  getOCIRepositoryStatus,
+  getHelmRepositoryStatus,
+  getKustomizationStatus,
+  getFluxHelmReleaseStatus,
+  getFluxAlertStatus,
+  getArgoApplicationStatus,
 } from './resource-utils'
 import {
   LabelsSection,
@@ -81,6 +88,13 @@ import {
   RoleBindingRenderer,
   EventRenderer,
   GenericRenderer,
+  GitRepositoryRenderer,
+  OCIRepositoryRenderer,
+  HelmRepositoryRenderer,
+  KustomizationRenderer,
+  FluxHelmReleaseRenderer,
+  AlertRenderer,
+  ArgoApplicationRenderer,
 } from './renderers'
 import { useOpenTerminal, useOpenLogs } from '../dock'
 import { PortForwardButton } from '../portforward/PortForwardButton'
@@ -564,6 +578,16 @@ function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
         </>
       )}
 
+      {/* FluxCD actions */}
+      {['gitrepositories', 'ocirepositories', 'helmrepositories', 'kustomizations', 'helmreleases', 'alerts'].includes(kind) && (
+        <FluxActions resource={resource} data={data} />
+      )}
+
+      {/* ArgoCD actions */}
+      {kind === 'applications' && (
+        <ArgoActions resource={resource} data={data} />
+      )}
+
       {/* Job logs */}
       {kind === 'jobs' && (
         <button
@@ -601,6 +625,171 @@ function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
         isLoading={deleteMutation.isPending}
       />
     </div>
+  )
+}
+
+// ============================================================================
+// FLUX ACTIONS
+// ============================================================================
+
+interface FluxActionsProps {
+  resource: SelectedResource
+  data: any
+}
+
+function FluxActions({ resource, data }: FluxActionsProps) {
+  const reconcileMutation = useFluxReconcile()
+  const syncWithSourceMutation = useFluxSyncWithSource()
+  const suspendMutation = useFluxSuspend()
+  const resumeMutation = useFluxResume()
+
+  const isSuspended = data?.spec?.suspend === true
+
+  // Only Kustomizations and HelmReleases have sources
+  const hasSource = resource.kind === 'kustomizations' || resource.kind === 'helmreleases'
+
+  return (
+    <>
+      {/* Reconcile button */}
+      <button
+        onClick={() => reconcileMutation.mutate({
+          kind: resource.kind,
+          namespace: resource.namespace,
+          name: resource.name,
+        })}
+        disabled={reconcileMutation.isPending || isSuspended}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50"
+        title={isSuspended ? 'Cannot reconcile while suspended' : 'Trigger reconciliation'}
+      >
+        <RefreshCw className={`w-3.5 h-3.5 ${reconcileMutation.isPending ? 'animate-spin' : ''}`} />
+        {reconcileMutation.isPending ? 'Reconciling...' : 'Reconcile'}
+      </button>
+
+      {/* Sync with Source button - only for Kustomizations and HelmReleases */}
+      {hasSource && (
+        <button
+          onClick={() => syncWithSourceMutation.mutate({
+            kind: resource.kind,
+            namespace: resource.namespace,
+            name: resource.name,
+          })}
+          disabled={syncWithSourceMutation.isPending || isSuspended}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-purple-600 hover:bg-purple-700 rounded-lg transition-colors disabled:opacity-50"
+          title={isSuspended ? 'Cannot sync while suspended' : 'Fetch latest from source, then reconcile'}
+        >
+          <RefreshCw className={`w-3.5 h-3.5 ${syncWithSourceMutation.isPending ? 'animate-spin' : ''}`} />
+          {syncWithSourceMutation.isPending ? 'Syncing...' : 'Sync with Source'}
+        </button>
+      )}
+
+      {/* Suspend/Resume button */}
+      {isSuspended ? (
+        <button
+          onClick={() => resumeMutation.mutate({
+            kind: resource.kind,
+            namespace: resource.namespace,
+            name: resource.name,
+          })}
+          disabled={resumeMutation.isPending}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
+        >
+          <Play className="w-3.5 h-3.5" />
+          {resumeMutation.isPending ? 'Resuming...' : 'Resume'}
+        </button>
+      ) : (
+        <button
+          onClick={() => suspendMutation.mutate({
+            kind: resource.kind,
+            namespace: resource.namespace,
+            name: resource.name,
+          })}
+          disabled={suspendMutation.isPending}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors disabled:opacity-50"
+        >
+          <Pause className="w-3.5 h-3.5" />
+          {suspendMutation.isPending ? 'Suspending...' : 'Suspend'}
+        </button>
+      )}
+    </>
+  )
+}
+
+// ============================================================================
+// ARGO ACTIONS
+// ============================================================================
+
+interface ArgoActionsProps {
+  resource: SelectedResource
+  data: any
+}
+
+function ArgoActions({ resource, data }: ArgoActionsProps) {
+  const syncMutation = useArgoSync()
+  const refreshMutation = useArgoRefresh()
+  const suspendMutation = useArgoSuspend()
+  const resumeMutation = useArgoResume()
+
+  // Check if app has automated sync
+  const hasAutomatedSync = !!data?.spec?.syncPolicy?.automated
+
+  return (
+    <>
+      {/* Sync button */}
+      <button
+        onClick={() => syncMutation.mutate({
+          namespace: resource.namespace,
+          name: resource.name,
+        })}
+        disabled={syncMutation.isPending}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50"
+        title="Sync application"
+      >
+        <RefreshCw className={`w-3.5 h-3.5 ${syncMutation.isPending ? 'animate-spin' : ''}`} />
+        {syncMutation.isPending ? 'Syncing...' : 'Sync'}
+      </button>
+
+      {/* Refresh button */}
+      <button
+        onClick={() => refreshMutation.mutate({
+          namespace: resource.namespace,
+          name: resource.name,
+          hard: false,
+        })}
+        disabled={refreshMutation.isPending}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors disabled:opacity-50"
+        title="Refresh (re-read from git)"
+      >
+        <RefreshCw className={`w-3.5 h-3.5 ${refreshMutation.isPending ? 'animate-spin' : ''}`} />
+        {refreshMutation.isPending ? 'Refreshing...' : 'Refresh'}
+      </button>
+
+      {/* Suspend/Resume (only for apps with automated sync) */}
+      {hasAutomatedSync ? (
+        <button
+          onClick={() => suspendMutation.mutate({
+            namespace: resource.namespace,
+            name: resource.name,
+          })}
+          disabled={suspendMutation.isPending}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors disabled:opacity-50"
+        >
+          <Pause className="w-3.5 h-3.5" />
+          {suspendMutation.isPending ? 'Suspending...' : 'Suspend'}
+        </button>
+      ) : (
+        <button
+          onClick={() => resumeMutation.mutate({
+            namespace: resource.namespace,
+            name: resource.name,
+          })}
+          disabled={resumeMutation.isPending}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
+        >
+          <Play className="w-3.5 h-3.5" />
+          {resumeMutation.isPending ? 'Enabling...' : 'Enable Auto-Sync'}
+        </button>
+      )}
+    </>
   )
 }
 
@@ -900,7 +1089,8 @@ function ResourceContent({ resource, data, relationships, onCopy, copied, onNavi
     'gateways', 'httproutes', 'sealedsecrets', 'workflowtemplates',
     'networkpolicies', 'poddisruptionbudgets', 'serviceaccounts',
     'roles', 'clusterroles', 'rolebindings', 'clusterrolebindings',
-    'events'
+    'events', 'gitrepositories', 'ocirepositories', 'helmrepositories',
+    'kustomizations', 'helmreleases', 'alerts', 'applications'
   ]
   const isKnownKind = knownKinds.includes(kind)
 
@@ -936,6 +1126,13 @@ function ResourceContent({ resource, data, relationships, onCopy, copied, onNavi
       {(kind === 'roles' || kind === 'clusterroles') && <RoleRenderer data={data} />}
       {(kind === 'rolebindings' || kind === 'clusterrolebindings') && <RoleBindingRenderer data={data} />}
       {kind === 'events' && <EventRenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'gitrepositories' && <GitRepositoryRenderer data={data} />}
+      {kind === 'ocirepositories' && <OCIRepositoryRenderer data={data} />}
+      {kind === 'helmrepositories' && <HelmRepositoryRenderer data={data} />}
+      {kind === 'kustomizations' && <KustomizationRenderer data={data} />}
+      {kind === 'helmreleases' && <FluxHelmReleaseRenderer data={data} />}
+      {kind === 'alerts' && <AlertRenderer data={data} />}
+      {kind === 'applications' && <ArgoApplicationRenderer data={data} />}
 
       {/* Generic renderer for CRDs and unknown resource types */}
       {!isKnownKind && <GenericRenderer data={data} />}
@@ -1050,6 +1247,41 @@ function getResourceStatus(kind: string, data: any): { text: string; color: stri
 
   if (k === 'poddisruptionbudgets') {
     const status = getPDBStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'gitrepositories') {
+    const status = getGitRepositoryStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'ocirepositories') {
+    const status = getOCIRepositoryStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'helmrepositories') {
+    const status = getHelmRepositoryStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'kustomizations') {
+    const status = getKustomizationStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'helmreleases') {
+    const status = getFluxHelmReleaseStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'alerts') {
+    const status = getFluxAlertStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'applications') {
+    const status = getArgoApplicationStatus(data)
     return { text: status.text, color: status.color }
   }
 

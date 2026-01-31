@@ -14,6 +14,10 @@ export type NodeKind =
   | 'Service'
   | 'Deployment'
   | 'Rollout'
+  | 'Application' // ArgoCD Application
+  | 'Kustomization' // FluxCD Kustomization
+  | 'HelmRelease' // FluxCD HelmRelease
+  | 'GitRepository' // FluxCD GitRepository
   | 'DaemonSet'
   | 'StatefulSet'
   | 'ReplicaSet'
@@ -150,6 +154,9 @@ export function isWorkloadKind(kind: string): boolean {
     'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet',
     'Service', 'Job', 'CronJob',
     'Workflow', 'CronWorkflow', // Argo Workflows
+    'Application', // ArgoCD Application
+    'Kustomization', 'HelmRelease', // FluxCD controllers
+    'GitRepository', 'OCIRepository', 'HelmRepository', // FluxCD sources
   ].includes(kind)
 }
 

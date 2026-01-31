@@ -111,6 +111,41 @@ import {
   getRoleRuleCount,
   getRoleBindingRole,
   getRoleBindingSubjectCount,
+  // FluxCD GitOps
+  getGitRepositoryUrl,
+  getGitRepositoryRef,
+  getGitRepositoryRevision,
+  getGitRepositoryStatus,
+  getOCIRepositoryUrl,
+  getOCIRepositoryRef,
+  getOCIRepositoryRevision,
+  getOCIRepositoryStatus,
+  getHelmRepositoryUrl,
+  getHelmRepositoryType,
+  getHelmRepositoryStatus,
+  getKustomizationSource,
+  getKustomizationPath,
+  getKustomizationInventory,
+  getKustomizationStatus,
+  getFluxHelmReleaseChart,
+  getFluxHelmReleaseVersion,
+  getFluxHelmReleaseRevision,
+  getFluxHelmReleaseStatus,
+  getFluxAlertProvider,
+  getFluxAlertEventCount,
+  getFluxAlertStatus,
+  // ArgoCD GitOps
+  getArgoApplicationProject,
+  getArgoApplicationSync,
+  getArgoApplicationHealth,
+  getArgoApplicationRepo,
+  getArgoApplicationSetGenerators,
+  getArgoApplicationSetTemplate,
+  getArgoApplicationSetAppCount,
+  getArgoApplicationSetStatus,
+  getArgoAppProjectDescription,
+  getArgoAppProjectDestinations,
+  getArgoAppProjectSources,
   formatAge,
   truncate,
 } from './resource-utils'
@@ -468,6 +503,89 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'object', label: 'Object', width: 'w-48', hideOnMobile: true },
     { key: 'count', label: 'Count', width: 'w-16' },
     { key: 'lastSeen', label: 'Last Seen', width: 'w-24' },
+  ],
+  // ============================================================================
+  // FLUXCD GITOPS RESOURCES
+  // ============================================================================
+  gitrepositories: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'url', label: 'URL', width: 'w-64' },
+    { key: 'ref', label: 'Ref', width: 'w-32', tooltip: 'Branch, tag, or semver' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'revision', label: 'Revision', width: 'w-24', hideOnMobile: true, tooltip: 'Last fetched commit SHA' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  ocirepositories: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'url', label: 'URL', width: 'w-64' },
+    { key: 'ref', label: 'Tag', width: 'w-24', tooltip: 'OCI tag or semver' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'revision', label: 'Digest', width: 'w-24', hideOnMobile: true },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  helmrepositories: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'url', label: 'URL', width: 'w-64' },
+    { key: 'type', label: 'Type', width: 'w-20', tooltip: 'default (Helm) or oci' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  kustomizations: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'source', label: 'Source', width: 'w-48', tooltip: 'Source GitRepository or OCIRepository' },
+    { key: 'path', label: 'Path', width: 'w-36', hideOnMobile: true },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'inventory', label: 'Resources', width: 'w-24', tooltip: 'Number of managed resources' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  helmreleases: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'chart', label: 'Chart', width: 'w-40' },
+    { key: 'version', label: 'Version', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'revision', label: 'Rev', width: 'w-16', hideOnMobile: true, tooltip: 'Helm release revision number' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  alerts: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'provider', label: 'Provider', width: 'w-40' },
+    { key: 'events', label: 'Events', width: 'w-24', tooltip: 'Number of event sources' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  // ============================================================================
+  // ARGOCD GITOPS RESOURCES
+  // ============================================================================
+  applications: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'project', label: 'Project', width: 'w-28' },
+    { key: 'sync', label: 'Sync', width: 'w-24' },
+    { key: 'health', label: 'Health', width: 'w-24' },
+    { key: 'repo', label: 'Repository', width: 'w-48', hideOnMobile: true },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  applicationsets: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'generators', label: 'Generators', width: 'w-32' },
+    { key: 'template', label: 'Template', width: 'w-40', hideOnMobile: true },
+    { key: 'applications', label: 'Apps', width: 'w-20', tooltip: 'Number of generated applications' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  appprojects: [
+    { key: 'name', label: 'Name' },
+    { key: 'description', label: 'Description', width: 'w-64' },
+    { key: 'destinations', label: 'Destinations', width: 'w-24', tooltip: 'Allowed cluster/namespace destinations' },
+    { key: 'sources', label: 'Sources', width: 'w-20', tooltip: 'Allowed source repositories' },
+    { key: 'age', label: 'Age', width: 'w-20' },
   ],
 }
 
@@ -1935,6 +2053,26 @@ function CellContent({ resource, kind, column }: CellContentProps) {
       return <RoleBindingCell resource={resource} column={column} />
     case 'events':
       return <EventCell resource={resource} column={column} />
+    // FluxCD GitOps resources
+    case 'gitrepositories':
+      return <GitRepositoryCell resource={resource} column={column} />
+    case 'ocirepositories':
+      return <OCIRepositoryCell resource={resource} column={column} />
+    case 'helmrepositories':
+      return <HelmRepositoryCell resource={resource} column={column} />
+    case 'kustomizations':
+      return <KustomizationCell resource={resource} column={column} />
+    case 'helmreleases':
+      return <FluxHelmReleaseCell resource={resource} column={column} />
+    case 'alerts':
+      return <FluxAlertCell resource={resource} column={column} />
+    // ArgoCD GitOps resources
+    case 'applications':
+      return <ArgoApplicationCell resource={resource} column={column} />
+    case 'applicationsets':
+      return <ArgoApplicationSetCell resource={resource} column={column} />
+    case 'appprojects':
+      return <ArgoAppProjectCell resource={resource} column={column} />
     default:
       // Generic cell for CRDs and unknown resources
       return <GenericCell resource={resource} column={column} />
@@ -2966,6 +3104,305 @@ function EventCell({ resource, column }: { resource: any; column: string }) {
       const lastTimestamp = resource.lastTimestamp || resource.metadata?.creationTimestamp
       if (!lastTimestamp) return <span className="text-sm text-theme-text-tertiary">-</span>
       return <span className="text-sm text-theme-text-secondary">{formatAge(lastTimestamp)}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+// ============================================================================
+// FLUXCD GITOPS CELL RENDERERS
+// ============================================================================
+
+function GitRepositoryCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'url': {
+      const url = getGitRepositoryUrl(resource)
+      return (
+        <Tooltip content={url}>
+          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
+        </Tooltip>
+      )
+    }
+    case 'ref': {
+      const ref = getGitRepositoryRef(resource)
+      return <span className="text-sm text-theme-text-secondary">{ref}</span>
+    }
+    case 'status': {
+      const status = getGitRepositoryStatus(resource)
+      return (
+        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+          {status.text}
+        </span>
+      )
+    }
+    case 'revision': {
+      const revision = getGitRepositoryRevision(resource)
+      return (
+        <span className="text-sm text-theme-text-tertiary font-mono">{revision}</span>
+      )
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function OCIRepositoryCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'url': {
+      const url = getOCIRepositoryUrl(resource)
+      return (
+        <Tooltip content={url}>
+          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
+        </Tooltip>
+      )
+    }
+    case 'ref': {
+      const ref = getOCIRepositoryRef(resource)
+      return <span className="text-sm text-theme-text-secondary">{ref}</span>
+    }
+    case 'status': {
+      const status = getOCIRepositoryStatus(resource)
+      return (
+        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+          {status.text}
+        </span>
+      )
+    }
+    case 'revision': {
+      const revision = getOCIRepositoryRevision(resource)
+      return (
+        <span className="text-sm text-theme-text-tertiary font-mono">{revision}</span>
+      )
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function HelmRepositoryCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'url': {
+      const url = getHelmRepositoryUrl(resource)
+      return (
+        <Tooltip content={url}>
+          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
+        </Tooltip>
+      )
+    }
+    case 'type': {
+      const type = getHelmRepositoryType(resource)
+      return <span className="text-sm text-theme-text-secondary">{type}</span>
+    }
+    case 'status': {
+      const status = getHelmRepositoryStatus(resource)
+      return (
+        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+          {status.text}
+        </span>
+      )
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function KustomizationCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'source': {
+      const source = getKustomizationSource(resource)
+      return (
+        <Tooltip content={source}>
+          <span className="text-sm text-theme-text-secondary truncate block">{source}</span>
+        </Tooltip>
+      )
+    }
+    case 'path': {
+      const path = getKustomizationPath(resource)
+      return <span className="text-sm text-theme-text-tertiary font-mono">{path}</span>
+    }
+    case 'status': {
+      const status = getKustomizationStatus(resource)
+      return (
+        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+          {status.text}
+        </span>
+      )
+    }
+    case 'inventory': {
+      const count = getKustomizationInventory(resource)
+      return (
+        <span className="text-sm text-theme-text-secondary">
+          {count > 0 ? count : '-'}
+        </span>
+      )
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function FluxHelmReleaseCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'chart': {
+      const chart = getFluxHelmReleaseChart(resource)
+      return (
+        <Tooltip content={chart}>
+          <span className="text-sm text-theme-text-secondary truncate block">{chart}</span>
+        </Tooltip>
+      )
+    }
+    case 'version': {
+      const version = getFluxHelmReleaseVersion(resource)
+      return <span className="text-sm text-theme-text-secondary">{version}</span>
+    }
+    case 'status': {
+      const status = getFluxHelmReleaseStatus(resource)
+      return (
+        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+          {status.text}
+        </span>
+      )
+    }
+    case 'revision': {
+      const revision = getFluxHelmReleaseRevision(resource)
+      return (
+        <span className="text-sm text-theme-text-tertiary">
+          {revision > 0 ? `#${revision}` : '-'}
+        </span>
+      )
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function FluxAlertCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'provider': {
+      const provider = getFluxAlertProvider(resource)
+      return <span className="text-sm text-theme-text-secondary">{provider}</span>
+    }
+    case 'events': {
+      const count = getFluxAlertEventCount(resource)
+      return (
+        <span className="text-sm text-theme-text-secondary">
+          {count > 0 ? count : '-'}
+        </span>
+      )
+    }
+    case 'status': {
+      const status = getFluxAlertStatus(resource)
+      return (
+        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+          {status.text}
+        </span>
+      )
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+// ============================================================================
+// ARGOCD GITOPS CELL RENDERERS
+// ============================================================================
+
+function ArgoApplicationCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'project': {
+      const project = getArgoApplicationProject(resource)
+      return <span className="text-sm text-theme-text-secondary">{project}</span>
+    }
+    case 'sync': {
+      const { status, color } = getArgoApplicationSync(resource)
+      return (
+        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', color)}>
+          {status}
+        </span>
+      )
+    }
+    case 'health': {
+      const { status, color } = getArgoApplicationHealth(resource)
+      return (
+        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', color)}>
+          {status}
+        </span>
+      )
+    }
+    case 'repo': {
+      const repo = getArgoApplicationRepo(resource)
+      return (
+        <Tooltip content={resource.spec?.source?.repoURL || resource.spec?.sources?.[0]?.repoURL || repo}>
+          <span className="text-sm text-theme-text-secondary truncate block">{repo}</span>
+        </Tooltip>
+      )
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function ArgoApplicationSetCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'generators': {
+      const generators = getArgoApplicationSetGenerators(resource)
+      return (
+        <Tooltip content={generators}>
+          <span className="text-sm text-theme-text-secondary truncate block">{generators}</span>
+        </Tooltip>
+      )
+    }
+    case 'template': {
+      const template = getArgoApplicationSetTemplate(resource)
+      return <span className="text-sm text-theme-text-secondary">{template}</span>
+    }
+    case 'applications': {
+      const count = getArgoApplicationSetAppCount(resource)
+      return (
+        <span className="text-sm text-theme-text-secondary">
+          {count > 0 ? count : '-'}
+        </span>
+      )
+    }
+    case 'status': {
+      const status = getArgoApplicationSetStatus(resource)
+      return (
+        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+          {status.text}
+        </span>
+      )
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function ArgoAppProjectCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'description': {
+      const desc = getArgoAppProjectDescription(resource)
+      return (
+        <Tooltip content={desc}>
+          <span className="text-sm text-theme-text-secondary truncate block">{desc}</span>
+        </Tooltip>
+      )
+    }
+    case 'destinations': {
+      const count = getArgoAppProjectDestinations(resource)
+      return (
+        <span className="text-sm text-theme-text-secondary">
+          {count === Infinity ? '*' : count}
+        </span>
+      )
+    }
+    case 'sources': {
+      const count = getArgoAppProjectSources(resource)
+      return (
+        <span className="text-sm text-theme-text-secondary">
+          {count === Infinity ? '*' : count}
+        </span>
+      )
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>

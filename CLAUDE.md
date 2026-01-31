@@ -242,6 +242,10 @@ DELETE /api/helm/releases/{ns}/{name}              # Uninstall release
   - `traffic`: Network flow (Ingress → Service → Pod)
   - `resources`: Full hierarchy (Deployment → ReplicaSet → Pod)
 - Node types: Ingress, Service, Deployment, DaemonSet, StatefulSet, ReplicaSet, Pod, Job, CronJob, ConfigMap, Secret, HPA, PVC
+- GitOps nodes: Application (ArgoCD), Kustomization, HelmRelease, GitRepository (FluxCD)
+  - Connected to managed resources via status.resources (ArgoCD) or status.inventory (FluxCD Kustomization)
+  - HelmRelease connects to resources via FluxCD labels (`helm.toolkit.fluxcd.io/name`) or standard Helm label (`app.kubernetes.io/instance`)
+  - **Single-cluster limitation**: Radar only shows connections when GitOps controller and managed resources are in the same cluster. ArgoCD commonly deploys to remote clusters (hub-spoke model), so Application→resource edges won't appear when connected to the ArgoCD cluster. FluxCD typically deploys to its own cluster, so connections usually work.
 
 ### Timeline
 - In-memory or SQLite storage for event tracking (`--timeline-storage`)
@@ -253,6 +257,50 @@ DELETE /api/helm/releases/{ns}/{name}              # Uninstall release
 - Computed at query time for resource detail views
 - Tracks: parent (owner), children (owned), config (ConfigMaps/Secrets), network (Services/Ingresses)
 - Used for topology edges and change propagation
+
+### Error Handling (Backend)
+All HTTP handlers use the simple `writeError` pattern:
+```go
+s.writeError(w, http.StatusXXX, "error message")
+// Returns: {"error": "error message"}
+```
+
+**HTTP Status Code Conventions:**
+- `400 Bad Request`: Invalid input (missing params, invalid YAML, unknown resource kind)
+- `404 Not Found`: Resource doesn't exist
+- `409 Conflict`: Operation already in progress (e.g., sync running)
+- `503 Service Unavailable`: Client/cache not initialized
+- `500 Internal Server Error`: Unexpected errors (always log before returning)
+
+**Logging Convention:**
+Always log 500 errors with context before returning:
+```go
+log.Printf("[module] Failed to <action> %s/%s: %v", namespace, name, err)
+s.writeError(w, http.StatusInternalServerError, err.Error())
+```
+
+**K8s Error Detection:**
+Use `apierrors.IsNotFound(err)` for proper K8s error type checking:
+```go
+if apierrors.IsNotFound(err) {
+    s.writeError(w, http.StatusNotFound, err.Error())
+    return
+}
+```
+
+### Error Handling (Frontend)
+The frontend uses React Query mutations with meta for toast messages:
+```typescript
+useMutation({
+  mutationFn: async (...) => { ... },
+  meta: {
+    errorMessage: 'Failed to update resource',  // Shown in toast
+    successMessage: 'Resource updated',
+  },
+})
+```
+
+Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 
 ## Tech Stack
 

@@ -4,23 +4,27 @@ package topology
 type NodeKind string
 
 const (
-	KindInternet    NodeKind = "Internet"
-	KindIngress     NodeKind = "Ingress"
-	KindService     NodeKind = "Service"
-	KindDeployment  NodeKind = "Deployment"
-	KindRollout     NodeKind = "Rollout"
-	KindDaemonSet   NodeKind = "DaemonSet"
-	KindStatefulSet NodeKind = "StatefulSet"
-	KindReplicaSet  NodeKind = "ReplicaSet"
-	KindPod         NodeKind = "Pod"
-	KindPodGroup    NodeKind = "PodGroup"
-	KindConfigMap   NodeKind = "ConfigMap"
-	KindSecret      NodeKind = "Secret"
-	KindHPA         NodeKind = "HPA"
-	KindJob         NodeKind = "Job"
-	KindCronJob     NodeKind = "CronJob"
-	KindPVC         NodeKind = "PVC"
-	KindNamespace   NodeKind = "Namespace"
+	KindInternet      NodeKind = "Internet"
+	KindIngress       NodeKind = "Ingress"
+	KindService       NodeKind = "Service"
+	KindDeployment    NodeKind = "Deployment"
+	KindRollout       NodeKind = "Rollout"
+	KindApplication   NodeKind = "Application"   // ArgoCD Application
+	KindKustomization NodeKind = "Kustomization" // FluxCD Kustomization
+	KindHelmRelease   NodeKind = "HelmRelease"   // FluxCD HelmRelease (Flux, not native Helm)
+	KindGitRepository NodeKind = "GitRepository" // FluxCD GitRepository
+	KindDaemonSet     NodeKind = "DaemonSet"
+	KindStatefulSet   NodeKind = "StatefulSet"
+	KindReplicaSet    NodeKind = "ReplicaSet"
+	KindPod           NodeKind = "Pod"
+	KindPodGroup      NodeKind = "PodGroup"
+	KindConfigMap     NodeKind = "ConfigMap"
+	KindSecret        NodeKind = "Secret"
+	KindHPA           NodeKind = "HPA"
+	KindJob           NodeKind = "Job"
+	KindCronJob       NodeKind = "CronJob"
+	KindPVC           NodeKind = "PVC"
+	KindNamespace     NodeKind = "Namespace"
 )
 
 // HealthStatus represents the health status of a node

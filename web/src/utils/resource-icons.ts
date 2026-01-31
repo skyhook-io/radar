@@ -37,6 +37,12 @@ import {
   // Scaling
   Scaling,
 
+  // GitOps
+  GitBranch,
+  Layers,
+  Anchor,
+  FolderGit2,
+
   // Fallback
   Puzzle,
 } from 'lucide-react'
@@ -96,6 +102,15 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   // Argo
   workflow: Activity,
   workflowtemplate: Activity,
+  application: GitBranch, // ArgoCD Application
+  applicationset: GitBranch, // ArgoCD ApplicationSet
+
+  // FluxCD
+  kustomization: Layers, // FluxCD Kustomization
+  helmrelease: Anchor, // FluxCD HelmRelease
+  gitrepository: FolderGit2, // FluxCD GitRepository
+  ocirepository: FolderGit2, // FluxCD OCIRepository
+  helmrepository: Anchor, // FluxCD HelmRepository
 
   // PDB
   poddisruptionbudget: ShieldCheck,
