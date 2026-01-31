@@ -3,6 +3,7 @@ import { useRefreshAnimation } from './hooks/useRefreshAnimation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { HomeView } from './components/home/HomeView'
+import { DebugOverlay } from './components/DebugOverlay'
 import { TopologyGraph } from './components/topology/TopologyGraph'
 import { TopologyFilterSidebar } from './components/topology/TopologyFilterSidebar'
 import { TimelineView } from './components/timeline/TimelineView'
@@ -595,6 +596,15 @@ function AppInner() {
               onHideAll={handleHideAllKinds}
               collapsed={filterSidebarCollapsed}
               onToggleCollapse={() => setFilterSidebarCollapsed(prev => !prev)}
+              hiddenKinds={topology?.hiddenKinds}
+              onEnableHiddenKind={(kind) => {
+                // Add the kind to visible kinds - the actual data is not available
+                // since it was hidden server-side, but this prepares for when
+                // we add query params to request specific kinds
+                setVisibleKinds(prev => new Set(prev).add(kind as NodeKind))
+                // TODO: Re-fetch topology with this kind enabled via query param
+                console.log(`[topology] User requested to show hidden kind: ${kind}`)
+              }}
             />
 
             <div className="flex-1 relative">
@@ -738,6 +748,9 @@ function AppInner() {
 
       {/* Spacer for dock */}
       <DockSpacer />
+
+      {/* Debug overlay - only in dev mode */}
+      {import.meta.env.DEV && <DebugOverlay />}
     </div>
   )
 }

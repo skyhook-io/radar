@@ -52,6 +52,10 @@ export interface Topology {
   nodes: TopologyNode[]
   edges: TopologyEdge[]
   warnings?: string[] // Warnings about resources that failed to load
+  truncated?: boolean // True if topology was truncated due to size limit
+  totalNodes?: number // Total nodes before truncation (only set if truncated)
+  largeCluster?: boolean // True if cluster exceeds large cluster threshold
+  hiddenKinds?: string[] // Resource kinds auto-hidden for performance
 }
 
 // K8s Event (from SSE stream)

@@ -1,9 +1,11 @@
-import { memo, useMemo } from 'react'
+import { memo, useMemo, useState } from 'react'
 import {
   ChevronLeft,
   ChevronRight,
   Eye,
-  EyeOff
+  EyeOff,
+  AlertTriangle,
+  Zap
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -56,6 +58,8 @@ interface TopologyFilterSidebarProps {
   onHideAll: () => void
   collapsed?: boolean
   onToggleCollapse?: () => void
+  hiddenKinds?: string[] // Kinds auto-hidden for performance in large clusters
+  onEnableHiddenKind?: (kind: string) => void // Callback to re-enable a hidden kind
 }
 
 export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
@@ -66,7 +70,13 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
   onHideAll,
   collapsed = false,
   onToggleCollapse,
+  hiddenKinds = [],
+  onEnableHiddenKind,
 }: TopologyFilterSidebarProps) {
+  // Track which hidden kinds the user has confirmed to show (performance warning acknowledged)
+  const [confirmedKinds, setConfirmedKinds] = useState<Set<string>>(new Set())
+  // Track which kind is pending confirmation
+  const [pendingConfirmKind, setPendingConfirmKind] = useState<string | null>(null)
   // Count nodes by kind
   const kindCounts = useMemo(() => {
     const counts = new Map<NodeKind, number>()
@@ -221,6 +231,81 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
             </div>
           )
         })}
+
+        {/* Auto-hidden kinds section (for large clusters) */}
+        {hiddenKinds.length > 0 && (
+          <div className="px-2 py-2 border-t border-theme-border/50">
+            <div className="flex items-center gap-1 text-xs font-medium text-amber-400/80 uppercase tracking-wider px-1 mb-1">
+              <Zap className="w-3 h-3" />
+              Hidden for Performance
+            </div>
+            <div className="space-y-0.5">
+              {hiddenKinds.map(kindName => {
+                const kindConfig = RESOURCE_KINDS.find(k => k.kind === kindName)
+                if (!kindConfig) return null
+
+                const { kind, label, icon: Icon } = kindConfig
+                const isConfirmed = confirmedKinds.has(kind)
+                const isPending = pendingConfirmKind === kind
+
+                return (
+                  <div key={kind} className="relative">
+                    <button
+                      onClick={() => {
+                        if (isConfirmed) {
+                          // Already confirmed - just toggle
+                          onEnableHiddenKind?.(kind)
+                        } else {
+                          // Show confirmation
+                          setPendingConfirmKind(kind)
+                        }
+                      }}
+                      className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left transition-colors text-theme-text-tertiary hover:bg-amber-500/10 hover:text-amber-400/80"
+                      title="Hidden for performance - click to show"
+                    >
+                      <Icon className="w-4 h-4 shrink-0 opacity-50" />
+                      <span className="flex-1 text-sm truncate opacity-70">{label}</span>
+                      <EyeOff className="w-3 h-3 opacity-50" />
+                    </button>
+
+                    {/* Confirmation popup */}
+                    {isPending && (
+                      <div className="absolute left-0 right-0 top-full mt-1 z-50 bg-theme-surface border border-amber-500/30 rounded-lg shadow-lg p-3">
+                        <div className="flex items-start gap-2 mb-2">
+                          <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                          <div className="text-xs text-theme-text-secondary">
+                            <p className="font-medium text-amber-400">Performance Warning</p>
+                            <p className="mt-1">
+                              Showing {label}s may slow down the topology view in large clusters.
+                            </p>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => {
+                              setConfirmedKinds(prev => new Set(prev).add(kind))
+                              setPendingConfirmKind(null)
+                              onEnableHiddenKind?.(kind)
+                            }}
+                            className="flex-1 px-2 py-1 text-xs bg-amber-500/20 text-amber-400 hover:bg-amber-500/30 rounded transition-colors"
+                          >
+                            Show Anyway
+                          </button>
+                          <button
+                            onClick={() => setPendingConfirmKind(null)}
+                            className="flex-1 px-2 py-1 text-xs bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover rounded transition-colors"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Footer stats */}

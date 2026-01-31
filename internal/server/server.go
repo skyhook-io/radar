@@ -9,7 +9,9 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
+	"runtime"
 	"strings"
 	"time"
 
@@ -37,6 +39,7 @@ type Server struct {
 	port        int
 	devMode     bool
 	staticFS    fs.FS
+	startTime   time.Time
 }
 
 // Config holds server configuration
@@ -54,6 +57,7 @@ func New(cfg Config) *Server {
 		broadcaster: NewSSEBroadcaster(),
 		port:        cfg.Port,
 		devMode:     cfg.DevMode,
+		startTime:   time.Now(),
 	}
 
 	// Set up static file system
@@ -83,6 +87,21 @@ func (s *Server) setupRoutes() {
 		AllowedHeaders:   []string{"Accept", "Content-Type"},
 		AllowCredentials: true,
 	}))
+
+	// pprof routes for profiling (dev mode only, but always available for debugging)
+	r.Route("/debug/pprof", func(r chi.Router) {
+		r.Get("/", pprof.Index)
+		r.Get("/cmdline", pprof.Cmdline)
+		r.Get("/profile", pprof.Profile)
+		r.Get("/symbol", pprof.Symbol)
+		r.Get("/trace", pprof.Trace)
+		r.Get("/allocs", pprof.Handler("allocs").ServeHTTP)
+		r.Get("/block", pprof.Handler("block").ServeHTTP)
+		r.Get("/goroutine", pprof.Handler("goroutine").ServeHTTP)
+		r.Get("/heap", pprof.Handler("heap").ServeHTTP)
+		r.Get("/mutex", pprof.Handler("mutex").ServeHTTP)
+		r.Get("/threadcreate", pprof.Handler("threadcreate").ServeHTTP)
+	})
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
@@ -139,6 +158,7 @@ func (s *Server) setupRoutes() {
 		// Debug routes (for event pipeline diagnostics)
 		r.Get("/debug/events", s.handleDebugEvents)
 		r.Get("/debug/events/diagnose", s.handleDebugEventsDiagnose)
+		r.Get("/debug/informers", s.handleDebugInformers)
 
 		// Traffic routes
 		r.Get("/traffic/sources", s.handleGetTrafficSources)
@@ -226,10 +246,29 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Get runtime stats
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	runtimeStats := map[string]any{
+		"heapMB":        float64(m.HeapAlloc) / 1024 / 1024,
+		"heapObjectsK":  float64(m.HeapObjects) / 1000,
+		"goroutines":    runtime.NumGoroutine(),
+		"uptimeSeconds": int(time.Since(s.startTime).Seconds()),
+	}
+
+	// Get informer counts for diagnostics
+	dynamicInformerCount := 0
+	if dynCache := k8s.GetDynamicResourceCache(); dynCache != nil {
+		dynamicInformerCount = dynCache.GetInformerCount()
+	}
+	runtimeStats["typedInformers"] = 16  // Fixed count of typed informers in cache.go
+	runtimeStats["dynamicInformers"] = dynamicInformerCount
+
 	s.writeJSON(w, map[string]any{
 		"status":        status,
 		"resourceCount": cache.GetResourceCount(),
 		"timeline":      timelineStats,
+		"runtime":       runtimeStats,
 	})
 }
 
@@ -1092,4 +1131,33 @@ func (s *Server) handleDebugEventsDiagnose(w http.ResponseWriter, r *http.Reques
 
 	response := timeline.GetDiagnosis(kind, namespace, name)
 	s.writeJSON(w, response)
+}
+
+// handleDebugInformers returns the list of dynamic informers currently running
+func (s *Server) handleDebugInformers(w http.ResponseWriter, r *http.Request) {
+	dynCache := k8s.GetDynamicResourceCache()
+	if dynCache == nil {
+		s.writeJSON(w, map[string]any{
+			"typedInformers":   16,
+			"dynamicInformers": 0,
+			"watchedResources": []string{},
+		})
+		return
+	}
+
+	gvrs := dynCache.GetWatchedResources()
+	resources := make([]string, len(gvrs))
+	for i, gvr := range gvrs {
+		if gvr.Group != "" {
+			resources[i] = gvr.Resource + "." + gvr.Group
+		} else {
+			resources[i] = gvr.Resource
+		}
+	}
+
+	s.writeJSON(w, map[string]any{
+		"typedInformers":   16,
+		"dynamicInformers": len(gvrs),
+		"watchedResources": resources,
+	})
 }
