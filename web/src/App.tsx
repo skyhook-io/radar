@@ -3,6 +3,7 @@ import { useRefreshAnimation } from './hooks/useRefreshAnimation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
 import { HomeView } from './components/home/HomeView'
+import { DebugOverlay } from './components/DebugOverlay'
 import { TopologyGraph } from './components/topology/TopologyGraph'
 import { TopologyFilterSidebar } from './components/topology/TopologyFilterSidebar'
 import { TimelineView } from './components/timeline/TimelineView'
@@ -747,6 +748,9 @@ function AppInner() {
 
       {/* Spacer for dock */}
       <DockSpacer />
+
+      {/* Debug overlay - only in dev mode */}
+      {import.meta.env.DEV && <DebugOverlay />}
     </div>
   )
 }

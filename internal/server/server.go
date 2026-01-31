@@ -10,6 +10,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"runtime"
 	"strings"
 	"time"
 
@@ -37,6 +38,7 @@ type Server struct {
 	port        int
 	devMode     bool
 	staticFS    fs.FS
+	startTime   time.Time
 }
 
 // Config holds server configuration
@@ -54,6 +56,7 @@ func New(cfg Config) *Server {
 		broadcaster: NewSSEBroadcaster(),
 		port:        cfg.Port,
 		devMode:     cfg.DevMode,
+		startTime:   time.Now(),
 	}
 
 	// Set up static file system
@@ -226,10 +229,21 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// Get runtime stats
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+	runtimeStats := map[string]any{
+		"heapMB":       float64(m.HeapAlloc) / 1024 / 1024,
+		"heapObjectsK": float64(m.HeapObjects) / 1000,
+		"goroutines":   runtime.NumGoroutine(),
+		"uptimeSeconds": int(time.Since(s.startTime).Seconds()),
+	}
+
 	s.writeJSON(w, map[string]any{
 		"status":        status,
 		"resourceCount": cache.GetResourceCount(),
 		"timeline":      timelineStats,
+		"runtime":       runtimeStats,
 	})
 }
 

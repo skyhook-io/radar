@@ -189,6 +189,30 @@ export function useClusterInfo() {
   })
 }
 
+// Runtime stats for debug overlay
+export interface RuntimeStats {
+  heapMB: number
+  heapObjectsK: number
+  goroutines: number
+  uptimeSeconds: number
+}
+
+export interface HealthResponse {
+  status: string
+  resourceCount: number
+  runtime: RuntimeStats
+}
+
+export function useRuntimeStats(enabled: boolean = true) {
+  return useQuery<HealthResponse>({
+    queryKey: ['health'],
+    queryFn: () => fetchJSON('/health'),
+    staleTime: 2000, // 2 seconds
+    refetchInterval: enabled ? 3000 : false, // Refresh every 3 seconds when enabled
+    enabled,
+  })
+}
+
 // Capabilities (RBAC-based feature flags)
 export function useCapabilities() {
   return useQuery<Capabilities>({
