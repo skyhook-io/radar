@@ -195,6 +195,8 @@ export interface RuntimeStats {
   heapObjectsK: number
   goroutines: number
   uptimeSeconds: number
+  typedInformers?: number
+  dynamicInformers?: number
 }
 
 export interface HealthResponse {

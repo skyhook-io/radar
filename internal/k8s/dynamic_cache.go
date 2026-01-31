@@ -123,6 +123,10 @@ func (d *DynamicResourceCache) EnsureWatching(gvr schema.GroupVersionResource) e
 	// Start the informer
 	go informer.Run(d.stopCh)
 
+	// Log the current count of dynamic informers for diagnostics
+	informerCount := len(d.informers)
+	log.Printf("Started watching dynamic resource: %s.%s/%s (total dynamic informers: %d)", gvr.Resource, gvr.Group, gvr.Version, informerCount)
+
 	// Wait for initial sync asynchronously (non-blocking)
 	go func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -139,8 +143,6 @@ func (d *DynamicResourceCache) EnsureWatching(gvr schema.GroupVersionResource) e
 		d.syncComplete[gvr] = true
 		d.mu.Unlock()
 	}()
-
-	log.Printf("Started watching dynamic resource: %s.%s/%s", gvr.Resource, gvr.Group, gvr.Version)
 	return nil
 }
 
@@ -476,6 +478,18 @@ func (d *DynamicResourceCache) GetWatchedResources() []schema.GroupVersionResour
 		result = append(result, gvr)
 	}
 	return result
+}
+
+// GetInformerCount returns the number of active dynamic informers
+func (d *DynamicResourceCache) GetInformerCount() int {
+	if d == nil {
+		return 0
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	return len(d.informers)
 }
 
 // WarmupParallel starts watching multiple resources in parallel and waits for all to sync

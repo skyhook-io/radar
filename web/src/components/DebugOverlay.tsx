@@ -69,6 +69,12 @@ export function DebugOverlay() {
                   <span className="text-theme-text-primary">{runtime.goroutines}</span>
                 </div>
                 <div className="flex justify-between gap-4">
+                  <span className="text-theme-text-tertiary">Informers</span>
+                  <span className="text-theme-text-primary">
+                    {runtime.typedInformers ?? 16}+{runtime.dynamicInformers ?? 0}
+                  </span>
+                </div>
+                <div className="flex justify-between gap-4">
                   <span className="text-theme-text-tertiary">Uptime</span>
                   <span className="text-theme-text-primary">{formatUptime(runtime.uptimeSeconds)}</span>
                 </div>

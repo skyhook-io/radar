@@ -158,6 +158,7 @@ func (s *Server) setupRoutes() {
 		// Debug routes (for event pipeline diagnostics)
 		r.Get("/debug/events", s.handleDebugEvents)
 		r.Get("/debug/events/diagnose", s.handleDebugEventsDiagnose)
+		r.Get("/debug/informers", s.handleDebugInformers)
 
 		// Traffic routes
 		r.Get("/traffic/sources", s.handleGetTrafficSources)
@@ -249,11 +250,19 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 	runtimeStats := map[string]any{
-		"heapMB":       float64(m.HeapAlloc) / 1024 / 1024,
-		"heapObjectsK": float64(m.HeapObjects) / 1000,
-		"goroutines":   runtime.NumGoroutine(),
+		"heapMB":        float64(m.HeapAlloc) / 1024 / 1024,
+		"heapObjectsK":  float64(m.HeapObjects) / 1000,
+		"goroutines":    runtime.NumGoroutine(),
 		"uptimeSeconds": int(time.Since(s.startTime).Seconds()),
 	}
+
+	// Get informer counts for diagnostics
+	dynamicInformerCount := 0
+	if dynCache := k8s.GetDynamicResourceCache(); dynCache != nil {
+		dynamicInformerCount = dynCache.GetInformerCount()
+	}
+	runtimeStats["typedInformers"] = 16  // Fixed count of typed informers in cache.go
+	runtimeStats["dynamicInformers"] = dynamicInformerCount
 
 	s.writeJSON(w, map[string]any{
 		"status":        status,
@@ -1122,4 +1131,33 @@ func (s *Server) handleDebugEventsDiagnose(w http.ResponseWriter, r *http.Reques
 
 	response := timeline.GetDiagnosis(kind, namespace, name)
 	s.writeJSON(w, response)
+}
+
+// handleDebugInformers returns the list of dynamic informers currently running
+func (s *Server) handleDebugInformers(w http.ResponseWriter, r *http.Request) {
+	dynCache := k8s.GetDynamicResourceCache()
+	if dynCache == nil {
+		s.writeJSON(w, map[string]any{
+			"typedInformers":   16,
+			"dynamicInformers": 0,
+			"watchedResources": []string{},
+		})
+		return
+	}
+
+	gvrs := dynCache.GetWatchedResources()
+	resources := make([]string, len(gvrs))
+	for i, gvr := range gvrs {
+		if gvr.Group != "" {
+			resources[i] = gvr.Resource + "." + gvr.Group
+		} else {
+			resources[i] = gvr.Resource
+		}
+	}
+
+	s.writeJSON(w, map[string]any{
+		"typedInformers":   16,
+		"dynamicInformers": len(gvrs),
+		"watchedResources": resources,
+	})
 }
