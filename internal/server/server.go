@@ -9,6 +9,7 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"net/http/pprof"
 	"net/url"
 	"runtime"
 	"strings"
@@ -86,6 +87,21 @@ func (s *Server) setupRoutes() {
 		AllowedHeaders:   []string{"Accept", "Content-Type"},
 		AllowCredentials: true,
 	}))
+
+	// pprof routes for profiling (dev mode only, but always available for debugging)
+	r.Route("/debug/pprof", func(r chi.Router) {
+		r.Get("/", pprof.Index)
+		r.Get("/cmdline", pprof.Cmdline)
+		r.Get("/profile", pprof.Profile)
+		r.Get("/symbol", pprof.Symbol)
+		r.Get("/trace", pprof.Trace)
+		r.Get("/allocs", pprof.Handler("allocs").ServeHTTP)
+		r.Get("/block", pprof.Handler("block").ServeHTTP)
+		r.Get("/goroutine", pprof.Handler("goroutine").ServeHTTP)
+		r.Get("/heap", pprof.Handler("heap").ServeHTTP)
+		r.Get("/mutex", pprof.Handler("mutex").ServeHTTP)
+		r.Get("/threadcreate", pprof.Handler("threadcreate").ServeHTTP)
+	})
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
