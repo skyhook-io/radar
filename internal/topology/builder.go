@@ -33,12 +33,147 @@ func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 		return nil, fmt.Errorf("resource cache not initialized")
 	}
 
+	// Detect large cluster and apply optimizations
+	isLargeCluster, hiddenKinds := b.detectLargeClusterAndOptimize(&opts)
+
+	var topo *Topology
+	var err error
+
 	switch opts.ViewMode {
 	case ViewModeTraffic:
-		return b.buildTrafficTopology(opts)
+		topo, err = b.buildTrafficTopology(opts)
 	default:
-		return b.buildResourcesTopology(opts)
+		topo, err = b.buildResourcesTopology(opts)
 	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	// Set large cluster flags in response
+	if isLargeCluster {
+		topo.LargeCluster = true
+		topo.HiddenKinds = hiddenKinds
+	}
+
+	return topo, nil
+}
+
+// detectLargeClusterAndOptimize checks if cluster is large and applies optimizations
+// Returns true if large cluster detected, and list of hidden kinds
+func (b *Builder) detectLargeClusterAndOptimize(opts *BuildOptions) (bool, []string) {
+	// Quick count of workload resources to estimate total node count
+	// This is a lightweight check - we count core resources that contribute most to topology
+	estimatedNodes := 0
+	var hiddenKinds []string
+
+	// Count deployments
+	deployments, _ := b.cache.Deployments().List(labels.Everything())
+	for _, d := range deployments {
+		if opts.Namespace == "" || d.Namespace == opts.Namespace {
+			estimatedNodes++
+		}
+	}
+
+	// Count statefulsets
+	statefulsets, _ := b.cache.StatefulSets().List(labels.Everything())
+	for _, s := range statefulsets {
+		if opts.Namespace == "" || s.Namespace == opts.Namespace {
+			estimatedNodes++
+		}
+	}
+
+	// Count daemonsets
+	daemonsets, _ := b.cache.DaemonSets().List(labels.Everything())
+	for _, d := range daemonsets {
+		if opts.Namespace == "" || d.Namespace == opts.Namespace {
+			estimatedNodes++
+		}
+	}
+
+	// Count services
+	services, _ := b.cache.Services().List(labels.Everything())
+	for _, s := range services {
+		if opts.Namespace == "" || s.Namespace == opts.Namespace {
+			estimatedNodes++
+		}
+	}
+
+	// Count pods (this is usually the largest contributor)
+	pods, _ := b.cache.Pods().List(labels.Everything())
+	podCount := 0
+	for _, p := range pods {
+		if opts.Namespace == "" || p.Namespace == opts.Namespace {
+			podCount++
+		}
+	}
+	// Estimate pod nodes after grouping (assume ~5 pods per group on average)
+	estimatedNodes += (podCount + 4) / 5
+
+	// Count jobs and cronjobs
+	jobs, _ := b.cache.Jobs().List(labels.Everything())
+	for _, j := range jobs {
+		if opts.Namespace == "" || j.Namespace == opts.Namespace {
+			estimatedNodes++
+		}
+	}
+	cronjobs, _ := b.cache.CronJobs().List(labels.Everything())
+	for _, c := range cronjobs {
+		if opts.Namespace == "" || c.Namespace == opts.Namespace {
+			estimatedNodes++
+		}
+	}
+
+	// Count ingresses
+	ingresses, _ := b.cache.Ingresses().List(labels.Everything())
+	for _, i := range ingresses {
+		if opts.Namespace == "" || i.Namespace == opts.Namespace {
+			estimatedNodes++
+		}
+	}
+
+	// Count configmaps (only if currently included)
+	if opts.IncludeConfigMaps {
+		configmaps, _ := b.cache.ConfigMaps().List(labels.Everything())
+		for _, c := range configmaps {
+			if opts.Namespace == "" || c.Namespace == opts.Namespace {
+				estimatedNodes++
+			}
+		}
+	}
+
+	// Count PVCs (only if currently included)
+	if opts.IncludePVCs {
+		pvcs, _ := b.cache.PersistentVolumeClaims().List(labels.Everything())
+		for _, p := range pvcs {
+			if opts.Namespace == "" || p.Namespace == opts.Namespace {
+				estimatedNodes++
+			}
+		}
+	}
+
+	// Check if large cluster
+	if estimatedNodes < LargeClusterThreshold {
+		return false, nil
+	}
+
+	// Large cluster detected - apply optimizations
+	log.Printf("INFO [topology] Large cluster detected (%d estimated nodes >= %d threshold), applying optimizations", estimatedNodes, LargeClusterThreshold)
+
+	// 1. More aggressive pod grouping (threshold 2 instead of 5)
+	opts.MaxIndividualPods = 2
+
+	// 2. Auto-hide ConfigMaps and PVCs
+	if opts.IncludeConfigMaps {
+		opts.IncludeConfigMaps = false
+		hiddenKinds = append(hiddenKinds, "ConfigMap")
+	}
+	if opts.IncludePVCs {
+		opts.IncludePVCs = false
+		hiddenKinds = append(hiddenKinds, "PVC")
+	}
+
+	return true, hiddenKinds
 }
 
 // buildResourcesTopology creates a comprehensive resource view
@@ -506,17 +641,24 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		})
 
 		// Create nodes and edges for each group
-		for _, group := range groupingResult.Groups {
-			if len(group.Pods) == 1 {
-				// Single pod - add as individual node
-				pod := group.Pods[0]
-				podID := GetPodID(pod)
-				nodes = append(nodes, CreatePodNode(pod, b.cache, true)) // includeNodeName=true for resources view
+		// Use MaxIndividualPods threshold to decide whether to show individual pods or group them
+		maxIndividualPods := opts.MaxIndividualPods
+		if maxIndividualPods <= 0 {
+			maxIndividualPods = 5 // Default threshold
+		}
 
-				// Connect to owner (resources view specific)
-				edges = append(edges, b.createPodOwnerEdges(pod, podID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, jobToCronJob)...)
+		for _, group := range groupingResult.Groups {
+			if len(group.Pods) <= maxIndividualPods {
+				// Small group - add as individual nodes
+				for _, pod := range group.Pods {
+					podID := GetPodID(pod)
+					nodes = append(nodes, CreatePodNode(pod, b.cache, true)) // includeNodeName=true for resources view
+
+					// Connect to owner (resources view specific)
+					edges = append(edges, b.createPodOwnerEdges(pod, podID, opts, replicaSetIDs, replicaSetToDeployment, replicaSetToRollout, jobIDs, jobToCronJob)...)
+				}
 			} else {
-				// Multiple pods - create PodGroup
+				// Large group - create PodGroup
 				podGroupID := GetPodGroupID(group)
 				nodes = append(nodes, CreatePodGroupNode(group, b.cache))
 
@@ -924,7 +1066,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	return &Topology{Nodes: nodes, Edges: edges, Warnings: warnings}, nil
+	topo := &Topology{Nodes: nodes, Edges: edges, Warnings: warnings}
+	return truncateTopologyIfNeeded(topo, opts), nil
 }
 
 // buildTrafficTopology creates a network-focused view
@@ -1118,24 +1261,31 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	})
 
 	// Create nodes and edges for each group
-	for _, group := range groupingResult.Groups {
-		if len(group.Pods) == 1 {
-			// Single pod - show as individual node
-			pod := group.Pods[0]
-			podID := GetPodID(pod)
-			nodes = append(nodes, CreatePodNode(pod, b.cache, false)) // includeNodeName=false for traffic view
+	// Use MaxIndividualPods threshold to decide whether to show individual pods or group them
+	maxIndividualPods := opts.MaxIndividualPods
+	if maxIndividualPods <= 0 {
+		maxIndividualPods = 5 // Default threshold
+	}
 
-			// Add edges from services to pod (traffic view specific)
-			for svcID := range group.ServiceIDs {
-				edges = append(edges, Edge{
-					ID:     fmt.Sprintf("%s-to-%s", svcID, podID),
-					Source: svcID,
-					Target: podID,
-					Type:   EdgeRoutesTo,
-				})
+	for _, group := range groupingResult.Groups {
+		if len(group.Pods) <= maxIndividualPods {
+			// Small group - show as individual nodes
+			for _, pod := range group.Pods {
+				podID := GetPodID(pod)
+				nodes = append(nodes, CreatePodNode(pod, b.cache, false)) // includeNodeName=false for traffic view
+
+				// Add edges from services to pod (traffic view specific)
+				for svcID := range group.ServiceIDs {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s", svcID, podID),
+						Source: svcID,
+						Target: podID,
+						Type:   EdgeRoutesTo,
+					})
+				}
 			}
 		} else {
-			// Multiple pods - create PodGroup node
+			// Large group - create PodGroup node
 			podGroupID := GetPodGroupID(group)
 			nodes = append(nodes, CreatePodGroupNode(group, b.cache))
 
@@ -1151,7 +1301,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	return &Topology{Nodes: nodes, Edges: edges, Warnings: warnings}, nil
+	topo := &Topology{Nodes: nodes, Edges: edges, Warnings: warnings}
+	return truncateTopologyIfNeeded(topo, opts), nil
 }
 
 // Helper functions
@@ -1463,6 +1614,44 @@ func extractWorkloadReferencesFromMap(spec map[string]any) workloadRefs {
 	}
 
 	return refs
+}
+
+// truncateTopologyIfNeeded truncates the topology if it exceeds the max nodes limit
+// Returns the truncated topology with appropriate metadata set
+func truncateTopologyIfNeeded(topo *Topology, opts BuildOptions) *Topology {
+	if opts.MaxNodes <= 0 || len(topo.Nodes) <= opts.MaxNodes {
+		return topo
+	}
+
+	totalNodes := len(topo.Nodes)
+
+	// Keep only the first MaxNodes nodes
+	topo.Nodes = topo.Nodes[:opts.MaxNodes]
+	topo.Truncated = true
+	topo.TotalNodes = totalNodes
+
+	// Build a set of kept node IDs for fast lookup
+	keptNodeIDs := make(map[string]bool, len(topo.Nodes))
+	for _, node := range topo.Nodes {
+		keptNodeIDs[node.ID] = true
+	}
+
+	// Filter edges to only include those between kept nodes
+	filteredEdges := make([]Edge, 0, len(topo.Edges))
+	for _, edge := range topo.Edges {
+		if keptNodeIDs[edge.Source] && keptNodeIDs[edge.Target] {
+			filteredEdges = append(filteredEdges, edge)
+		}
+	}
+	topo.Edges = filteredEdges
+
+	// Add warning about truncation
+	topo.Warnings = append(topo.Warnings, fmt.Sprintf(
+		"Topology truncated: showing %d of %d nodes. Filter by namespace for better performance.",
+		opts.MaxNodes, totalNodes,
+	))
+
+	return topo
 }
 
 // Unused but needed for imports

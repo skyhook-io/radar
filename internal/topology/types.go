@@ -65,9 +65,13 @@ type Edge struct {
 
 // Topology represents the complete graph
 type Topology struct {
-	Nodes    []Node   `json:"nodes"`
-	Edges    []Edge   `json:"edges"`
-	Warnings []string `json:"warnings,omitempty"` // Warnings about resources that failed to load
+	Nodes        []Node   `json:"nodes"`
+	Edges        []Edge   `json:"edges"`
+	Warnings     []string `json:"warnings,omitempty"`     // Warnings about resources that failed to load
+	Truncated    bool     `json:"truncated,omitempty"`    // True if topology was truncated due to size limit
+	TotalNodes   int      `json:"totalNodes,omitempty"`   // Total nodes before truncation (only set if truncated)
+	LargeCluster bool     `json:"largeCluster,omitempty"` // True if cluster exceeds large cluster threshold
+	HiddenKinds  []string `json:"hiddenKinds,omitempty"`  // Resource kinds auto-hidden for performance
 }
 
 // ViewMode determines how the topology is built
@@ -78,11 +82,15 @@ const (
 	ViewModeResources ViewMode = "resources" // Comprehensive tree
 )
 
+// Large cluster threshold - when pre-grouped node count exceeds this, apply optimizations
+const LargeClusterThreshold = 1000
+
 // BuildOptions configures topology building
 type BuildOptions struct {
 	Namespace          string   // Filter to specific namespace (empty = all)
 	ViewMode           ViewMode // How to display topology
 	MaxIndividualPods  int      // Above this, pods are grouped (default: 5)
+	MaxNodes           int      // Maximum nodes to return (0 = unlimited, default: 500)
 	IncludeSecrets     bool     // Include Secret nodes
 	IncludeConfigMaps  bool     // Include ConfigMap nodes
 	IncludePVCs        bool     // Include PersistentVolumeClaim nodes
@@ -95,6 +103,7 @@ func DefaultBuildOptions() BuildOptions {
 		Namespace:          "",
 		ViewMode:           ViewModeResources,
 		MaxIndividualPods:  5,
+		MaxNodes:           2000, // Limit to prevent browser crashes on large clusters
 		IncludeSecrets:     false, // Secrets are sensitive
 		IncludeConfigMaps:  true,
 		IncludePVCs:        true,

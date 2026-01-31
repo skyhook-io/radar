@@ -19,7 +19,7 @@ import {
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
-import { AlertTriangle, RotateCw } from 'lucide-react'
+import { AlertTriangle, RotateCw, Scissors } from 'lucide-react'
 
 import { K8sResourceNode } from './K8sResourceNode'
 import { GroupNode } from './GroupNode'
@@ -535,8 +535,23 @@ export function TopologyGraph({
 
   return (
     <ReactFlowProvider>
+      {/* Truncation banner - shown when topology has too many nodes */}
+      {topology?.truncated && (
+        <div className="absolute top-2 left-2 right-2 z-10 bg-blue-500/10 border border-blue-500/30 rounded-lg p-2 backdrop-blur-sm">
+          <div className="flex items-center gap-2">
+            <Scissors className="w-4 h-4 text-blue-400 shrink-0" />
+            <div className="text-sm">
+              <span className="font-medium text-blue-400">Large cluster:</span>
+              <span className="text-theme-text-secondary ml-1">
+                Showing {topology.nodes.length} of {topology.totalNodes} nodes.
+                Select a namespace for better performance.
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
       {/* Warning banner for partial topology data */}
-      {topology?.warnings && topology.warnings.length > 0 && (
+      {topology?.warnings && topology.warnings.length > 0 && !topology.truncated && (
         <div className="absolute top-2 left-2 right-2 z-10 bg-amber-500/10 border border-amber-500/30 rounded-lg p-2 backdrop-blur-sm">
           <div className="flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
