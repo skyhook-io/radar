@@ -34,7 +34,7 @@
     "yaml": "^2.8.2"
   },
   "devDependencies": {
-    "@types/diff": "^7.0.2",
+    "@types/diff": "^8.0.0",
     "@types/react": "^19.2.10",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^4.2.1",
