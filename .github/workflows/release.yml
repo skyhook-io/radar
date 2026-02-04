@@ -59,7 +59,7 @@ jobs:
           retention-days: 1
 
       - name: Update krew-index
-        uses: rajatjindal/krew-release-bot@v0.0.46
+        uses: rajatjindal/krew-release-bot@v0.0.47
 
   docker:
     name: Docker Image
