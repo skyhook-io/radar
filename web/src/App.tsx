@@ -22,6 +22,7 @@ import { ConnectionErrorView } from './components/ConnectionErrorView'
 import { CapabilitiesProvider } from './contexts/CapabilitiesContext'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { NamespaceSelector } from './components/ui/NamespaceSelector'
+import { UpdateNotification } from './components/ui/UpdateNotification'
 import { useEventSource } from './hooks/useEventSource'
 import { useNamespaces } from './api/client'
 import { Loader2 } from 'lucide-react'
@@ -816,6 +817,9 @@ function AppInner() {
 
       {/* Port Forward Manager */}
       <PortForwardManagerWrapper />
+
+      {/* Update notification */}
+      <UpdateNotification />
 
       {/* Bottom Dock for Terminal/Logs */}
       <BottomDock />

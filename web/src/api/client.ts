@@ -210,6 +210,25 @@ export function useClusterInfo() {
   return query
 }
 
+// Version check
+export interface VersionInfo {
+  currentVersion: string
+  latestVersion?: string
+  updateAvailable: boolean
+  releaseUrl?: string
+  releaseNotes?: string
+  error?: string
+}
+
+export function useVersionCheck() {
+  return useQuery<VersionInfo>({
+    queryKey: ['version-check'],
+    queryFn: () => fetchJSON('/version-check'),
+    staleTime: 60 * 60 * 1000, // 1 hour
+    retry: false, // Don't retry on failure
+  })
+}
+
 // Runtime stats for debug overlay
 export interface RuntimeStats {
   heapMB: number

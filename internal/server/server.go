@@ -31,6 +31,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/topology"
+	"github.com/skyhook-io/radar/internal/version"
 )
 
 // Server is the Explorer HTTP server
@@ -117,6 +118,7 @@ func (s *Server) setupRoutes() {
 			r.Use(middleware.Timeout(60 * time.Second))
 
 			r.Get("/health", s.handleHealth)
+			r.Get("/version-check", s.handleVersionCheck)
 			r.Get("/dashboard", s.handleDashboard)
 			r.Get("/dashboard/crds", s.handleDashboardCRDs)
 			r.Get("/cluster-info", s.handleClusterInfo)
@@ -309,6 +311,11 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"timeline":      timelineStats,
 		"runtime":       runtimeStats,
 	})
+}
+
+func (s *Server) handleVersionCheck(w http.ResponseWriter, r *http.Request) {
+	info := version.CheckForUpdate(r.Context())
+	s.writeJSON(w, info)
 }
 
 func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {

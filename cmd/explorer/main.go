@@ -20,6 +20,7 @@ import (
 	"github.com/skyhook-io/radar/internal/static"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
+	versionpkg "github.com/skyhook-io/radar/internal/version"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	_ "k8s.io/client-go/plugin/pkg/client/auth" // Register all auth provider plugins (OIDC, GCP, Azure, etc.)
 	"k8s.io/klog/v2"
@@ -54,6 +55,9 @@ func main() {
 		fmt.Printf("radar %s\n", version)
 		os.Exit(0)
 	}
+
+	// Set version for update checking
+	versionpkg.SetCurrent(version)
 
 	// Suppress verbose client-go logs (reflector errors, traces, etc.)
 	klog.InitFlags(nil)
