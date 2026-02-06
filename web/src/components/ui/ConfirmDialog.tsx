@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, ReactNode } from 'react'
 import { AlertTriangle, X } from 'lucide-react'
 import { clsx } from 'clsx'
 import { SEVERITY_TEXT, SEVERITY_BADGE_BORDERED } from '../../utils/badge-colors'
@@ -14,6 +14,7 @@ interface ConfirmDialogProps {
   cancelLabel?: string
   variant?: 'danger' | 'warning'
   isLoading?: boolean
+  children?: ReactNode // Optional custom content (e.g., checkboxes)
 }
 
 export function ConfirmDialog({
@@ -27,6 +28,7 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   variant = 'danger',
   isLoading = false,
+  children,
 }: ConfirmDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
 
@@ -98,6 +100,13 @@ export function ConfirmDialog({
             <pre className="text-xs text-theme-text-secondary bg-theme-base/50 rounded p-3 overflow-auto max-h-32 whitespace-pre-wrap font-mono">
               {details}
             </pre>
+          </div>
+        )}
+
+        {/* Custom content */}
+        {children && (
+          <div className="px-4 pt-4">
+            {children}
           </div>
         )}
 

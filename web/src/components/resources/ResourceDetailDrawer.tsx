@@ -469,6 +469,7 @@ function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
 
   // Delete confirmation state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [forceDelete, setForceDelete] = useState(false)
   const deleteMutation = useDeleteResource()
 
   // CronJob mutations
@@ -481,14 +482,20 @@ function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
 
   const handleDeleteConfirm = () => {
     deleteMutation.mutate(
-      { kind: resource.kind, namespace: resource.namespace, name: resource.name },
+      { kind: resource.kind, namespace: resource.namespace, name: resource.name, force: forceDelete },
       {
         onSuccess: () => {
           setShowDeleteConfirm(false)
+          setForceDelete(false)
           onClose()
         },
       }
     )
+  }
+
+  const handleDeleteClose = () => {
+    setShowDeleteConfirm(false)
+    setForceDelete(false)
   }
 
   const isRunning = kind === 'pods' ? data?.status?.phase === 'Running' : true
@@ -705,15 +712,25 @@ function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
       {/* Delete confirmation dialog */}
       <ConfirmDialog
         open={showDeleteConfirm}
-        onClose={() => setShowDeleteConfirm(false)}
+        onClose={handleDeleteClose}
         onConfirm={handleDeleteConfirm}
         title="Delete Resource"
         message={`Are you sure you want to delete "${resource.name}"?`}
         details={`This will permanently delete the ${formatKindName(resource.kind)} "${resource.name}" from the "${resource.namespace}" namespace.`}
-        confirmLabel="Delete"
+        confirmLabel={forceDelete ? 'Force Delete' : 'Delete'}
         variant="danger"
         isLoading={deleteMutation.isPending}
-      />
+      >
+        <label className="flex items-center gap-2 text-sm text-theme-text-secondary cursor-pointer">
+          <input
+            type="checkbox"
+            checked={forceDelete}
+            onChange={(e) => setForceDelete(e.target.checked)}
+            className="w-4 h-4 rounded border-theme-border bg-theme-base text-red-600 focus:ring-red-500 focus:ring-offset-0"
+          />
+          <span>Force delete (bypass graceful termination)</span>
+        </label>
+      </ConfirmDialog>
     </div>
   )
 }

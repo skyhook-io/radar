@@ -807,8 +807,12 @@ export function useDeleteResource() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ kind, namespace, name }: { kind: string; namespace: string; name: string }) => {
-      const response = await fetch(`${API_BASE}/resources/${kind}/${namespace}/${name}`, {
+    mutationFn: async ({ kind, namespace, name, force }: { kind: string; namespace: string; name: string; force?: boolean }) => {
+      const url = new URL(`${API_BASE}/resources/${kind}/${namespace}/${name}`, window.location.origin)
+      if (force) {
+        url.searchParams.set('force', 'true')
+      }
+      const response = await fetch(url.toString(), {
         method: 'DELETE',
       })
       if (!response.ok) {

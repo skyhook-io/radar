@@ -69,8 +69,16 @@ func UpdateResource(ctx context.Context, opts UpdateResourceOptions) (*unstructu
 	return result, nil
 }
 
+// DeleteResourceOptions contains options for deleting a resource
+type DeleteResourceOptions struct {
+	Kind      string
+	Namespace string
+	Name      string
+	Force     bool // Force delete with grace period 0
+}
+
 // DeleteResource deletes a Kubernetes resource
-func DeleteResource(ctx context.Context, kind, namespace, name string) error {
+func DeleteResource(ctx context.Context, opts DeleteResourceOptions) error {
 	discovery := GetResourceDiscovery()
 	if discovery == nil {
 		return fmt.Errorf("resource discovery not initialized")
@@ -82,17 +90,24 @@ func DeleteResource(ctx context.Context, kind, namespace, name string) error {
 	}
 
 	// Get GVR for this resource kind
-	gvr, ok := discovery.GetGVR(kind)
+	gvr, ok := discovery.GetGVR(opts.Kind)
 	if !ok {
-		return fmt.Errorf("unknown resource kind: %s", kind)
+		return fmt.Errorf("unknown resource kind: %s", opts.Kind)
+	}
+
+	// Build delete options
+	deleteOpts := metav1.DeleteOptions{}
+	if opts.Force {
+		gracePeriod := int64(0)
+		deleteOpts.GracePeriodSeconds = &gracePeriod
 	}
 
 	// Delete the resource
 	var err error
-	if namespace != "" {
-		err = dynamicClient.Resource(gvr).Namespace(namespace).Delete(ctx, name, metav1.DeleteOptions{})
+	if opts.Namespace != "" {
+		err = dynamicClient.Resource(gvr).Namespace(opts.Namespace).Delete(ctx, opts.Name, deleteOpts)
 	} else {
-		err = dynamicClient.Resource(gvr).Delete(ctx, name, metav1.DeleteOptions{})
+		err = dynamicClient.Resource(gvr).Delete(ctx, opts.Name, deleteOpts)
 	}
 
 	if err != nil {
