@@ -211,12 +211,16 @@ export function useClusterInfo() {
 }
 
 // Version check
+export type InstallMethod = 'homebrew' | 'krew' | 'scoop' | 'direct'
+
 export interface VersionInfo {
   currentVersion: string
   latestVersion?: string
   updateAvailable: boolean
   releaseUrl?: string
   releaseNotes?: string
+  installMethod: InstallMethod
+  updateCommand?: string
   error?: string
 }
 
