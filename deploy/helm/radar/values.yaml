@@ -34,7 +34,7 @@ rbac:
   # Allow Helm write operations (install, upgrade, rollback, uninstall, apply values)
   # Requires broad permissions - grants full CRUD on all resource types,
   # since Helm charts can create any kind of Kubernetes resource.
-  # Note: also implicitly grants secrets write access for Helm release storage.
+  # Automatically enables secrets read access (needed for Helm release storage).
   helm: false
 
   # Allow reading secrets (shows secrets in resource list)

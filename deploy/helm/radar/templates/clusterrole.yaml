@@ -29,8 +29,9 @@ rules:
     verbs: ["create", "update", "patch", "delete"]
   {{- end }}
 
-  {{- if .Values.rbac.secrets }}
-  # Secrets (opt-in - shows secrets in resource list)
+  {{- if or .Values.rbac.secrets .Values.rbac.helm }}
+  # Secrets access - required for Helm release storage (rbac.helm)
+  # or for showing secrets in the resource browser (rbac.secrets)
   - apiGroups: [""]
     resources:
       - secrets
