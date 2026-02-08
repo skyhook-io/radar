@@ -1,5 +1,5 @@
 .PHONY: build install clean dev frontend backend test lint help restart restart-fe kill watch-backend watch-frontend
-.PHONY: release release-binaries-dry docker docker-multiarch docker-push
+.PHONY: release release-binaries-dry docker docker-test docker-multiarch docker-push
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 LDFLAGS := -X main.version=$(VERSION)
@@ -126,8 +126,24 @@ fmt:
 # ============================================================================
 
 # Docker build (single arch, for local testing)
+# Uses --target full to build from source (the default 'release' target requires pre-built binaries)
 docker:
-	docker build -t $(DOCKER_REPO):$(VERSION) -t $(DOCKER_REPO):latest .
+	docker build --target full -t $(DOCKER_REPO):$(VERSION) -t $(DOCKER_REPO):latest .
+
+# Test Docker image with read-only filesystem (simulates in-cluster with readOnlyRootFilesystem)
+# Requires ~/.kube/config for cluster access; runs on port 9280
+docker-test: docker
+	@echo "Starting Radar with read-only filesystem (simulating in-cluster)..."
+	@echo "Press Ctrl+C to stop"
+	docker run --rm \
+		--read-only \
+		--tmpfs /tmp \
+		-e HELM_CACHE_HOME=/tmp/helm/cache \
+		-e HELM_CONFIG_HOME=/tmp/helm/config \
+		-e HELM_DATA_HOME=/tmp/helm/data \
+		-v $(HOME)/.kube/config:/home/nonroot/.kube/config:ro \
+		-p 9280:9280 \
+		$(DOCKER_REPO):$(VERSION) --no-browser
 
 # Docker build multi-arch (amd64 + arm64, for production)
 docker-multiarch:
@@ -174,6 +190,7 @@ help:
 	@echo ""
 	@echo "Docker & In-Cluster:"
 	@echo "  make docker           - Build Docker image (local arch)"
+	@echo "  make docker-test      - Build and run with read-only filesystem (simulates in-cluster)"
 	@echo "  make docker-multiarch - Build multi-arch image (amd64+arm64) and push"
 	@echo "  make docker-push      - Push to GHCR"
 	@echo ""
