@@ -43,10 +43,14 @@ spec:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
-          {{- with .Values.env }}
           env:
+            - name: HELM_CACHE_HOME
+              value: "/tmp/helm/cache"
+            - name: HELM_CONFIG_HOME
+              value: "/tmp/helm/config"
+            {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
-          {{- end }}
+            {{- end }}
           {{- if .Values.probes.liveness.enabled }}
           livenessProbe:
             httpGet:
