@@ -8,6 +8,7 @@ import { Markdown } from '../ui/Markdown'
 import type { SelectedHelmRelease, HelmHook, ChartDependency } from '../../types'
 import { formatDate } from './helm-utils'
 import { getHelmStatusColor } from '../../utils/badge-colors'
+import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
 import { RevisionHistory } from './RevisionHistory'
 import { ManifestViewer } from './ManifestViewer'
 import { ValuesViewer } from './ValuesViewer'
@@ -39,6 +40,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
   const [showUpgradeConfirm, setShowUpgradeConfirm] = useState(false)
   const resizeStartX = useRef(0)
   const resizeStartWidth = useRef(DEFAULT_WIDTH)
+  const canHelmWrite = useCanHelmWrite()
 
   const { data: releaseDetail, isLoading, refetch: refetchRelease } = useHelmRelease(
     release.namespace,
@@ -237,8 +239,12 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
             ) : upgradeInfo?.updateAvailable ? (
               <button
                 onClick={() => setShowUpgradeConfirm(true)}
-                className="flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 hover:bg-amber-500/30 transition-colors"
-                title={`Click to upgrade: ${upgradeInfo.currentVersion} → ${upgradeInfo.latestVersion}${upgradeInfo.repositoryName ? ` (${upgradeInfo.repositoryName})` : ''}`}
+                disabled={!canHelmWrite}
+                className={clsx(
+                  'flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 transition-colors',
+                  canHelmWrite ? 'hover:bg-amber-500/30 cursor-pointer' : 'opacity-50 cursor-not-allowed'
+                )}
+                title={canHelmWrite ? `Click to upgrade: ${upgradeInfo.currentVersion} → ${upgradeInfo.latestVersion}${upgradeInfo.repositoryName ? ` (${upgradeInfo.repositoryName})` : ''}` : 'Helm write permissions required (rbac.helm=true)'}
               >
                 <ArrowUpCircle className="w-3 h-3" />
                 {upgradeInfo.latestVersion}
@@ -260,8 +266,14 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
             </button>
             <button
               onClick={() => setShowUninstallConfirm(true)}
-              className="p-1.5 text-theme-text-secondary hover:text-red-400 hover:bg-red-500/10 rounded"
-              title="Uninstall release"
+              disabled={!canHelmWrite}
+              className={clsx(
+                'p-1.5 rounded',
+                canHelmWrite
+                  ? 'text-theme-text-secondary hover:text-red-400 hover:bg-red-500/10'
+                  : 'text-theme-text-disabled cursor-not-allowed'
+              )}
+              title={canHelmWrite ? 'Uninstall release' : 'Helm write permissions required (rbac.helm=true)'}
             >
               <Trash2 className="w-4 h-4" />
             </button>
@@ -324,7 +336,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
                 currentRevision={releaseDetail.revision}
                 onViewRevision={handleViewRevision}
                 onCompare={handleCompareRevisions}
-                onRollback={handleRollbackRequest}
+                onRollback={canHelmWrite ? handleRollbackRequest : undefined}
               />
             )}
             {activeTab === 'manifest' && (

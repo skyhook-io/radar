@@ -42,6 +42,7 @@ func main() {
 	historyLimit := flag.Int("history-limit", 10000, "Maximum number of events to retain in timeline")
 	debugEvents := flag.Bool("debug-events", false, "Enable verbose event debugging (logs all event drops)")
 	fakeInCluster := flag.Bool("fake-in-cluster", false, "Simulate in-cluster mode for testing (shows kubectl copy buttons instead of port-forward)")
+	disableHelmWrite := flag.Bool("disable-helm-write", false, "Simulate restricted Helm permissions (disables install/upgrade/rollback/uninstall)")
 	// Timeline storage options
 	timelineStorage := flag.String("timeline-storage", "memory", "Timeline storage backend: memory or sqlite")
 	timelineDBPath := flag.String("timeline-db", "", "Path to timeline database file (default: ~/.radar/timeline.db)")
@@ -50,6 +51,7 @@ func main() {
 	// Set debug mode for event tracking
 	k8s.DebugEvents = *debugEvents
 	k8s.ForceInCluster = *fakeInCluster
+	k8s.ForceDisableHelmWrite = *disableHelmWrite
 
 	if *showVersion {
 		fmt.Printf("radar %s\n", version)

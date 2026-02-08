@@ -34,6 +34,7 @@ function KubectlCommandDialog({
   onClose: () => void
 }) {
   const [copied, setCopied] = useState(false)
+  const [copyFallback, setCopyFallback] = useState(false)
   const [localPort, setLocalPort] = useState(info.port)
   const commandRef = useRef<HTMLElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
@@ -54,6 +55,8 @@ function KubectlCommandDialog({
         sel?.removeAllRanges()
         sel?.addRange(range)
       }
+      setCopyFallback(true)
+      setTimeout(() => setCopyFallback(false), 3000)
     }
   }
 
@@ -119,7 +122,7 @@ function KubectlCommandDialog({
               className="shrink-0 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors flex items-center gap-1.5"
             >
               {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
-              {copied ? 'Copied' : 'Copy'}
+              {copied ? 'Copied' : copyFallback ? 'Press Ctrl+C' : 'Copy'}
             </button>
           </div>
           <p className="text-xs text-theme-text-secondary">

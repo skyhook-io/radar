@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { Search, RefreshCw, Package, Database, AlertCircle, ExternalLink, ChevronDown, Star, Shield, BadgeCheck, Building2, Globe, ArrowUpDown, FileJson, PenTool } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useHelmRepositories, useSearchCharts, useUpdateRepository, useArtifactHubSearch, type ArtifactHubSortOption } from '../../api/client'
+import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
 import type { ChartInfo, HelmRepository, ArtifactHubChart, ChartSource } from '../../types'
 import { formatAge } from './helm-utils'
 import { Tooltip } from '../ui/Tooltip'
@@ -20,6 +21,8 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
   const [showOfficialOnly, setShowOfficialOnly] = useState(false)
   const [showVerifiedOnly, setShowVerifiedOnly] = useState(false)
   const [artifactHubSort, setArtifactHubSort] = useState<ArtifactHubSortOption>('relevance')
+
+  const canHelmWrite = useCanHelmWrite()
 
   // Local repo hooks
   const { data: repositories, isLoading: reposLoading } = useHelmRepositories()
@@ -157,6 +160,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
                       onSelect={() => { setSelectedRepo(repo.name); setRepoDropdownOpen(false) }}
                       onUpdate={() => handleUpdateRepo(repo.name)}
                       isUpdating={updateRepoMutation.isPending}
+                      canUpdate={canHelmWrite}
                     />
                   ))
                 )}
@@ -230,10 +234,10 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
             </label>
 
             {/* Refresh button */}
-            <Tooltip content="Update all repositories">
+            <Tooltip content={canHelmWrite ? "Update all repositories" : "Helm write permissions required (rbac.helm=true)"}>
               <button
                 onClick={handleUpdateAllRepos}
-                disabled={updateRepoMutation.isPending}
+                disabled={updateRepoMutation.isPending || !canHelmWrite}
                 className="p-2 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg disabled:opacity-50"
               >
                 <RefreshCw className={clsx('w-4 h-4', updateRepoMutation.isPending && 'animate-spin')} />
@@ -350,9 +354,10 @@ interface RepoDropdownItemProps {
   onSelect: () => void
   onUpdate: () => void
   isUpdating: boolean
+  canUpdate: boolean
 }
 
-function RepoDropdownItem({ repo, isSelected, onSelect, onUpdate, isUpdating }: RepoDropdownItemProps) {
+function RepoDropdownItem({ repo, isSelected, onSelect, onUpdate, isUpdating, canUpdate }: RepoDropdownItemProps) {
   return (
     <div className="flex items-center justify-between px-3 py-2 hover:bg-theme-hover group">
       <button
@@ -371,9 +376,9 @@ function RepoDropdownItem({ repo, isSelected, onSelect, onUpdate, isUpdating }: 
       </button>
       <button
         onClick={(e) => { e.stopPropagation(); onUpdate() }}
-        disabled={isUpdating}
+        disabled={isUpdating || !canUpdate}
         className="p-1 text-theme-text-tertiary hover:text-theme-text-primary opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
-        title="Update repository"
+        title={canUpdate ? "Update repository" : "Helm write permissions required (rbac.helm=true)"}
       >
         <RefreshCw className={clsx('w-3.5 h-3.5', isUpdating && 'animate-spin')} />
       </button>

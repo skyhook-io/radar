@@ -32,7 +32,7 @@ rbac:
   # Enable these based on features you need:
 
   # Allow Helm write operations (install, upgrade, rollback, uninstall, apply values)
-  # Requires broad permissions - grants full CRUD on all resource types,
+  # Requires broad permissions - grants create/update/patch/delete on all resource types,
   # since Helm charts can create any kind of Kubernetes resource.
   # Automatically enables secrets read access (needed for Helm release storage).
   helm: false

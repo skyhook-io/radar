@@ -2,6 +2,7 @@ package helm
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
 	"strconv"
 
@@ -385,6 +386,10 @@ func (h *Handlers) handleListRepositories(w http.ResponseWriter, r *http.Request
 
 // handleUpdateRepository updates the index for a specific repository
 func (h *Handlers) handleUpdateRepository(w http.ResponseWriter, r *http.Request) {
+	if !requireHelmWrite(w, r) {
+		return
+	}
+
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -622,14 +627,18 @@ type installResult struct {
 // Helper functions
 
 // requireHelmWrite checks if the service account has Helm write permissions.
-// Returns true if the request should proceed, false if a 403 was written.
+// Uses secrets/create as a sentinel check — if the service account can create
+// secrets, it likely has the broad RBAC granted by rbac.helm=true.
+// Returns true if the request should proceed, false if an error was written.
 func requireHelmWrite(w http.ResponseWriter, r *http.Request) bool {
 	caps, err := k8s.CheckCapabilities(r.Context())
 	if err != nil {
+		log.Printf("[helm] Failed to check capabilities for %s %s: %v", r.Method, r.URL.Path, err)
 		writeError(w, http.StatusInternalServerError, "failed to check capabilities: "+err.Error())
 		return false
 	}
 	if !caps.HelmWrite {
+		log.Printf("[helm] Denied %s %s: helmWrite capability not available", r.Method, r.URL.Path)
 		writeError(w, http.StatusForbidden, "Helm write operations require additional RBAC permissions. Set rbac.helm=true in the Radar Helm chart values.")
 		return false
 	}

@@ -5,6 +5,7 @@ import yaml from 'yaml'
 import { createPatch } from 'diff'
 import { useQueryClient } from '@tanstack/react-query'
 import { useChartDetail, useNamespaces, useArtifactHubChart, installChartWithProgress, type InstallProgressEvent } from '../../api/client'
+import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
 import type { ChartSource, ChartDetail, ArtifactHubChartDetail } from '../../types'
 import { YamlEditor } from '../ui/YamlEditor'
 import { Tooltip } from '../ui/Tooltip'
@@ -46,6 +47,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, onClo
   const progressEndRef = useRef<HTMLDivElement>(null)
 
   const queryClient = useQueryClient()
+  const canHelmWrite = useCanHelmWrite()
 
   // Choose the right data based on source
   const isLocal = source === 'local'
@@ -355,8 +357,9 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, onClo
                 {step === 'review' ? (
                   <button
                     onClick={handleInstall}
-                    disabled={!canInstall || isInstalling}
+                    disabled={!canInstall || isInstalling || !canHelmWrite}
                     className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    title={!canHelmWrite ? 'Helm write permissions required (rbac.helm=true)' : undefined}
                   >
                     {isInstalling ? (
                       <Loader2 className="w-4 h-4 animate-spin" />

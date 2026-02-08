@@ -20,16 +20,24 @@ export function UpdateNotification() {
   // Check if this version was already dismissed
   useEffect(() => {
     if (versionInfo?.latestVersion) {
-      const dismissedVersion = localStorage.getItem(DISMISSED_KEY)
-      if (dismissedVersion === versionInfo.latestVersion) {
-        setDismissed(true)
+      try {
+        const dismissedVersion = localStorage.getItem(DISMISSED_KEY)
+        if (dismissedVersion === versionInfo.latestVersion) {
+          setDismissed(true)
+        }
+      } catch {
+        // localStorage unavailable (e.g. Safari private mode)
       }
     }
   }, [versionInfo?.latestVersion])
 
   const handleDismiss = () => {
-    if (versionInfo?.latestVersion) {
-      localStorage.setItem(DISMISSED_KEY, versionInfo.latestVersion)
+    try {
+      if (versionInfo?.latestVersion) {
+        localStorage.setItem(DISMISSED_KEY, versionInfo.latestVersion)
+      }
+    } catch {
+      // localStorage unavailable — dismiss in-memory only
     }
     setDismissed(true)
   }
