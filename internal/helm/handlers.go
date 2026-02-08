@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // Handlers provides HTTP handlers for Helm endpoints
@@ -221,6 +222,10 @@ func (h *Handlers) handleBatchUpgradeCheck(w http.ResponseWriter, r *http.Reques
 
 // handleRollback rolls back a release to a previous revision
 func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
+	if !requireHelmWrite(w, r) {
+		return
+	}
+
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -252,6 +257,10 @@ func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
 
 // handleUninstall removes a release
 func (h *Handlers) handleUninstall(w http.ResponseWriter, r *http.Request) {
+	if !requireHelmWrite(w, r) {
+		return
+	}
+
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -271,6 +280,10 @@ func (h *Handlers) handleUninstall(w http.ResponseWriter, r *http.Request) {
 
 // handleUpgrade upgrades a release to a new version
 func (h *Handlers) handleUpgrade(w http.ResponseWriter, r *http.Request) {
+	if !requireHelmWrite(w, r) {
+		return
+	}
+
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -322,6 +335,10 @@ func (h *Handlers) handlePreviewValues(w http.ResponseWriter, r *http.Request) {
 
 // handleApplyValues applies new values to a release
 func (h *Handlers) handleApplyValues(w http.ResponseWriter, r *http.Request) {
+	if !requireHelmWrite(w, r) {
+		return
+	}
+
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -451,6 +468,10 @@ func (h *Handlers) handleGetChartDetailVersion(w http.ResponseWriter, r *http.Re
 
 // handleInstall installs a new Helm release (non-streaming version)
 func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
+	if !requireHelmWrite(w, r) {
+		return
+	}
+
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -492,6 +513,10 @@ func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
 
 // handleInstallStream installs a Helm release with SSE progress streaming
 func (h *Handlers) handleInstallStream(w http.ResponseWriter, r *http.Request) {
+	if !requireHelmWrite(w, r) {
+		return
+	}
+
 	client := GetClient()
 	if client == nil {
 		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
@@ -595,6 +620,21 @@ type installResult struct {
 }
 
 // Helper functions
+
+// requireHelmWrite checks if the service account has Helm write permissions.
+// Returns true if the request should proceed, false if a 403 was written.
+func requireHelmWrite(w http.ResponseWriter, r *http.Request) bool {
+	caps, err := k8s.CheckCapabilities(r.Context())
+	if err != nil {
+		writeError(w, http.StatusInternalServerError, "failed to check capabilities: "+err.Error())
+		return false
+	}
+	if !caps.HelmWrite {
+		writeError(w, http.StatusForbidden, "Helm write operations require additional RBAC permissions. Set rbac.helm=true in the Radar Helm chart values.")
+		return false
+	}
+	return true
+}
 
 func writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")

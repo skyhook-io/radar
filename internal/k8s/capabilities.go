@@ -16,7 +16,7 @@ type Capabilities struct {
 	Logs        bool `json:"logs"`        // Can get pods/log (log viewer)
 	PortForward bool `json:"portForward"` // Can create pods/portforward
 	Secrets     bool `json:"secrets"`     // Can list secrets
-	HelmWrite   bool `json:"helmWrite"`   // Can create secrets (Helm release storage)
+	HelmWrite   bool `json:"helmWrite"`   // Helm write ops (proxy check via secrets/create)
 }
 
 var (

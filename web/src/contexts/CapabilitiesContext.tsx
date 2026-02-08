@@ -8,6 +8,7 @@ const defaultCapabilities: Capabilities = {
   logs: true,
   portForward: true,
   secrets: true,
+  helmWrite: true,
 }
 
 // Restricted capabilities for error/failure cases (fail-closed)
@@ -16,6 +17,7 @@ const restrictedCapabilities: Capabilities = {
   logs: false,
   portForward: false,
   secrets: false,
+  helmWrite: false,
 }
 
 const CapabilitiesContext = createContext<Capabilities>(defaultCapabilities)
@@ -65,4 +67,8 @@ export function useCanPortForward(): boolean {
 
 export function useCanViewSecrets(): boolean {
   return useContext(CapabilitiesContext).secrets
+}
+
+export function useCanHelmWrite(): boolean {
+  return useContext(CapabilitiesContext).helmWrite
 }

@@ -6,6 +6,7 @@ export interface Capabilities {
   logs: boolean        // Log viewer (pods/log)
   portForward: boolean // Port forwarding (pods/portforward)
   secrets: boolean     // List secrets
+  helmWrite: boolean   // Helm write operations (install, upgrade, rollback, uninstall)
 }
 
 // Core node kinds that have specific UI handling
