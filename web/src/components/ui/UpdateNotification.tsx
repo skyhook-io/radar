@@ -40,8 +40,8 @@ export function UpdateNotification() {
         await navigator.clipboard.writeText(versionInfo.updateCommand)
         setCopied(true)
         setTimeout(() => setCopied(false), 2000)
-      } catch {
-        // Clipboard API may fail if page is not focused or in insecure context
+      } catch (err) {
+        console.debug('[radar] Clipboard write failed:', err)
         setCopyFailed(true)
         setTimeout(() => setCopyFailed(false), 2000)
       }

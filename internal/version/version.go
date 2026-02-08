@@ -61,9 +61,8 @@ func SetCurrent(v string) {
 }
 
 // CheckForUpdate checks GitHub for the latest release
-func CheckForUpdate(ctx context.Context) *UpdateInfo {
+func CheckForUpdate(_ context.Context) *UpdateInfo {
 	mu.Lock()
-	defer mu.Unlock()
 
 	// Use shorter TTL for cached errors so transient failures recover quickly
 	ttl := cacheTTL
@@ -73,14 +72,21 @@ func CheckForUpdate(ctx context.Context) *UpdateInfo {
 
 	if cachedResult != nil && time.Since(lastCheck) < ttl {
 		result := *cachedResult
+		mu.Unlock()
 		return &result
 	}
+	mu.Unlock()
 
-	// Fetch from GitHub (holding lock prevents concurrent requests)
-	result := fetchLatestRelease(ctx)
+	// Fetch outside the lock to avoid blocking concurrent callers during HTTP request.
+	// Use a background context so request cancellation doesn't poison the cache.
+	fetchCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	result := fetchLatestRelease(fetchCtx)
 
+	mu.Lock()
 	cachedResult = result
 	lastCheck = time.Now()
+	mu.Unlock()
 
 	return result
 }
@@ -134,7 +140,8 @@ func fetchLatestRelease(ctx context.Context) *UpdateInfo {
 
 	newer, err := isNewerVersion(result.LatestVersion, Current)
 	if err != nil {
-		log.Printf("[version] version comparison failed: %v", err)
+		result.Error = fmt.Sprintf("version comparison failed: %v", err)
+		log.Printf("[version] %s", result.Error)
 	}
 	result.UpdateAvail = newer
 
