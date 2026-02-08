@@ -31,6 +31,11 @@ rbac:
   # Privileged permissions (disabled by default for security)
   # Enable these based on features you need:
 
+  # Allow Helm write operations (install, upgrade, rollback, uninstall)
+  # Requires broad permissions - grants full CRUD on all resource types,
+  # since Helm charts can create any kind of Kubernetes resource.
+  helm: false
+
   # Allow reading secrets (shows secrets in resource list)
   secrets: false
 

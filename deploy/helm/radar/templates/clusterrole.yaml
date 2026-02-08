@@ -20,6 +20,15 @@ rules:
       - endpoints
     verbs: ["get", "list", "watch"]
 
+  {{- if .Values.rbac.helm }}
+  # Helm write operations require broad permissions because charts can create
+  # any Kubernetes resource type. This includes Secrets for Helm release storage,
+  # plus whatever resources the installed charts define.
+  - apiGroups: ["*"]
+    resources: ["*"]
+    verbs: ["create", "update", "patch", "delete"]
+  {{- end }}
+
   {{- if .Values.rbac.secrets }}
   # Secrets (opt-in - shows secrets in resource list)
   - apiGroups: [""]

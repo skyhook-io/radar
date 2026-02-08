@@ -16,6 +16,7 @@ type Capabilities struct {
 	Logs        bool `json:"logs"`        // Can get pods/log (log viewer)
 	PortForward bool `json:"portForward"` // Can create pods/portforward
 	Secrets     bool `json:"secrets"`     // Can list secrets
+	HelmWrite   bool `json:"helmWrite"`   // Can create secrets (Helm release storage)
 }
 
 var (
@@ -49,14 +50,14 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	if GetClient() == nil {
 		// Return all false if client not initialized (fail closed)
 		log.Printf("Warning: K8s client not initialized, returning restricted capabilities")
-		return &Capabilities{Exec: false, Logs: false, PortForward: false, Secrets: false}, nil
+		return &Capabilities{Exec: false, Logs: false, PortForward: false, Secrets: false, HelmWrite: false}, nil
 	}
 
 	// Check each capability in parallel using local variables to avoid data race
 	var wg sync.WaitGroup
-	var execAllowed, logsAllowed, portForwardAllowed, secretsAllowed bool
+	var execAllowed, logsAllowed, portForwardAllowed, secretsAllowed, helmWriteAllowed bool
 
-	wg.Add(4)
+	wg.Add(5)
 
 	go func() {
 		defer wg.Done()
@@ -78,6 +79,11 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 		secretsAllowed = canI(ctx, "", "secrets", "list")
 	}()
 
+	go func() {
+		defer wg.Done()
+		helmWriteAllowed = canI(ctx, "", "secrets", "create")
+	}()
+
 	wg.Wait()
 
 	// Build capabilities struct after all goroutines complete
@@ -86,6 +92,7 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 		Logs:        logsAllowed,
 		PortForward: portForwardAllowed,
 		Secrets:     secretsAllowed,
+		HelmWrite:   helmWriteAllowed,
 	}
 
 	// Cache the result

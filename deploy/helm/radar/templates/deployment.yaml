@@ -48,6 +48,8 @@ spec:
               value: "/tmp/helm/cache"
             - name: HELM_CONFIG_HOME
               value: "/tmp/helm/config"
+            - name: HELM_DATA_HOME
+              value: "/tmp/helm/data"
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}
