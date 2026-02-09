@@ -13,8 +13,10 @@ import {
   Plug,
   Globe,
   Monitor,
+  PenLine,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { useToast } from '../ui/Toast'
 
 interface PortForwardSession {
   id: string
@@ -41,7 +43,11 @@ export function PortForwardManager({
   onToggleMinimize,
 }: PortForwardManagerProps) {
   const [copiedId, setCopiedId] = useState<string | null>(null)
+  const [editingPortId, setEditingPortId] = useState<string | null>(null)
+  const [editPortValue, setEditPortValue] = useState('')
+  const [changingPortId, setChangingPortId] = useState<string | null>(null)
   const queryClient = useQueryClient()
+  const { showSuccess, showError } = useToast()
 
   // Fetch active port forwards
   const { data: sessions = [], isLoading } = useQuery<PortForwardSession[]>({
@@ -76,9 +82,10 @@ export function PortForwardManager({
     const newAddress = session.listenAddress === '0.0.0.0' ? '127.0.0.1' : '0.0.0.0'
     setTogglingId(session.id)
     try {
-      // Stop the current forward
-      await fetch(`/api/portforwards/${session.id}`, { method: 'DELETE' })
-      // Start a new one with the toggled address
+      const delRes = await fetch(`/api/portforwards/${session.id}`, { method: 'DELETE' })
+      if (!delRes.ok) {
+        throw new Error(`Failed to stop existing port forward (HTTP ${delRes.status})`)
+      }
       const res = await fetch('/api/portforwards', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -92,14 +99,57 @@ export function PortForwardManager({
         }),
       })
       if (!res.ok) {
-        const error = await res.json()
+        const error = await res.json().catch(() => ({}))
         throw new Error(error.error || 'Failed to restart port forward')
       }
       queryClient.invalidateQueries({ queryKey: ['portforwards'] })
     } catch (error) {
+      queryClient.invalidateQueries({ queryKey: ['portforwards'] })
+      const msg = error instanceof Error ? error.message : 'Failed to change network access'
+      showError('Failed to change network access', msg)
       console.error('Failed to toggle listen address:', error)
     } finally {
       setTogglingId(null)
+    }
+  }
+
+  const changeLocalPort = async (session: PortForwardSession, newPort: number) => {
+    if (newPort === session.localPort) {
+      setEditingPortId(null)
+      return
+    }
+    setChangingPortId(session.id)
+    setEditingPortId(null)
+    try {
+      const delRes = await fetch(`/api/portforwards/${session.id}`, { method: 'DELETE' })
+      if (!delRes.ok) {
+        throw new Error(`Failed to stop existing port forward (HTTP ${delRes.status})`)
+      }
+      const res = await fetch('/api/portforwards', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          namespace: session.namespace,
+          podName: session.podName || undefined,
+          serviceName: session.serviceName || undefined,
+          podPort: session.podPort,
+          localPort: newPort,
+          listenAddress: session.listenAddress,
+        }),
+      })
+      if (!res.ok) {
+        const error = await res.json().catch(() => ({}))
+        throw new Error(error.error || 'Failed to restart port forward')
+      }
+      queryClient.invalidateQueries({ queryKey: ['portforwards'] })
+      showSuccess('Port forward updated', `Now listening on localhost:${newPort}`)
+    } catch (error) {
+      queryClient.invalidateQueries({ queryKey: ['portforwards'] })
+      const msg = error instanceof Error ? error.message : 'Failed to change local port'
+      showError('Port forward lost', `Forward on port ${session.localPort} was stopped but port ${newPort} failed: ${msg}`)
+      console.error('Failed to change local port:', error)
+    } finally {
+      setChangingPortId(null)
     }
   }
 
@@ -219,12 +269,59 @@ export function PortForwardManager({
                     )}
                     {session.status === 'running' && (
                       <div className="mt-1.5 flex items-center gap-2">
-                        <code className="text-xs bg-slate-900 px-2 py-1 rounded text-blue-400">
-                          {session.listenAddress === '0.0.0.0' ? '0.0.0.0' : 'localhost'}:{session.localPort}
-                        </code>
+                        {editingPortId === session.id ? (
+                          <div className="flex items-center text-xs bg-slate-900 rounded text-blue-400 font-mono">
+                            <span className="pl-2 py-1 text-slate-500 select-none">
+                              {session.listenAddress === '0.0.0.0' ? '0.0.0.0' : 'localhost'}:
+                            </span>
+                            <input
+                              type="number"
+                              autoFocus
+                              min={1}
+                              max={65535}
+                              value={editPortValue}
+                              onChange={(e) => setEditPortValue(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  const val = Number(editPortValue)
+                                  if (isNaN(val) || val < 1 || val > 65535 || !Number.isInteger(val)) {
+                                    showError('Invalid port', 'Port must be a number between 1 and 65535')
+                                    return
+                                  }
+                                  changeLocalPort(session, val)
+                                } else if (e.key === 'Escape') {
+                                  setEditingPortId(null)
+                                }
+                              }}
+                              onBlur={() => setEditingPortId(null)}
+                              className="w-16 bg-transparent border-none pr-2 py-1 text-blue-400 font-mono text-xs outline-none [appearance:textfield] [&::-webkit-outer-spin-button]:appearance-none [&::-webkit-inner-spin-button]:appearance-none"
+                            />
+                          </div>
+                        ) : (
+                          <code
+                            className={clsx(
+                              'group/port text-xs bg-slate-900 px-2 py-1 rounded text-blue-400 transition-all inline-flex items-center gap-1',
+                              changingPortId === session.id
+                                ? 'opacity-50'
+                                : 'cursor-pointer hover:ring-1 hover:ring-blue-500/50'
+                            )}
+                            title="Click to change local port"
+                            onClick={() => {
+                              if (changingPortId || togglingId) return
+                              setEditingPortId(session.id)
+                              setEditPortValue(String(session.localPort))
+                            }}
+                          >
+                            {changingPortId === session.id && (
+                              <Loader2 className="w-3 h-3 animate-spin inline mr-1" />
+                            )}
+                            {session.listenAddress === '0.0.0.0' ? '0.0.0.0' : 'localhost'}:{session.localPort}
+                            <PenLine className="w-3 h-3 text-slate-500 opacity-0 group-hover/port:opacity-100 transition-opacity" />
+                          </code>
+                        )}
                         <button
                           onClick={() => toggleListenAddress(session)}
-                          disabled={togglingId === session.id}
+                          disabled={togglingId === session.id || changingPortId === session.id}
                           className={clsx(
                             'flex items-center gap-1 px-1.5 py-0.5 text-xs rounded transition-colors',
                             session.listenAddress === '0.0.0.0'

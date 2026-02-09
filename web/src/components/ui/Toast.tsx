@@ -151,11 +151,13 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
   return (
     <div
       className={clsx(
-        'flex items-start gap-3 p-3 rounded-lg shadow-xl border animate-in',
+        'flex items-start gap-3 p-3 rounded-lg shadow-2xl border animate-in',
         'w-[400px] max-w-[calc(100vw-32px)]',
         isError
           ? 'bg-red-950/90 border-red-800/50'
-          : 'bg-theme-surface border-theme-border'
+          : isSuccess
+            ? 'bg-emerald-950/90 border-emerald-700/50 dark:bg-emerald-950/90 dark:border-emerald-700/50'
+            : 'bg-theme-surface border-theme-border'
       )}
       style={style}
     >
@@ -177,13 +179,13 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className={clsx('text-sm font-medium', isError ? 'text-red-200' : 'text-theme-text-primary')}>
+          <span className={clsx('text-sm font-medium', isError ? 'text-red-200' : isSuccess ? 'text-emerald-100' : 'text-theme-text-primary')}>
             {toast.message}
           </span>
-          {!isError && <Check className="w-3.5 h-3.5 text-green-400 shrink-0" />}
+          {!isError && <Check className={clsx('w-3.5 h-3.5 shrink-0', isSuccess ? 'text-emerald-300' : 'text-green-400')} />}
         </div>
         {toast.detail && (
-          <p className={clsx('mt-1 text-xs', isError ? 'text-red-300/80' : 'text-theme-text-secondary')}>
+          <p className={clsx('mt-1 text-xs', isError ? 'text-red-300/80' : isSuccess ? 'text-emerald-300/80' : 'text-theme-text-secondary')}>
             {toast.detail}
           </p>
         )}
@@ -201,7 +203,9 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
           'p-1 rounded shrink-0',
           isError
             ? 'text-red-400 hover:text-red-300 hover:bg-red-900/50'
-            : 'text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated'
+            : isSuccess
+              ? 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-900/50'
+              : 'text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated'
         )}
       >
         <X className="w-4 h-4" />
