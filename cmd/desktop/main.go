@@ -52,6 +52,11 @@ func main() {
 
 	log.Printf("Radar Desktop %s starting...", version)
 
+	// GUI apps (macOS .app, Linux .desktop) get a minimal PATH that
+	// doesn't include user-installed tools like gke-gcloud-auth-plugin,
+	// gcloud, aws CLI, etc. Enrich PATH from the user's login shell.
+	enrichPath()
+
 	if *kubeconfig != "" && *kubeconfigDir != "" {
 		log.Fatalf("--kubeconfig and --kubeconfig-dir are mutually exclusive")
 	}
