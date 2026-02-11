@@ -1389,7 +1389,7 @@ func (s *Server) getDashboardCRDCounts(_ context.Context, namespace string) []Da
 		go func(idx int, r k8s.APIResource) {
 			defer wg.Done()
 
-			gvr, ok := discovery.GetGVR(r.Kind)
+			gvr, ok := discovery.GetGVRWithGroup(r.Kind, r.Group)
 			if !ok {
 				return
 			}

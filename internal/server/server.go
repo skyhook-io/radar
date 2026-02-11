@@ -514,6 +514,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	}
 	kind := chi.URLParam(r, "kind")
 	namespaces := parseNamespaces(r.URL.Query())
+	group := r.URL.Query().Get("group") // API group for CRD disambiguation
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {
@@ -699,7 +700,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		if len(namespaces) > 0 {
 			var merged []any
 			for _, ns := range namespaces {
-				items, listErr := cache.ListDynamic(r.Context(), kind, ns)
+				items, listErr := cache.ListDynamicWithGroup(r.Context(), kind, ns, group)
 				if listErr != nil {
 					if strings.Contains(listErr.Error(), "unknown resource kind") {
 						s.writeError(w, http.StatusBadRequest, listErr.Error())
@@ -714,7 +715,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			}
 			result = merged
 		} else {
-			result, err = cache.ListDynamic(r.Context(), kind, "")
+			result, err = cache.ListDynamicWithGroup(r.Context(), kind, "", group)
 			if err != nil {
 				if strings.Contains(err.Error(), "unknown resource kind") {
 					s.writeError(w, http.StatusBadRequest, err.Error())

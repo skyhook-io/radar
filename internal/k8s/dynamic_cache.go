@@ -846,7 +846,6 @@ func WarmupCommonCRDs() {
 		"Kustomization",  // FluxCD kustomize
 		"HelmRelease",    // FluxCD helm
 		"Alert",          // FluxCD notification
-		"Application",    // ArgoCD
 		"ApplicationSet", // ArgoCD
 		"AppProject",     // ArgoCD
 		"Gateway",        // Gateway API
@@ -862,6 +861,13 @@ func WarmupCommonCRDs() {
 			gvrs = append(gvrs, gvr)
 			log.Printf("Warming up CRD: %s", kind)
 		}
+	}
+
+	// ArgoCD Application needs group-qualified lookup to avoid collision with
+	// the Kubernetes SIG Application CRD (app.k8s.io), which shares the same Kind name.
+	if gvr, ok := discovery.GetGVRWithGroup("Application", "argoproj.io"); ok {
+		gvrs = append(gvrs, gvr)
+		log.Printf("Warming up CRD: Application (argoproj.io)")
 	}
 
 	if len(gvrs) > 0 {

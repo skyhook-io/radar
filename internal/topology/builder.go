@@ -377,7 +377,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	var applicationGVR schema.GroupVersionResource
 	hasApplications := false
 	if resourceDiscovery != nil {
-		applicationGVR, hasApplications = resourceDiscovery.GetGVR("Application")
+		applicationGVR, hasApplications = resourceDiscovery.GetGVRWithGroup("Application", "argoproj.io")
 	}
 	applicationIDs := make(map[string]string)                          // ns/name -> applicationID
 	var applicationResources []*unstructured.Unstructured              // Store for second pass

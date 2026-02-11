@@ -1095,13 +1095,31 @@ func IsKnownKind(kind string) bool {
 // ListDynamic returns resources of any type using the dynamic cache
 // Falls back to typed cache for known resources
 func (c *ResourceCache) ListDynamic(ctx context.Context, kind string, namespace string) ([]*unstructured.Unstructured, error) {
+	return c.ListDynamicWithGroup(ctx, kind, namespace, "")
+}
+
+// ListDynamicWithGroup returns resources, using the group to disambiguate
+// when multiple API groups have resources with the same kind name
+// (e.g., Application in argoproj.io vs app.k8s.io)
+func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, namespace string, group string) ([]*unstructured.Unstructured, error) {
 	discovery := GetResourceDiscovery()
 	if discovery == nil {
 		return nil, fmt.Errorf("resource discovery not initialized")
 	}
 
-	gvr, ok := discovery.GetGVR(kind)
+	var gvr schema.GroupVersionResource
+	var ok bool
+
+	if group != "" {
+		gvr, ok = discovery.GetGVRWithGroup(kind, group)
+	} else {
+		gvr, ok = discovery.GetGVR(kind)
+	}
+
 	if !ok {
+		if group != "" {
+			return nil, fmt.Errorf("unknown resource kind: %s (group: %s)", kind, group)
+		}
 		return nil, fmt.Errorf("unknown resource kind: %s", kind)
 	}
 
