@@ -257,8 +257,8 @@ func GetResourceCache() *ResourceCache {
 	return resourceCache
 }
 
-// ResetResourceCache stops and clears the resource cache
-// This must be called before ReinitResourceCache when switching contexts
+// ResetResourceCache stops and clears the resource cache so it can be
+// reinitialized for a new cluster after context switch.
 func ResetResourceCache() {
 	cacheMu.Lock()
 	defer cacheMu.Unlock()
@@ -269,12 +269,6 @@ func ResetResourceCache() {
 	}
 	cacheOnce = sync.Once{}
 	initialSyncComplete = false
-}
-
-// ReinitResourceCache reinitializes the resource cache after a context switch
-// Must call ResetResourceCache first
-func ReinitResourceCache() error {
-	return InitResourceCache()
 }
 
 // addChangeHandlers registers event handlers for change notifications

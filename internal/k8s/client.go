@@ -392,6 +392,12 @@ func SwitchContext(name string) error {
 		return fmt.Errorf("failed to build config for context %q: %w", name, err)
 	}
 
+	// Apply the same QPS/Burst settings as initial client creation.
+	// Without this, new clients use the default 5 QPS / 10 Burst, causing
+	// severe client-side throttling during CRD discovery after context switch.
+	config.QPS = 50
+	config.Burst = 100
+
 	// Create new clients
 	newK8sClient, err := kubernetes.NewForConfig(config)
 	if err != nil {

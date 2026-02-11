@@ -253,6 +253,10 @@ function AppInner() {
       // removeQueries clears cached data, invalidateQueries triggers refetch
       queryClient.removeQueries()
       queryClient.invalidateQueries()
+
+      // Reset URL to current view with no resource-specific params.
+      // Old cluster's selected pod/resource/kind don't exist on the new cluster.
+      navigate({ pathname: location.pathname, search: '' }, { replace: true })
     },
     onConnectionStateChange: updateConnectionFromSSE,
   })

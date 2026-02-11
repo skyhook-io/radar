@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -112,8 +113,8 @@ func GetDynamicResourceCache() *DynamicResourceCache {
 	return dynamicResourceCache
 }
 
-// ResetDynamicResourceCache stops and clears the dynamic resource cache
-// This must be called before ReinitDynamicResourceCache when switching contexts
+// ResetDynamicResourceCache stops and clears the dynamic resource cache so it
+// can be reinitialized for a new cluster after context switch.
 func ResetDynamicResourceCache() {
 	dynamicCacheMu.Lock()
 	defer dynamicCacheMu.Unlock()
@@ -123,12 +124,6 @@ func ResetDynamicResourceCache() {
 		dynamicResourceCache = nil
 	}
 	dynamicCacheOnce = sync.Once{}
-}
-
-// ReinitDynamicResourceCache reinitializes the dynamic cache after a context switch
-// Must call ResetDynamicResourceCache first
-func ReinitDynamicResourceCache(changeCh chan ResourceChange) error {
-	return InitDynamicResourceCache(changeCh)
 }
 
 // EnsureWatching starts watching a resource type if not already watching
@@ -153,16 +148,16 @@ func (d *DynamicResourceCache) EnsureWatching(gvr schema.GroupVersionResource) e
 		return nil
 	}
 
-	// If CRD discovery is in progress, wait for warmup to finish instead of
-	// probing independently. WarmupParallel() probes all CRDs efficiently
+	// If CRD discovery is in progress, wait for it to finish instead of
+	// probing independently. DiscoverAllCRDs() probes all CRDs efficiently
 	// in parallel — individual probes here would compete for the same QPS
-	// budget and create a convoy effect on clusters with many CRDs.
-	// The discoveryDone channel is closed when DiscoverAllCRDs() completes
-	// or when Stop() is called.
+	// budget and cause throttling contention on clusters with many CRDs.
+	// The discoveryDone channel is closed when DiscoverAllCRDs() completes,
+	// when Stop() is called, or if the discovery goroutine panics.
 	if d.GetDiscoveryStatus() == CRDDiscoveryInProgress {
 		select {
 		case <-d.discoveryDone:
-		case <-time.After(35 * time.Second):
+		case <-time.After(45 * time.Second): // covers API resource fetch + parallel probes + 30s sync timeout
 			log.Printf("[dynamic cache] Timeout waiting for CRD discovery, probing %s independently", gvr.Resource)
 		}
 
@@ -645,13 +640,24 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 	// Run discovery in background
 	go func() {
 		defer func() {
+			panicked := false
+			if r := recover(); r != nil {
+				panicked = true
+				buf := make([]byte, 4096)
+				n := runtime.Stack(buf, false)
+				log.Printf("PANIC in CRD discovery goroutine: %v\n%s", r, buf[:n])
+			}
 			d.discoveryMu.Lock()
 			if d.discoveryStatus != CRDDiscoveryComplete {
 				d.discoveryStatus = CRDDiscoveryComplete
 				close(d.discoveryDone)
 			}
 			d.discoveryMu.Unlock()
-			log.Println("[CRD Discovery] CRD discovery complete")
+			if panicked {
+				log.Println("[CRD Discovery] CRD discovery terminated due to panic (marked complete to unblock waiters)")
+			} else {
+				log.Println("[CRD Discovery] CRD discovery complete")
+			}
 
 			// Notify callbacks to trigger topology update
 			notifyCRDDiscoveryComplete()

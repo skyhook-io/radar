@@ -54,8 +54,9 @@ type MetricsHistoryStore struct {
 	nodeMetrics map[string]*nodeMetricsBuffer
 
 	// Control
-	stopCh chan struct{}
-	wg     sync.WaitGroup
+	stopCh   chan struct{}
+	stopOnce sync.Once
+	wg       sync.WaitGroup
 }
 
 // podMetricsBuffer holds ring buffers for each container in a pod
@@ -116,10 +117,13 @@ func (rb *ringBuffer) GetAll() []MetricsDataPoint {
 var (
 	metricsHistoryStore *MetricsHistoryStore
 	metricsHistoryOnce  sync.Once
+	metricsHistoryMu    sync.Mutex
 )
 
 // InitMetricsHistory initializes the metrics history store and starts polling
 func InitMetricsHistory() {
+	metricsHistoryMu.Lock()
+	defer metricsHistoryMu.Unlock()
 	metricsHistoryOnce.Do(func() {
 		metricsHistoryStore = &MetricsHistoryStore{
 			podMetrics:  make(map[string]*podMetricsBuffer),
@@ -143,10 +147,22 @@ func GetMetricsHistory() *MetricsHistoryStore {
 // StopMetricsHistory stops the metrics polling
 func StopMetricsHistory() {
 	if metricsHistoryStore != nil {
-		close(metricsHistoryStore.stopCh)
+		metricsHistoryStore.stopOnce.Do(func() {
+			close(metricsHistoryStore.stopCh)
+		})
 		metricsHistoryStore.wg.Wait()
 		log.Println("Metrics history collection stopped")
 	}
+}
+
+// ResetMetricsHistory stops polling and clears the store so it can be
+// reinitialized for a new cluster after context switch.
+func ResetMetricsHistory() {
+	metricsHistoryMu.Lock()
+	defer metricsHistoryMu.Unlock()
+	StopMetricsHistory()
+	metricsHistoryStore = nil
+	metricsHistoryOnce = sync.Once{}
 }
 
 // pollLoop continuously polls metrics at the configured interval

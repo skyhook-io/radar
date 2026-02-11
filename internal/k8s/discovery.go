@@ -125,20 +125,14 @@ func GetResourceDiscovery() *ResourceDiscovery {
 	return resourceDiscovery
 }
 
-// ResetResourceDiscovery clears the resource discovery instance
-// This must be called before ReinitResourceDiscovery when switching contexts
+// ResetResourceDiscovery clears the resource discovery instance so it can be
+// reinitialized for a new cluster after context switch.
 func ResetResourceDiscovery() {
 	discoveryMu.Lock()
 	defer discoveryMu.Unlock()
 
 	resourceDiscovery = nil
 	discoveryOnce = sync.Once{}
-}
-
-// ReinitResourceDiscovery reinitializes resource discovery after a context switch
-// Must call ResetResourceDiscovery first
-func ReinitResourceDiscovery() error {
-	return InitResourceDiscovery()
 }
 
 // refresh fetches all API resources from the cluster

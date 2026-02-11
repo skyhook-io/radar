@@ -105,7 +105,7 @@ func main() {
 	<-ready
 
 	// Initialize cluster in background (browser will see progress via SSE)
-	go app.InitializeCluster(timelineStoreCfg)
+	go app.InitializeCluster()
 
 	// Build window title
 	windowTitle := "Radar"

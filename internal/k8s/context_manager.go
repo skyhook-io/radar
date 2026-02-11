@@ -137,51 +137,17 @@ func TestClusterConnection(ctx context.Context) error {
 }
 
 // PerformContextSwitch orchestrates a full context switch:
-// 1. Stops all caches
+// 1. Tears down all subsystems
 // 2. Switches the K8s client to the new context
 // 3. Tests connectivity to ensure cluster is reachable
-// 4. Reinitializes all caches
+// 4. Reinitializes all subsystems (same sequence as initial boot)
 // 5. Notifies all registered callbacks
 func PerformContextSwitch(newContext string) error {
 	log.Printf("Performing context switch to %q", newContext)
+
+	// Step 1: Tear down all subsystems
 	reportProgress("Stopping caches...")
-
-	// Step 1: Stop all caches (order matters - stop dependent caches first)
-	log.Println("Stopping resource cache...")
-	ResetResourceCache()
-
-	log.Println("Stopping dynamic resource cache...")
-	ResetDynamicResourceCache()
-
-	log.Println("Stopping resource discovery...")
-	ResetResourceDiscovery()
-
-	// Reset timeline store if registered
-	contextSwitchMu.RLock()
-	tlResetFunc := timelineResetFunc
-	contextSwitchMu.RUnlock()
-	if tlResetFunc != nil {
-		log.Println("Stopping timeline store...")
-		tlResetFunc()
-	}
-
-	// Reset Helm client if registered
-	contextSwitchMu.RLock()
-	resetFunc := helmResetFunc
-	contextSwitchMu.RUnlock()
-	if resetFunc != nil {
-		log.Println("Stopping Helm client...")
-		resetFunc()
-	}
-
-	// Reset traffic manager if registered
-	contextSwitchMu.RLock()
-	trResetFunc := trafficResetFunc
-	contextSwitchMu.RUnlock()
-	if trResetFunc != nil {
-		log.Println("Stopping traffic manager...")
-		trResetFunc()
-	}
+	ResetAllSubsystems()
 
 	// Step 2: Switch the K8s client to the new context
 	reportProgress("Connecting to cluster...")
@@ -195,8 +161,7 @@ func PerformContextSwitch(newContext string) error {
 	InvalidateResourcePermissionsCache()
 	InvalidateServerVersionCache()
 
-	// Step 2.5: Test connectivity before proceeding with cache initialization
-	// This prevents hanging if the cluster is unreachable
+	// Step 3: Test connectivity before proceeding with initialization
 	reportProgress("Testing cluster connectivity...")
 	log.Println("Testing cluster connectivity...")
 	connCtx, connCancel := context.WithTimeout(context.Background(), ConnectionTestTimeout)
@@ -206,69 +171,12 @@ func PerformContextSwitch(newContext string) error {
 	}
 	log.Println("Cluster connectivity verified")
 
-	// Step 3: Reinitialize all caches with new client
-	// Order matters: typed cache first (provides change channel), then dynamic cache
-	reportProgress("Loading workloads...")
-	log.Println("Reinitializing resource cache...")
-	if err := ReinitResourceCache(); err != nil {
-		return fmt.Errorf("failed to reinit resource cache: %w", err)
+	// Step 4: Initialize all subsystems (same function as initial boot)
+	if err := InitAllSubsystems(reportProgress); err != nil {
+		return fmt.Errorf("subsystem init failed: %w", err)
 	}
 
-	reportProgress("Discovering API resources...")
-	log.Println("Reinitializing resource discovery...")
-	if err := ReinitResourceDiscovery(); err != nil {
-		return fmt.Errorf("failed to reinit resource discovery: %w", err)
-	}
-
-	reportProgress("Loading custom resources...")
-	log.Println("Reinitializing dynamic resource cache...")
-	changeCh := GetResourceCache().ChangesRaw()
-	if err := ReinitDynamicResourceCache(changeCh); err != nil {
-		return fmt.Errorf("failed to reinit dynamic resource cache: %w", err)
-	}
-
-	// Warm up common CRDs so they appear in timeline
-	WarmupCommonCRDs()
-
-	// Reinit timeline store before change history (so it's ready to receive events)
-	contextSwitchMu.RLock()
-	tlReinitFunc := timelineReinitFunc
-	contextSwitchMu.RUnlock()
-	if tlReinitFunc != nil {
-		reportProgress("Reinitializing timeline store...")
-		log.Println("Reinitializing timeline store...")
-		if err := tlReinitFunc(); err != nil {
-			// Timeline store failure is non-fatal (will use fallback)
-			log.Printf("Warning: failed to reinit timeline store: %v", err)
-		}
-	}
-
-	// Reinit Helm client if registered
-	contextSwitchMu.RLock()
-	reinitFunc := helmReinitFunc
-	contextSwitchMu.RUnlock()
-	if reinitFunc != nil {
-		reportProgress("Loading Helm releases...")
-		log.Println("Reinitializing Helm client...")
-		if err := reinitFunc(GetKubeconfigPath()); err != nil {
-			// Helm client failure is non-fatal
-			log.Printf("Warning: failed to reinit Helm client: %v", err)
-		}
-	}
-
-	// Reinit traffic manager if registered
-	contextSwitchMu.RLock()
-	trReinitFunc := trafficReinitFunc
-	contextSwitchMu.RUnlock()
-	if trReinitFunc != nil {
-		log.Println("Reinitializing traffic manager...")
-		if err := trReinitFunc(); err != nil {
-			// Traffic manager failure is non-fatal
-			log.Printf("Warning: failed to reinit traffic manager: %v", err)
-		}
-	}
-
-	// Step 4: Notify all registered callbacks
+	// Step 5: Notify all registered callbacks
 	reportProgress("Building topology...")
 	log.Printf("Context switch to %q complete, notifying callbacks...", newContext)
 	contextSwitchMu.RLock()

@@ -95,7 +95,8 @@ func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
 }
 
 // RegisterCallbacks registers Helm, timeline, and traffic reset/reinit functions
-// for context switching. Must be called before InitializeCluster.
+// used for both initial cluster initialization and context switching.
+// Must be called before InitializeCluster.
 func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	k8s.RegisterHelmFuncs(helm.ResetClient, helm.ReinitClient)
 
@@ -127,89 +128,42 @@ func CreateServer(cfg AppConfig) *server.Server {
 	return server.New(serverCfg)
 }
 
-// InitializeCluster connects to the cluster and initializes all caches.
+// InitializeCluster connects to the cluster and initializes all subsystems.
 // Progress is broadcast via SSE so the browser can show updates.
-func InitializeCluster(timelineStoreCfg timeline.StoreConfig) {
+// Callbacks must be registered via RegisterCallbacks before calling this.
+func InitializeCluster() {
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{
 		State:       k8s.StateConnecting,
 		Context:     k8s.GetContextName(),
 		ProgressMsg: "Testing cluster connectivity...",
 	})
 
-	clusterAccessErr := CheckClusterAccess()
-
-	if clusterAccessErr != nil {
+	if err := CheckClusterAccess(); err != nil {
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
 			Context:   k8s.GetContextName(),
-			Error:     clusterAccessErr.Error(),
-			ErrorType: k8s.ClassifyError(clusterAccessErr),
+			Error:     err.Error(),
+			ErrorType: k8s.ClassifyError(err),
 		})
 		log.Printf("Warning: Cluster not reachable, starting in disconnected mode")
 		return
 	}
 
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
-		State:       k8s.StateConnecting,
-		Context:     k8s.GetContextName(),
-		ProgressMsg: "Initializing timeline...",
-	})
-	if err := timeline.InitStore(timelineStoreCfg); err != nil {
-		log.Fatalf("Failed to initialize timeline store: %v", err)
-	}
-
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
-		State:       k8s.StateConnecting,
-		Context:     k8s.GetContextName(),
-		ProgressMsg: "Loading workloads...",
-	})
-	if err := k8s.InitResourceCache(); err != nil {
-		log.Printf("Warning: Failed to initialize resource cache: %v", err)
-	}
-	if cache := k8s.GetResourceCache(); cache != nil {
-		log.Printf("Resource cache initialized with %d resources", cache.GetResourceCount())
-	}
-
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
-		State:       k8s.StateConnecting,
-		Context:     k8s.GetContextName(),
-		ProgressMsg: "Discovering API resources...",
-	})
-	if err := k8s.InitResourceDiscovery(); err != nil {
-		log.Printf("Warning: Failed to initialize resource discovery: %v", err)
-	}
-
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
-		State:       k8s.StateConnecting,
-		Context:     k8s.GetContextName(),
-		ProgressMsg: "Loading custom resources...",
-	})
-	if cache := k8s.GetResourceCache(); cache != nil {
-		changeCh := cache.ChangesRaw()
-		if err := k8s.InitDynamicResourceCache(changeCh); err != nil {
-			log.Printf("Warning: Failed to initialize dynamic resource cache: %v", err)
-		}
-
-		k8s.WarmupCommonCRDs()
-
-		if dynamicCache := k8s.GetDynamicResourceCache(); dynamicCache != nil {
-			dynamicCache.DiscoverAllCRDs()
-		}
-	}
-
-	k8s.InitMetricsHistory()
-
-	k8s.SetConnectionStatus(k8s.ConnectionStatus{
-		State:       k8s.StateConnecting,
-		Context:     k8s.GetContextName(),
-		ProgressMsg: "Loading Helm releases...",
-	})
-	if err := helm.Initialize(k8s.GetKubeconfigPath()); err != nil {
-		log.Printf("Warning: Failed to initialize Helm client: %v", err)
-	}
-
-	if err := traffic.InitializeWithConfig(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName()); err != nil {
-		log.Printf("Warning: Failed to initialize traffic manager: %v", err)
+	if err := k8s.InitAllSubsystems(func(msg string) {
+		k8s.SetConnectionStatus(k8s.ConnectionStatus{
+			State:       k8s.StateConnecting,
+			Context:     k8s.GetContextName(),
+			ProgressMsg: msg,
+		})
+	}); err != nil {
+		k8s.SetConnectionStatus(k8s.ConnectionStatus{
+			State:     k8s.StateDisconnected,
+			Context:   k8s.GetContextName(),
+			Error:     err.Error(),
+			ErrorType: k8s.ClassifyError(err),
+		})
+		log.Printf("Warning: Subsystem init failed, starting in disconnected mode: %v", err)
+		return
 	}
 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{
@@ -219,17 +173,11 @@ func InitializeCluster(timelineStoreCfg timeline.StoreConfig) {
 	})
 }
 
-// Shutdown performs graceful teardown of caches and timeline.
+// Shutdown performs graceful teardown of all subsystems and the HTTP server.
 func Shutdown(srv *server.Server) {
 	log.Println("Shutting down...")
 	srv.Stop()
-	if cache := k8s.GetResourceCache(); cache != nil {
-		cache.Stop()
-	}
-	if dynCache := k8s.GetDynamicResourceCache(); dynCache != nil {
-		dynCache.Stop()
-	}
-	timeline.ResetStore()
+	k8s.ResetAllSubsystems()
 }
 
 // CheckClusterAccess verifies connectivity to the Kubernetes cluster.

@@ -119,7 +119,7 @@ func main() {
 	}
 
 	// Now initialize cluster connection and caches (browser will see progress via SSE)
-	app.InitializeCluster(timelineStoreCfg)
+	app.InitializeCluster()
 
 	// Block forever (server is running in background)
 	select {}
