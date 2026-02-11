@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
 	"os/exec"
@@ -8,6 +9,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 )
 
 // enrichPath ensures the desktop app can find CLI tools like
@@ -28,10 +30,18 @@ func enrichPath() {
 	if len(extras) > 0 {
 		os.Setenv("PATH", current+":"+strings.Join(extras, ":"))
 		log.Printf("PATH enriched with %d common paths (shell detection failed)", len(extras))
+	} else {
+		log.Printf("PATH enrichment: no additional paths found; auth plugins like gke-gcloud-auth-plugin may not be found")
 	}
 }
 
 // getShellPath runs the user's login shell to capture their full PATH.
+// It uses -i (interactive) so that zsh reads ~/.zshrc, where tools like
+// Homebrew's google-cloud-sdk add their PATH entries. Without -i, a
+// non-interactive login shell skips ~/.zshrc, so PATH entries added
+// there (like gke-gcloud-auth-plugin) are missing.
+// Output markers safely extract PATH even if the interactive shell
+// prints extra text (e.g. Oh My Zsh banners, motd).
 func getShellPath() string {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
@@ -42,17 +52,36 @@ func getShellPath() string {
 		}
 	}
 
-	cmd := exec.Command(shell, "-l", "-c", "echo $PATH")
+	const startMarker = "__RADAR_PATH_START__"
+	const endMarker = "__RADAR_PATH_END__"
+	echoCmd := "echo " + startMarker + "$PATH" + endMarker
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, shell, "-l", "-i", "-c", echoCmd)
 	cmd.Env = []string{
 		"HOME=" + os.Getenv("HOME"),
 		"USER=" + os.Getenv("USER"),
 		"SHELL=" + shell,
 	}
+	cmd.Stdin = nil
 	out, err := cmd.Output()
 	if err != nil {
+		log.Printf("Shell PATH detection failed (%s -l -i -c): %v", shell, err)
 		return ""
 	}
-	path := strings.TrimSpace(string(out))
+
+	output := string(out)
+	startIdx := strings.Index(output, startMarker)
+	endIdx := strings.Index(output, endMarker)
+	if startIdx == -1 || endIdx == -1 || endIdx <= startIdx {
+		log.Printf("Shell PATH detection: markers not found in output")
+		return ""
+	}
+	path := output[startIdx+len(startMarker) : endIdx]
+	path = strings.TrimSpace(path)
+
 	if path == "" || path == os.Getenv("PATH") {
 		return ""
 	}
@@ -71,8 +100,11 @@ func commonPaths() []string {
 	candidates := []string{
 		"/opt/homebrew/bin",
 		"/opt/homebrew/sbin",
+		"/opt/homebrew/share/google-cloud-sdk/bin", // Homebrew gcloud (Apple Silicon)
 		"/usr/local/bin",
+		"/usr/local/share/google-cloud-sdk/bin", // Homebrew gcloud (Intel)
 		"/usr/local/go/bin",
+		"/snap/bin", // Snap packages on Linux (kubectl, gcloud, aws-cli)
 	}
 
 	if home != "" {
