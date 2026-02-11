@@ -13,6 +13,11 @@ export const KIND_BADGE_COLORS: Record<string, string> = {
   // Networking
   Service: 'bg-blue-500/15 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300',
   Ingress: 'bg-violet-500/15 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300',
+  Gateway: 'bg-violet-500/15 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300',
+  HTTPRoute: 'bg-purple-500/15 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
+  GRPCRoute: 'bg-purple-500/15 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
+  TCPRoute: 'bg-purple-500/15 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
+  TLSRoute: 'bg-purple-500/15 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
 
   // Config
   ConfigMap: 'bg-amber-500/15 text-amber-700 dark:bg-amber-900/50 dark:text-amber-300',
@@ -47,6 +52,11 @@ export const KIND_BADGE_BORDERED: Record<string, string> = {
   Internet: 'bg-blue-500/20 text-blue-700 dark:text-blue-300 border border-blue-500/30',
   Service: 'bg-blue-500/20 text-blue-700 dark:text-blue-300 border border-blue-500/30',
   Ingress: 'bg-violet-500/20 text-violet-700 dark:text-violet-300 border border-violet-500/30',
+  Gateway: 'bg-violet-500/20 text-violet-700 dark:text-violet-300 border border-violet-500/30',
+  HTTPRoute: 'bg-purple-500/20 text-purple-700 dark:text-purple-300 border border-purple-500/30',
+  GRPCRoute: 'bg-purple-500/20 text-purple-700 dark:text-purple-300 border border-purple-500/30',
+  TCPRoute: 'bg-purple-500/20 text-purple-700 dark:text-purple-300 border border-purple-500/30',
+  TLSRoute: 'bg-purple-500/20 text-purple-700 dark:text-purple-300 border border-purple-500/30',
 
   // Config
   ConfigMap: 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border border-amber-500/30',

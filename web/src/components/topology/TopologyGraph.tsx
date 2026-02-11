@@ -272,8 +272,8 @@ export function TopologyGraph({
       return { nodes, edges }
     }
 
-    // Find all ingresses and group them
-    const ingresses = nodes.filter(n => n.kind === 'Ingress')
+    // Find all ingresses/gateways and group them
+    const ingresses = nodes.filter(n => n.kind === 'Ingress' || n.kind === 'Gateway')
     const groupsWithIngresses = new Map<string, TopologyNode[]>()
 
     for (const ingress of ingresses) {

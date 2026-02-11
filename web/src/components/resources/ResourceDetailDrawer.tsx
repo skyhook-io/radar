@@ -21,6 +21,7 @@ import { stringify as yamlStringify } from 'yaml'
 import { useResource, useResourceEvents, useUpdateResource, useDeleteResource, useTriggerCronJob, useSuspendCronJob, useResumeCronJob, useRestartWorkload, useFluxReconcile, useFluxSyncWithSource, useFluxSuspend, useFluxResume, useArgoSync, useArgoRefresh, useArgoSuspend, useArgoResume } from '../../api/client'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import type { SelectedResource, Relationships, ResourceRef } from '../../types'
+import { refToSelectedResource } from '../../utils/navigation'
 import {
   getPodStatus,
   getWorkloadStatus,
@@ -138,15 +139,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate }: Resource
   // Navigate to a related resource
   const handleNavigateToRelated = useCallback((ref: ResourceRef) => {
     if (onNavigate) {
-      // Convert kind to plural form for API consistency
-      const kindToPlural: Record<string, string> = {
-        pod: 'pods', service: 'services', deployment: 'deployments',
-        daemonset: 'daemonsets', statefulset: 'statefulsets', replicaset: 'replicasets',
-        ingress: 'ingresses', configmap: 'configmaps', secret: 'secrets',
-        job: 'jobs', cronjob: 'cronjobs', hpa: 'hpas',
-      }
-      const pluralKind = kindToPlural[ref.kind.toLowerCase()] || ref.kind.toLowerCase()
-      onNavigate({ kind: pluralKind, namespace: ref.namespace, name: ref.name })
+      onNavigate(refToSelectedResource(ref))
     }
   }, [onNavigate])
 

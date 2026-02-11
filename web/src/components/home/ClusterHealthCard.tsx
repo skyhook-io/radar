@@ -97,6 +97,7 @@ export function ClusterHealthCard({
     { kind: 'daemonsets', label: 'DaemonSets', icon: Container, total: counts.daemonSets.total, subtitle: `${counts.daemonSets.ready} ready`, hasIssues: counts.daemonSets.unready > 0 },
     { kind: 'services', label: 'Services', icon: Globe, total: counts.services },
     { kind: 'ingresses', label: 'Ingresses', icon: NetworkIcon, total: counts.ingresses },
+    ...(counts.gateways ? [{ kind: 'gateways', label: 'Gateways', icon: NetworkIcon, total: counts.gateways }] : []),
     { kind: 'jobs', label: 'Jobs', icon: Briefcase, total: counts.jobs.total, subtitle: `${counts.jobs.active} active`, hasIssues: counts.jobs.failed > 0 },
     { kind: 'cronjobs', label: 'CronJobs', icon: Clock, total: counts.cronJobs.total, subtitle: `${counts.cronJobs.active} active` },
   ]

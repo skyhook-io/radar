@@ -6,6 +6,7 @@ import { useHelmRelease, useHelmManifest, useHelmValues, useHelmManifestDiff, us
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Markdown } from '../ui/Markdown'
 import type { SelectedHelmRelease, HelmHook, ChartDependency } from '../../types'
+import type { NavigateToResource } from '../../utils/navigation'
 import { formatDate } from './helm-utils'
 import { getHelmStatusColor } from '../../utils/badge-colors'
 import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
@@ -18,7 +19,7 @@ import { ManifestDiffViewer } from './ManifestDiffViewer'
 interface HelmReleaseDrawerProps {
   release: SelectedHelmRelease
   onClose: () => void
-  onNavigateToResource?: (kind: string, namespace: string, name: string) => void
+  onNavigateToResource?: NavigateToResource
 }
 
 type TabId = 'overview' | 'history' | 'manifest' | 'values' | 'resources' | 'hooks' | 'diff'

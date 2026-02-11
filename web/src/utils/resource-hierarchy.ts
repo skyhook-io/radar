@@ -104,7 +104,9 @@ function nodeIdToLaneId(nodeId: string): string | null {
   const kindMap: Record<string, string> = {
     pod: 'Pod', service: 'Service', deployment: 'Deployment',
     replicaset: 'ReplicaSet', statefulset: 'StatefulSet', daemonset: 'DaemonSet',
-    ingress: 'Ingress', configmap: 'ConfigMap', secret: 'Secret',
+    ingress: 'Ingress', gateway: 'Gateway', httproute: 'HTTPRoute',
+    grpcroute: 'GRPCRoute', tcproute: 'TCPRoute', tlsroute: 'TLSRoute',
+    configmap: 'ConfigMap', secret: 'Secret',
     job: 'Job', cronjob: 'CronJob', hpa: 'HPA', podgroup: 'PodGroup',
     rollout: 'Rollout',
   }
@@ -258,8 +260,46 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         const sourceKind = sourceLaneId.split('/')[0]
         const targetKind = targetLaneId.split('/')[0]
 
+        // Gateway→Route: Gateway is parent of Route
+        if (sourceKind === 'Gateway' && (targetKind === 'HTTPRoute' || targetKind === 'GRPCRoute' || targetKind === 'TCPRoute' || targetKind === 'TLSRoute')) {
+          if (!laneParent.has(targetLaneId) && targetExists) {
+            if (!sourceExists) {
+              const parts = sourceLaneId.split('/')
+              laneMap.set(sourceLaneId, {
+                id: sourceLaneId,
+                kind: parts[0],
+                namespace: parts[1],
+                name: parts.slice(2).join('/'),
+                events: [],
+                isWorkload: isWorkloadKind(parts[0]),
+                children: [],
+                childEventCount: 0,
+              })
+            }
+            laneParent.set(targetLaneId, sourceLaneId)
+          }
+        }
+        // Route→Service: reverse (Service is representative, like Ingress)
+        else if ((sourceKind === 'HTTPRoute' || sourceKind === 'GRPCRoute' || sourceKind === 'TCPRoute' || sourceKind === 'TLSRoute') && targetKind === 'Service') {
+          if (!laneParent.has(sourceLaneId) && sourceExists) {
+            if (!targetExists) {
+              const parts = targetLaneId.split('/')
+              laneMap.set(targetLaneId, {
+                id: targetLaneId,
+                kind: parts[0],
+                namespace: parts[1],
+                name: parts.slice(2).join('/'),
+                events: [],
+                isWorkload: isWorkloadKind(parts[0]),
+                children: [],
+                childEventCount: 0,
+              })
+            }
+            laneParent.set(sourceLaneId, targetLaneId)
+          }
+        }
         // Ingress→Service: reverse relationship (Service is representative)
-        if (sourceKind === 'Ingress' && targetKind === 'Service') {
+        else if (sourceKind === 'Ingress' && targetKind === 'Service') {
           if (!laneParent.has(sourceLaneId) && sourceExists) {
             if (!targetExists) {
               const parts = targetLaneId.split('/')
@@ -336,7 +376,8 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
     // Only include primary resource kinds in app label grouping
     const appLabelEligibleKinds = new Set([
       'Service', 'Deployment', 'Rollout', 'StatefulSet', 'DaemonSet',
-      'Job', 'CronJob', 'Ingress', 'ConfigMap', 'Secret',
+      'Job', 'CronJob', 'Ingress', 'Gateway', 'HTTPRoute', 'GRPCRoute',
+      'TCPRoute', 'TLSRoute', 'ConfigMap', 'Secret',
       'Workflow', 'CronWorkflow',
     ])
 
@@ -358,7 +399,8 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       if (laneIds.length < 2) continue
 
       const kindPriority: Record<string, number> = {
-        Service: 1, Ingress: 2,
+        Service: 1, Ingress: 2, Gateway: 2,
+        HTTPRoute: 2, GRPCRoute: 2, TCPRoute: 2, TLSRoute: 2,
         Deployment: 3, Rollout: 3, StatefulSet: 3, DaemonSet: 3,
         Job: 4, CronJob: 4,
         ConfigMap: 5, Secret: 5,
@@ -416,7 +458,8 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       // Sort children by kind priority then by latest event
       if (lane.children && lane.children.length > 0) {
         const kindPriority: Record<string, number> = {
-          Service: 1, Deployment: 2, Rollout: 2, StatefulSet: 2, DaemonSet: 2,
+          Service: 1, Gateway: 1, HTTPRoute: 2, GRPCRoute: 2, TCPRoute: 2, TLSRoute: 2,
+          Deployment: 2, Rollout: 2, StatefulSet: 2, DaemonSet: 2,
           ReplicaSet: 3, Pod: 4, ConfigMap: 5, Secret: 5
         }
         lane.children.sort((a, b) => {

@@ -79,6 +79,8 @@ type DashboardResourceCounts struct {
 	ConfigMaps   int           `json:"configMaps"`
 	Secrets      int           `json:"secrets"`
 	PVCs         PVCCount      `json:"pvcs"`
+	Gateways     int           `json:"gateways"`
+	HTTPRoutes   int           `json:"httpRoutes"`
 	HelmReleases int           `json:"helmReleases"`
 	Restricted   []string      `json:"restricted,omitempty"` // Resource kinds the user cannot list
 }
@@ -721,6 +723,24 @@ func (s *Server) getDashboardResourceCounts(cache *k8s.ResourceCache, namespace 
 		}
 	} else {
 		restricted = append(restricted, "ingresses")
+	}
+
+	// Gateways and HTTPRoutes (via dynamic cache)
+	dynamicCache := k8s.GetDynamicResourceCache()
+	resourceDiscovery := k8s.GetResourceDiscovery()
+	if dynamicCache != nil && resourceDiscovery != nil {
+		if gwGVR, ok := resourceDiscovery.GetGVR("Gateway"); ok {
+			gateways, err := dynamicCache.List(gwGVR, namespace)
+			if err == nil {
+				counts.Gateways = len(gateways)
+			}
+		}
+		if hrGVR, ok := resourceDiscovery.GetGVR("HTTPRoute"); ok {
+			routes, err := dynamicCache.List(hrGVR, namespace)
+			if err == nil {
+				counts.HTTPRoutes = len(routes)
+			}
+		}
 	}
 
 	// Nodes (cluster-scoped, not filtered by namespace)

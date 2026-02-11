@@ -1224,6 +1224,109 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
+	// 7b. Add Gateway API nodes (CRD - fetched via dynamic cache)
+	gatewayIDs := make(map[string]string)                             // ns/name -> gatewayID
+	routeIDs := make(map[string]string)                               // kind/ns/name -> routeID
+	var gatewayRouteResources []*unstructured.Unstructured             // all routes for second-pass edge creation
+	var gatewayRouteKinds []string                                     // kind for each entry in gatewayRouteResources
+
+	var gatewayGVR schema.GroupVersionResource
+	hasGateways := false
+	if resourceDiscovery != nil {
+		gatewayGVR, hasGateways = resourceDiscovery.GetGVR("Gateway")
+	}
+	if hasGateways && dynamicCache != nil {
+		gateways, gwErr := dynamicCache.List(gatewayGVR, opts.NamespaceFilter())
+		if gwErr != nil {
+			log.Printf("WARNING [topology] Failed to list Gateways: %v", gwErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list Gateways: %v", gwErr))
+		}
+		for _, gw := range gateways {
+			ns := gw.GetNamespace()
+			if !opts.MatchesNamespaceFilter(ns) {
+				continue
+			}
+			name := gw.GetName()
+			gwID := fmt.Sprintf("gateway/%s/%s", ns, name)
+			gatewayIDs[ns+"/"+name] = gwID
+
+			listeners, _, _ := unstructured.NestedSlice(gw.Object, "spec", "listeners")
+			addresses, _, _ := unstructured.NestedSlice(gw.Object, "status", "addresses")
+
+			// Extract address values
+			var addrList []string
+			for _, addr := range addresses {
+				if addrMap, ok := addr.(map[string]any); ok {
+					if val, ok := addrMap["value"].(string); ok {
+						addrList = append(addrList, val)
+					}
+				}
+			}
+
+			nodes = append(nodes, Node{
+				ID:     gwID,
+				Kind:   KindGateway,
+				Name:   name,
+				Status: getGatewayHealth(gw),
+				Data: map[string]any{
+					"namespace":     ns,
+					"listenerCount": len(listeners),
+					"addresses":     addrList,
+					"labels":        gw.GetLabels(),
+				},
+			})
+		}
+	}
+
+	// Add Gateway API route nodes (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute)
+	gatewayRouteKindList := []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"}
+	for _, routeKind := range gatewayRouteKindList {
+		var routeGVR schema.GroupVersionResource
+		hasRoutes := false
+		if resourceDiscovery != nil {
+			routeGVR, hasRoutes = resourceDiscovery.GetGVR(routeKind)
+		}
+		if !hasRoutes || dynamicCache == nil {
+			continue
+		}
+		routes, routeErr := dynamicCache.List(routeGVR, opts.NamespaceFilter())
+		if routeErr != nil {
+			log.Printf("WARNING [topology] Failed to list %s: %v", routeKind, routeErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list %s: %v", routeKind, routeErr))
+			continue
+		}
+		for _, route := range routes {
+			ns := route.GetNamespace()
+			if !opts.MatchesNamespaceFilter(ns) {
+				continue
+			}
+			name := route.GetName()
+			kindLower := strings.ToLower(routeKind)
+			routeID := fmt.Sprintf("%s/%s/%s", kindLower, ns, name)
+			routeIDs[routeKind+"/"+ns+"/"+name] = routeID
+
+			hostnames, _, _ := unstructured.NestedStringSlice(route.Object, "spec", "hostnames")
+			rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+
+			nodes = append(nodes, Node{
+				ID:     routeID,
+				Kind:   NodeKind(routeKind),
+				Name:   name,
+				Status: getRouteHealth(route),
+				Data: map[string]any{
+					"namespace":  ns,
+					"hostnames":  hostnames,
+					"rulesCount": len(rules),
+					"labels":     route.GetLabels(),
+				},
+			})
+
+			// Store for second-pass edge creation
+			gatewayRouteResources = append(gatewayRouteResources, route)
+			gatewayRouteKinds = append(gatewayRouteKinds, routeKind)
+		}
+	}
+
 	// 8. Add ConfigMap nodes (if enabled)
 	if opts.IncludeConfigMaps {
 		cmLister := b.cache.ConfigMaps()
@@ -1503,6 +1606,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				targetID = jobIDs[resKey]
 			case "CronJob":
 				targetID = cronJobIDs[resKey]
+			case "Gateway":
+				targetID = gatewayIDs[resKey]
+			case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
+				targetID = routeIDs[resKind+"/"+resNS+"/"+resName]
 			}
 
 			// Only create edge if target exists in current cluster view
@@ -1573,6 +1680,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				targetID = cronJobIDs[resKey]
 			case "Ingress":
 				targetID = fmt.Sprintf("ingress/%s/%s", resNS, resName)
+			case "Gateway":
+				targetID = gatewayIDs[resKey]
+			case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
+				targetID = routeIDs[resKind+"/"+resNS+"/"+resName]
 			}
 
 			// Only create edge if target exists in current cluster view
@@ -1727,7 +1838,72 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// 15. Add generic CRD nodes connected via owner references
+	// 15. Create Gateway API edges (Gateway → Route, Route → Service)
+	for i, route := range gatewayRouteResources {
+		ns := route.GetNamespace()
+		name := route.GetName()
+		routeKind := gatewayRouteKinds[i]
+		routeID := routeIDs[routeKind+"/"+ns+"/"+name]
+
+		// Gateway → Route edges (read parentRefs)
+		parentRefs, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+		for _, pRef := range parentRefs {
+			pMap, ok := pRef.(map[string]any)
+			if !ok {
+				continue
+			}
+			parentName, _ := pMap["name"].(string)
+			parentNS, _ := pMap["namespace"].(string)
+			if parentNS == "" {
+				parentNS = ns // Default to route's namespace
+			}
+			gwID := gatewayIDs[parentNS+"/"+parentName]
+			if gwID != "" {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", gwID, routeID),
+					Source: gwID,
+					Target: routeID,
+					Type:   EdgeRoutesTo,
+				})
+			}
+		}
+
+		// Route → Service edges (read backendRefs from rules)
+		rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+		for _, rule := range rules {
+			ruleMap, ok := rule.(map[string]any)
+			if !ok {
+				continue
+			}
+			backendRefs, _, _ := unstructured.NestedSlice(ruleMap, "backendRefs")
+			for _, bRef := range backendRefs {
+				bMap, ok := bRef.(map[string]any)
+				if !ok {
+					continue
+				}
+				backendName, _ := bMap["name"].(string)
+				backendNS, _ := bMap["namespace"].(string)
+				if backendNS == "" {
+					backendNS = ns // Default to route's namespace
+				}
+				// Default kind is Service if not specified
+				backendKind, _ := bMap["kind"].(string)
+				if backendKind == "" || backendKind == "Service" {
+					svcKey := backendNS + "/" + backendName
+					if svcID, ok := serviceIDs[svcKey]; ok {
+						edges = append(edges, Edge{
+							ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
+							Source: routeID,
+							Target: svcID,
+							Type:   EdgeRoutesTo,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	// 16. Add generic CRD nodes connected via owner references
 	// Only includes CRDs already being watched and with owner refs to existing nodes
 	if opts.IncludeGenericCRDs {
 		nodes, edges = b.addGenericCRDNodes(nodes, edges, opts)
@@ -1796,6 +1972,32 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	servicesFromIngress := make(map[string]bool)          // svcKey -> has ingress
 	serviceIDs := make(map[string]string)                 // svcKey -> svcID
 
+	// Collect Gateway API resources from dynamic cache
+	trafficDynamicCache := k8s.GetDynamicResourceCache()
+	trafficResourceDiscovery := k8s.GetResourceDiscovery()
+	var trafficGateways []*unstructured.Unstructured
+	var trafficRoutes []*unstructured.Unstructured
+	var trafficRouteKinds []string
+	if trafficDynamicCache != nil && trafficResourceDiscovery != nil {
+		if gwGVR, ok := trafficResourceDiscovery.GetGVR("Gateway"); ok {
+			gws, err := trafficDynamicCache.List(gwGVR, opts.NamespaceFilter())
+			if err == nil {
+				trafficGateways = gws
+			}
+		}
+		for _, routeKind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
+			if rGVR, ok := trafficResourceDiscovery.GetGVR(routeKind); ok {
+				rts, err := trafficDynamicCache.List(rGVR, opts.NamespaceFilter())
+				if err == nil {
+					for _, rt := range rts {
+						trafficRoutes = append(trafficRoutes, rt)
+						trafficRouteKinds = append(trafficRouteKinds, routeKind)
+					}
+				}
+			}
+		}
+	}
+
 	// Step 1: Find services referenced by ingresses
 	for _, ing := range ingresses {
 		if !opts.MatchesNamespaceFilter(ing.Namespace) {
@@ -1809,6 +2011,39 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				if path.Backend.Service != nil {
 					svcKey := ing.Namespace + "/" + path.Backend.Service.Name
 					servicesFromIngress[svcKey] = true
+				}
+			}
+		}
+	}
+
+	// Step 1b: Find services referenced by Gateway API routes
+	servicesFromGateway := make(map[string]bool)
+	for _, route := range trafficRoutes {
+		ns := route.GetNamespace()
+		if !opts.MatchesNamespaceFilter(ns) {
+			continue
+		}
+		rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+		for _, rule := range rules {
+			ruleMap, ok := rule.(map[string]any)
+			if !ok {
+				continue
+			}
+			backendRefs, _, _ := unstructured.NestedSlice(ruleMap, "backendRefs")
+			for _, bRef := range backendRefs {
+				bMap, ok := bRef.(map[string]any)
+				if !ok {
+					continue
+				}
+				backendName, _ := bMap["name"].(string)
+				backendNS, _ := bMap["namespace"].(string)
+				if backendNS == "" {
+					backendNS = ns
+				}
+				backendKind, _ := bMap["kind"].(string)
+				if backendKind == "" || backendKind == "Service" {
+					svcKey := backendNS + "/" + backendName
+					servicesFromGateway[svcKey] = true
 				}
 			}
 		}
@@ -1830,8 +2065,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			}
 		}
 
-		// Include service if: referenced by ingress OR has matching pods
-		if servicesFromIngress[svcKey] || hasPods {
+		// Include service if: referenced by ingress, gateway route, OR has matching pods
+		if servicesFromIngress[svcKey] || servicesFromGateway[svcKey] || hasPods {
 			servicesToInclude[svcKey] = svc
 		}
 	}
@@ -1896,8 +2131,129 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-	// Step 4: Add Internet node if we have ingresses
-	if len(ingressIDs) > 0 {
+	// Step 3b: Build Gateway and route nodes/edges for traffic view
+	trafficGatewayIDs := make([]string, 0)
+	trafficGwIDMap := make(map[string]string) // ns/name -> gwID
+	for _, gw := range trafficGateways {
+		ns := gw.GetNamespace()
+		if !opts.MatchesNamespaceFilter(ns) {
+			continue
+		}
+		name := gw.GetName()
+		gwID := fmt.Sprintf("gateway/%s/%s", ns, name)
+		trafficGatewayIDs = append(trafficGatewayIDs, gwID)
+		trafficGwIDMap[ns+"/"+name] = gwID
+
+		listeners, _, _ := unstructured.NestedSlice(gw.Object, "spec", "listeners")
+		addresses, _, _ := unstructured.NestedSlice(gw.Object, "status", "addresses")
+		var addrList []string
+		for _, addr := range addresses {
+			if addrMap, ok := addr.(map[string]any); ok {
+				if val, ok := addrMap["value"].(string); ok {
+					addrList = append(addrList, val)
+				}
+			}
+		}
+
+		nodes = append(nodes, Node{
+			ID:     gwID,
+			Kind:   KindGateway,
+			Name:   name,
+			Status: getGatewayHealth(gw),
+			Data: map[string]any{
+				"namespace":     ns,
+				"listenerCount": len(listeners),
+				"addresses":     addrList,
+				"labels":        gw.GetLabels(),
+			},
+		})
+	}
+
+	for i, route := range trafficRoutes {
+		ns := route.GetNamespace()
+		if !opts.MatchesNamespaceFilter(ns) {
+			continue
+		}
+		name := route.GetName()
+		routeKind := trafficRouteKinds[i]
+		kindLower := strings.ToLower(routeKind)
+		routeID := fmt.Sprintf("%s/%s/%s", kindLower, ns, name)
+
+		hostnames, _, _ := unstructured.NestedStringSlice(route.Object, "spec", "hostnames")
+		rules, _, _ := unstructured.NestedSlice(route.Object, "spec", "rules")
+
+		nodes = append(nodes, Node{
+			ID:     routeID,
+			Kind:   NodeKind(routeKind),
+			Name:   name,
+			Status: getRouteHealth(route),
+			Data: map[string]any{
+				"namespace":  ns,
+				"hostnames":  hostnames,
+				"rulesCount": len(rules),
+				"labels":     route.GetLabels(),
+			},
+		})
+
+		// Gateway → Route edges
+		parentRefs, _, _ := unstructured.NestedSlice(route.Object, "spec", "parentRefs")
+		for _, pRef := range parentRefs {
+			pMap, ok := pRef.(map[string]any)
+			if !ok {
+				continue
+			}
+			parentName, _ := pMap["name"].(string)
+			parentNS, _ := pMap["namespace"].(string)
+			if parentNS == "" {
+				parentNS = ns
+			}
+			if gwID, ok := trafficGwIDMap[parentNS+"/"+parentName]; ok {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", gwID, routeID),
+					Source: gwID,
+					Target: routeID,
+					Type:   EdgeRoutesTo,
+				})
+			}
+		}
+
+		// Route → Service edges
+		for _, rule := range rules {
+			ruleMap, ok := rule.(map[string]any)
+			if !ok {
+				continue
+			}
+			backendRefs, _, _ := unstructured.NestedSlice(ruleMap, "backendRefs")
+			for _, bRef := range backendRefs {
+				bMap, ok := bRef.(map[string]any)
+				if !ok {
+					continue
+				}
+				backendName, _ := bMap["name"].(string)
+				backendNS, _ := bMap["namespace"].(string)
+				if backendNS == "" {
+					backendNS = ns
+				}
+				backendKind, _ := bMap["kind"].(string)
+				if backendKind == "" || backendKind == "Service" {
+					svcKey := backendNS + "/" + backendName
+					if _, ok := servicesToInclude[svcKey]; ok {
+						svcID := fmt.Sprintf("service/%s/%s", backendNS, backendName)
+						serviceIDs[svcKey] = svcID
+						edges = append(edges, Edge{
+							ID:     fmt.Sprintf("%s-to-%s", routeID, svcID),
+							Source: routeID,
+							Target: svcID,
+							Type:   EdgeRoutesTo,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	// Step 4: Add Internet node if we have ingresses or gateways
+	if len(ingressIDs) > 0 || len(trafficGatewayIDs) > 0 {
 		nodes = append([]Node{{
 			ID:     "internet",
 			Kind:   KindInternet,
@@ -1911,6 +2267,14 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				ID:     fmt.Sprintf("internet-to-%s", ingID),
 				Source: "internet",
 				Target: ingID,
+				Type:   EdgeRoutesTo,
+			})
+		}
+		for _, gwID := range trafficGatewayIDs {
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("internet-to-%s", gwID),
+				Source: "internet",
+				Target: gwID,
 				Type:   EdgeRoutesTo,
 			})
 		}
@@ -2404,6 +2768,72 @@ func truncateTopologyIfNeeded(topo *Topology, opts BuildOptions) *Topology {
 	return topo
 }
 
+// getGatewayHealth derives Gateway health from status.conditions
+// Programmed=True → healthy, Accepted=True (no Programmed) → degraded, otherwise unknown
+func getGatewayHealth(gw *unstructured.Unstructured) HealthStatus {
+	conditions, _, _ := unstructured.NestedSlice(gw.Object, "status", "conditions")
+	hasProgrammed := false
+	hasAccepted := false
+	for _, c := range conditions {
+		cMap, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		condType, _ := cMap["type"].(string)
+		condStatus, _ := cMap["status"].(string)
+		if condType == "Programmed" && condStatus == "True" {
+			hasProgrammed = true
+		}
+		if condType == "Accepted" && condStatus == "True" {
+			hasAccepted = true
+		}
+	}
+	if hasProgrammed {
+		return StatusHealthy
+	}
+	if hasAccepted {
+		return StatusDegraded
+	}
+	if len(conditions) > 0 {
+		return StatusUnhealthy
+	}
+	return StatusUnknown
+}
+
+// getRouteHealth derives route health from status.parents[].conditions
+// All parents Accepted → healthy, some → degraded, none → unhealthy
+func getRouteHealth(route *unstructured.Unstructured) HealthStatus {
+	parents, _, _ := unstructured.NestedSlice(route.Object, "status", "parents")
+	if len(parents) == 0 {
+		return StatusUnknown
+	}
+	accepted := 0
+	for _, p := range parents {
+		pMap, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		conditions, _, _ := unstructured.NestedSlice(pMap, "conditions")
+		for _, c := range conditions {
+			cMap, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			if cMap["type"] == "Accepted" && cMap["status"] == "True" {
+				accepted++
+				break
+			}
+		}
+	}
+	if accepted == len(parents) {
+		return StatusHealthy
+	}
+	if accepted > 0 {
+		return StatusDegraded
+	}
+	return StatusUnhealthy
+}
+
 // extractGenericStatus determines health from common CRD status patterns
 func extractGenericStatus(resource *unstructured.Unstructured) HealthStatus {
 	status, found, _ := unstructured.NestedMap(resource.Object, "status")
@@ -2463,6 +2893,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 	processedKinds := map[string]bool{
 		"rollout": true, "application": true, "kustomization": true,
 		"helmrelease": true, "gitrepository": true,
+		"gateway": true, "httproute": true, "grpcroute": true, "tcproute": true, "tlsroute": true,
 		// Core types handled by typed informers
 		"deployment": true, "daemonset": true, "statefulset": true,
 		"replicaset": true, "pod": true, "service": true, "ingress": true,

@@ -2,7 +2,31 @@ package topology
 
 import (
 	"strings"
+
+	"github.com/skyhook-io/radar/internal/k8s"
 )
+
+// resolveAPIGroup returns the API group for a resource kind using resource discovery.
+// Returns empty string for core K8s types (pods, services, etc.).
+func resolveAPIGroup(kind string) string {
+	discovery := k8s.GetResourceDiscovery()
+	if discovery == nil {
+		return ""
+	}
+	gvr, ok := discovery.GetGVR(strings.ToLower(kind))
+	if !ok {
+		return ""
+	}
+	return gvr.Group
+}
+
+// enrichRef sets the API group on a ResourceRef for CRD types.
+func enrichRef(ref *ResourceRef) {
+	if ref == nil {
+		return
+	}
+	ref.Group = resolveAPIGroup(ref.Kind)
+}
 
 // GetRelationships computes relationships for a specific resource
 // by finding all edges in the topology that involve this resource.
@@ -24,6 +48,7 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 			if ref == nil {
 				continue
 			}
+			enrichRef(ref)
 
 			switch edge.Type {
 			case EdgeManages:
@@ -33,9 +58,15 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 				// This is a Service exposing something
 				rel.Pods = append(rel.Pods, *ref)
 			case EdgeRoutesTo:
-				// This is an Ingress or Service routing to something
-				if strings.ToLower(kind) == "ingress" || strings.ToLower(kind) == "ingresses" {
-					// Ingress routes to Service
+				// This is an Ingress, Gateway, route, or Service routing to something
+				kindLower := strings.ToLower(kind)
+				if kindLower == "ingress" || kindLower == "ingresses" ||
+					kindLower == "gateway" || kindLower == "gateways" ||
+					kindLower == "httproute" || kindLower == "httproutes" ||
+					kindLower == "grpcroute" || kindLower == "grpcroutes" ||
+					kindLower == "tcproute" || kindLower == "tcproutes" ||
+					kindLower == "tlsroute" || kindLower == "tlsroutes" {
+					// Ingress/Gateway/Route routes to Service (or Gateway routes to route)
 					rel.Services = append(rel.Services, *ref)
 				} else {
 					// Service routes to Pod
@@ -56,6 +87,7 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 			if ref == nil {
 				continue
 			}
+			enrichRef(ref)
 
 			switch edge.Type {
 			case EdgeManages:
@@ -65,10 +97,12 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 				// A Service exposes this resource
 				rel.Services = append(rel.Services, *ref)
 			case EdgeRoutesTo:
-				// An Ingress or Service routes to this resource
+				// An Ingress, Gateway, route, or Service routes to this resource
 				sourceKind := strings.ToLower(ref.Kind)
 				if sourceKind == "ingress" {
 					rel.Ingresses = append(rel.Ingresses, *ref)
+				} else if sourceKind == "gateway" {
+					rel.Gateways = append(rel.Gateways, *ref)
 				} else if sourceKind == "service" {
 					rel.Services = append(rel.Services, *ref)
 				}
@@ -84,7 +118,7 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 
 	// Return nil if no relationships found
 	if rel.Owner == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
-		len(rel.Ingresses) == 0 && len(rel.ConfigRefs) == 0 && rel.HPA == nil &&
+		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.ConfigRefs) == 0 && rel.HPA == nil &&
 		rel.ScaleTarget == nil && len(rel.Pods) == 0 {
 		return nil
 	}
@@ -109,6 +143,11 @@ func buildNodeID(kind, namespace, name string) string {
 		"statefulsets": "statefulset",
 		"replicasets":  "replicaset",
 		"ingresses":    "ingress",
+		"gateways":     "gateway",
+		"httproutes":   "httproute",
+		"grpcroutes":   "grpcroute",
+		"tcproutes":    "tcproute",
+		"tlsroutes":    "tlsroute",
 		"configmaps":   "configmap",
 		"secrets":      "secret",
 		"hpas":         "hpa",
@@ -162,6 +201,11 @@ func normalizeKind(kind string) string {
 		"statefulset": "StatefulSet",
 		"replicaset":  "ReplicaSet",
 		"ingress":     "Ingress",
+		"gateway":     "Gateway",
+		"httproute":   "HTTPRoute",
+		"grpcroute":   "GRPCRoute",
+		"tcproute":    "TCPRoute",
+		"tlsroute":    "TLSRoute",
 		"configmap":   "ConfigMap",
 		"secret":      "Secret",
 		"hpa":         "HPA",
@@ -177,70 +221,3 @@ func normalizeKind(kind string) string {
 	return kind
 }
 
-// GetRelationshipsForAll computes relationships for multiple resources efficiently
-// by iterating through edges only once
-func GetRelationshipsForAll(resources []ResourceRef, topo *Topology) map[string]*Relationships {
-	if topo == nil {
-		return nil
-	}
-
-	// Build a map of node ID -> Relationships
-	result := make(map[string]*Relationships)
-	nodeIDs := make(map[string]bool)
-
-	// Build set of node IDs we care about
-	for _, r := range resources {
-		nodeID := buildNodeID(r.Kind, r.Namespace, r.Name)
-		nodeIDs[nodeID] = true
-		result[nodeID] = &Relationships{}
-	}
-
-	// Single pass through all edges
-	for _, edge := range topo.Edges {
-		// Check if source is one of our resources
-		if _, ok := nodeIDs[edge.Source]; ok {
-			ref := parseNodeID(edge.Target)
-			if ref != nil {
-				rel := result[edge.Source]
-				switch edge.Type {
-				case EdgeManages:
-					rel.Children = append(rel.Children, *ref)
-				case EdgeExposes:
-					rel.Pods = append(rel.Pods, *ref)
-				case EdgeRoutesTo:
-					// Could be Service or Pod depending on source type
-					rel.Pods = append(rel.Pods, *ref)
-				case EdgeUses:
-					rel.ScaleTarget = ref
-				}
-			}
-		}
-
-		// Check if target is one of our resources
-		if _, ok := nodeIDs[edge.Target]; ok {
-			ref := parseNodeID(edge.Source)
-			if ref != nil {
-				rel := result[edge.Target]
-				switch edge.Type {
-				case EdgeManages:
-					rel.Owner = ref
-				case EdgeExposes:
-					rel.Services = append(rel.Services, *ref)
-				case EdgeRoutesTo:
-					sourceKind := strings.ToLower(ref.Kind)
-					if sourceKind == "ingress" {
-						rel.Ingresses = append(rel.Ingresses, *ref)
-					} else {
-						rel.Services = append(rel.Services, *ref)
-					}
-				case EdgeUses:
-					rel.HPA = ref
-				case EdgeConfigures:
-					rel.ConfigRefs = append(rel.ConfigRefs, *ref)
-				}
-			}
-		}
-	}
-
-	return result
-}

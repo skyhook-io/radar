@@ -2,10 +2,12 @@ import { AlertTriangle, Info, Clock, Target, Server, Hash } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../drawer-components'
 import { formatAge } from '../resource-utils'
+import type { NavigateToResource } from '../../../utils/navigation'
+import { kindToPlural } from '../../../utils/navigation'
 
 interface EventRendererProps {
   data: any
-  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  onNavigate?: NavigateToResource
 }
 
 export function EventRenderer({ data, onNavigate }: EventRendererProps) {
@@ -80,11 +82,17 @@ export function EventRenderer({ data, onNavigate }: EventRendererProps) {
               <span className="text-theme-text-tertiary text-sm w-24">Name</span>
               {onNavigate ? (
                 <button
-                  onClick={() => onNavigate({
-                    kind: involvedObject.kind.toLowerCase() + 's',
-                    namespace: involvedObject.namespace || '',
-                    name: involvedObject.name,
-                  })}
+                  onClick={() => {
+                    // Parse API group from apiVersion (format: "group/version" or "v1" for core)
+                    const apiVersion = involvedObject.apiVersion || ''
+                    const group = apiVersion.includes('/') ? apiVersion.split('/')[0] : undefined
+                    onNavigate({
+                      kind: kindToPlural(involvedObject.kind),
+                      namespace: involvedObject.namespace || '',
+                      name: involvedObject.name,
+                      group,
+                    })
+                  }}
                   className="text-blue-400 hover:text-blue-300 text-sm font-medium hover:underline"
                 >
                   {involvedObject.name}

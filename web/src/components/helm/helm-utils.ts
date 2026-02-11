@@ -33,30 +33,5 @@ export function getChartDisplay(chart: string, version: string): string {
   return `${chart}-${version}`
 }
 
-// Map resource kind to plural name for API calls
-export function kindToPlural(kind: string): string {
-  const kindLower = kind.toLowerCase()
-  const irregulars: Record<string, string> = {
-    ingress: 'ingresses',
-    configmap: 'configmaps',
-    service: 'services',
-    deployment: 'deployments',
-    statefulset: 'statefulsets',
-    daemonset: 'daemonsets',
-    replicaset: 'replicasets',
-    pod: 'pods',
-    secret: 'secrets',
-    serviceaccount: 'serviceaccounts',
-    persistentvolumeclaim: 'persistentvolumeclaims',
-    role: 'roles',
-    rolebinding: 'rolebindings',
-    clusterrole: 'clusterroles',
-    clusterrolebinding: 'clusterrolebindings',
-    networkpolicy: 'networkpolicies',
-    horizontalpodautoscaler: 'horizontalpodautoscalers',
-    poddisruptionbudget: 'poddisruptionbudgets',
-    job: 'jobs',
-    cronjob: 'cronjobs',
-  }
-  return irregulars[kindLower] || kindLower + 's'
-}
+// Re-export kindToPlural from centralized navigation utils
+export { kindToPlural } from '../../utils/navigation'

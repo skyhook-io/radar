@@ -1,6 +1,7 @@
 import { useDashboard, useDashboardCRDs } from '../../api/client'
 import type { DashboardResponse } from '../../api/client'
 import type { ExtendedMainView, Topology, SelectedResource } from '../../types'
+import { kindToPlural } from '../../utils/navigation'
 import { TopologyPreview } from './TopologyPreview'
 import { HelmSummary } from './HelmSummary'
 import { ActivitySummary } from './ActivitySummary'
@@ -109,23 +110,6 @@ interface ProblemsPanelProps {
   onResourceClick: (resource: SelectedResource) => void
 }
 
-// Convert problem kind to the plural API resource name for navigation
-const KIND_TO_RESOURCE: Record<string, string> = {
-  'Pod': 'pods',
-  'Deployment': 'deployments',
-  'StatefulSet': 'statefulsets',
-  'DaemonSet': 'daemonsets',
-  'Node': 'nodes',
-  'Job': 'jobs',
-  'CronJob': 'cronjobs',
-  'Service': 'services',
-  'Ingress': 'ingresses',
-  'ReplicaSet': 'replicasets',
-}
-
-function problemKindToResource(kind: string): string {
-  return KIND_TO_RESOURCE[kind] || kind.toLowerCase() + 's'
-}
 
 function ProblemsPanel({ problems, onResourceClick }: ProblemsPanelProps) {
   return (
@@ -144,7 +128,7 @@ function ProblemsPanel({ problems, onResourceClick }: ProblemsPanelProps) {
               key={`${p.kind}-${p.namespace}-${p.name}-${i}`}
               className="w-full flex items-center gap-2 px-3 py-1.5 hover:bg-theme-hover transition-colors text-left cursor-pointer"
               onClick={() => onResourceClick({
-                kind: problemKindToResource(p.kind),
+                kind: kindToPlural(p.kind),
                 namespace: p.namespace,
                 name: p.name,
               })}

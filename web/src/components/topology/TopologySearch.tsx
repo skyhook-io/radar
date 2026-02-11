@@ -19,7 +19,13 @@ function getNodeIcon(kind: string) {
 function getKindColor(kind: string): string {
   switch (kind) {
     case 'Ingress':
+    case 'Gateway':
       return 'text-purple-400'
+    case 'HTTPRoute':
+    case 'GRPCRoute':
+    case 'TCPRoute':
+    case 'TLSRoute':
+      return 'text-purple-300'
     case 'Service':
       return 'text-blue-400'
     case 'Deployment':

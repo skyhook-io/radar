@@ -6,6 +6,11 @@ type NodeKind string
 const (
 	KindInternet      NodeKind = "Internet"
 	KindIngress       NodeKind = "Ingress"
+	KindGateway       NodeKind = "Gateway"
+	KindHTTPRoute     NodeKind = "HTTPRoute"
+	KindGRPCRoute     NodeKind = "GRPCRoute"
+	KindTCPRoute      NodeKind = "TCPRoute"
+	KindTLSRoute      NodeKind = "TLSRoute"
 	KindService       NodeKind = "Service"
 	KindDeployment    NodeKind = "Deployment"
 	KindRollout       NodeKind = "Rollout"
@@ -153,6 +158,7 @@ type ResourceRef struct {
 	Kind      string `json:"kind"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
+	Group     string `json:"group,omitempty"` // API group for CRDs (e.g., "cert-manager.io")
 }
 
 // Relationships holds computed relationships for a resource
@@ -161,6 +167,7 @@ type Relationships struct {
 	Children    []ResourceRef `json:"children,omitempty"`    // Resources this owns (manages edge)
 	Services    []ResourceRef `json:"services,omitempty"`    // Services selecting/exposing this
 	Ingresses   []ResourceRef `json:"ingresses,omitempty"`   // Ingresses routing to this
+	Gateways    []ResourceRef `json:"gateways,omitempty"`    // Gateways routing to this (via routes)
 	ConfigRefs  []ResourceRef `json:"configRefs,omitempty"`  // ConfigMaps/Secrets used by this
 	HPA         *ResourceRef  `json:"hpa,omitempty"`         // HPA scaling this
 	ScaleTarget *ResourceRef  `json:"scaleTarget,omitempty"` // For HPA: what it scales

@@ -106,6 +106,8 @@ export interface DashboardResourceCounts {
   daemonSets: WorkloadCount
   services: number
   ingresses: number
+  gateways?: number
+  httpRoutes?: number
   nodes: { total: number; ready: number; notReady: number }
   namespaces: number
   jobs: { total: number; active: number; succeeded: number; failed: number }

@@ -276,6 +276,8 @@ export function getKindColor(kind: string): string {
   if (k.includes('pod')) return 'bg-lime-500/20 text-lime-700 dark:text-lime-300 border-lime-500/30'
   if (k.includes('deployment')) return 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
   if (k.includes('service')) return 'bg-blue-500/20 text-blue-700 dark:text-blue-300 border-blue-500/30'
+  if (k.includes('gateway')) return 'bg-violet-500/20 text-violet-700 dark:text-violet-300 border-violet-500/30'
+  if (k.includes('route')) return 'bg-purple-500/20 text-purple-700 dark:text-purple-300 border-purple-500/30'
   if (k.includes('ingress')) return 'bg-violet-500/20 text-violet-700 dark:text-violet-300 border-violet-500/30'
   if (k.includes('configmap')) return 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/30'
   if (k.includes('secret')) return 'bg-red-500/20 text-red-700 dark:text-red-300 border-red-500/30'
@@ -296,7 +298,9 @@ export function formatKindName(kind: string): string {
   const k = kind.toLowerCase()
   const names: Record<string, string> = {
     pods: 'Pod', deployments: 'Deployment', daemonsets: 'DaemonSet', statefulsets: 'StatefulSet',
-    replicasets: 'ReplicaSet', services: 'Service', ingresses: 'Ingress', configmaps: 'ConfigMap',
+    replicasets: 'ReplicaSet', services: 'Service', ingresses: 'Ingress',
+    gateways: 'Gateway', httproutes: 'HTTPRoute', grpcroutes: 'GRPCRoute',
+    tcproutes: 'TCPRoute', tlsroutes: 'TLSRoute', configmaps: 'ConfigMap',
     secrets: 'Secret', jobs: 'Job', cronjobs: 'CronJob', hpas: 'HPA',
     horizontalpodautoscalers: 'HPA', nodes: 'Node', namespaces: 'Namespace',
     persistentvolumeclaims: 'PVC', persistentvolumes: 'PV',
@@ -338,6 +342,7 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
     (relationships.children && relationships.children.length > 0) ||
     (relationships.services && relationships.services.length > 0) ||
     (relationships.ingresses && relationships.ingresses.length > 0) ||
+    (relationships.gateways && relationships.gateways.length > 0) ||
     (relationships.pods && relationships.pods.length > 0) ||
     (relationships.configRefs && relationships.configRefs.length > 0) ||
     relationships.hpa ||
@@ -366,6 +371,11 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
         {/* Ingresses routing to this resource */}
         {relationships.ingresses && relationships.ingresses.length > 0 && (
           <RelationshipGroup label="Ingresses" refs={relationships.ingresses} onNavigate={onNavigate} />
+        )}
+
+        {/* Gateways routing to this resource */}
+        {relationships.gateways && relationships.gateways.length > 0 && (
+          <RelationshipGroup label="Gateways" refs={relationships.gateways} onNavigate={onNavigate} />
         )}
 
         {/* Pods selected/exposed by this Service */}
@@ -460,6 +470,11 @@ function formatKindForRef(kind: string): string {
     configmap: 'cm',
     service: 'svc',
     ingress: 'ing',
+    gateway: 'gw',
+    httproute: 'hr',
+    grpcroute: 'grpc',
+    tcproute: 'tcp',
+    tlsroute: 'tls',
     secret: 'secret',
     pod: 'pod',
     job: 'job',

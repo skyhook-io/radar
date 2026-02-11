@@ -18,6 +18,8 @@ import {
   Check,
 } from 'lucide-react'
 import type { TimelineEvent, TimeRange, ResourceRef, Relationships } from '../../types'
+import type { NavigateToResource } from '../../utils/navigation'
+import { refToSelectedResource } from '../../utils/navigation'
 import { isChangeEvent, isHistoricalEvent } from '../../types'
 import { useChanges, useResourceWithRelationships, usePodLogs, useDeleteResource, useTopology } from '../../api/client'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
@@ -45,7 +47,7 @@ interface ResourceDetailPageProps {
   namespace: string
   name: string
   onBack: () => void
-  onNavigateToResource?: (kind: string, namespace: string, name: string) => void
+  onNavigateToResource?: NavigateToResource
 }
 
 export function ResourceDetailPage({
@@ -155,7 +157,7 @@ export function ResourceDetailPage({
                 <span className="truncate max-w-md font-mono text-xs">{metadata.find(m => m.label === 'Image')?.value}</span>
               )}
               {relationships?.owner && (
-                <span>Owner: <button onClick={() => onNavigateToResource?.(relationships.owner!.kind, relationships.owner!.namespace, relationships.owner!.name)} className="text-blue-500 hover:underline">{relationships.owner.name}</button></span>
+                <span>Owner: <button onClick={() => onNavigateToResource?.(refToSelectedResource(relationships.owner!))} className="text-blue-500 hover:underline">{relationships.owner.name}</button></span>
               )}
             </div>
           </div>
@@ -441,6 +443,29 @@ function determineHealth(kind: string, resource: any): string {
     }
     case 'Service':
       return 'healthy' // Services are always "healthy" if they exist
+    case 'Gateway': {
+      // Check conditions for Programmed/Accepted
+      const gwConditions = status.conditions || []
+      const programmed = gwConditions.find((c: any) => c.type === 'Programmed')
+      const accepted = gwConditions.find((c: any) => c.type === 'Accepted')
+      if (programmed?.status === 'True') return 'healthy'
+      if (accepted?.status === 'True') return 'degraded'
+      if (gwConditions.length > 0) return 'unhealthy'
+      return 'unknown'
+    }
+    case 'HTTPRoute':
+    case 'GRPCRoute':
+    case 'TCPRoute':
+    case 'TLSRoute': {
+      const parents = status.parents || []
+      if (parents.length === 0) return 'unknown'
+      const acceptedCount = parents.filter((p: any) =>
+        p.conditions?.some((c: any) => c.type === 'Accepted' && c.status === 'True')
+      ).length
+      if (acceptedCount === parents.length) return 'healthy'
+      if (acceptedCount > 0) return 'degraded'
+      return 'unhealthy'
+    }
     default:
       return 'unknown'
   }
@@ -733,7 +758,8 @@ function EventsTab({
     // Sort by kind priority then by event count
     const kindPriority: Record<string, number> = {
       Service: 1, Deployment: 2, Rollout: 2, StatefulSet: 2, DaemonSet: 2,
-      ReplicaSet: 3, ConfigMap: 4, Secret: 4, Ingress: 5, Pod: 6
+      ReplicaSet: 3, ConfigMap: 4, Secret: 4, Gateway: 5, HTTPRoute: 4, GRPCRoute: 4,
+      TCPRoute: 4, TLSRoute: 4, Ingress: 5, Pod: 6
     }
 
     allChildren.sort((a, b) => {
@@ -1006,7 +1032,7 @@ function InfoTab({
   resource: any
   relationships?: Relationships
   isLoading: boolean
-  onNavigate?: (kind: string, namespace: string, name: string) => void
+  onNavigate?: NavigateToResource
   kind: string
 }) {
   if (isLoading) {
@@ -1135,7 +1161,7 @@ function RelatedResources({
 }: {
   relationships?: Relationships
   isLoading?: boolean
-  onNavigate?: (kind: string, namespace: string, name: string) => void
+  onNavigate?: NavigateToResource
 }) {
   if (isLoading) {
     return <p className="text-sm text-theme-text-tertiary">Loading relationships...</p>
@@ -1150,6 +1176,7 @@ function RelatedResources({
   if (relationships.owner) sections.push({ title: 'Owner', items: [relationships.owner] })
   if (relationships.services?.length) sections.push({ title: 'Services', items: relationships.services })
   if (relationships.ingresses?.length) sections.push({ title: 'Ingresses', items: relationships.ingresses })
+  if (relationships.gateways?.length) sections.push({ title: 'Gateways', items: relationships.gateways })
   if (relationships.children?.length) sections.push({ title: 'Children', items: relationships.children.slice(0, 5) })
   if (relationships.configRefs?.length) sections.push({ title: 'Config', items: relationships.configRefs })
   if (relationships.pods?.length) sections.push({ title: 'Pods', items: relationships.pods.slice(0, 5) })
@@ -1167,7 +1194,7 @@ function RelatedResources({
             {section.items.map(item => (
               <button
                 key={`${item.kind}/${item.namespace}/${item.name}`}
-                onClick={() => onNavigate?.(item.kind, item.namespace, item.name)}
+                onClick={() => onNavigate?.(refToSelectedResource(item))}
                 className="w-full text-left px-2 py-1.5 rounded hover:bg-theme-elevated/50 flex items-center gap-2 group"
               >
                 <KindBadge kind={item.kind} />

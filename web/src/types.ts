@@ -34,6 +34,11 @@ export interface Capabilities {
 export type CoreNodeKind =
   | 'Internet'
   | 'Ingress'
+  | 'Gateway'
+  | 'HTTPRoute'
+  | 'GRPCRoute'
+  | 'TCPRoute'
+  | 'TLSRoute'
   | 'Service'
   | 'Deployment'
   | 'Rollout'
@@ -269,6 +274,7 @@ export interface ResourceRef {
   kind: string
   namespace: string
   name: string
+  group?: string  // API group for CRDs (e.g., 'cert-manager.io')
 }
 
 // Computed relationships for a resource
@@ -277,6 +283,7 @@ export interface Relationships {
   children?: ResourceRef[]
   services?: ResourceRef[]
   ingresses?: ResourceRef[]
+  gateways?: ResourceRef[]
   configRefs?: ResourceRef[]
   hpa?: ResourceRef
   scaleTarget?: ResourceRef

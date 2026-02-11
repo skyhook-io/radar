@@ -279,6 +279,11 @@ body {
 }
 .topology-icon-internet { background: #3b82f6; border-radius: 50%; }
 .topology-icon-ingress { background: #8b5cf6; }
+.topology-icon-gateway { background: #8b5cf6; }
+.topology-icon-httproute { background: #a78bfa; }
+.topology-icon-grpcroute { background: #a78bfa; }
+.topology-icon-tcproute { background: #a78bfa; }
+.topology-icon-tlsroute { background: #a78bfa; }
 .topology-icon-service { background: #3b82f6; border-radius: 50%; }
 .topology-icon-deployment { background: #10b981; }
 .topology-icon-rollout { background: #10b981; }

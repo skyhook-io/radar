@@ -22,6 +22,8 @@ import type { TimelineEvent, TimeRange } from '../../types'
 import { isChangeEvent, isK8sEvent, isHistoricalEvent, isOperation } from '../../types'
 import { getOperationColor, getHealthBadgeColor } from '../../utils/badge-colors'
 import { ResourceRefBadge } from '../resources/drawer-components'
+import type { NavigateToResource } from '../../utils/navigation'
+import { kindToPlural, refToSelectedResource } from '../../utils/navigation'
 
 /** Format resource age (e.g., "3d", "5h", "10m") */
 function formatResourceAge(createdAt: string): string {
@@ -43,7 +45,7 @@ interface TimelineListProps {
   namespaces: string[]
   onViewChange?: (view: 'list' | 'swimlane') => void
   currentView?: 'list' | 'swimlane'
-  onResourceClick?: (kind: string, namespace: string, name: string) => void
+  onResourceClick?: NavigateToResource
   initialFilter?: ActivityTypeFilter
   initialTimeRange?: TimeRange
 }
@@ -63,6 +65,11 @@ const RESOURCE_KINDS = [
   'Service',
   'ConfigMap',
   'Ingress',
+  'Gateway',
+  'HTTPRoute',
+  'GRPCRoute',
+  'TCPRoute',
+  'TLSRoute',
   'ReplicaSet',
   'DaemonSet',
   'StatefulSet',
@@ -513,7 +520,7 @@ interface ActivityCardProps {
   item: TimelineEvent
   expanded: boolean
   onToggle: () => void
-  onResourceClick?: (kind: string, namespace: string, name: string) => void
+  onResourceClick?: NavigateToResource
 }
 
 function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCardProps) {
@@ -582,7 +589,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  onResourceClick?.(item.kind, item.namespace, item.name)
+                  onResourceClick?.({ kind: kindToPlural(item.kind), namespace: item.namespace, name: item.name })
                 }}
                 className="flex items-center gap-2 hover:bg-theme-elevated/50 rounded px-1 -ml-1 transition-colors group"
               >
@@ -597,7 +604,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
                   <span className="text-xs text-theme-text-quaternary">←</span>
                   <ResourceRefBadge
                     resourceRef={{ kind: item.owner.kind, namespace: item.namespace, name: item.owner.name }}
-                    onClick={(ref) => onResourceClick?.(ref.kind, ref.namespace, ref.name)}
+                    onClick={(ref) => onResourceClick?.(refToSelectedResource(ref))}
                   />
                 </span>
               )}
@@ -676,7 +683,7 @@ interface AggregatedActivityCardProps {
   reason: string
   expanded: boolean
   onToggle: () => void
-  onResourceClick?: (kind: string, namespace: string, name: string) => void
+  onResourceClick?: NavigateToResource
 }
 
 function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle, onResourceClick }: AggregatedActivityCardProps) {
@@ -718,7 +725,7 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  onResourceClick?.(first.kind, first.namespace, first.name)
+                  onResourceClick?.({ kind: kindToPlural(first.kind), namespace: first.namespace, name: first.name })
                 }}
                 className="flex items-center gap-2 hover:bg-theme-elevated/50 rounded px-1 -ml-1 transition-colors group"
               >

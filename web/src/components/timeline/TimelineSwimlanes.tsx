@@ -25,6 +25,8 @@ import {
 } from 'lucide-react'
 import { useHasLimitedAccess } from '../../contexts/CapabilitiesContext'
 import type { TimelineEvent, Topology } from '../../types'
+import type { NavigateToResource } from '../../utils/navigation'
+import { kindToPlural } from '../../utils/navigation'
 import { isChangeEvent, isHistoricalEvent, isOperation } from '../../types'
 import { DiffViewer } from './DiffViewer'
 import { getOperationColor, getHealthBadgeColor, getEventTypeColor } from '../../utils/badge-colors'
@@ -41,7 +43,7 @@ import {
 interface TimelineSwimlanesProps {
   events: TimelineEvent[]
   isLoading?: boolean
-  onResourceClick?: (kind: string, namespace: string, name: string) => void
+  onResourceClick?: NavigateToResource
   viewMode?: 'list' | 'swimlane'
   onViewModeChange?: (mode: 'list' | 'swimlane') => void
   topology?: Topology
@@ -89,7 +91,8 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
     GitRepository: 52, OCIRepository: 52, HelmRepository: 52, // FluxCD sources
     // Core workloads
     Deployment: 50, Rollout: 50, StatefulSet: 50, DaemonSet: 50,
-    Service: 45, Ingress: 45,
+    Service: 45, Ingress: 45, Gateway: 45,
+    HTTPRoute: 42, GRPCRoute: 42, TCPRoute: 42, TLSRoute: 42,
     Job: 40, CronJob: 40, Workflow: 40, CronWorkflow: 40,
     Pod: 30,
     HPA: 25,
@@ -685,7 +688,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                         )}
                         <div
                           className="flex-1 min-w-0 cursor-pointer hover:bg-theme-surface/30 rounded px-1 -mx-1 group"
-                          onClick={() => onResourceClick?.(lane.kind, lane.namespace, lane.name)}
+                          onClick={() => onResourceClick?.({ kind: kindToPlural(lane.kind), namespace: lane.namespace, name: lane.name })}
                         >
                           <div className="flex items-center gap-1">
                             <span className={clsx(
@@ -760,7 +763,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                           <div className="flex">
                             <div
                               className="w-[19.25rem] shrink-0 border-r border-theme-border/50 pl-4 pr-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-theme-elevated/30 group"
-                              onClick={() => onResourceClick?.(lane.kind, lane.namespace, lane.name)}
+                              onClick={() => onResourceClick?.({ kind: kindToPlural(lane.kind), namespace: lane.namespace, name: lane.name })}
                             >
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-1">
@@ -812,7 +815,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                             {/* Child lane label - indented */}
                             <div
                               className="w-[19.25rem] shrink-0 border-r border-theme-border/50 pl-4 pr-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-theme-elevated/30 group"
-                              onClick={() => onResourceClick?.(child.kind, child.namespace, child.name)}
+                              onClick={() => onResourceClick?.({ kind: kindToPlural(child.kind), namespace: child.namespace, name: child.name })}
                             >
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-1">
@@ -1215,7 +1218,7 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
 interface EventDetailPanelProps {
   event: TimelineEvent
   onClose: () => void
-  onResourceClick?: (kind: string, namespace: string, name: string) => void
+  onResourceClick?: NavigateToResource
 }
 
 function EventDetailPanel({ event, onClose, onResourceClick }: EventDetailPanelProps) {
@@ -1235,7 +1238,7 @@ function EventDetailPanel({ event, onClose, onResourceClick }: EventDetailPanelP
               {event.kind}
             </span>
             <button
-              onClick={() => onResourceClick?.(event.kind, event.namespace, event.name)}
+              onClick={() => onResourceClick?.({ kind: kindToPlural(event.kind), namespace: event.namespace, name: event.name })}
               className="text-theme-text-primary font-medium hover:text-blue-600 dark:hover:text-blue-300 cursor-pointer"
             >
               {event.name}

@@ -21,6 +21,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { SelectedResource, APIResource } from '../../types'
+import type { NavigateToResource } from '../../utils/navigation'
 import { useAPIResources, categorizeResources, CORE_RESOURCES } from '../../api/apiResources'
 import {
   getPodStatus,
@@ -600,7 +601,7 @@ function getColumnsForKind(kind: string): Column[] {
 interface ResourcesViewProps {
   namespaces: string[]
   selectedResource?: SelectedResource | null
-  onResourceClick?: (kind: string, namespace: string, name: string, group?: string) => void
+  onResourceClick?: NavigateToResource
   onKindChange?: () => void // Called when user changes resource type in sidebar
 }
 
@@ -798,7 +799,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     if (resourceParam && onResourceClick) {
       const [ns, name] = resourceParam.split('/')
       if (ns && name) {
-        onResourceClick(selectedKind.name, ns, name)
+        onResourceClick({ kind: selectedKind.name, namespace: ns, name, group: selectedKind.group })
       }
     }
   }, []) // Only on mount
@@ -1900,7 +1901,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                       kind={selectedKind.name}
                       columns={columns}
                       isSelected={isSelected}
-                      onClick={() => onResourceClick?.(selectedKind.name, resource.metadata?.namespace || '', resource.metadata?.name, selectedKind.group)}
+                      onClick={() => onResourceClick?.({ kind: selectedKind.name, namespace: resource.metadata?.namespace || '', name: resource.metadata?.name, group: selectedKind.group })}
                     />
                   )
                 })}

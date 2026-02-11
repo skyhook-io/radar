@@ -108,7 +108,9 @@ function useTopologyStats(topology: Topology | null) {
     // Top kinds sorted by display priority
     const kindPriority: Record<string, number> = {
       Deployment: 1, Rollout: 1, StatefulSet: 2, DaemonSet: 2,
-      Service: 3, Ingress: 4, Pod: 5, PodGroup: 5,
+      Service: 3, Ingress: 4, Gateway: 4,
+      HTTPRoute: 4, GRPCRoute: 4, TCPRoute: 4, TLSRoute: 4,
+      Pod: 5, PodGroup: 5,
       Job: 6, CronJob: 6, ConfigMap: 7, Secret: 7,
     }
     const topKinds = Object.entries(kindCounts)
@@ -123,7 +125,8 @@ function useTopologyStats(topology: Topology | null) {
 const kindDotColors: Record<string, string> = {
   Deployment: 'bg-emerald-400', Rollout: 'bg-emerald-400',
   StatefulSet: 'bg-cyan-400', DaemonSet: 'bg-teal-400',
-  Service: 'bg-blue-400', Ingress: 'bg-violet-400',
+  Service: 'bg-blue-400', Ingress: 'bg-violet-400', Gateway: 'bg-violet-400',
+  HTTPRoute: 'bg-purple-400', GRPCRoute: 'bg-purple-400', TCPRoute: 'bg-purple-400', TLSRoute: 'bg-purple-400',
   Pod: 'bg-lime-500', PodGroup: 'bg-lime-500',
   Job: 'bg-purple-400', CronJob: 'bg-purple-400',
   ConfigMap: 'bg-amber-400', Secret: 'bg-red-400',

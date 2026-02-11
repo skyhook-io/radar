@@ -32,7 +32,8 @@ function scoreLane(lane: ResourceLane): number {
 
   const kindScores: Record<string, number> = {
     Deployment: 50, Rollout: 50, StatefulSet: 50, DaemonSet: 50,
-    Service: 45, Ingress: 45,
+    Service: 45, Ingress: 45, Gateway: 45,
+    HTTPRoute: 42, GRPCRoute: 42, TCPRoute: 42, TLSRoute: 42,
     Job: 40, CronJob: 40,
     Pod: 30, ReplicaSet: 20,
   }
@@ -64,6 +65,11 @@ const KIND_SHORT: Record<string, string> = {
   ConfigMap: 'CM',
   CronJob: 'CJ',
   Ingress: 'Ing',
+  Gateway: 'GW',
+  HTTPRoute: 'HR',
+  GRPCRoute: 'gRPC',
+  TCPRoute: 'TCP',
+  TLSRoute: 'TLS',
 }
 
 export function ActivitySummary({ namespaces, topology, onNavigate }: ActivitySummaryProps) {

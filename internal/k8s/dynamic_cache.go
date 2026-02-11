@@ -843,6 +843,11 @@ func WarmupCommonCRDs() {
 		"Application",    // ArgoCD
 		"ApplicationSet", // ArgoCD
 		"AppProject",     // ArgoCD
+		"Gateway",        // Gateway API
+		"HTTPRoute",      // Gateway API
+		"GRPCRoute",      // Gateway API
+		"TCPRoute",       // Gateway API
+		"TLSRoute",       // Gateway API
 	}
 
 	var gvrs []schema.GroupVersionResource

@@ -58,6 +58,10 @@ func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
 		changes, summaryParts = diffFluxHelmRelease(oldObj, newObj)
 	case "GitRepository", "OCIRepository", "HelmRepository":
 		changes, summaryParts = diffFluxSource(oldObj, newObj, kind)
+	case "Gateway":
+		changes, summaryParts = diffGateway(oldObj, newObj)
+	case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
+		changes, summaryParts = diffGatewayRoute(oldObj, newObj)
 	default:
 		return nil
 	}
@@ -1702,4 +1706,151 @@ func extractPrimaryIssue(summary string) string {
 	}
 
 	return ""
+}
+
+// diffGateway computes diff for Gateway API Gateway resources (unstructured)
+func diffGateway(oldObj, newObj any) ([]FieldChange, []string) {
+	oldGW, ok1 := oldObj.(*unstructured.Unstructured)
+	newGW, ok2 := newObj.(*unstructured.Unstructured)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	// Check listener count
+	oldListeners, _, _ := unstructured.NestedSlice(oldGW.Object, "spec", "listeners")
+	newListeners, _, _ := unstructured.NestedSlice(newGW.Object, "spec", "listeners")
+	if len(oldListeners) != len(newListeners) {
+		changes = append(changes, FieldChange{
+			Path:     "spec.listeners",
+			OldValue: fmt.Sprintf("%d listeners", len(oldListeners)),
+			NewValue: fmt.Sprintf("%d listeners", len(newListeners)),
+		})
+		summary = append(summary, fmt.Sprintf("listeners: %d→%d", len(oldListeners), len(newListeners)))
+	}
+
+	// Check addresses
+	oldAddrs, _, _ := unstructured.NestedSlice(oldGW.Object, "status", "addresses")
+	newAddrs, _, _ := unstructured.NestedSlice(newGW.Object, "status", "addresses")
+	if len(oldAddrs) != len(newAddrs) {
+		changes = append(changes, FieldChange{
+			Path:     "status.addresses",
+			OldValue: fmt.Sprintf("%d addresses", len(oldAddrs)),
+			NewValue: fmt.Sprintf("%d addresses", len(newAddrs)),
+		})
+		summary = append(summary, fmt.Sprintf("addresses: %d→%d", len(oldAddrs), len(newAddrs)))
+	}
+
+	// Check conditions (Accepted, Programmed)
+	oldConditions := getConditionMap(oldGW.Object, "status", "conditions")
+	newConditions := getConditionMap(newGW.Object, "status", "conditions")
+	for _, condType := range []string{"Accepted", "Programmed"} {
+		oldStatus := oldConditions[condType]
+		newStatus := newConditions[condType]
+		if oldStatus != newStatus && oldStatus != "" && newStatus != "" {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.conditions.%s", condType),
+				OldValue: oldStatus,
+				NewValue: newStatus,
+			})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
+		}
+	}
+
+	return changes, summary
+}
+
+// diffGatewayRoute computes diff for Gateway API route resources (HTTPRoute, GRPCRoute, TCPRoute, TLSRoute)
+func diffGatewayRoute(oldObj, newObj any) ([]FieldChange, []string) {
+	oldRoute, ok1 := oldObj.(*unstructured.Unstructured)
+	newRoute, ok2 := newObj.(*unstructured.Unstructured)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	// Check hostnames
+	oldHostnames, _, _ := unstructured.NestedStringSlice(oldRoute.Object, "spec", "hostnames")
+	newHostnames, _, _ := unstructured.NestedStringSlice(newRoute.Object, "spec", "hostnames")
+	if strings.Join(oldHostnames, ",") != strings.Join(newHostnames, ",") {
+		changes = append(changes, FieldChange{
+			Path:     "spec.hostnames",
+			OldValue: strings.Join(oldHostnames, ", "),
+			NewValue: strings.Join(newHostnames, ", "),
+		})
+		summary = append(summary, fmt.Sprintf("hostnames: %s→%s", strings.Join(oldHostnames, ","), strings.Join(newHostnames, ",")))
+	}
+
+	// Check rules count
+	oldRules, _, _ := unstructured.NestedSlice(oldRoute.Object, "spec", "rules")
+	newRules, _, _ := unstructured.NestedSlice(newRoute.Object, "spec", "rules")
+	if len(oldRules) != len(newRules) {
+		changes = append(changes, FieldChange{
+			Path:     "spec.rules",
+			OldValue: fmt.Sprintf("%d rules", len(oldRules)),
+			NewValue: fmt.Sprintf("%d rules", len(newRules)),
+		})
+		summary = append(summary, fmt.Sprintf("rules: %d→%d", len(oldRules), len(newRules)))
+	}
+
+	// Check parent acceptance status
+	oldParents, _, _ := unstructured.NestedSlice(oldRoute.Object, "status", "parents")
+	newParents, _, _ := unstructured.NestedSlice(newRoute.Object, "status", "parents")
+	oldAccepted := countAcceptedParents(oldParents)
+	newAccepted := countAcceptedParents(newParents)
+	if oldAccepted != newAccepted || len(oldParents) != len(newParents) {
+		changes = append(changes, FieldChange{
+			Path:     "status.parents",
+			OldValue: fmt.Sprintf("%d/%d accepted", oldAccepted, len(oldParents)),
+			NewValue: fmt.Sprintf("%d/%d accepted", newAccepted, len(newParents)),
+		})
+		summary = append(summary, fmt.Sprintf("accepted: %d/%d→%d/%d", oldAccepted, len(oldParents), newAccepted, len(newParents)))
+	}
+
+	return changes, summary
+}
+
+// getConditionMap extracts a map of condition type -> status from nested conditions
+func getConditionMap(obj map[string]any, path ...string) map[string]string {
+	result := make(map[string]string)
+	conditions, _, _ := unstructured.NestedSlice(obj, path...)
+	for _, c := range conditions {
+		cMap, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		condType, _ := cMap["type"].(string)
+		condStatus, _ := cMap["status"].(string)
+		if condType != "" {
+			result[condType] = condStatus
+		}
+	}
+	return result
+}
+
+// countAcceptedParents counts how many parent refs have Accepted=True condition
+func countAcceptedParents(parents []any) int {
+	count := 0
+	for _, p := range parents {
+		pMap, ok := p.(map[string]any)
+		if !ok {
+			continue
+		}
+		conditions, _, _ := unstructured.NestedSlice(pMap, "conditions")
+		for _, c := range conditions {
+			cMap, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			if cMap["type"] == "Accepted" && cMap["status"] == "True" {
+				count++
+				break
+			}
+		}
+	}
+	return count
 }

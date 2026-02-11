@@ -3,6 +3,7 @@ import { TimelineList } from './TimelineList'
 import { TimelineSwimlanes } from './TimelineSwimlanes'
 import { useChanges, useTopology } from '../../api/client'
 import type { Topology } from '../../types'
+import type { NavigateToResource } from '../../utils/navigation'
 
 // Stable empty array to avoid creating new references on every render
 const EMPTY_EVENTS: never[] = []
@@ -26,7 +27,7 @@ export type { ActivityTypeFilter } from './TimelineList'
 
 interface TimelineViewProps {
   namespaces: string[]
-  onResourceClick?: (kind: string, namespace: string, name: string) => void
+  onResourceClick?: NavigateToResource
   initialViewMode?: TimelineViewMode
   initialFilter?: 'all' | 'changes' | 'k8s_events' | 'warnings' | 'unhealthy'
   initialTimeRange?: TimeRange

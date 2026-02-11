@@ -35,6 +35,8 @@ type ResourcePermissions struct {
 	Jobs                     bool `json:"jobs"`
 	CronJobs                 bool `json:"cronJobs"`
 	HorizontalPodAutoscalers bool `json:"horizontalPodAutoscalers"`
+	Gateways                 bool `json:"gateways"`
+	HTTPRoutes               bool `json:"httpRoutes"`
 }
 
 // PermissionCheckResult holds the result of RBAC permission checks
@@ -273,6 +275,9 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 		{"apps", "replicasets", &perms.ReplicaSets},
 		// networking.k8s.io group
 		{"networking.k8s.io", "ingresses", &perms.Ingresses},
+		// gateway.networking.k8s.io group
+		{"gateway.networking.k8s.io", "gateways", &perms.Gateways},
+		{"gateway.networking.k8s.io", "httproutes", &perms.HTTPRoutes},
 		// batch group
 		{"batch", "jobs", &perms.Jobs},
 		{"batch", "cronjobs", &perms.CronJobs},
