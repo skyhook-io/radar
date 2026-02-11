@@ -64,7 +64,7 @@ func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEve
 
 // NewHistoricalEvent creates a historical TimelineEvent
 // The ID is deterministic based on the event content to avoid duplicates on restart
-func NewHistoricalEvent(kind, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo) TimelineEvent {
+func NewHistoricalEvent(kind, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
 	// Create deterministic ID from event attributes to avoid duplicates
 	hashInput := fmt.Sprintf("historical:%s/%s/%s:%d:%s", kind, namespace, name, ts.UnixNano(), reason)
 	hash := sha256.Sum256([]byte(hashInput))
@@ -82,6 +82,7 @@ func NewHistoricalEvent(kind, namespace, name string, ts time.Time, reason, mess
 		Message:     message,
 		HealthState: healthState,
 		Owner:       owner,
+		Labels:      labels,
 	}
 }
 

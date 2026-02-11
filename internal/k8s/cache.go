@@ -631,7 +631,7 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 	// and record them to the timeline store
 	var events []timeline.TimelineEvent
 	if op == "add" && newObj != nil {
-		historicalEvents := extractTimelineHistoricalEvents(kind, namespace, name, newObj, owner)
+		historicalEvents := extractTimelineHistoricalEvents(kind, namespace, name, newObj, owner, labels)
 		events = append(events, historicalEvents...)
 	}
 
@@ -698,7 +698,7 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 }
 
 // extractTimelineHistoricalEvents extracts historical events from resource metadata/status for the timeline store
-func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owner *timeline.OwnerInfo) []timeline.TimelineEvent {
+func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owner *timeline.OwnerInfo, labels map[string]string) []timeline.TimelineEvent {
 	var events []timeline.TimelineEvent
 
 	switch kind {
@@ -707,12 +707,12 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 			// Pod creation
 			if !pod.CreationTimestamp.IsZero() {
 				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
-					pod.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner))
+					pod.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 			// Pod started
 			if pod.Status.StartTime != nil && !pod.Status.StartTime.IsZero() {
 				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
-					pod.Status.StartTime.Time, "started", "", timeline.HealthDegraded, owner))
+					pod.Status.StartTime.Time, "started", "", timeline.HealthDegraded, owner, labels))
 			}
 			// Check conditions
 			for _, cond := range pod.Status.Conditions {
@@ -726,7 +726,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 					health = timeline.HealthDegraded
 				}
 				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
-					cond.LastTransitionTime.Time, string(cond.Type), cond.Message, health, owner))
+					cond.LastTransitionTime.Time, string(cond.Type), cond.Message, health, owner, labels))
 			}
 		}
 
@@ -734,7 +734,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 		if deploy, ok := obj.(*appsv1.Deployment); ok {
 			if !deploy.CreationTimestamp.IsZero() {
 				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
-					deploy.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner))
+					deploy.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 			// Check conditions
 			for _, cond := range deploy.Status.Conditions {
@@ -748,7 +748,35 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 					health = timeline.HealthDegraded
 				}
 				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
-					cond.LastTransitionTime.Time, string(cond.Type), cond.Message, health, owner))
+					cond.LastTransitionTime.Time, string(cond.Type), cond.Message, health, owner, labels))
+			}
+		}
+
+	case "ReplicaSet":
+		if rs, ok := obj.(*appsv1.ReplicaSet); ok {
+			if !rs.CreationTimestamp.IsZero() {
+				health := timeline.HealthUnknown
+				if rs.Status.ReadyReplicas > 0 && rs.Status.ReadyReplicas == rs.Status.Replicas {
+					health = timeline.HealthHealthy
+				}
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					rs.CreationTimestamp.Time, "created", "", health, owner, labels))
+			}
+		}
+
+	case "StatefulSet":
+		if sts, ok := obj.(*appsv1.StatefulSet); ok {
+			if !sts.CreationTimestamp.IsZero() {
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					sts.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
+			}
+		}
+
+	case "DaemonSet":
+		if ds, ok := obj.(*appsv1.DaemonSet); ok {
+			if !ds.CreationTimestamp.IsZero() {
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					ds.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 		}
 
@@ -756,7 +784,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 		if svc, ok := obj.(*corev1.Service); ok {
 			if !svc.CreationTimestamp.IsZero() {
 				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
-					svc.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner))
+					svc.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner, labels))
 			}
 		}
 
@@ -764,11 +792,11 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 		if job, ok := obj.(*batchv1.Job); ok {
 			if !job.CreationTimestamp.IsZero() {
 				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
-					job.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner))
+					job.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 			if job.Status.StartTime != nil && !job.Status.StartTime.IsZero() {
 				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
-					job.Status.StartTime.Time, "started", "", timeline.HealthDegraded, owner))
+					job.Status.StartTime.Time, "started", "", timeline.HealthDegraded, owner, labels))
 			}
 			if job.Status.CompletionTime != nil && !job.Status.CompletionTime.IsZero() {
 				health := timeline.HealthHealthy
@@ -776,7 +804,18 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 					health = timeline.HealthUnhealthy
 				}
 				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
-					job.Status.CompletionTime.Time, "completed", "", health, owner))
+					job.Status.CompletionTime.Time, "completed", "", health, owner, labels))
+			}
+		}
+
+	default:
+		// For unstructured CRD resources (Gateway, HTTPRoute, etc.),
+		// extract at least a "created" event from the creation timestamp
+		if u, ok := obj.(*unstructured.Unstructured); ok {
+			ct := u.GetCreationTimestamp()
+			if !ct.IsZero() {
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					ct.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 		}
 	}

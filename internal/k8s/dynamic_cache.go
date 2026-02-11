@@ -317,18 +317,19 @@ func (d *DynamicResourceCache) enqueueDynamicChange(kind string, gvr schema.Grou
 	// Track event received
 	timeline.IncrementReceived(kind)
 
-	// Skip ADD events during initial sync - they represent existing resources, not new creations
+	// During initial sync, still record to timeline store (historical events)
+	// but skip SSE notification
+	isSyncAdd := false
 	if op == "add" {
 		d.mu.RLock()
 		synced := d.syncComplete[gvr]
 		d.mu.RUnlock()
 
 		if !synced {
+			isSyncAdd = true
 			if DebugEvents {
-				log.Printf("[DEBUG] Skipping dynamic initial sync add event: %s/%s/%s", kind, namespace, name)
+				log.Printf("[DEBUG] Dynamic initial sync add event: %s/%s/%s (recording historical only)", kind, namespace, name)
 			}
-			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonAlreadySeen, op)
-			return
 		}
 	}
 
@@ -338,8 +339,13 @@ func (d *DynamicResourceCache) enqueueDynamicChange(kind string, gvr schema.Grou
 		diff = ComputeDiff(kind, oldObj, obj)
 	}
 
-	// Record to timeline store
+	// Record to timeline store (handles sync vs real add internally)
 	recordToTimelineStore(kind, namespace, name, uid, op, oldObj, obj)
+
+	// Skip SSE notification during initial sync
+	if isSyncAdd {
+		return
+	}
 
 	// Send to change channel for SSE if configured
 	if d.changes != nil {
