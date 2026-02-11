@@ -788,6 +788,22 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 			}
 		}
 
+	case "Ingress":
+		if ing, ok := obj.(*networkingv1.Ingress); ok {
+			if !ing.CreationTimestamp.IsZero() {
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					ing.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner, labels))
+			}
+		}
+
+	case "CronJob":
+		if cj, ok := obj.(*batchv1.CronJob); ok {
+			if !cj.CreationTimestamp.IsZero() {
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					cj.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner, labels))
+			}
+		}
+
 	case "Job":
 		if job, ok := obj.(*batchv1.Job); ok {
 			if !job.CreationTimestamp.IsZero() {

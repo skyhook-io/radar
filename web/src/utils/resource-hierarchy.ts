@@ -106,9 +106,11 @@ function nodeIdToLaneId(nodeId: string): string | null {
     replicaset: 'ReplicaSet', statefulset: 'StatefulSet', daemonset: 'DaemonSet',
     ingress: 'Ingress', gateway: 'Gateway', httproute: 'HTTPRoute',
     grpcroute: 'GRPCRoute', tcproute: 'TCPRoute', tlsroute: 'TLSRoute',
-    configmap: 'ConfigMap', secret: 'Secret',
+    configmap: 'ConfigMap', secret: 'Secret', pvc: 'PVC',
     job: 'Job', cronjob: 'CronJob', hpa: 'HPA', podgroup: 'PodGroup',
-    rollout: 'Rollout',
+    rollout: 'Rollout', namespace: 'Namespace',
+    application: 'Application', kustomization: 'Kustomization',
+    helmrelease: 'HelmRelease', gitrepository: 'GitRepository',
   }
   return `${kindMap[kind] || kind}/${namespace}/${name}`
 }
@@ -378,6 +380,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       'Service', 'Deployment', 'Rollout', 'StatefulSet', 'DaemonSet',
       'Job', 'CronJob', 'Ingress', 'Gateway', 'HTTPRoute', 'GRPCRoute',
       'TCPRoute', 'TLSRoute', 'ConfigMap', 'Secret',
+      'Application', 'Kustomization', 'HelmRelease', 'GitRepository',
       'Workflow', 'CronWorkflow',
     ])
 
