@@ -35,7 +35,7 @@
   },
   "devDependencies": {
     "@types/diff": "^8.0.0",
-    "@types/react": "^19.2.10",
+    "@types/react": "^19.2.13",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.4",
     "postcss": "^8.5.6",
