@@ -38,6 +38,7 @@ type DynamicResourceCache struct {
 	changes         chan ResourceChange // Channel for change notifications (shared with typed cache)
 	discoveryStatus CRDDiscoveryStatus  // Status of CRD discovery
 	discoveryMu     sync.RWMutex        // Mutex for discovery status
+	discoveryDone   chan struct{}        // closed when DiscoverAllCRDs() completes
 }
 
 var (
@@ -98,6 +99,7 @@ func InitDynamicResourceCache(changeCh chan ResourceChange) error {
 			stopCh:          make(chan struct{}),
 			changes:         changeCh,
 			discoveryStatus: CRDDiscoveryIdle,
+			discoveryDone:   make(chan struct{}),
 		}
 
 		log.Println("Dynamic resource cache initialized")
@@ -149,6 +151,26 @@ func (d *DynamicResourceCache) EnsureWatching(gvr schema.GroupVersionResource) e
 	d.mu.RUnlock()
 	if exists {
 		return nil
+	}
+
+	// If CRD discovery is in progress, wait for warmup to finish instead of
+	// probing independently. WarmupParallel() probes all CRDs efficiently
+	// in parallel — individual probes here would compete for the same QPS
+	// budget and create a convoy effect on clusters with many CRDs.
+	if d.GetDiscoveryStatus() == CRDDiscoveryInProgress {
+		select {
+		case <-d.discoveryDone:
+		case <-time.After(35 * time.Second):
+			log.Printf("[dynamic cache] Timeout waiting for CRD discovery, probing %s independently", gvr.Resource)
+		}
+
+		// Re-check: warmup may have created this informer
+		d.mu.RLock()
+		_, exists = d.informers[gvr]
+		d.mu.RUnlock()
+		if exists {
+			return nil
+		}
 	}
 
 	// Probe access BEFORE acquiring write lock — this is a network call and
@@ -622,7 +644,10 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 	go func() {
 		defer func() {
 			d.discoveryMu.Lock()
-			d.discoveryStatus = CRDDiscoveryComplete
+			if d.discoveryStatus != CRDDiscoveryComplete {
+				d.discoveryStatus = CRDDiscoveryComplete
+				close(d.discoveryDone)
+			}
 			d.discoveryMu.Unlock()
 			log.Println("[CRD Discovery] CRD discovery complete")
 
@@ -768,6 +793,15 @@ func (d *DynamicResourceCache) Stop() {
 
 	d.stopOnce.Do(func() {
 		log.Println("Stopping dynamic resource cache")
+
+		// Unblock any HTTP handlers waiting for discovery to finish
+		d.discoveryMu.Lock()
+		if d.discoveryStatus != CRDDiscoveryComplete {
+			d.discoveryStatus = CRDDiscoveryComplete
+			close(d.discoveryDone)
+		}
+		d.discoveryMu.Unlock()
+
 		close(d.stopCh)
 		d.factory.Shutdown()
 	})
