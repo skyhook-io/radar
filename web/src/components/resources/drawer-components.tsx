@@ -343,6 +343,7 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
     (relationships.services && relationships.services.length > 0) ||
     (relationships.ingresses && relationships.ingresses.length > 0) ||
     (relationships.gateways && relationships.gateways.length > 0) ||
+    (relationships.routes && relationships.routes.length > 0) ||
     (relationships.pods && relationships.pods.length > 0) ||
     (relationships.configRefs && relationships.configRefs.length > 0) ||
     relationships.hpa ||
@@ -376,6 +377,11 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
         {/* Gateways routing to this resource */}
         {relationships.gateways && relationships.gateways.length > 0 && (
           <RelationshipGroup label="Gateways" refs={relationships.gateways} onNavigate={onNavigate} />
+        )}
+
+        {/* Routes attached to this Gateway */}
+        {relationships.routes && relationships.routes.length > 0 && (
+          <RelationshipGroup label="Routes" refs={relationships.routes} onNavigate={onNavigate} />
         )}
 
         {/* Pods selected/exposed by this Service */}

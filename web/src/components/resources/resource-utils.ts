@@ -1385,8 +1385,15 @@ export function getGatewayClass(gw: any): string {
   return gw.spec?.gatewayClassName || '-'
 }
 
-export function getGatewayListeners(gw: any): number {
-  return (gw.spec?.listeners || []).length
+export function getGatewayListeners(gw: any): string {
+  const listeners = gw.spec?.listeners || []
+  if (listeners.length === 0) return '-'
+  return listeners.map((l: any) => `${l.protocol}:${l.port}`).join(', ')
+}
+
+export function getGatewayAttachedRoutes(gw: any): number {
+  const statusListeners = gw.status?.listeners || []
+  return statusListeners.reduce((sum: number, l: any) => sum + (l.attachedRoutes ?? 0), 0)
 }
 
 export function getGatewayAddresses(gw: any): string {
@@ -1395,10 +1402,31 @@ export function getGatewayAddresses(gw: any): string {
 }
 
 // ============================================================================
-// HTTPROUTE UTILITIES (Gateway API)
+// GATEWAYCLASS UTILITIES (Gateway API)
 // ============================================================================
 
-export function getHTTPRouteStatus(route: any): StatusBadge {
+export function getGatewayClassStatus(gc: any): StatusBadge {
+  const conditions = gc.status?.conditions || []
+  const accepted = conditions.find((c: any) => c.type === 'Accepted')
+  if (accepted?.status === 'True') return { text: 'Accepted', color: healthColors.healthy, level: 'healthy' }
+  if (accepted?.status === 'False') return { text: accepted.reason || 'Not Accepted', color: healthColors.unhealthy, level: 'unhealthy' }
+  return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+}
+
+export function getGatewayClassController(gc: any): string {
+  return gc.spec?.controllerName || '-'
+}
+
+export function getGatewayClassDescription(gc: any): string {
+  return gc.spec?.description || '-'
+}
+
+// ============================================================================
+// GATEWAY API ROUTE UTILITIES (shared by HTTPRoute, GRPCRoute, TCPRoute, TLSRoute)
+// ============================================================================
+
+// All Gateway API route types share the same status/parents/rules/hostnames structure
+export function getRouteStatus(route: any): StatusBadge {
   const parents = route.status?.parents || []
   if (parents.length === 0) return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
   const allAccepted = parents.every((p: any) =>
@@ -1412,19 +1440,39 @@ export function getHTTPRouteStatus(route: any): StatusBadge {
   return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
 }
 
-export function getHTTPRouteParents(route: any): string {
+export function getRouteParents(route: any): string {
   const refs = route.spec?.parentRefs || []
   return refs.map((r: any) => r.name).join(', ') || '-'
 }
 
-export function getHTTPRouteHostnames(route: any): string {
+export function getRouteHostnames(route: any): string {
   const hostnames = route.spec?.hostnames || []
   return hostnames.join(', ') || 'Any'
 }
 
-export function getHTTPRouteRulesCount(route: any): number {
+export function getRouteRulesCount(route: any): number {
   return (route.spec?.rules || []).length
 }
+
+export function getRouteBackends(route: any): string {
+  const rules = route.spec?.rules || []
+  // Collect unique backend name:port pairs across all rules
+  const seen = new Set<string>()
+  for (const rule of rules) {
+    for (const ref of rule.backendRefs || []) {
+      const key = ref.port ? `${ref.name}:${ref.port}` : ref.name
+      seen.add(key)
+    }
+  }
+  if (seen.size === 0) return '-'
+  return Array.from(seen).join(', ')
+}
+
+// Legacy aliases for HTTPRoute (used by HTTPRouteRenderer)
+export const getHTTPRouteStatus = getRouteStatus
+export const getHTTPRouteParents = getRouteParents
+export const getHTTPRouteHostnames = getRouteHostnames
+export const getHTTPRouteRulesCount = getRouteRulesCount
 
 // ============================================================================
 // SEALED SECRET UTILITIES (Bitnami)

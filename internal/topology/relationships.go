@@ -28,6 +28,16 @@ func enrichRef(ref *ResourceRef) {
 	ref.Group = resolveAPIGroup(ref.Kind)
 }
 
+// isRouteKind returns true if the kind is a Gateway API route type.
+func isRouteKind(kindLower string) bool {
+	switch kindLower {
+	case "httproute", "httproutes", "grpcroute", "grpcroutes",
+		"tcproute", "tcproutes", "tlsroute", "tlsroutes":
+		return true
+	}
+	return false
+}
+
 // GetRelationships computes relationships for a specific resource
 // by finding all edges in the topology that involve this resource.
 // The topology should be pre-built and cached for performance.
@@ -60,13 +70,17 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 			case EdgeRoutesTo:
 				// This is an Ingress, Gateway, route, or Service routing to something
 				kindLower := strings.ToLower(kind)
-				if kindLower == "ingress" || kindLower == "ingresses" ||
-					kindLower == "gateway" || kindLower == "gateways" ||
-					kindLower == "httproute" || kindLower == "httproutes" ||
-					kindLower == "grpcroute" || kindLower == "grpcroutes" ||
-					kindLower == "tcproute" || kindLower == "tcproutes" ||
-					kindLower == "tlsroute" || kindLower == "tlsroutes" {
-					// Ingress/Gateway/Route routes to Service (or Gateway routes to route)
+				targetKindLower := strings.ToLower(ref.Kind)
+				if kindLower == "gateway" || kindLower == "gateways" {
+					// Gateway routes to routes or services
+					if isRouteKind(targetKindLower) {
+						rel.Routes = append(rel.Routes, *ref)
+					} else {
+						rel.Services = append(rel.Services, *ref)
+					}
+				} else if kindLower == "ingress" || kindLower == "ingresses" ||
+					isRouteKind(kindLower) {
+					// Ingress/Route routes to Service
 					rel.Services = append(rel.Services, *ref)
 				} else {
 					// Service routes to Pod
@@ -119,7 +133,8 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 
 	// Return nil if no relationships found
 	if rel.Owner == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
-		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.ConfigRefs) == 0 && rel.HPA == nil &&
+		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
+		len(rel.ConfigRefs) == 0 && rel.HPA == nil &&
 		rel.ScaleTarget == nil && len(rel.Pods) == 0 {
 		return nil
 	}
@@ -221,4 +236,3 @@ func normalizeKind(kind string) string {
 	}
 	return kind
 }
-

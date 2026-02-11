@@ -8,71 +8,27 @@ export type NavigateToResource = (resource: SelectedResource) => void
 
 /**
  * Convert a singular kind (e.g., "Deployment") to plural API resource name (e.g., "deployments").
- * Single source of truth — replaces the duplicated maps that were scattered across the codebase.
+ * Single source of truth — uses English pluralization rules with a small alias map for
+ * abbreviations and special mappings that aren't simple plurals.
  */
 export function kindToPlural(kind: string): string {
   const kindLower = kind.toLowerCase()
-  const irregulars: Record<string, string> = {
-    // Core resources
-    ingress: 'ingresses',
-    configmap: 'configmaps',
-    service: 'services',
-    deployment: 'deployments',
-    statefulset: 'statefulsets',
-    daemonset: 'daemonsets',
-    replicaset: 'replicasets',
-    pod: 'pods',
-    secret: 'secrets',
-    namespace: 'namespaces',
-    // Jobs & scheduling
-    job: 'jobs',
-    cronjob: 'cronjobs',
-    // Autoscaling
-    hpa: 'hpas',
-    horizontalpodautoscaler: 'horizontalpodautoscalers',
-    // Storage
-    persistentvolumeclaim: 'persistentvolumeclaims',
-    persistentvolume: 'persistentvolumes',
-    storageclass: 'storageclasses',
+
+  // Aliases: abbreviations or mappings to a different resource name
+  const aliases: Record<string, string> = {
     pvc: 'persistentvolumeclaims',
-    // Networking
-    gateway: 'gateways',
-    httproute: 'httproutes',
-    grpcroute: 'grpcroutes',
-    tcproute: 'tcproutes',
-    tlsroute: 'tlsroutes',
-    networkpolicy: 'networkpolicies',
-    // RBAC
-    serviceaccount: 'serviceaccounts',
-    role: 'roles',
-    rolebinding: 'rolebindings',
-    clusterrole: 'clusterroles',
-    clusterrolebinding: 'clusterrolebindings',
-    // cert-manager
-    certificate: 'certificates',
-    certificaterequest: 'certificaterequests',
-    clusterissuer: 'clusterissuers',
-    // Argo
-    rollout: 'rollouts',
-    workflow: 'workflows',
-    application: 'applications',
-    // FluxCD
-    kustomization: 'kustomizations',
-    helmrelease: 'helmreleases',
-    gitrepository: 'gitrepositories',
-    ocirepository: 'ocirepositories',
-    helmrepository: 'helmrepositories',
-    alert: 'alerts',
-    // Misc
-    poddisruptionbudget: 'poddisruptionbudgets',
-    sealedsecret: 'sealedsecrets',
-    workflowtemplate: 'workflowtemplates',
-    event: 'events',
-    node: 'nodes',
-    // Topology-specific
     podgroup: 'pods',
   }
-  return irregulars[kindLower] || kindLower + 's'
+  if (aliases[kindLower]) return aliases[kindLower]
+
+  // English pluralization rules (covers *Class→*classes, *Policy→*policies, *Repository→*repositories, etc.)
+  if (kindLower.endsWith('s') || kindLower.endsWith('x') || kindLower.endsWith('ch') || kindLower.endsWith('sh')) {
+    return kindLower + 'es'
+  }
+  if (kindLower.endsWith('y') && !/[aeiou]y$/.test(kindLower)) {
+    return kindLower.slice(0, -1) + 'ies'
+  }
+  return kindLower + 's'
 }
 
 /**

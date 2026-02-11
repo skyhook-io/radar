@@ -144,7 +144,12 @@ export function HTTPRouteRenderer({ data }: HTTPRouteRendererProps) {
                           )}
                           {match.headers && match.headers.length > 0 && (
                             <span className="text-theme-text-tertiary">
-                              [{match.headers.map((h: any) => `${h.name}=${h.value}`).join(', ')}]
+                              headers: [{match.headers.map((h: any) => `${h.name}=${h.value}`).join(', ')}]
+                            </span>
+                          )}
+                          {match.queryParams && match.queryParams.length > 0 && (
+                            <span className="text-theme-text-tertiary">
+                              query: [{match.queryParams.map((q: any) => `${q.name}=${q.value}`).join(', ')}]
                             </span>
                           )}
                         </div>

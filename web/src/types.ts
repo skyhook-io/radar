@@ -297,6 +297,7 @@ export interface Relationships {
   services?: ResourceRef[]
   ingresses?: ResourceRef[]
   gateways?: ResourceRef[]
+  routes?: ResourceRef[]
   configRefs?: ResourceRef[]
   hpa?: ResourceRef
   scaleTarget?: ResourceRef

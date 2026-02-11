@@ -38,7 +38,8 @@ import {
   getClusterIssuerStatus,
   getCertificateRequestStatus,
   getGatewayStatus,
-  getHTTPRouteStatus,
+  getGatewayClassStatus,
+  getRouteStatus,
   getSealedSecretStatus,
   getPDBStatus,
   getGitRepositoryStatus,
@@ -79,6 +80,7 @@ import {
   CertificateRequestRenderer,
   ClusterIssuerRenderer,
   GatewayRenderer,
+  GatewayClassRenderer,
   HTTPRouteRenderer,
   SealedSecretRenderer,
   WorkflowTemplateRenderer,
@@ -1126,6 +1128,7 @@ function ResourceContent({ resource, data, relationships, onCopy, copied, onNavi
       {kind === 'certificaterequests' && <CertificateRequestRenderer data={data} />}
       {kind === 'clusterissuers' && <ClusterIssuerRenderer data={data} />}
       {kind === 'gateways' && <GatewayRenderer data={data} />}
+      {kind === 'gatewayclasses' && <GatewayClassRenderer data={data} />}
       {kind === 'httproutes' && <HTTPRouteRenderer data={data} />}
       {kind === 'sealedsecrets' && <SealedSecretRenderer data={data} />}
       {kind === 'workflowtemplates' && <WorkflowTemplateRenderer data={data} />}
@@ -1244,8 +1247,13 @@ function getResourceStatus(kind: string, data: any): { text: string; color: stri
     return { text: status.text, color: status.color }
   }
 
-  if (k === 'httproutes') {
-    const status = getHTTPRouteStatus(data)
+  if (k === 'gatewayclasses') {
+    const status = getGatewayClassStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'httproutes' || k === 'grpcroutes' || k === 'tcproutes' || k === 'tlsroutes') {
+    const status = getRouteStatus(data)
     return { text: status.text, color: status.color }
   }
 

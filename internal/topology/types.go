@@ -177,6 +177,7 @@ type Relationships struct {
 	Services    []ResourceRef `json:"services,omitempty"`    // Services selecting/exposing this
 	Ingresses   []ResourceRef `json:"ingresses,omitempty"`   // Ingresses routing to this
 	Gateways    []ResourceRef `json:"gateways,omitempty"`    // Gateways routing to this (via routes)
+	Routes      []ResourceRef `json:"routes,omitempty"`      // Routes attached to this Gateway
 	ConfigRefs  []ResourceRef `json:"configRefs,omitempty"`  // ConfigMaps/Secrets used by this
 	HPA         *ResourceRef  `json:"hpa,omitempty"`         // HPA scaling this
 	ScaleTarget *ResourceRef  `json:"scaleTarget,omitempty"` // For HPA: what it scales
