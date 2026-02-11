@@ -157,6 +157,8 @@ func (d *DynamicResourceCache) EnsureWatching(gvr schema.GroupVersionResource) e
 	// probing independently. WarmupParallel() probes all CRDs efficiently
 	// in parallel — individual probes here would compete for the same QPS
 	// budget and create a convoy effect on clusters with many CRDs.
+	// The discoveryDone channel is closed when DiscoverAllCRDs() completes
+	// or when Stop() is called.
 	if d.GetDiscoveryStatus() == CRDDiscoveryInProgress {
 		select {
 		case <-d.discoveryDone:
