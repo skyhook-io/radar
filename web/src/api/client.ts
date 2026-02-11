@@ -107,7 +107,7 @@ export interface DashboardResourceCounts {
   services: number
   ingresses: number
   gateways?: number
-  httpRoutes?: number
+  routes?: number
   nodes: { total: number; ready: number; notReady: number }
   namespaces: number
   jobs: { total: number; active: number; succeeded: number; failed: number }

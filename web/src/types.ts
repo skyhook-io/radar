@@ -18,6 +18,8 @@ export interface ResourcePermissions {
   jobs: boolean
   cronJobs: boolean
   hpas: boolean
+  gateways: boolean
+  httpRoutes: boolean
 }
 
 // Feature capabilities based on RBAC permissions
@@ -31,6 +33,17 @@ export interface Capabilities {
 }
 
 // Core node kinds that have specific UI handling
+//
+// When adding a new kind here, also update:
+// - ALL_NODE_KINDS in App.tsx
+// - TopologyFilterSidebar.tsx RESOURCE_KINDS array
+// - index.css .topology-icon-* class
+// - K8sResourceNode.tsx NODE_DIMENSIONS
+// - resource-icons.ts KIND_ICON_MAP
+// - kindToPlural in navigation.ts (if irregular plural)
+// - badge-colors.ts KIND_BADGE_COLORS + KIND_BADGE_BORDERED
+// - layout.ts kindPriority in pickGroupName()
+// - resource-hierarchy.ts kindPriority maps + appLabelEligibleKinds
 export type CoreNodeKind =
   | 'Internet'
   | 'Ingress'

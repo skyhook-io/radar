@@ -66,6 +66,9 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   endpointslice: Radio,
   gateway: DoorOpen,
   httproute: Globe,
+  grpcroute: Globe,
+  tcproute: Globe,
+  tlsroute: Globe,
 
   // Config
   configmap: FileSliders,

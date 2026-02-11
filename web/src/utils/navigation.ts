@@ -8,7 +8,7 @@ export type NavigateToResource = (resource: SelectedResource) => void
 
 /**
  * Convert a singular kind (e.g., "Deployment") to plural API resource name (e.g., "deployments").
- * Single source of truth — replaces the 3 duplicated maps across the codebase.
+ * Single source of truth — replaces the duplicated maps that were scattered across the codebase.
  */
 export function kindToPlural(kind: string): string {
   const kindLower = kind.toLowerCase()

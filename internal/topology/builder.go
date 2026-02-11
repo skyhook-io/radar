@@ -1920,7 +1920,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 }
 
 // buildTrafficTopology creates a network-focused view
-// Shows only nodes that are part of actual traffic paths: Internet -> Ingress -> Service -> Pod
+// Shows only nodes that are part of actual traffic paths:
+//   - Internet -> Ingress -> Service -> Pod
+//   - Internet -> Gateway -> Route -> Service -> Pod
 func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	nodes := make([]Node, 0)
 	edges := make([]Edge, 0)
@@ -1981,14 +1983,20 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	if trafficDynamicCache != nil && trafficResourceDiscovery != nil {
 		if gwGVR, ok := trafficResourceDiscovery.GetGVR("Gateway"); ok {
 			gws, err := trafficDynamicCache.List(gwGVR, opts.NamespaceFilter())
-			if err == nil {
+			if err != nil {
+				log.Printf("WARNING [topology/traffic] Failed to list Gateways: %v", err)
+				warnings = append(warnings, fmt.Sprintf("Failed to list Gateways: %v", err))
+			} else {
 				trafficGateways = gws
 			}
 		}
 		for _, routeKind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
 			if rGVR, ok := trafficResourceDiscovery.GetGVR(routeKind); ok {
 				rts, err := trafficDynamicCache.List(rGVR, opts.NamespaceFilter())
-				if err == nil {
+				if err != nil {
+					log.Printf("WARNING [topology/traffic] Failed to list %s: %v", routeKind, err)
+					warnings = append(warnings, fmt.Sprintf("Failed to list %s: %v", routeKind, err))
+				} else {
 					for _, rt := range rts {
 						trafficRoutes = append(trafficRoutes, rt)
 						trafficRouteKinds = append(trafficRouteKinds, routeKind)
@@ -2769,7 +2777,7 @@ func truncateTopologyIfNeeded(topo *Topology, opts BuildOptions) *Topology {
 }
 
 // getGatewayHealth derives Gateway health from status.conditions
-// Programmed=True → healthy, Accepted=True (no Programmed) → degraded, otherwise unknown
+// Programmed=True → healthy, Accepted=True (no Programmed) → degraded, conditions but neither → unhealthy, no conditions → unknown
 func getGatewayHealth(gw *unstructured.Unstructured) HealthStatus {
 	conditions, _, _ := unstructured.NestedSlice(gw.Object, "status", "conditions")
 	hasProgrammed := false

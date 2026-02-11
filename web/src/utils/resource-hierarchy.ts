@@ -7,7 +7,7 @@
  *
  * The hierarchy is built from:
  * 1. Owner references (event.owner) - most reliable for Deployment→RS→Pod chains
- * 2. Topology edges (Service→Deployment via 'exposes', Ingress→Service via 'routes-to', etc.)
+ * 2. Topology edges (Service→Deployment via 'exposes', Ingress→Service and Gateway→Route→Service via 'routes-to', etc.)
  * 3. App label grouping (app.kubernetes.io/name or app label)
  */
 

@@ -91,13 +91,14 @@ export function ClusterHealthCard({
     { value: counts.nodes.notReady, color: '#ef4444' },
   ]
 
-  // Simple 6 core resources
+  // Secondary resource counts
   const secondaryResources = [
     { kind: 'statefulsets', label: 'StatefulSets', icon: Database, total: counts.statefulSets.total, subtitle: `${counts.statefulSets.ready} ready`, hasIssues: counts.statefulSets.unready > 0 },
     { kind: 'daemonsets', label: 'DaemonSets', icon: Container, total: counts.daemonSets.total, subtitle: `${counts.daemonSets.ready} ready`, hasIssues: counts.daemonSets.unready > 0 },
     { kind: 'services', label: 'Services', icon: Globe, total: counts.services },
     { kind: 'ingresses', label: 'Ingresses', icon: NetworkIcon, total: counts.ingresses },
     ...(counts.gateways ? [{ kind: 'gateways', label: 'Gateways', icon: NetworkIcon, total: counts.gateways }] : []),
+    ...(counts.routes ? [{ kind: 'httproutes', label: 'Routes', icon: Globe, total: counts.routes }] : []),
     { kind: 'jobs', label: 'Jobs', icon: Briefcase, total: counts.jobs.total, subtitle: `${counts.jobs.active} active`, hasIssues: counts.jobs.failed > 0 },
     { kind: 'cronjobs', label: 'CronJobs', icon: Clock, total: counts.cronJobs.total, subtitle: `${counts.cronJobs.active} active` },
   ]

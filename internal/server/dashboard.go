@@ -80,7 +80,7 @@ type DashboardResourceCounts struct {
 	Secrets      int           `json:"secrets"`
 	PVCs         PVCCount      `json:"pvcs"`
 	Gateways     int           `json:"gateways"`
-	HTTPRoutes   int           `json:"httpRoutes"`
+	Routes       int           `json:"routes"`
 	HelmReleases int           `json:"helmReleases"`
 	Restricted   []string      `json:"restricted,omitempty"` // Resource kinds the user cannot list
 }
@@ -725,20 +725,26 @@ func (s *Server) getDashboardResourceCounts(cache *k8s.ResourceCache, namespace 
 		restricted = append(restricted, "ingresses")
 	}
 
-	// Gateways and HTTPRoutes (via dynamic cache)
+	// Gateways and routes (via dynamic cache)
 	dynamicCache := k8s.GetDynamicResourceCache()
 	resourceDiscovery := k8s.GetResourceDiscovery()
 	if dynamicCache != nil && resourceDiscovery != nil {
 		if gwGVR, ok := resourceDiscovery.GetGVR("Gateway"); ok {
 			gateways, err := dynamicCache.List(gwGVR, namespace)
-			if err == nil {
+			if err != nil {
+				log.Printf("WARNING [dashboard] Failed to count Gateways: %v", err)
+			} else {
 				counts.Gateways = len(gateways)
 			}
 		}
-		if hrGVR, ok := resourceDiscovery.GetGVR("HTTPRoute"); ok {
-			routes, err := dynamicCache.List(hrGVR, namespace)
-			if err == nil {
-				counts.HTTPRoutes = len(routes)
+		for _, routeKind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
+			if rGVR, ok := resourceDiscovery.GetGVR(routeKind); ok {
+				routes, err := dynamicCache.List(rGVR, namespace)
+				if err != nil {
+					log.Printf("WARNING [dashboard] Failed to count %s: %v", routeKind, err)
+				} else {
+					counts.Routes += len(routes)
+				}
 			}
 		}
 	}

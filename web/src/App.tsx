@@ -41,12 +41,7 @@ const ALL_NODE_KINDS: NodeKind[] = [
 ]
 
 // Default visible kinds (ReplicaSet hidden by default - noisy intermediate object)
-const DEFAULT_VISIBLE_KINDS: NodeKind[] = [
-  'Internet', 'Ingress', 'Gateway', 'HTTPRoute', 'GRPCRoute', 'TCPRoute', 'TLSRoute',
-  'Service', 'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet',
-  'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'HPA', 'Job', 'CronJob', 'PVC', 'Namespace',
-  'Application', 'Kustomization', 'HelmRelease', 'GitRepository'
-]
+const DEFAULT_VISIBLE_KINDS = ALL_NODE_KINDS.filter(k => k !== 'ReplicaSet')
 
 // Convert API resource name back to topology node ID prefix
 function apiResourceToNodeIdPrefix(apiResource: string): string {

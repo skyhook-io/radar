@@ -101,7 +101,8 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 				sourceKind := strings.ToLower(ref.Kind)
 				if sourceKind == "ingress" {
 					rel.Ingresses = append(rel.Ingresses, *ref)
-				} else if sourceKind == "gateway" {
+				} else if sourceKind == "gateway" || sourceKind == "httproute" ||
+					sourceKind == "grpcroute" || sourceKind == "tcproute" || sourceKind == "tlsroute" {
 					rel.Gateways = append(rel.Gateways, *ref)
 				} else if sourceKind == "service" {
 					rel.Services = append(rel.Services, *ref)

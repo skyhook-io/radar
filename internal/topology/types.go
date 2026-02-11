@@ -1,6 +1,15 @@
 package topology
 
 // NodeKind represents the type of a topology node
+//
+// When adding a new NodeKind constant, also update:
+// - builder.go: node creation + edge creation (both resources and traffic views)
+// - builder.go: genericCRDExclusion check (if kind is handled via dynamic cache)
+// - relationships.go: buildNodeID + normalizeKind maps, EdgeRoutesTo dispatch
+// - history.go: diff dispatch switch
+// - dashboard.go: resource counting (if applicable)
+// - capabilities.go: ResourcePermissions struct + permCheck array (if needs RBAC)
+// - dynamic_cache.go: warmup list (if CRD)
 type NodeKind string
 
 const (
@@ -88,7 +97,7 @@ type Topology struct {
 type ViewMode string
 
 const (
-	ViewModeTraffic   ViewMode = "traffic"   // Network-focused (Ingress -> Service -> Pod)
+	ViewModeTraffic   ViewMode = "traffic"   // Network-focused (Ingress/Gateway -> Service -> Pod)
 	ViewModeResources ViewMode = "resources" // Comprehensive tree
 )
 
