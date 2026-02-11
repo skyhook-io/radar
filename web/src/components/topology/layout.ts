@@ -267,8 +267,8 @@ function pickGroupName(nodes: TopologyNode[]): string {
     'PodGroup': 9,
     'ConfigMap': 10,
     'Secret': 10,
-    'PVC': 10,
-    'HPA': 10,
+    'PersistentVolumeClaim': 10,
+    'HorizontalPodAutoscaler': 10,
   }
 
   // Sort by priority and pick the first

@@ -36,7 +36,7 @@ import { kindToPlural } from './utils/navigation'
 const ALL_NODE_KINDS: NodeKind[] = [
   'Internet', 'Ingress', 'Gateway', 'HTTPRoute', 'GRPCRoute', 'TCPRoute', 'TLSRoute',
   'Service', 'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet',
-  'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'HPA', 'Job', 'CronJob', 'PVC', 'Namespace',
+  'ReplicaSet', 'Pod', 'PodGroup', 'ConfigMap', 'Secret', 'HorizontalPodAutoscaler', 'Job', 'CronJob', 'PersistentVolumeClaim', 'Namespace',
   'Application', 'Kustomization', 'HelmRelease', 'GitRepository'
 ]
 
@@ -60,10 +60,10 @@ function apiResourceToNodeIdPrefix(apiResource: string): string {
     'tlsroutes': 'tlsroute',
     'configmaps': 'configmap',
     'secrets': 'secret',
-    'hpas': 'hpa',
+    'horizontalpodautoscalers': 'horizontalpodautoscaler',
     'jobs': 'job',
     'cronjobs': 'cronjob',
-    'persistentvolumeclaims': 'pvc',
+    'persistentvolumeclaims': 'persistentvolumeclaim',
     'namespaces': 'namespace',
   }
   return prefixMap[apiResource] || apiResource.replace(/s$/, '')

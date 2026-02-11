@@ -294,10 +294,10 @@ body {
 .topology-icon-podgroup { background: #84cc16; border-radius: 50%; }
 .topology-icon-configmap { background: #f59e0b; }
 .topology-icon-secret { background: #ef4444; }
-.topology-icon-hpa { background: #ec4899; }
+.topology-icon-horizontalpodautoscaler { background: #ec4899; }
 .topology-icon-job { background: #a855f7; }
 .topology-icon-cronjob { background: #a855f7; }
-.topology-icon-pvc { background: #06b6d4; }
+.topology-icon-persistentvolumeclaim { background: #06b6d4; }
 .topology-icon-namespace { background: #6366f1; }
 .topology-icon-application { background: #f97316; }
 .topology-icon-kustomization { background: #0ea5e9; }

@@ -101,16 +101,22 @@ function nodeIdToLaneId(nodeId: string): string | null {
   const kind = parts[0]
   const namespace = parts[1]
   const name = parts[2]
+  // Maps lowercase topology node IDs to PascalCase kind names used in timeline lane IDs.
   const kindMap: Record<string, string> = {
     pod: 'Pod', service: 'Service', deployment: 'Deployment',
     replicaset: 'ReplicaSet', statefulset: 'StatefulSet', daemonset: 'DaemonSet',
     ingress: 'Ingress', gateway: 'Gateway', httproute: 'HTTPRoute',
     grpcroute: 'GRPCRoute', tcproute: 'TCPRoute', tlsroute: 'TLSRoute',
-    configmap: 'ConfigMap', secret: 'Secret', pvc: 'PVC',
-    job: 'Job', cronjob: 'CronJob', hpa: 'HPA', podgroup: 'PodGroup',
-    rollout: 'Rollout', namespace: 'Namespace',
-    application: 'Application', kustomization: 'Kustomization',
-    helmrelease: 'HelmRelease', gitrepository: 'GitRepository',
+    configmap: 'ConfigMap', secret: 'Secret',
+    persistentvolumeclaim: 'PersistentVolumeClaim',
+    job: 'Job', cronjob: 'CronJob',
+    horizontalpodautoscaler: 'HorizontalPodAutoscaler',
+    podgroup: 'PodGroup', rollout: 'Rollout', namespace: 'Namespace',
+    application: 'Application', applicationset: 'ApplicationSet', appproject: 'AppProject',
+    kustomization: 'Kustomization',
+    helmrelease: 'HelmRelease', helmrepository: 'HelmRepository',
+    helmchart: 'HelmChart', gitrepository: 'GitRepository',
+    ocirepository: 'OCIRepository', certificate: 'Certificate',
   }
   return `${kindMap[kind] || kind}/${namespace}/${name}`
 }
@@ -463,6 +469,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         const kindPriority: Record<string, number> = {
           Service: 1, Gateway: 1, HTTPRoute: 2, GRPCRoute: 2, TCPRoute: 2, TLSRoute: 2,
           Deployment: 2, Rollout: 2, StatefulSet: 2, DaemonSet: 2,
+          Job: 3, CronJob: 3,
           ReplicaSet: 3, Pod: 4, ConfigMap: 5, Secret: 5
         }
         lane.children.sort((a, b) => {

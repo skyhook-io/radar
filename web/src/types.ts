@@ -66,14 +66,23 @@ export type CoreNodeKind =
   | 'PodGroup'
   | 'ConfigMap'
   | 'Secret'
-  | 'HPA'
+  | 'HorizontalPodAutoscaler'
   | 'Job'
   | 'CronJob'
-  | 'PVC'
+  | 'PersistentVolumeClaim'
   | 'Namespace'
 
 // NodeKind can be a core kind or any arbitrary CRD kind string
 export type NodeKind = CoreNodeKind | (string & {})
+
+/** Short display names for verbose K8s kind names */
+export function displayKind(kind: string): string {
+  const shortNames: Record<string, string> = {
+    HorizontalPodAutoscaler: 'HPA',
+    PersistentVolumeClaim: 'PVC',
+  }
+  return shortNames[kind] || kind
+}
 
 export type HealthStatus = 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
 

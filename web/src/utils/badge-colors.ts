@@ -28,9 +28,7 @@ export const KIND_BADGE_COLORS: Record<string, string> = {
   CronJob: 'bg-purple-500/15 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300',
 
   // Autoscaling & Storage
-  HPA: 'bg-pink-500/15 text-pink-700 dark:bg-pink-900/50 dark:text-pink-300',
   HorizontalPodAutoscaler: 'bg-pink-500/15 text-pink-700 dark:bg-pink-900/50 dark:text-pink-300',
-  PVC: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300',
   PersistentVolumeClaim: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300',
 
   // Special
@@ -67,9 +65,7 @@ export const KIND_BADGE_BORDERED: Record<string, string> = {
   CronJob: 'bg-purple-500/20 text-purple-700 dark:text-purple-300 border border-purple-500/30',
 
   // Autoscaling & Storage
-  HPA: 'bg-pink-500/20 text-pink-700 dark:text-pink-300 border border-pink-500/30',
   HorizontalPodAutoscaler: 'bg-pink-500/20 text-pink-700 dark:text-pink-300 border border-pink-500/30',
-  PVC: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30',
   PersistentVolumeClaim: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30',
 }
 

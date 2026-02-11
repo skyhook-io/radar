@@ -9,6 +9,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -801,6 +802,14 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 			if !cj.CreationTimestamp.IsZero() {
 				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
 					cj.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner, labels))
+			}
+		}
+
+	case "HorizontalPodAutoscaler":
+		if hpa, ok := obj.(*autoscalingv2.HorizontalPodAutoscaler); ok {
+			if !hpa.CreationTimestamp.IsZero() {
+				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+					hpa.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner, labels))
 			}
 		}
 

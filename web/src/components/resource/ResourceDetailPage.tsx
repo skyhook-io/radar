@@ -398,7 +398,7 @@ function extractMetadata(kind: string, resource: any): { label: string; value: s
       items.push({ label: 'Keys', value: dataKeys.length > 3 ? `${dataKeys.slice(0, 3).join(', ')}...` : dataKeys.join(', ') || '(empty)' })
       break
 
-    case 'HPA':
+    case 'HorizontalPodAutoscaler':
       if (spec.minReplicas) items.push({ label: 'Min', value: String(spec.minReplicas) })
       if (spec.maxReplicas) items.push({ label: 'Max', value: String(spec.maxReplicas) })
       if (status.currentReplicas) items.push({ label: 'Current', value: String(status.currentReplicas) })

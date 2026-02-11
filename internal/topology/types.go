@@ -34,10 +34,10 @@ const (
 	KindPodGroup      NodeKind = "PodGroup"
 	KindConfigMap     NodeKind = "ConfigMap"
 	KindSecret        NodeKind = "Secret"
-	KindHPA           NodeKind = "HPA"
+	KindHPA           NodeKind = "HorizontalPodAutoscaler"
 	KindJob           NodeKind = "Job"
 	KindCronJob       NodeKind = "CronJob"
-	KindPVC           NodeKind = "PVC"
+	KindPVC           NodeKind = "PersistentVolumeClaim"
 	KindNamespace     NodeKind = "Namespace"
 )
 

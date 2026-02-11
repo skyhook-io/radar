@@ -191,7 +191,7 @@ func (b *Builder) detectLargeClusterAndOptimize(opts *BuildOptions) (bool, []str
 	}
 	if opts.IncludePVCs {
 		opts.IncludePVCs = false
-		hiddenKinds = append(hiddenKinds, "PVC")
+		hiddenKinds = append(hiddenKinds, "PersistentVolumeClaim")
 	}
 
 	return true, hiddenKinds
@@ -835,6 +835,21 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				"labels":           cj.Labels,
 			},
 		})
+
+		// Track ConfigMap/Secret/PVC references
+		refs := extractWorkloadReferences(cj.Spec.JobTemplate.Spec.Template.Spec)
+		if len(refs.configMaps) > 0 || len(refs.secrets) > 0 || len(refs.pvcs) > 0 {
+			workloadNamespaces[cjID] = cj.Namespace
+		}
+		if len(refs.configMaps) > 0 {
+			workloadConfigMapRefs[cjID] = refs.configMaps
+		}
+		if len(refs.secrets) > 0 {
+			workloadSecretRefs[cjID] = refs.secrets
+		}
+		if len(refs.pvcs) > 0 {
+			workloadPVCRefs[cjID] = refs.pvcs
+		}
 	}
 
 	// 5. Add Job nodes
@@ -1163,6 +1178,40 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 			}
 		}
+		// Check Jobs
+		for _, job := range jobs {
+			if job.Namespace != svc.Namespace {
+				continue
+			}
+			if matchesSelector(job.Spec.Template.ObjectMeta.Labels, svc.Spec.Selector) {
+				jobID := jobIDs[job.Namespace+"/"+job.Name]
+				if jobID != "" {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s", svcID, jobID),
+						Source: svcID,
+						Target: jobID,
+						Type:   EdgeExposes,
+					})
+				}
+			}
+		}
+		// Check CronJobs
+		for _, cj := range cronjobs {
+			if cj.Namespace != svc.Namespace {
+				continue
+			}
+			if matchesSelector(cj.Spec.JobTemplate.Spec.Template.ObjectMeta.Labels, svc.Spec.Selector) {
+				cjID := cronJobIDs[cj.Namespace+"/"+cj.Name]
+				if cjID != "" {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s", svcID, cjID),
+						Source: svcID,
+						Target: cjID,
+						Type:   EdgeExposes,
+					})
+				}
+			}
+		}
 	}
 
 	// 7. Add Ingress nodes
@@ -1452,7 +1501,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				}
 
 				// Only include PVCs that are referenced by workloads in the same namespace
-				pvcID := fmt.Sprintf("pvc/%s/%s", pvc.Namespace, pvc.Name)
+				pvcID := fmt.Sprintf("persistentvolumeclaim/%s/%s", pvc.Namespace, pvc.Name)
 				isReferenced := false
 
 				for workloadID, refs := range workloadPVCRefs {
@@ -1516,7 +1565,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				continue
 			}
 
-			hpaID := fmt.Sprintf("hpa/%s/%s", hpa.Namespace, hpa.Name)
+			hpaID := fmt.Sprintf("horizontalpodautoscaler/%s/%s", hpa.Namespace, hpa.Name)
 
 			nodes = append(nodes, Node{
 				ID:     hpaID,
@@ -1834,6 +1883,89 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					Target: stsID,
 					Type:   EdgeManages,
 				})
+			}
+		}
+
+		// Find DaemonSets with matching label
+		for _, ds := range daemonsetsByNS[hrNS] {
+			if matchesHelmRelease(ds.Labels, hrName, hrNS) {
+				dsID := fmt.Sprintf("daemonset/%s/%s", ds.Namespace, ds.Name)
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", hrID, dsID),
+					Source: hrID,
+					Target: dsID,
+					Type:   EdgeManages,
+				})
+			}
+		}
+
+		// Find Jobs with matching label
+		for jobKey, jobID := range jobIDs {
+			jobParts := strings.Split(jobKey, "/")
+			if len(jobParts) != 2 || jobParts[0] != hrNS {
+				continue
+			}
+			jobLister := b.cache.Jobs()
+			if jobLister == nil {
+				continue
+			}
+			job, jobGetErr := jobLister.Jobs(jobParts[0]).Get(jobParts[1])
+			if jobGetErr != nil || job == nil {
+				continue
+			}
+			if matchesHelmRelease(job.Labels, hrName, hrNS) {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", hrID, jobID),
+					Source: hrID,
+					Target: jobID,
+					Type:   EdgeManages,
+				})
+			}
+		}
+
+		// Find CronJobs with matching label
+		for cjKey, cjID := range cronJobIDs {
+			cjParts := strings.Split(cjKey, "/")
+			if len(cjParts) != 2 || cjParts[0] != hrNS {
+				continue
+			}
+			cjLister := b.cache.CronJobs()
+			if cjLister == nil {
+				continue
+			}
+			cj, cjGetErr := cjLister.CronJobs(cjParts[0]).Get(cjParts[1])
+			if cjGetErr != nil || cj == nil {
+				continue
+			}
+			if matchesHelmRelease(cj.Labels, hrName, hrNS) {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", hrID, cjID),
+					Source: hrID,
+					Target: cjID,
+					Type:   EdgeManages,
+				})
+			}
+		}
+
+		// Find Rollouts with matching label
+		if hasRollouts && dynamicCache != nil {
+			for rolloutKey, rolloutID := range rolloutIDs {
+				rolloutParts := strings.Split(rolloutKey, "/")
+				if len(rolloutParts) != 2 || rolloutParts[0] != hrNS {
+					continue
+				}
+				rolloutRes, rolloutGetErr := dynamicCache.Get(rolloutGVR, rolloutParts[0], rolloutParts[1])
+				if rolloutGetErr != nil || rolloutRes == nil {
+					continue
+				}
+				if matchesHelmRelease(rolloutRes.GetLabels(), hrName, hrNS) {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s", hrID, rolloutID),
+						Source: hrID,
+						Target: rolloutID,
+						Type:   EdgeManages,
+					})
+				}
 			}
 		}
 	}

@@ -51,7 +51,7 @@ const RESOURCE_KINDS: {
   { kind: 'Secret', label: 'Secret', icon: getTopologyIcon('Secret'), color: 'text-red-400', category: 'config' },
 
   // Scaling
-  { kind: 'HPA', label: 'HPA', icon: getTopologyIcon('HPA'), color: 'text-pink-400', category: 'scaling' },
+  { kind: 'HorizontalPodAutoscaler', label: 'HPA', icon: getTopologyIcon('HorizontalPodAutoscaler'), color: 'text-pink-400', category: 'scaling' },
 ]
 
 const CATEGORIES = [

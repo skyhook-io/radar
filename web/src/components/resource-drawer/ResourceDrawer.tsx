@@ -85,7 +85,7 @@ function getDisplayFields(kind: NodeKind, data: Record<string, unknown>): Array<
         ...common,
         ['Keys', data.keys],
       ]
-    case 'HPA':
+    case 'HorizontalPodAutoscaler':
       return [
         ...common,
         ['Min Replicas', data.minReplicas],

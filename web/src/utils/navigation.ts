@@ -16,6 +16,7 @@ export function kindToPlural(kind: string): string {
 
   // Aliases: abbreviations or mappings to a different resource name
   const aliases: Record<string, string> = {
+    horizontalpodautoscaler: 'horizontalpodautoscalers',
     pvc: 'persistentvolumeclaims',
     podgroup: 'pods',
   }

@@ -103,10 +103,10 @@ export const NODE_DIMENSIONS: Record<NodeKind, { width: number; height: number }
   PodGroup: { width: 200, height: 64 },
   ConfigMap: { width: 180, height: 48 },
   Secret: { width: 180, height: 48 },
-  HPA: { width: 160, height: 48 },
+  HorizontalPodAutoscaler: { width: 160, height: 48 },
   Job: { width: 180, height: 56 },
   CronJob: { width: 200, height: 56 },
-  PVC: { width: 200, height: 48 },
+  PersistentVolumeClaim: { width: 200, height: 48 },
   Namespace: { width: 180, height: 48 },
 }
 
@@ -201,7 +201,7 @@ function getSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string 
       const host = hostnames?.length ? hostnames[0] : ''
       return host ? `${host} • ${rulesCount} rules` : `${rulesCount} rules`
     }
-    case 'HPA': {
+    case 'HorizontalPodAutoscaler': {
       const min = nodeData.minReplicas ?? 1
       const max = nodeData.maxReplicas ?? 10
       const current = nodeData.current ?? 0
@@ -211,7 +211,7 @@ function getSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string 
       return `${nodeData.keys ?? 0} keys`
     case 'Secret':
       return `${nodeData.keys ?? 0} keys`
-    case 'PVC': {
+    case 'PersistentVolumeClaim': {
       const storage = (nodeData.storage as string) || ''
       const phase = (nodeData.phase as string) || ''
       return storage ? `${storage} (${phase})` : phase
@@ -254,7 +254,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   const subtitle = getSubtitle(kind, nodeData)
   const isInternet = kind === 'Internet'
   const isPodGroup = kind === 'PodGroup'
-  const isSmallNode = kind === 'ConfigMap' || kind === 'Secret' || kind === 'HPA'
+  const isSmallNode = kind === 'ConfigMap' || kind === 'Secret' || kind === 'HorizontalPodAutoscaler'
   const canExpand = isPodGroup && onExpand && !isExpanded
   const canCollapse = isPodGroup && onCollapse && isExpanded
   const statusIssue = nodeData.statusIssue as string | undefined

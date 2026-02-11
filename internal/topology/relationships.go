@@ -166,9 +166,10 @@ func buildNodeID(kind, namespace, name string) string {
 		"tlsroutes":    "tlsroute",
 		"configmaps":   "configmap",
 		"secrets":      "secret",
-		"hpas":         "hpa",
-		"jobs":         "job",
-		"cronjobs":     "cronjob",
+		"horizontalpodautoscalers": "horizontalpodautoscaler",
+		"jobs":                    "job",
+		"cronjobs":                "cronjob",
+		"persistentvolumeclaims":  "persistentvolumeclaim",
 	}
 
 	if singular, ok := kindMap[k]; ok {
@@ -222,12 +223,13 @@ func normalizeKind(kind string) string {
 		"grpcroute":   "GRPCRoute",
 		"tcproute":    "TCPRoute",
 		"tlsroute":    "TLSRoute",
-		"configmap":   "ConfigMap",
-		"secret":      "Secret",
-		"hpa":         "HPA",
-		"job":         "Job",
-		"cronjob":     "CronJob",
-		"podgroup":    "PodGroup",
+		"configmap":                "ConfigMap",
+		"secret":                   "Secret",
+		"horizontalpodautoscaler":  "HorizontalPodAutoscaler",
+		"job":                      "Job",
+		"cronjob":                  "CronJob",
+		"persistentvolumeclaim":    "PersistentVolumeClaim",
+		"podgroup":                 "PodGroup",
 		"internet":    "Internet",
 	}
 

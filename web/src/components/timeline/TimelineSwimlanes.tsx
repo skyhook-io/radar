@@ -27,7 +27,7 @@ import { useHasLimitedAccess } from '../../contexts/CapabilitiesContext'
 import type { TimelineEvent, Topology } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 import { kindToPlural } from '../../utils/navigation'
-import { isChangeEvent, isHistoricalEvent, isOperation } from '../../types'
+import { isChangeEvent, isHistoricalEvent, isOperation, displayKind } from '../../types'
 import { DiffViewer } from './DiffViewer'
 import { getOperationColor, getHealthBadgeColor, getEventTypeColor } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
@@ -95,9 +95,9 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
     HTTPRoute: 42, GRPCRoute: 42, TCPRoute: 42, TLSRoute: 42,
     Job: 40, CronJob: 40, Workflow: 40, CronWorkflow: 40,
     Pod: 30,
-    HPA: 25,
+    HorizontalPodAutoscaler: 25,
     ReplicaSet: 20,
-    ConfigMap: 10, Secret: 10, PVC: 10,
+    ConfigMap: 10, Secret: 10, PersistentVolumeClaim: 10,
   }
   breakdown.kind = kindScores[lane.kind] || 15
 
@@ -695,7 +695,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                               'text-xs px-1 py-0.5 rounded',
                               lane.isWorkload ? 'bg-blue-500/15 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300' : 'bg-theme-elevated text-theme-text-secondary'
                             )}>
-                              {lane.kind}
+                              {displayKind(lane.kind)}
                             </span>
                             {hasChildren && (
                               <span className="text-xs text-theme-text-tertiary">
@@ -768,7 +768,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-1">
                                   <span className="text-xs px-1 py-0.5 rounded bg-blue-500/15 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300">
-                                    {lane.kind}
+                                    {displayKind(lane.kind)}
                                   </span>
                                 </div>
                                 <div className="text-sm text-theme-text-secondary break-words group-hover:text-blue-600 dark:group-hover:text-blue-300 group-hover:underline cursor-pointer">
@@ -820,7 +820,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-1">
                                   <span className="text-xs px-1 py-0.5 rounded bg-theme-elevated/50 text-theme-text-secondary">
-                                    {child.kind}
+                                    {displayKind(child.kind)}
                                   </span>
                                 </div>
                                 <div className="text-sm text-theme-text-secondary break-words group-hover:text-blue-600 dark:group-hover:text-blue-300 group-hover:underline cursor-pointer">
@@ -1235,7 +1235,7 @@ function EventDetailPanel({ event, onClose, onResourceClick }: EventDetailPanelP
         <div>
           <div className="flex items-center gap-2">
             <span className="text-xs px-1.5 py-0.5 bg-theme-elevated rounded text-theme-text-secondary">
-              {event.kind}
+              {displayKind(event.kind)}
             </span>
             <button
               onClick={() => onResourceClick?.({ kind: kindToPlural(event.kind), namespace: event.namespace, name: event.name })}
