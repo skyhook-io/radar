@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect, useMemo } from 'react'
-import { ChevronDown, Check, Loader2, Server, AlertTriangle, XCircle } from 'lucide-react'
+import { ChevronDown, Check, Loader2, Server, AlertTriangle, XCircle, Search, X } from 'lucide-react'
 import { useContexts, useSwitchContext, useClusterInfo, fetchSessionCounts, type SessionCounts } from '../api/client'
 import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useDock } from '../components/dock'
@@ -95,11 +95,14 @@ interface ContextGroup {
 
 export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
   const [isOpen, setIsOpen] = useState(false)
+  const [search, setSearch] = useState('')
+  const [highlightedIndex, setHighlightedIndex] = useState(-1)
   const [showConfirm, setShowConfirm] = useState(false)
   const [pendingSwitch, setPendingSwitch] = useState<ParsedContext | null>(null)
   const [sessionCounts, setSessionCounts] = useState<SessionCounts | null>(null)
   const [switchError, setSwitchError] = useState<SwitchError | null>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
+  const searchInputRef = useRef<HTMLInputElement>(null)
 
   const { data: contexts, isLoading: contextsLoading } = useContexts()
   const { data: clusterInfo } = useClusterInfo()
@@ -148,6 +151,83 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
 
     return { groups, hasMultipleAccounts }
   }, [contexts])
+
+  // Filter groups by search query
+  const { filteredGroups, flatItems, itemIndexMap } = useMemo(() => {
+    const filteredGroups = search.trim()
+      ? groups
+          .map(group => ({
+            ...group,
+            items: group.items.filter(item => {
+              const searchLower = search.toLowerCase()
+              return (
+                item.clusterName.toLowerCase().includes(searchLower) ||
+                item.raw.toLowerCase().includes(searchLower) ||
+                (item.region && item.region.toLowerCase().includes(searchLower)) ||
+                (item.account && item.account.toLowerCase().includes(searchLower))
+              )
+            }),
+          }))
+          .filter(group => group.items.length > 0)
+      : groups
+
+    const flatItems = filteredGroups.flatMap(g => g.items)
+    const itemIndexMap = new Map<string, number>()
+    flatItems.forEach((item, i) => itemIndexMap.set(item.context.name, i))
+
+    return { filteredGroups, flatItems, itemIndexMap }
+  }, [groups, search])
+
+  // Reset search and highlight when dropdown opens/closes
+  useEffect(() => {
+    if (isOpen) {
+      setSearch('')
+      setHighlightedIndex(-1)
+      requestAnimationFrame(() => {
+        searchInputRef.current?.focus()
+      })
+    }
+  }, [isOpen])
+
+  // Reset highlighted index when filtered results change
+  useEffect(() => {
+    setHighlightedIndex(-1)
+  }, [search])
+
+  // Keyboard navigation for search
+  const handleSearchKeyDown = (e: React.KeyboardEvent) => {
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault()
+        setHighlightedIndex(prev => (prev < flatItems.length - 1 ? prev + 1 : prev))
+        break
+      case 'ArrowUp':
+        e.preventDefault()
+        setHighlightedIndex(prev => (prev > 0 ? prev - 1 : 0))
+        break
+      case 'Enter':
+        e.preventDefault()
+        if (highlightedIndex >= 0 && flatItems[highlightedIndex]) {
+          handleContextSwitch(flatItems[highlightedIndex])
+        } else if (flatItems.length > 0) {
+          setHighlightedIndex(0)
+        }
+        break
+      case 'Escape':
+        e.preventDefault()
+        setIsOpen(false)
+        break
+    }
+  }
+
+  // Scroll highlighted item into view
+  useEffect(() => {
+    if (!isOpen || highlightedIndex < 0 || !dropdownRef.current) return
+    const highlighted = dropdownRef.current.querySelector('[data-highlighted="true"]')
+    if (highlighted) {
+      highlighted.scrollIntoView({ block: 'nearest' })
+    }
+  }, [highlightedIndex, isOpen])
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -292,81 +372,124 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
       {/* Dropdown menu */}
       {isOpen && !contextsLoading && contexts && (
         <div className="absolute top-full left-0 mt-1 z-50 min-w-[280px] max-w-[420px] bg-theme-surface border border-theme-border-light rounded-lg shadow-xl overflow-hidden">
-          <div className="max-h-[400px] overflow-y-auto">
-            {groups.map((group, groupIndex) => {
-              // Show group header if we have multiple accounts (which implies grouping is useful)
-              const showHeader = hasMultipleAccounts
-              const headerLabel = group.provider
-                ? `${group.provider}${group.account ? ` · ${group.account}` : ''}`
-                : 'Other'
+          {/* Search input */}
+          {contexts.length > 1 && (
+            <div className="p-2 border-b border-theme-border">
+              <div className="relative">
+                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-tertiary" />
+                <input
+                  ref={searchInputRef}
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  onKeyDown={handleSearchKeyDown}
+                  placeholder="Search clusters..."
+                  className="w-full bg-theme-base text-theme-text-primary text-xs rounded px-2 py-1.5 pl-7 pr-7 border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500 placeholder:text-theme-text-tertiary"
+                />
+                {search && (
+                  <button
+                    type="button"
+                    onClick={() => setSearch('')}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-theme-text-tertiary hover:text-theme-text-secondary"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
 
-              return (
-                <div key={`${group.provider}:${group.account}`}>
-                  {/* Divider between groups */}
-                  {groupIndex > 0 && (
-                    <div className="border-t border-theme-border-light my-1" />
-                  )}
-                  {/* Group header - only if multiple accounts exist */}
-                  {showHeader && (
-                    <div className="px-3 py-1.5 bg-theme-elevated/30">
-                      <span className="text-[10px] text-theme-text-tertiary font-medium">
-                        {headerLabel}
-                      </span>
-                    </div>
-                  )}
-                  {/* Group items */}
-                  {group.items.map((item) => (
-                    <button
-                      key={item.context.name}
-                      onClick={() => handleContextSwitch(item)}
-                      disabled={item.context.isCurrent || switchContext.isPending}
-                      className={`
-                        w-full flex items-center gap-2 px-3 py-2 text-left
-                        transition-colors
-                        ${item.context.isCurrent
-                          ? 'bg-blue-500/10'
-                          : 'hover:bg-theme-hover cursor-pointer'
-                        }
-                        disabled:opacity-50
-                      `}
-                    >
-                      <div className="shrink-0 w-4 h-4 flex items-center justify-center">
-                        {item.context.isCurrent ? (
-                          <Check className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                        ) : (
-                          <div className="w-1.5 h-1.5 rounded-full bg-theme-text-tertiary/30" />
-                        )}
+          <div className="max-h-[400px] overflow-y-auto">
+            {flatItems.length === 0 ? (
+              <div className="px-3 py-6 text-center text-xs text-theme-text-tertiary">
+                No clusters match "{search}"
+              </div>
+            ) : (
+              filteredGroups.map((group, groupIndex) => {
+                const showHeader = hasMultipleAccounts
+                const headerLabel = group.provider
+                  ? `${group.provider}${group.account ? ` · ${group.account}` : ''}`
+                  : 'Other'
+
+                return (
+                  <div key={`${group.provider}:${group.account}`}>
+                    {groupIndex > 0 && (
+                      <div className="border-t border-theme-border-light my-1" />
+                    )}
+                    {showHeader && (
+                      <div className="px-3 py-1.5 bg-theme-elevated/30">
+                        <span className="text-[10px] text-theme-text-tertiary font-medium">
+                          {headerLabel}
+                        </span>
                       </div>
-                      <div className="flex-1 min-w-0">
-                        {/* Main line: cluster name + region */}
-                        <div className="flex items-center gap-1.5">
-                          <span className={`text-sm font-medium truncate ${item.context.isCurrent ? 'text-blue-600 dark:text-blue-400' : 'text-theme-text-primary'}`}>
-                            {item.clusterName}
-                          </span>
-                          {item.region && (
-                            <span className="shrink-0 text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 rounded">
-                              {item.region}
-                            </span>
-                          )}
-                          {item.context.isCurrent && (
-                            <span className="shrink-0 text-[9px] text-blue-600 dark:text-blue-400">
-                              ●
-                            </span>
-                          )}
-                        </div>
-                        {/* Second line: raw context name (only if we parsed it to something different) */}
-                        {item.provider && (
-                          <div className="text-[10px] text-theme-text-tertiary truncate mt-0.5" title={item.raw}>
-                            {item.raw}
+                    )}
+                    {group.items.map((item) => {
+                      const itemIndex = itemIndexMap.get(item.context.name) ?? -1
+                      return (
+                        <button
+                          key={item.context.name}
+                          data-highlighted={itemIndex === highlightedIndex}
+                          onClick={() => handleContextSwitch(item)}
+                          onMouseEnter={() => setHighlightedIndex(itemIndex)}
+                          disabled={item.context.isCurrent || switchContext.isPending}
+                          className={`
+                            w-full flex items-center gap-2 px-3 py-2 text-left
+                            transition-colors
+                            ${item.context.isCurrent
+                              ? 'bg-blue-500/10'
+                              : itemIndex === highlightedIndex
+                                ? 'bg-theme-hover cursor-pointer'
+                                : 'hover:bg-theme-hover cursor-pointer'
+                            }
+                            disabled:opacity-50
+                          `}
+                        >
+                          <div className="shrink-0 w-4 h-4 flex items-center justify-center">
+                            {item.context.isCurrent ? (
+                              <Check className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
+                            ) : (
+                              <div className="w-1.5 h-1.5 rounded-full bg-theme-text-tertiary/30" />
+                            )}
                           </div>
-                        )}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              )
-            })}
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <span className={`text-sm font-medium truncate ${item.context.isCurrent ? 'text-blue-600 dark:text-blue-400' : 'text-theme-text-primary'}`}>
+                                {item.clusterName}
+                              </span>
+                              {item.region && (
+                                <span className="shrink-0 text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 rounded">
+                                  {item.region}
+                                </span>
+                              )}
+                              {item.context.isCurrent && (
+                                <span className="shrink-0 text-[9px] text-blue-600 dark:text-blue-400">
+                                  ●
+                                </span>
+                              )}
+                            </div>
+                            {item.provider && (
+                              <div className="text-[10px] text-theme-text-tertiary truncate mt-0.5" title={item.raw}>
+                                {item.raw}
+                              </div>
+                            )}
+                          </div>
+                        </button>
+                      )
+                    })}
+                  </div>
+                )
+              })
+            )}
           </div>
+
+          {/* Footer with count */}
+          {contexts.length > 1 && search && flatItems.length > 0 && (
+            <div className="px-3 py-1.5 text-[10px] text-theme-text-tertiary border-t border-theme-border bg-theme-base">
+              {flatItems.length === contexts.length
+                ? `${contexts.length} clusters`
+                : `${flatItems.length} of ${contexts.length} clusters`}
+            </div>
+          )}
 
           {/* Error message if switch failed */}
           {switchContext.isError && (
