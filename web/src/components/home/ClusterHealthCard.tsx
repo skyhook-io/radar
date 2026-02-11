@@ -92,13 +92,18 @@ export function ClusterHealthCard({
   ]
 
   // Secondary resource counts
-  const secondaryResources = [
+  // Show whichever networking type has more resources: Ingresses or Routes (Gateway API)
+  const routeCount = counts.routes ?? 0
+  const ingressCount = counts.ingresses ?? 0
+
+  type SecondaryResource = { kind: string; group?: string; label: string; icon: typeof Globe; total: number; subtitle?: string; hasIssues?: boolean }
+  const secondaryResources: SecondaryResource[] = [
     { kind: 'statefulsets', label: 'StatefulSets', icon: Database, total: counts.statefulSets.total, subtitle: `${counts.statefulSets.ready} ready`, hasIssues: counts.statefulSets.unready > 0 },
     { kind: 'daemonsets', label: 'DaemonSets', icon: Container, total: counts.daemonSets.total, subtitle: `${counts.daemonSets.ready} ready`, hasIssues: counts.daemonSets.unready > 0 },
     { kind: 'services', label: 'Services', icon: Globe, total: counts.services },
-    { kind: 'ingresses', label: 'Ingresses', icon: NetworkIcon, total: counts.ingresses },
-    ...(counts.gateways ? [{ kind: 'gateways', label: 'Gateways', icon: NetworkIcon, total: counts.gateways }] : []),
-    ...(counts.routes ? [{ kind: 'httproutes', label: 'Routes', icon: Globe, total: counts.routes }] : []),
+    routeCount > ingressCount
+      ? { kind: 'httproutes', group: 'gateway.networking.k8s.io', label: 'Routes', icon: Globe, total: routeCount }
+      : { kind: 'ingresses', label: 'Ingresses', icon: NetworkIcon, total: ingressCount },
     { kind: 'jobs', label: 'Jobs', icon: Briefcase, total: counts.jobs.total, subtitle: `${counts.jobs.active} active`, hasIssues: counts.jobs.failed > 0 },
     { kind: 'cronjobs', label: 'CronJobs', icon: Clock, total: counts.cronJobs.total, subtitle: `${counts.cronJobs.active} active` },
   ]
@@ -291,7 +296,7 @@ export function ClusterHealthCard({
           {secondaryResources.map((res) => (
             <button
               key={res.kind}
-              onClick={() => onNavigateToKind(res.kind)}
+              onClick={() => onNavigateToKind(res.kind, res.group)}
               className="flex items-center lg:justify-center gap-1.5 px-2 py-1 rounded hover:bg-theme-hover transition-colors cursor-pointer text-sm"
             >
               {isRestricted(res.kind) ? (

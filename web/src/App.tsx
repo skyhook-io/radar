@@ -285,17 +285,20 @@ function AppInner() {
     // Remove legacy 'namespace' param if present
     params.delete('namespace')
 
-    // Update mode param
-    if (topologyMode !== 'resources') {
-      params.set('mode', topologyMode)
+    // Topology-specific params: only set when on topology view, clean up otherwise
+    if (mainView === 'topology') {
+      if (topologyMode !== 'resources') {
+        params.set('mode', topologyMode)
+      } else {
+        params.delete('mode')
+      }
+      if (groupingMode !== 'none' && (namespaces.length === 0 || groupingMode !== 'namespace')) {
+        params.set('group', groupingMode)
+      } else {
+        params.delete('group')
+      }
     } else {
       params.delete('mode')
-    }
-
-    // Update group param
-    if (groupingMode !== 'none' && (namespaces.length === 0 || groupingMode !== 'namespace')) {
-      params.set('group', groupingMode)
-    } else {
       params.delete('group')
     }
 
@@ -581,6 +584,7 @@ function AppInner() {
               newParams.set('kind', kind)
               newParams.delete('mode')
               newParams.delete('resource')
+              newParams.delete('group') // Clear topology grouping param to avoid leaking into resources view
               if (apiGroup) {
                 newParams.set('apiGroup', apiGroup)
               } else {
@@ -596,6 +600,11 @@ function AppInner() {
               newParams.delete('mode')
               newParams.delete('group')
               newParams.delete('resource')
+              if (resource.group) {
+                newParams.set('apiGroup', resource.group)
+              } else {
+                newParams.delete('apiGroup')
+              }
               navigate({ pathname: '/resources', search: newParams.toString() })
             }}
           />

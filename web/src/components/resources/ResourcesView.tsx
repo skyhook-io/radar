@@ -1905,10 +1905,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
               {namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in {namespaces.length === 1 ? `namespace: ${namespaces[0]}` : `${namespaces.length} namespaces`}</p>}
             </div>
           ) : (
-            <table className={clsx(
-              'w-full',
-              selectedKind.name.toLowerCase() !== 'ingresses' && 'table-fixed'
-            )}>
+            <table className="w-full">
               <thead className="bg-theme-surface sticky top-0 z-10">
                 <tr>
                   {columns.map((col) => {
