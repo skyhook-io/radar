@@ -181,20 +181,44 @@ func Shutdown(srv *server.Server) {
 }
 
 // CheckClusterAccess verifies connectivity to the Kubernetes cluster.
+// Retries once after a 2-second pause to handle transient failures common with
+// exec-based credential plugins (e.g., EKS) that may not be ready on cold start.
+// Deterministic errors (RBAC, network) skip the retry.
 func CheckClusterAccess() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
 	clientset := k8s.GetClient()
 	if clientset == nil {
 		return fmt.Errorf("kubernetes client not initialized")
 	}
 
-	_, err := clientset.Discovery().RESTClient().Get().AbsPath("/version").Do(ctx).Raw()
-	if err != nil {
-		return fmt.Errorf("failed to connect to cluster: %w", err)
+	var lastErr error
+	for attempt := 0; attempt < 2; attempt++ {
+		if attempt > 0 {
+			// Don't retry errors that won't resolve on their own
+			errType := k8s.ClassifyError(lastErr)
+			if errType == "rbac" || errType == "network" {
+				break
+			}
+			log.Printf("Retrying cluster connectivity check...")
+			k8s.SetConnectionStatus(k8s.ConnectionStatus{
+				State:       k8s.StateConnecting,
+				Context:     k8s.GetContextName(),
+				ProgressMsg: "Retrying cluster connectivity...",
+			})
+			time.Sleep(2 * time.Second)
+		}
+
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		_, err := clientset.Discovery().RESTClient().Get().AbsPath("/version").Do(ctx).Raw()
+		cancel()
+
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+		log.Printf("Cluster connectivity check failed (attempt %d/2): %v", attempt+1, err)
 	}
-	return nil
+
+	return fmt.Errorf("failed to connect to cluster: %w", lastErr)
 }
 
 // ParseKubeconfigDirs splits a comma-separated directory string into a slice.
