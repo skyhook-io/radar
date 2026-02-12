@@ -13,7 +13,7 @@ contents:
   - src: deploy/linux/radar-desktop.desktop
     dst: /usr/share/applications/radar-desktop.desktop
   - src: build/appicon.png
-    dst: /usr/share/icons/hicolor/32x32/apps/radar-desktop.png
+    dst: /usr/share/icons/hicolor/512x512/apps/radar-desktop.png
 overrides:
   deb:
     depends:
