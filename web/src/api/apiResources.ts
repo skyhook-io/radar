@@ -54,6 +54,7 @@ export const CORE_RESOURCES: APIResource[] = [
   { group: 'networking.k8s.io', version: 'v1', kind: 'Ingress', name: 'ingresses', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: 'networking.k8s.io', version: 'v1', kind: 'NetworkPolicy', name: 'networkpolicies', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: 'autoscaling', version: 'v2', kind: 'HorizontalPodAutoscaler', name: 'horizontalpodautoscalers', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: '', version: 'v1', kind: 'Event', name: 'events', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
 ]
 
 // Resources that should be hidden from the sidebar
@@ -63,8 +64,10 @@ const HIDDEN_KINDS = ['PodMetrics', 'NodeMetrics']
 export function categorizeResources(resources: APIResource[]): ResourceCategory[] {
   // Filter out non-listable resources (e.g., tokenreviews, subjectaccessreviews)
   // Also filter out hidden resources like metrics (shown in Pod/Node views instead)
+  // Filter events.k8s.io Event — duplicate of core v1 Event (same data, backend uses core v1)
   const listableResources = resources.filter(r =>
-    r.verbs?.includes('list') && !HIDDEN_KINDS.includes(r.kind)
+    r.verbs?.includes('list') && !HIDDEN_KINDS.includes(r.kind) &&
+    !(r.kind === 'Event' && r.group === 'events.k8s.io')
   )
 
   // Deduplicate by kind (not plural name) to handle cases like:

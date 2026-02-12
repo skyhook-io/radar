@@ -247,7 +247,10 @@ func (d *ResourceDiscovery) GetAPIResources() ([]APIResource, error) {
 	return result, nil
 }
 
-// GetGVR returns the GroupVersionResource for a given kind or plural name
+// GetGVR returns the GroupVersionResource for a given kind or plural name.
+// WARNING: If multiple CRDs share the same Kind across different API groups
+// (e.g., Application in argoproj.io vs app.k8s.io), this returns whichever
+// was discovered first. Use GetGVRWithGroup to disambiguate.
 func (d *ResourceDiscovery) GetGVR(kindOrName string) (schema.GroupVersionResource, bool) {
 	if d == nil {
 		return schema.GroupVersionResource{}, false

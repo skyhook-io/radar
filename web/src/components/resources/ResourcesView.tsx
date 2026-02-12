@@ -852,7 +852,23 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
     const resourceKindLower = selectedResource.kind.toLowerCase()
 
-    // Find the best match: prefer dynamic API discovery (has correct kind for CRDs) over hardcoded
+    // Prefer matching from resourcesToCount (deduped list used for queries) to ensure group consistency.
+    // Raw apiResources can have duplicates (e.g., Event in both v1 and events.k8s.io) where find()
+    // returns a different group than categorizeResources() deduped to, causing query index mismatch.
+    const countMatch = resourcesToCount.find(r =>
+      r.name.toLowerCase() === resourceKindLower ||
+      r.kind.toLowerCase() === resourceKindLower
+    )
+
+    if (countMatch) {
+      if (selectedKind.name === countMatch.name && selectedKind.kind === countMatch.kind && selectedKind.group === countMatch.group) return
+      setOwnerKind('')
+      setOwnerName('')
+      setSelectedKind({ name: countMatch.name, kind: countMatch.kind, group: countMatch.group })
+      return
+    }
+
+    // Fall back to raw API resources for kinds not yet in categories
     const apiMatch = apiResources?.find(r =>
       r.name.toLowerCase() === resourceKindLower ||
       r.kind.toLowerCase() === resourceKindLower
@@ -864,7 +880,6 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     const match = apiMatch || coreMatch
 
     if (match) {
-      // Skip if already correctly resolved (check kind too — fallback may have set wrong casing)
       if (selectedKind.name === match.name && selectedKind.kind === match.kind && selectedKind.group === match.group) return
       setOwnerKind('')
       setOwnerName('')
@@ -1077,8 +1092,18 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         return status.updatedNumberScheduled ?? status.updatedReplicas ?? 0
       case 'restarts':
         return getPodRestarts(resource)
+      case 'lastSeen': {
+        const lastTs = resource.lastTimestamp || meta.creationTimestamp
+        return lastTs ? new Date(lastTs).getTime() : 0
+      }
+      case 'count':
+        return resource.count || 0
+      case 'reason':
+        return resource.reason || ''
+      case 'object':
+        return resource.involvedObject ? `${resource.involvedObject.kind}/${resource.involvedObject.name}` : ''
       case 'type':
-        return resource.spec?.type || ''
+        return resource.spec?.type || resource.type || ''
       case 'version':
         return status.nodeInfo?.kubeletVersion || ''
       default:
@@ -1251,6 +1276,13 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
           // Finally sort by name
           return (a.metadata?.name || '').localeCompare(b.metadata?.name || '')
+        })
+      } else if (kindLower === 'events') {
+        // Events: most recently seen first
+        result = [...result].sort((a: any, b: any) => {
+          const aTime = new Date(a.lastTimestamp || a.metadata?.creationTimestamp || 0).getTime()
+          const bTime = new Date(b.lastTimestamp || b.metadata?.creationTimestamp || 0).getTime()
+          return bTime - aTime
         })
       } else if (['deployments', 'statefulsets', 'replicasets'].includes(kindLower)) {
         // Workloads: unhealthy first, scaled-to-zero at bottom
@@ -1909,7 +1941,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
               <thead className="bg-theme-surface sticky top-0 z-10">
                 <tr>
                   {columns.map((col) => {
-                    const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate'].includes(col.key)
+                    const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object'].includes(col.key)
                     const isSorted = sortColumn === col.key
                     return (
                       <th

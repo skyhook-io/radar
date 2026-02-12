@@ -757,6 +757,9 @@ func setTypeMeta(resource any) {
 	case *corev1.Namespace:
 		r.APIVersion = "v1"
 		r.Kind = "Namespace"
+	case *corev1.Event:
+		r.APIVersion = "v1"
+		r.Kind = "Event"
 	case *corev1.ConfigMap:
 		r.APIVersion = "v1"
 		r.Kind = "ConfigMap"
@@ -879,6 +882,12 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resource, err = lister.Secrets(namespace).Get(name)
+	case "events", "event":
+		if cache.Events() == nil {
+			forbiddenGet("events")
+			return
+		}
+		resource, err = cache.Events().Events(namespace).Get(name)
 	case "persistentvolumeclaims", "persistentvolumeclaim", "pvcs", "pvc":
 		if cache.PersistentVolumeClaims() == nil {
 			forbiddenGet("persistentvolumeclaims")

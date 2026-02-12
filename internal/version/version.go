@@ -6,12 +6,19 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+)
+
+const (
+	releasesURL = "https://releases.skyhook.io/radar/latest"
+	githubURL   = "https://api.github.com/repos/skyhook-io/radar/releases/latest"
 )
 
 var (
@@ -122,7 +129,20 @@ func fetchLatestRelease(ctx context.Context) *UpdateInfo {
 	}
 
 	client := &http.Client{Timeout: 10 * time.Second}
-	req, err := http.NewRequestWithContext(ctx, "GET", "https://api.github.com/repos/skyhook-io/radar/releases/latest", nil)
+
+	mode := "local"
+	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
+		mode = "in-cluster"
+	}
+	proxyURL := fmt.Sprintf("%s?%s", releasesURL, url.Values{
+		"v":      {Current},
+		"os":     {runtime.GOOS},
+		"arch":   {runtime.GOARCH},
+		"method": {string(method)},
+		"mode":   {mode},
+	}.Encode())
+
+	req, err := http.NewRequestWithContext(ctx, "GET", proxyURL, nil)
 	if err != nil {
 		result.Error = fmt.Sprintf("failed to create request: %v", err)
 		log.Printf("[version] %s", result.Error)
@@ -131,15 +151,30 @@ func fetchLatestRelease(ctx context.Context) *UpdateInfo {
 	req.Header.Set("User-Agent", fmt.Sprintf("radar/%s", Current))
 
 	resp, err := client.Do(req)
-	if err != nil {
-		result.Error = fmt.Sprintf("failed to check for updates: %v", err)
-		log.Printf("[version] %s", result.Error)
-		return result
+	if err != nil || resp.StatusCode != http.StatusOK {
+		// Fallback to GitHub directly
+		if resp != nil {
+			resp.Body.Close()
+		}
+		log.Printf("[version] Proxy failed, falling back to GitHub directly")
+		req2, err2 := http.NewRequestWithContext(ctx, "GET", githubURL, nil)
+		if err2 != nil {
+			result.Error = fmt.Sprintf("failed to create fallback request: %v", err2)
+			log.Printf("[version] %s", result.Error)
+			return result
+		}
+		req2.Header.Set("User-Agent", fmt.Sprintf("radar/%s", Current))
+		resp, err = client.Do(req2)
+		if err != nil {
+			result.Error = fmt.Sprintf("failed to check for updates: %v", err)
+			log.Printf("[version] %s", result.Error)
+			return result
+		}
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		result.Error = fmt.Sprintf("GitHub API returned %d", resp.StatusCode)
+		result.Error = fmt.Sprintf("update check returned %d", resp.StatusCode)
 		log.Printf("[version] %s", result.Error)
 		return result
 	}
