@@ -786,9 +786,8 @@ func (c *Client) CheckForUpgrade(namespace, name string) (*UpgradeInfo, error) {
 		return info, nil
 	}
 
-	// Search through all repo indexes
-	var latestVersion string
-	var repoName string
+	// Search through all repo indexes, tracking which repos contain the current version
+	var candidates []repoVersionInfo
 	cacheDir := c.settings.RepositoryCache
 
 	for _, r := range f.Repositories {
@@ -802,15 +801,27 @@ func (c *Client) CheckForUpgrade(namespace, name string) (*UpgradeInfo, error) {
 
 		// Look for the chart
 		if versions, ok := indexFile.Entries[chartName]; ok {
+			var latestInRepo string
+			hasCurrentVersion := false
 			for _, v := range versions {
-				if latestVersion == "" || compareVersions(v.Version, latestVersion) > 0 {
-					latestVersion = v.Version
-					repoName = r.Name
+				if latestInRepo == "" || compareVersions(v.Version, latestInRepo) > 0 {
+					latestInRepo = v.Version
 				}
+				if v.Version == currentVersion {
+					hasCurrentVersion = true
+				}
+			}
+			if latestInRepo != "" {
+				candidates = append(candidates, repoVersionInfo{
+					repoName:          r.Name,
+					latestVersion:     latestInRepo,
+					hasCurrentVersion: hasCurrentVersion,
+				})
 			}
 		}
 	}
 
+	latestVersion, repoName := findBestUpgradeVersion(candidates)
 	if latestVersion == "" {
 		info.Error = "chart not found in configured repositories"
 		return info, nil
@@ -821,6 +832,39 @@ func (c *Client) CheckForUpgrade(namespace, name string) (*UpgradeInfo, error) {
 	info.UpdateAvailable = compareVersions(latestVersion, currentVersion) > 0
 
 	return info, nil
+}
+
+// repoVersionInfo holds version information from a single repository for upgrade comparison.
+type repoVersionInfo struct {
+	repoName          string
+	latestVersion     string
+	hasCurrentVersion bool
+}
+
+// findBestUpgradeVersion picks the best upgrade version for a chart.
+// It prefers repos that contain the currently installed version (source repo heuristic),
+// which avoids suggesting upgrades from unrelated charts that share the same name.
+func findBestUpgradeVersion(candidates []repoVersionInfo) (latestVersion, repoName string) {
+	// First: try repos that have the current version (likely the source repo)
+	for _, c := range candidates {
+		if c.hasCurrentVersion {
+			if latestVersion == "" || compareVersions(c.latestVersion, latestVersion) > 0 {
+				latestVersion = c.latestVersion
+				repoName = c.repoName
+			}
+		}
+	}
+	if latestVersion != "" {
+		return
+	}
+	// Fallback: pick highest across all repos (stale index case)
+	for _, c := range candidates {
+		if latestVersion == "" || compareVersions(c.latestVersion, latestVersion) > 0 {
+			latestVersion = c.latestVersion
+			repoName = c.repoName
+		}
+	}
+	return
 }
 
 // compareVersions compares two semver strings
@@ -1023,11 +1067,10 @@ func (c *Client) BatchCheckUpgrades(namespace string) (*BatchUpgradeInfo, error)
 		return result, nil
 	}
 
-	// Build a map of chart name -> latest version info from all repos
-	chartLatestVersions := make(map[string]struct {
-		version  string
-		repoName string
-	})
+	// Build a map of chart name -> per-repo version info (including all versions for source detection)
+	chartRepoVersions := make(map[string][]repoVersionInfo)
+	// Also track all available versions per chart per repo, for current-version matching
+	chartAllVersions := make(map[string]map[string][]string) // chartName -> repoName -> []versions
 
 	cacheDir := c.settings.RepositoryCache
 	for _, r := range f.Repositories {
@@ -1041,21 +1084,23 @@ func (c *Client) BatchCheckUpgrades(namespace string) (*BatchUpgradeInfo, error)
 			if len(versions) == 0 {
 				continue
 			}
-			// versions[0] is typically the latest
 			latestInRepo := versions[0].Version
+			var allVersions []string
 			for _, v := range versions {
+				allVersions = append(allVersions, v.Version)
 				if compareVersions(v.Version, latestInRepo) > 0 {
 					latestInRepo = v.Version
 				}
 			}
 
-			existing, exists := chartLatestVersions[chartName]
-			if !exists || compareVersions(latestInRepo, existing.version) > 0 {
-				chartLatestVersions[chartName] = struct {
-					version  string
-					repoName string
-				}{latestInRepo, r.Name}
+			chartRepoVersions[chartName] = append(chartRepoVersions[chartName], repoVersionInfo{
+				repoName:      r.Name,
+				latestVersion: latestInRepo,
+			})
+			if chartAllVersions[chartName] == nil {
+				chartAllVersions[chartName] = make(map[string][]string)
 			}
+			chartAllVersions[chartName][r.Name] = allVersions
 		}
 	}
 
@@ -1066,10 +1111,22 @@ func (c *Client) BatchCheckUpgrades(namespace string) (*BatchUpgradeInfo, error)
 			CurrentVersion: rel.ChartVersion,
 		}
 
-		if latest, ok := chartLatestVersions[rel.Chart]; ok {
-			info.LatestVersion = latest.version
-			info.RepositoryName = latest.repoName
-			info.UpdateAvailable = compareVersions(latest.version, rel.ChartVersion) > 0
+		if candidates, ok := chartRepoVersions[rel.Chart]; ok {
+			// Mark which repos contain the current version
+			for i := range candidates {
+				if repoVersions, ok := chartAllVersions[rel.Chart][candidates[i].repoName]; ok {
+					for _, v := range repoVersions {
+						if v == rel.ChartVersion {
+							candidates[i].hasCurrentVersion = true
+							break
+						}
+					}
+				}
+			}
+			latestVersion, repoName := findBestUpgradeVersion(candidates)
+			info.LatestVersion = latestVersion
+			info.RepositoryName = repoName
+			info.UpdateAvailable = compareVersions(latestVersion, rel.ChartVersion) > 0
 		} else {
 			info.Error = "chart not found in configured repositories"
 		}
