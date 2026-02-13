@@ -163,6 +163,8 @@ import {
   formatAge,
   truncate,
   getCellFilterValue,
+  parseColumnFilters,
+  serializeColumnFilters,
 } from './resource-utils'
 import { Tooltip } from '../ui/Tooltip'
 import { getResourceIcon } from '../../utils/resource-icons'
@@ -708,29 +710,6 @@ function getInitialKindFromURL(): SelectedKindInfo {
   return DEFAULT_KIND_INFO
 }
 
-// Parse column filters from URL `filters` param (format: "col:val,col2:val2")
-function parseColumnFilters(filtersParam: string | null): Record<string, string> {
-  if (!filtersParam) return {}
-  const filters: Record<string, string> = {}
-  for (const pair of filtersParam.split(',')) {
-    const colonIdx = pair.indexOf(':')
-    if (colonIdx > 0) {
-      const key = pair.slice(0, colonIdx).trim()
-      const value = pair.slice(colonIdx + 1).trim()
-      if (key && value) filters[key] = value
-    }
-  }
-  return filters
-}
-
-// Serialize column filters to URL param format
-function serializeColumnFilters(filters: Record<string, string>): string {
-  return Object.entries(filters)
-    .filter(([, v]) => v)
-    .map(([k, v]) => `${k}:${v}`)
-    .join(',')
-}
-
 // Get initial filters from URL
 function getInitialFiltersFromURL() {
   const params = new URLSearchParams(window.location.search)
@@ -1109,11 +1088,13 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return result
   }, [resourcesToCount, resourceQueries])
 
-  // Reset sort and filters when kind changes
+  // Reset sort and filters when kind changes (but not when syncing from URL navigation)
   useEffect(() => {
     setSortColumn(null)
     setSortDirection(null)
-    setColumnFilters({})
+    if (!isSyncingFromURL.current) {
+      setColumnFilters({})
+    }
     setProblemFilters([])
   }, [selectedKind.name])
 

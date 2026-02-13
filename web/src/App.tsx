@@ -8,6 +8,7 @@ import { TopologyGraph } from './components/topology/TopologyGraph'
 import { TopologyFilterSidebar } from './components/topology/TopologyFilterSidebar'
 import { TimelineView } from './components/timeline/TimelineView'
 import { ResourcesView } from './components/resources/ResourcesView'
+import { serializeColumnFilters } from './components/resources/resource-utils'
 import { ResourceDetailDrawer } from './components/resources/ResourceDetailDrawer'
 import { ResourceDetailPage } from './components/resource/ResourceDetailPage'
 import { HelmView } from './components/helm/HelmView'
@@ -592,10 +593,7 @@ function AppInner() {
               }
               // Apply column filters if provided
               if (filters && Object.keys(filters).length > 0) {
-                const filtersStr = Object.entries(filters)
-                  .filter(([, v]) => v)
-                  .map(([k, v]) => `${k}:${v}`)
-                  .join(',')
+                const filtersStr = serializeColumnFilters(filters)
                 if (filtersStr) {
                   newParams.set('filters', filtersStr)
                 }

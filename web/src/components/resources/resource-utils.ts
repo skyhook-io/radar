@@ -1745,7 +1745,32 @@ export function formatResources(resources: any): string {
  * Used by the generic column filter system to match resources against filter values.
  * Reuses existing utility functions for kind-specific columns.
  */
+// Parse column filters from URL `filters` param (format: "col:val|col2:val2")
+// Uses `|` as pair separator so values can safely contain commas (e.g., "Ready,SchedulingDisabled")
+export function parseColumnFilters(filtersParam: string | null): Record<string, string> {
+  if (!filtersParam) return {}
+  const filters: Record<string, string> = {}
+  for (const pair of filtersParam.split('|')) {
+    const colonIdx = pair.indexOf(':')
+    if (colonIdx > 0) {
+      const key = pair.slice(0, colonIdx).trim()
+      const value = pair.slice(colonIdx + 1).trim()
+      if (key && value) filters[key] = value
+    }
+  }
+  return filters
+}
+
+// Serialize column filters to URL param format
+export function serializeColumnFilters(filters: Record<string, string>): string {
+  return Object.entries(filters)
+    .filter(([, v]) => v)
+    .map(([k, v]) => `${k}:${v}`)
+    .join('|')
+}
+
 export function getCellFilterValue(resource: any, column: string, kind: string): string {
+  try {
   const kindLower = kind.toLowerCase()
 
   switch (column) {
@@ -1831,5 +1856,10 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
   if (val === undefined || val === null) return ''
   if (typeof val === 'boolean') return val ? 'Yes' : 'No'
   if (typeof val === 'string') return val
+  if (typeof val === 'number') return String(val)
+  if (typeof val === 'object') return '' // Skip objects/arrays — not filterable
   return String(val)
+  } catch {
+    return ''
+  }
 }
