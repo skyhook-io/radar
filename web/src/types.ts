@@ -313,10 +313,28 @@ export interface Relationships {
   pods?: ResourceRef[]
 }
 
-// Resource with computed relationships (API response wrapper)
+// Parsed X.509 certificate metadata (from backend cert parsing)
+export interface CertificateInfo {
+  subject: string
+  sans?: string[]
+  issuer: string
+  selfSigned?: boolean
+  keyType: string
+  serialNumber: string
+  notBefore: string
+  notAfter: string
+  daysLeft: number
+  expired?: boolean
+}
+
+export interface SecretCertificateInfo {
+  certificates: CertificateInfo[]
+}
+
 export interface ResourceWithRelationships<T = unknown> {
   resource: T
   relationships?: Relationships
+  certificateInfo?: SecretCertificateInfo
 }
 
 // API Resource (from discovery endpoint)

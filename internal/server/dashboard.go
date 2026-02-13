@@ -31,8 +31,9 @@ type DashboardResponse struct {
 	RecentChanges   []DashboardChange        `json:"recentChanges"`
 	TopologySummary DashboardTopologySummary `json:"topologySummary"`
 	TrafficSummary  *DashboardTrafficSummary `json:"trafficSummary"`
-	HelmReleases    DashboardHelmSummary     `json:"helmReleases"`
-	Metrics         *DashboardMetrics        `json:"metrics"`
+	HelmReleases      DashboardHelmSummary        `json:"helmReleases"`
+	Metrics           *DashboardMetrics           `json:"metrics"`
+	CertificateHealth *DashboardCertificateHealth `json:"certificateHealth,omitempty"`
 }
 
 // DashboardCRDsResponse is the response for CRD counts (loaded lazily)
@@ -243,6 +244,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	// Cluster metrics (best-effort, nil if metrics-server unavailable)
 	resp.Metrics = s.getDashboardMetrics(r.Context())
+
+	// Certificate health (nil if no TLS secrets)
+	resp.CertificateHealth = s.getDashboardCertificateHealth(namespace)
 
 	s.writeJSON(w, resp)
 }

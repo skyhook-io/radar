@@ -1,12 +1,21 @@
 import { useState } from 'react'
-import { AlertTriangle, Copy, Check } from 'lucide-react'
+import { AlertTriangle, Copy, Check, Shield } from 'lucide-react'
+import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../drawer-components'
+import type { SecretCertificateInfo, CertificateInfo } from '../../../types'
 
 interface SecretRendererProps {
   data: any
+  certificateInfo?: SecretCertificateInfo
 }
 
-export function SecretRenderer({ data }: SecretRendererProps) {
+function formatDate(dateStr: string): string {
+  if (!dateStr) return '-'
+  const d = new Date(dateStr)
+  return d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+}
+
+export function SecretRenderer({ data, certificateInfo }: SecretRendererProps) {
   const [revealed, setRevealed] = useState<Set<string>>(new Set())
   const [copied, setCopied] = useState<string | null>(null)
   const dataKeys = Object.keys(data.data || {})
@@ -37,6 +46,9 @@ export function SecretRenderer({ data }: SecretRendererProps) {
     }
   }
 
+  const certs = certificateInfo?.certificates
+  const leafCert = certs?.[0]
+
   return (
     <>
       <Section title="Secret">
@@ -46,6 +58,67 @@ export function SecretRenderer({ data }: SecretRendererProps) {
           {data.immutable && <Property label="Immutable" value="Yes" />}
         </PropertyList>
       </Section>
+
+      {/* Certificate expiry alerts */}
+      {leafCert && leafCert.expired && (
+        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-red-400">Certificate has expired</div>
+              <div className="text-xs text-red-300/80 mt-1">
+                Expired {formatDate(leafCert.notAfter)}. {leafCert.daysLeft !== 0 && `${Math.abs(leafCert.daysLeft)}d ago.`}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {leafCert && !leafCert.expired && leafCert.daysLeft <= 7 && (
+        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-red-400">
+                Certificate expires in {leafCert.daysLeft} day{leafCert.daysLeft !== 1 ? 's' : ''}
+              </div>
+              <div className="text-xs text-red-300/80 mt-1">
+                Check that cert-manager or your CA is renewing this certificate.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {leafCert && !leafCert.expired && leafCert.daysLeft > 7 && leafCert.daysLeft <= 30 && (
+        <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
+          <div className="flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0">
+              <div className="text-sm font-medium text-yellow-400">
+                Certificate expires in {leafCert.daysLeft} day{leafCert.daysLeft !== 1 ? 's' : ''}
+              </div>
+              <div className="text-xs text-yellow-300/80 mt-1">
+                Renewal should happen automatically before expiry.
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Certificate info section */}
+      {certs && certs.length > 0 && (
+        <>
+          {certs.map((cert, i) => (
+            <CertificateInfoSection
+              key={cert.serialNumber}
+              cert={cert}
+              index={i}
+              total={certs.length}
+            />
+          ))}
+        </>
+      )}
 
       <Section title="Data" defaultExpanded>
         <div className="space-y-2">
@@ -98,5 +171,59 @@ export function SecretRenderer({ data }: SecretRendererProps) {
         Secret values are sensitive. Be careful when revealing.
       </div>
     </>
+  )
+}
+
+function CertificateInfoSection({ cert, index, total }: { cert: CertificateInfo; index: number; total: number }) {
+  const expiryTextColor = cert.expired || cert.daysLeft <= 7
+    ? 'text-red-400'
+    : cert.daysLeft <= 30
+      ? 'text-yellow-400'
+      : 'text-green-400'
+
+  const title = total > 1
+    ? `Certificate ${index + 1} of ${total}`
+    : 'Certificate Info'
+
+  return (
+    <Section title={title} icon={Shield} defaultExpanded={index === 0}>
+      <PropertyList>
+        <Property label="Subject (CN)" value={cert.subject} />
+        {cert.sans && cert.sans.length > 0 && (
+          <Property label="SANs" value={
+            <div className="flex flex-wrap gap-1">
+              {cert.sans.map(san => (
+                <span key={san} className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary">
+                  {san}
+                </span>
+              ))}
+            </div>
+          } />
+        )}
+        <Property label="Issuer" value={
+          <span>
+            {cert.issuer}
+            {cert.selfSigned && (
+              <span className="ml-2 text-[10px] px-1 py-0.5 bg-yellow-500/10 text-yellow-400 rounded">self-signed</span>
+            )}
+          </span>
+        } />
+        <Property label="Key Type" value={cert.keyType} />
+        <Property label="Serial" value={
+          <span className="font-mono text-xs">{cert.serialNumber}</span>
+        } />
+        <Property label="Not Before" value={formatDate(cert.notBefore)} />
+        <Property label="Expires" value={
+          <span>
+            {formatDate(cert.notAfter)}
+            <span className={clsx('ml-2 text-xs', expiryTextColor)}>
+              {cert.expired
+                ? `(expired ${Math.abs(cert.daysLeft)}d ago)`
+                : `(${cert.daysLeft}d remaining)`}
+            </span>
+          </span>
+        } />
+      </PropertyList>
+    </Section>
   )
 }

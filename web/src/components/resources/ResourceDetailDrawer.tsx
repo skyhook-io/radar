@@ -130,7 +130,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate }: Resource
 
   const updateResource = useUpdateResource()
 
-  const { data: resourceData, relationships, isLoading, refetch: refetchResource } = useResource<any>(
+  const { data: resourceData, relationships, certificateInfo, isLoading, refetch: refetchResource } = useResource<any>(
     resource.kind,
     resource.namespace,
     resource.name,
@@ -313,6 +313,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate }: Resource
             resource={resource}
             data={resourceData}
             relationships={relationships}
+            certificateInfo={certificateInfo}
             onCopy={copyToClipboard}
             copied={copied}
             onNavigate={handleNavigateToRelated}
@@ -1075,12 +1076,13 @@ interface ResourceContentProps {
   resource: SelectedResource
   data: any
   relationships?: Relationships
+  certificateInfo?: import('../../types').SecretCertificateInfo
   onCopy: (text: string, key: string) => void
   copied: string | null
   onNavigate?: (ref: ResourceRef) => void
 }
 
-function ResourceContent({ resource, data, relationships, onCopy, copied, onNavigate }: ResourceContentProps) {
+function ResourceContent({ resource, data, relationships, certificateInfo, onCopy, copied, onNavigate }: ResourceContentProps) {
   const kind = resource.kind.toLowerCase()
 
   // Fetch events for this resource
@@ -1114,7 +1116,7 @@ function ResourceContent({ resource, data, relationships, onCopy, copied, onNavi
       {kind === 'services' && <ServiceRenderer data={data} onCopy={onCopy} copied={copied} />}
       {kind === 'ingresses' && <IngressRenderer data={data} />}
       {kind === 'configmaps' && <ConfigMapRenderer data={data} />}
-      {kind === 'secrets' && <SecretRenderer data={data} />}
+      {kind === 'secrets' && <SecretRenderer data={data} certificateInfo={certificateInfo} />}
       {kind === 'jobs' && <JobRenderer data={data} />}
       {kind === 'cronjobs' && <CronJobRenderer data={data} />}
       {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPARenderer data={data} />}

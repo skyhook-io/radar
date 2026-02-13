@@ -177,6 +177,14 @@ export interface DashboardCRDCount {
   count: number
 }
 
+export interface DashboardCertificateHealth {
+  total: number
+  healthy: number
+  warning: number
+  critical: number
+  expired: number
+}
+
 export interface DashboardResponse {
   cluster: DashboardCluster
   health: DashboardHealth
@@ -188,6 +196,7 @@ export interface DashboardResponse {
   trafficSummary: DashboardTrafficSummary | null
   helmReleases: DashboardHelmSummary
   metrics: DashboardMetrics | null
+  certificateHealth: DashboardCertificateHealth | null
 }
 
 export interface DashboardCRDsResponse {
@@ -201,6 +210,23 @@ export function useDashboard(namespaces: string[] = []) {
     queryFn: () => fetchJSON(`/dashboard${params}`),
     staleTime: 15000, // 15 seconds
     refetchInterval: 30000, // Refresh every 30 seconds
+  })
+}
+
+// Certificate expiry for TLS secrets (used in secrets list view)
+export interface CertExpiry {
+  daysLeft: number
+  expired?: boolean
+}
+
+export function useSecretCertExpiry(namespaces: string[] = [], enabled = true) {
+  const params = namespaces.length > 0 ? `?namespaces=${namespaces.join(',')}` : ''
+  return useQuery<Record<string, CertExpiry>>({
+    queryKey: ['secret-cert-expiry', namespaces],
+    queryFn: () => fetchJSON(`/secrets/certificate-expiry${params}`),
+    enabled,
+    staleTime: 30000,
+    refetchInterval: 60000,
   })
 }
 
@@ -391,6 +417,7 @@ export function useResource<T>(kind: string, namespace: string, name: string, gr
     ...query,
     data: query.data?.resource,
     relationships: query.data?.relationships,
+    certificateInfo: query.data?.certificateInfo,
   }
 }
 

@@ -188,4 +188,8 @@ type Relationships struct {
 type ResourceWithRelationships struct {
 	Resource      any            `json:"resource"`
 	Relationships *Relationships `json:"relationships,omitempty"`
+	// CertificateInfo holds parsed TLS certificate metadata for Secret resources.
+	// Typed as any to avoid an import cycle (actual type: *server.SecretCertificateInfo).
+	// Only populated for kubernetes.io/tls secrets with valid PEM certificate data.
+	CertificateInfo any `json:"certificateInfo,omitempty"`
 }

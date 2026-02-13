@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useCallback, useRef, forwardRef } from 'r
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useLocation } from 'react-router-dom'
 import { useQueries } from '@tanstack/react-query'
-import { ApiError, isForbiddenError } from '../../api/client'
+import { ApiError, isForbiddenError, useSecretCertExpiry } from '../../api/client'
 import {
   Search,
   RefreshCw,
@@ -313,6 +313,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'type', label: 'Type', width: 'w-28' },
     { key: 'keys', label: 'Keys', width: 'w-20' },
+    { key: 'expires', label: 'Expires', width: 'w-24', tooltip: 'Certificate expiry for TLS secrets' },
     { key: 'age', label: 'Age', width: 'w-20' },
   ],
   jobs: [
@@ -2601,6 +2602,7 @@ function ConfigMapCell({ resource, column }: { resource: any; column: string }) 
 }
 
 function SecretCell({ resource, column }: { resource: any; column: string }) {
+  const { data: certExpiry, isError: certExpiryError } = useSecretCertExpiry([], column === 'expires')
   switch (column) {
     case 'type': {
       const { type, color } = getSecretType(resource)
@@ -2613,6 +2615,26 @@ function SecretCell({ resource, column }: { resource: any; column: string }) {
     case 'keys': {
       const count = getSecretKeyCount(resource)
       return <span className="text-sm text-theme-text-secondary">{count}</span>
+    }
+    case 'expires': {
+      if (certExpiryError) {
+        return <span className="text-sm text-theme-text-tertiary" title="Failed to load certificate expiry">!</span>
+      }
+      const meta = resource.metadata || {}
+      const key = `${meta.namespace}/${meta.name}`
+      const expiry = certExpiry?.[key]
+      if (!expiry) {
+        return <span className="text-sm text-theme-text-tertiary">-</span>
+      }
+      const color = expiry.expired || expiry.daysLeft < 7
+        ? 'text-red-400'
+        : expiry.daysLeft < 30
+          ? 'text-yellow-400'
+          : 'text-green-400'
+      const text = expiry.expired
+        ? `Expired ${Math.abs(expiry.daysLeft)}d ago`
+        : `${expiry.daysLeft}d`
+      return <span className={clsx('text-sm font-medium', color)}>{text}</span>
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
@@ -2899,10 +2921,11 @@ function CertificateCell({ resource, column }: { resource: any; column: string }
       const expiry = getCertificateExpiry(resource)
       return (
         <span className={clsx(
-          'text-sm',
+          'text-sm font-medium',
           expiry.level === 'unhealthy' ? 'text-red-400' :
           expiry.level === 'degraded' ? 'text-yellow-400' :
-          'text-theme-text-secondary'
+          expiry.level === 'healthy' ? 'text-green-400' :
+          'text-theme-text-tertiary'
         )}>
           {expiry.text}
         </span>

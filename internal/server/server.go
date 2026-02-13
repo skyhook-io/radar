@@ -134,6 +134,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/resources/{kind}/{namespace}/{name}", s.handleGetResource)
 			r.Put("/resources/{kind}/{namespace}/{name}", s.handleUpdateResource)
 			r.Delete("/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)
+			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
 			r.Get("/events", s.handleEvents)
 			r.Get("/changes", s.handleChanges)
 			r.Get("/changes/{kind}/{namespace}/{name}/children", s.handleChangeChildren)
@@ -960,6 +961,16 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	response := topology.ResourceWithRelationships{
 		Resource:      resource,
 		Relationships: relationships,
+	}
+
+	// Enrich TLS secrets with parsed certificate info
+	if secret, ok := resource.(*corev1.Secret); ok && secret.Type == corev1.SecretTypeTLS {
+		if certPEM, exists := secret.Data["tls.crt"]; exists && len(certPEM) > 0 {
+			certs := parsePEMCertificates(certPEM)
+			if len(certs) > 0 {
+				response.CertificateInfo = &SecretCertificateInfo{Certificates: certs}
+			}
+		}
 	}
 
 	s.writeJSON(w, response)

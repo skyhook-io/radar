@@ -6,6 +6,7 @@ import { TopologyPreview } from './TopologyPreview'
 import { HelmSummary } from './HelmSummary'
 import { ActivitySummary } from './ActivitySummary'
 import { TrafficSummary } from './TrafficSummary'
+import { CertificateHealthCard } from './CertificateHealthCard'
 import { ClusterHealthCard } from './ClusterHealthCard'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -86,6 +87,12 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
               data={data.trafficSummary}
               onNavigate={() => onNavigateToView('traffic')}
             />
+            {data.certificateHealth && (
+              <CertificateHealthCard
+                data={data.certificateHealth}
+                onNavigate={() => onNavigateToResourceKind('Secret')}
+              />
+            )}
           </div>
 
           {/* Right column: problems panel */}
