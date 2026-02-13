@@ -1,5 +1,5 @@
-import { Globe, Shield, Clock, AlertTriangle } from 'lucide-react'
-import { Section, PropertyList, Property } from '../drawer-components'
+import { Globe, Shield, Clock } from 'lucide-react'
+import { Section, PropertyList, Property, AlertBanner } from '../drawer-components'
 
 interface IngressRendererProps {
   data: any
@@ -20,34 +20,23 @@ export function IngressRenderer({ data }: IngressRendererProps) {
     <>
       {/* No address warning */}
       {hasNoAddress && (
-        <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <Clock className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-yellow-400">Address Not Assigned</div>
-              <div className="text-xs text-yellow-300/80 mt-1">
-                {hasNoClass
-                  ? 'No ingress class specified — an ingress controller may not pick up this resource.'
-                  : 'Waiting for ingress controller to provision address. Check Events if this persists.'}
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="warning"
+          icon={Clock}
+          title="Address Not Assigned"
+          message={hasNoClass
+            ? 'No ingress class specified — an ingress controller may not pick up this resource.'
+            : 'Waiting for ingress controller to provision address. Check Events if this persists.'}
+        />
       )}
 
       {/* No rules warning */}
       {hasNoRules && (
-        <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-blue-400">No Routing Rules</div>
-              <div className="text-xs text-blue-300/80 mt-1">
-                This ingress has no rules defined. Traffic will not be routed.
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="info"
+          title="No Routing Rules"
+          message="This ingress has no rules defined. Traffic will not be routed."
+        />
       )}
 
       <Section title="Ingress" icon={Globe}>

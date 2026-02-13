@@ -1,5 +1,5 @@
-import { Globe, AlertTriangle, Clock } from 'lucide-react'
-import { Section, PropertyList, Property, KeyValueBadgeList, CopyHandler } from '../drawer-components'
+import { Globe, Clock } from 'lucide-react'
+import { Section, PropertyList, Property, KeyValueBadgeList, CopyHandler, AlertBanner } from '../drawer-components'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 
 interface ServiceRendererProps {
@@ -25,33 +25,21 @@ export function ServiceRenderer({ data, onCopy, copied }: ServiceRendererProps) 
     <>
       {/* LoadBalancer pending warning */}
       {lbPending && (
-        <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <Clock className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-yellow-400">Load Balancer Pending</div>
-              <div className="text-xs text-yellow-300/80 mt-1">
-                External IP/hostname has not been assigned yet. This may take a few minutes.
-                Check Events below if provisioning is stuck.
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="warning"
+          icon={Clock}
+          title="Load Balancer Pending"
+          message="External IP/hostname has not been assigned yet. This may take a few minutes. Check Events below if provisioning is stuck."
+        />
       )}
 
       {/* No selector warning (manual endpoints) */}
       {hasNoSelector && !isExternalName && (
-        <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-blue-400">No Pod Selector</div>
-              <div className="text-xs text-blue-300/80 mt-1">
-                This service has no selector — endpoints must be managed manually or by an external controller.
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="info"
+          title="No Pod Selector"
+          message="This service has no selector — endpoints must be managed manually or by an external controller."
+        />
       )}
 
       <Section title="Service" icon={Globe}>

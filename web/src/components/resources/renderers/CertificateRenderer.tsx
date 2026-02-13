@@ -1,6 +1,6 @@
-import { Shield, AlertTriangle, Clock, Globe } from 'lucide-react'
+import { Shield, Clock, Globe } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../drawer-components'
 
 interface CertificateRendererProps {
   data: any
@@ -65,64 +65,35 @@ export function CertificateRenderer({ data }: CertificateRendererProps) {
     <>
       {/* Problem detection alerts */}
       {isNotReady && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400">Certificate Not Ready</div>
-              <div className="text-xs text-red-300/80 mt-1">
-                {readyCond.reason && <span className="font-medium">{readyCond.reason}: </span>}
-                {readyCond.message || 'The certificate is not in a ready state.'}
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="error"
+          title="Certificate Not Ready"
+          message={<>{readyCond.reason && <span className="font-medium">{readyCond.reason}: </span>}{readyCond.message || 'The certificate is not in a ready state.'}</>}
+        />
       )}
 
       {isExpired && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400">Certificate has expired</div>
-              <div className="text-xs text-red-300/80 mt-1">
-                Expired {formatDate(notAfter)}. Renewal may be pending or failing.
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="error"
+          title="Certificate has expired"
+          message={`Expired ${formatDate(notAfter)}. Renewal may be pending or failing.`}
+        />
       )}
 
       {expiresWithin7Days && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400">
-                Certificate expires in {daysUntilExpiry} day{daysUntilExpiry !== 1 ? 's' : ''}
-              </div>
-              <div className="text-xs text-red-300/80 mt-1">
-                Check that cert-manager is renewing this certificate.
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="error"
+          title={`Certificate expires in ${daysUntilExpiry} day${daysUntilExpiry !== 1 ? 's' : ''}`}
+          message="Check that cert-manager is renewing this certificate."
+        />
       )}
 
       {expiresWithin30Days && (
-        <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-yellow-400">
-                Certificate expires in {daysUntilExpiry} day{daysUntilExpiry !== 1 ? 's' : ''}
-              </div>
-              <div className="text-xs text-yellow-300/80 mt-1">
-                Renewal should happen automatically before expiry.
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="warning"
+          title={`Certificate expires in ${daysUntilExpiry} day${daysUntilExpiry !== 1 ? 's' : ''}`}
+          message="Renewal should happen automatically before expiry."
+        />
       )}
 
       {/* Certificate Info */}

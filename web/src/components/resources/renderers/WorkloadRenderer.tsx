@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
-import { Server, AlertTriangle, ExternalLink, Scale, Minus, Plus, Loader2 } from 'lucide-react'
+import { Server, ExternalLink, Scale, Minus, Plus, Loader2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection, AlertBanner } from '../drawer-components'
 import { useScaleWorkload } from '../../../api/client'
 import { useQueryClient } from '@tanstack/react-query'
 
@@ -172,34 +172,20 @@ export function WorkloadRenderer({ kind, data }: WorkloadRendererProps) {
 
       {/* Problems alert - shown at top when there are real issues */}
       {hasProblems && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400 mb-1">Issues Detected</div>
-              <ul className="text-xs text-red-300 space-y-1">
-                {problems.map((problem, i) => (
-                  <li key={i} className="flex items-start gap-1.5">
-                    <span className="text-red-400/60 mt-0.5">•</span>
-                    <span>{problem}</span>
-                  </li>
-                ))}
-              </ul>
-              <div className="flex items-center justify-between mt-2">
-                <div className="text-xs text-red-400/60">
-                  Check Events below for details, or view individual pods for logs.
-                </div>
-                <button
-                  onClick={() => navigate(viewPodsUrl)}
-                  className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded transition-colors"
-                >
-                  <ExternalLink className="w-3 h-3" />
-                  View Pods
-                </button>
-              </div>
+        <AlertBanner variant="error" title="Issues Detected" items={problems}>
+          <div className="flex items-center justify-between mt-2">
+            <div className="text-xs text-red-400/60">
+              Check Events below for details, or view individual pods for logs.
             </div>
+            <button
+              onClick={() => navigate(viewPodsUrl)}
+              className="flex items-center gap-1 px-2 py-1 text-xs font-medium text-red-400 hover:text-red-300 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded transition-colors"
+            >
+              <ExternalLink className="w-3 h-3" />
+              View Pods
+            </button>
           </div>
-        </div>
+        </AlertBanner>
       )}
 
       <Section title="Status" icon={Server}>

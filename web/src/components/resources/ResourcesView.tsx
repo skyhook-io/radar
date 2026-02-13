@@ -72,10 +72,6 @@ import {
   getWorkflowDuration,
   getWorkflowProgress,
   getWorkflowTemplate,
-  getCertificateStatus,
-  getCertificateDomains,
-  getCertificateIssuer,
-  getCertificateExpiry,
   getPVStatus,
   getPVAccessModes,
   getPVClaim,
@@ -83,20 +79,6 @@ import {
   getStorageClassReclaimPolicy,
   getStorageClassBindingMode,
   getStorageClassExpansion,
-  getCertificateRequestStatus,
-  getCertificateRequestIssuer,
-  getCertificateRequestApproved,
-  getClusterIssuerStatus,
-  getClusterIssuerType,
-  getIssuerStatus,
-  getIssuerType,
-  getOrderState,
-  getOrderDomains,
-  getOrderIssuer,
-  getChallengeState,
-  getChallengeType,
-  getChallengeDomain,
-  getChallengePresented,
   getGatewayStatus,
   getGatewayClass,
   getGatewayListeners,
@@ -125,41 +107,6 @@ import {
   getRoleRuleCount,
   getRoleBindingRole,
   getRoleBindingSubjectCount,
-  // FluxCD GitOps
-  getGitRepositoryUrl,
-  getGitRepositoryRef,
-  getGitRepositoryRevision,
-  getGitRepositoryStatus,
-  getOCIRepositoryUrl,
-  getOCIRepositoryRef,
-  getOCIRepositoryRevision,
-  getOCIRepositoryStatus,
-  getHelmRepositoryUrl,
-  getHelmRepositoryType,
-  getHelmRepositoryStatus,
-  getKustomizationSource,
-  getKustomizationPath,
-  getKustomizationInventory,
-  getKustomizationStatus,
-  getFluxHelmReleaseChart,
-  getFluxHelmReleaseVersion,
-  getFluxHelmReleaseRevision,
-  getFluxHelmReleaseStatus,
-  getFluxAlertProvider,
-  getFluxAlertEventCount,
-  getFluxAlertStatus,
-  // ArgoCD GitOps
-  getArgoApplicationProject,
-  getArgoApplicationSync,
-  getArgoApplicationHealth,
-  getArgoApplicationRepo,
-  getArgoApplicationSetGenerators,
-  getArgoApplicationSetTemplate,
-  getArgoApplicationSetAppCount,
-  getArgoApplicationSetStatus,
-  getArgoAppProjectDescription,
-  getArgoAppProjectDestinations,
-  getArgoAppProjectSources,
   formatAge,
   truncate,
   getCellFilterValue,
@@ -168,6 +115,11 @@ import {
 } from './resource-utils'
 import { Tooltip } from '../ui/Tooltip'
 import { getResourceIcon } from '../../utils/resource-icons'
+// CRD-specific cell components (extracted)
+import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell } from './renderers/flux-cells'
+import { ArgoApplicationCell, ArgoApplicationSetCell, ArgoAppProjectCell } from './renderers/argo-cells'
+import { VulnerabilityReportCell, ConfigAuditReportCell, ExposedSecretReportCell, RbacAssessmentReportCell, ClusterComplianceReportCell, SbomReportCell } from './renderers/trivy-cells'
+import { CertificateCell, CertificateRequestCell, ClusterIssuerCell, IssuerCell, OrderCell, ChallengeCell } from './renderers/certmanager-cells'
 
 // Pod problem filter options (special multi-select, not a single column value)
 const POD_PROBLEMS = ['CrashLoopBackOff', 'ImagePullBackOff', 'OOMKilled', 'Unschedulable', 'Not Ready', 'High Restarts'] as const
@@ -677,6 +629,99 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'destinations', label: 'Destinations', width: 'w-24', tooltip: 'Allowed cluster/namespace destinations' },
     { key: 'sources', label: 'Sources', width: 'w-20', tooltip: 'Allowed source repositories' },
     { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  // Trivy Operator
+  vulnerabilityreports: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'container', label: 'Container', width: 'w-28' },
+    { key: 'image', label: 'Image', width: 'w-48' },
+    { key: 'critical', label: 'C', width: 'w-12', tooltip: 'Critical vulnerabilities' },
+    { key: 'high', label: 'H', width: 'w-12', tooltip: 'High vulnerabilities' },
+    { key: 'medium', label: 'M', width: 'w-12', tooltip: 'Medium vulnerabilities' },
+    { key: 'low', label: 'L', width: 'w-12', tooltip: 'Low vulnerabilities' },
+    { key: 'age', label: 'Age', width: 'w-16' },
+  ],
+  configauditreports: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'critical', label: 'C', width: 'w-12', tooltip: 'Critical findings' },
+    { key: 'high', label: 'H', width: 'w-12', tooltip: 'High findings' },
+    { key: 'medium', label: 'M', width: 'w-12', tooltip: 'Medium findings' },
+    { key: 'low', label: 'L', width: 'w-12', tooltip: 'Low findings' },
+    { key: 'age', label: 'Age', width: 'w-16' },
+  ],
+  exposedsecretreports: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'container', label: 'Container', width: 'w-28' },
+    { key: 'image', label: 'Image', width: 'w-48' },
+    { key: 'critical', label: 'C', width: 'w-12', tooltip: 'Critical secrets' },
+    { key: 'high', label: 'H', width: 'w-12', tooltip: 'High secrets' },
+    { key: 'medium', label: 'M', width: 'w-12', tooltip: 'Medium secrets' },
+    { key: 'low', label: 'L', width: 'w-12', tooltip: 'Low secrets' },
+    { key: 'age', label: 'Age', width: 'w-16' },
+  ],
+  rbacassessmentreports: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'critical', label: 'C', width: 'w-12', tooltip: 'Critical findings' },
+    { key: 'high', label: 'H', width: 'w-12', tooltip: 'High findings' },
+    { key: 'medium', label: 'M', width: 'w-12', tooltip: 'Medium findings' },
+    { key: 'low', label: 'L', width: 'w-12', tooltip: 'Low findings' },
+    { key: 'age', label: 'Age', width: 'w-16' },
+  ],
+  clusterrbacassessmentreports: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'critical', label: 'C', width: 'w-12', tooltip: 'Critical findings' },
+    { key: 'high', label: 'H', width: 'w-12', tooltip: 'High findings' },
+    { key: 'medium', label: 'M', width: 'w-12', tooltip: 'Medium findings' },
+    { key: 'low', label: 'L', width: 'w-12', tooltip: 'Low findings' },
+    { key: 'age', label: 'Age', width: 'w-16' },
+  ],
+  clustercompliancereports: [
+    { key: 'name', label: 'Name' },
+    { key: 'title', label: 'Framework', width: 'w-64' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'pass', label: 'Pass', width: 'w-16' },
+    { key: 'fail', label: 'Fail', width: 'w-16' },
+    { key: 'age', label: 'Age', width: 'w-16' },
+  ],
+  sbomreports: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'container', label: 'Container', width: 'w-28' },
+    { key: 'components', label: 'Components', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-16' },
+  ],
+  clustersbomreports: [
+    { key: 'name', label: 'Name' },
+    { key: 'components', label: 'Components', width: 'w-24' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-16' },
+  ],
+  infraassessmentreports: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'critical', label: 'C', width: 'w-12', tooltip: 'Critical findings' },
+    { key: 'high', label: 'H', width: 'w-12', tooltip: 'High findings' },
+    { key: 'medium', label: 'M', width: 'w-12', tooltip: 'Medium findings' },
+    { key: 'low', label: 'L', width: 'w-12', tooltip: 'Low findings' },
+    { key: 'age', label: 'Age', width: 'w-16' },
+  ],
+  clusterinfraassessmentreports: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'critical', label: 'C', width: 'w-12', tooltip: 'Critical findings' },
+    { key: 'high', label: 'H', width: 'w-12', tooltip: 'High findings' },
+    { key: 'medium', label: 'M', width: 'w-12', tooltip: 'Medium findings' },
+    { key: 'low', label: 'L', width: 'w-12', tooltip: 'Low findings' },
+    { key: 'age', label: 'Age', width: 'w-16' },
   ],
 }
 
@@ -2263,6 +2308,23 @@ function CellContent({ resource, kind, column }: CellContentProps) {
       return <ArgoApplicationSetCell resource={resource} column={column} />
     case 'appprojects':
       return <ArgoAppProjectCell resource={resource} column={column} />
+    // Trivy Operator
+    case 'vulnerabilityreports':
+      return <VulnerabilityReportCell resource={resource} column={column} />
+    case 'configauditreports':
+      return <ConfigAuditReportCell resource={resource} column={column} />
+    case 'exposedsecretreports':
+      return <ExposedSecretReportCell resource={resource} column={column} />
+    case 'rbacassessmentreports':
+    case 'clusterrbacassessmentreports':
+    case 'infraassessmentreports':
+    case 'clusterinfraassessmentreports':
+      return <RbacAssessmentReportCell resource={resource} column={column} />
+    case 'clustercompliancereports':
+      return <ClusterComplianceReportCell resource={resource} column={column} />
+    case 'sbomreports':
+    case 'clustersbomreports':
+      return <SbomReportCell resource={resource} column={column} />
     default:
       // Generic cell for CRDs and unknown resources
       return <GenericCell resource={resource} column={column} />
@@ -2942,46 +3004,6 @@ function WorkflowCell({ resource, column }: { resource: any; column: string }) {
   }
 }
 
-function CertificateCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'status': {
-      const status = getCertificateStatus(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
-    case 'domains': {
-      const domains = getCertificateDomains(resource)
-      return (
-        <Tooltip content={domains}>
-          <span className="text-sm text-theme-text-secondary truncate block">{domains || '-'}</span>
-        </Tooltip>
-      )
-    }
-    case 'issuer': {
-      const issuer = getCertificateIssuer(resource)
-      return <span className="text-sm text-theme-text-secondary">{issuer}</span>
-    }
-    case 'expires': {
-      const expiry = getCertificateExpiry(resource)
-      return (
-        <span className={clsx(
-          'text-sm font-medium',
-          expiry.level === 'unhealthy' ? 'text-red-400' :
-          expiry.level === 'degraded' ? 'text-yellow-400' :
-          expiry.level === 'healthy' ? 'text-green-400' :
-          'text-theme-text-tertiary'
-        )}>
-          {expiry.text}
-        </span>
-      )
-    }
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
 
 function PersistentVolumeCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
@@ -3053,104 +3075,7 @@ function StorageClassCell({ resource, column }: { resource: any; column: string 
   }
 }
 
-function CertificateRequestCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'status': {
-      const status = getCertificateRequestStatus(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
-    case 'issuer':
-      return <span className="text-sm text-theme-text-secondary">{getCertificateRequestIssuer(resource)}</span>
-    case 'approved':
-      return <span className="text-sm text-theme-text-secondary">{getCertificateRequestApproved(resource)}</span>
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
 
-function ClusterIssuerCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'status': {
-      const status = getClusterIssuerStatus(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
-    case 'issuerType':
-      return <span className="text-sm text-theme-text-secondary">{getClusterIssuerType(resource)}</span>
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
-
-function IssuerCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'status': {
-      const status = getIssuerStatus(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
-    case 'issuerType':
-      return <span className="text-sm text-theme-text-secondary">{getIssuerType(resource)}</span>
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
-
-function OrderCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'state': {
-      const state = getOrderState(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', state.color)}>
-          {state.text}
-        </span>
-      )
-    }
-    case 'domains': {
-      const domains = getOrderDomains(resource)
-      return (
-        <Tooltip content={domains}>
-          <span className="text-sm text-theme-text-secondary truncate block">{domains}</span>
-        </Tooltip>
-      )
-    }
-    case 'issuer':
-      return <span className="text-sm text-theme-text-secondary">{getOrderIssuer(resource)}</span>
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
-
-function ChallengeCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'state': {
-      const state = getChallengeState(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', state.color)}>
-          {state.text}
-        </span>
-      )
-    }
-    case 'challengeType':
-      return <span className="text-sm text-theme-text-secondary">{getChallengeType(resource)}</span>
-    case 'domain':
-      return <span className="text-sm text-theme-text-secondary">{getChallengeDomain(resource)}</span>
-    case 'presented':
-      return <span className="text-sm text-theme-text-secondary">{getChallengePresented(resource)}</span>
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
 
 function GatewayCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
@@ -3431,335 +3356,5 @@ function EventCell({ resource, column }: { resource: any; column: string }) {
   }
 }
 
-// ============================================================================
-// FLUXCD GITOPS CELL RENDERERS
-// ============================================================================
 
-function GitRepositoryCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'url': {
-      const url = getGitRepositoryUrl(resource)
-      return (
-        <Tooltip content={url}>
-          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
-        </Tooltip>
-      )
-    }
-    case 'ref': {
-      const ref = getGitRepositoryRef(resource)
-      return <span className="text-sm text-theme-text-secondary">{ref}</span>
-    }
-    case 'status': {
-      const status = getGitRepositoryStatus(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
-    case 'revision': {
-      const revision = getGitRepositoryRevision(resource)
-      return (
-        <span className="text-sm text-theme-text-tertiary font-mono">{revision}</span>
-      )
-    }
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
 
-function OCIRepositoryCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'url': {
-      const url = getOCIRepositoryUrl(resource)
-      return (
-        <Tooltip content={url}>
-          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
-        </Tooltip>
-      )
-    }
-    case 'ref': {
-      const ref = getOCIRepositoryRef(resource)
-      return <span className="text-sm text-theme-text-secondary">{ref}</span>
-    }
-    case 'status': {
-      const status = getOCIRepositoryStatus(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
-    case 'revision': {
-      const revision = getOCIRepositoryRevision(resource)
-      return (
-        <span className="text-sm text-theme-text-tertiary font-mono">{revision}</span>
-      )
-    }
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
-
-function HelmRepositoryCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'url': {
-      const url = getHelmRepositoryUrl(resource)
-      return (
-        <Tooltip content={url}>
-          <span className="text-sm text-theme-text-secondary truncate block">{url}</span>
-        </Tooltip>
-      )
-    }
-    case 'type': {
-      const type = getHelmRepositoryType(resource)
-      return <span className="text-sm text-theme-text-secondary">{type}</span>
-    }
-    case 'status': {
-      const status = getHelmRepositoryStatus(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
-
-function KustomizationCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'source': {
-      const source = getKustomizationSource(resource)
-      return (
-        <Tooltip content={source}>
-          <span className="text-sm text-theme-text-secondary truncate block">{source}</span>
-        </Tooltip>
-      )
-    }
-    case 'path': {
-      const path = getKustomizationPath(resource)
-      return <span className="text-sm text-theme-text-tertiary font-mono">{path}</span>
-    }
-    case 'status': {
-      const status = getKustomizationStatus(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
-    case 'revision': {
-      const revision = resource.status?.lastAppliedRevision || resource.status?.lastAttemptedRevision || ''
-      if (!revision) return <span className="text-sm text-theme-text-tertiary">-</span>
-      // Format: "refs/heads/main@sha1:abc123..." -> "main@abc123"
-      const formatted = revision
-        .replace(/^refs\/heads\//, '')
-        .replace(/^refs\/tags\//, '')
-        .replace(/@sha1:([a-f0-9]{8})[a-f0-9]*$/, '@$1')
-      return (
-        <Tooltip content={revision}>
-          <span className="text-sm text-theme-text-secondary font-mono truncate block">{formatted}</span>
-        </Tooltip>
-      )
-    }
-    case 'inventory': {
-      const count = getKustomizationInventory(resource)
-      return (
-        <span className="text-sm text-theme-text-secondary">
-          {count > 0 ? count : '-'}
-        </span>
-      )
-    }
-    case 'lastUpdated': {
-      // Kustomization uses history[0].lastReconciled or conditions[Ready].lastTransitionTime
-      const lastReconcile = resource.status?.history?.[0]?.lastReconciled ||
-        resource.status?.conditions?.find((c: any) => c.type === 'Ready')?.lastTransitionTime
-      return (
-        <span className="text-sm text-theme-text-secondary">
-          {lastReconcile ? formatAge(lastReconcile) : '-'}
-        </span>
-      )
-    }
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
-
-function FluxHelmReleaseCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'chart': {
-      const chart = getFluxHelmReleaseChart(resource)
-      return (
-        <Tooltip content={chart}>
-          <span className="text-sm text-theme-text-secondary truncate block">{chart}</span>
-        </Tooltip>
-      )
-    }
-    case 'version': {
-      const version = getFluxHelmReleaseVersion(resource)
-      return <span className="text-sm text-theme-text-secondary">{version}</span>
-    }
-    case 'status': {
-      const status = getFluxHelmReleaseStatus(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
-    case 'revision': {
-      const revision = getFluxHelmReleaseRevision(resource)
-      return (
-        <span className="text-sm text-theme-text-tertiary">
-          {revision > 0 ? `#${revision}` : '-'}
-        </span>
-      )
-    }
-    case 'lastUpdated': {
-      // HelmRelease uses history[0].lastDeployed or conditions[Ready].lastTransitionTime
-      const lastReconcile = resource.status?.history?.[0]?.lastDeployed ||
-        resource.status?.conditions?.find((c: any) => c.type === 'Ready')?.lastTransitionTime
-      return (
-        <span className="text-sm text-theme-text-secondary">
-          {lastReconcile ? formatAge(lastReconcile) : '-'}
-        </span>
-      )
-    }
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
-
-function FluxAlertCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'provider': {
-      const provider = getFluxAlertProvider(resource)
-      return <span className="text-sm text-theme-text-secondary">{provider}</span>
-    }
-    case 'events': {
-      const count = getFluxAlertEventCount(resource)
-      return (
-        <span className="text-sm text-theme-text-secondary">
-          {count > 0 ? count : '-'}
-        </span>
-      )
-    }
-    case 'status': {
-      const status = getFluxAlertStatus(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
-
-// ============================================================================
-// ARGOCD GITOPS CELL RENDERERS
-// ============================================================================
-
-function ArgoApplicationCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'project': {
-      const project = getArgoApplicationProject(resource)
-      return <span className="text-sm text-theme-text-secondary">{project}</span>
-    }
-    case 'sync': {
-      const { status, color } = getArgoApplicationSync(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', color)}>
-          {status}
-        </span>
-      )
-    }
-    case 'health': {
-      const { status, color } = getArgoApplicationHealth(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', color)}>
-          {status}
-        </span>
-      )
-    }
-    case 'repo': {
-      const repo = getArgoApplicationRepo(resource)
-      return (
-        <Tooltip content={resource.spec?.source?.repoURL || resource.spec?.sources?.[0]?.repoURL || repo}>
-          <span className="text-sm text-theme-text-secondary truncate block">{repo}</span>
-        </Tooltip>
-      )
-    }
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
-
-function ArgoApplicationSetCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'generators': {
-      const generators = getArgoApplicationSetGenerators(resource)
-      return (
-        <Tooltip content={generators}>
-          <span className="text-sm text-theme-text-secondary truncate block">{generators}</span>
-        </Tooltip>
-      )
-    }
-    case 'template': {
-      const template = getArgoApplicationSetTemplate(resource)
-      return <span className="text-sm text-theme-text-secondary">{template}</span>
-    }
-    case 'applications': {
-      const count = getArgoApplicationSetAppCount(resource)
-      return (
-        <span className="text-sm text-theme-text-secondary">
-          {count > 0 ? count : '-'}
-        </span>
-      )
-    }
-    case 'status': {
-      const status = getArgoApplicationSetStatus(resource)
-      return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
-          {status.text}
-        </span>
-      )
-    }
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}
-
-function ArgoAppProjectCell({ resource, column }: { resource: any; column: string }) {
-  switch (column) {
-    case 'description': {
-      const desc = getArgoAppProjectDescription(resource)
-      return (
-        <Tooltip content={desc}>
-          <span className="text-sm text-theme-text-secondary truncate block">{desc}</span>
-        </Tooltip>
-      )
-    }
-    case 'destinations': {
-      const count = getArgoAppProjectDestinations(resource)
-      return (
-        <span className="text-sm text-theme-text-secondary">
-          {count === Infinity ? '*' : count}
-        </span>
-      )
-    }
-    case 'sources': {
-      const count = getArgoAppProjectSources(resource)
-      return (
-        <span className="text-sm text-theme-text-secondary">
-          {count === Infinity ? '*' : count}
-        </span>
-      )
-    }
-    default:
-      return <span className="text-sm text-theme-text-tertiary">-</span>
-  }
-}

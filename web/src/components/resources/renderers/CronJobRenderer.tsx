@@ -1,5 +1,5 @@
-import { Clock, AlertTriangle, Pause } from 'lucide-react'
-import { Section, PropertyList, Property } from '../drawer-components'
+import { Clock, Pause } from 'lucide-react'
+import { Section, PropertyList, Property, AlertBanner } from '../drawer-components'
 import { formatAge, cronToHuman } from '../resource-utils'
 
 interface CronJobRendererProps {
@@ -23,49 +23,30 @@ export function CronJobRenderer({ data }: CronJobRendererProps) {
     <>
       {/* Suspended warning */}
       {isSuspended && (
-        <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <Pause className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-yellow-400">CronJob Suspended</div>
-              <div className="text-xs text-yellow-300/80 mt-1">
-                No new jobs will be scheduled until this CronJob is resumed.
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="warning"
+          icon={Pause}
+          title="CronJob Suspended"
+          message="No new jobs will be scheduled until this CronJob is resumed."
+        />
       )}
 
       {/* Never run warning */}
       {hasNeverRun && !isSuspended && (
-        <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-blue-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-blue-400">Never Scheduled</div>
-              <div className="text-xs text-blue-300/80 mt-1">
-                This CronJob has never run. Check the schedule and starting deadline settings.
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="info"
+          title="Never Scheduled"
+          message="This CronJob has never run. Check the schedule and starting deadline settings."
+        />
       )}
 
       {/* Recent failures warning */}
       {recentFailures && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400">Recent Jobs Failing</div>
-              <div className="text-xs text-red-300/80 mt-1">
-                Jobs have been scheduled but haven't succeeded recently.
-                Last success: {formatAge(status.lastSuccessfulTime)}.
-                Check job history and pod logs.
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="error"
+          title="Recent Jobs Failing"
+          message={<>Jobs have been scheduled but haven't succeeded recently. Last success: {formatAge(status.lastSuccessfulTime)}. Check job history and pod logs.</>}
+        />
       )}
 
       <Section title="Schedule" icon={Clock}>

@@ -1,6 +1,6 @@
-import { Globe, AlertTriangle, ArrowRight, Network, Filter } from 'lucide-react'
+import { Globe, ArrowRight, Network, Filter } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../drawer-components'
 
 interface HTTPRouteRendererProps {
   data: any
@@ -31,38 +31,26 @@ export function HTTPRouteRenderer({ data }: HTTPRouteRendererProps) {
     <>
       {/* Accepted=False alert */}
       {notAcceptedParents.length > 0 && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400">Route Not Accepted</div>
-              <div className="text-xs text-red-300/80 mt-1">
-                {notAcceptedParents.map((p: any) => {
-                  const cond = (p.conditions || []).find((c: any) => c.type === 'Accepted' && c.status === 'False')
-                  const gwName = p.parentRef?.name || 'unknown'
-                  return cond?.reason
-                    ? `Gateway "${gwName}": ${cond.reason}${cond.message ? ' — ' + cond.message : ''}`
-                    : `Gateway "${gwName}" has not accepted this route.`
-                }).join('; ')}
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="error"
+          title="Route Not Accepted"
+          message={notAcceptedParents.map((p: any) => {
+            const cond = (p.conditions || []).find((c: any) => c.type === 'Accepted' && c.status === 'False')
+            const gwName = p.parentRef?.name || 'unknown'
+            return cond?.reason
+              ? `Gateway "${gwName}": ${cond.reason}${cond.message ? ' — ' + cond.message : ''}`
+              : `Gateway "${gwName}" has not accepted this route.`
+          }).join('; ')}
+        />
       )}
 
       {/* ResolvedRefs=False alert */}
       {unresolvedRefsParents.length > 0 && (
-        <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-yellow-400">Unresolved References</div>
-              <div className="text-xs text-yellow-300/80 mt-1">
-                Some backend references could not be resolved. Check that the target services exist and are accessible.
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="warning"
+          title="Unresolved References"
+          message="Some backend references could not be resolved. Check that the target services exist and are accessible."
+        />
       )}
 
       {/* Status section */}

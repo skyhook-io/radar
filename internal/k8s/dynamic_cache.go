@@ -856,6 +856,16 @@ func WarmupCommonCRDs() {
 		"GRPCRoute",      // Gateway API
 		"TCPRoute",       // Gateway API
 		"TLSRoute",       // Gateway API
+		"VulnerabilityReport",          // Trivy Operator
+		"ConfigAuditReport",            // Trivy Operator
+		"ExposedSecretReport",          // Trivy Operator
+		"RbacAssessmentReport",         // Trivy Operator
+		"ClusterRbacAssessmentReport",  // Trivy Operator
+		"ClusterComplianceReport",      // Trivy Operator
+		"SbomReport",                   // Trivy Operator
+		"ClusterSbomReport",            // Trivy Operator
+		"InfraAssessmentReport",        // Trivy Operator
+		"ClusterInfraAssessmentReport", // Trivy Operator
 	}
 
 	var gvrs []schema.GroupVersionResource

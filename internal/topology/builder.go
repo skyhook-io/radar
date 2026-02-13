@@ -3115,11 +3115,17 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		existingIDs[node.ID] = true
 	}
 
-	// Skip kinds already handled explicitly by buildResourcesTopology
+	// Skip kinds handled explicitly by buildResourcesTopology or excluded from topology entirely
 	processedKinds := map[string]bool{
 		"rollout": true, "application": true, "kustomization": true,
 		"helmrelease": true, "gitrepository": true, "certificate": true,
 		"gateway": true, "httproute": true, "grpcroute": true, "tcproute": true, "tlsroute": true,
+		// Trivy Operator reports - high cardinality, excluded from topology
+		"vulnerabilityreport": true, "configauditreport": true,
+		"exposedsecretreport": true, "sbomreport": true,
+		"rbacassessmentreport": true, "clusterrbacassessmentreport": true,
+		"clustercompliancereport": true, "clustersbomreport": true,
+		"infraassessmentreport": true, "clusterinfraassessmentreport": true,
 		// Core types handled by typed informers
 		"deployment": true, "daemonset": true, "statefulset": true,
 		"replicaset": true, "pod": true, "service": true, "ingress": true,

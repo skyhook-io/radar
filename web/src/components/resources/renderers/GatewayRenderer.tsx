@@ -1,6 +1,6 @@
-import { Globe, AlertTriangle, Radio, Lock } from 'lucide-react'
+import { Globe, Radio, Lock } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../drawer-components'
 
 interface GatewayRendererProps {
   data: any
@@ -34,33 +34,19 @@ export function GatewayRenderer({ data }: GatewayRendererProps) {
     <>
       {/* Problem detection alerts */}
       {isNotAccepted && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400">Gateway Not Accepted</div>
-              <div className="text-xs text-red-300/80 mt-1">
-                {acceptedCond.reason && <span className="font-medium">{acceptedCond.reason}: </span>}
-                {acceptedCond.message || 'The gateway has not been accepted by the controller.'}
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="error"
+          title="Gateway Not Accepted"
+          message={<>{acceptedCond.reason && <span className="font-medium">{acceptedCond.reason}: </span>}{acceptedCond.message || 'The gateway has not been accepted by the controller.'}</>}
+        />
       )}
 
       {isNotProgrammed && (
-        <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-yellow-400">Gateway Not Programmed</div>
-              <div className="text-xs text-yellow-300/80 mt-1">
-                {programmedCond.reason && <span className="font-medium">{programmedCond.reason}: </span>}
-                {programmedCond.message || 'The gateway configuration has not been programmed into the data plane.'}
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="warning"
+          title="Gateway Not Programmed"
+          message={<>{programmedCond.reason && <span className="font-medium">{programmedCond.reason}: </span>}{programmedCond.message || 'The gateway configuration has not been programmed into the data plane.'}</>}
+        />
       )}
 
       {/* Status section */}

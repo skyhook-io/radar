@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, Copy, Check, Tag, AlertTriangle } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, Check, Tag, AlertTriangle, CheckCircle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatAge } from './resource-utils'
 
@@ -144,6 +144,66 @@ export function ConditionsSection({ conditions }: { conditions?: any[] }) {
   )
 }
 
+// ============================================================================
+// ALERT BANNER
+// ============================================================================
+
+const ALERT_COLORS = {
+  error:   { bg: 'bg-red-500/10', border: 'border-red-500/30', title: 'text-red-400', message: 'text-red-300/80', list: 'text-red-300', bullet: 'text-red-400/60' },
+  warning: { bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', title: 'text-yellow-400', message: 'text-yellow-300/80', list: 'text-yellow-300', bullet: 'text-yellow-400/60' },
+  info:    { bg: 'bg-blue-500/10', border: 'border-blue-500/30', title: 'text-blue-400', message: 'text-blue-300/80', list: 'text-blue-300', bullet: 'text-blue-400/60' },
+  success: { bg: 'bg-green-500/10', border: 'border-green-500/30', title: 'text-green-400', message: 'text-green-300/80', list: 'text-green-300', bullet: 'text-green-400/60' },
+} as const
+
+const DEFAULT_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  error: AlertTriangle,
+  warning: AlertTriangle,
+  info: AlertTriangle,
+  success: CheckCircle,
+}
+
+interface AlertBannerProps {
+  variant: 'error' | 'warning' | 'info' | 'success'
+  icon?: React.ComponentType<{ className?: string }>
+  title: string
+  message?: React.ReactNode
+  items?: string[]
+  children?: React.ReactNode
+}
+
+export function AlertBanner({ variant, icon, title, message, items, children }: AlertBannerProps) {
+  const colors = ALERT_COLORS[variant]
+  const Icon = icon || DEFAULT_ICONS[variant]
+  const hasBody = message || items || children
+
+  return (
+    <div className={clsx('mb-4 p-3 border rounded-lg', colors.bg, colors.border)}>
+      <div className={clsx('flex gap-2', hasBody ? 'items-start' : 'items-center')}>
+        <Icon className={clsx('w-4 h-4 shrink-0', colors.title, hasBody && 'mt-0.5')} />
+        {hasBody ? (
+          <div className="flex-1 min-w-0">
+            <div className={clsx('text-sm font-medium', colors.title, items && 'mb-1')}>{title}</div>
+            {message && <div className={clsx('text-xs mt-1', colors.message)}>{message}</div>}
+            {items && items.length > 0 && (
+              <ul className={clsx('text-xs space-y-1', colors.list)}>
+                {items.map((item, i) => (
+                  <li key={i} className="flex items-start gap-1.5">
+                    <span className={clsx(colors.bullet, 'mt-0.5')}>•</span>
+                    <span>{item}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {children}
+          </div>
+        ) : (
+          <div className={clsx('text-sm font-medium', colors.title)}>{title}</div>
+        )}
+      </div>
+    </div>
+  )
+}
+
 /** Problem type for ProblemAlerts component */
 export interface Problem {
   color: 'red' | 'yellow'
@@ -157,42 +217,12 @@ export function ProblemAlerts({ problems }: { problems: Problem[] }) {
   return (
     <>
       {problems.map((problem, i) => (
-        <div
+        <AlertBanner
           key={i}
-          className={clsx(
-            'mb-4 p-3 border rounded-lg',
-            problem.color === 'red'
-              ? 'bg-red-500/10 border-red-500/30'
-              : 'bg-yellow-500/10 border-yellow-500/30'
-          )}
-        >
-          <div className="flex items-start gap-2">
-            <AlertTriangle
-              className={clsx(
-                'w-4 h-4 mt-0.5 shrink-0',
-                problem.color === 'red' ? 'text-red-400' : 'text-yellow-400'
-              )}
-            />
-            <div className="flex-1 min-w-0">
-              <div
-                className={clsx(
-                  'text-sm font-medium',
-                  problem.color === 'red' ? 'text-red-400' : 'text-yellow-400'
-                )}
-              >
-                {problem.color === 'red' ? 'Issue Detected' : 'Warning'}
-              </div>
-              <div
-                className={clsx(
-                  'text-xs mt-1',
-                  problem.color === 'red' ? 'text-red-300/80' : 'text-yellow-300/80'
-                )}
-              >
-                {problem.message}
-              </div>
-            </div>
-          </div>
-        </div>
+          variant={problem.color === 'red' ? 'error' : 'warning'}
+          title={problem.color === 'red' ? 'Issue Detected' : 'Warning'}
+          message={problem.message}
+        />
       ))}
     </>
   )
@@ -280,6 +310,7 @@ export function getKindColor(kind: string): string {
   if (k.includes('route')) return 'bg-purple-500/20 text-purple-700 dark:text-purple-300 border-purple-500/30'
   if (k.includes('ingress')) return 'bg-violet-500/20 text-violet-700 dark:text-violet-300 border-violet-500/30'
   if (k.includes('configmap')) return 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/30'
+  if (k.endsWith('report')) return 'bg-rose-500/20 text-rose-700 dark:text-rose-300 border-rose-500/30'
   if (k.includes('secret')) return 'bg-red-500/20 text-red-700 dark:text-red-300 border-red-500/30'
   if (k.includes('daemonset')) return 'bg-teal-500/20 text-teal-700 dark:text-teal-300 border-teal-500/30'
   if (k.includes('statefulset')) return 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border-cyan-500/30'

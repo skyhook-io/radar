@@ -1,5 +1,5 @@
-import { Clock, AlertTriangle, CheckCircle } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection } from '../drawer-components'
+import { Clock } from 'lucide-react'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../drawer-components'
 import { formatDuration } from '../resource-utils'
 
 interface JobRendererProps {
@@ -67,32 +67,12 @@ export function JobRenderer({ data }: JobRendererProps) {
     <>
       {/* Problems alert */}
       {hasProblems && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400 mb-1">Job Issues</div>
-              <ul className="text-xs text-red-300 space-y-1">
-                {problems.map((problem, i) => (
-                  <li key={i} className="flex items-start gap-1.5">
-                    <span className="text-red-400/60 mt-0.5">•</span>
-                    <span>{problem}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </div>
+        <AlertBanner variant="error" title="Job Issues" items={problems} />
       )}
 
       {/* Success banner */}
       {isComplete && !hasProblems && (
-        <div className="mb-4 p-3 bg-green-500/10 border border-green-500/30 rounded-lg">
-          <div className="flex items-center gap-2">
-            <CheckCircle className="w-4 h-4 text-green-400 shrink-0" />
-            <div className="text-sm font-medium text-green-400">Job Completed Successfully</div>
-          </div>
-        </div>
+        <AlertBanner variant="success" title="Job Completed Successfully" />
       )}
 
       <Section title="Status" icon={Clock}>

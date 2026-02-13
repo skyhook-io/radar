@@ -1,7 +1,7 @@
 import { useState } from 'react'
-import { Server, HardDrive, Terminal as TerminalIcon, FileText, AlertTriangle, Activity } from 'lucide-react'
+import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, CopyHandler } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner } from '../drawer-components'
 import { formatResources } from '../resource-utils'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 import { useOpenTerminal, useOpenLogs } from '../../dock'
@@ -136,22 +136,7 @@ export function PodRenderer({ data, onCopy, copied }: PodRendererProps) {
     <>
       {/* Problems alert - shown at top when there are issues */}
       {hasProblems && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400 mb-1">Issues Detected</div>
-              <ul className="text-xs text-red-300 space-y-1">
-                {problems.map((problem, i) => (
-                  <li key={i} className="flex items-start gap-1.5">
-                    <span className="text-red-400/60 mt-0.5">•</span>
-                    <span>{problem}</span>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-        </div>
+        <AlertBanner variant="error" title="Issues Detected" items={problems} />
       )}
 
       {/* Status section */}

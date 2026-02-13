@@ -15,7 +15,9 @@ import {
   // Networking
   Plug,
   DoorOpen,
+  Shield,
   ShieldCheck,
+  ShieldAlert,
   Radio,
   Globe,
 
@@ -27,6 +29,7 @@ import {
   HardDrive,
   Cylinder,
   Database,
+  FileSearch,
 
   // Cluster
   Cpu,
@@ -117,6 +120,12 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
 
   // PDB
   poddisruptionbudget: ShieldCheck,
+
+  // Trivy Operator
+  vulnerabilityreport: Shield,
+  configauditreport: ShieldCheck,
+  exposedsecretreport: ShieldAlert,
+  sbomreport: FileSearch,
 }
 
 /** Get the icon for a Kubernetes resource kind (case-insensitive). */

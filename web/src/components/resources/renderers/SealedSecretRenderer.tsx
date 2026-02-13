@@ -1,6 +1,6 @@
-import { Lock, Key, AlertTriangle, FileText } from 'lucide-react'
+import { Lock, Key, FileText } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, KeyValueBadgeList } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, KeyValueBadgeList, AlertBanner } from '../drawer-components'
 
 interface SealedSecretRendererProps {
   data: any
@@ -40,18 +40,11 @@ export function SealedSecretRenderer({ data }: SealedSecretRendererProps) {
     <>
       {/* Problem detection alert */}
       {isNotSynced && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400">Secret is not synced</div>
-              <div className="text-xs text-red-300/80 mt-1">
-                {syncedCond.reason && <span className="font-medium">{syncedCond.reason}: </span>}
-                {syncedCond.message || 'The sealed secret failed to unseal and sync to a Secret.'}
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="error"
+          title="Secret is not synced"
+          message={<>{syncedCond.reason && <span className="font-medium">{syncedCond.reason}: </span>}{syncedCond.message || 'The sealed secret failed to unseal and sync to a Secret.'}</>}
+        />
       )}
 
       {/* Status */}

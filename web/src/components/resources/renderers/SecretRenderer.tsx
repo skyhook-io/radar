@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { AlertTriangle, Copy, Check, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property } from '../drawer-components'
+import { Section, PropertyList, Property, AlertBanner } from '../drawer-components'
 import type { SecretCertificateInfo, CertificateInfo } from '../../../types'
 
 interface SecretRendererProps {
@@ -61,49 +61,27 @@ export function SecretRenderer({ data, certificateInfo }: SecretRendererProps) {
 
       {/* Certificate expiry alerts */}
       {leafCert && leafCert.expired && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400">Certificate has expired</div>
-              <div className="text-xs text-red-300/80 mt-1">
-                Expired {formatDate(leafCert.notAfter)}. {leafCert.daysLeft !== 0 && `${Math.abs(leafCert.daysLeft)}d ago.`}
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="error"
+          title="Certificate has expired"
+          message={`Expired ${formatDate(leafCert.notAfter)}.${leafCert.daysLeft !== 0 ? ` ${Math.abs(leafCert.daysLeft)}d ago.` : ''}`}
+        />
       )}
 
       {leafCert && !leafCert.expired && leafCert.daysLeft <= 7 && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400">
-                Certificate expires in {leafCert.daysLeft} day{leafCert.daysLeft !== 1 ? 's' : ''}
-              </div>
-              <div className="text-xs text-red-300/80 mt-1">
-                Check that cert-manager or your CA is renewing this certificate.
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="error"
+          title={`Certificate expires in ${leafCert.daysLeft} day${leafCert.daysLeft !== 1 ? 's' : ''}`}
+          message="Check that cert-manager or your CA is renewing this certificate."
+        />
       )}
 
       {leafCert && !leafCert.expired && leafCert.daysLeft > 7 && leafCert.daysLeft <= 30 && (
-        <div className="mb-4 p-3 bg-yellow-500/10 border border-yellow-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-yellow-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-yellow-400">
-                Certificate expires in {leafCert.daysLeft} day{leafCert.daysLeft !== 1 ? 's' : ''}
-              </div>
-              <div className="text-xs text-yellow-300/80 mt-1">
-                Renewal should happen automatically before expiry.
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="warning"
+          title={`Certificate expires in ${leafCert.daysLeft} day${leafCert.daysLeft !== 1 ? 's' : ''}`}
+          message="Renewal should happen automatically before expiry."
+        />
       )}
 
       {/* Certificate info section */}

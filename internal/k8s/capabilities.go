@@ -208,7 +208,8 @@ var (
 	cachedPermResult    *PermissionCheckResult
 	resourcePermsMu     sync.RWMutex
 	resourcePermsExpiry time.Time
-	resourcePermsTTL    = 60 * time.Second
+	resourcePermsTTL         = 60 * time.Second
+	resourcePermsErrorTTL    = 5 * time.Second // Short TTL when API errors caused fail-closed results
 )
 
 // CheckResourcePermissions checks RBAC permissions for all resource types using
@@ -286,13 +287,17 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 
 	// Phase 1: Check all resources cluster-wide
 	var wg sync.WaitGroup
+	var hadErrors atomic.Bool
 	wg.Add(len(checks))
 
 	for _, check := range checks {
 		go func(c permCheck) {
 			defer wg.Done()
-			allowed, _ := canI(ctx, "", c.group, c.resource, "list")
+			allowed, apiErr := canI(ctx, "", c.group, c.resource, "list")
 			*c.result = allowed
+			if apiErr {
+				hadErrors.Store(true)
+			}
 		}(check)
 	}
 
@@ -326,8 +331,11 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 			for _, check := range nsChecks {
 				go func(c permCheck) {
 					defer wg.Done()
-					allowed, _ := canI(ctx, fallbackNs, c.group, c.resource, "list")
+					allowed, apiErr := canI(ctx, fallbackNs, c.group, c.resource, "list")
 					*c.result = allowed
+					if apiErr {
+						hadErrors.Store(true)
+					}
 				}(check)
 			}
 			wg.Wait()
@@ -364,7 +372,12 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	}
 
 	cachedPermResult = result
-	resourcePermsExpiry = time.Now().Add(resourcePermsTTL)
+	ttl := resourcePermsTTL
+	if hadErrors.Load() {
+		ttl = resourcePermsErrorTTL
+		log.Printf("Warning: resource permission checks had API errors, using short cache TTL (%v)", ttl)
+	}
+	resourcePermsExpiry = time.Now().Add(ttl)
 
 	return result
 }

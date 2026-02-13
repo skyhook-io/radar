@@ -1,6 +1,6 @@
-import { Shield, AlertTriangle, FileText, Info } from 'lucide-react'
+import { Shield, FileText, Info } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../drawer-components'
 
 interface CertificateRequestRendererProps {
   data: any
@@ -29,33 +29,19 @@ export function CertificateRequestRenderer({ data }: CertificateRequestRendererP
     <>
       {/* Problem detection alerts */}
       {isNotReady && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400">Certificate Request Not Ready</div>
-              <div className="text-xs text-red-300/80 mt-1">
-                {readyCond.reason && <span className="font-medium">{readyCond.reason}: </span>}
-                {readyCond.message || 'The certificate request is not in a ready state.'}
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="error"
+          title="Certificate Request Not Ready"
+          message={<>{readyCond.reason && <span className="font-medium">{readyCond.reason}: </span>}{readyCond.message || 'The certificate request is not in a ready state.'}</>}
+        />
       )}
 
       {isDenied && (
-        <div className="mb-4 p-3 bg-red-500/10 border border-red-500/30 rounded-lg">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
-            <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400">Certificate request was denied</div>
-              <div className="text-xs text-red-300/80 mt-1">
-                {deniedCond.reason && <span className="font-medium">{deniedCond.reason}: </span>}
-                {deniedCond.message || 'The certificate request has been denied by the approver.'}
-              </div>
-            </div>
-          </div>
-        </div>
+        <AlertBanner
+          variant="error"
+          title="Certificate request was denied"
+          message={<>{deniedCond.reason && <span className="font-medium">{deniedCond.reason}: </span>}{deniedCond.message || 'The certificate request has been denied by the approver.'}</>}
+        />
       )}
 
       {/* Status */}

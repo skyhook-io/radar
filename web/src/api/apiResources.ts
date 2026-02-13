@@ -165,6 +165,7 @@ export function formatGroupName(group: string): string {
     'linkerd.io': 'Linkerd',
     'policy.linkerd.io': 'Linkerd',
     'cilium.io': 'Cilium',
+    'aquasecurity.github.io': 'Trivy',
     'bitnami.com': 'Bitnami',
     'elasticsearch.k8s.elastic.co': 'Elastic',
     'kibana.k8s.elastic.co': 'Elastic',

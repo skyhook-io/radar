@@ -52,6 +52,12 @@ import {
   getFluxHelmReleaseStatus,
   getFluxAlertStatus,
   getArgoApplicationStatus,
+  getVulnerabilityReportStatus,
+  getConfigAuditReportStatus,
+  getExposedSecretReportStatus,
+  getRbacAssessmentReportStatus,
+  getClusterComplianceReportStatus,
+  getSbomReportStatus,
 } from './resource-utils'
 import {
   LabelsSection,
@@ -104,6 +110,11 @@ import {
   FluxHelmReleaseRenderer,
   AlertRenderer,
   ArgoApplicationRenderer,
+  VulnerabilityReportRenderer,
+  ConfigAuditReportRenderer,
+  ExposedSecretReportRenderer,
+  ClusterComplianceReportRenderer,
+  SbomReportRenderer,
 } from './renderers'
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import { PortForwardButton } from '../portforward/PortForwardButton'
@@ -121,6 +132,22 @@ interface ResourceDetailDrawerProps {
 const MIN_WIDTH = 400
 const MAX_WIDTH_PERCENT = 0.7
 const DEFAULT_WIDTH = 550
+const WIDE_WIDTH = 750
+
+const WIDE_KINDS = new Set([
+  'vulnerabilityreports',
+  'configauditreports',
+  'exposedsecretreports',
+  'rbacassessmentreports',
+  'clusterrbacassessmentreports',
+  'clustercompliancereports',
+  'sbomreports',
+  'clustersbomreports',
+])
+
+function getDefaultWidth(kind: string): number {
+  return WIDE_KINDS.has(kind.toLowerCase()) ? WIDE_WIDTH : DEFAULT_WIDTH
+}
 
 export function ResourceDetailDrawer({ resource, onClose, onNavigate }: ResourceDetailDrawerProps) {
   const [copied, setCopied] = useState<string | null>(null)
@@ -129,10 +156,17 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate }: Resource
   const [editedYaml, setEditedYaml] = useState('')
   const [yamlErrors, setYamlErrors] = useState<string[]>([])
   const [saveSuccess, setSaveSuccess] = useState(false)
-  const [drawerWidth, setDrawerWidth] = useState(DEFAULT_WIDTH)
+  const [drawerWidth, setDrawerWidth] = useState(() => getDefaultWidth(resource.kind))
   const [isResizing, setIsResizing] = useState(false)
   const resizeStartX = useRef(0)
-  const resizeStartWidth = useRef(DEFAULT_WIDTH)
+  const resizeStartWidth = useRef(getDefaultWidth(resource.kind))
+
+  // Reset drawer width when resource kind changes
+  useEffect(() => {
+    const w = getDefaultWidth(resource.kind)
+    setDrawerWidth(w)
+    resizeStartWidth.current = w
+  }, [resource.kind])
 
   const updateResource = useUpdateResource()
 
@@ -1110,7 +1144,11 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
     'networkpolicies', 'poddisruptionbudgets', 'serviceaccounts',
     'roles', 'clusterroles', 'rolebindings', 'clusterrolebindings',
     'events', 'gitrepositories', 'ocirepositories', 'helmrepositories',
-    'kustomizations', 'helmreleases', 'alerts', 'applications'
+    'kustomizations', 'helmreleases', 'alerts', 'applications',
+    'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
+    'rbacassessmentreports', 'clusterrbacassessmentreports',
+    'clustercompliancereports', 'sbomreports', 'clustersbomreports',
+    'infraassessmentreports', 'clusterinfraassessmentreports'
   ]
   const isKnownKind = knownKinds.includes(kind)
 
@@ -1157,6 +1195,12 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
       {kind === 'helmreleases' && <FluxHelmReleaseRenderer data={data} />}
       {kind === 'alerts' && <AlertRenderer data={data} />}
       {kind === 'applications' && <ArgoApplicationRenderer data={data} />}
+      {kind === 'vulnerabilityreports' && <VulnerabilityReportRenderer data={data} />}
+      {kind === 'configauditreports' && <ConfigAuditReportRenderer data={data} />}
+      {kind === 'exposedsecretreports' && <ExposedSecretReportRenderer data={data} />}
+      {(kind === 'rbacassessmentreports' || kind === 'clusterrbacassessmentreports' || kind === 'infraassessmentreports' || kind === 'clusterinfraassessmentreports') && <ConfigAuditReportRenderer data={data} />}
+      {kind === 'clustercompliancereports' && <ClusterComplianceReportRenderer data={data} />}
+      {(kind === 'sbomreports' || kind === 'clustersbomreports') && <SbomReportRenderer data={data} />}
 
       {/* Generic renderer for CRDs and unknown resource types */}
       {!isKnownKind && <GenericRenderer data={data} />}
@@ -1326,6 +1370,36 @@ function getResourceStatus(kind: string, data: any): { text: string; color: stri
 
   if (k === 'applications') {
     const status = getArgoApplicationStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'vulnerabilityreports') {
+    const status = getVulnerabilityReportStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'configauditreports') {
+    const status = getConfigAuditReportStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'exposedsecretreports') {
+    const status = getExposedSecretReportStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'rbacassessmentreports' || k === 'clusterrbacassessmentreports' || k === 'infraassessmentreports' || k === 'clusterinfraassessmentreports') {
+    const status = getRbacAssessmentReportStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'clustercompliancereports') {
+    const status = getClusterComplianceReportStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'sbomreports' || k === 'clustersbomreports') {
+    const status = getSbomReportStatus(data)
     return { text: status.text, color: status.color }
   }
 
