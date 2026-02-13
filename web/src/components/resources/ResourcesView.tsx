@@ -715,12 +715,7 @@ function getInitialFiltersFromURL() {
   const params = new URLSearchParams(window.location.search)
   // Parse generic column filters
   const columnFilters = parseColumnFilters(params.get('filters'))
-  // Backward compatibility: alias `status` param into columnFilters
-  const statusParam = params.get('status')
-  if (statusParam && !columnFilters['status']) {
-    columnFilters['status'] = statusParam
-  }
-  return {
+  const result = {
     search: params.get('search') || '',
     columnFilters,
     problemFilters: params.get('problems')?.split(',').filter(Boolean) || [],
@@ -729,6 +724,8 @@ function getInitialFiltersFromURL() {
     ownerKind: params.get('ownerKind') || '', // e.g., "DaemonSet"
     ownerName: params.get('ownerName') || '', // e.g., "app-caretta"
   }
+  console.debug('[filters] getInitialFiltersFromURL:', { url: window.location.search, columnFilters: result.columnFilters, search: result.search, problemFilters: result.problemFilters })
+  return result
 }
 
 // Sort state type
@@ -756,6 +753,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const [ownerKind, setOwnerKind] = useState<string>(initialFilters.ownerKind)
   const [ownerName, setOwnerName] = useState<string>(initialFilters.ownerName)
 
+  console.debug('[filters] ResourcesView render:', { kind: selectedKind.name, columnFilters, searchTerm, url: location.search })
+
   // Track if this is the initial mount to avoid re-syncing on first render
   const isInitialMount = useRef(true)
   const isSyncingFromURL = useRef(false)
@@ -768,6 +767,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const lastScrolledResource = useRef<string | null>(null)
   // Ref to search input for keyboard shortcut
   const searchInputRef = useRef<HTMLInputElement>(null)
+  // Ref to filter dropdown for click-outside closing
+  const filterDropdownRef = useRef<HTMLDivElement>(null)
 
   // Keyboard shortcut: / or Cmd/Ctrl+K to focus search
   useEffect(() => {
@@ -783,12 +784,27 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return () => document.removeEventListener('keydown', handler)
   }, [])
 
+  // Close filter dropdown on outside click
+  useEffect(() => {
+    if (!showFilterDropdown) return
+    const handler = (e: MouseEvent) => {
+      if (filterDropdownRef.current && !filterDropdownRef.current.contains(e.target as Node)) {
+        setShowFilterDropdown(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showFilterDropdown])
+
   // Sync state from URL when navigation occurs (e.g., deep linking from WorkloadRenderer)
   useEffect(() => {
     if (isInitialMount.current) {
       isInitialMount.current = false
+      console.debug('[filters] URL sync effect: skipping initial mount')
       return
     }
+
+    console.debug('[filters] URL sync effect: location.search changed →', location.search)
 
     // Mark that we're syncing from URL to prevent URL write-back
     isSyncingFromURL.current = true
@@ -799,6 +815,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
     // Update kind if it changed
     if (newKind.name !== selectedKind.name || newKind.group !== selectedKind.group) {
+      console.debug('[filters] URL sync: kind changed', { from: selectedKind.name, to: newKind.name })
       setSelectedKind(newKind)
     }
 
@@ -817,11 +834,15 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     const newFiltersStr = serializeColumnFilters(newFilters.columnFilters)
     const currentFiltersStr = serializeColumnFilters(columnFilters)
     if (newFiltersStr !== currentFiltersStr) {
+      console.debug('[filters] URL sync: columnFilters changed', { from: columnFilters, to: newFilters.columnFilters })
       setColumnFilters(newFilters.columnFilters)
+    } else {
+      console.debug('[filters] URL sync: columnFilters unchanged', columnFilters)
     }
 
     // Reset the flag after a tick to allow normal URL updates
     requestAnimationFrame(() => {
+      console.debug('[filters] URL sync: resetting isSyncingFromURL flag')
       isSyncingFromURL.current = false
     })
   }, [location.search]) // Re-run when URL search params change
@@ -858,7 +879,6 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     } else {
       params.delete('filters')
     }
-    params.delete('status') // Remove legacy param
     if (problems.length > 0) {
       params.set('problems', problems.join(','))
     } else {
@@ -876,6 +896,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     }
 
     const newURL = `${window.location.pathname}?${params.toString()}`
+    console.debug('[filters] updateURL:', newURL)
     window.history.replaceState({}, '', newURL)
   }, [])
 
@@ -883,15 +904,18 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   useEffect(() => {
     // Skip URL update if we're syncing FROM the URL (e.g., browser back button)
     if (isSyncingFromURL.current) {
+      console.debug('[filters] URL update effect: skipped (syncing from URL)')
       return
     }
     // Skip URL update if selectedResource's kind doesn't match selectedKind (still syncing)
     if (selectedResource) {
       const resourceKindLower = selectedResource.kind.toLowerCase()
       if (selectedKind.name.toLowerCase() !== resourceKindLower) {
+        console.debug('[filters] URL update effect: skipped (kind mismatch)', { selectedKind: selectedKind.name, resourceKind: selectedResource.kind })
         return // Wait for kind sync effect to run first
       }
     }
+    console.debug('[filters] URL update effect: writing state to URL', { kind: selectedKind.name, columnFilters, searchTerm, problemFilters })
     updateURL(selectedKind, searchTerm, columnFilters, problemFilters, showInactiveReplicaSets, selectedResource?.namespace, selectedResource?.name)
   }, [selectedKind, searchTerm, columnFilters, problemFilters, showInactiveReplicaSets, selectedResource, updateURL])
 
@@ -1089,11 +1113,22 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   }, [resourcesToCount, resourceQueries])
 
   // Reset sort and filters when kind changes (but not when syncing from URL navigation)
+  // Track previous kind to skip on mount (where the effect fires but kind hasn't actually changed)
+  const prevKindRef = useRef(selectedKind.name)
   useEffect(() => {
+    if (prevKindRef.current === selectedKind.name) {
+      console.debug('[filters] kind-change effect: skipping (kind unchanged on mount)', selectedKind.name)
+      return
+    }
+    console.debug('[filters] kind-change effect: kind changed from', prevKindRef.current, 'to', selectedKind.name, '| isSyncingFromURL =', isSyncingFromURL.current)
+    prevKindRef.current = selectedKind.name
     setSortColumn(null)
     setSortDirection(null)
     if (!isSyncingFromURL.current) {
+      console.debug('[filters] kind-change effect: clearing columnFilters')
       setColumnFilters({})
+    } else {
+      console.debug('[filters] kind-change effect: preserving columnFilters (URL sync in progress)')
     }
     setProblemFilters([])
   }, [selectedKind.name])
@@ -1225,11 +1260,13 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     const activeColFilters = Object.entries(columnFilters).filter(([, v]) => v)
     if (activeColFilters.length > 0) {
       const kindLower = selectedKind.name.toLowerCase()
+      const beforeCount = result.length
       result = result.filter((r: any) =>
         activeColFilters.every(([col, val]) =>
           getCellFilterValue(r, col, kindLower) === val
         )
       )
+      console.debug('[filters] filteredResources: column filters applied', { filters: Object.fromEntries(activeColFilters), kind: kindLower, before: beforeCount, after: result.length })
     }
 
     // Apply problem filters (pods only)
@@ -1550,8 +1587,12 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       }
     }
 
-    if (filterableColumns.length === 0 && !problems) return null
+    if (filterableColumns.length === 0 && !problems) {
+      console.debug('[filters] filterOptions: no filterable columns detected for', kindLower)
+      return null
+    }
 
+    console.debug('[filters] filterOptions:', { kind: kindLower, columns: filterableColumns.map(c => `${c.label}(${c.values.length} vals)`), hasProblems: !!problems })
     return { columns: filterableColumns, problems }
   }, [resources, selectedKind.name])
 
@@ -1576,7 +1617,6 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     // Also clear URL params
     const params = new URLSearchParams(window.location.search)
     params.delete('filters')
-    params.delete('status')
     params.delete('labels')
     params.delete('ownerKind')
     params.delete('ownerName')
@@ -1750,7 +1790,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
           {/* Filter dropdown */}
           {filterOptions && (
-            <div className="relative">
+            <div className="relative" ref={filterDropdownRef}>
               <button
                 onClick={() => setShowFilterDropdown(!showFilterDropdown)}
                 className={clsx(

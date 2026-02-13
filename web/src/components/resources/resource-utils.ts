@@ -1758,15 +1758,20 @@ export function parseColumnFilters(filtersParam: string | null): Record<string, 
       if (key && value) filters[key] = value
     }
   }
+  console.debug('[filters] parseColumnFilters:', JSON.stringify(filtersParam), '→', filters)
   return filters
 }
 
 // Serialize column filters to URL param format
 export function serializeColumnFilters(filters: Record<string, string>): string {
-  return Object.entries(filters)
+  const result = Object.entries(filters)
     .filter(([, v]) => v)
     .map(([k, v]) => `${k}:${v}`)
     .join('|')
+  if (result || Object.keys(filters).length > 0) {
+    console.debug('[filters] serializeColumnFilters:', filters, '→', JSON.stringify(result))
+  }
+  return result
 }
 
 export function getCellFilterValue(resource: any, column: string, kind: string): string {
