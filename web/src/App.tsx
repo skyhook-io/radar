@@ -578,7 +578,7 @@ function AppInner() {
             namespaces={namespaces}
             topology={topology}
             onNavigateToView={setMainView}
-            onNavigateToResourceKind={(kind, apiGroup) => {
+            onNavigateToResourceKind={(kind, apiGroup, filters) => {
               // Navigate to resources view with kind pre-selected via URL param
               const newParams = new URLSearchParams(searchParams)
               newParams.set('kind', kind)
@@ -589,6 +589,18 @@ function AppInner() {
                 newParams.set('apiGroup', apiGroup)
               } else {
                 newParams.delete('apiGroup')
+              }
+              // Apply column filters if provided
+              if (filters && Object.keys(filters).length > 0) {
+                const filtersStr = Object.entries(filters)
+                  .filter(([, v]) => v)
+                  .map(([k, v]) => `${k}:${v}`)
+                  .join(',')
+                if (filtersStr) {
+                  newParams.set('filters', filtersStr)
+                }
+              } else {
+                newParams.delete('filters')
               }
               navigate({ pathname: '/resources', search: newParams.toString() })
             }}

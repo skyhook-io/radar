@@ -15,7 +15,7 @@ interface HomeViewProps {
   namespaces: string[]
   topology: Topology | null
   onNavigateToView: (view: ExtendedMainView, params?: Record<string, string>) => void
-  onNavigateToResourceKind: (kind: string, group?: string) => void
+  onNavigateToResourceKind: (kind: string, group?: string, filters?: Record<string, string>) => void
   onNavigateToResource: (resource: SelectedResource) => void
 }
 
@@ -90,7 +90,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
             {data.certificateHealth && (
               <CertificateHealthCard
                 data={data.certificateHealth}
-                onNavigate={() => onNavigateToResourceKind('Secret')}
+                onNavigate={() => onNavigateToResourceKind('Secret', undefined, { type: 'TLS' })}
               />
             )}
           </div>

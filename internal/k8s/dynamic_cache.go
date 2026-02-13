@@ -840,6 +840,9 @@ func WarmupCommonCRDs() {
 		"Workflow",       // Argo Workflows
 		"CronWorkflow",   // Argo Workflows
 		"Certificate",    // cert-manager
+		"CertificateRequest", // cert-manager
+		"Order",              // cert-manager ACME
+		"Challenge",          // cert-manager ACME
 		"GitRepository",  // FluxCD source
 		"OCIRepository",  // FluxCD source
 		"HelmRepository", // FluxCD source

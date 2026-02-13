@@ -170,10 +170,16 @@ func buildNodeID(kind, namespace, name string) string {
 		"jobs":                    "job",
 		"cronjobs":                "cronjob",
 		"persistentvolumeclaims":  "persistentvolumeclaim",
+		"certificates": "certificate",
 	}
 
 	if singular, ok := kindMap[k]; ok {
 		k = singular
+	} else if discovery := k8s.GetResourceDiscovery(); discovery != nil {
+		// Fall back to resource discovery for CRDs (e.g., "certificaterequests" → "certificaterequest")
+		if res, found := discovery.GetResource(k); found {
+			k = strings.ToLower(res.Kind)
+		}
 	}
 
 	return k + "/" + namespace + "/" + name
@@ -230,11 +236,18 @@ func normalizeKind(kind string) string {
 		"cronjob":                  "CronJob",
 		"persistentvolumeclaim":    "PersistentVolumeClaim",
 		"podgroup":                 "PodGroup",
+		"certificate":             "Certificate",
 		"internet":    "Internet",
 	}
 
 	if normalized, ok := kindMap[strings.ToLower(kind)]; ok {
 		return normalized
+	}
+	// Fall back to resource discovery for CRDs (e.g., "certificaterequest" → "CertificateRequest")
+	if discovery := k8s.GetResourceDiscovery(); discovery != nil {
+		if res, found := discovery.GetResource(kind); found {
+			return res.Kind
+		}
 	}
 	return kind
 }

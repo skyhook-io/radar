@@ -1,3 +1,102 @@
-<svg width="400" height="230" viewBox="0 0 400 230" fill="none" xmlns="http://www.w3.org/2000/svg">
-<path d="M285.354 229.272C222.143 229.272 170.735 177.864 170.735 114.653V111.583C170.735 77.3338 146.276 55.1946 108.445 55.1946C70.6136 55.1946 42.8116 84.634 42.8116 120.828C42.8116 157.021 72.251 186.461 108.445 186.461C120.214 186.461 131.778 183.322 141.841 177.353L163.639 214.195C146.958 224.053 127.889 229.272 108.445 229.272C48.6449 229.272 0 180.628 0 120.828C0 61.0279 48.6449 12.383 108.445 12.383C168.245 12.383 213.546 53.1819 213.546 111.583V114.653C213.546 154.258 245.749 186.461 285.354 186.461C324.959 186.461 357.162 154.258 357.162 114.653C357.162 75.0483 324.959 42.8457 285.354 42.8457C272.459 42.8457 259.838 46.2911 248.819 52.8067L226.987 15.9648C244.589 5.52628 264.784 0 285.32 0C348.531 0 399.939 51.4081 399.939 114.619C399.939 177.83 348.531 229.238 285.32 229.238L285.354 229.272Z" fill="#2D7AFF"/>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <defs>
+    <!-- Dark background gradient -->
+    <radialGradient id="bg" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#0a1e3d"/>
+      <stop offset="70%" stop-color="#06132a"/>
+      <stop offset="100%" stop-color="#020a18"/>
+    </radialGradient>
+
+    <!-- Sweep trail gradient (conic approximation) -->
+    <linearGradient id="sweepGlow" x1="0" y1="0" x2="1" y2="0" gradientTransform="rotate(-45, 0.5, 0.5)">
+      <stop offset="0%" stop-color="#00ccff" stop-opacity="0"/>
+      <stop offset="60%" stop-color="#00aaff" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#66eeff" stop-opacity="0.5"/>
+    </linearGradient>
+
+    <!-- Ring glow -->
+    <filter id="ringGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="1.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Dot glow -->
+    <filter id="dotGlow" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="2.5" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Sweep line glow -->
+    <filter id="lineGlow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Outer ring glow -->
+    <filter id="outerGlow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur stdDeviation="4" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Clip to circle -->
+    <clipPath id="radarClip">
+      <circle cx="128" cy="128" r="118"/>
+    </clipPath>
+  </defs>
+
+  <!-- Background -->
+  <circle cx="128" cy="128" r="128" fill="#020a18"/>
+  <circle cx="128" cy="128" r="118" fill="url(#bg)"/>
+
+  <!-- Outer ring -->
+  <circle cx="128" cy="128" r="118" fill="none" stroke="#3ab8ff" stroke-width="3.5" filter="url(#outerGlow)" opacity="0.9"/>
+
+  <!-- Concentric rings -->
+  <g filter="url(#ringGlow)" opacity="0.6">
+    <circle cx="128" cy="128" r="90" fill="none" stroke="#2090dd" stroke-width="1.2"/>
+    <circle cx="128" cy="128" r="62" fill="none" stroke="#2090dd" stroke-width="1.2"/>
+    <circle cx="128" cy="128" r="34" fill="none" stroke="#2090dd" stroke-width="1.2"/>
+  </g>
+
+  <!-- Crosshairs (subtle) -->
+  <g opacity="0.15" stroke="#3ab8ff" stroke-width="0.5">
+    <line x1="128" y1="10" x2="128" y2="246"/>
+    <line x1="10" y1="128" x2="246" y2="128"/>
+  </g>
+
+  <!-- Sweep trail (pie wedge) -->
+  <g clip-path="url(#radarClip)">
+    <path d="M128,128 L128,10 A118,118 0 0,1 211.5,44.5 Z" fill="url(#sweepGlow)" opacity="0.7"/>
+    <!-- Secondary softer trail -->
+    <path d="M128,128 L211.5,44.5 A118,118 0 0,1 240,95 Z" fill="#00ccff" opacity="0.05"/>
+  </g>
+
+  <!-- Sweep line -->
+  <line x1="128" y1="128" x2="211" y2="45" stroke="#aaeeff" stroke-width="2" filter="url(#lineGlow)" stroke-linecap="round"/>
+  <line x1="128" y1="128" x2="211" y2="45" stroke="#ffffff" stroke-width="1" opacity="0.9" stroke-linecap="round"/>
+
+  <!-- Radar blips -->
+  <g filter="url(#dotGlow)">
+    <circle cx="155" cy="68" r="4" fill="#ffffff" opacity="0.95"/>
+    <circle cx="178" cy="108" r="3.5" fill="#ffffff" opacity="0.9"/>
+    <circle cx="98" cy="85" r="3" fill="#eeffff" opacity="0.7"/>
+    <circle cx="85" cy="155" r="3.5" fill="#eeffff" opacity="0.65"/>
+    <circle cx="160" cy="175" r="3" fill="#eeffff" opacity="0.6"/>
+    <circle cx="108" cy="195" r="3.5" fill="#eeffff" opacity="0.5"/>
+  </g>
+
+  <!-- Center dot -->
+  <circle cx="128" cy="128" r="3" fill="#66eeff" filter="url(#dotGlow)" opacity="0.8"/>
 </svg>

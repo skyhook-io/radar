@@ -1368,6 +1368,96 @@ export function getClusterIssuerType(issuer: any): string {
 }
 
 // ============================================================================
+// ISSUER UTILITIES (cert-manager)
+// Issuers and ClusterIssuers share the same spec/status schema in cert-manager,
+// differing only in scope (namespaced vs cluster-wide).
+// ============================================================================
+
+export const getIssuerStatus = getClusterIssuerStatus
+export const getIssuerType = getClusterIssuerType
+
+// ============================================================================
+// ORDER UTILITIES (cert-manager ACME)
+// ============================================================================
+
+export function getOrderState(order: any): StatusBadge {
+  const state = order.status?.state || ''
+  switch (state.toLowerCase()) {
+    case 'valid':
+      return { text: 'Valid', color: healthColors.healthy, level: 'healthy' }
+    case 'ready':
+      return { text: 'Ready', color: 'bg-blue-500/20 text-blue-400', level: 'healthy' }
+    case 'pending':
+      return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+    case 'invalid':
+      return { text: 'Invalid', color: healthColors.unhealthy, level: 'unhealthy' }
+    case 'expired':
+      return { text: 'Expired', color: healthColors.unhealthy, level: 'unhealthy' }
+    case 'errored':
+      return { text: 'Errored', color: healthColors.unhealthy, level: 'unhealthy' }
+    default:
+      return { text: state || 'Unknown', color: healthColors.unknown, level: 'unknown' }
+  }
+}
+
+export function getOrderDomains(order: any): string {
+  const dnsNames = order.spec?.dnsNames || []
+  if (dnsNames.length === 0) return '-'
+  if (dnsNames.length === 1) return dnsNames[0]
+  if (dnsNames.length <= 2) return dnsNames.join(', ')
+  return `${dnsNames[0]} +${dnsNames.length - 1}`
+}
+
+export function getOrderIssuer(order: any): string {
+  return order.spec?.issuerRef?.name || '-'
+}
+
+// ============================================================================
+// CHALLENGE UTILITIES (cert-manager ACME)
+// ============================================================================
+
+export function getChallengeState(challenge: any): StatusBadge {
+  const state = challenge.status?.state || ''
+  switch (state.toLowerCase()) {
+    case 'valid':
+      return { text: 'Valid', color: healthColors.healthy, level: 'healthy' }
+    case 'ready':
+      return { text: 'Ready', color: 'bg-blue-500/20 text-blue-400', level: 'healthy' }
+    case 'pending':
+      return { text: 'Pending', color: healthColors.degraded, level: 'degraded' }
+    case 'processing':
+      return { text: 'Processing', color: healthColors.degraded, level: 'degraded' }
+    case 'invalid':
+      return { text: 'Invalid', color: healthColors.unhealthy, level: 'unhealthy' }
+    case 'expired':
+      return { text: 'Expired', color: healthColors.unhealthy, level: 'unhealthy' }
+    case 'errored':
+      return { text: 'Errored', color: healthColors.unhealthy, level: 'unhealthy' }
+    default:
+      return { text: state || 'Unknown', color: healthColors.unknown, level: 'unknown' }
+  }
+}
+
+export function getChallengeType(challenge: any): string {
+  const type = challenge.spec?.type
+  if (type) return type
+  if (challenge.spec?.solver?.http01) return 'HTTP-01'
+  if (challenge.spec?.solver?.dns01) return 'DNS-01'
+  return 'Unknown'
+}
+
+export function getChallengeDomain(challenge: any): string {
+  return challenge.spec?.dnsName || '-'
+}
+
+export function getChallengePresented(challenge: any): string {
+  const presented = challenge.status?.presented
+  if (presented === true) return 'Yes'
+  if (presented === false) return 'No'
+  return '-'
+}
+
+// ============================================================================
 // GATEWAY UTILITIES (Gateway API)
 // ============================================================================
 
@@ -1644,4 +1734,102 @@ export function formatResources(resources: any): string {
     parts.push(`Mem: ${formatMemoryString(resources.memory)}`)
   }
   return parts.join(', ') || '-'
+}
+
+// ============================================================================
+// GENERIC COLUMN FILTER VALUE EXTRACTION
+// ============================================================================
+
+/**
+ * Extracts a string filter value for a given column key and resource kind.
+ * Used by the generic column filter system to match resources against filter values.
+ * Reuses existing utility functions for kind-specific columns.
+ */
+export function getCellFilterValue(resource: any, column: string, kind: string): string {
+  const kindLower = kind.toLowerCase()
+
+  switch (column) {
+    case 'type':
+      if (kindLower === 'secrets' || kindLower === 'sealedsecrets') return getSecretType(resource).type
+      if (kindLower === 'services') return resource.spec?.type || ''
+      if (kindLower === 'events') return resource.type || ''
+      if (kindLower === 'helmrepositories') return getHelmRepositoryType(resource)
+      return resource.spec?.type || resource.type || ''
+    case 'status':
+      if (kindLower === 'pods') return getPodStatus(resource).text
+      if (['deployments', 'statefulsets', 'daemonsets', 'replicasets'].includes(kindLower)) {
+        const status = getWorkloadStatus(resource, kindLower)
+        if (status.text === 'Scaled to 0') return 'Scaled to 0'
+        if (status.level === 'healthy') return 'Healthy'
+        if (status.level === 'degraded') return 'Degraded'
+        if (status.level === 'unhealthy') return 'Unhealthy'
+        return 'Unknown'
+      }
+      if (kindLower === 'nodes') return getNodeStatus(resource).text
+      if (kindLower === 'jobs') return getJobStatus(resource).text
+      if (kindLower === 'cronjobs') return getCronJobStatus(resource).text
+      if (kindLower === 'certificates') return getCertificateStatus(resource).text
+      if (kindLower === 'certificaterequests') return getCertificateRequestStatus(resource).text
+      if (kindLower === 'clusterissuers' || kindLower === 'issuers') return getClusterIssuerStatus(resource).text
+      if (kindLower === 'persistentvolumeclaims') return getPVCStatus(resource).text
+      if (kindLower === 'persistentvolumes') return getPVStatus(resource).text
+      if (kindLower === 'rollouts') return getRolloutStatus(resource).text
+      if (kindLower === 'workflows') return getWorkflowStatus(resource).text
+      if (kindLower === 'hpas' || kindLower === 'horizontalpodautoscalers') return getHPAStatus(resource).text
+      if (kindLower === 'gateways') return getGatewayStatus(resource).text
+      if (kindLower === 'gatewayclasses') return getGatewayClassStatus(resource).text
+      if (['httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes'].includes(kindLower)) return getRouteStatus(resource).text
+      if (kindLower === 'sealedsecrets') return getSealedSecretStatus(resource).text
+      if (kindLower === 'poddisruptionbudgets') return getPDBStatus(resource).text
+      if (kindLower === 'applications') return getArgoApplicationStatus(resource).text
+      if (kindLower === 'applicationsets') return getArgoApplicationSetStatus(resource).text
+      if (kindLower === 'gitrepositories') return getGitRepositoryStatus(resource).text
+      if (kindLower === 'ocirepositories') return getOCIRepositoryStatus(resource).text
+      if (kindLower === 'helmrepositories') return getHelmRepositoryStatus(resource).text
+      if (kindLower === 'kustomizations') return getKustomizationStatus(resource).text
+      if (kindLower === 'helmreleases') return getFluxHelmReleaseStatus(resource).text
+      if (kindLower === 'alerts') return getFluxAlertStatus(resource).text
+      // Generic CRDs: try status.phase, then Ready condition
+      if (resource.status?.phase) return resource.status.phase
+      {
+        const conditions = resource.status?.conditions || []
+        const ready = conditions.find((c: any) => c.type === 'Ready')
+        if (ready?.status === 'True') return 'Ready'
+        if (ready?.status === 'False') return 'Not Ready'
+      }
+      return ''
+    case 'state':
+      if (kindLower === 'orders') return getOrderState(resource).text
+      if (kindLower === 'challenges') return getChallengeState(resource).text
+      return resource.status?.state || ''
+    case 'challengeType':
+      return getChallengeType(resource)
+    case 'issuerType':
+      return getClusterIssuerType(resource)
+    case 'class':
+      return resource.spec?.ingressClassName || resource.spec?.gatewayClassName || ''
+    case 'roles':
+      return getNodeRoles(resource)
+    case 'strategy':
+      return getRolloutStrategy(resource)
+    case 'storageClass':
+      return resource.spec?.storageClassName || ''
+    case 'reclaimPolicy':
+      return resource.reclaimPolicy || resource.spec?.persistentVolumeReclaimPolicy || ''
+    case 'bindingMode':
+      return getStorageClassBindingMode(resource)
+    case 'expansion':
+      return getStorageClassExpansion(resource)
+    case 'automount':
+      return getServiceAccountAutomount(resource)
+    case 'policyTypes':
+      return getNetworkPolicyTypes(resource)
+  }
+
+  // Fallback: try common paths
+  const val = resource.status?.[column] ?? resource.spec?.[column] ?? resource[column]
+  if (val === undefined || val === null) return ''
+  if (typeof val === 'boolean') return val ? 'Yes' : 'No'
+  if (typeof val === 'string') return val
+  return String(val)
 }

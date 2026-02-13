@@ -36,6 +36,9 @@ import {
   getCertificateStatus,
   getPVStatus,
   getClusterIssuerStatus,
+  getIssuerStatus,
+  getOrderState,
+  getChallengeState,
   getCertificateRequestStatus,
   getGatewayStatus,
   getGatewayClassStatus,
@@ -79,6 +82,9 @@ import {
   StorageClassRenderer,
   CertificateRequestRenderer,
   ClusterIssuerRenderer,
+  IssuerRenderer,
+  OrderRenderer,
+  ChallengeRenderer,
   GatewayRenderer,
   GatewayClassRenderer,
   HTTPRouteRenderer,
@@ -1098,7 +1104,8 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
     'services', 'ingresses', 'configmaps', 'secrets', 'jobs', 'cronjobs',
     'hpas', 'horizontalpodautoscalers', 'nodes', 'persistentvolumeclaims',
     'rollouts', 'certificates', 'workflows', 'persistentvolumes',
-    'storageclasses', 'certificaterequests', 'clusterissuers',
+    'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
+    'orders', 'challenges',
     'gateways', 'httproutes', 'sealedsecrets', 'workflowtemplates',
     'networkpolicies', 'poddisruptionbudgets', 'serviceaccounts',
     'roles', 'clusterroles', 'rolebindings', 'clusterrolebindings',
@@ -1129,6 +1136,9 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
       {kind === 'storageclasses' && <StorageClassRenderer data={data} />}
       {kind === 'certificaterequests' && <CertificateRequestRenderer data={data} />}
       {kind === 'clusterissuers' && <ClusterIssuerRenderer data={data} />}
+      {kind === 'issuers' && <IssuerRenderer data={data} />}
+      {kind === 'orders' && <OrderRenderer data={data} />}
+      {kind === 'challenges' && <ChallengeRenderer data={data} />}
       {kind === 'gateways' && <GatewayRenderer data={data} />}
       {kind === 'gatewayclasses' && <GatewayClassRenderer data={data} />}
       {kind === 'httproutes' && <HTTPRouteRenderer data={data} />}
@@ -1241,6 +1251,21 @@ function getResourceStatus(kind: string, data: any): { text: string; color: stri
 
   if (k === 'clusterissuers') {
     const status = getClusterIssuerStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'issuers') {
+    const status = getIssuerStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'orders') {
+    const status = getOrderState(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'challenges') {
+    const status = getChallengeState(data)
     return { text: status.text, color: status.color }
   }
 

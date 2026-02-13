@@ -27,6 +27,7 @@ const (
 	KindKustomization NodeKind = "Kustomization" // FluxCD Kustomization
 	KindHelmRelease   NodeKind = "HelmRelease"   // FluxCD HelmRelease (Flux, not native Helm)
 	KindGitRepository NodeKind = "GitRepository" // FluxCD GitRepository
+	KindCertificate   NodeKind = "Certificate"   // cert-manager Certificate
 	KindDaemonSet     NodeKind = "DaemonSet"
 	KindStatefulSet   NodeKind = "StatefulSet"
 	KindReplicaSet    NodeKind = "ReplicaSet"

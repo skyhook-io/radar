@@ -41,8 +41,8 @@ type CertificateInfo struct {
 
 // SecretCertificateInfo holds parsed certificate data for a TLS secret.
 // Attached to secret responses so the frontend doesn't need to parse certs.
-// Certificates are ordered leaf-first: index 0 is the server certificate,
-// subsequent entries are intermediates/root.
+// Certificates are returned in PEM order (conventionally leaf-first: index 0 is the
+// server certificate, subsequent entries are intermediates/root).
 type SecretCertificateInfo struct {
 	Certificates []CertificateInfo `json:"certificates"`
 }
@@ -75,15 +75,25 @@ func (s *Server) handleSecretCertExpiry(w http.ResponseWriter, r *http.Request) 
 
 	namespaces := parseNamespaces(r.URL.Query())
 	var secrets []*corev1.Secret
+	var listErr error
 	if len(namespaces) == 1 {
-		secrets, _ = lister.Secrets(namespaces[0]).List(labels.Everything())
+		secrets, listErr = lister.Secrets(namespaces[0]).List(labels.Everything())
 	} else if len(namespaces) > 1 {
 		for _, ns := range namespaces {
-			nsSecrets, _ := lister.Secrets(ns).List(labels.Everything())
+			nsSecrets, err := lister.Secrets(ns).List(labels.Everything())
+			if err != nil {
+				listErr = err
+				break
+			}
 			secrets = append(secrets, nsSecrets...)
 		}
 	} else {
-		secrets, _ = lister.List(labels.Everything())
+		secrets, listErr = lister.List(labels.Everything())
+	}
+	if listErr != nil {
+		log.Printf("[certificate] Failed to list secrets: %v", listErr)
+		s.writeError(w, http.StatusInternalServerError, "Failed to list secrets")
+		return
 	}
 
 	result := make(map[string]CertExpiry)
@@ -132,10 +142,15 @@ func (s *Server) getDashboardCertificateHealth(namespace string) *DashboardCerti
 	}
 
 	var secrets []*corev1.Secret
+	var err error
 	if namespace != "" {
-		secrets, _ = lister.Secrets(namespace).List(labels.Everything())
+		secrets, err = lister.Secrets(namespace).List(labels.Everything())
 	} else {
-		secrets, _ = lister.List(labels.Everything())
+		secrets, err = lister.List(labels.Everything())
+	}
+	if err != nil {
+		log.Printf("[certificate] Failed to list secrets for dashboard health: %v", err)
+		return nil
 	}
 
 	health := &DashboardCertificateHealth{}

@@ -2,10 +2,6 @@ import { Shield, AlertTriangle, Globe, Lock, Key } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection } from '../drawer-components'
 
-interface ClusterIssuerRendererProps {
-  data: any
-}
-
 function detectIssuerType(spec: any): string {
   if (spec.acme) return 'ACME'
   if (spec.ca) return 'CA'
@@ -14,7 +10,7 @@ function detectIssuerType(spec: any): string {
   return 'Unknown'
 }
 
-function getSolverType(solver: any): { type: string; detail: string } {
+export function getSolverType(solver: any): { type: string; detail: string } {
   if (solver.http01) {
     const ingressClass = solver.http01.ingress?.class || solver.http01.ingress?.ingressClassName
     return { type: 'HTTP-01', detail: ingressClass ? `Ingress class: ${ingressClass}` : 'Ingress solver' }
@@ -34,7 +30,7 @@ function getSolverType(solver: any): { type: string; detail: string } {
   return { type: 'Unknown', detail: '' }
 }
 
-export function ClusterIssuerRenderer({ data }: ClusterIssuerRendererProps) {
+function IssuerRendererBase({ data, kind }: { data: any; kind: string }) {
   const spec = data.spec || {}
   const status = data.status || {}
   const conditions = status.conditions || []
@@ -57,7 +53,7 @@ export function ClusterIssuerRenderer({ data }: ClusterIssuerRendererProps) {
           <div className="flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 text-red-400 mt-0.5 shrink-0" />
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-red-400">ClusterIssuer Not Ready</div>
+              <div className="text-sm font-medium text-red-400">{kind} Not Ready</div>
               <div className="text-xs text-red-300/80 mt-1">
                 {readyCond.reason && <span className="font-medium">{readyCond.reason}: </span>}
                 {readyCond.message || 'The issuer is not in a ready state.'}
@@ -146,4 +142,12 @@ export function ClusterIssuerRenderer({ data }: ClusterIssuerRendererProps) {
       <ConditionsSection conditions={conditions} />
     </>
   )
+}
+
+export function ClusterIssuerRenderer({ data }: { data: any }) {
+  return <IssuerRendererBase data={data} kind="ClusterIssuer" />
+}
+
+export function IssuerRenderer({ data }: { data: any }) {
+  return <IssuerRendererBase data={data} kind="Issuer" />
 }

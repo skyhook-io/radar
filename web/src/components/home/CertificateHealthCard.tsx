@@ -37,7 +37,7 @@ export function CertificateHealthCard({ data, onNavigate }: CertificateHealthCar
       </div>
 
       <div className="flex-1 min-h-0 flex flex-col items-center justify-center px-4 py-4">
-        {/* Summary ring / bar */}
+        {/* Expiry distribution bar */}
         <div className="flex items-center gap-3 w-full">
           {/* Color bar showing distribution */}
           <div className="flex-1 h-3 rounded-full overflow-hidden bg-theme-hover flex">

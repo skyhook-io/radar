@@ -674,6 +674,42 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
+	// 1g. Add cert-manager Certificate nodes (CRD - fetched via dynamic cache)
+	// Certificates need explicit handling because Certificate→Secret uses spec.secretName (not ownerRef)
+	var certificateGVR schema.GroupVersionResource
+	hasCertificates := false
+	if resourceDiscovery != nil {
+		certificateGVR, hasCertificates = resourceDiscovery.GetGVR("Certificate")
+	}
+	var certificateResources []unstructured.Unstructured
+	if hasCertificates && dynamicCache != nil {
+		certs, certErr := dynamicCache.List(certificateGVR, opts.NamespaceFilter())
+		if certErr != nil {
+			log.Printf("WARNING [topology] Failed to list cert-manager Certificates: %v", certErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list cert-manager Certificates: %v", certErr))
+		}
+		for _, cert := range certs {
+			ns := cert.GetNamespace()
+			if !opts.MatchesNamespaceFilter(ns) {
+				continue
+			}
+			name := cert.GetName()
+
+			certID := fmt.Sprintf("certificate/%s/%s", ns, name)
+			nodes = append(nodes, Node{
+				ID:     certID,
+				Kind:   KindCertificate,
+				Name:   name,
+				Status: extractCertificateStatus(*cert),
+				Data: map[string]any{
+					"namespace": ns,
+					"labels":    cert.GetLabels(),
+				},
+			})
+			certificateResources = append(certificateResources, *cert)
+		}
+	}
+
 	// 2. Add DaemonSet nodes
 	var daemonsets []*appsv1.DaemonSet
 	if lister := b.cache.DaemonSets(); lister != nil {
@@ -2035,6 +2071,30 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
+	// 15b. Create cert-manager Certificate → Secret edges (via spec.secretName)
+	secretIDs := make(map[string]bool)
+	for _, node := range nodes {
+		if node.Kind == KindSecret {
+			secretIDs[node.ID] = true
+		}
+	}
+	for _, cert := range certificateResources {
+		ns := cert.GetNamespace()
+		certID := fmt.Sprintf("certificate/%s/%s", ns, cert.GetName())
+		secretName, _, _ := unstructured.NestedString(cert.Object, "spec", "secretName")
+		if secretName != "" {
+			secretID := fmt.Sprintf("secret/%s/%s", ns, secretName)
+			if secretIDs[secretID] {
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", certID, secretID),
+					Source: certID,
+					Target: secretID,
+					Type:   EdgeManages,
+				})
+			}
+		}
+	}
+
 	// 16. Add generic CRD nodes connected via owner references
 	// Only includes CRDs already being watched and with owner refs to existing nodes
 	if opts.IncludeGenericCRDs {
@@ -3013,9 +3073,35 @@ func extractGenericStatus(resource *unstructured.Unstructured) HealthStatus {
 	return StatusUnknown
 }
 
-// addGenericCRDNodes adds CRD nodes that have owner references to existing topology nodes.
-// This enables the topology to display ANY CRD type without hardcoding, as long as
-// the CRD has an owner reference chain leading to a known topology node.
+// extractCertificateStatus reads the Ready condition from a cert-manager Certificate
+func extractCertificateStatus(cert unstructured.Unstructured) HealthStatus {
+	conditions, found, _ := unstructured.NestedSlice(cert.Object, "status", "conditions")
+	if !found {
+		return StatusUnknown
+	}
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cond["type"] == "Ready" {
+			switch cond["status"] {
+			case "True":
+				return StatusHealthy
+			case "False":
+				return StatusUnhealthy
+			}
+			return StatusUnknown
+		}
+	}
+	return StatusUnknown
+}
+
+// addGenericCRDNodes adds CRD nodes connected to the topology via owner references.
+// It uses two-phase resolution: first collecting all candidate CRD resources, then
+// iteratively adding nodes whose owners are already in the topology. This handles
+// multi-level CRD chains (e.g., Certificate → CertificateRequest → Order) where
+// intermediate nodes only become resolvable after their parents are added.
 func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptions) ([]Node, []Edge) {
 	dynamicCache := k8s.GetDynamicResourceCache()
 	resourceDiscovery := k8s.GetResourceDiscovery()
@@ -3032,7 +3118,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 	// Skip kinds already handled explicitly by buildResourcesTopology
 	processedKinds := map[string]bool{
 		"rollout": true, "application": true, "kustomization": true,
-		"helmrelease": true, "gitrepository": true,
+		"helmrelease": true, "gitrepository": true, "certificate": true,
 		"gateway": true, "httproute": true, "grpcroute": true, "tcproute": true, "tlsroute": true,
 		// Core types handled by typed informers
 		"deployment": true, "daemonset": true, "statefulset": true,
@@ -3046,6 +3132,15 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 	// Track per-kind counts to prevent any single CRD type from overwhelming the topology
 	crdCounts := make(map[string]int)
 	maxPerKind := 50
+
+	// Phase 1: Collect all candidate CRD resources
+	type candidate struct {
+		nodeID    string
+		node      Node
+		ownerRefs []string // ownerKind/ns/name IDs
+		ns        string
+	}
+	var candidates []candidate
 
 	for _, gvr := range dynamicCache.GetWatchedResources() {
 		kind := resourceDiscovery.GetKindForGVR(gvr)
@@ -3070,10 +3165,6 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		}
 
 		for _, resource := range resources {
-			if crdCounts[kindLower] >= maxPerKind {
-				break
-			}
-
 			ns := resource.GetNamespace()
 			if !opts.MatchesNamespaceFilter(ns) {
 				continue
@@ -3092,39 +3183,66 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 				continue
 			}
 
-			// Check if any owner exists in the topology
-			var ownerEdges []Edge
+			// Collect owner IDs
+			var ownerNodeIDs []string
 			for _, ref := range ownerRefs {
 				ownerKindLower := strings.ToLower(ref.Kind)
-				ownerID := fmt.Sprintf("%s/%s/%s", ownerKindLower, ns, ref.Name)
+				ownerNodeIDs = append(ownerNodeIDs, fmt.Sprintf("%s/%s/%s", ownerKindLower, ns, ref.Name))
+			}
+
+			candidates = append(candidates, candidate{
+				nodeID: nodeID,
+				node: Node{
+					ID:     nodeID,
+					Kind:   NodeKind(kind),
+					Name:   name,
+					Status: extractGenericStatus(resource),
+					Data: map[string]any{
+						"namespace": ns,
+						"labels":    resource.GetLabels(),
+					},
+				},
+				ownerRefs: ownerNodeIDs,
+				ns:        ns,
+			})
+		}
+	}
+
+	// Phase 2: Iterative resolution — keep adding nodes whose owners exist
+	for {
+		added := 0
+		remaining := candidates[:0] // reuse slice
+		for _, c := range candidates {
+			kindLower := strings.ToLower(string(c.node.Kind))
+			if crdCounts[kindLower] >= maxPerKind {
+				continue // drop — kind at capacity
+			}
+
+			var ownerEdges []Edge
+			for _, ownerID := range c.ownerRefs {
 				if existingIDs[ownerID] {
 					ownerEdges = append(ownerEdges, Edge{
-						ID:     fmt.Sprintf("%s-to-%s", ownerID, nodeID),
+						ID:     fmt.Sprintf("%s-to-%s", ownerID, c.nodeID),
 						Source: ownerID,
-						Target: nodeID,
+						Target: c.nodeID,
 						Type:   EdgeManages,
 					})
 				}
 			}
 
-			// Only add node if at least one owner exists in topology
-			if len(ownerEdges) == 0 {
-				continue
+			if len(ownerEdges) > 0 {
+				nodes = append(nodes, c.node)
+				edges = append(edges, ownerEdges...)
+				existingIDs[c.nodeID] = true
+				crdCounts[kindLower]++
+				added++
+			} else {
+				remaining = append(remaining, c)
 			}
-
-			nodes = append(nodes, Node{
-				ID:     nodeID,
-				Kind:   NodeKind(kind),
-				Name:   name,
-				Status: extractGenericStatus(resource),
-				Data: map[string]any{
-					"namespace": ns,
-					"labels":    resource.GetLabels(),
-				},
-			})
-			edges = append(edges, ownerEdges...)
-			existingIDs[nodeID] = true
-			crdCounts[kindLower]++
+		}
+		candidates = remaining
+		if added == 0 {
+			break // No progress — stop
 		}
 	}
 

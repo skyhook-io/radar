@@ -331,6 +331,7 @@ export interface SecretCertificateInfo {
   certificates: CertificateInfo[]
 }
 
+// Resource with computed relationships and optional certificate info (API response wrapper)
 export interface ResourceWithRelationships<T = unknown> {
   resource: T
   relationships?: Relationships
