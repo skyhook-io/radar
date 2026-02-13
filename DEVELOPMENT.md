@@ -4,7 +4,7 @@ Guide for developers contributing to Radar or building custom versions.
 
 ## Prerequisites
 
-- **Go 1.22+**
+- **Go 1.25+**
 - **Node.js 20+**
 - **npm**
 - **kubectl** with cluster access
@@ -32,6 +32,7 @@ Open http://localhost:9273 — the Vite dev server proxies `/api` requests to th
 ## Make Commands
 
 ```bash
+make deps             # Install all dependencies (Go + npm)
 make build            # Build everything (frontend + embedded binary)
 make frontend         # Build frontend only
 make backend          # Build backend only
@@ -40,6 +41,9 @@ make tsc              # TypeScript type check
 make lint             # Run linter
 make clean            # Clean build artifacts
 make docker           # Build Docker image
+make desktop-dev      # Desktop app dev mode with hot reload (Wails)
+make desktop          # Build desktop binary
+make desktop-package-darwin  # Package macOS .app bundle
 ```
 
 ## Project Structure
@@ -115,69 +119,13 @@ radar/
 
 ### Tech Stack
 
-**Backend:** Go 1.22+, client-go, chi router, gorilla/websocket, Helm SDK, `go:embed`
+**Backend:** Go 1.25+, client-go, chi router, gorilla/websocket, Helm SDK, Cilium/Hubble, go-containerregistry, SQLite, Wails v2, `go:embed`
 
-**Frontend:** React 18, TypeScript, Vite, @xyflow/react + ELK.js, @xterm/xterm, Monaco Editor, TanStack React Query v5, Tailwind CSS + shadcn/ui
+**Frontend:** React 19, TypeScript, Vite, @xyflow/react + ELK.js, @xterm/xterm, Monaco Editor, TanStack React Query v5, Tailwind CSS v4 + shadcn/ui
 
 ## API Reference
 
-### Core
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/health` | Health check with resource counts |
-| `GET /api/cluster-info` | Cluster platform and version info |
-| `GET /api/capabilities` | RBAC capability detection (exec, logs, port-forward, secrets) |
-| `GET /api/topology` | Current topology graph (filterable by `?namespace=` and `?view=`) |
-| `GET /api/namespaces` | List of namespaces |
-| `GET /api/api-resources` | Available API resources (for CRD discovery) |
-
-### Resources
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/resources/{kind}` | List resources by kind |
-| `GET /api/resources/{kind}/{ns}/{name}` | Get single resource with relationships |
-| `PUT /api/resources/{kind}/{ns}/{name}` | Update resource from YAML |
-| `DELETE /api/resources/{kind}/{ns}/{name}` | Delete resource |
-
-### Events & History
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/events` | Recent Kubernetes events |
-| `GET /api/events/stream` | SSE stream for real-time events |
-| `GET /api/changes` | Resource change history (`?namespace=`, `?kind=`, `?limit=`) |
-
-### Pod Operations
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/pods/{ns}/{name}/logs` | Fetch pod logs |
-| `GET /api/pods/{ns}/{name}/logs/stream` | Stream logs via SSE |
-| `GET /api/pods/{ns}/{name}/exec` | WebSocket terminal session |
-
-### Port Forwarding
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/portforwards` | List active sessions |
-| `POST /api/portforwards` | Start port forward |
-| `DELETE /api/portforwards/{id}` | Stop port forward |
-| `GET /api/portforwards/available/{type}/{ns}/{name}` | Get available ports |
-
-### Helm
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /api/helm/releases` | List all releases |
-| `GET /api/helm/releases/{ns}/{name}` | Release details |
-| `GET /api/helm/releases/{ns}/{name}/values` | Release values |
-| `GET /api/helm/releases/{ns}/{name}/manifest` | Rendered manifest |
-| `GET /api/helm/releases/{ns}/{name}/diff` | Diff between revisions |
-| `POST /api/helm/releases/{ns}/{name}/rollback` | Rollback release |
-| `POST /api/helm/releases/{ns}/{name}/upgrade` | Upgrade release |
-| `DELETE /api/helm/releases/{ns}/{name}` | Uninstall release |
+For the full API reference, see [CLAUDE.md](CLAUDE.md#api-endpoints).
 
 ## Adding Features
 

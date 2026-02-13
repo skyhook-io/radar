@@ -11,7 +11,7 @@ Topology, event timeline, and service traffic — plus resource browsing, Helm m
 [![Go Report Card](https://goreportcard.com/badge/github.com/skyhook-io/radar?v=2)](https://goreportcard.com/report/github.com/skyhook-io/radar)
 [![Downloads](https://img.shields.io/github/downloads/skyhook-io/radar/total?logo=github)](https://github.com/skyhook-io/radar/releases)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
-[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 
 Visualize your cluster topology, browse resources, stream logs, exec into pods, inspect container image filesystems, manage Helm releases, monitor GitOps workflows (FluxCD & ArgoCD), and forward ports — all from a single binary with zero cluster-side installation.
 
@@ -134,7 +134,7 @@ radar
 |------|---------|-------------|
 | `--kubeconfig` | `~/.kube/config` | Path to kubeconfig file |
 | `--kubeconfig-dir` | | Comma-separated directories containing kubeconfig files |
-| `--namespace` | (all) | Initial namespace filter (also used as RBAC fallback for namespace-scoped users) |
+| `--namespace` | (all) | Initial namespace filter (supports multi-select in the UI; also used as RBAC fallback for namespace-scoped users) |
 | `--port` | `9280` | Server port |
 | `--no-browser` | `false` | Don't auto-open browser |
 | `--timeline-storage` | `memory` | Timeline storage backend: `memory` or `sqlite` |
@@ -217,6 +217,14 @@ Manage Helm releases deployed in your cluster.
 - Inspect values, compare revisions, view release history
 - Upgrade, rollback, or uninstall releases directly from the UI
 
+### TLS Certificate Management
+
+View TLS certificate details and expiry dates across all namespaces — catch expiring certificates before they cause outages.
+
+- Parses TLS secrets to show certificate subject, issuer, and validity period
+- Dashboard-level certificate expiry overview
+- Available from the resource detail view for any TLS-type Secret
+
 ### GitOps
 
 Monitor and manage FluxCD and ArgoCD resources with unified status views and actions.
@@ -269,6 +277,7 @@ Visualize live network traffic between services using Hubble or Caretta.
 | `Escape` | Close panel/modal |
 | `?` | Show keyboard shortcuts |
 | `/` | Focus search |
+| `Ctrl+F` | Search within current view |
 | `r` | Refresh topology |
 | `f` | Fit view to screen |
 | `1` | Traffic view |

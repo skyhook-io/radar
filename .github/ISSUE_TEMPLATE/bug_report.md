@@ -29,7 +29,7 @@ If applicable, add screenshots to help explain your problem.
 ## Environment
 
 - OS: [e.g., macOS 14.0, Ubuntu 22.04]
-- Explorer version: [e.g., 1.0.0]
+- Radar version: [e.g., 0.9.0]
 - Kubernetes version: [e.g., 1.28]
 - Cluster type: [e.g., GKE, EKS, minikube, kind]
 - Browser: [e.g., Chrome 120]

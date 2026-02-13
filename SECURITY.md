@@ -25,8 +25,8 @@ Include as much of the following information as possible:
 
 | Version | Supported          |
 | ------- | ------------------ |
-| latest  | :white_check_mark: |
-| < 1.0   | :x:                |
+| Latest release | :white_check_mark: |
+| Previous releases | Best effort |
 
 ## Security Model
 

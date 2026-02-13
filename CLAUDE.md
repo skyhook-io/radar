@@ -36,7 +36,7 @@ Radar is a modern Kubernetes visibility tool — local-first, no account require
 radar/
 ├── cmd/
 │   ├── explorer/              # CLI entry point (main.go)
-│   └── desktop/               # Desktop app entry point (Tauri/Wails)
+│   └── desktop/               # Desktop app entry point (Wails v2)
 ├── internal/
 │   ├── app/                   # Application lifecycle management
 │   ├── helm/                  # Helm client integration
@@ -44,6 +44,10 @@ radar/
 │   │   ├── handlers.go        # HTTP handlers for Helm operations
 │   │   └── types.go           # Helm release types
 │   ├── images/                # Container image analysis
+│   │   ├── auth.go            # Registry authentication (pull secrets, ECR, GCR, ACR)
+│   │   ├── handlers.go        # HTTP handlers for image inspection
+│   │   ├── inspector.go       # Image filesystem extraction and caching
+│   │   └── types.go           # Image metadata and filesystem types
 │   ├── k8s/
 │   │   ├── cache.go           # Typed informer caching
 │   │   ├── capabilities.go    # Cluster capability detection
@@ -62,6 +66,7 @@ radar/
 │   ├── server/
 │   │   ├── server.go          # chi router, main REST endpoints
 │   │   ├── sse.go             # Server-Sent Events broadcaster
+│   │   ├── certificate.go     # TLS certificate parsing and expiry
 │   │   ├── exec.go            # WebSocket pod terminal exec
 │   │   ├── logs.go            # Pod logs streaming
 │   │   ├── workload_logs.go   # Workload-level log aggregation
@@ -99,12 +104,16 @@ radar/
 │   │   │   ├── topology/      # Graph visualization
 │   │   │   ├── traffic/       # Traffic flow visualization
 │   │   │   └── ui/            # Base shadcn/ui components
-│   │   ├── contexts/          # React contexts (capabilities, theme, etc.)
+│   │   ├── context/           # React contexts (connection, theme, context-switch)
+│   │   ├── contexts/          # React contexts (capabilities)
 │   │   ├── hooks/             # Custom React hooks
 │   │   ├── types.ts           # TypeScript type definitions
 │   │   └── utils/             # Topology and utility functions
 │   └── package.json
 ├── deploy/                    # Docker, Helm, Krew configs
+├── docs/                      # User documentation (configuration, in-cluster guide)
+├── scripts/                   # Release scripts
+├── .github/                   # CI workflows, issue/PR templates, dependabot
 └── Makefile
 ```
 
@@ -167,6 +176,7 @@ make docker         # Build Docker image
 
 ```
 --kubeconfig        Path to kubeconfig file (default: ~/.kube/config)
+--kubeconfig-dir    Comma-separated directories containing kubeconfig files (mutually exclusive with --kubeconfig)
 --namespace         Initial namespace filter (empty = all namespaces)
 --port              Server port (default: 9280)
 --no-browser        Don't auto-open browser
@@ -175,6 +185,10 @@ make docker         # Build Docker image
 --timeline-storage  Timeline storage backend: memory or sqlite (default: memory)
 --timeline-db       Path to timeline SQLite database (default: ~/.radar/timeline.db)
 --history-limit     Maximum number of events to retain in timeline (default: 10000)
+--prometheus-url    Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)
+--debug-events      Enable verbose event debugging (logs all event drops)
+--fake-in-cluster   Simulate in-cluster mode for testing (shows kubectl copy buttons instead of port-forward)
+--disable-helm-write Simulate restricted Helm permissions (disables install/upgrade/rollback/uninstall)
 ```
 
 ## API Endpoints
@@ -199,26 +213,34 @@ GET  /api/sessions                            # List active sessions
 ### Topology
 ```
 GET  /api/topology                            # Full topology graph
-GET  /api/topology?namespace=X                # Namespace-filtered
+GET  /api/topology?namespace=X                # Namespace-filtered (single)
+GET  /api/topology?namespaces=X,Y             # Multi-namespace filtered
 GET  /api/topology?view=traffic|resources     # View mode selection
 ```
 
 ### Resources
 ```
 GET    /api/resources/{kind}                  # List resources by kind
-GET    /api/resources/{kind}?namespace=X      # Namespace-filtered list
+GET    /api/resources/{kind}?namespace=X      # Namespace-filtered list (single)
+GET    /api/resources/{kind}?namespaces=X,Y   # Multi-namespace filtered list
 GET    /api/resources/{kind}/{ns}/{name}      # Single resource with relationships
 PUT    /api/resources/{kind}/{ns}/{name}      # Update resource from YAML
 DELETE /api/resources/{kind}/{ns}/{name}      # Delete resource
 ```
 
+### Certificate Expiry
+```
+GET  /api/secrets/certificate-expiry          # TLS certificate expiry for all secrets
+```
+
 ### Events & Changes
 ```
 GET  /api/events                              # Recent K8s events
-GET  /api/events?namespace=X                  # Namespace-filtered events
+GET  /api/events?namespace=X                  # Namespace-filtered events (single)
+GET  /api/events?namespaces=X,Y               # Multi-namespace filtered events
 GET  /api/events/stream                       # SSE stream for real-time events
 GET  /api/changes                             # Timeline of resource changes
-GET  /api/changes?namespace=X&kind=Y&limit=N  # Filtered change history
+GET  /api/changes?namespaces=X,Y&kind=Z&limit=N # Filtered change history
 GET  /api/changes/{kind}/{ns}/{name}/children # Child resource changes
 ```
 
@@ -262,9 +284,18 @@ DELETE /api/portforwards/{id}                      # Stop a port forward
 GET    /api/portforwards/available/{type}/{ns}/{name} # Get available ports for pod/service
 ```
 
+### Image Inspection
+```
+GET  /api/images/metadata                          # Image metadata (cached or lightweight)
+GET  /api/images/inspect                           # Full image filesystem tree
+GET  /api/images/file                              # Download individual file from image
+```
+
 ### Helm Management
 ```
 GET    /api/helm/releases                          # List all Helm releases
+POST   /api/helm/releases                          # Install a new Helm release
+POST   /api/helm/releases/install-stream           # Install with streaming progress
 GET    /api/helm/releases/{ns}/{name}              # Get release details
 GET    /api/helm/releases/{ns}/{name}/manifest     # Get rendered manifest
 GET    /api/helm/releases/{ns}/{name}/values       # Get release values
@@ -273,7 +304,21 @@ GET    /api/helm/releases/{ns}/{name}/upgrade-info # Check upgrade availability
 GET    /api/helm/upgrade-check                     # Batch check for upgrades
 POST   /api/helm/releases/{ns}/{name}/rollback     # Rollback to previous revision
 POST   /api/helm/releases/{ns}/{name}/upgrade      # Upgrade to new version
+POST   /api/helm/releases/{ns}/{name}/values/preview # Preview values change
+PUT    /api/helm/releases/{ns}/{name}/values       # Apply values change
 DELETE /api/helm/releases/{ns}/{name}              # Uninstall release
+```
+
+### Helm Chart Browser
+```
+GET  /api/helm/repositories                        # List local Helm repositories
+POST /api/helm/repositories/{name}/update          # Update repository index
+GET  /api/helm/charts                              # Search charts across repositories
+GET  /api/helm/charts/{repo}/{chart}               # Get chart details
+GET  /api/helm/charts/{repo}/{chart}/{version}     # Get specific chart version
+GET  /api/helm/artifacthub/search                  # Search ArtifactHub
+GET  /api/helm/artifacthub/charts/{repo}/{chart}   # Get ArtifactHub chart details
+GET  /api/helm/artifacthub/charts/{repo}/{chart}/{version} # Get ArtifactHub chart version
 ```
 
 ### GitOps — ArgoCD
@@ -302,6 +347,20 @@ GET  /api/traffic/flows                       # Current traffic flows
 GET  /api/traffic/flows/stream                # SSE stream for traffic flows
 POST /api/traffic/connect                     # Connect to traffic source
 GET  /api/traffic/connection                  # Traffic connection status
+```
+
+### Desktop Update (only active when updater is set)
+```
+POST /api/desktop/update                      # Start desktop app update download
+GET  /api/desktop/update/status               # Check update download progress
+POST /api/desktop/update/apply                # Apply downloaded update
+```
+
+### Debug
+```
+GET  /api/debug/events                        # Event pipeline metrics and recent drops
+GET  /api/debug/events/diagnose               # Diagnose missing events for a resource
+GET  /api/debug/informers                     # List active typed and dynamic informers
 ```
 
 ## Key Patterns
@@ -359,10 +418,17 @@ s.writeError(w, http.StatusXXX, "error message")
 
 **HTTP Status Code Conventions:**
 - `400 Bad Request`: Invalid input (missing params, invalid YAML, unknown resource kind)
+- `403 Forbidden`: RBAC insufficient permissions (lister is nil or K8s API returns forbidden)
 - `404 Not Found`: Resource doesn't exist
 - `409 Conflict`: Operation already in progress (e.g., sync running)
-- `503 Service Unavailable`: Client/cache not initialized
+- `503 Service Unavailable`: Client/cache not initialized, or not connected to cluster
 - `500 Internal Server Error`: Unexpected errors (always log before returning)
+
+**`requireConnected` Guard:**
+Most handlers that access cluster data call `s.requireConnected(w)` at the top, which returns 503 if the cluster connection isn't established yet. Use this pattern for any new handler that needs cache data.
+
+**Multi-Namespace Query Parameters:**
+Endpoints that accept namespace filters support both `?namespace=X` (single, backward compat) and `?namespaces=X,Y` (comma-separated, preferred). Use the `parseNamespaces()` helper to handle both.
 
 **Logging Convention:**
 Always log 500 errors with context before returning:
@@ -397,15 +463,19 @@ Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 ## Tech Stack
 
 ### Backend
-- Go 1.22+
+- Go 1.25+
 - client-go (K8s client library)
 - chi (HTTP router with middleware)
 - gorilla/websocket (WebSocket support for exec)
 - helm.sh/helm/v3 (Helm SDK)
+- cilium/cilium (Hubble traffic observation)
+- google/go-containerregistry (image filesystem inspection)
+- modernc.org/sqlite (timeline storage)
+- wailsapp/wails/v2 (desktop app framework)
 - go:embed (frontend embedding)
 
 ### Frontend
-- React 18 + TypeScript
+- React 19 + TypeScript
 - Vite (build tool, dev server)
 - @xyflow/react + elkjs (graph visualization and layout)
 - @xterm/xterm + @xterm/addon-fit (terminal emulation)
@@ -413,7 +483,9 @@ Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 - shiki (syntax highlighting)
 - @tanstack/react-query v5 (server state management)
 - react-router-dom (client-side routing)
-- Tailwind CSS + shadcn/ui (styling)
+- Tailwind CSS v4 + shadcn/ui (styling, uses @tailwindcss/vite plugin)
+- clsx + tailwind-merge (class utilities)
+- react-markdown + @tailwindcss/typography (markdown rendering)
 - Lucide React (icons)
 - yaml (YAML parsing)
 

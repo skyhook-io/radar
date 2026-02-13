@@ -38,9 +38,11 @@ Feature requests are welcome! Please include:
 
 ## Development Setup
 
+For detailed architecture, API reference, and release process, see [DEVELOPMENT.md](DEVELOPMENT.md).
+
 ### Prerequisites
 
-- Go 1.22+
+- Go 1.25+
 - Node.js 20+
 - npm
 - Access to a Kubernetes cluster (minikube, kind, or remote)
