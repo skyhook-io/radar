@@ -371,6 +371,7 @@ export function useCapabilities() {
     queryKey: ['capabilities'],
     queryFn: () => fetchJSON('/capabilities'),
     staleTime: 60000, // 1 minute - cached on backend too
+    refetchInterval: 60000, // Re-check periodically so transient failures self-correct
   })
 }
 
