@@ -68,8 +68,9 @@ var (
 	ForceDisableHelmWrite bool
 )
 
-// CheckCapabilities checks RBAC permissions using SelfSubjectAccessReview
-// Results are cached for 60 seconds to avoid hammering the API
+// CheckCapabilities checks RBAC permissions using SelfSubjectAccessReview.
+// Results are cached for 60 seconds normally, or 5 seconds when API errors
+// caused fail-closed results (to allow rapid retry without long UI disruption).
 func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	capabilitiesMu.RLock()
 	if cachedCapabilities != nil && time.Now().Before(capabilitiesExpiry) {
@@ -100,126 +101,53 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	checkCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	// Check each capability in parallel using local variables to avoid data race.
+	// Check each capability in parallel.
 	// Try cluster-wide first, then namespace-scoped as fallback for namespace-scoped users.
 	// Track API errors to avoid caching transient failures for the full TTL.
 	fallbackNs := GetEffectiveNamespace()
-	var wg sync.WaitGroup
-	var execAllowed, logsAllowed, portForwardAllowed, secretsAllowed, helmWriteAllowed bool
 	var hadErrors atomic.Bool
 
-	wg.Add(5)
+	type capCheck struct {
+		resource string
+		verb     string
+		result   *bool
+	}
 
-	go func() {
-		defer wg.Done()
-		allowed, apiErr := canI(checkCtx, "", "", "pods/exec", "create")
-		if allowed {
-			execAllowed = true
-			return
-		}
-		if fallbackNs != "" {
-			allowed, nsApiErr := canI(checkCtx, fallbackNs, "", "pods/exec", "create")
+	caps := &Capabilities{}
+	checks := []capCheck{
+		{"pods/exec", "create", &caps.Exec},
+		{"pods/log", "get", &caps.Logs},
+		{"pods/portforward", "create", &caps.PortForward},
+		{"secrets", "list", &caps.Secrets},
+		{"secrets", "create", &caps.HelmWrite},
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(checks))
+
+	for _, check := range checks {
+		go func(c capCheck) {
+			defer wg.Done()
+			allowed, apiErr := canI(checkCtx, "", "", c.resource, c.verb)
 			if allowed {
-				execAllowed = true
+				*c.result = true
 				return
 			}
-			apiErr = apiErr && nsApiErr
-		}
-		if apiErr {
-			hadErrors.Store(true)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		allowed, apiErr := canI(checkCtx, "", "", "pods/log", "get")
-		if allowed {
-			logsAllowed = true
-			return
-		}
-		if fallbackNs != "" {
-			allowed, nsApiErr := canI(checkCtx, fallbackNs, "", "pods/log", "get")
-			if allowed {
-				logsAllowed = true
-				return
+			if fallbackNs != "" {
+				allowed, nsApiErr := canI(checkCtx, fallbackNs, "", c.resource, c.verb)
+				if allowed {
+					*c.result = true
+					return
+				}
+				apiErr = apiErr || nsApiErr
 			}
-			apiErr = apiErr && nsApiErr
-		}
-		if apiErr {
-			hadErrors.Store(true)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		allowed, apiErr := canI(checkCtx, "", "", "pods/portforward", "create")
-		if allowed {
-			portForwardAllowed = true
-			return
-		}
-		if fallbackNs != "" {
-			allowed, nsApiErr := canI(checkCtx, fallbackNs, "", "pods/portforward", "create")
-			if allowed {
-				portForwardAllowed = true
-				return
+			if apiErr {
+				hadErrors.Store(true)
 			}
-			apiErr = apiErr && nsApiErr
-		}
-		if apiErr {
-			hadErrors.Store(true)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		allowed, apiErr := canI(checkCtx, "", "", "secrets", "list")
-		if allowed {
-			secretsAllowed = true
-			return
-		}
-		if fallbackNs != "" {
-			allowed, nsApiErr := canI(checkCtx, fallbackNs, "", "secrets", "list")
-			if allowed {
-				secretsAllowed = true
-				return
-			}
-			apiErr = apiErr && nsApiErr
-		}
-		if apiErr {
-			hadErrors.Store(true)
-		}
-	}()
-
-	go func() {
-		defer wg.Done()
-		allowed, apiErr := canI(checkCtx, "", "", "secrets", "create")
-		if allowed {
-			helmWriteAllowed = true
-			return
-		}
-		if fallbackNs != "" {
-			allowed, nsApiErr := canI(checkCtx, fallbackNs, "", "secrets", "create")
-			if allowed {
-				helmWriteAllowed = true
-				return
-			}
-			apiErr = apiErr && nsApiErr
-		}
-		if apiErr {
-			hadErrors.Store(true)
-		}
-	}()
+		}(check)
+	}
 
 	wg.Wait()
-
-	// Build capabilities struct after all goroutines complete
-	caps := &Capabilities{
-		Exec:        execAllowed,
-		Logs:        logsAllowed,
-		PortForward: portForwardAllowed,
-		Secrets:     secretsAllowed,
-		HelmWrite:   helmWriteAllowed,
-	}
 
 	if ForceDisableHelmWrite {
 		caps.HelmWrite = false
@@ -239,6 +167,7 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 }
 
 // canI checks if the current user/service account can perform an action.
+// The group parameter specifies the API group (empty string for core resources like pods, secrets).
 // Returns (allowed, apiErr) where apiErr=true means the API call itself failed
 // (distinct from RBAC denial where allowed=false, apiErr=false).
 func canI(ctx context.Context, namespace, group, resource, verb string) (allowed bool, apiErr bool) {
