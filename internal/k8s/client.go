@@ -17,18 +17,18 @@ import (
 )
 
 var (
-	k8sClient       *kubernetes.Clientset
-	k8sConfig       *rest.Config
-	discoveryClient *discovery.DiscoveryClient
-	dynamicClient   dynamic.Interface
-	initOnce        sync.Once
-	initErr         error
-	kubeconfigPath     string
-	kubeconfigPaths    []string // Multiple kubeconfig paths when using --kubeconfig-dir
-	contextName        string
-	clusterName        string
-	contextNamespace   string // Default namespace from kubeconfig context
-	fallbackNamespace  string // Explicit namespace from --namespace flag
+	k8sClient         *kubernetes.Clientset
+	k8sConfig         *rest.Config
+	discoveryClient   *discovery.DiscoveryClient
+	dynamicClient     dynamic.Interface
+	initOnce          sync.Once
+	initErr           error
+	kubeconfigPath    string
+	kubeconfigPaths   []string // Multiple kubeconfig paths when using --kubeconfig-dir
+	contextName       string
+	clusterName       string
+	contextNamespace  string // Default namespace from kubeconfig context
+	fallbackNamespace string // Explicit namespace from --namespace flag
 	// clientMu protects access to client variables during context switches.
 	// Readers use RLock, context switch uses Lock.
 	clientMu sync.RWMutex
