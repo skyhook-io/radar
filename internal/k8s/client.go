@@ -105,8 +105,18 @@ func doInit(opts InitOptions) error {
 					kubeconfig = filepath.Join(home, ".kube", "config")
 				}
 			}
-			kubeconfigPath = kubeconfig
-			loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
+
+			// KUBECONFIG can contain multiple paths separated by the OS path
+			// list separator (colon on Unix, semicolon on Windows).
+			// Split and use Precedence when there are multiple entries.
+			if paths := filepath.SplitList(kubeconfig); len(paths) > 1 {
+				kubeconfigPaths = paths
+				loadingRules = &clientcmd.ClientConfigLoadingRules{Precedence: paths}
+				log.Printf("KUBECONFIG contains %d paths, using merged mode", len(paths))
+			} else {
+				kubeconfigPath = kubeconfig
+				loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: kubeconfig}
+			}
 		}
 
 		configOverrides := &clientcmd.ConfigOverrides{}
