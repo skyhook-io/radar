@@ -19,13 +19,9 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
-	appsv1 "k8s.io/api/apps/v1"
-	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
+	corev1 "k8s.io/api/core/v1"
 
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/images"
@@ -46,14 +42,16 @@ type Server struct {
 	startTime   time.Time
 	listener    net.Listener
 	updater     *updater.Updater
+	mcpHandler  http.Handler
 }
 
 // Config holds server configuration
 type Config struct {
 	Port       int
-	DevMode    bool     // Serve frontend from filesystem instead of embedded
-	StaticFS   embed.FS // Embedded frontend files
-	StaticRoot string   // Path within StaticFS
+	DevMode    bool         // Serve frontend from filesystem instead of embedded
+	StaticFS   embed.FS     // Embedded frontend files
+	StaticRoot string       // Path within StaticFS
+	MCPHandler http.Handler // MCP server handler (nil = MCP disabled)
 }
 
 // New creates a new server instance
@@ -64,6 +62,7 @@ func New(cfg Config) *Server {
 		port:        cfg.Port,
 		devMode:     cfg.DevMode,
 		startTime:   time.Now(),
+		mcpHandler:  cfg.MCPHandler,
 	}
 
 	// Set up static file system
@@ -196,6 +195,10 @@ func (s *Server) setupRoutes() {
 			r.Post("/argo/applications/{namespace}/{name}/suspend", s.handleArgoSuspend)
 			r.Post("/argo/applications/{namespace}/{name}/resume", s.handleArgoResume)
 
+			// AI resource preview (minified output for MCP/debugging)
+			r.Get("/ai/resources/{kind}", s.handleAIListResources)
+			r.Get("/ai/resources/{kind}/{namespace}/{name}", s.handleAIGetResource)
+
 			// Debug routes (for event pipeline diagnostics)
 			r.Get("/debug/events", s.handleDebugEvents)
 			r.Get("/debug/events/diagnose", s.handleDebugEventsDiagnose)
@@ -226,6 +229,11 @@ func (s *Server) setupRoutes() {
 		// Traffic streaming (no timeout)
 		r.Get("/traffic/flows/stream", s.handleTrafficFlowsStream)
 	})
+
+	// MCP server (Model Context Protocol for AI tools)
+	if s.mcpHandler != nil {
+		r.Mount("/mcp", s.mcpHandler)
+	}
 
 	// Static files (frontend) - SPA fallback to index.html
 	if s.staticFS != nil {
@@ -381,6 +389,8 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+
+	caps.MCPEnabled = s.mcpHandler != nil
 
 	// Include resource permissions if cache is available
 	if cache := k8s.GetResourceCache(); cache != nil {
@@ -745,59 +755,9 @@ func normalizeKind(kind string) string {
 }
 
 // setTypeMeta sets the APIVersion and Kind fields on typed resources.
-// Kubernetes informers don't populate these fields, but users expect to see them in YAML.
+// Delegates to k8s.SetTypeMeta.
 func setTypeMeta(resource any) {
-	switch r := resource.(type) {
-	case *corev1.Pod:
-		r.APIVersion = "v1"
-		r.Kind = "Pod"
-	case *corev1.Service:
-		r.APIVersion = "v1"
-		r.Kind = "Service"
-	case *corev1.Node:
-		r.APIVersion = "v1"
-		r.Kind = "Node"
-	case *corev1.Namespace:
-		r.APIVersion = "v1"
-		r.Kind = "Namespace"
-	case *corev1.Event:
-		r.APIVersion = "v1"
-		r.Kind = "Event"
-	case *corev1.ConfigMap:
-		r.APIVersion = "v1"
-		r.Kind = "ConfigMap"
-	case *corev1.Secret:
-		r.APIVersion = "v1"
-		r.Kind = "Secret"
-	case *corev1.PersistentVolumeClaim:
-		r.APIVersion = "v1"
-		r.Kind = "PersistentVolumeClaim"
-	case *appsv1.Deployment:
-		r.APIVersion = "apps/v1"
-		r.Kind = "Deployment"
-	case *appsv1.DaemonSet:
-		r.APIVersion = "apps/v1"
-		r.Kind = "DaemonSet"
-	case *appsv1.StatefulSet:
-		r.APIVersion = "apps/v1"
-		r.Kind = "StatefulSet"
-	case *appsv1.ReplicaSet:
-		r.APIVersion = "apps/v1"
-		r.Kind = "ReplicaSet"
-	case *networkingv1.Ingress:
-		r.APIVersion = "networking.k8s.io/v1"
-		r.Kind = "Ingress"
-	case *batchv1.Job:
-		r.APIVersion = "batch/v1"
-		r.Kind = "Job"
-	case *batchv1.CronJob:
-		r.APIVersion = "batch/v1"
-		r.Kind = "CronJob"
-	case *autoscalingv2.HorizontalPodAutoscaler:
-		r.APIVersion = "autoscaling/v2"
-		r.Kind = "HorizontalPodAutoscaler"
-	}
-	// Unstructured resources (CRDs) already have APIVersion and Kind set
+	k8s.SetTypeMeta(resource)
 }
 
 func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {

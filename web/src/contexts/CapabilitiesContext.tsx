@@ -9,6 +9,7 @@ const defaultCapabilities: Capabilities = {
   portForward: true,
   secrets: true,
   helmWrite: true,
+  mcpEnabled: true,
 }
 
 // Restricted capabilities for error/failure cases (fail-closed)
@@ -18,6 +19,7 @@ const restrictedCapabilities: Capabilities = {
   portForward: false,
   secrets: false,
   helmWrite: false,
+  mcpEnabled: false,
 }
 
 const CapabilitiesContext = createContext<Capabilities>(defaultCapabilities)

@@ -12,6 +12,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/static"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -35,6 +36,7 @@ type AppConfig struct {
 	TimelineDBPath   string
 	PrometheusURL    string
 	Version          string
+	MCPEnabled       bool
 }
 
 // SetGlobals applies debug/test flags to global state.
@@ -125,6 +127,12 @@ func CreateServer(cfg AppConfig) *server.Server {
 		StaticFS:   static.FS,
 		StaticRoot: "dist",
 	}
+
+	if cfg.MCPEnabled {
+		serverCfg.MCPHandler = mcppkg.NewHandler()
+		log.Printf("MCP server enabled at http://localhost:%d/mcp", cfg.Port)
+	}
+
 	return server.New(serverCfg)
 }
 

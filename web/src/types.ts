@@ -29,6 +29,7 @@ export interface Capabilities {
   portForward: boolean // Port forwarding (pods/portforward)
   secrets: boolean     // List secrets
   helmWrite: boolean   // Helm write operations (install, upgrade, rollback, uninstall, apply values)
+  mcpEnabled: boolean  // MCP server is running
   resources?: ResourcePermissions // Per-resource-type permissions
 }
 

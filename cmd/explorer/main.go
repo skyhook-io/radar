@@ -36,6 +36,8 @@ func main() {
 	timelineDBPath := flag.String("timeline-db", "", "Path to timeline database file (default: ~/.radar/timeline.db)")
 	// Traffic/metrics options
 	prometheusURL := flag.String("prometheus-url", "", "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
+	// MCP server
+	noMCP := flag.Bool("no-mcp", false, "Disable MCP (Model Context Protocol) server for AI tools")
 	flag.Parse()
 
 	if *showVersion {
@@ -71,6 +73,7 @@ func main() {
 		TimelineStorage:  *timelineStorage,
 		TimelineDBPath:   *timelineDBPath,
 		PrometheusURL:    *prometheusURL,
+		MCPEnabled:       !*noMCP,
 		Version:          version,
 	}
 

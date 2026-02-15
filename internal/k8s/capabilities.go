@@ -54,6 +54,7 @@ type Capabilities struct {
 	PortForward bool                 `json:"portForward"`         // Can create pods/portforward
 	Secrets     bool                 `json:"secrets"`             // Can list secrets
 	HelmWrite   bool                 `json:"helmWrite"`           // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	MCPEnabled  bool                 `json:"mcpEnabled"`          // MCP server is running
 	Resources   *ResourcePermissions `json:"resources,omitempty"` // Per-resource-type permissions
 }
 

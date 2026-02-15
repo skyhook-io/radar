@@ -1,12 +1,15 @@
+import { useState } from 'react'
 import type { DashboardResponse, DashboardMetrics, DashboardCRDCount, DashboardProblem } from '../../api/client'
 import { HealthRing } from './HealthRing'
 import {
   AlertTriangle, CheckCircle, XCircle,
   Cpu, MemoryStick, Database, Container, Globe, Network as NetworkIcon, Briefcase, Clock,
-  ArrowRight, Server, Boxes, Shield,
+  ArrowRight, Server, Boxes, Shield, Radio, Info,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatCPUMillicores, formatMemoryMiB } from '../../utils/format'
+import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
+import { MCPSetupDialog } from './MCPSetupDialog'
 
 interface ClusterHealthCardProps {
   health: DashboardResponse['health']
@@ -68,6 +71,10 @@ export function ClusterHealthCard({
 }: ClusterHealthCardProps) {
   void _topCRDs // Reserved for future CRD display
 
+  const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
+  const { mcpEnabled } = useCapabilitiesContext()
+  const mcpUrl = `${window.location.origin}/mcp`
+
   const restricted = counts.restricted ?? []
   const isRestricted = (kind: string) => restricted.includes(kind)
 
@@ -115,7 +122,7 @@ export function ClusterHealthCard({
       <div className="px-6 py-5 border-b border-theme-border-light">
         <div className="flex items-stretch gap-8">
           {/* Left: Cluster info */}
-          <div className="flex flex-col justify-center min-w-[180px] pr-8 border-r border-theme-border/50">
+          <div className="flex flex-col justify-center w-[300px] shrink-0 pr-8 border-r border-theme-border/50">
             <div className="flex items-center gap-2 mb-2">
               {platformInfo.icon ? (
                 <img src={platformInfo.icon} alt={platformInfo.name} className="w-5 h-5 object-contain" />
@@ -124,7 +131,7 @@ export function ClusterHealthCard({
               )}
               <span className="text-xs text-theme-text-secondary">{platformInfo.name}</span>
             </div>
-            <h2 className="text-sm font-semibold text-theme-text-primary truncate mb-1" title={cluster.name}>
+            <h2 className="text-sm font-semibold text-theme-text-primary break-all mb-1" title={cluster.name}>
               {cluster.name || 'Cluster'}
             </h2>
             <div className="flex flex-col gap-1 text-xs text-theme-text-tertiary">
@@ -133,29 +140,23 @@ export function ClusterHealthCard({
               )}
               <span>{counts.namespaces} namespaces</span>
             </div>
-            {/* Action buttons for issues */}
-            <div className="flex flex-col gap-2 mt-3">
-              {health.warningEvents > 0 && (
-                <button
-                  onClick={onWarningEventsClick}
-                  title="Native Kubernetes Warning events (e.g., ImagePullBackOff, FailedScheduling)"
-                  className="flex items-center gap-1.5 w-fit px-2.5 py-1.5 bg-yellow-500/10 hover:bg-yellow-500/20 border border-yellow-500/30 rounded-md transition-colors cursor-pointer"
-                >
-                  <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />
-                  <span className="text-xs text-yellow-500 font-medium">{health.warningEvents} Warning Events</span>
-                </button>
-              )}
-              {problems.length > 0 && (
-                <button
-                  onClick={onUnhealthyClick}
-                  title="View timeline of unhealthy/degraded workload events"
-                  className="flex items-center gap-1.5 w-fit px-2.5 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-md transition-colors cursor-pointer"
-                >
-                  <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
-                  <span className="text-xs text-red-500 font-medium">View unhealthy workload events</span>
-                </button>
-              )}
-            </div>
+            {/* MCP Server indicator */}
+            {mcpEnabled && (
+              <button
+                onClick={() => setMcpDialogOpen(true)}
+                className="flex items-center gap-2 mt-3 px-2.5 py-2 bg-purple-500/5 hover:bg-purple-500/10 border border-purple-500/20 rounded-md transition-colors cursor-pointer w-full"
+              >
+                <Radio className="w-3.5 h-3.5 text-purple-400 animate-pulse shrink-0" />
+                <div className="flex flex-col gap-0.5 min-w-0 flex-1 text-left">
+                  <span className="text-xs font-medium text-purple-400">MCP Server Live</span>
+                  <span className="text-[10px] text-theme-text-tertiary truncate font-mono" title={mcpUrl}>
+                    HTTP · {mcpUrl}
+                  </span>
+                </div>
+                <Info className="w-3.5 h-3.5 text-purple-400/60 shrink-0" />
+              </button>
+            )}
+            <MCPSetupDialog open={mcpDialogOpen} onClose={() => setMcpDialogOpen(false)} mcpUrl={mcpUrl} />
           </div>
 
           {/* Center: Three health rings */}
@@ -233,7 +234,7 @@ export function ClusterHealthCard({
           </div>
 
           {/* Right: Resource utilization */}
-          <div className="flex flex-col justify-center min-w-[280px] pl-8 border-l border-theme-border/50">
+          <div className="flex flex-col justify-center w-[300px] shrink-0 pl-8 border-l border-theme-border/50">
             <div className="flex items-center gap-2 mb-3">
               <Boxes className="w-4 h-4 text-theme-text-tertiary" />
               <span className="text-xs text-theme-text-secondary">Resource Utilization</span>
@@ -289,15 +290,39 @@ export function ClusterHealthCard({
         </div>
       </div>
 
-      {/* Secondary resources row + Browse All button */}
-      <div className="flex">
-        {/* Left: Resources row - evenly spread */}
-        <div className="flex-1 grid grid-cols-3 lg:grid-cols-6 px-4 py-2.5 bg-theme-surface/30">
+      {/* Secondary resources row — matches top row's 3-column layout */}
+      <div className="flex items-stretch px-6 gap-8 py-2.5 bg-theme-surface/30">
+        {/* Left column: Warning indicators (aligned with cluster info) */}
+        <div className="flex flex-col justify-center gap-1 w-[300px] shrink-0 pr-8 border-r border-theme-border/50">
+          {health.warningEvents > 0 && (
+            <button
+              onClick={onWarningEventsClick}
+              title="Native Kubernetes Warning events (e.g., ImagePullBackOff, FailedScheduling)"
+              className="flex items-center gap-1.5 w-fit px-2.5 py-1.5 bg-yellow-500/10 hover:bg-yellow-500/20 border border-yellow-500/30 rounded-md transition-colors cursor-pointer"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />
+              <span className="text-xs text-yellow-500 font-medium">{health.warningEvents} Warning Events</span>
+            </button>
+          )}
+          {problems.length > 0 && (
+            <button
+              onClick={onUnhealthyClick}
+              title="View timeline of unhealthy/degraded workload events"
+              className="flex items-center gap-1.5 w-fit px-2.5 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-md transition-colors cursor-pointer"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
+              <span className="text-xs text-red-500 font-medium">View unhealthy workload events</span>
+            </button>
+          )}
+        </div>
+
+        {/* Center column: Resources (aligned with health rings) */}
+        <div className="flex-1 grid grid-cols-3 items-center justify-items-center">
           {secondaryResources.map((res) => (
             <button
               key={res.kind}
               onClick={() => onNavigateToKind(res.kind, res.group)}
-              className="flex items-center lg:justify-center gap-1.5 px-2 py-1 rounded hover:bg-theme-hover transition-colors cursor-pointer text-sm"
+              className="flex items-center gap-1.5 px-2 py-1 rounded hover:bg-theme-hover transition-colors cursor-pointer text-sm"
             >
               {isRestricted(res.kind) ? (
                 <>
@@ -320,14 +345,16 @@ export function ClusterHealthCard({
           ))}
         </div>
 
-        {/* Right: Browse All Resources button */}
-        <button
-          onClick={onNavigateToView}
-          className="flex items-center gap-2 px-5 text-sm font-medium text-blue-500 hover:text-blue-400 hover:bg-blue-500/5 transition-colors cursor-pointer border-l border-theme-border shrink-0"
-        >
-          Browse All Resources
-          <ArrowRight className="w-4 h-4" />
-        </button>
+        {/* Right column: Browse All (aligned with resource utilization) */}
+        <div className="flex items-center justify-center w-[300px] shrink-0 pl-8 border-l border-theme-border/50">
+          <button
+            onClick={onNavigateToView}
+            className="flex items-center gap-2 text-base font-medium text-blue-500 hover:text-blue-400 transition-colors cursor-pointer"
+          >
+            Browse All Resources
+            <ArrowRight className="w-5 h-5" />
+          </button>
+        </div>
       </div>
     </div>
   )
