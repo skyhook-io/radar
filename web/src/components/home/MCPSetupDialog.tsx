@@ -252,7 +252,15 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
         </div>
 
         {/* Footer */}
-        <div className="flex justify-end px-6 py-3 border-t border-theme-border shrink-0">
+        <div className="flex items-center justify-between px-6 py-3 border-t border-theme-border shrink-0">
+          <a
+            href="https://github.com/skyhook-io/radar/blob/main/docs/mcp.md"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-xs text-theme-text-tertiary hover:text-purple-400 transition-colors"
+          >
+            Documentation
+          </a>
           <button
             onClick={onClose}
             className="px-4 py-2 text-sm font-medium rounded-lg hover:bg-theme-elevated transition-colors cursor-pointer text-theme-text-secondary"

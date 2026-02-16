@@ -15,7 +15,12 @@ Radar is a modern Kubernetes visibility tool — local-first, no account require
 │   ┌─────────────────┐                   ┌───────────────────┐  │
 │   │    Browser      │◄── HTTP/SSE/WS ──►│  Radar Binary     │  │
 │   │  (React + UI)   │                   │  (Go + Embedded)  │  │
-│   └─────────────────┘                   └───────────────────┘  │
+│   └─────────────────┘                   └───────┬───────────┘  │
+│                                                  │              │
+│   ┌─────────────────┐                            │              │
+│   │   AI Tools      │◄──── MCP (HTTP) ───────────┤              │
+│   │  (Claude, etc.) │                            │              │
+│   └─────────────────┘                            │              │
 │                                                  │              │
 └──────────────────────────────────────────────────│──────────────┘
                                                    │
@@ -38,6 +43,8 @@ radar/
 │   ├── explorer/              # CLI entry point (main.go)
 │   └── desktop/               # Desktop app entry point (Wails v2)
 ├── internal/
+│   ├── ai/
+│   │   └── context/           # AI context minification for LLM-friendly output
 │   ├── app/                   # Application lifecycle management
 │   ├── helm/                  # Helm client integration
 │   │   ├── client.go          # Helm SDK wrapper
@@ -59,10 +66,15 @@ radar/
 │   │   ├── dynamic_cache.go   # CRD/dynamic resource support
 │   │   ├── ephemeral.go       # Ephemeral/debug containers
 │   │   ├── history.go         # Change history tracking
+│   │   ├── fetch.go           # Resource fetching for AI/MCP consumers
 │   │   ├── metrics.go         # Pod/node metrics collection
 │   │   ├── metrics_history.go # Metrics history tracking
 │   │   ├── subsystems.go      # Cache subsystem management
 │   │   └── update.go          # Resource update/delete operations
+│   ├── mcp/                   # MCP (Model Context Protocol) server
+│   │   ├── server.go          # MCP HTTP handler setup
+│   │   ├── tools.go           # MCP tool definitions (7 tools)
+│   │   └── resources.go       # MCP resource definitions (3 resources)
 │   ├── server/
 │   │   ├── server.go          # chi router, main REST endpoints
 │   │   ├── sse.go             # Server-Sent Events broadcaster
@@ -75,6 +87,7 @@ radar/
 │   │   ├── argo_handlers.go   # ArgoCD sync/refresh/suspend handlers
 │   │   ├── flux_handlers.go   # FluxCD reconcile/suspend handlers
 │   │   ├── gitops_types.go    # Shared GitOps request/response types
+│   │   ├── ai_handlers.go     # AI resource preview endpoints
 │   │   ├── traffic_handlers.go # Service mesh traffic flow handlers
 │   │   └── desktop_update.go  # Desktop app auto-update handlers
 │   ├── static/                # Embedded frontend files
@@ -189,6 +202,7 @@ make docker         # Build Docker image
 --debug-events      Enable verbose event debugging (logs all event drops)
 --fake-in-cluster   Simulate in-cluster mode for testing (shows kubectl copy buttons instead of port-forward)
 --disable-helm-write Simulate restricted Helm permissions (disables install/upgrade/rollback/uninstall)
+--no-mcp            Disable MCP (Model Context Protocol) server for AI tools
 ```
 
 ## API Endpoints
@@ -363,6 +377,17 @@ GET  /api/debug/events/diagnose               # Diagnose missing events for a re
 GET  /api/debug/informers                     # List active typed and dynamic informers
 ```
 
+### AI Resource Preview
+```
+GET  /api/ai/resources/{kind}                 # Minified resource list (verbosity: summary|detail|compact)
+GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbosity: summary|detail|compact)
+```
+
+### MCP (Model Context Protocol)
+```
+/mcp                                          # MCP Streamable HTTP endpoint (POST for JSON-RPC, GET for SSE)
+```
+
 ## Key Patterns
 
 ### K8s Caching
@@ -408,6 +433,23 @@ GET  /api/debug/informers                     # List active typed and dynamic in
 - Computed at query time for resource detail views
 - Tracks: parent (owner), children (owned), config (ConfigMaps/Secrets), network (Services/Ingresses/Gateways/Routes)
 - Used for topology edges and change propagation
+
+### AI Context Minification
+- Converts K8s resources into token-efficient representations for LLM consumption
+- Three verbosity levels:
+  - `Summary`: Typed struct with key fields per resource kind (used by MCP `list_resources`)
+  - `Detail`: Full spec/status with metadata noise stripped (used by MCP `get_resource`)
+  - `Compact`: Aggressive pruning for token-constrained contexts (probes, volumes, security contexts removed)
+- Secret safety: never exposes `.data`/`.stringData`, redacts env values with known secret patterns (API keys, tokens, passwords, base64 blocks)
+- Event deduplication: groups by (reason, normalized message), replaces pod hashes/UUIDs/IPs with placeholders
+- Log filtering: prioritizes error/warning patterns, falls back to last 20 lines, redacts secrets
+
+### MCP Server
+- Stateless HTTP handler mounted at `/mcp` (JSON-RPC over HTTP)
+- 7 tools: `get_dashboard`, `list_resources`, `get_resource`, `get_topology`, `get_events`, `get_pod_logs`, `list_namespaces`
+- 3 resources: `cluster://health`, `cluster://topology`, `cluster://events`
+- All operations are read-only; respects cluster RBAC
+- Enabled by default, disable with `--no-mcp`
 
 ### Error Handling (Backend)
 All HTTP handlers use the simple `writeError` pattern:
@@ -471,6 +513,7 @@ Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 - cilium/cilium (Hubble traffic observation)
 - google/go-containerregistry (image filesystem inspection)
 - modernc.org/sqlite (timeline storage)
+- modelcontextprotocol/go-sdk (MCP server implementation)
 - wailsapp/wails/v2 (desktop app framework)
 - go:embed (frontend embedding)
 

@@ -33,6 +33,7 @@ curl -fsSL https://raw.githubusercontent.com/skyhook-io/radar/main/install.sh | 
 - **Airgapped-ready** — no external network calls, works in isolated environments
 - **Real-time** — watches your cluster via informers, pushes updates to the browser via SSE
 - **Works everywhere** — GKE, EKS, AKS, minikube, kind, k3s, or any conformant cluster
+- **AI-ready** — built-in [MCP server](docs/mcp.md) lets AI assistants query your cluster through Radar
 - **In-cluster option** — deploy with Helm for shared team access with RBAC-scoped permissions
 
 ---
@@ -140,6 +141,7 @@ radar
 | `--timeline-storage` | `memory` | Timeline storage backend: `memory` or `sqlite` |
 | `--timeline-db` | `~/.radar/timeline.db` | Path to SQLite database (when using sqlite storage) |
 | `--history-limit` | `10000` | Maximum events to retain in timeline |
+| `--no-mcp` | `false` | Disable MCP server for AI tool integration |
 | `--version` | | Show version and exit |
 
 See [Configuration Guide](docs/configuration.md) for details on cluster connection precedence, multiple kubeconfig files, and context switching.
@@ -249,6 +251,14 @@ Visualize live network traffic between services using Hubble or Caretta.
 - Animated flow graph showing requests per second between services
 - Filter by namespace, protocol, or status code
 - Setup wizard to install a traffic source if none is detected
+
+### AI Integration (MCP) <sup>beta</sup>
+
+Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI assistants — Claude, Cursor, Copilot, and others — query your cluster through Radar.
+
+Instead of raw `kubectl` output (verbose YAML that burns through LLM context windows), your AI gets pre-processed, token-optimized data: topology graphs, health assessments, deduplicated events, and filtered logs. All read-only by design.
+
+Enabled by default. Disable with `--no-mcp`. See the **[MCP Guide](docs/mcp.md)** for setup instructions.
 
 ---
 
