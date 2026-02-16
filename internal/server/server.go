@@ -1257,6 +1257,11 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusForbidden, err.Error())
 			return
 		}
+		if strings.Contains(err.Error(), "stuck in Terminating state") {
+			s.writeError(w, http.StatusConflict, err.Error())
+			return
+		}
+		log.Printf("[delete] Failed to delete %s %s/%s (force=%v): %v", kind, namespace, name, force, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}

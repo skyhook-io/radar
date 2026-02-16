@@ -3,8 +3,10 @@ package k8s
 import (
 	"context"
 	"fmt"
+	"log"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
@@ -95,6 +97,23 @@ func DeleteResource(ctx context.Context, opts DeleteResourceOptions) error {
 		return fmt.Errorf("unknown resource kind: %s", opts.Kind)
 	}
 
+	// Force delete: strip finalizers first so the resource can actually be removed
+	if opts.Force {
+		finalizerPatch := []byte(`{"metadata":{"finalizers":null}}`)
+		var patchErr error
+		if opts.Namespace != "" {
+			_, patchErr = dynamicClient.Resource(gvr).Namespace(opts.Namespace).Patch(ctx, opts.Name, types.MergePatchType, finalizerPatch, metav1.PatchOptions{})
+		} else {
+			_, patchErr = dynamicClient.Resource(gvr).Patch(ctx, opts.Name, types.MergePatchType, finalizerPatch, metav1.PatchOptions{})
+		}
+		if patchErr != nil && !apierrors.IsNotFound(patchErr) {
+			if apierrors.IsForbidden(patchErr) {
+				return fmt.Errorf("force delete requires patch permission to strip finalizers: %w", patchErr)
+			}
+			log.Printf("[delete] Failed to strip finalizers from %s %s/%s: %v", opts.Kind, opts.Namespace, opts.Name, patchErr)
+		}
+	}
+
 	// Build delete options
 	deleteOpts := metav1.DeleteOptions{}
 	if opts.Force {
@@ -111,7 +130,25 @@ func DeleteResource(ctx context.Context, opts DeleteResourceOptions) error {
 	}
 
 	if err != nil {
+		// Force delete may have already removed the resource (stripping finalizers
+		// on a resource with deletionTimestamp causes immediate garbage collection)
+		if opts.Force && apierrors.IsNotFound(err) {
+			return nil
+		}
 		return fmt.Errorf("failed to delete resource: %w", err)
+	}
+
+	// For non-force deletes, check if the resource is stuck (has finalizers blocking removal)
+	if !opts.Force {
+		var obj *unstructured.Unstructured
+		if opts.Namespace != "" {
+			obj, _ = dynamicClient.Resource(gvr).Namespace(opts.Namespace).Get(ctx, opts.Name, metav1.GetOptions{})
+		} else {
+			obj, _ = dynamicClient.Resource(gvr).Get(ctx, opts.Name, metav1.GetOptions{})
+		}
+		if obj != nil && obj.GetDeletionTimestamp() != nil && len(obj.GetFinalizers()) > 0 {
+			return fmt.Errorf("resource is stuck in Terminating state due to finalizers — use force delete to remove it")
+		}
 	}
 
 	return nil

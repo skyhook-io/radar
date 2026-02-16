@@ -22,7 +22,7 @@ import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource } from '../../utils/navigation'
 import { isChangeEvent, isHistoricalEvent } from '../../types'
 import { useChanges, useResourceWithRelationships, usePodLogs, useDeleteResource, useTopology } from '../../api/client'
-import { ConfirmDialog } from '../ui/ConfirmDialog'
+import { ForceDeleteConfirmDialog } from '../ui/ForceDeleteConfirmDialog'
 import { getKindBadgeColor, getHealthBadgeColor } from '../../utils/badge-colors'
 import { buildResourceHierarchy, getAllEventsFromHierarchy, isProblematicEvent, type ResourceLane } from '../../utils/resource-hierarchy'
 import {
@@ -500,25 +500,18 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
 function ActionsDropdown({ kind, namespace, name, onBack }: { kind: string; namespace: string; name: string; onBack: () => void }) {
   const [open, setOpen] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
-  const [forceDelete, setForceDelete] = useState(false)
   const deleteMutation = useDeleteResource()
 
-  const handleDeleteConfirm = () => {
+  function handleDeleteConfirm(force: boolean) {
     deleteMutation.mutate(
-      { kind: kind.toLowerCase() + 's', namespace, name, force: forceDelete }, // Convert kind to plural for API
+      { kind: kind.toLowerCase() + 's', namespace, name, force }, // Convert kind to plural for API
       {
         onSuccess: () => {
           setShowDeleteConfirm(false)
-          setForceDelete(false)
           onBack()
         },
       }
     )
-  }
-
-  const handleDeleteClose = () => {
-    setShowDeleteConfirm(false)
-    setForceDelete(false)
   }
 
   // Placeholder actions - would need backend support
@@ -563,28 +556,15 @@ function ActionsDropdown({ kind, namespace, name, onBack }: { kind: string; name
         </>
       )}
 
-      {/* Delete confirmation dialog */}
-      <ConfirmDialog
+      <ForceDeleteConfirmDialog
         open={showDeleteConfirm}
-        onClose={handleDeleteClose}
+        onClose={() => setShowDeleteConfirm(false)}
         onConfirm={handleDeleteConfirm}
-        title="Delete Resource"
-        message={`Are you sure you want to delete "${name}"?`}
-        details={`This will permanently delete the ${kind} "${name}" from the "${namespace}" namespace.`}
-        confirmLabel={forceDelete ? 'Force Delete' : 'Delete'}
-        variant="danger"
+        resourceName={name}
+        resourceKind={kind}
+        namespaceName={namespace}
         isLoading={deleteMutation.isPending}
-      >
-        <label className="flex items-center gap-2 text-sm text-theme-text-secondary cursor-pointer">
-          <input
-            type="checkbox"
-            checked={forceDelete}
-            onChange={(e) => setForceDelete(e.target.checked)}
-            className="w-4 h-4 rounded border-theme-border bg-theme-base text-red-600 focus:ring-red-500 focus:ring-offset-0"
-          />
-          <span>Force delete (bypass graceful termination)</span>
-        </label>
-      </ConfirmDialog>
+      />
     </div>
   )
 }
