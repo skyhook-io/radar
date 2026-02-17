@@ -89,17 +89,24 @@ func checkAndUpdateStarred(statePath string, state *starState) bool {
 		return state.StarredAt != ""
 	}
 	if err := exec.Command(ghPath, "api", "user/starred/"+githubRepo, "--silent").Run(); err == nil {
+		// 204 No Content — user has starred
 		if state.StarredAt == "" {
 			state.StarredAt = time.Now().Format(time.RFC3339)
 			saveStarState(statePath, state)
 		}
 		return true
 	}
-	// User unstarred on GitHub — clear stale local cache
-	if state.StarredAt != "" {
-		state.StarredAt = ""
-		saveStarState(statePath, state)
+	// The error could be 404 (not starred) or a transient failure (network, rate limit).
+	// Only clear cached StarredAt if we can confirm it's a 404 by re-checking with
+	// a command that surfaces the HTTP status code.
+	out, err := exec.Command(ghPath, "api", "user/starred/"+githubRepo, "-i", "--silent").CombinedOutput()
+	if err != nil && strings.Contains(string(out), "HTTP 404") {
+		if state.StarredAt != "" {
+			state.StarredAt = ""
+			saveStarState(statePath, state)
+		}
 	}
+	// For any other error (network, rate limit, etc.), keep cached state as-is
 	return false
 }
 
@@ -123,8 +130,8 @@ func trackAndMaybePrompt() error {
 		return nil
 	}
 
-	// Only prompt in interactive terminals
-	if !term.IsTerminal(int(os.Stdin.Fd())) {
+	// Only prompt in interactive terminals (check both stdin and stdout)
+	if !term.IsTerminal(int(os.Stdin.Fd())) || !term.IsTerminal(int(os.Stdout.Fd())) {
 		return nil
 	}
 
