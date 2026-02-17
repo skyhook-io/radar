@@ -220,6 +220,11 @@ func (s *Server) setupRoutes() {
 			r.Get("/connection", s.handleConnectionStatus)
 			r.Post("/connection/retry", s.handleConnectionRetry)
 
+			// GitHub star status and action
+			r.Get("/github/starred", s.handleGitHubStarStatus)
+			r.Post("/github/star", s.handleGitHubStar)
+			r.Post("/github/dismiss", s.handleGitHubDismiss)
+
 			// Desktop update routes (only active when updater is set)
 			r.Post("/desktop/update", s.handleDesktopUpdateStart)
 			r.Get("/desktop/update/status", s.handleDesktopUpdateStatus)

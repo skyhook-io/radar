@@ -107,6 +107,9 @@ func main() {
 	// Initialize cluster in background (browser will see progress via SSE)
 	go app.InitializeCluster()
 
+	// Track opens and maybe prompt to star (non-blocking)
+	app.MaybePromptGitHubStar()
+
 	// Build window title
 	windowTitle := "Radar"
 	if ctx := k8s.GetContextName(); ctx != "" {
