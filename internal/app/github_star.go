@@ -43,6 +43,13 @@ func (s *starState) shouldPrompt() bool {
 		return true
 	}
 
+	// Don't show more than one prompt per 48 hours (prevents CLI + UI double-prompt)
+	if prompted, err := time.Parse(time.RFC3339, s.PromptedAt); err == nil {
+		if time.Since(prompted) < 48*time.Hour {
+			return false
+		}
+	}
+
 	// Backoff: prompt at increasing open thresholds after each dismissal
 	thresholds := []int{3, 10, 20, 30, 50, 100}
 	if s.Dismissals >= len(thresholds) {
@@ -121,6 +128,11 @@ func trackAndMaybePrompt() error {
 		return nil
 	}
 
+	// Mark as prompted immediately so the UI callout (which checks star.json)
+	// won't also show a prompt during the sleep window below.
+	state.PromptedAt = time.Now().Format(time.RFC3339)
+	saveStarState(statePath, state)
+
 	// Wait for the user to see the UI before prompting
 	time.Sleep(5 * time.Second)
 
@@ -132,8 +144,6 @@ func trackAndMaybePrompt() error {
 			ghReady = false
 		}
 	}
-
-	state.PromptedAt = time.Now().Format(time.RFC3339)
 
 	if ghReady {
 		// Interactive prompt — can star for them

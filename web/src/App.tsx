@@ -846,8 +846,17 @@ function GitHubStarButton() {
           setStarred(data.starred)
           setGhAvailable(data.ghAvailable)
           if (data.shouldPrompt && !data.starred) {
-            // Delay the callout so it doesn't appear instantly on load
-            setTimeout(() => setShowCallout(true), 3000)
+            // Delay the callout, then re-check in case CLI prompted during the wait
+            setTimeout(() => {
+              fetch('/api/github/starred')
+                .then(res => res.ok ? res.json() : null)
+                .then(fresh => {
+                  if (fresh?.shouldPrompt && !fresh.starred) {
+                    setShowCallout(true)
+                  }
+                })
+                .catch(() => {})
+            }, 3000)
           }
         }
       })

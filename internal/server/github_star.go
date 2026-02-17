@@ -85,6 +85,12 @@ func (s *githubStarState) shouldPromptUI() bool {
 	if s.PromptedAt == "" {
 		return true
 	}
+	// Don't show more than one prompt per 48 hours (prevents CLI + UI double-prompt)
+	if prompted, err := time.Parse(time.RFC3339, s.PromptedAt); err == nil {
+		if time.Since(prompted) < 48*time.Hour {
+			return false
+		}
+	}
 	thresholds := []int{3, 10, 20, 30, 50, 100}
 	if s.Dismissals >= len(thresholds) {
 		return false
