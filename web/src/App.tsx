@@ -835,7 +835,7 @@ function GitHubStarButton() {
     // Fetch star count from GitHub public API
     fetch('https://api.github.com/repos/skyhook-io/radar')
       .then(res => res.ok ? res.json() : null)
-      .then(data => { if (data?.stargazers_count) setStarCount(data.stargazers_count) })
+      .then(data => { if (data && typeof data.stargazers_count === 'number') setStarCount(data.stargazers_count) })
       .catch(() => {})
 
     // Check if user already starred (via backend/gh CLI) and whether to show prompt
@@ -863,6 +863,11 @@ function GitHubStarButton() {
       .catch(() => {})
   }, [])
 
+  const handleDismiss = useCallback(() => {
+    setShowCallout(false)
+    fetch('/api/github/dismiss', { method: 'POST' }).catch(() => {})
+  }, [])
+
   // Close callout when clicking outside
   useEffect(() => {
     if (!showCallout) return
@@ -876,12 +881,7 @@ function GitHubStarButton() {
     }
     document.addEventListener('mousedown', handleClickOutside)
     return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [showCallout])
-
-  const handleDismiss = () => {
-    setShowCallout(false)
-    fetch('/api/github/dismiss', { method: 'POST' }).catch(() => {})
-  }
+  }, [showCallout, handleDismiss])
 
   const handleClick = (e: React.MouseEvent) => {
     if (starred) return // Already starred, just let the link open GitHub

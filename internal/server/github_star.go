@@ -32,12 +32,12 @@ func (s *Server) handleGitHubStarStatus(w http.ResponseWriter, r *http.Request) 
 
 // handleGitHubStar stars the repo via gh CLI.
 func (s *Server) handleGitHubStar(w http.ResponseWriter, r *http.Request) {
-	ghPath, err := exec.LookPath("gh")
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, "GitHub CLI (gh) is not installed")
+	if !isGhReady() {
+		s.writeError(w, http.StatusBadRequest, "GitHub CLI (gh) is not installed or not authenticated")
 		return
 	}
 
+	ghPath, _ := exec.LookPath("gh")
 	cmd := exec.Command(ghPath, "api", "user/starred/"+githubStarRepo, "-X", "PUT", "--silent")
 	if err := cmd.Run(); err != nil {
 		s.writeError(w, http.StatusInternalServerError, "Failed to star repo via gh CLI")
