@@ -124,7 +124,7 @@ func main() {
 	// Now initialize cluster connection and caches (browser will see progress via SSE)
 	app.InitializeCluster()
 
-	// Offer to star the repo on GitHub (non-blocking, only if gh CLI is available)
+	// Track opens and maybe prompt to star the repo on GitHub (non-blocking)
 	app.MaybePromptGitHubStar()
 
 	// Block forever (server is running in background)
