@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useToast } from '../ui/Toast'
+import { openExternal } from '../../utils/navigation'
 
 interface PortForwardSession {
   id: string
@@ -161,7 +162,7 @@ export function PortForwardManager({
   }, [])
 
   const handleOpenUrl = useCallback((session: PortForwardSession) => {
-    window.open(`http://localhost:${session.localPort}`, '_blank')
+    openExternal(`http://localhost:${session.localPort}`)
   }, [])
 
   // Show both running and error sessions (not stopped)

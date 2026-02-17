@@ -278,13 +278,16 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 			case "input":
 				stdinWriter.Write([]byte(msg.Data))
 			case "resize":
+				// Drain any stale pending size so the new one isn't dropped.
+				// The initial 80x24 may still be buffered if StreamWithContext
+				// hasn't consumed it yet (K8s API connect is slower than local WS).
 				select {
-				case sizeQueue.resizeChan <- remotecommand.TerminalSize{
+				case <-sizeQueue.resizeChan:
+				default:
+				}
+				sizeQueue.resizeChan <- remotecommand.TerminalSize{
 					Width:  msg.Cols,
 					Height: msg.Rows,
-				}:
-				default:
-					// Drop resize if channel full
 				}
 			}
 		case <-r.Context().Done():

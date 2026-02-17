@@ -1,6 +1,22 @@
 import type { SelectedResource, ResourceRef } from '../types'
 
 /**
+ * Open a URL in the system browser.
+ * In the Wails desktop app, window.open() is swallowed by the webview,
+ * so we use the injected runtime.BrowserOpenURL instead.
+ */
+export function openExternal(url: string): void {
+  const wailsRuntime = (window as unknown as Record<string, unknown>).runtime as
+    | { BrowserOpenURL?: (url: string) => void }
+    | undefined
+  if (wailsRuntime?.BrowserOpenURL) {
+    wailsRuntime.BrowserOpenURL(url)
+  } else {
+    window.open(url, '_blank')
+  }
+}
+
+/**
  * Canonical callback type for navigating to a resource.
  * All components that trigger resource navigation should use this type.
  */

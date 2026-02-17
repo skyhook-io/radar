@@ -94,21 +94,6 @@ export function TerminalTab({
     xterm.loadAddon(webLinksAddon)
     xterm.open(terminalRef.current)
 
-    // Delay fit to ensure container is sized
-    // Use proposeDimensions + 1 workaround for better space utilization
-    const doFit = () => {
-      const dims = fitAddon.proposeDimensions()
-      if (dims) {
-        xterm.resize(dims.cols, dims.rows)
-      }
-    }
-
-    requestAnimationFrame(() => {
-      doFit()
-      // Second fit after layout settles
-      setTimeout(doFit, 100)
-    })
-
     xtermRef.current = xterm
     fitAddonRef.current = fitAddon
 
@@ -119,18 +104,36 @@ export function TerminalTab({
     const ws = new WebSocket(wsUrl)
     wsRef.current = ws
 
+    // Fit terminal to container and notify backend of new dimensions
+    const doFit = () => {
+      const dims = fitAddon.proposeDimensions()
+      if (dims) {
+        xterm.resize(dims.cols, dims.rows)
+      }
+      if (ws.readyState === WebSocket.OPEN) {
+        const msg: TerminalMessage = {
+          type: 'resize',
+          rows: xterm.rows,
+          cols: xterm.cols,
+        }
+        ws.send(JSON.stringify(msg))
+      }
+    }
+
+    // Delay initial fit to ensure container is sized
+    requestAnimationFrame(() => {
+      doFit()
+      // Second fit after layout settles
+      setTimeout(doFit, 100)
+    })
+
     ws.onopen = () => {
       setIsConnected(true)
       setIsConnecting(false)
-      xterm.focus()
 
-      // Send initial size
-      const msg: TerminalMessage = {
-        type: 'resize',
-        rows: xterm.rows,
-        cols: xterm.cols,
-      }
-      ws.send(JSON.stringify(msg))
+      // Fit to container and send actual dimensions (not xterm defaults)
+      doFit()
+      xterm.focus()
     }
 
     ws.onmessage = (event) => {

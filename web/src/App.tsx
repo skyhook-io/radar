@@ -31,7 +31,7 @@ import { RefreshCw, FolderTree, Network, List, Clock, Package, Sun, Moon, Activi
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, Topology } from './types'
-import { kindToPlural } from './utils/navigation'
+import { kindToPlural, openExternal } from './utils/navigation'
 
 // All possible node kinds (core + GitOps)
 const ALL_NODE_KINDS: NodeKind[] = [
@@ -900,7 +900,7 @@ function GitHubStarButton() {
         })
         .catch(() => {
           // Fallback: open GitHub in browser
-          window.open('https://github.com/skyhook-io/radar', '_blank')
+          openExternal('https://github.com/skyhook-io/radar')
         })
     } else {
       // No gh CLI — link opens GitHub; dismiss the callout
