@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { NodeKind, HealthStatus } from '../../types'
+import { displayKind } from '../../types'
 import { healthToSeverity, SEVERITY_DOT } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 
@@ -103,7 +104,7 @@ export const NODE_DIMENSIONS: Record<NodeKind, { width: number; height: number }
   PodGroup: { width: 200, height: 64 },
   ConfigMap: { width: 180, height: 48 },
   Secret: { width: 180, height: 48 },
-  HorizontalPodAutoscaler: { width: 160, height: 48 },
+  HorizontalPodAutoscaler: { width: 280, height: 56 },
   Job: { width: 180, height: 56 },
   CronJob: { width: 200, height: 56 },
   PersistentVolumeClaim: { width: 200, height: 48 },
@@ -326,7 +327,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
           <div className="flex items-center gap-1.5 mb-0.5">
             <span className={iconClass} />
             <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary font-medium">
-              {isPodGroup ? 'Pod Group' : kind}
+              {isPodGroup ? 'Pod Group' : displayKind(kind)}
             </span>
             {/* Expand/Collapse button for PodGroup */}
             {canExpand && (
