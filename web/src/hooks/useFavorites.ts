@@ -24,7 +24,9 @@ function savePinned(pinned: PinnedKind[]) {
   } catch {
     // ignore storage errors
   }
-  fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinnedKinds: pinned }) }).catch(() => {})
+  fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinnedKinds: pinned }) })
+    .then((res) => { if (!res.ok) console.warn('[settings] Failed to persist pinned kinds:', res.status) })
+    .catch((err) => console.warn('[settings] Failed to persist pinned kinds:', err))
 }
 
 function matches(a: PinnedKind, name: string, group: string): boolean {
@@ -44,7 +46,7 @@ export function usePinnedKinds() {
           localStorage.setItem(STORAGE_KEY, JSON.stringify(data.pinnedKinds))
         }
       })
-      .catch(() => {})
+      .catch((err) => console.warn('[settings] Failed to load pinned kinds from server:', err))
   }, [])
 
   const togglePin = useCallback((item: PinnedKind) => {

@@ -2,6 +2,7 @@ package settings
 
 import (
 	"encoding/json"
+	"log"
 	"os"
 	"path/filepath"
 )
@@ -36,10 +37,14 @@ func Load() Settings {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
+		if !os.IsNotExist(err) {
+			log.Printf("[settings] Failed to read %s: %v", path, err)
+		}
 		return Settings{}
 	}
 	var s Settings
 	if err := json.Unmarshal(data, &s); err != nil {
+		log.Printf("[settings] Failed to parse %s: %v", path, err)
 		return Settings{}
 	}
 	return s

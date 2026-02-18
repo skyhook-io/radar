@@ -37,7 +37,9 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ theme: newTheme }),
-    }).catch(() => {})
+    }).then((res) => {
+      if (!res.ok) console.warn('[settings] Failed to persist theme:', res.status)
+    }).catch((err) => console.warn('[settings] Failed to persist theme:', err))
   }
 
   const toggleTheme = () => {
@@ -59,7 +61,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
           localStorage.setItem(THEME_STORAGE_KEY, data.theme)
         }
       })
-      .catch(() => {})
+      .catch((err) => console.warn('[settings] Failed to load theme from server:', err))
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Listen for system theme changes
