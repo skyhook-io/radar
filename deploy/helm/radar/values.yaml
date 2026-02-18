@@ -153,6 +153,11 @@ timeline:
   # Maximum number of events to retain
   historyLimit: 10000
 
+# MCP (Model Context Protocol) server for AI tools
+mcp:
+  # Set to false to disable the MCP server (useful when deployed behind authentication)
+  enabled: true
+
 # Traffic source configuration
 traffic:
   # Manual Prometheus/VictoriaMetrics URL (bypasses auto-discovery)
