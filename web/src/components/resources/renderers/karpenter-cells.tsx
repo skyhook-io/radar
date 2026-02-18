@@ -1,0 +1,72 @@
+// Karpenter cell components for ResourcesView table
+
+import { clsx } from 'clsx'
+import { Tooltip } from '../../ui/Tooltip'
+import {
+  getNodePoolStatus,
+  getNodePoolNodeClassRef,
+  getNodePoolLimits,
+  getNodePoolDisruptionPolicy,
+  getNodeClaimStatus,
+  getNodeClaimInstanceType,
+  getNodeClaimNodeName,
+  getNodeClaimNodePoolRef,
+} from '../resource-utils-karpenter'
+
+export function NodePoolCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'status': {
+      const status = getNodePoolStatus(resource)
+      return (
+        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+          {status.text}
+        </span>
+      )
+    }
+    case 'nodeClass': {
+      const ref = getNodePoolNodeClassRef(resource)
+      return <span className="text-sm text-theme-text-secondary">{ref}</span>
+    }
+    case 'limits': {
+      const limits = getNodePoolLimits(resource)
+      return (
+        <Tooltip content={limits}>
+          <span className="text-sm text-theme-text-secondary truncate block">{limits}</span>
+        </Tooltip>
+      )
+    }
+    case 'disruption': {
+      const policy = getNodePoolDisruptionPolicy(resource)
+      return <span className="text-sm text-theme-text-secondary">{policy}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+export function NodeClaimCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'status': {
+      const status = getNodeClaimStatus(resource)
+      return (
+        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+          {status.text}
+        </span>
+      )
+    }
+    case 'instanceType': {
+      const instanceType = getNodeClaimInstanceType(resource)
+      return <span className="text-sm text-theme-text-secondary">{instanceType}</span>
+    }
+    case 'nodeName': {
+      const name = getNodeClaimNodeName(resource)
+      return <span className="text-sm text-theme-text-secondary">{name}</span>
+    }
+    case 'nodePool': {
+      const pool = getNodeClaimNodePoolRef(resource)
+      return <span className="text-sm text-theme-text-secondary">{pool}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}

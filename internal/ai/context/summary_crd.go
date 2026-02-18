@@ -2,6 +2,7 @@ package context
 
 import (
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -24,6 +25,16 @@ func summarizeUnstructured(obj *unstructured.Unstructured) *ResourceSummary {
 		return summarizeFluxHelmRelease(obj)
 	case group == "gateway.networking.k8s.io" && kind == "Gateway":
 		return summarizeGateway(obj)
+	case group == "karpenter.sh" && kind == "NodePool":
+		return summarizeKarpenterNodePool(obj)
+	case group == "karpenter.sh" && kind == "NodeClaim":
+		return summarizeKarpenterNodeClaim(obj)
+	case group == "keda.sh" && kind == "ScaledObject":
+		return summarizeKedaScaledObject(obj)
+	case group == "keda.sh" && kind == "ScaledJob":
+		return summarizeKedaScaledJob(obj)
+	case group == "gateway.networking.k8s.io" && kind == "GatewayClass":
+		return summarizeGatewayClass(obj)
 	}
 
 	// Generic fallback
@@ -216,4 +227,180 @@ func extractReadyCondition(obj *unstructured.Unstructured) string {
 
 func formatInt64Pair(a, b int64) string {
 	return fmt.Sprintf("%d/%d", a, b)
+}
+
+func summarizeKarpenterNodePool(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind:      "NodePool",
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
+		Age:       age(obj.GetCreationTimestamp().Time),
+	}
+
+	s.Status = extractReadyCondition(obj)
+
+	// Disruption policy
+	policy, _, _ := unstructured.NestedString(obj.Object, "spec", "disruption", "consolidationPolicy")
+	if policy != "" {
+		s.Strategy = policy
+	}
+
+	// Limits (CPU/memory)
+	limits, found, _ := unstructured.NestedMap(obj.Object, "spec", "limits")
+	if found {
+		var limitParts []string
+		if cpu, ok := limits["cpu"]; ok {
+			limitParts = append(limitParts, fmt.Sprintf("cpu:%v", cpu))
+		}
+		if mem, ok := limits["memory"]; ok {
+			limitParts = append(limitParts, fmt.Sprintf("mem:%v", mem))
+		}
+		if len(limitParts) > 0 {
+			s.Capacity = strings.Join(limitParts, ",")
+		}
+	}
+
+	// Requirement count
+	reqs, found, _ := unstructured.NestedSlice(obj.Object, "spec", "template", "spec", "requirements")
+	if found && len(reqs) > 0 {
+		s.Ready = fmt.Sprintf("%d requirements", len(reqs))
+	}
+
+	return s
+}
+
+func summarizeKarpenterNodeClaim(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind:      "NodeClaim",
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
+		Age:       age(obj.GetCreationTimestamp().Time),
+	}
+
+	s.Status = extractReadyCondition(obj)
+
+	// Instance type from status
+	instanceType, _, _ := unstructured.NestedString(obj.Object, "status", "instanceType")
+	if instanceType != "" {
+		s.Type = instanceType
+	}
+
+	// Node name from status
+	nodeName, _, _ := unstructured.NestedString(obj.Object, "status", "nodeName")
+	if nodeName != "" {
+		s.Node = nodeName
+	}
+
+	// Capacity from status
+	capacity, found, _ := unstructured.NestedMap(obj.Object, "status", "capacity")
+	if found {
+		var capParts []string
+		if cpu, ok := capacity["cpu"]; ok {
+			capParts = append(capParts, fmt.Sprintf("cpu:%v", cpu))
+		}
+		if mem, ok := capacity["memory"]; ok {
+			capParts = append(capParts, fmt.Sprintf("mem:%v", mem))
+		}
+		if len(capParts) > 0 {
+			s.Capacity = strings.Join(capParts, ",")
+		}
+	}
+
+	return s
+}
+
+func summarizeKedaScaledObject(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind:      "ScaledObject",
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
+		Age:       age(obj.GetCreationTimestamp().Time),
+	}
+
+	// Check paused annotation
+	annotations := obj.GetAnnotations()
+	if annotations != nil {
+		if paused, ok := annotations["autoscaling.keda.sh/paused"]; ok && paused == "true" {
+			s.Status = "Paused"
+		}
+	}
+	if s.Status == "" {
+		s.Status = extractReadyCondition(obj)
+	}
+
+	// Target ref
+	targetKind, _, _ := unstructured.NestedString(obj.Object, "spec", "scaleTargetRef", "kind")
+	targetName, _, _ := unstructured.NestedString(obj.Object, "spec", "scaleTargetRef", "name")
+	if targetKind != "" && targetName != "" {
+		s.Target = fmt.Sprintf("%s/%s", targetKind, targetName)
+	}
+
+	// Min/max replicas
+	minReplicas, found, _ := unstructured.NestedInt64(obj.Object, "spec", "minReplicaCount")
+	if found {
+		min32 := int32(minReplicas)
+		s.MinReplicas = &min32
+	}
+	maxReplicas, found, _ := unstructured.NestedInt64(obj.Object, "spec", "maxReplicaCount")
+	if found {
+		s.MaxReplicas = int32(maxReplicas)
+	}
+
+	// Trigger count
+	triggers, found, _ := unstructured.NestedSlice(obj.Object, "spec", "triggers")
+	if found {
+		s.Ready = fmt.Sprintf("%d triggers", len(triggers))
+	}
+
+	// Last active time
+	lastActive, _, _ := unstructured.NestedString(obj.Object, "status", "lastActiveTime")
+	if lastActive != "" {
+		s.Version = lastActive // Reuse Version field for last active time
+	}
+
+	return s
+}
+
+func summarizeKedaScaledJob(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind:      "ScaledJob",
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
+		Age:       age(obj.GetCreationTimestamp().Time),
+	}
+
+	s.Status = extractReadyCondition(obj)
+
+	// Scaling strategy
+	strategy, _, _ := unstructured.NestedString(obj.Object, "spec", "scalingStrategy", "strategy")
+	if strategy != "" {
+		s.Strategy = strategy
+	}
+
+	// Trigger count
+	triggers, found, _ := unstructured.NestedSlice(obj.Object, "spec", "triggers")
+	if found {
+		s.Ready = fmt.Sprintf("%d triggers", len(triggers))
+	}
+
+	return s
+}
+
+func summarizeGatewayClass(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind: "GatewayClass",
+		Name: obj.GetName(),
+		Age:  age(obj.GetCreationTimestamp().Time),
+	}
+
+	// Accepted condition
+	s.Status = extractReadyCondition(obj)
+
+	// Controller name
+	controllerName, _, _ := unstructured.NestedString(obj.Object, "spec", "controllerName")
+	if controllerName != "" {
+		s.Type = controllerName
+	}
+
+	return s
 }

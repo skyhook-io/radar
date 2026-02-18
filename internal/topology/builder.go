@@ -710,6 +710,229 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
+	// 1h. Add Karpenter NodePool and NodeClaim nodes (CRD - fetched via dynamic cache)
+	nodePoolIDs := make(map[string]string)   // ns/name -> nodePoolID
+	nodeClaimIDs := make(map[string]string)  // ns/name -> nodeClaimID
+
+	var nodePoolGVR schema.GroupVersionResource
+	hasNodePools := false
+	if resourceDiscovery != nil {
+		nodePoolGVR, hasNodePools = resourceDiscovery.GetGVR("NodePool")
+	}
+	if hasNodePools && dynamicCache != nil {
+		nodePools, npErr := dynamicCache.List(nodePoolGVR, opts.NamespaceFilter())
+		if npErr != nil {
+			log.Printf("WARNING [topology] Failed to list Karpenter NodePools: %v", npErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list Karpenter NodePools: %v", npErr))
+		}
+		for _, np := range nodePools {
+			ns := np.GetNamespace()
+			if !opts.MatchesNamespaceFilter(ns) {
+				continue
+			}
+			name := np.GetName()
+
+			npID := fmt.Sprintf("nodepool/%s/%s", ns, name)
+			nodePoolIDs[ns+"/"+name] = npID
+			nodes = append(nodes, Node{
+				ID:     npID,
+				Kind:   KindNodePool,
+				Name:   name,
+				Status: extractKarpenterNodePoolStatus(*np),
+				Data: map[string]any{
+					"namespace": ns,
+					"labels":    np.GetLabels(),
+				},
+			})
+		}
+	}
+
+	var nodeClaimGVR schema.GroupVersionResource
+	hasNodeClaims := false
+	if resourceDiscovery != nil {
+		nodeClaimGVR, hasNodeClaims = resourceDiscovery.GetGVR("NodeClaim")
+	}
+	if hasNodeClaims && dynamicCache != nil {
+		nodeClaims, ncErr := dynamicCache.List(nodeClaimGVR, opts.NamespaceFilter())
+		if ncErr != nil {
+			log.Printf("WARNING [topology] Failed to list Karpenter NodeClaims: %v", ncErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list Karpenter NodeClaims: %v", ncErr))
+		}
+		for _, nc := range nodeClaims {
+			ns := nc.GetNamespace()
+			if !opts.MatchesNamespaceFilter(ns) {
+				continue
+			}
+			name := nc.GetName()
+
+			ncID := fmt.Sprintf("nodeclaim/%s/%s", ns, name)
+			nodeClaimIDs[ns+"/"+name] = ncID
+			nodes = append(nodes, Node{
+				ID:     ncID,
+				Kind:   KindNodeClaim,
+				Name:   name,
+				Status: extractKarpenterNodeClaimStatus(*nc),
+				Data: map[string]any{
+					"namespace": ns,
+					"labels":    nc.GetLabels(),
+				},
+			})
+
+			// NodePool → NodeClaim edge via ownerRef or karpenter.sh/nodepool label
+			edgeAdded := false
+			for _, ownerRef := range nc.GetOwnerReferences() {
+				if ownerRef.Kind == "NodePool" {
+					// NodePool is cluster-scoped, so key uses empty namespace
+					if ownerID, ok := nodePoolIDs["/"+ownerRef.Name]; ok {
+						edges = append(edges, Edge{
+							ID:     fmt.Sprintf("%s-to-%s", ownerID, ncID),
+							Source: ownerID,
+							Target: ncID,
+							Type:   EdgeManages,
+						})
+						edgeAdded = true
+					}
+				}
+			}
+			// Fallback: use karpenter.sh/nodepool label if no ownerRef matched
+			if !edgeAdded {
+				if poolName, ok := nc.GetLabels()["karpenter.sh/nodepool"]; ok {
+					if ownerID, ok := nodePoolIDs["/"+poolName]; ok {
+						edges = append(edges, Edge{
+							ID:     fmt.Sprintf("%s-to-%s", ownerID, ncID),
+							Source: ownerID,
+							Target: ncID,
+							Type:   EdgeManages,
+						})
+					}
+				}
+			}
+		}
+	}
+
+	// 1i. Add KEDA ScaledObject and ScaledJob nodes (CRD - fetched via dynamic cache)
+	var scaledObjectGVR schema.GroupVersionResource
+	hasScaledObjects := false
+	if resourceDiscovery != nil {
+		scaledObjectGVR, hasScaledObjects = resourceDiscovery.GetGVR("ScaledObject")
+	}
+	if hasScaledObjects && dynamicCache != nil {
+		scaledObjects, soErr := dynamicCache.List(scaledObjectGVR, opts.NamespaceFilter())
+		if soErr != nil {
+			log.Printf("WARNING [topology] Failed to list KEDA ScaledObjects: %v", soErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list KEDA ScaledObjects: %v", soErr))
+		}
+		for _, so := range scaledObjects {
+			ns := so.GetNamespace()
+			if !opts.MatchesNamespaceFilter(ns) {
+				continue
+			}
+			name := so.GetName()
+
+			soID := fmt.Sprintf("scaledobject/%s/%s", ns, name)
+			nodes = append(nodes, Node{
+				ID:     soID,
+				Kind:   KindScaledObject,
+				Name:   name,
+				Status: extractKedaScaledObjectStatus(*so),
+				Data: map[string]any{
+					"namespace": ns,
+					"labels":    so.GetLabels(),
+				},
+			})
+
+			// ScaledObject → target workload edge (via spec.scaleTargetRef)
+			targetKind, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "kind")
+			targetName, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "name")
+			if targetKind == "" {
+				targetKind = "Deployment" // KEDA defaults to Deployment when kind is omitted
+			}
+			if targetName != "" {
+				targetKey := ns + "/" + targetName
+				var targetID string
+				switch targetKind {
+				case "Deployment":
+					targetID = deploymentIDs[targetKey]
+				case "StatefulSet":
+					targetID = statefulSetIDs[targetKey]
+				case "Rollout":
+					targetID = rolloutIDs[targetKey]
+				}
+				if targetID != "" {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s", soID, targetID),
+						Source: soID,
+						Target: targetID,
+						Type:   EdgeManages,
+					})
+				}
+			}
+		}
+	}
+
+	var scaledJobGVR schema.GroupVersionResource
+	hasScaledJobs := false
+	if resourceDiscovery != nil {
+		scaledJobGVR, hasScaledJobs = resourceDiscovery.GetGVR("ScaledJob")
+	}
+	if hasScaledJobs && dynamicCache != nil {
+		scaledJobs, sjErr := dynamicCache.List(scaledJobGVR, opts.NamespaceFilter())
+		if sjErr != nil {
+			log.Printf("WARNING [topology] Failed to list KEDA ScaledJobs: %v", sjErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list KEDA ScaledJobs: %v", sjErr))
+		}
+		for _, sj := range scaledJobs {
+			ns := sj.GetNamespace()
+			if !opts.MatchesNamespaceFilter(ns) {
+				continue
+			}
+			name := sj.GetName()
+
+			sjID := fmt.Sprintf("scaledjob/%s/%s", ns, name)
+			nodes = append(nodes, Node{
+				ID:     sjID,
+				Kind:   KindScaledJob,
+				Name:   name,
+				Status: extractKedaScaledJobStatus(*sj),
+				Data: map[string]any{
+					"namespace": ns,
+					"labels":    sj.GetLabels(),
+				},
+			})
+		}
+	}
+
+	// 1j. Add Gateway API GatewayClass nodes (CRD - fetched via dynamic cache)
+	gatewayClassIDs := make(map[string]string) // name -> gatewayClassID (cluster-scoped)
+
+	var gatewayClassGVR schema.GroupVersionResource
+	hasGatewayClasses := false
+	if resourceDiscovery != nil {
+		gatewayClassGVR, hasGatewayClasses = resourceDiscovery.GetGVR("GatewayClass")
+	}
+	if hasGatewayClasses && dynamicCache != nil {
+		gatewayClasses, gcErr := dynamicCache.List(gatewayClassGVR, "")
+		if gcErr != nil {
+			log.Printf("WARNING [topology] Failed to list GatewayClasses: %v", gcErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list GatewayClasses: %v", gcErr))
+		}
+		for _, gc := range gatewayClasses {
+			name := gc.GetName()
+
+			gcID := fmt.Sprintf("gatewayclass//%s", name)
+			gatewayClassIDs[name] = gcID
+			nodes = append(nodes, Node{
+				ID:     gcID,
+				Kind:   KindGatewayClass,
+				Name:   name,
+				Status: extractGatewayClassStatus(*gc),
+				Data: map[string]any{
+					"labels": gc.GetLabels(),
+				},
+			})
+		}
+	}
+
 	// 2. Add DaemonSet nodes
 	var daemonsets []*appsv1.DaemonSet
 	if lister := b.cache.DaemonSets(); lister != nil {
@@ -1360,6 +1583,33 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"labels":        gw.GetLabels(),
 				},
 			})
+		}
+	}
+
+	// Create GatewayClass → Gateway edges (match via spec.gatewayClassName on Gateway)
+	if hasGateways && dynamicCache != nil {
+		gateways, _ := dynamicCache.List(gatewayGVR, opts.NamespaceFilter())
+		for _, gw := range gateways {
+			ns := gw.GetNamespace()
+			if !opts.MatchesNamespaceFilter(ns) {
+				continue
+			}
+			name := gw.GetName()
+			gwID := gatewayIDs[ns+"/"+name]
+			if gwID == "" {
+				continue
+			}
+			className, _, _ := unstructured.NestedString(gw.Object, "spec", "gatewayClassName")
+			if className != "" {
+				if gcID, ok := gatewayClassIDs[className]; ok {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s", gcID, gwID),
+						Source: gcID,
+						Target: gwID,
+						Type:   EdgeManages,
+					})
+				}
+			}
 		}
 	}
 
@@ -2092,6 +2342,39 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					Type:   EdgeManages,
 				})
 			}
+		}
+	}
+
+	// 15c. Create cert-manager Certificate → Issuer/ClusterIssuer edges (via spec.issuerRef)
+	// Build a lookup of existing node IDs for matching
+	existingNodeIDs := make(map[string]bool, len(nodes))
+	for _, node := range nodes {
+		existingNodeIDs[node.ID] = true
+	}
+	for _, cert := range certificateResources {
+		ns := cert.GetNamespace()
+		certID := fmt.Sprintf("certificate/%s/%s", ns, cert.GetName())
+
+		issuerKind, _, _ := unstructured.NestedString(cert.Object, "spec", "issuerRef", "kind")
+		issuerName, _, _ := unstructured.NestedString(cert.Object, "spec", "issuerRef", "name")
+		if issuerKind == "" || issuerName == "" {
+			continue
+		}
+
+		var issuerID string
+		switch issuerKind {
+		case "ClusterIssuer":
+			issuerID = fmt.Sprintf("clusterissuer//%s", issuerName)
+		case "Issuer":
+			issuerID = fmt.Sprintf("issuer/%s/%s", ns, issuerName)
+		}
+		if issuerID != "" && existingNodeIDs[issuerID] {
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("%s-to-%s", certID, issuerID),
+				Source: certID,
+				Target: issuerID,
+				Type:   EdgeManages,
+			})
 		}
 	}
 
@@ -3097,6 +3380,134 @@ func extractCertificateStatus(cert unstructured.Unstructured) HealthStatus {
 	return StatusUnknown
 }
 
+// extractKarpenterNodePoolStatus reads the Ready condition from a Karpenter NodePool
+func extractKarpenterNodePoolStatus(np unstructured.Unstructured) HealthStatus {
+	conditions, found, _ := unstructured.NestedSlice(np.Object, "status", "conditions")
+	if !found {
+		return StatusUnknown
+	}
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cond["type"] == "Ready" {
+			switch cond["status"] {
+			case "True":
+				return StatusHealthy
+			case "False":
+				return StatusUnhealthy
+			}
+			return StatusUnknown
+		}
+	}
+	return StatusUnknown
+}
+
+// extractKarpenterNodeClaimStatus reads the Ready condition from a Karpenter NodeClaim
+func extractKarpenterNodeClaimStatus(nc unstructured.Unstructured) HealthStatus {
+	conditions, found, _ := unstructured.NestedSlice(nc.Object, "status", "conditions")
+	if !found {
+		return StatusUnknown
+	}
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cond["type"] == "Ready" {
+			switch cond["status"] {
+			case "True":
+				return StatusHealthy
+			case "False":
+				return StatusUnhealthy
+			}
+			return StatusUnknown
+		}
+	}
+	return StatusUnknown
+}
+
+// extractKedaScaledObjectStatus reads the Active condition and Paused annotation from a KEDA ScaledObject
+func extractKedaScaledObjectStatus(so unstructured.Unstructured) HealthStatus {
+	// Check for Paused annotation
+	annotations := so.GetAnnotations()
+	if annotations != nil {
+		if paused, ok := annotations["autoscaling.keda.sh/paused"]; ok && paused == "true" {
+			return StatusDegraded
+		}
+	}
+
+	conditions, found, _ := unstructured.NestedSlice(so.Object, "status", "conditions")
+	if !found {
+		return StatusUnknown
+	}
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cond["type"] == "Active" {
+			switch cond["status"] {
+			case "True":
+				return StatusHealthy
+			case "False":
+				return StatusDegraded
+			}
+			return StatusUnknown
+		}
+	}
+	return StatusUnknown
+}
+
+// extractKedaScaledJobStatus reads the Active condition from a KEDA ScaledJob
+func extractKedaScaledJobStatus(sj unstructured.Unstructured) HealthStatus {
+	conditions, found, _ := unstructured.NestedSlice(sj.Object, "status", "conditions")
+	if !found {
+		return StatusUnknown
+	}
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cond["type"] == "Active" {
+			switch cond["status"] {
+			case "True":
+				return StatusHealthy
+			case "False":
+				return StatusDegraded
+			}
+			return StatusUnknown
+		}
+	}
+	return StatusUnknown
+}
+
+// extractGatewayClassStatus reads the Accepted condition from a Gateway API GatewayClass
+func extractGatewayClassStatus(gc unstructured.Unstructured) HealthStatus {
+	conditions, found, _ := unstructured.NestedSlice(gc.Object, "status", "conditions")
+	if !found {
+		return StatusUnknown
+	}
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if cond["type"] == "Accepted" {
+			switch cond["status"] {
+			case "True":
+				return StatusHealthy
+			case "False":
+				return StatusUnhealthy
+			}
+			return StatusUnknown
+		}
+	}
+	return StatusUnknown
+}
+
 // addGenericCRDNodes adds CRD nodes connected to the topology via owner references.
 // It uses two-phase resolution: first collecting all candidate CRD resources, then
 // iteratively adding nodes whose owners are already in the topology. This handles
@@ -3120,6 +3531,9 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		"rollout": true, "application": true, "kustomization": true,
 		"helmrelease": true, "gitrepository": true, "certificate": true,
 		"gateway": true, "httproute": true, "grpcroute": true, "tcproute": true, "tlsroute": true,
+		"nodepool": true, "nodeclaim": true,       // Karpenter
+		"scaledobject": true, "scaledjob": true,   // KEDA
+		"gatewayclass": true,                       // Gateway API
 		// Trivy Operator reports - high cardinality, excluded from topology
 		"vulnerabilityreport": true, "configauditreport": true,
 		"exposedsecretreport": true, "sbomreport": true,

@@ -4,6 +4,8 @@ import { formatCPUString, formatMemoryString } from '../../utils/format'
 
 // Import functions from sub-modules used internally by getCellFilterValue
 import { getCertificateStatus, getCertificateRequestStatus, getClusterIssuerStatus, getClusterIssuerType, getOrderState, getChallengeState, getChallengeType } from './resource-utils-certmanager'
+import { getNodePoolStatus, getNodeClaimStatus } from './resource-utils-karpenter'
+import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda'
 import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus } from './resource-utils-flux'
 import { getArgoApplicationStatus, getArgoApplicationSetStatus } from './resource-utils-argo'
 
@@ -1370,6 +1372,10 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'kustomizations') return getKustomizationStatus(resource).text
       if (kindLower === 'helmreleases') return getFluxHelmReleaseStatus(resource).text
       if (kindLower === 'alerts') return getFluxAlertStatus(resource).text
+      if (kindLower === 'nodepools') return getNodePoolStatus(resource).text
+      if (kindLower === 'nodeclaims') return getNodeClaimStatus(resource).text
+      if (kindLower === 'scaledobjects') return getScaledObjectStatus(resource).text
+      if (kindLower === 'scaledjobs') return getScaledJobStatus(resource).text
       // Generic CRDs: try status.phase, then Ready condition
       if (resource.status?.phase) return resource.status.phase
       {
@@ -1442,3 +1448,42 @@ export {
   getSbomReportContainer,
 } from './resource-utils-trivy'
 export type { VulnerabilitySummary, ConfigAuditSummary } from './resource-utils-trivy'
+
+// ============================================================================
+// KARPENTER UTILITIES — re-exported from resource-utils-karpenter.ts
+// ============================================================================
+export {
+  getNodePoolStatus,
+  getNodePoolNodeClassRef,
+  getNodePoolLimits,
+  getNodePoolDisruptionPolicy,
+  getNodePoolRequirements,
+  getNodePoolWeight,
+  getNodeClaimStatus,
+  getNodeClaimInstanceType,
+  getNodeClaimNodeName,
+  getNodeClaimCapacity,
+  getNodeClaimNodePoolRef,
+} from './resource-utils-karpenter'
+
+// ============================================================================
+// KEDA UTILITIES — re-exported from resource-utils-keda.ts
+// ============================================================================
+export {
+  getScaledObjectStatus,
+  getScaledObjectTarget,
+  getScaledObjectTargetKind,
+  getScaledObjectTargetName,
+  getScaledObjectReplicas,
+  getScaledObjectTriggers,
+  getScaledObjectTriggerCount,
+  getScaledObjectHpaName,
+  getScaledObjectLastActiveTime,
+  getScaledObjectPollingInterval,
+  getScaledObjectCooldownPeriod,
+  getScaledJobStatus,
+  getScaledJobTarget,
+  getScaledJobStrategy,
+  getScaledJobTriggerCount,
+  getScaledJobTriggers,
+} from './resource-utils-keda'

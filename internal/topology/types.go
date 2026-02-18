@@ -30,6 +30,11 @@ const (
 	KindHelmRelease   NodeKind = "HelmRelease"   // FluxCD HelmRelease (Flux, not native Helm)
 	KindGitRepository NodeKind = "GitRepository" // FluxCD GitRepository
 	KindCertificate   NodeKind = "Certificate"   // cert-manager Certificate
+	KindNodePool      NodeKind = "NodePool"      // Karpenter NodePool
+	KindNodeClaim     NodeKind = "NodeClaim"     // Karpenter NodeClaim
+	KindScaledObject  NodeKind = "ScaledObject"  // KEDA ScaledObject
+	KindScaledJob     NodeKind = "ScaledJob"     // KEDA ScaledJob
+	KindGatewayClass  NodeKind = "GatewayClass"  // Gateway API GatewayClass
 	KindDaemonSet     NodeKind = "DaemonSet"
 	KindStatefulSet   NodeKind = "StatefulSet"
 	KindReplicaSet    NodeKind = "ReplicaSet"

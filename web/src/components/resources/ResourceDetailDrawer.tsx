@@ -70,6 +70,8 @@ import {
   getKindColor,
   formatKindName,
 } from './drawer-components'
+import { getNodePoolStatus, getNodeClaimStatus } from './resource-utils-karpenter'
+import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda'
 import {
   PodRenderer,
   WorkloadRenderer,
@@ -117,6 +119,10 @@ import {
   ExposedSecretReportRenderer,
   ClusterComplianceReportRenderer,
   SbomReportRenderer,
+  KarpenterNodePoolRenderer,
+  KarpenterNodeClaimRenderer,
+  KedaScaledObjectRenderer,
+  KedaScaledJobRenderer,
 } from './renderers'
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import { PortForwardButton } from '../portforward/PortForwardButton'
@@ -1175,11 +1181,13 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
     'rollouts', 'certificates', 'workflows', 'persistentvolumes',
     'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
     'orders', 'challenges',
-    'gateways', 'httproutes', 'sealedsecrets', 'workflowtemplates',
+    'gateways', 'gatewayclasses', 'httproutes', 'sealedsecrets', 'workflowtemplates',
     'networkpolicies', 'poddisruptionbudgets', 'serviceaccounts',
     'roles', 'clusterroles', 'rolebindings', 'clusterrolebindings',
     'events', 'gitrepositories', 'ocirepositories', 'helmrepositories',
     'kustomizations', 'helmreleases', 'alerts', 'applications',
+    'nodepools', 'nodeclaims', 'scaledobjects', 'scaledjobs',
+    'triggerauthentications', 'clustertriggerauthentications',
     'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
     'rbacassessmentreports', 'clusterrbacassessmentreports',
     'clustercompliancereports', 'sbomreports', 'clustersbomreports',
@@ -1230,6 +1238,10 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
       {kind === 'helmreleases' && <FluxHelmReleaseRenderer data={data} />}
       {kind === 'alerts' && <AlertRenderer data={data} />}
       {kind === 'applications' && <ArgoApplicationRenderer data={data} />}
+      {kind === 'nodepools' && <KarpenterNodePoolRenderer data={data} />}
+      {kind === 'nodeclaims' && <KarpenterNodeClaimRenderer data={data} />}
+      {kind === 'scaledobjects' && <KedaScaledObjectRenderer data={data} />}
+      {kind === 'scaledjobs' && <KedaScaledJobRenderer data={data} />}
       {kind === 'vulnerabilityreports' && <VulnerabilityReportRenderer data={data} />}
       {kind === 'configauditreports' && <ConfigAuditReportRenderer data={data} />}
       {kind === 'exposedsecretreports' && <ExposedSecretReportRenderer data={data} />}
@@ -1405,6 +1417,26 @@ function getResourceStatus(kind: string, data: any): { text: string; color: stri
 
   if (k === 'applications') {
     const status = getArgoApplicationStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'nodepools') {
+    const status = getNodePoolStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'nodeclaims') {
+    const status = getNodeClaimStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'scaledobjects') {
+    const status = getScaledObjectStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'scaledjobs') {
+    const status = getScaledJobStatus(data)
     return { text: status.text, color: status.color }
   }
 

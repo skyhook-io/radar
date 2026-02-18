@@ -866,6 +866,13 @@ func WarmupCommonCRDs() {
 		"ClusterSbomReport",            // Trivy Operator
 		"InfraAssessmentReport",        // Trivy Operator
 		"ClusterInfraAssessmentReport", // Trivy Operator
+		"NodePool",                     // Karpenter
+		"NodeClaim",                    // Karpenter
+		"ScaledObject",                 // KEDA
+		"ScaledJob",                    // KEDA
+		"TriggerAuthentication",        // KEDA
+		"ClusterTriggerAuthentication", // KEDA
+		"GatewayClass",                 // Gateway API
 	}
 
 	var gvrs []schema.GroupVersionResource

@@ -170,7 +170,12 @@ func buildNodeID(kind, namespace, name string) string {
 		"jobs":                    "job",
 		"cronjobs":                "cronjob",
 		"persistentvolumeclaims":  "persistentvolumeclaim",
-		"certificates": "certificate",
+		"certificates":  "certificate",
+		"nodepools":     "nodepool",
+		"nodeclaims":    "nodeclaim",
+		"scaledobjects": "scaledobject",
+		"scaledjobs":    "scaledjob",
+		"gatewayclasses": "gatewayclass",
 	}
 
 	if singular, ok := kindMap[k]; ok {
@@ -237,6 +242,11 @@ func normalizeKind(kind string) string {
 		"persistentvolumeclaim":    "PersistentVolumeClaim",
 		"podgroup":                 "PodGroup",
 		"certificate":             "Certificate",
+		"nodepool":     "NodePool",
+		"nodeclaim":    "NodeClaim",
+		"scaledobject": "ScaledObject",
+		"scaledjob":    "ScaledJob",
+		"gatewayclass": "GatewayClass",
 		"internet":    "Internet",
 	}
 

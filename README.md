@@ -264,10 +264,12 @@ Enabled by default. Disable with `--no-mcp`. See the **[MCP Guide](docs/mcp.md)*
 
 ## Supported Resources
 
+Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integrations](docs/integrations.md) with topology edges, detail views, and AI summaries.
+
 | Category | Resources |
 |----------|-----------|
 | **Workloads** | Deployments, DaemonSets, StatefulSets, ReplicaSets, Pods, Jobs, CronJobs |
-| **Networking** | Services, Ingresses, NetworkPolicies, Endpoints |
+| **Networking** | Services, Ingresses, NetworkPolicies, Endpoints, PodDisruptionBudgets |
 | **Configuration** | ConfigMaps, Secrets (names only, values hidden) |
 | **Storage** | PersistentVolumeClaims, PersistentVolumes, StorageClasses |
 | **Autoscaling** | HorizontalPodAutoscalers |
@@ -276,7 +278,12 @@ Enabled by default. Disable with `--no-mcp`. See the **[MCP Guide](docs/mcp.md)*
 | **GitOps (ArgoCD)** | Application, ApplicationSet, AppProject |
 | **Argo Rollouts** | Rollout |
 | **Argo Workflows** | Workflow, WorkflowTemplate |
-| **CRDs** | Any Custom Resource Definition in your cluster |
+| **cert-manager** | Certificate, CertificateRequest, Order, Challenge, Issuer, ClusterIssuer |
+| **Gateway API** | Gateway, GatewayClass, HTTPRoute, GRPCRoute, TCPRoute, TLSRoute |
+| **Karpenter** | NodePool, NodeClaim (+ provider-specific NodeClasses via auto-discovery) |
+| **KEDA** | ScaledObject, ScaledJob, TriggerAuthentication, ClusterTriggerAuthentication |
+| **Security (Trivy)** | VulnerabilityReport, ConfigAuditReport, ExposedSecretReport, ClusterComplianceReport, SbomReport |
+| **CRDs** | Any Custom Resource Definition in your cluster (auto-discovered) |
 
 ---
 
