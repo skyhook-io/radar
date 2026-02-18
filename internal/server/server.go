@@ -24,6 +24,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/helm"
+	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -225,6 +226,10 @@ func (s *Server) setupRoutes() {
 			r.Get("/github/starred", s.handleGitHubStarStatus)
 			r.Post("/github/star", s.handleGitHubStar)
 			r.Post("/github/dismiss", s.handleGitHubDismiss)
+
+			// Settings (persisted user preferences)
+			r.Get("/settings", s.handleGetSettings)
+			r.Put("/settings", s.handlePutSettings)
 
 			// Desktop routes
 			r.Post("/desktop/open-url", s.handleDesktopOpenURL)
@@ -1586,6 +1591,26 @@ func (s *Server) requireConnected(w http.ResponseWriter) bool {
 		return false
 	}
 	return true
+}
+
+// Settings handlers
+
+func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
+	s.writeJSON(w, settings.Load())
+}
+
+func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
+	var updated settings.Settings
+	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := settings.Save(updated); err != nil {
+		log.Printf("[settings] Failed to save settings: %v", err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, updated)
 }
 
 // Debug handlers for event pipeline diagnostics

@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 
 export interface PinnedKind {
   name: string       // plural name for API calls, e.g. "pods", "deployments"
@@ -24,6 +24,7 @@ function savePinned(pinned: PinnedKind[]) {
   } catch {
     // ignore storage errors
   }
+  fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinnedKinds: pinned }) }).catch(() => {})
 }
 
 function matches(a: PinnedKind, name: string, group: string): boolean {
@@ -32,6 +33,19 @@ function matches(a: PinnedKind, name: string, group: string): boolean {
 
 export function usePinnedKinds() {
   const [pinned, setPinned] = useState<PinnedKind[]>(loadPinned)
+
+  // Sync from server (persisted settings survive port changes in desktop app)
+  useEffect(() => {
+    fetch('/api/settings')
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (data?.pinnedKinds?.length && loadPinned().length === 0) {
+          setPinned(data.pinnedKinds)
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(data.pinnedKinds))
+        }
+      })
+      .catch(() => {})
+  }, [])
 
   const togglePin = useCallback((item: PinnedKind) => {
     setPinned((prev) => {
