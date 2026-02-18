@@ -13,6 +13,7 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
+	"github.com/wailsapp/wails/v2/pkg/options/linux"
 	"github.com/wailsapp/wails/v2/pkg/options/mac"
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -56,6 +57,10 @@ func main() {
 	// doesn't include user-installed tools like gke-gcloud-auth-plugin,
 	// gcloud, aws CLI, etc. Enrich PATH from the user's login shell.
 	enrichPath()
+
+	// On Linux, detect system dark mode via xdg-desktop-portal D-Bus and
+	// set GTK_THEME so WebKitGTK's prefers-color-scheme media query works.
+	applySystemTheme()
 
 	if *kubeconfig != "" && *kubeconfigDir != "" {
 		log.Fatalf("--kubeconfig and --kubeconfig-dir are mutually exclusive")
@@ -126,6 +131,8 @@ func main() {
 		Height:    900,
 		MinWidth:  800,
 		MinHeight: 600,
+		MaxWidth:  7680,
+		MaxHeight: 4320,
 
 		AssetServer: &assetserver.Options{
 			Handler: NewRedirectHandler(srv.ActualAddr()),
@@ -150,6 +157,11 @@ func main() {
 				Title:   "Radar",
 				Message: "Kubernetes Visibility Tool\nBuilt by Skyhook\n\nVersion: " + version,
 			},
+		},
+
+		Linux: &linux.Options{
+			ProgramName:      "radar",
+			WebviewGpuPolicy: linux.WebviewGpuPolicyOnDemand,
 		},
 	})
 
