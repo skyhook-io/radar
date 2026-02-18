@@ -46,6 +46,11 @@ type ResourceCache struct {
 	stopOnce         sync.Once
 	secretsEnabled   bool            // Whether secrets informer is running (requires RBAC)
 	enabledResources map[string]bool // Which resource types have informers running
+
+	// reconnecting indicates the typed cache is currently reconnecting.
+	// When true, lister methods still return stale cached data instead of errors.
+	reconnecting   bool
+	reconnectingMu sync.RWMutex
 }
 
 // ResourceChange represents a resource change event
@@ -230,14 +235,25 @@ func InitResourceCache() error {
 		log.Printf("Starting resource cache with SharedInformers for %d/%d resource types", enabledCount, len(setups))
 		syncStart := time.Now()
 
-		// Wait for caches to sync
-		if !cache.WaitForCacheSync(stopCh, syncFuncs...) {
-			close(stopCh)
-			initErr = fmt.Errorf("failed to sync resource caches")
-			return
-		}
+		// Wait for caches to sync with a timeout so the app becomes usable faster.
+		// Informers that haven't synced yet will continue in the background.
+		syncCtx, syncCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		synced := cache.WaitForCacheSync(syncCtx.Done(), syncFuncs...)
+		syncCancel()
 
-		log.Printf("Resource caches synced successfully in %v", time.Since(syncStart))
+		if synced {
+			log.Printf("Resource caches synced successfully in %v", time.Since(syncStart))
+		} else {
+			// Count how many actually synced
+			syncedCount := 0
+			for _, fn := range syncFuncs {
+				if fn() {
+					syncedCount++
+				}
+			}
+			log.Printf("Resource cache partial sync: %d/%d synced in %v (remaining will sync in background)",
+				syncedCount, len(syncFuncs), time.Since(syncStart))
+		}
 
 		// Mark initial sync as complete - now we can start recording "add" events
 		initialSyncComplete = true
@@ -1010,6 +1026,17 @@ func (c *ResourceCache) Stop() {
 		c.factory.Shutdown()
 		close(c.changes)
 	})
+}
+
+// IsReconnecting returns true if the cache is currently in a reconnection state.
+// During reconnection, listers return stale data from the last good state.
+func (c *ResourceCache) IsReconnecting() bool {
+	if c == nil {
+		return false
+	}
+	c.reconnectingMu.RLock()
+	defer c.reconnectingMu.RUnlock()
+	return c.reconnecting
 }
 
 // GetResourceCount returns total cached resources

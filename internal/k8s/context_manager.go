@@ -54,6 +54,7 @@ var (
 	timelineReinitFunc             TimelineReinitFunc
 	trafficResetFunc               TrafficResetFunc
 	trafficReinitFunc              TrafficReinitFunc
+	contextStateCache              *StateCache
 )
 
 // OnContextSwitch registers a callback to be called when the context is switched
@@ -107,6 +108,20 @@ func RegisterTrafficFuncs(reset TrafficResetFunc, reinit TrafficReinitFunc) {
 	defer contextSwitchMu.Unlock()
 	trafficResetFunc = reset
 	trafficReinitFunc = reinit
+}
+
+// SetContextStateCache stores a reference to the state cache for use during context switches.
+func SetContextStateCache(cache *StateCache) {
+	contextSwitchMu.Lock()
+	defer contextSwitchMu.Unlock()
+	contextStateCache = cache
+}
+
+// GetContextStateCache returns the stored state cache.
+func GetContextStateCache() *StateCache {
+	contextSwitchMu.RLock()
+	defer contextSwitchMu.RUnlock()
+	return contextStateCache
 }
 
 // TestClusterConnection tests connectivity to the current cluster
@@ -164,16 +179,38 @@ func PerformContextSwitch(newContext string) error {
 	// Step 3: Test connectivity before proceeding with initialization
 	reportProgress("Testing cluster connectivity...")
 	log.Println("Testing cluster connectivity...")
-	connCtx, connCancel := context.WithTimeout(context.Background(), ConnectionTestTimeout)
-	defer connCancel()
-	if err := TestClusterConnection(connCtx); err != nil {
-		return fmt.Errorf("cluster connection failed: %w", err)
+
+	// Test connectivity and get server version for cache key
+	testConfig := rest.CopyConfig(GetConfig())
+	testConfig.Timeout = ConnectionTestTimeout
+	testClient, err := kubernetes.NewForConfig(testConfig)
+	if err != nil {
+		return fmt.Errorf("failed to create test client: %w", err)
+	}
+	versionInfo, err := testClient.Discovery().ServerVersion()
+	if err != nil {
+		return fmt.Errorf("cluster unreachable: %w", err)
 	}
 	log.Println("Cluster connectivity verified")
 
-	// Step 4: Initialize all subsystems (same function as initial boot)
-	if err := InitAllSubsystems(reportProgress); err != nil {
-		return fmt.Errorf("subsystem init failed: %w", err)
+	// Step 4: Initialize all subsystems, with cache acceleration if available
+	sc := GetContextStateCache()
+	if sc != nil {
+		config := GetConfig()
+		serverURL := ""
+		if config != nil {
+			serverURL = config.Host
+		}
+		clusterID := ClusterID(newContext, serverURL, versionInfo.GitVersion)
+		sc.SaveCluster(clusterID, newContext, serverURL, versionInfo.GitVersion)
+
+		if err := InitAllSubsystemsCached(sc, clusterID, reportProgress); err != nil {
+			return fmt.Errorf("subsystem init failed: %w", err)
+		}
+	} else {
+		if err := InitAllSubsystems(reportProgress); err != nil {
+			return fmt.Errorf("subsystem init failed: %w", err)
+		}
 	}
 
 	// Step 5: Notify all registered callbacks

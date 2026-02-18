@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math/rand"
 	"runtime"
 	"strings"
 	"sync"
@@ -40,6 +41,12 @@ type DynamicResourceCache struct {
 	discoveryStatus CRDDiscoveryStatus  // Status of CRD discovery
 	discoveryMu     sync.RWMutex        // Mutex for discovery status
 	discoveryDone   chan struct{}        // closed when DiscoverAllCRDs() completes
+
+	// Circuit breaker: tracks reconnection state to prevent thundering herd
+	circuitOpen    bool          // true when circuit is open (backing off)
+	circuitMu      sync.RWMutex  // protects circuitOpen and circuitResetAt
+	circuitResetAt time.Time     // when to attempt closing the circuit
+	reconnectOnce  sync.Once     // ensures only one reconnection runs at a time
 }
 
 var (
@@ -126,11 +133,17 @@ func ResetDynamicResourceCache() {
 	dynamicCacheOnce = sync.Once{}
 }
 
-// EnsureWatching starts watching a resource type if not already watching
-// The sync happens asynchronously - callers should use WaitForSync if they need to wait
+// EnsureWatching starts watching a resource type if not already watching.
+// The sync happens asynchronously - callers should use WaitForSync if they need to wait.
+// Returns immediately if circuit breaker is open (during reconnection).
 func (d *DynamicResourceCache) EnsureWatching(gvr schema.GroupVersionResource) error {
 	if d == nil {
 		return fmt.Errorf("dynamic resource cache not initialized")
+	}
+
+	// Don't start new watchers during reconnection
+	if d.isCircuitOpen() {
+		return fmt.Errorf("circuit breaker open, cannot start new watchers")
 	}
 
 	// Check if resource supports list/watch verbs before attempting to watch
@@ -404,16 +417,28 @@ func (d *DynamicResourceCache) IsSynced(gvr schema.GroupVersionResource) bool {
 	return informer.HasSynced()
 }
 
-// List returns all resources of a given GVR, optionally filtered by namespace
-// This is non-blocking - returns whatever data is available immediately
+// List returns all resources of a given GVR, optionally filtered by namespace.
+// This is non-blocking - returns whatever data is available immediately.
+// During reconnection, returns stale cached data rather than blocking.
 func (d *DynamicResourceCache) List(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
 	if d == nil {
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
 	}
 
-	// Ensure we're watching this resource (non-blocking)
-	if err := d.EnsureWatching(gvr); err != nil {
-		return nil, err
+	// During circuit breaker open state, return whatever we have cached
+	// without trying to start new watchers (which would fail)
+	if !d.isCircuitOpen() {
+		// Ensure we're watching this resource (non-blocking)
+		if err := d.EnsureWatching(gvr); err != nil {
+			// If we have stale data in an existing informer, return it
+			d.mu.RLock()
+			informer, exists := d.informers[gvr]
+			d.mu.RUnlock()
+			if exists {
+				return d.listFromInformer(informer, namespace)
+			}
+			return nil, err
+		}
 	}
 
 	d.mu.RLock()
@@ -421,11 +446,19 @@ func (d *DynamicResourceCache) List(gvr schema.GroupVersionResource, namespace s
 	d.mu.RUnlock()
 
 	if !exists {
+		if d.isCircuitOpen() {
+			// During reconnection, return empty rather than error
+			return nil, nil
+		}
 		return nil, fmt.Errorf("informer not found for %v", gvr)
 	}
 
+	return d.listFromInformer(informer, namespace)
+}
+
+// listFromInformer extracts items from an informer's indexer.
+func (d *DynamicResourceCache) listFromInformer(informer cache.SharedIndexInformer, namespace string) ([]*unstructured.Unstructured, error) {
 	// Return whatever data is available - don't block waiting for sync
-	// The cache will populate via watch events
 	var items []any
 	var err error
 
@@ -451,16 +484,24 @@ func (d *DynamicResourceCache) List(gvr schema.GroupVersionResource, namespace s
 	return result, nil
 }
 
-// ListBlocking returns all resources, waiting for cache sync first
-// Use this when you need guaranteed complete data
+// ListBlocking returns all resources, waiting for cache sync first.
+// Use this when you need guaranteed complete data.
+// During reconnection, falls back to returning stale data with a short timeout.
 func (d *DynamicResourceCache) ListBlocking(gvr schema.GroupVersionResource, namespace string, timeout time.Duration) ([]*unstructured.Unstructured, error) {
 	if d == nil {
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
 	}
 
+	// During reconnection, reduce timeout to avoid blocking the API for minutes
+	if d.isCircuitOpen() {
+		timeout = 2 * time.Second
+	}
+
 	// Ensure we're watching this resource
-	if err := d.EnsureWatching(gvr); err != nil {
-		return nil, err
+	if !d.isCircuitOpen() {
+		if err := d.EnsureWatching(gvr); err != nil {
+			return nil, err
+		}
 	}
 
 	d.mu.RLock()
@@ -468,6 +509,9 @@ func (d *DynamicResourceCache) ListBlocking(gvr schema.GroupVersionResource, nam
 	d.mu.RUnlock()
 
 	if !exists {
+		if d.isCircuitOpen() {
+			return nil, nil // Return empty during reconnection
+		}
 		return nil, fmt.Errorf("informer not found for %v", gvr)
 	}
 
@@ -478,40 +522,22 @@ func (d *DynamicResourceCache) ListBlocking(gvr schema.GroupVersionResource, nam
 		cache.WaitForCacheSync(ctx.Done(), informer.HasSynced)
 	}
 
-	var items []any
-	var err error
-
-	if namespace != "" {
-		items, err = informer.GetIndexer().ByIndex(cache.NamespaceIndex, namespace)
-	} else {
-		items = informer.GetIndexer().List()
-	}
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to list resources: %w", err)
-	}
-
-	result := make([]*unstructured.Unstructured, 0, len(items))
-	for _, item := range items {
-		if u, ok := item.(*unstructured.Unstructured); ok {
-			u = stripManagedFieldsUnstructured(u)
-			result = append(result, u)
-		}
-	}
-
-	return result, nil
+	return d.listFromInformer(informer, namespace)
 }
 
-// Get returns a single resource by namespace and name
-// Waits briefly for sync if cache is empty (for better UX on specific resource requests)
+// Get returns a single resource by namespace and name.
+// Waits briefly for sync if cache is empty (for better UX on specific resource requests).
+// During reconnection, returns stale cached data immediately without blocking.
 func (d *DynamicResourceCache) Get(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
 	if d == nil {
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
 	}
 
-	// Ensure we're watching this resource
-	if err := d.EnsureWatching(gvr); err != nil {
-		return nil, err
+	// Ensure we're watching this resource (skip during reconnection)
+	if !d.isCircuitOpen() {
+		if err := d.EnsureWatching(gvr); err != nil {
+			return nil, err
+		}
 	}
 
 	d.mu.RLock()
@@ -519,6 +545,9 @@ func (d *DynamicResourceCache) Get(gvr schema.GroupVersionResource, namespace, n
 	d.mu.RUnlock()
 
 	if !exists {
+		if d.isCircuitOpen() {
+			return nil, fmt.Errorf("resource not found (reconnecting): %s/%s", namespace, name)
+		}
 		return nil, fmt.Errorf("informer not found for %v", gvr)
 	}
 
@@ -537,8 +566,13 @@ func (d *DynamicResourceCache) Get(gvr schema.GroupVersionResource, namespace, n
 	}
 
 	// If not found and cache not synced, wait briefly and retry
+	// During reconnection, use a shorter timeout
 	if !exists && !informer.HasSynced() {
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		syncTimeout := 2 * time.Second
+		if d.isCircuitOpen() {
+			syncTimeout = 500 * time.Millisecond
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), syncTimeout)
 		defer cancel()
 		cache.WaitForCacheSync(ctx.Done(), informer.HasSynced)
 
@@ -729,6 +763,72 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 	}()
 }
 
+// WarmupFromCache starts watching CRDs that were previously probed accessible.
+// Unlike WarmupParallel, this skips probeAccess entirely — the access results
+// come from the SQLite state cache. If a cached GVR is no longer accessible
+// (e.g., RBAC changed), the informer's reflector will log errors and the
+// background validation will detect the mismatch.
+func (d *DynamicResourceCache) WarmupFromCache(gvrs []schema.GroupVersionResource, timeout time.Duration) {
+	if d == nil || len(gvrs) == 0 {
+		return
+	}
+
+	log.Printf("Warming up %d CRDs from cache (skipping access probes)...", len(gvrs))
+
+	// Phase 1: Create informers for all cached-accessible resources (no network probes)
+	var validGVRs []schema.GroupVersionResource
+	for _, gvr := range gvrs {
+		if err := d.startWatching(gvr); err == nil {
+			validGVRs = append(validGVRs, gvr)
+		}
+	}
+
+	if len(validGVRs) == 0 {
+		return
+	}
+
+	// Phase 2: Collect all HasSynced funcs and wait for sync
+	d.mu.RLock()
+	syncFuncs := make([]cache.InformerSynced, 0, len(validGVRs))
+	for _, gvr := range validGVRs {
+		if informer, ok := d.informers[gvr]; ok {
+			syncFuncs = append(syncFuncs, informer.HasSynced)
+		}
+	}
+	d.mu.RUnlock()
+
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+
+	if !cache.WaitForCacheSync(ctx.Done(), syncFuncs...) {
+		log.Printf("Warning: not all cached CRDs synced within timeout")
+	} else {
+		log.Printf("All %d cached CRDs synced", len(syncFuncs))
+	}
+}
+
+// ExportCRDAccess exports the current set of watched CRDs as CachedCRDAccess entries.
+// This is used to save the probe results to the state cache.
+func (d *DynamicResourceCache) ExportCRDAccess() []CachedCRDAccess {
+	if d == nil {
+		return nil
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	var results []CachedCRDAccess
+	for gvr := range d.informers {
+		results = append(results, CachedCRDAccess{
+			Group:    gvr.Group,
+			Version:  gvr.Version,
+			Resource: gvr.Resource,
+			Allowed:  true,
+		})
+	}
+	return results
+}
+
 // WarmupParallel starts watching multiple resources in parallel and waits for all to sync
 func (d *DynamicResourceCache) WarmupParallel(gvrs []schema.GroupVersionResource, timeout time.Duration) {
 	if d == nil || len(gvrs) == 0 {
@@ -819,6 +919,165 @@ func (d *DynamicResourceCache) Stop() {
 		close(d.stopCh)
 		d.factory.Shutdown()
 	})
+}
+
+// isCircuitOpen returns true if the circuit breaker is open (we should not attempt new connections).
+func (d *DynamicResourceCache) isCircuitOpen() bool {
+	d.circuitMu.RLock()
+	defer d.circuitMu.RUnlock()
+	if !d.circuitOpen {
+		return false
+	}
+	// Check if the reset time has passed
+	return time.Now().Before(d.circuitResetAt)
+}
+
+// openCircuit opens the circuit breaker for the given duration.
+func (d *DynamicResourceCache) openCircuit(duration time.Duration) {
+	d.circuitMu.Lock()
+	defer d.circuitMu.Unlock()
+	d.circuitOpen = true
+	d.circuitResetAt = time.Now().Add(duration)
+	log.Printf("[dynamic cache] Circuit breaker opened for %v", duration)
+}
+
+// closeCircuit closes the circuit breaker, allowing connections.
+func (d *DynamicResourceCache) closeCircuit() {
+	d.circuitMu.Lock()
+	defer d.circuitMu.Unlock()
+	if d.circuitOpen {
+		d.circuitOpen = false
+		log.Println("[dynamic cache] Circuit breaker closed")
+	}
+}
+
+// StaggeredReconnect restarts all dynamic informers with jitter to prevent
+// thundering herd when the http2 connection drops and all watchers die at once.
+// Each informer is restarted with a random delay of 0-2 seconds between them.
+func (d *DynamicResourceCache) StaggeredReconnect() {
+	if d == nil {
+		return
+	}
+
+	// Prevent multiple concurrent reconnections
+	alreadyRunning := true
+	d.reconnectOnce.Do(func() {
+		alreadyRunning = false
+	})
+	if alreadyRunning {
+		log.Println("[dynamic cache] Staggered reconnect already in progress, skipping")
+		return
+	}
+	defer func() {
+		d.reconnectOnce = sync.Once{} // reset for next reconnection
+	}()
+
+	// Check circuit breaker
+	if d.isCircuitOpen() {
+		log.Println("[dynamic cache] Circuit breaker open, skipping reconnect")
+		return
+	}
+
+	d.mu.RLock()
+	gvrs := make([]schema.GroupVersionResource, 0, len(d.informers))
+	for gvr := range d.informers {
+		gvrs = append(gvrs, gvr)
+	}
+	d.mu.RUnlock()
+
+	if len(gvrs) == 0 {
+		return
+	}
+
+	log.Printf("[dynamic cache] Starting staggered reconnect for %d informers", len(gvrs))
+
+	// Open circuit breaker during reconnection
+	d.openCircuit(30 * time.Second)
+
+	// Stop the old factory
+	d.mu.Lock()
+	// Create a new stop channel (the old one is already closed or invalid)
+	oldStopCh := d.stopCh
+	d.stopCh = make(chan struct{})
+	// Reset stopOnce so we can stop again later
+	d.stopOnce = sync.Once{}
+	d.mu.Unlock()
+
+	// Close old stop channel to signal old informers (safe even if already closed)
+	select {
+	case <-oldStopCh:
+		// Already closed, nothing to do
+	default:
+		close(oldStopCh)
+	}
+
+	// Recreate the factory
+	client := GetDynamicClient()
+	if client == nil {
+		log.Println("[dynamic cache] Dynamic client not available for reconnect")
+		return
+	}
+
+	var factory dynamicinformer.DynamicSharedInformerFactory
+	if permResult := GetCachedPermissionResult(); permResult != nil && permResult.NamespaceScoped && permResult.Namespace != "" {
+		factory = dynamicinformer.NewFilteredDynamicSharedInformerFactory(
+			client, 0, permResult.Namespace, nil,
+		)
+	} else {
+		factory = dynamicinformer.NewDynamicSharedInformerFactory(client, 0)
+	}
+
+	d.mu.Lock()
+	d.factory = factory
+	d.informers = make(map[schema.GroupVersionResource]cache.SharedIndexInformer)
+	d.syncComplete = make(map[schema.GroupVersionResource]bool)
+	d.mu.Unlock()
+
+	// Restart informers with staggered delays (0-2s jitter per informer)
+	var wg sync.WaitGroup
+	syncFuncs := make([]cache.InformerSynced, 0, len(gvrs))
+	var syncMu sync.Mutex
+
+	for _, gvr := range gvrs {
+		wg.Add(1)
+		go func(g schema.GroupVersionResource) {
+			defer wg.Done()
+
+			// Random jitter: 0-2000ms between informer starts
+			jitter := time.Duration(rand.Intn(2000)) * time.Millisecond
+			time.Sleep(jitter)
+
+			if err := d.startWatching(g); err != nil {
+				log.Printf("[dynamic cache] Failed to restart informer for %s: %v", g.Resource, err)
+				return
+			}
+
+			d.mu.RLock()
+			if inf, ok := d.informers[g]; ok {
+				syncMu.Lock()
+				syncFuncs = append(syncFuncs, inf.HasSynced)
+				syncMu.Unlock()
+			}
+			d.mu.RUnlock()
+		}(gvr)
+	}
+
+	wg.Wait()
+
+	// Wait for all to sync with a timeout
+	if len(syncFuncs) > 0 {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if !cache.WaitForCacheSync(ctx.Done(), syncFuncs...) {
+			log.Printf("[dynamic cache] Warning: not all informers re-synced after reconnect")
+		} else {
+			log.Printf("[dynamic cache] All %d informers re-synced after reconnect", len(syncFuncs))
+		}
+	}
+
+	// Close circuit breaker on success
+	d.closeCircuit()
 }
 
 // WarmupCommonCRDs starts watching common CRDs (Rollouts, Workflows, etc.) at startup

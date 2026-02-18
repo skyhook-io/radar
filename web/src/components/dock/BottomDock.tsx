@@ -1,10 +1,11 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
-import { X, ChevronDown, ChevronUp, Terminal, FileText, Trash2, Layers } from 'lucide-react'
+import { X, ChevronDown, ChevronUp, Terminal, FileText, Trash2, Layers, MessageCircle } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useDock, DockTab } from './DockContext'
+import { useDock, useOpenChat, DockTab } from './DockContext'
 import { TerminalTab } from './TerminalTab'
 import { LogsTab } from './LogsTab'
 import { WorkloadLogsTab } from './WorkloadLogsTab'
+import { ChatTab } from './ChatTab'
 
 const MIN_HEIGHT = 200
 const DEFAULT_HEIGHT = 300
@@ -12,10 +13,23 @@ const MAX_HEIGHT_RATIO = 0.7
 
 export function BottomDock() {
   const { tabs, activeTabId, isExpanded, removeTab, setActiveTab, toggleExpanded, closeAll } = useDock()
+  const openChat = useOpenChat()
   const [height, setHeight] = useState(DEFAULT_HEIGHT)
   const isDragging = useRef(false)
   const startY = useRef(0)
   const startHeight = useRef(0)
+
+  // Keyboard shortcut: Cmd+K / Ctrl+K opens AI chat
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
+        e.preventDefault()
+        openChat()
+      }
+    }
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [openChat])
 
   // Handle resize drag - must be before any early returns (Rules of Hooks)
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
@@ -136,7 +150,7 @@ function TabButton({
   onSelect: () => void
   onClose: () => void
 }) {
-  const Icon = tab.type === 'terminal' ? Terminal : tab.type === 'workload-logs' ? Layers : FileText
+  const Icon = tab.type === 'terminal' ? Terminal : tab.type === 'workload-logs' ? Layers : tab.type === 'ai-chat' ? MessageCircle : FileText
 
   return (
     <div
@@ -193,6 +207,15 @@ function TabContent({ tab, isActive }: { tab: DockTab; isActive: boolean }) {
         namespace={tab.namespace!}
         workloadKind={tab.workloadKind!}
         workloadName={tab.workloadName!}
+      />
+    )
+  }
+
+  if (tab.type === 'ai-chat') {
+    return (
+      <ChatTab
+        resourceContext={tab.resourceContext}
+        initialMessage={tab.initialMessage}
       />
     )
   }

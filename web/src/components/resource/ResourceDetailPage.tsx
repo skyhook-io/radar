@@ -22,6 +22,7 @@ import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource } from '../../utils/navigation'
 import { isChangeEvent, isHistoricalEvent } from '../../types'
 import { useChanges, useResourceWithRelationships, usePodLogs, useDeleteResource, useTopology } from '../../api/client'
+import { useIsClusterConnected } from '../../context/ConnectionContext'
 import { ForceDeleteConfirmDialog } from '../ui/ForceDeleteConfirmDialog'
 import { getKindBadgeColor, getHealthBadgeColor } from '../../utils/badge-colors'
 import { buildResourceHierarchy, getAllEventsFromHierarchy, isProblematicEvent, type ResourceLane } from '../../utils/resource-hierarchy'
@@ -501,6 +502,7 @@ function ActionsDropdown({ kind, namespace, name, onBack }: { kind: string; name
   const [open, setOpen] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const deleteMutation = useDeleteResource()
+  const clusterConnected = useIsClusterConnected()
 
   function handleDeleteConfirm(force: boolean) {
     deleteMutation.mutate(
@@ -517,9 +519,9 @@ function ActionsDropdown({ kind, namespace, name, onBack }: { kind: string; name
   // Placeholder actions - would need backend support
   const actions = [
     { label: 'Describe', icon: FileText, action: () => console.log('describe') },
-    { label: 'Restart', icon: RotateCcw, action: () => console.log('restart'), disabled: !['Deployment', 'Rollout', 'StatefulSet', 'DaemonSet'].includes(kind) },
-    { label: 'Scale', icon: Scale, action: () => console.log('scale'), disabled: !['Deployment', 'Rollout', 'StatefulSet'].includes(kind) },
-    { label: 'Delete', icon: Trash2, action: () => setShowDeleteConfirm(true), danger: true },
+    { label: 'Restart', icon: RotateCcw, action: () => console.log('restart'), disabled: !clusterConnected || !['Deployment', 'Rollout', 'StatefulSet', 'DaemonSet'].includes(kind) },
+    { label: 'Scale', icon: Scale, action: () => console.log('scale'), disabled: !clusterConnected || !['Deployment', 'Rollout', 'StatefulSet'].includes(kind) },
+    { label: 'Delete', icon: Trash2, action: () => setShowDeleteConfirm(true), danger: true, disabled: !clusterConnected },
   ]
 
   return (

@@ -1,2 +1,2 @@
-export { DockProvider, useDock, useOpenTerminal, useOpenLogs, useOpenWorkloadLogs } from './DockContext'
+export { DockProvider, useDock, useOpenTerminal, useOpenLogs, useOpenWorkloadLogs, useOpenChat } from './DockContext'
 export { BottomDock } from './BottomDock'

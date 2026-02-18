@@ -34,6 +34,35 @@ type DashboardResponse struct {
 	HelmReleases      DashboardHelmSummary        `json:"helmReleases"`
 	Metrics           *DashboardMetrics           `json:"metrics"`
 	CertificateHealth *DashboardCertificateHealth `json:"certificateHealth,omitempty"`
+	Degraded          bool                        `json:"degraded,omitempty"`
+}
+
+// dashboardCache holds a memoized dashboard response to prevent thundering herd
+type dashboardCache struct {
+	mu       sync.RWMutex
+	response *DashboardResponse
+	key      string // namespace key that produced this response
+	expiry   time.Time
+}
+
+const dashboardCacheTTL = 2 * time.Second
+const dashboardTimeout = 3 * time.Second
+
+func (dc *dashboardCache) get(key string) *DashboardResponse {
+	dc.mu.RLock()
+	defer dc.mu.RUnlock()
+	if dc.response != nil && dc.key == key && time.Now().Before(dc.expiry) {
+		return dc.response
+	}
+	return nil
+}
+
+func (dc *dashboardCache) set(key string, resp *DashboardResponse) {
+	dc.mu.Lock()
+	defer dc.mu.Unlock()
+	dc.response = resp
+	dc.key = key
+	dc.expiry = time.Now().Add(dashboardCacheTTL)
 }
 
 // DashboardCRDsResponse is the response for CRD counts (loaded lazily)
@@ -207,46 +236,109 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 		namespace = namespaces[0]
 	}
 
+	// Memoization: return cached response if fresh (prevents thundering herd)
+	cacheKey := strings.Join(namespaces, ",")
+	if cached := s.dashCache.get(cacheKey); cached != nil {
+		s.writeJSON(w, cached)
+		return
+	}
+
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
 		return
 	}
 
+	// Hard timeout: dashboard NEVER blocks longer than 3 seconds
+	ctx, cancel := context.WithTimeout(r.Context(), dashboardTimeout)
+	defer cancel()
+
 	resp := DashboardResponse{}
+	degraded := false
 
-	// Cluster info
-	resp.Cluster = s.getDashboardCluster(r.Context())
+	// Cluster info (uses API call — run with timeout)
+	clusterDone := make(chan DashboardCluster, 1)
+	go func() {
+		clusterDone <- s.getDashboardCluster(ctx)
+	}()
 
-	// Pod health + workload problems
+	// Non-blocking cache reads (informer listers are in-memory, fast)
 	resp.Health, resp.Problems = s.getDashboardHealth(cache, namespace)
-
-	// Resource counts
 	resp.ResourceCounts = s.getDashboardResourceCounts(cache, namespace)
-
-	// Recent warning events
 	resp.RecentEvents = s.getDashboardRecentEvents(cache, namespace)
-
-	// Count warning events for health banner
 	resp.Health.WarningEvents = s.countWarningEvents(cache, namespace)
-
-	// Recent changes from timeline
-	resp.RecentChanges = s.getDashboardRecentChanges(r.Context(), namespaces)
-
-	// Topology summary
 	resp.TopologySummary = s.getDashboardTopologySummary(namespaces)
-
-	// Traffic summary
-	resp.TrafficSummary = s.getDashboardTrafficSummary(r.Context(), namespaces)
-
-	// Helm releases summary
-	resp.HelmReleases = s.getDashboardHelmSummary(namespace)
-
-	// Cluster metrics (best-effort, nil if metrics-server unavailable)
-	resp.Metrics = s.getDashboardMetrics(r.Context())
-
-	// Certificate health (nil if no TLS secrets)
 	resp.CertificateHealth = s.getDashboardCertificateHealth(namespace)
+
+	// Recent changes from timeline (uses context)
+	resp.RecentChanges = s.getDashboardRecentChanges(ctx, namespaces)
+
+	// Potentially slow operations: run concurrently with timeout
+	type helmResult struct {
+		summary DashboardHelmSummary
+	}
+	type trafficResult struct {
+		summary *DashboardTrafficSummary
+	}
+	type metricsResult struct {
+		metrics *DashboardMetrics
+	}
+
+	helmDone := make(chan helmResult, 1)
+	trafficDone := make(chan trafficResult, 1)
+	metricsDone := make(chan metricsResult, 1)
+
+	go func() {
+		helmDone <- helmResult{summary: s.getDashboardHelmSummary(namespace)}
+	}()
+	go func() {
+		trafficDone <- trafficResult{summary: s.getDashboardTrafficSummary(ctx, namespaces)}
+	}()
+	go func() {
+		metricsDone <- metricsResult{metrics: s.getDashboardMetrics(ctx)}
+	}()
+
+	// Collect cluster info
+	select {
+	case ci := <-clusterDone:
+		resp.Cluster = ci
+	case <-ctx.Done():
+		resp.Cluster = DashboardCluster{Connected: false}
+		degraded = true
+	}
+
+	// Collect helm
+	select {
+	case hr := <-helmDone:
+		resp.HelmReleases = hr.summary
+	case <-ctx.Done():
+		resp.HelmReleases = DashboardHelmSummary{Releases: []DashboardHelmRelease{}}
+		degraded = true
+	}
+
+	// Collect traffic
+	select {
+	case tr := <-trafficDone:
+		resp.TrafficSummary = tr.summary
+	case <-ctx.Done():
+		degraded = true
+	}
+
+	// Collect metrics
+	select {
+	case mr := <-metricsDone:
+		resp.Metrics = mr.metrics
+	case <-ctx.Done():
+		degraded = true
+	}
+
+	if degraded {
+		resp.Degraded = true
+		log.Printf("[dashboard] Response degraded: some data sources timed out within %v", dashboardTimeout)
+	}
+
+	// Cache the response for a few seconds
+	s.dashCache.set(cacheKey, &resp)
 
 	s.writeJSON(w, resp)
 }
@@ -729,24 +821,21 @@ func (s *Server) getDashboardResourceCounts(cache *k8s.ResourceCache, namespace 
 		restricted = append(restricted, "ingresses")
 	}
 
-	// Gateways and routes (via dynamic cache)
+	// Gateways and routes (via dynamic cache) — only read already-synced informers
+	// to avoid blocking on EnsureWatching/CRD discovery
 	dynamicCache := k8s.GetDynamicResourceCache()
 	resourceDiscovery := k8s.GetResourceDiscovery()
 	if dynamicCache != nil && resourceDiscovery != nil {
-		if gwGVR, ok := resourceDiscovery.GetGVR("Gateway"); ok {
+		if gwGVR, ok := resourceDiscovery.GetGVR("Gateway"); ok && dynamicCache.IsSynced(gwGVR) {
 			gateways, err := dynamicCache.List(gwGVR, namespace)
-			if err != nil {
-				log.Printf("WARNING [dashboard] Failed to count Gateways: %v", err)
-			} else {
+			if err == nil {
 				counts.Gateways = len(gateways)
 			}
 		}
 		for _, routeKind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
-			if rGVR, ok := resourceDiscovery.GetGVR(routeKind); ok {
+			if rGVR, ok := resourceDiscovery.GetGVR(routeKind); ok && dynamicCache.IsSynced(rGVR) {
 				routes, err := dynamicCache.List(rGVR, namespace)
-				if err != nil {
-					log.Printf("WARNING [dashboard] Failed to count %s: %v", routeKind, err)
-				} else {
+				if err == nil {
 					counts.Routes += len(routes)
 				}
 			}
@@ -888,13 +977,25 @@ func (s *Server) getDashboardResourceCounts(cache *k8s.ResourceCache, namespace 
 		}
 	}
 
-	// Helm releases count
-	helmClient := helm.GetClient()
-	if helmClient != nil {
-		releases, err := helmClient.ListReleases(namespace)
-		if err == nil {
-			counts.HelmReleases = len(releases)
+	// Helm releases count — non-blocking, skip if slow
+	// The full helm summary is fetched separately in the dashboard handler
+	helmDone := make(chan int, 1)
+	go func() {
+		helmClient := helm.GetClient()
+		if helmClient != nil {
+			releases, err := helmClient.ListReleases(namespace)
+			if err == nil {
+				helmDone <- len(releases)
+				return
+			}
 		}
+		helmDone <- 0
+	}()
+	select {
+	case count := <-helmDone:
+		counts.HelmReleases = count
+	case <-time.After(2 * time.Second):
+		// Skip helm count rather than blocking the dashboard
 	}
 
 	counts.Restricted = restricted

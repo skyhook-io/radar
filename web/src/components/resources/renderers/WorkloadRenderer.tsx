@@ -3,6 +3,7 @@ import { Server, ExternalLink, Scale, Minus, Plus, Loader2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
 import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection, AlertBanner } from '../drawer-components'
 import { useScaleWorkload } from '../../../api/client'
+import { useIsClusterConnected } from '../../../context/ConnectionContext'
 import { useQueryClient } from '@tanstack/react-query'
 
 interface WorkloadRendererProps {
@@ -102,6 +103,7 @@ export function WorkloadRenderer({ kind, data }: WorkloadRendererProps) {
   const spec = data.spec || {}
   const metadata = data.metadata || {}
 
+  const clusterConnected = useIsClusterConnected()
   const isDaemonSet = kind === 'daemonsets'
   const isStatefulSet = kind === 'statefulsets'
   const isScalable = kind === 'deployments' || kind === 'statefulsets'
@@ -218,7 +220,9 @@ export function WorkloadRenderer({ kind, data }: WorkloadRendererProps) {
           {isScalable && (
             <button
               onClick={openScaleDialog}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded transition-colors"
+              disabled={!clusterConnected}
+              title={!clusterConnected ? 'Cluster not connected' : undefined}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded transition-colors disabled:opacity-50 disabled:pointer-events-none"
             >
               <Scale className="w-3 h-3" />
               Scale

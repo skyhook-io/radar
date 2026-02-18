@@ -36,6 +36,11 @@ func main() {
 	timelineStorage := flag.String("timeline-storage", "memory", "Timeline storage backend: memory or sqlite")
 	timelineDBPath := flag.String("timeline-db", "", "Path to timeline database file (default: ~/.radar/timeline.db)")
 	prometheusURL := flag.String("prometheus-url", "", "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
+	// AI options
+	aiProvider := flag.String("ai-provider", "", "AI provider: openai, anthropic, ollama (auto-detected from env if not set)")
+	aiModel := flag.String("ai-model", "", "AI model name (uses provider default if not set)")
+	aiAPIKey := flag.String("ai-api-key", "", "API key for AI provider (or set OPENAI_API_KEY / ANTHROPIC_API_KEY env)")
+	ollamaURL := flag.String("ollama-url", "", "Ollama server URL (default: http://localhost:11434, or set OLLAMA_URL env)")
 	flag.Parse()
 
 	if *showVersion {
@@ -74,6 +79,10 @@ func main() {
 		TimelineStorage:  *timelineStorage,
 		TimelineDBPath:   *timelineDBPath,
 		PrometheusURL:    *prometheusURL,
+		AIProvider:       *aiProvider,
+		AIModel:          *aiModel,
+		AIAPIKey:         *aiAPIKey,
+		OllamaURL:        *ollamaURL,
 		Version:          version,
 	}
 
@@ -105,7 +114,7 @@ func main() {
 	<-ready
 
 	// Initialize cluster in background (browser will see progress via SSE)
-	go app.InitializeCluster()
+	go app.InitializeCluster(cfg)
 
 	// Build window title
 	windowTitle := "Radar"

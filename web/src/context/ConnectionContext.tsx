@@ -156,3 +156,9 @@ export function useConnection() {
   }
   return context
 }
+
+/** Returns true only when the K8s API connection is established. Use to disable write actions. */
+export function useIsClusterConnected(): boolean {
+  const { connection } = useConnection()
+  return connection.state === 'connected'
+}

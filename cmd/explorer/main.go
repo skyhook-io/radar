@@ -38,6 +38,14 @@ func main() {
 	prometheusURL := flag.String("prometheus-url", "", "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	// MCP server
 	noMCP := flag.Bool("no-mcp", false, "Disable MCP (Model Context Protocol) server for AI tools")
+	// State cache options
+	cacheDBPath := flag.String("cache-db", "", "Path to state cache database (default: ~/.radar/cache.db)")
+	noCache := flag.Bool("no-cache", false, "Disable state caching (full discovery on every startup)")
+	// AI options
+	aiProvider := flag.String("ai-provider", "", "AI provider: openai, anthropic, ollama (auto-detected from env if not set)")
+	aiModel := flag.String("ai-model", "", "AI model name (uses provider default if not set)")
+	aiAPIKey := flag.String("ai-api-key", "", "API key for AI provider (or set OPENAI_API_KEY / ANTHROPIC_API_KEY env)")
+	ollamaURL := flag.String("ollama-url", "", "Ollama server URL (default: http://localhost:11434, or set OLLAMA_URL env)")
 	flag.Parse()
 
 	if *showVersion {
@@ -74,6 +82,12 @@ func main() {
 		TimelineDBPath:   *timelineDBPath,
 		PrometheusURL:    *prometheusURL,
 		MCPEnabled:       !*noMCP,
+		CacheDBPath:      *cacheDBPath,
+		NoCache:          *noCache,
+		AIProvider:       *aiProvider,
+		AIModel:          *aiModel,
+		AIAPIKey:         *aiAPIKey,
+		OllamaURL:        *ollamaURL,
 		Version:          version,
 	}
 
@@ -122,7 +136,7 @@ func main() {
 	}
 
 	// Now initialize cluster connection and caches (browser will see progress via SSE)
-	app.InitializeCluster()
+	app.InitializeCluster(cfg)
 
 	// Block forever (server is running in background)
 	select {}

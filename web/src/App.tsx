@@ -15,19 +15,19 @@ import { HelmView } from './components/helm/HelmView'
 import { TrafficView } from './components/traffic/TrafficView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardManager, usePortForwardCount } from './components/portforward/PortForwardManager'
-import { DockProvider, BottomDock, useDock } from './components/dock'
+import { DockProvider, BottomDock, useDock, useOpenChat } from './components/dock'
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
 import { ConnectionProvider, useConnection } from './context/ConnectionContext'
 import { ConnectionErrorView } from './components/ConnectionErrorView'
 import { CapabilitiesProvider } from './contexts/CapabilitiesContext'
+import { ConnectionBanner } from './components/ConnectionBanner'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { NamespaceSelector } from './components/ui/NamespaceSelector'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { useEventSource } from './hooks/useEventSource'
 import { useNamespaces } from './api/client'
-import { Loader2 } from 'lucide-react'
-import { RefreshCw, FolderTree, Network, List, Clock, Package, Sun, Moon, Activity, Home } from 'lucide-react'
+import { Loader2, RefreshCw, FolderTree, Network, List, Clock, Package, Sun, Moon, Activity, Home, MessageCircle } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, Topology } from './types'
@@ -214,6 +214,9 @@ function AppInner() {
 
   // Query client for cache invalidation
   const queryClient = useQueryClient()
+
+  // AI chat
+  const openChat = useOpenChat()
 
   // SSE connection for real-time updates
   const { topology, connected, reconnect: reconnectSSE } = useEventSource(namespaces, topologyMode, {
@@ -413,7 +416,7 @@ function AppInner() {
         <div className="flex items-center gap-4 shrink-0">
           <div className="flex items-center gap-2.5">
             <Logo />
-            <span className="text-xl text-theme-text-primary leading-none -translate-y-0.5" style={{ fontFamily: "'DM Sans', sans-serif", fontWeight: 520 }}>radar</span>
+            <span className="text-xl text-theme-text-primary leading-none -translate-y-0.5" style={{ fontFamily: "'DM Sans', sans-serif", fontWeight: 520 }}>Terrasible</span>
           </div>
 
           <div className="flex items-center gap-2">
@@ -487,10 +490,23 @@ function AppInner() {
             disabledTooltip="Helm view always shows all namespaces"
           />
 
+          {/* AI Chat */}
+          <Tooltip content={`AI Chat (${navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'}K)`}>
+            <button
+              onClick={() => openChat()}
+              className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+            >
+              <MessageCircle className="w-4 h-4" />
+            </button>
+          </Tooltip>
+
           {/* Theme toggle */}
           <ThemeToggle />
         </div>
       </header>
+
+      {/* Connection status banner (SSE paused / reconnecting) */}
+      <ConnectionBanner sseConnected={connected} />
 
       {/* Connection error view - show when disconnected */}
       {!isSwitching && connection.state === 'disconnected' && (

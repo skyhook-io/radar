@@ -4,7 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 ## Project Overview
 
-Radar is a modern Kubernetes visibility tool — local-first, no account required, no cloud dependency, fast. It provides topology visualization, event timeline, service traffic maps, resource browsing, and Helm management. Runs as a kubectl plugin (`kubectl-radar`) or standalone binary and opens a web UI in the browser. Open source, free forever. Built by Skyhook.
+Terrasible (formerly Radar) is an AI-powered Kubernetes visibility platform — local-first, no account required, no cloud dependency, fast. It provides topology visualization, event timeline, service traffic maps, resource browsing, Helm management, AI-assisted troubleshooting, and MCP integration for AI tools. Runs as a kubectl plugin (`kubectl-radar`) or standalone binary and opens a web UI in the browser. Open source, free forever. Originally built by Skyhook, extended by Terrasible.
+
+The frontend is branded as **"Terrasible — AI-Powered Kubernetes Visibility Platform"**.
 
 ## Architecture
 
@@ -15,6 +17,7 @@ Radar is a modern Kubernetes visibility tool — local-first, no account require
 │   ┌─────────────────┐                   ┌───────────────────┐  │
 │   │    Browser      │◄── HTTP/SSE/WS ──►│  Radar Binary     │  │
 │   │  (React + UI)   │                   │  (Go + Embedded)  │  │
+│   │  AI Chat (⌘K)   │                   │  AI Providers     │  │
 │   └─────────────────┘                   └───────┬───────────┘  │
 │                                                  │              │
 │   ┌─────────────────┐                            │              │
@@ -22,6 +25,16 @@ Radar is a modern Kubernetes visibility tool — local-first, no account require
 │   │  (Claude, etc.) │                            │              │
 │   └─────────────────┘                            │              │
 │                                                  │              │
+│   ┌─────────────────┐                            │              │
+│   │  AI Providers   │◄── OpenAI/Anthropic/Ollama─┤              │
+│   │  (LLM backends) │                            │              │
+│   └─────────────────┘                            │              │
+│                                                  │              │
+│   ┌─────────────────┐                            │              │
+│   │  SQLite Caches  │◄── State + Timeline ───────┘              │
+│   │  (~/.radar/)    │                                           │
+│   └─────────────────┘                                           │
+│                                                                 │
 └──────────────────────────────────────────────────│──────────────┘
                                                    │
                                          ┌─────────┴─────────┐
@@ -43,9 +56,29 @@ radar/
 │   ├── explorer/              # CLI entry point (main.go)
 │   └── desktop/               # Desktop app entry point (Wails v2)
 ├── internal/
-│   ├── ai/
-│   │   └── context/           # AI context minification for LLM-friendly output
+│   ├── ai/                    # AI integration (chat providers + context minification)
+│   │   ├── anthropic.go       # Anthropic Claude streaming provider
+│   │   ├── context.go         # K8s context builder for AI chat system prompt
+│   │   ├── handlers.go        # HTTP handlers for /api/ai/* endpoints
+│   │   ├── ollama.go          # Ollama local LLM streaming provider
+│   │   ├── openai.go          # OpenAI streaming provider
+│   │   ├── provider.go        # Provider interface, Registry, types
+│   │   └── context/           # AI context minification for MCP/LLM-friendly output
+│   │       ├── summary.go     # Summary verbosity (typed struct per resource kind)
+│   │       ├── detail.go      # Detail verbosity (full spec/status, noise stripped)
+│   │       ├── compact.go     # Compact verbosity (aggressive pruning)
+│   │       ├── events.go      # Event deduplication and normalization
+│   │       ├── logs.go        # Log filtering and secret redaction
+│   │       ├── redact.go      # Secret value redaction
+│   │       ├── prune.go       # Field pruning (managed fields, annotations)
+│   │       ├── minify.go      # Entry point for resource minification
+│   │       ├── assemble.go    # Multi-resource assembly
+│   │       ├── metrics.go     # Metrics context for AI
+│   │       ├── relationships.go # Relationship context
+│   │       ├── summary_crd.go # CRD-specific summaries
+│   │       └── types.go       # Verbosity levels, output types
 │   ├── app/                   # Application lifecycle management
+│   │   └── bootstrap.go       # AppConfig, AI registry setup, state cache init, cluster connect
 │   ├── helm/                  # Helm client integration
 │   │   ├── client.go          # Helm SDK wrapper
 │   │   ├── handlers.go        # HTTP handlers for Helm operations
@@ -56,7 +89,7 @@ radar/
 │   │   ├── inspector.go       # Image filesystem extraction and caching
 │   │   └── types.go           # Image metadata and filesystem types
 │   ├── k8s/
-│   │   ├── cache.go           # Typed informer caching
+│   │   ├── cache.go           # Typed informer caching (30s sync timeout)
 │   │   ├── capabilities.go    # Cluster capability detection
 │   │   ├── client.go          # K8s client initialization
 │   │   ├── cluster_detection.go # GKE/EKS/AKS platform detection
@@ -69,7 +102,8 @@ radar/
 │   │   ├── fetch.go           # Resource fetching for AI/MCP consumers
 │   │   ├── metrics.go         # Pod/node metrics collection
 │   │   ├── metrics_history.go # Metrics history tracking
-│   │   ├── subsystems.go      # Cache subsystem management
+│   │   ├── state_cache.go     # SQLite state cache for fast startup
+│   │   ├── subsystems.go      # Cache subsystem management (cached + uncached paths)
 │   │   └── update.go          # Resource update/delete operations
 │   ├── mcp/                   # MCP (Model Context Protocol) server
 │   │   ├── server.go          # MCP HTTP handler setup
@@ -101,10 +135,19 @@ radar/
 │   ├── updater/               # Binary self-update logic
 │   └── version/               # Version information
 ├── web/                       # React frontend (embedded at build)
+│   ├── index.html             # Entry HTML (title: "Terrasible — AI-Powered...")
 │   ├── src/
 │   │   ├── api/               # API client + SSE hooks
+│   │   │   ├── client.ts      # Core REST/SSE client
+│   │   │   └── ai.ts          # AI chat streaming API + React Query hooks
 │   │   ├── components/
-│   │   │   ├── dock/          # Bottom dock with terminal/logs tabs
+│   │   │   ├── dock/          # Bottom dock with terminal/logs/AI chat tabs
+│   │   │   │   ├── BottomDock.tsx   # Dock container (Cmd+K shortcut)
+│   │   │   │   ├── DockContext.tsx  # DockProvider, useOpenChat, useOpenTerminal hooks
+│   │   │   │   ├── ChatTab.tsx      # AI chat tab (provider selector, message list)
+│   │   │   │   ├── ChatMessage.tsx  # Single chat message (markdown rendering)
+│   │   │   │   ├── ChatInput.tsx    # Chat input box with send/stop
+│   │   │   │   └── index.ts        # Re-exports (DockProvider, useOpenChat, etc.)
 │   │   │   ├── gitops/        # ArgoCD/FluxCD management panels
 │   │   │   ├── helm/          # Helm release management UI
 │   │   │   ├── home/          # Home/dashboard view
@@ -123,6 +166,7 @@ radar/
 │   │   ├── types.ts           # TypeScript type definitions
 │   │   └── utils/             # Topology and utility functions
 │   └── package.json
+├── .env.example               # Template for AI provider env vars
 ├── deploy/                    # Docker, Helm, Krew configs
 ├── docs/                      # User documentation (configuration, in-cluster guide)
 ├── scripts/                   # Release scripts
@@ -177,13 +221,79 @@ make frontend       # Build frontend only
 make backend        # Build backend only
 make watch-frontend # Vite dev server (port 9273)
 make watch-backend  # Air hot reload (port 9280)
-make test           # Run all tests
 make docker         # Build Docker image
 ```
+
+### Testing
+
+**IMPORTANT: Run `make test-all` after every feature implementation.** This is the minimum verification before considering any feature complete.
+
+```bash
+# Full test suite (unit + build verification) — RUN AFTER EVERY FEATURE
+make test-all
+
+# Individual test targets
+make test-unit       # Go unit tests (ai/context, helm, k8s, timeline, version)
+make test-build      # Build verification: Go build + frontend build + TypeScript type check
+make test-frontend   # TypeScript type check only (fast)
+make test            # Go unit tests (verbose output)
+make lint            # Go vet
+
+# E2E smoke tests (requires cluster access + optional AI API key in .env)
+make test-e2e
+```
+
+#### What each test target verifies
+
+| Target | What it checks |
+|---|---|
+| `test-unit` | Go unit tests across all packages |
+| `test-build` | Go compiles (`cmd/explorer` + `cmd/desktop`), TypeScript compiles, frontend builds |
+| `test-e2e` | Starts server on port 19280, hits all API endpoints, checks AI streaming, then shuts down |
+| `test-all` | `test-unit` + `test-build` combined |
+
+#### E2E test coverage
+
+The `make test-e2e` target starts a real server instance and verifies:
+- **Core**: health, connection, capabilities, cluster-info, dashboard, namespaces, api-resources, sessions
+- **Resources**: topology, pods, deployments, services, nodes, events, changes
+- **Helm**: releases listing
+- **Metrics**: top pods, top nodes
+- **AI** (if configured): providers, models, chat streaming (SSE)
+- **Debug**: informers
+
+E2E tests require a valid kubeconfig with cluster access. AI endpoint tests are skipped if no API key is configured.
+
+#### When to run tests
+
+- **After every feature/bugfix**: `make test-all` (mandatory)
+- **Before commits**: `make test-all` (mandatory)
+- **After merge conflict resolution**: `make test-all` (mandatory)
+- **Full E2E validation**: `make test-e2e` (recommended, requires cluster)
+- **Quick TypeScript check during frontend work**: `make test-frontend`
 
 ### Development Ports
 - **9280**: Backend API server (Go)
 - **9273**: Vite dev server (proxies /api to 9280)
+
+### Air Hot-Reload Configuration
+`.air.toml` uses separate `bin` and `args_bin` fields (required by air v1.64+):
+```toml
+bin = "./tmp/radar"
+args_bin = ["--dev", "--no-browser", "--kubeconfig", "~/.kube/config"]
+```
+The Makefile has `-include .env` + `export`, so env vars from `.env` are automatically available to `make watch-backend`.
+
+### AI Provider Configuration for Development
+Copy `.env.example` to `.env` and set your API key:
+```bash
+cp .env.example .env
+# Edit .env with your key:
+# ANTHROPIC_API_KEY=sk-ant-...
+# or OPENAI_API_KEY=sk-...
+# or OLLAMA_URL=http://localhost:11434
+```
+Then run `make watch-backend` — the Makefile exports `.env` vars automatically.
 
 ## CLI Flags
 
@@ -203,6 +313,12 @@ make docker         # Build Docker image
 --fake-in-cluster   Simulate in-cluster mode for testing (shows kubectl copy buttons instead of port-forward)
 --disable-helm-write Simulate restricted Helm permissions (disables install/upgrade/rollback/uninstall)
 --no-mcp            Disable MCP (Model Context Protocol) server for AI tools
+--cache-db          Path to state cache SQLite database (default: ~/.radar/cache.db)
+--no-cache          Disable state caching (full discovery on every startup)
+--ai-provider       AI provider: openai, anthropic, ollama (auto-detected from env if not set)
+--ai-model          AI model name (uses provider default if not set)
+--ai-api-key        API key for AI provider (or set OPENAI_API_KEY / ANTHROPIC_API_KEY env)
+--ollama-url        Ollama server URL (default: http://localhost:11434, or set OLLAMA_URL env)
 ```
 
 ## API Endpoints
@@ -288,6 +404,8 @@ GET  /api/metrics/pods/{ns}/{name}            # Current pod metrics
 GET  /api/metrics/pods/{ns}/{name}/history    # Pod metrics history
 GET  /api/metrics/nodes/{name}                # Current node metrics
 GET  /api/metrics/nodes/{name}/history        # Node metrics history
+GET  /api/metrics/top/pods                    # Bulk pod metrics for table view
+GET  /api/metrics/top/nodes                   # Bulk node metrics for table view
 ```
 
 ### Port Forwarding
@@ -352,6 +470,20 @@ POST /api/flux/{kind}/{ns}/{name}/suspend         # Suspend reconciliation
 POST /api/flux/{kind}/{ns}/{name}/resume          # Resume reconciliation
 ```
 
+### AI Chat
+```
+POST /api/ai/chat                             # Stream AI chat response via SSE (outside timeout group)
+GET  /api/ai/providers                        # List available AI providers and status
+POST /api/ai/provider                         # Switch active AI provider/model
+GET  /api/ai/models                           # List models for active provider
+```
+
+### AI Resource Preview
+```
+GET  /api/ai/resources/{kind}                 # Minified resource list (verbosity: summary|detail|compact)
+GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbosity: summary|detail|compact)
+```
+
 ### Traffic (Service Mesh)
 ```
 GET  /api/traffic/sources                     # Available traffic data sources
@@ -377,12 +509,6 @@ GET  /api/debug/events/diagnose               # Diagnose missing events for a re
 GET  /api/debug/informers                     # List active typed and dynamic informers
 ```
 
-### AI Resource Preview
-```
-GET  /api/ai/resources/{kind}                 # Minified resource list (verbosity: summary|detail|compact)
-GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbosity: summary|detail|compact)
-```
-
 ### MCP (Model Context Protocol)
 ```
 /mcp                                          # MCP Streamable HTTP endpoint (POST for JSON-RPC, GET for SSE)
@@ -395,6 +521,7 @@ GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbos
 - Dynamic caching for CRDs and custom resource types via API discovery
 - Memory-efficient with field stripping (removes managed fields, last-applied annotations)
 - Change notifications via channel for real-time SSE updates
+- **30-second sync timeout**: `WaitForCacheSync` uses a context timeout instead of blocking indefinitely; partially-synced caches continue in background
 - Supports: Pods, Services, Deployments, DaemonSets, StatefulSets, ReplicaSets, Ingresses, ConfigMaps, Secrets, Events, Jobs, CronJobs, HorizontalPodAutoscalers, PersistentVolumeClaims, Nodes, Namespaces
 
 ### Server-Sent Events (SSE)
@@ -428,6 +555,44 @@ GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbos
 - Records: resource kind, name, namespace, change type, timestamp, owner info, health state
 - Configurable limit (default: 10000 events)
 - Supports grouping by owner, app label, or namespace
+
+### State Cache (Fast Startup)
+- SQLite-backed cache at `~/.radar/cache.db` for accelerating startup
+- Caches API resource discovery, RBAC permission checks, and CRD access probes
+- Cluster fingerprint derived from SHA-256 of `contextName|serverURL|serverVersion`
+- Two init paths in `subsystems.go`:
+  - `InitAllSubsystems()` — full discovery, no cache
+  - `InitAllSubsystemsCached()` — loads cached RBAC/discovery/CRD data, skips API calls on hit
+- On cache miss: falls back to full discovery, then saves results to cache via `saveAllToCache()`
+- On cache hit: parallelizes Helm + Traffic init via `sync.WaitGroup` for faster startup
+- Background goroutine (`backgroundValidateAndUpdate`) validates cache against live cluster after init
+- Cache is automatically invalidated when cluster version changes (e.g., cluster upgrade)
+- Stale clusters purged after 30 days of not being seen
+- Disabled with `--no-cache` flag
+- Uses WAL journal mode, 16MB cache, single connection (safe for single-process use)
+- Tables: `clusters`, `api_resources`, `rbac_cache`, `crd_access`
+- Cache is also used during context switches via `SetContextStateCache()`
+
+### AI Chat Integration
+- Multi-provider architecture: OpenAI, Anthropic (Claude), Ollama (local)
+- Provider interface (`ai.Provider`): `ChatStream()`, `Name()`, `Available()`, `Models()`
+- Registry (`ai.Registry`) with runtime switching (no restart required)
+- Streaming responses via SSE (Server-Sent Events) from backend to frontend
+- System prompt auto-enriched with live K8s context (`ai.BuildSystemPrompt()`):
+  - Cluster info (platform, version, node count)
+  - Pod summary (running/pending/failed, CrashLoopBackOff detection)
+  - Recent warning events from timeline (last 30 minutes)
+  - Resource-specific context (pod status, container states, events, recent logs)
+- Default models: `claude-sonnet-4-20250514` (Anthropic), `gpt-4o-mini` (OpenAI), `llama3.2` (Ollama)
+- Frontend: chat tab in bottom dock (`Cmd+K` / `Ctrl+K` to open, or click MessageCircle icon in header)
+  - Singleton tab (reuses existing chat via DockContext)
+  - Provider/model selector in settings panel
+  - Markdown rendering for assistant responses (via react-markdown)
+  - Supports resource-scoped context (e.g., "ask about this pod")
+  - Streaming API client (`web/src/api/ai.ts`): async generator `streamChat()` + React Query hooks
+- Configuration via CLI flags (`--ai-provider`, `--ai-api-key`, `--ai-model`, `--ollama-url`)
+  or environment variables (`OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `OLLAMA_URL`)
+- Auto-detection: if no `--ai-provider` is set, detects from available env vars (priority: OPENAI > ANTHROPIC > OLLAMA)
 
 ### Resource Relationships
 - Computed at query time for resource detail views
@@ -512,7 +677,7 @@ Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 - helm.sh/helm/v3 (Helm SDK)
 - cilium/cilium (Hubble traffic observation)
 - google/go-containerregistry (image filesystem inspection)
-- modernc.org/sqlite (timeline storage)
+- modernc.org/sqlite (pure-Go SQLite for timeline storage + state cache)
 - modelcontextprotocol/go-sdk (MCP server implementation)
 - wailsapp/wails/v2 (desktop app framework)
 - go:embed (frontend embedding)
@@ -528,7 +693,7 @@ Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 - react-router-dom (client-side routing)
 - Tailwind CSS v4 + shadcn/ui (styling, uses @tailwindcss/vite plugin)
 - clsx + tailwind-merge (class utilities)
-- react-markdown + @tailwindcss/typography (markdown rendering)
+- react-markdown + @tailwindcss/typography (markdown rendering, AI chat)
 - Lucide React (icons)
 - yaml (YAML parsing)
 
@@ -536,7 +701,7 @@ Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 
 ### Middleware Stack
 - Logger, Recoverer (panic recovery)
-- 60-second request timeout
+- 60-second request timeout (exempts SSE/WebSocket/AI streaming endpoints)
 - CORS enabled for `http://localhost:*` and `http://127.0.0.1:*`
 
 ### Vite Dev Proxy

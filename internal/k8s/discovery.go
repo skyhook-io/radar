@@ -354,3 +354,103 @@ func (d *ResourceDiscovery) GetKindForGVR(gvr schema.GroupVersionResource) strin
 	}
 	return ""
 }
+
+// --- State Cache Integration ---
+
+// InitResourceDiscoveryFromCache initializes the resource discovery module
+// using pre-loaded data from the state cache, skipping the API server call.
+func InitResourceDiscoveryFromCache(resources []CachedAPIResource) error {
+	var initErr error
+	discoveryOnce.Do(func() {
+		resourceDiscovery = &ResourceDiscovery{
+			resourceMap: make(map[string]APIResource),
+			gvrMap:      make(map[string]schema.GroupVersionResource),
+			cacheTTL:    5 * time.Minute,
+		}
+		if !resourceDiscovery.LoadFromCache(resources) {
+			initErr = fmt.Errorf("failed to load discovery from cache")
+		}
+	})
+	return initErr
+}
+
+// LoadFromCache populates the discovery maps from cached data.
+// Uses the same deduplication logic as refresh() (prefer non-CRD, prefer stable versions).
+// Returns true if cache was loaded successfully.
+func (d *ResourceDiscovery) LoadFromCache(resources []CachedAPIResource) bool {
+	if len(resources) == 0 {
+		return false
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	d.resources = nil
+	d.resourceMap = make(map[string]APIResource)
+	d.gvrMap = make(map[string]schema.GroupVersionResource)
+
+	for _, cached := range resources {
+		resource := APIResource{
+			Group:      cached.Group,
+			Version:    cached.Version,
+			Kind:       cached.Kind,
+			Name:       cached.Name,
+			Namespaced: cached.Namespaced,
+			IsCRD:      cached.IsCRD,
+			Verbs:      cached.Verbs,
+		}
+
+		d.resources = append(d.resources, resource)
+
+		gvr := schema.GroupVersionResource{
+			Group:    cached.Group,
+			Version:  cached.Version,
+			Resource: cached.Name,
+		}
+
+		// Same dedup logic as refresh(): prefer non-CRD over CRD, then stable versions
+		kindKey := strings.ToLower(cached.Kind)
+		if existing, ok := d.resourceMap[kindKey]; !ok ||
+			(!cached.IsCRD && existing.IsCRD) ||
+			(cached.IsCRD == existing.IsCRD && existing.Group == cached.Group && isMoreStableVersion(cached.Version, existing.Version)) {
+			d.resourceMap[kindKey] = resource
+			d.gvrMap[kindKey] = gvr
+		}
+
+		nameKey := strings.ToLower(cached.Name)
+		if existing, ok := d.resourceMap[nameKey]; !ok ||
+			(!cached.IsCRD && existing.IsCRD) ||
+			(cached.IsCRD == existing.IsCRD && existing.Group == cached.Group && isMoreStableVersion(cached.Version, existing.Version)) {
+			d.resourceMap[nameKey] = resource
+			d.gvrMap[nameKey] = gvr
+		}
+	}
+
+	d.lastRefresh = time.Now()
+	log.Printf("Loaded %d API resources from cache (%d unique kinds)", len(d.resources), len(d.resourceMap)/2)
+	return true
+}
+
+// ExportForCache converts the current discovery state to a cacheable slice.
+func (d *ResourceDiscovery) ExportForCache() []CachedAPIResource {
+	if d == nil {
+		return nil
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	result := make([]CachedAPIResource, len(d.resources))
+	for i, r := range d.resources {
+		result[i] = CachedAPIResource{
+			Group:      r.Group,
+			Version:    r.Version,
+			Kind:       r.Kind,
+			Name:       r.Name,
+			Namespaced: r.Namespaced,
+			IsCRD:      r.IsCRD,
+			Verbs:      r.Verbs,
+		}
+	}
+	return result
+}

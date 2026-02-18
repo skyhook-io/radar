@@ -23,6 +23,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/skyhook-io/radar/internal/ai"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -43,6 +44,8 @@ type Server struct {
 	listener    net.Listener
 	updater     *updater.Updater
 	mcpHandler  http.Handler
+	aiRegistry  *ai.Registry
+	dashCache   *dashboardCache
 }
 
 // Config holds server configuration
@@ -52,6 +55,7 @@ type Config struct {
 	StaticFS   embed.FS     // Embedded frontend files
 	StaticRoot string       // Path within StaticFS
 	MCPHandler http.Handler // MCP server handler (nil = MCP disabled)
+	AIRegistry *ai.Registry // AI provider registry (nil = AI disabled)
 }
 
 // New creates a new server instance
@@ -63,6 +67,8 @@ func New(cfg Config) *Server {
 		devMode:     cfg.DevMode,
 		startTime:   time.Now(),
 		mcpHandler:  cfg.MCPHandler,
+		aiRegistry:  cfg.AIRegistry,
+		dashCache:   &dashboardCache{},
 	}
 
 	// Set up static file system
@@ -115,6 +121,12 @@ func (s *Server) setupRoutes() {
 		r.Get("/pods/{namespace}/{name}/logs/stream", s.handlePodLogsStream)
 		r.Get("/pods/{namespace}/{name}/exec", s.handlePodExec)
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
+
+		// AI streaming endpoint (SSE, no timeout)
+		if s.aiRegistry != nil {
+			aiHandlers := ai.NewHandlers(s.aiRegistry)
+			aiHandlers.RegisterStreamingRoutes(r)
+		}
 
 		// All other API routes get a 60-second timeout
 		r.Group(func(r chi.Router) {
@@ -181,6 +193,12 @@ func (s *Server) setupRoutes() {
 			// Image inspection routes
 			imageHandlers := images.NewHandlers()
 			imageHandlers.RegisterRoutes(r)
+
+			// AI routes (non-streaming)
+			if s.aiRegistry != nil {
+				aiHandlers := ai.NewHandlers(s.aiRegistry)
+				aiHandlers.RegisterRoutes(r)
+			}
 
 			// FluxCD routes
 			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.handleFluxReconcile)

@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, ReactNode } from 'react'
 
-export type DockTabType = 'terminal' | 'logs' | 'workload-logs'
+export type DockTabType = 'terminal' | 'logs' | 'workload-logs' | 'ai-chat'
 
 export interface DockTab {
   id: string
@@ -16,6 +16,14 @@ export interface DockTab {
   // Workload logs props
   workloadKind?: string
   workloadName?: string
+  // AI chat props
+  resourceContext?: {
+    kind?: string
+    namespace?: string
+    name?: string
+    group?: string
+  }
+  initialMessage?: string
 }
 
 interface DockContextValue {
@@ -43,6 +51,8 @@ export function DockProvider({ children }: { children: ReactNode }) {
     // Check if a similar tab already exists
     const existingTab = tabs.find(t => {
       if (t.type !== tabData.type) return false
+      // AI chat is a singleton tab - always reuse
+      if (t.type === 'ai-chat') return true
       if (t.type === 'workload-logs') {
         return t.namespace === tabData.namespace &&
                t.workloadKind === tabData.workloadKind &&
@@ -196,4 +206,28 @@ export function useOpenWorkloadLogs() {
   }
 
   return openWorkloadLogs
+}
+
+export function useOpenChat() {
+  const { addTab } = useDock()
+
+  // Return a function that opens / focuses the AI chat tab
+  const openChat = (opts?: {
+    resourceContext?: {
+      kind?: string
+      namespace?: string
+      name?: string
+      group?: string
+    }
+    initialMessage?: string
+  }) => {
+    addTab({
+      type: 'ai-chat',
+      title: 'AI Chat',
+      resourceContext: opts?.resourceContext,
+      initialMessage: opts?.initialMessage,
+    })
+  }
+
+  return openChat
 }

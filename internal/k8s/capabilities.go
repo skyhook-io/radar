@@ -401,3 +401,118 @@ func InvalidateResourcePermissionsCache() {
 	defer resourcePermsMu.Unlock()
 	cachedPermResult = nil
 }
+
+// --- State Cache Integration ---
+
+// ExportRBACResults exports the current RBAC permission check results for caching.
+// Returns nil if no cached results are available.
+func ExportRBACResults() []CachedRBACResult {
+	resourcePermsMu.RLock()
+	defer resourcePermsMu.RUnlock()
+
+	if cachedPermResult == nil || cachedPermResult.Perms == nil {
+		return nil
+	}
+
+	perms := cachedPermResult.Perms
+	ns := cachedPermResult.Namespace
+	nsScoped := cachedPermResult.NamespaceScoped
+
+	results := []CachedRBACResult{
+		{Resource: "pods", Group: "", Allowed: perms.Pods, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "services", Group: "", Allowed: perms.Services, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "configmaps", Group: "", Allowed: perms.ConfigMaps, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "secrets", Group: "", Allowed: perms.Secrets, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "events", Group: "", Allowed: perms.Events, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "persistentvolumeclaims", Group: "", Allowed: perms.PersistentVolumeClaims, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "nodes", Group: "", Allowed: perms.Nodes, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "namespaces", Group: "", Allowed: perms.Namespaces, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "deployments", Group: "apps", Allowed: perms.Deployments, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "daemonsets", Group: "apps", Allowed: perms.DaemonSets, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "statefulsets", Group: "apps", Allowed: perms.StatefulSets, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "replicasets", Group: "apps", Allowed: perms.ReplicaSets, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "ingresses", Group: "networking.k8s.io", Allowed: perms.Ingresses, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "gateways", Group: "gateway.networking.k8s.io", Allowed: perms.Gateways, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "httproutes", Group: "gateway.networking.k8s.io", Allowed: perms.HTTPRoutes, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "jobs", Group: "batch", Allowed: perms.Jobs, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "cronjobs", Group: "batch", Allowed: perms.CronJobs, NamespaceScoped: nsScoped, Namespace: ns},
+		{Resource: "horizontalpodautoscalers", Group: "autoscaling", Allowed: perms.HorizontalPodAutoscalers, NamespaceScoped: nsScoped, Namespace: ns},
+	}
+
+	return results
+}
+
+// ImportRBACResults loads cached RBAC results, populating the cached permission result.
+// Returns the reconstructed PermissionCheckResult. The in-memory RBAC cache is also
+// populated so that InitResourceCache and InitDynamicResourceCache can use it.
+func ImportRBACResults(results []CachedRBACResult) *PermissionCheckResult {
+	if len(results) == 0 {
+		return nil
+	}
+
+	perms := &ResourcePermissions{}
+	nsScoped := false
+	namespace := ""
+
+	for _, r := range results {
+		// Pick up namespace info from any entry
+		if r.NamespaceScoped {
+			nsScoped = true
+			namespace = r.Namespace
+		}
+
+		switch r.Group + "/" + r.Resource {
+		case "/pods":
+			perms.Pods = r.Allowed
+		case "/services":
+			perms.Services = r.Allowed
+		case "/configmaps":
+			perms.ConfigMaps = r.Allowed
+		case "/secrets":
+			perms.Secrets = r.Allowed
+		case "/events":
+			perms.Events = r.Allowed
+		case "/persistentvolumeclaims":
+			perms.PersistentVolumeClaims = r.Allowed
+		case "/nodes":
+			perms.Nodes = r.Allowed
+		case "/namespaces":
+			perms.Namespaces = r.Allowed
+		case "apps/deployments":
+			perms.Deployments = r.Allowed
+		case "apps/daemonsets":
+			perms.DaemonSets = r.Allowed
+		case "apps/statefulsets":
+			perms.StatefulSets = r.Allowed
+		case "apps/replicasets":
+			perms.ReplicaSets = r.Allowed
+		case "networking.k8s.io/ingresses":
+			perms.Ingresses = r.Allowed
+		case "gateway.networking.k8s.io/gateways":
+			perms.Gateways = r.Allowed
+		case "gateway.networking.k8s.io/httproutes":
+			perms.HTTPRoutes = r.Allowed
+		case "batch/jobs":
+			perms.Jobs = r.Allowed
+		case "batch/cronjobs":
+			perms.CronJobs = r.Allowed
+		case "autoscaling/horizontalpodautoscalers":
+			perms.HorizontalPodAutoscalers = r.Allowed
+		}
+	}
+
+	result := &PermissionCheckResult{
+		Perms:           perms,
+		NamespaceScoped: nsScoped,
+		Namespace:       namespace,
+	}
+
+	// Populate the in-memory cache so GetCachedPermissionResult() works
+	resourcePermsMu.Lock()
+	cachedPermResult = result
+	resourcePermsExpiry = time.Now().Add(resourcePermsTTL)
+	resourcePermsMu.Unlock()
+
+	log.Printf("Loaded RBAC permissions from cache (namespace_scoped=%v, namespace=%q)", nsScoped, namespace)
+	return result
+}

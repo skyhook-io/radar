@@ -20,11 +20,11 @@ interface HomeViewProps {
 }
 
 export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToResourceKind, onNavigateToResource }: HomeViewProps) {
-  const { data, isLoading, error } = useDashboard(namespaces)
+  const { data, isLoading, error, dataUpdatedAt } = useDashboard(namespaces)
   // CRDs load lazily after main dashboard to keep initial load fast
   const { data: crdsData } = useDashboardCRDs(namespaces)
 
-  if (isLoading) {
+  if (isLoading && !data) {
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
@@ -35,7 +35,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
     )
   }
 
-  if (error || !data) {
+  if (!data) {
     return (
       <div className="flex-1 flex items-center justify-center text-theme-text-secondary">
         <p>Failed to load dashboard data</p>
@@ -43,11 +43,24 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
     )
   }
 
+  // Show stale data indicator when error + cached data
+  const isStale = error && dataUpdatedAt > 0
+
   const hasProblems = data.problems && data.problems.length > 0
 
   return (
     <div className="flex-1 overflow-y-auto">
       <div className="max-w-[1600px] mx-auto px-6 py-6 space-y-5">
+        {/* Stale data warning */}
+        {isStale && (
+          <div className="flex items-center gap-2 px-3 py-2 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg">
+            <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            <span>
+              Showing cached data from {new Date(dataUpdatedAt).toLocaleTimeString()} — live updates unavailable
+            </span>
+          </div>
+        )}
+
         {/* Row 1: Cluster Health Card (combined health + resource counts) */}
         <ClusterHealthCard
           health={data.health}

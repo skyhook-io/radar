@@ -21,6 +21,7 @@ import {
 import { clsx } from 'clsx'
 import { stringify as yamlStringify } from 'yaml'
 import { useResource, useResourceEvents, useUpdateResource, useDeleteResource, useTriggerCronJob, useSuspendCronJob, useResumeCronJob, useRestartWorkload, useFluxReconcile, useFluxSyncWithSource, useFluxSuspend, useFluxResume, useArgoSync, useArgoRefresh, useArgoSuspend, useArgoResume } from '../../api/client'
+import { useIsClusterConnected } from '../../context/ConnectionContext'
 import { ForceDeleteConfirmDialog } from '../ui/ForceDeleteConfirmDialog'
 import type { SelectedResource, Relationships, ResourceRef } from '../../types'
 import { refToSelectedResource } from '../../utils/navigation'
@@ -466,6 +467,7 @@ function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
   const canExec = useCanExec()
   const canViewLogs = useCanViewLogs()
   const canPortForward = useCanPortForward()
+  const clusterConnected = useIsClusterConnected()
 
   // Delete confirmation state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
@@ -604,7 +606,8 @@ function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
               namespace: resource.namespace,
               name: resource.name,
             })}
-            disabled={restartWorkloadMutation.isPending}
+            disabled={restartWorkloadMutation.isPending || !clusterConnected}
+            title={!clusterConnected ? 'Cluster not connected' : undefined}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors disabled:opacity-50"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${restartWorkloadMutation.isPending ? 'animate-spin' : ''}`} />
@@ -634,7 +637,8 @@ function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
               namespace: resource.namespace,
               name: resource.name,
             })}
-            disabled={triggerCronJobMutation.isPending}
+            disabled={triggerCronJobMutation.isPending || !clusterConnected}
+            title={!clusterConnected ? 'Cluster not connected' : undefined}
             className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50"
           >
             <Play className={`w-3.5 h-3.5 ${triggerCronJobMutation.isPending ? 'animate-pulse' : ''}`} />
@@ -646,7 +650,8 @@ function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
                 namespace: resource.namespace,
                 name: resource.name,
               })}
-              disabled={resumeCronJobMutation.isPending}
+              disabled={resumeCronJobMutation.isPending || !clusterConnected}
+              title={!clusterConnected ? 'Cluster not connected' : undefined}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-green-600 hover:bg-green-700 rounded-lg transition-colors disabled:opacity-50"
             >
               <Play className="w-3.5 h-3.5" />
@@ -658,7 +663,8 @@ function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
                 namespace: resource.namespace,
                 name: resource.name,
               })}
-              disabled={suspendCronJobMutation.isPending}
+              disabled={suspendCronJobMutation.isPending || !clusterConnected}
+              title={!clusterConnected ? 'Cluster not connected' : undefined}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors disabled:opacity-50"
             >
               <Pause className="w-3.5 h-3.5" />
@@ -696,7 +702,9 @@ function ActionsBar({ resource, data, onClose }: ActionsBarProps) {
       {/* Delete action for all - shown as secondary/danger style */}
       <button
         onClick={() => setShowDeleteConfirm(true)}
-        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-400 hover:text-white hover:bg-red-600 border border-red-400/50 hover:border-red-600 rounded-lg transition-colors"
+        disabled={!clusterConnected}
+        title={!clusterConnected ? 'Cluster not connected' : undefined}
+        className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-red-400 hover:text-white hover:bg-red-600 border border-red-400/50 hover:border-red-600 rounded-lg transition-colors disabled:opacity-50 disabled:pointer-events-none"
       >
         <Trash2 className="w-3.5 h-3.5" />
         Delete
