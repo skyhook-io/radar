@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"strings"
 	"sync"
 	"time"
@@ -195,6 +196,42 @@ func (h *HubbleSource) loadTLSConfig(ctx context.Context, namespace string) (*tl
 	return tlsConfig, true
 }
 
+// discoverTLSServerName probes the server certificate to discover the correct TLS ServerName.
+// This handles environments like AKS where the Hubble Relay cert has a different SAN
+// (e.g., *.hubble-relay.cilium.io) than the default k8s service DNS name.
+func (h *HubbleSource) discoverTLSServerName(address string) (string, error) {
+	probeCfg := &tls.Config{
+		InsecureSkipVerify: true,
+	}
+	// Include client certs in case the server requires mTLS
+	if h.tlsConfig != nil && len(h.tlsConfig.Certificates) > 0 {
+		probeCfg.Certificates = h.tlsConfig.Certificates
+	}
+
+	conn, err := tls.DialWithDialer(&net.Dialer{Timeout: 3 * time.Second}, "tcp", address, probeCfg)
+	if err != nil {
+		return "", fmt.Errorf("failed to probe server certificate: %w", err)
+	}
+	defer conn.Close()
+
+	certs := conn.ConnectionState().PeerCertificates
+	if len(certs) == 0 {
+		return "", fmt.Errorf("server returned no certificates")
+	}
+
+	serverCert := certs[0]
+	if len(serverCert.DNSNames) == 0 {
+		return "", fmt.Errorf("server certificate has no DNS SANs")
+	}
+
+	san := serverCert.DNSNames[0]
+	if strings.HasPrefix(san, "*.") {
+		// Wildcard cert (e.g., *.hubble-relay.cilium.io) — construct a concrete match
+		san = "relay" + san[1:]
+	}
+	return san, nil
+}
+
 // isNativeHubble checks if this is GKE Dataplane V2 (native Hubble)
 func (h *HubbleSource) isNativeHubble(ctx context.Context) bool {
 	// Check for GKE by looking at node provider ID
@@ -361,14 +398,16 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*Metric
 		return false
 	}
 
-	tryTLS := func() bool {
+	tryTLSWith := func(serverName string) bool {
 		if h.tlsConfig == nil {
 			return false
 		}
-		log.Printf("[hubble] Connecting to gRPC at %s (TLS)", grpcAddr)
+		cfg := h.tlsConfig.Clone()
+		cfg.ServerName = serverName
+		log.Printf("[hubble] Connecting to gRPC at %s (TLS, ServerName: %s)", grpcAddr, serverName)
 		var err error
 		conn, err = grpc.NewClient(grpcAddr,
-			grpc.WithTransportCredentials(credentials.NewTLS(h.tlsConfig)),
+			grpc.WithTransportCredentials(credentials.NewTLS(cfg)),
 		)
 		if err != nil {
 			lastErr = fmt.Errorf("TLS connection failed: %w", err)
@@ -381,8 +420,39 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*Metric
 			log.Printf("[hubble] Connected to Hubble Relay at %s (TLS)", grpcAddr)
 			return true
 		}
-		lastErr = fmt.Errorf("TLS gRPC connection test failed")
 		h.closeConnectionLocked()
+		return false
+	}
+
+	tryTLS := func() bool {
+		if h.tlsConfig == nil {
+			return false
+		}
+
+		if tryTLSWith(h.tlsConfig.ServerName) {
+			return true
+		}
+
+		// TLS may have failed due to ServerName mismatch (e.g., AKS cert uses *.hubble-relay.cilium.io).
+		// Probe the server certificate to discover the correct ServerName.
+		discoveredName, err := h.discoverTLSServerName(grpcAddr)
+		if err != nil {
+			log.Printf("[hubble] Could not discover server name: %v", err)
+			lastErr = fmt.Errorf("TLS gRPC connection test failed")
+			return false
+		}
+		if discoveredName == h.tlsConfig.ServerName {
+			lastErr = fmt.Errorf("TLS gRPC connection test failed")
+			return false
+		}
+
+		log.Printf("[hubble] Retrying TLS with discovered ServerName: %s (was: %s)", discoveredName, h.tlsConfig.ServerName)
+
+		if tryTLSWith(discoveredName) {
+			return true
+		}
+
+		lastErr = fmt.Errorf("TLS gRPC connection test failed (tried default and discovered ServerName %s)", discoveredName)
 		return false
 	}
 
