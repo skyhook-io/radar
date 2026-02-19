@@ -1,6 +1,8 @@
 # CRD Integrations
 
-Radar automatically discovers and displays any Custom Resource Definition (CRD) in your cluster. For popular tools, Radar goes further — providing dedicated detail views, topology edges, smart table columns, and AI-optimized summaries.
+Radar automatically discovers and displays **any** Custom Resource Definition (CRD) in your cluster — no configuration needed. For popular tools, Radar provides dedicated detail views, topology edges, smart table columns, and AI-optimized summaries for seamless integration.
+
+---
 
 ## Karpenter
 
@@ -8,7 +10,7 @@ Radar automatically discovers and displays any Custom Resource Definition (CRD) 
 
 ### What Radar Shows
 
-**Topology:** Full provisioning chain — NodePool → NodeClaim → Node → Pod. See which NodePool owns which NodeClaims, which Nodes they provisioned, and what Pods are running on them.
+**Topology:** Full provisioning chain — NodePool → NodeClaim → Node → Pod. See which NodePool owns which NodeClaims, which Nodes they provisioned, and what Pods are running on them. NodePool → NodeClass edges show the provider-specific configuration each pool uses.
 
 <p align="center">
   <img src="screenshots/integrations/karpenter-topology.png" alt="Karpenter Topology" width="800">
@@ -17,10 +19,11 @@ Radar automatically discovers and displays any Custom Resource Definition (CRD) 
 
 **NodePool Detail View:**
 - Status conditions (Ready)
-- NodeClass reference (EC2NodeClass, AKSNodeClass, or generic)
+- Clickable NodeClass reference (EC2NodeClass, AKSNodeClass, or generic)
 - Resource limits (CPU, memory)
 - Disruption policy and consolidation settings
 - Instance requirements (types, zones, architectures)
+- Template labels applied to provisioned nodes
 
 <p align="center">
   <img src="screenshots/integrations/karpenter-nodepool-detail.png" alt="NodePool Detail" width="800">
@@ -28,12 +31,18 @@ Radar automatically discovers and displays any Custom Resource Definition (CRD) 
 </p>
 
 **NodeClaim Detail View:**
+- Provisioning timeline with timestamps
 - Status conditions (Initialized, Launched, Registered, Ready)
-- Instance type and capacity
-- Node name and NodePool reference
-- Provisioning timeline
+- Instance type, capacity, and zone
+- Requirements (instance types, architectures, OS)
+- Clickable Node and NodeClass references
 
-<!-- NodeClaim detail screenshot pending -->
+**NodeClass Detail View** (EC2NodeClass, AKSNodeClass, etc.):
+- AMI selector terms and aliases
+- Block device mappings (volume type, size, encryption)
+- IAM role configuration
+- Subnet and security group discovery tags
+- Instance metadata options (IMDS configuration)
 
 **Resource Browser:** Smart columns show status, NodeClass reference, limits, and disruption policy at a glance.
 
@@ -48,8 +57,10 @@ Radar automatically discovers and displays any Custom Resource Definition (CRD) 
 |-----|-------|----------|-------------|------------|
 | NodePool | `karpenter.sh/v1` | Yes | Yes | Yes |
 | NodeClaim | `karpenter.sh/v1` | Yes | Yes | Yes |
+| EC2NodeClass | `karpenter.k8s.aws/v1` | Yes | Yes | Yes |
+| AKSNodeClass | `karpenter.azure.com/v1alpha2` | Yes | Yes | Yes |
 
-Provider-specific NodeClasses (EC2NodeClass, AKSNodeClass, etc.) are auto-discovered and browsable via the generic CRD viewer.
+All provider-specific NodeClass variants are automatically detected and supported.
 
 ---
 
@@ -87,7 +98,11 @@ Provider-specific NodeClasses (EC2NodeClass, AKSNodeClass, etc.) are auto-discov
 - Success/failure limits
 - Trigger list
 
-<!-- ScaledJob detail screenshot pending -->
+**TriggerAuthentication Detail View:**
+- Pod identity provider and configuration
+- Secret references with linked Secret navigation
+- Environment variable mappings
+- External secret providers (HashiCorp Vault, Azure Key Vault, AWS Secrets Manager)
 
 **Resource Browser:** Smart columns show status, target workload, trigger count, and replica range at a glance.
 
@@ -102,8 +117,8 @@ Provider-specific NodeClasses (EC2NodeClass, AKSNodeClass, etc.) are auto-discov
 |-----|-------|----------|-------------|------------|
 | ScaledObject | `keda.sh/v1alpha1` | Yes | Yes | Yes |
 | ScaledJob | `keda.sh/v1alpha1` | Yes | Yes | Yes |
-| TriggerAuthentication | `keda.sh/v1alpha1` | — | Generic | — |
-| ClusterTriggerAuthentication | `keda.sh/v1alpha1` | — | Generic | — |
+| TriggerAuthentication | `keda.sh/v1alpha1` | — | Yes | Yes |
+| ClusterTriggerAuthentication | `keda.sh/v1alpha1` | — | Yes | Yes |
 
 ---
 
@@ -122,22 +137,22 @@ Provider-specific NodeClasses (EC2NodeClass, AKSNodeClass, etc.) are auto-discov
 
 **Gateway Detail View:** Listeners, addresses, attached routes, and status conditions.
 
+**GatewayClass Detail View:** Controller name, description, parameters reference, and status conditions.
+
 **HTTPRoute Detail View:** Rules with path/header matching, backend references, filters, and weights.
 
-**GatewayClass:** Appears as a cluster-scoped parent node in topology, showing which controller manages your Gateways.
-
-<!-- Gateway detail screenshot pending -->
+**GRPCRoute Detail View:** Service/method matching, backend references, and filters.
 
 ### Supported CRDs
 
 | CRD | Group | Topology | Detail View | AI Summary |
 |-----|-------|----------|-------------|------------|
-| GatewayClass | `gateway.networking.k8s.io/v1` | Yes | Generic | Yes |
-| Gateway | `gateway.networking.k8s.io/v1` | Yes | Yes | — |
-| HTTPRoute | `gateway.networking.k8s.io/v1` | Yes | Yes | — |
-| GRPCRoute | `gateway.networking.k8s.io/v1` | Yes | Generic | — |
-| TCPRoute | `gateway.networking.k8s.io/v1alpha2` | Yes | Generic | — |
-| TLSRoute | `gateway.networking.k8s.io/v1alpha2` | Yes | Generic | — |
+| GatewayClass | `gateway.networking.k8s.io/v1` | Yes | Yes | Yes |
+| Gateway | `gateway.networking.k8s.io/v1` | Yes | Yes | Yes |
+| HTTPRoute | `gateway.networking.k8s.io/v1` | Yes | Yes | Yes |
+| GRPCRoute | `gateway.networking.k8s.io/v1` | Yes | Yes | Yes |
+| TCPRoute | `gateway.networking.k8s.io/v1alpha2` | Yes | Yes | Yes |
+| TLSRoute | `gateway.networking.k8s.io/v1alpha2` | Yes | Yes | Yes |
 
 ---
 
@@ -178,7 +193,7 @@ Provider-specific NodeClasses (EC2NodeClass, AKSNodeClass, etc.) are auto-discov
 
 | CRD | Group | Topology | Detail View | AI Summary |
 |-----|-------|----------|-------------|------------|
-| Certificate | `cert-manager.io/v1` | Yes | Yes | Yes |
+| Certificate | `cert-manager.io/v1` | Yes | Yes | — |
 | CertificateRequest | `cert-manager.io/v1` | Yes | Yes | — |
 | Issuer | `cert-manager.io/v1` | Yes | Yes | — |
 | ClusterIssuer | `cert-manager.io/v1` | Yes | Yes | — |
@@ -199,8 +214,6 @@ Provider-specific NodeClasses (EC2NodeClass, AKSNodeClass, etc.) are auto-discov
 
 **Resource Browser:** Smart columns show severity counts and scan status at a glance.
 
-<!-- VulnerabilityReport detail screenshot pending -->
-
 ### Supported CRDs
 
 | CRD | Group | Topology | Detail View | AI Summary |
@@ -210,6 +223,22 @@ Provider-specific NodeClasses (EC2NodeClass, AKSNodeClass, etc.) are auto-discov
 | ExposedSecretReport | `aquasecurity.github.io/v1alpha1` | — | Yes | — |
 | ClusterComplianceReport | `aquasecurity.github.io/v1alpha1` | — | Yes | — |
 | SbomReport | `aquasecurity.github.io/v1alpha1` | — | Yes | — |
+
+---
+
+## Bitnami Sealed Secrets
+
+[Sealed Secrets](https://sealed-secrets.netlify.app/) encrypts Kubernetes Secrets so they can be safely stored in Git. The controller decrypts them in-cluster at deploy time.
+
+### What Radar Shows
+
+**SealedSecret Detail View:** Encrypted data keys, template metadata, and the target Secret's scope and namespace.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| SealedSecret | `bitnami.com/v1alpha1` | — | Yes | — |
 
 ---
 
@@ -238,19 +267,27 @@ See the main [README](../README.md#gitops) for GitOps integration details.
 
 ---
 
-## Other CRDs
+## Argo Rollouts
 
-Any CRD installed in your cluster is automatically discovered and browsable. Resources appear in the sidebar, can be filtered and searched, and show full YAML in the detail drawer. The generic viewer works with any resource — the integrations above simply add richer presentation.
-
-### Argo Rollouts
+[Argo Rollouts](https://argoproj.github.io/rollouts/) provides progressive delivery strategies including blue-green and canary deployments.
 
 | CRD | Group | Topology | Detail View | AI Summary |
 |-----|-------|----------|-------------|------------|
 | Rollout | `argoproj.io/v1alpha1` | Yes | Yes | Yes |
 
-### Argo Workflows
+---
+
+## Argo Workflows
+
+[Argo Workflows](https://argoproj.github.io/workflows/) is a container-native workflow engine for orchestrating parallel jobs on Kubernetes.
 
 | CRD | Group | Topology | Detail View | AI Summary |
 |-----|-------|----------|-------------|------------|
 | Workflow | `argoproj.io/v1alpha1` | — | Yes | — |
 | WorkflowTemplate | `argoproj.io/v1alpha1` | — | Yes | — |
+
+---
+
+## Any Other CRD
+
+Radar automatically discovers and displays **every** CRD installed in your cluster — no configuration or plugins required. Resources appear in the sidebar, can be filtered and searched, and show full YAML with syntax highlighting in the detail drawer. The integrations above add richer presentation, but every CRD is browsable out of the box.
