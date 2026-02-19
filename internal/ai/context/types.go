@@ -16,7 +16,8 @@ type Relationships struct {
 	Gateways    []ResourceRef
 	Routes      []ResourceRef
 	ConfigRefs  []ResourceRef
-	HPA         *ResourceRef
+	Consumers   []ResourceRef
+	Scalers     []ResourceRef
 	ScaleTarget *ResourceRef
 	Pods        []ResourceRef
 }

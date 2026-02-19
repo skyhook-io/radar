@@ -109,6 +109,10 @@ export const NODE_DIMENSIONS: Record<NodeKind, { width: number; height: number }
   CronJob: { width: 200, height: 56 },
   PersistentVolumeClaim: { width: 200, height: 48 },
   Namespace: { width: 180, height: 48 },
+  Node: { width: 280, height: 56 },
+  NodePool: { width: 260, height: 56 },
+  NodeClaim: { width: 260, height: 56 },
+  NodeClass: { width: 260, height: 56 },
 }
 
 
@@ -225,6 +229,10 @@ function getSubtitle(kind: NodeKind, nodeData: Record<string, unknown>): string 
         return `${count} pods (${unhealthy} unhealthy)`
       }
       return `${count} pods (${healthy} healthy)`
+    }
+    case 'Node': {
+      const instanceType = nodeData.instanceType as string
+      return instanceType || ''
     }
     case 'Internet':
       return ''

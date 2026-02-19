@@ -711,23 +711,25 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// 1h. Add Karpenter NodePool and NodeClaim nodes (CRD - fetched via dynamic cache)
-	nodePoolIDs := make(map[string]string)   // ns/name -> nodePoolID
-	nodeClaimIDs := make(map[string]string)  // ns/name -> nodeClaimID
+	nodePoolIDs := make(map[string]string)        // ns/name -> nodePoolID
+	nodeClaimNodeNames := make(map[string]string) // nodeName -> nodeClaimID (for NodeClaim → Node edges)
 
 	var nodePoolGVR schema.GroupVersionResource
 	hasNodePools := false
 	if resourceDiscovery != nil {
 		nodePoolGVR, hasNodePools = resourceDiscovery.GetGVR("NodePool")
 	}
+	var cachedNodePools []*unstructured.Unstructured // reused for NodePool→NodeClass edges
 	if hasNodePools && dynamicCache != nil {
 		nodePools, npErr := dynamicCache.List(nodePoolGVR, opts.NamespaceFilter())
 		if npErr != nil {
 			log.Printf("WARNING [topology] Failed to list Karpenter NodePools: %v", npErr)
 			warnings = append(warnings, fmt.Sprintf("Failed to list Karpenter NodePools: %v", npErr))
 		}
+		cachedNodePools = nodePools
 		for _, np := range nodePools {
 			ns := np.GetNamespace()
-			if !opts.MatchesNamespaceFilter(ns) {
+			if ns != "" && !opts.MatchesNamespaceFilter(ns) {
 				continue
 			}
 			name := np.GetName()
@@ -760,13 +762,12 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 		for _, nc := range nodeClaims {
 			ns := nc.GetNamespace()
-			if !opts.MatchesNamespaceFilter(ns) {
+			if ns != "" && !opts.MatchesNamespaceFilter(ns) {
 				continue
 			}
 			name := nc.GetName()
 
 			ncID := fmt.Sprintf("nodeclaim/%s/%s", ns, name)
-			nodeClaimIDs[ns+"/"+name] = ncID
 			nodes = append(nodes, Node{
 				ID:     ncID,
 				Kind:   KindNodeClaim,
@@ -805,6 +806,106 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 							Type:   EdgeManages,
 						})
 					}
+				}
+			}
+
+			// Collect status.nodeName for NodeClaim → Node edges
+			if nodeName, _, _ := unstructured.NestedString(nc.Object, "status", "nodeName"); nodeName != "" {
+				nodeClaimNodeNames[nodeName] = ncID
+			}
+
+		}
+	}
+
+	// 1h-ii-a. Add Karpenter-managed Node nodes (NodeClaim → Node edges)
+	if len(nodeClaimNodeNames) > 0 && b.cache.Nodes() != nil {
+		allNodes, nodeErr := b.cache.Nodes().List(labels.Everything())
+		if nodeErr != nil {
+			log.Printf("WARNING [topology] Failed to list Nodes for Karpenter edges: %v", nodeErr)
+		} else {
+			for _, node := range allNodes {
+				ncID, ok := nodeClaimNodeNames[node.Name]
+				if !ok {
+					continue // skip non-Karpenter nodes
+				}
+				nodeID := fmt.Sprintf("node//%s", node.Name)
+				nodes = append(nodes, Node{
+					ID:     nodeID,
+					Kind:   KindNode,
+					Name:   node.Name,
+					Status: extractNodeStatus(*node),
+					Data: map[string]any{
+						"namespace":    "",
+						"labels":       node.Labels,
+						"instanceType": node.Labels["node.kubernetes.io/instance-type"],
+					},
+				})
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", ncID, nodeID),
+					Source: ncID,
+					Target: nodeID,
+					Type:   EdgeManages,
+				})
+			}
+		}
+	}
+
+	// 1h-iii. Add Karpenter NodeClass nodes (EC2NodeClass, AKSNodeClass, etc.)
+	nodeClassIDs := make(map[string]string) // "kind/name" -> nodeClassID (cluster-scoped, keyed by kind to avoid collision)
+
+	// Try common NodeClass kinds across cloud providers
+	nodeClassKinds := []string{"EC2NodeClass", "AKSNodeClass", "GCPNodeClass"}
+	for _, ncKind := range nodeClassKinds {
+		var ncGVR schema.GroupVersionResource
+		var hasKind bool
+		if resourceDiscovery != nil {
+			ncGVR, hasKind = resourceDiscovery.GetGVR(ncKind)
+		}
+		if !hasKind || dynamicCache == nil {
+			continue
+		}
+		nodeClasses, ncErr := dynamicCache.List(ncGVR, "")
+		if ncErr != nil {
+			log.Printf("WARNING [topology] Failed to list Karpenter %s: %v", ncKind, ncErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list Karpenter %s: %v", ncKind, ncErr))
+			continue
+		}
+		for _, nc := range nodeClasses {
+			name := nc.GetName()
+			ncID := fmt.Sprintf("nodeclass//%s", name)
+			nodeClassIDs[ncKind+"/"+name] = ncID
+			nodes = append(nodes, Node{
+				ID:     ncID,
+				Kind:   KindNodeClass,
+				Name:   name,
+				Status: extractKarpenterNodePoolStatus(*nc), // Same Ready condition pattern
+				Data: map[string]any{
+					"namespace": "",
+					"labels":    nc.GetLabels(),
+				},
+			})
+		}
+	}
+
+	// NodePool → NodeClass edges via spec.template.spec.nodeClassRef
+	if len(nodeClassIDs) > 0 {
+		for _, np := range cachedNodePools {
+			npNs := np.GetNamespace()
+			npName := np.GetName()
+			npID, ok := nodePoolIDs[npNs+"/"+npName]
+			if !ok {
+				continue
+			}
+			refName, _, _ := unstructured.NestedString(np.Object, "spec", "template", "spec", "nodeClassRef", "name")
+			refKind, _, _ := unstructured.NestedString(np.Object, "spec", "template", "spec", "nodeClassRef", "kind")
+			if refName != "" && refKind != "" {
+				if ncID, ok := nodeClassIDs[refKind+"/"+refName]; ok {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s", npID, ncID),
+						Source: npID,
+						Target: ncID,
+						Type:   EdgeConfigures,
+					})
 				}
 			}
 		}
@@ -863,7 +964,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						ID:     fmt.Sprintf("%s-to-%s", soID, targetID),
 						Source: soID,
 						Target: targetID,
-						Type:   EdgeManages,
+						Type:   EdgeUses,
 					})
 				}
 			}
@@ -1588,7 +1689,11 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// Create GatewayClass → Gateway edges (match via spec.gatewayClassName on Gateway)
 	if hasGateways && dynamicCache != nil {
-		gateways, _ := dynamicCache.List(gatewayGVR, opts.NamespaceFilter())
+		gateways, gwEdgeErr := dynamicCache.List(gatewayGVR, opts.NamespaceFilter())
+		if gwEdgeErr != nil {
+			log.Printf("WARNING [topology] Failed to list Gateways for GatewayClass edges: %v", gwEdgeErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list Gateways for GatewayClass edges: %v", gwEdgeErr))
+		}
 		for _, gw := range gateways {
 			ns := gw.GetNamespace()
 			if !opts.MatchesNamespaceFilter(ns) {
@@ -2373,7 +2478,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				ID:     fmt.Sprintf("%s-to-%s", certID, issuerID),
 				Source: certID,
 				Target: issuerID,
-				Type:   EdgeManages,
+				Type:   EdgeUses,
 			})
 		}
 	}
@@ -3428,12 +3533,28 @@ func extractKarpenterNodeClaimStatus(nc unstructured.Unstructured) HealthStatus 
 	return StatusUnknown
 }
 
-// extractKedaScaledObjectStatus reads the Active condition and Paused annotation from a KEDA ScaledObject
+// extractNodeStatus reads the Ready condition from a Kubernetes Node
+func extractNodeStatus(node corev1.Node) HealthStatus {
+	for _, cond := range node.Status.Conditions {
+		if cond.Type == corev1.NodeReady {
+			if cond.Status == corev1.ConditionTrue {
+				return StatusHealthy
+			}
+			return StatusUnhealthy
+		}
+	}
+	return StatusUnknown
+}
+
+// extractKedaScaledObjectStatus reads conditions and annotations from a KEDA ScaledObject
 func extractKedaScaledObjectStatus(so unstructured.Unstructured) HealthStatus {
-	// Check for Paused annotation
+	// Check for Paused annotation (two variants)
 	annotations := so.GetAnnotations()
 	if annotations != nil {
 		if paused, ok := annotations["autoscaling.keda.sh/paused"]; ok && paused == "true" {
+			return StatusDegraded
+		}
+		if _, ok := annotations["autoscaling.keda.sh/paused-replicas"]; ok {
 			return StatusDegraded
 		}
 	}
@@ -3442,45 +3563,89 @@ func extractKedaScaledObjectStatus(so unstructured.Unstructured) HealthStatus {
 	if !found {
 		return StatusUnknown
 	}
+
+	var activeCond, readyCond, fallbackCond map[string]any
 	for _, c := range conditions {
 		cond, ok := c.(map[string]any)
 		if !ok {
 			continue
 		}
-		if cond["type"] == "Active" {
-			switch cond["status"] {
-			case "True":
-				return StatusHealthy
-			case "False":
-				return StatusDegraded
-			}
-			return StatusUnknown
+		switch cond["type"] {
+		case "Fallback":
+			fallbackCond = cond
+		case "Ready":
+			readyCond = cond
+		case "Active":
+			activeCond = cond
 		}
 	}
+
+	// Fallback active means triggers are failing
+	if fallbackCond != nil && fallbackCond["status"] == "True" {
+		return StatusUnhealthy
+	}
+
+	// Ready=False means ScaledObject is not operational
+	if readyCond != nil && readyCond["status"] == "False" {
+		return StatusUnhealthy
+	}
+
+	if activeCond != nil {
+		switch activeCond["status"] {
+		case "True":
+			return StatusHealthy
+		case "False":
+			return StatusDegraded
+		}
+	}
+
+	if readyCond != nil && readyCond["status"] == "True" {
+		return StatusHealthy
+	}
+
 	return StatusUnknown
 }
 
-// extractKedaScaledJobStatus reads the Active condition from a KEDA ScaledJob
+// extractKedaScaledJobStatus reads conditions from a KEDA ScaledJob
 func extractKedaScaledJobStatus(sj unstructured.Unstructured) HealthStatus {
 	conditions, found, _ := unstructured.NestedSlice(sj.Object, "status", "conditions")
 	if !found {
 		return StatusUnknown
 	}
+
+	var activeCond, readyCond map[string]any
 	for _, c := range conditions {
 		cond, ok := c.(map[string]any)
 		if !ok {
 			continue
 		}
-		if cond["type"] == "Active" {
-			switch cond["status"] {
-			case "True":
-				return StatusHealthy
-			case "False":
-				return StatusDegraded
-			}
-			return StatusUnknown
+		switch cond["type"] {
+		case "Ready":
+			readyCond = cond
+		case "Active":
+			activeCond = cond
 		}
 	}
+
+	// Ready condition takes priority
+	if readyCond != nil {
+		switch readyCond["status"] {
+		case "True":
+			return StatusHealthy
+		case "False":
+			return StatusDegraded
+		}
+	}
+
+	if activeCond != nil {
+		switch activeCond["status"] {
+		case "True":
+			return StatusHealthy
+		case "False":
+			return StatusDegraded
+		}
+	}
+
 	return StatusUnknown
 }
 
@@ -3531,7 +3696,8 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		"rollout": true, "application": true, "kustomization": true,
 		"helmrelease": true, "gitrepository": true, "certificate": true,
 		"gateway": true, "httproute": true, "grpcroute": true, "tcproute": true, "tlsroute": true,
-		"nodepool": true, "nodeclaim": true,       // Karpenter
+		"nodepool": true, "nodeclaim": true,             // Karpenter
+		"ec2nodeclass": true, "aksnodeclass": true, "gcpnodeclass": true, // Karpenter NodeClass
 		"scaledobject": true, "scaledjob": true,   // KEDA
 		"gatewayclass": true,                       // Gateway API
 		// Trivy Operator reports - high cardinality, excluded from topology

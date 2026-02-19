@@ -1,9 +1,10 @@
 import { Shield, Users } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property } from '../drawer-components'
+import { Section, PropertyList, Property, ResourceLink } from '../drawer-components'
 
 interface RoleBindingRendererProps {
   data: any
+  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
 function getSubjectKindBadgeClass(kind: string): string {
@@ -30,7 +31,7 @@ function getRoleRefKindBadgeClass(kind: string): string {
   }
 }
 
-export function RoleBindingRenderer({ data }: RoleBindingRendererProps) {
+export function RoleBindingRenderer({ data, onNavigate }: RoleBindingRendererProps) {
   const roleRef = data.roleRef || {}
   const subjects: any[] = data.subjects || []
 
@@ -48,7 +49,9 @@ export function RoleBindingRenderer({ data }: RoleBindingRendererProps) {
               ) : undefined
             }
           />
-          <Property label="Name" value={roleRef.name} />
+          <Property label="Name" value={
+            roleRef.name ? <ResourceLink name={roleRef.name} kind={roleRef.kind === 'ClusterRole' ? 'clusterroles' : 'roles'} namespace={roleRef.kind === 'ClusterRole' ? '' : (data.metadata?.namespace || '')} onNavigate={onNavigate} /> : undefined
+          } />
           <Property label="API Group" value={roleRef.apiGroup} />
         </PropertyList>
       </Section>
@@ -61,7 +64,11 @@ export function RoleBindingRenderer({ data }: RoleBindingRendererProps) {
                 <span className={clsx('px-2 py-0.5 rounded text-xs', getSubjectKindBadgeClass(subject.kind))}>
                   {subject.kind}
                 </span>
-                <span className="text-theme-text-primary font-medium">{subject.name}</span>
+                {subject.kind === 'ServiceAccount' ? (
+                  <ResourceLink name={subject.name} kind="serviceaccounts" namespace={subject.namespace || 'default'} onNavigate={onNavigate} />
+                ) : (
+                  <span className="text-theme-text-primary font-medium">{subject.name}</span>
+                )}
               </div>
               <div className="text-xs text-theme-text-tertiary mt-1">
                 Namespace: {subject.kind === 'ServiceAccount' ? (subject.namespace || 'default') : '-'}

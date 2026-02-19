@@ -1,12 +1,13 @@
 import { Clock, Pause } from 'lucide-react'
-import { Section, PropertyList, Property, AlertBanner } from '../drawer-components'
+import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../drawer-components'
 import { formatAge, cronToHuman } from '../resource-utils'
 
 interface CronJobRendererProps {
   data: any
+  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
-export function CronJobRenderer({ data }: CronJobRendererProps) {
+export function CronJobRenderer({ data, onNavigate }: CronJobRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
 
@@ -73,7 +74,9 @@ export function CronJobRenderer({ data }: CronJobRendererProps) {
         <Section title="Active Jobs">
           <div className="space-y-1">
             {status.active.map((job: any) => (
-              <div key={job.name} className="text-sm text-blue-400">{job.name}</div>
+              <div key={job.name} className="text-sm">
+                <ResourceLink name={job.name} kind="jobs" namespace={job.namespace || data.metadata?.namespace || ''} onNavigate={onNavigate} />
+              </div>
             ))}
           </div>
         </Section>

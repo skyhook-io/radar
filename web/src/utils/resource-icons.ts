@@ -33,6 +33,7 @@ import {
 
   // Cluster
   Cpu,
+  Server,
   FolderOpen,
   UserCog,
   Activity,
@@ -117,6 +118,19 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   gitrepository: FolderGit2, // FluxCD GitRepository
   ocirepository: FolderGit2, // FluxCD OCIRepository
   helmrepository: Anchor, // FluxCD HelmRepository
+
+  // Karpenter
+  nodepool: Server,
+  nodeclaim: Server,
+  ec2nodeclass: Server,
+  aksnodeclass: Server,
+  gcpnodeclass: Server,
+
+  // KEDA
+  scaledobject: Scaling,
+  scaledjob: Scaling,
+  triggerauthentication: KeyRound,
+  clustertriggerauthentication: KeyRound,
 
   // PDB
   poddisruptionbudget: ShieldCheck,

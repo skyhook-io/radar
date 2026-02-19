@@ -81,7 +81,11 @@ export function getNodeClaimStatus(resource: any): StatusBadge {
 }
 
 export function getNodeClaimInstanceType(resource: any): string {
-  return resource.status?.instanceType || resource.spec?.instanceType || '-'
+  // v1beta1: status.instanceType; v1: label or spec.requirements fallback
+  return resource.status?.instanceType
+    || resource.metadata?.labels?.['node.kubernetes.io/instance-type']
+    || resource.spec?.requirements?.find((r: any) => r.key === 'node.kubernetes.io/instance-type')?.values?.[0]
+    || '-'
 }
 
 export function getNodeClaimNodeName(resource: any): string {
@@ -94,4 +98,53 @@ export function getNodeClaimCapacity(resource: any): Record<string, string> {
 
 export function getNodeClaimNodePoolRef(resource: any): string {
   return resource.metadata?.labels?.['karpenter.sh/nodepool'] || '-'
+}
+
+export function getNodeClaimRequirements(resource: any): Array<{ key: string; operator: string; values: string[] }> {
+  return resource.spec?.requirements || []
+}
+
+export function getNodeClaimNodeClassRef(resource: any): { group?: string; kind?: string; name?: string } | null {
+  return resource.spec?.nodeClassRef || null
+}
+
+export function getNodeClaimExpireAfter(resource: any): string | undefined {
+  return resource.spec?.expireAfter
+}
+
+// ============================================================================
+// KARPENTER EC2NODECLASS UTILITIES
+// ============================================================================
+
+export function getEC2NodeClassStatus(resource: any): StatusBadge {
+  const conditions = resource.status?.conditions || []
+  const readyCond = conditions.find((c: any) => c.type === 'Ready')
+
+  if (readyCond?.status === 'True') {
+    return { text: 'Ready', color: healthColors.healthy, level: 'healthy' }
+  }
+  if (readyCond?.status === 'False') {
+    return { text: readyCond.reason || 'NotReady', color: healthColors.unhealthy, level: 'unhealthy' }
+  }
+  return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
+}
+
+export function getEC2NodeClassAMI(resource: any): string {
+  const terms = resource.spec?.amiSelectorTerms || []
+  if (terms.length === 0) return '-'
+  // Show alias if available (e.g., "al2023@latest"), otherwise show ID
+  const first = terms[0]
+  return first.alias || first.id || first.name || '-'
+}
+
+export function getEC2NodeClassRole(resource: any): string {
+  return resource.spec?.role || '-'
+}
+
+export function getEC2NodeClassVolumeSize(resource: any): string {
+  const mappings = resource.spec?.blockDeviceMappings || []
+  if (mappings.length === 0) return '-'
+  const first = mappings[0]
+  const size = first.ebs?.volumeSize
+  return size || '-'
 }

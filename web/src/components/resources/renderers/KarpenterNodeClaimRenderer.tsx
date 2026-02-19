@@ -1,19 +1,36 @@
-import { Server, Cpu } from 'lucide-react'
+import { Server, Cpu, Settings } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../drawer-components'
 import {
   getNodeClaimStatus,
   getNodeClaimInstanceType,
   getNodeClaimNodeName,
   getNodeClaimCapacity,
   getNodeClaimNodePoolRef,
+  getNodeClaimRequirements,
+  getNodeClaimNodeClassRef,
+  getNodeClaimExpireAfter,
 } from '../resource-utils-karpenter'
+
+function formatRelativeTime(isoString: string): string {
+  const date = new Date(isoString)
+  if (isNaN(date.getTime())) return ''
+  const seconds = Math.floor((Date.now() - date.getTime()) / 1000)
+  if (seconds < 60) return `${seconds}s ago`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m ago`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.floor(hours / 24)
+  return `${days}d ago`
+}
 
 interface KarpenterNodeClaimRendererProps {
   data: any
+  onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 }
 
-export function KarpenterNodeClaimRenderer({ data }: KarpenterNodeClaimRendererProps) {
+export function KarpenterNodeClaimRenderer({ data, onNavigate }: KarpenterNodeClaimRendererProps) {
   const status = data.status || {}
   const conditions = status.conditions || []
 
@@ -21,6 +38,9 @@ export function KarpenterNodeClaimRenderer({ data }: KarpenterNodeClaimRendererP
   const isNotReady = claimStatus.level === 'unhealthy'
   const readyCond = conditions.find((c: any) => c.type === 'Ready')
   const capacity = getNodeClaimCapacity(data)
+  const requirements = getNodeClaimRequirements(data)
+  const nodeClassRef = getNodeClaimNodeClassRef(data)
+  const expireAfter = getNodeClaimExpireAfter(data)
 
   // Provisioning steps for timeline
   const steps = [
@@ -47,7 +67,23 @@ export function KarpenterNodeClaimRenderer({ data }: KarpenterNodeClaimRendererP
           <Property label="Instance Type" value={getNodeClaimInstanceType(data)} />
           <Property label="Node Name" value={getNodeClaimNodeName(data)} />
           <Property label="NodePool" value={getNodeClaimNodePoolRef(data)} />
+          {nodeClassRef && (
+            <Property
+              label="NodeClass"
+              value={nodeClassRef.name ? (
+                <ResourceLink
+                  name={nodeClassRef.name}
+                  kind={(nodeClassRef.kind || 'EC2NodeClass').toLowerCase() + 's'}
+                  namespace=""
+                  group={nodeClassRef.group}
+                  label={`${nodeClassRef.kind || 'EC2NodeClass'}/${nodeClassRef.name}`}
+                  onNavigate={onNavigate}
+                />
+              ) : '-'}
+            />
+          )}
           {status.imageID && <Property label="Image ID" value={status.imageID} />}
+          {expireAfter && <Property label="Expire After" value={expireAfter} />}
         </PropertyList>
       </Section>
 
@@ -63,6 +99,31 @@ export function KarpenterNodeClaimRenderer({ data }: KarpenterNodeClaimRendererP
         </Section>
       )}
 
+      {/* Requirements */}
+      {requirements.length > 0 && (
+        <Section title={`Requirements (${requirements.length})`} icon={Settings}>
+          <div className="space-y-1">
+            {requirements.map((req: any, i: number) => (
+              <div key={i} className="bg-theme-elevated/30 rounded p-2">
+                <div className="flex items-center gap-2 text-sm">
+                  <span className="text-theme-text-primary font-medium">{req.key}</span>
+                  <span className="text-theme-text-tertiary">{req.operator}</span>
+                </div>
+                {req.values && req.values.length > 0 && (
+                  <div className="mt-1 flex flex-wrap gap-1">
+                    {req.values.map((v: string, vi: number) => (
+                      <span key={vi} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                        {v}
+                      </span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </Section>
+      )}
+
       {/* Provisioning Timeline */}
       <Section title="Provisioning" defaultExpanded>
         <div className="space-y-1">
@@ -71,6 +132,7 @@ export function KarpenterNodeClaimRenderer({ data }: KarpenterNodeClaimRendererP
             const isComplete = cond?.status === 'True'
             const isFailed = cond?.status === 'False'
             const isPending = !cond
+            const transitionTime = cond?.lastTransitionTime
 
             // Find the current step (first non-True)
             const currentStepIndex = steps.findIndex((s) => {
@@ -103,12 +165,17 @@ export function KarpenterNodeClaimRenderer({ data }: KarpenterNodeClaimRendererP
                 <span className="text-theme-text-tertiary text-xs w-4 shrink-0">{index}</span>
                 <span
                   className={clsx(
-                    'text-sm',
+                    'text-sm flex-1',
                     isCurrent ? 'text-theme-text-primary font-medium' : 'text-theme-text-secondary'
                   )}
                 >
                   {step.label}
                 </span>
+                {transitionTime && (
+                  <span className="text-xs text-theme-text-tertiary shrink-0">
+                    {formatRelativeTime(transitionTime)}
+                  </span>
+                )}
               </div>
             )
           })}

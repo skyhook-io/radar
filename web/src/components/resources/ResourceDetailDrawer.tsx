@@ -70,7 +70,7 @@ import {
   getKindColor,
   formatKindName,
 } from './drawer-components'
-import { getNodePoolStatus, getNodeClaimStatus } from './resource-utils-karpenter'
+import { getNodePoolStatus, getNodeClaimStatus, getEC2NodeClassStatus } from './resource-utils-karpenter'
 import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda'
 import {
   PodRenderer,
@@ -98,6 +98,8 @@ import {
   GatewayRenderer,
   GatewayClassRenderer,
   HTTPRouteRenderer,
+  GRPCRouteRenderer,
+  SimpleRouteRenderer,
   SealedSecretRenderer,
   WorkflowTemplateRenderer,
   NetworkPolicyRenderer,
@@ -121,8 +123,10 @@ import {
   SbomReportRenderer,
   KarpenterNodePoolRenderer,
   KarpenterNodeClaimRenderer,
+  KarpenterEC2NodeClassRenderer,
   KedaScaledObjectRenderer,
   KedaScaledJobRenderer,
+  KedaTriggerAuthRenderer,
 } from './renderers'
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import { PortForwardButton } from '../portforward/PortForwardButton'
@@ -1181,12 +1185,12 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
     'rollouts', 'certificates', 'workflows', 'persistentvolumes',
     'storageclasses', 'certificaterequests', 'clusterissuers', 'issuers',
     'orders', 'challenges',
-    'gateways', 'gatewayclasses', 'httproutes', 'sealedsecrets', 'workflowtemplates',
+    'gateways', 'gatewayclasses', 'httproutes', 'grpcroutes', 'tcproutes', 'tlsroutes', 'sealedsecrets', 'workflowtemplates',
     'networkpolicies', 'poddisruptionbudgets', 'serviceaccounts',
     'roles', 'clusterroles', 'rolebindings', 'clusterrolebindings',
     'events', 'gitrepositories', 'ocirepositories', 'helmrepositories',
     'kustomizations', 'helmreleases', 'alerts', 'applications',
-    'nodepools', 'nodeclaims', 'scaledobjects', 'scaledjobs',
+    'nodepools', 'nodeclaims', 'ec2nodeclasses', 'scaledobjects', 'scaledjobs',
     'triggerauthentications', 'clustertriggerauthentications',
     'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
     'rbacassessmentreports', 'clusterrbacassessmentreports',
@@ -1198,38 +1202,41 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
   return (
     <div className="p-4 space-y-4">
       {/* Kind-specific content - delegates to modular renderers */}
-      {kind === 'pods' && <PodRenderer data={data} onCopy={onCopy} copied={copied} />}
-      {['deployments', 'statefulsets', 'daemonsets'].includes(kind) && <WorkloadRenderer kind={kind} data={data} />}
+      {kind === 'pods' && <PodRenderer data={data} onCopy={onCopy} copied={copied} onNavigate={onNavigate} />}
+      {['deployments', 'statefulsets', 'daemonsets'].includes(kind) && <WorkloadRenderer kind={kind} data={data} onNavigate={onNavigate} />}
       {kind === 'replicasets' && <ReplicaSetRenderer data={data} />}
       {kind === 'services' && <ServiceRenderer data={data} onCopy={onCopy} copied={copied} />}
-      {kind === 'ingresses' && <IngressRenderer data={data} />}
+      {kind === 'ingresses' && <IngressRenderer data={data} onNavigate={onNavigate} />}
       {kind === 'configmaps' && <ConfigMapRenderer data={data} />}
       {kind === 'secrets' && <SecretRenderer data={data} certificateInfo={certificateInfo} />}
       {kind === 'jobs' && <JobRenderer data={data} />}
-      {kind === 'cronjobs' && <CronJobRenderer data={data} />}
-      {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPARenderer data={data} />}
+      {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
+      {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPARenderer data={data} onNavigate={onNavigate} />}
       {kind === 'nodes' && <NodeRenderer data={data} />}
-      {kind === 'persistentvolumeclaims' && <PVCRenderer data={data} />}
+      {kind === 'persistentvolumeclaims' && <PVCRenderer data={data} onNavigate={onNavigate} />}
       {kind === 'rollouts' && <RolloutRenderer data={data} />}
       {kind === 'certificates' && <CertificateRenderer data={data} />}
       {kind === 'workflows' && <WorkflowRenderer data={data} />}
-      {kind === 'persistentvolumes' && <PersistentVolumeRenderer data={data} />}
+      {kind === 'persistentvolumes' && <PersistentVolumeRenderer data={data} onNavigate={onNavigate} />}
       {kind === 'storageclasses' && <StorageClassRenderer data={data} />}
       {kind === 'certificaterequests' && <CertificateRequestRenderer data={data} />}
       {kind === 'clusterissuers' && <ClusterIssuerRenderer data={data} />}
       {kind === 'issuers' && <IssuerRenderer data={data} />}
       {kind === 'orders' && <OrderRenderer data={data} />}
       {kind === 'challenges' && <ChallengeRenderer data={data} />}
-      {kind === 'gateways' && <GatewayRenderer data={data} />}
+      {kind === 'gateways' && <GatewayRenderer data={data} onNavigate={onNavigate} />}
       {kind === 'gatewayclasses' && <GatewayClassRenderer data={data} />}
-      {kind === 'httproutes' && <HTTPRouteRenderer data={data} />}
+      {kind === 'httproutes' && <HTTPRouteRenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'grpcroutes' && <GRPCRouteRenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'tcproutes' && <SimpleRouteRenderer data={data} kind="TCPRoute" onNavigate={onNavigate} />}
+      {kind === 'tlsroutes' && <SimpleRouteRenderer data={data} kind="TLSRoute" onNavigate={onNavigate} />}
       {kind === 'sealedsecrets' && <SealedSecretRenderer data={data} />}
       {kind === 'workflowtemplates' && <WorkflowTemplateRenderer data={data} />}
       {kind === 'networkpolicies' && <NetworkPolicyRenderer data={data} />}
       {kind === 'poddisruptionbudgets' && <PodDisruptionBudgetRenderer data={data} />}
       {kind === 'serviceaccounts' && <ServiceAccountRenderer data={data} />}
       {(kind === 'roles' || kind === 'clusterroles') && <RoleRenderer data={data} />}
-      {(kind === 'rolebindings' || kind === 'clusterrolebindings') && <RoleBindingRenderer data={data} />}
+      {(kind === 'rolebindings' || kind === 'clusterrolebindings') && <RoleBindingRenderer data={data} onNavigate={onNavigate} />}
       {kind === 'events' && <EventRenderer data={data} onNavigate={onNavigate} />}
       {kind === 'gitrepositories' && <GitRepositoryRenderer data={data} />}
       {kind === 'ocirepositories' && <OCIRepositoryRenderer data={data} />}
@@ -1238,10 +1245,12 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
       {kind === 'helmreleases' && <FluxHelmReleaseRenderer data={data} />}
       {kind === 'alerts' && <AlertRenderer data={data} />}
       {kind === 'applications' && <ArgoApplicationRenderer data={data} />}
-      {kind === 'nodepools' && <KarpenterNodePoolRenderer data={data} />}
-      {kind === 'nodeclaims' && <KarpenterNodeClaimRenderer data={data} />}
-      {kind === 'scaledobjects' && <KedaScaledObjectRenderer data={data} />}
+      {kind === 'nodepools' && <KarpenterNodePoolRenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'nodeclaims' && <KarpenterNodeClaimRenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'ec2nodeclasses' && <KarpenterEC2NodeClassRenderer data={data} />}
+      {kind === 'scaledobjects' && <KedaScaledObjectRenderer data={data} onNavigate={onNavigate} />}
       {kind === 'scaledjobs' && <KedaScaledJobRenderer data={data} />}
+      {(kind === 'triggerauthentications' || kind === 'clustertriggerauthentications') && <KedaTriggerAuthRenderer data={data} onNavigate={onNavigate} />}
       {kind === 'vulnerabilityreports' && <VulnerabilityReportRenderer data={data} />}
       {kind === 'configauditreports' && <ConfigAuditReportRenderer data={data} />}
       {kind === 'exposedsecretreports' && <ExposedSecretReportRenderer data={data} />}
@@ -1427,6 +1436,11 @@ function getResourceStatus(kind: string, data: any): { text: string; color: stri
 
   if (k === 'nodeclaims') {
     const status = getNodeClaimStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'ec2nodeclasses') {
+    const status = getEC2NodeClassStatus(data)
     return { text: status.text, color: status.color }
   }
 

@@ -1,10 +1,11 @@
 import { Cpu, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, ResourceLink } from '../drawer-components'
 import { formatAge } from '../resource-utils'
 
 interface HPARendererProps {
   data: any
+  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
 // Extract problems from HPA conditions
@@ -51,7 +52,7 @@ function getHPAProblems(data: any): string[] {
   return problems
 }
 
-export function HPARenderer({ data }: HPARendererProps) {
+export function HPARenderer({ data, onNavigate }: HPARendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const metrics = status.currentMetrics || []
@@ -108,7 +109,17 @@ export function HPARenderer({ data }: HPARendererProps) {
 
       <Section title="Scaling" icon={Cpu}>
         <PropertyList>
-          <Property label="Target" value={`${spec.scaleTargetRef?.kind}/${spec.scaleTargetRef?.name}`} />
+          <Property label="Target" value={
+            spec.scaleTargetRef?.name ? (
+              <ResourceLink
+                name={spec.scaleTargetRef.name}
+                kind={(spec.scaleTargetRef.kind || 'Deployment').toLowerCase() + 's'}
+                namespace={data.metadata?.namespace || ''}
+                label={`${spec.scaleTargetRef.kind}/${spec.scaleTargetRef.name}`}
+                onNavigate={onNavigate}
+              />
+            ) : undefined
+          } />
           <Property label="Current" value={status.currentReplicas} />
           <Property label="Desired" value={status.desiredReplicas} />
           <Property label="Min" value={spec.minReplicas || 1} />

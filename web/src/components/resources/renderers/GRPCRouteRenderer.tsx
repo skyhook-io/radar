@@ -3,12 +3,12 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceRefBadge } from '../drawer-components'
 import type { ResourceRef } from '../../../types'
 
-interface HTTPRouteRendererProps {
+interface GRPCRouteRendererProps {
   data: any
   onNavigate?: (ref: ResourceRef) => void
 }
 
-export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) {
+export function GRPCRouteRenderer({ data, onNavigate }: GRPCRouteRendererProps) {
   const spec = data.spec || {}
   const status = data.status || {}
   const parentRefs = spec.parentRefs || []
@@ -116,7 +116,7 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
                   Rule {ruleIdx + 1}
                 </div>
 
-                {/* Matches → backends inline */}
+                {/* gRPC matches → backends */}
                 <div className="space-y-1">
                   {matches.length === 0 && backendRefs.length === 0 && (
                     <div className="text-xs text-theme-text-secondary italic">Match all</div>
@@ -148,24 +148,24 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
                   {matches.map((match: any, matchIdx: number) => (
                     <div key={matchIdx} className="text-xs text-theme-text-secondary flex flex-wrap items-center gap-1.5">
                       {match.method && (
-                        <span className="px-1.5 py-0.5 bg-blue-500/20 text-blue-400 rounded font-medium">
-                          {match.method}
-                        </span>
-                      )}
-                      {match.path && (
-                        <span>
-                          <span className="text-theme-text-tertiary">{match.path.type || 'PathPrefix'}:</span>{' '}
-                          <span className="text-theme-text-primary">{match.path.value}</span>
-                        </span>
+                        <>
+                          {match.method.type && match.method.type !== 'Exact' && (
+                            <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded text-[10px]">{match.method.type}</span>
+                          )}
+                          {match.method.service && (
+                            <span>
+                              <span className="text-theme-text-primary font-medium">{match.method.service}</span>
+                              {match.method.method && <span className="text-theme-text-tertiary">/{match.method.method}</span>}
+                            </span>
+                          )}
+                          {!match.method.service && match.method.method && (
+                            <span><span className="text-theme-text-tertiary">*/</span><span className="text-theme-text-primary">{match.method.method}</span></span>
+                          )}
+                        </>
                       )}
                       {match.headers && match.headers.length > 0 && (
                         <span className="text-theme-text-tertiary">
                           headers: [{match.headers.map((h: any) => `${h.name}=${h.value}`).join(', ')}]
-                        </span>
-                      )}
-                      {match.queryParams && match.queryParams.length > 0 && (
-                        <span className="text-theme-text-tertiary">
-                          query: [{match.queryParams.map((q: any) => `${q.name}=${q.value}`).join(', ')}]
                         </span>
                       )}
                       {/* Single backend inline on first match */}
@@ -194,46 +194,14 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
                   )}
                 </div>
 
-                {/* Filters inline */}
+                {/* Filters */}
                 {filters.length > 0 && (
                   <div className="mt-1.5">
                     <div className="text-xs text-theme-text-secondary flex flex-wrap items-center gap-1.5">
                       <Filter className="w-3 h-3 text-theme-text-tertiary" />
                       {filters.map((filter: any, filterIdx: number) => (
-                        <span key={filterIdx} className="inline-flex items-center gap-1">
-                          <span className="px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded">
-                            {filter.type}
-                          </span>
-                          {filter.type === 'RequestHeaderModifier' && filter.requestHeaderModifier && (
-                            <span className="text-theme-text-tertiary">
-                              {summarizeHeaderModifier(filter.requestHeaderModifier)}
-                            </span>
-                          )}
-                          {filter.type === 'ResponseHeaderModifier' && filter.responseHeaderModifier && (
-                            <span className="text-theme-text-tertiary">
-                              {summarizeHeaderModifier(filter.responseHeaderModifier)}
-                            </span>
-                          )}
-                          {filter.type === 'RequestRedirect' && filter.requestRedirect && (
-                            <span className="text-theme-text-tertiary">
-                              {filter.requestRedirect.scheme && `${filter.requestRedirect.scheme}://`}
-                              {filter.requestRedirect.hostname || ''}
-                              {filter.requestRedirect.port ? `:${filter.requestRedirect.port}` : ''}
-                              {filter.requestRedirect.statusCode ? ` (${filter.requestRedirect.statusCode})` : ''}
-                            </span>
-                          )}
-                          {filter.type === 'URLRewrite' && filter.urlRewrite && (
-                            <span className="text-theme-text-tertiary">
-                              {filter.urlRewrite.hostname && `host: ${filter.urlRewrite.hostname}`}
-                              {filter.urlRewrite.path?.replacePrefixMatch && ` path: ${filter.urlRewrite.path.replacePrefixMatch}`}
-                            </span>
-                          )}
-                          {filter.type === 'RequestMirror' && filter.requestMirror && (
-                            <span className="text-theme-text-tertiary">
-                              {filter.requestMirror.backendRef?.name || 'unknown'}
-                              {filter.requestMirror.backendRef?.port ? `:${filter.requestMirror.backendRef.port}` : ''}
-                            </span>
-                          )}
+                        <span key={filterIdx} className="px-1.5 py-0.5 bg-amber-500/20 text-amber-400 rounded">
+                          {filter.type}
                         </span>
                       ))}
                     </div>
@@ -292,12 +260,4 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
       <ConditionsSection conditions={firstParentConditions} />
     </>
   )
-}
-
-function summarizeHeaderModifier(modifier: any): string {
-  const parts: string[] = []
-  if (modifier.set?.length) parts.push(`set: ${modifier.set.map((h: any) => h.name).join(', ')}`)
-  if (modifier.add?.length) parts.push(`add: ${modifier.add.map((h: any) => h.name).join(', ')}`)
-  if (modifier.remove?.length) parts.push(`remove: ${modifier.remove.join(', ')}`)
-  return parts.join('; ')
 }

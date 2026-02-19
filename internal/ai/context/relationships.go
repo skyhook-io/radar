@@ -44,8 +44,12 @@ func SummarizeRelationships(rels *Relationships, statusFn StatusFunc) string {
 		fmt.Fprintf(&b, "Config: %s\n", strings.Join(names, ", "))
 	}
 
-	if rels.HPA != nil {
-		fmt.Fprintf(&b, "HPA: %s\n", rels.HPA.Name)
+	if len(rels.Scalers) > 0 {
+		names := make([]string, len(rels.Scalers))
+		for i, ref := range rels.Scalers {
+			names[i] = fmt.Sprintf("%s/%s", ref.Kind, ref.Name)
+		}
+		fmt.Fprintf(&b, "Scalers: %s\n", strings.Join(names, ", "))
 	}
 
 	if rels.ScaleTarget != nil {

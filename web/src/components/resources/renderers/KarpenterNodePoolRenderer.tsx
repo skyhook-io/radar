@@ -1,5 +1,5 @@
-import { Server, Settings, Shield, Cpu } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../drawer-components'
+import { Server, Settings, Shield, Cpu, Tag } from 'lucide-react'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../drawer-components'
 import {
   getNodePoolStatus,
   getNodePoolNodeClassRef,
@@ -10,9 +10,10 @@ import {
 
 interface KarpenterNodePoolRendererProps {
   data: any
+  onNavigate?: (ref: { kind: string; namespace: string; name: string; group?: string }) => void
 }
 
-export function KarpenterNodePoolRenderer({ data }: KarpenterNodePoolRendererProps) {
+export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoolRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const conditions = status.conditions || []
@@ -23,6 +24,9 @@ export function KarpenterNodePoolRenderer({ data }: KarpenterNodePoolRendererPro
   const requirements = getNodePoolRequirements(data)
   const weight = getNodePoolWeight(data)
   const disruption = spec.disruption || {}
+  const templateLabels = spec.template?.metadata?.labels || {}
+  const templateExpireAfter = spec.template?.spec?.expireAfter
+  const nodeClassRef = spec.template?.spec?.nodeClassRef
 
   return (
     <>
@@ -38,12 +42,24 @@ export function KarpenterNodePoolRenderer({ data }: KarpenterNodePoolRendererPro
       {/* NodeClass Reference */}
       <Section title="Node Class" icon={Server}>
         <PropertyList>
-          <Property label="Reference" value={getNodePoolNodeClassRef(data)} />
-          {spec.template?.spec?.nodeClassRef?.group && (
-            <Property label="API Group" value={spec.template.spec.nodeClassRef.group} />
+          <Property
+            label="Reference"
+            value={nodeClassRef?.name ? (
+              <ResourceLink
+                name={nodeClassRef.name}
+                kind={(nodeClassRef.kind || 'EC2NodeClass').toLowerCase() + 's'}
+                namespace=""
+                group={nodeClassRef.group}
+                label={getNodePoolNodeClassRef(data)}
+                onNavigate={onNavigate}
+              />
+            ) : getNodePoolNodeClassRef(data)}
+          />
+          {nodeClassRef?.group && (
+            <Property label="API Group" value={nodeClassRef.group} />
           )}
-          {spec.template?.spec?.nodeClassRef?.kind && (
-            <Property label="Kind" value={spec.template.spec.nodeClassRef.kind} />
+          {nodeClassRef?.kind && (
+            <Property label="Kind" value={nodeClassRef.kind} />
           )}
         </PropertyList>
       </Section>
@@ -67,8 +83,8 @@ export function KarpenterNodePoolRenderer({ data }: KarpenterNodePoolRendererPro
           {disruption.consolidateAfter && (
             <Property label="Consolidate After" value={disruption.consolidateAfter} />
           )}
-          {disruption.expireAfter && (
-            <Property label="Expire After" value={disruption.expireAfter} />
+          {(disruption.expireAfter || templateExpireAfter) && (
+            <Property label="Expire After" value={disruption.expireAfter || templateExpireAfter} />
           )}
         </PropertyList>
         {disruption.budgets && disruption.budgets.length > 0 && (
@@ -84,6 +100,22 @@ export function KarpenterNodePoolRenderer({ data }: KarpenterNodePoolRendererPro
           </div>
         )}
       </Section>
+
+      {/* Template Labels */}
+      {Object.keys(templateLabels).length > 0 && (
+        <Section title="Template Labels" icon={Tag}>
+          <div className="flex flex-wrap gap-1">
+            {Object.entries(templateLabels).map(([key, val]) => (
+              <span
+                key={key}
+                className="inline-flex items-center px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary"
+              >
+                {key}: {String(val)}
+              </span>
+            ))}
+          </div>
+        </Section>
+      )}
 
       {/* Requirements */}
       {requirements.length > 0 && (

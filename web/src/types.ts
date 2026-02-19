@@ -71,6 +71,7 @@ export type CoreNodeKind =
   | 'Job'
   | 'CronJob'
   | 'PersistentVolumeClaim'
+  | 'Node'
   | 'Namespace'
 
 // NodeKind can be a core kind or any arbitrary CRD kind string
@@ -81,6 +82,7 @@ export function displayKind(kind: string): string {
   const shortNames: Record<string, string> = {
     HorizontalPodAutoscaler: 'HPA',
     PersistentVolumeClaim: 'PVC',
+    EC2NodeClass: 'NodeClass',
   }
   return shortNames[kind] || kind
 }
@@ -309,7 +311,8 @@ export interface Relationships {
   gateways?: ResourceRef[]
   routes?: ResourceRef[]
   configRefs?: ResourceRef[]
-  hpa?: ResourceRef
+  consumers?: ResourceRef[]
+  scalers?: ResourceRef[]
   scaleTarget?: ResourceRef
   pods?: ResourceRef[]
 }

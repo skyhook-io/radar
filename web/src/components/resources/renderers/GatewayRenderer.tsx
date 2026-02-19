@@ -1,12 +1,21 @@
 import { Globe, Radio, Lock } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../drawer-components'
+
+const protocolColors: Record<string, string> = {
+  HTTP: 'bg-blue-500/20 text-blue-400',
+  HTTPS: 'bg-green-500/20 text-green-400',
+  TLS: 'bg-green-500/20 text-green-400',
+  TCP: 'bg-orange-500/20 text-orange-400',
+  UDP: 'bg-purple-500/20 text-purple-400',
+}
 
 interface GatewayRendererProps {
   data: any
+  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
-export function GatewayRenderer({ data }: GatewayRendererProps) {
+export function GatewayRenderer({ data, onNavigate }: GatewayRendererProps) {
   const spec = data.spec || {}
   const status = data.status || {}
   const conditions = status.conditions || []
@@ -52,7 +61,9 @@ export function GatewayRenderer({ data }: GatewayRendererProps) {
       {/* Status section */}
       <Section title="Gateway" icon={Globe}>
         <PropertyList>
-          <Property label="Gateway Class" value={spec.gatewayClassName} />
+          <Property label="Gateway Class" value={
+            spec.gatewayClassName ? <ResourceLink name={spec.gatewayClassName} kind="gatewayclasses" onNavigate={onNavigate} /> : undefined
+          } />
           <Property
             label="Accepted"
             value={
@@ -107,8 +118,12 @@ export function GatewayRenderer({ data }: GatewayRendererProps) {
             const listenerStatus = getListenerStatus(listener.name)
             const listenerConditions = listenerStatus?.conditions || []
             const listenerAccepted = listenerConditions.find((c: any) => c.type === 'Accepted')
+            const listenerConflicted = listenerConditions.find((c: any) => c.type === 'Conflicted')
+            const listenerResolvedRefs = listenerConditions.find((c: any) => c.type === 'ResolvedRefs')
             const isListenerAccepted = listenerAccepted?.status === 'True'
             const isListenerNotAccepted = listenerAccepted?.status === 'False'
+            const isConflicted = listenerConflicted?.status === 'True'
+            const hasUnresolvedRefs = listenerResolvedRefs?.status === 'False'
             const isHTTPS = listener.protocol === 'HTTPS' || listener.protocol === 'TLS'
 
             return (
@@ -117,29 +132,40 @@ export function GatewayRenderer({ data }: GatewayRendererProps) {
                   <div className="flex items-center gap-2">
                     {isHTTPS && <Lock className="w-3.5 h-3.5 text-green-400" />}
                     <span className="text-sm font-medium text-theme-text-primary">{listener.name}</span>
-                  </div>
-                  {listenerAccepted && (
                     <span className={clsx(
-                      'w-4 h-4 rounded-full flex items-center justify-center text-xs shrink-0',
-                      isListenerAccepted
-                        ? 'bg-green-500/20 text-green-400'
-                        : isListenerNotAccepted
-                          ? 'bg-red-500/20 text-red-400'
-                          : 'bg-gray-500/20 text-gray-400'
+                      'px-1.5 py-0.5 rounded text-[10px] font-medium',
+                      protocolColors[listener.protocol] || 'bg-gray-500/20 text-gray-400'
                     )}>
-                      {isListenerAccepted ? '\u2713' : isListenerNotAccepted ? '\u2717' : '?'}
+                      {listener.protocol}:{listener.port}
                     </span>
-                  )}
+                  </div>
+                  <div className="flex items-center gap-1">
+                    {isConflicted && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-red-500/20 text-red-400">
+                        Conflicted
+                      </span>
+                    )}
+                    {hasUnresolvedRefs && (
+                      <span className="px-1.5 py-0.5 rounded text-[10px] font-medium bg-yellow-500/20 text-yellow-400">
+                        Unresolved Refs
+                      </span>
+                    )}
+                    {listenerAccepted && (
+                      <span className={clsx(
+                        'w-4 h-4 rounded-full flex items-center justify-center text-xs shrink-0',
+                        isListenerAccepted
+                          ? 'bg-green-500/20 text-green-400'
+                          : isListenerNotAccepted
+                            ? 'bg-red-500/20 text-red-400'
+                            : 'bg-gray-500/20 text-gray-400'
+                      )}>
+                        {isListenerAccepted ? '\u2713' : isListenerNotAccepted ? '\u2717' : '?'}
+                      </span>
+                    )}
+                  </div>
                 </div>
 
                 <div className="space-y-1 text-xs text-theme-text-secondary">
-                  <div className="flex items-center gap-2">
-                    <span className="text-theme-text-tertiary">Port:</span>
-                    <span>{listener.port}</span>
-                    <span className="text-theme-text-tertiary">Protocol:</span>
-                    <span>{listener.protocol}</span>
-                  </div>
-
                   {listener.hostname && (
                     <div>
                       <span className="text-theme-text-tertiary">Hostname: </span>
@@ -154,7 +180,12 @@ export function GatewayRenderer({ data }: GatewayRendererProps) {
                       {listener.tls.certificateRefs?.length > 0 && (
                         <span className="ml-2">
                           <span className="text-theme-text-tertiary">Certs: </span>
-                          {listener.tls.certificateRefs.map((ref: any) => ref.name).join(', ')}
+                          {listener.tls.certificateRefs.map((ref: any, ci: number) => (
+                            <span key={ci}>
+                              {ci > 0 && ', '}
+                              <ResourceLink name={ref.name} kind="secrets" namespace={ref.namespace || data.metadata?.namespace || ''} onNavigate={onNavigate} />
+                            </span>
+                          ))}
                         </span>
                       )}
                     </div>

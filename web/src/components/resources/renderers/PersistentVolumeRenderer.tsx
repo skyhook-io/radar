@@ -1,9 +1,10 @@
 import { HardDrive, Link, Database, Server } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../drawer-components'
 
 interface PersistentVolumeRendererProps {
   data: any
+  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
 const accessModeShorthand: Record<string, string> = {
@@ -18,7 +19,7 @@ function formatAccessModes(modes: string[] | undefined): string | undefined {
   return modes.map(m => accessModeShorthand[m] || m).join(', ')
 }
 
-export function PersistentVolumeRenderer({ data }: PersistentVolumeRendererProps) {
+export function PersistentVolumeRenderer({ data, onNavigate }: PersistentVolumeRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const phase = status.phase
@@ -81,7 +82,9 @@ export function PersistentVolumeRenderer({ data }: PersistentVolumeRendererProps
               ) : undefined
             }
           />
-          <Property label="Storage Class" value={spec.storageClassName} />
+          <Property label="Storage Class" value={
+            spec.storageClassName ? <ResourceLink name={spec.storageClassName} kind="storageclasses" namespace="" onNavigate={onNavigate} /> : undefined
+          } />
         </PropertyList>
       </Section>
 
@@ -90,7 +93,9 @@ export function PersistentVolumeRenderer({ data }: PersistentVolumeRendererProps
         <Section title="Claim" icon={Link}>
           <PropertyList>
             <Property label="Namespace" value={claimRef.namespace} />
-            <Property label="Name" value={claimRef.name} />
+            <Property label="Name" value={
+              claimRef.name ? <ResourceLink name={claimRef.name} kind="persistentvolumeclaims" namespace={claimRef.namespace || ''} onNavigate={onNavigate} /> : undefined
+            } />
             <Property label="UID" value={claimRef.uid} />
           </PropertyList>
         </Section>

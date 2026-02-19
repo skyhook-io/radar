@@ -63,6 +63,11 @@ export function KedaScaledJobRenderer({ data }: KedaScaledJobRendererProps) {
                   {trigger.name && (
                     <span className="text-theme-text-tertiary">({trigger.name})</span>
                   )}
+                  {trigger.authenticationRef && (
+                    <span className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                      auth: {trigger.authenticationRef.name}
+                    </span>
+                  )}
                 </div>
                 {trigger.metadata && Object.keys(trigger.metadata).length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">

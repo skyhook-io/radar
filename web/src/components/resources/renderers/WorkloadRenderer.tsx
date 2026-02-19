@@ -1,13 +1,14 @@
 import { useState, useEffect } from 'react'
 import { Server, ExternalLink, Scale, Minus, Plus, Loader2 } from 'lucide-react'
 import { useNavigate } from 'react-router-dom'
-import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection, AlertBanner } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection, AlertBanner, ResourceLink } from '../drawer-components'
 import { useScaleWorkload } from '../../../api/client'
 import { useQueryClient } from '@tanstack/react-query'
 
 interface WorkloadRendererProps {
   kind: string
   data: any
+  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
 // Check if the workload is actively progressing (scaling, rolling update)
@@ -95,7 +96,7 @@ function getOwnerKind(kind: string): string {
   return kindMap[kind] || kind
 }
 
-export function WorkloadRenderer({ kind, data }: WorkloadRendererProps) {
+export function WorkloadRenderer({ kind, data, onNavigate }: WorkloadRendererProps) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const status = data.status || {}
@@ -307,7 +308,9 @@ export function WorkloadRenderer({ kind, data }: WorkloadRendererProps) {
           )}
           {isStatefulSet && (
             <>
-              <Property label="Service Name" value={spec.serviceName} />
+              <Property label="Service Name" value={
+                spec.serviceName ? <ResourceLink name={spec.serviceName} kind="services" namespace={data.metadata?.namespace || ''} onNavigate={onNavigate} /> : undefined
+              } />
               <Property label="Pod Management" value={spec.podManagementPolicy || 'OrderedReady'} />
             </>
           )}

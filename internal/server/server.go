@@ -1600,17 +1600,25 @@ func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
-	current := settings.Load()
-	if err := json.NewDecoder(r.Body).Decode(&current); err != nil {
+	var patch settings.Settings
+	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if err := settings.Save(current); err != nil {
+	result, err := settings.Update(func(current *settings.Settings) {
+		if patch.Theme != "" {
+			current.Theme = patch.Theme
+		}
+		if patch.PinnedKinds != nil {
+			current.PinnedKinds = patch.PinnedKinds
+		}
+	})
+	if err != nil {
 		log.Printf("[settings] Failed to save settings: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.writeJSON(w, current)
+	s.writeJSON(w, result)
 }
 
 // Debug handlers for event pipeline diagnostics

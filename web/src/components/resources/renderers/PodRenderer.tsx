@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink } from '../drawer-components'
 import { formatResources } from '../resource-utils'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 import { useOpenTerminal, useOpenLogs } from '../../dock'
@@ -15,6 +15,7 @@ interface PodRendererProps {
   data: any
   onCopy: CopyHandler
   copied: string | null
+  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
 // Extract problems from pod status and conditions
@@ -81,7 +82,7 @@ function getPodProblems(data: any): string[] {
   return problems
 }
 
-export function PodRenderer({ data, onCopy, copied }: PodRendererProps) {
+export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererProps) {
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
 
@@ -143,7 +144,9 @@ export function PodRenderer({ data, onCopy, copied }: PodRendererProps) {
       <Section title="Status" icon={Server}>
         <PropertyList>
           <Property label="Phase" value={data.status?.phase} />
-          <Property label="Node" value={data.spec?.nodeName} copyable onCopy={onCopy} copied={copied} />
+          <Property label="Node" value={
+            data.spec?.nodeName ? <ResourceLink name={data.spec.nodeName} kind="nodes" onNavigate={onNavigate} /> : undefined
+          } copyable onCopy={onCopy} copied={copied} />
           <Property label="Pod IP" value={data.status?.podIP} copyable onCopy={onCopy} copied={copied} />
           <Property label="Host IP" value={data.status?.hostIP} />
           <Property
@@ -163,7 +166,9 @@ export function PodRenderer({ data, onCopy, copied }: PodRendererProps) {
             }
             value={data.status?.qosClass}
           />
-          <Property label="Service Account" value={data.spec?.serviceAccountName} />
+          <Property label="Service Account" value={
+            data.spec?.serviceAccountName ? <ResourceLink name={data.spec.serviceAccountName} kind="serviceaccounts" namespace={data.metadata?.namespace || ''} onNavigate={onNavigate} /> : undefined
+          } />
         </PropertyList>
       </Section>
 

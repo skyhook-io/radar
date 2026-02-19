@@ -4,6 +4,18 @@ import type { StatusBadge } from './resource-utils'
 import { healthColors, formatAge } from './resource-utils'
 
 // ============================================================================
+// SHARED HELPERS
+// ============================================================================
+
+function extractTriggerTypes(resource: any): string {
+  const triggers = resource.spec?.triggers || []
+  if (triggers.length === 0) return '-'
+  const types = [...new Set(triggers.map((t: any) => t.type).filter(Boolean))] as string[]
+  if (types.length > 3) return `${types.slice(0, 3).join(', ')} +${types.length - 3}`
+  return types.join(', ') || '-'
+}
+
+// ============================================================================
 // KEDA SCALEDOBJECT UTILITIES
 // ============================================================================
 
@@ -71,12 +83,17 @@ export function getScaledObjectReplicas(resource: any): string {
   return parts.join(' ')
 }
 
-export function getScaledObjectTriggers(resource: any): Array<{ type: string; name?: string; metadata?: Record<string, string> }> {
+export function getScaledObjectTriggers(resource: any): Array<{ type: string; name?: string; metadata?: Record<string, string>; authenticationRef?: { name: string; kind?: string } }> {
   return (resource.spec?.triggers || []).map((t: any) => ({
     type: t.type,
     name: t.name,
     metadata: t.metadata,
+    ...(t.authenticationRef ? { authenticationRef: { name: t.authenticationRef.name, kind: t.authenticationRef.kind } } : {}),
   }))
+}
+
+export function getScaledObjectTriggerTypes(resource: any): string {
+  return extractTriggerTypes(resource)
 }
 
 export function getScaledObjectTriggerCount(resource: any): number {
@@ -140,10 +157,47 @@ export function getScaledJobTriggerCount(resource: any): number {
   return (resource.spec?.triggers || []).length
 }
 
-export function getScaledJobTriggers(resource: any): Array<{ type: string; name?: string; metadata?: Record<string, string> }> {
+export function getScaledJobTriggers(resource: any): Array<{ type: string; name?: string; metadata?: Record<string, string>; authenticationRef?: { name: string; kind?: string } }> {
   return (resource.spec?.triggers || []).map((t: any) => ({
     type: t.type,
     name: t.name,
     metadata: t.metadata,
+    ...(t.authenticationRef ? { authenticationRef: { name: t.authenticationRef.name, kind: t.authenticationRef.kind } } : {}),
+  }))
+}
+
+export function getScaledJobTriggerTypes(resource: any): string {
+  return extractTriggerTypes(resource)
+}
+
+// ============================================================================
+// KEDA TRIGGERAUTHENTICATION UTILITIES
+// ============================================================================
+
+export function getTriggerAuthSecretRefCount(resource: any): number {
+  return (resource.spec?.secretTargetRef || []).length
+}
+
+export function getTriggerAuthEnvCount(resource: any): number {
+  return (resource.spec?.env || []).length
+}
+
+export function getTriggerAuthHasVault(resource: any): boolean {
+  return !!resource.spec?.hashiCorpVault
+}
+
+export function getTriggerAuthSecretRefs(resource: any): Array<{ parameter: string; name: string; key: string }> {
+  return (resource.spec?.secretTargetRef || []).map((r: any) => ({
+    parameter: r.parameter || '',
+    name: r.name || '',
+    key: r.key || '',
+  }))
+}
+
+export function getTriggerAuthEnvVars(resource: any): Array<{ parameter: string; name: string; containerName?: string }> {
+  return (resource.spec?.env || []).map((e: any) => ({
+    parameter: e.parameter || '',
+    name: e.name || '',
+    containerName: e.containerName,
   }))
 }

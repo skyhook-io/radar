@@ -30,8 +30,10 @@ const (
 	KindHelmRelease   NodeKind = "HelmRelease"   // FluxCD HelmRelease (Flux, not native Helm)
 	KindGitRepository NodeKind = "GitRepository" // FluxCD GitRepository
 	KindCertificate   NodeKind = "Certificate"   // cert-manager Certificate
+	KindNode          NodeKind = "Node"          // Kubernetes Node (only shown when Karpenter-managed)
 	KindNodePool      NodeKind = "NodePool"      // Karpenter NodePool
 	KindNodeClaim     NodeKind = "NodeClaim"     // Karpenter NodeClaim
+	KindNodeClass     NodeKind = "NodeClass"     // Karpenter NodeClass (EC2NodeClass, AKSNodeClass, etc.)
 	KindScaledObject  NodeKind = "ScaledObject"  // KEDA ScaledObject
 	KindScaledJob     NodeKind = "ScaledJob"     // KEDA ScaledJob
 	KindGatewayClass  NodeKind = "GatewayClass"  // Gateway API GatewayClass
@@ -182,8 +184,9 @@ type Relationships struct {
 	Gateways    []ResourceRef `json:"gateways,omitempty"`    // Gateways routing to this (via routes)
 	Routes      []ResourceRef `json:"routes,omitempty"`      // Routes attached to this Gateway
 	ConfigRefs  []ResourceRef `json:"configRefs,omitempty"`  // ConfigMaps/Secrets used by this
-	HPA         *ResourceRef  `json:"hpa,omitempty"`         // HPA scaling this
-	ScaleTarget *ResourceRef  `json:"scaleTarget,omitempty"` // For HPA: what it scales
+	Consumers   []ResourceRef `json:"consumers,omitempty"`   // For ConfigMap/Secret: workloads that reference this
+	Scalers     []ResourceRef `json:"scalers,omitempty"`     // HPA/ScaledObject/ScaledJob scaling this
+	ScaleTarget *ResourceRef  `json:"scaleTarget,omitempty"` // For HPA/ScaledObject: what it scales
 	Pods        []ResourceRef `json:"pods,omitempty"`        // For Service: pods it routes to
 }
 

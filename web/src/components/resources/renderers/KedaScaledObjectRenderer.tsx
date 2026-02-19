@@ -1,5 +1,5 @@
 import { Cpu } from 'lucide-react'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../drawer-components'
 import {
   getScaledObjectStatus,
   getScaledObjectTarget,
@@ -13,14 +13,16 @@ import {
 
 interface KedaScaledObjectRendererProps {
   data: any
+  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
-export function KedaScaledObjectRenderer({ data }: KedaScaledObjectRendererProps) {
+export function KedaScaledObjectRenderer({ data, onNavigate }: KedaScaledObjectRendererProps) {
   const status = data.status || {}
   const conditions = status.conditions || []
 
   const soStatus = getScaledObjectStatus(data)
   const triggers = getScaledObjectTriggers(data)
+  const fallback = data.spec?.fallback
 
   // Problem detection
   const isPaused = soStatus.text === 'Paused'
@@ -58,13 +60,42 @@ export function KedaScaledObjectRenderer({ data }: KedaScaledObjectRendererProps
       {/* Scaling section */}
       <Section title="Scaling" icon={Cpu}>
         <PropertyList>
-          <Property label="Target" value={getScaledObjectTarget(data)} />
+          <Property label="Target" value={(() => {
+            const target = data.spec?.scaleTargetRef
+            if (target?.name) {
+              return (
+                <ResourceLink
+                  name={target.name}
+                  kind={(target.kind || 'Deployment').toLowerCase() + 's'}
+                  namespace={data.metadata?.namespace || ''}
+                  label={getScaledObjectTarget(data)}
+                  onNavigate={onNavigate}
+                />
+              )
+            }
+            return getScaledObjectTarget(data)
+          })()} />
           <Property label="Replicas" value={getScaledObjectReplicas(data)} />
           <Property label="Polling Interval" value={`${getScaledObjectPollingInterval(data)}s`} />
           <Property label="Cooldown Period" value={`${getScaledObjectCooldownPeriod(data)}s`} />
-          <Property label="Generated HPA" value={getScaledObjectHpaName(data)} />
+          <Property label="Generated HPA" value={(() => {
+            const hpaName = getScaledObjectHpaName(data)
+            if (hpaName && hpaName !== '-') {
+              return <ResourceLink name={hpaName} kind="horizontalpodautoscalers" namespace={data.metadata?.namespace || ''} onNavigate={onNavigate} />
+            }
+            return hpaName
+          })()} />
           <Property label="Last Active" value={getScaledObjectLastActiveTime(data)} />
         </PropertyList>
+        {fallback && (
+          <div className="mt-2 pt-2 border-t border-theme-border">
+            <div className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-1">Fallback</div>
+            <PropertyList>
+              <Property label="Failure Threshold" value={String(fallback.failureThreshold ?? '-')} />
+              <Property label="Replicas" value={String(fallback.replicas ?? '-')} />
+            </PropertyList>
+          </div>
+        )}
       </Section>
 
       {/* Triggers section */}
@@ -77,6 +108,11 @@ export function KedaScaledObjectRenderer({ data }: KedaScaledObjectRendererProps
                   <span className="text-theme-text-primary font-medium">{trigger.type}</span>
                   {trigger.name && (
                     <span className="text-theme-text-tertiary">({trigger.name})</span>
+                  )}
+                  {trigger.authenticationRef && (
+                    <span className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                      auth: {trigger.authenticationRef.name}
+                    </span>
                   )}
                 </div>
                 {trigger.metadata && Object.keys(trigger.metadata).length > 0 && (

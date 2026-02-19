@@ -868,6 +868,9 @@ func WarmupCommonCRDs() {
 		"ClusterInfraAssessmentReport", // Trivy Operator
 		"NodePool",                     // Karpenter
 		"NodeClaim",                    // Karpenter
+		"EC2NodeClass",                 // Karpenter (AWS)
+		"AKSNodeClass",                 // Karpenter (Azure)
+		"GCPNodeClass",                 // Karpenter (GCP)
 		"ScaledObject",                 // KEDA
 		"ScaledJob",                    // KEDA
 		"TriggerAuthentication",        // KEDA

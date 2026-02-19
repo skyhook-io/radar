@@ -87,11 +87,11 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 					rel.Pods = append(rel.Pods, *ref)
 				}
 			case EdgeUses:
-				// HPA uses/scales a workload
+				// HPA/ScaledObject/ScaledJob scales a workload
 				rel.ScaleTarget = ref
 			case EdgeConfigures:
-				// ConfigMap/Secret configures a workload - this is outgoing from config
-				// Skip - we handle this on the target side
+				// ConfigMap/Secret is used by a workload (outgoing from config)
+				rel.Consumers = append(rel.Consumers, *ref)
 			}
 		}
 
@@ -122,8 +122,8 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 					rel.Services = append(rel.Services, *ref)
 				}
 			case EdgeUses:
-				// An HPA scales this resource
-				rel.HPA = ref
+				// An HPA/ScaledObject/ScaledJob scales this resource
+				rel.Scalers = append(rel.Scalers, *ref)
 			case EdgeConfigures:
 				// A ConfigMap/Secret is used by this resource
 				rel.ConfigRefs = append(rel.ConfigRefs, *ref)
@@ -134,7 +134,7 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 	// Return nil if no relationships found
 	if rel.Owner == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
 		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
-		len(rel.ConfigRefs) == 0 && rel.HPA == nil &&
+		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
 		rel.ScaleTarget == nil && len(rel.Pods) == 0 {
 		return nil
 	}
@@ -170,12 +170,22 @@ func buildNodeID(kind, namespace, name string) string {
 		"jobs":                    "job",
 		"cronjobs":                "cronjob",
 		"persistentvolumeclaims":  "persistentvolumeclaim",
-		"certificates":  "certificate",
-		"nodepools":     "nodepool",
-		"nodeclaims":    "nodeclaim",
-		"scaledobjects": "scaledobject",
-		"scaledjobs":    "scaledjob",
-		"gatewayclasses": "gatewayclass",
+		"applications":    "application",
+		"kustomizations":  "kustomization",
+		"helmreleases":    "helmrelease",
+		"gitrepositories": "gitrepository",
+		"certificates":    "certificate",
+		"issuers":         "issuer",
+		"clusterissuers":  "clusterissuer",
+		"nodepools":       "nodepool",
+		"nodeclaims":      "nodeclaim",
+		"nodeclasses":     "nodeclass",
+		"ec2nodeclasses":  "nodeclass",
+		"aksnodeclasses":  "nodeclass",
+		"gcpnodeclasses":  "nodeclass",
+		"scaledobjects":   "scaledobject",
+		"scaledjobs":      "scaledjob",
+		"gatewayclasses":  "gatewayclass",
 	}
 
 	if singular, ok := kindMap[k]; ok {
@@ -241,9 +251,17 @@ func normalizeKind(kind string) string {
 		"cronjob":                  "CronJob",
 		"persistentvolumeclaim":    "PersistentVolumeClaim",
 		"podgroup":                 "PodGroup",
-		"certificate":             "Certificate",
+		"application":    "Application",
+		"kustomization":  "Kustomization",
+		"helmrelease":    "HelmRelease",
+		"gitrepository":  "GitRepository",
+		"certificate":    "Certificate",
+		"issuer":         "Issuer",
+		"clusterissuer":  "ClusterIssuer",
+		"node":         "Node",
 		"nodepool":     "NodePool",
 		"nodeclaim":    "NodeClaim",
+		"nodeclass":    "NodeClass",
 		"scaledobject": "ScaledObject",
 		"scaledjob":    "ScaledJob",
 		"gatewayclass": "GatewayClass",

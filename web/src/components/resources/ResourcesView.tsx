@@ -95,6 +95,7 @@ import {
   getRouteParents,
   getRouteHostnames,
   getRouteBackends,
+  getRouteRulesCount,
   getSealedSecretStatus,
   getSealedSecretKeyCount,
   getWorkflowTemplateCount,
@@ -124,8 +125,8 @@ import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, Kustomization
 import { ArgoApplicationCell, ArgoApplicationSetCell, ArgoAppProjectCell } from './renderers/argo-cells'
 import { VulnerabilityReportCell, ConfigAuditReportCell, ExposedSecretReportCell, RbacAssessmentReportCell, ClusterComplianceReportCell, SbomReportCell } from './renderers/trivy-cells'
 import { CertificateCell, CertificateRequestCell, ClusterIssuerCell, IssuerCell, OrderCell, ChallengeCell } from './renderers/certmanager-cells'
-import { NodePoolCell, NodeClaimCell } from './renderers/karpenter-cells'
-import { ScaledObjectCell, ScaledJobCell } from './renderers/keda-cells'
+import { NodePoolCell, NodeClaimCell, EC2NodeClassCell } from './renderers/karpenter-cells'
+import { ScaledObjectCell, ScaledJobCell, TriggerAuthenticationCell, ClusterTriggerAuthenticationCell } from './renderers/keda-cells'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 
 // Pod problem filter options (special multi-select, not a single column value)
@@ -467,6 +468,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'hostnames', label: 'Hostnames', width: 'w-48' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
+    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-20' },
   ],
   gatewayclasses: [
@@ -493,13 +495,21 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'nodeName', label: 'Node', width: 'w-40', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-20' },
   ],
+  ec2nodeclasses: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'ami', label: 'AMI', width: 'w-36', tooltip: 'AMI selector alias or ID' },
+    { key: 'role', label: 'IAM Role', width: 'w-48' },
+    { key: 'volumeSize', label: 'Volume', width: 'w-24', tooltip: 'Root volume size' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
   scaledobjects: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'target', label: 'Target', width: 'w-48', tooltip: 'Scale target workload' },
     { key: 'replicas', label: 'Replicas', width: 'w-28', tooltip: 'Min-Max replica range' },
-    { key: 'triggers', label: 'Triggers', width: 'w-20' },
+    { key: 'triggerTypes', label: 'Trigger Types', width: 'w-40' },
     { key: 'age', label: 'Age', width: 'w-20' },
   ],
   scaledjobs: [
@@ -508,7 +518,22 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'target', label: 'Job Target', width: 'w-48' },
     { key: 'strategy', label: 'Strategy', width: 'w-28' },
-    { key: 'triggers', label: 'Triggers', width: 'w-20' },
+    { key: 'triggerTypes', label: 'Trigger Types', width: 'w-40' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  triggerauthentications: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'secretTargetRef', label: 'Secret Refs', width: 'w-20' },
+    { key: 'env', label: 'Env Vars', width: 'w-20' },
+    { key: 'hashiCorpVault', label: 'Vault', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  clustertriggerauthentications: [
+    { key: 'name', label: 'Name' },
+    { key: 'secretTargetRef', label: 'Secret Refs', width: 'w-20' },
+    { key: 'env', label: 'Env Vars', width: 'w-20' },
+    { key: 'hashiCorpVault', label: 'Vault', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-20' },
   ],
   grpcroutes: [
@@ -518,6 +543,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'hostnames', label: 'Hostnames', width: 'w-48' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
+    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-20' },
   ],
   tcproutes: [
@@ -526,6 +552,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
+    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-20' },
   ],
   tlsroutes: [
@@ -535,6 +562,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'hostnames', label: 'Hostnames', width: 'w-48', tooltip: 'SNI hostnames for TLS routing' },
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
+    { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-20' },
   ],
   sealedsecrets: [
@@ -2786,11 +2814,17 @@ function CellContent({ resource, kind, column }: CellContentProps) {
       return <NodePoolCell resource={resource} column={column} />
     case 'nodeclaims':
       return <NodeClaimCell resource={resource} column={column} />
+    case 'ec2nodeclasses':
+      return <EC2NodeClassCell resource={resource} column={column} />
     // KEDA
     case 'scaledobjects':
       return <ScaledObjectCell resource={resource} column={column} />
     case 'scaledjobs':
       return <ScaledJobCell resource={resource} column={column} />
+    case 'triggerauthentications':
+      return <TriggerAuthenticationCell resource={resource} column={column} />
+    case 'clustertriggerauthentications':
+      return <ClusterTriggerAuthenticationCell resource={resource} column={column} />
     // ArgoCD GitOps resources
     case 'applications':
       return <ArgoApplicationCell resource={resource} column={column} />
@@ -3695,6 +3729,8 @@ function RouteCell({ resource, column }: { resource: any; column: string }) {
         </Tooltip>
       )
     }
+    case 'rules':
+      return <span className="text-sm text-theme-text-secondary">{getRouteRulesCount(resource)}</span>
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
   }

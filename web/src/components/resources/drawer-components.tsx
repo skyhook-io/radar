@@ -365,6 +365,16 @@ interface RelatedResourcesSectionProps {
   onNavigate?: (ref: ResourceRef) => void
 }
 
+function dedupeRefs(refs: ResourceRef[]): ResourceRef[] {
+  const seen = new Set<string>()
+  return refs.filter(ref => {
+    const key = `${ref.kind}/${ref.namespace}/${ref.name}`
+    if (seen.has(key)) return false
+    seen.add(key)
+    return true
+  })
+}
+
 export function RelatedResourcesSection({ relationships, onNavigate }: RelatedResourcesSectionProps) {
   if (!relationships) return null
 
@@ -377,7 +387,8 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
     (relationships.routes && relationships.routes.length > 0) ||
     (relationships.pods && relationships.pods.length > 0) ||
     (relationships.configRefs && relationships.configRefs.length > 0) ||
-    relationships.hpa ||
+    (relationships.consumers && relationships.consumers.length > 0) ||
+    (relationships.scalers && relationships.scalers.length > 0) ||
     relationships.scaleTarget
 
   if (!hasRelationships) return null
@@ -385,52 +396,36 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
   return (
     <Section title="Related Resources" icon={Link} defaultExpanded>
       <div className="space-y-3">
-        {/* Owner (parent resource) */}
         {relationships.owner && (
           <RelationshipGroup label="Owner" refs={[relationships.owner]} onNavigate={onNavigate} />
         )}
-
-        {/* Children (managed resources) */}
         {relationships.children && relationships.children.length > 0 && (
-          <RelationshipGroup label="Children" refs={relationships.children} onNavigate={onNavigate} />
+          <RelationshipGroup label="Children" refs={dedupeRefs(relationships.children)} onNavigate={onNavigate} />
         )}
-
-        {/* Services exposing this resource */}
         {relationships.services && relationships.services.length > 0 && (
-          <RelationshipGroup label="Services" refs={relationships.services} onNavigate={onNavigate} />
+          <RelationshipGroup label="Services" refs={dedupeRefs(relationships.services)} onNavigate={onNavigate} />
         )}
-
-        {/* Ingresses routing to this resource */}
         {relationships.ingresses && relationships.ingresses.length > 0 && (
-          <RelationshipGroup label="Ingresses" refs={relationships.ingresses} onNavigate={onNavigate} />
+          <RelationshipGroup label="Ingresses" refs={dedupeRefs(relationships.ingresses)} onNavigate={onNavigate} />
         )}
-
-        {/* Gateways routing to this resource */}
         {relationships.gateways && relationships.gateways.length > 0 && (
-          <RelationshipGroup label="Gateways" refs={relationships.gateways} onNavigate={onNavigate} />
+          <RelationshipGroup label="Gateways" refs={dedupeRefs(relationships.gateways)} onNavigate={onNavigate} />
         )}
-
-        {/* Routes attached to this Gateway */}
         {relationships.routes && relationships.routes.length > 0 && (
-          <RelationshipGroup label="Routes" refs={relationships.routes} onNavigate={onNavigate} />
+          <RelationshipGroup label="Routes" refs={dedupeRefs(relationships.routes)} onNavigate={onNavigate} />
         )}
-
-        {/* Pods selected/exposed by this Service */}
         {relationships.pods && relationships.pods.length > 0 && (
-          <RelationshipGroup label="Pods" refs={relationships.pods} onNavigate={onNavigate} />
+          <RelationshipGroup label="Pods" refs={dedupeRefs(relationships.pods)} onNavigate={onNavigate} />
         )}
-
-        {/* ConfigMaps/Secrets used */}
         {relationships.configRefs && relationships.configRefs.length > 0 && (
-          <RelationshipGroup label="Configuration" refs={relationships.configRefs} onNavigate={onNavigate} />
+          <RelationshipGroup label="Configuration" refs={dedupeRefs(relationships.configRefs)} onNavigate={onNavigate} />
         )}
-
-        {/* HPA scaling this workload */}
-        {relationships.hpa && (
-          <RelationshipGroup label="Autoscaler" refs={[relationships.hpa]} onNavigate={onNavigate} />
+        {relationships.consumers && relationships.consumers.length > 0 && (
+          <RelationshipGroup label="Used By" refs={dedupeRefs(relationships.consumers)} onNavigate={onNavigate} />
         )}
-
-        {/* What this HPA scales */}
+        {relationships.scalers && relationships.scalers.length > 0 && (
+          <RelationshipGroup label="Autoscaler" refs={dedupeRefs(relationships.scalers)} onNavigate={onNavigate} />
+        )}
         {relationships.scaleTarget && (
           <RelationshipGroup label="Scale Target" refs={[relationships.scaleTarget]} onNavigate={onNavigate} />
         )}
@@ -494,6 +489,26 @@ export function ResourceRefBadge({ resourceRef, onClick }: ResourceRefBadgeProps
       <span className="opacity-60">{kindName}/</span>
       {resourceRef.name}
     </span>
+  )
+}
+
+/** Inline text link for navigating to a resource. Renders as plain text when onNavigate is absent. */
+export function ResourceLink({ name, kind, namespace = '', group, label, onNavigate }: {
+  name: string
+  kind: string
+  namespace?: string
+  group?: string
+  label?: React.ReactNode
+  onNavigate?: ((ref: { kind: string; namespace: string; name: string; group?: string }) => void) | null
+}) {
+  if (!onNavigate) return <>{label || name}</>
+  return (
+    <button
+      onClick={() => onNavigate({ kind, namespace, name, group })}
+      className="text-blue-400 hover:text-blue-300 hover:underline cursor-pointer"
+    >
+      {label || name}
+    </button>
   )
 }
 

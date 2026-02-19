@@ -1,9 +1,10 @@
 import { HardDrive } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../drawer-components'
 
 interface PVCRendererProps {
   data: any
+  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
 const accessModeShorthand: Record<string, string> = {
@@ -18,7 +19,7 @@ function formatAccessModes(modes: string[] | undefined): string | undefined {
   return modes.map(m => accessModeShorthand[m] || m).join(', ')
 }
 
-export function PVCRenderer({ data }: PVCRendererProps) {
+export function PVCRenderer({ data, onNavigate }: PVCRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const annotations = data.metadata?.annotations || {}
@@ -70,10 +71,14 @@ export function PVCRenderer({ data }: PVCRendererProps) {
           />
           <Property label="Capacity" value={status.capacity?.storage} />
           <Property label="Requested" value={spec.resources?.requests?.storage} />
-          <Property label="Storage Class" value={spec.storageClassName} />
+          <Property label="Storage Class" value={
+            spec.storageClassName ? <ResourceLink name={spec.storageClassName} kind="storageclasses" namespace="" onNavigate={onNavigate} /> : undefined
+          } />
           <Property label="Access Modes" value={formatAccessModes(spec.accessModes)} />
           <Property label="Volume Mode" value={spec.volumeMode} />
-          <Property label="Volume Name" value={spec.volumeName} />
+          <Property label="Volume Name" value={
+            spec.volumeName ? <ResourceLink name={spec.volumeName} kind="persistentvolumes" namespace="" onNavigate={onNavigate} /> : undefined
+          } />
         </PropertyList>
       </Section>
 

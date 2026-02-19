@@ -11,6 +11,10 @@ import {
   getNodeClaimInstanceType,
   getNodeClaimNodeName,
   getNodeClaimNodePoolRef,
+  getEC2NodeClassStatus,
+  getEC2NodeClassAMI,
+  getEC2NodeClassRole,
+  getEC2NodeClassVolumeSize,
 } from '../resource-utils-karpenter'
 
 export function NodePoolCell({ resource, column }: { resource: any; column: string }) {
@@ -65,6 +69,37 @@ export function NodeClaimCell({ resource, column }: { resource: any; column: str
     case 'nodePool': {
       const pool = getNodeClaimNodePoolRef(resource)
       return <span className="text-sm text-theme-text-secondary">{pool}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+export function EC2NodeClassCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'status': {
+      const status = getEC2NodeClassStatus(resource)
+      return (
+        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+          {status.text}
+        </span>
+      )
+    }
+    case 'ami': {
+      const ami = getEC2NodeClassAMI(resource)
+      return <span className="text-sm text-theme-text-secondary">{ami}</span>
+    }
+    case 'role': {
+      const role = getEC2NodeClassRole(resource)
+      return (
+        <Tooltip content={role}>
+          <span className="text-sm text-theme-text-secondary truncate block">{role}</span>
+        </Tooltip>
+      )
+    }
+    case 'volumeSize': {
+      const size = getEC2NodeClassVolumeSize(resource)
+      return <span className="text-sm text-theme-text-secondary">{size}</span>
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>

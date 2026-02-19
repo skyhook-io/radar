@@ -1,11 +1,12 @@
 import { Globe, Shield, Clock } from 'lucide-react'
-import { Section, PropertyList, Property, AlertBanner } from '../drawer-components'
+import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../drawer-components'
 
 interface IngressRendererProps {
   data: any
+  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
 }
 
-export function IngressRenderer({ data }: IngressRendererProps) {
+export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
   const spec = data.spec || {}
   const rules = spec.rules || []
   const tls = spec.tls || []
@@ -65,9 +66,17 @@ export function IngressRenderer({ data }: IngressRendererProps) {
                     <span className="text-theme-text-tertiary">{path.pathType || 'Prefix'}:</span>
                     <span>{path.path || '/'}</span>
                     <span className="text-theme-text-tertiary">→</span>
-                    <span className="text-blue-400">
-                      {path.backend?.service?.name}:{path.backend?.service?.port?.number || path.backend?.service?.port?.name}
-                    </span>
+                    {path.backend?.service?.name ? (
+                      <ResourceLink
+                        name={path.backend.service.name}
+                        kind="services"
+                        namespace={data.metadata?.namespace || ''}
+                        label={<span className="text-blue-400">{path.backend.service.name}:{path.backend.service.port?.number || path.backend.service.port?.name}</span>}
+                        onNavigate={onNavigate}
+                      />
+                    ) : (
+                      <span className="text-blue-400">-</span>
+                    )}
                   </div>
                 ))}
               </div>
@@ -81,7 +90,9 @@ export function IngressRenderer({ data }: IngressRendererProps) {
           <div className="space-y-2">
             {tls.map((t: any) => (
               <div key={t.secretName} className="text-sm">
-                <div className="text-theme-text-secondary">Secret: <span className="text-theme-text-primary">{t.secretName}</span></div>
+                <div className="text-theme-text-secondary">Secret: {t.secretName ? (
+                  <ResourceLink name={t.secretName} kind="secrets" namespace={data.metadata?.namespace || ''} onNavigate={onNavigate} />
+                ) : '-'}</div>
                 <div className="text-xs text-theme-text-tertiary">Hosts: {t.hosts?.join(', ') || '*'}</div>
               </div>
             ))}

@@ -5,6 +5,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"sync"
 )
 
 // PinnedKind is a resource kind the user has pinned to the sidebar.
@@ -19,6 +20,10 @@ type Settings struct {
 	Theme       string       `json:"theme,omitempty"`
 	PinnedKinds []PinnedKind `json:"pinnedKinds,omitempty"`
 }
+
+// mu serializes Load-Decode-Save cycles to prevent concurrent PUTs from
+// overwriting each other's changes.
+var mu sync.Mutex
 
 // Path returns the settings file path (~/.radar/settings.json).
 func Path() string {
@@ -68,4 +73,14 @@ func Save(s Settings) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// Update atomically loads, applies a mutation, and saves settings.
+// This prevents concurrent PUTs from overwriting each other's changes.
+func Update(mutate func(*Settings)) (Settings, error) {
+	mu.Lock()
+	defer mu.Unlock()
+	s := Load()
+	mutate(&s)
+	return s, Save(s)
 }

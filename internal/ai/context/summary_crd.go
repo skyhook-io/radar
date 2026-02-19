@@ -29,12 +29,20 @@ func summarizeUnstructured(obj *unstructured.Unstructured) *ResourceSummary {
 		return summarizeKarpenterNodePool(obj)
 	case group == "karpenter.sh" && kind == "NodeClaim":
 		return summarizeKarpenterNodeClaim(obj)
+	case strings.Contains(group, "karpenter") && strings.HasSuffix(kind, "NodeClass"):
+		return summarizeKarpenterNodeClass(obj)
 	case group == "keda.sh" && kind == "ScaledObject":
 		return summarizeKedaScaledObject(obj)
 	case group == "keda.sh" && kind == "ScaledJob":
 		return summarizeKedaScaledJob(obj)
+	case group == "keda.sh" && kind == "TriggerAuthentication":
+		return summarizeKedaTriggerAuthentication(obj)
+	case group == "keda.sh" && kind == "ClusterTriggerAuthentication":
+		return summarizeKedaTriggerAuthentication(obj)
 	case group == "gateway.networking.k8s.io" && kind == "GatewayClass":
 		return summarizeGatewayClass(obj)
+	case group == "gateway.networking.k8s.io" && (kind == "HTTPRoute" || kind == "GRPCRoute" || kind == "TCPRoute" || kind == "TLSRoute"):
+		return summarizeGatewayRoute(obj)
 	}
 
 	// Generic fallback
@@ -346,16 +354,10 @@ func summarizeKedaScaledObject(obj *unstructured.Unstructured) *ResourceSummary 
 		s.MaxReplicas = int32(maxReplicas)
 	}
 
-	// Trigger count
+	// Trigger types
 	triggers, found, _ := unstructured.NestedSlice(obj.Object, "spec", "triggers")
-	if found {
-		s.Ready = fmt.Sprintf("%d triggers", len(triggers))
-	}
-
-	// Last active time
-	lastActive, _, _ := unstructured.NestedString(obj.Object, "status", "lastActiveTime")
-	if lastActive != "" {
-		s.Version = lastActive // Reuse Version field for last active time
+	if found && len(triggers) > 0 {
+		s.Ready = fmt.Sprintf("triggers: %s", extractTriggerTypes(triggers))
 	}
 
 	return s
@@ -371,16 +373,134 @@ func summarizeKedaScaledJob(obj *unstructured.Unstructured) *ResourceSummary {
 
 	s.Status = extractReadyCondition(obj)
 
+	// Job target
+	targetName, _, _ := unstructured.NestedString(obj.Object, "spec", "jobTargetRef", "name")
+	if targetName != "" {
+		s.Target = targetName
+	}
+
+	// Max replicas
+	maxReplicas, found, _ := unstructured.NestedInt64(obj.Object, "spec", "maxReplicaCount")
+	if found {
+		s.MaxReplicas = int32(maxReplicas)
+	}
+
 	// Scaling strategy
 	strategy, _, _ := unstructured.NestedString(obj.Object, "spec", "scalingStrategy", "strategy")
 	if strategy != "" {
 		s.Strategy = strategy
 	}
 
-	// Trigger count
-	triggers, found, _ := unstructured.NestedSlice(obj.Object, "spec", "triggers")
+	// Trigger types
+	triggers, tfound, _ := unstructured.NestedSlice(obj.Object, "spec", "triggers")
+	if tfound && len(triggers) > 0 {
+		s.Ready = fmt.Sprintf("triggers: %s", extractTriggerTypes(triggers))
+	}
+
+	return s
+}
+
+func summarizeKedaTriggerAuthentication(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind:      obj.GetKind(),
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
+		Age:       age(obj.GetCreationTimestamp().Time),
+	}
+
+	s.Status = extractReadyCondition(obj)
+
+	var sources []string
+	secretRefs, found, _ := unstructured.NestedSlice(obj.Object, "spec", "secretTargetRef")
+	if found && len(secretRefs) > 0 {
+		sources = append(sources, fmt.Sprintf("%d secrets", len(secretRefs)))
+	}
+	envVars, found, _ := unstructured.NestedSlice(obj.Object, "spec", "env")
+	if found && len(envVars) > 0 {
+		sources = append(sources, fmt.Sprintf("%d env", len(envVars)))
+	}
+	_, found, _ = unstructured.NestedMap(obj.Object, "spec", "hashiCorpVault")
 	if found {
-		s.Ready = fmt.Sprintf("%d triggers", len(triggers))
+		sources = append(sources, "vault")
+	}
+	_, found, _ = unstructured.NestedMap(obj.Object, "spec", "azureKeyVault")
+	if found {
+		sources = append(sources, "azure-kv")
+	}
+	_, found, _ = unstructured.NestedMap(obj.Object, "spec", "awsSecretManager")
+	if found {
+		sources = append(sources, "aws-sm")
+	}
+
+	if len(sources) > 0 {
+		s.Ready = strings.Join(sources, ", ")
+	}
+
+	return s
+}
+
+// extractTriggerTypes returns a deduplicated comma-separated list of trigger types from a triggers slice.
+func extractTriggerTypes(triggers []any) string {
+	seen := map[string]bool{}
+	var types []string
+	for _, t := range triggers {
+		trigger, ok := t.(map[string]any)
+		if !ok {
+			continue
+		}
+		trigType, _ := trigger["type"].(string)
+		if trigType != "" && !seen[trigType] {
+			seen[trigType] = true
+			types = append(types, trigType)
+		}
+	}
+	return strings.Join(types, ", ")
+}
+
+func summarizeKarpenterNodeClass(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind: obj.GetKind(),
+		Name: obj.GetName(),
+		Age:  age(obj.GetCreationTimestamp().Time),
+	}
+
+	s.Status = extractReadyCondition(obj)
+
+	// IAM role
+	role, _, _ := unstructured.NestedString(obj.Object, "spec", "role")
+	if role != "" {
+		s.Type = role
+	}
+
+	// AMI selector
+	amiTerms, found, _ := unstructured.NestedSlice(obj.Object, "spec", "amiSelectorTerms")
+	if found && len(amiTerms) > 0 {
+		if term, ok := amiTerms[0].(map[string]any); ok {
+			if alias, ok := term["alias"].(string); ok {
+				s.Image = alias
+			} else if id, ok := term["id"].(string); ok {
+				s.Image = id
+			}
+		}
+	}
+
+	// Volume info
+	blockDevices, found, _ := unstructured.NestedSlice(obj.Object, "spec", "blockDeviceMappings")
+	if found && len(blockDevices) > 0 {
+		if bd, ok := blockDevices[0].(map[string]any); ok {
+			if ebs, ok := bd["ebs"].(map[string]any); ok {
+				var volParts []string
+				if volType, ok := ebs["volumeType"].(string); ok {
+					volParts = append(volParts, volType)
+				}
+				if volSize, ok := ebs["volumeSize"].(string); ok {
+					volParts = append(volParts, volSize)
+				}
+				if len(volParts) > 0 {
+					s.Capacity = strings.Join(volParts, " ")
+				}
+			}
+		}
 	}
 
 	return s
@@ -400,6 +520,87 @@ func summarizeGatewayClass(obj *unstructured.Unstructured) *ResourceSummary {
 	controllerName, _, _ := unstructured.NestedString(obj.Object, "spec", "controllerName")
 	if controllerName != "" {
 		s.Type = controllerName
+	}
+
+	return s
+}
+
+func summarizeGatewayRoute(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind:      obj.GetKind(),
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
+		Age:       age(obj.GetCreationTimestamp().Time),
+	}
+
+	// Gateway API routes use status.parents[].conditions, not status.conditions
+	parents, found, _ := unstructured.NestedSlice(obj.Object, "status", "parents")
+	if found && len(parents) > 0 {
+		allAccepted := true
+		anyRejected := false
+		checkedAny := false
+		for _, p := range parents {
+			pMap, ok := p.(map[string]any)
+			if !ok {
+				continue
+			}
+			conds, _, _ := unstructured.NestedSlice(pMap, "conditions")
+			for _, c := range conds {
+				cond, ok := c.(map[string]any)
+				if !ok {
+					continue
+				}
+				if cond["type"] == "Accepted" {
+					checkedAny = true
+					if cond["status"] != "True" {
+						allAccepted = false
+						if cond["status"] == "False" {
+							anyRejected = true
+						}
+					}
+				}
+			}
+		}
+		if !checkedAny {
+			// No Accepted conditions found — can't determine status
+		} else if allAccepted {
+			s.Status = "Accepted"
+		} else if anyRejected {
+			s.Status = "NotAccepted"
+		} else {
+			s.Status = "Pending"
+		}
+	}
+
+	// Parent gateway names
+	parentRefs, found, _ := unstructured.NestedSlice(obj.Object, "spec", "parentRefs")
+	if found {
+		var names []string
+		for _, ref := range parentRefs {
+			refMap, ok := ref.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := refMap["name"].(string)
+			if name != "" {
+				names = append(names, name)
+			}
+		}
+		if len(names) > 0 {
+			s.Type = strings.Join(names, ", ")
+		}
+	}
+
+	// Hostnames
+	hostnames, found, _ := unstructured.NestedStringSlice(obj.Object, "spec", "hostnames")
+	if found && len(hostnames) > 0 {
+		s.Ready = strings.Join(hostnames, ", ")
+	}
+
+	// Rules count as strategy field
+	rules, found, _ := unstructured.NestedSlice(obj.Object, "spec", "rules")
+	if found && len(rules) > 0 {
+		s.Strategy = fmt.Sprintf("%d rules", len(rules))
 	}
 
 	return s
