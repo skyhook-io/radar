@@ -560,4 +560,5 @@ func TestSummary_CronJob(t *testing.T) {
 	}
 }
 
-func int32Ptr(i int32) *int32 { return &i }
+//go:fix inline
+func int32Ptr(i int32) *int32 { return new(i) }

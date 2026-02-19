@@ -777,14 +777,14 @@ func (c *CarettaSource) discoverMetricsServiceDynamic(ctx context.Context) *metr
 
 	log.Printf("[caretta] Dynamic discovery found %d candidates, top scores:", len(candidates))
 	limit := min(len(candidates), 5)
-	for i := 0; i < limit; i++ {
+	for i := range limit {
 		log.Printf("[caretta]   %s/%s (score=%d, basePath=%q)",
 			candidates[i].info.namespace, candidates[i].info.name,
 			candidates[i].score, candidates[i].info.basePath)
 	}
 
 	// Validate top candidates via API probe (works when running in-cluster)
-	for i := 0; i < limit; i++ {
+	for i := range limit {
 		cand := &candidates[i]
 		addr := cand.info.clusterAddr
 
