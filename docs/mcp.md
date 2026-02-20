@@ -115,7 +115,8 @@ Add via the Cline MCP settings UI:
 {
   "mcpServers": {
     "radar": {
-      "url": "http://localhost:9280/mcp"
+      "url": "http://localhost:9280/mcp",
+      "type": "streamableHttp"
     }
   }
 }
