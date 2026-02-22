@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, PlayCircle } from 'lucide-react'
+import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink } from '../drawer-components'
 import { formatResources } from '../resource-utils'
@@ -181,7 +181,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
 
       {/* Init Containers - shown only when present */}
       {initContainers.length > 0 && (
-        <Section title={`Init Containers (${initContainers.length})`} icon={PlayCircle} defaultExpanded>
+        <Section title={`Init Containers (${initContainers.length})`} icon={CirclePlay} defaultExpanded>
           <div className="space-y-3">
             {initContainers.map((container: any, index: number) => {
               const status = initContainerStatuses.find((s: any) => s.name === container.name)
@@ -190,8 +190,9 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
               const restarts = status?.restartCount || 0
 
               // Determine completion status
-              const isCompleted = stateKey === 'terminated' && state?.terminated?.exitCode === 0
-              const isFailed = stateKey === 'terminated' && state?.terminated?.exitCode !== 0
+              const exitCode = state?.terminated?.exitCode
+              const isCompleted = stateKey === 'terminated' && exitCode === 0
+              const isFailed = stateKey === 'terminated' && exitCode != null && exitCode !== 0
               const isWaiting = stateKey === 'waiting'
               const isInitRunning = stateKey === 'running'
 
@@ -202,7 +203,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
                 statusLabel = 'Completed'
                 statusColor = 'bg-green-500/20 text-green-400'
               } else if (isFailed) {
-                statusLabel = `Exit ${state?.terminated?.exitCode}`
+                statusLabel = `Exit ${exitCode}`
                 statusColor = 'bg-red-500/20 text-red-400'
               } else if (isInitRunning) {
                 statusLabel = 'Running'
