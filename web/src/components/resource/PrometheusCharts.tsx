@@ -82,7 +82,7 @@ export function PrometheusCharts({ kind, namespace, name }: PrometheusChartsProp
     return null
   }
 
-  // Not connected state
+  // Loading state — checking Prometheus availability
   if (statusLoading) {
     return (
       <div className="flex items-center justify-center py-12 text-theme-text-tertiary">

@@ -117,8 +117,8 @@ func RegisterTrafficFuncs(reset TrafficResetFunc, reinit TrafficReinitFunc) {
 	trafficReinitFunc = reinit
 }
 
-// RegisterPrometheusResetFunc registers the Prometheus client reset/reinit functions
-func RegisterPrometheusResetFunc(reset PrometheusResetFunc, reinit PrometheusReinitFunc) {
+// RegisterPrometheusFuncs registers the Prometheus client reset/reinit functions.
+func RegisterPrometheusFuncs(reset PrometheusResetFunc, reinit PrometheusReinitFunc) {
 	contextSwitchMu.Lock()
 	defer contextSwitchMu.Unlock()
 	prometheusResetFunc = reset

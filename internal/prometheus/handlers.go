@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -24,7 +25,9 @@ func RegisterRoutes(r chi.Router) {
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("[prometheus] Failed to encode JSON response: %v", err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {
@@ -52,16 +55,18 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 
 	// Allow URL override via query param (resets existing connection)
 	if overrideURL := r.URL.Query().Get("url"); overrideURL != "" {
+		u, err := url.Parse(overrideURL)
+		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
+			writeError(w, http.StatusBadRequest, "invalid URL: must be a valid HTTP(S) URL")
+			return
+		}
 		client.SetURL(overrideURL)
 	}
 
-	_, err := client.EnsureConnected(r.Context())
+	_, _, err := client.EnsureConnected(r.Context())
 	if err != nil {
 		log.Printf("[prometheus] Connection failed: %v", err)
-		writeJSON(w, http.StatusOK, Status{
-			Available: false,
-			Error:     err.Error(),
-		})
+		writeError(w, http.StatusBadGateway, "Prometheus connection failed: "+err.Error())
 		return
 	}
 
@@ -69,7 +74,7 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseTimeRange parses the "range" query parameter into start/end/step.
-// Supported values: 10m, 30m, 1h, 3h, 6h, 12h, 24h, 48h, 7d, 14d
+// Supported values: 10m, 30m, 1h, 3h, 6h, 12h, 24h, 48h, 7d, 14d (default: 1h)
 func parseTimeRange(rangeStr string) (start, end time.Time, step time.Duration) {
 	end = time.Now()
 
@@ -116,17 +121,17 @@ func parseTimeRange(rangeStr string) (start, end time.Time, step time.Duration) 
 
 // ResourceMetricsResponse is the response shape for resource metrics.
 type ResourceMetricsResponse struct {
-	Kind      string          `json:"kind"`
-	Namespace string          `json:"namespace,omitempty"`
-	Name      string          `json:"name"`
-	Category  MetricCategory  `json:"category"`
-	Unit      string          `json:"unit"`
-	Range     string          `json:"range"`
-	Result    *QueryResult    `json:"result"`
+	Kind      string         `json:"kind"`
+	Namespace string         `json:"namespace,omitempty"`
+	Name      string         `json:"name"`
+	Category  MetricCategory `json:"category"`
+	Unit      string         `json:"unit"`
+	Range     string         `json:"range"`
+	Result    *QueryResult   `json:"result"`
 }
 
 // handleResourceMetrics returns Prometheus metrics for a specific resource.
-// Query params: category (cpu|memory|network_rx|network_tx|filesystem), range (10m|30m|1h|...|14d)
+// Query params: category (cpu|memory|network_rx|network_tx|filesystem, default: cpu), range (10m|30m|1h|...|14d, default: 1h)
 func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 	client := GetClient()
 	if client == nil {
@@ -192,7 +197,7 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 		Namespace: namespace,
 		Name:      name,
 		Category:  category,
-		Unit:      CategoryUnit(category),
+		Unit:      CategoryUnitForKind(kind, category),
 		Range:     rangeStr,
 		Result:    result,
 	})
@@ -254,7 +259,7 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 		Kind:     kind,
 		Name:     name,
 		Category: category,
-		Unit:     CategoryUnit(category),
+		Unit:     CategoryUnitForKind(kind, category),
 		Range:    rangeStr,
 		Result:   result,
 	})
@@ -372,6 +377,7 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 	if queryType == "instant" {
 		result, err := client.Query(r.Context(), query)
 		if err != nil {
+			log.Printf("[prometheus] Raw instant query failed: %v", err)
 			writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 			return
 		}
@@ -385,6 +391,7 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
+		log.Printf("[prometheus] Raw range query failed: %v", err)
 		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 		return
 	}

@@ -107,6 +107,9 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		return timeline.ReinitStore(timelineStoreCfg)
 	})
 
+	// Initialize Prometheus metrics client (must come before SetManualURL)
+	prometheuspkg.Initialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
+
 	if cfg.PrometheusURL != "" {
 		u, err := url.Parse(cfg.PrometheusURL)
 		if err != nil || (u.Scheme != "http" && u.Scheme != "https") {
@@ -116,14 +119,11 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		prometheuspkg.SetManualURL(cfg.PrometheusURL)
 	}
 
-	// Initialize Prometheus metrics client
-	prometheuspkg.Initialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
-
 	k8s.RegisterTrafficFuncs(traffic.Reset, func() error {
 		return traffic.ReinitializeWithConfig(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
 	})
 
-	k8s.RegisterPrometheusResetFunc(prometheuspkg.Reset, func() error {
+	k8s.RegisterPrometheusFuncs(prometheuspkg.Reset, func() error {
 		prometheuspkg.Reinitialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
 		if cfg.PrometheusURL != "" {
 			prometheuspkg.SetManualURL(cfg.PrometheusURL)

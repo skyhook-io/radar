@@ -13,7 +13,8 @@ import (
 	"github.com/skyhook-io/radar/internal/traffic"
 )
 
-// Well-known Prometheus/VictoriaMetrics service locations (same as traffic/caretta.go).
+// Well-known Prometheus/VictoriaMetrics service locations
+// (similar to traffic/caretta.go but with different ordering for workload metrics discovery).
 var wellKnownLocations = []struct {
 	namespace string
 	name      string
@@ -66,36 +67,45 @@ var skipNamespaces = map[string]bool{
 //  2. Existing traffic system port-forward
 //  3. Well-known service locations
 //  4. Dynamic cluster-wide discovery with scoring
-func (c *Client) discover(ctx context.Context) (string, error) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
+//
+// The lock is only held briefly to read/write state, not during network I/O.
+func (c *Client) discover(ctx context.Context) (string, string, error) {
+	// Layer 1: Manual URL override (read under lock)
+	c.mu.RLock()
+	manualURL := c.manualURL
+	contextName := c.contextName
+	k8sClient := c.k8sClient
+	c.mu.RUnlock()
 
-	// Layer 1: Manual URL override
-	if c.manualURL != "" {
-		addr := strings.TrimRight(c.manualURL, "/")
-		if c.probeUnlocked(ctx, addr) {
+	if manualURL != "" {
+		addr := strings.TrimRight(manualURL, "/")
+		if c.probe(ctx, addr) {
 			log.Printf("[prometheus] Using manual URL: %s", addr)
+			c.mu.Lock()
 			c.baseURL = addr
 			c.basePath = ""
 			c.discovered = true
-			return addr, nil
+			c.mu.Unlock()
+			return addr, "", nil
 		}
-		return "", fmt.Errorf("manual Prometheus URL %s not reachable", addr)
+		return "", "", fmt.Errorf("manual Prometheus URL %s not reachable", addr)
 	}
 
 	// Layer 2: Check if traffic system already has a port-forward
-	if pfAddr := traffic.GetMetricsAddress(c.contextName); pfAddr != "" {
-		if c.probeUnlocked(ctx, pfAddr) {
+	if pfAddr := traffic.GetMetricsAddress(contextName); pfAddr != "" {
+		if c.probe(ctx, pfAddr) {
 			log.Printf("[prometheus] Using traffic system port-forward: %s", pfAddr)
+			c.mu.Lock()
 			c.baseURL = pfAddr
 			c.basePath = ""
 			c.discovered = true
-			return pfAddr, nil
+			c.mu.Unlock()
+			return pfAddr, "", nil
 		}
 	}
 
-	if c.k8sClient == nil {
-		return "", fmt.Errorf("no Kubernetes client available for discovery")
+	if k8sClient == nil {
+		return "", "", fmt.Errorf("no Kubernetes client available for discovery")
 	}
 
 	// Layer 3: Well-known service locations
@@ -106,53 +116,56 @@ func (c *Client) discover(ctx context.Context) (string, error) {
 	}
 
 	if info == nil {
-		return "", fmt.Errorf("no Prometheus service found in cluster")
+		return "", "", fmt.Errorf("no Prometheus service found in cluster")
 	}
 
+	c.mu.Lock()
 	c.discoveryService = &ServiceInfo{
 		Namespace: info.namespace,
 		Name:      info.name,
 		Port:      info.port,
 		BasePath:  info.basePath,
 	}
+	c.mu.Unlock()
 
-	// Try cluster-internal address
-	if c.probeUnlocked(ctx, info.clusterAddr+info.basePath) {
+	// Try cluster-internal address (no lock held during probe)
+	if c.probe(ctx, info.clusterAddr+info.basePath) {
 		log.Printf("[prometheus] Connected to %s/%s at %s", info.namespace, info.name, info.clusterAddr)
+		c.mu.Lock()
 		c.baseURL = info.clusterAddr
 		c.basePath = info.basePath
 		c.discovered = true
-		return info.clusterAddr, nil
+		c.mu.Unlock()
+		return info.clusterAddr, info.basePath, nil
 	}
 
 	// Not reachable in-cluster — try port-forward
 	log.Printf("[prometheus] Service %s/%s not reachable in-cluster, starting port-forward...", info.namespace, info.name)
-	connInfo, err := traffic.StartMetricsPortForward(ctx, info.namespace, info.name, info.port, c.contextName)
+	connInfo, err := traffic.StartMetricsPortForward(ctx, info.namespace, info.name, info.port, contextName)
 	if err != nil {
-		return "", fmt.Errorf("port-forward to %s/%s failed: %w", info.namespace, info.name, err)
+		return "", "", fmt.Errorf("port-forward to %s/%s failed: %w", info.namespace, info.name, err)
 	}
 
 	addr := connInfo.Address
 	if info.basePath != "" {
-		if c.probeUnlocked(ctx, addr+info.basePath) {
+		if c.probe(ctx, addr+info.basePath) {
+			c.mu.Lock()
 			c.baseURL = addr
 			c.basePath = info.basePath
 			c.discovered = true
-			return addr, nil
+			c.mu.Unlock()
+			return addr, info.basePath, nil
 		}
-	} else if c.probeUnlocked(ctx, addr) {
+	} else if c.probe(ctx, addr) {
+		c.mu.Lock()
 		c.baseURL = addr
 		c.basePath = ""
 		c.discovered = true
-		return addr, nil
+		c.mu.Unlock()
+		return addr, "", nil
 	}
 
-	return "", fmt.Errorf("Prometheus at %s/%s not responding after port-forward", info.namespace, info.name)
-}
-
-// probeUnlocked checks reachability without holding the lock.
-func (c *Client) probeUnlocked(ctx context.Context, addr string) bool {
-	return c.probe(ctx, addr)
+	return "", "", fmt.Errorf("Prometheus at %s/%s not responding after port-forward", info.namespace, info.name)
 }
 
 type serviceInfo struct {
@@ -164,8 +177,12 @@ type serviceInfo struct {
 }
 
 func (c *Client) findWellKnownService(ctx context.Context) *serviceInfo {
+	c.mu.RLock()
+	k8sClient := c.k8sClient
+	c.mu.RUnlock()
+
 	for _, loc := range wellKnownLocations {
-		svc, err := c.k8sClient.CoreV1().Services(loc.namespace).Get(ctx, loc.name, metav1.GetOptions{})
+		svc, err := k8sClient.CoreV1().Services(loc.namespace).Get(ctx, loc.name, metav1.GetOptions{})
 		if err != nil {
 			continue
 		}
@@ -193,7 +210,11 @@ type scoredCandidate struct {
 func (c *Client) discoverDynamic(ctx context.Context) *serviceInfo {
 	log.Printf("[prometheus] Starting dynamic discovery...")
 
-	svcs, err := c.k8sClient.CoreV1().Services("").List(ctx, metav1.ListOptions{})
+	c.mu.RLock()
+	k8sClient := c.k8sClient
+	c.mu.RUnlock()
+
+	svcs, err := k8sClient.CoreV1().Services("").List(ctx, metav1.ListOptions{})
 	if err != nil {
 		log.Printf("[prometheus] Failed to list services: %v", err)
 		return nil
@@ -233,12 +254,12 @@ func (c *Client) discoverDynamic(ctx context.Context) *serviceInfo {
 		log.Printf("[prometheus]   %s/%s (score=%d)", candidates[i].info.namespace, candidates[i].info.name, candidates[i].score)
 	}
 
-	// Validate top candidates
+	// Validate top candidates (no lock held during probes)
 	for i := range limit {
 		cand := &candidates[i]
 		addr := cand.info.clusterAddr
 
-		if c.probeUnlocked(ctx, addr+cand.info.basePath) {
+		if c.probe(ctx, addr+cand.info.basePath) {
 			log.Printf("[prometheus] Validated: %s/%s", cand.info.namespace, cand.info.name)
 			return &cand.info
 		}

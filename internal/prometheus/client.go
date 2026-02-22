@@ -78,11 +78,11 @@ func Initialize(client kubernetes.Interface, config *rest.Config, contextName st
 }
 
 // SetManualURL sets the --prometheus-url override on the global client.
-func SetManualURL(url string) {
+func SetManualURL(rawURL string) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	if globalClient != nil {
-		globalClient.manualURL = url
+		globalClient.manualURL = strings.TrimRight(rawURL, "/")
 	}
 }
 
@@ -155,15 +155,16 @@ func (c *Client) GetStatus() Status {
 }
 
 // EnsureConnected attempts to discover and connect to Prometheus if not already connected.
-// Returns the base URL or an error.
-func (c *Client) EnsureConnected(ctx context.Context) (string, error) {
+// Returns the base URL and base path, or an error.
+func (c *Client) EnsureConnected(ctx context.Context) (string, string, error) {
 	c.mu.RLock()
 	if c.baseURL != "" {
 		// Verify cached address still works
-		addr := c.baseURL + c.basePath
+		base := c.baseURL
+		bp := c.basePath
 		c.mu.RUnlock()
-		if c.probe(ctx, addr) {
-			return c.baseURL, nil
+		if c.probe(ctx, base+bp) {
+			return base, bp, nil
 		}
 		// Stale — clear and rediscover
 		c.mu.Lock()
@@ -180,7 +181,7 @@ func (c *Client) EnsureConnected(ctx context.Context) (string, error) {
 
 // QueryRange executes a Prometheus range query.
 func (c *Client) QueryRange(ctx context.Context, query string, start, end time.Time, step time.Duration) (*QueryResult, error) {
-	base, err := c.EnsureConnected(ctx)
+	base, basePath, err := c.EnsureConnected(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -192,13 +193,13 @@ func (c *Client) QueryRange(ctx context.Context, query string, start, end time.T
 		"step":  {fmt.Sprintf("%.0f", step.Seconds())},
 	}
 
-	reqURL := fmt.Sprintf("%s%s/api/v1/query_range?%s", base, c.basePath, params.Encode())
+	reqURL := fmt.Sprintf("%s%s/api/v1/query_range?%s", base, basePath, params.Encode())
 	return c.doQuery(ctx, reqURL)
 }
 
 // Query executes a Prometheus instant query.
 func (c *Client) Query(ctx context.Context, query string) (*QueryResult, error) {
-	base, err := c.EnsureConnected(ctx)
+	base, basePath, err := c.EnsureConnected(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -207,7 +208,7 @@ func (c *Client) Query(ctx context.Context, query string) (*QueryResult, error) 
 		"query": {query},
 	}
 
-	reqURL := fmt.Sprintf("%s%s/api/v1/query?%s", base, c.basePath, params.Encode())
+	reqURL := fmt.Sprintf("%s%s/api/v1/query?%s", base, basePath, params.Encode())
 	return c.doQuery(ctx, reqURL)
 }
 
@@ -326,7 +327,9 @@ func parseQueryResult(data json.RawMessage) (*QueryResult, error) {
 			}
 		} else if raw.ResultType == "vector" && r.Value != nil {
 			dp, err := parseDataPoint(r.Value)
-			if err == nil {
+			if err != nil {
+				log.Printf("[prometheus] Skipping invalid vector data point: %v", err)
+			} else {
 				series.DataPoints = []DataPoint{dp}
 			}
 		}

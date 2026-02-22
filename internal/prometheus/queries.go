@@ -2,8 +2,26 @@ package prometheus
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 )
+
+// sanitizeLabelValue escapes characters that are special in PromQL label matchers.
+// This prevents PromQL injection via resource names, namespaces, etc.
+var unsafeLabelChars = regexp.MustCompile(`[\\'"` + "`" + `{}]`)
+
+func sanitizeLabelValue(s string) string {
+	return unsafeLabelChars.ReplaceAllStringFunc(s, func(c string) string {
+		return `\` + c
+	})
+}
+
+// escapeRegexMeta escapes regex metacharacters for PromQL =~ matching.
+var regexMeta = regexp.MustCompile(`([.+*?^${}()|[\]\\])`)
+
+func escapeRegexMeta(s string) string {
+	return regexMeta.ReplaceAllString(s, `\\$1`)
+}
 
 // MetricCategory represents a category of metrics.
 type MetricCategory string
@@ -39,7 +57,9 @@ func CategoryLabel(cat MetricCategory) string {
 	}
 }
 
-// CategoryUnit returns the unit for a metric category.
+// CategoryUnit returns the default unit for a metric category.
+// For kind-aware units (e.g. Node filesystem = bytes vs Pod filesystem = bytes/s),
+// use CategoryUnitForKind instead.
 func CategoryUnit(cat MetricCategory) string {
 	switch cat {
 	case CategoryCPU:
@@ -53,6 +73,16 @@ func CategoryUnit(cat MetricCategory) string {
 	default:
 		return ""
 	}
+}
+
+// CategoryUnitForKind returns the unit for a metric category, adjusted for the resource kind.
+// Node filesystem queries return absolute bytes (used space), while pod/workload filesystem
+// queries return I/O rate (bytes/s).
+func CategoryUnitForKind(kind string, cat MetricCategory) string {
+	if strings.EqualFold(kind, "node") && cat == CategoryFilesystem {
+		return "bytes"
+	}
+	return CategoryUnit(cat)
 }
 
 // SupportedKinds returns the resource kinds that support Prometheus metrics.
@@ -74,17 +104,15 @@ func CategoriesForKind(kind string) []MetricCategory {
 }
 
 // BuildQuery builds a PromQL query for the given resource and metric category.
-// For workloads (Deployment, StatefulSet, etc.) it uses pod regex matching.
+// For workloads (Deployment, StatefulSet, Job, CronJob, etc.) it uses pod regex matching.
 // For Pods it uses exact name matching.
-// For Nodes it uses the node label.
+// For Nodes it matches the node_exporter "instance" label.
 func BuildQuery(kind, namespace, name string, category MetricCategory) string {
 	switch strings.ToLower(kind) {
 	case "pod":
 		return buildPodQuery(namespace, name, category)
-	case "deployment", "statefulset", "daemonset", "replicaset":
+	case "deployment", "statefulset", "daemonset", "replicaset", "job", "cronjob":
 		return buildWorkloadQuery(namespace, name, category)
-	case "job", "cronjob":
-		return buildPodQuery(namespace, name, category)
 	case "node":
 		return buildNodeQuery(name, category)
 	default:
@@ -94,15 +122,16 @@ func BuildQuery(kind, namespace, name string, category MetricCategory) string {
 
 // BuildNamespaceQuery builds a PromQL query for namespace-level aggregation.
 func BuildNamespaceQuery(namespace string, category MetricCategory) string {
+	ns := sanitizeLabelValue(namespace)
 	switch category {
 	case CategoryCPU:
-		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{container!='',namespace='%s'}[5m]))`, namespace)
+		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{container!='',namespace='%s'}[5m]))`, ns)
 	case CategoryMemory:
-		return fmt.Sprintf(`sum(container_memory_working_set_bytes{container!='',namespace='%s'})`, namespace)
+		return fmt.Sprintf(`sum(container_memory_working_set_bytes{container!='',namespace='%s'})`, ns)
 	case CategoryNetworkRX:
-		return fmt.Sprintf(`sum(rate(container_network_receive_bytes_total{namespace='%s'}[5m]))`, namespace)
+		return fmt.Sprintf(`sum(rate(container_network_receive_bytes_total{namespace='%s'}[5m]))`, ns)
 	case CategoryNetworkTX:
-		return fmt.Sprintf(`sum(rate(container_network_transmit_bytes_total{namespace='%s'}[5m]))`, namespace)
+		return fmt.Sprintf(`sum(rate(container_network_transmit_bytes_total{namespace='%s'}[5m]))`, ns)
 	default:
 		return ""
 	}
@@ -125,66 +154,71 @@ func BuildClusterQuery(category MetricCategory) string {
 }
 
 func buildPodQuery(namespace, podName string, category MetricCategory) string {
+	ns := sanitizeLabelValue(namespace)
+	pod := sanitizeLabelValue(podName)
+
 	switch category {
 	case CategoryCPU:
 		return fmt.Sprintf(
 			`sum(rate(container_cpu_usage_seconds_total{container!='',namespace='%s',pod='%s'}[5m])) by (pod,namespace)`,
-			namespace, podName)
+			ns, pod)
 	case CategoryMemory:
 		return fmt.Sprintf(
 			`sum(container_memory_working_set_bytes{container!='',namespace='%s',pod='%s'}) by (pod,namespace)`,
-			namespace, podName)
+			ns, pod)
 	case CategoryNetworkRX:
 		return fmt.Sprintf(
 			`sum(rate(container_network_receive_bytes_total{namespace='%s',pod='%s'}[5m])) by (pod,namespace)`,
-			namespace, podName)
+			ns, pod)
 	case CategoryNetworkTX:
 		return fmt.Sprintf(
 			`sum(rate(container_network_transmit_bytes_total{namespace='%s',pod='%s'}[5m])) by (pod,namespace)`,
-			namespace, podName)
+			ns, pod)
 	case CategoryFilesystem:
 		return fmt.Sprintf(
 			`sum(rate(container_fs_writes_bytes_total{namespace='%s',pod='%s'}[5m]) + rate(container_fs_reads_bytes_total{namespace='%s',pod='%s'}[5m])) by (pod,namespace)`,
-			namespace, podName, namespace, podName)
+			ns, pod, ns, pod)
 	default:
 		return ""
 	}
 }
 
 func buildWorkloadQuery(namespace, workloadName string, category MetricCategory) string {
-	// Use regex matching to capture all pods belonging to the workload
-	podPattern := fmt.Sprintf("%s-.*", workloadName)
+	ns := sanitizeLabelValue(namespace)
+	// Escape regex metacharacters in the workload name so e.g. "my.app" matches literally
+	podPattern := fmt.Sprintf("%s-.*", escapeRegexMeta(workloadName))
 
 	switch category {
 	case CategoryCPU:
 		return fmt.Sprintf(
 			`sum(rate(container_cpu_usage_seconds_total{container!='',namespace='%s',pod=~'%s'}[5m])) by (pod,namespace)`,
-			namespace, podPattern)
+			ns, podPattern)
 	case CategoryMemory:
 		return fmt.Sprintf(
 			`sum(container_memory_working_set_bytes{container!='',namespace='%s',pod=~'%s'}) by (pod,namespace)`,
-			namespace, podPattern)
+			ns, podPattern)
 	case CategoryNetworkRX:
 		return fmt.Sprintf(
 			`sum(rate(container_network_receive_bytes_total{namespace='%s',pod=~'%s'}[5m])) by (pod,namespace)`,
-			namespace, podPattern)
+			ns, podPattern)
 	case CategoryNetworkTX:
 		return fmt.Sprintf(
 			`sum(rate(container_network_transmit_bytes_total{namespace='%s',pod=~'%s'}[5m])) by (pod,namespace)`,
-			namespace, podPattern)
+			ns, podPattern)
 	case CategoryFilesystem:
 		return fmt.Sprintf(
 			`sum(rate(container_fs_writes_bytes_total{namespace='%s',pod=~'%s'}[5m]) + rate(container_fs_reads_bytes_total{namespace='%s',pod=~'%s'}[5m])) by (pod,namespace)`,
-			namespace, podPattern, namespace, podPattern)
+			ns, podPattern, ns, podPattern)
 	default:
 		return ""
 	}
 }
 
 func buildNodeQuery(nodeName string, category MetricCategory) string {
-	// Node exporter metrics use "instance" label (standard from node_exporter / prometheus.exporter.unix).
-	// Some setups add a "node" label via relabeling, so we match either.
-	nodeFilter := fmt.Sprintf(`instance=~'%s(:\\d+)?'`, nodeName)
+	// Node exporter metrics use the "instance" label (standard from node_exporter).
+	// The instance label typically includes a port suffix, so we match with an optional port.
+	sanitized := escapeRegexMeta(sanitizeLabelValue(nodeName))
+	nodeFilter := fmt.Sprintf(`instance=~'%s(:\\d+)?'`, sanitized)
 
 	switch category {
 	case CategoryCPU:
@@ -196,8 +230,7 @@ func buildNodeQuery(nodeName string, category MetricCategory) string {
 			`node_memory_MemTotal_bytes{%s} - node_memory_MemAvailable_bytes{%s}`,
 			nodeFilter, nodeFilter)
 	case CategoryFilesystem:
-		// Match common root mountpoints; falls back to '/' if none match.
-		// In-container node exporters may only see container mounts.
+		// Filter to real filesystems by type (ext4, xfs, btrfs), excluding tmpfs/overlay/proc.
 		return fmt.Sprintf(
 			`sum(node_filesystem_size_bytes{%s,fstype=~'ext4|xfs|btrfs'} - node_filesystem_avail_bytes{%s,fstype=~'ext4|xfs|btrfs'})`,
 			nodeFilter, nodeFilter)

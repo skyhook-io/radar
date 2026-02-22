@@ -11,6 +11,7 @@ import {
   Terminal,
   FileText,
   Activity,
+  BarChart3,
   MoreVertical,
   RotateCcw,
   Scale,
@@ -215,7 +216,7 @@ export function ResourceDetailPage({
           </TabButton>
           {isPrometheusSupported(kind) && (
             <TabButton active={activeTab === 'metrics'} onClick={() => setActiveTab('metrics')}>
-              <Activity className="w-4 h-4" />
+              <BarChart3 className="w-4 h-4" />
               Metrics
             </TabButton>
           )}
