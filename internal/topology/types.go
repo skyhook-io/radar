@@ -178,6 +178,7 @@ type ResourceRef struct {
 // Relationships holds computed relationships for a resource
 type Relationships struct {
 	Owner       *ResourceRef  `json:"owner,omitempty"`       // Parent via ownerReference (manages edge)
+	Deployment  *ResourceRef  `json:"deployment,omitempty"`  // Grandparent Deployment (for Pods owned by ReplicaSets)
 	Children    []ResourceRef `json:"children,omitempty"`    // Resources this owns (manages edge)
 	Services    []ResourceRef `json:"services,omitempty"`    // Services selecting/exposing this
 	Ingresses   []ResourceRef `json:"ingresses,omitempty"`   // Ingresses routing to this

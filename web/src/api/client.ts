@@ -977,6 +977,56 @@ export function useScaleWorkload() {
 }
 
 // ============================================================================
+// Workload rollback
+// ============================================================================
+
+// Workload revision history
+export interface WorkloadRevision {
+  number: number
+  createdAt: string
+  image: string
+  isCurrent: boolean
+  replicas: number
+  template?: string // Pod template spec as YAML (for revision diff)
+}
+
+export function useWorkloadRevisions(kind: string, namespace: string, name: string, enabled = true) {
+  return useQuery<WorkloadRevision[]>({
+    queryKey: ['workload-revisions', kind, namespace, name],
+    queryFn: () => fetchJSON(`/workloads/${kind}/${namespace}/${name}/revisions`),
+    enabled: Boolean(kind && namespace && name && enabled),
+  })
+}
+
+export function useRollbackWorkload() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ kind, namespace, name, revision }: { kind: string; namespace: string; name: string; revision: number }) => {
+      const response = await fetch(`${API_BASE}/workloads/${kind}/${namespace}/${name}/rollback`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ revision }),
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json()
+    },
+    meta: {
+      errorMessage: 'Failed to rollback workload',
+      successMessage: 'Rollback initiated',
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
+      queryClient.invalidateQueries({ queryKey: ['resource', variables.kind, variables.namespace, variables.name] })
+      queryClient.invalidateQueries({ queryKey: ['workload-revisions', variables.kind, variables.namespace, variables.name] })
+      queryClient.invalidateQueries({ queryKey: ['topology'] })
+    },
+  })
+}
+
+// ============================================================================
 // Helm API hooks
 // ============================================================================
 

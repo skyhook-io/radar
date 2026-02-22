@@ -22,6 +22,8 @@ import {
   Columns3,
   RotateCcw,
   Pin,
+  Trash2,
+  Tag,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { SelectedResource, APIResource } from '../../types'
@@ -1668,7 +1670,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       result = result.filter((r: any) => isReplicaSetActive(r))
     }
 
-    // Apply label selector filter (e.g., "app=caretta,version=v1")
+    // Apply label selector filter (e.g., "app=caretta,version=v1") — OR logic: matches ANY selected label
     if (labelSelector) {
       const labelPairs = labelSelector.split(',').map(pair => {
         const [key, value] = pair.split('=')
@@ -1677,7 +1679,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
       result = result.filter((r: any) => {
         const labels = r.metadata?.labels || {}
-        return labelPairs.every(({ key, value }) => labels[key] === value)
+        return labelPairs.some(({ key, value }) => labels[key] === value)
       })
     }
 
@@ -1999,13 +2001,25 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       }
     }
 
-    if (filterableColumns.length === 0 && !problems) {
-      console.debug('[filters] filterOptions: no filterable columns detected for', kindLower)
-      return null
+    // Compute available labels for label filtering
+    const labelCounts: Record<string, number> = {}
+    for (const r of resources) {
+      const labels = r.metadata?.labels || {}
+      for (const [key, value] of Object.entries(labels)) {
+        // Skip internal/noisy labels
+        if (key.includes('pod-template-hash') || key.includes('controller-revision-hash')) continue
+        const pair = `${key}=${value}`
+        labelCounts[pair] = (labelCounts[pair] || 0) + 1
+      }
     }
+    const labelValues = Object.entries(labelCounts)
+      .map(([pair, count]) => ({ value: pair, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 30) // cap at 30 most common labels
 
-    console.debug('[filters] filterOptions:', { kind: kindLower, columns: filterableColumns.map(c => `${c.label}(${c.values.length} vals)`), hasProblems: !!problems })
-    return { columns: filterableColumns, problems }
+    console.debug('[filters] filterOptions:', { kind: kindLower, columns: filterableColumns.map(c => `${c.label}(${c.values.length} vals)`), hasProblems: !!problems, labels: labelValues.length })
+    if (filterableColumns.length === 0 && !problems && labelValues.length === 0) return null
+    return { columns: filterableColumns, problems, labels: labelValues }
   }, [resources, selectedKind.name])
 
   // Compute inactive ReplicaSet count for toggle display
@@ -2044,6 +2058,32 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         : [...prev, problem]
     )
   }, [])
+
+  // Toggle a label pair in the label selector (e.g., "app=nginx")
+  const toggleLabelFilter = useCallback((pair: string) => {
+    setLabelSelector(prev => {
+      const existing = prev ? prev.split(',').filter(Boolean) : []
+      const newLabels = existing.includes(pair)
+        ? existing.filter(p => p !== pair)
+        : [...existing, pair]
+      const newSelector = newLabels.join(',')
+      // Sync to URL
+      const params = new URLSearchParams(window.location.search)
+      if (newSelector) {
+        params.set('labels', newSelector)
+      } else {
+        params.delete('labels')
+      }
+      window.history.replaceState({}, '', `${window.location.pathname}?${params.toString()}`)
+      return newSelector
+    })
+  }, [])
+
+  // Parse active label pairs for display
+  const activeLabelPairs = useMemo(() => {
+    if (!labelSelector) return []
+    return labelSelector.split(',').filter(Boolean)
+  }, [labelSelector])
 
   return (
     <div className="flex h-full w-full">
@@ -2268,7 +2308,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                 <span>Filter</span>
                 {hasActiveFilters && (
                   <span className="px-1.5 py-0.5 text-xs bg-blue-500/30 text-blue-700 dark:text-blue-300 rounded">
-                    {Object.values(columnFilters).filter(v => v).length + problemFilters.length}
+                    {Object.values(columnFilters).filter(v => v).length + problemFilters.length + activeLabelPairs.length}
                   </span>
                 )}
               </button>
@@ -2287,7 +2327,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                     )}
                   </div>
 
-                  <div className="p-3 space-y-4 max-h-80 overflow-y-auto">
+                  <div className="p-3 space-y-4 max-h-[28rem] overflow-y-auto">
                     {/* Generic column filters */}
                     {filterOptions.columns.map(({ key, label, values }) => (
                       <div key={key}>
@@ -2345,6 +2385,34 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                         </div>
                       </div>
                     )}
+
+                    {/* Label filter (multi-select) */}
+                    {filterOptions.labels && filterOptions.labels.length > 0 && (
+                      <div>
+                        <label className="text-xs font-medium text-theme-text-secondary uppercase tracking-wide mb-2 block">
+                          <span className="flex items-center gap-1">
+                            <Tag className="w-3 h-3" />
+                            Labels
+                          </span>
+                        </label>
+                        <div className="flex flex-wrap gap-1.5">
+                          {filterOptions.labels.map(({ value, count }) => (
+                            <button
+                              key={value}
+                              onClick={() => toggleLabelFilter(value)}
+                              className={clsx(
+                                'px-2 py-1 text-xs rounded transition-colors',
+                                activeLabelPairs.includes(value)
+                                  ? 'bg-green-500/30 text-green-700 dark:text-green-300'
+                                  : 'bg-theme-elevated text-theme-text-secondary hover:text-theme-text-primary'
+                              )}
+                            >
+                              {value} ({count})
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -2383,6 +2451,15 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                 <span key={p} className="flex items-center gap-1 px-2 py-1 text-xs bg-red-500/20 text-red-700 dark:text-red-300 rounded">
                   {p}
                   <button onClick={() => toggleProblemFilter(p)} className="hover:text-theme-text-primary">
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+              {activeLabelPairs.map(pair => (
+                <span key={pair} className="flex items-center gap-1 px-2 py-1 text-xs bg-green-500/20 text-green-700 dark:text-green-300 rounded">
+                  <Tag className="w-3 h-3" />
+                  {pair}
+                  <button onClick={() => toggleLabelFilter(pair)} className="hover:text-theme-text-primary">
                     <X className="w-3 h-3" />
                   </button>
                 </span>
@@ -2699,12 +2776,23 @@ function CellContent({ resource, kind, column }: CellContentProps) {
 
   // Common columns
   if (column === 'name') {
+    const isTerminating = !!meta.deletionTimestamp
     return (
-      <Tooltip content={meta.name}>
-        <span className="text-sm text-theme-text-primary font-medium truncate block">
-          {meta.name}
-        </span>
-      </Tooltip>
+      <div className="flex items-center gap-1.5 min-w-0">
+        <Tooltip content={meta.name}>
+          <span className={clsx('text-sm font-medium truncate block', isTerminating ? 'text-theme-text-tertiary line-through' : 'text-theme-text-primary')}>
+            {meta.name}
+          </span>
+        </Tooltip>
+        {isTerminating && (
+          <Tooltip content="Resource is being deleted (has deletionTimestamp set). May be stuck due to finalizers.">
+            <span className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium bg-red-500/15 text-red-600 dark:text-red-400 rounded">
+              <Trash2 className="w-3 h-3" />
+              Terminating
+            </span>
+          </Tooltip>
+        )}
+      </div>
     )
   }
   if (column === 'namespace') {

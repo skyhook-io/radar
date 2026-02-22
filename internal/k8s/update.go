@@ -2,8 +2,11 @@ package k8s
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
+	"sort"
+	"strconv"
 	"time"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -12,6 +15,16 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/yaml"
 )
+
+// WorkloadRevision represents a single revision in a workload's rollout history
+type WorkloadRevision struct {
+	Number    int64     `json:"number"`
+	CreatedAt time.Time `json:"createdAt"`
+	Image     string    `json:"image"`    // primary container image
+	IsCurrent bool      `json:"isCurrent"`
+	Replicas  int64     `json:"replicas"`
+	Template  string    `json:"template,omitempty"` // Pod template spec as YAML (for revision diff)
+}
 
 // UpdateResourceOptions contains options for updating a resource
 type UpdateResourceOptions struct {
@@ -358,7 +371,434 @@ func normalizeKind(kind string) string {
 		return "deployments"
 	case "StatefulSet", "statefulset", "statefulsets":
 		return "statefulsets"
+	case "DaemonSet", "daemonset", "daemonsets":
+		return "daemonsets"
 	default:
 		return kind
 	}
+}
+
+// ListWorkloadRevisions returns the revision history for a Deployment, StatefulSet, or DaemonSet.
+func ListWorkloadRevisions(ctx context.Context, kind, namespace, name string) ([]WorkloadRevision, error) {
+	dynamicClient := GetDynamicClient()
+	if dynamicClient == nil {
+		return nil, fmt.Errorf("dynamic client not initialized")
+	}
+
+	discovery := GetResourceDiscovery()
+	if discovery == nil {
+		return nil, fmt.Errorf("resource discovery not initialized")
+	}
+
+	normalizedKind := normalizeKind(kind)
+
+	// First fetch the workload itself so we can match ownerReferences by UID
+	workloadGVR, ok := discovery.GetGVR(normalizedKind)
+	if !ok {
+		return nil, fmt.Errorf("unknown resource kind: %s", kind)
+	}
+
+	workload, err := dynamicClient.Resource(workloadGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get workload: %w", err)
+	}
+	workloadUID := string(workload.GetUID())
+
+	switch normalizedKind {
+	case "deployments":
+		return listDeploymentRevisions(ctx, discovery, namespace, name, workloadUID)
+	case "statefulsets", "daemonsets":
+		return listControllerRevisions(ctx, discovery, namespace, name, workloadUID)
+	default:
+		return nil, fmt.Errorf("revision history not supported for %s", kind)
+	}
+}
+
+// listDeploymentRevisions lists revisions for a Deployment by finding its ReplicaSets.
+func listDeploymentRevisions(ctx context.Context, discovery *ResourceDiscovery, namespace, name, workloadUID string) ([]WorkloadRevision, error) {
+	dynamicClient := GetDynamicClient()
+
+	rsGVR, ok := discovery.GetGVR("replicasets")
+	if !ok {
+		return nil, fmt.Errorf("replicasets resource not found")
+	}
+
+	rsList, err := dynamicClient.Resource(rsGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list replicasets: %w", err)
+	}
+
+	var revisions []WorkloadRevision
+	var maxRevision int64
+
+	for _, rs := range rsList.Items {
+		// Filter by ownerReference matching the Deployment UID
+		owners := rs.GetOwnerReferences()
+		owned := false
+		for _, ref := range owners {
+			if string(ref.UID) == workloadUID {
+				owned = true
+				break
+			}
+		}
+		if !owned {
+			continue
+		}
+
+		// Extract revision number from annotation
+		annotations := rs.GetAnnotations()
+		revStr, ok := annotations["deployment.kubernetes.io/revision"]
+		if !ok {
+			continue
+		}
+		revNum, err := strconv.ParseInt(revStr, 10, 64)
+		if err != nil {
+			continue
+		}
+
+		// Extract primary container image
+		image := extractContainerImage(rs.Object)
+
+		// Extract replicas
+		replicas, _, _ := unstructured.NestedInt64(rs.Object, "spec", "replicas")
+
+		// Extract pod template as YAML for diff
+		var templateStr string
+		if template, found, _ := unstructured.NestedMap(rs.Object, "spec", "template"); found && template != nil {
+			if templateYAML, err := yaml.Marshal(template); err == nil {
+				templateStr = string(templateYAML)
+			}
+		}
+
+		// Track the highest revision number
+		if revNum > maxRevision {
+			maxRevision = revNum
+		}
+
+		revisions = append(revisions, WorkloadRevision{
+			Number:    revNum,
+			CreatedAt: rs.GetCreationTimestamp().Time,
+			Image:     image,
+			Replicas:  replicas,
+			Template:  templateStr,
+		})
+	}
+
+	// Mark the current revision
+	for i := range revisions {
+		if revisions[i].Number == maxRevision {
+			revisions[i].IsCurrent = true
+		}
+	}
+
+	// Sort descending by revision number
+	sort.Slice(revisions, func(i, j int) bool {
+		return revisions[i].Number > revisions[j].Number
+	})
+
+	return revisions, nil
+}
+
+// listControllerRevisions lists revisions for a StatefulSet or DaemonSet by finding ControllerRevisions.
+func listControllerRevisions(ctx context.Context, discovery *ResourceDiscovery, namespace, name, workloadUID string) ([]WorkloadRevision, error) {
+	dynamicClient := GetDynamicClient()
+
+	crGVR, ok := discovery.GetGVR("controllerrevisions")
+	if !ok {
+		return nil, fmt.Errorf("controllerrevisions resource not found")
+	}
+
+	crList, err := dynamicClient.Resource(crGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list controllerrevisions: %w", err)
+	}
+
+	var revisions []WorkloadRevision
+	var maxRevision int64
+
+	for _, cr := range crList.Items {
+		// Filter by ownerReference matching the workload UID
+		owners := cr.GetOwnerReferences()
+		owned := false
+		for _, ref := range owners {
+			if string(ref.UID) == workloadUID {
+				owned = true
+				break
+			}
+		}
+		if !owned {
+			continue
+		}
+
+		// Extract revision number from .revision field
+		revNum, found, err := unstructured.NestedInt64(cr.Object, "revision")
+		if err != nil || !found {
+			continue
+		}
+
+		// Extract primary container image from .data.spec.template.spec.containers[0].image
+		image := extractContainerImageFromData(cr.Object)
+
+		// Extract template as YAML for diff
+		// ControllerRevision .data contains the workload spec (includes template)
+		var templateStr string
+		if data, found, _ := unstructured.NestedMap(cr.Object, "data"); found && data != nil {
+			// Try to extract just the pod template from the spec
+			if template, tFound, _ := unstructured.NestedMap(data, "spec", "template"); tFound && template != nil {
+				if templateYAML, err := yaml.Marshal(template); err == nil {
+					templateStr = string(templateYAML)
+				}
+			} else {
+				// Fallback: use the full data (some CRDs structure differently)
+				if dataYAML, err := yaml.Marshal(data); err == nil {
+					templateStr = string(dataYAML)
+				}
+			}
+		}
+
+		if revNum > maxRevision {
+			maxRevision = revNum
+		}
+
+		revisions = append(revisions, WorkloadRevision{
+			Number:    revNum,
+			CreatedAt: cr.GetCreationTimestamp().Time,
+			Image:     image,
+			Template:  templateStr,
+		})
+	}
+
+	// Mark the current revision
+	for i := range revisions {
+		if revisions[i].Number == maxRevision {
+			revisions[i].IsCurrent = true
+		}
+	}
+
+	// Sort descending by revision number
+	sort.Slice(revisions, func(i, j int) bool {
+		return revisions[i].Number > revisions[j].Number
+	})
+
+	return revisions, nil
+}
+
+// extractContainerImage extracts the first container image from spec.template.spec.containers[0].image
+func extractContainerImage(obj map[string]any) string {
+	containers, found, _ := unstructured.NestedSlice(obj, "spec", "template", "spec", "containers")
+	if !found || len(containers) == 0 {
+		return ""
+	}
+	if container, ok := containers[0].(map[string]any); ok {
+		if image, ok := container["image"].(string); ok {
+			return image
+		}
+	}
+	return ""
+}
+
+// extractContainerImageFromData extracts the first container image from .data.spec.template.spec.containers[0].image
+// for ControllerRevision objects.
+func extractContainerImageFromData(obj map[string]any) string {
+	data, found, _ := unstructured.NestedMap(obj, "data")
+	if !found {
+		return ""
+	}
+	return extractContainerImage(data)
+}
+
+// RollbackWorkload rolls back a Deployment, StatefulSet, or DaemonSet to a specific revision.
+func RollbackWorkload(ctx context.Context, kind, namespace, name string, revision int64) error {
+	dynamicClient := GetDynamicClient()
+	if dynamicClient == nil {
+		return fmt.Errorf("dynamic client not initialized")
+	}
+
+	discovery := GetResourceDiscovery()
+	if discovery == nil {
+		return fmt.Errorf("resource discovery not initialized")
+	}
+
+	normalizedKind := normalizeKind(kind)
+
+	// First fetch the workload to get its UID
+	workloadGVR, ok := discovery.GetGVR(normalizedKind)
+	if !ok {
+		return fmt.Errorf("unknown resource kind: %s", kind)
+	}
+
+	workload, err := dynamicClient.Resource(workloadGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to get workload: %w", err)
+	}
+	workloadUID := string(workload.GetUID())
+
+	switch normalizedKind {
+	case "deployments":
+		return rollbackDeployment(ctx, discovery, namespace, name, workloadUID, revision)
+	case "statefulsets", "daemonsets":
+		return rollbackControllerRevision(ctx, discovery, normalizedKind, namespace, name, workloadUID, revision)
+	default:
+		return fmt.Errorf("rollback not supported for %s", kind)
+	}
+}
+
+// rollbackDeployment rolls back a Deployment by copying the target ReplicaSet's pod template.
+func rollbackDeployment(ctx context.Context, discovery *ResourceDiscovery, namespace, name, workloadUID string, revision int64) error {
+	dynamicClient := GetDynamicClient()
+
+	rsGVR, ok := discovery.GetGVR("replicasets")
+	if !ok {
+		return fmt.Errorf("replicasets resource not found")
+	}
+
+	// List ReplicaSets to find the one with the target revision
+	rsList, err := dynamicClient.Resource(rsGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list replicasets: %w", err)
+	}
+
+	var targetRS *unstructured.Unstructured
+	for i := range rsList.Items {
+		rs := &rsList.Items[i]
+		owners := rs.GetOwnerReferences()
+		owned := false
+		for _, ref := range owners {
+			if string(ref.UID) == workloadUID {
+				owned = true
+				break
+			}
+		}
+		if !owned {
+			continue
+		}
+
+		annotations := rs.GetAnnotations()
+		revStr, ok := annotations["deployment.kubernetes.io/revision"]
+		if !ok {
+			continue
+		}
+		revNum, err := strconv.ParseInt(revStr, 10, 64)
+		if err != nil {
+			continue
+		}
+		if revNum == revision {
+			targetRS = rs
+			break
+		}
+	}
+
+	if targetRS == nil {
+		return fmt.Errorf("revision %d not found", revision)
+	}
+
+	// Extract the pod template from the target RS
+	podTemplate, found, err := unstructured.NestedMap(targetRS.Object, "spec", "template")
+	if err != nil || !found {
+		return fmt.Errorf("failed to extract pod template from revision %d", revision)
+	}
+
+	// Build the patch: replace the Deployment's spec.template with the target RS's template
+	patchData := map[string]any{
+		"spec": map[string]any{
+			"template": podTemplate,
+		},
+	}
+	patchBytes, err := json.Marshal(patchData)
+	if err != nil {
+		return fmt.Errorf("failed to build rollback patch: %w", err)
+	}
+
+	deployGVR, ok := discovery.GetGVR("deployments")
+	if !ok {
+		return fmt.Errorf("deployments resource not found")
+	}
+
+	_, err = dynamicClient.Resource(deployGVR).Namespace(namespace).Patch(
+		ctx,
+		name,
+		types.MergePatchType,
+		patchBytes,
+		metav1.PatchOptions{},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to rollback deployment: %w", err)
+	}
+
+	return nil
+}
+
+// rollbackControllerRevision rolls back a StatefulSet or DaemonSet using a ControllerRevision's data.
+func rollbackControllerRevision(ctx context.Context, discovery *ResourceDiscovery, normalizedKind, namespace, name, workloadUID string, revision int64) error {
+	dynamicClient := GetDynamicClient()
+
+	crGVR, ok := discovery.GetGVR("controllerrevisions")
+	if !ok {
+		return fmt.Errorf("controllerrevisions resource not found")
+	}
+
+	// List ControllerRevisions to find the one with the target revision
+	crList, err := dynamicClient.Resource(crGVR).Namespace(namespace).List(ctx, metav1.ListOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to list controllerrevisions: %w", err)
+	}
+
+	var targetCR *unstructured.Unstructured
+	for i := range crList.Items {
+		cr := &crList.Items[i]
+		owners := cr.GetOwnerReferences()
+		owned := false
+		for _, ref := range owners {
+			if string(ref.UID) == workloadUID {
+				owned = true
+				break
+			}
+		}
+		if !owned {
+			continue
+		}
+
+		revNum, found, err := unstructured.NestedInt64(cr.Object, "revision")
+		if err != nil || !found {
+			continue
+		}
+		if revNum == revision {
+			targetCR = cr
+			break
+		}
+	}
+
+	if targetCR == nil {
+		return fmt.Errorf("revision %d not found", revision)
+	}
+
+	// Extract the .data field from the ControllerRevision
+	data, found, err := unstructured.NestedMap(targetCR.Object, "data")
+	if err != nil || !found {
+		return fmt.Errorf("failed to extract data from revision %d", revision)
+	}
+
+	// Build a strategic merge patch from the ControllerRevision's data
+	patchBytes, err := json.Marshal(data)
+	if err != nil {
+		return fmt.Errorf("failed to build rollback patch: %w", err)
+	}
+
+	gvr, ok := discovery.GetGVR(normalizedKind)
+	if !ok {
+		return fmt.Errorf("unknown resource kind: %s", normalizedKind)
+	}
+
+	_, err = dynamicClient.Resource(gvr).Namespace(namespace).Patch(
+		ctx,
+		name,
+		types.StrategicMergePatchType,
+		patchBytes,
+		metav1.PatchOptions{},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to rollback workload: %w", err)
+	}
+
+	return nil
 }

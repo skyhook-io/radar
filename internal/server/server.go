@@ -168,9 +168,11 @@ func (s *Server) setupRoutes() {
 			r.Post("/cronjobs/{namespace}/{name}/suspend", s.handleSuspendCronJob)
 			r.Post("/cronjobs/{namespace}/{name}/resume", s.handleResumeCronJob)
 
-			// Workload restart
+			// Workload restart, scale, rollback
 			r.Post("/workloads/{kind}/{namespace}/{name}/restart", s.handleRestartWorkload)
 			r.Post("/workloads/{kind}/{namespace}/{name}/scale", s.handleScaleWorkload)
+			r.Get("/workloads/{kind}/{namespace}/{name}/revisions", s.handleWorkloadRevisions)
+			r.Post("/workloads/{kind}/{namespace}/{name}/rollback", s.handleRollbackWorkload)
 
 			// Workload logs (non-streaming)
 			r.Get("/workloads/{kind}/{namespace}/{name}/logs", s.handleWorkloadLogs)
@@ -1420,6 +1422,109 @@ func (s *Server) handleScaleWorkload(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, map[string]any{
 		"message":  "Workload scaled",
 		"replicas": req.Replicas,
+	})
+}
+
+// handleWorkloadRevisions returns the revision history for a Deployment, StatefulSet, or DaemonSet
+func (s *Server) handleWorkloadRevisions(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+
+	kind := chi.URLParam(r, "kind")
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	// Validate that this is a rollbackable workload type
+	validKinds := map[string]bool{
+		"deployments":  true,
+		"statefulsets": true,
+		"daemonsets":   true,
+	}
+	if !validKinds[strings.ToLower(kind)] {
+		s.writeError(w, http.StatusBadRequest, "revision history only available for Deployments, StatefulSets, and DaemonSets")
+		return
+	}
+
+	revisions, err := k8s.ListWorkloadRevisions(r.Context(), kind, namespace, name)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			s.writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if apierrors.IsForbidden(err) {
+			s.writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		log.Printf("[revisions] Failed to list revisions for %s %s/%s: %v", kind, namespace, name, err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, revisions)
+}
+
+// handleRollbackWorkload rolls back a Deployment, StatefulSet, or DaemonSet to a previous revision
+func (s *Server) handleRollbackWorkload(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+
+	kind := chi.URLParam(r, "kind")
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	// Parse request body
+	var req struct {
+		Revision int64 `json:"revision"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	// Validate revision
+	if req.Revision <= 0 {
+		s.writeError(w, http.StatusBadRequest, "revision must be a positive integer")
+		return
+	}
+
+	// Validate that this is a rollbackable workload type
+	validKinds := map[string]bool{
+		"deployments":  true,
+		"statefulsets": true,
+		"daemonsets":   true,
+	}
+	if !validKinds[strings.ToLower(kind)] {
+		s.writeError(w, http.StatusBadRequest, "rollback only available for Deployments, StatefulSets, and DaemonSets")
+		return
+	}
+
+	err := k8s.RollbackWorkload(r.Context(), kind, namespace, name, req.Revision)
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			s.writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if apierrors.IsForbidden(err) {
+			s.writeError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "not found") {
+			s.writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "not supported") {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		log.Printf("[rollback] Failed to rollback %s %s/%s to revision %d: %v", kind, namespace, name, req.Revision, err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, map[string]string{
+		"message": fmt.Sprintf("Rollback to revision %d initiated", req.Revision),
 	})
 }
 

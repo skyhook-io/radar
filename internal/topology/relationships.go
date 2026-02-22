@@ -131,8 +131,47 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 		}
 	}
 
+	// Convenience shortcuts: bridge the Deployment↔ReplicaSet↔Pod gap
+	// so users see Pods directly under Deployments and vice versa.
+	kindLower := strings.ToLower(kind)
+
+	// Deployment → show grandchild Pods (Deployment→ReplicaSet→Pod)
+	if kindLower == "deployments" || kindLower == "deployment" {
+		for _, child := range rel.Children {
+			if strings.EqualFold(child.Kind, "ReplicaSet") {
+				childID := buildNodeID(child.Kind, child.Namespace, child.Name)
+				for _, edge := range topo.Edges {
+					if edge.Source == childID && edge.Type == EdgeManages {
+						podRef := parseNodeID(edge.Target)
+						if podRef != nil && strings.EqualFold(podRef.Kind, "Pod") {
+							enrichRef(podRef)
+							rel.Pods = append(rel.Pods, *podRef)
+						}
+					}
+				}
+			}
+		}
+	}
+
+	// Pod → if owner is a ReplicaSet, also show the grandparent Deployment
+	if kindLower == "pods" || kindLower == "pod" {
+		if rel.Owner != nil && strings.EqualFold(rel.Owner.Kind, "ReplicaSet") {
+			ownerID := buildNodeID(rel.Owner.Kind, rel.Owner.Namespace, rel.Owner.Name)
+			for _, edge := range topo.Edges {
+				if edge.Target == ownerID && edge.Type == EdgeManages {
+					deployRef := parseNodeID(edge.Source)
+					if deployRef != nil && strings.EqualFold(deployRef.Kind, "Deployment") {
+						enrichRef(deployRef)
+						rel.Deployment = deployRef
+						break
+					}
+				}
+			}
+		}
+	}
+
 	// Return nil if no relationships found
-	if rel.Owner == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
+	if rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
 		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
 		rel.ScaleTarget == nil && len(rel.Pods) == 0 {

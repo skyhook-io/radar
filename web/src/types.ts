@@ -305,6 +305,7 @@ export interface ResourceRef {
 // Computed relationships for a resource
 export interface Relationships {
   owner?: ResourceRef
+  deployment?: ResourceRef   // Grandparent Deployment (for Pods owned by ReplicaSets)
   children?: ResourceRef[]
   services?: ResourceRef[]
   ingresses?: ResourceRef[]

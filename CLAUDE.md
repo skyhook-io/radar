@@ -132,12 +132,33 @@ radar/
 
 ## Development Commands
 
+### CRITICAL: Frontend Embedding Pipeline
+
+The Go binary serves the frontend via `go:embed` from `internal/static/dist/`, NOT from `web/dist/`. The build pipeline is:
+
+```
+web/src → (npm run build) → web/dist → (make embed) → internal/static/dist → (go build) → binary
+```
+
+**ALWAYS use `make build` to build the full application.** Running `cd web && npm run build` followed by `go build` will NOT update the served frontend — the embed step (`make embed`) that copies `web/dist/*` to `internal/static/dist/` will be skipped, and the binary will serve stale frontend assets.
+
+```bash
+# CORRECT: Full build (frontend + embed + backend)
+make build
+
+# CORRECT: Quick rebuild after frontend-only changes
+make restart-fe    # frontend + embed + restart server
+
+# CORRECT: Full rebuild + restart
+make restart       # frontend + embed + backend + restart server
+
+# WRONG: This skips the embed step!
+cd web && npm run build && cd .. && go build -o radar ./cmd/explorer
+```
+
 ### Backend (Go)
 ```bash
-# Build binary
-go build -o radar ./cmd/explorer
-
-# Run in dev mode (serves frontend from filesystem, not embedded)
+# Run in dev mode (serves frontend from web/dist instead of embedded — no embed step needed)
 go run ./cmd/explorer --dev
 
 # Run tests
@@ -166,19 +187,18 @@ npm run tsc
 
 ### Full Build
 ```bash
-# Build everything (frontend + embedded binary)
-make build
-
-# Run the complete application
-./radar
-
-# Other Makefile targets
-make frontend       # Build frontend only
-make backend        # Build backend only
+make build          # Build everything (frontend + embed + binary)
+make restart        # Build + restart server
+make restart-fe     # Frontend-only rebuild + restart (no Go recompile)
+make frontend       # Build frontend only (to web/dist)
+make embed          # Copy web/dist → internal/static/dist
+make backend        # Build Go binary only (uses embedded assets)
 make watch-frontend # Vite dev server (port 9273)
 make watch-backend  # Air hot reload (port 9280)
 make test           # Run all tests
-make docker         # Build Docker image
+make tsc            # Type check frontend
+make kill           # Kill running radar on port 9280
+make clean          # Remove build artifacts
 ```
 
 ### Development Ports
@@ -273,6 +293,8 @@ GET  /api/workloads/{kind}/{ns}/{name}/logs/stream # Stream aggregated workload 
 GET  /api/workloads/{kind}/{ns}/{name}/pods        # List pods for a workload
 POST /api/workloads/{kind}/{ns}/{name}/restart     # Rolling restart workload
 POST /api/workloads/{kind}/{ns}/{name}/scale       # Scale workload replicas
+GET  /api/workloads/{kind}/{ns}/{name}/revisions   # List revision history (Deployments, StatefulSets, DaemonSets)
+POST /api/workloads/{kind}/{ns}/{name}/rollback    # Rollback to a specific revision
 ```
 
 ### CronJob Operations
@@ -431,7 +453,7 @@ GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbos
 
 ### Resource Relationships
 - Computed at query time for resource detail views
-- Tracks: parent (owner), children (owned), config (ConfigMaps/Secrets), network (Services/Ingresses/Gateways/Routes)
+- Tracks: parent (owner), children (owned), deployment (grandparent shortcut for Pods owned by ReplicaSets), config (ConfigMaps/Secrets), network (Services/Ingresses/Gateways/Routes)
 - Used for topology edges and change propagation
 
 ### AI Context Minification

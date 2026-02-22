@@ -380,6 +380,7 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
 
   const hasRelationships =
     relationships.owner ||
+    relationships.deployment ||
     (relationships.children && relationships.children.length > 0) ||
     (relationships.services && relationships.services.length > 0) ||
     (relationships.ingresses && relationships.ingresses.length > 0) ||
@@ -398,6 +399,9 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
       <div className="space-y-3">
         {relationships.owner && (
           <RelationshipGroup label="Owner" refs={[relationships.owner]} onNavigate={onNavigate} />
+        )}
+        {relationships.deployment && (
+          <RelationshipGroup label="Deployment" refs={[relationships.deployment]} onNavigate={onNavigate} />
         )}
         {relationships.children && relationships.children.length > 0 && (
           <RelationshipGroup label="Children" refs={dedupeRefs(relationships.children)} onNavigate={onNavigate} />
