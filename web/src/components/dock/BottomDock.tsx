@@ -2,6 +2,7 @@ import { useState, useCallback, useRef, useEffect } from 'react'
 import { X, ChevronDown, ChevronUp, Terminal, FileText, Trash2, Layers } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useDock, DockTab } from './DockContext'
+import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 import { TerminalTab } from './TerminalTab'
 import { LogsTab } from './LogsTab'
 import { WorkloadLogsTab } from './WorkloadLogsTab'
@@ -48,6 +49,17 @@ export function BottomDock() {
       document.removeEventListener('mouseup', handleMouseUp)
     }
   }, [])
+
+  // Dock toggle shortcut (Ctrl+`)
+  useRegisterShortcut({
+    id: 'dock-toggle',
+    keys: 'Ctrl+`',
+    description: 'Toggle dock',
+    category: 'Dock',
+    scope: 'global',
+    handler: () => toggleExpanded(),
+    enabled: tabs.length > 0,
+  })
 
   // Don't render if no tabs - AFTER all hooks
   if (tabs.length === 0) {

@@ -3,6 +3,7 @@ import { Search, X, ChevronRight } from 'lucide-react'
 import { getTopologyIcon } from '../../utils/resource-icons'
 import { clsx } from 'clsx'
 import type { TopologyNode } from '../../types'
+import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 
 interface TopologySearchProps {
   nodes: TopologyNode[]
@@ -92,26 +93,27 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode }: TopologySe
     }
   }, [selectedIndex, filteredNodes.length])
 
-  // Handle keyboard shortcuts
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Cmd+K or Ctrl+K to open search
-      if ((e.metaKey || e.ctrlKey) && e.key === 'k') {
-        e.preventDefault()
-        setIsOpen(true)
-        setTimeout(() => inputRef.current?.focus(), 0)
-      }
-
-      // Escape to close
-      if (e.key === 'Escape' && isOpen) {
-        e.preventDefault()
-        handleClose()
-      }
-    }
-
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [isOpen])
+  // Keyboard shortcuts for topology search
+  useRegisterShortcut({
+    id: 'topology-search',
+    keys: '/',
+    description: 'Search topology',
+    category: 'Search',
+    scope: 'topology',
+    handler: () => {
+      setIsOpen(true)
+      setTimeout(() => inputRef.current?.focus(), 0)
+    },
+  })
+  useRegisterShortcut({
+    id: 'topology-search-close',
+    keys: 'Escape',
+    description: 'Close search',
+    category: 'Topology',
+    scope: 'topology',
+    handler: () => { if (isOpen) handleClose() },
+    enabled: isOpen,
+  })
 
   // Navigate to node and zoom
   const navigateToNode = useCallback((node: TopologyNode) => {

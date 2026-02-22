@@ -1,5 +1,6 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
+import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { Package, Search, RefreshCw, ArrowUpCircle, LayoutGrid, List, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
@@ -46,6 +47,102 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
         r.chart.toLowerCase().includes(term)
     )
   }, [releases, searchTerm])
+
+  // Keyboard navigation state
+  const searchInputRef = useRef<HTMLInputElement>(null)
+  const highlightedRowRef = useRef<HTMLTableRowElement>(null)
+  const [highlightedIndex, setHighlightedIndex] = useState(-1)
+  const filteredReleasesCountRef = useRef(0)
+  filteredReleasesCountRef.current = filteredReleases.length
+
+  // Reset highlight when search changes
+  useEffect(() => { setHighlightedIndex(-1) }, [searchTerm])
+
+  // Scroll highlighted row into view
+  useEffect(() => {
+    if (highlightedIndex >= 0 && highlightedRowRef.current) {
+      highlightedRowRef.current.scrollIntoView({ block: 'nearest' })
+    }
+  }, [highlightedIndex])
+
+  // Helper: get release at highlighted index
+  const getHighlightedRelease = useCallback(() => {
+    if (highlightedIndex < 0 || highlightedIndex >= filteredReleases.length) return null
+    return filteredReleases[highlightedIndex]
+  }, [highlightedIndex, filteredReleases])
+
+  // Register Helm keyboard shortcuts
+  useRegisterShortcuts([
+    {
+      id: 'helm-search',
+      keys: '/',
+      description: 'Focus search',
+      category: 'Search',
+      scope: 'helm',
+      handler: () => searchInputRef.current?.focus(),
+    },
+    {
+      id: 'helm-nav-down',
+      keys: 'j',
+      description: 'Next row',
+      category: 'Helm',
+      scope: 'helm',
+      handler: () => setHighlightedIndex(i => {
+        const max = filteredReleasesCountRef.current - 1
+        return i < max ? i + 1 : i
+      }),
+    },
+    {
+      id: 'helm-nav-down-arrow',
+      keys: 'ArrowDown',
+      description: 'Next row',
+      category: 'Helm',
+      scope: 'helm',
+      handler: () => setHighlightedIndex(i => {
+        const max = filteredReleasesCountRef.current - 1
+        return i < max ? i + 1 : i
+      }),
+    },
+    {
+      id: 'helm-nav-up',
+      keys: 'k',
+      description: 'Previous row',
+      category: 'Helm',
+      scope: 'helm',
+      handler: () => setHighlightedIndex(i => i > 0 ? i - 1 : 0),
+    },
+    {
+      id: 'helm-nav-up-arrow',
+      keys: 'ArrowUp',
+      description: 'Previous row',
+      category: 'Helm',
+      scope: 'helm',
+      handler: () => setHighlightedIndex(i => i > 0 ? i - 1 : 0),
+    },
+    {
+      id: 'helm-open',
+      keys: 'Enter',
+      description: 'Open release detail',
+      category: 'Helm',
+      scope: 'helm',
+      handler: () => {
+        const release = getHighlightedRelease()
+        if (release) onReleaseClick?.(release.namespace, release.name)
+      },
+      enabled: highlightedIndex >= 0,
+    },
+    {
+      id: 'helm-clear-highlight',
+      keys: 'Escape',
+      description: 'Clear highlight / blur search',
+      category: 'Helm',
+      scope: 'helm',
+      handler: () => {
+        if (highlightedIndex >= 0) setHighlightedIndex(-1)
+        else searchInputRef.current?.blur()
+      },
+    },
+  ])
 
   const handleChartSelect = (repo: string, chart: string, version: string, source: ChartSource) => {
     setSelectedChart({ repo, chart, version, source })
@@ -110,6 +207,7 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
               <div className="flex-1 relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
                 <input
+                  ref={searchInputRef}
                   type="text"
                   placeholder="Search releases..."
                   value={searchTerm}
@@ -188,16 +286,19 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
                     </tr>
                   </thead>
                   <tbody className="table-divide-subtle">
-                    {filteredReleases.map((release) => (
+                    {filteredReleases.map((release, index) => (
                       <ReleaseRow
                         key={`${release.namespace}-${release.name}`}
+                        ref={index === highlightedIndex ? highlightedRowRef : null}
                         release={release}
                         upgradeInfo={upgradeInfo?.releases[`${release.namespace}/${release.name}`]}
                         isSelected={
                           selectedRelease?.namespace === release.namespace &&
                           selectedRelease?.name === release.name
                         }
+                        isHighlighted={index === highlightedIndex}
                         onClick={() => onReleaseClick?.(release.namespace, release.name)}
+                        onMouseEnter={() => setHighlightedIndex(-1)}
                       />
                     ))}
                   </tbody>
@@ -229,7 +330,9 @@ interface ReleaseRowProps {
   release: HelmRelease
   upgradeInfo?: UpgradeInfo
   isSelected: boolean
+  isHighlighted?: boolean
   onClick: () => void
+  onMouseEnter?: () => void
 }
 
 // Get actionable tooltip content for health issues
@@ -274,7 +377,8 @@ function getActionableTooltip(issue: string | undefined, summary: string | undef
   )
 }
 
-function ReleaseRow({ release, upgradeInfo, isSelected, onClick }: ReleaseRowProps) {
+const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
+  function ReleaseRow({ release, upgradeInfo, isSelected, isHighlighted, onClick, onMouseEnter }, ref) {
   // Health badge styling
   const getHealthBadge = () => {
     if (!release.resourceHealth || release.resourceHealth === 'unknown') return null
@@ -303,12 +407,16 @@ function ReleaseRow({ release, upgradeInfo, isSelected, onClick }: ReleaseRowPro
 
   return (
     <tr
+      ref={ref}
       onClick={onClick}
+      onMouseEnter={onMouseEnter}
       className={clsx(
         'cursor-pointer transition-colors',
         isSelected
           ? 'bg-blue-500/20 hover:bg-blue-500/30'
-          : 'hover:bg-theme-surface/50'
+          : isHighlighted
+            ? 'bg-blue-500/10 ring-1 ring-inset ring-blue-400/30'
+            : 'hover:bg-theme-surface/50'
       )}
     >
       <td className="px-4 py-3">
@@ -360,4 +468,4 @@ function ReleaseRow({ release, upgradeInfo, isSelected, onClick }: ReleaseRowPro
       </td>
     </tr>
   )
-}
+})

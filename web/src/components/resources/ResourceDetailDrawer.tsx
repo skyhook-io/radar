@@ -1,5 +1,6 @@
-import { useState, useCallback, useEffect, useRef } from 'react'
+import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
+import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import {
   X,
   Copy,
@@ -145,6 +146,8 @@ interface ResourceDetailDrawerProps {
   resource: SelectedResource
   onClose: () => void
   onNavigate?: (resource: SelectedResource) => void
+  /** Open directly to YAML view */
+  initialTab?: 'detail' | 'yaml'
 }
 
 const MIN_WIDTH = 400
@@ -167,9 +170,9 @@ function getDefaultWidth(kind: string): number {
   return WIDE_KINDS.has(kind.toLowerCase()) ? WIDE_WIDTH : DEFAULT_WIDTH
 }
 
-export function ResourceDetailDrawer({ resource, onClose, onNavigate }: ResourceDetailDrawerProps) {
+export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab }: ResourceDetailDrawerProps) {
   const [copied, setCopied] = useState<string | null>(null)
-  const [showYaml, setShowYaml] = useState(false)
+  const [showYaml, setShowYaml] = useState(initialTab === 'yaml')
   const [isEditing, setIsEditing] = useState(false)
   const [editedYaml, setEditedYaml] = useState('')
   const [yamlErrors, setYamlErrors] = useState<string[]>([])
@@ -203,14 +206,37 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate }: Resource
     }
   }, [onNavigate])
 
-  // ESC key handler
-  useEffect(() => {
-    const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === 'Escape') onClose()
-    }
-    document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [onClose])
+  // Drawer keyboard shortcuts
+  const drawerShortcuts = useMemo(() => [
+    {
+      id: 'drawer-yaml',
+      keys: 'y',
+      description: 'Switch to YAML view',
+      category: 'Drawer' as const,
+      scope: 'drawer' as const,
+      handler: () => setShowYaml(true),
+      enabled: true,
+    },
+    {
+      id: 'drawer-detail',
+      keys: 'e',
+      description: 'Switch to detail view',
+      category: 'Drawer' as const,
+      scope: 'drawer' as const,
+      handler: () => setShowYaml(false),
+      enabled: true,
+    },
+    {
+      id: 'drawer-close',
+      keys: 'Escape',
+      description: 'Close drawer',
+      category: 'Drawer' as const,
+      scope: 'drawer' as const,
+      handler: () => onClose(),
+      enabled: true,
+    },
+  ], [onClose])
+  useRegisterShortcuts(drawerShortcuts)
 
   // Resize handlers
   const handleResizeStart = useCallback((e: React.MouseEvent) => {

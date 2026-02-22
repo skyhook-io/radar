@@ -19,6 +19,7 @@ import {
 import '@xyflow/react/dist/style.css'
 
 import { AlertTriangle, RotateCw, Scissors, Shield } from 'lucide-react'
+import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 
 import { K8sResourceNode } from './K8sResourceNode'
 import { GroupNode } from './GroupNode'
@@ -641,10 +642,54 @@ const VIEWPORT_ANIMATION_DURATION = 400
 // Inner component to handle animated viewport transitions and zoom-based CSS variables
 // Must be inside ReactFlow to use useReactFlow hook
 function ViewportController({ structureKey }: { structureKey: string }) {
-  const { fitView, getViewport } = useReactFlow()
+  const { fitView, zoomIn, zoomOut, setViewport, getViewport } = useReactFlow()
   const nodes = useNodes() // Reactive hook to watch node changes
   const prevStructureKeyRef = useRef<string>('')
   const prevNodesLengthRef = useRef(0)
+
+  // Topology keyboard shortcuts
+  useRegisterShortcuts([
+    {
+      id: 'topology-fit-view',
+      keys: 'f',
+      description: 'Fit graph to screen',
+      category: 'Topology',
+      scope: 'topology',
+      handler: () => fitView({ padding: 0.15, duration: VIEWPORT_ANIMATION_DURATION }),
+    },
+    {
+      id: 'topology-zoom-in',
+      keys: '+',
+      description: 'Zoom in',
+      category: 'Topology',
+      scope: 'topology',
+      handler: () => zoomIn({ duration: 200 }),
+    },
+    {
+      id: 'topology-zoom-in-equals',
+      keys: '=',
+      description: 'Zoom in',
+      category: 'Topology',
+      scope: 'topology',
+      handler: () => zoomIn({ duration: 200 }),
+    },
+    {
+      id: 'topology-zoom-out',
+      keys: '-',
+      description: 'Zoom out',
+      category: 'Topology',
+      scope: 'topology',
+      handler: () => zoomOut({ duration: 200 }),
+    },
+    {
+      id: 'topology-reset-zoom',
+      keys: '0',
+      description: 'Reset zoom',
+      category: 'Topology',
+      scope: 'topology',
+      handler: () => setViewport({ x: 0, y: 0, zoom: 1 }, { duration: 200 }),
+    },
+  ])
 
   // Update CSS variables for header offset and scale based on zoom
   // This allows child nodes to move up when header shrinks (zoomed in)

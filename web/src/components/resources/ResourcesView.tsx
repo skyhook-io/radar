@@ -131,6 +131,8 @@ import { CertificateCell, CertificateRequestCell, ClusterIssuerCell, IssuerCell,
 import { NodePoolCell, NodeClaimCell, EC2NodeClassCell } from './renderers/karpenter-cells'
 import { ScaledObjectCell, ScaledJobCell, TriggerAuthenticationCell, ClusterTriggerAuthenticationCell } from './renderers/keda-cells'
 import { usePinnedKinds } from '../../hooks/useFavorites'
+import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
+import { useOpenWorkloadLogs } from '../dock'
 
 // Pod problem filter options (special multi-select, not a single column value)
 const POD_PROBLEMS = ['CrashLoopBackOff', 'ImagePullBackOff', 'OOMKilled', 'Unschedulable', 'Not Ready', 'High Restarts'] as const
@@ -884,6 +886,7 @@ interface ResourcesViewProps {
   namespaces: string[]
   selectedResource?: SelectedResource | null
   onResourceClick?: NavigateToResource
+  onResourceClickYaml?: NavigateToResource
   onKindChange?: () => void // Called when user changes resource type in sidebar
 }
 
@@ -928,7 +931,7 @@ function getInitialFiltersFromURL() {
 // Sort state type
 type SortDirection = 'asc' | 'desc' | null
 
-export function ResourcesView({ namespaces, selectedResource, onResourceClick, onKindChange }: ResourcesViewProps) {
+export function ResourcesView({ namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange }: ResourcesViewProps) {
   const location = useLocation()
   const initialFilters = getInitialFiltersFromURL()
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(getInitialKindFromURL)
@@ -1148,19 +1151,196 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     isColumnSettingsLoaded.current = false
   }, [selectedKind.name, allColumns])
 
-  // Keyboard shortcut: / or Cmd/Ctrl+K to focus search
+  // Keyboard shortcut: / to focus search
+  useRegisterShortcut({
+    id: 'resources-search',
+    keys: '/',
+    description: 'Focus search',
+    category: 'Search',
+    scope: 'resources',
+    handler: () => searchInputRef.current?.focus(),
+  })
+
+  // Keyboard navigation: highlighted row state
+  const [highlightedIndex, setHighlightedIndex] = useState(-1)
+  const highlightedRowRef = useRef<HTMLTableRowElement>(null)
+
+  // Reset highlight when kind, search, sort, or namespace changes
+  const namespacesKey = namespaces.join(',')
+  useEffect(() => { setHighlightedIndex(-1) }, [selectedKind.name, searchTerm, sortColumn, sortDirection, namespacesKey])
+
+  // Scroll highlighted row into view
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === '/' || ((e.metaKey || e.ctrlKey) && e.key === 'k')) {
-        const tag = (e.target as HTMLElement)?.tagName
-        if (tag === 'INPUT' || tag === 'TEXTAREA') return
-        e.preventDefault()
-        searchInputRef.current?.focus()
-      }
+    if (highlightedIndex >= 0 && highlightedRowRef.current) {
+      highlightedRowRef.current.scrollIntoView({ block: 'nearest' })
     }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
+  }, [highlightedIndex])
+
+  // Open logs for workload resources
+  const openWorkloadLogs = useOpenWorkloadLogs()
+
+  // Helper: get resource at highlighted index
+  const getHighlightedResource = useCallback(() => {
+    // filteredResources is computed later in the component — use a ref to access it
+    return highlightedResourceRef.current
   }, [])
+
+  // Register navigation shortcuts
+  useRegisterShortcuts([
+    {
+      id: 'resources-nav-down',
+      keys: 'j',
+      description: 'Next row',
+      category: 'Table',
+      scope: 'resources',
+      handler: () => setHighlightedIndex(i => {
+        const max = filteredResourceCountRef.current - 1
+        return i < max ? i + 1 : i
+      }),
+    },
+    {
+      id: 'resources-nav-down-arrow',
+      keys: 'ArrowDown',
+      description: 'Next row',
+      category: 'Table',
+      scope: 'resources',
+      handler: () => setHighlightedIndex(i => {
+        const max = filteredResourceCountRef.current - 1
+        return i < max ? i + 1 : i
+      }),
+    },
+    {
+      id: 'resources-nav-up',
+      keys: 'k',
+      description: 'Previous row',
+      category: 'Table',
+      scope: 'resources',
+      handler: () => setHighlightedIndex(i => i > 0 ? i - 1 : 0),
+    },
+    {
+      id: 'resources-nav-up-arrow',
+      keys: 'ArrowUp',
+      description: 'Previous row',
+      category: 'Table',
+      scope: 'resources',
+      handler: () => setHighlightedIndex(i => i > 0 ? i - 1 : 0),
+    },
+    {
+      id: 'resources-nav-top',
+      keys: 'g g',
+      description: 'Jump to first row',
+      category: 'Table',
+      scope: 'resources',
+      handler: () => setHighlightedIndex(0),
+    },
+    {
+      id: 'resources-nav-bottom',
+      keys: 'G',
+      description: 'Jump to last row',
+      category: 'Table',
+      scope: 'resources',
+      handler: () => setHighlightedIndex(Math.max(0, filteredResourceCountRef.current - 1)),
+    },
+    {
+      id: 'resources-open',
+      keys: 'Enter',
+      description: 'Open resource detail',
+      category: 'Resource Actions',
+      scope: 'resources',
+      handler: () => {
+        const res = getHighlightedResource()
+        if (!res?.metadata?.name) return
+        onResourceClick?.({ kind: selectedKind.name, namespace: res.metadata.namespace || '', name: res.metadata.name, group: selectedKind.group })
+      },
+      enabled: highlightedIndex >= 0,
+    },
+    {
+      id: 'resources-open-detail',
+      keys: 'd',
+      description: 'Open resource detail',
+      category: 'Resource Actions',
+      scope: 'resources',
+      handler: () => {
+        const res = getHighlightedResource()
+        if (!res?.metadata?.name) return
+        onResourceClick?.({ kind: selectedKind.name, namespace: res.metadata.namespace || '', name: res.metadata.name, group: selectedKind.group })
+      },
+      enabled: highlightedIndex >= 0,
+    },
+    {
+      id: 'resources-open-yaml',
+      keys: 'y',
+      description: 'Open YAML view',
+      category: 'Resource Actions',
+      scope: 'resources',
+      handler: () => {
+        const res = getHighlightedResource()
+        if (!res?.metadata?.name) return
+        const cb = onResourceClickYaml || onResourceClick
+        cb?.({ kind: selectedKind.name, namespace: res.metadata.namespace || '', name: res.metadata.name, group: selectedKind.group })
+      },
+      enabled: highlightedIndex >= 0,
+    },
+    {
+      id: 'resources-logs',
+      keys: 'l',
+      description: 'Open logs',
+      category: 'Resource Actions',
+      scope: 'resources',
+      handler: () => {
+        const res = getHighlightedResource()
+        if (!res) return
+        const kindLower = selectedKind.name.toLowerCase()
+        const ns = res.metadata?.namespace || ''
+        const name = res.metadata?.name || ''
+        if (kindLower === 'pods') {
+          openWorkloadLogs({ namespace: ns, workloadKind: 'Pod', workloadName: name })
+        } else if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs'].includes(kindLower)) {
+          openWorkloadLogs({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })
+        }
+      },
+      enabled: highlightedIndex >= 0 && ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs'].includes(selectedKind.name.toLowerCase()),
+    },
+    {
+      id: 'resources-sort-name',
+      keys: 'N',
+      description: 'Sort by name',
+      category: 'Table',
+      scope: 'resources',
+      handler: () => handleSort('name'),
+    },
+    {
+      id: 'resources-sort-age',
+      keys: 'A',
+      description: 'Sort by age',
+      category: 'Table',
+      scope: 'resources',
+      handler: () => handleSort('age'),
+    },
+    {
+      id: 'resources-sort-status',
+      keys: 'S',
+      description: 'Sort by status',
+      category: 'Table',
+      scope: 'resources',
+      handler: () => handleSort('status'),
+    },
+    {
+      id: 'resources-clear-highlight',
+      keys: 'Escape',
+      description: 'Clear highlight / blur search',
+      category: 'Table',
+      scope: 'resources',
+      handler: () => {
+        if (highlightedIndex >= 0) setHighlightedIndex(-1)
+        else searchInputRef.current?.blur()
+      },
+    },
+  ])
+
+  // Refs for accessing filteredResources inside shortcuts (computed later in component)
+  const filteredResourceCountRef = useRef(0)
+  const highlightedResourceRef = useRef<any>(null)
 
   // Close filter dropdown on outside click
   useEffect(() => {
@@ -1815,6 +1995,10 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
     return result
   }, [resources, searchTerm, columnFilters, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, sortColumn, sortDirection, getSortValue, podMatchesProblemFilter])
+
+  // Keep refs in sync for keyboard shortcuts (shortcuts can't capture filteredResources directly)
+  filteredResourceCountRef.current = filteredResources.length
+  highlightedResourceRef.current = highlightedIndex >= 0 ? filteredResources[highlightedIndex] ?? null : null
 
   // Scroll to selected row when selection changes (but not on group expand/filteredResources change)
   useEffect(() => {
@@ -2662,20 +2846,23 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                 </tr>
               </thead>
               <tbody style={{ display: 'contents' }}>
-                {filteredResources.map((resource: any) => {
+                {filteredResources.map((resource: any, index: number) => {
                   const isSelected = selectedResource?.kind === selectedKind.name &&
                     selectedResource?.namespace === resource.metadata?.namespace &&
                     selectedResource?.name === resource.metadata?.name
+                  const isHighlighted = index === highlightedIndex
                   return (
                     <ResourceRow
                       key={resource.metadata?.uid || `${resource.metadata?.namespace}-${resource.metadata?.name}`}
-                      ref={isSelected ? selectedRowRef : null}
+                      ref={isSelected ? selectedRowRef : isHighlighted ? highlightedRowRef : null}
                       resource={resource}
                       kind={selectedKind.name}
                       columns={columns}
                       hasSpacerColumn={hasResizedColumns}
                       isSelected={isSelected}
+                      isHighlighted={isHighlighted}
                       onClick={() => onResourceClick?.({ kind: selectedKind.name, namespace: resource.metadata?.namespace || '', name: resource.metadata?.name, group: selectedKind.group })}
+                      onMouseEnter={() => setHighlightedIndex(-1)}
                     />
                   )
                 })}
@@ -2770,15 +2957,18 @@ interface ResourceRowProps {
   columns: Column[]
   hasSpacerColumn: boolean
   isSelected?: boolean
+  isHighlighted?: boolean
   onClick?: () => void
+  onMouseEnter?: () => void
 }
 
 const ResourceRow = forwardRef<HTMLTableRowElement, ResourceRowProps>(
-  function ResourceRow({ resource, kind, columns, hasSpacerColumn, isSelected, onClick }, ref) {
+  function ResourceRow({ resource, kind, columns, hasSpacerColumn, isSelected, isHighlighted, onClick, onMouseEnter }, ref) {
     return (
       <tr
         ref={ref}
         onClick={onClick}
+        onMouseEnter={onMouseEnter}
         className="group/row contents"
       >
       {columns.map((col) => (
@@ -2789,7 +2979,9 @@ const ResourceRow = forwardRef<HTMLTableRowElement, ResourceRowProps>(
             col.key !== 'status' && 'overflow-hidden truncate',
             isSelected
               ? 'bg-blue-500/20 group-hover/row:bg-blue-500/30'
-              : 'group-hover/row:bg-theme-surface/50'
+              : isHighlighted
+                ? 'bg-blue-500/10 ring-1 ring-inset ring-blue-400/30'
+                : 'group-hover/row:bg-theme-surface/50'
           )}
         >
           <CellContent resource={resource} kind={kind} column={col.key} />

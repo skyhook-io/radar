@@ -24,8 +24,11 @@ import { CapabilitiesProvider } from './contexts/CapabilitiesContext'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { NamespaceSelector } from './components/ui/NamespaceSelector'
 import { UpdateNotification } from './components/ui/UpdateNotification'
+import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
+import { CommandPalette } from './components/ui/CommandPalette'
 import { useEventSource } from './hooks/useEventSource'
-import { useNamespaces } from './api/client'
+import { useNamespaces, useSwitchContext } from './api/client'
+import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
 import { Loader2 } from 'lucide-react'
 import { RefreshCw, FolderTree, Network, List, Clock, Package, Sun, Moon, Activity, Home, Star } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
@@ -158,6 +161,7 @@ function AppInner() {
 
   const [namespaces, setNamespaces] = useState<string[]>(getInitialState().namespaces)
   const [selectedResource, setSelectedResource] = useState<SelectedResource | null>(null)
+  const [drawerInitialTab, setDrawerInitialTab] = useState<'detail' | 'yaml'>('detail')
   const [selectedHelmRelease, setSelectedHelmRelease] = useState<SelectedHelmRelease | null>(null)
   const [topologyMode, setTopologyMode] = useState<'resources' | 'traffic'>(getInitialState().topologyMode)
   const [groupingMode, setGroupingMode] = useState<GroupingMode>(getInitialState().grouping)
@@ -182,6 +186,75 @@ function AppInner() {
   // Topology filter state
   const [visibleKinds, setVisibleKinds] = useState<Set<NodeKind>>(() => new Set(DEFAULT_VISIBLE_KINDS))
   const [filterSidebarCollapsed, setFilterSidebarCollapsed] = useState(false)
+
+  // Help overlay state
+  const [showHelp, setShowHelp] = useState(false)
+
+  // Command palette state
+  const [showCommandPalette, setShowCommandPalette] = useState(false)
+
+  // Theme toggle for keyboard shortcut
+  const { toggleTheme } = useTheme()
+
+  // Context switching for command palette
+  const switchContext = useSwitchContext()
+
+  // View switching keyboard shortcuts
+  const views: ExtendedMainView[] = ['home', 'topology', 'resources', 'timeline', 'helm', 'traffic']
+  useRegisterShortcuts([
+    ...views.map((view, i) => ({
+      id: `view-${view}`,
+      keys: String(i + 1),
+      description: `Go to ${view.charAt(0).toUpperCase() + view.slice(1)}`,
+      category: 'Navigation' as const,
+      scope: 'global' as const,
+      handler: () => setMainView(view),
+    })),
+    {
+      id: 'theme-toggle',
+      keys: 't',
+      description: 'Toggle dark/light theme',
+      category: 'General' as const,
+      scope: 'global' as const,
+      handler: () => toggleTheme(),
+    },
+    {
+      id: 'help-toggle',
+      keys: '?',
+      description: 'Show keyboard shortcuts',
+      category: 'General' as const,
+      scope: 'global' as const,
+      handler: () => setShowHelp(prev => !prev),
+    },
+    {
+      id: 'command-palette',
+      keys: 'Cmd+k',
+      description: 'Open command palette',
+      category: 'General' as const,
+      scope: 'global' as const,
+      handler: () => setShowCommandPalette(true),
+    },
+    {
+      id: 'command-palette-p',
+      keys: 'Cmd+p',
+      description: 'Open command palette',
+      category: 'General' as const,
+      scope: 'global' as const,
+      handler: () => setShowCommandPalette(true),
+    },
+  ])
+
+  // Separate registration for help-close — its `enabled` changes with showHelp,
+  // and keeping it in the batch above would cause all stable shortcuts to churn.
+  useRegisterShortcut({
+    id: 'help-close',
+    keys: 'Escape',
+    description: 'Close overlay',
+    category: 'General',
+    scope: 'global',
+    handler: () => setShowHelp(false),
+    enabled: showHelp,
+  })
 
   // Compute effective grouping mode:
   // - All namespaces: must use 'namespace' or 'app' (no 'none')
@@ -706,6 +779,7 @@ function AppInner() {
             namespaces={namespaces}
             selectedResource={selectedResource}
             onResourceClick={setSelectedResource}
+            onResourceClickYaml={(res) => { setDrawerInitialTab('yaml'); setSelectedResource(res) }}
             onKindChange={() => setSelectedResource(null)}
           />
         )}
@@ -756,8 +830,9 @@ function AppInner() {
       {selectedResource && (
         <ResourceDetailDrawer
           resource={selectedResource}
-          onClose={() => setSelectedResource(null)}
-          onNavigate={(res) => setSelectedResource(res)}
+          initialTab={drawerInitialTab}
+          onClose={() => { setSelectedResource(null); setDrawerInitialTab('detail') }}
+          onNavigate={(res) => { setDrawerInitialTab('detail'); setSelectedResource(res) }}
         />
       )}
 
@@ -790,6 +865,28 @@ function AppInner() {
       {/* Spacer for dock */}
       <DockSpacer />
 
+      {/* Keyboard shortcut help overlay */}
+      {showHelp && <ShortcutHelpOverlay onClose={() => setShowHelp(false)} />}
+
+      {/* Command palette */}
+      {showCommandPalette && (
+        <CommandPalette
+          onClose={() => setShowCommandPalette(false)}
+          onNavigateView={(view) => setMainView(view)}
+          onNavigateKind={(kind, group) => {
+            const params = new URLSearchParams(searchParams)
+            params.set('kind', kind)
+            if (group) params.set('apiGroup', group)
+            else params.delete('apiGroup')
+            params.delete('resource')
+            navigate({ pathname: '/resources', search: params.toString() })
+          }}
+          onSwitchContext={(name) => switchContext.mutate({ name })}
+          onSetNamespaces={setNamespaces}
+          onToggleTheme={toggleTheme}
+        />
+      )}
+
       {/* Debug overlay - only in dev mode */}
       {import.meta.env.DEV && <DebugOverlay />}
     </div>
@@ -810,7 +907,9 @@ function App() {
       <CapabilitiesProvider>
         <ContextSwitchProvider>
           <DockProvider>
-            <AppInner />
+            <KeyboardShortcutProvider>
+              <AppInner />
+            </KeyboardShortcutProvider>
           </DockProvider>
         </ContextSwitchProvider>
       </CapabilitiesProvider>
