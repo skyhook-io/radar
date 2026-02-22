@@ -215,8 +215,10 @@ func buildWorkloadQuery(namespace, workloadName string, category MetricCategory)
 }
 
 func buildNodeQuery(nodeName string, category MetricCategory) string {
-	// Node exporter metrics use the "instance" label (standard from node_exporter).
-	// The instance label typically includes a port suffix, so we match with an optional port.
+	// Node exporter metrics use the "instance" label which is typically set to the node
+	// name or IP. The value often includes a port suffix, so we match with an optional port.
+	// This heuristic works for most standard deployments; clusters with custom relabeling
+	// may need the --prometheus-url flag plus adjusted recording rules.
 	sanitized := escapeRegexMeta(sanitizeLabelValue(nodeName))
 	nodeFilter := fmt.Sprintf(`instance=~'%s(:\\d+)?'`, sanitized)
 

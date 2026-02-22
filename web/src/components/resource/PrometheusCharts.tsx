@@ -230,7 +230,7 @@ function MetricsSummary({ series, category, unit }: {
     }
     if (allValues.length === 0) return null
 
-    // Current = last value of first (or aggregated) series
+    // Latest = sum of each series' most recent data point
     const lastValues = series.map(s => s.dataPoints[s.dataPoints.length - 1]?.value ?? 0)
     const current = lastValues.reduce((a, b) => a + b, 0)
     const max = Math.max(...allValues)

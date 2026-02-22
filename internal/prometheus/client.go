@@ -105,7 +105,7 @@ func GetClient() *Client {
 	return globalClient
 }
 
-// Reset clears the global client (used on context switch).
+// Reset clears connection state so the next query triggers rediscovery (used on context switch).
 func Reset() {
 	clientMu.Lock()
 	defer clientMu.Unlock()
@@ -145,11 +145,17 @@ func (c *Client) GetStatus() Status {
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 
+	var svc *ServiceInfo
+	if c.discoveryService != nil {
+		cp := *c.discoveryService
+		svc = &cp
+	}
+
 	return Status{
 		Available:   c.baseURL != "",
 		Connected:   c.baseURL != "",
 		Address:     c.baseURL,
-		Service:     c.discoveryService,
+		Service:     svc,
 		ContextName: c.contextName,
 	}
 }
@@ -224,7 +230,7 @@ func (c *Client) doQuery(ctx context.Context, reqURL string) (*QueryResult, erro
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 10<<20)) // 10 MB cap
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}

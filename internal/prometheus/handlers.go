@@ -74,7 +74,8 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 }
 
 // parseTimeRange parses the "range" query parameter into start/end/step.
-// Supported values: 10m, 30m, 1h, 3h, 6h, 12h, 24h, 48h, 7d, 14d (default: 1h)
+// Supported values: 10m, 30m, 1h, 3h, 6h, 12h, 24h, 48h, 7d, 14d (default: 1h).
+// The frontend UI exposes a subset of these; the full set is available via the API.
 func parseTimeRange(rangeStr string) (start, end time.Time, step time.Duration) {
 	end = time.Now()
 
@@ -111,6 +112,8 @@ func parseTimeRange(rangeStr string) (start, end time.Time, step time.Duration) 
 		duration = 14 * 24 * time.Hour
 		step = 2 * time.Hour
 	default:
+		log.Printf("[prometheus] Unrecognized range %q, falling back to 1h", rangeStr)
+		rangeStr = "1h"
 		duration = time.Hour
 		step = time.Minute
 	}

@@ -12,8 +12,8 @@ import (
 // Returns an error if a critical subsystem (resource cache) fails to
 // initialize. All other subsystems log warnings and continue in degraded mode.
 //
-// External subsystem callbacks (timeline, helm, traffic) must be registered
-// via the Register*Funcs methods before calling this function.
+// External subsystem callbacks (timeline, helm, traffic, prometheus) must be
+// registered via the Register*Funcs methods before calling this function.
 //
 // The progress callback receives human-readable status messages suitable for
 // display in the UI (e.g. via SSE connection status updates).

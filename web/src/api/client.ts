@@ -756,7 +756,10 @@ export function usePrometheusConnect() {
   return useMutation({
     mutationFn: async () => {
       const resp = await fetch(`${API_BASE}/prometheus/connect`, { method: 'POST' })
-      if (!resp.ok) throw new Error('Failed to connect')
+      if (!resp.ok) {
+        const body = await resp.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(body.error || `HTTP ${resp.status}`)
+      }
       return resp.json() as Promise<PrometheusStatus>
     },
     onSuccess: () => {

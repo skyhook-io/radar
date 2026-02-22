@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/skyhook-io/radar/internal/traffic"
@@ -116,6 +117,9 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 	}
 
 	if info == nil {
+		c.mu.Lock()
+		c.discoveryService = nil
+		c.mu.Unlock()
 		return "", "", fmt.Errorf("no Prometheus service found in cluster")
 	}
 
@@ -184,6 +188,9 @@ func (c *Client) findWellKnownService(ctx context.Context) *serviceInfo {
 	for _, loc := range wellKnownLocations {
 		svc, err := k8sClient.CoreV1().Services(loc.namespace).Get(ctx, loc.name, metav1.GetOptions{})
 		if err != nil {
+			if !apierrors.IsNotFound(err) {
+				log.Printf("[prometheus] Error checking well-known service %s/%s: %v", loc.namespace, loc.name, err)
+			}
 			continue
 		}
 
@@ -319,13 +326,13 @@ func scoreService(svc corev1.Service) (score int, basePath string) {
 	// Port signals
 	for _, p := range svc.Spec.Ports {
 		switch p.Port {
-		case 9090:
+		case 9090: // Prometheus default
 			score += 30
-		case 8428:
+		case 8428: // VictoriaMetrics single-node default
 			score += 30
-		case 8481:
+		case 8481: // VictoriaMetrics vmselect default
 			score += 25
-		case 9009:
+		case 9009: // Thanos Query default
 			score += 25
 		}
 		if strings.Contains(strings.ToLower(p.Name), "prometheus") {

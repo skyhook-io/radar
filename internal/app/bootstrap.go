@@ -97,8 +97,8 @@ func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
 	return storeCfg
 }
 
-// RegisterCallbacks registers Helm, timeline, and traffic reset/reinit functions
-// used for both initial cluster initialization and context switching.
+// RegisterCallbacks registers Helm, timeline, traffic, and Prometheus reset/reinit
+// functions used for both initial cluster initialization and context switching.
 // Must be called before InitializeCluster.
 func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 	k8s.RegisterHelmFuncs(helm.ResetClient, helm.ReinitClient)
