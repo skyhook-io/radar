@@ -231,15 +231,15 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     handler: () => searchInputRef.current?.focus(),
   })
   useRegisterShortcut({
-    id: 'swimlane-close-detail',
+    id: 'swimlane-escape',
     keys: 'Escape',
-    description: 'Close detail panel',
+    description: 'Close detail / blur search',
     category: 'Timeline',
     scope: 'timeline',
     handler: () => {
       if (selectedEvent) setSelectedEvent(null)
+      else searchInputRef.current?.blur()
     },
-    enabled: !!selectedEvent,
   })
 
   // Filter events by search term
@@ -459,7 +459,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
               type="text"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search... (/ or ⌘K)"
+              placeholder="Search... (press /)"
               className="w-80 pl-9 pr-8 py-1.5 text-sm bg-theme-elevated border border-theme-border-light rounded-lg text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
             />
             {searchTerm && (

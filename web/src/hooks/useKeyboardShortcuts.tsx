@@ -235,10 +235,11 @@ export function KeyboardShortcutProvider({ children }: { children: ReactNode }) 
     }
   }, [])
 
-  // Compute active shortcuts for help overlay (memoized on version changes)
+  // Compute active shortcuts for help overlay (memoized on version changes).
+  // Shows ALL registered shortcuts regardless of `enabled` state — the help overlay
+  // should present a stable view of what's available, not flicker based on transient state.
   const activeShortcuts = useMemo(() =>
     Array.from(shortcutsRef.current.values())
-      .filter(s => s.enabled !== false)
       .map(({ _registrationId, ...s }) => s as KeyboardShortcut)
       // Deduplicate by id (keep highest priority)
       .reduce((acc, s) => {
@@ -265,6 +266,7 @@ export function KeyboardShortcutProvider({ children }: { children: ReactNode }) 
 /** Register a keyboard shortcut. Automatically deregisters on unmount or when key config changes. */
 export function useRegisterShortcut(shortcut: KeyboardShortcut) {
   const ctx = useContext(KeyboardShortcutContext)
+  const register = ctx?.registerShortcut
   const handlerRef = useRef(shortcut.handler)
   handlerRef.current = shortcut.handler
 
@@ -273,19 +275,19 @@ export function useRegisterShortcut(shortcut: KeyboardShortcut) {
   }, [])
 
   useEffect(() => {
-    if (!ctx) {
+    if (!register) {
       if (import.meta.env.DEV) {
         console.warn(`[useRegisterShortcut] Shortcut "${shortcut.id}" registered outside KeyboardShortcutProvider — it will not work.`)
       }
       return
     }
-    return ctx.registerShortcut({
+    return register({
       ...shortcut,
       handler: stableHandler,
     })
     // Re-register when key config changes (but NOT handler — that's stable via ref)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ctx, shortcut.id, shortcut.keys, shortcut.scope, shortcut.enabled, stableHandler])
+  }, [register, shortcut.id, shortcut.keys, shortcut.scope, shortcut.enabled, stableHandler])
 }
 
 /** Register multiple shortcuts at once. */
@@ -298,8 +300,10 @@ export function useRegisterShortcuts(shortcuts: KeyboardShortcut[]) {
     handlersRef.current.set(s.id, s.handler)
   }
 
+  const register = ctx?.registerShortcut
+
   useEffect(() => {
-    if (!ctx) {
+    if (!register) {
       if (import.meta.env.DEV) {
         console.warn(`[useRegisterShortcuts] ${shortcuts.length} shortcuts (${shortcuts.map(s => s.id).join(', ')}) registered outside KeyboardShortcutProvider — they will not work.`)
       }
@@ -310,7 +314,7 @@ export function useRegisterShortcuts(shortcuts: KeyboardShortcut[]) {
     for (const shortcut of shortcuts) {
       const handler = handlersRef.current.get(shortcut.id)
       if (handler) {
-        cleanups.push(ctx.registerShortcut({
+        cleanups.push(register({
           ...shortcut,
           handler: (e) => {
             const current = handlersRef.current.get(shortcut.id)
@@ -322,7 +326,7 @@ export function useRegisterShortcuts(shortcuts: KeyboardShortcut[]) {
 
     return () => cleanups.forEach(fn => fn())
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ctx, shortcuts.map(s => `${s.id}:${s.keys}:${s.scope}:${s.enabled}`).join('|')])
+  }, [register, shortcuts.map(s => `${s.id}:${s.keys}:${s.scope}:${s.enabled}`).join('|')])
 }
 
 /** Get all active shortcuts (for help overlay). */

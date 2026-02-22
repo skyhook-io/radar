@@ -132,7 +132,7 @@ import { NodePoolCell, NodeClaimCell, EC2NodeClassCell } from './renderers/karpe
 import { ScaledObjectCell, ScaledJobCell, TriggerAuthenticationCell, ClusterTriggerAuthenticationCell } from './renderers/keda-cells'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
-import { useOpenWorkloadLogs } from '../dock'
+import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 
 // Pod problem filter options (special multi-select, not a single column value)
 const POD_PROBLEMS = ['CrashLoopBackOff', 'ImagePullBackOff', 'OOMKilled', 'Unschedulable', 'Not Ready', 'High Restarts'] as const
@@ -973,7 +973,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const shouldPushHistory = useRef(false)
 
   // Ref to selected row for scrolling into view on deeplink
-  const selectedRowRef = useRef<HTMLTableRowElement>(null)
+  const selectedRowRef = useRef<HTMLTableCellElement>(null)
   // Ref to selected sidebar item for scrolling into view on deeplink
   const selectedSidebarRef = useRef<HTMLButtonElement>(null)
   // Track what resource we last scrolled to, to avoid re-scrolling on group expand
@@ -1049,16 +1049,20 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     })
   }, [visibleColumns, columnWidths, selectedKind.name])
 
-  // Close column picker on outside click
+  // Close column picker on outside click or Escape
   useEffect(() => {
     if (!showColumnPicker) return
-    const handler = (e: MouseEvent) => {
+    const handleClick = (e: MouseEvent) => {
       if (columnPickerRef.current && !columnPickerRef.current.contains(e.target as Node)) {
         setShowColumnPicker(false)
       }
     }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); setShowColumnPicker(false) }
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleKey, true)
+    return () => { document.removeEventListener('mousedown', handleClick); document.removeEventListener('keydown', handleKey, true) }
   }, [showColumnPicker])
 
   // Whether any columns have been resized (triggers switch to fixed grid sizes + spacer)
@@ -1163,7 +1167,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
   // Keyboard navigation: highlighted row state
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
-  const highlightedRowRef = useRef<HTMLTableRowElement>(null)
+  const highlightedRowRef = useRef<HTMLTableCellElement>(null)
 
   // Reset highlight when kind, search, sort, or namespace changes
   const namespacesKey = namespaces.join(',')
@@ -1176,7 +1180,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     }
   }, [highlightedIndex])
 
-  // Open logs for workload resources
+  // Open logs for pod / workload resources
+  const openLogs = useOpenLogs()
   const openWorkloadLogs = useOpenWorkloadLogs()
 
   // Helper: get resource at highlighted index
@@ -1294,7 +1299,11 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         const ns = res.metadata?.namespace || ''
         const name = res.metadata?.name || ''
         if (kindLower === 'pods') {
-          openWorkloadLogs({ namespace: ns, workloadKind: 'Pod', workloadName: name })
+          // For pods, use openLogs directly (not workload logs)
+          const containers = (res.spec?.containers || []).map((c: { name: string }) => c.name)
+          if (containers.length > 0) {
+            openLogs({ namespace: ns, podName: name, containers })
+          }
         } else if (['deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs'].includes(kindLower)) {
           openWorkloadLogs({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })
         }
@@ -1332,6 +1341,9 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       category: 'Table',
       scope: 'resources',
       handler: () => {
+        // Close dropdowns first, then clear highlight, then blur search
+        if (showColumnPicker) { setShowColumnPicker(false); return }
+        if (showFilterDropdown) { setShowFilterDropdown(false); return }
         if (highlightedIndex >= 0) setHighlightedIndex(-1)
         else searchInputRef.current?.blur()
       },
@@ -1342,16 +1354,59 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const filteredResourceCountRef = useRef(0)
   const highlightedResourceRef = useRef<any>(null)
 
-  // Close filter dropdown on outside click
+  // Ref for flat kind list used by [ / ] sidebar navigation (populated after filteredCategories is computed)
+  const flatKindListRef = useRef<SelectedKindInfo[]>([])
+
+  // Sidebar kind navigation: [ = previous kind, ] = next kind
+  useRegisterShortcuts([
+    {
+      id: 'resources-prev-kind',
+      keys: '[',
+      description: 'Previous resource kind',
+      category: 'Table',
+      scope: 'resources',
+      handler: () => {
+        const list = flatKindListRef.current
+        if (list.length === 0) return
+        const idx = list.findIndex(k => k.name === selectedKind.name && k.group === selectedKind.group)
+        const prev = idx > 0 ? list[idx - 1] : list[list.length - 1]
+        shouldPushHistory.current = true
+        setSelectedKind(prev)
+        onKindChange?.()
+      },
+    },
+    {
+      id: 'resources-next-kind',
+      keys: ']',
+      description: 'Next resource kind',
+      category: 'Table',
+      scope: 'resources',
+      handler: () => {
+        const list = flatKindListRef.current
+        if (list.length === 0) return
+        const idx = list.findIndex(k => k.name === selectedKind.name && k.group === selectedKind.group)
+        const next = idx < list.length - 1 ? list[idx + 1] : list[0]
+        shouldPushHistory.current = true
+        setSelectedKind(next)
+        onKindChange?.()
+      },
+    },
+  ])
+
+  // Close filter dropdown on outside click or Escape
   useEffect(() => {
     if (!showFilterDropdown) return
-    const handler = (e: MouseEvent) => {
+    const handleClick = (e: MouseEvent) => {
       if (filterDropdownRef.current && !filterDropdownRef.current.contains(e.target as Node)) {
         setShowFilterDropdown(false)
       }
     }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
+    const handleKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { e.stopPropagation(); setShowFilterDropdown(false) }
+    }
+    document.addEventListener('mousedown', handleClick)
+    document.addEventListener('keydown', handleKey, true)
+    return () => { document.removeEventListener('mousedown', handleClick); document.removeEventListener('keydown', handleKey, true) }
   }, [showFilterDropdown])
 
   // Sync state from URL when navigation occurs (e.g., deep linking from WorkloadRenderer)
@@ -2107,6 +2162,26 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       .filter(Boolean) as typeof sortedCategories
   }, [sortedCategories, kindFilter])
 
+  // Build flat kind list for [ / ] sidebar navigation
+  // Includes pinned kinds first, then all visible kinds from categories (deduped)
+  useEffect(() => {
+    const list: SelectedKindInfo[] = []
+    const seen = new Set<string>()
+    const addKind = (k: SelectedKindInfo) => {
+      const key = `${k.group}/${k.name}`
+      if (!seen.has(key)) { seen.add(key); list.push(k) }
+    }
+    for (const p of pinned) addKind({ name: p.name, kind: p.kind, group: p.group })
+    if (filteredCategories) {
+      for (const cat of filteredCategories) {
+        for (const r of cat.visibleResources) {
+          addKind({ name: r.name, kind: r.kind, group: r.group })
+        }
+      }
+    }
+    flatKindListRef.current = list
+  }, [pinned, filteredCategories])
+
   // Auto-expand all categories when filtering
   const isKindFiltering = kindFilter.trim().length > 0
   const effectiveExpandedCategories = useMemo(() => {
@@ -2504,7 +2579,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
             <input
               ref={searchInputRef}
               type="text"
-              placeholder="Search... (/ or ⌘K)"
+              placeholder="Search... (press /)"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -2962,18 +3037,18 @@ interface ResourceRowProps {
   onMouseEnter?: () => void
 }
 
-const ResourceRow = forwardRef<HTMLTableRowElement, ResourceRowProps>(
+const ResourceRow = forwardRef<HTMLTableCellElement, ResourceRowProps>(
   function ResourceRow({ resource, kind, columns, hasSpacerColumn, isSelected, isHighlighted, onClick, onMouseEnter }, ref) {
     return (
       <tr
-        ref={ref}
         onClick={onClick}
         onMouseEnter={onMouseEnter}
         className="group/row contents"
       >
-      {columns.map((col) => (
+      {columns.map((col, i) => (
         <td
           key={col.key}
+          ref={i === 0 ? ref : undefined}
           className={clsx(
             'px-4 py-3 border-b-subtle cursor-pointer transition-colors',
             col.key !== 'status' && 'overflow-hidden truncate',

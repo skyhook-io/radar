@@ -253,6 +253,7 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
             type="text"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Escape') { setShowSearch(false); setSearchQuery('') } }}
             placeholder="Search logs..."
             className="flex-1 bg-transparent text-theme-text-primary text-sm placeholder-theme-text-disabled focus:outline-none"
             autoFocus

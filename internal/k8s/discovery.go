@@ -241,9 +241,26 @@ func (d *ResourceDiscovery) GetAPIResources() ([]APIResource, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
 
-	// Return a copy
-	result := make([]APIResource, len(d.resources))
-	copy(result, d.resources)
+	// Deduplicate by name+group, keeping the most stable version.
+	// d.resources contains every version of every resource (e.g., GitRepository v1 AND v1beta2).
+	type entry struct {
+		index   int
+		version string
+	}
+	seen := make(map[string]entry, len(d.resources))
+	result := make([]APIResource, 0, len(d.resources))
+
+	for _, res := range d.resources {
+		key := res.Name + "/" + res.Group
+		if existing, ok := seen[key]; !ok {
+			seen[key] = entry{index: len(result), version: res.Version}
+			result = append(result, res)
+		} else if isMoreStableVersion(res.Version, existing.version) {
+			result[existing.index] = res
+			seen[key] = entry{index: existing.index, version: res.Version}
+		}
+	}
+
 	return result, nil
 }
 

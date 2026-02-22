@@ -94,6 +94,14 @@ export function TimelineList({ namespaces, onViewChange, currentView = 'list', o
     scope: 'timeline',
     handler: () => searchInputRef.current?.focus(),
   })
+  useRegisterShortcut({
+    id: 'timeline-list-escape',
+    keys: 'Escape',
+    description: 'Blur search',
+    category: 'Search',
+    scope: 'timeline',
+    handler: () => searchInputRef.current?.blur(),
+  })
 
   // Fetch unified timeline - always include all events, filter client-side
   const { data: activity, isLoading, refetch: refetchChanges } = useChanges({
@@ -275,7 +283,7 @@ export function TimelineList({ namespaces, onViewChange, currentView = 'list', o
           <input
             ref={searchInputRef}
             type="text"
-            placeholder="Search... (/ or ⌘K)"
+            placeholder="Search... (press /)"
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
             className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"

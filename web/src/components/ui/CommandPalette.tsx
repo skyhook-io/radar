@@ -24,6 +24,8 @@ interface CommandItem {
   icon?: React.ComponentType<{ className?: string }>
   shortcut?: string
   action: () => void
+  /** Extra terms to match against during search (not displayed) */
+  searchTerms?: string[]
 }
 
 // Fuzzy match scoring: exact prefix > word boundary > substring
@@ -39,11 +41,17 @@ function scoreMatch(text: string, query: string): number {
 }
 
 function bestScore(item: CommandItem, query: string): number {
-  return Math.max(
+  let best = Math.max(
     scoreMatch(item.label, query),
     scoreMatch(item.sublabel || '', query),
     scoreMatch(item.category, query)
   )
+  if (item.searchTerms) {
+    for (const term of item.searchTerms) {
+      best = Math.max(best, scoreMatch(term, query))
+    }
+  }
+  return best
 }
 
 export function CommandPalette({
@@ -58,6 +66,7 @@ export function CommandPalette({
   const [selectedIndex, setSelectedIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
   const resultsRef = useRef<HTMLDivElement>(null)
+  const isKeyboardNav = useRef(false)
 
   const { data: namespacesData } = useNamespaces()
   const { data: contexts } = useContexts()
@@ -105,17 +114,23 @@ export function CommandPalette({
       })
     }
 
-    // Resource kinds
+    // Resource kinds (deduplicate by name+group — backend may return multiple API versions)
     const resources = apiResources || CORE_RESOURCES
+    const seenKinds = new Set<string>()
     for (const r of resources) {
       if (!r.verbs?.includes('list')) continue
+      const kindKey = `${r.name}/${r.group}`
+      if (seenKinds.has(kindKey)) continue
+      seenKinds.add(kindKey)
+      const pluralLabel = r.name.charAt(0).toUpperCase() + r.name.slice(1)
       result.push({
         id: `kind-${r.name}-${r.group}`,
-        label: `Show ${r.kind}`,
+        label: pluralLabel,
         sublabel: r.group || 'core',
         category: 'Resource Kinds',
         icon: getResourceIcon(r.kind),
         action: () => { onNavigateKind(r.name, r.group) },
+        searchTerms: [r.name, r.kind],
       })
     }
 
@@ -217,10 +232,12 @@ export function CommandPalette({
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault()
+        isKeyboardNav.current = true
         setSelectedIndex(i => Math.min(i + 1, flatItems.length - 1))
         break
       case 'ArrowUp':
         e.preventDefault()
+        isKeyboardNav.current = true
         setSelectedIndex(i => Math.max(i - 1, 0))
         break
       case 'Enter':
@@ -293,7 +310,10 @@ export function CommandPalette({
                     key={item.id}
                     data-selected={isSelected}
                     onClick={() => { item.action(); onClose() }}
-                    onMouseEnter={() => setSelectedIndex(thisIndex)}
+                    onMouseMove={() => {
+                      if (isKeyboardNav.current) { isKeyboardNav.current = false; return }
+                      setSelectedIndex(thisIndex)
+                    }}
                     className={clsx(
                       'w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors',
                       isSelected ? 'bg-blue-500/15' : 'hover:bg-theme-elevated/30'
