@@ -79,6 +79,8 @@ interface KeyMatcher {
   altKey?: boolean
 }
 
+const isMac = typeof navigator !== 'undefined' && /Mac|iPhone|iPad/.test(navigator.platform)
+
 function parseKeys(keys: string): KeyMatcher {
   // Multi-key sequence (space-separated, e.g. "g g")
   if (keys.includes(' ') && !keys.includes('+')) {
@@ -90,7 +92,11 @@ function parseKeys(keys: string): KeyMatcher {
 
   for (const part of parts) {
     const lower = part.toLowerCase().trim()
-    if (lower === 'cmd' || lower === 'meta') matcher.metaKey = true
+    if (lower === 'cmd' || lower === 'meta') {
+      // Cmd maps to Meta on Mac, Ctrl on Windows/Linux
+      if (isMac) matcher.metaKey = true
+      else matcher.ctrlKey = true
+    }
     else if (lower === 'ctrl') matcher.ctrlKey = true
     else if (lower === 'shift') matcher.shiftKey = true
     else if (lower === 'alt') matcher.altKey = true
@@ -118,8 +124,9 @@ function matchesKey(e: KeyboardEvent, matcher: KeyMatcher, currentKey: string): 
     // Check no extra modifiers (unless required) — but only for non-modifier keys
     if (!matcher.metaKey && e.metaKey) return false
     if (!matcher.ctrlKey && e.ctrlKey) return false
-    // Don't check shift for single chars (handled by key matching)
-    if (matcher.shiftKey === undefined && e.shiftKey && key.length === 1 && key === key.toLowerCase()) return false
+    // Don't check shift for plain lowercase letters (prevents Shift+j triggering "j")
+    // but allow Shift-produced symbols like ? (Shift+/) and + (Shift+=)
+    if (matcher.shiftKey === undefined && e.shiftKey && key.length === 1 && key >= 'a' && key <= 'z') return false
     if (!matcher.altKey && e.altKey) return false
     return true
   }
