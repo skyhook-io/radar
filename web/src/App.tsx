@@ -234,14 +234,6 @@ function AppInner() {
       scope: 'global' as const,
       handler: () => setShowCommandPalette(true),
     },
-    {
-      id: 'command-palette-p',
-      keys: 'Cmd+p',
-      description: 'Open command palette',
-      category: 'General' as const,
-      scope: 'global' as const,
-      handler: () => setShowCommandPalette(true),
-    },
   ])
 
   // Separate registration for help-close — its `enabled` changes with showHelp,

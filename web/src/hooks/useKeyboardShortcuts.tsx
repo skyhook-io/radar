@@ -1,8 +1,8 @@
 import { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
-// Scope priority: higher number = higher priority (wins when multiple scopes active)
-export type ShortcutScope = 'global' | 'topology' | 'resources' | 'timeline' | 'helm' | 'traffic' | 'drawer' | 'command-palette' | 'dialog'
+export type ShortcutScope = 'global' | 'topology' | 'resources' | 'timeline' | 'helm' | 'traffic' | 'drawer'
 
+// Scope priority: higher number = higher priority (wins when multiple scopes active)
 const SCOPE_PRIORITY: Record<ShortcutScope, number> = {
   global: 0,
   topology: 1,
@@ -11,8 +11,6 @@ const SCOPE_PRIORITY: Record<ShortcutScope, number> = {
   helm: 1,
   traffic: 1,
   drawer: 2,
-  'command-palette': 3,
-  dialog: 4,
 }
 
 export type ShortcutCategory = 'Navigation' | 'Search' | 'Resource Actions' | 'Table' | 'General' | 'Topology' | 'Timeline' | 'Helm' | 'Drawer' | 'Dock'
@@ -174,7 +172,7 @@ export function KeyboardShortcutProvider({ children }: { children: ReactNode }) 
             const matcher = parseKeys(shortcut.keys)
             if (matcher.sequence.length === 2 && matchesKey(e, matcher, firstKey)) {
               e.preventDefault()
-              shortcut.handler(e)
+              try { shortcut.handler(e) } catch (err) { console.error(`[KeyboardShortcuts] Handler "${shortcut.id}" threw:`, err) }
               return
             }
           }
@@ -206,7 +204,7 @@ export function KeyboardShortcutProvider({ children }: { children: ReactNode }) 
         // Escape always fires (even when suppressed)
         if (e.key === 'Escape' && shortcut.keys === 'Escape') {
           e.preventDefault()
-          shortcut.handler(e)
+          try { shortcut.handler(e) } catch (err) { console.error(`[KeyboardShortcuts] Handler "${shortcut.id}" threw:`, err) }
           return
         }
 
@@ -214,14 +212,20 @@ export function KeyboardShortcutProvider({ children }: { children: ReactNode }) 
 
         if (matchesKey(e, matcher, '')) {
           e.preventDefault()
-          shortcut.handler(e)
+          try { shortcut.handler(e) } catch (err) { console.error(`[KeyboardShortcuts] Handler "${shortcut.id}" threw:`, err) }
           return
         }
       }
     }
 
     document.addEventListener('keydown', handleKeyDown)
-    return () => document.removeEventListener('keydown', handleKeyDown)
+    return () => {
+      document.removeEventListener('keydown', handleKeyDown)
+      if (sequenceTimerRef.current) {
+        clearTimeout(sequenceTimerRef.current)
+        sequenceTimerRef.current = null
+      }
+    }
   }, [])
 
   // Compute active shortcuts for help overlay (memoized on version changes)
@@ -251,7 +255,7 @@ export function KeyboardShortcutProvider({ children }: { children: ReactNode }) 
   )
 }
 
-/** Register a keyboard shortcut. Returns cleanup function. */
+/** Register a keyboard shortcut. Automatically deregisters on unmount or when key config changes. */
 export function useRegisterShortcut(shortcut: KeyboardShortcut) {
   const ctx = useContext(KeyboardShortcutContext)
   const handlerRef = useRef(shortcut.handler)
@@ -288,7 +292,12 @@ export function useRegisterShortcuts(shortcuts: KeyboardShortcut[]) {
   }
 
   useEffect(() => {
-    if (!ctx) return
+    if (!ctx) {
+      if (import.meta.env.DEV) {
+        console.warn(`[useRegisterShortcuts] ${shortcuts.length} shortcuts (${shortcuts.map(s => s.id).join(', ')}) registered outside KeyboardShortcutProvider — they will not work.`)
+      }
+      return
+    }
 
     const cleanups: (() => void)[] = []
     for (const shortcut of shortcuts) {

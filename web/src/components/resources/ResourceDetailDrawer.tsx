@@ -182,6 +182,11 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
   const resizeStartX = useRef(0)
   const resizeStartWidth = useRef(getDefaultWidth(resource.kind))
 
+  // Sync initialTab into showYaml when resource or tab changes (useState only uses initializer on first mount)
+  useEffect(() => {
+    setShowYaml(initialTab === 'yaml')
+  }, [resource.kind, resource.namespace, resource.name, initialTab])
+
   // Reset drawer width when resource kind changes
   useEffect(() => {
     const w = getDefaultWidth(resource.kind)

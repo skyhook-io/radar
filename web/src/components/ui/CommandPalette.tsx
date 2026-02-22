@@ -101,7 +101,7 @@ export function CommandPalette({
         category: 'Views',
         icon: v.icon,
         shortcut: v.shortcut,
-        action: () => { onNavigateView(v.view); onClose() },
+        action: () => { onNavigateView(v.view) },
       })
     }
 
@@ -115,7 +115,7 @@ export function CommandPalette({
         sublabel: r.group || 'core',
         category: 'Resource Kinds',
         icon: getResourceIcon(r.kind),
-        action: () => { onNavigateKind(r.name, r.group); onClose() },
+        action: () => { onNavigateKind(r.name, r.group) },
       })
     }
 
@@ -127,7 +127,7 @@ export function CommandPalette({
           label: ctx.name,
           sublabel: ctx.isCurrent ? 'current' : ctx.cluster,
           category: 'Contexts',
-          action: () => { if (!ctx.isCurrent) onSwitchContext(ctx.name); onClose() },
+          action: () => { if (!ctx.isCurrent) onSwitchContext(ctx.name) },
         })
       }
     }
@@ -139,7 +139,7 @@ export function CommandPalette({
           id: `ns-${ns.name}`,
           label: ns.name,
           category: 'Namespaces',
-          action: () => { onSetNamespaces([ns.name]); onClose() },
+          action: () => { onSetNamespaces([ns.name]) },
         })
       }
       // "All namespaces" option
@@ -147,7 +147,7 @@ export function CommandPalette({
         id: 'ns-all',
         label: 'All Namespaces',
         category: 'Namespaces',
-        action: () => { onSetNamespaces([]); onClose() },
+        action: () => { onSetNamespaces([]) },
       })
     }
 
@@ -158,11 +158,12 @@ export function CommandPalette({
       category: 'Actions',
       icon: Sun,
       shortcut: 't',
-      action: () => { onToggleTheme(); onClose() },
+      action: () => { onToggleTheme() },
     })
 
     return result
-  }, [apiResources, contexts, namespacesData, onClose, onNavigateView, onNavigateKind, onSwitchContext, onSetNamespaces, onToggleTheme])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [apiResources, contexts, namespacesData, onNavigateView, onNavigateKind, onSwitchContext, onSetNamespaces, onToggleTheme])
 
   // Filter and rank results
   const filteredItems = useMemo(() => {
@@ -226,10 +227,11 @@ export function CommandPalette({
         e.preventDefault()
         if (flatItems[selectedIndex]) {
           flatItems[selectedIndex].action()
+          onClose()
         }
         break
     }
-  }, [flatItems, selectedIndex])
+  }, [flatItems, selectedIndex, onClose])
 
   // Flatten for index tracking
   let flatIndex = 0
@@ -290,7 +292,7 @@ export function CommandPalette({
                   <button
                     key={item.id}
                     data-selected={isSelected}
-                    onClick={item.action}
+                    onClick={() => { item.action(); onClose() }}
                     onMouseEnter={() => setSelectedIndex(thisIndex)}
                     className={clsx(
                       'w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors',
