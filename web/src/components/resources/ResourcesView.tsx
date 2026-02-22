@@ -888,11 +888,12 @@ interface ResourcesViewProps {
 // Default selected kind
 const DEFAULT_KIND_INFO: SelectedKindInfo = { name: 'pods', kind: 'Pod', group: '' }
 
-// Read initial state from URL
+// Read initial state from URL — kind is in the path: /resources/{kind}
 function getInitialKindFromURL(): SelectedKindInfo {
-  const params = new URLSearchParams(window.location.search)
-  const kind = params.get('kind')
-  const group = params.get('apiGroup') || ''
+  // Read kind from URL path segment: /resources/{kind}
+  const pathSegments = window.location.pathname.replace(/^\//, '').split('/')
+  const kind = pathSegments.length > 1 && pathSegments[0] === 'resources' ? pathSegments[1] : null
+  const group = new URLSearchParams(window.location.search).get('apiGroup') || ''
   if (kind) {
     // Find matching resource from CORE_RESOURCES or use as-is
     const coreMatch = CORE_RESOURCES.find(r => r.kind === kind || r.name === kind)
@@ -1216,7 +1217,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       console.debug('[filters] URL sync: resetting isSyncingFromURL flag')
       isSyncingFromURL.current = false
     })
-  }, [location.search]) // Re-run when URL search params change
+  }, [location.search, location.pathname]) // Re-run when URL path or search params change
 
   // Update URL with all state
   const updateURL = useCallback((
@@ -1231,8 +1232,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     // Preserve existing params (like namespace from App)
     const params = new URLSearchParams(window.location.search)
 
-    // Set/update resources-specific params
-    params.set('kind', kindInfo.kind)
+    // Kind is now in the path (/resources/{kind}), not a query param
+    params.delete('kind')
     if (kindInfo.group) {
       params.set('apiGroup', kindInfo.group)
     } else {
@@ -1266,7 +1267,9 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       params.delete('resource')
     }
 
-    const newURL = `${window.location.pathname}?${params.toString()}`
+    const newPath = `/resources/${kindInfo.name}`
+    const queryStr = params.toString()
+    const newURL = queryStr ? `${newPath}?${queryStr}` : newPath
     console.debug('[filters] updateURL:', newURL)
     window.history.replaceState({}, '', newURL)
   }, [])

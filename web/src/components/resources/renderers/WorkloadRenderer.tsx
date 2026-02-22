@@ -136,7 +136,7 @@ export function WorkloadRenderer({ kind, data, onNavigate }: WorkloadRendererPro
   }, [isScaling, kind, metadata.namespace, metadata.name, queryClient])
 
   // Build URL for viewing pods owned by this workload
-  const viewPodsUrl = `/resources?kind=pods&ownerKind=${encodeURIComponent(getOwnerKind(kind))}&ownerName=${encodeURIComponent(metadata.name || '')}&namespace=${encodeURIComponent(metadata.namespace || '')}`
+  const viewPodsUrl = `/resources/pods?ownerKind=${encodeURIComponent(getOwnerKind(kind))}&ownerName=${encodeURIComponent(metadata.name || '')}&namespace=${encodeURIComponent(metadata.namespace || '')}`
 
   const handleScale = () => {
     scaleMutation.mutate({

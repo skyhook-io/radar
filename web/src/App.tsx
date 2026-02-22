@@ -574,10 +574,10 @@ function AppInner() {
             topology={topology}
             onNavigateToView={setMainView}
             onNavigateToResourceKind={(kind, apiGroup, filters) => {
-              // Navigate to resources view with kind pre-selected via URL param
+              // Navigate to resources view with kind in URL path
               console.debug('[filters] App.onNavigateToResourceKind:', { kind, apiGroup, filters })
               const newParams = new URLSearchParams(searchParams)
-              newParams.set('kind', kind)
+              newParams.delete('kind') // kind is now in the path
               newParams.delete('mode')
               newParams.delete('resource')
               newParams.delete('group') // Clear topology grouping param to avoid leaking into resources view
@@ -595,15 +595,15 @@ function AppInner() {
               } else {
                 newParams.delete('filters')
               }
-              const targetURL = `/resources?${newParams.toString()}`
+              const targetURL = `/resources/${kind}?${newParams.toString()}`
               console.debug('[filters] App.onNavigateToResourceKind: navigating to', targetURL)
-              navigate({ pathname: '/resources', search: newParams.toString() })
+              navigate({ pathname: `/resources/${kind}`, search: newParams.toString() })
             }}
             onNavigateToResource={(resource) => {
               // Switch to resources view and open the resource detail drawer
               setSelectedResource(resource)
               const newParams = new URLSearchParams(searchParams)
-              newParams.set('kind', resource.kind)
+              newParams.delete('kind') // kind is now in the path
               newParams.delete('mode')
               newParams.delete('group')
               newParams.delete('resource')
@@ -612,7 +612,7 @@ function AppInner() {
               } else {
                 newParams.delete('apiGroup')
               }
-              navigate({ pathname: '/resources', search: newParams.toString() })
+              navigate({ pathname: `/resources/${resource.kind}`, search: newParams.toString() })
             }}
           />
         )}
@@ -763,9 +763,12 @@ function AppInner() {
           release={selectedHelmRelease}
           onClose={() => setSelectedHelmRelease(null)}
           onNavigateToResource={(resource) => {
-            // Navigate to resources view and select the resource
+            // Navigate to resources view with kind in path and open the resource detail drawer
             setSelectedHelmRelease(null)
-            setMainView('resources')
+            const newParams = new URLSearchParams()
+            const globalNamespaces = searchParams.get('namespaces')
+            if (globalNamespaces) newParams.set('namespaces', globalNamespaces)
+            navigate({ pathname: `/resources/${resource.kind}`, search: newParams.toString() })
             setSelectedResource(resource)
           }}
         />
