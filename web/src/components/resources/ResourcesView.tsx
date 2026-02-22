@@ -964,6 +964,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const isSyncingFromURL = useRef(false)
   // Track whether the initial mount effect has processed the ?resource= param
   const hasProcessedInitialResource = useRef(false)
+  // Set by sidebar kind change to push a browser history entry (vs replace for filter changes)
+  const shouldPushHistory = useRef(false)
 
   // Ref to selected row for scrolling into view on deeplink
   const selectedRowRef = useRef<HTMLTableRowElement>(null)
@@ -1304,12 +1306,10 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       }
     }
     // Push history when kind changes (so browser back/forward works), replace for filter changes
-    const kindChanged = prevKindRef.current !== selectedKind.name
-    if (kindChanged) {
-      prevKindRef.current = selectedKind.name
-    }
-    console.debug('[filters] URL update effect: writing state to URL', { kind: selectedKind.name, columnFilters, searchTerm, problemFilters, kindChanged })
-    updateURL(selectedKind, searchTerm, columnFilters, problemFilters, showInactiveReplicaSets, selectedResource?.namespace, selectedResource?.name, kindChanged)
+    const pushHistory = shouldPushHistory.current
+    shouldPushHistory.current = false
+    console.debug('[filters] URL update effect: writing state to URL', { kind: selectedKind.name, columnFilters, searchTerm, problemFilters, pushHistory })
+    updateURL(selectedKind, searchTerm, columnFilters, problemFilters, showInactiveReplicaSets, selectedResource?.namespace, selectedResource?.name, pushHistory)
   }, [selectedKind, searchTerm, columnFilters, problemFilters, showInactiveReplicaSets, selectedResource, updateURL])
 
   // Handle resource click from URL on mount
@@ -2177,6 +2177,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                         isPinned={true}
                         onTogglePin={() => togglePin(p)}
                         onClick={() => {
+                          shouldPushHistory.current = true
                           setSelectedKind({ name: p.name, kind: p.kind, group: p.group })
                           onKindChange?.()
                         }}
@@ -2226,6 +2227,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                           isPinned={isPinned(resource.name, resource.group)}
                           onTogglePin={() => togglePin({ name: resource.name, kind: resource.kind, group: resource.group })}
                           onClick={() => {
+                            shouldPushHistory.current = true
                             setSelectedKind({ name: resource.name, kind: resource.kind, group: resource.group })
                             onKindChange?.()
                           }}
@@ -2252,6 +2254,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                 <button
                   key={type.kind}
                   onClick={() => {
+                    shouldPushHistory.current = true
                     setSelectedKind({ name: type.kind, kind: type.label, group: '' })
                     onKindChange?.()
                   }}

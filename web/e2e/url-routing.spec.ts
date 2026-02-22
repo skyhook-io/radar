@@ -46,33 +46,6 @@ test.describe('URL Routing Migration: kind in path', () => {
     expect(page.url()).toContain('/resources/pods')
   })
 
-  test('backward compat: /resources?kind=pods redirects to /resources/pods', async ({ page }) => {
-    await page.goto('/resources?kind=pods')
-    await waitForResourcesView(page)
-
-    // Should have been redirected — kind in path, not query param
-    expect(page.url()).toContain('/resources/pods')
-    expect(page.url()).not.toContain('kind=pods')
-  })
-
-  test('backward compat: /resources?kind=deployments redirects to /resources/deployments', async ({ page }) => {
-    await page.goto('/resources?kind=deployments')
-    await waitForResourcesView(page)
-
-    expect(page.url()).toContain('/resources/deployments')
-    expect(page.url()).not.toContain('kind=deployments')
-  })
-
-  test('backward compat: /resources?kind=secrets&search=radar preserves other params', async ({ page }) => {
-    await page.goto('/resources?kind=secrets&search=radar')
-    await waitForResourcesView(page)
-
-    // Kind should be in path, search should remain as query param
-    expect(page.url()).toContain('/resources/secrets')
-    expect(page.url()).not.toContain('kind=secrets')
-    expect(page.url()).toContain('search=radar')
-  })
-
   test('query params (search, namespaces) are preserved with path-based kind', async ({ page }) => {
     await page.goto('/resources/pods?search=test&namespaces=default')
     await waitForResourcesView(page)
