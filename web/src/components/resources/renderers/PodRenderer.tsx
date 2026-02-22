@@ -7,7 +7,7 @@ import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 import { useOpenTerminal, useOpenLogs } from '../../dock'
 import { Tooltip } from '../../ui/Tooltip'
 import { useCanExec, useCanViewLogs, useCanPortForward } from '../../../contexts/CapabilitiesContext'
-import { usePodMetrics, usePodMetricsHistory } from '../../../api/client'
+import { usePodMetrics, usePodMetricsHistory, usePrometheusStatus } from '../../../api/client'
 import { MetricsChart } from '../../ui/MetricsChart'
 import { ImageFilesystemModal } from '../ImageFilesystemModal'
 
@@ -100,7 +100,9 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
   const canViewLogs = useCanViewLogs()
   const canPortForward = useCanPortForward()
 
-  // Fetch pod metrics (current and historical)
+  // Fetch pod metrics (current and historical) — hidden when Prometheus is connected
+  const { data: prometheusStatus } = usePrometheusStatus()
+  const prometheusConnected = prometheusStatus?.connected === true
   const { data: metrics } = usePodMetrics(namespace, podName)
   const { data: metricsHistory } = usePodMetricsHistory(namespace, podName)
 
@@ -448,8 +450,8 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
         </div>
       </Section>
 
-      {/* Resource Usage (from metrics-server) */}
-      {!!(metrics?.containers?.length || metricsHistory?.containers?.length) && (
+      {/* Resource Usage (from metrics-server) — hidden when Prometheus charts are available */}
+      {!prometheusConnected && !!(metrics?.containers?.length || metricsHistory?.containers?.length) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           <div className="space-y-4">
             {(metricsHistory?.containers || metrics?.containers || []).map((historyContainer) => {

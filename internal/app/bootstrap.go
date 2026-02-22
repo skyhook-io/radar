@@ -192,6 +192,21 @@ func InitializeCluster() {
 		Context:     k8s.GetContextName(),
 		ClusterName: k8s.GetClusterName(),
 	})
+
+	// Auto-discover Prometheus in the background so charts are ready immediately
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		client := prometheuspkg.GetClient()
+		if client == nil {
+			return
+		}
+		if _, _, err := client.EnsureConnected(ctx); err != nil {
+			log.Printf("[prometheus] Auto-discovery: %v", err)
+		} else {
+			log.Printf("[prometheus] Auto-discovery succeeded")
+		}
+	}()
 }
 
 // Shutdown performs graceful teardown of all subsystems and the HTTP server.

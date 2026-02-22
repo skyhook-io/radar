@@ -1,7 +1,7 @@
 import { Server, HardDrive, Globe, Tag, Activity } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../drawer-components'
-import { useNodeMetrics, useNodeMetricsHistory } from '../../../api/client'
+import { useNodeMetrics, useNodeMetricsHistory, usePrometheusStatus } from '../../../api/client'
 import { MetricsChart } from '../../ui/MetricsChart'
 import { formatMemoryString } from '../../../utils/format'
 
@@ -75,6 +75,8 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
 
   // Fetch node metrics (current and historical)
   const nodeName = metadata.name
+  const { data: prometheusStatus } = usePrometheusStatus()
+  const prometheusConnected = prometheusStatus?.connected === true
   const { data: metrics } = useNodeMetrics(nodeName)
   const { data: metricsHistory } = useNodeMetricsHistory(nodeName)
 
@@ -141,8 +143,8 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
         </div>
       </Section>
 
-      {/* Resource Usage (from metrics-server) */}
-      {(metrics?.usage || metricsHistory?.dataPoints?.length) && (
+      {/* Resource Usage (from metrics-server) — hidden when Prometheus charts are available */}
+      {!prometheusConnected && (metrics?.usage || metricsHistory?.dataPoints?.length) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           {metricsHistory?.dataPoints && metricsHistory.dataPoints.length > 0 ? (
             <div className="space-y-4">

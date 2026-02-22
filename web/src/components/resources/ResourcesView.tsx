@@ -2585,7 +2585,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         </div>
 
         {/* Table */}
-        <div className="flex-1 overflow-auto relative" ref={tableContainerRef}>
+        <div className="flex-1 overflow-y-auto overflow-x-hidden relative" ref={tableContainerRef}>
           {isLoading ? (
             <div className="absolute inset-0 flex items-center justify-center text-theme-text-tertiary">
               Loading...
@@ -2785,7 +2785,8 @@ const ResourceRow = forwardRef<HTMLTableRowElement, ResourceRowProps>(
         <td
           key={col.key}
           className={clsx(
-            'px-4 py-3 overflow-hidden truncate border-b-subtle cursor-pointer transition-colors',
+            'px-4 py-3 border-b-subtle cursor-pointer transition-colors',
+            col.key !== 'status' && 'overflow-hidden truncate',
             isSelected
               ? 'bg-blue-500/20 group-hover/row:bg-blue-500/30'
               : 'group-hover/row:bg-theme-surface/50'
