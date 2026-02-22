@@ -7,6 +7,7 @@ import { formatMemoryString } from '../../../utils/format'
 
 interface NodeRendererProps {
   data: any
+  relationships?: { pods?: any[] }
 }
 
 // Helper to handle undefined values
@@ -57,7 +58,7 @@ function getNodeProblems(data: any): string[] {
   return problems
 }
 
-export function NodeRenderer({ data }: NodeRendererProps) {
+export function NodeRenderer({ data, relationships }: NodeRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const metadata = data.metadata || {}
@@ -107,30 +108,35 @@ export function NodeRenderer({ data }: NodeRendererProps) {
       {/* Capacity */}
       <Section title="Capacity" icon={HardDrive}>
         <div className="space-y-1">
-          <div className="grid grid-cols-3 gap-2 text-xs text-theme-text-tertiary font-medium mb-2">
+          <div className="grid grid-cols-4 gap-2 text-xs text-theme-text-tertiary font-medium mb-2">
             <span>Resource</span>
             <span>Capacity</span>
             <span>Allocatable</span>
+            <span>In Use</span>
           </div>
-          <div className="grid grid-cols-3 gap-2 text-sm">
+          <div className="grid grid-cols-4 gap-2 text-sm">
             <span className="text-theme-text-secondary">CPU</span>
             <span className="text-theme-text-primary">{capacity.cpu || '-'}</span>
             <span className="text-theme-text-primary">{allocatable.cpu || '-'}</span>
+            <span className="text-theme-text-primary font-medium">{metrics?.usage?.cpu || '-'}</span>
           </div>
-          <div className="grid grid-cols-3 gap-2 text-sm">
+          <div className="grid grid-cols-4 gap-2 text-sm">
             <span className="text-theme-text-secondary">Memory</span>
             <span className="text-theme-text-primary">{formatMemory(capacity.memory)}</span>
             <span className="text-theme-text-primary">{formatMemory(allocatable.memory)}</span>
+            <span className="text-theme-text-primary font-medium">{metrics?.usage?.memory ? formatMemory(metrics.usage.memory) : '-'}</span>
           </div>
-          <div className="grid grid-cols-3 gap-2 text-sm">
+          <div className="grid grid-cols-4 gap-2 text-sm">
             <span className="text-theme-text-secondary">Pods</span>
             <span className="text-theme-text-primary">{capacity.pods || '-'}</span>
             <span className="text-theme-text-primary">{allocatable.pods || '-'}</span>
+            <span className="text-theme-text-primary font-medium">{relationships?.pods?.length ?? '-'}</span>
           </div>
-          <div className="grid grid-cols-3 gap-2 text-sm">
+          <div className="grid grid-cols-4 gap-2 text-sm">
             <span className="text-theme-text-secondary">Ephemeral Storage</span>
             <span className="text-theme-text-primary">{formatStorage(capacity['ephemeral-storage'])}</span>
             <span className="text-theme-text-primary">{formatStorage(allocatable['ephemeral-storage'])}</span>
+            <span className="text-theme-text-primary">-</span>
           </div>
         </div>
       </Section>

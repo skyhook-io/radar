@@ -375,17 +375,24 @@ func (s *MetricsHistoryStore) GetNodeMetricsHistory(name string) *NodeMetricsHis
 
 // TopPodMetrics holds the latest metrics snapshot for a single pod
 type TopPodMetrics struct {
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	CPU       int64  `json:"cpu"`    // nanocores
-	Memory    int64  `json:"memory"` // bytes
+	Namespace     string `json:"namespace"`
+	Name          string `json:"name"`
+	CPU           int64  `json:"cpu"`           // nanocores (usage)
+	Memory        int64  `json:"memory"`        // bytes (usage)
+	CPURequest    int64  `json:"cpuRequest"`    // nanocores (sum across containers)
+	CPULimit      int64  `json:"cpuLimit"`      // nanocores (sum across containers)
+	MemoryRequest int64  `json:"memoryRequest"` // bytes (sum across containers)
+	MemoryLimit   int64  `json:"memoryLimit"`   // bytes (sum across containers)
 }
 
 // TopNodeMetrics holds the latest metrics snapshot for a single node
 type TopNodeMetrics struct {
-	Name   string `json:"name"`
-	CPU    int64  `json:"cpu"`    // nanocores
-	Memory int64  `json:"memory"` // bytes
+	Name              string `json:"name"`
+	CPU               int64  `json:"cpu"`               // nanocores (usage)
+	Memory            int64  `json:"memory"`             // bytes (usage)
+	PodCount          int    `json:"podCount"`           // number of pods scheduled on this node
+	CPUAllocatable    int64  `json:"cpuAllocatable"`     // nanocores
+	MemoryAllocatable int64  `json:"memoryAllocatable"`  // bytes
 }
 
 // GetAllPodMetricsLatest returns the latest metrics for all tracked pods

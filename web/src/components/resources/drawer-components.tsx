@@ -466,16 +466,30 @@ interface RelationshipGroupProps {
   onNavigate?: (ref: ResourceRef) => void
 }
 
+const RELATIONSHIP_TRUNCATE_LIMIT = 10
+
 function RelationshipGroup({ label, refs, onNavigate }: RelationshipGroupProps) {
+  const [showAll, setShowAll] = useState(false)
   if (!refs || refs.length === 0) return null
+
+  const truncated = !showAll && refs.length > RELATIONSHIP_TRUNCATE_LIMIT
+  const visibleRefs = truncated ? refs.slice(0, RELATIONSHIP_TRUNCATE_LIMIT) : refs
 
   return (
     <div>
-      <div className="text-xs text-theme-text-tertiary mb-1">{label}</div>
+      <div className="text-xs text-theme-text-tertiary mb-1">{label}{refs.length > 1 ? ` (${refs.length})` : ''}</div>
       <div className="flex flex-wrap gap-1">
-        {refs.map((resourceRef, i) => (
+        {visibleRefs.map((resourceRef, i) => (
           <ResourceRefBadge key={`${resourceRef.kind}-${resourceRef.namespace}-${resourceRef.name}-${i}`} resourceRef={resourceRef} onClick={onNavigate} />
         ))}
+        {truncated && (
+          <button
+            onClick={() => setShowAll(true)}
+            className="px-2 py-0.5 text-xs rounded border border-theme-border text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated transition-colors"
+          >
+            Show all {refs.length}
+          </button>
+        )}
       </div>
     </div>
   )

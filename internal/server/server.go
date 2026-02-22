@@ -1076,32 +1076,147 @@ func (s *Server) handleNodeMetricsHistory(w http.ResponseWriter, r *http.Request
 
 // handleTopPods returns the latest metrics for all pods (bulk endpoint for table view)
 func (s *Server) handleTopPods(w http.ResponseWriter, r *http.Request) {
-	store := k8s.GetMetricsHistory()
-	if store == nil {
-		s.writeJSON(w, []k8s.TopPodMetrics{})
+	if !s.requireConnected(w) {
 		return
 	}
 
-	metrics := store.GetAllPodMetricsLatest()
-	if metrics == nil {
-		metrics = []k8s.TopPodMetrics{}
+	// Build metrics lookup (may be empty if metrics-server is unavailable)
+	metricsMap := make(map[string]*k8s.TopPodMetrics)
+	if store := k8s.GetMetricsHistory(); store != nil {
+		raw := store.GetAllPodMetricsLatest()
+		for i := range raw {
+			metricsMap[raw[i].Namespace+"/"+raw[i].Name] = &raw[i]
+		}
 	}
-	s.writeJSON(w, metrics)
+
+	// Get pod lister from cache to enrich with requests/limits
+	cache := k8s.GetResourceCache()
+	if cache == nil || cache.Pods() == nil {
+		// No cache — return metrics-only data
+		result := make([]k8s.TopPodMetrics, 0, len(metricsMap))
+		for _, m := range metricsMap {
+			result = append(result, *m)
+		}
+		s.writeJSON(w, result)
+		return
+	}
+
+	pods, err := cache.Pods().List(labels.Everything())
+	if err != nil {
+		log.Printf("[metrics] Failed to list pods for top pods: %v", err)
+		s.writeError(w, http.StatusInternalServerError, "Failed to list pods")
+		return
+	}
+
+	result := make([]k8s.TopPodMetrics, 0, len(pods))
+	for _, pod := range pods {
+		key := pod.Namespace + "/" + pod.Name
+		entry := k8s.TopPodMetrics{
+			Namespace: pod.Namespace,
+			Name:      pod.Name,
+		}
+
+		// Merge usage metrics if available
+		if m, ok := metricsMap[key]; ok {
+			entry.CPU = m.CPU
+			entry.Memory = m.Memory
+		}
+
+		// Sum requests and limits across all containers
+		for _, c := range pod.Spec.Containers {
+			if req, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+				entry.CPURequest += req.MilliValue() * 1000000 // millicores to nanocores
+			}
+			if lim, ok := c.Resources.Limits[corev1.ResourceCPU]; ok {
+				entry.CPULimit += lim.MilliValue() * 1000000
+			}
+			if req, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+				entry.MemoryRequest += req.Value()
+			}
+			if lim, ok := c.Resources.Limits[corev1.ResourceMemory]; ok {
+				entry.MemoryLimit += lim.Value()
+			}
+		}
+
+		result = append(result, entry)
+	}
+
+	s.writeJSON(w, result)
 }
 
 // handleTopNodes returns the latest metrics for all nodes (bulk endpoint for table view)
 func (s *Server) handleTopNodes(w http.ResponseWriter, r *http.Request) {
-	store := k8s.GetMetricsHistory()
-	if store == nil {
+	if !s.requireConnected(w) {
+		return
+	}
+
+	// Build metrics lookup (may be empty if metrics-server is unavailable)
+	metricsMap := make(map[string]*k8s.TopNodeMetrics)
+	if store := k8s.GetMetricsHistory(); store != nil {
+		raw := store.GetAllNodeMetricsLatest()
+		for i := range raw {
+			metricsMap[raw[i].Name] = &raw[i]
+		}
+	}
+
+	// Count running pods per node
+	cache := k8s.GetResourceCache()
+	podCounts := make(map[string]int)
+	if cache != nil {
+		if podLister := cache.Pods(); podLister != nil {
+			pods, err := podLister.List(labels.Everything())
+			if err != nil {
+				log.Printf("[metrics] Failed to list pods for node pod counts: %v", err)
+			} else {
+				for _, pod := range pods {
+					if pod.Spec.NodeName != "" && pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed {
+						podCounts[pod.Spec.NodeName]++
+					}
+				}
+			}
+		}
+	}
+
+	// List all nodes from cache
+	var nodes []*corev1.Node
+	if cache != nil {
+		if nodeLister := cache.Nodes(); nodeLister != nil {
+			var err error
+			nodes, err = nodeLister.List(labels.Everything())
+			if err != nil {
+				log.Printf("[metrics] Failed to list nodes: %v", err)
+				s.writeError(w, http.StatusInternalServerError, "Failed to list nodes")
+				return
+			}
+		}
+	}
+	if len(nodes) == 0 {
 		s.writeJSON(w, []k8s.TopNodeMetrics{})
 		return
 	}
 
-	metrics := store.GetAllNodeMetricsLatest()
-	if metrics == nil {
-		metrics = []k8s.TopNodeMetrics{}
+	result := make([]k8s.TopNodeMetrics, 0, len(nodes))
+	for _, node := range nodes {
+		entry := k8s.TopNodeMetrics{Name: node.Name}
+
+		if m, ok := metricsMap[node.Name]; ok {
+			entry.CPU = m.CPU
+			entry.Memory = m.Memory
+		}
+
+		entry.PodCount = podCounts[node.Name]
+
+		if cpu := node.Status.Allocatable[corev1.ResourceCPU]; !cpu.IsZero() {
+			entry.CPUAllocatable = cpu.MilliValue() * 1000000 // millicores to nanocores
+		}
+		if mem := node.Status.Allocatable[corev1.ResourceMemory]; !mem.IsZero() {
+			entry.MemoryAllocatable = mem.Value()
+		}
+
+		result = append(result, entry)
 	}
-	s.writeJSON(w, metrics)
+
+	s.writeJSON(w, result)
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {

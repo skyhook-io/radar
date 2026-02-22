@@ -656,14 +656,21 @@ export function useNodeMetricsHistory(nodeName: string) {
 export interface TopPodMetrics {
   namespace: string
   name: string
-  cpu: number    // nanocores
-  memory: number // bytes
+  cpu: number           // nanocores (usage)
+  memory: number        // bytes (usage)
+  cpuRequest: number    // nanocores (sum across containers)
+  cpuLimit: number      // nanocores (sum across containers)
+  memoryRequest: number // bytes (sum across containers)
+  memoryLimit: number   // bytes (sum across containers)
 }
 
 export interface TopNodeMetrics {
   name: string
-  cpu: number    // nanocores
-  memory: number // bytes
+  cpu: number              // nanocores (usage)
+  memory: number           // bytes (usage)
+  podCount: number         // pods scheduled on this node
+  cpuAllocatable: number   // nanocores
+  memoryAllocatable: number // bytes
 }
 
 // Fetch bulk metrics for all pods (for CPU/Memory columns in resource table)

@@ -26,6 +26,7 @@ import {
   Tag,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { ResourceBar } from '../ui/ResourceBar'
 import type { SelectedResource, APIResource } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 import { useAPIResources, categorizeResources, CORE_RESOURCES } from '../../api/apiResources'
@@ -237,8 +238,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'ready', label: 'Ready', width: 'w-16' },
     { key: 'status', label: 'Status', width: 'w-40' },
-    { key: 'cpu', label: 'CPU', width: 'w-20', defaultVisible: false, tooltip: 'Current CPU usage in cores' },
-    { key: 'memory', label: 'Memory', width: 'w-24', defaultVisible: false, tooltip: 'Current memory usage' },
+    { key: 'cpu', label: 'CPU', width: 'w-32', tooltip: 'CPU usage / limit (marker = request)' },
+    { key: 'memory', label: 'Memory', width: 'w-32', tooltip: 'Memory usage / limit (marker = request)' },
     { key: 'restarts', label: 'Restarts', width: 'w-24' },
     { key: 'podIP', label: 'Pod IP', width: 'w-32', defaultVisible: false },
     { key: 'node', label: 'Node', width: 'w-44', hideOnMobile: true },
@@ -303,8 +304,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-44' },
     { key: 'roles', label: 'Roles', width: 'w-28' },
-    { key: 'cpu', label: 'CPU', width: 'w-24', defaultVisible: false, tooltip: 'Current CPU usage / capacity' },
-    { key: 'memory', label: 'Memory', width: 'w-28', defaultVisible: false, tooltip: 'Current memory usage / capacity' },
+    { key: 'cpu', label: 'CPU', width: 'w-32', tooltip: 'Current CPU usage / allocatable' },
+    { key: 'memory', label: 'Memory', width: 'w-32', tooltip: 'Current memory usage / allocatable' },
+    { key: 'pods', label: 'Pods', width: 'w-24', tooltip: 'Pods running / allocatable' },
     { key: 'conditions', label: 'Conditions', width: 'w-40', hideOnMobile: true },
     { key: 'taints', label: 'Taints', width: 'w-24', hideOnMobile: true },
     { key: 'version', label: 'Version', width: 'w-28' },
@@ -1596,6 +1598,12 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
         }
         if (kindLower === 'nodes') {
           return metricsLookup.nodes.get(meta.name)?.memory ?? 0
+        }
+        return 0
+      }
+      case 'pods': {
+        if (kindLower === 'nodes') {
+          return metricsLookup.nodes.get(meta.name)?.podCount ?? 0
         }
         return 0
       }
@@ -3072,15 +3080,23 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
       const key = `${resource.metadata?.namespace}/${resource.metadata?.name}`
       const m = metrics.pods.get(key)
       if (!m || m.cpu === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const cores = m.cpu / 1e9
-      return <span className="text-sm text-theme-text-secondary font-mono">{cores.toFixed(3)}</span>
+      const denom = m.cpuLimit || m.cpuRequest
+      if (!denom) return <span className="text-sm text-theme-text-secondary font-mono">{formatCPU(m.cpu)}</span>
+      const pct = (m.cpu / denom) * 100
+      const marker = m.cpuLimit > 0 && m.cpuRequest > 0 ? (m.cpuRequest / m.cpuLimit) * 100 : undefined
+      const tip = buildResourceTooltip('CPU', m.cpu, m.cpuRequest, m.cpuLimit, formatCPU)
+      return <ResourceBar used={formatCPU(m.cpu)} total={formatCPU(denom)} percent={pct} colorScheme={getBulletBarScheme(pct, marker)} markerPercent={marker} tooltip={tip} />
     }
     case 'memory': {
       const key = `${resource.metadata?.namespace}/${resource.metadata?.name}`
       const m = metrics.pods.get(key)
       if (!m || m.memory === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const mib = m.memory / (1024 * 1024)
-      return <span className="text-sm text-theme-text-secondary font-mono">{mib.toFixed(2)}Mi</span>
+      const denom = m.memoryLimit || m.memoryRequest
+      if (!denom) return <span className="text-sm text-theme-text-secondary font-mono">{formatMemoryShort(m.memory)}</span>
+      const pct = (m.memory / denom) * 100
+      const marker = m.memoryLimit > 0 && m.memoryRequest > 0 ? (m.memoryRequest / m.memoryLimit) * 100 : undefined
+      const tip = buildResourceTooltip('Memory', m.memory, m.memoryRequest, m.memoryLimit, formatMemoryShort)
+      return <ResourceBar used={formatMemoryShort(m.memory)} total={formatMemoryShort(denom)} percent={pct} colorScheme={getBulletBarScheme(pct, marker)} markerPercent={marker} tooltip={tip} />
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
@@ -3476,6 +3492,88 @@ function HPACell({ resource, column }: { resource: any; column: string }) {
   }
 }
 
+// Format helpers for resource bars
+function formatCPU(nanocores: number): string {
+  const m = Math.round(nanocores / 1e6)
+  return `${m}m`
+}
+
+function formatMemoryShort(bytes: number): string {
+  const gib = bytes / (1024 * 1024 * 1024)
+  if (gib >= 1) return `${gib.toFixed(1)}Gi`
+  const mib = bytes / (1024 * 1024)
+  return `${Math.round(mib)}Mi`
+}
+
+// Bullet graph color logic for pod resource bars:
+// green when usage < request, yellow when above request, red when > 85% of limit
+function getBulletBarScheme(_usagePct: number, _markerPct: number | undefined): 'utilization' {
+  return 'utilization'
+}
+
+function buildResourceTooltip(
+  type: 'CPU' | 'Memory',
+  usage: number,
+  request: number,
+  limit: number,
+  formatFn: (n: number) => string,
+) {
+  const isCPU = type === 'CPU'
+
+  let guidance: string
+  if (limit > 0 && request > 0) {
+    const pctOfLimit = (usage / limit) * 100
+    if (pctOfLimit > 90) {
+      guidance = isCPU
+        ? 'Near the limit — CPU may be throttled'
+        : 'Near the limit — at risk of OOM kill'
+    } else if (usage > request) {
+      guidance = 'Exceeds request — consider raising it if sustained'
+    } else {
+      guidance = 'Below request — healthy headroom'
+    }
+  } else if (limit > 0) {
+    const pctOfLimit = (usage / limit) * 100
+    if (pctOfLimit > 90) {
+      guidance = isCPU
+        ? 'Near the limit — CPU may be throttled'
+        : 'Near the limit — at risk of OOM kill'
+    } else {
+      guidance = 'No request set — scheduling may be suboptimal'
+    }
+  } else if (request > 0) {
+    guidance = usage > request
+      ? `Exceeds request with no limit — unbounded ${isCPU ? 'CPU' : 'memory'} access`
+      : 'No limit set — pod can burst beyond request'
+  } else {
+    guidance = 'No request or limit configured'
+  }
+
+  return (
+    <div className="whitespace-normal w-52 flex flex-col gap-1.5 py-0.5">
+      <div className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-xs font-mono">
+        <span className="text-theme-text-tertiary">Usage</span>
+        <span className="text-theme-text-primary">{formatFn(usage)}</span>
+        {request > 0 && (
+          <>
+            <span className="text-theme-text-tertiary">Request</span>
+            <span className="text-theme-text-primary">{formatFn(request)}</span>
+          </>
+        )}
+        {limit > 0 && (
+          <>
+            <span className="text-theme-text-tertiary">Limit</span>
+            <span className="text-theme-text-primary">{formatFn(limit)}</span>
+          </>
+        )}
+      </div>
+      <div className="text-[11px] text-theme-text-secondary border-t border-theme-border/50 pt-1">
+        {guidance}
+      </div>
+    </div>
+  )
+}
+
 function NodeCell({ resource, column }: { resource: any; column: string }) {
   const metrics = useContext(MetricsContext)
 
@@ -3530,14 +3628,24 @@ function NodeCell({ resource, column }: { resource: any; column: string }) {
     case 'cpu': {
       const m = metrics.nodes.get(resource.metadata?.name)
       if (!m || m.cpu === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const cores = m.cpu / 1e9
-      return <span className="text-sm text-theme-text-secondary font-mono">{cores.toFixed(3)}</span>
+      const pct = m.cpuAllocatable > 0 ? (m.cpu / m.cpuAllocatable) * 100 : 0
+      return <ResourceBar used={formatCPU(m.cpu)} total={formatCPU(m.cpuAllocatable)} percent={pct} />
     }
     case 'memory': {
       const m = metrics.nodes.get(resource.metadata?.name)
       if (!m || m.memory === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const mib = m.memory / (1024 * 1024)
-      return <span className="text-sm text-theme-text-secondary font-mono">{mib.toFixed(2)}Mi</span>
+      const pct = m.memoryAllocatable > 0 ? (m.memory / m.memoryAllocatable) * 100 : 0
+      return <ResourceBar used={formatMemoryShort(m.memory)} total={formatMemoryShort(m.memoryAllocatable)} percent={pct} />
+    }
+    case 'pods': {
+      const m = metrics.nodes.get(resource.metadata?.name)
+      const allocatable = resource.status?.allocatable?.pods
+      const podCount = m?.podCount ?? 0
+      if (!allocatable) return <span className="text-sm text-theme-text-tertiary font-mono">{podCount || '-'}</span>
+      const max = parseInt(allocatable, 10)
+      if (isNaN(max) || max <= 0) return <span className="text-sm text-theme-text-tertiary font-mono">{podCount || '-'}</span>
+      const pct = (podCount / max) * 100
+      return <ResourceBar used={String(podCount)} total={String(max)} percent={pct} colorScheme="count" />
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>

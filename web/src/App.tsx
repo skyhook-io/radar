@@ -265,8 +265,11 @@ function AppInner() {
   const namespacesKey = namespaces.join(',')
 
   // Update URL query params when state changes (path is handled by setMainView)
+  // Read from window.location.search (not React Router's searchParams) to preserve
+  // params set by child components via window.history.replaceState (e.g., kind from ResourcesView).
   useEffect(() => {
-    const params = new URLSearchParams(searchParams)
+    const currentSearch = window.location.search
+    const params = new URLSearchParams(currentSearch)
 
     // Update namespaces param
     if (namespaces.length > 0) {
@@ -297,8 +300,8 @@ function AppInner() {
     // Note: resource param for timeline detail view is handled by setDetailResource wrapper
     // to ensure proper history push/pop behavior
 
-    // Only update if params changed
-    if (params.toString() !== searchParams.toString()) {
+    // Only update if params actually changed vs current URL
+    if (params.toString() !== new URLSearchParams(currentSearch).toString()) {
       setSearchParams(params, { replace: true })
     }
   }, [namespacesKey, topologyMode, groupingMode, mainView, searchParams, setSearchParams])

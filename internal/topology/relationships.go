@@ -3,6 +3,7 @@ package topology
 import (
 	"strings"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -217,6 +218,19 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 					}
 				}
 			}
+		case "node", "nodes":
+			if podLister := cache.Pods(); podLister != nil {
+				allPods, podErr := podLister.List(labels.Everything())
+				if podErr == nil {
+					for _, pod := range allPods {
+						if pod.Spec.NodeName == name && pod.Status.Phase != corev1.PodSucceeded && pod.Status.Phase != corev1.PodFailed {
+							podRef := ResourceRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
+							enrichRef(&podRef)
+							rel.Pods = append(rel.Pods, podRef)
+						}
+					}
+				}
+			}
 		}
 	}
 
@@ -282,6 +296,7 @@ func buildNodeID(kind, namespace, name string) string {
 		"pdbs":                     "poddisruptionbudget",
 		"verticalpodautoscalers":   "verticalpodautoscaler",
 		"vpas":                     "verticalpodautoscaler",
+		"nodes":                    "node",
 	}
 
 	if singular, ok := kindMap[k]; ok {

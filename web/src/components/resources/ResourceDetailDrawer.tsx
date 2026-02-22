@@ -1605,7 +1605,7 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
       {kind === 'jobs' && <JobRenderer data={data} />}
       {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
       {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPARenderer data={data} onNavigate={onNavigate} />}
-      {kind === 'nodes' && <NodeRenderer data={data} />}
+      {kind === 'nodes' && <NodeRenderer data={data} relationships={relationships} />}
       {kind === 'persistentvolumeclaims' && <PVCRenderer data={data} onNavigate={onNavigate} />}
       {kind === 'rollouts' && <RolloutRenderer data={data} />}
       {kind === 'certificates' && <CertificateRenderer data={data} />}
