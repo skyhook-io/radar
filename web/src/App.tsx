@@ -867,11 +867,11 @@ function AppInner() {
           onNavigateView={(view) => setMainView(view)}
           onNavigateKind={(kind, group) => {
             const params = new URLSearchParams(searchParams)
-            params.set('kind', kind)
+            params.delete('kind')
             if (group) params.set('apiGroup', group)
             else params.delete('apiGroup')
             params.delete('resource')
-            navigate({ pathname: '/resources', search: params.toString() })
+            navigate({ pathname: `/resources/${kind}`, search: params.toString() })
           }}
           onSwitchContext={(name) => switchContext.mutate({ name })}
           onSetNamespaces={setNamespaces}
