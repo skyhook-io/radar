@@ -260,7 +260,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
                       Image: {container.image}
                     </button>
                     {command && (
-                      <div className="text-theme-text-tertiary font-mono truncate" title={command}>
+                      <div className="text-theme-text-tertiary font-mono break-all">
                         $ {command}
                       </div>
                     )}
@@ -449,7 +449,7 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
       </Section>
 
       {/* Resource Usage (from metrics-server) */}
-      {(metrics?.containers?.length || metricsHistory?.containers?.length) && (
+      {!!(metrics?.containers?.length || metricsHistory?.containers?.length) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           <div className="space-y-4">
             {(metricsHistory?.containers || metrics?.containers || []).map((historyContainer) => {
