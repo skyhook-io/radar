@@ -6,6 +6,7 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev
 LDFLAGS := -X main.version=$(VERSION)
 DOCKER_REPO ?= ghcr.io/skyhook-io/radar
 RADAR_FLAGS ?=
+PORT ?= 9280
 
 ## Build targets
 
@@ -42,16 +43,16 @@ embed:
 # Quick rebuild and restart
 restart: frontend embed backend kill
 	@sleep 1
-	./radar --kubeconfig ~/.kube/config --no-browser &
+	./radar --kubeconfig ~/.kube/config --no-browser --port $(PORT) $(RADAR_FLAGS) &
 	@sleep 4
-	@echo "Server running at http://localhost:9280"
+	@echo "Server running at http://localhost:$(PORT)"
 
 # Frontend-only rebuild and restart (faster - no Go recompile)
 restart-fe: frontend embed kill
 	@sleep 1
-	./radar --kubeconfig ~/.kube/config --no-browser &
+	./radar --kubeconfig ~/.kube/config --no-browser --port $(PORT) $(RADAR_FLAGS) &
 	@sleep 4
-	@echo "Server running at http://localhost:9280"
+	@echo "Server running at http://localhost:$(PORT)"
 
 # Hot reload development (run both in separate terminals)
 # Terminal 1: make watch-frontend
@@ -87,7 +88,7 @@ run-dev:
 
 # Kill any running radar process
 kill:
-	@lsof -ti:9280 | xargs kill -9 2>/dev/null || true
+	@lsof -ti:$(PORT) | xargs kill -9 2>/dev/null || true
 
 # Install all dependencies
 deps:
