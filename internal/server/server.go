@@ -24,9 +24,10 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/helm"
-	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/internal/k8s"
+	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
+	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/topology"
 	"github.com/skyhook-io/radar/internal/updater"
@@ -185,6 +186,9 @@ func (s *Server) setupRoutes() {
 			// Image inspection routes
 			imageHandlers := images.NewHandlers()
 			imageHandlers.RegisterRoutes(r)
+
+			// Prometheus metrics routes
+			prometheuspkg.RegisterRoutes(r)
 
 			// FluxCD routes
 			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.handleFluxReconcile)

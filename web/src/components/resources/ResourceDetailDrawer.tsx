@@ -26,6 +26,7 @@ import { stringify as yamlStringify } from 'yaml'
 import { useResource, useResourceEvents, useUpdateResource, useDeleteResource, useTriggerCronJob, useSuspendCronJob, useResumeCronJob, useRestartWorkload, useWorkloadRevisions, useRollbackWorkload, useFluxReconcile, useFluxSyncWithSource, useFluxSuspend, useFluxResume, useArgoSync, useArgoRefresh, useArgoSuspend, useArgoResume } from '../../api/client'
 import type { WorkloadRevision } from '../../api/client'
 import { ForceDeleteConfirmDialog } from '../ui/ForceDeleteConfirmDialog'
+import { PrometheusCharts } from '../resource/PrometheusCharts'
 import type { SelectedResource, Relationships, ResourceRef } from '../../types'
 import { refToSelectedResource } from '../../utils/navigation'
 import {
@@ -1654,6 +1655,9 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
 
       {/* Generic renderer for CRDs and unknown resource types */}
       {!isKnownKind && <GenericRenderer data={data} />}
+
+      {/* Prometheus Metrics Charts */}
+      <PrometheusCharts kind={data?.kind || resource.kind} namespace={resource.namespace} name={resource.name} />
 
       {/* Related Resources - clickable links to related items */}
       <RelatedResourcesSection relationships={relationships} onNavigate={onNavigate} />

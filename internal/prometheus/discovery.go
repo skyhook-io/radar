@@ -1,0 +1,353 @@
+package prometheus
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"sort"
+	"strings"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/skyhook-io/radar/internal/traffic"
+)
+
+// Well-known Prometheus/VictoriaMetrics service locations (same as traffic/caretta.go).
+var wellKnownLocations = []struct {
+	namespace string
+	name      string
+	port      int    // 0 = use service's first port
+	basePath  string // sub-path for Prometheus API
+}{
+	// VictoriaMetrics — monitoring namespace first (workload metrics)
+	{"monitoring", "victoria-metrics-victoria-metrics-single-server", 8428, ""},
+	{"monitoring", "victoria-metrics-single-server", 8428, ""},
+	{"monitoring", "vmsingle", 8428, ""},
+	{"monitoring", "vmselect", 8481, "/select/0/prometheus"},
+	{"victoria-metrics", "victoria-metrics-victoria-metrics-single-server", 8428, ""},
+	{"victoria-metrics", "victoria-metrics-single-server", 8428, ""},
+	{"victoria-metrics", "vmsingle", 8428, ""},
+	{"victoria-metrics", "vmselect", 8481, "/select/0/prometheus"},
+	// VictoriaMetrics — caretta namespace (traffic-specific, lower priority)
+	{"caretta", "caretta-vm", 8428, ""},
+	// kube-prometheus-stack
+	{"monitoring", "prometheus-kube-prometheus-prometheus", 9090, ""},
+	{"monitoring", "prometheus-operated", 9090, ""},
+	// Standard Prometheus
+	{"opencost", "prometheus-server", 0, ""},
+	{"monitoring", "prometheus-server", 0, ""},
+	{"prometheus", "prometheus-server", 0, ""},
+	{"observability", "prometheus-server", 0, ""},
+	{"metrics", "prometheus-server", 0, ""},
+	{"kube-system", "prometheus", 0, ""},
+	{"default", "prometheus", 0, ""},
+}
+
+// Namespaces commonly used for metrics services
+var metricsNamespaces = map[string]bool{
+	"monitoring":       true,
+	"prometheus":       true,
+	"observability":    true,
+	"metrics":          true,
+	"victoria-metrics": true,
+	"caretta":          true,
+	"opencost":         true,
+}
+
+// Namespaces to skip during dynamic discovery
+var skipNamespaces = map[string]bool{
+	"kube-public":     true,
+	"kube-node-lease": true,
+}
+
+// discover finds and connects to Prometheus using a multi-layer approach:
+//  1. Manual URL override (--prometheus-url)
+//  2. Existing traffic system port-forward
+//  3. Well-known service locations
+//  4. Dynamic cluster-wide discovery with scoring
+func (c *Client) discover(ctx context.Context) (string, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Layer 1: Manual URL override
+	if c.manualURL != "" {
+		addr := strings.TrimRight(c.manualURL, "/")
+		if c.probeUnlocked(ctx, addr) {
+			log.Printf("[prometheus] Using manual URL: %s", addr)
+			c.baseURL = addr
+			c.basePath = ""
+			c.discovered = true
+			return addr, nil
+		}
+		return "", fmt.Errorf("manual Prometheus URL %s not reachable", addr)
+	}
+
+	// Layer 2: Check if traffic system already has a port-forward
+	if pfAddr := traffic.GetMetricsAddress(c.contextName); pfAddr != "" {
+		if c.probeUnlocked(ctx, pfAddr) {
+			log.Printf("[prometheus] Using traffic system port-forward: %s", pfAddr)
+			c.baseURL = pfAddr
+			c.basePath = ""
+			c.discovered = true
+			return pfAddr, nil
+		}
+	}
+
+	if c.k8sClient == nil {
+		return "", fmt.Errorf("no Kubernetes client available for discovery")
+	}
+
+	// Layer 3: Well-known service locations
+	info := c.findWellKnownService(ctx)
+	if info == nil {
+		// Layer 4: Dynamic discovery
+		info = c.discoverDynamic(ctx)
+	}
+
+	if info == nil {
+		return "", fmt.Errorf("no Prometheus service found in cluster")
+	}
+
+	c.discoveryService = &ServiceInfo{
+		Namespace: info.namespace,
+		Name:      info.name,
+		Port:      info.port,
+		BasePath:  info.basePath,
+	}
+
+	// Try cluster-internal address
+	if c.probeUnlocked(ctx, info.clusterAddr+info.basePath) {
+		log.Printf("[prometheus] Connected to %s/%s at %s", info.namespace, info.name, info.clusterAddr)
+		c.baseURL = info.clusterAddr
+		c.basePath = info.basePath
+		c.discovered = true
+		return info.clusterAddr, nil
+	}
+
+	// Not reachable in-cluster — try port-forward
+	log.Printf("[prometheus] Service %s/%s not reachable in-cluster, starting port-forward...", info.namespace, info.name)
+	connInfo, err := traffic.StartMetricsPortForward(ctx, info.namespace, info.name, info.port, c.contextName)
+	if err != nil {
+		return "", fmt.Errorf("port-forward to %s/%s failed: %w", info.namespace, info.name, err)
+	}
+
+	addr := connInfo.Address
+	if info.basePath != "" {
+		if c.probeUnlocked(ctx, addr+info.basePath) {
+			c.baseURL = addr
+			c.basePath = info.basePath
+			c.discovered = true
+			return addr, nil
+		}
+	} else if c.probeUnlocked(ctx, addr) {
+		c.baseURL = addr
+		c.basePath = ""
+		c.discovered = true
+		return addr, nil
+	}
+
+	return "", fmt.Errorf("Prometheus at %s/%s not responding after port-forward", info.namespace, info.name)
+}
+
+// probeUnlocked checks reachability without holding the lock.
+func (c *Client) probeUnlocked(ctx context.Context, addr string) bool {
+	return c.probe(ctx, addr)
+}
+
+type serviceInfo struct {
+	namespace   string
+	name        string
+	port        int
+	clusterAddr string
+	basePath    string
+}
+
+func (c *Client) findWellKnownService(ctx context.Context) *serviceInfo {
+	for _, loc := range wellKnownLocations {
+		svc, err := c.k8sClient.CoreV1().Services(loc.namespace).Get(ctx, loc.name, metav1.GetOptions{})
+		if err != nil {
+			continue
+		}
+
+		port := resolvePort(*svc, loc.port)
+		addr := buildClusterAddr(svc.Name, svc.Namespace, svc.Spec.ClusterIP, port)
+
+		log.Printf("[prometheus] Found well-known service: %s/%s:%d", svc.Namespace, svc.Name, port)
+		return &serviceInfo{
+			namespace:   svc.Namespace,
+			name:        svc.Name,
+			port:        port,
+			clusterAddr: addr,
+			basePath:    loc.basePath,
+		}
+	}
+	return nil
+}
+
+type scoredCandidate struct {
+	info  serviceInfo
+	score int
+}
+
+func (c *Client) discoverDynamic(ctx context.Context) *serviceInfo {
+	log.Printf("[prometheus] Starting dynamic discovery...")
+
+	svcs, err := c.k8sClient.CoreV1().Services("").List(ctx, metav1.ListOptions{})
+	if err != nil {
+		log.Printf("[prometheus] Failed to list services: %v", err)
+		return nil
+	}
+
+	var candidates []scoredCandidate
+	for _, svc := range svcs.Items {
+		score, bp := scoreService(svc)
+		if score <= 0 {
+			continue
+		}
+		port := resolvePort(svc, 0)
+		candidates = append(candidates, scoredCandidate{
+			info: serviceInfo{
+				namespace:   svc.Namespace,
+				name:        svc.Name,
+				port:        port,
+				clusterAddr: buildClusterAddr(svc.Name, svc.Namespace, svc.Spec.ClusterIP, port),
+				basePath:    bp,
+			},
+			score: score,
+		})
+	}
+
+	if len(candidates) == 0 {
+		log.Printf("[prometheus] Dynamic discovery found no candidates")
+		return nil
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].score > candidates[j].score
+	})
+
+	limit := min(len(candidates), 5)
+	log.Printf("[prometheus] Found %d candidates, top %d:", len(candidates), limit)
+	for i := range limit {
+		log.Printf("[prometheus]   %s/%s (score=%d)", candidates[i].info.namespace, candidates[i].info.name, candidates[i].score)
+	}
+
+	// Validate top candidates
+	for i := range limit {
+		cand := &candidates[i]
+		addr := cand.info.clusterAddr
+
+		if c.probeUnlocked(ctx, addr+cand.info.basePath) {
+			log.Printf("[prometheus] Validated: %s/%s", cand.info.namespace, cand.info.name)
+			return &cand.info
+		}
+	}
+
+	// Return best unvalidated candidate (caller will port-forward)
+	best := &candidates[0]
+	log.Printf("[prometheus] No candidates reachable in-cluster, returning best: %s/%s (score=%d)",
+		best.info.namespace, best.info.name, best.score)
+	return &best.info
+}
+
+// scoreService computes a heuristic score for a service being Prometheus-compatible.
+func scoreService(svc corev1.Service) (score int, basePath string) {
+	labels := svc.Labels
+	name := svc.Name
+	ns := svc.Namespace
+
+	if svc.Spec.Type == corev1.ServiceTypeExternalName {
+		return 0, ""
+	}
+	if skipNamespaces[ns] {
+		return 0, ""
+	}
+
+	// Label signals
+	appName := labels["app.kubernetes.io/name"]
+	appLabel := labels["app"]
+	component := labels["app.kubernetes.io/component"]
+
+	switch appName {
+	case "prometheus":
+		score += 100
+	case "victoria-metrics-single", "vmsingle":
+		score += 100
+	case "vmselect":
+		score += 90
+		basePath = "/select/0/prometheus"
+	case "thanos-query", "thanos-querier":
+		score += 80
+	}
+
+	switch appLabel {
+	case "prometheus", "prometheus-server":
+		score += 80
+	case "vmsingle":
+		score += 80
+	case "vmselect":
+		score += 80
+		basePath = "/select/0/prometheus"
+	}
+
+	if score > 0 && component == "server" {
+		score += 20
+	}
+
+	// Port signals
+	for _, p := range svc.Spec.Ports {
+		switch p.Port {
+		case 9090:
+			score += 30
+		case 8428:
+			score += 30
+		case 8481:
+			score += 25
+		case 9009:
+			score += 25
+		}
+		if strings.Contains(strings.ToLower(p.Name), "prometheus") {
+			score += 10
+		}
+	}
+
+	// Name signals
+	nameLower := strings.ToLower(name)
+	if strings.Contains(nameLower, "prometheus") {
+		score += 20
+	}
+	if strings.Contains(nameLower, "victoria") || strings.Contains(nameLower, "vmsingle") || strings.Contains(nameLower, "vmselect") {
+		score += 20
+		if strings.Contains(nameLower, "vmselect") && basePath == "" {
+			basePath = "/select/0/prometheus"
+		}
+	}
+	if strings.Contains(nameLower, "thanos") {
+		score += 15
+	}
+
+	// Namespace signal
+	if metricsNamespaces[ns] {
+		score += 10
+	}
+
+	return score, basePath
+}
+
+func resolvePort(svc corev1.Service, defaultPort int) int {
+	if defaultPort != 0 {
+		return defaultPort
+	}
+	if len(svc.Spec.Ports) > 0 {
+		return int(svc.Spec.Ports[0].Port)
+	}
+	return 80
+}
+
+func buildClusterAddr(name, namespace, clusterIP string, port int) string {
+	if clusterIP == "None" {
+		return fmt.Sprintf("http://%s-0.%s.%s.svc.cluster.local:%d", name, name, namespace, port)
+	}
+	return fmt.Sprintf("http://%s.%s.svc.cluster.local:%d", name, namespace, port)
+}

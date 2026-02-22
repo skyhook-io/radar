@@ -99,6 +99,17 @@ func InitAllSubsystems(progress func(string)) error {
 		}
 	}
 
+	// 8. Prometheus metrics client
+	contextSwitchMu.RLock()
+	promReinitFn := prometheusReinitFunc
+	contextSwitchMu.RUnlock()
+	if promReinitFn != nil {
+		progress("Initializing Prometheus metrics...")
+		if err := promReinitFn(); err != nil {
+			log.Printf("Warning: Prometheus init failed: %v", err)
+		}
+	}
+
 	return nil
 }
 
@@ -107,6 +118,14 @@ func InitAllSubsystems(progress func(string)) error {
 // Each reset is wrapped in a panic recover so a failure in one subsystem
 // does not prevent remaining subsystems from being torn down.
 func ResetAllSubsystems() {
+	// 8. Prometheus metrics client
+	contextSwitchMu.RLock()
+	promResetFn := prometheusResetFunc
+	contextSwitchMu.RUnlock()
+	if promResetFn != nil {
+		safeReset("prometheus", promResetFn)
+	}
+
 	// 7. Traffic
 	contextSwitchMu.RLock()
 	trResetFn := trafficResetFunc

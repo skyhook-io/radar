@@ -694,6 +694,138 @@ export function useTopNodeMetrics() {
 }
 
 // ============================================================================
+// Prometheus Metrics
+// ============================================================================
+
+// Prometheus types
+export interface PrometheusStatus {
+  available: boolean
+  connected: boolean
+  address?: string
+  service?: {
+    namespace: string
+    name: string
+    port: number
+    basePath?: string
+  }
+  contextName?: string
+  error?: string
+}
+
+export interface PrometheusDataPoint {
+  timestamp: number
+  value: number
+}
+
+export interface PrometheusSeries {
+  labels: Record<string, string>
+  dataPoints: PrometheusDataPoint[]
+}
+
+export interface PrometheusQueryResult {
+  resultType: string
+  series: PrometheusSeries[]
+}
+
+export interface PrometheusResourceMetrics {
+  kind: string
+  namespace?: string
+  name: string
+  category: string
+  unit: string
+  range: string
+  result: PrometheusQueryResult
+}
+
+export type PrometheusMetricCategory = 'cpu' | 'memory' | 'network_rx' | 'network_tx' | 'filesystem'
+export type PrometheusTimeRange = '10m' | '30m' | '1h' | '3h' | '6h' | '12h' | '24h' | '48h' | '7d' | '14d'
+
+// Check Prometheus availability
+export function usePrometheusStatus() {
+  return useQuery<PrometheusStatus>({
+    queryKey: ['prometheus-status'],
+    queryFn: () => fetchJSON('/prometheus/status'),
+    staleTime: 30000,
+    refetchInterval: 60000,
+  })
+}
+
+// Connect to Prometheus (trigger discovery)
+export function usePrometheusConnect() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async () => {
+      const resp = await fetch(`${API_BASE}/prometheus/connect`, { method: 'POST' })
+      if (!resp.ok) throw new Error('Failed to connect')
+      return resp.json() as Promise<PrometheusStatus>
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['prometheus-status'] })
+    },
+    meta: {
+      errorMessage: 'Failed to connect to Prometheus',
+      successMessage: 'Connected to Prometheus',
+    },
+  })
+}
+
+// Fetch Prometheus metrics for a resource
+export function usePrometheusResourceMetrics(
+  kind: string,
+  namespace: string,
+  name: string,
+  category: PrometheusMetricCategory = 'cpu',
+  range: PrometheusTimeRange = '1h',
+  enabled = true,
+) {
+  return useQuery<PrometheusResourceMetrics>({
+    queryKey: ['prometheus-resource-metrics', kind, namespace, name, category, range],
+    queryFn: () =>
+      fetchJSON(
+        namespace
+          ? `/prometheus/resources/${kind}/${namespace}/${name}?category=${category}&range=${range}`
+          : `/prometheus/resources/${kind}/${name}?category=${category}&range=${range}`,
+      ),
+    enabled,
+    staleTime: 30000,
+    refetchInterval: 60000,
+  })
+}
+
+// Fetch Prometheus metrics for a namespace
+export function usePrometheusNamespaceMetrics(
+  namespace: string,
+  category: PrometheusMetricCategory = 'cpu',
+  range: PrometheusTimeRange = '1h',
+  enabled = true,
+) {
+  return useQuery<PrometheusResourceMetrics>({
+    queryKey: ['prometheus-namespace-metrics', namespace, category, range],
+    queryFn: () =>
+      fetchJSON(`/prometheus/namespace/${namespace}?category=${category}&range=${range}`),
+    enabled,
+    staleTime: 30000,
+    refetchInterval: 60000,
+  })
+}
+
+// Fetch Prometheus metrics for the entire cluster
+export function usePrometheusClusterMetrics(
+  category: PrometheusMetricCategory = 'cpu',
+  range: PrometheusTimeRange = '1h',
+  enabled = true,
+) {
+  return useQuery<PrometheusResourceMetrics>({
+    queryKey: ['prometheus-cluster-metrics', category, range],
+    queryFn: () =>
+      fetchJSON(`/prometheus/cluster?category=${category}&range=${range}`),
+    enabled,
+    staleTime: 30000,
+    refetchInterval: 60000,
+  })
+}
+
+// ============================================================================
 // Pod Logs
 // ============================================================================
 

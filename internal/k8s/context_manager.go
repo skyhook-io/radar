@@ -44,6 +44,12 @@ type TrafficResetFunc func()
 // Returns error if reinitialization fails
 type TrafficReinitFunc func() error
 
+// PrometheusResetFunc is called to reset the Prometheus metrics client
+type PrometheusResetFunc func()
+
+// PrometheusReinitFunc is called to reinitialize the Prometheus metrics client
+type PrometheusReinitFunc func() error
+
 var (
 	contextSwitchCallbacks         []ContextSwitchCallback
 	contextSwitchProgressCallbacks []ContextSwitchProgressCallback
@@ -54,6 +60,8 @@ var (
 	timelineReinitFunc             TimelineReinitFunc
 	trafficResetFunc               TrafficResetFunc
 	trafficReinitFunc              TrafficReinitFunc
+	prometheusResetFunc            PrometheusResetFunc
+	prometheusReinitFunc           PrometheusReinitFunc
 )
 
 // OnContextSwitch registers a callback to be called when the context is switched
@@ -107,6 +115,14 @@ func RegisterTrafficFuncs(reset TrafficResetFunc, reinit TrafficReinitFunc) {
 	defer contextSwitchMu.Unlock()
 	trafficResetFunc = reset
 	trafficReinitFunc = reinit
+}
+
+// RegisterPrometheusResetFunc registers the Prometheus client reset/reinit functions
+func RegisterPrometheusResetFunc(reset PrometheusResetFunc, reinit PrometheusReinitFunc) {
+	contextSwitchMu.Lock()
+	defer contextSwitchMu.Unlock()
+	prometheusResetFunc = reset
+	prometheusReinitFunc = reinit
 }
 
 // TestClusterConnection tests connectivity to the current cluster

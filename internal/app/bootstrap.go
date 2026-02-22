@@ -13,6 +13,7 @@ import (
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
+	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
 	"github.com/skyhook-io/radar/internal/static"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -112,10 +113,22 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 			log.Fatalf("Invalid --prometheus-url %q: must be a valid HTTP(S) URL (e.g., http://prometheus-server.monitoring:9090)", cfg.PrometheusURL)
 		}
 		traffic.SetMetricsURL(cfg.PrometheusURL)
+		prometheuspkg.SetManualURL(cfg.PrometheusURL)
 	}
+
+	// Initialize Prometheus metrics client
+	prometheuspkg.Initialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
 
 	k8s.RegisterTrafficFuncs(traffic.Reset, func() error {
 		return traffic.ReinitializeWithConfig(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
+	})
+
+	k8s.RegisterPrometheusResetFunc(prometheuspkg.Reset, func() error {
+		prometheuspkg.Reinitialize(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
+		if cfg.PrometheusURL != "" {
+			prometheuspkg.SetManualURL(cfg.PrometheusURL)
+		}
+		return nil
 	})
 }
 

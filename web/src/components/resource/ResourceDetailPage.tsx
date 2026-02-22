@@ -39,8 +39,9 @@ import {
   calculateTimeRange,
 } from '../timeline/shared'
 import { stringify as yamlStringify } from 'yaml'
+import { PrometheusCharts, isPrometheusSupported } from './PrometheusCharts'
 
-type TabType = 'events' | 'logs' | 'info' | 'yaml'
+type TabType = 'events' | 'logs' | 'info' | 'yaml' | 'metrics'
 
 interface ResourceDetailPageProps {
   kind: string
@@ -212,6 +213,12 @@ export function ResourceDetailPage({
             <FileText className="w-4 h-4" />
             YAML
           </TabButton>
+          {isPrometheusSupported(kind) && (
+            <TabButton active={activeTab === 'metrics'} onClick={() => setActiveTab('metrics')}>
+              <Activity className="w-4 h-4" />
+              Metrics
+            </TabButton>
+          )}
         </div>
       </div>
 
@@ -249,6 +256,9 @@ export function ResourceDetailPage({
         )}
         {activeTab === 'yaml' && (
           <YamlTab resource={resource} isLoading={resourceLoading} />
+        )}
+        {activeTab === 'metrics' && (
+          <PrometheusCharts kind={kind} namespace={namespace} name={name} />
         )}
       </div>
     </div>
