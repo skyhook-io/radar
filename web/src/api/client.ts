@@ -108,7 +108,7 @@ export interface DashboardResourceCounts {
   ingresses: number
   gateways?: number
   routes?: number
-  nodes: { total: number; ready: number; notReady: number }
+  nodes: { total: number; ready: number; notReady: number; cordoned: number }
   namespaces: number
   jobs: { total: number; active: number; succeeded: number; failed: number }
   cronJobs: { total: number; active: number; suspended: number }
@@ -198,6 +198,7 @@ export interface DashboardResponse {
   metrics: DashboardMetrics | null
   metricsServerAvailable: boolean
   certificateHealth: DashboardCertificateHealth | null
+  nodeVersionSkew: { versions: Record<string, string[]>; minVersion: string; maxVersion: string } | null
 }
 
 export interface DashboardCRDsResponse {

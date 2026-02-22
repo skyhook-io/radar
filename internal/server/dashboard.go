@@ -35,6 +35,7 @@ type DashboardResponse struct {
 	Metrics                *DashboardMetrics           `json:"metrics"`
 	MetricsServerAvailable bool                        `json:"metricsServerAvailable"`
 	CertificateHealth      *DashboardCertificateHealth `json:"certificateHealth,omitempty"`
+	NodeVersionSkew        *k8s.VersionSkew            `json:"nodeVersionSkew,omitempty"`
 }
 
 // DashboardCRDsResponse is the response for CRD counts (loaded lazily)
@@ -120,6 +121,7 @@ type NodeCount struct {
 	Total    int `json:"total"`
 	Ready    int `json:"ready"`
 	NotReady int `json:"notReady"`
+	Cordoned int `json:"cordoned"`
 }
 
 type JobCount struct {
@@ -156,6 +158,7 @@ type DashboardEvent struct {
 	InvolvedObject string `json:"involvedObject"`
 	Namespace      string `json:"namespace"`
 	Timestamp      string `json:"timestamp"`
+	Count          int32  `json:"count,omitempty"`
 }
 
 type DashboardChange struct {
@@ -250,6 +253,12 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// Certificate health (nil if no TLS secrets)
 	resp.CertificateHealth = s.getDashboardCertificateHealth(namespace)
 
+	// Node version skew
+	if nodeLister := cache.Nodes(); nodeLister != nil {
+		nodes, _ := nodeLister.List(labels.Everything())
+		resp.NodeVersionSkew = k8s.DetectVersionSkew(nodes)
+	}
+
 	s.writeJSON(w, resp)
 }
 
@@ -326,7 +335,7 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 						Name:       d.Name,
 						Status:     "error",
 						Reason:     fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, d.Status.Replicas),
-						Age:        formatAge(ageDur),
+						Age:        k8s.FormatAge(ageDur),
 						AgeSeconds: int64(ageDur.Seconds()),
 					})
 				}
@@ -342,7 +351,7 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 						Name:       d.Name,
 						Status:     "error",
 						Reason:     fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, d.Status.Replicas),
-						Age:        formatAge(ageDur),
+						Age:        k8s.FormatAge(ageDur),
 						AgeSeconds: int64(ageDur.Seconds()),
 					})
 				}
@@ -363,7 +372,7 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 						Name:       ss.Name,
 						Status:     "error",
 						Reason:     fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, ss.Status.Replicas),
-						Age:        formatAge(ageDur),
+						Age:        k8s.FormatAge(ageDur),
 						AgeSeconds: int64(ageDur.Seconds()),
 					})
 				}
@@ -379,7 +388,7 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 						Name:       ss.Name,
 						Status:     "error",
 						Reason:     fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, ss.Status.Replicas),
-						Age:        formatAge(ageDur),
+						Age:        k8s.FormatAge(ageDur),
 						AgeSeconds: int64(ageDur.Seconds()),
 					})
 				}
@@ -400,7 +409,7 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 						Name:       ds.Name,
 						Status:     "error",
 						Reason:     fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable),
-						Age:        formatAge(ageDur),
+						Age:        k8s.FormatAge(ageDur),
 						AgeSeconds: int64(ageDur.Seconds()),
 					})
 				}
@@ -416,7 +425,7 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 						Name:       ds.Name,
 						Status:     "error",
 						Reason:     fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable),
-						Age:        formatAge(ageDur),
+						Age:        k8s.FormatAge(ageDur),
 						AgeSeconds: int64(ageDur.Seconds()),
 					})
 				}
@@ -424,37 +433,28 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 		}
 	}
 
-	// Node problems: Ready=False
+	// Node problems: NotReady, Cordoned, pressure conditions
 	var nodes []*corev1.Node
 	if nodeLister := cache.Nodes(); nodeLister != nil {
 		nodes, _ = nodeLister.List(labels.Everything())
 	}
-	for _, n := range nodes {
-		ready := false
-		for _, cond := range n.Status.Conditions {
-			if cond.Type == corev1.NodeReady && cond.Status == corev1.ConditionTrue {
-				ready = true
+	for _, np := range k8s.DetectNodeProblems(nodes) {
+		ageDur := time.Duration(0)
+		for _, n := range nodes {
+			if n.Name == np.NodeName {
+				ageDur = now.Sub(n.CreationTimestamp.Time)
 				break
 			}
 		}
-		if !ready {
-			reason := "NotReady"
-			for _, cond := range n.Status.Conditions {
-				if cond.Type == corev1.NodeReady && cond.Message != "" {
-					reason = cond.Message
-					break
-				}
-			}
-			ageDur := now.Sub(n.CreationTimestamp.Time)
-			problems = append(problems, DashboardProblem{
-				Kind:       "Node",
-				Name:       n.Name,
-				Status:     "error",
-				Reason:     reason,
-				Age:        formatAge(ageDur),
-				AgeSeconds: int64(ageDur.Seconds()),
-			})
-		}
+		problems = append(problems, DashboardProblem{
+			Kind:       "Node",
+			Name:       np.NodeName,
+			Status:     np.Severity,
+			Reason:     np.Problem,
+			Message:    np.Reason,
+			Age:        k8s.FormatAge(ageDur),
+			AgeSeconds: int64(ageDur.Seconds()),
+		})
 	}
 
 	// Sort: errors first, then warnings; within each group sort by age (most recent first)
@@ -469,65 +469,9 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 	return health, problems
 }
 
-// classifyPodHealth determines if a pod is healthy, warning, or error
+// classifyPodHealth delegates to the shared implementation in k8s.ClassifyPodHealth.
 func classifyPodHealth(pod *corev1.Pod, now time.Time) string {
-	// Succeeded pods are healthy
-	if pod.Status.Phase == corev1.PodSucceeded {
-		return "healthy"
-	}
-
-	// Failed pods are errors
-	if pod.Status.Phase == corev1.PodFailed {
-		return "error"
-	}
-
-	// Check container statuses for error conditions
-	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.State.Waiting != nil {
-			reason := cs.State.Waiting.Reason
-			if reason == "CrashLoopBackOff" || reason == "ImagePullBackOff" || reason == "ErrImagePull" || reason == "CreateContainerConfigError" {
-				return "error"
-			}
-		}
-		if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
-			return "error"
-		}
-		if cs.LastTerminationState.Terminated != nil && cs.LastTerminationState.Terminated.Reason == "OOMKilled" {
-			return "error"
-		}
-	}
-
-	// Init container errors
-	for _, cs := range pod.Status.InitContainerStatuses {
-		if cs.State.Waiting != nil {
-			reason := cs.State.Waiting.Reason
-			if reason == "CrashLoopBackOff" || reason == "ImagePullBackOff" || reason == "ErrImagePull" {
-				return "error"
-			}
-		}
-	}
-
-	// Warning: pods pending for more than 5 minutes
-	if pod.Status.Phase == corev1.PodPending {
-		if now.Sub(pod.CreationTimestamp.Time) > 5*time.Minute {
-			return "warning"
-		}
-		return "healthy" // recently pending is fine
-	}
-
-	// Warning: pods with high restart counts
-	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.RestartCount > 3 {
-			return "warning"
-		}
-	}
-
-	// Running with all containers ready = healthy
-	if pod.Status.Phase == corev1.PodRunning {
-		return "healthy"
-	}
-
-	return "healthy"
+	return k8s.ClassifyPodHealth(pod, now)
 }
 
 func podToProblem(pod *corev1.Pod, severity string, now time.Time) DashboardProblem {
@@ -577,8 +521,8 @@ func podToProblem(pod *corev1.Pod, severity string, now time.Time) DashboardProb
 		Name:       pod.Name,
 		Status:     severity,
 		Reason:     reason,
-		Message:    truncate(message, 200),
-		Age:        formatAge(ageDur),
+		Message:    k8s.Truncate(message, 200),
+		Age:        k8s.FormatAge(ageDur),
 		AgeSeconds: int64(ageDur.Seconds()),
 	}
 }
@@ -760,15 +704,13 @@ func (s *Server) getDashboardResourceCounts(cache *k8s.ResourceCache, namespace 
 		nodeList, _ := nodeLister.List(labels.Everything())
 		counts.Nodes.Total = len(nodeList)
 		for _, n := range nodeList {
-			ready := false
-			for _, cond := range n.Status.Conditions {
-				if cond.Type == corev1.NodeReady && cond.Status == corev1.ConditionTrue {
-					ready = true
-					break
+			h := k8s.ClassifyNodeHealth(n)
+			if h.Ready {
+				if h.Unschedulable {
+					counts.Nodes.Cordoned++
+				} else {
+					counts.Nodes.Ready++
 				}
-			}
-			if ready {
-				counts.Nodes.Ready++
 			} else {
 				counts.Nodes.NotReady++
 			}
@@ -951,10 +893,11 @@ func (s *Server) getDashboardRecentEvents(cache *k8s.ResourceCache, namespace st
 		result = append(result, DashboardEvent{
 			Type:           e.Type,
 			Reason:         e.Reason,
-			Message:        truncate(e.Message, 200),
+			Message:        k8s.Truncate(e.Message, 200),
 			InvolvedObject: fmt.Sprintf("%s/%s", e.InvolvedObject.Kind, e.InvolvedObject.Name),
 			Namespace:      e.Namespace,
 			Timestamp:      ts.Format(time.RFC3339),
+			Count:          max(e.Count, 1),
 		})
 	}
 
@@ -985,7 +928,7 @@ func (s *Server) getDashboardRecentChanges(ctx context.Context, namespaces []str
 		if e.Diff != nil && e.Diff.Summary != "" {
 			summary = e.Diff.Summary
 		} else if e.Message != "" {
-			summary = truncate(e.Message, 100)
+			summary = k8s.Truncate(e.Message, 100)
 		}
 
 		result = append(result, DashboardChange{
@@ -1104,6 +1047,13 @@ func (s *Server) getDashboardHelmSummary(namespace string) DashboardHelmSummary 
 	result := DashboardHelmSummary{
 		Total: len(releases),
 	}
+
+	// Sort: failed/unhealthy releases first to surface problems
+	sort.SliceStable(releases, func(i, j int) bool {
+		pi := helmStatusPriority(releases[i].Status, releases[i].ResourceHealth)
+		pj := helmStatusPriority(releases[j].Status, releases[j].ResourceHealth)
+		return pi < pj
+	})
 
 	// Take top 6 releases
 	limit := min(len(releases), 6)
@@ -1317,26 +1267,6 @@ func parseMemoryToBytes(s string) int64 {
 
 // Helper functions
 
-func formatAge(d time.Duration) string {
-	if d < time.Minute {
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	}
-	if d < time.Hour {
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	}
-	if d < 24*time.Hour {
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	}
-	return fmt.Sprintf("%dd", int(d.Hours()/24))
-}
-
-func truncate(s string, maxLen int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
-}
 
 // getDashboardCRDCounts returns counts of CRD instances in the cluster.
 func (s *Server) getDashboardCRDCounts(_ context.Context, namespace string) []DashboardCRDCount {
@@ -1430,4 +1360,22 @@ func (s *Server) getDashboardCRDCounts(_ context.Context, namespace string) []Da
 	}
 
 	return counts
+}
+
+// helmStatusPriority returns a sort priority for Helm release statuses.
+// Lower values sort first — failed and unhealthy releases are surfaced first.
+func helmStatusPriority(status, resourceHealth string) int {
+	if status == "failed" {
+		return 0
+	}
+	if status == "pending-install" || status == "pending-upgrade" || status == "pending-rollback" {
+		return 1
+	}
+	switch resourceHealth {
+	case "unhealthy":
+		return 2
+	case "degraded":
+		return 3
+	}
+	return 4
 }

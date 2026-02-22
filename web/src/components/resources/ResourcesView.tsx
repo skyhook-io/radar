@@ -2051,6 +2051,23 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     return result
   }, [resources, searchTerm, columnFilters, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, sortColumn, sortDirection, getSortValue, podMatchesProblemFilter])
 
+  // For nodes table: compute the majority minor version so outliers can be highlighted
+  const majorityNodeMinorVersion = useMemo(() => {
+    if (selectedKind.name.toLowerCase() !== 'nodes') return ''
+    const counts = new Map<string, number>()
+    for (const r of filteredResources) {
+      const full = r.status?.nodeInfo?.kubeletVersion || ''
+      const match = full.match(/^v?(\d+\.\d+)/)
+      if (match) counts.set(match[1], (counts.get(match[1]) || 0) + 1)
+    }
+    let best = ''
+    let bestCount = 0
+    for (const [v, c] of counts) {
+      if (c > bestCount) { best = v; bestCount = c }
+    }
+    return counts.size > 1 ? best : '' // empty string means no skew
+  }, [filteredResources, selectedKind.name])
+
   // Keep refs in sync for keyboard shortcuts (shortcuts can't capture filteredResources directly)
   filteredResourceCountRef.current = filteredResources.length
   highlightedResourceRef.current = highlightedIndex >= 0 ? filteredResources[highlightedIndex] ?? null : null
@@ -2936,6 +2953,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
                       hasSpacerColumn={hasResizedColumns}
                       isSelected={isSelected}
                       isHighlighted={isHighlighted}
+                      majorityNodeMinorVersion={majorityNodeMinorVersion}
                       onClick={() => onResourceClick?.({ kind: selectedKind.name, namespace: resource.metadata?.namespace || '', name: resource.metadata?.name, group: selectedKind.group })}
                       onMouseEnter={() => setHighlightedIndex(-1)}
                     />
@@ -3033,12 +3051,13 @@ interface ResourceRowProps {
   hasSpacerColumn: boolean
   isSelected?: boolean
   isHighlighted?: boolean
+  majorityNodeMinorVersion?: string
   onClick?: () => void
   onMouseEnter?: () => void
 }
 
 const ResourceRow = forwardRef<HTMLTableCellElement, ResourceRowProps>(
-  function ResourceRow({ resource, kind, columns, hasSpacerColumn, isSelected, isHighlighted, onClick, onMouseEnter }, ref) {
+  function ResourceRow({ resource, kind, columns, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter }, ref) {
     return (
       <tr
         onClick={onClick}
@@ -3059,7 +3078,7 @@ const ResourceRow = forwardRef<HTMLTableCellElement, ResourceRowProps>(
                 : 'group-hover/row:bg-theme-surface/50'
           )}
         >
-          <CellContent resource={resource} kind={kind} column={col.key} />
+          <CellContent resource={resource} kind={kind} column={col.key} majorityNodeMinorVersion={majorityNodeMinorVersion} />
         </td>
       ))}
       {hasSpacerColumn && <td className="border-b-subtle p-0" />}
@@ -3072,9 +3091,10 @@ interface CellContentProps {
   resource: any
   kind: string
   column: string
+  majorityNodeMinorVersion?: string
 }
 
-function CellContent({ resource, kind, column }: CellContentProps) {
+function CellContent({ resource, kind, column, majorityNodeMinorVersion }: CellContentProps) {
   const meta = resource.metadata || {}
 
   // Common columns
@@ -3137,7 +3157,7 @@ function CellContent({ resource, kind, column }: CellContentProps) {
     case 'horizontalpodautoscalers':
       return <HPACell resource={resource} column={column} />
     case 'nodes':
-      return <NodeCell resource={resource} column={column} />
+      return <NodeCell resource={resource} column={column} majorityNodeMinorVersion={majorityNodeMinorVersion} />
     case 'persistentvolumeclaims':
       return <PVCCell resource={resource} column={column} />
     case 'rollouts':
@@ -3869,7 +3889,7 @@ function buildResourceTooltip(
   )
 }
 
-function NodeCell({ resource, column }: { resource: any; column: string }) {
+function NodeCell({ resource, column, majorityNodeMinorVersion }: { resource: any; column: string; majorityNodeMinorVersion?: string }) {
   const metrics = useContext(MetricsContext)
 
   switch (column) {
@@ -3918,7 +3938,12 @@ function NodeCell({ resource, column }: { resource: any; column: string }) {
     }
     case 'version': {
       const version = getNodeVersion(resource)
-      return <span className="text-sm text-theme-text-secondary">{version}</span>
+      const isSkewed = majorityNodeMinorVersion && version && !version.startsWith(`v${majorityNodeMinorVersion}`)
+      return (
+        <span className={clsx('text-sm', isSkewed ? 'text-yellow-400 font-medium' : 'text-theme-text-secondary')}>
+          {version}
+        </span>
+      )
     }
     case 'cpu': {
       const m = metrics.nodes.get(resource.metadata?.name)

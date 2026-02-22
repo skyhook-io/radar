@@ -270,8 +270,8 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 	deduplicated := aicontext.DeduplicateEvents(eventValues)
 
 	limit := 20
-	if input.Limit > 0 && input.Limit < limit {
-		limit = input.Limit
+	if input.Limit > 0 {
+		limit = min(input.Limit, 100)
 	}
 	if len(deduplicated) > limit {
 		deduplicated = deduplicated[:limit]
@@ -344,6 +344,8 @@ func handleListNamespaces(ctx context.Context, req *mcp.CallToolRequest, input s
 
 type mcpDashboard struct {
 	Cluster        mcpClusterInfo   `json:"cluster"`
+	Nodes          mcpNodeSummary   `json:"nodes"`
+	VersionSkew    []string         `json:"versionSkew,omitempty"`
 	Health         mcpHealthSummary `json:"health"`
 	Problems       []mcpProblem     `json:"problems"`
 	WarningEvents  int              `json:"warningEvents"`
@@ -360,6 +362,13 @@ type mcpClusterInfo struct {
 	Version  string `json:"version"`
 }
 
+type mcpNodeSummary struct {
+	Total    int `json:"total"`
+	Ready    int `json:"ready"`
+	NotReady int `json:"notReady"`
+	Cordoned int `json:"cordoned"`
+}
+
 type mcpHealthSummary struct {
 	HealthyPods int `json:"healthyPods"`
 	WarningPods int `json:"warningPods"`
@@ -371,6 +380,7 @@ type mcpProblem struct {
 	Namespace string `json:"namespace,omitempty"`
 	Name      string `json:"name"`
 	Reason    string `json:"reason"`
+	Message   string `json:"message,omitempty"`
 	Age       string `json:"age"`
 }
 
@@ -418,7 +428,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		}
 		d.ResourceCounts["pods"] = len(pods)
 		for _, pod := range pods {
-			switch classifyPodHealth(pod, now) {
+			switch k8s.ClassifyPodHealth(pod, now) {
 			case "healthy":
 				d.Health.HealthyPods++
 			case "warning":
@@ -430,8 +440,8 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 						Kind:      "Pod",
 						Namespace: pod.Namespace,
 						Name:      pod.Name,
-						Reason:    podProblemReason(pod),
-						Age:       formatAge(now.Sub(pod.CreationTimestamp.Time)),
+						Reason:    k8s.PodProblemReason(pod),
+						Age:       k8s.FormatAge(now.Sub(pod.CreationTimestamp.Time)),
 					})
 				}
 			}
@@ -440,46 +450,150 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 
 	// Deployment problems
 	if depLister := cache.Deployments(); depLister != nil {
-		var deps []*corev1.Pod // placeholder type - will use actual
-		_ = deps
-		listDeps := func() {
-			if namespace != "" {
-				items, _ := cache.Deployments().Deployments(namespace).List(labels.Everything())
-				d.ResourceCounts["deployments"] = len(items)
-				for _, dep := range items {
-					if dep.Status.UnavailableReplicas > 0 && len(d.Problems) < 10 {
-						d.Problems = append(d.Problems, mcpProblem{
-							Kind:      "Deployment",
-							Namespace: dep.Namespace,
-							Name:      dep.Name,
-							Reason:    fmt.Sprintf("%d/%d available", dep.Status.AvailableReplicas, dep.Status.Replicas),
-							Age:       formatAge(now.Sub(dep.CreationTimestamp.Time)),
-						})
-					}
+		if namespace != "" {
+			items, _ := depLister.Deployments(namespace).List(labels.Everything())
+			d.ResourceCounts["deployments"] = len(items)
+			for _, dep := range items {
+				if dep.Status.UnavailableReplicas > 0 && len(d.Problems) < 10 {
+					d.Problems = append(d.Problems, mcpProblem{
+						Kind:      "Deployment",
+						Namespace: dep.Namespace,
+						Name:      dep.Name,
+						Reason:    fmt.Sprintf("%d/%d available", dep.Status.AvailableReplicas, dep.Status.Replicas),
+						Age:       k8s.FormatAge(now.Sub(dep.CreationTimestamp.Time)),
+					})
 				}
-			} else {
-				items, _ := cache.Deployments().List(labels.Everything())
-				d.ResourceCounts["deployments"] = len(items)
-				for _, dep := range items {
-					if dep.Status.UnavailableReplicas > 0 && len(d.Problems) < 10 {
-						d.Problems = append(d.Problems, mcpProblem{
-							Kind:      "Deployment",
-							Namespace: dep.Namespace,
-							Name:      dep.Name,
-							Reason:    fmt.Sprintf("%d/%d available", dep.Status.AvailableReplicas, dep.Status.Replicas),
-							Age:       formatAge(now.Sub(dep.CreationTimestamp.Time)),
-						})
-					}
+			}
+		} else {
+			items, _ := depLister.List(labels.Everything())
+			d.ResourceCounts["deployments"] = len(items)
+			for _, dep := range items {
+				if dep.Status.UnavailableReplicas > 0 && len(d.Problems) < 10 {
+					d.Problems = append(d.Problems, mcpProblem{
+						Kind:      "Deployment",
+						Namespace: dep.Namespace,
+						Name:      dep.Name,
+						Reason:    fmt.Sprintf("%d/%d available", dep.Status.AvailableReplicas, dep.Status.Replicas),
+						Age:       k8s.FormatAge(now.Sub(dep.CreationTimestamp.Time)),
+					})
 				}
 			}
 		}
-		listDeps()
+	}
+
+	// StatefulSet problems: readyReplicas < replicas
+	if ssLister := cache.StatefulSets(); ssLister != nil {
+		if namespace != "" {
+			ssets, _ := ssLister.StatefulSets(namespace).List(labels.Everything())
+			for _, ss := range ssets {
+				if ss.Status.ReadyReplicas < ss.Status.Replicas && len(d.Problems) < 10 {
+					d.Problems = append(d.Problems, mcpProblem{
+						Kind:      "StatefulSet",
+						Namespace: ss.Namespace,
+						Name:      ss.Name,
+						Reason:    fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, ss.Status.Replicas),
+						Age:       k8s.FormatAge(now.Sub(ss.CreationTimestamp.Time)),
+					})
+				}
+			}
+		} else {
+			ssets, _ := ssLister.List(labels.Everything())
+			for _, ss := range ssets {
+				if ss.Status.ReadyReplicas < ss.Status.Replicas && len(d.Problems) < 10 {
+					d.Problems = append(d.Problems, mcpProblem{
+						Kind:      "StatefulSet",
+						Namespace: ss.Namespace,
+						Name:      ss.Name,
+						Reason:    fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, ss.Status.Replicas),
+						Age:       k8s.FormatAge(now.Sub(ss.CreationTimestamp.Time)),
+					})
+				}
+			}
+		}
+	}
+
+	// DaemonSet problems: numberUnavailable > 0
+	if dsLister := cache.DaemonSets(); dsLister != nil {
+		if namespace != "" {
+			dsets, _ := dsLister.DaemonSets(namespace).List(labels.Everything())
+			for _, ds := range dsets {
+				if ds.Status.NumberUnavailable > 0 && len(d.Problems) < 10 {
+					d.Problems = append(d.Problems, mcpProblem{
+						Kind:      "DaemonSet",
+						Namespace: ds.Namespace,
+						Name:      ds.Name,
+						Reason:    fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable),
+						Age:       k8s.FormatAge(now.Sub(ds.CreationTimestamp.Time)),
+					})
+				}
+			}
+		} else {
+			dsets, _ := dsLister.List(labels.Everything())
+			for _, ds := range dsets {
+				if ds.Status.NumberUnavailable > 0 && len(d.Problems) < 10 {
+					d.Problems = append(d.Problems, mcpProblem{
+						Kind:      "DaemonSet",
+						Namespace: ds.Namespace,
+						Name:      ds.Name,
+						Reason:    fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable),
+						Age:       k8s.FormatAge(now.Sub(ds.CreationTimestamp.Time)),
+					})
+				}
+			}
+		}
+	}
+
+	// Node problems (cluster-scoped, not filtered by namespace)
+	if nodeLister := cache.Nodes(); nodeLister != nil {
+		nodes, _ := nodeLister.List(labels.Everything())
+		d.ResourceCounts["nodes"] = len(nodes)
+		d.Nodes.Total = len(nodes)
+
+		for _, node := range nodes {
+			h := k8s.ClassifyNodeHealth(node)
+			if h.Ready {
+				if h.Unschedulable {
+					d.Nodes.Cordoned++
+				} else {
+					d.Nodes.Ready++
+				}
+			} else {
+				d.Nodes.NotReady++
+			}
+		}
+
+		nodeProblems := k8s.DetectNodeProblems(nodes)
+		for _, np := range nodeProblems {
+			if len(d.Problems) < 10 {
+				age := ""
+				for _, n := range nodes {
+					if n.Name == np.NodeName {
+						age = k8s.FormatAge(now.Sub(n.CreationTimestamp.Time))
+						break
+					}
+				}
+				d.Problems = append(d.Problems, mcpProblem{
+					Kind:   "Node",
+					Name:   np.NodeName,
+					Reason: np.Problem,
+					Age:    age,
+				})
+			}
+		}
+
+		// Version skew
+		if skew := k8s.DetectVersionSkew(nodes); skew != nil {
+			for v := range skew.Versions {
+				d.VersionSkew = append(d.VersionSkew, v)
+			}
+			sort.Strings(d.VersionSkew)
+		}
 	}
 
 	// Simple resource counts for other types
 	countResources(cache, namespace, &d)
 
-	// Warning events
+	// Warning events — deduplicate first, then sort by count
 	if eventLister := cache.Events(); eventLister != nil {
 		var events []*corev1.Event
 		if namespace != "" {
@@ -488,42 +602,41 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			events, _ = eventLister.List(labels.Everything())
 		}
 
-		var warnings []*corev1.Event
+		var warningValues []corev1.Event
 		for _, e := range events {
 			if e.Type == "Warning" {
-				warnings = append(warnings, e)
+				warningValues = append(warningValues, *e)
 			}
 		}
-		d.WarningEvents = len(warnings)
+		d.WarningEvents = len(warningValues)
 
-		// Top 5 warnings sorted by recency
-		sort.Slice(warnings, func(i, j int) bool {
-			ti := warnings[i].LastTimestamp.Time
-			tj := warnings[j].LastTimestamp.Time
-			if ti.IsZero() {
-				ti = warnings[i].CreationTimestamp.Time
-			}
-			if tj.IsZero() {
-				tj = warnings[j].CreationTimestamp.Time
-			}
-			return ti.After(tj)
+		// Deduplicate and sort by count descending to surface systemic issues
+		deduplicated := aicontext.DeduplicateEvents(warningValues)
+		sort.Slice(deduplicated, func(i, j int) bool {
+			return deduplicated[i].Count > deduplicated[j].Count
 		})
-		limit := min(len(warnings), 5)
-		for _, e := range warnings[:limit] {
-			count := max(int(e.Count), 1)
+
+		limit := min(len(deduplicated), 5)
+		for _, e := range deduplicated[:limit] {
 			d.TopWarnings = append(d.TopWarnings, mcpWarning{
 				Reason:  e.Reason,
-				Message: truncate(e.Message, 200),
-				Count:   count,
+				Message: k8s.Truncate(e.Message, 200),
+				Count:   e.Count,
 			})
 		}
 	}
 
-	// Helm releases
+	// Helm releases — sort failed-first before slicing
 	if helmClient := helm.GetClient(); helmClient != nil {
 		releases, err := helmClient.ListReleases(namespace)
 		if err == nil {
 			d.HelmReleases.Total = len(releases)
+
+			// Sort: failed/pending-install first, then unhealthy/degraded
+			sort.SliceStable(releases, func(i, j int) bool {
+				return helmStatusPriority(releases[i].Status, releases[i].ResourceHealth) < helmStatusPriority(releases[j].Status, releases[j].ResourceHealth)
+			})
+
 			limit := min(len(releases), 5)
 			for _, r := range releases[:limit] {
 				d.HelmReleases.Releases = append(d.HelmReleases.Releases, mcpHelmRelease{
@@ -609,73 +722,24 @@ func countResources(cache *k8s.ResourceCache, namespace string, d *mcpDashboard)
 		items, _ := nsLister.List(labels.Everything())
 		d.ResourceCounts["namespaces"] = len(items)
 	}
-	if nodeLister := cache.Nodes(); nodeLister != nil {
-		items, _ := nodeLister.List(labels.Everything())
-		d.ResourceCounts["nodes"] = len(items)
-	}
 }
 
-// classifyPodHealth determines if a pod is healthy, warning, or error.
-func classifyPodHealth(pod *corev1.Pod, now time.Time) string {
-	if pod.Status.Phase == corev1.PodSucceeded {
-		return "healthy"
+// helmStatusPriority returns a sort priority for Helm release statuses.
+// Lower values sort first — failed and unhealthy releases are surfaced first.
+func helmStatusPriority(status, resourceHealth string) int {
+	if status == "failed" {
+		return 0
 	}
-	if pod.Status.Phase == corev1.PodFailed {
-		return "error"
+	if status == "pending-install" || status == "pending-upgrade" || status == "pending-rollback" {
+		return 1
 	}
-	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.State.Waiting != nil {
-			reason := cs.State.Waiting.Reason
-			if reason == "CrashLoopBackOff" || reason == "ImagePullBackOff" || reason == "ErrImagePull" || reason == "CreateContainerConfigError" {
-				return "error"
-			}
-		}
-		if cs.State.Terminated != nil && cs.State.Terminated.Reason == "OOMKilled" {
-			return "error"
-		}
+	switch resourceHealth {
+	case "unhealthy":
+		return 2
+	case "degraded":
+		return 3
 	}
-	if pod.Status.Phase == corev1.PodPending && now.Sub(pod.CreationTimestamp.Time) > 5*time.Minute {
-		return "warning"
-	}
-	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.RestartCount > 3 {
-			return "warning"
-		}
-	}
-	return "healthy"
-}
-
-func podProblemReason(pod *corev1.Pod) string {
-	for _, cs := range pod.Status.ContainerStatuses {
-		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
-			return cs.State.Waiting.Reason
-		}
-		if cs.State.Terminated != nil && cs.State.Terminated.Reason != "" {
-			return cs.State.Terminated.Reason
-		}
-	}
-	return string(pod.Status.Phase)
-}
-
-func formatAge(d time.Duration) string {
-	if d < time.Minute {
-		return fmt.Sprintf("%ds", int(d.Seconds()))
-	}
-	if d < time.Hour {
-		return fmt.Sprintf("%dm", int(d.Minutes()))
-	}
-	if d < 24*time.Hour {
-		return fmt.Sprintf("%dh", int(d.Hours()))
-	}
-	return fmt.Sprintf("%dd", int(d.Hours()/24))
-}
-
-func truncate(s string, maxLen int) string {
-	s = strings.TrimSpace(s)
-	if len(s) <= maxLen {
-		return s
-	}
-	return s[:maxLen-3] + "..."
+	return 4
 }
 
 // toJSONResult marshals data into a text content MCP result.

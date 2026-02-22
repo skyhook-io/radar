@@ -57,6 +57,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
           metricsServerAvailable={data.metricsServerAvailable}
           topCRDs={crdsData?.topCRDs}
           problems={data.problems ?? []}
+          nodeVersionSkew={data.nodeVersionSkew}
           onNavigateToKind={onNavigateToResourceKind}
           onNavigateToView={() => onNavigateToView('resources')}
           onWarningEventsClick={() => onNavigateToView('timeline', { view: 'list', filter: 'warnings', time: 'all' })}

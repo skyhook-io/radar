@@ -20,6 +20,7 @@ interface ClusterHealthCardProps {
   metricsServerAvailable: boolean
   topCRDs?: DashboardCRDCount[] // Loaded lazily, may be undefined
   problems: DashboardProblem[]
+  nodeVersionSkew: DashboardResponse['nodeVersionSkew']
   onNavigateToKind: (kind: string, group?: string) => void
   onNavigateToView: () => void
   onWarningEventsClick?: () => void
@@ -102,6 +103,7 @@ export function ClusterHealthCard({
   metricsServerAvailable,
   topCRDs: _topCRDs,
   problems,
+  nodeVersionSkew,
   onNavigateToKind,
   onNavigateToView,
   onWarningEventsClick,
@@ -131,8 +133,10 @@ export function ClusterHealthCard({
   ]
 
   // Nodes ring segments
+  const cordonedCount = counts.nodes.cordoned ?? 0
   const nodesRingSegments = [
     { value: counts.nodes.ready, color: '#22c55e' },
+    { value: cordonedCount, color: '#eab308' }, // amber for cordoned
     { value: counts.nodes.notReady, color: '#ef4444' },
   ]
 
@@ -178,6 +182,29 @@ export function ClusterHealthCard({
               )}
               <span>{counts.namespaces} namespaces</span>
             </div>
+            {nodeVersionSkew && (
+              <Tooltip
+                content={
+                  <div className="space-y-1.5">
+                    <div className="font-medium">Node version skew detected</div>
+                    {Object.entries(nodeVersionSkew.versions).map(([version, nodes]) => (
+                      <div key={version}>
+                        <span className="font-mono font-medium">v{version}</span>
+                        <span className="text-theme-text-tertiary"> — {nodes.length} node{nodes.length > 1 ? 's' : ''}</span>
+                        <div className="text-[10px] text-theme-text-tertiary pl-2">{nodes.join(', ')}</div>
+                      </div>
+                    ))}
+                  </div>
+                }
+                position="bottom"
+                className="!whitespace-normal !max-w-sm"
+              >
+                <span className="flex items-center gap-1.5 mt-1 text-xs text-yellow-500">
+                  <AlertTriangle className="w-3 h-3 shrink-0" />
+                  Version skew: v{nodeVersionSkew.minVersion} — v{nodeVersionSkew.maxVersion}
+                </span>
+              </Tooltip>
+            )}
             {/* MCP Server indicator */}
             {mcpEnabled && (
               <button
@@ -263,6 +290,9 @@ export function ClusterHealthCard({
                 <span className="text-xs font-medium text-theme-text-secondary">Nodes</span>
                 <div className="flex items-center gap-2 text-[11px]">
                   <span className="text-green-500">{counts.nodes.ready} ready</span>
+                  {cordonedCount > 0 && (
+                    <span className="text-yellow-500">{cordonedCount} cordoned</span>
+                  )}
                   {counts.nodes.notReady > 0 && (
                     <span className="text-red-500">{counts.nodes.notReady} not ready</span>
                   )}

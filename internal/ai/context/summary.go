@@ -37,7 +37,8 @@ type ResourceSummary struct {
 	Strategy    string   `json:"strategy,omitempty"`
 	Completions string   `json:"completions,omitempty"`
 	Duration    string   `json:"duration,omitempty"`
-	Suspended   *bool    `json:"suspended,omitempty"`
+	Suspended     *bool    `json:"suspended,omitempty"`
+	Unschedulable *bool    `json:"unschedulable,omitempty"`
 	Active      int      `json:"active,omitempty"`
 	Target      string   `json:"target,omitempty"`
 	MinReplicas *int32   `json:"minReplicas,omitempty"`
@@ -370,6 +371,17 @@ func summarizeNode(node *corev1.Node) *ResourceSummary {
 			case corev1.NodePIDPressure:
 				s.Pressures = append(s.Pressures, "PIDPressure")
 			}
+		}
+	}
+
+	// Cordoned/unschedulable status
+	if node.Spec.Unschedulable {
+		unschedulable := true
+		s.Unschedulable = &unschedulable
+		if s.Status != "" {
+			s.Status += ",SchedulingDisabled"
+		} else {
+			s.Status = "SchedulingDisabled"
 		}
 	}
 
