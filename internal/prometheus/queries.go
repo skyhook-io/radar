@@ -185,8 +185,8 @@ func buildPodQuery(namespace, podName string, category MetricCategory) string {
 
 func buildWorkloadQuery(namespace, workloadName string, category MetricCategory) string {
 	ns := sanitizeLabelValue(namespace)
-	// Escape regex metacharacters in the workload name so e.g. "my.app" matches literally
-	podPattern := fmt.Sprintf("%s-.*", escapeRegexMeta(workloadName))
+	// Sanitize then escape regex metacharacters so e.g. "my.app" matches literally
+	podPattern := fmt.Sprintf("%s-.*", escapeRegexMeta(sanitizeLabelValue(workloadName)))
 
 	switch category {
 	case CategoryCPU:

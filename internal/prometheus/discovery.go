@@ -169,6 +169,7 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 		return addr, "", nil
 	}
 
+	traffic.StopMetricsPortForward()
 	return "", "", fmt.Errorf("Prometheus at %s/%s not responding after port-forward", info.namespace, info.name)
 }
 
