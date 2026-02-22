@@ -91,7 +91,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
             {data.certificateHealth && (
               <CertificateHealthCard
                 data={data.certificateHealth}
-                onNavigate={() => onNavigateToResourceKind('Secret', undefined, { type: 'TLS' })}
+                onNavigate={() => onNavigateToResourceKind('secrets', undefined, { type: 'TLS' })}
               />
             )}
           </div>
