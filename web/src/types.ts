@@ -315,6 +315,7 @@ export interface Relationships {
   consumers?: ResourceRef[]
   scalers?: ResourceRef[]
   scaleTarget?: ResourceRef
+  policies?: ResourceRef[]
   pods?: ResourceRef[]
 }
 

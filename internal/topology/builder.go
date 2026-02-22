@@ -9,6 +9,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -2000,6 +2001,160 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	} else {
 		warnings = append(warnings, "HorizontalPodAutoscalers not available (RBAC not granted)")
+	}
+
+	// 11b. Add PDB nodes
+	if pdbLister := b.cache.PodDisruptionBudgets(); pdbLister != nil {
+		pdbs, pdbErr := pdbLister.List(labels.Everything())
+		if pdbErr != nil {
+			log.Printf("WARNING [topology] Failed to list PodDisruptionBudgets: %v", pdbErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list PodDisruptionBudgets: %v", pdbErr))
+		}
+		for _, pdb := range pdbs {
+			if !opts.MatchesNamespaceFilter(pdb.Namespace) {
+				continue
+			}
+
+			pdbID := fmt.Sprintf("poddisruptionbudget/%s/%s", pdb.Namespace, pdb.Name)
+
+			status := StatusHealthy
+			if pdb.Status.DisruptionsAllowed == 0 && pdb.Status.CurrentHealthy < pdb.Status.DesiredHealthy {
+				status = StatusDegraded
+			}
+
+			nodes = append(nodes, Node{
+				ID:     pdbID,
+				Kind:   KindPDB,
+				Name:   pdb.Name,
+				Status: status,
+				Data: map[string]any{
+					"namespace":          pdb.Namespace,
+					"disruptionsAllowed": pdb.Status.DisruptionsAllowed,
+					"currentHealthy":     pdb.Status.CurrentHealthy,
+					"desiredHealthy":     pdb.Status.DesiredHealthy,
+					"labels":             pdb.Labels,
+				},
+			})
+
+			// Connect to target workloads by matching PDB's selector against workload pod template labels
+			if pdb.Spec.Selector != nil {
+				sel, selErr := metav1.LabelSelectorAsSelector(pdb.Spec.Selector)
+				if selErr == nil {
+					// Check Deployments
+					if deployLister := b.cache.Deployments(); deployLister != nil {
+						deploys, _ := deployLister.Deployments(pdb.Namespace).List(labels.Everything())
+						for _, d := range deploys {
+							if sel.Matches(labels.Set(d.Spec.Template.Labels)) {
+								targetID := deploymentIDs[d.Namespace+"/"+d.Name]
+								if targetID != "" {
+									edges = append(edges, Edge{
+										ID:     fmt.Sprintf("%s-to-%s", pdbID, targetID),
+										Source: pdbID,
+										Target: targetID,
+										Type:   EdgeProtects,
+									})
+								}
+							}
+						}
+					}
+					// Check StatefulSets
+					if stsLister := b.cache.StatefulSets(); stsLister != nil {
+						stss, _ := stsLister.StatefulSets(pdb.Namespace).List(labels.Everything())
+						for _, s := range stss {
+							if sel.Matches(labels.Set(s.Spec.Template.Labels)) {
+								targetID := statefulSetIDs[s.Namespace+"/"+s.Name]
+								if targetID != "" {
+									edges = append(edges, Edge{
+										ID:     fmt.Sprintf("%s-to-%s", pdbID, targetID),
+										Source: pdbID,
+										Target: targetID,
+										Type:   EdgeProtects,
+									})
+								}
+							}
+						}
+					}
+					// Check DaemonSets
+					if dsLister := b.cache.DaemonSets(); dsLister != nil {
+						dss, _ := dsLister.DaemonSets(pdb.Namespace).List(labels.Everything())
+						for _, d := range dss {
+							if sel.Matches(labels.Set(d.Spec.Template.Labels)) {
+								dsID := fmt.Sprintf("daemonset/%s/%s", d.Namespace, d.Name)
+								edges = append(edges, Edge{
+									ID:     fmt.Sprintf("%s-to-%s", pdbID, dsID),
+									Source: pdbID,
+									Target: dsID,
+									Type:   EdgeProtects,
+								})
+							}
+						}
+					}
+				}
+			}
+		}
+	} else {
+		warnings = append(warnings, "PodDisruptionBudgets not available (RBAC not granted)")
+	}
+
+	// 11c. Add VPA nodes (CRD - fetched via dynamic cache)
+	var vpaGVR schema.GroupVersionResource
+	hasVPAs := false
+	if resourceDiscovery != nil {
+		vpaGVR, hasVPAs = resourceDiscovery.GetGVR("VerticalPodAutoscaler")
+	}
+	if hasVPAs && dynamicCache != nil {
+		vpas, vpaErr := dynamicCache.List(vpaGVR, opts.NamespaceFilter())
+		if vpaErr != nil {
+			log.Printf("WARNING [topology] Failed to list VerticalPodAutoscalers: %v", vpaErr)
+			warnings = append(warnings, fmt.Sprintf("Failed to list VerticalPodAutoscalers: %v", vpaErr))
+		}
+		for _, vpa := range vpas {
+			ns := vpa.GetNamespace()
+			if !opts.MatchesNamespaceFilter(ns) {
+				continue
+			}
+			name := vpa.GetName()
+			vpaID := fmt.Sprintf("verticalpodautoscaler/%s/%s", ns, name)
+
+			nodes = append(nodes, Node{
+				ID:     vpaID,
+				Kind:   KindVPA,
+				Name:   name,
+				Status: StatusHealthy,
+				Data: map[string]any{
+					"namespace": ns,
+					"labels":    vpa.GetLabels(),
+				},
+			})
+
+			// Connect to target workload via spec.targetRef
+			targetKind, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "kind")
+			targetName, _, _ := unstructured.NestedString(vpa.Object, "spec", "targetRef", "name")
+			if targetKind != "" && targetName != "" {
+				targetKey := ns + "/" + targetName
+				var targetID string
+				switch targetKind {
+				case "Deployment":
+					targetID = deploymentIDs[targetKey]
+				case "StatefulSet":
+					targetID = statefulSetIDs[targetKey]
+				case "DaemonSet":
+					targetID = fmt.Sprintf("daemonset/%s/%s", ns, targetName)
+				case "ReplicaSet":
+					targetID = replicaSetIDs[targetKey]
+				case "Rollout":
+					targetID = rolloutIDs[targetKey]
+				}
+				if targetID != "" {
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s", vpaID, targetID),
+						Source: vpaID,
+						Target: targetID,
+						Type:   EdgeUses,
+					})
+				}
+			}
+		}
 	}
 
 	// 12. Second pass: Create ArgoCD Application edges to managed resources

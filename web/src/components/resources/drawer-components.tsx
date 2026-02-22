@@ -183,7 +183,7 @@ export function AlertBanner({ variant, icon, title, message, items, children }: 
         {hasBody ? (
           <div className="flex-1 min-w-0">
             <div className={clsx('text-sm font-medium', colors.title, items && 'mb-1')}>{title}</div>
-            {message && <div className={clsx('text-xs mt-1', colors.message)}>{message}</div>}
+            {message && <div className={clsx('text-xs mt-1 break-all', colors.message)}>{message}</div>}
             {items && items.length > 0 && (
               <ul className={clsx('text-xs space-y-1', colors.list)}>
                 {items.map((item, i) => (
@@ -408,6 +408,7 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
     (relationships.configRefs && relationships.configRefs.length > 0) ||
     (relationships.consumers && relationships.consumers.length > 0) ||
     (relationships.scalers && relationships.scalers.length > 0) ||
+    (relationships.policies && relationships.policies.length > 0) ||
     relationships.scaleTarget
 
   if (!hasRelationships) return null
@@ -447,6 +448,9 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
         )}
         {relationships.scalers && relationships.scalers.length > 0 && (
           <RelationshipGroup label="Autoscaler" refs={dedupeRefs(relationships.scalers)} onNavigate={onNavigate} />
+        )}
+        {relationships.policies && relationships.policies.length > 0 && (
+          <RelationshipGroup label="Disruption Budget" refs={dedupeRefs(relationships.policies)} onNavigate={onNavigate} />
         )}
         {relationships.scaleTarget && (
           <RelationshipGroup label="Scale Target" refs={[relationships.scaleTarget]} onNavigate={onNavigate} />

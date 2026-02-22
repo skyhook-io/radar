@@ -48,6 +48,10 @@ const (
 	KindJob           NodeKind = "Job"
 	KindCronJob       NodeKind = "CronJob"
 	KindPVC           NodeKind = "PersistentVolumeClaim"
+	KindPV            NodeKind = "PersistentVolume"
+	KindStorageClass  NodeKind = "StorageClass"
+	KindPDB           NodeKind = "PodDisruptionBudget"
+	KindVPA           NodeKind = "VerticalPodAutoscaler"
 	KindNamespace     NodeKind = "Namespace"
 )
 
@@ -69,6 +73,7 @@ const (
 	EdgeExposes    EdgeType = "exposes"
 	EdgeManages    EdgeType = "manages"
 	EdgeUses       EdgeType = "uses"
+	EdgeProtects   EdgeType = "protects"
 	EdgeConfigures EdgeType = "configures"
 )
 
@@ -188,6 +193,7 @@ type Relationships struct {
 	Consumers   []ResourceRef `json:"consumers,omitempty"`   // For ConfigMap/Secret: workloads that reference this
 	Scalers     []ResourceRef `json:"scalers,omitempty"`     // HPA/ScaledObject/ScaledJob scaling this
 	ScaleTarget *ResourceRef  `json:"scaleTarget,omitempty"` // For HPA/ScaledObject: what it scales
+	Policies    []ResourceRef `json:"policies,omitempty"`    // PDBs protecting this workload
 	Pods        []ResourceRef `json:"pods,omitempty"`        // For Service: pods it routes to
 }
 

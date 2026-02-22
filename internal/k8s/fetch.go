@@ -8,6 +8,8 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 )
@@ -347,6 +349,44 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 			return nil, err
 		}
 		return ToRuntimeObjects(items), nil
+	case "persistentvolumes", "pvs":
+		if cache.PersistentVolumes() == nil {
+			return nil, fmt.Errorf("forbidden: persistentvolumes")
+		}
+		items, err := cache.PersistentVolumes().List(labels.Everything())
+		if err != nil {
+			return nil, err
+		}
+		return ToRuntimeObjects(items), nil
+	case "storageclasses", "sc":
+		if cache.StorageClasses() == nil {
+			return nil, fmt.Errorf("forbidden: storageclasses")
+		}
+		items, err := cache.StorageClasses().List(labels.Everything())
+		if err != nil {
+			return nil, err
+		}
+		return ToRuntimeObjects(items), nil
+	case "poddisruptionbudgets", "pdbs":
+		if cache.PodDisruptionBudgets() == nil {
+			return nil, fmt.Errorf("forbidden: poddisruptionbudgets")
+		}
+		return listPerNs(
+			func() ([]runtime.Object, error) {
+				items, err := cache.PodDisruptionBudgets().List(labels.Everything())
+				if err != nil {
+					return nil, err
+				}
+				return ToRuntimeObjects(items), nil
+			},
+			func(ns string) ([]runtime.Object, error) {
+				items, err := cache.PodDisruptionBudgets().PodDisruptionBudgets(ns).List(labels.Everything())
+				if err != nil {
+					return nil, err
+				}
+				return ToRuntimeObjects(items), nil
+			},
+		)
 	default:
 		return nil, ErrUnknownKind
 	}
@@ -436,6 +476,21 @@ func FetchResource(cache *ResourceCache, kind, namespace, name string) (runtime.
 			return nil, fmt.Errorf("forbidden: namespaces")
 		}
 		return cache.Namespaces().Get(name)
+	case "persistentvolumes", "persistentvolume", "pvs", "pv":
+		if cache.PersistentVolumes() == nil {
+			return nil, fmt.Errorf("forbidden: persistentvolumes")
+		}
+		return cache.PersistentVolumes().Get(name)
+	case "storageclasses", "storageclass", "sc":
+		if cache.StorageClasses() == nil {
+			return nil, fmt.Errorf("forbidden: storageclasses")
+		}
+		return cache.StorageClasses().Get(name)
+	case "poddisruptionbudgets", "poddisruptionbudget", "pdbs", "pdb":
+		if cache.PodDisruptionBudgets() == nil {
+			return nil, fmt.Errorf("forbidden: poddisruptionbudgets")
+		}
+		return cache.PodDisruptionBudgets().PodDisruptionBudgets(namespace).Get(name)
 	default:
 		return nil, ErrUnknownKind
 	}
@@ -493,5 +548,14 @@ func SetTypeMeta(resource any) {
 	case *autoscalingv2.HorizontalPodAutoscaler:
 		r.APIVersion = "autoscaling/v2"
 		r.Kind = "HorizontalPodAutoscaler"
+	case *corev1.PersistentVolume:
+		r.APIVersion = "v1"
+		r.Kind = "PersistentVolume"
+	case *storagev1.StorageClass:
+		r.APIVersion = "storage.k8s.io/v1"
+		r.Kind = "StorageClass"
+	case *policyv1.PodDisruptionBudget:
+		r.APIVersion = "policy/v1"
+		r.Kind = "PodDisruptionBudget"
 	}
 }

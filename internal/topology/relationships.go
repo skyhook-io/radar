@@ -3,6 +3,8 @@ package topology
 import (
 	"strings"
 
+	"k8s.io/apimachinery/pkg/labels"
+
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -89,6 +91,9 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 			case EdgeUses:
 				// HPA/ScaledObject/ScaledJob scales a workload
 				rel.ScaleTarget = ref
+			case EdgeProtects:
+				// PDB protects a workload (outgoing from PDB)
+				rel.ScaleTarget = ref
 			case EdgeConfigures:
 				// ConfigMap/Secret is used by a workload (outgoing from config)
 				rel.Consumers = append(rel.Consumers, *ref)
@@ -124,6 +129,9 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 			case EdgeUses:
 				// An HPA/ScaledObject/ScaledJob scales this resource
 				rel.Scalers = append(rel.Scalers, *ref)
+			case EdgeProtects:
+				// A PDB protects this workload
+				rel.Policies = append(rel.Policies, *ref)
 			case EdgeConfigures:
 				// A ConfigMap/Secret is used by this resource
 				rel.ConfigRefs = append(rel.ConfigRefs, *ref)
@@ -170,11 +178,53 @@ func GetRelationships(kind, namespace, name string, topo *Topology) *Relationshi
 		}
 	}
 
+	// Storage chain: PVC→PV→StorageClass (direct cache lookups, not topology edges)
+	cache := k8s.GetResourceCache()
+	if cache != nil {
+		switch kindLower {
+		case "persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs":
+			if pvcLister := cache.PersistentVolumeClaims(); pvcLister != nil {
+				if pvc, pvcErr := pvcLister.PersistentVolumeClaims(namespace).Get(name); pvcErr == nil && pvc.Spec.VolumeName != "" {
+					pvRef := ResourceRef{Kind: "PersistentVolume", Name: pvc.Spec.VolumeName}
+					enrichRef(&pvRef)
+					rel.Children = append(rel.Children, pvRef)
+				}
+			}
+		case "persistentvolume", "persistentvolumes", "pv", "pvs":
+			if pvLister := cache.PersistentVolumes(); pvLister != nil {
+				if pv, pvErr := pvLister.Get(name); pvErr == nil {
+					if pv.Spec.ClaimRef != nil {
+						claimRef := ResourceRef{Kind: "PersistentVolumeClaim", Namespace: pv.Spec.ClaimRef.Namespace, Name: pv.Spec.ClaimRef.Name}
+						enrichRef(&claimRef)
+						rel.Consumers = append(rel.Consumers, claimRef)
+					}
+					if pv.Spec.StorageClassName != "" {
+						scRef := ResourceRef{Kind: "StorageClass", Name: pv.Spec.StorageClassName}
+						enrichRef(&scRef)
+						rel.ConfigRefs = append(rel.ConfigRefs, scRef)
+					}
+				}
+			}
+		case "storageclass", "storageclasses", "sc":
+			if pvLister := cache.PersistentVolumes(); pvLister != nil {
+				if pvs, pvErr := pvLister.List(labels.Everything()); pvErr == nil {
+					for _, pv := range pvs {
+						if pv.Spec.StorageClassName == name {
+							pvRef := ResourceRef{Kind: "PersistentVolume", Name: pv.Name}
+							enrichRef(&pvRef)
+							rel.Children = append(rel.Children, pvRef)
+						}
+					}
+				}
+			}
+		}
+	}
+
 	// Return nil if no relationships found
 	if rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
 		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
-		rel.ScaleTarget == nil && len(rel.Pods) == 0 {
+		len(rel.Policies) == 0 && rel.ScaleTarget == nil && len(rel.Pods) == 0 {
 		return nil
 	}
 
@@ -222,9 +272,16 @@ func buildNodeID(kind, namespace, name string) string {
 		"ec2nodeclasses":  "nodeclass",
 		"aksnodeclasses":  "nodeclass",
 		"gcpnodeclasses":  "nodeclass",
-		"scaledobjects":   "scaledobject",
-		"scaledjobs":      "scaledjob",
-		"gatewayclasses":  "gatewayclass",
+		"scaledobjects":            "scaledobject",
+		"scaledjobs":               "scaledjob",
+		"gatewayclasses":           "gatewayclass",
+		"persistentvolumes":        "persistentvolume",
+		"pvs":                      "persistentvolume",
+		"storageclasses":           "storageclass",
+		"poddisruptionbudgets":     "poddisruptionbudget",
+		"pdbs":                     "poddisruptionbudget",
+		"verticalpodautoscalers":   "verticalpodautoscaler",
+		"vpas":                     "verticalpodautoscaler",
 	}
 
 	if singular, ok := kindMap[k]; ok {
@@ -301,10 +358,14 @@ func normalizeKind(kind string) string {
 		"nodepool":     "NodePool",
 		"nodeclaim":    "NodeClaim",
 		"nodeclass":    "NodeClass",
-		"scaledobject": "ScaledObject",
-		"scaledjob":    "ScaledJob",
-		"gatewayclass": "GatewayClass",
-		"internet":    "Internet",
+		"scaledobject":            "ScaledObject",
+		"scaledjob":               "ScaledJob",
+		"gatewayclass":            "GatewayClass",
+		"internet":                "Internet",
+		"persistentvolume":        "PersistentVolume",
+		"storageclass":            "StorageClass",
+		"poddisruptionbudget":     "PodDisruptionBudget",
+		"verticalpodautoscaler":   "VerticalPodAutoscaler",
 	}
 
 	if normalized, ok := kindMap[strings.ToLower(kind)]; ok {

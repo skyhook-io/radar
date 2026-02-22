@@ -131,6 +131,7 @@ import {
   KedaScaledObjectRenderer,
   KedaScaledJobRenderer,
   KedaTriggerAuthRenderer,
+  VPARenderer,
 } from './renderers'
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import { PortForwardButton } from '../portforward/PortForwardButton'
@@ -1564,7 +1565,8 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
     'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
     'rbacassessmentreports', 'clusterrbacassessmentreports',
     'clustercompliancereports', 'sbomreports', 'clustersbomreports',
-    'infraassessmentreports', 'clusterinfraassessmentreports'
+    'infraassessmentreports', 'clusterinfraassessmentreports',
+    'verticalpodautoscalers'
   ]
   const isKnownKind = knownKinds.includes(kind)
 
@@ -1626,6 +1628,7 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
       {(kind === 'rbacassessmentreports' || kind === 'clusterrbacassessmentreports' || kind === 'infraassessmentreports' || kind === 'clusterinfraassessmentreports') && <ConfigAuditReportRenderer data={data} />}
       {kind === 'clustercompliancereports' && <ClusterComplianceReportRenderer data={data} />}
       {(kind === 'sbomreports' || kind === 'clustersbomreports') && <SbomReportRenderer data={data} />}
+      {kind === 'verticalpodautoscalers' && <VPARenderer data={data} onNavigate={onNavigate} />}
 
       {/* Generic renderer for CRDs and unknown resource types */}
       {!isKnownKind && <GenericRenderer data={data} />}

@@ -60,7 +60,7 @@ export function EventRenderer({ data, onNavigate }: EventRendererProps) {
             </div>
             {message && (
               <p className={clsx(
-                'text-sm',
+                'text-sm break-all',
                 isWarning ? 'text-amber-200/90' : 'text-blue-200/90'
               )}>
                 {message}

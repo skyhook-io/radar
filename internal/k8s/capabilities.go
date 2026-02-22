@@ -14,8 +14,10 @@ import (
 // clusterScopedResources are K8s resources that exist at cluster scope (not namespaced).
 // These cannot be checked with a namespace-scoped SelfSubjectAccessReview.
 var clusterScopedResources = map[string]bool{
-	"nodes":      true,
-	"namespaces": true,
+	"nodes":            true,
+	"namespaces":       true,
+	"persistentvolumes": true,
+	"storageclasses":    true,
 }
 
 // ResourcePermissions indicates which resource types the user can list/watch
@@ -36,6 +38,9 @@ type ResourcePermissions struct {
 	Jobs                     bool `json:"jobs"`
 	CronJobs                 bool `json:"cronJobs"`
 	HorizontalPodAutoscalers bool `json:"horizontalPodAutoscalers"`
+	PersistentVolumes        bool `json:"persistentVolumes"`
+	StorageClasses           bool `json:"storageClasses"`
+	PodDisruptionBudgets     bool `json:"podDisruptionBudgets"`
 	Gateways                 bool `json:"gateways"`
 	HTTPRoutes               bool `json:"httpRoutes"`
 }
@@ -284,6 +289,12 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 		{"batch", "cronjobs", &perms.CronJobs},
 		// autoscaling group
 		{"autoscaling", "horizontalpodautoscalers", &perms.HorizontalPodAutoscalers},
+		// core group (cluster-scoped)
+		{"", "persistentvolumes", &perms.PersistentVolumes},
+		// storage.k8s.io group
+		{"storage.k8s.io", "storageclasses", &perms.StorageClasses},
+		// policy group
+		{"policy", "poddisruptionbudgets", &perms.PodDisruptionBudgets},
 	}
 
 	// Phase 1: Check all resources cluster-wide

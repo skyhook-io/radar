@@ -722,6 +722,29 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		result, err = cache.Namespaces().List(labels.Everything())
+	case "persistentvolumes", "pvs":
+		if cache.PersistentVolumes() == nil {
+			forbiddenMsg("persistentvolumes")
+			return
+		}
+		result, err = cache.PersistentVolumes().List(labels.Everything())
+	case "storageclasses", "sc":
+		if cache.StorageClasses() == nil {
+			forbiddenMsg("storageclasses")
+			return
+		}
+		result, err = cache.StorageClasses().List(labels.Everything())
+	case "poddisruptionbudgets", "pdbs":
+		if cache.PodDisruptionBudgets() == nil {
+			forbiddenMsg("poddisruptionbudgets")
+			return
+		}
+		result, err = listPerNs(
+			func() (any, error) { return cache.PodDisruptionBudgets().List(labels.Everything()) },
+			func(ns string) (any, error) {
+				return cache.PodDisruptionBudgets().PodDisruptionBudgets(ns).List(labels.Everything())
+			},
+		)
 	default:
 		// Fall back to dynamic cache for CRDs and other unknown resources
 		if len(namespaces) > 0 {
@@ -901,6 +924,24 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resource, err = cache.Namespaces().Get(name)
+	case "persistentvolumes", "persistentvolume", "pvs", "pv":
+		if cache.PersistentVolumes() == nil {
+			forbiddenGet("persistentvolumes")
+			return
+		}
+		resource, err = cache.PersistentVolumes().Get(name)
+	case "storageclasses", "storageclass", "sc":
+		if cache.StorageClasses() == nil {
+			forbiddenGet("storageclasses")
+			return
+		}
+		resource, err = cache.StorageClasses().Get(name)
+	case "poddisruptionbudgets", "poddisruptionbudget", "pdbs", "pdb":
+		if cache.PodDisruptionBudgets() == nil {
+			forbiddenGet("poddisruptionbudgets")
+			return
+		}
+		resource, err = cache.PodDisruptionBudgets().PodDisruptionBudgets(namespace).Get(name)
 	default:
 		// Fall back to dynamic cache for CRDs and other unknown resources
 		// Use group to disambiguate when multiple API groups have similar resource names

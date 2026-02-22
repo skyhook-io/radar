@@ -14,6 +14,8 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
+	storagev1 "k8s.io/api/storage/v1"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -25,6 +27,8 @@ import (
 	listersbatchv1 "k8s.io/client-go/listers/batch/v1"
 	listerscorev1 "k8s.io/client-go/listers/core/v1"
 	listersnetworkingv1 "k8s.io/client-go/listers/networking/v1"
+	listerspolicyv1 "k8s.io/client-go/listers/policy/v1"
+	listersstoragev1 "k8s.io/client-go/listers/storage/v1"
 	"k8s.io/client-go/tools/cache"
 
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -94,10 +98,11 @@ func dropManagedFields(obj any) (any, error) {
 	// Drop heavy annotations from common resources
 	switch obj.(type) {
 	case *corev1.Pod, *corev1.Service, *corev1.Node, *corev1.Namespace,
-		*corev1.PersistentVolumeClaim, *corev1.ConfigMap, *corev1.Secret,
+		*corev1.PersistentVolumeClaim, *corev1.PersistentVolume, *corev1.ConfigMap, *corev1.Secret,
 		*appsv1.Deployment, *appsv1.DaemonSet, *appsv1.StatefulSet, *appsv1.ReplicaSet,
 		*networkingv1.Ingress,
-		*batchv1.Job, *batchv1.CronJob:
+		*batchv1.Job, *batchv1.CronJob,
+		*policyv1.PodDisruptionBudget, *storagev1.StorageClass:
 		if meta, ok := obj.(metav1.Object); ok && meta.GetAnnotations() != nil {
 			delete(meta.GetAnnotations(), "kubectl.kubernetes.io/last-applied-configuration")
 		}
@@ -164,6 +169,9 @@ func InitResourceCache() error {
 			"jobs":                     perms.Jobs,
 			"cronjobs":                 perms.CronJobs,
 			"horizontalpodautoscalers": perms.HorizontalPodAutoscalers,
+			"persistentvolumes":        perms.PersistentVolumes,
+			"storageclasses":            perms.StorageClasses,
+			"poddisruptionbudgets":      perms.PodDisruptionBudgets,
 		}
 
 		// Conditionally create informers and register handlers
@@ -195,6 +203,15 @@ func InitResourceCache() error {
 			{"cronjobs", "CronJob", func() cache.SharedIndexInformer { return factory.Batch().V1().CronJobs().Informer() }, false},
 			{"horizontalpodautoscalers", "HorizontalPodAutoscaler", func() cache.SharedIndexInformer {
 				return factory.Autoscaling().V2().HorizontalPodAutoscalers().Informer()
+			}, false},
+			{"persistentvolumes", "PersistentVolume", func() cache.SharedIndexInformer {
+				return factory.Core().V1().PersistentVolumes().Informer()
+			}, false},
+			{"storageclasses", "StorageClass", func() cache.SharedIndexInformer {
+				return factory.Storage().V1().StorageClasses().Informer()
+			}, false},
+			{"poddisruptionbudgets", "PodDisruptionBudget", func() cache.SharedIndexInformer {
+				return factory.Policy().V1().PodDisruptionBudgets().Informer()
 			}, false},
 		}
 
@@ -979,6 +996,27 @@ func (c *ResourceCache) HorizontalPodAutoscalers() listersautoscalingv2.Horizont
 	return c.factory.Autoscaling().V2().HorizontalPodAutoscalers().Lister()
 }
 
+func (c *ResourceCache) PersistentVolumes() listerscorev1.PersistentVolumeLister {
+	if c == nil || !c.isEnabled("persistentvolumes") {
+		return nil
+	}
+	return c.factory.Core().V1().PersistentVolumes().Lister()
+}
+
+func (c *ResourceCache) StorageClasses() listersstoragev1.StorageClassLister {
+	if c == nil || !c.isEnabled("storageclasses") {
+		return nil
+	}
+	return c.factory.Storage().V1().StorageClasses().Lister()
+}
+
+func (c *ResourceCache) PodDisruptionBudgets() listerspolicyv1.PodDisruptionBudgetLister {
+	if c == nil || !c.isEnabled("poddisruptionbudgets") {
+		return nil
+	}
+	return c.factory.Policy().V1().PodDisruptionBudgets().Lister()
+}
+
 // GetEnabledResources returns the map of which resource types have informers running
 func (c *ResourceCache) GetEnabledResources() map[string]bool {
 	if c == nil {
@@ -1093,6 +1131,9 @@ var knownKinds = map[string]bool{
 	"job": true, "jobs": true,
 	"cronjob": true, "cronjobs": true,
 	"horizontalpodautoscaler": true, "horizontalpodautoscalers": true, "hpa": true, "hpas": true,
+	"persistentvolume": true, "persistentvolumes": true, "pv": true, "pvs": true,
+	"storageclass": true, "storageclasses": true, "sc": true,
+	"poddisruptionbudget": true, "poddisruptionbudgets": true, "pdb": true, "pdbs": true,
 }
 
 // IsKnownKind returns true if the kind is handled by the typed cache
@@ -1484,6 +1525,42 @@ func (c *ResourceCache) GetResourceStatus(kind, namespace, name string) *Resourc
 		}
 		return &ResourceStatus{
 			Status: string(pvc.Status.Phase),
+		}
+
+	case "persistentvolume", "persistentvolumes", "pv":
+		if c.PersistentVolumes() == nil {
+			return nil
+		}
+		pv, err := c.PersistentVolumes().Get(name)
+		if err != nil {
+			return nil
+		}
+		return &ResourceStatus{
+			Status: string(pv.Status.Phase),
+		}
+
+	case "storageclass", "storageclasses", "sc":
+		if c.StorageClasses() == nil {
+			return nil
+		}
+		if _, err := c.StorageClasses().Get(name); err != nil {
+			return nil
+		}
+		return &ResourceStatus{
+			Status: "Active",
+		}
+
+	case "poddisruptionbudget", "poddisruptionbudgets", "pdb":
+		if c.PodDisruptionBudgets() == nil {
+			return nil
+		}
+		pdb, err := c.PodDisruptionBudgets().PodDisruptionBudgets(namespace).Get(name)
+		if err != nil {
+			return nil
+		}
+		return &ResourceStatus{
+			Status: "Active",
+			Ready:  fmt.Sprintf("%d/%d", pdb.Status.CurrentHealthy, pdb.Status.DesiredHealthy),
 		}
 
 	default:

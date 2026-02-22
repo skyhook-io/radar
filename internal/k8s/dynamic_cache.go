@@ -876,6 +876,7 @@ func WarmupCommonCRDs() {
 		"TriggerAuthentication",        // KEDA
 		"ClusterTriggerAuthentication", // KEDA
 		"GatewayClass",                 // Gateway API
+		"VerticalPodAutoscaler",        // VPA
 	}
 
 	var gvrs []schema.GroupVersionResource
