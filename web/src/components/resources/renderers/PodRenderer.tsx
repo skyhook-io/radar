@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity } from 'lucide-react'
+import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, PlayCircle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink } from '../drawer-components'
 import { formatResources } from '../resource-utils'
@@ -85,6 +85,8 @@ function getPodProblems(data: any): string[] {
 export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererProps) {
   const containerStatuses = data.status?.containerStatuses || []
   const containers = data.spec?.containers || []
+  const initContainers = data.spec?.initContainers || []
+  const initContainerStatuses = data.status?.initContainerStatuses || []
 
   const namespace = data.metadata?.namespace
   const podName = data.metadata?.name
@@ -122,12 +124,17 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
     }
   }
 
+  const allContainerNames = [
+    ...initContainers.map((c: { name: string }) => c.name),
+    ...containers.map((c: { name: string }) => c.name),
+  ]
+
   const handleOpenLogs = (containerName?: string) => {
     if (namespace && podName) {
       openLogs({
         namespace,
         podName,
-        containers: containers.map((c: { name: string }) => c.name),
+        containers: allContainerNames,
         containerName,
       })
     }
@@ -171,6 +178,137 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
           } />
         </PropertyList>
       </Section>
+
+      {/* Init Containers - shown only when present */}
+      {initContainers.length > 0 && (
+        <Section title={`Init Containers (${initContainers.length})`} icon={PlayCircle} defaultExpanded>
+          <div className="space-y-3">
+            {initContainers.map((container: any, index: number) => {
+              const status = initContainerStatuses.find((s: any) => s.name === container.name)
+              const state = status?.state
+              const stateKey = state ? Object.keys(state)[0] : 'unknown'
+              const restarts = status?.restartCount || 0
+
+              // Determine completion status
+              const isCompleted = stateKey === 'terminated' && state?.terminated?.exitCode === 0
+              const isFailed = stateKey === 'terminated' && state?.terminated?.exitCode !== 0
+              const isWaiting = stateKey === 'waiting'
+              const isInitRunning = stateKey === 'running'
+
+              // Status label and color
+              let statusLabel: string
+              let statusColor: string
+              if (isCompleted) {
+                statusLabel = 'Completed'
+                statusColor = 'bg-green-500/20 text-green-400'
+              } else if (isFailed) {
+                statusLabel = `Exit ${state?.terminated?.exitCode}`
+                statusColor = 'bg-red-500/20 text-red-400'
+              } else if (isInitRunning) {
+                statusLabel = 'Running'
+                statusColor = 'bg-blue-500/20 text-blue-400'
+              } else if (isWaiting) {
+                statusLabel = state?.waiting?.reason || 'Waiting'
+                statusColor = 'bg-yellow-500/20 text-yellow-400'
+              } else {
+                statusLabel = 'Pending'
+                statusColor = 'bg-gray-500/20 text-gray-400'
+              }
+
+              // Build command string
+              const command = container.command || container.args
+                ? [...(container.command || []), ...(container.args || [])].join(' ')
+                : null
+
+              return (
+                <div key={container.name} className={clsx(
+                  'rounded-lg p-3 border-l-2',
+                  isCompleted ? 'bg-theme-elevated/20 border-green-500/40' :
+                  isFailed ? 'bg-theme-elevated/30 border-red-500/50' :
+                  isInitRunning ? 'bg-theme-elevated/30 border-blue-500/50' :
+                  'bg-theme-elevated/30 border-yellow-500/40'
+                )}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="text-[10px] font-mono text-theme-text-tertiary bg-theme-elevated rounded px-1.5 py-0.5">
+                        {index + 1}/{initContainers.length}
+                      </span>
+                      <span className="text-sm font-medium text-theme-text-primary">{container.name}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      {canViewLogs && (
+                        <button
+                          onClick={() => handleOpenLogs(container.name)}
+                          className="p-1 text-slate-400 hover:text-blue-400 hover:bg-slate-600/50 rounded transition-colors"
+                          title={`View logs for ${container.name}`}
+                        >
+                          <FileText className="w-4 h-4" />
+                        </button>
+                      )}
+                      <span className={clsx('px-2 py-0.5 text-xs rounded', statusColor)}>
+                        {statusLabel}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-xs text-theme-text-secondary space-y-1">
+                    <button
+                      className="truncate text-blue-400 hover:text-blue-300 hover:underline text-left w-full"
+                      title="Click to view filesystem"
+                      onClick={() => setSelectedImage(container.image)}
+                    >
+                      Image: {container.image}
+                    </button>
+                    {command && (
+                      <div className="text-theme-text-tertiary font-mono truncate" title={command}>
+                        $ {command}
+                      </div>
+                    )}
+                    {restarts > 0 && (
+                      <div className={restarts > 5 ? 'text-red-400' : 'text-yellow-400'}>
+                        Restarts: {restarts}
+                      </div>
+                    )}
+                    {/* Waiting reason detail */}
+                    {isWaiting && state?.waiting?.reason && state.waiting.reason !== 'PodInitializing' && (
+                      <div className="text-red-400 flex items-center gap-1">
+                        <span className="font-medium">{state.waiting.reason}</span>
+                        {state.waiting.message && (
+                          <span className="text-theme-text-tertiary truncate" title={state.waiting.message}>
+                            — {state.waiting.message.slice(0, 60)}{state.waiting.message.length > 60 ? '...' : ''}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {/* Failed termination detail */}
+                    {isFailed && (
+                      <div className="text-red-400 flex items-center gap-1">
+                        <span className="font-medium">
+                          {state?.terminated?.reason || 'Failed'}
+                        </span>
+                        {state?.terminated?.message && (
+                          <span className="text-theme-text-tertiary truncate" title={state.terminated.message}>
+                            — {state.terminated.message.slice(0, 80)}{state.terminated.message.length > 80 ? '...' : ''}
+                          </span>
+                        )}
+                      </div>
+                    )}
+                    {(container.resources?.requests || container.resources?.limits) && (
+                      <div className="flex gap-4 mt-1">
+                        {container.resources?.requests && (
+                          <span>Requests: {formatResources(container.resources.requests)}</span>
+                        )}
+                        {container.resources?.limits && (
+                          <span>Limits: {formatResources(container.resources.limits)}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </Section>
+      )}
 
       {/* Container Status */}
       <Section title="Containers" icon={HardDrive} defaultExpanded>

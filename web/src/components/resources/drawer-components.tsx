@@ -277,10 +277,28 @@ export function MetadataSection({ data }: { data: any }) {
 
 export function PodTemplateSection({ template }: { template: any }) {
   if (!template) return null
+  const initContainers = template.spec?.initContainers || []
   const containers = template.spec?.containers || []
 
   return (
     <div className="space-y-2">
+      {initContainers.length > 0 && (
+        <>
+          <div className="text-xs text-theme-text-tertiary font-medium uppercase tracking-wide">Init Containers</div>
+          {initContainers.map((c: any) => (
+            <div key={c.name} className="bg-theme-elevated/30 rounded p-2 text-sm border-l-2 border-yellow-500/40">
+              <div className="font-medium text-theme-text-primary">{c.name}</div>
+              <div className="text-xs text-theme-text-secondary truncate" title={c.image}>{c.image}</div>
+              {(c.command || c.args) && (
+                <div className="text-xs text-theme-text-tertiary font-mono mt-1 truncate" title={[...(c.command || []), ...(c.args || [])].join(' ')}>
+                  $ {[...(c.command || []), ...(c.args || [])].join(' ')}
+                </div>
+              )}
+            </div>
+          ))}
+          <div className="text-xs text-theme-text-tertiary font-medium uppercase tracking-wide mt-3">Containers</div>
+        </>
+      )}
       {containers.map((c: any) => (
         <div key={c.name} className="bg-theme-elevated/30 rounded p-2 text-sm">
           <div className="font-medium text-theme-text-primary">{c.name}</div>
