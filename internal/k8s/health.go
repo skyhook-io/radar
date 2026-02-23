@@ -5,6 +5,8 @@ import (
 	"strings"
 	"time"
 
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 )
 
@@ -240,4 +242,113 @@ func Truncate(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen-3] + "..."
+}
+
+// HPAProblem describes a detected issue with an HPA.
+type HPAProblem struct {
+	Name      string
+	Namespace string
+	Problem   string // "maxed"
+	Reason    string
+}
+
+// DetectHPAProblems finds HPAs that have hit their replica ceiling.
+func DetectHPAProblems(hpas []*autoscalingv2.HorizontalPodAutoscaler) []HPAProblem {
+	var problems []HPAProblem
+	for _, hpa := range hpas {
+		if hpa.Spec.MaxReplicas > 0 && hpa.Status.CurrentReplicas >= hpa.Spec.MaxReplicas && hpa.Status.DesiredReplicas >= hpa.Spec.MaxReplicas {
+			problems = append(problems, HPAProblem{
+				Name:      hpa.Name,
+				Namespace: hpa.Namespace,
+				Problem:   "maxed",
+				Reason:    fmt.Sprintf("%d/%d replicas (wants %d)", hpa.Status.CurrentReplicas, hpa.Spec.MaxReplicas, hpa.Status.DesiredReplicas),
+			})
+		}
+	}
+	return problems
+}
+
+// CronJobProblem describes a detected issue with a CronJob.
+type CronJobProblem struct {
+	Name      string
+	Namespace string
+	Problem   string // "stale" or "never-scheduled"
+	Reason    string
+}
+
+// DetectCronJobProblems finds non-suspended CronJobs that haven't run recently.
+func DetectCronJobProblems(cronjobs []*batchv1.CronJob) []CronJobProblem {
+	var problems []CronJobProblem
+	now := time.Now()
+	for _, cj := range cronjobs {
+		if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
+			continue
+		}
+		if cj.Status.LastScheduleTime != nil {
+			sinceLast := now.Sub(cj.Status.LastScheduleTime.Time)
+			if sinceLast > 24*time.Hour {
+				problems = append(problems, CronJobProblem{
+					Name:      cj.Name,
+					Namespace: cj.Namespace,
+					Problem:   "stale",
+					Reason:    fmt.Sprintf("last run %dh ago", int(sinceLast.Hours())),
+				})
+			}
+		} else if now.Sub(cj.CreationTimestamp.Time) > 24*time.Hour {
+			problems = append(problems, CronJobProblem{
+				Name:      cj.Name,
+				Namespace: cj.Namespace,
+				Problem:   "never-scheduled",
+				Reason:    "created but never ran",
+			})
+		}
+	}
+	return problems
+}
+
+// ParseCPUToMillis parses CPU quantity strings like "250m", "1", "500n".
+func ParseCPUToMillis(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	if before, ok := strings.CutSuffix(s, "n"); ok {
+		var val int64
+		fmt.Sscanf(before, "%d", &val)
+		return val / 1000000
+	}
+	if before, ok := strings.CutSuffix(s, "m"); ok {
+		var val int64
+		fmt.Sscanf(before, "%d", &val)
+		return val
+	}
+	var val int64
+	fmt.Sscanf(s, "%d", &val)
+	return val * 1000
+}
+
+// ParseMemoryToBytes parses memory quantity strings like "1024Ki", "256Mi", "1Gi".
+func ParseMemoryToBytes(s string) int64 {
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return 0
+	}
+	if before, ok := strings.CutSuffix(s, "Ki"); ok {
+		var val int64
+		fmt.Sscanf(before, "%d", &val)
+		return val * 1024
+	}
+	if before, ok := strings.CutSuffix(s, "Mi"); ok {
+		var val int64
+		fmt.Sscanf(before, "%d", &val)
+		return val * 1024 * 1024
+	}
+	if before, ok := strings.CutSuffix(s, "Gi"); ok {
+		var val int64
+		fmt.Sscanf(before, "%d", &val)
+		return val * 1024 * 1024 * 1024
+	}
+	var val int64
+	fmt.Sscanf(s, "%d", &val)
+	return val
 }

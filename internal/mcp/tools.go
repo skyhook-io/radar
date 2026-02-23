@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
@@ -111,7 +113,7 @@ type topologyInput struct {
 
 type eventsInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace"`
-	Limit     int    `json:"limit,omitempty" jsonschema:"maximum number of events to return (default 20)"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"max 100, default 20"`
 }
 
 type podLogsInput struct {
@@ -329,12 +331,16 @@ func handleListNamespaces(ctx context.Context, req *mcp.CallToolRequest, input s
 		return nil, nil, fmt.Errorf("failed to list namespaces: %w", err)
 	}
 
-	result := make([]map[string]string, 0, len(namespaces))
+	result := make([]map[string]any, 0, len(namespaces))
 	for _, ns := range namespaces {
-		result = append(result, map[string]string{
+		entry := map[string]any{
 			"name":   ns.Name,
 			"status": string(ns.Status.Phase),
-		})
+		}
+		if len(ns.Labels) > 0 {
+			entry["labels"] = ns.Labels
+		}
+		result = append(result, entry)
 	}
 
 	return toJSONResult(result)
@@ -351,9 +357,17 @@ type mcpDashboard struct {
 	WarningEvents  int              `json:"warningEvents"`
 	TopWarnings    []mcpWarning     `json:"topWarnings"`
 	HelmReleases   mcpHelmSummary   `json:"helmReleases"`
+	Metrics        *mcpMetrics      `json:"metrics,omitempty"`
 	TopologyNodes  int              `json:"topologyNodes"`
 	TopologyEdges  int              `json:"topologyEdges"`
 	ResourceCounts map[string]int   `json:"resourceCounts"`
+}
+
+type mcpMetrics struct {
+	CPUUsagePercent   int `json:"cpuUsagePercent,omitempty"`
+	CPURequestPercent int `json:"cpuRequestPercent,omitempty"`
+	MemUsagePercent   int `json:"memUsagePercent,omitempty"`
+	MemRequestPercent int `json:"memRequestPercent,omitempty"`
 }
 
 type mcpClusterInfo struct {
@@ -396,10 +410,12 @@ type mcpHelmSummary struct {
 }
 
 type mcpHelmRelease struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-	Chart     string `json:"chart"`
-	Status    string `json:"status"`
+	Name           string `json:"name"`
+	Namespace      string `json:"namespace"`
+	Chart          string `json:"chart"`
+	ChartVersion   string `json:"chartVersion"`
+	Status         string `json:"status"`
+	ResourceHealth string `json:"resourceHealth,omitempty"`
 }
 
 func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace string) mcpDashboard {
@@ -543,6 +559,46 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		}
 	}
 
+	// HPA problems
+	if hpaLister := cache.HorizontalPodAutoscalers(); hpaLister != nil {
+		var hpas []*autoscalingv2.HorizontalPodAutoscaler
+		if namespace != "" {
+			hpas, _ = hpaLister.HorizontalPodAutoscalers(namespace).List(labels.Everything())
+		} else {
+			hpas, _ = hpaLister.List(labels.Everything())
+		}
+		for _, hp := range k8s.DetectHPAProblems(hpas) {
+			if len(d.Problems) < 10 {
+				d.Problems = append(d.Problems, mcpProblem{
+					Kind:      "HorizontalPodAutoscaler",
+					Namespace: hp.Namespace,
+					Name:      hp.Name,
+					Reason:    hp.Reason,
+				})
+			}
+		}
+	}
+
+	// CronJob problems
+	if cjLister := cache.CronJobs(); cjLister != nil {
+		var cronjobs []*batchv1.CronJob
+		if namespace != "" {
+			cronjobs, _ = cjLister.CronJobs(namespace).List(labels.Everything())
+		} else {
+			cronjobs, _ = cjLister.List(labels.Everything())
+		}
+		for _, cp := range k8s.DetectCronJobProblems(cronjobs) {
+			if len(d.Problems) < 10 {
+				d.Problems = append(d.Problems, mcpProblem{
+					Kind:      "CronJob",
+					Namespace: cp.Namespace,
+					Name:      cp.Name,
+					Reason:    cp.Reason,
+				})
+			}
+		}
+	}
+
 	// Node problems (cluster-scoped, not filtered by namespace)
 	if nodeLister := cache.Nodes(); nodeLister != nil {
 		nodes, _ := nodeLister.List(labels.Everything())
@@ -640,11 +696,77 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			limit := min(len(releases), 5)
 			for _, r := range releases[:limit] {
 				d.HelmReleases.Releases = append(d.HelmReleases.Releases, mcpHelmRelease{
-					Name:      r.Name,
-					Namespace: r.Namespace,
-					Chart:     r.Chart,
-					Status:    r.Status,
+					Name:           r.Name,
+					Namespace:      r.Namespace,
+					Chart:          r.Chart,
+					ChartVersion:   r.ChartVersion,
+					Status:         r.Status,
+					ResourceHealth: r.ResourceHealth,
 				})
+			}
+		}
+	}
+
+	// Metrics (best-effort — silently skip if metrics-server unavailable)
+	if client := k8s.GetClient(); client != nil {
+		data, err := client.RESTClient().Get().
+			AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").
+			DoRaw(ctx)
+		if err == nil {
+			var nodeMetricsList struct {
+				Items []struct {
+					Usage struct {
+						CPU    string `json:"cpu"`
+						Memory string `json:"memory"`
+					} `json:"usage"`
+				} `json:"items"`
+			}
+			if err := json.Unmarshal(data, &nodeMetricsList); err != nil {
+				log.Printf("[mcp] Failed to parse node metrics: %v", err)
+			} else if len(nodeMetricsList.Items) > 0 {
+				if nodeLister := cache.Nodes(); nodeLister != nil {
+					allNodes, _ := nodeLister.List(labels.Everything())
+					var cpuCapMillis, memCapBytes int64
+					for _, n := range allNodes {
+						cpuCapMillis += n.Status.Capacity.Cpu().MilliValue()
+						memCapBytes += n.Status.Capacity.Memory().Value()
+					}
+
+					var cpuUsageMillis, memUsageBytes int64
+					for _, item := range nodeMetricsList.Items {
+						cpuUsageMillis += k8s.ParseCPUToMillis(item.Usage.CPU)
+						memUsageBytes += k8s.ParseMemoryToBytes(item.Usage.Memory)
+					}
+
+					var cpuReqMillis, memReqBytes int64
+					if podLister := cache.Pods(); podLister != nil {
+						allPods, _ := podLister.List(labels.Everything())
+						for _, pod := range allPods {
+							if pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+								continue
+							}
+							for _, c := range pod.Spec.Containers {
+								if c.Resources.Requests != nil {
+									if cpu, ok := c.Resources.Requests[corev1.ResourceCPU]; ok {
+										cpuReqMillis += cpu.MilliValue()
+									}
+									if mem, ok := c.Resources.Requests[corev1.ResourceMemory]; ok {
+										memReqBytes += mem.Value()
+									}
+								}
+							}
+						}
+					}
+
+					if cpuCapMillis > 0 && memCapBytes > 0 {
+						d.Metrics = &mcpMetrics{
+							CPUUsagePercent:   int(cpuUsageMillis * 100 / cpuCapMillis),
+							CPURequestPercent: int(cpuReqMillis * 100 / cpuCapMillis),
+							MemUsagePercent:   int(memUsageBytes * 100 / memCapBytes),
+							MemRequestPercent: int(memReqBytes * 100 / memCapBytes),
+						}
+					}
+				}
 			}
 		}
 	}

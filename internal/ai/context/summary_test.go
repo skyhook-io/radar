@@ -2,8 +2,10 @@ package context
 
 import (
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -557,6 +559,107 @@ func TestSummary_CronJob(t *testing.T) {
 	}
 	if s.Active != 2 {
 		t.Errorf("Active = %d, want 2", s.Active)
+	}
+}
+
+func TestSummary_HPAIssue(t *testing.T) {
+	tests := []struct {
+		name      string
+		hpa       *autoscalingv2.HorizontalPodAutoscaler
+		wantIssue string
+	}{
+		{
+			name: "maxed",
+			hpa: &autoscalingv2.HorizontalPodAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+				Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+					MaxReplicas:    10,
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "web"},
+				},
+				Status: autoscalingv2.HorizontalPodAutoscalerStatus{CurrentReplicas: 10, DesiredReplicas: 10},
+			},
+			wantIssue: "maxed",
+		},
+		{
+			name: "normal",
+			hpa: &autoscalingv2.HorizontalPodAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+				Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+					MaxReplicas:    10,
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "web"},
+				},
+				Status: autoscalingv2.HorizontalPodAutoscalerStatus{CurrentReplicas: 5, DesiredReplicas: 5},
+			},
+			wantIssue: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := Minify(tt.hpa, LevelSummary)
+			if err != nil {
+				t.Fatalf("Minify failed: %v", err)
+			}
+			s := raw.(*ResourceSummary)
+			if s.Issue != tt.wantIssue {
+				t.Errorf("Issue = %q, want %q", s.Issue, tt.wantIssue)
+			}
+		})
+	}
+}
+
+func TestSummary_CronJobIssue(t *testing.T) {
+	now := time.Now()
+	suspended := true
+	notSuspended := false
+	oldTime := metav1.NewTime(now.Add(-48 * time.Hour))
+	freshTime := metav1.NewTime(now.Add(-1 * time.Hour))
+
+	tests := []struct {
+		name      string
+		cj        *batchv1.CronJob
+		wantIssue string
+	}{
+		{
+			name: "stale",
+			cj: &batchv1.CronJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "backup", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-72 * time.Hour))},
+				Spec:       batchv1.CronJobSpec{Schedule: "0 2 * * *", Suspend: &notSuspended},
+				Status:     batchv1.CronJobStatus{LastScheduleTime: &oldTime},
+			},
+			wantIssue: "no recent runs",
+		},
+		{
+			name: "suspended is ok",
+			cj: &batchv1.CronJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "backup", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-72 * time.Hour))},
+				Spec:       batchv1.CronJobSpec{Schedule: "0 2 * * *", Suspend: &suspended},
+				Status:     batchv1.CronJobStatus{LastScheduleTime: &oldTime},
+			},
+			wantIssue: "",
+		},
+		{
+			name: "fresh is ok",
+			cj: &batchv1.CronJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "backup", Namespace: "default", CreationTimestamp: metav1.NewTime(now.Add(-72 * time.Hour))},
+				Spec:       batchv1.CronJobSpec{Schedule: "0 2 * * *", Suspend: &notSuspended},
+				Status:     batchv1.CronJobStatus{LastScheduleTime: &freshTime},
+			},
+			wantIssue: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			raw, err := Minify(tt.cj, LevelSummary)
+			if err != nil {
+				t.Fatalf("Minify failed: %v", err)
+			}
+			s := raw.(*ResourceSummary)
+			if s.Issue != tt.wantIssue {
+				t.Errorf("Issue = %q, want %q", s.Issue, tt.wantIssue)
+			}
+		})
 	}
 }
 

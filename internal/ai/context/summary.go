@@ -312,6 +312,12 @@ func summarizeCronJob(cj *batchv1.CronJob) *ResourceSummary {
 
 	if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
 		s.Suspended = cj.Spec.Suspend
+	} else {
+		if cj.Status.LastScheduleTime != nil && time.Since(cj.Status.LastScheduleTime.Time) > 24*time.Hour {
+			s.Issue = "no recent runs"
+		} else if cj.Status.LastScheduleTime == nil && time.Since(cj.CreationTimestamp.Time) > 24*time.Hour {
+			s.Issue = "never scheduled"
+		}
 	}
 
 	return s
@@ -331,6 +337,10 @@ func summarizeHPA(hpa *autoscalingv2.HorizontalPodAutoscaler) *ResourceSummary {
 
 	if hpa.Spec.MinReplicas != nil {
 		s.MinReplicas = hpa.Spec.MinReplicas
+	}
+
+	if hpa.Spec.MaxReplicas > 0 && hpa.Status.CurrentReplicas >= hpa.Spec.MaxReplicas && hpa.Status.DesiredReplicas >= hpa.Spec.MaxReplicas {
+		s.Issue = "maxed"
 	}
 
 	return s

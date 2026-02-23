@@ -7,10 +7,11 @@ import (
 	"log"
 	"net/http"
 	"sort"
-	"strings"
 	"sync"
 	"time"
 
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
@@ -430,6 +431,46 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 					})
 				}
 			}
+		}
+	}
+
+	// HPA problems: maxed out
+	if hpaLister := cache.HorizontalPodAutoscalers(); hpaLister != nil {
+		var hpas []*autoscalingv2.HorizontalPodAutoscaler
+		if namespace != "" {
+			hpas, _ = hpaLister.HorizontalPodAutoscalers(namespace).List(labels.Everything())
+		} else {
+			hpas, _ = hpaLister.List(labels.Everything())
+		}
+		for _, hp := range k8s.DetectHPAProblems(hpas) {
+			problems = append(problems, DashboardProblem{
+				Kind:      "HorizontalPodAutoscaler",
+				Namespace: hp.Namespace,
+				Name:      hp.Name,
+				Status:    "warning",
+				Reason:    hp.Problem,
+				Message:   hp.Reason,
+			})
+		}
+	}
+
+	// CronJob problems: stale or never-scheduled
+	if cjLister := cache.CronJobs(); cjLister != nil {
+		var cronjobs []*batchv1.CronJob
+		if namespace != "" {
+			cronjobs, _ = cjLister.CronJobs(namespace).List(labels.Everything())
+		} else {
+			cronjobs, _ = cjLister.List(labels.Everything())
+		}
+		for _, cp := range k8s.DetectCronJobProblems(cronjobs) {
+			problems = append(problems, DashboardProblem{
+				Kind:      "CronJob",
+				Namespace: cp.Namespace,
+				Name:      cp.Name,
+				Status:    "warning",
+				Reason:    cp.Problem,
+				Message:   cp.Reason,
+			})
 		}
 	}
 
@@ -870,6 +911,11 @@ func (s *Server) getDashboardRecentEvents(cache *k8s.ResourceCache, namespace st
 	}
 
 	sort.Slice(warnings, func(i, j int) bool {
+		ci := max(warnings[i].Count, 1)
+		cj := max(warnings[j].Count, 1)
+		if ci != cj {
+			return ci > cj
+		}
 		ti := warnings[i].LastTimestamp.Time
 		tj := warnings[j].LastTimestamp.Time
 		if ti.IsZero() {
@@ -1210,60 +1256,11 @@ func (s *Server) getDashboardMetrics(ctx context.Context) *DashboardMetrics {
 	return metrics
 }
 
-// parseCPUToMillis parses CPU quantity strings like "250m", "1", "500n"
-func parseCPUToMillis(s string) int64 {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0
-	}
-	if before, ok := strings.CutSuffix(s, "n"); ok {
-		// nanocores
-		s = before
-		var val int64
-		fmt.Sscanf(s, "%d", &val)
-		return val / 1000000
-	}
-	if before, ok := strings.CutSuffix(s, "m"); ok {
-		s = before
-		var val int64
-		fmt.Sscanf(s, "%d", &val)
-		return val
-	}
-	// Plain number = cores
-	var val int64
-	fmt.Sscanf(s, "%d", &val)
-	return val * 1000
-}
+// parseCPUToMillis delegates to k8s.ParseCPUToMillis.
+func parseCPUToMillis(s string) int64 { return k8s.ParseCPUToMillis(s) }
 
-// parseMemoryToBytes parses memory quantity strings like "1024Ki", "256Mi", "1Gi"
-func parseMemoryToBytes(s string) int64 {
-	s = strings.TrimSpace(s)
-	if s == "" {
-		return 0
-	}
-	if before, ok := strings.CutSuffix(s, "Ki"); ok {
-		s = before
-		var val int64
-		fmt.Sscanf(s, "%d", &val)
-		return val * 1024
-	}
-	if before, ok := strings.CutSuffix(s, "Mi"); ok {
-		s = before
-		var val int64
-		fmt.Sscanf(s, "%d", &val)
-		return val * 1024 * 1024
-	}
-	if before, ok := strings.CutSuffix(s, "Gi"); ok {
-		s = before
-		var val int64
-		fmt.Sscanf(s, "%d", &val)
-		return val * 1024 * 1024 * 1024
-	}
-	// Plain bytes
-	var val int64
-	fmt.Sscanf(s, "%d", &val)
-	return val
-}
+// parseMemoryToBytes delegates to k8s.ParseMemoryToBytes.
+func parseMemoryToBytes(s string) int64 { return k8s.ParseMemoryToBytes(s) }
 
 // Helper functions
 
