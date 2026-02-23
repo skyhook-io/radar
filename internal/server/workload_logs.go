@@ -3,7 +3,6 @@ package server
 import (
 	"bufio"
 	"context"
-	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -15,7 +14,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -137,7 +135,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	selector, err := getWorkloadSelector(cache, kind, namespace, name)
+	selector, err := k8s.GetWorkloadSelector(cache, kind, namespace, name)
 	if err != nil {
 		sendSSEEvent(w, flusher, "error", map[string]string{"message": err.Error()})
 		return
@@ -174,7 +172,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	// Start streaming from each pod/container
 	startPodStreams := func(pods []*corev1.Pod) {
 		for _, pod := range pods {
-			containers := getContainersToLog(pod, container)
+			containers := k8s.GetContainersForPod(pod, container, true)
 			for _, c := range containers {
 				key := pod.Name + "/" + c
 				if _, exists := activeStreams.Load(key); exists {
@@ -321,61 +319,6 @@ func streamPodLogs(ctx context.Context, client *kubernetes.Clientset, namespace,
 	}
 }
 
-// getWorkloadSelector returns the label selector for a workload
-func getWorkloadSelector(cache *k8s.ResourceCache, kind, namespace, name string) (*metav1.LabelSelector, error) {
-	switch kind {
-	case "deployments":
-		dep, err := cache.Deployments().Deployments(namespace).Get(name)
-		if err != nil {
-			return nil, fmt.Errorf("deployment %s/%s not found: %w", namespace, name, err)
-		}
-		return dep.Spec.Selector, nil
-
-	case "statefulsets":
-		sts, err := cache.StatefulSets().StatefulSets(namespace).Get(name)
-		if err != nil {
-			return nil, fmt.Errorf("statefulset %s/%s not found: %w", namespace, name, err)
-		}
-		return sts.Spec.Selector, nil
-
-	case "daemonsets":
-		ds, err := cache.DaemonSets().DaemonSets(namespace).Get(name)
-		if err != nil {
-			return nil, fmt.Errorf("daemonset %s/%s not found: %w", namespace, name, err)
-		}
-		return ds.Spec.Selector, nil
-
-	default:
-		return nil, fmt.Errorf("unsupported workload kind: %s", kind)
-	}
-}
-
-// getContainersToLog returns containers to stream logs from
-func getContainersToLog(pod *corev1.Pod, selectedContainer string) []string {
-	if selectedContainer != "" {
-		// Check if this container exists in the pod
-		for _, c := range pod.Spec.Containers {
-			if c.Name == selectedContainer {
-				return []string{selectedContainer}
-			}
-		}
-		for _, c := range pod.Spec.InitContainers {
-			if c.Name == selectedContainer {
-				return []string{selectedContainer}
-			}
-		}
-		// Container not found, return empty
-		return nil
-	}
-
-	// Return all containers
-	containers := make([]string, 0, len(pod.Spec.Containers))
-	for _, c := range pod.Spec.Containers {
-		containers = append(containers, c.Name)
-	}
-	return containers
-}
-
 // isPodReady checks if all containers in a pod are ready
 func isPodReady(pod *corev1.Pod) bool {
 	if pod.Status.Phase != corev1.PodRunning {
@@ -440,10 +383,13 @@ func (s *Server) getWorkloadPods(kind, namespace, name string) ([]*corev1.Pod, *
 		return nil, &workloadError{http.StatusServiceUnavailable, "resource cache not available"}
 	}
 
-	selector, err := getWorkloadSelector(cache, kind, namespace, name)
+	selector, err := k8s.GetWorkloadSelector(cache, kind, namespace, name)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			return nil, &workloadError{http.StatusNotFound, err.Error()}
+		}
+		if strings.Contains(err.Error(), "insufficient permissions") {
+			return nil, &workloadError{http.StatusForbidden, err.Error()}
 		}
 		return nil, &workloadError{http.StatusInternalServerError, err.Error()}
 	}
@@ -474,7 +420,7 @@ func collectLogsFromPods(ctx context.Context, client *kubernetes.Clientset, name
 	var wg sync.WaitGroup
 
 	for _, pod := range pods {
-		containers := getContainersToLog(pod, container)
+		containers := k8s.GetContainersForPod(pod, container, true)
 		for _, c := range containers {
 			wg.Add(1)
 			go func(podName, containerName string) {

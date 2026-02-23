@@ -11,14 +11,13 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
-	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
 	aicontext "github.com/skyhook-io/radar/internal/ai/context"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/topology"
 )
 
@@ -63,7 +62,9 @@ func registerTools(server *mcp.Server) {
 		Name: "get_resource",
 		Description: "Get detailed information about a single Kubernetes resource. " +
 			"Returns minified spec, status, and metadata. " +
-			"Use after list_resources to drill into a specific resource.",
+			"Use after list_resources to drill into a specific resource. " +
+			"Optionally include related context (events, relationships, metrics, logs) " +
+			"using the 'include' parameter (comma-separated) to avoid extra tool calls.",
 		Annotations: readOnly,
 	}, logToolCall("get_resource", handleGetResource))
 
@@ -96,6 +97,14 @@ func registerTools(server *mcp.Server) {
 			"Use to discover available namespaces before filtering other queries.",
 		Annotations: readOnly,
 	}, logToolCall("list_namespaces", handleListNamespaces))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "get_changes",
+		Description: "Get recent resource changes (creates, updates, deletes) from the cluster timeline. " +
+			"Use to investigate what changed before an incident. " +
+			"Filter by namespace, resource kind, or specific resource name.",
+		Annotations: readOnly,
+	}, logToolCall("get_changes", handleGetChanges))
 
 	// --- Helm tools (read-only) ---
 
@@ -181,16 +190,28 @@ type getResourceInput struct {
 	Kind      string `json:"kind" jsonschema:"resource kind, e.g. pod, deployment, service"`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
 	Name      string `json:"name" jsonschema:"resource name"`
+	Include   string `json:"include,omitempty" jsonschema:"comma-separated extras to include: events, relationships, metrics, logs"`
 }
 
 type topologyInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace"`
 	View      string `json:"view,omitempty" jsonschema:"view mode: traffic for network flow or resources for ownership hierarchy"`
+	Format    string `json:"format,omitempty" jsonschema:"output format: graph (default, full node/edge data) or summary (text description of resource chains)"`
 }
 
 type eventsInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max 100, default 20"`
+	Kind      string `json:"kind,omitempty" jsonschema:"filter to events involving this resource kind (e.g. Pod, Deployment)"`
+	Name      string `json:"name,omitempty" jsonschema:"filter to events involving this resource name"`
+}
+
+type getChangesInput struct {
+	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace"`
+	Kind      string `json:"kind,omitempty" jsonschema:"filter to a resource kind (e.g. Deployment, Pod)"`
+	Name      string `json:"name,omitempty" jsonschema:"filter to a specific resource name"`
+	Since     string `json:"since,omitempty" jsonschema:"duration to look back, e.g. 1h, 30m, 24h (default 1h)"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"max changes to return (default 20, max 50)"`
 }
 
 type podLogsInput struct {
@@ -278,6 +299,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	name := input.Name
 
 	// Try typed cache first
+	var resourceData any
 	obj, err := k8s.FetchResource(cache, kind, namespace, name)
 	if err == k8s.ErrUnknownKind {
 		// Fall through to dynamic cache for CRDs
@@ -285,19 +307,220 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		if dynErr != nil {
 			return nil, nil, fmt.Errorf("resource not found: %w", dynErr)
 		}
-		return toJSONResult(aicontext.MinifyUnstructured(u, aicontext.LevelDetail))
-	}
-	if err != nil {
+		resourceData = aicontext.MinifyUnstructured(u, aicontext.LevelDetail)
+	} else if err != nil {
 		return nil, nil, fmt.Errorf("resource not found: %w", err)
+	} else {
+		k8s.SetTypeMeta(obj)
+		minified, minErr := aicontext.Minify(obj, aicontext.LevelDetail)
+		if minErr != nil {
+			return nil, nil, fmt.Errorf("failed to minify: %w", minErr)
+		}
+		resourceData = minified
 	}
 
-	k8s.SetTypeMeta(obj)
-	result, err := aicontext.Minify(obj, aicontext.LevelDetail)
-	if err != nil {
-		return nil, nil, fmt.Errorf("failed to minify: %w", err)
+	includes := parseIncludes(input.Include)
+	if len(includes) == 0 {
+		return toJSONResult(resourceData)
 	}
 
+	// Build enriched response with requested extras
+	result := map[string]any{"resource": resourceData}
+	attachResourceExtras(ctx, cache, result, includes, kind, namespace, name)
 	return toJSONResult(result)
+}
+
+// attachResourceExtras populates optional extras (events, relationships, metrics, logs)
+// on the result map based on the includes set.
+func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result map[string]any, includes map[string]bool, kind, namespace, name string) {
+	if includes["events"] {
+		if eventLister := cache.Events(); eventLister != nil {
+			var events []*corev1.Event
+			var listErr error
+			if namespace != "" {
+				events, listErr = eventLister.Events(namespace).List(labels.Everything())
+			} else {
+				events, listErr = eventLister.List(labels.Everything())
+			}
+			if listErr != nil {
+				log.Printf("[mcp] Failed to list events for %s/%s/%s: %v", kind, namespace, name, listErr)
+			}
+			// Filter to events involving this resource
+			var matched []corev1.Event
+			displayKind := normalizeDisplayKind(kind)
+			for _, e := range events {
+				if strings.EqualFold(e.InvolvedObject.Kind, displayKind) && e.InvolvedObject.Name == name {
+					matched = append(matched, *e)
+				}
+			}
+			if len(matched) > 0 {
+				deduplicated := aicontext.DeduplicateEvents(matched)
+				if len(deduplicated) > 10 {
+					deduplicated = deduplicated[:10]
+				}
+				result["events"] = deduplicated
+			}
+		}
+	}
+
+	if includes["relationships"] {
+		opts := topology.DefaultBuildOptions()
+		if namespace != "" {
+			opts.Namespaces = []string{namespace}
+		}
+		builder := topology.NewBuilder()
+		topo, err := builder.Build(opts)
+		if err != nil {
+			log.Printf("[mcp] Failed to build topology for relationships %s/%s/%s: %v", kind, namespace, name, err)
+		} else {
+			displayKind := normalizeDisplayKind(kind)
+			if rels := topology.GetRelationships(displayKind, namespace, name, topo); rels != nil {
+				result["relationships"] = rels
+			}
+		}
+	}
+
+	if includes["metrics"] {
+		if isPodKind(kind) {
+			if metrics, err := k8s.GetPodMetrics(ctx, namespace, name); err == nil {
+				result["metrics"] = metrics
+			}
+		}
+	}
+
+	if includes["logs"] {
+		if isPodKind(kind) {
+			if client := k8s.GetClient(); client != nil {
+				tailLines := int64(100)
+				opts := &corev1.PodLogOptions{TailLines: &tailLines}
+				stream, err := client.CoreV1().Pods(namespace).GetLogs(name, opts).Stream(ctx)
+				if err != nil {
+					log.Printf("[mcp] Failed to get logs for %s/%s: %v", namespace, name, err)
+				} else {
+					defer stream.Close()
+					data, readErr := io.ReadAll(stream)
+					if readErr != nil {
+						log.Printf("[mcp] Failed to read logs for %s/%s: %v", namespace, name, readErr)
+					} else {
+						result["logs"] = aicontext.FilterLogs(string(data))
+					}
+				}
+			}
+		}
+	}
+}
+
+// normalizeDisplayKind converts a lowercase kind to its display form for matching
+// against InvolvedObject.Kind and topology node kinds (e.g. "pod" → "Pod").
+func normalizeDisplayKind(kind string) string {
+	displayKinds := map[string]string{
+		"pod": "Pod", "pods": "Pod",
+		"service": "Service", "services": "Service",
+		"deployment": "Deployment", "deployments": "Deployment",
+		"daemonset": "DaemonSet", "daemonsets": "DaemonSet",
+		"statefulset": "StatefulSet", "statefulsets": "StatefulSet",
+		"replicaset": "ReplicaSet", "replicasets": "ReplicaSet",
+		"ingress": "Ingress", "ingresses": "Ingress",
+		"configmap": "ConfigMap", "configmaps": "ConfigMap",
+		"secret": "Secret", "secrets": "Secret",
+		"job": "Job", "jobs": "Job",
+		"cronjob": "CronJob", "cronjobs": "CronJob",
+		"node": "Node", "nodes": "Node",
+		"namespace": "Namespace", "namespaces": "Namespace",
+		"persistentvolumeclaim": "PersistentVolumeClaim", "persistentvolumeclaims": "PersistentVolumeClaim",
+		"persistentvolume": "PersistentVolume", "persistentvolumes": "PersistentVolume",
+		"storageclass": "StorageClass", "storageclasses": "StorageClass",
+		"horizontalpodautoscaler": "HorizontalPodAutoscaler", "horizontalpodautoscalers": "HorizontalPodAutoscaler",
+		"poddisruptionbudget": "PodDisruptionBudget", "poddisruptionbudgets": "PodDisruptionBudget",
+	}
+	if display, ok := displayKinds[kind]; ok {
+		return display
+	}
+	return kind
+}
+
+func isPodKind(kind string) bool {
+	return kind == "pod" || kind == "pods"
+}
+
+func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getChangesInput) (*mcp.CallToolResult, any, error) {
+	store := timeline.GetStore()
+	if store == nil {
+		return nil, nil, fmt.Errorf("timeline store not initialized")
+	}
+
+	since := 1 * time.Hour
+	if input.Since != "" {
+		parsed, err := time.ParseDuration(input.Since)
+		if err != nil {
+			return nil, nil, fmt.Errorf("invalid duration %q: %w", input.Since, err)
+		}
+		if parsed <= 0 {
+			return nil, nil, fmt.Errorf("duration must be positive, got %q", input.Since)
+		}
+		since = parsed
+	}
+
+	limit := 20
+	if input.Limit > 0 {
+		limit = min(input.Limit, 50)
+	}
+
+	queryOpts := timeline.QueryOptions{
+		Since:        time.Now().Add(-since),
+		FilterPreset: "default",
+	}
+	if input.Namespace != "" {
+		queryOpts.Namespaces = []string{input.Namespace}
+	}
+	if input.Kind != "" {
+		queryOpts.Kinds = []string{input.Kind}
+	}
+	// When name filtering is needed client-side, fetch more to compensate for post-filter reduction
+	if input.Name != "" {
+		queryOpts.Limit = limit * 10
+	} else {
+		queryOpts.Limit = limit
+	}
+
+	events, err := store.Query(ctx, queryOpts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to query timeline: %w", err)
+	}
+
+	// Client-side name filter (QueryOptions doesn't support name filtering)
+	if input.Name != "" {
+		filtered := events[:0]
+		for _, e := range events {
+			if e.Name == input.Name {
+				filtered = append(filtered, e)
+			}
+		}
+		events = filtered
+		if len(events) > limit {
+			events = events[:limit]
+		}
+	}
+
+	changes := make([]mcpChange, 0, len(events))
+	for _, e := range events {
+		summary := ""
+		if e.Diff != nil && e.Diff.Summary != "" {
+			summary = e.Diff.Summary
+		} else if e.Message != "" {
+			summary = k8s.Truncate(e.Message, 100)
+		}
+		changes = append(changes, mcpChange{
+			Kind:       e.Kind,
+			Namespace:  e.Namespace,
+			Name:       e.Name,
+			ChangeType: string(e.EventType),
+			Summary:    summary,
+			Timestamp:  e.Timestamp.Format(time.RFC3339),
+		})
+	}
+
+	return toJSONResult(changes)
 }
 
 func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topologyInput) (*mcp.CallToolResult, any, error) {
@@ -315,7 +538,185 @@ func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topo
 		return nil, nil, fmt.Errorf("failed to build topology: %w", err)
 	}
 
+	if strings.ToLower(input.Format) == "summary" {
+		return toJSONResult(buildTopologySummary(topo))
+	}
+
 	return toJSONResult(topo)
+}
+
+// topologySummary is an LLM-friendly text representation of the topology.
+type topologySummary struct {
+	Namespaces []nsSummary    `json:"namespaces"`
+	Problems   []string       `json:"problems,omitempty"`
+	Stats      topologyStats  `json:"stats"`
+}
+
+type nsSummary struct {
+	Namespace string   `json:"namespace"`
+	Chains    []string `json:"chains"`
+}
+
+type topologyStats struct {
+	Nodes int `json:"nodes"`
+	Edges int `json:"edges"`
+}
+
+func buildTopologySummary(topo *topology.Topology) topologySummary {
+	// Build lookup maps
+	nodeByID := make(map[string]*topology.Node, len(topo.Nodes))
+	for i := range topo.Nodes {
+		nodeByID[topo.Nodes[i].ID] = &topo.Nodes[i]
+	}
+
+	// Build adjacency: source → targets
+	children := make(map[string][]string)
+	parents := make(map[string][]string)
+	for _, e := range topo.Edges {
+		children[e.Source] = append(children[e.Source], e.Target)
+		parents[e.Target] = append(parents[e.Target], e.Source)
+	}
+
+	// Find root nodes (no incoming edges)
+	roots := make(map[string]bool)
+	for _, n := range topo.Nodes {
+		if len(parents[n.ID]) == 0 {
+			roots[n.ID] = true
+		}
+	}
+
+	// Walk chains from roots, group by namespace
+	visited := make(map[string]bool)
+	nsChains := make(map[string][]string)
+	var problems []string
+
+	for _, n := range topo.Nodes {
+		if !roots[n.ID] || visited[n.ID] {
+			continue
+		}
+		chain := walkChain(n.ID, nodeByID, children, visited, 0)
+		if chain == "" {
+			continue
+		}
+		ns := nodeNamespace(nodeByID[n.ID])
+		nsChains[ns] = append(nsChains[ns], chain)
+	}
+
+	// Also walk any unvisited nodes (cycles or isolated nodes)
+	for _, n := range topo.Nodes {
+		if visited[n.ID] {
+			continue
+		}
+		desc := describeNode(&n)
+		ns := nodeNamespace(&n)
+		nsChains[ns] = append(nsChains[ns], desc)
+		visited[n.ID] = true
+	}
+
+	// Detect problems
+	for _, n := range topo.Nodes {
+		if n.Status == topology.StatusUnhealthy || n.Status == topology.StatusDegraded {
+			problems = append(problems, fmt.Sprintf("%s %s: %s", n.Kind, n.Name, n.Status))
+		}
+	}
+
+	// Build sorted namespace list
+	var namespaces []nsSummary
+	sortedNs := make([]string, 0, len(nsChains))
+	for ns := range nsChains {
+		sortedNs = append(sortedNs, ns)
+	}
+	sort.Strings(sortedNs)
+	for _, ns := range sortedNs {
+		namespaces = append(namespaces, nsSummary{
+			Namespace: ns,
+			Chains:    nsChains[ns],
+		})
+	}
+
+	return topologySummary{
+		Namespaces: namespaces,
+		Problems:   problems,
+		Stats:      topologyStats{Nodes: len(topo.Nodes), Edges: len(topo.Edges)},
+	}
+}
+
+// walkChain recursively describes a resource chain from a root node.
+func walkChain(nodeID string, nodeByID map[string]*topology.Node, children map[string][]string, visited map[string]bool, depth int) string {
+	if depth > 10 || visited[nodeID] {
+		return ""
+	}
+	visited[nodeID] = true
+
+	node, ok := nodeByID[nodeID]
+	if !ok {
+		return ""
+	}
+
+	desc := describeNode(node)
+	kids := children[nodeID]
+	if len(kids) == 0 {
+		return desc
+	}
+
+	// For single-child chains, flatten into arrows
+	if len(kids) == 1 {
+		childDesc := walkChain(kids[0], nodeByID, children, visited, depth+1)
+		if childDesc != "" {
+			return desc + " → " + childDesc
+		}
+		return desc
+	}
+
+	// For multiple children, list them
+	var childDescs []string
+	for _, kid := range kids {
+		childDesc := walkChain(kid, nodeByID, children, visited, depth+1)
+		if childDesc != "" {
+			childDescs = append(childDescs, childDesc)
+		}
+	}
+	if len(childDescs) == 0 {
+		return desc
+	}
+	if len(childDescs) == 1 {
+		return desc + " → " + childDescs[0]
+	}
+	return desc + " → [" + strings.Join(childDescs, ", ") + "]"
+}
+
+func describeNode(n *topology.Node) string {
+	desc := fmt.Sprintf("%s/%s", n.Kind, n.Name)
+
+	// Add status annotation for unhealthy nodes
+	if n.Status == topology.StatusUnhealthy {
+		desc += " (unhealthy)"
+	} else if n.Status == topology.StatusDegraded {
+		desc += " (degraded)"
+	}
+
+	// Add useful data annotations
+	if n.Data != nil {
+		if ready, ok := n.Data["readyReplicas"]; ok {
+			if desired, ok2 := n.Data["replicas"]; ok2 {
+				desc += fmt.Sprintf(" (%v/%v ready)", ready, desired)
+			}
+		}
+		if host, ok := n.Data["host"]; ok && host != "" {
+			desc += fmt.Sprintf(" [%v]", host)
+		}
+	}
+
+	return desc
+}
+
+func nodeNamespace(n *topology.Node) string {
+	if n.Data != nil {
+		if ns, ok := n.Data["namespace"].(string); ok && ns != "" {
+			return ns
+		}
+	}
+	return "(cluster)"
 }
 
 func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input eventsInput) (*mcp.CallToolResult, any, error) {
@@ -338,6 +739,21 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list events: %w", err)
+	}
+
+	// Filter by InvolvedObject kind/name if specified
+	if input.Kind != "" || input.Name != "" {
+		filtered := events[:0]
+		for _, e := range events {
+			if input.Kind != "" && !strings.EqualFold(e.InvolvedObject.Kind, input.Kind) {
+				continue
+			}
+			if input.Name != "" && e.InvolvedObject.Name != input.Name {
+				continue
+			}
+			filtered = append(filtered, e)
+		}
+		events = filtered
 	}
 
 	// Convert to non-pointer slice for DeduplicateEvents
@@ -431,6 +847,7 @@ type mcpDashboard struct {
 	VersionSkew    []string         `json:"versionSkew,omitempty"`
 	Health         mcpHealthSummary `json:"health"`
 	Problems       []mcpProblem     `json:"problems"`
+	RecentChanges  []mcpChange      `json:"recentChanges,omitempty"`
 	WarningEvents  int              `json:"warningEvents"`
 	TopWarnings    []mcpWarning     `json:"topWarnings"`
 	HelmReleases   mcpHelmSummary   `json:"helmReleases"`
@@ -438,6 +855,15 @@ type mcpDashboard struct {
 	TopologyNodes  int              `json:"topologyNodes"`
 	TopologyEdges  int              `json:"topologyEdges"`
 	ResourceCounts map[string]int   `json:"resourceCounts"`
+}
+
+type mcpChange struct {
+	Kind       string `json:"kind"`
+	Namespace  string `json:"namespace,omitempty"`
+	Name       string `json:"name"`
+	ChangeType string `json:"changeType"`
+	Summary    string `json:"summary,omitempty"`
+	Timestamp  string `json:"timestamp"`
 }
 
 type mcpMetrics struct {
@@ -541,142 +967,33 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		}
 	}
 
-	// Deployment problems
+	// Workload/HPA/CronJob/Node problems (excluding pods, handled above)
+	for _, p := range k8s.DetectProblems(cache, namespace) {
+		if len(d.Problems) >= 10 {
+			break
+		}
+		d.Problems = append(d.Problems, mcpProblem{
+			Kind:      p.Kind,
+			Namespace: p.Namespace,
+			Name:      p.Name,
+			Reason:    p.Reason,
+			Message:   p.Message,
+			Age:       p.Age,
+		})
+	}
+
+	// Deployment resource count
 	if depLister := cache.Deployments(); depLister != nil {
 		if namespace != "" {
 			items, _ := depLister.Deployments(namespace).List(labels.Everything())
 			d.ResourceCounts["deployments"] = len(items)
-			for _, dep := range items {
-				if dep.Status.UnavailableReplicas > 0 && len(d.Problems) < 10 {
-					d.Problems = append(d.Problems, mcpProblem{
-						Kind:      "Deployment",
-						Namespace: dep.Namespace,
-						Name:      dep.Name,
-						Reason:    fmt.Sprintf("%d/%d available", dep.Status.AvailableReplicas, dep.Status.Replicas),
-						Age:       k8s.FormatAge(now.Sub(dep.CreationTimestamp.Time)),
-					})
-				}
-			}
 		} else {
 			items, _ := depLister.List(labels.Everything())
 			d.ResourceCounts["deployments"] = len(items)
-			for _, dep := range items {
-				if dep.Status.UnavailableReplicas > 0 && len(d.Problems) < 10 {
-					d.Problems = append(d.Problems, mcpProblem{
-						Kind:      "Deployment",
-						Namespace: dep.Namespace,
-						Name:      dep.Name,
-						Reason:    fmt.Sprintf("%d/%d available", dep.Status.AvailableReplicas, dep.Status.Replicas),
-						Age:       k8s.FormatAge(now.Sub(dep.CreationTimestamp.Time)),
-					})
-				}
-			}
 		}
 	}
 
-	// StatefulSet problems: readyReplicas < replicas
-	if ssLister := cache.StatefulSets(); ssLister != nil {
-		if namespace != "" {
-			ssets, _ := ssLister.StatefulSets(namespace).List(labels.Everything())
-			for _, ss := range ssets {
-				if ss.Status.ReadyReplicas < ss.Status.Replicas && len(d.Problems) < 10 {
-					d.Problems = append(d.Problems, mcpProblem{
-						Kind:      "StatefulSet",
-						Namespace: ss.Namespace,
-						Name:      ss.Name,
-						Reason:    fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, ss.Status.Replicas),
-						Age:       k8s.FormatAge(now.Sub(ss.CreationTimestamp.Time)),
-					})
-				}
-			}
-		} else {
-			ssets, _ := ssLister.List(labels.Everything())
-			for _, ss := range ssets {
-				if ss.Status.ReadyReplicas < ss.Status.Replicas && len(d.Problems) < 10 {
-					d.Problems = append(d.Problems, mcpProblem{
-						Kind:      "StatefulSet",
-						Namespace: ss.Namespace,
-						Name:      ss.Name,
-						Reason:    fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, ss.Status.Replicas),
-						Age:       k8s.FormatAge(now.Sub(ss.CreationTimestamp.Time)),
-					})
-				}
-			}
-		}
-	}
-
-	// DaemonSet problems: numberUnavailable > 0
-	if dsLister := cache.DaemonSets(); dsLister != nil {
-		if namespace != "" {
-			dsets, _ := dsLister.DaemonSets(namespace).List(labels.Everything())
-			for _, ds := range dsets {
-				if ds.Status.NumberUnavailable > 0 && len(d.Problems) < 10 {
-					d.Problems = append(d.Problems, mcpProblem{
-						Kind:      "DaemonSet",
-						Namespace: ds.Namespace,
-						Name:      ds.Name,
-						Reason:    fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable),
-						Age:       k8s.FormatAge(now.Sub(ds.CreationTimestamp.Time)),
-					})
-				}
-			}
-		} else {
-			dsets, _ := dsLister.List(labels.Everything())
-			for _, ds := range dsets {
-				if ds.Status.NumberUnavailable > 0 && len(d.Problems) < 10 {
-					d.Problems = append(d.Problems, mcpProblem{
-						Kind:      "DaemonSet",
-						Namespace: ds.Namespace,
-						Name:      ds.Name,
-						Reason:    fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable),
-						Age:       k8s.FormatAge(now.Sub(ds.CreationTimestamp.Time)),
-					})
-				}
-			}
-		}
-	}
-
-	// HPA problems
-	if hpaLister := cache.HorizontalPodAutoscalers(); hpaLister != nil {
-		var hpas []*autoscalingv2.HorizontalPodAutoscaler
-		if namespace != "" {
-			hpas, _ = hpaLister.HorizontalPodAutoscalers(namespace).List(labels.Everything())
-		} else {
-			hpas, _ = hpaLister.List(labels.Everything())
-		}
-		for _, hp := range k8s.DetectHPAProblems(hpas) {
-			if len(d.Problems) < 10 {
-				d.Problems = append(d.Problems, mcpProblem{
-					Kind:      "HorizontalPodAutoscaler",
-					Namespace: hp.Namespace,
-					Name:      hp.Name,
-					Reason:    hp.Reason,
-				})
-			}
-		}
-	}
-
-	// CronJob problems
-	if cjLister := cache.CronJobs(); cjLister != nil {
-		var cronjobs []*batchv1.CronJob
-		if namespace != "" {
-			cronjobs, _ = cjLister.CronJobs(namespace).List(labels.Everything())
-		} else {
-			cronjobs, _ = cjLister.List(labels.Everything())
-		}
-		for _, cp := range k8s.DetectCronJobProblems(cronjobs) {
-			if len(d.Problems) < 10 {
-				d.Problems = append(d.Problems, mcpProblem{
-					Kind:      "CronJob",
-					Namespace: cp.Namespace,
-					Name:      cp.Name,
-					Reason:    cp.Reason,
-				})
-			}
-		}
-	}
-
-	// Node problems (cluster-scoped, not filtered by namespace)
+	// Node health summary (cluster-scoped, not filtered by namespace)
 	if nodeLister := cache.Nodes(); nodeLister != nil {
 		nodes, _ := nodeLister.List(labels.Everything())
 		d.ResourceCounts["nodes"] = len(nodes)
@@ -692,25 +1009,6 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 				}
 			} else {
 				d.Nodes.NotReady++
-			}
-		}
-
-		nodeProblems := k8s.DetectNodeProblems(nodes)
-		for _, np := range nodeProblems {
-			if len(d.Problems) < 10 {
-				age := ""
-				for _, n := range nodes {
-					if n.Name == np.NodeName {
-						age = k8s.FormatAge(now.Sub(n.CreationTimestamp.Time))
-						break
-					}
-				}
-				d.Problems = append(d.Problems, mcpProblem{
-					Kind:   "Node",
-					Name:   np.NodeName,
-					Reason: np.Problem,
-					Age:    age,
-				})
 			}
 		}
 
@@ -767,7 +1065,7 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 
 			// Sort: failed/pending-install first, then unhealthy/degraded
 			sort.SliceStable(releases, func(i, j int) bool {
-				return helmStatusPriority(releases[i].Status, releases[i].ResourceHealth) < helmStatusPriority(releases[j].Status, releases[j].ResourceHealth)
+				return helm.StatusPriority(releases[i].Status, releases[i].ResourceHealth) < helm.StatusPriority(releases[j].Status, releases[j].ResourceHealth)
 			})
 
 			limit := min(len(releases), 5)
@@ -859,6 +1157,56 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		d.TopologyEdges = len(topo.Edges)
 	}
 
+	// Correlate recent changes with problems — only show changes for broken resources
+	if store := timeline.GetStore(); store != nil && len(d.Problems) > 0 {
+		problemKeys := make(map[string]bool, len(d.Problems))
+		for _, p := range d.Problems {
+			problemKeys[fmt.Sprintf("%s/%s/%s", p.Kind, p.Namespace, p.Name)] = true
+		}
+
+		queryOpts := timeline.QueryOptions{
+			Since:        now.Add(-1 * time.Hour),
+			Limit:        20,
+			FilterPreset: "workloads",
+		}
+		if namespace != "" {
+			queryOpts.Namespaces = []string{namespace}
+		}
+		changes, err := store.Query(ctx, queryOpts)
+		if err != nil {
+			log.Printf("[mcp] Failed to query timeline for dashboard changes: %v", err)
+		}
+		if err == nil {
+			for _, c := range changes {
+				key := fmt.Sprintf("%s/%s/%s", c.Kind, c.Namespace, c.Name)
+				// Also check owner chain (e.g. Pod problem → Deployment change)
+				ownerKey := ""
+				if c.Owner != nil {
+					ownerKey = fmt.Sprintf("%s/%s/%s", c.Owner.Kind, c.Namespace, c.Owner.Name)
+				}
+				if problemKeys[key] || (ownerKey != "" && problemKeys[ownerKey]) {
+					summary := ""
+					if c.Diff != nil && c.Diff.Summary != "" {
+						summary = c.Diff.Summary
+					} else if c.Message != "" {
+						summary = k8s.Truncate(c.Message, 100)
+					}
+					d.RecentChanges = append(d.RecentChanges, mcpChange{
+						Kind:       c.Kind,
+						Namespace:  c.Namespace,
+						Name:       c.Name,
+						ChangeType: string(c.EventType),
+						Summary:    summary,
+						Timestamp:  c.Timestamp.Format(time.RFC3339),
+					})
+					if len(d.RecentChanges) >= 5 {
+						break
+					}
+				}
+			}
+		}
+	}
+
 	return d
 }
 
@@ -921,24 +1269,6 @@ func countResources(cache *k8s.ResourceCache, namespace string, d *mcpDashboard)
 		items, _ := nsLister.List(labels.Everything())
 		d.ResourceCounts["namespaces"] = len(items)
 	}
-}
-
-// helmStatusPriority returns a sort priority for Helm release statuses.
-// Lower values sort first — failed and unhealthy releases are surfaced first.
-func helmStatusPriority(status, resourceHealth string) int {
-	if status == "failed" {
-		return 0
-	}
-	if status == "pending-install" || status == "pending-upgrade" || status == "pending-rollback" {
-		return 1
-	}
-	switch resourceHealth {
-	case "unhealthy":
-		return 2
-	case "degraded":
-		return 3
-	}
-	return 4
 }
 
 // toJSONResult marshals data into a text content MCP result.

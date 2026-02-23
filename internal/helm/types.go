@@ -273,3 +273,21 @@ type InstallProgress struct {
 	Message string `json:"message"`          // Human-readable status message
 	Detail  string `json:"detail,omitempty"` // Additional detail (e.g., command output)
 }
+
+// StatusPriority returns a sort priority for Helm release statuses.
+// Lower values sort first — failed and unhealthy releases are surfaced first.
+func StatusPriority(status, resourceHealth string) int {
+	if status == "failed" {
+		return 0
+	}
+	if status == "pending-install" || status == "pending-upgrade" || status == "pending-rollback" {
+		return 1
+	}
+	switch resourceHealth {
+	case "unhealthy":
+		return 2
+	case "degraded":
+		return 3
+	}
+	return 4
+}

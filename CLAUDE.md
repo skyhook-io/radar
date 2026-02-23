@@ -469,8 +469,8 @@ GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbos
 
 ### MCP Server
 - Stateless HTTP handler mounted at `/mcp` (JSON-RPC over HTTP)
-- 13 tools organized into read and write categories:
-  - **Read tools** (7): `get_dashboard`, `list_resources`, `get_resource`, `get_topology`, `get_events`, `get_pod_logs`, `list_namespaces`
+- 14 tools organized into read and write categories:
+  - **Read tools** (8): `get_dashboard` (with problem-correlated changes), `list_resources`, `get_resource` (with optional `include`: events, relationships, metrics, logs), `get_topology` (with `format`: graph or summary), `get_events` (with optional `kind`/`name` resource filter), `get_pod_logs`, `list_namespaces`, `get_changes` (timeline of resource mutations)
   - **Read tools — Helm** (2): `list_helm_releases`, `get_helm_release` (with optional values/history/diff)
   - **Read tools — Logs** (1): `get_workload_logs` (aggregated, AI-filtered logs across all pods)
   - **Write tools** (3): `manage_workload` (restart/scale/rollback), `manage_cronjob` (trigger/suspend/resume), `manage_gitops` (ArgoCD sync/suspend/resume, FluxCD reconcile/suspend/resume)

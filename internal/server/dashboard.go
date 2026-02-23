@@ -10,8 +10,6 @@ import (
 	"sync"
 	"time"
 
-	autoscalingv2 "k8s.io/api/autoscaling/v2"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
@@ -323,178 +321,17 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 		}
 	}
 
-	// Deployment problems: unavailableReplicas > 0
-	if depLister := cache.Deployments(); depLister != nil {
-		if namespace != "" {
-			deps, _ := depLister.Deployments(namespace).List(labels.Everything())
-			for _, d := range deps {
-				if d.Status.UnavailableReplicas > 0 {
-					ageDur := now.Sub(d.CreationTimestamp.Time)
-					problems = append(problems, DashboardProblem{
-						Kind:       "Deployment",
-						Namespace:  d.Namespace,
-						Name:       d.Name,
-						Status:     "error",
-						Reason:     fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, d.Status.Replicas),
-						Age:        k8s.FormatAge(ageDur),
-						AgeSeconds: int64(ageDur.Seconds()),
-					})
-				}
-			}
-		} else {
-			deps, _ := depLister.List(labels.Everything())
-			for _, d := range deps {
-				if d.Status.UnavailableReplicas > 0 {
-					ageDur := now.Sub(d.CreationTimestamp.Time)
-					problems = append(problems, DashboardProblem{
-						Kind:       "Deployment",
-						Namespace:  d.Namespace,
-						Name:       d.Name,
-						Status:     "error",
-						Reason:     fmt.Sprintf("%d/%d available", d.Status.AvailableReplicas, d.Status.Replicas),
-						Age:        k8s.FormatAge(ageDur),
-						AgeSeconds: int64(ageDur.Seconds()),
-					})
-				}
-			}
-		}
-	}
-
-	// StatefulSet problems: readyReplicas < replicas
-	if ssLister := cache.StatefulSets(); ssLister != nil {
-		if namespace != "" {
-			ssets, _ := ssLister.StatefulSets(namespace).List(labels.Everything())
-			for _, ss := range ssets {
-				if ss.Status.ReadyReplicas < ss.Status.Replicas {
-					ageDur := now.Sub(ss.CreationTimestamp.Time)
-					problems = append(problems, DashboardProblem{
-						Kind:       "StatefulSet",
-						Namespace:  ss.Namespace,
-						Name:       ss.Name,
-						Status:     "error",
-						Reason:     fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, ss.Status.Replicas),
-						Age:        k8s.FormatAge(ageDur),
-						AgeSeconds: int64(ageDur.Seconds()),
-					})
-				}
-			}
-		} else {
-			ssets, _ := ssLister.List(labels.Everything())
-			for _, ss := range ssets {
-				if ss.Status.ReadyReplicas < ss.Status.Replicas {
-					ageDur := now.Sub(ss.CreationTimestamp.Time)
-					problems = append(problems, DashboardProblem{
-						Kind:       "StatefulSet",
-						Namespace:  ss.Namespace,
-						Name:       ss.Name,
-						Status:     "error",
-						Reason:     fmt.Sprintf("%d/%d ready", ss.Status.ReadyReplicas, ss.Status.Replicas),
-						Age:        k8s.FormatAge(ageDur),
-						AgeSeconds: int64(ageDur.Seconds()),
-					})
-				}
-			}
-		}
-	}
-
-	// DaemonSet problems: numberUnavailable > 0
-	if dsLister := cache.DaemonSets(); dsLister != nil {
-		if namespace != "" {
-			dsets, _ := dsLister.DaemonSets(namespace).List(labels.Everything())
-			for _, ds := range dsets {
-				if ds.Status.NumberUnavailable > 0 {
-					ageDur := now.Sub(ds.CreationTimestamp.Time)
-					problems = append(problems, DashboardProblem{
-						Kind:       "DaemonSet",
-						Namespace:  ds.Namespace,
-						Name:       ds.Name,
-						Status:     "error",
-						Reason:     fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable),
-						Age:        k8s.FormatAge(ageDur),
-						AgeSeconds: int64(ageDur.Seconds()),
-					})
-				}
-			}
-		} else {
-			dsets, _ := dsLister.List(labels.Everything())
-			for _, ds := range dsets {
-				if ds.Status.NumberUnavailable > 0 {
-					ageDur := now.Sub(ds.CreationTimestamp.Time)
-					problems = append(problems, DashboardProblem{
-						Kind:       "DaemonSet",
-						Namespace:  ds.Namespace,
-						Name:       ds.Name,
-						Status:     "error",
-						Reason:     fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable),
-						Age:        k8s.FormatAge(ageDur),
-						AgeSeconds: int64(ageDur.Seconds()),
-					})
-				}
-			}
-		}
-	}
-
-	// HPA problems: maxed out
-	if hpaLister := cache.HorizontalPodAutoscalers(); hpaLister != nil {
-		var hpas []*autoscalingv2.HorizontalPodAutoscaler
-		if namespace != "" {
-			hpas, _ = hpaLister.HorizontalPodAutoscalers(namespace).List(labels.Everything())
-		} else {
-			hpas, _ = hpaLister.List(labels.Everything())
-		}
-		for _, hp := range k8s.DetectHPAProblems(hpas) {
-			problems = append(problems, DashboardProblem{
-				Kind:      "HorizontalPodAutoscaler",
-				Namespace: hp.Namespace,
-				Name:      hp.Name,
-				Status:    "warning",
-				Reason:    hp.Problem,
-				Message:   hp.Reason,
-			})
-		}
-	}
-
-	// CronJob problems: stale or never-scheduled
-	if cjLister := cache.CronJobs(); cjLister != nil {
-		var cronjobs []*batchv1.CronJob
-		if namespace != "" {
-			cronjobs, _ = cjLister.CronJobs(namespace).List(labels.Everything())
-		} else {
-			cronjobs, _ = cjLister.List(labels.Everything())
-		}
-		for _, cp := range k8s.DetectCronJobProblems(cronjobs) {
-			problems = append(problems, DashboardProblem{
-				Kind:      "CronJob",
-				Namespace: cp.Namespace,
-				Name:      cp.Name,
-				Status:    "warning",
-				Reason:    cp.Problem,
-				Message:   cp.Reason,
-			})
-		}
-	}
-
-	// Node problems: NotReady, Cordoned, pressure conditions
-	var nodes []*corev1.Node
-	if nodeLister := cache.Nodes(); nodeLister != nil {
-		nodes, _ = nodeLister.List(labels.Everything())
-	}
-	for _, np := range k8s.DetectNodeProblems(nodes) {
-		ageDur := time.Duration(0)
-		for _, n := range nodes {
-			if n.Name == np.NodeName {
-				ageDur = now.Sub(n.CreationTimestamp.Time)
-				break
-			}
-		}
+	// Workload/HPA/CronJob/Node problems (excluding pods, handled above)
+	for _, p := range k8s.DetectProblems(cache, namespace) {
 		problems = append(problems, DashboardProblem{
-			Kind:       "Node",
-			Name:       np.NodeName,
-			Status:     np.Severity,
-			Reason:     np.Problem,
-			Message:    np.Reason,
-			Age:        k8s.FormatAge(ageDur),
-			AgeSeconds: int64(ageDur.Seconds()),
+			Kind:       p.Kind,
+			Namespace:  p.Namespace,
+			Name:       p.Name,
+			Status:     p.Severity,
+			Reason:     p.Reason,
+			Message:    p.Message,
+			Age:        p.Age,
+			AgeSeconds: p.AgeSeconds,
 		})
 	}
 
@@ -1096,8 +933,8 @@ func (s *Server) getDashboardHelmSummary(namespace string) DashboardHelmSummary 
 
 	// Sort: failed/unhealthy releases first to surface problems
 	sort.SliceStable(releases, func(i, j int) bool {
-		pi := helmStatusPriority(releases[i].Status, releases[i].ResourceHealth)
-		pj := helmStatusPriority(releases[j].Status, releases[j].ResourceHealth)
+		pi := helm.StatusPriority(releases[i].Status, releases[i].ResourceHealth)
+		pj := helm.StatusPriority(releases[j].Status, releases[j].ResourceHealth)
 		return pi < pj
 	})
 
@@ -1359,20 +1196,3 @@ func (s *Server) getDashboardCRDCounts(_ context.Context, namespace string) []Da
 	return counts
 }
 
-// helmStatusPriority returns a sort priority for Helm release statuses.
-// Lower values sort first — failed and unhealthy releases are surfaced first.
-func helmStatusPriority(status, resourceHealth string) int {
-	if status == "failed" {
-		return 0
-	}
-	if status == "pending-install" || status == "pending-upgrade" || status == "pending-rollback" {
-		return 1
-	}
-	switch resourceHealth {
-	case "unhealthy":
-		return 2
-	case "degraded":
-		return 3
-	}
-	return 4
-}

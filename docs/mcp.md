@@ -165,13 +165,14 @@ Add to `~/.gemini/settings.json`:
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `get_dashboard` | Cluster health overview — resource counts, problems, warning events, Helm status | `namespace` (optional) |
+| `get_dashboard` | Cluster health overview — resource counts, problems, warning events, Helm status. Includes recent changes correlated with detected problems. | `namespace` (optional) |
 | `list_resources` | List resources of a kind with minified summaries (pods, deployments, services, CRDs, etc.) | `kind` (required), `namespace` (optional) |
-| `get_resource` | Detailed view of a single resource — minified spec, status, metadata | `kind` (required), `namespace` (required), `name` (required) |
-| `get_topology` | Topology graph showing resource relationships (nodes and edges) | `namespace` (optional), `view` (optional: `traffic` or `resources`) |
-| `get_events` | Recent warning events, deduplicated and sorted by recency | `namespace` (optional), `limit` (optional, default 20) |
+| `get_resource` | Detailed view of a single resource — minified spec, status, metadata. Optionally include related context to avoid extra tool calls. | `kind` (required), `namespace` (required), `name` (required), `include` (optional: `events,relationships,metrics,logs`) |
+| `get_topology` | Topology graph showing resource relationships (nodes and edges). Use `summary` format for LLM-friendly text descriptions of resource chains. | `namespace` (optional), `view` (optional: `traffic` or `resources`), `format` (optional: `graph` or `summary`) |
+| `get_events` | Recent warning events, deduplicated and sorted by recency. Filter by resource kind/name to scope to a specific resource. | `namespace` (optional), `limit` (optional, default 20), `kind` (optional), `name` (optional) |
 | `get_pod_logs` | Filtered pod logs prioritizing errors/warnings, with secret redaction | `namespace` (required), `name` (required), `container` (optional), `tail_lines` (optional) |
 | `list_namespaces` | List all namespaces with status | (none) |
+| `get_changes` | Recent resource changes (creates, updates, deletes) from the cluster timeline. Use to investigate what changed before an incident. | `namespace` (optional), `kind` (optional), `name` (optional), `since` (optional, e.g. `1h`, `30m`; default `1h`), `limit` (optional, default 20, max 50) |
 | `list_helm_releases` | List all Helm releases with status and health | `namespace` (optional) |
 | `get_helm_release` | Detailed Helm release info with optional values, history, and manifest diff | `namespace` (required), `name` (required), `include` (optional: `values,history,diff`), `diff_revision_1` / `diff_revision_2` (optional) |
 | `get_workload_logs` | Aggregated, AI-filtered logs from all pods of a workload (Deployment, StatefulSet, DaemonSet) | `kind` (required), `namespace` (required), `name` (required), `container` (optional), `tail_lines` (optional) |

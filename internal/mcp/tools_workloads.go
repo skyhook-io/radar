@@ -11,7 +11,6 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	aicontext "github.com/skyhook-io/radar/internal/ai/context"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -147,7 +146,7 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 	}
 
 	// Get the workload's label selector
-	selector, err := getWorkloadSelectorFromCache(cache, kind, input.Namespace, input.Name)
+	selector, err := k8s.GetWorkloadSelector(cache, kind, input.Namespace, input.Name)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -199,7 +198,7 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 	var wg sync.WaitGroup
 
 	for _, pod := range pods {
-		containers := getContainersForPod(pod, input.Container)
+		containers := k8s.GetContainersForPod(pod, input.Container, true)
 		for _, c := range containers {
 			wg.Add(1)
 			go func(podName, containerName string) {
@@ -262,64 +261,6 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 		"pods":     len(pods),
 		"logs":     allLogs,
 	})
-}
-
-// getWorkloadSelectorFromCache returns the label selector for a workload from cache.
-func getWorkloadSelectorFromCache(cache *k8s.ResourceCache, kind, namespace, name string) (*metav1.LabelSelector, error) {
-	switch kind {
-	case "deployments":
-		lister := cache.Deployments()
-		if lister == nil {
-			return nil, fmt.Errorf("insufficient permissions to list deployments")
-		}
-		dep, err := lister.Deployments(namespace).Get(name)
-		if err != nil {
-			return nil, fmt.Errorf("deployment %s/%s not found: %w", namespace, name, err)
-		}
-		return dep.Spec.Selector, nil
-
-	case "statefulsets":
-		lister := cache.StatefulSets()
-		if lister == nil {
-			return nil, fmt.Errorf("insufficient permissions to list statefulsets")
-		}
-		sts, err := lister.StatefulSets(namespace).Get(name)
-		if err != nil {
-			return nil, fmt.Errorf("statefulset %s/%s not found: %w", namespace, name, err)
-		}
-		return sts.Spec.Selector, nil
-
-	case "daemonsets":
-		lister := cache.DaemonSets()
-		if lister == nil {
-			return nil, fmt.Errorf("insufficient permissions to list daemonsets")
-		}
-		ds, err := lister.DaemonSets(namespace).Get(name)
-		if err != nil {
-			return nil, fmt.Errorf("daemonset %s/%s not found: %w", namespace, name, err)
-		}
-		return ds.Spec.Selector, nil
-
-	default:
-		return nil, fmt.Errorf("unsupported workload kind: %s", kind)
-	}
-}
-
-// getContainersForPod returns containers to fetch logs from.
-func getContainersForPod(pod *corev1.Pod, selectedContainer string) []string {
-	if selectedContainer != "" {
-		for _, c := range pod.Spec.Containers {
-			if c.Name == selectedContainer {
-				return []string{selectedContainer}
-			}
-		}
-		return nil
-	}
-	containers := make([]string, 0, len(pod.Spec.Containers))
-	for _, c := range pod.Spec.Containers {
-		containers = append(containers, c.Name)
-	}
-	return containers
 }
 
 // normalizeWorkloadKind converts various kind formats to the plural lowercase form.

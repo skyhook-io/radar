@@ -212,18 +212,22 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
                   { name: 'kind', required: true, desc: 'resource kind, e.g. pods, deployments, services' },
                   { name: 'namespace', required: false, desc: 'filter to a specific namespace' },
                 ]},
-                { name: 'get_resource', desc: 'Get detailed information about a single Kubernetes resource. Returns minified spec, status, and metadata. Use after list_resources to drill into a specific resource.', params: [
+                { name: 'get_resource', desc: 'Get detailed information about a single Kubernetes resource. Returns minified spec, status, and metadata. Optionally include related context (events, relationships, metrics, logs) to avoid extra tool calls.', params: [
                   { name: 'kind', required: true, desc: 'resource kind, e.g. pod, deployment, service' },
                   { name: 'namespace', required: true, desc: 'resource namespace' },
                   { name: 'name', required: true, desc: 'resource name' },
+                  { name: 'include', required: false, desc: 'events, relationships, metrics, logs' },
                 ]},
-                { name: 'get_topology', desc: 'Get the topology graph showing relationships between Kubernetes resources. Returns nodes and edges representing Deployments, Services, Ingresses, Pods, etc. Use \'traffic\' view for network flow or \'resources\' view for ownership hierarchy.', params: [
+                { name: 'get_topology', desc: 'Get the topology graph showing relationships between Kubernetes resources. Returns nodes and edges representing Deployments, Services, Ingresses, Pods, etc. Use \'traffic\' view for network flow or \'resources\' view for ownership hierarchy. Use \'summary\' format for LLM-friendly text descriptions.', params: [
                   { name: 'namespace', required: false, desc: 'filter to a specific namespace' },
                   { name: 'view', required: false, desc: 'traffic or resources' },
+                  { name: 'format', required: false, desc: 'graph (default) or summary (text)' },
                 ]},
-                { name: 'get_events', desc: 'Get recent Kubernetes warning events, deduplicated and sorted by recency. Useful for diagnosing issues — shows event reason, message, and occurrence count.', params: [
+                { name: 'get_events', desc: 'Get recent Kubernetes warning events, deduplicated and sorted by recency. Useful for diagnosing issues — shows event reason, message, and occurrence count. Filter by resource kind/name to scope to a specific resource.', params: [
                   { name: 'namespace', required: false, desc: 'filter to a specific namespace' },
                   { name: 'limit', required: false, desc: 'max events to return (default 20)' },
+                  { name: 'kind', required: false, desc: 'filter to events for this resource kind' },
+                  { name: 'name', required: false, desc: 'filter to events for this resource name' },
                 ]},
                 { name: 'get_pod_logs', desc: 'Get filtered log lines from a pod, prioritizing errors and warnings. Returns diagnostically relevant lines (errors, panics, stack traces) or falls back to the last 20 lines if no error patterns match.', params: [
                   { name: 'namespace', required: true, desc: 'pod namespace' },
@@ -232,6 +236,13 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
                   { name: 'tail_lines', required: false, desc: 'lines from end (default 200)' },
                 ]},
                 { name: 'list_namespaces', desc: 'List all Kubernetes namespaces with their status. Use to discover available namespaces before filtering other queries.', params: [] },
+                { name: 'get_changes', desc: 'Get recent resource changes (creates, updates, deletes) from the cluster timeline. Use to investigate what changed before an incident. Filter by namespace, resource kind, or specific resource name.', params: [
+                  { name: 'namespace', required: false, desc: 'filter to a specific namespace' },
+                  { name: 'kind', required: false, desc: 'filter to a resource kind (e.g. Deployment)' },
+                  { name: 'name', required: false, desc: 'filter to a specific resource name' },
+                  { name: 'since', required: false, desc: 'lookback duration, e.g. 1h, 30m (default 1h)' },
+                  { name: 'limit', required: false, desc: 'max changes to return (default 20, max 50)' },
+                ]},
                 { name: 'list_helm_releases', desc: 'List all Helm releases in the cluster with their status and health. Returns release name, namespace, chart, version, status, and resource health.', params: [
                   { name: 'namespace', required: false, desc: 'filter to a specific namespace' },
                 ]},
