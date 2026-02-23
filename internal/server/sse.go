@@ -89,6 +89,7 @@ func (b *SSEBroadcaster) Start() {
 
 	go b.run()
 	go b.watchResourceChanges()
+	go b.watchDeferredSync()
 	go b.heartbeat()
 }
 
@@ -99,6 +100,40 @@ func (b *SSEBroadcaster) registerCRDDiscoveryCallback() {
 		log.Printf("SSE broadcaster: CRD discovery complete, broadcasting topology update")
 		b.broadcastTopologyUpdate()
 	})
+}
+
+// watchDeferredSync waits for deferred informers (secrets, events, etc.) to
+// finish syncing and then broadcasts a topology update + deferred_ready event
+// so the UI can fill in the missing data (config edges, event counts, etc.).
+func (b *SSEBroadcaster) watchDeferredSync() {
+	// Wait for cache to exist first
+	for {
+		cache := k8s.GetResourceCache()
+		if cache != nil {
+			ch := cache.DeferredDone()
+			if ch == nil {
+				return // no deferred informers
+			}
+			select {
+			case <-ch:
+				log.Printf("SSE broadcaster: deferred informers synced, broadcasting topology update")
+				b.Broadcast(SSEEvent{
+					Event: "deferred_ready",
+					Data:  map[string]any{},
+				})
+				b.broadcastTopologyUpdate()
+				return
+			case <-b.stopCh:
+				return
+			}
+		}
+		// Cache not ready yet — wait a bit and retry
+		select {
+		case <-time.After(100 * time.Millisecond):
+		case <-b.stopCh:
+			return
+		}
+	}
 }
 
 // registerConnectionStateCallback registers for connection state changes
@@ -228,12 +263,41 @@ func (b *SSEBroadcaster) run() {
 	}
 }
 
-// watchResourceChanges listens for K8s resource changes and broadcasts topology updates
+// watchResourceChanges listens for K8s resource changes and broadcasts topology updates.
+// If the cache isn't ready yet (server starts before cluster init), it waits for
+// the connection state to become connected before starting the watch loop.
 func (b *SSEBroadcaster) watchResourceChanges() {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		log.Println("Warning: Resource cache not available for SSE broadcasts")
-		return
+		// Cache not ready yet — wait for connection to be established
+		log.Println("SSE broadcaster: cache not ready, waiting for connection...")
+		ch := make(chan struct{}, 1)
+		k8s.OnConnectionChange(func(status k8s.ConnectionStatus) {
+			if status.State == k8s.StateConnected {
+				select {
+				case ch <- struct{}{}:
+				default:
+				}
+			}
+		})
+		// If already connected by the time we register, check again
+		if k8s.IsConnected() {
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}
+		select {
+		case <-ch:
+			cache = k8s.GetResourceCache()
+			if cache == nil {
+				log.Println("Warning: Resource cache still nil after connection")
+				return
+			}
+			log.Println("SSE broadcaster: cache ready, starting resource change watcher")
+		case <-b.stopCh:
+			return
+		}
 	}
 
 	changes := cache.Changes()

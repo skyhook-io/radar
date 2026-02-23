@@ -37,10 +37,39 @@ import (
 // DebugEvents enables verbose event debugging when true (set via --debug-events flag)
 var DebugEvents bool
 
+// TimingLogs enables [startup-timing] log lines when true (set via --dev flag).
+// These are useful for profiling startup but too noisy for production.
+var TimingLogs bool
+
+// LogTiming prints a [startup-timing] log line if TimingLogs is enabled.
+func LogTiming(format string, args ...any) {
+	if TimingLogs {
+		log.Printf("[startup-timing] "+format, args...)
+	}
+}
+
+// logTiming is the package-internal alias.
+var logTiming = LogTiming
+
 // initialSyncComplete is set to true after the initial cache sync completes.
 // During initial sync, "add" events are skipped since they represent existing
 // resources, not new creations. Only adds after sync are recorded.
 var initialSyncComplete bool
+
+// deferredResources lists informer keys that are NOT required for the initial
+// topology/dashboard render. These sync in the background after StateConnected
+// so the UI can render immediately with core resources.
+// Their lister accessors return nil until sync completes, at which point
+// an SSE topology update fills in the missing edges/counts.
+var deferredResources = map[string]bool{
+	"secrets":               true,
+	"events":                true,
+	"configmaps":            true,
+	"persistentvolumeclaims": true,
+	"persistentvolumes":      true,
+	"storageclasses":         true,
+	"poddisruptionbudgets":   true,
+}
 
 // ResourceCache provides fast, eventually-consistent access to K8s resources
 // using SharedInformers. Optimized for small-mid sized clusters.
@@ -51,6 +80,9 @@ type ResourceCache struct {
 	stopOnce         sync.Once
 	secretsEnabled   bool            // Whether secrets informer is running (requires RBAC)
 	enabledResources map[string]bool // Which resource types have informers running
+	deferredSynced   map[string]bool // Tracks which deferred resources have completed sync
+	deferredMu       sync.RWMutex   // Protects deferredSynced
+	deferredDone     chan struct{}   // Closed when ALL deferred informers have synced
 }
 
 // ResourceChange represents a resource change event
@@ -131,9 +163,11 @@ func InitResourceCache() error {
 		changes := make(chan ResourceChange, 10000)
 
 		// Check RBAC permissions for all resource types before creating informers
+		rbacStart := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		permResult := CheckResourcePermissions(ctx)
 		cancel()
+		logTiming("    RBAC permission checks: %v", time.Since(rbacStart))
 		perms := permResult.Perms
 
 		// Create factory — namespace-scoped if user only has namespace-level access
@@ -174,10 +208,6 @@ func InitResourceCache() error {
 			"poddisruptionbudgets":      perms.PodDisruptionBudgets,
 		}
 
-		// Conditionally create informers and register handlers
-		var syncFuncs []cache.InformerSynced
-		var handlerErrors []error
-
 		type informerSetup struct {
 			key     string
 			kind    string
@@ -215,7 +245,17 @@ func InitResourceCache() error {
 			}, false},
 		}
 
+		// Split informers into critical (block startup) and deferred (background sync).
+		// Critical informers are needed for the initial topology/dashboard render.
+		// Deferred informers (secrets, events, configmaps, pvcs, pvs, storageclasses, pdbs)
+		// only add supplementary data (config edges, counts, cert health) — the UI
+		// gracefully handles their listers being nil until sync completes.
+		var criticalSyncFuncs []cache.InformerSynced
+		var deferredSyncFuncs []cache.InformerSynced
+		var deferredKeys []string
+		var handlerErrors []error
 		enabledCount := 0
+
 		for _, s := range setups {
 			if !enabled[s.key] {
 				continue
@@ -227,7 +267,12 @@ func InitResourceCache() error {
 			} else {
 				handlerErrors = append(handlerErrors, addChangeHandlers(inf, s.kind, changes))
 			}
-			syncFuncs = append(syncFuncs, inf.HasSynced)
+			if deferredResources[s.key] {
+				deferredSyncFuncs = append(deferredSyncFuncs, inf.HasSynced)
+				deferredKeys = append(deferredKeys, s.key)
+			} else {
+				criticalSyncFuncs = append(criticalSyncFuncs, inf.HasSynced)
+			}
 		}
 
 		for _, err := range handlerErrors {
@@ -246,28 +291,88 @@ func InitResourceCache() error {
 				stopCh:           stopCh,
 				secretsEnabled:   false,
 				enabledResources: enabled,
+				deferredSynced:   make(map[string]bool),
+				deferredDone:     make(chan struct{}),
 			}
+			close(resourceCache.deferredDone)
 			initialSyncComplete = true
 			return
 		}
 
-		// Start all informers
+		// Start all informers (each runs LIST+WATCH in its own goroutine)
 		factory.Start(stopCh)
 
-		log.Printf("Starting resource cache with SharedInformers for %d/%d resource types", enabledCount, len(setups))
+		log.Printf("Starting resource cache: %d critical + %d deferred informers (%d/%d total)",
+			len(criticalSyncFuncs), len(deferredSyncFuncs), enabledCount, len(setups))
 		syncStart := time.Now()
 
-		// Wait for caches to sync
-		if !cache.WaitForCacheSync(stopCh, syncFuncs...) {
-			close(stopCh)
-			initErr = fmt.Errorf("failed to sync resource caches")
-			return
+		// Track per-informer sync times
+		for _, s := range setups {
+			if !enabled[s.key] {
+				continue
+			}
+			kind := s.kind
+			key := s.key
+			isDeferred := deferredResources[key]
+			// Find matching HasSynced func
+			var fn cache.InformerSynced
+			if isDeferred {
+				for i, dk := range deferredKeys {
+					if dk == key {
+						fn = deferredSyncFuncs[i]
+						break
+					}
+				}
+			} else {
+				idx := 0
+				for _, ss := range setups {
+					if !enabled[ss.key] || deferredResources[ss.key] {
+						continue
+					}
+					if ss.key == key {
+						fn = criticalSyncFuncs[idx]
+						break
+					}
+					idx++
+				}
+			}
+			if fn != nil {
+				tag := "critical"
+				if isDeferred {
+					tag = "deferred"
+				}
+				go func() {
+					t := time.Now()
+					for !fn() {
+						time.Sleep(10 * time.Millisecond)
+					}
+					logTiming("    Informer synced: %-28s %v (%s)", kind, time.Since(t), tag)
+				}()
+			}
 		}
 
-		log.Printf("Resource caches synced successfully in %v", time.Since(syncStart))
+		// Phase 1: Wait only for critical informers — these drive the first render
+		if len(criticalSyncFuncs) > 0 {
+			if !cache.WaitForCacheSync(stopCh, criticalSyncFuncs...) {
+				close(stopCh)
+				initErr = fmt.Errorf("failed to sync critical resource caches")
+				return
+			}
+		}
+		logTiming("    Phase 1 sync (%d critical informers): %v", len(criticalSyncFuncs), time.Since(syncStart))
+		log.Printf("Critical resource caches synced in %v — UI can render", time.Since(syncStart))
 
-		// Mark initial sync as complete - now we can start recording "add" events
+		// Mark initial sync as complete for critical resources.
+		// "Add" events for deferred resources during their sync will be recorded,
+		// but that's fine — they'll just trigger topology updates.
 		initialSyncComplete = true
+
+		// Build deferred tracking state
+		deferredSynced := make(map[string]bool, len(deferredKeys))
+		for _, k := range deferredKeys {
+			deferredSynced[k] = false
+		}
+		deferredDone := make(chan struct{})
 
 		resourceCache = &ResourceCache{
 			factory:          factory,
@@ -275,6 +380,28 @@ func InitResourceCache() error {
 			stopCh:           stopCh,
 			secretsEnabled:   enabled["secrets"],
 			enabledResources: enabled,
+			deferredSynced:   deferredSynced,
+			deferredDone:     deferredDone,
+		}
+
+		// Phase 2: Wait for deferred informers in background
+		if len(deferredSyncFuncs) > 0 {
+			go func() {
+				deferredStart := time.Now()
+				if cache.WaitForCacheSync(stopCh, deferredSyncFuncs...) {
+					// Mark all deferred as synced
+					resourceCache.deferredMu.Lock()
+					for _, k := range deferredKeys {
+						resourceCache.deferredSynced[k] = true
+					}
+					resourceCache.deferredMu.Unlock()
+					close(deferredDone)
+					logTiming("    Phase 2 sync (%d deferred informers): %v", len(deferredSyncFuncs), time.Since(deferredStart))
+					log.Printf("Deferred resource caches synced in %v (total: %v)", time.Since(deferredStart), time.Since(syncStart))
+				}
+			}()
+		} else {
+			close(deferredDone)
 		}
 	})
 	return initErr
@@ -884,6 +1011,43 @@ func (c *ResourceCache) isEnabled(key string) bool {
 	return c.enabledResources[key]
 }
 
+// isReady returns true if the resource is enabled and, if it's a deferred
+// resource, its informer has finished syncing. Critical resources are always
+// ready once the cache exists (they block startup).
+func (c *ResourceCache) isReady(key string) bool {
+	if !c.isEnabled(key) {
+		return false
+	}
+	if !deferredResources[key] {
+		return true // critical resource — synced before cache was published
+	}
+	c.deferredMu.RLock()
+	defer c.deferredMu.RUnlock()
+	return c.deferredSynced[key]
+}
+
+// IsDeferredSynced returns true when all deferred informers have completed sync.
+func (c *ResourceCache) IsDeferredSynced() bool {
+	if c == nil {
+		return false
+	}
+	select {
+	case <-c.deferredDone:
+		return true
+	default:
+		return false
+	}
+}
+
+// DeferredDone returns a channel that is closed when all deferred informers
+// have completed their initial sync. Use this to trigger topology refreshes.
+func (c *ResourceCache) DeferredDone() <-chan struct{} {
+	if c == nil {
+		return nil
+	}
+	return c.deferredDone
+}
+
 func (c *ResourceCache) Services() listerscorev1.ServiceLister {
 	if c == nil || !c.isEnabled("services") {
 		return nil
@@ -913,28 +1077,28 @@ func (c *ResourceCache) Namespaces() listerscorev1.NamespaceLister {
 }
 
 func (c *ResourceCache) ConfigMaps() listerscorev1.ConfigMapLister {
-	if c == nil || !c.isEnabled("configmaps") {
+	if c == nil || !c.isReady("configmaps") {
 		return nil
 	}
 	return c.factory.Core().V1().ConfigMaps().Lister()
 }
 
 func (c *ResourceCache) Secrets() listerscorev1.SecretLister {
-	if c == nil || !c.isEnabled("secrets") {
+	if c == nil || !c.isReady("secrets") {
 		return nil
 	}
 	return c.factory.Core().V1().Secrets().Lister()
 }
 
 func (c *ResourceCache) Events() listerscorev1.EventLister {
-	if c == nil || !c.isEnabled("events") {
+	if c == nil || !c.isReady("events") {
 		return nil
 	}
 	return c.factory.Core().V1().Events().Lister()
 }
 
 func (c *ResourceCache) PersistentVolumeClaims() listerscorev1.PersistentVolumeClaimLister {
-	if c == nil || !c.isEnabled("persistentvolumeclaims") {
+	if c == nil || !c.isReady("persistentvolumeclaims") {
 		return nil
 	}
 	return c.factory.Core().V1().PersistentVolumeClaims().Lister()
@@ -997,21 +1161,21 @@ func (c *ResourceCache) HorizontalPodAutoscalers() listersautoscalingv2.Horizont
 }
 
 func (c *ResourceCache) PersistentVolumes() listerscorev1.PersistentVolumeLister {
-	if c == nil || !c.isEnabled("persistentvolumes") {
+	if c == nil || !c.isReady("persistentvolumes") {
 		return nil
 	}
 	return c.factory.Core().V1().PersistentVolumes().Lister()
 }
 
 func (c *ResourceCache) StorageClasses() listersstoragev1.StorageClassLister {
-	if c == nil || !c.isEnabled("storageclasses") {
+	if c == nil || !c.isReady("storageclasses") {
 		return nil
 	}
 	return c.factory.Storage().V1().StorageClasses().Lister()
 }
 
 func (c *ResourceCache) PodDisruptionBudgets() listerspolicyv1.PodDisruptionBudgetLister {
-	if c == nil || !c.isEnabled("poddisruptionbudgets") {
+	if c == nil || !c.isReady("poddisruptionbudgets") {
 		return nil
 	}
 	return c.factory.Policy().V1().PodDisruptionBudgets().Lister()

@@ -43,6 +43,7 @@ type AppConfig struct {
 // SetGlobals applies debug/test flags to global state.
 func SetGlobals(cfg AppConfig) {
 	k8s.DebugEvents = cfg.DebugEvents
+	k8s.TimingLogs = cfg.DevMode
 	k8s.ForceInCluster = cfg.FakeInCluster
 	k8s.ForceDisableHelmWrite = cfg.DisableHelmWrite
 	versionpkg.SetCurrent(cfg.Version)
@@ -153,12 +154,15 @@ func CreateServer(cfg AppConfig) *server.Server {
 // Progress is broadcast via SSE so the browser can show updates.
 // Callbacks must be registered via RegisterCallbacks before calling this.
 func InitializeCluster() {
+	clusterStart := time.Now()
+
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{
 		State:       k8s.StateConnecting,
 		Context:     k8s.GetContextName(),
 		ProgressMsg: "Testing cluster connectivity...",
 	})
 
+	t := time.Now()
 	if err := CheckClusterAccess(); err != nil {
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
@@ -169,7 +173,9 @@ func InitializeCluster() {
 		log.Printf("Warning: Cluster not reachable, starting in disconnected mode")
 		return
 	}
+	k8s.LogTiming(" Cluster access check: %v", time.Since(t))
 
+	t = time.Now()
 	if err := k8s.InitAllSubsystems(func(msg string) {
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:       k8s.StateConnecting,
@@ -186,6 +192,8 @@ func InitializeCluster() {
 		log.Printf("Warning: Subsystem init failed, starting in disconnected mode: %v", err)
 		return
 	}
+	k8s.LogTiming(" All subsystems initialized: %v", time.Since(t))
+	k8s.LogTiming(" Total cluster init: %v", time.Since(clusterStart))
 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{
 		State:       k8s.StateConnected,
@@ -195,6 +203,7 @@ func InitializeCluster() {
 
 	// Auto-discover Prometheus in the background so charts are ready immediately
 	go func() {
+		pt := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		client := prometheuspkg.GetClient()
@@ -202,9 +211,9 @@ func InitializeCluster() {
 			return
 		}
 		if _, _, err := client.EnsureConnected(ctx); err != nil {
-			log.Printf("[prometheus] Auto-discovery: %v", err)
+			log.Printf("[prometheus] Auto-discovery failed (%v): %v", time.Since(pt), err)
 		} else {
-			log.Printf("[prometheus] Auto-discovery succeeded")
+			log.Printf("[prometheus] Auto-discovery succeeded (%v)", time.Since(pt))
 		}
 	}()
 }
@@ -243,15 +252,17 @@ func CheckClusterAccess() error {
 			time.Sleep(2 * time.Second)
 		}
 
+		t := time.Now()
 		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		_, err := clientset.Discovery().RESTClient().Get().AbsPath("/version").Do(ctx).Raw()
 		cancel()
 
 		if err == nil {
+			k8s.LogTiming("   Cluster /version check (attempt %d): %v", attempt+1, time.Since(t))
 			return nil
 		}
+		k8s.LogTiming("   Cluster /version check failed (attempt %d): %v (%v)", attempt+1, err, time.Since(t))
 		lastErr = err
-		log.Printf("Cluster connectivity check failed (attempt %d/2): %v", attempt+1, err)
 	}
 
 	return fmt.Errorf("failed to connect to cluster: %w", lastErr)

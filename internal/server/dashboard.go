@@ -35,6 +35,7 @@ type DashboardResponse struct {
 	MetricsServerAvailable bool                        `json:"metricsServerAvailable"`
 	CertificateHealth      *DashboardCertificateHealth `json:"certificateHealth,omitempty"`
 	NodeVersionSkew        *k8s.VersionSkew            `json:"nodeVersionSkew,omitempty"`
+	DeferredLoading        bool                        `json:"deferredLoading,omitempty"` // True while deferred informers (secrets, events, etc.) are still syncing
 }
 
 // DashboardCRDsResponse is the response for CRD counts (loaded lazily)
@@ -217,6 +218,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := DashboardResponse{}
+
+	// Signal to the frontend that some data (events, secrets, configmaps, etc.)
+	// may be incomplete because deferred informers are still syncing.
+	resp.DeferredLoading = !cache.IsDeferredSynced()
 
 	// Cluster info
 	resp.Cluster = s.getDashboardCluster(r.Context())

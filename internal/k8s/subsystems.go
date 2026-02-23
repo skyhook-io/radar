@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"sync"
+	"time"
 )
 
 // InitAllSubsystems initializes all subsystems in the correct order.
@@ -18,34 +20,65 @@ import (
 // The progress callback receives human-readable status messages suitable for
 // display in the UI (e.g. via SSE connection status updates).
 func InitAllSubsystems(progress func(string)) error {
+	subsystemStart := time.Now()
+
 	// 1. Timeline — before caches so events during warmup are captured
 	contextSwitchMu.RLock()
 	tlReinitFn := timelineReinitFunc
 	contextSwitchMu.RUnlock()
 	if tlReinitFn != nil {
 		progress("Initializing timeline...")
+		t := time.Now()
 		if err := tlReinitFn(); err != nil {
 			log.Printf("Warning: timeline init failed: %v", err)
 		}
+		logTiming("   Timeline init: %v", time.Since(t))
 	}
 
-	// 2. Resource cache (typed informers) — critical, everything depends on this
+	// 2. Resource cache (typed informers) — critical, topology depends on this.
+	// Start API resource discovery in parallel since it's independent.
 	progress("Loading workloads...")
+	t := time.Now()
+
+	// Snapshot callback refs before parallel section
+	contextSwitchMu.RLock()
+	hReinitFn := helmReinitFunc
+	trReinitFn := trafficReinitFunc
+	promReinitFn := prometheusReinitFunc
+	contextSwitchMu.RUnlock()
+
+	// Start API discovery in parallel with the resource cache sync.
+	// Discovery calls ServerGroupsAndResources() which is independent of informer sync.
+	var discoveryWg sync.WaitGroup
+	var discoveryErr error
+	discoveryWg.Add(1)
+	go func() {
+		defer discoveryWg.Done()
+		dt := time.Now()
+		if err := InitResourceDiscovery(); err != nil {
+			discoveryErr = err
+		}
+		logTiming("   API resource discovery: %v (parallel)", time.Since(dt))
+	}()
+
+	// Resource cache init (RBAC checks + informer sync) — the dominant cost
 	if err := InitResourceCache(); err != nil {
 		return fmt.Errorf("resource cache init failed: %w", err)
 	}
+	logTiming("   Resource cache init: %v", time.Since(t))
 	if cache := GetResourceCache(); cache != nil {
 		log.Printf("Resource cache initialized with %d resources", cache.GetResourceCount())
 	}
 
-	// 3. API resource discovery
-	progress("Discovering API resources...")
-	if err := InitResourceDiscovery(); err != nil {
-		log.Printf("Warning: resource discovery init failed: %v", err)
+	// Wait for discovery to complete before dynamic cache (which needs discovery data)
+	discoveryWg.Wait()
+	if discoveryErr != nil {
+		log.Printf("Warning: resource discovery init failed: %v", discoveryErr)
 	}
 
-	// 4. Dynamic cache (factory init is synchronous; CRD warmup and discovery kick off async)
+	// 3. Dynamic cache (factory init is synchronous; CRD warmup and discovery kick off async)
 	progress("Loading custom resources...")
+	t = time.Now()
 	if cache := GetResourceCache(); cache != nil {
 		changeCh := cache.ChangesRaw()
 		if err := InitDynamicResourceCache(changeCh); err != nil {
@@ -53,12 +86,9 @@ func InitAllSubsystems(progress func(string)) error {
 		}
 
 		// CRD warmup and full discovery run in background.
-		// Common CRDs appear in topology quickly as they sync;
-		// remaining CRDs appear as DiscoverAllCRDs completes.
 		if dc := GetDynamicResourceCache(); dc != nil {
 			go func() {
-				// Warmup runs in its own recover so a panic there
-				// doesn't prevent full CRD discovery from running.
+				crdStart := time.Now()
 				func() {
 					defer func() {
 						if r := recover(); r != nil {
@@ -67,48 +97,71 @@ func InitAllSubsystems(progress func(string)) error {
 							log.Printf("PANIC in CRD warmup: %v\n%s", r, buf[:n])
 						}
 					}()
+					wt := time.Now()
 					WarmupCommonCRDs()
+					logTiming("   CRD warmup: %v (background)", time.Since(wt))
 				}()
+				dt := time.Now()
 				dc.DiscoverAllCRDs()
+				logTiming("   CRD full discovery: %v (background)", time.Since(dt))
+				logTiming("   CRD total (warmup+discovery): %v (background)", time.Since(crdStart))
 			}()
 		}
 	}
+	logTiming("   Dynamic cache factory init: %v", time.Since(t))
 
-	// 5. Metrics history
-	InitMetricsHistory()
+	// 4. Remaining subsystems — all independent, run in parallel.
+	// These are fast individually but running them in parallel saves the serial sum.
+	t = time.Now()
+	var remainingWg sync.WaitGroup
 
-	// 6. Helm
-	contextSwitchMu.RLock()
-	hReinitFn := helmReinitFunc
-	contextSwitchMu.RUnlock()
+	remainingWg.Add(1)
+	go func() {
+		defer remainingWg.Done()
+		mt := time.Now()
+		InitMetricsHistory()
+		logTiming("   Metrics history init: %v (parallel)", time.Since(mt))
+	}()
+
 	if hReinitFn != nil {
-		progress("Loading Helm releases...")
-		if err := hReinitFn(GetKubeconfigPath()); err != nil {
-			log.Printf("Warning: Helm init failed: %v", err)
-		}
+		remainingWg.Add(1)
+		go func() {
+			defer remainingWg.Done()
+			ht := time.Now()
+			if err := hReinitFn(GetKubeconfigPath()); err != nil {
+				log.Printf("Warning: Helm init failed: %v", err)
+			}
+			logTiming("   Helm init: %v (parallel)", time.Since(ht))
+		}()
 	}
 
-	// 7. Traffic
-	contextSwitchMu.RLock()
-	trReinitFn := trafficReinitFunc
-	contextSwitchMu.RUnlock()
 	if trReinitFn != nil {
-		progress("Initializing traffic analysis...")
-		if err := trReinitFn(); err != nil {
-			log.Printf("Warning: traffic init failed: %v", err)
-		}
+		remainingWg.Add(1)
+		go func() {
+			defer remainingWg.Done()
+			tt := time.Now()
+			if err := trReinitFn(); err != nil {
+				log.Printf("Warning: traffic init failed: %v", err)
+			}
+			logTiming("   Traffic init: %v (parallel)", time.Since(tt))
+		}()
 	}
 
-	// 8. Prometheus metrics client
-	contextSwitchMu.RLock()
-	promReinitFn := prometheusReinitFunc
-	contextSwitchMu.RUnlock()
 	if promReinitFn != nil {
-		progress("Initializing Prometheus metrics...")
-		if err := promReinitFn(); err != nil {
-			log.Printf("Warning: Prometheus init failed: %v", err)
-		}
+		remainingWg.Add(1)
+		go func() {
+			defer remainingWg.Done()
+			pt := time.Now()
+			if err := promReinitFn(); err != nil {
+				log.Printf("Warning: Prometheus init failed: %v", err)
+			}
+			logTiming("   Prometheus init: %v (parallel)", time.Since(pt))
+		}()
 	}
+
+	remainingWg.Wait()
+	logTiming("   Remaining subsystems (parallel): %v", time.Since(t))
+	logTiming(" InitAllSubsystems total: %v", time.Since(subsystemStart))
 
 	return nil
 }

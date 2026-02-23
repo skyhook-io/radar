@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/app"
+	"github.com/skyhook-io/radar/internal/k8s"
 	_ "k8s.io/client-go/plugin/pkg/client/auth" // Register all auth provider plugins (OIDC, GCP, Azure, etc.)
 	"k8s.io/klog/v2"
 )
@@ -19,6 +20,8 @@ var (
 )
 
 func main() {
+	startupStart := time.Now()
+
 	// Parse flags
 	kubeconfig := flag.String("kubeconfig", "", "Path to kubeconfig file (default: ~/.kube/config)")
 	kubeconfigDir := flag.String("kubeconfig-dir", "", "Comma-separated directories containing kubeconfig files (mutually exclusive with --kubeconfig)")
@@ -80,17 +83,23 @@ func main() {
 	// Set global flags
 	app.SetGlobals(cfg)
 
-	// Initialize K8s client
+	// Initialize K8s client (local only — parses kubeconfig, no network)
+	t := time.Now()
 	if err := app.InitializeK8s(cfg); err != nil {
 		log.Fatalf("%v", err)
 	}
+	k8s.LogTiming(" K8s client init: %v", time.Since(t))
 
 	// Build timeline config and register callbacks
+	t = time.Now()
 	timelineStoreCfg := app.BuildTimelineStoreConfig(cfg)
 	app.RegisterCallbacks(cfg, timelineStoreCfg)
+	k8s.LogTiming(" Callbacks registered: %v", time.Since(t))
 
 	// Create server
+	t = time.Now()
 	srv := app.CreateServer(cfg)
+	k8s.LogTiming(" Server created: %v", time.Since(t))
 
 	// Handle shutdown signals
 	sigCh := make(chan os.Signal, 1)
@@ -102,17 +111,17 @@ func main() {
 		os.Exit(0)
 	}()
 
-	// Start server in background so browser can connect while we initialize
+	// Start server in background — wait for it to actually bind the port
+	ready := make(chan struct{})
 	go func() {
-		if err := srv.Start(); err != nil {
+		if err := srv.StartWithReady(ready); err != nil {
 			log.Fatalf("Server error: %v", err)
 		}
 	}()
+	<-ready
+	k8s.LogTiming(" Server listening: %v (since start)", time.Since(startupStart))
 
-	// Give server a moment to start accepting connections
-	time.Sleep(100 * time.Millisecond)
-
-	// Open browser - it can now connect and see progress updates
+	// Open browser — server is confirmed ready to accept connections
 	if !cfg.NoBrowser {
 		url := fmt.Sprintf("http://localhost:%d", cfg.Port)
 		if cfg.Namespace != "" {
@@ -123,6 +132,7 @@ func main() {
 
 	// Now initialize cluster connection and caches (browser will see progress via SSE)
 	app.InitializeCluster()
+	k8s.LogTiming(" Total startup (to connected): %v", time.Since(startupStart))
 
 	// Track opens and maybe prompt to star the repo on GitHub (non-blocking)
 	app.MaybePromptGitHubStar()

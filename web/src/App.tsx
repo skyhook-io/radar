@@ -299,6 +299,11 @@ function AppInner() {
       navigate({ pathname: location.pathname, search: '' }, { replace: true })
     },
     onConnectionStateChange: updateConnectionFromSSE,
+    onDeferredReady: () => {
+      // Deferred informers (secrets, events, configmaps, etc.) have finished syncing.
+      // Refetch dashboard so counts, warning events, and cert health fill in.
+      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+    },
   })
   const [reconnect, isReconnecting] = useRefreshAnimation(reconnectSSE)
 

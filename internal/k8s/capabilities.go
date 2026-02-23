@@ -300,6 +300,7 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	}
 
 	// Phase 1: Check all resources cluster-wide
+	phase1Start := time.Now()
 	var wg sync.WaitGroup
 	var hadErrors atomic.Bool
 	wg.Add(len(checks))
@@ -316,6 +317,7 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	}
 
 	wg.Wait()
+	logTiming("    RBAC phase 1 (cluster-wide, %d checks): %v", len(checks), time.Since(phase1Start))
 
 	// Phase 2: If all namespace-scoped resources failed and we have a fallback namespace,
 	// retry those checks scoped to the specific namespace.

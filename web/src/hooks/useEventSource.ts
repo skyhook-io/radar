@@ -14,6 +14,7 @@ interface UseEventSourceOptions {
   onContextSwitchProgress?: (message: string) => void
   onContextChanged?: (context: string) => void
   onConnectionStateChange?: (status: ConnectionState) => void
+  onDeferredReady?: () => void
 }
 
 const MAX_EVENTS = 100 // Keep last 100 events
@@ -188,6 +189,11 @@ export function useEventSource(
       } catch (e) {
         console.error('Failed to parse context_changed event:', e)
       }
+    })
+
+    // Handle deferred informer sync completion — refetch dashboard data
+    es.addEventListener('deferred_ready', () => {
+      optionsRef.current?.onDeferredReady?.()
     })
 
     // Handle connection state events (for graceful startup)

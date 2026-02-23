@@ -199,6 +199,7 @@ export interface DashboardResponse {
   metricsServerAvailable: boolean
   certificateHealth: DashboardCertificateHealth | null
   nodeVersionSkew: { versions: Record<string, string[]>; minVersion: string; maxVersion: string } | null
+  deferredLoading?: boolean // True while deferred informers (secrets, events, etc.) are still syncing
 }
 
 export interface DashboardCRDsResponse {
