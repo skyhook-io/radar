@@ -16,7 +16,7 @@ Radar's MCP server solves these:
 
 - **Token-optimized** — resources are minified, stripping noise (managed fields, internal annotations, redundant status) while preserving what matters
 - **Enriched data** — topology graphs, health assessments, deduplicated events, filtered logs (prioritizing errors/warnings)
-- **Read-only** — all MCP tools are read-only by design, safer than giving agents kubectl write access
+- **Safe operations** — read tools are read-only; write tools (restart, scale, sync) are clearly annotated and non-destructive
 - **Secret-safe** — Secret data is never exposed, environment values are redacted, log output is scrubbed for API keys and tokens
 - **RBAC-aware** — respects your cluster's RBAC permissions
 - **Vendor-neutral** — works with any MCP-compatible AI tool
@@ -161,6 +161,8 @@ Add to `~/.gemini/settings.json`:
 
 ## Available Tools
 
+### Read Tools
+
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | `get_dashboard` | Cluster health overview — resource counts, problems, warning events, Helm status | `namespace` (optional) |
@@ -170,6 +172,17 @@ Add to `~/.gemini/settings.json`:
 | `get_events` | Recent warning events, deduplicated and sorted by recency | `namespace` (optional), `limit` (optional, default 20) |
 | `get_pod_logs` | Filtered pod logs prioritizing errors/warnings, with secret redaction | `namespace` (required), `name` (required), `container` (optional), `tail_lines` (optional) |
 | `list_namespaces` | List all namespaces with status | (none) |
+| `list_helm_releases` | List all Helm releases with status and health | `namespace` (optional) |
+| `get_helm_release` | Detailed Helm release info with optional values, history, and manifest diff | `namespace` (required), `name` (required), `include` (optional: `values,history,diff`), `diff_revision_1` / `diff_revision_2` (optional) |
+| `get_workload_logs` | Aggregated, AI-filtered logs from all pods of a workload (Deployment, StatefulSet, DaemonSet) | `kind` (required), `namespace` (required), `name` (required), `container` (optional), `tail_lines` (optional) |
+
+### Write Tools
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| `manage_workload` | Restart, scale, or rollback a Deployment, StatefulSet, or DaemonSet | `action` (required: `restart`, `scale`, `rollback`), `kind` (required), `namespace` (required), `name` (required), `replicas` (for scale), `revision` (for rollback) |
+| `manage_cronjob` | Trigger, suspend, or resume a CronJob | `action` (required: `trigger`, `suspend`, `resume`), `namespace` (required), `name` (required) |
+| `manage_gitops` | Manage ArgoCD and FluxCD resources — sync, reconcile, suspend, resume | `action` (required), `tool` (required: `argocd` or `fluxcd`), `namespace` (required), `name` (required), `kind` (FluxCD only) |
 
 ## Available Resources
 
@@ -181,7 +194,7 @@ Add to `~/.gemini/settings.json`:
 
 ## Security
 
-- **Read-only** — all tools and resources are read-only; no cluster modifications
+- **Safe by design** — read tools are strictly read-only; write tools perform non-destructive operations (restart, scale, sync) and are annotated with MCP tool hints so AI clients can distinguish them
 - **Local-only** — MCP server runs on localhost alongside Radar
 - **RBAC-aware** — respects your kubeconfig's RBAC permissions; returns 403 for unauthorized resources
 - **Secret redaction** — Secret `.data` and `.stringData` are never exposed; only key names are shown

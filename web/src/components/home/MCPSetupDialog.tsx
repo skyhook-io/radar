@@ -154,7 +154,8 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
               verbose YAML output.
             </p>
             <p className="text-sm text-theme-text-secondary leading-relaxed">
-              All tools exposed by Radar's MCP server are read-only.
+              Read tools are strictly read-only. Write tools (restart, scale, sync) are
+              non-destructive and annotated so your AI client can distinguish them.
             </p>
           </div>
 
@@ -231,6 +232,36 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
                   { name: 'tail_lines', required: false, desc: 'lines from end (default 200)' },
                 ]},
                 { name: 'list_namespaces', desc: 'List all Kubernetes namespaces with their status. Use to discover available namespaces before filtering other queries.', params: [] },
+                { name: 'list_helm_releases', desc: 'List all Helm releases in the cluster with their status and health. Returns release name, namespace, chart, version, status, and resource health.', params: [
+                  { name: 'namespace', required: false, desc: 'filter to a specific namespace' },
+                ]},
+                { name: 'get_helm_release', desc: 'Get detailed information about a specific Helm release including owned resources and their status. Optionally include values, revision history, or manifest diff between revisions.', params: [
+                  { name: 'namespace', required: true, desc: 'release namespace' },
+                  { name: 'name', required: true, desc: 'release name' },
+                  { name: 'include', required: false, desc: 'values, history, diff' },
+                ]},
+                { name: 'get_workload_logs', desc: 'Get aggregated, AI-filtered logs from all pods of a workload (Deployment, StatefulSet, or DaemonSet). Logs are collected from all matching pods, filtered for errors/warnings, and deduplicated.', params: [
+                  { name: 'kind', required: true, desc: 'deployment, statefulset, or daemonset' },
+                  { name: 'namespace', required: true, desc: 'workload namespace' },
+                  { name: 'name', required: true, desc: 'workload name' },
+                ]},
+                { name: 'manage_workload', desc: 'Perform operations on a workload. \'restart\' triggers a rolling restart, \'scale\' changes the replica count, \'rollback\' reverts to a previous revision.', params: [
+                  { name: 'action', required: true, desc: 'restart, scale, or rollback' },
+                  { name: 'kind', required: true, desc: 'deployment, statefulset, or daemonset' },
+                  { name: 'namespace', required: true, desc: 'workload namespace' },
+                  { name: 'name', required: true, desc: 'workload name' },
+                ]},
+                { name: 'manage_cronjob', desc: 'Perform operations on a CronJob. \'trigger\' creates a manual Job run, \'suspend\' pauses the schedule, \'resume\' re-enables it.', params: [
+                  { name: 'action', required: true, desc: 'trigger, suspend, or resume' },
+                  { name: 'namespace', required: true, desc: 'cronjob namespace' },
+                  { name: 'name', required: true, desc: 'cronjob name' },
+                ]},
+                { name: 'manage_gitops', desc: 'Perform operations on GitOps resources. ArgoCD: sync, suspend, resume. FluxCD: reconcile, suspend, resume.', params: [
+                  { name: 'action', required: true, desc: 'sync/reconcile, suspend, or resume' },
+                  { name: 'tool', required: true, desc: 'argocd or fluxcd' },
+                  { name: 'namespace', required: true, desc: 'resource namespace' },
+                  { name: 'name', required: true, desc: 'resource name' },
+                ]},
               ].map((tool) => (
                 <div key={tool.name} className="px-3 py-2 rounded bg-theme-base/50 space-y-1.5">
                   <code className="text-[11px] font-mono text-purple-400">{tool.name}</code>
