@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"log"
 	"strings"
 	"time"
 
@@ -165,10 +164,12 @@ func argoSetAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 	}
 
 	var patch map[string]any
-	action := "suspended"
+	action := "suspend"
+	pastAction := "suspended"
 
 	if enable {
-		action = "resumed"
+		action = "resume"
+		pastAction = "resumed"
 		prune := true
 		selfHeal := true
 
@@ -241,7 +242,7 @@ func argoSetAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 
 	return toJSONResult(map[string]string{
 		"status":  "ok",
-		"message": fmt.Sprintf("ArgoCD Application %s/%s auto-sync %s", namespace, name, action),
+		"message": fmt.Sprintf("ArgoCD Application %s/%s auto-sync %s", namespace, name, pastAction),
 	})
 }
 
@@ -268,7 +269,6 @@ func fluxReconcile(ctx context.Context, dynClient dynamic.Interface, gvr schema.
 		if apierrors.IsNotFound(err) {
 			return nil, nil, fmt.Errorf("FluxCD %s %s/%s not found", kind, namespace, name)
 		}
-		log.Printf("[mcp] Failed to reconcile FluxCD %s %s/%s: %v", kind, namespace, name, err)
 		return nil, nil, fmt.Errorf("failed to reconcile %s %s/%s: %w", kind, namespace, name, err)
 	}
 
@@ -299,7 +299,6 @@ func fluxSetSuspend(ctx context.Context, dynClient dynamic.Interface, gvr schema
 		if apierrors.IsNotFound(err) {
 			return nil, nil, fmt.Errorf("FluxCD %s %s/%s not found", kind, namespace, name)
 		}
-		log.Printf("[mcp] Failed to update FluxCD %s %s/%s: %v", kind, namespace, name, err)
 		return nil, nil, fmt.Errorf("failed to update %s %s/%s: %w", kind, namespace, name, err)
 	}
 

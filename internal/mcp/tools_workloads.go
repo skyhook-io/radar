@@ -64,6 +64,9 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 		if input.Replicas == nil {
 			return nil, nil, fmt.Errorf("replicas is required for scale action")
 		}
+		if kind == "daemonsets" {
+			return nil, nil, fmt.Errorf("scaling is not supported for DaemonSets (only Deployments and StatefulSets)")
+		}
 		if err := k8s.ScaleWorkload(ctx, kind, input.Namespace, input.Name, *input.Replicas); err != nil {
 			return nil, nil, fmt.Errorf("scale failed: %w", err)
 		}
@@ -164,11 +167,31 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 		tailLines = int64(input.TailLines)
 	}
 
+	// Validate container name if specified
+	if input.Container != "" {
+		found := false
+		for _, pod := range pods {
+			for _, c := range pod.Spec.Containers {
+				if c.Name == input.Container {
+					found = true
+					break
+				}
+			}
+			if found {
+				break
+			}
+		}
+		if !found {
+			return nil, nil, fmt.Errorf("container %q not found in any pod of %s %s/%s", input.Container, kind, input.Namespace, input.Name)
+		}
+	}
+
 	// Collect logs from all pods concurrently
 	type logEntry struct {
-		Pod       string                   `json:"pod"`
-		Container string                   `json:"container"`
-		Logs      aicontext.FilteredLogs   `json:"logs"`
+		Pod       string                 `json:"pod"`
+		Container string                 `json:"container"`
+		Logs      aicontext.FilteredLogs `json:"logs,omitempty"`
+		Error     string                 `json:"error,omitempty"`
 	}
 
 	var allLogs []logEntry
@@ -188,9 +211,18 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 					Timestamps: true,
 				}
 
+				entry := logEntry{
+					Pod:       podName,
+					Container: containerName,
+				}
+
 				stream, err := client.CoreV1().Pods(input.Namespace).GetLogs(podName, opts).Stream(ctx)
 				if err != nil {
 					log.Printf("[mcp] Failed to get logs for %s/%s: %v", podName, containerName, err)
+					entry.Error = fmt.Sprintf("failed to get logs: %v", err)
+					mu.Lock()
+					allLogs = append(allLogs, entry)
+					mu.Unlock()
 					return
 				}
 				defer stream.Close()
@@ -198,18 +230,18 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 				data, err := io.ReadAll(stream)
 				if err != nil {
 					log.Printf("[mcp] Failed to read logs for %s/%s: %v", podName, containerName, err)
+					entry.Error = fmt.Sprintf("failed to read logs: %v", err)
+					mu.Lock()
+					allLogs = append(allLogs, entry)
+					mu.Unlock()
 					return
 				}
 
 				// Apply AI-optimized log filtering
-				filtered := aicontext.FilterLogs(string(data))
+				entry.Logs = aicontext.FilterLogs(string(data))
 
 				mu.Lock()
-				allLogs = append(allLogs, logEntry{
-					Pod:       podName,
-					Container: containerName,
-					Logs:      filtered,
-				})
+				allLogs = append(allLogs, entry)
 				mu.Unlock()
 			}(pod.Name, c)
 		}

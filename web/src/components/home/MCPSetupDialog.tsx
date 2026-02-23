@@ -239,17 +239,23 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
                   { name: 'namespace', required: true, desc: 'release namespace' },
                   { name: 'name', required: true, desc: 'release name' },
                   { name: 'include', required: false, desc: 'values, history, diff' },
+                  { name: 'diff_revision_1', required: false, desc: 'first revision for diff' },
+                  { name: 'diff_revision_2', required: false, desc: 'second revision for diff (defaults to current)' },
                 ]},
                 { name: 'get_workload_logs', desc: 'Get aggregated, AI-filtered logs from all pods of a workload (Deployment, StatefulSet, or DaemonSet). Logs are collected from all matching pods, filtered for errors/warnings, and deduplicated.', params: [
                   { name: 'kind', required: true, desc: 'deployment, statefulset, or daemonset' },
                   { name: 'namespace', required: true, desc: 'workload namespace' },
                   { name: 'name', required: true, desc: 'workload name' },
+                  { name: 'container', required: false, desc: 'specific container name' },
+                  { name: 'tail_lines', required: false, desc: 'lines per pod (default 100)' },
                 ]},
                 { name: 'manage_workload', desc: 'Perform operations on a workload. \'restart\' triggers a rolling restart, \'scale\' changes the replica count, \'rollback\' reverts to a previous revision.', params: [
                   { name: 'action', required: true, desc: 'restart, scale, or rollback' },
                   { name: 'kind', required: true, desc: 'deployment, statefulset, or daemonset' },
                   { name: 'namespace', required: true, desc: 'workload namespace' },
                   { name: 'name', required: true, desc: 'workload name' },
+                  { name: 'replicas', required: false, desc: 'target replica count (for scale)' },
+                  { name: 'revision', required: false, desc: 'target revision (for rollback)' },
                 ]},
                 { name: 'manage_cronjob', desc: 'Perform operations on a CronJob. \'trigger\' creates a manual Job run, \'suspend\' pauses the schedule, \'resume\' re-enables it.', params: [
                   { name: 'action', required: true, desc: 'trigger, suspend, or resume' },
@@ -261,6 +267,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
                   { name: 'tool', required: true, desc: 'argocd or fluxcd' },
                   { name: 'namespace', required: true, desc: 'resource namespace' },
                   { name: 'name', required: true, desc: 'resource name' },
+                  { name: 'kind', required: false, desc: 'FluxCD resource kind (e.g. kustomization, helmrelease)' },
                 ]},
               ].map((tool) => (
                 <div key={tool.name} className="px-3 py-2 rounded bg-theme-base/50 space-y-1.5">

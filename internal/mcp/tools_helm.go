@@ -3,6 +3,8 @@ package mcp
 import (
 	"context"
 	"fmt"
+	"log"
+	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -78,7 +80,10 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 
 	if includes["values"] {
 		values, err := helmClient.GetValues(input.Namespace, input.Name, false)
-		if err == nil {
+		if err != nil {
+			log.Printf("[mcp] Failed to get values for %s/%s: %v", input.Namespace, input.Name, err)
+			result["valuesError"] = err.Error()
+		} else {
 			result["values"] = values.UserSupplied
 		}
 	}
@@ -93,7 +98,10 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 			rev2 = detail.Revision // default to current revision
 		}
 		diff, err := helmClient.GetManifestDiff(input.Namespace, input.Name, input.DiffRev1, rev2)
-		if err == nil {
+		if err != nil {
+			log.Printf("[mcp] Failed to get manifest diff for %s/%s: %v", input.Namespace, input.Name, err)
+			result["diffError"] = err.Error()
+		} else {
 			result["diff"] = diff
 		}
 	}
@@ -107,37 +115,10 @@ func parseIncludes(s string) map[string]bool {
 	if s == "" {
 		return result
 	}
-	for _, part := range splitAndTrim(s) {
-		result[part] = true
-	}
-	return result
-}
-
-// splitAndTrim splits a comma-separated string and trims whitespace.
-func splitAndTrim(s string) []string {
-	var parts []string
-	start := 0
-	for i := 0; i <= len(s); i++ {
-		if i == len(s) || s[i] == ',' {
-			part := trimSpace(s[start:i])
-			if part != "" {
-				parts = append(parts, part)
-			}
-			start = i + 1
+	for _, part := range strings.Split(s, ",") {
+		if trimmed := strings.TrimSpace(part); trimmed != "" {
+			result[trimmed] = true
 		}
 	}
-	return parts
-}
-
-// trimSpace trims leading and trailing whitespace.
-func trimSpace(s string) string {
-	start := 0
-	for start < len(s) && (s[start] == ' ' || s[start] == '\t') {
-		start++
-	}
-	end := len(s)
-	for end > start && (s[end-1] == ' ' || s[end-1] == '\t') {
-		end--
-	}
-	return s[start:end]
+	return result
 }

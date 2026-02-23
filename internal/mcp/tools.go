@@ -40,12 +40,15 @@ func logToolCall[In any](name string, handler func(context.Context, *mcp.CallToo
 }
 
 func registerTools(server *mcp.Server) {
+	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true}
+
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_dashboard",
 		Description: "Get cluster health overview including resource counts, " +
 			"problems (failing pods, unhealthy deployments), recent warning events, " +
 			"and Helm release status. Start here to understand cluster state before " +
 			"drilling into specific resources.",
+		Annotations: readOnly,
 	}, logToolCall("get_dashboard", handleGetDashboard))
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -53,6 +56,7 @@ func registerTools(server *mcp.Server) {
 		Description: "List Kubernetes resources of a given kind with minified summaries. " +
 			"Supports all built-in kinds (pods, deployments, services, etc.) and CRDs. " +
 			"Use to discover what's running before inspecting individual resources.",
+		Annotations: readOnly,
 	}, logToolCall("list_resources", handleListResources))
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -60,6 +64,7 @@ func registerTools(server *mcp.Server) {
 		Description: "Get detailed information about a single Kubernetes resource. " +
 			"Returns minified spec, status, and metadata. " +
 			"Use after list_resources to drill into a specific resource.",
+		Annotations: readOnly,
 	}, logToolCall("get_resource", handleGetResource))
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -67,12 +72,14 @@ func registerTools(server *mcp.Server) {
 		Description: "Get the topology graph showing relationships between Kubernetes resources. " +
 			"Returns nodes and edges representing Deployments, Services, Ingresses, Pods, etc. " +
 			"Use 'traffic' view for network flow or 'resources' view for ownership hierarchy.",
+		Annotations: readOnly,
 	}, logToolCall("get_topology", handleGetTopology))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_events",
 		Description: "Get recent Kubernetes warning events, deduplicated and sorted by recency. " +
 			"Useful for diagnosing issues — shows event reason, message, and occurrence count.",
+		Annotations: readOnly,
 	}, logToolCall("get_events", handleGetEvents))
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -80,17 +87,17 @@ func registerTools(server *mcp.Server) {
 		Description: "Get filtered log lines from a pod, prioritizing errors and warnings. " +
 			"Returns diagnostically relevant lines (errors, panics, stack traces) or " +
 			"falls back to the last 20 lines if no error patterns match.",
+		Annotations: readOnly,
 	}, logToolCall("get_pod_logs", handleGetPodLogs))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_namespaces",
 		Description: "List all Kubernetes namespaces with their status. " +
 			"Use to discover available namespaces before filtering other queries.",
+		Annotations: readOnly,
 	}, logToolCall("list_namespaces", handleListNamespaces))
 
 	// --- Helm tools (read-only) ---
-
-	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true}
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_helm_releases",
