@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, Copy, Check, Tag, AlertTriangle, CheckCircle } from 'lucide-react'
+import { ChevronDown, ChevronRight, Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatAge } from './resource-utils'
+import { Tooltip } from '../ui/Tooltip'
 
 // ============================================================================
 // UI COMPONENTS
@@ -269,7 +270,11 @@ export function MetadataSection({ data }: { data: any }) {
         <Property label="UID" value={meta.uid} />
         <Property label="Resource Version" value={meta.resourceVersion} />
         <Property label="Generation" value={meta.generation} />
-        <Property label="Created" value={meta.creationTimestamp ? formatAge(meta.creationTimestamp) : '-'} />
+        <Property label="Created" value={meta.creationTimestamp ? (
+          <Tooltip content={new Date(meta.creationTimestamp).toLocaleString()}>
+            <span className="border-b border-dotted border-theme-text-tertiary cursor-help">{formatAge(meta.creationTimestamp)}</span>
+          </Tooltip>
+        ) : '-'} />
       </PropertyList>
     </Section>
   )
@@ -311,6 +316,111 @@ export function PodTemplateSection({ template }: { template: any }) {
         </div>
       ))}
     </div>
+  )
+}
+
+// ============================================================================
+// EXTERNAL LINKS SECTION
+// ============================================================================
+
+const A8R_LINK_KEYS: Record<string, string> = {
+  'a8r.io/runbook': 'Runbook',
+  'a8r.io/documentation': 'Documentation',
+  'a8r.io/repository': 'Repository',
+  'a8r.io/logs': 'Logs',
+  'a8r.io/chat': 'Chat',
+  'a8r.io/incidents': 'Incidents',
+  'a8r.io/bugs': 'Bugs',
+}
+
+const A8R_TEXT_KEYS: Record<string, string> = {
+  'a8r.io/owner': 'Owner',
+  'a8r.io/description': 'Description',
+}
+
+export function ExternalLinksSection({ data }: { data: any }) {
+  const annotations = data.metadata?.annotations
+  if (!annotations) return null
+
+  const links: { label: string; url: string }[] = []
+  const textProps: { label: string; value: string }[] = []
+
+  // ArgoCD external link
+  const argoLink = annotations['link.argocd.argoproj.io/external-link']
+  if (argoLink) links.push({ label: 'External Link', url: argoLink })
+
+  // a8r.io links
+  for (const [key, label] of Object.entries(A8R_LINK_KEYS)) {
+    const val = annotations[key]
+    if (val) links.push({ label, url: val })
+  }
+
+  // a8r.io text properties
+  for (const [key, label] of Object.entries(A8R_TEXT_KEYS)) {
+    const val = annotations[key]
+    if (val) textProps.push({ label, value: val })
+  }
+
+  if (links.length === 0 && textProps.length === 0) return null
+
+  return (
+    <Section title={`External Info (${links.length + textProps.length})`} icon={ExternalLink} defaultExpanded>
+      <div className="space-y-2">
+        {textProps.map(({ label, value }) => (
+          <div key={label} className="text-sm">
+            <span className="text-theme-text-tertiary">{label}: </span>
+            <span className="text-theme-text-primary">{value}</span>
+          </div>
+        ))}
+        {links.map(({ label, url }) => (
+          <div key={label} className="text-sm">
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-blue-400 hover:text-blue-300 hover:underline inline-flex items-center gap-1"
+            >
+              {label}
+              <ExternalLink className="w-3 h-3" />
+            </a>
+          </div>
+        ))}
+      </div>
+    </Section>
+  )
+}
+
+// ============================================================================
+// APP INFO SECTION (app.kubernetes.io/* labels)
+// ============================================================================
+
+const APP_LABELS: Record<string, string> = {
+  'app.kubernetes.io/name': 'App Name',
+  'app.kubernetes.io/version': 'Version',
+  'app.kubernetes.io/component': 'Component',
+  'app.kubernetes.io/part-of': 'Part Of',
+  'app.kubernetes.io/managed-by': 'Managed By',
+  'app.kubernetes.io/instance': 'Instance',
+}
+
+export function AppInfoSection({ data }: { data: any }) {
+  const labels = data.metadata?.labels
+  if (!labels) return null
+
+  const entries = Object.entries(APP_LABELS)
+    .map(([key, label]) => ({ label, value: labels[key] }))
+    .filter(({ value }) => value)
+
+  if (entries.length === 0) return null
+
+  return (
+    <Section title="App Info" icon={Layers} defaultExpanded>
+      <PropertyList>
+        {entries.map(({ label, value }) => (
+          <Property key={label} label={label} value={value} />
+        ))}
+      </PropertyList>
+    </Section>
   )
 }
 

@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink } from '../drawer-components'
-import { formatResources } from '../resource-utils'
+import { formatResources, formatDuration } from '../resource-utils'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 import { useOpenTerminal, useOpenLogs } from '../../dock'
 import { Tooltip } from '../../ui/Tooltip'
@@ -10,6 +10,45 @@ import { useCanExec, useCanViewLogs, useCanPortForward } from '../../../contexts
 import { usePodMetrics, usePodMetricsHistory, usePrometheusStatus } from '../../../api/client'
 import { MetricsChart } from '../../ui/MetricsChart'
 import { ImageFilesystemModal } from '../ImageFilesystemModal'
+
+function parseValidDate(dateStr: string): Date | null {
+  const d = new Date(dateStr)
+  return isNaN(d.getTime()) ? null : d
+}
+
+function formatMsAgo(dateStr: string): string | null {
+  const d = parseValidDate(dateStr)
+  if (!d) return null
+  const ms = Date.now() - d.getTime()
+  if (ms < 60000) return 'just now'
+  if (ms < 3600000) return `${Math.floor(ms / 60000)}m ago`
+  if (ms < 86400000) return `${Math.floor(ms / 3600000)}h ago`
+  return `${Math.floor(ms / 86400000)}d ago`
+}
+
+function getRestartRecency(finishedAt: string | undefined, restarts: number): { color: string; label: string | null } {
+  const d = finishedAt ? parseValidDate(finishedAt) : null
+  const ms = d ? Date.now() - d.getTime() : null
+
+  if (ms !== null) {
+    let color = 'text-theme-text-tertiary'
+    if (ms < 10 * 60 * 1000) color = 'text-red-400'
+    else if (ms < 60 * 60 * 1000) color = 'text-yellow-400'
+    const label = formatMsAgo(finishedAt!)
+    return { color, label }
+  }
+
+  return { color: restarts > 5 ? 'text-red-400' : 'text-yellow-400', label: null }
+}
+
+function getRunDuration(startedAt: string, finishedAt: string): string | null {
+  const start = parseValidDate(startedAt)
+  const end = parseValidDate(finishedAt)
+  if (!start || !end) return null
+  const dur = end.getTime() - start.getTime()
+  if (dur <= 0) return null
+  return formatDuration(dur, true)
+}
 
 interface PodRendererProps {
   data: any
@@ -375,11 +414,14 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
                   >
                     Image: {container.image}
                   </button>
-                  {restarts > 0 && (
-                    <div className={restarts > 5 ? 'text-red-400' : 'text-yellow-400'}>
-                      Restarts: {restarts}
-                    </div>
-                  )}
+                  {restarts > 0 && (() => {
+                    const { color, label } = getRestartRecency(lastTermination?.finishedAt, restarts)
+                    return (
+                      <div className={color}>
+                        Restarts: {restarts}{label ? ` (last: ${label})` : ''}
+                      </div>
+                    )
+                  })()}
                   {/* Show current waiting reason (e.g., CrashLoopBackOff) */}
                   {currentWaiting?.reason && currentWaiting.reason !== 'ContainerCreating' && (
                     <div className="text-red-400 flex items-center gap-1">
@@ -402,14 +444,29 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
                   )}
                   {/* Show last termination info if container restarted */}
                   {lastTermination && restarts > 0 && !currentTerminated && (
-                    <div className="text-amber-400/80 flex items-center gap-1">
-                      <span className="font-medium">Last exit: {lastTermination.reason || 'Error'}</span>
-                      {lastTermination.exitCode !== undefined && lastTermination.exitCode !== 0 && (
-                        <span className="text-theme-text-tertiary">(code {lastTermination.exitCode})</span>
-                      )}
-                      {lastTermination.reason === 'OOMKilled' && container.resources?.limits?.memory && (
-                        <span className="text-theme-text-tertiary">— limit: {container.resources.limits.memory}</span>
-                      )}
+                    <div className="text-amber-400/80 space-y-0.5">
+                      <div className="flex items-center gap-1">
+                        <span className="font-medium">Last exit: {lastTermination.reason || 'Error'}</span>
+                        {lastTermination.exitCode !== undefined && lastTermination.exitCode !== 0 && (
+                          <span className="text-theme-text-tertiary">(code {lastTermination.exitCode})</span>
+                        )}
+                        {lastTermination.reason === 'OOMKilled' && container.resources?.limits?.memory && (
+                          <span className="text-theme-text-tertiary">— limit: {container.resources.limits.memory}</span>
+                        )}
+                      </div>
+                      {lastTermination.finishedAt && (() => {
+                        const agoLabel = formatMsAgo(lastTermination.finishedAt)
+                        if (!agoLabel) return null
+                        const runDur = lastTermination.startedAt
+                          ? getRunDuration(lastTermination.startedAt, lastTermination.finishedAt)
+                          : null
+                        return (
+                          <div className="text-theme-text-tertiary flex items-center gap-1">
+                            <span>Terminated {agoLabel}</span>
+                            {runDur && <span>(ran {runDur})</span>}
+                          </div>
+                        )
+                      })()}
                     </div>
                   )}
                   {container.ports && container.ports.length > 0 && (

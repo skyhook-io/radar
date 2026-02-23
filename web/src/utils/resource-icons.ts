@@ -132,6 +132,12 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   triggerauthentication: KeyRound,
   clustertriggerauthentication: KeyRound,
 
+  // Prometheus Operator
+  servicemonitor: Radio,
+  prometheusrule: ShieldAlert,
+  podmonitor: Radio,
+  alertmanager: ShieldAlert,
+
   // PDB
   poddisruptionbudget: ShieldCheck,
 

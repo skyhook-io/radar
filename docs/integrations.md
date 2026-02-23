@@ -202,6 +202,41 @@ All provider-specific NodeClass variants are automatically detected and supporte
 
 ---
 
+## Prometheus Operator
+
+[Prometheus Operator](https://prometheus-operator.dev/) simplifies Prometheus setup on Kubernetes, providing CRDs for defining monitoring targets, alerting rules, and scrape configurations declaratively.
+
+### What Radar Shows
+
+**ServiceMonitor Detail View:**
+- Status conditions
+- Job label and scrape endpoint configuration (port, path, interval, scheme)
+- Service selector (matchLabels)
+- Namespace selector scope
+
+**PrometheusRule Detail View:**
+- Rule group breakdown with per-group rule counts
+- Alert rules vs recording rules summary
+- Group evaluation intervals
+
+**PodMonitor Detail View:**
+- Pod metrics endpoint configuration (port, path, interval, scheme)
+- Pod selector (matchLabels)
+- Namespace selector scope
+
+**Resource Browser:** Smart columns show status, endpoint count, selectors, and job labels at a glance.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| ServiceMonitor | `monitoring.coreos.com/v1` | — | Yes | Yes |
+| PodMonitor | `monitoring.coreos.com/v1` | — | Yes | Yes |
+| PrometheusRule | `monitoring.coreos.com/v1` | — | Yes | Yes |
+| Alertmanager | `monitoring.coreos.com/v1` | — | Generic | Yes |
+
+---
+
 ## Trivy Operator
 
 [Trivy Operator](https://aquasecurity.github.io/trivy-operator/) continuously scans your cluster for vulnerabilities, misconfigurations, exposed secrets, and license compliance issues.

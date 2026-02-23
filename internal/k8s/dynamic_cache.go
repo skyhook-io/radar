@@ -877,6 +877,10 @@ func WarmupCommonCRDs() {
 		"ClusterTriggerAuthentication", // KEDA
 		"GatewayClass",                 // Gateway API
 		"VerticalPodAutoscaler",        // VPA
+		"ServiceMonitor",               // Prometheus Operator
+		"PodMonitor",                   // Prometheus Operator
+		"PrometheusRule",               // Prometheus Operator
+		"Alertmanager",                 // Prometheus Operator
 	}
 
 	var gvrs []schema.GroupVersionResource

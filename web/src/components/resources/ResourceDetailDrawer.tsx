@@ -73,11 +73,14 @@ import {
   MetadataSection,
   EventsSection,
   RelatedResourcesSection,
+  ExternalLinksSection,
+  AppInfoSection,
   getKindColor,
   formatKindName,
 } from './drawer-components'
 import { getNodePoolStatus, getNodeClaimStatus, getEC2NodeClassStatus } from './resource-utils-karpenter'
 import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda'
+import { getServiceMonitorStatus, getPrometheusRuleStatus, getPodMonitorStatus } from './resource-utils-prometheus'
 import {
   PodRenderer,
   WorkloadRenderer,
@@ -134,6 +137,9 @@ import {
   KedaScaledJobRenderer,
   KedaTriggerAuthRenderer,
   VPARenderer,
+  ServiceMonitorRenderer,
+  PrometheusRuleRenderer,
+  PodMonitorRenderer,
 } from './renderers'
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import { PortForwardButton } from '../portforward/PortForwardButton'
@@ -1616,6 +1622,7 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
     'kustomizations', 'helmreleases', 'alerts', 'applications',
     'nodepools', 'nodeclaims', 'ec2nodeclasses', 'scaledobjects', 'scaledjobs',
     'triggerauthentications', 'clustertriggerauthentications',
+    'servicemonitors', 'prometheusrules', 'podmonitors',
     'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
     'rbacassessmentreports', 'clusterrbacassessmentreports',
     'clustercompliancereports', 'sbomreports', 'clustersbomreports',
@@ -1683,9 +1690,16 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
       {kind === 'clustercompliancereports' && <ClusterComplianceReportRenderer data={data} />}
       {(kind === 'sbomreports' || kind === 'clustersbomreports') && <SbomReportRenderer data={data} />}
       {kind === 'verticalpodautoscalers' && <VPARenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'servicemonitors' && <ServiceMonitorRenderer data={data} />}
+      {kind === 'prometheusrules' && <PrometheusRuleRenderer data={data} />}
+      {kind === 'podmonitors' && <PodMonitorRenderer data={data} />}
 
       {/* Generic renderer for CRDs and unknown resource types */}
       {!isKnownKind && <GenericRenderer data={data} />}
+
+      {/* App Info and External Links - identity context, shown early */}
+      <AppInfoSection data={data} />
+      <ExternalLinksSection data={data} />
 
       {/* Prometheus Metrics Charts */}
       <PrometheusCharts kind={data?.kind || resource.kind} namespace={resource.namespace} name={resource.name} />
@@ -1880,6 +1894,21 @@ function getResourceStatus(kind: string, data: any): { text: string; color: stri
 
   if (k === 'scaledjobs') {
     const status = getScaledJobStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'servicemonitors') {
+    const status = getServiceMonitorStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'prometheusrules') {
+    const status = getPrometheusRuleStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'podmonitors') {
+    const status = getPodMonitorStatus(data)
     return { text: status.text, color: status.color }
   }
 

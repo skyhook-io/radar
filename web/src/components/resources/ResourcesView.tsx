@@ -24,6 +24,8 @@ import {
   Pin,
   Trash2,
   Tag,
+  Copy,
+  Check,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { ResourceBar } from '../ui/ResourceBar'
@@ -130,6 +132,7 @@ import { VulnerabilityReportCell, ConfigAuditReportCell, ExposedSecretReportCell
 import { CertificateCell, CertificateRequestCell, ClusterIssuerCell, IssuerCell, OrderCell, ChallengeCell } from './renderers/certmanager-cells'
 import { NodePoolCell, NodeClaimCell, EC2NodeClassCell } from './renderers/karpenter-cells'
 import { ScaledObjectCell, ScaledJobCell, TriggerAuthenticationCell, ClusterTriggerAuthenticationCell } from './renderers/keda-cells'
+import { ServiceMonitorCell, PrometheusRuleCell, PodMonitorCell } from './renderers/prometheus-cells'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
@@ -540,6 +543,31 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'secretTargetRef', label: 'Secret Refs', width: 'w-20' },
     { key: 'env', label: 'Env Vars', width: 'w-20' },
     { key: 'hashiCorpVault', label: 'Vault', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  servicemonitors: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'endpoints', label: 'Endpoints', width: 'w-20', tooltip: 'Number of scrape endpoints' },
+    { key: 'jobLabel', label: 'Job Label', width: 'w-32' },
+    { key: 'selector', label: 'Selector', width: 'w-48' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  prometheusrules: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'groups', label: 'Groups', width: 'w-20' },
+    { key: 'rules', label: 'Rules', width: 'w-20', tooltip: 'Total alert + recording rules' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  podmonitors: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'endpoints', label: 'Endpoints', width: 'w-20', tooltip: 'Number of pod metrics endpoints' },
+    { key: 'selector', label: 'Selector', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-20' },
   ],
   grpcroutes: [
@@ -3087,6 +3115,26 @@ const ResourceRow = forwardRef<HTMLTableCellElement, ResourceRowProps>(
   }
 )
 
+function CopyNameButton({ name }: { name: string }) {
+  const [copied, setCopied] = useState(false)
+  if (!name) return null
+  return (
+    <button
+      onClick={(e) => {
+        e.stopPropagation()
+        navigator.clipboard.writeText(name).then(() => {
+          setCopied(true)
+          setTimeout(() => setCopied(false), 1500)
+        }).catch(() => {})
+      }}
+      className="shrink-0 p-0.5 text-theme-text-tertiary hover:text-theme-text-primary opacity-0 group-hover/row:opacity-100 transition-opacity"
+      title="Copy name"
+    >
+      {copied ? <Check className="w-3 h-3 text-green-400" /> : <Copy className="w-3 h-3" />}
+    </button>
+  )
+}
+
 interface CellContentProps {
   resource: any
   kind: string
@@ -3107,6 +3155,7 @@ function CellContent({ resource, kind, column, majorityNodeMinorVersion }: CellC
             {meta.name}
           </span>
         </Tooltip>
+        <CopyNameButton name={meta.name} />
         {isTerminating && (
           <Tooltip content="Resource is being deleted (has deletionTimestamp set). May be stuck due to finalizers.">
             <span className="shrink-0 flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium bg-red-500/15 text-red-600 dark:text-red-400 rounded">
@@ -3227,6 +3276,13 @@ function CellContent({ resource, kind, column, majorityNodeMinorVersion }: CellC
       return <NodeClaimCell resource={resource} column={column} />
     case 'ec2nodeclasses':
       return <EC2NodeClassCell resource={resource} column={column} />
+    // Prometheus Operator
+    case 'servicemonitors':
+      return <ServiceMonitorCell resource={resource} column={column} />
+    case 'prometheusrules':
+      return <PrometheusRuleCell resource={resource} column={column} />
+    case 'podmonitors':
+      return <PodMonitorCell resource={resource} column={column} />
     // KEDA
     case 'scaledobjects':
       return <ScaledObjectCell resource={resource} column={column} />
