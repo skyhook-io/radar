@@ -337,6 +337,11 @@ func (s *Server) SetUpdater(u *updater.Updater) {
 	s.updater = u
 }
 
+// Handler returns the server's HTTP handler for use with httptest.
+func (s *Server) Handler() http.Handler {
+	return s.router
+}
+
 // Stop gracefully stops the server
 func (s *Server) Stop() {
 	s.broadcaster.Stop()
