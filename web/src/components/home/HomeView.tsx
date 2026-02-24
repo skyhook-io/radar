@@ -1,4 +1,4 @@
-import { useDashboard, useDashboardCRDs } from '../../api/client'
+import { useDashboard, useDashboardCRDs, useDashboardHelm } from '../../api/client'
 import type { DashboardResponse } from '../../api/client'
 import type { ExtendedMainView, Topology, SelectedResource } from '../../types'
 import { kindToPlural } from '../../utils/navigation'
@@ -21,8 +21,9 @@ interface HomeViewProps {
 
 export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToResourceKind, onNavigateToResource }: HomeViewProps) {
   const { data, isLoading, error } = useDashboard(namespaces)
-  // CRDs load lazily after main dashboard to keep initial load fast
+  // CRDs and Helm load lazily after main dashboard to keep initial load fast
   const { data: crdsData } = useDashboardCRDs(namespaces)
+  const { data: helmData } = useDashboardHelm(namespaces)
 
   if (isLoading) {
     return (
@@ -77,7 +78,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
               onNavigate={() => onNavigateToView('topology')}
             />
             <HelmSummary
-              data={data.helmReleases}
+              data={helmData}
               onNavigate={() => onNavigateToView('helm')}
             />
             <ActivitySummary

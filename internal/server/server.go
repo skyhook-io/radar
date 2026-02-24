@@ -127,6 +127,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/version-check", s.handleVersionCheck)
 			r.Get("/dashboard", s.handleDashboard)
 			r.Get("/dashboard/crds", s.handleDashboardCRDs)
+			r.Get("/dashboard/helm", s.handleDashboardHelm)
 			r.Get("/cluster-info", s.handleClusterInfo)
 			r.Get("/capabilities", s.handleCapabilities)
 			r.Get("/topology", s.handleTopology)

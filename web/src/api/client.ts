@@ -194,7 +194,6 @@ export interface DashboardResponse {
   recentChanges: DashboardChange[]
   topologySummary: DashboardTopologySummary
   trafficSummary: DashboardTrafficSummary | null
-  helmReleases: DashboardHelmSummary
   metrics: DashboardMetrics | null
   metricsServerAvailable: boolean
   certificateHealth: DashboardCertificateHealth | null
@@ -241,6 +240,17 @@ export function useDashboardCRDs(namespaces: string[] = []) {
     queryFn: () => fetchJSON(`/dashboard/crds${params}`),
     staleTime: 30000, // 30 seconds - less frequent updates
     refetchInterval: 60000, // Refresh every minute
+  })
+}
+
+// Helm summary - loaded lazily after main dashboard (Helm SDK lists K8s secrets, ~2-3s)
+export function useDashboardHelm(namespaces: string[] = []) {
+  const params = namespaces.length > 0 ? `?namespace=${namespaces[0]}` : ''
+  return useQuery<DashboardHelmSummary>({
+    queryKey: ['dashboard-helm', namespaces],
+    queryFn: () => fetchJSON(`/dashboard/helm${params}`),
+    staleTime: 30000,
+    refetchInterval: 60000,
   })
 }
 

@@ -30,7 +30,6 @@ type DashboardResponse struct {
 	RecentChanges          []DashboardChange           `json:"recentChanges"`
 	TopologySummary        DashboardTopologySummary    `json:"topologySummary"`
 	TrafficSummary         *DashboardTrafficSummary    `json:"trafficSummary"`
-	HelmReleases           DashboardHelmSummary        `json:"helmReleases"`
 	Metrics                *DashboardMetrics           `json:"metrics"`
 	MetricsServerAvailable bool                        `json:"metricsServerAvailable"`
 	CertificateHealth      *DashboardCertificateHealth `json:"certificateHealth,omitempty"`
@@ -204,6 +203,7 @@ type DashboardHelmRelease struct {
 }
 
 func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
+	dashStart := time.Now()
 	namespaces := parseNamespaces(r.URL.Query())
 	// For backward compat with single namespace string in internal functions
 	namespace := ""
@@ -223,47 +223,79 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// may be incomplete because deferred informers are still syncing.
 	resp.DeferredLoading = !cache.IsDeferredSynced()
 
-	// Cluster info
-	resp.Cluster = s.getDashboardCluster(r.Context())
+	// --- Slow network calls: run in parallel ---
+	var wg sync.WaitGroup
+	var cluster DashboardCluster
+	var metrics *DashboardMetrics
+	var trafficSummary *DashboardTrafficSummary
 
-	// Pod health + workload problems
+	ctx := r.Context()
+
+	wg.Add(3)
+	go func() {
+		defer wg.Done()
+		t := time.Now()
+		cluster = s.getDashboardCluster(ctx)
+		k8s.LogTiming("  [dashboard] cluster info: %v", time.Since(t))
+	}()
+	go func() {
+		defer wg.Done()
+		t := time.Now()
+		metrics = s.getDashboardMetrics(ctx)
+		k8s.LogTiming("  [dashboard] metrics: %v", time.Since(t))
+	}()
+	go func() {
+		defer wg.Done()
+		t := time.Now()
+		trafficSummary = s.getDashboardTrafficSummary(ctx, namespaces)
+		k8s.LogTiming("  [dashboard] traffic: %v", time.Since(t))
+	}()
+
+	// --- Fast cache-based calls: run while network calls are in flight ---
+	t := time.Now()
 	resp.Health, resp.Problems = s.getDashboardHealth(cache, namespace)
+	k8s.LogTiming("  [dashboard] health: %v", time.Since(t))
 
-	// Resource counts
+	t = time.Now()
 	resp.ResourceCounts = s.getDashboardResourceCounts(cache, namespace)
+	k8s.LogTiming("  [dashboard] resource counts: %v", time.Since(t))
 
-	// Recent warning events
+	t = time.Now()
 	resp.RecentEvents = s.getDashboardRecentEvents(cache, namespace)
-
-	// Count warning events for health banner
 	resp.Health.WarningEvents = s.countWarningEvents(cache, namespace)
+	k8s.LogTiming("  [dashboard] events: %v", time.Since(t))
 
-	// Recent changes from timeline
-	resp.RecentChanges = s.getDashboardRecentChanges(r.Context(), namespaces)
+	t = time.Now()
+	resp.RecentChanges = s.getDashboardRecentChanges(ctx, namespaces)
+	k8s.LogTiming("  [dashboard] changes: %v", time.Since(t))
 
-	// Topology summary
+	t = time.Now()
 	resp.TopologySummary = s.getDashboardTopologySummary(namespaces)
+	k8s.LogTiming("  [dashboard] topology: %v", time.Since(t))
 
-	// Traffic summary
-	resp.TrafficSummary = s.getDashboardTrafficSummary(r.Context(), namespaces)
-
-	// Helm releases summary
-	resp.HelmReleases = s.getDashboardHelmSummary(namespace)
-
-	// Cluster metrics (best-effort, nil if metrics-server unavailable)
-	resp.Metrics = s.getDashboardMetrics(r.Context())
-	resp.MetricsServerAvailable = resp.Metrics != nil
-
-	// Certificate health (nil if no TLS secrets)
 	resp.CertificateHealth = s.getDashboardCertificateHealth(namespace)
 
-	// Node version skew
 	if nodeLister := cache.Nodes(); nodeLister != nil {
 		nodes, _ := nodeLister.List(labels.Everything())
 		resp.NodeVersionSkew = k8s.DetectVersionSkew(nodes)
 	}
 
+	// --- Wait for network calls and assemble response ---
+	wg.Wait()
+
+	resp.Cluster = cluster
+	resp.Metrics = metrics
+	resp.MetricsServerAvailable = metrics != nil
+	resp.TrafficSummary = trafficSummary
+
+	k8s.LogTiming(" [dashboard] total: %v", time.Since(dashStart))
 	s.writeJSON(w, resp)
+}
+
+// handleDashboardHelm returns Helm release summary - loaded lazily to keep main dashboard fast
+func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
+	namespace := r.URL.Query().Get("namespace")
+	s.writeJSON(w, s.getDashboardHelmSummary(namespace))
 }
 
 // handleDashboardCRDs returns CRD counts - loaded lazily to keep main dashboard fast
@@ -715,14 +747,8 @@ func (s *Server) getDashboardResourceCounts(cache *k8s.ResourceCache, namespace 
 		}
 	}
 
-	// Helm releases count
-	helmClient := helm.GetClient()
-	if helmClient != nil {
-		releases, err := helmClient.ListReleases(namespace)
-		if err == nil {
-			counts.HelmReleases = len(releases)
-		}
-	}
+	// HelmReleases count is set by the caller from the helm summary
+	// to avoid a duplicate ListReleases() call.
 
 	counts.Restricted = restricted
 	return counts
