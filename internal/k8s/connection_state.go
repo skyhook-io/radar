@@ -20,7 +20,7 @@ type ConnectionStatus struct {
 	Context     string          `json:"context"`
 	ClusterName string          `json:"clusterName,omitempty"`
 	Error       string          `json:"error,omitempty"`
-	ErrorType   string          `json:"errorType,omitempty"` // auth, network, timeout, unknown
+	ErrorType   string          `json:"errorType,omitempty"` // auth, rbac, network, timeout, unknown
 	ProgressMsg string          `json:"progressMessage,omitempty"`
 }
 
@@ -84,7 +84,10 @@ func OnConnectionChange(callback ConnectionChangeCallback) {
 	connectionCallbacks = append(connectionCallbacks, callback)
 }
 
-// ClassifyError analyzes an error and returns its type (auth, network, timeout, unknown)
+// ClassifyError analyzes an error and returns its type (auth, rbac, network, timeout, unknown).
+// Uses the kubeconfig AuthInfo to improve classification — timeouts when an
+// exec credential plugin is configured are classified as "auth" since the
+// plugin hangs when tokens expire.
 func ClassifyError(err error) string {
 	if err == nil {
 		return ""
@@ -119,10 +122,15 @@ func ClassifyError(err error) string {
 		return "network"
 	}
 
-	// Timeout errors
+	// Timeout errors — but when an exec credential plugin is configured,
+	// timeouts almost always mean expired credentials (the plugin hangs
+	// trying to refresh), not actual network timeouts.
 	if strings.Contains(errLower, "i/o timeout") ||
 		strings.Contains(errLower, "context deadline exceeded") ||
 		strings.Contains(errLower, "timeout") {
+		if UsesExecAuth() {
+			return "auth"
+		}
 		return "timeout"
 	}
 

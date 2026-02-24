@@ -44,7 +44,7 @@ type DynamicResourceCache struct {
 
 var (
 	dynamicResourceCache *DynamicResourceCache
-	dynamicCacheOnce     sync.Once
+	dynamicCacheOnce     = new(sync.Once)
 	dynamicCacheMu       sync.Mutex
 
 	// Callbacks for CRD discovery completion
@@ -123,7 +123,7 @@ func ResetDynamicResourceCache() {
 		dynamicResourceCache.Stop()
 		dynamicResourceCache = nil
 	}
-	dynamicCacheOnce = sync.Once{}
+	dynamicCacheOnce = new(sync.Once)
 }
 
 // EnsureWatching starts watching a resource type if not already watching
@@ -799,7 +799,9 @@ func (d *DynamicResourceCache) WarmupParallel(gvrs []schema.GroupVersionResource
 	}
 }
 
-// Stop gracefully shuts down the dynamic cache
+// Stop initiates a non-blocking shutdown of the dynamic cache.
+// It closes the stopCh and runs factory.Shutdown() in the background
+// so that context switches are not blocked by stuck informer goroutines.
 func (d *DynamicResourceCache) Stop() {
 	if d == nil {
 		return
@@ -817,7 +819,23 @@ func (d *DynamicResourceCache) Stop() {
 		d.discoveryMu.Unlock()
 
 		close(d.stopCh)
-		d.factory.Shutdown()
+
+		// Run factory.Shutdown() in background — it blocks until all
+		// informer goroutines exit, which can take a long time when
+		// exec credential plugins are stuck.
+		go func() {
+			done := make(chan struct{})
+			go func() {
+				d.factory.Shutdown()
+				close(done)
+			}()
+			select {
+			case <-done:
+				log.Println("Dynamic resource cache factory shutdown complete")
+			case <-time.After(5 * time.Second):
+				log.Println("Dynamic resource cache factory shutdown taking >5s, abandoning (will GC)")
+			}
+		}()
 	})
 }
 

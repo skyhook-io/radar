@@ -35,7 +35,7 @@ type ResourceDiscovery struct {
 
 var (
 	resourceDiscovery *ResourceDiscovery
-	discoveryOnce     sync.Once
+	discoveryOnce     = new(sync.Once)
 	discoveryMu       sync.Mutex
 )
 
@@ -132,7 +132,7 @@ func ResetResourceDiscovery() {
 	defer discoveryMu.Unlock()
 
 	resourceDiscovery = nil
-	discoveryOnce = sync.Once{}
+	discoveryOnce = new(sync.Once)
 }
 
 // refresh fetches all API resources from the cluster

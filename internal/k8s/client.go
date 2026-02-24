@@ -29,6 +29,7 @@ var (
 	clusterName       string
 	contextNamespace  string // Default namespace from kubeconfig context
 	fallbackNamespace string // Explicit namespace from --namespace flag
+	contextUsesExec   bool   // True when the current context uses an exec credential plugin
 	// clientMu protects access to client variables during context switches.
 	// Readers use RLock, context switch uses Lock.
 	clientMu sync.RWMutex
@@ -129,6 +130,9 @@ func doInit(opts InitOptions) error {
 			if ctx, ok := rawConfig.Contexts[contextName]; ok {
 				clusterName = ctx.Cluster
 				contextNamespace = ctx.Namespace
+				if ai, ok := rawConfig.AuthInfos[ctx.AuthInfo]; ok && ai.Exec != nil {
+					contextUsesExec = true
+				}
 			}
 		}
 
@@ -264,6 +268,16 @@ func GetContextNamespace() string {
 	clientMu.RLock()
 	defer clientMu.RUnlock()
 	return contextNamespace
+}
+
+// UsesExecAuth returns true if the current context uses an exec credential plugin.
+// This covers any plugin configured in kubeconfig AuthInfo.Exec (e.g., GKE, EKS,
+// AKS, OIDC/Dex/Keycloak, Teleport). These plugins can hang when credentials
+// expire, causing generic timeouts instead of auth errors.
+func UsesExecAuth() bool {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	return contextUsesExec
 }
 
 // SetFallbackNamespace sets an explicit namespace to use as RBAC fallback
@@ -425,6 +439,11 @@ func SwitchContext(name string) error {
 	}
 
 	// Update global variables atomically
+	usesExec := false
+	if ai, ok := rawConfig.AuthInfos[ctx.AuthInfo]; ok && ai.Exec != nil {
+		usesExec = true
+	}
+
 	clientMu.Lock()
 	k8sConfig = config
 	k8sClient = newK8sClient
@@ -433,6 +452,7 @@ func SwitchContext(name string) error {
 	contextName = name
 	clusterName = ctx.Cluster
 	contextNamespace = ctx.Namespace
+	contextUsesExec = usesExec
 	clientMu.Unlock()
 
 	return nil

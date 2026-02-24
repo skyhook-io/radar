@@ -342,9 +342,12 @@ func (s *Server) Handler() http.Handler {
 	return s.router
 }
 
-// Stop gracefully stops the server
+// Stop gracefully stops the server and releases the listening port.
 func (s *Server) Stop() {
 	s.broadcaster.Stop()
+	if s.listener != nil {
+		s.listener.Close()
+	}
 }
 
 // Handlers

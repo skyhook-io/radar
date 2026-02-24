@@ -48,7 +48,6 @@ func LogTiming(format string, args ...any) {
 	}
 }
 
-// logTiming is the package-internal alias.
 var logTiming = LogTiming
 
 // initialSyncComplete is set to true after the initial cache sync completes.
@@ -97,7 +96,7 @@ type ResourceChange struct {
 
 var (
 	resourceCache *ResourceCache
-	cacheOnce     sync.Once
+	cacheOnce     = new(sync.Once)
 	cacheMu       sync.Mutex
 )
 
@@ -144,16 +143,12 @@ func dropManagedFields(obj any) (any, error) {
 }
 
 // InitResourceCache initializes the resource cache
-func InitResourceCache() error {
+func InitResourceCache(ctx context.Context) error {
 	var initErr error
+	// cacheOnce is a *sync.Once (heap-allocated pointer). ResetResourceCache
+	// can safely replace it with a new instance even if Do() is still running
+	// on the old one — each instance has its own internal mutex.
 	cacheOnce.Do(func() {
-		// Hold cacheMu for the entire init so that ResetResourceCache (which also
-		// acquires cacheMu) blocks until we finish. Without this, a concurrent
-		// context switch can zero cacheOnce while doSlow still holds its internal
-		// mutex, causing "sync: unlock of unlocked mutex".
-		cacheMu.Lock()
-		defer cacheMu.Unlock()
-
 		if k8sClient == nil {
 			initErr = fmt.Errorf("cannot create resource cache: k8s client not initialized")
 			return
@@ -162,12 +157,23 @@ func InitResourceCache() error {
 		stopCh := make(chan struct{})
 		changes := make(chan ResourceChange, 10000)
 
-		// Check RBAC permissions for all resource types before creating informers
+		// Check RBAC permissions for all resource types before creating informers.
+		// This is the slow path when exec credential plugins are broken (each call
+		// serializes through the plugin). No lock is held here so that context
+		// switches can proceed via ResetResourceCache without blocking.
 		rbacStart := time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		permResult := CheckResourcePermissions(ctx)
+		rbacCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+		permResult := CheckResourcePermissions(rbacCtx)
 		cancel()
 		logTiming("    RBAC permission checks: %v", time.Since(rbacStart))
+
+		// Bail if context was canceled during RBAC checks (e.g., version check
+		// failed while we were waiting for serialized exec plugin calls).
+		if ctx.Err() != nil {
+			initErr = ctx.Err()
+			return
+		}
+
 		perms := permResult.Perms
 
 		// Create factory — namespace-scoped if user only has namespace-level access
@@ -344,6 +350,11 @@ func InitResourceCache() error {
 				go func() {
 					t := time.Now()
 					for !fn() {
+						select {
+						case <-stopCh:
+							return
+						default:
+						}
 						time.Sleep(10 * time.Millisecond)
 					}
 					logTiming("    Informer synced: %-28s %v (%s)", kind, time.Since(t), tag)
@@ -385,16 +396,17 @@ func InitResourceCache() error {
 		}
 
 		// Phase 2: Wait for deferred informers in background
+		rc := resourceCache // capture local — avoid reading package var in goroutine
 		if len(deferredSyncFuncs) > 0 {
 			go func() {
 				deferredStart := time.Now()
 				if cache.WaitForCacheSync(stopCh, deferredSyncFuncs...) {
 					// Mark all deferred as synced
-					resourceCache.deferredMu.Lock()
+					rc.deferredMu.Lock()
 					for _, k := range deferredKeys {
-						resourceCache.deferredSynced[k] = true
+						rc.deferredSynced[k] = true
 					}
-					resourceCache.deferredMu.Unlock()
+					rc.deferredMu.Unlock()
 					close(deferredDone)
 					logTiming("    Phase 2 sync (%d deferred informers): %v", len(deferredSyncFuncs), time.Since(deferredStart))
 					log.Printf("Deferred resource caches synced in %v (total: %v)", time.Since(deferredStart), time.Since(syncStart))
@@ -425,7 +437,7 @@ func ResetResourceCache() {
 		resourceCache.Stop()
 		resourceCache = nil
 	}
-	cacheOnce = sync.Once{}
+	cacheOnce = new(sync.Once)
 	initialSyncComplete = false
 }
 
@@ -1211,7 +1223,11 @@ func (c *ResourceCache) ChangesRaw() chan ResourceChange {
 	return c.changes
 }
 
-// Stop gracefully shuts down the cache
+// Stop initiates a non-blocking shutdown of the cache.
+// It closes the stopCh to signal informer goroutines and runs
+// factory.Shutdown() in the background. The changes channel is
+// abandoned (not closed) so background informers draining can
+// still send without panicking; it will be GC'd.
 func (c *ResourceCache) Stop() {
 	if c == nil {
 		return
@@ -1220,8 +1236,23 @@ func (c *ResourceCache) Stop() {
 	c.stopOnce.Do(func() {
 		log.Println("Stopping resource cache")
 		close(c.stopCh)
-		c.factory.Shutdown()
-		close(c.changes)
+
+		// Run factory.Shutdown() in background — it blocks until all
+		// informer goroutines exit, which can take a long time when
+		// exec credential plugins are stuck in HTTP calls.
+		go func() {
+			done := make(chan struct{})
+			go func() {
+				c.factory.Shutdown()
+				close(done)
+			}()
+			select {
+			case <-done:
+				log.Println("Resource cache factory shutdown complete")
+			case <-time.After(5 * time.Second):
+				log.Println("Resource cache factory shutdown taking >5s, abandoning (will GC)")
+			}
+		}()
 	})
 }
 

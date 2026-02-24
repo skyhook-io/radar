@@ -12,7 +12,7 @@ import (
 
 var (
 	cachedServerVersion string
-	serverVersionOnce   sync.Once
+	serverVersionOnce   = new(sync.Once)
 	serverVersionMu     sync.Mutex
 )
 
@@ -37,7 +37,7 @@ func InvalidateServerVersionCache() {
 	serverVersionMu.Lock()
 	defer serverVersionMu.Unlock()
 	cachedServerVersion = ""
-	serverVersionOnce = sync.Once{}
+	serverVersionOnce = new(sync.Once)
 }
 
 // ClusterInfo contains detected cluster information

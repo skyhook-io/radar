@@ -187,8 +187,12 @@ func PerformContextSwitch(newContext string) error {
 	}
 	log.Println("Cluster connectivity verified")
 
-	// Step 4: Initialize all subsystems (same function as initial boot)
-	if err := InitAllSubsystems(reportProgress); err != nil {
+	// Step 4: Initialize all subsystems (same function as initial boot).
+	// Teardown above is non-blocking, so old informers may still be draining.
+	// Use a timeout to prevent context switch from hanging indefinitely.
+	initCtx, initCancel := context.WithTimeout(context.Background(), ContextSwitchTimeout)
+	defer initCancel()
+	if err := InitAllSubsystems(initCtx, reportProgress); err != nil {
 		return fmt.Errorf("subsystem init failed: %w", err)
 	}
 

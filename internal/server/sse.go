@@ -26,6 +26,11 @@ type SSEBroadcaster struct {
 	mu         sync.RWMutex
 	stopCh     chan struct{}
 
+	// watchStopCh is closed to stop the current watchResourceChanges goroutine.
+	// On context switch, it is replaced with a fresh channel to restart the watcher.
+	watchStopCh chan struct{}
+	watchMu     sync.Mutex
+
 	// Cached topology for relationship lookups (updated on each topology rebuild)
 	cachedTopology   *topology.Topology
 	cachedTopologyMu sync.RWMutex
@@ -64,10 +69,11 @@ func safeSend(ch chan SSEEvent, event SSEEvent) {
 // NewSSEBroadcaster creates a new SSE broadcaster
 func NewSSEBroadcaster() *SSEBroadcaster {
 	return &SSEBroadcaster{
-		clients:    make(map[chan SSEEvent]ClientInfo),
-		register:   make(chan clientRegistration),
-		unregister: make(chan chan SSEEvent),
-		stopCh:     make(chan struct{}),
+		clients:     make(map[chan SSEEvent]ClientInfo),
+		register:    make(chan clientRegistration),
+		unregister:  make(chan chan SSEEvent),
+		stopCh:      make(chan struct{}),
+		watchStopCh: make(chan struct{}),
 	}
 }
 
@@ -185,6 +191,9 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 		b.cachedTopology = nil
 		b.cachedTopologyMu.Unlock()
 
+		// Restart the resource change watcher for the new cache
+		b.restartResourceWatcher()
+
 		// Broadcast context_changed event to all clients
 		b.mu.RLock()
 		clientCount := len(b.clients)
@@ -263,10 +272,34 @@ func (b *SSEBroadcaster) run() {
 	}
 }
 
+// restartResourceWatcher stops the current watchResourceChanges goroutine and
+// spawns a new one for the current resource cache. Called on context switch
+// since the old cache's changes channel is abandoned (not closed).
+func (b *SSEBroadcaster) restartResourceWatcher() {
+	b.watchMu.Lock()
+	defer b.watchMu.Unlock()
+
+	// Stop the old watcher
+	close(b.watchStopCh)
+	// Create a new stop channel for the new watcher
+	b.watchStopCh = make(chan struct{})
+
+	// Spawn a new watcher goroutine
+	go b.watchResourceChanges()
+}
+
 // watchResourceChanges listens for K8s resource changes and broadcasts topology updates.
 // If the cache isn't ready yet (server starts before cluster init), it waits for
 // the connection state to become connected before starting the watch loop.
+// It captures a local copy of watchStopCh so that restartResourceWatcher() can
+// stop this goroutine by closing the old channel without a data race.
 func (b *SSEBroadcaster) watchResourceChanges() {
+	// Capture local stop channel — restartResourceWatcher() will close it
+	// when a context switch happens, causing this goroutine to exit.
+	b.watchMu.Lock()
+	watchStop := b.watchStopCh
+	b.watchMu.Unlock()
+
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		// Cache not ready yet — wait for connection to be established
@@ -297,6 +330,8 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 			log.Println("SSE broadcaster: cache ready, starting resource change watcher")
 		case <-b.stopCh:
 			return
+		case <-watchStop:
+			return
 		}
 	}
 
@@ -313,6 +348,9 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 	for {
 		select {
 		case <-b.stopCh:
+			return
+
+		case <-watchStop:
 			return
 
 		case change, ok := <-changes:

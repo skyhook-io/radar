@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"runtime"
@@ -19,7 +20,7 @@ import (
 //
 // The progress callback receives human-readable status messages suitable for
 // display in the UI (e.g. via SSE connection status updates).
-func InitAllSubsystems(progress func(string)) error {
+func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 	subsystemStart := time.Now()
 
 	// 1. Timeline — before caches so events during warmup are captured
@@ -49,20 +50,32 @@ func InitAllSubsystems(progress func(string)) error {
 
 	// Start API discovery in parallel with the resource cache sync.
 	// Discovery calls ServerGroupsAndResources() which is independent of informer sync.
+	// Skipped if context is already canceled (e.g., version check failed) to avoid
+	// exec plugin calls through broken credentials.
 	var discoveryWg sync.WaitGroup
 	var discoveryErr error
-	discoveryWg.Add(1)
-	go func() {
-		defer discoveryWg.Done()
-		dt := time.Now()
-		if err := InitResourceDiscovery(); err != nil {
-			discoveryErr = err
-		}
-		logTiming("   API resource discovery: %v (parallel)", time.Since(dt))
-	}()
+	if ctx.Err() == nil {
+		discoveryWg.Add(1)
+		go func() {
+			defer discoveryWg.Done()
+			// Re-check inside goroutine — context may have been canceled
+			// between the outer check and this goroutine actually running.
+			if ctx.Err() != nil {
+				return
+			}
+			dt := time.Now()
+			if err := InitResourceDiscovery(); err != nil {
+				discoveryErr = err
+			}
+			logTiming("   API resource discovery: %v (parallel)", time.Since(dt))
+		}()
+	}
 
 	// Resource cache init (RBAC checks + informer sync) — the dominant cost
-	if err := InitResourceCache(); err != nil {
+	if err := InitResourceCache(ctx); err != nil {
+		// Don't block on discoveryWg.Wait() — the discovery goroutine may be
+		// stuck in an API call through a broken exec plugin for 30+ seconds.
+		// It will finish on its own; closure keeps locals alive.
 		return fmt.Errorf("resource cache init failed: %w", err)
 	}
 	logTiming("   Resource cache init: %v", time.Since(t))
@@ -70,10 +83,18 @@ func InitAllSubsystems(progress func(string)) error {
 		log.Printf("Resource cache initialized with %d resources", cache.GetResourceCount())
 	}
 
-	// Wait for discovery to complete before dynamic cache (which needs discovery data)
-	discoveryWg.Wait()
-	if discoveryErr != nil {
-		log.Printf("Warning: resource discovery init failed: %v", discoveryErr)
+	// Wait for discovery to complete before dynamic cache (which needs discovery data).
+	// If context is canceled, skip the wait — let discovery drain in background.
+	if ctx.Err() == nil {
+		discoveryWg.Wait()
+		if discoveryErr != nil {
+			log.Printf("Warning: resource discovery init failed: %v", discoveryErr)
+		}
+	}
+
+	// Bail if context was canceled while we were waiting
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 
 	// 3. Dynamic cache (factory init is synchronous; CRD warmup and discovery kick off async)
@@ -109,6 +130,11 @@ func InitAllSubsystems(progress func(string)) error {
 		}
 	}
 	logTiming("   Dynamic cache factory init: %v", time.Since(t))
+
+	// Bail if context was canceled during dynamic cache init
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
 
 	// 4. Remaining subsystems — all independent, run in parallel.
 	// These are fast individually but running them in parallel saves the serial sum.

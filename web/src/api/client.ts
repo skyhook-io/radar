@@ -1823,6 +1823,12 @@ export function useSwitchContext() {
       queryClient.removeQueries()
       queryClient.invalidateQueries()
     },
+    onError: () => {
+      // Invalidate contexts so the dropdown checkmark reflects the backend's
+      // current context after a failed switch (backend has already switched
+      // the in-memory context even though connectivity failed).
+      queryClient.invalidateQueries({ queryKey: ['contexts'] })
+    },
   })
 }
 

@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/helm"
@@ -153,6 +154,10 @@ func CreateServer(cfg AppConfig) *server.Server {
 // InitializeCluster connects to the cluster and initializes all subsystems.
 // Progress is broadcast via SSE so the browser can show updates.
 // Callbacks must be registered via RegisterCallbacks before calling this.
+//
+// The /version connectivity check runs in parallel with subsystem init
+// (RBAC checks + informer sync) so neither blocks the other. If the
+// connectivity check fails, subsystem init is canceled immediately.
 func InitializeCluster() {
 	clusterStart := time.Now()
 
@@ -162,8 +167,50 @@ func InitializeCluster() {
 		ProgressMsg: "Testing cluster connectivity...",
 	})
 
-	t := time.Now()
-	if err := CheckClusterAccess(); err != nil {
+	// Run connectivity check and subsystem init in parallel.
+	// Subsystem init (RBAC + informers) makes API calls that implicitly
+	// verify connectivity, so starting them together saves ~1-2s.
+	// If /version fails, we cancel subsystem init via context.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Gate: subsystem progress messages only update the UI after /version
+	// confirms connectivity. Before that the user sees "Testing cluster
+	// connectivity..." / "Retrying cluster connectivity..." from CheckClusterAccess.
+	var connected atomic.Bool
+
+	// Hard 10s deadline for the entire connectivity check — tight enough to
+	// fail fast on expired GKE/EKS auth (exec plugins can block 40s+),
+	// generous enough for healthy clusters where the exec plugin + HTTP
+	// round-trip typically takes 2-5s.
+	versionCtx, versionCancel := context.WithTimeout(ctx, 10*time.Second)
+
+	versionErr := make(chan error, 1)
+	go func() {
+		defer versionCancel()
+		versionErr <- CheckClusterAccess(versionCtx)
+	}()
+
+	subsystemErr := make(chan error, 1)
+	go func() {
+		subsystemErr <- k8s.InitAllSubsystems(ctx, func(msg string) {
+			if connected.Load() {
+				k8s.SetConnectionStatus(k8s.ConnectionStatus{
+					State:       k8s.StateConnecting,
+					Context:     k8s.GetContextName(),
+					ProgressMsg: msg,
+				})
+			}
+		})
+	}()
+
+	// Wait for connectivity check first
+	if err := <-versionErr; err != nil {
+		cancel() // Cancel subsystem init — RBAC goroutines will see ctx.Err()
+
+		// Update status IMMEDIATELY so the UI shows the error page.
+		// Don't wait for subsystem drain — exec credential plugins serialize
+		// API calls, so draining 20+ RBAC checks can take 30+ seconds.
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
 			Context:   k8s.GetContextName(),
@@ -171,18 +218,26 @@ func InitializeCluster() {
 			ErrorType: k8s.ClassifyError(err),
 		})
 		log.Printf("Warning: Cluster not reachable, starting in disconnected mode")
+
+		// Drain subsystem goroutine in background to prevent goroutine leak.
+		// Cleanup is handled by the next context switch or retry.
+		go func() {
+			<-subsystemErr
+		}()
 		return
 	}
-	k8s.LogTiming(" Cluster access check: %v", time.Since(t))
+	connected.Store(true)
+	k8s.LogTiming(" Cluster access check: %v", time.Since(clusterStart))
 
-	t = time.Now()
-	if err := k8s.InitAllSubsystems(func(msg string) {
-		k8s.SetConnectionStatus(k8s.ConnectionStatus{
-			State:       k8s.StateConnecting,
-			Context:     k8s.GetContextName(),
-			ProgressMsg: msg,
-		})
-	}); err != nil {
+	// Connectivity confirmed — kick off progress updates for remaining init
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{
+		State:       k8s.StateConnecting,
+		Context:     k8s.GetContextName(),
+		ProgressMsg: "Loading workloads...",
+	})
+
+	// Connectivity confirmed — wait for subsystem init to finish
+	if err := <-subsystemErr; err != nil {
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
 			Context:   k8s.GetContextName(),
@@ -192,7 +247,6 @@ func InitializeCluster() {
 		log.Printf("Warning: Subsystem init failed, starting in disconnected mode: %v", err)
 		return
 	}
-	k8s.LogTiming(" All subsystems initialized: %v", time.Since(t))
 	k8s.LogTiming(" Total cluster init: %v", time.Since(clusterStart))
 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{
@@ -204,13 +258,13 @@ func InitializeCluster() {
 	// Auto-discover Prometheus in the background so charts are ready immediately
 	go func() {
 		pt := time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		promCtx, promCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer promCancel()
 		client := prometheuspkg.GetClient()
 		if client == nil {
 			return
 		}
-		if _, _, err := client.EnsureConnected(ctx); err != nil {
+		if _, _, err := client.EnsureConnected(promCtx); err != nil {
 			log.Printf("[prometheus] Auto-discovery failed (%v): %v", time.Since(pt), err)
 		} else {
 			log.Printf("[prometheus] Auto-discovery succeeded (%v)", time.Since(pt))
@@ -226,10 +280,15 @@ func Shutdown(srv *server.Server) {
 }
 
 // CheckClusterAccess verifies connectivity to the Kubernetes cluster.
-// Retries once after a 2-second pause to handle transient failures common with
-// exec-based credential plugins (e.g., EKS) that may not be ready on cold start.
-// Deterministic errors (RBAC, network) skip the retry.
-func CheckClusterAccess() error {
+// The provided context controls the overall deadline — when it expires, the
+// check returns immediately even if the exec credential plugin (e.g., GKE,
+// EKS) is still blocking.
+//
+// Retries once after a 2-second pause to handle transient timeouts.
+// Deterministic errors (auth, RBAC, network) skip the retry — retrying
+// expired credentials or unreachable hosts won't help; the user can click
+// "Retry" in the UI after fixing the underlying issue.
+func CheckClusterAccess(ctx context.Context) error {
 	clientset := k8s.GetClient()
 	if clientset == nil {
 		return fmt.Errorf("kubernetes client not initialized")
@@ -240,8 +299,14 @@ func CheckClusterAccess() error {
 		if attempt > 0 {
 			// Don't retry errors that won't resolve on their own
 			errType := k8s.ClassifyError(lastErr)
-			if errType == "rbac" || errType == "network" {
+			if errType == "auth" || errType == "rbac" || errType == "network" {
 				break
+			}
+			// Don't retry if the parent context is already done
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("failed to connect to cluster: %w", lastErr)
+			default:
 			}
 			log.Printf("Retrying cluster connectivity check...")
 			k8s.SetConnectionStatus(k8s.ConnectionStatus{
@@ -249,12 +314,35 @@ func CheckClusterAccess() error {
 				Context:     k8s.GetContextName(),
 				ProgressMsg: "Retrying cluster connectivity...",
 			})
-			time.Sleep(2 * time.Second)
+			select {
+		case <-time.After(2 * time.Second):
+		case <-ctx.Done():
+			return fmt.Errorf("failed to connect to cluster: %w", lastErr)
+		}
 		}
 
 		t := time.Now()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		_, err := clientset.Discovery().RESTClient().Get().AbsPath("/version").Do(ctx).Raw()
+		attemptCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+
+		// Run the API call in a goroutine so we can select on the parent
+		// context. This guarantees we return when the deadline hits even
+		// if the exec credential plugin blocks beyond the HTTP timeout.
+		resultCh := make(chan error, 1)
+		go func() {
+			_, err := clientset.Discovery().RESTClient().Get().AbsPath("/version").Do(attemptCtx).Raw()
+			resultCh <- err
+		}()
+
+		var err error
+		select {
+		case err = <-resultCh:
+		case <-ctx.Done():
+			cancel()
+			if lastErr != nil {
+				return fmt.Errorf("failed to connect to cluster: %w", lastErr)
+			}
+			return fmt.Errorf("failed to connect to cluster: %w", ctx.Err())
+		}
 		cancel()
 
 		if err == nil {

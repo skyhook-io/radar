@@ -89,7 +89,7 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 	}
 
 	// Mark cacheOnce as "already executed" so InitResourceCache is a no-op.
-	cacheOnce = sync.Once{}
+	cacheOnce = new(sync.Once)
 	cacheOnce.Do(func() {})
 
 	return nil
@@ -107,6 +107,11 @@ func ResetTestState() {
 	connectionStatusMu.Lock()
 	connectionStatus = ConnectionStatus{}
 	connectionStatusMu.Unlock()
+
+	// Reset connection callbacks
+	connectionCallbacksMu.Lock()
+	connectionCallbacks = nil
+	connectionCallbacksMu.Unlock()
 
 	// Reset capabilities cache
 	capabilitiesMu.Lock()

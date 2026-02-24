@@ -1,9 +1,11 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"os/signal"
 	"syscall"
@@ -115,7 +117,11 @@ func main() {
 	ready := make(chan struct{})
 	go func() {
 		if err := srv.StartWithReady(ready); err != nil {
-			log.Fatalf("Server error: %v", err)
+			// "use of closed network connection" is expected when the listener
+			// is closed during graceful shutdown — not an actual error.
+			if !errors.Is(err, net.ErrClosed) {
+				log.Fatalf("Server error: %v", err)
+			}
 		}
 	}()
 	<-ready

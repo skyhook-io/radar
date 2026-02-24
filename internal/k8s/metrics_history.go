@@ -116,7 +116,7 @@ func (rb *ringBuffer) GetAll() []MetricsDataPoint {
 
 var (
 	metricsHistoryStore *MetricsHistoryStore
-	metricsHistoryOnce  sync.Once
+	metricsHistoryOnce  = new(sync.Once)
 	metricsHistoryMu    sync.Mutex
 )
 
@@ -162,7 +162,7 @@ func ResetMetricsHistory() {
 	defer metricsHistoryMu.Unlock()
 	StopMetricsHistory()
 	metricsHistoryStore = nil
-	metricsHistoryOnce = sync.Once{}
+	metricsHistoryOnce = new(sync.Once)
 }
 
 // pollLoop continuously polls metrics at the configured interval
