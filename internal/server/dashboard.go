@@ -83,8 +83,7 @@ type DashboardResourceCounts struct {
 	PVCs         PVCCount      `json:"pvcs"`
 	Gateways     int           `json:"gateways"`
 	Routes       int           `json:"routes"`
-	HelmReleases int           `json:"helmReleases"`
-	Restricted   []string      `json:"restricted,omitempty"` // Resource kinds the user cannot list
+	Restricted []string `json:"restricted,omitempty"` // Resource kinds the user cannot list
 }
 
 type WorkloadCount struct {
@@ -294,7 +293,14 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 // handleDashboardHelm returns Helm release summary - loaded lazily to keep main dashboard fast
 func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
-	namespace := r.URL.Query().Get("namespace")
+	if !s.requireConnected(w) {
+		return
+	}
+	namespaces := parseNamespaces(r.URL.Query())
+	namespace := ""
+	if len(namespaces) == 1 {
+		namespace = namespaces[0]
+	}
 	s.writeJSON(w, s.getDashboardHelmSummary(namespace))
 }
 
@@ -747,9 +753,6 @@ func (s *Server) getDashboardResourceCounts(cache *k8s.ResourceCache, namespace 
 		}
 	}
 
-	// HelmReleases count is set by the caller from the helm summary
-	// to avoid a duplicate ListReleases() call.
-
 	counts.Restricted = restricted
 	return counts
 }
@@ -955,6 +958,7 @@ func (s *Server) getDashboardHelmSummary(namespace string) DashboardHelmSummary 
 		if helm.IsForbiddenError(err) {
 			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
 		}
+		log.Printf("[dashboard] Failed to list Helm releases: %v", err)
 		return DashboardHelmSummary{Releases: []DashboardHelmRelease{}}
 	}
 

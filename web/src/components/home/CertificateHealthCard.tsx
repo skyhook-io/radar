@@ -22,7 +22,7 @@ export function CertificateHealthCard({ data, onNavigate }: CertificateHealthCar
     <button
       onClick={onNavigate}
       className={clsx(
-        'group h-[260px] rounded-lg border-[3px] bg-theme-surface/50 hover:-translate-y-1 hover:shadow-[0_12px_24px_rgba(0,0,0,0.12)] transition-all duration-200 text-left cursor-pointer',
+        'group h-[260px] rounded-lg border-[3px] bg-theme-surface/50 hover:-translate-y-1 hover:shadow-[0_12px_24px_rgba(0,0,0,0.12)] transition-all duration-200 text-left cursor-pointer animate-fade-in-up',
         borderColor
       )}
     >

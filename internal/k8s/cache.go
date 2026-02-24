@@ -398,6 +398,9 @@ func InitResourceCache() error {
 					close(deferredDone)
 					logTiming("    Phase 2 sync (%d deferred informers): %v", len(deferredSyncFuncs), time.Since(deferredStart))
 					log.Printf("Deferred resource caches synced in %v (total: %v)", time.Since(deferredStart), time.Since(syncStart))
+				} else {
+					log.Printf("ERROR: Deferred resource cache sync failed after %v — events, secrets, configmaps, PVCs, PVs, storage classes, and PDBs will be unavailable", time.Since(deferredStart))
+					close(deferredDone) // Unblock waiters so they don't hang forever
 				}
 			}()
 		} else {

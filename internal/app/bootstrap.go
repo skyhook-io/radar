@@ -261,7 +261,7 @@ func CheckClusterAccess() error {
 			k8s.LogTiming("   Cluster /version check (attempt %d): %v", attempt+1, time.Since(t))
 			return nil
 		}
-		k8s.LogTiming("   Cluster /version check failed (attempt %d): %v (%v)", attempt+1, err, time.Since(t))
+		log.Printf("Cluster connectivity check failed (attempt %d/2): %v (%v)", attempt+1, err, time.Since(t))
 		lastErr = err
 	}
 

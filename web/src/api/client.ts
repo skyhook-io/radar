@@ -115,7 +115,6 @@ export interface DashboardResourceCounts {
   configMaps: number
   secrets: number
   pvcs: { total: number; bound: number; pending: number; unbound: number }
-  helmReleases: number
   restricted?: string[] // Resource kinds the user cannot list due to RBAC
 }
 
@@ -245,7 +244,7 @@ export function useDashboardCRDs(namespaces: string[] = []) {
 
 // Helm summary - loaded lazily after main dashboard (Helm SDK lists K8s secrets, ~2-3s)
 export function useDashboardHelm(namespaces: string[] = []) {
-  const params = namespaces.length > 0 ? `?namespace=${namespaces[0]}` : ''
+  const params = namespaces.length > 0 ? `?namespaces=${namespaces.join(',')}` : ''
   return useQuery<DashboardHelmSummary>({
     queryKey: ['dashboard-helm', namespaces],
     queryFn: () => fetchJSON(`/dashboard/helm${params}`),

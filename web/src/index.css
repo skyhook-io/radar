@@ -437,6 +437,21 @@ body {
   animation: slide-in-from-right 0.2s ease-out;
 }
 
+@keyframes fade-in-up {
+  from {
+    opacity: 0;
+    transform: translateY(24px) scale(0.97);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+.animate-fade-in-up {
+  animation: fade-in-up 0.5s ease-out both;
+}
+
 .slide-in-from-right-5 {
   --tw-enter-translate-x: 1.25rem;
 }
