@@ -60,7 +60,7 @@ jobs:
 
       - name: Update krew-index
         if: "!contains(github.ref_name, '-')"
-        uses: rajatjindal/krew-release-bot@v0.0.47
+        uses: rajatjindal/krew-release-bot@v0.0.50
 
       - name: Release summary
         if: always()
