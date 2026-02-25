@@ -153,15 +153,17 @@ func (s *IstioSource) queryHTTPFlows(ctx context.Context, client *promclient.Cli
 	// Main query: all requests, no response_code grouping
 	query := `sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, request_protocol, reporter) (rate(istio_requests_total{reporter="destination"}[5m]))`
 	if opts.Namespace != "" {
+		safeNS := promclient.SanitizeLabelValue(opts.Namespace)
 		query = fmt.Sprintf(`sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, request_protocol, reporter) (rate(istio_requests_total{reporter="destination", source_workload_namespace="%s"}[5m])) or sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, request_protocol, reporter) (rate(istio_requests_total{reporter="destination", destination_workload_namespace="%s"}[5m]))`,
-			opts.Namespace, opts.Namespace)
+			safeNS, safeNS)
 	}
 
 	// Error query: 5xx only
 	errorQuery := `sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, reporter) (rate(istio_requests_total{reporter="destination", response_code=~"5.."}[5m]))`
 	if opts.Namespace != "" {
+		safeNS := promclient.SanitizeLabelValue(opts.Namespace)
 		errorQuery = fmt.Sprintf(`sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, reporter) (rate(istio_requests_total{reporter="destination", response_code=~"5..", source_workload_namespace="%s"}[5m])) or sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, reporter) (rate(istio_requests_total{reporter="destination", response_code=~"5..", destination_workload_namespace="%s"}[5m]))`,
-			opts.Namespace, opts.Namespace)
+			safeNS, safeNS)
 	}
 
 	result, err := client.Query(ctx, query)
@@ -292,10 +294,11 @@ func (s *IstioSource) queryByteMetrics(ctx context.Context, client *promclient.C
 	sentQuery := `sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace) (rate(istio_request_bytes_sum{reporter="destination"}[5m]))`
 	recvQuery := `sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace) (rate(istio_response_bytes_sum{reporter="destination"}[5m]))`
 	if opts.Namespace != "" {
+		safeNS := promclient.SanitizeLabelValue(opts.Namespace)
 		sentQuery = fmt.Sprintf(`sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace) (rate(istio_request_bytes_sum{reporter="destination", source_workload_namespace="%s"}[5m])) or sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace) (rate(istio_request_bytes_sum{reporter="destination", destination_workload_namespace="%s"}[5m]))`,
-			opts.Namespace, opts.Namespace)
+			safeNS, safeNS)
 		recvQuery = fmt.Sprintf(`sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace) (rate(istio_response_bytes_sum{reporter="destination", source_workload_namespace="%s"}[5m])) or sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace) (rate(istio_response_bytes_sum{reporter="destination", destination_workload_namespace="%s"}[5m]))`,
-			opts.Namespace, opts.Namespace)
+			safeNS, safeNS)
 	}
 
 	parseByteResult := func(result *promclient.QueryResult, target map[flowKey]float64) {
@@ -342,8 +345,9 @@ func (s *IstioSource) queryByteMetrics(ctx context.Context, client *promclient.C
 func (s *IstioSource) queryTCPFlows(ctx context.Context, client *promclient.Client, opts FlowOptions) ([]Flow, error) {
 	query := `sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, reporter) (rate(istio_tcp_connections_opened_total{reporter="destination"}[5m]))`
 	if opts.Namespace != "" {
+		safeNS := promclient.SanitizeLabelValue(opts.Namespace)
 		query = fmt.Sprintf(`sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, reporter) (rate(istio_tcp_connections_opened_total{reporter="destination", source_workload_namespace="%s"}[5m])) or sum by (source_workload, source_workload_namespace, destination_workload, destination_workload_namespace, destination_service_name, reporter) (rate(istio_tcp_connections_opened_total{reporter="destination", destination_workload_namespace="%s"}[5m]))`,
-			opts.Namespace, opts.Namespace)
+			safeNS, safeNS)
 	}
 
 	result, err := client.Query(ctx, query)

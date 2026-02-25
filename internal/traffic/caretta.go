@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/portforward"
+	promclient "github.com/skyhook-io/radar/internal/prometheus"
 )
 
 const (
@@ -321,8 +322,9 @@ func (c *CarettaSource) queryPrometheusForFlows(ctx context.Context, promAddr st
 	query := "caretta_links_observed"
 	if opts.Namespace != "" {
 		// Filter by namespace (either client or server)
+		safeNS := promclient.SanitizeLabelValue(opts.Namespace)
 		query = fmt.Sprintf(`caretta_links_observed{client_namespace="%s"} or caretta_links_observed{server_namespace="%s"}`,
-			opts.Namespace, opts.Namespace)
+			safeNS, safeNS)
 	}
 
 	queryURL := fmt.Sprintf("%s%s/api/v1/query?query=%s", promAddr, basePath, url.QueryEscape(query))
