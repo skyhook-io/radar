@@ -97,7 +97,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
                 onNavigate={() => onNavigateToResourceKind('secrets', undefined, { type: 'TLS' })}
               />
             )}
-            <CostCard />
+            <CostCard onNavigate={() => onNavigateToView('cost')} />
           </div>
 
           {/* Right column: problems panel */}

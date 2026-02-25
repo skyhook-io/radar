@@ -21,6 +21,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
+
+	"github.com/skyhook-io/radar/internal/portforward"
 )
 
 const (
@@ -305,7 +307,7 @@ func (h *HubbleSource) resolveTargetPort(ctx context.Context, svc *corev1.Servic
 }
 
 // Connect establishes connection to Hubble Relay via port-forward and gRPC
-func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*MetricsConnectionInfo, error) {
+func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*portforward.ConnectionInfo, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
@@ -318,7 +320,7 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*Metric
 	if h.grpcConn != nil && h.currentContext == contextName {
 		// Test the connection
 		if h.testConnection(ctx) {
-			return &MetricsConnectionInfo{
+			return &portforward.ConnectionInfo{
 				Connected:   true,
 				LocalPort:   h.localPort,
 				Address:     fmt.Sprintf("localhost:%d", h.localPort),
@@ -341,7 +343,7 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*Metric
 	if h.relayPort == 0 {
 		relaySvc, err := h.k8sClient.CoreV1().Services(namespace).Get(ctx, hubbleRelayService, metav1.GetOptions{})
 		if err != nil {
-			return &MetricsConnectionInfo{
+			return &portforward.ConnectionInfo{
 				Connected: false,
 				Error:     fmt.Sprintf("Hubble Relay service not found in %s: %v", namespace, err),
 			}, nil
@@ -351,9 +353,9 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*Metric
 
 	// Start port-forward to Hubble Relay
 	log.Printf("[hubble] Starting port-forward to %s/%s:%d", namespace, hubbleRelayService, h.relayPort)
-	connInfo, err := StartMetricsPortForward(ctx, namespace, hubbleRelayService, h.relayPort, contextName)
+	connInfo, err := portforward.Start(ctx, namespace, hubbleRelayService, h.relayPort, contextName)
 	if err != nil {
-		return &MetricsConnectionInfo{
+		return &portforward.ConnectionInfo{
 			Connected:   false,
 			Namespace:   namespace,
 			ServiceName: hubbleRelayService,
@@ -465,7 +467,7 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*Metric
 	}
 
 	if connected {
-		return &MetricsConnectionInfo{
+		return &portforward.ConnectionInfo{
 			Connected:   true,
 			LocalPort:   h.localPort,
 			Address:     grpcAddr,
@@ -476,9 +478,9 @@ func (h *HubbleSource) Connect(ctx context.Context, contextName string) (*Metric
 	}
 
 	// Both attempts failed
-	StopMetricsPortForward()
+	portforward.Stop()
 	h.localPort = 0
-	return &MetricsConnectionInfo{
+	return &portforward.ConnectionInfo{
 		Connected: false,
 		Error:     fmt.Sprintf("Failed to connect to Hubble Relay: %v", lastErr),
 	}, nil

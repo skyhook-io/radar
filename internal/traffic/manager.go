@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"math"
 	"strings"
 	"sync"
 	"time"
@@ -11,6 +12,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/skyhook-io/radar/internal/portforward"
 )
 
 // Manager handles traffic source detection and management
@@ -64,7 +67,7 @@ func InitializeWithConfig(client kubernetes.Interface, config *rest.Config, cont
 
 		// Set K8s clients for port-forward functionality
 		if config != nil {
-			SetK8sClients(client, config)
+			portforward.SetK8sClients(client, config)
 		}
 	})
 	return initErr
@@ -94,8 +97,14 @@ func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 		NotDetected: []string{},
 	}
 
-	// Check each registered source
-	for name, source := range m.sources {
+	// Check each registered source in deterministic priority order
+	// (hubble has deepest visibility, istio has L7 metrics, caretta is fallback)
+	sourceOrder := []string{"hubble", "istio", "caretta"}
+	for _, name := range sourceOrder {
+		source, ok := m.sources[name]
+		if !ok {
+			continue
+		}
 		result, err := source.Detect(ctx)
 		if err != nil {
 			log.Printf("[traffic] Error detecting %s: %v", name, err)
@@ -116,7 +125,7 @@ func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 				Native:  result.Native,
 				Message: result.Message,
 			})
-			// Set first available as active
+			// Set first available as active (deterministic priority)
 			if m.activeSource == nil {
 				m.activeSource = source
 			}
@@ -450,8 +459,8 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 			agg.BytesSent += f.BytesSent
 			agg.BytesRecv += f.BytesRecv
 			agg.Connections += f.Connections
-			agg.RequestCount += int64(f.RequestRate)
-			agg.ErrorCount += int64(f.ErrorRate)
+			agg.RequestCount += roundRate(f.RequestRate)
+			agg.ErrorCount += roundRate(f.ErrorRate)
 			if f.LastSeen.After(agg.LastSeen) {
 				agg.LastSeen = f.LastSeen
 			}
@@ -465,8 +474,8 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 				BytesSent:    f.BytesSent,
 				BytesRecv:    f.BytesRecv,
 				Connections:  f.Connections,
-				RequestCount: int64(f.RequestRate),
-				ErrorCount:   int64(f.ErrorRate),
+				RequestCount: roundRate(f.RequestRate),
+				ErrorCount:   roundRate(f.ErrorRate),
 				LastSeen:     f.LastSeen,
 			}
 		}
@@ -477,6 +486,19 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 		result = append(result, *agg)
 	}
 	return result
+}
+
+// roundRate converts a per-second rate to an int64 count, ensuring that any
+// positive rate maps to at least 1 (so low-traffic services aren't invisible).
+func roundRate(rate float64) int64 {
+	if rate <= 0 {
+		return 0
+	}
+	r := int64(math.Round(rate))
+	if r == 0 {
+		return 1
+	}
+	return r
 }
 
 // Close cleans up all traffic sources
@@ -500,7 +522,7 @@ func (m *Manager) Close() error {
 // Reset cleans up for context switching
 func Reset() {
 	// Stop any active metrics port-forward first
-	StopMetricsPortForward()
+	portforward.Stop()
 
 	if manager != nil {
 		manager.Close()
@@ -523,14 +545,14 @@ func ReinitializeWithConfig(client kubernetes.Interface, config *rest.Config, co
 
 // Connect establishes connection to the active traffic source
 // This may start a port-forward if running locally and needed
-func (m *Manager) Connect(ctx context.Context) (*MetricsConnectionInfo, error) {
+func (m *Manager) Connect(ctx context.Context) (*portforward.ConnectionInfo, error) {
 	m.mu.Lock()
 	source := m.activeSource
 	contextName := m.contextName
 	m.mu.Unlock()
 
 	if source == nil {
-		return &MetricsConnectionInfo{
+		return &portforward.ConnectionInfo{
 			Connected: false,
 			Error:     "No traffic source available",
 		}, nil
@@ -550,14 +572,14 @@ func (m *Manager) Connect(ctx context.Context) (*MetricsConnectionInfo, error) {
 	}
 
 	// For sources without Connect support, just return connected
-	return &MetricsConnectionInfo{
+	return &portforward.ConnectionInfo{
 		Connected: true,
 	}, nil
 }
 
 // GetConnectionInfo returns current connection status
-func (m *Manager) GetConnectionInfo() *MetricsConnectionInfo {
-	return GetConnectionInfo()
+func (m *Manager) GetConnectionInfo() *portforward.ConnectionInfo {
+	return portforward.GetConnectionInfo()
 }
 
 // SetContextName updates the current context name

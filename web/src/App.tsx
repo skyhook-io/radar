@@ -13,6 +13,7 @@ import { ResourceDetailDrawer } from './components/resources/ResourceDetailDrawe
 import { ResourceDetailPage } from './components/resource/ResourceDetailPage'
 import { HelmView } from './components/helm/HelmView'
 import { TrafficView } from './components/traffic/TrafficView'
+import { CostView } from './components/cost/CostView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardManager, usePortForwardCount } from './components/portforward/PortForwardManager'
 import { DockProvider, BottomDock, useDock } from './components/dock'
@@ -87,8 +88,8 @@ function encodeResourceParam(resource: SelectedResource): string {
   return `${resource.kind}/${resource.namespace}/${resource.name}`
 }
 
-// Extended MainView type that includes traffic
-type ExtendedMainView = MainView | 'traffic'
+// Extended MainView type that includes traffic and cost
+type ExtendedMainView = MainView | 'traffic' | 'cost'
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -99,6 +100,7 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'timeline') return 'timeline'
   if (path === 'helm') return 'helm'
   if (path === 'traffic') return 'traffic'
+  if (path === 'cost') return 'cost'
   return 'home'
 }
 
@@ -832,6 +834,11 @@ function AppInner() {
         {/* Traffic view */}
         {mainView === 'traffic' && (
           <TrafficView namespaces={namespaces} />
+        )}
+
+        {/* Cost detail view */}
+        {mainView === 'cost' && (
+          <CostView onBack={() => setMainView('home')} />
         )}
 
         </ErrorBoundary>

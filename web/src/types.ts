@@ -728,8 +728,8 @@ export interface TrafficFilters {
   timeRange: string
 }
 
-// Main view type now includes 'traffic'
-export type ExtendedMainView = MainView | 'traffic'
+// Main view type now includes 'traffic' and 'cost'
+export type ExtendedMainView = MainView | 'traffic' | 'cost'
 
 // ============================================================================
 // Image Filesystem Types

@@ -323,6 +323,233 @@ See the main [README](../README.md#gitops) for GitOps integration details.
 
 ---
 
+## Istio
+
+[Istio](https://istio.io/) is the most widely adopted service mesh, providing traffic management, security (mTLS), and observability for microservices.
+
+### What Radar Shows
+
+**Topology:** Full Istio traffic path — IstioGateway → VirtualService → Service, and DestinationRule → Service configuration edges. See how traffic flows through gateway listeners, virtual service routing rules, and into backend services.
+
+**VirtualService Detail View:**
+- HTTP/TCP/TLS routing rules with match conditions
+- Destinations with weight distribution bars
+- Fault injection and traffic mirroring detection (AlertBanner warnings)
+- Retry policies, timeouts, and CORS settings
+- Gateway references with clickable links
+
+**DestinationRule Detail View:**
+- Target service host with clickable link
+- Traffic policy: connection pool (TCP/HTTP limits), load balancer algorithm, outlier detection (ejection settings), TLS mode
+- Subset definitions with labels and per-subset traffic policy overrides
+
+**Gateway Detail View (networking.istio.io):**
+- Server configurations with port, protocol, and hosts
+- TLS settings per server (mode, credential references)
+- Workload selector labels
+
+**ServiceEntry Detail View:**
+- Hosts, location (MESH_EXTERNAL/MESH_INTERNAL), resolution strategy
+- Ports with protocol badges
+- Endpoint addresses with port mappings and labels
+
+**PeerAuthentication Detail View:**
+- mTLS mode with color-coded badges (STRICT/PERMISSIVE/DISABLE)
+- Scope indicator (workload-scoped vs namespace-wide)
+- Port-level mTLS overrides
+
+**AuthorizationPolicy Detail View:**
+- Action badge (ALLOW/DENY/CUSTOM/AUDIT) with rule breakdown
+- Source principals, namespaces, IP blocks
+- Operation matching (hosts, ports, methods, paths)
+- Deny-all and allow-nothing detection (AlertBanner)
+
+**Resource Browser:** Smart columns show status badges, hosts, gateways, route counts, mTLS modes, actions, and load balancer algorithms at a glance.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| VirtualService | `networking.istio.io/v1` | Yes | Yes | — |
+| DestinationRule | `networking.istio.io/v1` | Yes | Yes | — |
+| Gateway | `networking.istio.io/v1` | Yes | Yes | — |
+| ServiceEntry | `networking.istio.io/v1` | — | Yes | — |
+| PeerAuthentication | `security.istio.io/v1` | — | Yes | — |
+| AuthorizationPolicy | `security.istio.io/v1` | — | Yes | — |
+
+---
+
+## Velero
+
+[Velero](https://velero.io/) provides backup and restore capabilities for Kubernetes cluster resources and persistent volumes.
+
+### What Radar Shows
+
+**Backup Detail View:**
+- Phase with color-coded badge, start/completion timestamps, duration
+- Progress bar during in-progress backups (items backed up percentage)
+- Scope filters: included/excluded namespaces and resources, label selectors
+- Storage location and volume snapshot locations
+- Options: TTL, snapshot volumes, default filesystem backup
+- Error/warning detection (AlertBanner for failed or partial backups with validation errors)
+
+**Restore Detail View:**
+- Phase badge, source backup reference, duration
+- Progress bar during in-progress restores
+- Scope filters: included/excluded namespaces and resources
+- Restore options: PV restoration, existing resource policy
+- Error detection (AlertBanner for failed or partial restores)
+
+**Schedule Detail View:**
+- Cron schedule (monospace), last backup timestamp
+- Pause state detection (AlertBanner when paused)
+- Validation failure detection (AlertBanner)
+- Backup template: storage location, TTL, namespace/resource filters, snapshot settings
+
+**BackupStorageLocation Detail View:**
+- Phase (Available/Unavailable), last validation and sync times
+- Provider configuration: bucket, prefix, region, access mode
+- Provider-specific config key-value pairs
+
+**VolumeSnapshotLocation Detail View:**
+- Provider name and configuration parameters
+
+**Resource Browser:** Smart columns show phase badges, storage location, namespace counts, duration, expiry (with color-coded warnings), and error/warning counts.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| Backup | `velero.io/v1` | — | Yes | — |
+| Restore | `velero.io/v1` | — | Yes | — |
+| Schedule | `velero.io/v1` | — | Yes | — |
+| BackupStorageLocation | `velero.io/v1` | — | Yes | — |
+| VolumeSnapshotLocation | `velero.io/v1` | — | Yes | — |
+
+---
+
+## External Secrets Operator
+
+[External Secrets Operator](https://external-secrets.io/) (ESO) synchronizes secrets from external providers (AWS Secrets Manager, HashiCorp Vault, Azure Key Vault, GCP Secret Manager, and more) into Kubernetes Secrets.
+
+### What Radar Shows
+
+**ExternalSecret Detail View:**
+- Sync status badge, last sync time, refresh interval
+- Store reference with clickable link and kind indicator
+- Secret mappings table (secret key → remote key, property, version)
+- Data sources with type badges
+- Target secret configuration and creation policies
+- Sync failure detection (AlertBanner when Ready condition is False)
+
+**ClusterExternalSecret Detail View:**
+- Overview: provisioned vs failed namespace counts
+- Namespace selection: explicit list or label selector
+- Provisioned namespaces (green badges)
+- Failed namespaces with per-namespace error details (AlertBanner)
+- ExternalSecret spec: refresh interval, store reference, data/source counts
+
+**SecretStore / ClusterSecretStore Detail View:**
+- Provider with color-coded badge (AWS orange, Azure/GCP blue, Vault purple, etc.)
+- Provider-specific details: region, vault URL, project ID, authentication method
+- Connection status with reason and last transition
+- Retry settings
+- Readiness detection (AlertBanner when not Ready)
+
+**Resource Browser:** Smart columns show sync status, store reference, provider type, refresh interval, and last sync time.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| ExternalSecret | `external-secrets.io/v1beta1` | — | Yes | — |
+| ClusterExternalSecret | `external-secrets.io/v1beta1` | — | Yes | — |
+| SecretStore | `external-secrets.io/v1beta1` | — | Yes | — |
+| ClusterSecretStore | `external-secrets.io/v1beta1` | — | Yes | — |
+
+---
+
+## CloudNativePG
+
+[CloudNativePG](https://cloudnative-pg.io/) (CNPG) is the Kubernetes operator for PostgreSQL, covering the full lifecycle from bootstrapping to monitoring, with high availability, automated failover, and backup management.
+
+### What Radar Shows
+
+**Cluster Detail View:**
+- Phase, instances ready/desired, primary instance, image version
+- Instance node distribution (which K8s nodes run each PostgreSQL instance)
+- Storage configuration: data size, storage class, WAL storage
+- Backup configuration: destination, retention policy, last successful backup, recovery point
+- Monitoring: PodMonitor integration, custom query ConfigMaps
+- Replication settings (for replica clusters)
+- PostgreSQL parameters
+- Health detection (AlertBanner for degraded clusters, failover/switchover in progress)
+
+**Backup Detail View:**
+- Phase, backup method, duration, start/stop timestamps
+- Cluster reference with clickable link
+- Destination path and server name
+- Recovery target
+- Failure detection (AlertBanner with error message)
+
+**ScheduledBackup Detail View:**
+- Cron schedule, last/next schedule timestamps
+- Suspension detection (AlertBanner when paused)
+- Backup configuration: cluster reference, method, owner reference settings
+
+**Pooler Detail View:**
+- Type (read-write/read-only) with colored badge, pool mode
+- Instances ready/desired
+- Cluster reference with clickable link
+- PgBouncer parameters
+- Degraded state detection (AlertBanner when not all instances ready)
+
+**Resource Browser:** Smart columns show status, instance counts (with degraded highlighting), primary instance, image tag, storage size, cluster reference, and schedule expressions.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| Cluster | `postgresql.cnpg.io/v1` | — | Yes | — |
+| Backup | `postgresql.cnpg.io/v1` | — | Yes | — |
+| ScheduledBackup | `postgresql.cnpg.io/v1` | — | Yes | — |
+| Pooler | `postgresql.cnpg.io/v1` | — | Yes | — |
+
+---
+
+## Kyverno
+
+[Kyverno](https://kyverno.io/) is a Kubernetes-native policy engine for validation, mutation, generation, and image verification — no new language required, policies are written as Kubernetes resources.
+
+### What Radar Shows
+
+**Policy / ClusterPolicy Detail View:**
+- Failure action badge (Enforce in red, Audit in yellow)
+- Configuration: background scanning, webhook timeout, failure policy, schema validation
+- Rule type summary (validate/mutate/generate/verifyImages counts)
+- Individual rules with type badges and match/exclude indicators
+- Auto-generated rules list
+
+**PolicyReport / ClusterPolicyReport Detail View:**
+- Visual result bar chart (pass/fail/warn/error/skip proportions)
+- Scope and source information
+- Individual results with status badges, severity levels, policy/rule names
+- Expandable details: message, category, source, affected resources
+- Problem detection (AlertBanner for failures or errors)
+
+**Resource Browser:** Smart columns show status (colored by worst outcome), failure action, rule counts, and pass/fail/warn/error/skip breakdowns.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| Policy | `kyverno.io/v1` | — | Yes | — |
+| ClusterPolicy | `kyverno.io/v1` | — | Yes | — |
+| PolicyReport | `wgpolicyk8s.io/v1alpha2` | — | Yes | — |
+| ClusterPolicyReport | `wgpolicyk8s.io/v1alpha2` | — | Yes | — |
+
+---
+
 ## Any Other CRD
 
 Radar automatically discovers and displays **every** CRD installed in your cluster — no configuration or plugins required. Resources appear in the sidebar, can be filtered and searched, and show full YAML with syntax highlighting in the detail drawer. The integrations above add richer presentation, but every CRD is browsable out of the box.

@@ -10,6 +10,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/skyhook-io/radar/internal/portforward"
 	promclient "github.com/skyhook-io/radar/internal/prometheus"
 )
 
@@ -450,10 +451,10 @@ func (s *IstioSource) StreamFlows(ctx context.Context, opts FlowOptions) (<-chan
 
 // Connect triggers Prometheus discovery via the shared client.
 // The shared prometheus.Client handles port-forwarding automatically.
-func (s *IstioSource) Connect(ctx context.Context, contextName string) (*MetricsConnectionInfo, error) {
+func (s *IstioSource) Connect(ctx context.Context, contextName string) (*portforward.ConnectionInfo, error) {
 	client, err := s.getPrometheusClient()
 	if err != nil {
-		return &MetricsConnectionInfo{
+		return &portforward.ConnectionInfo{
 			Connected: false,
 			Error:     "Prometheus client not initialized",
 		}, nil
@@ -462,14 +463,14 @@ func (s *IstioSource) Connect(ctx context.Context, contextName string) (*Metrics
 	// EnsureConnected triggers discovery + port-forward if needed
 	_, _, err = client.EnsureConnected(ctx)
 	if err != nil {
-		return &MetricsConnectionInfo{
+		return &portforward.ConnectionInfo{
 			Connected: false,
 			Error:     fmt.Sprintf("Failed to connect to Prometheus: %v", err),
 		}, nil
 	}
 
 	status := client.GetStatus()
-	info := &MetricsConnectionInfo{
+	info := &portforward.ConnectionInfo{
 		Connected:   true,
 		Address:     status.Address,
 		ContextName: contextName,

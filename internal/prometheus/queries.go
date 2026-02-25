@@ -6,11 +6,11 @@ import (
 	"strings"
 )
 
-// sanitizeLabelValue escapes characters that are special in PromQL label matchers.
+// SanitizeLabelValue escapes characters that are special in PromQL label matchers.
 // This prevents PromQL injection via resource names, namespaces, etc.
 var unsafeLabelChars = regexp.MustCompile(`[\\'"` + "`" + `{}]`)
 
-func sanitizeLabelValue(s string) string {
+func SanitizeLabelValue(s string) string {
 	return unsafeLabelChars.ReplaceAllStringFunc(s, func(c string) string {
 		return `\` + c
 	})
@@ -122,7 +122,7 @@ func BuildQuery(kind, namespace, name string, category MetricCategory) string {
 
 // BuildNamespaceQuery builds a PromQL query for namespace-level aggregation.
 func BuildNamespaceQuery(namespace string, category MetricCategory) string {
-	ns := sanitizeLabelValue(namespace)
+	ns := SanitizeLabelValue(namespace)
 	switch category {
 	case CategoryCPU:
 		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{container!='',namespace='%s'}[5m]))`, ns)
@@ -154,8 +154,8 @@ func BuildClusterQuery(category MetricCategory) string {
 }
 
 func buildPodQuery(namespace, podName string, category MetricCategory) string {
-	ns := sanitizeLabelValue(namespace)
-	pod := sanitizeLabelValue(podName)
+	ns := SanitizeLabelValue(namespace)
+	pod := SanitizeLabelValue(podName)
 
 	switch category {
 	case CategoryCPU:
@@ -184,9 +184,9 @@ func buildPodQuery(namespace, podName string, category MetricCategory) string {
 }
 
 func buildWorkloadQuery(namespace, workloadName string, category MetricCategory) string {
-	ns := sanitizeLabelValue(namespace)
+	ns := SanitizeLabelValue(namespace)
 	// Sanitize then escape regex metacharacters so e.g. "my.app" matches literally
-	podPattern := fmt.Sprintf("%s-.*", escapeRegexMeta(sanitizeLabelValue(workloadName)))
+	podPattern := fmt.Sprintf("%s-.*", escapeRegexMeta(SanitizeLabelValue(workloadName)))
 
 	switch category {
 	case CategoryCPU:
@@ -219,7 +219,7 @@ func buildNodeQuery(nodeName string, category MetricCategory) string {
 	// name or IP. The value often includes a port suffix, so we match with an optional port.
 	// This heuristic works for most standard deployments; clusters with custom relabeling
 	// may need the --prometheus-url flag plus adjusted recording rules.
-	sanitized := escapeRegexMeta(sanitizeLabelValue(nodeName))
+	sanitized := escapeRegexMeta(SanitizeLabelValue(nodeName))
 	nodeFilter := fmt.Sprintf(`instance=~'%s(:\\d+)?'`, sanitized)
 
 	switch category {

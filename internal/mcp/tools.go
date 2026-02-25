@@ -432,6 +432,17 @@ func normalizeDisplayKind(kind string) string {
 		"storageclass": "StorageClass", "storageclasses": "StorageClass",
 		"horizontalpodautoscaler": "HorizontalPodAutoscaler", "horizontalpodautoscalers": "HorizontalPodAutoscaler",
 		"poddisruptionbudget": "PodDisruptionBudget", "poddisruptionbudgets": "PodDisruptionBudget",
+		"role": "Role", "roles": "Role",
+		"clusterrole": "ClusterRole", "clusterroles": "ClusterRole",
+		"rolebinding": "RoleBinding", "rolebindings": "RoleBinding",
+		"clusterrolebinding": "ClusterRoleBinding", "clusterrolebindings": "ClusterRoleBinding",
+		"serviceaccount": "ServiceAccount", "serviceaccounts": "ServiceAccount",
+		"ingressclass": "IngressClass", "ingressclasses": "IngressClass",
+		"priorityclass": "PriorityClass", "priorityclasses": "PriorityClass",
+		"runtimeclass": "RuntimeClass", "runtimeclasses": "RuntimeClass",
+		"lease": "Lease", "leases": "Lease",
+		"mutatingwebhookconfiguration": "MutatingWebhookConfiguration", "mutatingwebhookconfigurations": "MutatingWebhookConfiguration",
+		"validatingwebhookconfiguration": "ValidatingWebhookConfiguration", "validatingwebhookconfigurations": "ValidatingWebhookConfiguration",
 	}
 	if display, ok := displayKinds[kind]; ok {
 		return display

@@ -547,6 +547,7 @@ Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 - Register in: `renderers/index.ts` (export), `ResourceDetailDrawer.tsx` (import + knownKinds + render line)
 - Use `AlertBanner` for problem detection, `ConditionsSection` for K8s conditions
 - Long text in alerts/banners needs `break-all` class for CSS word breaking
+- Core K8s renderers: Role, ClusterRole, RoleBinding, ClusterRoleBinding, ServiceAccount, IngressClass, PriorityClass, RuntimeClass, Lease, MutatingWebhookConfiguration, ValidatingWebhookConfiguration
 - Supported CRD integrations: Argo Rollouts, Argo Workflows, cert-manager, Gateway API, Bitnami Sealed Secrets, FluxCD, ArgoCD, Trivy Operator, Karpenter, KEDA, VPA, Prometheus Operator, Kyverno/PolicyReport, Velero (Backup, Restore, Schedule, BackupStorageLocation, VolumeSnapshotLocation), External Secrets Operator (ExternalSecret, ClusterExternalSecret, SecretStore, ClusterSecretStore), CloudNativePG (Cluster, Backup, ScheduledBackup, Pooler)
 
 ## Tech Stack

@@ -2429,14 +2429,17 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     const term = kindFilter.toLowerCase()
     return sortedCategories
       .map(category => {
+        const categoryMatches = category.name.toLowerCase().includes(term)
+        // If the group name matches, show all its resources
+        if (categoryMatches) return category
         const matchingResources = category.visibleResources.filter((resource: any) =>
           resource.kind.toLowerCase().includes(term) ||
           resource.name.toLowerCase().includes(term)
         )
-        if (matchingResources.length === 0 && !category.name.toLowerCase().includes(term)) return null
+        if (matchingResources.length === 0) return null
         return {
           ...category,
-          visibleResources: matchingResources.length > 0 ? matchingResources : category.visibleResources,
+          visibleResources: matchingResources,
         }
       })
       .filter(Boolean) as typeof sortedCategories
