@@ -78,9 +78,11 @@ func handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query actual CPU usage cost (for efficiency calculation)
+	// cAdvisor metrics use "instance" for the node hostname, while OpenCost uses "node",
+	// so we label_replace to bridge the join.
 	cpuUsageMap := make(map[string]float64)
 	cpuUsageResult, err := client.Query(r.Context(),
-		`sum by (namespace) (rate(container_cpu_usage_seconds_total{container!="", namespace!=""}[1h]) * on(node) group_left() node_cpu_hourly_cost)`)
+		`sum by (namespace) (label_replace(rate(container_cpu_usage_seconds_total{container!="", namespace!=""}[1h]), "node", "$1", "instance", "(.+)") * on(node) group_left() node_cpu_hourly_cost)`)
 	if err == nil {
 		for _, s := range cpuUsageResult.Series {
 			ns := s.Labels["namespace"]
@@ -93,7 +95,7 @@ func handleSummary(w http.ResponseWriter, r *http.Request) {
 	// Query actual memory usage cost (for efficiency calculation)
 	memUsageMap := make(map[string]float64)
 	memUsageResult, err := client.Query(r.Context(),
-		`sum by (namespace) (container_memory_working_set_bytes{container!="", namespace!=""} / 1073741824 * on(node) group_left() node_ram_hourly_cost)`)
+		`sum by (namespace) (label_replace(container_memory_working_set_bytes{container!="", namespace!=""}, "node", "$1", "instance", "(.+)") / 1073741824 * on(node) group_left() node_ram_hourly_cost)`)
 	if err == nil {
 		for _, s := range memUsageResult.Series {
 			ns := s.Labels["namespace"]
@@ -304,7 +306,7 @@ func handleWorkloads(w http.ResponseWriter, r *http.Request) {
 
 	// Query per-pod CPU usage cost (for efficiency)
 	podCPUUsage := make(map[string]float64)
-	cpuUsageQuery := `sum by (pod) (rate(container_cpu_usage_seconds_total{container!="", namespace="` + safeNS + `"}[1h]) * on(node) group_left() node_cpu_hourly_cost)`
+	cpuUsageQuery := `sum by (pod) (label_replace(rate(container_cpu_usage_seconds_total{container!="", namespace="` + safeNS + `"}[1h]), "node", "$1", "instance", "(.+)") * on(node) group_left() node_cpu_hourly_cost)`
 	cpuUsageResult, usageErr := client.Query(r.Context(), cpuUsageQuery)
 	if usageErr == nil {
 		for _, s := range cpuUsageResult.Series {
@@ -317,7 +319,7 @@ func handleWorkloads(w http.ResponseWriter, r *http.Request) {
 
 	// Query per-pod memory usage cost (for efficiency)
 	podMemUsage := make(map[string]float64)
-	memUsageQuery := `sum by (pod) (container_memory_working_set_bytes{container!="", namespace="` + safeNS + `"} / 1073741824 * on(node) group_left() node_ram_hourly_cost)`
+	memUsageQuery := `sum by (pod) (label_replace(container_memory_working_set_bytes{container!="", namespace="` + safeNS + `"}, "node", "$1", "instance", "(.+)") / 1073741824 * on(node) group_left() node_ram_hourly_cost)`
 	memUsageResult, usageErr := client.Query(r.Context(), memUsageQuery)
 	if usageErr == nil {
 		for _, s := range memUsageResult.Series {

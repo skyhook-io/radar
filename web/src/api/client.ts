@@ -289,6 +289,7 @@ export function useOpenCostSummary() {
     queryFn: () => fetchJSON('/opencost/summary'),
     refetchInterval: 60000, // Refresh every minute
     staleTime: 30000,
+    placeholderData: (prev) => prev, // Keep previous data visible during refetch
   })
 }
 
@@ -348,6 +349,7 @@ export function useOpenCostTrend(range_: CostTimeRange = '24h') {
     queryFn: () => fetchJSON(`/opencost/trend?range=${range_}`),
     staleTime: 60000,
     refetchInterval: 120000, // Refresh every 2 minutes
+    placeholderData: (prev) => prev,
   })
 }
 
@@ -373,6 +375,7 @@ export function useOpenCostNodes() {
     queryFn: () => fetchJSON('/opencost/nodes'),
     staleTime: 60000,
     refetchInterval: 120000,
+    placeholderData: (prev) => prev,
   })
 }
 
