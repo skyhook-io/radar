@@ -7,6 +7,7 @@ import { HelmSummary } from './HelmSummary'
 import { ActivitySummary } from './ActivitySummary'
 import { TrafficSummary } from './TrafficSummary'
 import { CertificateHealthCard } from './CertificateHealthCard'
+import { CostCard } from './CostCard'
 import { ClusterHealthCard } from './ClusterHealthCard'
 import { AlertTriangle, Loader2 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -96,6 +97,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
                 onNavigate={() => onNavigateToResourceKind('secrets', undefined, { type: 'TLS' })}
               />
             )}
+            <CostCard />
           </div>
 
           {/* Right column: problems panel */}

@@ -55,6 +55,9 @@ type Flow struct {
 	Connections int64     `json:"connections"`
 	Verdict     string    `json:"verdict"` // forwarded, dropped, error
 	LastSeen    time.Time `json:"lastSeen"`
+	// L7 stats (populated by Istio source)
+	RequestRate float64 `json:"requestRate,omitempty"` // requests per second
+	ErrorRate   float64 `json:"errorRate,omitempty"`   // 5xx errors per second
 }
 
 // Endpoint represents a source or destination in a flow
@@ -136,6 +139,7 @@ type HelmChartInfo struct {
 // SourcesResponse is the response for GET /api/traffic/sources
 type SourcesResponse struct {
 	Cluster     ClusterInfo     `json:"cluster"`
+	Active      string          `json:"active"`
 	Detected    []SourceStatus  `json:"detected"`
 	NotDetected []string        `json:"notDetected"`
 	Recommended *Recommendation `json:"recommended,omitempty"`

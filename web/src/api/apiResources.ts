@@ -29,10 +29,11 @@ export interface ResourceCategory {
 
 // Known core resource categories
 const WORKLOAD_KINDS = ['Pod', 'Deployment', 'Rollout', 'DaemonSet', 'StatefulSet', 'ReplicaSet', 'Job', 'CronJob']
-const NETWORKING_KINDS = ['Service', 'Ingress', 'NetworkPolicy', 'Endpoints', 'EndpointSlice']
-const CONFIG_KINDS = ['ConfigMap', 'Secret', 'HorizontalPodAutoscaler', 'PodDisruptionBudget', 'LimitRange', 'ResourceQuota']
+const NETWORKING_KINDS = ['Service', 'Ingress', 'IngressClass', 'NetworkPolicy', 'Endpoints', 'EndpointSlice']
+const CONFIG_KINDS = ['ConfigMap', 'Secret', 'HorizontalPodAutoscaler', 'PodDisruptionBudget', 'LimitRange', 'ResourceQuota', 'PriorityClass', 'RuntimeClass', 'Lease', 'MutatingWebhookConfiguration', 'ValidatingWebhookConfiguration']
 const STORAGE_KINDS = ['PersistentVolumeClaim', 'PersistentVolume', 'StorageClass', 'VolumeAttachment']
-const CLUSTER_KINDS = ['Node', 'Namespace', 'ServiceAccount', 'Event']
+const ACCESS_CONTROL_KINDS = ['ServiceAccount', 'Role', 'ClusterRole', 'RoleBinding', 'ClusterRoleBinding']
+const CLUSTER_KINDS = ['Node', 'Namespace', 'Event']
 
 // Core resources that must always be present (fallback if API discovery misses them)
 export const CORE_RESOURCES: APIResource[] = [
@@ -55,6 +56,17 @@ export const CORE_RESOURCES: APIResource[] = [
   { group: 'networking.k8s.io', version: 'v1', kind: 'NetworkPolicy', name: 'networkpolicies', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: 'autoscaling', version: 'v2', kind: 'HorizontalPodAutoscaler', name: 'horizontalpodautoscalers', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
   { group: '', version: 'v1', kind: 'Event', name: 'events', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: 'rbac.authorization.k8s.io', version: 'v1', kind: 'Role', name: 'roles', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: 'rbac.authorization.k8s.io', version: 'v1', kind: 'ClusterRole', name: 'clusterroles', namespaced: false, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: 'rbac.authorization.k8s.io', version: 'v1', kind: 'RoleBinding', name: 'rolebindings', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: 'rbac.authorization.k8s.io', version: 'v1', kind: 'ClusterRoleBinding', name: 'clusterrolebindings', namespaced: false, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: 'networking.k8s.io', version: 'v1', kind: 'IngressClass', name: 'ingressclasses', namespaced: false, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: 'admissionregistration.k8s.io', version: 'v1', kind: 'MutatingWebhookConfiguration', name: 'mutatingwebhookconfigurations', namespaced: false, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: 'admissionregistration.k8s.io', version: 'v1', kind: 'ValidatingWebhookConfiguration', name: 'validatingwebhookconfigurations', namespaced: false, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: 'scheduling.k8s.io', version: 'v1', kind: 'PriorityClass', name: 'priorityclasses', namespaced: false, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: 'node.k8s.io', version: 'v1', kind: 'RuntimeClass', name: 'runtimeclasses', namespaced: false, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: 'coordination.k8s.io', version: 'v1', kind: 'Lease', name: 'leases', namespaced: true, isCrd: false, verbs: ['list', 'get', 'watch'] },
+  { group: 'storage.k8s.io', version: 'v1', kind: 'VolumeAttachment', name: 'volumeattachments', namespaced: false, isCrd: false, verbs: ['list', 'get', 'watch'] },
 ]
 
 // Resources that should be hidden from the sidebar
@@ -99,6 +111,7 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
   const networking = uniqueResources.filter(r => NETWORKING_KINDS.includes(r.kind))
   const config = uniqueResources.filter(r => CONFIG_KINDS.includes(r.kind))
   const storage = uniqueResources.filter(r => STORAGE_KINDS.includes(r.kind))
+  const accessControl = uniqueResources.filter(r => ACCESS_CONTROL_KINDS.includes(r.kind))
   const cluster = uniqueResources.filter(r => CLUSTER_KINDS.includes(r.kind))
 
   // CRDs grouped by API group
@@ -117,6 +130,7 @@ export function categorizeResources(resources: APIResource[]): ResourceCategory[
   addToCategory('Networking', networking)
   addToCategory('Configuration', config)
   addToCategory('Storage', storage)
+  addToCategory('Access Control', accessControl)
   addToCategory('Cluster', cluster)
 
   // Add CRD groups (may merge with existing categories if names match)

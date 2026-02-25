@@ -1,6 +1,6 @@
 import { Shield, Info } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property } from '../drawer-components'
+import { Section, PropertyList, Property, AlertBanner } from '../drawer-components'
 
 interface RoleRendererProps {
   data: any
@@ -22,8 +22,20 @@ export function RoleRenderer({ data }: RoleRendererProps) {
   const rules = data.rules || []
   const aggregationRule = data.aggregationRule
 
+  const hasWildcard = rules.some((r: any) =>
+    (r.verbs || []).includes('*') || (r.apiGroups || []).includes('*') || (r.resources || []).includes('*')
+  )
+
   return (
     <>
+      {hasWildcard && (
+        <AlertBanner
+          variant="warning"
+          title="Wildcard Permissions"
+          message="This role grants wildcard (*) permissions. Review the rules to ensure this level of access is intended."
+        />
+      )}
+
       {/* Overview */}
       <Section title="Overview" icon={Shield}>
         <PropertyList>

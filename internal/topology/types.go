@@ -36,8 +36,14 @@ const (
 	KindNodeClass     NodeKind = "NodeClass"     // Karpenter NodeClass (EC2NodeClass, AKSNodeClass, etc.)
 	KindScaledObject  NodeKind = "ScaledObject"  // KEDA ScaledObject
 	KindScaledJob     NodeKind = "ScaledJob"     // KEDA ScaledJob
-	KindGatewayClass  NodeKind = "GatewayClass"  // Gateway API GatewayClass
-	KindDaemonSet     NodeKind = "DaemonSet"
+	KindGatewayClass         NodeKind = "GatewayClass"         // Gateway API GatewayClass
+	KindVirtualService       NodeKind = "VirtualService"       // Istio VirtualService
+	KindDestinationRule      NodeKind = "DestinationRule"      // Istio DestinationRule
+	KindIstioGateway         NodeKind = "IstioGateway"         // Istio Gateway (networking.istio.io, NOT Gateway API)
+	KindServiceEntry         NodeKind = "ServiceEntry"         // Istio ServiceEntry
+	KindPeerAuthentication   NodeKind = "PeerAuthentication"   // Istio PeerAuthentication
+	KindAuthorizationPolicy  NodeKind = "AuthorizationPolicy"  // Istio AuthorizationPolicy
+	KindDaemonSet            NodeKind = "DaemonSet"
 	KindStatefulSet   NodeKind = "StatefulSet"
 	KindReplicaSet    NodeKind = "ReplicaSet"
 	KindPod           NodeKind = "Pod"

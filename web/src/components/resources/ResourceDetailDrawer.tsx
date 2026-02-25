@@ -81,6 +81,18 @@ import {
 import { getNodePoolStatus, getNodeClaimStatus, getEC2NodeClassStatus } from './resource-utils-karpenter'
 import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda'
 import { getServiceMonitorStatus, getPrometheusRuleStatus, getPodMonitorStatus } from './resource-utils-prometheus'
+import { getPolicyReportStatus, getKyvernoPolicyStatus } from './resource-utils-kyverno'
+import { getBackupStatus, getRestoreStatus, getScheduleStatus, getBSLStatus } from './resource-utils-velero'
+import {
+  getVirtualServiceStatus,
+  getDestinationRuleStatus,
+  getIstioGatewayStatus,
+  getServiceEntryStatus,
+  getPeerAuthenticationStatus,
+  getAuthorizationPolicyStatus,
+} from './resource-utils-istio'
+import { getCNPGClusterStatus, getCNPGBackupStatus, getCNPGScheduledBackupStatus, getCNPGPoolerStatus } from './resource-utils-cnpg'
+import { getExternalSecretStatus, getClusterExternalSecretStatus, getSecretStoreStatus, getClusterSecretStoreStatus } from './resource-utils-eso'
 import {
   PodRenderer,
   WorkloadRenderer,
@@ -116,6 +128,7 @@ import {
   ServiceAccountRenderer,
   RoleRenderer,
   RoleBindingRenderer,
+  WebhookConfigRenderer,
   EventRenderer,
   GenericRenderer,
   GitRepositoryRenderer,
@@ -140,6 +153,30 @@ import {
   ServiceMonitorRenderer,
   PrometheusRuleRenderer,
   PodMonitorRenderer,
+  PolicyReportRenderer,
+  KyvernoPolicyRenderer,
+  VeleroBackupRenderer,
+  VeleroRestoreRenderer,
+  VeleroScheduleRenderer,
+  VeleroBSLRenderer,
+  VeleroVSLRenderer,
+  CNPGClusterRenderer,
+  CNPGBackupRenderer,
+  CNPGScheduledBackupRenderer,
+  CNPGPoolerRenderer,
+  ExternalSecretRenderer,
+  ClusterExternalSecretRenderer,
+  SecretStoreRenderer,
+  IstioVirtualServiceRenderer,
+  IstioDestinationRuleRenderer,
+  IstioGatewayRenderer,
+  IstioServiceEntryRenderer,
+  IstioPeerAuthenticationRenderer,
+  IstioAuthorizationPolicyRenderer,
+  IngressClassRenderer,
+  PriorityClassRenderer,
+  RuntimeClassRenderer,
+  LeaseRenderer,
 } from './renderers'
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import { PortForwardButton } from '../portforward/PortForwardButton'
@@ -170,6 +207,8 @@ const WIDE_KINDS = new Set([
   'clustercompliancereports',
   'sbomreports',
   'clustersbomreports',
+  'policyreports',
+  'clusterpolicyreports',
 ])
 
 function getDefaultWidth(kind: string): number {
@@ -1623,11 +1662,19 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
     'nodepools', 'nodeclaims', 'ec2nodeclasses', 'scaledobjects', 'scaledjobs',
     'triggerauthentications', 'clustertriggerauthentications',
     'servicemonitors', 'prometheusrules', 'podmonitors',
+    'policyreports', 'clusterpolicyreports', 'kyvernopolicies', 'clusterpolicies',
     'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
     'rbacassessmentreports', 'clusterrbacassessmentreports',
     'clustercompliancereports', 'sbomreports', 'clustersbomreports',
     'infraassessmentreports', 'clusterinfraassessmentreports',
-    'verticalpodautoscalers'
+    'verticalpodautoscalers',
+    'backups', 'restores', 'schedules', 'backupstoragelocations', 'volumesnapshotlocations',
+    'externalsecrets', 'clusterexternalsecrets', 'secretstores', 'clustersecretstores',
+    'clusters', 'scheduledbackups', 'poolers',
+    'virtualservices', 'destinationrules', 'serviceentries',
+    'peerauthentications', 'authorizationpolicies',
+    'mutatingwebhookconfigurations', 'validatingwebhookconfigurations',
+    'ingressclasses', 'priorityclasses', 'runtimeclasses', 'leases',
   ]
   const isKnownKind = knownKinds.includes(kind)
 
@@ -1656,7 +1703,7 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
       {kind === 'issuers' && <IssuerRenderer data={data} />}
       {kind === 'orders' && <OrderRenderer data={data} />}
       {kind === 'challenges' && <ChallengeRenderer data={data} />}
-      {kind === 'gateways' && <GatewayRenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'gateways' && (data.apiVersion?.includes('networking.istio.io') ? <IstioGatewayRenderer data={data} /> : <GatewayRenderer data={data} onNavigate={onNavigate} />)}
       {kind === 'gatewayclasses' && <GatewayClassRenderer data={data} />}
       {kind === 'httproutes' && <HTTPRouteRenderer data={data} onNavigate={onNavigate} />}
       {kind === 'grpcroutes' && <GRPCRouteRenderer data={data} onNavigate={onNavigate} />}
@@ -1693,6 +1740,31 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
       {kind === 'servicemonitors' && <ServiceMonitorRenderer data={data} />}
       {kind === 'prometheusrules' && <PrometheusRuleRenderer data={data} />}
       {kind === 'podmonitors' && <PodMonitorRenderer data={data} />}
+      {(kind === 'policyreports' || kind === 'clusterpolicyreports') && <PolicyReportRenderer data={data} />}
+      {(kind === 'kyvernopolicies' || kind === 'clusterpolicies') && <KyvernoPolicyRenderer data={data} />}
+      {kind === 'backups' && data.apiVersion?.includes('cnpg.io') && <CNPGBackupRenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'backups' && !data.apiVersion?.includes('cnpg.io') && <VeleroBackupRenderer data={data} />}
+      {kind === 'restores' && <VeleroRestoreRenderer data={data} />}
+      {kind === 'schedules' && <VeleroScheduleRenderer data={data} />}
+      {kind === 'backupstoragelocations' && <VeleroBSLRenderer data={data} />}
+      {kind === 'volumesnapshotlocations' && <VeleroVSLRenderer data={data} />}
+      {kind === 'externalsecrets' && <ExternalSecretRenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'clusterexternalsecrets' && <ClusterExternalSecretRenderer data={data} />}
+      {(kind === 'secretstores' || kind === 'clustersecretstores') && <SecretStoreRenderer data={data} />}
+      {kind === 'clusters' && <CNPGClusterRenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'scheduledbackups' && <CNPGScheduledBackupRenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'poolers' && <CNPGPoolerRenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'virtualservices' && <IstioVirtualServiceRenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'destinationrules' && <IstioDestinationRuleRenderer data={data} onNavigate={onNavigate} />}
+      {kind === 'serviceentries' && <IstioServiceEntryRenderer data={data} />}
+      {kind === 'peerauthentications' && <IstioPeerAuthenticationRenderer data={data} />}
+      {kind === 'authorizationpolicies' && <IstioAuthorizationPolicyRenderer data={data} />}
+      {kind === 'mutatingwebhookconfigurations' && <WebhookConfigRenderer data={data} isMutating />}
+      {kind === 'validatingwebhookconfigurations' && <WebhookConfigRenderer data={data} />}
+      {kind === 'ingressclasses' && <IngressClassRenderer data={data} />}
+      {kind === 'priorityclasses' && <PriorityClassRenderer data={data} />}
+      {kind === 'runtimeclasses' && <RuntimeClassRenderer data={data} />}
+      {kind === 'leases' && <LeaseRenderer data={data} />}
 
       {/* Generic renderer for CRDs and unknown resource types */}
       {!isKnownKind && <GenericRenderer data={data} />}
@@ -1813,6 +1885,11 @@ function getResourceStatus(kind: string, data: any): { text: string; color: stri
   }
 
   if (k === 'gateways') {
+    // Distinguish between Gateway API and Istio Gateway
+    if (data.apiVersion?.includes('networking.istio.io')) {
+      const status = getIstioGatewayStatus(data)
+      return { text: status.text, color: status.color }
+    }
     const status = getGatewayStatus(data)
     return { text: status.text, color: status.color }
   }
@@ -1939,6 +2016,100 @@ function getResourceStatus(kind: string, data: any): { text: string; color: stri
 
   if (k === 'sbomreports' || k === 'clustersbomreports') {
     const status = getSbomReportStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'policyreports' || k === 'clusterpolicyreports') {
+    const status = getPolicyReportStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'kyvernopolicies' || k === 'clusterpolicies') {
+    const status = getKyvernoPolicyStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'backups') {
+    if (data.apiVersion?.includes('cnpg.io')) {
+      const status = getCNPGBackupStatus(data)
+      return { text: status.text, color: status.color }
+    }
+    const status = getBackupStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'restores') {
+    const status = getRestoreStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'schedules') {
+    const status = getScheduleStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'backupstoragelocations') {
+    const status = getBSLStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'externalsecrets') {
+    const status = getExternalSecretStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'clusterexternalsecrets') {
+    const status = getClusterExternalSecretStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'secretstores') {
+    const status = getSecretStoreStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'clustersecretstores') {
+    const status = getClusterSecretStoreStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'clusters') {
+    const status = getCNPGClusterStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'scheduledbackups') {
+    const status = getCNPGScheduledBackupStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'poolers') {
+    const status = getCNPGPoolerStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'virtualservices') {
+    const status = getVirtualServiceStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'destinationrules') {
+    const status = getDestinationRuleStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'serviceentries') {
+    const status = getServiceEntryStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'peerauthentications') {
+    const status = getPeerAuthenticationStatus(data)
+    return { text: status.text, color: status.color }
+  }
+
+  if (k === 'authorizationpolicies') {
+    const status = getAuthorizationPolicyStatus(data)
     return { text: status.text, color: status.color }
   }
 

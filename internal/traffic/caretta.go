@@ -37,11 +37,13 @@ var metricsServiceLocations = []struct {
 	{"victoria-metrics", "victoria-metrics-single-server", 8428, ""},
 	{"victoria-metrics", "vmsingle", 8428, ""},
 	{"monitoring", "victoria-metrics-single-server", 8428, ""},
+	{"monitoring", "victoria-metrics-victoria-metrics-single-server", 8428, ""},
 	{"monitoring", "vmsingle", 8428, ""},
 	// VictoriaMetrics vmselect (cluster mode) - uses sub-path
 	{"victoria-metrics", "vmselect", 8481, "/select/0/prometheus"},
 	{"monitoring", "vmselect", 8481, "/select/0/prometheus"},
 	// kube-prometheus-stack (any release name uses this service name pattern)
+	{"monitoring", "kube-prometheus-stack-prometheus", 9090, ""},
 	{"monitoring", "prometheus-kube-prometheus-prometheus", 9090, ""},
 	{"monitoring", "prometheus-operated", 9090, ""},
 	// Standard Prometheus locations
@@ -846,4 +848,51 @@ func (c *CarettaSource) GetMetricsServiceInfo() (namespace, service string, port
 	c.mu.RLock()
 	defer c.mu.RUnlock()
 	return c.metricsNamespace, c.metricsService, c.metricsPort
+}
+
+// queryPrometheusRaw executes a PromQL query and returns the parsed response.
+// Used by IstioSource to share Prometheus discovery infrastructure.
+func (c *CarettaSource) queryPrometheusRaw(ctx context.Context, query string) (*prometheusResponse, error) {
+	c.mu.RLock()
+	promAddr := c.prometheusAddr
+	basePath := c.metricsBasePath
+	c.mu.RUnlock()
+
+	if promAddr == "" {
+		promAddr = c.discoverPrometheus(ctx)
+		if promAddr == "" {
+			return nil, fmt.Errorf("prometheus not found")
+		}
+		c.mu.RLock()
+		basePath = c.metricsBasePath
+		c.mu.RUnlock()
+	}
+
+	queryURL := fmt.Sprintf("%s%s/api/v1/query?query=%s", promAddr, basePath, url.QueryEscape(query))
+
+	req, err := http.NewRequestWithContext(ctx, "GET", queryURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("querying prometheus: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("prometheus returned status %d", resp.StatusCode)
+	}
+
+	var promResp prometheusResponse
+	if err := json.NewDecoder(resp.Body).Decode(&promResp); err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	if promResp.Status != "success" {
+		return nil, fmt.Errorf("prometheus query failed: %s", promResp.Status)
+	}
+
+	return &promResp, nil
 }

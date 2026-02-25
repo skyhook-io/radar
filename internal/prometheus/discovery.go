@@ -11,7 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
-	"github.com/skyhook-io/radar/internal/traffic"
+	"github.com/skyhook-io/radar/internal/portforward"
 )
 
 // Well-known Prometheus/VictoriaMetrics service locations
@@ -34,6 +34,7 @@ var wellKnownLocations = []struct {
 	// VictoriaMetrics — caretta namespace (traffic-specific, lower priority)
 	{"caretta", "caretta-vm", 8428, ""},
 	// kube-prometheus-stack
+	{"monitoring", "kube-prometheus-stack-prometheus", 9090, ""},
 	{"monitoring", "prometheus-kube-prometheus-prometheus", 9090, ""},
 	{"monitoring", "prometheus-operated", 9090, ""},
 	// Standard Prometheus
@@ -93,7 +94,7 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 	}
 
 	// Layer 2: Check if traffic system already has a port-forward
-	if pfAddr := traffic.GetMetricsAddress(contextName); pfAddr != "" {
+	if pfAddr := portforward.GetAddress(contextName); pfAddr != "" {
 		if c.probe(ctx, pfAddr) {
 			log.Printf("[prometheus] Using traffic system port-forward: %s", pfAddr)
 			c.mu.Lock()
@@ -145,7 +146,7 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 
 	// Not reachable in-cluster — try port-forward
 	log.Printf("[prometheus] Service %s/%s not reachable in-cluster, starting port-forward...", info.namespace, info.name)
-	connInfo, err := traffic.StartMetricsPortForward(ctx, info.namespace, info.name, info.port, contextName)
+	connInfo, err := portforward.Start(ctx, info.namespace, info.name, info.port, contextName)
 	if err != nil {
 		return "", "", fmt.Errorf("port-forward to %s/%s failed: %w", info.namespace, info.name, err)
 	}
@@ -169,7 +170,7 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 		return addr, "", nil
 	}
 
-	traffic.StopMetricsPortForward()
+	portforward.Stop()
 	return "", "", fmt.Errorf("Prometheus at %s/%s not responding after port-forward", info.namespace, info.name)
 }
 

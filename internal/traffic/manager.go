@@ -60,6 +60,7 @@ func InitializeWithConfig(client kubernetes.Interface, config *rest.Config, cont
 			caretta.metricsURL = configuredMetricsURL
 		}
 		manager.sources["caretta"] = caretta
+		manager.sources["istio"] = NewIstioSource(client)
 
 		// Set K8s clients for port-forward functionality
 		if config != nil {
@@ -122,6 +123,11 @@ func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 		} else {
 			response.NotDetected = append(response.NotDetected, name)
 		}
+	}
+
+	// Set active source name in response
+	if m.activeSource != nil {
+		response.Active = m.activeSource.Name()
 	}
 
 	// Generate recommendation based on cluster type
@@ -280,6 +286,18 @@ func (m *Manager) generateRecommendation(info *ClusterInfo, detected []SourceSta
 		}
 	}
 
+	// If Istio is detected but not yet "available" (e.g., Prometheus not found),
+	// recommend connecting Prometheus for Istio metrics
+	for _, s := range detected {
+		if s.Name == "istio" && s.Status == "error" {
+			return &Recommendation{
+				Name:   "istio",
+				Reason: "Istio service mesh detected but Prometheus not reachable. Use --prometheus-url to point Radar to your Prometheus instance for Istio traffic visibility.",
+				DocsURL: "https://istio.io/latest/docs/ops/integrations/prometheus/",
+			}
+		}
+	}
+
 	switch info.CNI {
 	case "cilium":
 		if info.Platform == "gke" {
@@ -432,20 +450,24 @@ func AggregateFlows(flows []Flow) []AggregatedFlow {
 			agg.BytesSent += f.BytesSent
 			agg.BytesRecv += f.BytesRecv
 			agg.Connections += f.Connections
+			agg.RequestCount += int64(f.RequestRate)
+			agg.ErrorCount += int64(f.ErrorRate)
 			if f.LastSeen.After(agg.LastSeen) {
 				agg.LastSeen = f.LastSeen
 			}
 		} else {
 			aggregated[key] = &AggregatedFlow{
-				Source:      f.Source,
-				Destination: f.Destination,
-				Protocol:    f.Protocol,
-				Port:        f.Port,
-				FlowCount:   1,
-				BytesSent:   f.BytesSent,
-				BytesRecv:   f.BytesRecv,
-				Connections: f.Connections,
-				LastSeen:    f.LastSeen,
+				Source:       f.Source,
+				Destination:  f.Destination,
+				Protocol:     f.Protocol,
+				Port:         f.Port,
+				FlowCount:    1,
+				BytesSent:    f.BytesSent,
+				BytesRecv:    f.BytesRecv,
+				Connections:  f.Connections,
+				RequestCount: int64(f.RequestRate),
+				ErrorCount:   int64(f.ErrorRate),
+				LastSeen:     f.LastSeen,
 			}
 		}
 	}
@@ -523,6 +545,10 @@ func (m *Manager) Connect(ctx context.Context) (*MetricsConnectionInfo, error) {
 		return hubble.Connect(ctx, contextName)
 	}
 
+	if istio, ok := source.(*IstioSource); ok {
+		return istio.Connect(ctx, contextName)
+	}
+
 	// For sources without Connect support, just return connected
 	return &MetricsConnectionInfo{
 		Connected: true,
@@ -553,6 +579,8 @@ func (m *Manager) SetContextName(name string) {
 		hubble.currentContext = name
 		hubble.mu.Unlock()
 	}
+
+	// Istio shares Prometheus via caretta, no additional context update needed
 }
 
 // DefaultFlowOptions returns sensible defaults

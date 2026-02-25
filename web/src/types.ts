@@ -699,6 +699,7 @@ export interface TrafficRecommendation {
 // Response from GET /api/traffic/sources
 export interface TrafficSourcesResponse {
   cluster: TrafficClusterInfo
+  active: string
   detected: TrafficSourceStatus[]
   notDetected: string[]
   recommended?: TrafficRecommendation

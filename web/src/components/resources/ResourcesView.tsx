@@ -115,8 +115,6 @@ import {
   getServiceAccountAutomount,
   getServiceAccountSecretCount,
   getRoleRuleCount,
-  getRoleBindingRole,
-  getRoleBindingSubjectCount,
   formatAge,
   truncate,
   getCellFilterValue,
@@ -133,6 +131,11 @@ import { CertificateCell, CertificateRequestCell, ClusterIssuerCell, IssuerCell,
 import { NodePoolCell, NodeClaimCell, EC2NodeClassCell } from './renderers/karpenter-cells'
 import { ScaledObjectCell, ScaledJobCell, TriggerAuthenticationCell, ClusterTriggerAuthenticationCell } from './renderers/keda-cells'
 import { ServiceMonitorCell, PrometheusRuleCell, PodMonitorCell } from './renderers/prometheus-cells'
+import { PolicyReportCell, ClusterPolicyReportCell, KyvernoPolicyCell, ClusterPolicyCell } from './renderers/kyverno-cells'
+import { ExternalSecretCell, ClusterExternalSecretCell, SecretStoreCell, ClusterSecretStoreCell } from './renderers/eso-cells'
+import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell } from './renderers/velero-cells'
+import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCell } from './renderers/cnpg-cells'
+import { VirtualServiceCell, DestinationRuleCell, IstioGatewayCell, ServiceEntryCell, PeerAuthenticationCell, AuthorizationPolicyCell } from './renderers/istio-cells'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
@@ -570,6 +573,45 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'selector', label: 'Selector', width: 'w-48' },
     { key: 'age', label: 'Age', width: 'w-20' },
   ],
+  // ============================================================================
+  // KYVERNO / POLICY REPORT RESOURCES
+  // ============================================================================
+  policyreports: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'pass', label: 'Pass', width: 'w-16' },
+    { key: 'fail', label: 'Fail', width: 'w-16' },
+    { key: 'warn', label: 'Warn', width: 'w-16' },
+    { key: 'error', label: 'Err', width: 'w-16' },
+    { key: 'skip', label: 'Skip', width: 'w-16' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  clusterpolicyreports: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'pass', label: 'Pass', width: 'w-16' },
+    { key: 'fail', label: 'Fail', width: 'w-16' },
+    { key: 'warn', label: 'Warn', width: 'w-16' },
+    { key: 'error', label: 'Err', width: 'w-16' },
+    { key: 'skip', label: 'Skip', width: 'w-16' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  kyvernopolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'action', label: 'Action', width: 'w-24', tooltip: 'Validation failure action (Enforce or Audit)' },
+    { key: 'rules', label: 'Rules', width: 'w-16' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  clusterpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'action', label: 'Action', width: 'w-24', tooltip: 'Validation failure action (Enforce or Audit)' },
+    { key: 'rules', label: 'Rules', width: 'w-16' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
   grpcroutes: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
@@ -660,6 +702,46 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'role', label: 'Role', width: 'w-48' },
     { key: 'subjects', label: 'Subjects', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  ingressclasses: [
+    { key: 'name', label: 'Name' },
+    { key: 'controller', label: 'Controller', width: 'w-64' },
+    { key: 'default', label: 'Default', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  leases: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-48' },
+    { key: 'holder', label: 'Holder', width: 'w-48' },
+    { key: 'renewTime', label: 'Last Renewed', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  priorityclasses: [
+    { key: 'name', label: 'Name' },
+    { key: 'value', label: 'Value', width: 'w-24' },
+    { key: 'globalDefault', label: 'Global Default', width: 'w-28' },
+    { key: 'preemptionPolicy', label: 'Preemption', width: 'w-32' },
+    { key: 'description', label: 'Description', width: 'w-64', hideOnMobile: true },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  runtimeclasses: [
+    { key: 'name', label: 'Name' },
+    { key: 'handler', label: 'Handler', width: 'w-48' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  mutatingwebhookconfigurations: [
+    { key: 'name', label: 'Name' },
+    { key: 'webhooks', label: 'Webhooks', width: 'w-20' },
+    { key: 'failurePolicy', label: 'Failure Policy', width: 'w-28' },
+    { key: 'target', label: 'Target', width: 'w-48', hideOnMobile: true },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  validatingwebhookconfigurations: [
+    { key: 'name', label: 'Name' },
+    { key: 'webhooks', label: 'Webhooks', width: 'w-20' },
+    { key: 'failurePolicy', label: 'Failure Policy', width: 'w-28' },
+    { key: 'target', label: 'Target', width: 'w-48', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-20' },
   ],
   events: [
@@ -850,6 +932,159 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'medium', label: 'M', width: 'w-12', tooltip: 'Medium findings' },
     { key: 'low', label: 'L', width: 'w-12', tooltip: 'Low findings' },
     { key: 'age', label: 'Age', width: 'w-16' },
+  ],
+  // External Secrets Operator
+  externalsecrets: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'store', label: 'Store', width: 'w-36' },
+    { key: 'provider', label: 'Provider', width: 'w-28' },
+    { key: 'refreshInterval', label: 'Refresh', width: 'w-24' },
+    { key: 'lastSync', label: 'Last Sync', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  clusterexternalsecrets: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'namespaces', label: 'Namespaces', width: 'w-24' },
+    { key: 'failed', label: 'Failed', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  secretstores: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'provider', label: 'Provider', width: 'w-32' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  clustersecretstores: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'provider', label: 'Provider', width: 'w-32' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  // ============================================================================
+  // VELERO BACKUP & DISASTER RECOVERY
+  // ============================================================================
+  backups: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'storageLocation', label: 'Storage', width: 'w-36' },
+    { key: 'namespaces', label: 'Scope', width: 'w-24', tooltip: 'Included namespaces (* = all)' },
+    { key: 'duration', label: 'Duration', width: 'w-24' },
+    { key: 'expiry', label: 'Expires', width: 'w-24' },
+    { key: 'errors', label: 'Errors', width: 'w-16' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  restores: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'backupName', label: 'Backup', width: 'w-40' },
+    { key: 'duration', label: 'Duration', width: 'w-24' },
+    { key: 'errors', label: 'Errors', width: 'w-16' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  schedules: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'schedule', label: 'Schedule', width: 'w-32' },
+    { key: 'lastBackup', label: 'Last Backup', width: 'w-28' },
+    { key: 'paused', label: 'Paused', width: 'w-16' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  backupstoragelocations: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'provider', label: 'Provider', width: 'w-24' },
+    { key: 'bucket', label: 'Bucket', width: 'w-40' },
+    { key: 'default', label: 'Default', width: 'w-16' },
+    { key: 'lastValidation', label: 'Validated', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  // ============================================================================
+  // CLOUDNATIVEPG (CNPG) POSTGRESQL
+  // ============================================================================
+  clusters: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'instances', label: 'Instances', width: 'w-24', tooltip: 'Ready/Total' },
+    { key: 'primary', label: 'Primary', width: 'w-36' },
+    { key: 'image', label: 'Image', width: 'w-28' },
+    { key: 'storage', label: 'Storage', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  scheduledbackups: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'cluster', label: 'Cluster', width: 'w-36' },
+    { key: 'schedule', label: 'Schedule', width: 'w-36' },
+    { key: 'lastSchedule', label: 'Last Run', width: 'w-24' },
+    { key: 'suspended', label: 'Suspended', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  poolers: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'cluster', label: 'Cluster', width: 'w-36' },
+    { key: 'type', label: 'Type', width: 'w-16' },
+    { key: 'poolMode', label: 'Pool Mode', width: 'w-28' },
+    { key: 'instances', label: 'Instances', width: 'w-24', tooltip: 'Ready/Total' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  // ============================================================================
+  // ISTIO SERVICE MESH
+  // ============================================================================
+  virtualservices: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'hosts', label: 'Hosts', width: 'w-48' },
+    { key: 'gateways', label: 'Gateways', width: 'w-40' },
+    { key: 'routes', label: 'Routes', width: 'w-20', tooltip: 'HTTP + TCP + TLS routes' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  destinationrules: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'host', label: 'Host', width: 'w-48' },
+    { key: 'subsets', label: 'Subsets', width: 'w-20' },
+    { key: 'loadBalancer', label: 'LB Policy', width: 'w-28' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  serviceentries: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'hosts', label: 'Hosts', width: 'w-48' },
+    { key: 'location', label: 'Location', width: 'w-28' },
+    { key: 'ports', label: 'Ports', width: 'w-32' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  peerauthentications: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'mode', label: 'mTLS Mode', width: 'w-28' },
+    { key: 'selector', label: 'Selector', width: 'w-48' },
+    { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  authorizationpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-24' },
+    { key: 'action', label: 'Action', width: 'w-24' },
+    { key: 'rules', label: 'Rules', width: 'w-20' },
+    { key: 'selector', label: 'Selector', width: 'w-48' },
+    { key: 'age', label: 'Age', width: 'w-20' },
   ],
 }
 
@@ -3230,6 +3465,10 @@ function CellContent({ resource, kind, column, majorityNodeMinorVersion }: CellC
     case 'challenges':
       return <ChallengeCell resource={resource} column={column} />
     case 'gateways':
+      // Disambiguate Gateway API vs Istio Gateway by apiVersion
+      if (resource.apiVersion?.includes('networking.istio.io')) {
+        return <IstioGatewayCell resource={resource} column={column} />
+      }
       return <GatewayCell resource={resource} column={column} />
     case 'httproutes':
     case 'grpcroutes':
@@ -3254,6 +3493,17 @@ function CellContent({ resource, kind, column, majorityNodeMinorVersion }: CellC
     case 'rolebindings':
     case 'clusterrolebindings':
       return <RoleBindingCell resource={resource} column={column} />
+    case 'ingressclasses':
+      return <IngressClassCell resource={resource} column={column} />
+    case 'leases':
+      return <LeaseCell resource={resource} column={column} />
+    case 'priorityclasses':
+      return <PriorityClassCell resource={resource} column={column} />
+    case 'runtimeclasses':
+      return <RuntimeClassCell resource={resource} column={column} />
+    case 'mutatingwebhookconfigurations':
+    case 'validatingwebhookconfigurations':
+      return <WebhookConfigCell resource={resource} column={column} />
     case 'events':
       return <EventCell resource={resource} column={column} />
     // FluxCD GitOps resources
@@ -3299,6 +3549,15 @@ function CellContent({ resource, kind, column, majorityNodeMinorVersion }: CellC
       return <ArgoApplicationSetCell resource={resource} column={column} />
     case 'appprojects':
       return <ArgoAppProjectCell resource={resource} column={column} />
+    // Kyverno / Policy Reports
+    case 'policyreports':
+      return <PolicyReportCell resource={resource} column={column} />
+    case 'clusterpolicyreports':
+      return <ClusterPolicyReportCell resource={resource} column={column} />
+    case 'kyvernopolicies':
+      return <KyvernoPolicyCell resource={resource} column={column} />
+    case 'clusterpolicies':
+      return <ClusterPolicyCell resource={resource} column={column} />
     // Trivy Operator
     case 'vulnerabilityreports':
       return <VulnerabilityReportCell resource={resource} column={column} />
@@ -3316,6 +3575,46 @@ function CellContent({ resource, kind, column, majorityNodeMinorVersion }: CellC
     case 'sbomreports':
     case 'clustersbomreports':
       return <SbomReportCell resource={resource} column={column} />
+    // External Secrets Operator
+    case 'externalsecrets':
+      return <ExternalSecretCell resource={resource} column={column} />
+    case 'clusterexternalsecrets':
+      return <ClusterExternalSecretCell resource={resource} column={column} />
+    case 'secretstores':
+      return <SecretStoreCell resource={resource} column={column} />
+    case 'clustersecretstores':
+      return <ClusterSecretStoreCell resource={resource} column={column} />
+    // Velero
+    case 'backups':
+      // Disambiguate CNPG vs Velero backups by apiVersion
+      if (resource.apiVersion?.includes('cnpg.io')) {
+        return <CNPGBackupCell resource={resource} column={column} />
+      }
+      return <BackupCell resource={resource} column={column} />
+    case 'restores':
+      return <RestoreCell resource={resource} column={column} />
+    case 'schedules':
+      return <ScheduleCell resource={resource} column={column} />
+    case 'backupstoragelocations':
+      return <BackupStorageLocationCell resource={resource} column={column} />
+    // CloudNativePG
+    case 'clusters':
+      return <CNPGClusterCell resource={resource} column={column} />
+    case 'scheduledbackups':
+      return <CNPGScheduledBackupCell resource={resource} column={column} />
+    case 'poolers':
+      return <CNPGPoolerCell resource={resource} column={column} />
+    // Istio Service Mesh
+    case 'virtualservices':
+      return <VirtualServiceCell resource={resource} column={column} />
+    case 'destinationrules':
+      return <DestinationRuleCell resource={resource} column={column} />
+    case 'serviceentries':
+      return <ServiceEntryCell resource={resource} column={column} />
+    case 'peerauthentications':
+      return <PeerAuthenticationCell resource={resource} column={column} />
+    case 'authorizationpolicies':
+      return <AuthorizationPolicyCell resource={resource} column={column} />
     default:
       // Generic cell for CRDs and unknown resources
       return <GenericCell resource={resource} column={column} />
@@ -4412,10 +4711,110 @@ function RoleCell({ resource, column }: { resource: any; column: string }) {
 
 function RoleBindingCell({ resource, column }: { resource: any; column: string }) {
   switch (column) {
-    case 'role':
-      return <span className="text-sm text-theme-text-secondary">{getRoleBindingRole(resource)}</span>
-    case 'subjects':
-      return <span className="text-sm text-theme-text-secondary">{getRoleBindingSubjectCount(resource)}</span>
+    case 'role': {
+      const ref = resource.roleRef
+      if (!ref?.name) return <span className="text-sm text-theme-text-tertiary">-</span>
+      const kindColor = ref.kind === 'ClusterRole' ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'
+      return (
+        <span className="text-sm text-theme-text-secondary inline-flex items-center gap-1.5">
+          <span className={clsx('px-1.5 py-0.5 rounded text-xs', kindColor)}>{ref.kind === 'ClusterRole' ? 'CR' : 'R'}</span>
+          {ref.name}
+        </span>
+      )
+    }
+    case 'subjects': {
+      const subjects: any[] = resource.subjects || []
+      if (subjects.length === 0) return <span className="text-sm text-theme-text-tertiary">0</span>
+      const preview = subjects.slice(0, 2).map((s: any) => {
+        const prefix = s.kind === 'ServiceAccount' ? 'sa:' : s.kind === 'Group' ? 'grp:' : ''
+        return prefix + s.name
+      }).join(', ')
+      const more = subjects.length > 2 ? ` +${subjects.length - 2}` : ''
+      return <span className="text-sm text-theme-text-secondary" title={subjects.map((s: any) => `${s.kind}:${s.name}`).join(', ')}>{preview}{more}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function IngressClassCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'controller':
+      return <span className="text-sm text-theme-text-secondary">{resource.spec?.controller || '-'}</span>
+    case 'default': {
+      const isDefault = resource.metadata?.annotations?.['ingressclass.kubernetes.io/is-default-class'] === 'true'
+      return <span className={clsx('text-sm', isDefault ? 'text-green-400' : 'text-theme-text-tertiary')}>{isDefault ? 'Yes' : 'No'}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function LeaseCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'holder':
+      return <span className="text-sm text-theme-text-secondary">{resource.spec?.holderIdentity || '-'}</span>
+    case 'renewTime': {
+      const renewTime = resource.spec?.renewTime
+      if (!renewTime) return <span className="text-sm text-theme-text-tertiary">-</span>
+      const elapsed = (Date.now() - new Date(renewTime).getTime()) / 1000
+      const duration = resource.spec?.leaseDurationSeconds || 0
+      const isStale = duration > 0 && elapsed > duration
+      const diff = Date.now() - new Date(renewTime).getTime()
+      const seconds = Math.floor(diff / 1000)
+      const label = seconds < 60 ? `${seconds}s ago` : seconds < 3600 ? `${Math.floor(seconds / 60)}m ago` : seconds < 86400 ? `${Math.floor(seconds / 3600)}h ago` : `${Math.floor(seconds / 86400)}d ago`
+      return <span className={clsx('text-sm', isStale ? 'text-red-400' : 'text-green-400')} title={new Date(renewTime).toLocaleString()}>{label}</span>
+    }
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function PriorityClassCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'value':
+      return <span className="text-sm text-theme-text-secondary">{resource.value ?? '-'}</span>
+    case 'globalDefault':
+      return <span className={clsx('text-sm', resource.globalDefault ? 'text-green-400' : 'text-theme-text-tertiary')}>{resource.globalDefault ? 'Yes' : 'No'}</span>
+    case 'preemptionPolicy':
+      return <span className="text-sm text-theme-text-secondary">{resource.preemptionPolicy || 'PreemptLowerPriority'}</span>
+    case 'description':
+      return resource.description
+        ? <span className="text-sm text-theme-text-secondary truncate" title={resource.description}>{resource.description}</span>
+        : <span className="text-sm text-theme-text-tertiary">-</span>
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function RuntimeClassCell({ resource, column }: { resource: any; column: string }) {
+  switch (column) {
+    case 'handler':
+      return <span className="text-sm text-theme-text-secondary">{resource.handler || '-'}</span>
+    default:
+      return <span className="text-sm text-theme-text-tertiary">-</span>
+  }
+}
+
+function WebhookConfigCell({ resource, column }: { resource: any; column: string }) {
+  const webhooks = resource.webhooks || []
+  switch (column) {
+    case 'webhooks':
+      return <span className="text-sm text-theme-text-secondary">{webhooks.length}</span>
+    case 'failurePolicy': {
+      const hasFail = webhooks.some((w: any) => w.failurePolicy === 'Fail')
+      return hasFail
+        ? <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-400">Fail</span>
+        : <span className="text-sm text-theme-text-secondary">Ignore</span>
+    }
+    case 'target': {
+      if (webhooks.length === 0) return <span className="text-sm text-theme-text-tertiary">-</span>
+      const first = webhooks[0]
+      const svc = first.clientConfig?.service
+      const target = svc ? `${svc.namespace}/${svc.name}` : first.clientConfig?.url || '-'
+      const more = webhooks.length > 1 ? ` +${webhooks.length - 1}` : ''
+      return <span className="text-sm text-theme-text-secondary truncate" title={target}>{target}{more && <span className="text-theme-text-tertiary">{more}</span>}</span>
+    }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
   }

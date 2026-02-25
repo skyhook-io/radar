@@ -1,4 +1,7 @@
-package traffic
+// Package portforward provides shared metrics port-forwarding infrastructure.
+// It is used by both the traffic package (for Caretta/Hubble) and the prometheus
+// package (for resource metrics), breaking what would otherwise be an import cycle.
+package portforward
 
 import (
 	"context"
@@ -19,7 +22,7 @@ import (
 	"k8s.io/client-go/transport/spdy"
 )
 
-// MetricsPortForward manages port-forwarding to metrics services for traffic data
+// MetricsPortForward manages port-forwarding to metrics services
 type MetricsPortForward struct {
 	mu sync.RWMutex
 
@@ -36,25 +39,13 @@ type MetricsPortForward struct {
 	stopCh chan struct{}
 	cancel context.CancelFunc
 
-	// K8s clients (stored to avoid import cycle)
+	// K8s clients
 	k8sClient kubernetes.Interface
 	k8sConfig *rest.Config
 }
 
-// Global metrics port-forward instance
-var metricsPortForward = &MetricsPortForward{}
-
-// SetK8sClients sets the K8s client and config for port-forwarding
-// Must be called before using port-forward features
-func SetK8sClients(client kubernetes.Interface, config *rest.Config) {
-	metricsPortForward.mu.Lock()
-	defer metricsPortForward.mu.Unlock()
-	metricsPortForward.k8sClient = client
-	metricsPortForward.k8sConfig = config
-}
-
-// MetricsConnectionInfo contains info about the metrics connection
-type MetricsConnectionInfo struct {
+// ConnectionInfo contains info about the metrics connection
+type ConnectionInfo struct {
 	Connected   bool   `json:"connected"`
 	LocalPort   int    `json:"localPort,omitempty"`
 	Address     string `json:"address,omitempty"`
@@ -64,8 +55,20 @@ type MetricsConnectionInfo struct {
 	Error       string `json:"error,omitempty"`
 }
 
-// StartMetricsPortForward starts a port-forward to the specified metrics service
-func StartMetricsPortForward(ctx context.Context, namespace, serviceName string, targetPort int, contextName string) (*MetricsConnectionInfo, error) {
+// Global metrics port-forward instance
+var metricsPortForward = &MetricsPortForward{}
+
+// SetK8sClients sets the K8s client and config for port-forwarding.
+// Must be called before using port-forward features.
+func SetK8sClients(client kubernetes.Interface, config *rest.Config) {
+	metricsPortForward.mu.Lock()
+	defer metricsPortForward.mu.Unlock()
+	metricsPortForward.k8sClient = client
+	metricsPortForward.k8sConfig = config
+}
+
+// Start starts a port-forward to the specified metrics service.
+func Start(ctx context.Context, namespace, serviceName string, targetPort int, contextName string) (*ConnectionInfo, error) {
 	metricsPortForward.mu.Lock()
 	defer metricsPortForward.mu.Unlock()
 
@@ -74,7 +77,7 @@ func StartMetricsPortForward(ctx context.Context, namespace, serviceName string,
 		metricsPortForward.namespace == namespace &&
 		metricsPortForward.serviceName == serviceName &&
 		metricsPortForward.contextName == contextName {
-		return &MetricsConnectionInfo{
+		return &ConnectionInfo{
 			Connected:   true,
 			LocalPort:   metricsPortForward.localPort,
 			Address:     fmt.Sprintf("http://localhost:%d", metricsPortForward.localPort),
@@ -85,7 +88,7 @@ func StartMetricsPortForward(ctx context.Context, namespace, serviceName string,
 	}
 
 	// Stop any existing port-forward first
-	stopMetricsPortForwardLocked()
+	stopLocked()
 
 	client := metricsPortForward.k8sClient
 	config := metricsPortForward.k8sConfig
@@ -95,7 +98,7 @@ func StartMetricsPortForward(ctx context.Context, namespace, serviceName string,
 	}
 
 	// Find a pod backing the service
-	podName, err := findPodForMetricsService(ctx, client, namespace, serviceName, targetPort)
+	podName, err := findPodForService(ctx, client, namespace, serviceName)
 	if err != nil {
 		return nil, fmt.Errorf("failed to find pod for service %s: %w", serviceName, err)
 	}
@@ -126,7 +129,7 @@ func StartMetricsPortForward(ctx context.Context, namespace, serviceName string,
 	errCh := make(chan error, 1)
 
 	go func() {
-		err := runMetricsPortForward(pfCtx, client, config, namespace, podName, localPort, targetPort, stopCh, readyCh)
+		err := runPortForward(pfCtx, client, config, namespace, podName, localPort, targetPort, stopCh, readyCh)
 		if err != nil {
 			errCh <- err
 		}
@@ -143,9 +146,9 @@ func StartMetricsPortForward(ctx context.Context, namespace, serviceName string,
 	// Wait for ready or error (with timeout)
 	select {
 	case <-readyCh:
-		log.Printf("[traffic] Metrics port-forward ready: localhost:%d -> %s/%s:%d (context: %s)",
+		log.Printf("[portforward] Ready: localhost:%d -> %s/%s:%d (context: %s)",
 			localPort, namespace, serviceName, targetPort, contextName)
-		return &MetricsConnectionInfo{
+		return &ConnectionInfo{
 			Connected:   true,
 			LocalPort:   localPort,
 			Address:     fmt.Sprintf("http://localhost:%d", localPort),
@@ -155,33 +158,33 @@ func StartMetricsPortForward(ctx context.Context, namespace, serviceName string,
 		}, nil
 
 	case err := <-errCh:
-		stopMetricsPortForwardLocked()
+		stopLocked()
 		return nil, fmt.Errorf("port-forward failed: %w", err)
 
 	case <-time.After(10 * time.Second):
-		stopMetricsPortForwardLocked()
+		stopLocked()
 		return nil, fmt.Errorf("port-forward timed out")
 
 	case <-ctx.Done():
-		stopMetricsPortForwardLocked()
+		stopLocked()
 		return nil, ctx.Err()
 	}
 }
 
-// StopMetricsPortForward stops the active metrics port-forward
-func StopMetricsPortForward() {
+// Stop stops the active metrics port-forward.
+func Stop() {
 	metricsPortForward.mu.Lock()
 	defer metricsPortForward.mu.Unlock()
-	stopMetricsPortForwardLocked()
+	stopLocked()
 }
 
-// stopMetricsPortForwardLocked stops the port-forward (caller must hold lock)
-func stopMetricsPortForwardLocked() {
+// stopLocked stops the port-forward (caller must hold lock)
+func stopLocked() {
 	if !metricsPortForward.active {
 		return
 	}
 
-	log.Printf("[traffic] Stopping metrics port-forward: localhost:%d -> %s/%s",
+	log.Printf("[portforward] Stopping: localhost:%d -> %s/%s",
 		metricsPortForward.localPort, metricsPortForward.namespace, metricsPortForward.serviceName)
 
 	if metricsPortForward.cancel != nil {
@@ -207,9 +210,9 @@ func stopMetricsPortForwardLocked() {
 	metricsPortForward.cancel = nil
 }
 
-// GetMetricsAddress returns the current metrics address if connected
-// Returns empty string if not connected or if the connection is for a different context
-func GetMetricsAddress(currentContext string) string {
+// GetAddress returns the current metrics address if connected.
+// Returns empty string if not connected or if the connection is for a different context.
+func GetAddress(currentContext string) string {
 	metricsPortForward.mu.RLock()
 	defer metricsPortForward.mu.RUnlock()
 
@@ -219,7 +222,7 @@ func GetMetricsAddress(currentContext string) string {
 
 	// Validate context matches
 	if metricsPortForward.contextName != currentContext {
-		log.Printf("[traffic] Metrics port-forward context mismatch: have %q, want %q",
+		log.Printf("[portforward] Context mismatch: have %q, want %q",
 			metricsPortForward.contextName, currentContext)
 		return ""
 	}
@@ -227,16 +230,16 @@ func GetMetricsAddress(currentContext string) string {
 	return fmt.Sprintf("http://localhost:%d", metricsPortForward.localPort)
 }
 
-// GetConnectionInfo returns current connection info
-func GetConnectionInfo() *MetricsConnectionInfo {
+// GetConnectionInfo returns current connection info.
+func GetConnectionInfo() *ConnectionInfo {
 	metricsPortForward.mu.RLock()
 	defer metricsPortForward.mu.RUnlock()
 
 	if !metricsPortForward.active {
-		return &MetricsConnectionInfo{Connected: false}
+		return &ConnectionInfo{Connected: false}
 	}
 
-	return &MetricsConnectionInfo{
+	return &ConnectionInfo{
 		Connected:   true,
 		LocalPort:   metricsPortForward.localPort,
 		Address:     fmt.Sprintf("http://localhost:%d", metricsPortForward.localPort),
@@ -246,18 +249,17 @@ func GetConnectionInfo() *MetricsConnectionInfo {
 	}
 }
 
-// IsConnectedForContext checks if we have an active connection for the given context
+// IsConnectedForContext checks if we have an active connection for the given context.
 func IsConnectedForContext(contextName string) bool {
 	metricsPortForward.mu.RLock()
 	defer metricsPortForward.mu.RUnlock()
 	return metricsPortForward.active && metricsPortForward.contextName == contextName
 }
 
-// runMetricsPortForward runs the actual port-forward
-func runMetricsPortForward(ctx context.Context, client kubernetes.Interface, config *rest.Config,
+// runPortForward runs the actual port-forward
+func runPortForward(ctx context.Context, client kubernetes.Interface, config *rest.Config,
 	namespace, podName string, localPort, targetPort int, stopCh chan struct{}, readyCh chan struct{}) error {
 
-	// Build port-forward request
 	req := client.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
@@ -284,17 +286,14 @@ func runMetricsPortForward(ctx context.Context, client kubernetes.Interface, con
 	return pf.ForwardPorts()
 }
 
-// findPodForMetricsService finds a running pod backing the given service
-func findPodForMetricsService(ctx context.Context, client kubernetes.Interface, namespace, serviceName string, targetPort int) (string, error) {
-	// Get service
+// findPodForService finds a running pod backing the given service
+func findPodForService(ctx context.Context, client kubernetes.Interface, namespace, serviceName string) (string, error) {
 	svc, err := client.CoreV1().Services(namespace).Get(ctx, serviceName, metav1.GetOptions{})
 	if err != nil {
 		return "", fmt.Errorf("failed to get service: %w", err)
 	}
 
-	// Handle headless services (ClusterIP: None)
 	if svc.Spec.ClusterIP == "None" || svc.Spec.ClusterIP == "" {
-		// For headless services, find pods directly by selector
 		if svc.Spec.Selector == nil || len(svc.Spec.Selector) == 0 {
 			return "", fmt.Errorf("headless service has no selector")
 		}
@@ -302,7 +301,6 @@ func findPodForMetricsService(ctx context.Context, client kubernetes.Interface, 
 		return "", fmt.Errorf("service has no selector")
 	}
 
-	// Build label selector
 	var selector string
 	for k, v := range svc.Spec.Selector {
 		if selector != "" {
@@ -311,7 +309,6 @@ func findPodForMetricsService(ctx context.Context, client kubernetes.Interface, 
 		selector += k + "=" + v
 	}
 
-	// Find pods matching selector
 	pods, err := client.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
 		LabelSelector: selector,
 	})
@@ -323,7 +320,6 @@ func findPodForMetricsService(ctx context.Context, client kubernetes.Interface, 
 		return "", fmt.Errorf("no pods found matching selector")
 	}
 
-	// Return first running pod
 	for _, pod := range pods.Items {
 		if pod.Status.Phase == corev1.PodRunning {
 			return pod.Name, nil

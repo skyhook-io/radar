@@ -41,6 +41,7 @@ interface TrafficGraphProps {
   showNamespaceGroups?: boolean
   serviceCategories?: Map<string, string>
   addonMode?: AddonMode
+  trafficSource?: string
 }
 
 // Phase 2.1: Calculate edge width based on connection count (log scale)
@@ -133,6 +134,7 @@ interface TrafficNodeData extends Record<string, unknown> {
   serviceCategory?: string // For external nodes: database, cloud, etc.
   ports?: PortInfo[] // All inbound ports sorted by connection count
   nodeHeight?: number // Dynamic height based on ports
+  connLabel?: string // Label for connections: "conn" or "req/s"
 }
 
 // Service category colors for external nodes
@@ -255,9 +257,9 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
         </div>
       )}
       {/* Ports section */}
-      {data.ports && data.ports.length > 0 && (
+      {data.ports && data.ports.filter(p => p.port !== 0).length > 0 && (
         <div className="mt-1.5 space-y-0.5">
-          {data.ports.slice(0, MAX_VISIBLE_PORTS).map((portInfo) => (
+          {data.ports.filter(p => p.port !== 0).slice(0, MAX_VISIBLE_PORTS).map((portInfo) => (
             <div key={portInfo.port} className="flex items-center justify-between gap-1 text-xs">
               <span className={clsx(
                 'font-mono',
@@ -277,18 +279,18 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
               </span>
             </div>
           ))}
-          {data.ports.length > MAX_VISIBLE_PORTS && (
+          {data.ports.filter(p => p.port !== 0).length > MAX_VISIBLE_PORTS && (
             <div className={clsx(
               'text-xs',
               (hasNamespaceColor || isAddonNode) ? 'text-white/50' : 'text-theme-text-tertiary'
             )}>
-              +{data.ports.length - MAX_VISIBLE_PORTS} more
+              +{data.ports.filter(p => p.port !== 0).length - MAX_VISIBLE_PORTS} more
             </div>
           )}
         </div>
       )}
-      {/* Total connections (only if no ports shown) */}
-      {(!data.ports || data.ports.length === 0) && data.totalConnections && data.totalConnections > 0 && (
+      {/* Total connections (only if no ports shown, or all ports are 0) */}
+      {(!data.ports || data.ports.filter(p => p.port !== 0).length === 0) && data.totalConnections && data.totalConnections > 0 && (
         <div className="mt-1">
           <span className={clsx(
             'text-xs truncate',
@@ -298,7 +300,7 @@ function TrafficNode({ data }: { data: TrafficNodeData }) {
                 ? 'text-white/70'
                 : 'text-theme-text-tertiary'
           )}>
-            {formatConnections(data.totalConnections)} conn
+            {formatConnections(data.totalConnections)} {data.connLabel || 'conn'}
           </span>
         </div>
       )}
@@ -369,10 +371,12 @@ function DetailsPanel({
   selection,
   onClose,
   flows,
+  isIstio,
 }: {
   selection: Selection
   onClose: () => void
   flows: AggregatedFlow[]
+  isIstio: boolean
 }) {
   if (!selection) return null
 
@@ -480,8 +484,8 @@ function DetailsPanel({
               )}
               {nodeData.totalConnections && (
                 <div className="text-xs text-theme-text-secondary">
-                  Total connections: <span className="text-theme-text-primary font-medium">
-                    {formatConnections(nodeData.totalConnections)}
+                  {isIstio ? 'Total request rate' : 'Total connections'}: <span className="text-theme-text-primary font-medium">
+                    {formatConnections(nodeData.totalConnections)}{isIstio ? '/s' : ''}
                   </span>
                 </div>
               )}
@@ -536,18 +540,25 @@ function DetailsPanel({
                           {flow.source.name}
                         </span>
                         <ArrowRight className="h-3 w-3 text-theme-text-tertiary shrink-0" />
-                        <span className="text-blue-400 font-mono">:{flow.port}</span>
+                        {flow.port !== 0 && (
+                          <span className="text-blue-400 font-mono">:{flow.port}</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 text-[10px]">
                         <span className="px-1 py-0.5 rounded bg-theme-bg text-theme-text-tertiary uppercase">
                           {flow.protocol || 'tcp'}
                         </span>
                         <span className="text-theme-text-secondary">
-                          {formatConnections(flow.connections)} conn
+                          {formatConnections(flow.connections)} {isIstio ? 'req/s' : 'conn'}
                         </span>
                         {(flow.bytesSent > 0 || flow.bytesRecv > 0) && (
                           <span className="text-theme-text-tertiary">
                             {formatBytes(flow.bytesSent + flow.bytesRecv)}
+                          </span>
+                        )}
+                        {flow.errorCount && flow.errorCount > 0 && (
+                          <span className="text-red-400">
+                            {formatConnections(flow.errorCount)} err
                           </span>
                         )}
                       </div>
@@ -573,18 +584,25 @@ function DetailsPanel({
                         <span className="text-theme-text-primary truncate flex-1">
                           {flow.destination.name}
                         </span>
-                        <span className="text-blue-400 font-mono">:{flow.port}</span>
+                        {flow.port !== 0 && (
+                          <span className="text-blue-400 font-mono">:{flow.port}</span>
+                        )}
                       </div>
                       <div className="flex items-center gap-2 text-[10px]">
                         <span className="px-1 py-0.5 rounded bg-theme-bg text-theme-text-tertiary uppercase">
                           {flow.protocol || 'tcp'}
                         </span>
                         <span className="text-theme-text-secondary">
-                          {formatConnections(flow.connections)} conn
+                          {formatConnections(flow.connections)} {isIstio ? 'req/s' : 'conn'}
                         </span>
                         {(flow.bytesSent > 0 || flow.bytesRecv > 0) && (
                           <span className="text-theme-text-tertiary">
                             {formatBytes(flow.bytesSent + flow.bytesRecv)}
+                          </span>
+                        )}
+                        {flow.errorCount && flow.errorCount > 0 && (
+                          <span className="text-red-400">
+                            {formatConnections(flow.errorCount)} err
                           </span>
                         )}
                       </div>
@@ -607,23 +625,35 @@ function DetailsPanel({
               </div>
 
               <div className="grid grid-cols-2 gap-2 text-xs">
-                <div className="p-2 rounded bg-theme-elevated">
-                  <div className="text-theme-text-tertiary">Port</div>
-                  <div className="text-theme-text-primary font-medium">{edgeData.port}</div>
-                </div>
+                {edgeData.port !== 0 && (
+                  <div className="p-2 rounded bg-theme-elevated">
+                    <div className="text-theme-text-tertiary">Port</div>
+                    <div className="text-theme-text-primary font-medium">{edgeData.port}</div>
+                  </div>
+                )}
                 <div className="p-2 rounded bg-theme-elevated">
                   <div className="text-theme-text-tertiary">Protocol</div>
                   <div className="text-theme-text-primary font-medium uppercase">{edgeData.protocol}</div>
                 </div>
                 <div className="p-2 rounded bg-theme-elevated">
-                  <div className="text-theme-text-tertiary">Connections</div>
-                  <div className="text-theme-text-primary font-medium">{formatConnections(edgeData.connections)}</div>
+                  <div className="text-theme-text-tertiary">{isIstio ? 'Request Rate' : 'Connections'}</div>
+                  <div className="text-theme-text-primary font-medium">
+                    {formatConnections(edgeData.connections)}{isIstio ? '/s' : ''}
+                  </div>
                 </div>
-                {edgeData.flow && (
+                {edgeData.flow && (edgeData.flow.bytesSent > 0 || edgeData.flow.bytesRecv > 0) && (
                   <div className="p-2 rounded bg-theme-elevated">
                     <div className="text-theme-text-tertiary">Data</div>
                     <div className="text-theme-text-primary font-medium">
                       {formatBytes(edgeData.flow.bytesSent + edgeData.flow.bytesRecv)}
+                    </div>
+                  </div>
+                )}
+                {edgeData.flow?.errorCount && edgeData.flow.errorCount > 0 && (
+                  <div className="p-2 rounded bg-red-500/10 border border-red-500/30">
+                    <div className="text-red-400">Errors (5xx)</div>
+                    <div className="text-red-400 font-medium">
+                      {formatConnections(edgeData.flow.errorCount)}/s
                     </div>
                   </div>
                 )}
@@ -693,7 +723,9 @@ const nodeTypes = {
   addonGroup: AddonGroupNode,
 }
 
-export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show' }: TrafficGraphProps) {
+export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups = false, serviceCategories, addonMode = 'show', trafficSource = '' }: TrafficGraphProps) {
+  const isIstio = trafficSource === 'istio'
+  const connLabel = isIstio ? 'req/s' : 'conn'
   const [layoutedNodes, setLayoutedNodes] = useState<Node<TrafficNodeData>[]>([])
   const [layoutedEdges, setLayoutedEdges] = useState<Edge[]>([])
   const [selection, setSelection] = useState<Selection | null>(null)
@@ -817,6 +849,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
             isAddonNode: sourceIsAddon, // AddonInternet is NOT an addon node
             serviceCategory: flow.source.kind.toLowerCase() === 'external' ? serviceCategories?.get(flow.source.name) : undefined,
             nodeHeight: NODE_BASE_HEIGHT,
+            connLabel,
           },
         })
       }
@@ -849,6 +882,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
               serviceCategory: undefined,
               ports: destPorts,
               nodeHeight: getNodeHeight(destPorts),
+              connLabel,
             },
           })
         }
@@ -878,6 +912,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
             serviceCategory: flow.destination.kind.toLowerCase() === 'external' ? serviceCategories?.get(flow.destination.name) : undefined,
             ports: destPorts,
             nodeHeight: getNodeHeight(destPorts),
+            connLabel,
           },
         })
       }
@@ -901,8 +936,10 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       // Phase 2.1: Edge width based on connection count
       const strokeWidth = getEdgeWidth(flow.connections)
 
-      // Phase 2.2: Edge label - just connection count (port shown on node)
-      const edgeLabel = formatConnections(flow.connections)
+      // Phase 2.2: Edge label - connection count with unit suffix
+      const edgeLabel = isIstio
+        ? `${formatConnections(flow.connections)}/s`
+        : formatConnections(flow.connections)
 
       edgeList.push({
         id: edgeId,
@@ -939,7 +976,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
       addonGroupEdge, // Pass this for adding after group is created
       addonGroupOutEdge, // Pass this for adding group → kubernetes edge
     }
-  }, [flows, hotPathThreshold, showNamespaceGroups, serviceCategories, addonMode])
+  }, [flows, hotPathThreshold, showNamespaceGroups, serviceCategories, addonMode, isIstio, connLabel])
 
   // Apply ELK layout
   const applyLayout = useCallback(async () => {
@@ -1242,6 +1279,7 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
           selection={selection}
           onClose={() => setSelection(null)}
           flows={flows}
+          isIstio={isIstio}
         />
       )}
     </div>

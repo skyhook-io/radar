@@ -1,6 +1,6 @@
 import { Shield, Users } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ResourceLink } from '../drawer-components'
+import { Section, PropertyList, Property, ResourceLink, AlertBanner } from '../drawer-components'
 
 interface RoleBindingRendererProps {
   data: any
@@ -34,9 +34,24 @@ function getRoleRefKindBadgeClass(kind: string): string {
 export function RoleBindingRenderer({ data, onNavigate }: RoleBindingRendererProps) {
   const roleRef = data.roleRef || {}
   const subjects: any[] = data.subjects || []
+  const isClusterRoleBinding = data.kind === 'ClusterRoleBinding'
 
   return (
     <>
+      {subjects.length === 0 && (
+        <AlertBanner
+          variant="warning"
+          title="No Subjects"
+          message="This binding has no subjects — it has no effect until subjects are added."
+        />
+      )}
+
+      {isClusterRoleBinding && (
+        <div className="p-2 bg-blue-500/10 border border-blue-500/30 rounded text-xs text-blue-300/80 flex items-start gap-2">
+          <span>ClusterRoleBinding grants permissions across all namespaces.</span>
+        </div>
+      )}
+
       <Section title="Role Reference" icon={Shield}>
         <PropertyList>
           <Property

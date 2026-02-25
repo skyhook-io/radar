@@ -374,7 +374,13 @@ POST /api/flux/{kind}/{ns}/{name}/suspend         # Suspend reconciliation
 POST /api/flux/{kind}/{ns}/{name}/resume          # Resume reconciliation
 ```
 
+### Cost (OpenCost)
+```
+GET  /api/opencost/summary                    # Namespace-level cost summary (requires OpenCost + Prometheus)
+```
+
 ### Traffic (Service Mesh)
+Three traffic sources: **Hubble** (Cilium eBPF via gRPC), **Caretta** (eBPF via Prometheus), **Istio** (`istio_requests_total`/`istio_tcp_connections_opened_total` via Prometheus). Auto-detected at startup; user can switch active source via the UI dropdown when multiple are available.
 ```
 GET  /api/traffic/sources                     # Available traffic data sources
 GET  /api/traffic/source                      # Active traffic source
@@ -437,10 +443,16 @@ GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbos
 - Owner reference traversal for parent-child relationships
 - Selector-based matching for Service→Pod, Deployment→ReplicaSet
 - Two view modes:
-  - `traffic`: Network flow (Ingress/Gateway → HTTPRoute → Service → Pod)
+  - `traffic`: Network flow (Ingress/Gateway → HTTPRoute → Service → Pod, also IstioGateway → VirtualService → Service)
   - `resources`: Full hierarchy (Deployment → ReplicaSet → Pod)
 - Node types: Ingress, Gateway, HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, Service, Deployment, DaemonSet, StatefulSet, ReplicaSet, Pod, Job, CronJob, ConfigMap, Secret, HorizontalPodAutoscaler, PersistentVolumeClaim, PersistentVolume, StorageClass, PodDisruptionBudget, VerticalPodAutoscaler
-- Edge type semantics (these drive UI grouping in Related Resources): `EdgeManages` (owner), `EdgeUses` (autoscalers like HPA/VPA/KEDA → Scalers group), `EdgeProtects` (PDB → Policies group), `EdgeConfigures` (ConfigMap/Secret), `EdgeExposes` (Service/Ingress/Gateway). Choose the right edge type — don't reuse one just because the code pattern is similar.
+- Edge type semantics (these drive UI grouping in Related Resources): `EdgeManages` (owner), `EdgeUses` (autoscalers like HPA/VPA/KEDA → Scalers group), `EdgeProtects` (PDB → Policies group), `EdgeConfigures` (ConfigMap/Secret/DestinationRule), `EdgeExposes` (Service/Ingress/Gateway/VirtualService). Choose the right edge type — don't reuse one just because the code pattern is similar.
+- Istio service mesh nodes: VirtualService, DestinationRule, IstioGateway (note: uses "istiogateway" node ID prefix to disambiguate from Gateway API's "gateway"), ServiceEntry, PeerAuthentication, AuthorizationPolicy
+  - VirtualService → Service edges (EdgeExposes, via spec.http/tcp/tls route destinations, parses short/FQDN Istio host format)
+  - Istio Gateway → VirtualService edges (EdgeExposes, via spec.gateways[] references)
+  - DestinationRule → Service edges (EdgeConfigures, via spec.host)
+  - Uses `GetGVRWithGroup("Gateway", "networking.istio.io")` to disambiguate Istio Gateway from Gateway API Gateway
+  - Frontend detects Istio vs Gateway API Gateways via `data.apiVersion?.includes('networking.istio.io')`
 - GitOps nodes: Application (ArgoCD), Kustomization, HelmRelease, GitRepository (FluxCD)
   - Connected to managed resources via status.resources (ArgoCD) or status.inventory (FluxCD Kustomization)
   - HelmRelease connects to resources via FluxCD labels (`helm.toolkit.fluxcd.io/name`) or standard Helm label (`app.kubernetes.io/instance`). Matches Deployment, Service, StatefulSet, DaemonSet, Job, CronJob, Rollout.
@@ -535,6 +547,7 @@ Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 - Register in: `renderers/index.ts` (export), `ResourceDetailDrawer.tsx` (import + knownKinds + render line)
 - Use `AlertBanner` for problem detection, `ConditionsSection` for K8s conditions
 - Long text in alerts/banners needs `break-all` class for CSS word breaking
+- Supported CRD integrations: Argo Rollouts, Argo Workflows, cert-manager, Gateway API, Bitnami Sealed Secrets, FluxCD, ArgoCD, Trivy Operator, Karpenter, KEDA, VPA, Prometheus Operator, Kyverno/PolicyReport, Velero (Backup, Restore, Schedule, BackupStorageLocation, VolumeSnapshotLocation), External Secrets Operator (ExternalSecret, ClusterExternalSecret, SecretStore, ClusterSecretStore), CloudNativePG (Cluster, Backup, ScheduledBackup, Pooler)
 
 ## Tech Stack
 

@@ -26,6 +26,7 @@ import (
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/opencost"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -190,6 +191,9 @@ func (s *Server) setupRoutes() {
 
 			// Prometheus metrics routes
 			prometheuspkg.RegisterRoutes(r)
+
+			// OpenCost routes
+			opencost.RegisterRoutes(r)
 
 			// FluxCD routes
 			r.Post("/flux/{kind}/{namespace}/{name}/reconcile", s.handleFluxReconcile)

@@ -8,6 +8,9 @@ import { getNodePoolStatus, getNodeClaimStatus } from './resource-utils-karpente
 import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda'
 import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus } from './resource-utils-flux'
 import { getArgoApplicationStatus, getArgoApplicationSetStatus } from './resource-utils-argo'
+import { getPolicyReportStatus as _getPolicyReportStatus, getKyvernoPolicyStatus as _getKyvernoPolicyStatus } from './resource-utils-kyverno'
+import { getBackupStatus as _getBackupStatus, getRestoreStatus as _getRestoreStatus, getScheduleStatus as _getScheduleStatus, getBSLStatus as _getBSLStatus } from './resource-utils-velero'
+import { getExternalSecretStatus as _getExternalSecretStatus, getClusterExternalSecretStatus as _getClusterExternalSecretStatus, getSecretStoreStatus as _getSecretStoreStatus, getClusterSecretStoreStatus as _getClusterSecretStoreStatus } from './resource-utils-eso'
 
 // ============================================================================
 // STATUS & HEALTH UTILITIES
@@ -1376,6 +1379,16 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'nodeclaims') return getNodeClaimStatus(resource).text
       if (kindLower === 'scaledobjects') return getScaledObjectStatus(resource).text
       if (kindLower === 'scaledjobs') return getScaledJobStatus(resource).text
+      if (kindLower === 'policyreports' || kindLower === 'clusterpolicyreports') return _getPolicyReportStatus(resource).text
+      if (kindLower === 'kyvernopolicies' || kindLower === 'clusterpolicies') return _getKyvernoPolicyStatus(resource).text
+      if (kindLower === 'backups') return _getBackupStatus(resource).text
+      if (kindLower === 'restores') return _getRestoreStatus(resource).text
+      if (kindLower === 'schedules') return _getScheduleStatus(resource).text
+      if (kindLower === 'backupstoragelocations') return _getBSLStatus(resource).text
+      if (kindLower === 'externalsecrets') return _getExternalSecretStatus(resource).text
+      if (kindLower === 'clusterexternalsecrets') return _getClusterExternalSecretStatus(resource).text
+      if (kindLower === 'secretstores') return _getSecretStoreStatus(resource).text
+      if (kindLower === 'clustersecretstores') return _getClusterSecretStoreStatus(resource).text
       // Generic CRDs: try status.phase, then Ready condition
       if (resource.status?.phase) return resource.status.phase
       {
@@ -1487,3 +1500,46 @@ export {
   getScaledJobTriggerCount,
   getScaledJobTriggers,
 } from './resource-utils-keda'
+
+// ============================================================================
+// KYVERNO / POLICY REPORT UTILITIES — re-exported from resource-utils-kyverno.ts
+// ============================================================================
+export {
+  getPolicyReportStatus,
+  getPolicyReportSummary,
+  getPolicyReportResults,
+  getPolicyReportResultCount,
+  getPolicyReportScope,
+  getPolicyReportSource,
+  getClusterPolicyReportStatus,
+  getKyvernoPolicyStatus,
+  getKyvernoPolicyAction,
+  getKyvernoPolicyRuleCount,
+  getKyvernoPolicyRuleTypes,
+  getKyvernoPolicyRules,
+  getKyvernoPolicyBackground,
+  getKyvernoPolicyRuleCountByType,
+  getClusterPolicyStatus,
+  getClusterPolicyAction,
+  getClusterPolicyRuleCount,
+} from './resource-utils-kyverno'
+
+// ============================================================================
+// EXTERNAL SECRETS OPERATOR UTILITIES — re-exported from resource-utils-eso.ts
+// ============================================================================
+export {
+  getExternalSecretStatus,
+  getExternalSecretStore,
+  getExternalSecretRefreshInterval,
+  getExternalSecretSecretCount,
+  getExternalSecretLastSync,
+  getExternalSecretTargetName,
+  getExternalSecretProvider,
+  getClusterExternalSecretStatus,
+  getClusterExternalSecretNamespaceCount,
+  getClusterExternalSecretFailedCount,
+  getSecretStoreStatus,
+  getSecretStoreProviderType,
+  getSecretStoreProviderKey,
+  getClusterSecretStoreStatus,
+} from './resource-utils-eso'

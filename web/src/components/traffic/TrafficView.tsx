@@ -1,12 +1,12 @@
 import { useState, useEffect, useMemo, useRef, useCallback } from 'react'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
-import { useTrafficSources, useTrafficFlows, useTrafficConnect } from '../../api/traffic'
+import { useTrafficSources, useTrafficFlows, useTrafficConnect, useSetTrafficSource } from '../../api/traffic'
 import { useClusterInfo } from '../../api/client'
 import type { TrafficWizardState, AggregatedFlow } from '../../types'
 import { TrafficWizard } from './TrafficWizard'
 import { TrafficGraph } from './TrafficGraph'
 import { TrafficFilterSidebar } from './TrafficFilterSidebar'
-import { Loader2, RefreshCw, Filter, Plug } from 'lucide-react'
+import { Loader2, RefreshCw, Filter, Plug, ChevronDown } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 
@@ -351,7 +351,10 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const [connectionError, setConnectionError] = useState<string | null>(null)
   const queryClient = useQueryClient()
   const connectMutation = useTrafficConnect()
+  const setSourceMutation = useSetTrafficSource()
   const hasAutoConnectedRef = useRef(false)
+  const [sourcePickerOpen, setSourcePickerOpen] = useState(false)
+  const sourcePickerRef = useRef<HTMLDivElement>(null)
 
   // Track cluster context to reset state on cluster change
   const { data: clusterInfo } = useClusterInfo()
@@ -372,6 +375,18 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     lastClusterRef.current = currentCluster
   }, [clusterInfo?.context, queryClient])
 
+  // Close source picker on outside click
+  useEffect(() => {
+    if (!sourcePickerOpen) return
+    const handler = (e: MouseEvent) => {
+      if (sourcePickerRef.current && !sourcePickerRef.current.contains(e.target as Node)) {
+        setSourcePickerOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [sourcePickerOpen])
+
   const {
     data: sourcesData,
     isLoading: sourcesLoading,
@@ -381,6 +396,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
   const {
     data: flowsData,
     isLoading: flowsLoading,
+    isFetching: flowsFetching,
     refetch: refetchFlowsRaw,
   } = useTrafficFlows({
     namespaces,
@@ -389,6 +405,14 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
     enabled: wizardState === 'ready' && !isConnecting && !connectionError,
   })
   const [refetchFlows, isRefreshAnimating] = useRefreshAnimation(refetchFlowsRaw)
+
+  // Auto-retry when flows return with warning but no data (e.g., port-forward not ready yet)
+  useEffect(() => {
+    if (flowsData?.warning && (!flowsData.aggregated || flowsData.aggregated.length === 0) && !flowsFetching) {
+      const timer = setTimeout(() => refetchFlowsRaw(), 2000)
+      return () => clearTimeout(timer)
+    }
+  }, [flowsData, flowsFetching, refetchFlowsRaw])
 
   // Filter flows based on user preferences
   // Note: namespace filtering is done server-side via the global namespace selector
@@ -854,8 +878,51 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
           <div className="flex items-center gap-4">
             <h2 className="text-sm font-medium text-theme-text-primary">Traffic Flow</h2>
             {(() => {
-              const activeSource = sourcesData?.detected.find(s => s.status === 'available')
+              const availableSources = sourcesData?.detected.filter(s => s.status === 'available') || []
+              const activeName = sourcesData?.active
+              const activeSource = availableSources.find(s => s.name === activeName) || availableSources[0]
               if (!activeSource) return null
+
+              const sourceDescription: Record<string, string> = {
+                hubble: 'network connections observed via eBPF',
+                caretta: 'network connections observed via eBPF',
+                istio: 'request metrics via Prometheus',
+              }
+
+              const handleSwitchSource = (name: string) => {
+                if (name === activeSource.name) {
+                  setSourcePickerOpen(false)
+                  return
+                }
+                setSourcePickerOpen(false)
+                setIsConnecting(true)
+                setConnectionError(null)
+                hasAutoConnectedRef.current = true
+                setSourceMutation.mutate(name, {
+                  onSuccess: () => {
+                    queryClient.invalidateQueries({ queryKey: ['traffic-sources'] })
+                    // Reconnect after switching source
+                    connectMutation.mutate(undefined, {
+                      onSuccess: (data) => {
+                        setIsConnecting(false)
+                        if (!data.connected && data.error) {
+                          setConnectionError(data.error)
+                        }
+                        queryClient.invalidateQueries({ queryKey: ['traffic-flows'] })
+                      },
+                      onError: (error) => {
+                        setIsConnecting(false)
+                        setConnectionError(error.message)
+                      },
+                    })
+                  },
+                  onError: (error) => {
+                    setIsConnecting(false)
+                    setConnectionError(error.message)
+                  },
+                })
+              }
+
               return (
                 <div className="flex items-center gap-2 text-xs text-theme-text-secondary border-l border-theme-border pl-4">
                   {isConnecting ? (
@@ -869,8 +936,10 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                       <span className="text-yellow-400">{activeSource.name}</span>
                       <button
                         onClick={() => {
-                          hasAutoConnectedRef.current = false
+                          setIsConnecting(true)
                           setConnectionError(null)
+                          queryClient.removeQueries({ queryKey: ['traffic-flows'] })
+                          hasAutoConnectedRef.current = false
                         }}
                         className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] bg-yellow-500/10 text-yellow-400 rounded hover:bg-yellow-500/20"
                         title="Retry connection"
@@ -882,13 +951,44 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                   ) : (
                     <>
                       <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
-                      <span>via {activeSource.name}</span>
+                      {availableSources.length > 1 ? (
+                        <div className="relative" ref={sourcePickerRef}>
+                          <button
+                            onClick={() => setSourcePickerOpen(!sourcePickerOpen)}
+                            className="flex items-center gap-1 hover:text-theme-text-primary transition-colors"
+                          >
+                            <span>via {activeSource.name}</span>
+                            <ChevronDown className="h-3 w-3" />
+                          </button>
+                          {sourcePickerOpen && (
+                            <div className="absolute top-full left-0 mt-1 z-50 bg-theme-surface border border-theme-border rounded-md shadow-lg py-1 min-w-[140px]">
+                              {availableSources.map(source => (
+                                <button
+                                  key={source.name}
+                                  onClick={() => handleSwitchSource(source.name)}
+                                  className={clsx(
+                                    'w-full text-left px-3 py-1.5 text-xs hover:bg-theme-hover transition-colors flex items-center justify-between gap-3',
+                                    source.name === activeSource.name && 'text-blue-400'
+                                  )}
+                                >
+                                  <span className="capitalize">{source.name}</span>
+                                  {source.name === activeSource.name && (
+                                    <span className="inline-block w-1.5 h-1.5 rounded-full bg-blue-400" />
+                                  )}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ) : (
+                        <span>via {activeSource.name}</span>
+                      )}
                       {activeSource.native && (
                         <span className="px-1.5 py-0.5 text-[10px] bg-blue-500/10 text-blue-400 rounded">
                           Native
                         </span>
                       )}
-                      <span className="text-theme-text-tertiary">· network connections observed via eBPF</span>
+                      <span className="text-theme-text-tertiary">· {sourceDescription[activeSource.name] || 'traffic visibility'}</span>
                     </>
                   )}
                 </div>
@@ -925,7 +1025,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
 
         {/* Graph area */}
         <div className="flex-1 relative">
-          {isConnecting || (flowsLoading && !flowsData) ? (
+          {isConnecting || (flowsFetching && finalFlows.length === 0) ? (
             <div className="absolute inset-0 flex items-center justify-center">
               <div className="flex items-center gap-2 text-theme-text-secondary">
                 <Loader2 className="h-5 w-5 animate-spin" />
@@ -939,6 +1039,7 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
               showNamespaceGroups={showNamespaceGroups}
               serviceCategories={serviceCategories}
               addonMode={addonMode}
+              trafficSource={sourcesData?.active || ''}
             />
           ) : connectionError ? (
             <div className="absolute inset-0 flex items-center justify-center">
@@ -950,8 +1051,10 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
                 </p>
                 <button
                   onClick={() => {
-                    hasAutoConnectedRef.current = false
+                    setIsConnecting(true)
                     setConnectionError(null)
+                    queryClient.removeQueries({ queryKey: ['traffic-flows'] })
+                    hasAutoConnectedRef.current = false
                   }}
                   className="px-3 py-1.5 text-sm bg-blue-500 text-white rounded hover:bg-blue-600"
                 >

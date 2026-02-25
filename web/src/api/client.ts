@@ -253,6 +253,34 @@ export function useDashboardHelm(namespaces: string[] = []) {
   })
 }
 
+// ============================================================================
+// OpenCost
+// ============================================================================
+
+export interface OpenCostNamespaceCost {
+  name: string
+  hourlyCost: number
+  cpuCost: number
+  memoryCost: number
+}
+
+export interface OpenCostSummary {
+  available: boolean
+  currency?: string
+  window?: string
+  totalHourlyCost?: number
+  namespaces?: OpenCostNamespaceCost[]
+}
+
+export function useOpenCostSummary() {
+  return useQuery<OpenCostSummary>({
+    queryKey: ['opencost-summary'],
+    queryFn: () => fetchJSON('/opencost/summary'),
+    refetchInterval: 60000, // Refresh every minute
+    staleTime: 30000,
+  })
+}
+
 // Cluster info
 export function useClusterInfo() {
   const query = useQuery<ClusterInfo>({
