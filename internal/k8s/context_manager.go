@@ -62,7 +62,47 @@ var (
 	trafficReinitFunc              TrafficReinitFunc
 	prometheusResetFunc            PrometheusResetFunc
 	prometheusReinitFunc           PrometheusReinitFunc
+
+	// operationCtx is canceled at the start of every context switch and retry.
+	// API calls that should not survive a context switch (RBAC checks, capability
+	// probes) derive their context from this instead of context.Background().
+	operationCtx    context.Context
+	operationCancel context.CancelFunc
+	operationMu     sync.Mutex
 )
+
+func init() {
+	operationCtx, operationCancel = context.WithCancel(context.Background())
+}
+
+// CancelOngoingOperations cancels any in-flight API calls from previous
+// operations (capabilities checks, RBAC checks, etc.) and creates a fresh
+// operation context. Called at the start of context switch and retry.
+func CancelOngoingOperations() {
+	operationMu.Lock()
+	defer operationMu.Unlock()
+	log.Printf("[ops] Canceling ongoing operations (previous API calls will be interrupted)")
+	operationCancel()
+	operationCtx, operationCancel = context.WithCancel(context.Background())
+}
+
+// NewOperationContext returns a context derived from the current operation
+// context with the given timeout. Use this instead of context.Background()
+// for API calls that should be canceled on context switch.
+func NewOperationContext(timeout time.Duration) (context.Context, context.CancelFunc) {
+	operationMu.Lock()
+	parent := operationCtx
+	operationMu.Unlock()
+	return context.WithTimeout(parent, timeout)
+}
+
+// OperationContext returns the current operation context. Callers that need
+// WithCancel semantics (instead of WithTimeout) should derive from this.
+func OperationContext() context.Context {
+	operationMu.Lock()
+	defer operationMu.Unlock()
+	return operationCtx
+}
 
 // OnContextSwitch registers a callback to be called when the context is switched
 func OnContextSwitch(callback ContextSwitchCallback) {
@@ -125,8 +165,13 @@ func RegisterPrometheusFuncs(reset PrometheusResetFunc, reinit PrometheusReinitF
 	prometheusReinitFunc = reinit
 }
 
-// TestClusterConnection tests connectivity to the current cluster
-// Returns an error if the cluster is unreachable within the timeout
+// TestClusterConnection tests connectivity to the current cluster.
+// Returns an error if the cluster is unreachable within the timeout.
+//
+// The API call runs in a goroutine with a select on ctx.Done() to guarantee
+// prompt return. client-go's exec credential plugins don't propagate
+// per-request context cancellation, so Do(ctx) alone can block indefinitely
+// while the plugin retries expired credentials.
 func TestClusterConnection(ctx context.Context) error {
 	config := GetConfig()
 	if config == nil {
@@ -144,12 +189,24 @@ func TestClusterConnection(ctx context.Context) error {
 		return fmt.Errorf("failed to create test client: %w", err)
 	}
 
-	// Try to get server version - this is a lightweight call that tests connectivity
-	_, err = testClient.Discovery().ServerVersion()
-	if err != nil {
-		return fmt.Errorf("cluster unreachable: %w", err)
+	// Run the API call in a goroutine so we can select on ctx.Done().
+	// This guarantees we return when the context expires even if the exec
+	// credential plugin is blocking (it doesn't respect request context).
+	resultCh := make(chan error, 1)
+	go func() {
+		_, err := testClient.Discovery().RESTClient().Get().AbsPath("/version").Do(ctx).Raw()
+		resultCh <- err
+	}()
+
+	select {
+	case err := <-resultCh:
+		if err != nil {
+			return fmt.Errorf("cluster unreachable: %w", err)
+		}
+		return nil
+	case <-ctx.Done():
+		return fmt.Errorf("cluster unreachable: %w", ctx.Err())
 	}
-	return nil
 }
 
 // PerformContextSwitch orchestrates a full context switch:
@@ -159,46 +216,64 @@ func TestClusterConnection(ctx context.Context) error {
 // 4. Reinitializes all subsystems (same sequence as initial boot)
 // 5. Notifies all registered callbacks
 func PerformContextSwitch(newContext string) error {
-	log.Printf("Performing context switch to %q", newContext)
+	switchStart := time.Now()
+	log.Printf("[ops] Context switch START → %q", newContext)
+
+	// Cancel any in-flight API calls from the previous context (RBAC checks,
+	// capability probes, etc.) so they don't serialize through the old exec
+	// plugin and block the new context's connectivity test.
+	CancelOngoingOperations()
 
 	// Step 1: Tear down all subsystems
 	reportProgress("Stopping caches...")
+	t := time.Now()
 	ResetAllSubsystems()
+	logTiming("   [ops] ResetAllSubsystems: %v", time.Since(t))
 
 	// Step 2: Switch the K8s client to the new context
 	reportProgress("Connecting to cluster...")
+	t = time.Now()
 	log.Printf("Switching K8s client to context %q...", newContext)
 	if err := SwitchContext(newContext); err != nil {
+		log.Printf("[ops] Context switch FAILED at SwitchContext: %v (%v)", err, time.Since(switchStart))
 		return fmt.Errorf("failed to switch context: %w", err)
 	}
+	logTiming("   [ops] SwitchContext: %v", time.Since(t))
 
 	// Invalidate caches - permissions and cluster info may differ between clusters
 	InvalidateCapabilitiesCache()
 	InvalidateResourcePermissionsCache()
 	InvalidateServerVersionCache()
 
-	// Step 3: Test connectivity before proceeding with initialization
+	// Step 3: Test connectivity before proceeding with initialization.
+	// Contexts are derived from the operation context so they're canceled
+	// if another context switch starts while this one is in progress.
 	reportProgress("Testing cluster connectivity...")
+	t = time.Now()
 	log.Println("Testing cluster connectivity...")
-	connCtx, connCancel := context.WithTimeout(context.Background(), ConnectionTestTimeout)
+	connCtx, connCancel := NewOperationContext(ConnectionTestTimeout)
 	defer connCancel()
 	if err := TestClusterConnection(connCtx); err != nil {
+		log.Printf("[ops] Context switch FAILED at connectivity test: %v (%v since switch start)", err, time.Since(switchStart))
 		return fmt.Errorf("cluster connection failed: %w", err)
 	}
-	log.Println("Cluster connectivity verified")
+	log.Printf("[ops] Cluster connectivity verified (%v)", time.Since(t))
 
 	// Step 4: Initialize all subsystems (same function as initial boot).
 	// Teardown above is non-blocking, so old informers may still be draining.
 	// Use a timeout to prevent context switch from hanging indefinitely.
-	initCtx, initCancel := context.WithTimeout(context.Background(), ContextSwitchTimeout)
+	t = time.Now()
+	initCtx, initCancel := NewOperationContext(ContextSwitchTimeout)
 	defer initCancel()
 	if err := InitAllSubsystems(initCtx, reportProgress); err != nil {
+		log.Printf("[ops] Context switch FAILED at subsystem init: %v (%v since switch start)", err, time.Since(switchStart))
 		return fmt.Errorf("subsystem init failed: %w", err)
 	}
+	logTiming("   [ops] InitAllSubsystems: %v", time.Since(t))
 
 	// Step 5: Notify all registered callbacks
 	reportProgress("Building topology...")
-	log.Printf("Context switch to %q complete, notifying callbacks...", newContext)
+	log.Printf("[ops] Context switch to %q COMPLETE (%v total)", newContext, time.Since(switchStart))
 	contextSwitchMu.RLock()
 	callbacks := make([]ContextSwitchCallback, len(contextSwitchCallbacks))
 	copy(callbacks, contextSwitchCallbacks)

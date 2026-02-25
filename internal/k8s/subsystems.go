@@ -52,30 +52,35 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 	// Discovery calls ServerGroupsAndResources() which is independent of informer sync.
 	// Skipped if context is already canceled (e.g., version check failed) to avoid
 	// exec plugin calls through broken credentials.
-	var discoveryWg sync.WaitGroup
-	var discoveryErr error
+	//
+	// Discovery result is communicated via a buffered channel to avoid a data race
+	// on the early-return path (where the main goroutine exits without Wait()).
+	discoveryErrCh := make(chan error, 1)
+	discoveryStarted := false
 	if ctx.Err() == nil {
-		discoveryWg.Add(1)
+		discoveryStarted = true
 		go func() {
-			defer discoveryWg.Done()
 			// Re-check inside goroutine — context may have been canceled
 			// between the outer check and this goroutine actually running.
 			if ctx.Err() != nil {
+				logTiming("   [ops] Skipping API discovery: context canceled")
+				discoveryErrCh <- nil
 				return
 			}
 			dt := time.Now()
-			if err := InitResourceDiscovery(); err != nil {
-				discoveryErr = err
-			}
+			err := InitResourceDiscovery()
 			logTiming("   API resource discovery: %v (parallel)", time.Since(dt))
+			discoveryErrCh <- err
 		}()
+	} else {
+		logTiming("   [ops] Skipping API discovery goroutine: context already canceled")
 	}
 
 	// Resource cache init (RBAC checks + informer sync) — the dominant cost
 	if err := InitResourceCache(ctx); err != nil {
-		// Don't block on discoveryWg.Wait() — the discovery goroutine may be
-		// stuck in an API call through a broken exec plugin for 30+ seconds.
-		// It will finish on its own; closure keeps locals alive.
+		// Don't block on discovery — the goroutine may be stuck in an API call
+		// through a broken exec plugin for 30+ seconds. It will finish on its
+		// own and send to the buffered channel (which will be GC'd).
 		return fmt.Errorf("resource cache init failed: %w", err)
 	}
 	logTiming("   Resource cache init: %v", time.Since(t))
@@ -85,15 +90,17 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 
 	// Wait for discovery to complete before dynamic cache (which needs discovery data).
 	// If context is canceled, skip the wait — let discovery drain in background.
-	if ctx.Err() == nil {
-		discoveryWg.Wait()
-		if discoveryErr != nil {
+	if discoveryStarted && ctx.Err() == nil {
+		if discoveryErr := <-discoveryErrCh; discoveryErr != nil {
 			log.Printf("Warning: resource discovery init failed: %v", discoveryErr)
 		}
+	} else if discoveryStarted {
+		logTiming("   [ops] Skipping discovery wait: context canceled")
 	}
 
 	// Bail if context was canceled while we were waiting
 	if ctx.Err() != nil {
+		log.Printf("[ops] InitAllSubsystems bailing: context canceled (%v since start)", time.Since(subsystemStart))
 		return ctx.Err()
 	}
 
@@ -133,6 +140,7 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 
 	// Bail if context was canceled during dynamic cache init
 	if ctx.Err() != nil {
+		log.Printf("[ops] InitAllSubsystems bailing after dynamic cache: context canceled (%v since start)", time.Since(subsystemStart))
 		return ctx.Err()
 	}
 
@@ -193,11 +201,13 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 }
 
 // ResetAllSubsystems tears down all subsystems in reverse order of init.
+// Init order: 1) timeline, 2) resource cache + API discovery, 3) dynamic cache,
+// 4) remaining (metrics history, helm, traffic, prometheus).
 // Safe to call on first boot when singletons are nil.
 // Each reset is wrapped in a panic recover so a failure in one subsystem
 // does not prevent remaining subsystems from being torn down.
 func ResetAllSubsystems() {
-	// 8. Prometheus metrics client
+	// Step 4 subsystems (reverse): prometheus, traffic, helm, metrics history
 	contextSwitchMu.RLock()
 	promResetFn := prometheusResetFunc
 	contextSwitchMu.RUnlock()
@@ -205,7 +215,6 @@ func ResetAllSubsystems() {
 		safeReset("prometheus", promResetFn)
 	}
 
-	// 7. Traffic
 	contextSwitchMu.RLock()
 	trResetFn := trafficResetFunc
 	contextSwitchMu.RUnlock()
@@ -213,7 +222,6 @@ func ResetAllSubsystems() {
 		safeReset("traffic", trResetFn)
 	}
 
-	// 6. Helm
 	contextSwitchMu.RLock()
 	hResetFn := helmResetFunc
 	contextSwitchMu.RUnlock()
@@ -221,19 +229,16 @@ func ResetAllSubsystems() {
 		safeReset("Helm", hResetFn)
 	}
 
-	// 5. Metrics history
 	safeReset("metrics history", ResetMetricsHistory)
 
-	// 4. Dynamic cache
+	// Step 3: dynamic cache
 	safeReset("dynamic resource cache", ResetDynamicResourceCache)
 
-	// 3. Resource discovery
+	// Step 2: resource discovery + resource cache
 	safeReset("resource discovery", ResetResourceDiscovery)
-
-	// 2. Resource cache
 	safeReset("resource cache", ResetResourceCache)
 
-	// 1. Timeline
+	// Step 1: timeline
 	contextSwitchMu.RLock()
 	tlResetFn := timelineResetFunc
 	contextSwitchMu.RUnlock()

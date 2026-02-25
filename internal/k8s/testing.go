@@ -30,15 +30,15 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 		"daemonsets":               true,
 		"statefulsets":             true,
 		"replicasets":              true,
-		"ingresses":               true,
-		"configmaps":              true,
-		"secrets":                 true,
-		"events":                  true,
-		"persistentvolumeclaims":  true,
-		"nodes":                   true,
-		"namespaces":              true,
-		"jobs":                    true,
-		"cronjobs":                true,
+		"ingresses":                true,
+		"configmaps":               true,
+		"secrets":                  true,
+		"events":                   true,
+		"persistentvolumeclaims":   true,
+		"nodes":                    true,
+		"namespaces":               true,
+		"jobs":                     true,
+		"cronjobs":                 true,
 		"horizontalpodautoscalers": true,
 		"persistentvolumes":        true,
 		"storageclasses":           true,
@@ -122,4 +122,7 @@ func ResetTestState() {
 	resourcePermsMu.Lock()
 	cachedPermResult = nil
 	resourcePermsMu.Unlock()
+
+	// Reset operation context so stale cancellations don't leak between tests
+	CancelOngoingOperations()
 }

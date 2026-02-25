@@ -14,8 +14,8 @@ import (
 // clusterScopedResources are K8s resources that exist at cluster scope (not namespaced).
 // These cannot be checked with a namespace-scoped SelfSubjectAccessReview.
 var clusterScopedResources = map[string]bool{
-	"nodes":            true,
-	"namespaces":       true,
+	"nodes":             true,
+	"namespaces":        true,
 	"persistentvolumes": true,
 	"storageclasses":    true,
 }
@@ -65,9 +65,9 @@ type Capabilities struct {
 }
 
 var (
-	cachedCapabilities *Capabilities
-	capabilitiesMu     sync.RWMutex
-	capabilitiesExpiry time.Time
+	cachedCapabilities   *Capabilities
+	capabilitiesMu       sync.RWMutex
+	capabilitiesExpiry   time.Time
 	capabilitiesTTL      = 60 * time.Second
 	capabilitiesErrorTTL = 5 * time.Second // Short TTL when API errors caused fail-closed results
 
@@ -98,10 +98,21 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 		return &Capabilities{Exec: false, Logs: false, PortForward: false, Secrets: false, SecretsUpdate: false, HelmWrite: false}, nil
 	}
 
-	// Use a background context so that HTTP request cancellation doesn't cause
-	// transient failures to be cached as "denied" for the full TTL.
-	checkCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Don't start RBAC checks when disconnected — the exec credential plugin
+	// serializes all API calls per-process, so browser-polled capability checks
+	// would block retry/context-switch connectivity tests.
+	if GetConnectionStatus().State == StateDisconnected {
+		return &Capabilities{}, nil
+	}
+
+	// Use the operation context so RBAC checks are canceled on context switch.
+	// This prevents stale exec plugin calls from serializing and blocking the
+	// new context's connectivity test.
+	checkCtx, cancel := NewOperationContext(10 * time.Second)
 	defer cancel()
+
+	capStart := time.Now()
+	logTiming("   [caps] CheckCapabilities starting RBAC checks")
 
 	// Check each capability in parallel.
 	// Try cluster-wide first, then namespace-scoped as fallback for namespace-scoped users.
@@ -151,6 +162,7 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	}
 
 	wg.Wait()
+	logTiming("   [caps] CheckCapabilities RBAC checks done (%v)", time.Since(capStart))
 
 	if ForceDisableHelmWrite {
 		caps.HelmWrite = false
@@ -180,6 +192,7 @@ func canI(ctx context.Context, namespace, group, resource, verb string) (allowed
 	// goroutines from starting new (serialized) exec plugin invocations
 	// after the parent context is canceled.
 	if ctx.Err() != nil {
+		logTiming("   [caps] canI(%s %s) skipped: context canceled", verb, resource)
 		return false, true
 	}
 
@@ -221,11 +234,11 @@ func InvalidateCapabilitiesCache() {
 }
 
 var (
-	cachedPermResult    *PermissionCheckResult
-	resourcePermsMu     sync.RWMutex
-	resourcePermsExpiry time.Time
-	resourcePermsTTL         = 60 * time.Second
-	resourcePermsErrorTTL    = 5 * time.Second // Short TTL when API errors caused fail-closed results
+	cachedPermResult      *PermissionCheckResult
+	resourcePermsMu       sync.RWMutex
+	resourcePermsExpiry   time.Time
+	resourcePermsTTL      = 60 * time.Second
+	resourcePermsErrorTTL = 5 * time.Second // Short TTL when API errors caused fail-closed results
 )
 
 // CheckResourcePermissions checks RBAC permissions for all resource types using
@@ -300,6 +313,7 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	}
 
 	// Phase 1: Check all resources cluster-wide
+	logTiming("   [perms] Phase 1 starting: %d cluster-wide RBAC checks", len(checks))
 	phase1Start := time.Now()
 	var wg sync.WaitGroup
 	var hadErrors atomic.Bool
@@ -322,6 +336,7 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	// Bail early if context was canceled (e.g., version check failed while
 	// RBAC checks were in-flight). No point starting Phase 2.
 	if ctx.Err() != nil {
+		logTiming("   [perms] Bailing after Phase 1: context canceled")
 		result := &PermissionCheckResult{Perms: perms}
 		resourcePermsMu.Lock()
 		cachedPermResult = result

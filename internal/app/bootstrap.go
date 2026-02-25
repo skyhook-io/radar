@@ -159,7 +159,12 @@ func CreateServer(cfg AppConfig) *server.Server {
 // (RBAC checks + informer sync) so neither blocks the other. If the
 // connectivity check fails, subsystem init is canceled immediately.
 func InitializeCluster() {
+	// Cancel any in-flight API calls from previous attempts (e.g., browser
+	// polling /api/capabilities with RBAC checks through a broken exec plugin).
+	k8s.CancelOngoingOperations()
+
 	clusterStart := time.Now()
+	log.Printf("[ops] InitializeCluster START (context=%s)", k8s.GetContextName())
 
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{
 		State:       k8s.StateConnecting,
@@ -171,7 +176,9 @@ func InitializeCluster() {
 	// Subsystem init (RBAC + informers) makes API calls that implicitly
 	// verify connectivity, so starting them together saves ~1-2s.
 	// If /version fails, we cancel subsystem init via context.
-	ctx, cancel := context.WithCancel(context.Background())
+	// Derived from the operation context so a context switch or retry
+	// cancels our goroutines immediately.
+	ctx, cancel := context.WithCancel(k8s.OperationContext())
 	defer cancel()
 
 	// Gate: subsystem progress messages only update the UI after /version
@@ -217,7 +224,7 @@ func InitializeCluster() {
 			Error:     err.Error(),
 			ErrorType: k8s.ClassifyError(err),
 		})
-		log.Printf("Warning: Cluster not reachable, starting in disconnected mode")
+		log.Printf("[ops] InitializeCluster FAILED: %v (errorType=%s, %v elapsed)", err, k8s.ClassifyError(err), time.Since(clusterStart))
 
 		// Drain subsystem goroutine in background to prevent goroutine leak.
 		// Cleanup is handled by the next context switch or retry.
@@ -315,10 +322,10 @@ func CheckClusterAccess(ctx context.Context) error {
 				ProgressMsg: "Retrying cluster connectivity...",
 			})
 			select {
-		case <-time.After(2 * time.Second):
-		case <-ctx.Done():
-			return fmt.Errorf("failed to connect to cluster: %w", lastErr)
-		}
+			case <-time.After(2 * time.Second):
+			case <-ctx.Done():
+				return fmt.Errorf("failed to connect to cluster: %w", lastErr)
+			}
 		}
 
 		t := time.Now()

@@ -23,9 +23,9 @@ import (
 type CRDDiscoveryStatus string
 
 const (
-	CRDDiscoveryIdle        CRDDiscoveryStatus = "idle"        // Not started
-	CRDDiscoveryInProgress  CRDDiscoveryStatus = "discovering" // Discovery in progress
-	CRDDiscoveryComplete    CRDDiscoveryStatus = "ready"       // Discovery complete
+	CRDDiscoveryIdle       CRDDiscoveryStatus = "idle"        // Not started
+	CRDDiscoveryInProgress CRDDiscoveryStatus = "discovering" // Discovery in progress
+	CRDDiscoveryComplete   CRDDiscoveryStatus = "ready"       // Discovery complete
 )
 
 // DynamicResourceCache provides on-demand caching for CRDs and other dynamic resources
@@ -39,7 +39,7 @@ type DynamicResourceCache struct {
 	changes         chan ResourceChange // Channel for change notifications (shared with typed cache)
 	discoveryStatus CRDDiscoveryStatus  // Status of CRD discovery
 	discoveryMu     sync.RWMutex        // Mutex for discovery status
-	discoveryDone   chan struct{}        // closed when DiscoverAllCRDs() completes
+	discoveryDone   chan struct{}       // closed when DiscoverAllCRDs() completes
 }
 
 var (
@@ -208,13 +208,28 @@ func (d *DynamicResourceCache) startWatching(gvr schema.GroupVersionResource) er
 	informerCount := len(d.informers)
 	log.Printf("Started watching dynamic resource: %s.%s/%s (total dynamic informers: %d)", gvr.Resource, gvr.Group, gvr.Version, informerCount)
 
-	// Wait for initial sync asynchronously (non-blocking)
+	// Wait for initial sync asynchronously (non-blocking).
+	// The sync context is canceled by either a 30s timeout or d.stopCh closing
+	// (context switch / shutdown), whichever comes first.
 	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-		defer cancel()
+		syncCtx, syncCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer syncCancel()
+		go func() {
+			select {
+			case <-d.stopCh:
+				syncCancel()
+			case <-syncCtx.Done():
+			}
+		}()
 
-		if !cache.WaitForCacheSync(ctx.Done(), informer.HasSynced) {
-			log.Printf("Warning: cache sync timeout for %v", gvr)
+		if !cache.WaitForCacheSync(syncCtx.Done(), informer.HasSynced) {
+			// Only warn on genuine timeout, not on shutdown
+			select {
+			case <-d.stopCh:
+				return
+			default:
+				log.Printf("Warning: cache sync timeout for %v", gvr)
+			}
 		} else {
 			log.Printf("Dynamic resource synced: %s.%s/%s", gvr.Resource, gvr.Group, gvr.Version)
 		}
@@ -833,7 +848,7 @@ func (d *DynamicResourceCache) Stop() {
 			case <-done:
 				log.Println("Dynamic resource cache factory shutdown complete")
 			case <-time.After(5 * time.Second):
-				log.Println("Dynamic resource cache factory shutdown taking >5s, abandoning (will GC)")
+				log.Println("Dynamic resource cache factory shutdown taking >5s, abandoning (goroutine will finish on its own)")
 			}
 		}()
 	})
@@ -854,26 +869,26 @@ func WarmupCommonCRDs() {
 
 	// Common CRDs that should be warmed up for timeline visibility
 	commonCRDs := []string{
-		"Rollout",        // Argo Rollouts
-		"Workflow",       // Argo Workflows
-		"CronWorkflow",   // Argo Workflows
-		"Certificate",    // cert-manager
-		"CertificateRequest", // cert-manager
-		"Order",              // cert-manager ACME
-		"Challenge",          // cert-manager ACME
-		"GitRepository",  // FluxCD source
-		"OCIRepository",  // FluxCD source
-		"HelmRepository", // FluxCD source
-		"Kustomization",  // FluxCD kustomize
-		"HelmRelease",    // FluxCD helm
-		"Alert",          // FluxCD notification
-		"ApplicationSet", // ArgoCD
-		"AppProject",     // ArgoCD
-		"Gateway",        // Gateway API
-		"HTTPRoute",      // Gateway API
-		"GRPCRoute",      // Gateway API
-		"TCPRoute",       // Gateway API
-		"TLSRoute",       // Gateway API
+		"Rollout",                      // Argo Rollouts
+		"Workflow",                     // Argo Workflows
+		"CronWorkflow",                 // Argo Workflows
+		"Certificate",                  // cert-manager
+		"CertificateRequest",           // cert-manager
+		"Order",                        // cert-manager ACME
+		"Challenge",                    // cert-manager ACME
+		"GitRepository",                // FluxCD source
+		"OCIRepository",                // FluxCD source
+		"HelmRepository",               // FluxCD source
+		"Kustomization",                // FluxCD kustomize
+		"HelmRelease",                  // FluxCD helm
+		"Alert",                        // FluxCD notification
+		"ApplicationSet",               // ArgoCD
+		"AppProject",                   // ArgoCD
+		"Gateway",                      // Gateway API
+		"HTTPRoute",                    // Gateway API
+		"GRPCRoute",                    // Gateway API
+		"TCPRoute",                     // Gateway API
+		"TLSRoute",                     // Gateway API
 		"VulnerabilityReport",          // Trivy Operator
 		"ConfigAuditReport",            // Trivy Operator
 		"ExposedSecretReport",          // Trivy Operator

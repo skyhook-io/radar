@@ -56,14 +56,14 @@ var logTiming = LogTiming
 var initialSyncComplete bool
 
 // deferredResources lists informer keys that are NOT required for the initial
-// topology/dashboard render. These sync in the background after StateConnected
-// so the UI can render immediately with core resources.
+// topology/dashboard render. These sync in the background after the critical
+// informers complete, so the UI can render immediately with core resources.
 // Their lister accessors return nil until sync completes, at which point
 // an SSE topology update fills in the missing edges/counts.
 var deferredResources = map[string]bool{
-	"secrets":               true,
-	"events":                true,
-	"configmaps":            true,
+	"secrets":                true,
+	"events":                 true,
+	"configmaps":             true,
 	"persistentvolumeclaims": true,
 	"persistentvolumes":      true,
 	"storageclasses":         true,
@@ -80,7 +80,7 @@ type ResourceCache struct {
 	secretsEnabled   bool            // Whether secrets informer is running (requires RBAC)
 	enabledResources map[string]bool // Which resource types have informers running
 	deferredSynced   map[string]bool // Tracks which deferred resources have completed sync
-	deferredMu       sync.RWMutex   // Protects deferredSynced
+	deferredMu       sync.RWMutex    // Protects deferredSynced
 	deferredDone     chan struct{}   // Closed when ALL deferred informers have synced
 }
 
@@ -210,8 +210,8 @@ func InitResourceCache(ctx context.Context) error {
 			"cronjobs":                 perms.CronJobs,
 			"horizontalpodautoscalers": perms.HorizontalPodAutoscalers,
 			"persistentvolumes":        perms.PersistentVolumes,
-			"storageclasses":            perms.StorageClasses,
-			"poddisruptionbudgets":      perms.PodDisruptionBudgets,
+			"storageclasses":           perms.StorageClasses,
+			"poddisruptionbudgets":     perms.PodDisruptionBudgets,
 		}
 
 		type informerSetup struct {
@@ -1250,7 +1250,7 @@ func (c *ResourceCache) Stop() {
 			case <-done:
 				log.Println("Resource cache factory shutdown complete")
 			case <-time.After(5 * time.Second):
-				log.Println("Resource cache factory shutdown taking >5s, abandoning (will GC)")
+				log.Println("Resource cache factory shutdown taking >5s, abandoning (goroutine will finish on its own)")
 			}
 		}()
 	})
