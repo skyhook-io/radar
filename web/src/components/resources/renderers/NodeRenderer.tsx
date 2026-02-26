@@ -1,7 +1,7 @@
 import { Server, HardDrive, Globe, Tag, Activity } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../drawer-components'
-import { useNodeMetrics, useNodeMetricsHistory } from '../../../api/client'
+import { useNodeMetrics, useNodeMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
 import { MetricsChart } from '../../ui/MetricsChart'
 import { formatMemoryString } from '../../../utils/format'
 
@@ -78,6 +78,15 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
   const { data: metrics } = useNodeMetrics(nodeName)
   const { data: metricsHistory } = useNodeMetricsHistory(nodeName)
 
+  // Hide metrics-server section only when Prometheus actually has CPU data for this node
+  const { data: prometheusStatus } = usePrometheusStatus()
+  const prometheusConnected = prometheusStatus?.connected === true
+  const { data: prometheusCPU } = usePrometheusResourceMetrics(
+    'Node', '', nodeName ?? '', 'cpu', '1h', prometheusConnected,
+  )
+  const prometheusHasCPU = (prometheusCPU?.result?.series?.length ?? 0) > 0
+    && (prometheusCPU?.result?.series?.some(s => s.dataPoints?.length > 0) ?? false)
+
   // Extract platform info from labels
   const instanceType = labels['node.kubernetes.io/instance-type']
   const zone = labels['topology.kubernetes.io/zone']
@@ -141,8 +150,8 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
         </div>
       </Section>
 
-      {/* Resource Usage (from metrics-server) */}
-      {(metrics?.usage || metricsHistory?.dataPoints?.length) && (
+      {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
+      {!prometheusHasCPU && (metrics?.usage || metricsHistory?.dataPoints?.length) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           {metricsHistory?.dataPoints && metricsHistory.dataPoints.length > 0 ? (
             <div className="space-y-4">

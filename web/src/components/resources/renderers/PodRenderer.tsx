@@ -7,7 +7,7 @@ import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 import { useOpenTerminal, useOpenLogs } from '../../dock'
 import { Tooltip } from '../../ui/Tooltip'
 import { useCanExec, useCanViewLogs, useCanPortForward } from '../../../contexts/CapabilitiesContext'
-import { usePodMetrics, usePodMetricsHistory } from '../../../api/client'
+import { usePodMetrics, usePodMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
 import { MetricsChart } from '../../ui/MetricsChart'
 import { ImageFilesystemModal } from '../ImageFilesystemModal'
 
@@ -142,6 +142,15 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
   // Fetch pod metrics (current and historical)
   const { data: metrics } = usePodMetrics(namespace, podName)
   const { data: metricsHistory } = usePodMetricsHistory(namespace, podName)
+
+  // Hide metrics-server section only when Prometheus actually has CPU data for this pod
+  const { data: prometheusStatus } = usePrometheusStatus()
+  const prometheusConnected = prometheusStatus?.connected === true
+  const { data: prometheusCPU } = usePrometheusResourceMetrics(
+    'Pod', namespace ?? '', podName ?? '', 'cpu', '1h', prometheusConnected,
+  )
+  const prometheusHasCPU = (prometheusCPU?.result?.series?.length ?? 0) > 0
+    && (prometheusCPU?.result?.series?.some(s => s.dataPoints?.length > 0) ?? false)
 
   // Check for problems
   const problems = getPodProblems(data)
@@ -505,8 +514,8 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
         </div>
       </Section>
 
-      {/* Resource Usage (from metrics-server) */}
-      {!!(metrics?.containers?.length || metricsHistory?.containers?.length) && (
+      {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
+      {!prometheusHasCPU && !!(metrics?.containers?.length || metricsHistory?.containers?.length) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           <div className="space-y-4">
             {(metricsHistory?.containers || metrics?.containers || []).map((historyContainer) => {
