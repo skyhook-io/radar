@@ -333,10 +333,10 @@ function AreaChart({ series, color, fillColor, unit }: {
       }
     }
 
-    if (minTs === maxTs || maxVal === 0) {
-      // Handle flat data - still show something
-      if (maxVal === 0) maxVal = 1
-      if (minTs === maxTs) maxTs = minTs + 60
+    if (minTs === maxTs) maxTs = minTs + 60
+    if (maxVal === 0) {
+      // Use a small unit-appropriate default so the Y-axis isn't misleadingly large
+      maxVal = unit === 'cores' ? 0.01 : unit === 'bytes' ? 1024 * 1024 : unit === 'bytes/s' ? 1024 : 1
     }
 
     const padding = maxVal * 0.1
@@ -623,17 +623,20 @@ function formatMetricValue(value: number, unit: string): string {
 
   switch (unit) {
     case 'cores': {
+      if (value < 0.0001) return '< 0.1m'
       if (value < 0.001) return `${(value * 1000).toFixed(1)}m`
       if (value < 1) return `${(value * 1000).toFixed(0)}m`
       return `${value.toFixed(2)}`
     }
     case 'bytes': {
+      if (value < 1) return '< 1 B'
       if (value < 1024) return `${value.toFixed(0)} B`
       if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB`
       if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MiB`
       return `${(value / (1024 * 1024 * 1024)).toFixed(2)} GiB`
     }
     case 'bytes/s': {
+      if (value < 1) return '< 1 B/s'
       if (value < 1024) return `${value.toFixed(0)} B/s`
       if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KiB/s`
       if (value < 1024 * 1024 * 1024) return `${(value / (1024 * 1024)).toFixed(1)} MiB/s`

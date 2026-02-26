@@ -78,14 +78,17 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
   const { data: metrics } = useNodeMetrics(nodeName)
   const { data: metricsHistory } = useNodeMetricsHistory(nodeName)
 
-  // Hide metrics-server section only when Prometheus actually has CPU data for this node
-  const { data: prometheusStatus } = usePrometheusStatus()
+  // Hide metrics-server section only when Prometheus actually has CPU data for this node.
+  // Also hide while Prometheus data is loading to avoid a brief flash of metrics-server.
+  const { data: prometheusStatus, isLoading: prometheusStatusLoading } = usePrometheusStatus()
   const prometheusConnected = prometheusStatus?.connected === true
-  const { data: prometheusCPU } = usePrometheusResourceMetrics(
+  const { data: prometheusCPU, isLoading: prometheusCPULoading } = usePrometheusResourceMetrics(
     'Node', '', nodeName ?? '', 'cpu', '1h', prometheusConnected,
   )
-  const prometheusHasCPU = (prometheusCPU?.result?.series?.length ?? 0) > 0
-    && (prometheusCPU?.result?.series?.some(s => s.dataPoints?.length > 0) ?? false)
+  const prometheusHasCPU = prometheusCPU?.result?.series?.some(
+    s => s.dataPoints?.length > 0,
+  ) ?? false
+  const hideMetricsServer = prometheusHasCPU || prometheusStatusLoading || (prometheusConnected && prometheusCPULoading)
 
   // Extract platform info from labels
   const instanceType = labels['node.kubernetes.io/instance-type']
@@ -151,7 +154,7 @@ export function NodeRenderer({ data, relationships }: NodeRendererProps) {
       </Section>
 
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
-      {!prometheusHasCPU && (metrics?.usage || metricsHistory?.dataPoints?.length) && (
+      {!hideMetricsServer && (metrics?.usage || metricsHistory?.dataPoints?.length) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
           {metricsHistory?.dataPoints && metricsHistory.dataPoints.length > 0 ? (
             <div className="space-y-4">

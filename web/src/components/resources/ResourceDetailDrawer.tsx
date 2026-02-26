@@ -1773,8 +1773,10 @@ function ResourceContent({ resource, data, relationships, certificateInfo, onCop
       <AppInfoSection data={data} />
       <ExternalLinksSection data={data} />
 
-      {/* Prometheus Metrics Charts */}
-      <PrometheusCharts kind={data?.kind || resource.kind} namespace={resource.namespace} name={resource.name} />
+      {/* Prometheus Metrics Charts — skip for Pending pods (no metrics exist yet) */}
+      {!(kind === 'pods' && data?.status?.phase === 'Pending') && (
+        <PrometheusCharts kind={data?.kind || resource.kind} namespace={resource.namespace} name={resource.name} />
+      )}
 
       {/* Related Resources - clickable links to related items */}
       <RelatedResourcesSection relationships={relationships} onNavigate={onNavigate} />
