@@ -596,7 +596,7 @@ function AppInner() {
           {/* Command palette trigger */}
           <button
             onClick={() => setShowCommandPalette(true)}
-            className="flex items-center gap-2 h-7 px-2.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+            className="hidden lg:flex items-center gap-2 h-7 px-2.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
           >
             <Search className="w-3.5 h-3.5" />
             <kbd className="text-[10px] text-theme-text-tertiary bg-theme-surface px-1 py-0.5 rounded border border-theme-border-light">
@@ -605,10 +605,14 @@ function AppInner() {
           </button>
 
           {/* GitHub star */}
-          <GitHubStarButton />
+          <div className="hidden lg:block">
+            <GitHubStarButton />
+          </div>
 
           {/* Theme toggle */}
-          <ThemeToggle />
+          <div className="hidden md:block">
+            <ThemeToggle />
+          </div>
         </div>
       </header>
 

@@ -449,123 +449,123 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   return (
     <div className="flex flex-col h-full w-full">
       {/* Toolbar with search and zoom */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-theme-border bg-theme-surface/30">
-        <div className="flex items-center gap-4">
-          {/* Search */}
-          <div className="relative">
-            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search... (press /)"
-              className="w-80 pl-9 pr-8 py-1.5 text-sm bg-theme-elevated border border-theme-border-light rounded-lg text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            />
-            {searchTerm && (
-              <button
-                onClick={() => setSearchTerm('')}
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-theme-text-tertiary hover:text-theme-text-primary"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-          {/* Zoom controls */}
-          <div className="flex items-center gap-2">
-            <button
-              onClick={handleZoomIn}
-              className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-              title="Zoom in (Ctrl+scroll)"
-            >
-              <ZoomIn className="w-4 h-4" />
-            </button>
-            <button
-              onClick={handleZoomOut}
-              className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-              title="Zoom out (Ctrl+scroll)"
-            >
-              <ZoomOut className="w-4 h-4" />
-            </button>
-            <span className="text-xs text-theme-text-tertiary">
-              {zoom < 1 ? `${Math.round(zoom * 60)}m` : zoom >= 24 ? `${Math.round(zoom / 24)}d` : `${zoom}h`} window
-            </span>
-            {panOffset > 0 && (
-              <button
-                onClick={() => setPanOffset(0)}
-                className="px-2 py-1 text-xs text-blue-600 dark:text-blue-300 hover:text-blue-700 dark:hover:text-blue-200 hover:bg-theme-elevated rounded"
-                title="Jump to current time"
-              >
-                → Now
-              </button>
-            )}
-          </div>
-          {/* Sort by latest */}
-          <button
-            onClick={handleRefreshSort}
-            className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
-            title="Re-sort by importance"
-          >
-            <ArrowUpDown className="w-3.5 h-3.5" />
-            Sort
-          </button>
-        </div>
-        <div className="flex items-center gap-4">
-          {/* Legend with hover tooltips */}
-          <div className="flex items-center gap-3 text-xs text-theme-text-secondary">
-            {/* Event dot legend */}
-            <LegendItem color="bg-green-500" label="created" description="Resource was created" />
-            <LegendItem color="bg-blue-500" label="modified" description="Resource was updated/changed" />
-            <LegendItem color="bg-red-500" label="deleted" description="Resource was removed" />
-            <LegendItem color="bg-amber-500" label="warning" description="Warning event (CrashLoopBackOff, Failed, etc.)" />
-            <LegendItem color="bg-theme-text-tertiary" label="historical" description="Inferred from resource metadata (creation time, etc.)" dashed />
-            {/* Health bar legend - separator and bars */}
-            <span className="w-px h-3 bg-theme-border-light mx-1" />
-            <HealthBarLegendItem color="bg-green-500/60" label="healthy" description="Resource is fully operational" />
-            <HealthBarLegendItem color="bg-blue-500/60" label="rolling" description="Expected degradation during deployment rollout" />
-            <HealthBarLegendItem color="bg-amber-500/60" label="degraded" description="Unexpected partial availability" />
-            <HealthBarLegendItem color="bg-red-500/60" label="unhealthy" description="Resource is failing or not ready" />
-          </div>
-          <span className="text-xs text-theme-text-tertiary">
-            {visibleLanes.length} resource{visibleLanes.length !== 1 ? 's' : ''} · {filteredEvents.length} event
-            {filteredEvents.length !== 1 ? 's' : ''}
-            {searchTerm && ` (filtered)`}
-          </span>
-          {/* Group by app toggle */}
-          <Tooltip content="Group related resources (Deployment, Service, Pod) by their app.kubernetes.io/name label" position="bottom">
-            <label className="flex items-center gap-1.5 text-xs text-theme-text-secondary cursor-pointer hover:text-theme-text-primary">
+      <div className="border-b border-theme-border bg-theme-surface/30 overflow-hidden">
+        <div className="flex items-center justify-between px-4 py-2">
+          <div className="flex items-center gap-4">
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
               <input
-                type="checkbox"
-                checked={groupByApp}
-                onChange={(e) => setGroupByApp(e.target.checked)}
-                className="w-3.5 h-3.5 rounded border-theme-border-light bg-theme-elevated text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                ref={searchInputRef}
+                type="text"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search... (press /)"
+                className="w-80 pl-9 pr-8 py-1.5 text-sm bg-theme-elevated border border-theme-border-light rounded-lg text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
-              <span className="border-b border-dotted border-theme-text-tertiary">Group by app</span>
-            </label>
-          </Tooltip>
-          {/* View toggle */}
-          {onViewModeChange && (
-            <div className="flex items-center gap-1 bg-theme-elevated rounded-lg p-1">
-              <button
-                onClick={() => onViewModeChange('list')}
-                className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors ${
-                  viewMode === 'list' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
-                }`}
-              >
-                <List className="w-3.5 h-3.5" />
-                List
-              </button>
-              <button
-                onClick={() => onViewModeChange('swimlane')}
-                className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors ${
-                  viewMode === 'swimlane' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
-                }`}
-              >
-                <GanttChart className="w-3.5 h-3.5" />
-                Timeline
-              </button>
+              {searchTerm && (
+                <button
+                  onClick={() => setSearchTerm('')}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-theme-text-tertiary hover:text-theme-text-primary"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
-          )}
+            {/* Zoom controls */}
+            <div className="flex items-center gap-2">
+              <button
+                onClick={handleZoomIn}
+                className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+                title="Zoom in (Ctrl+scroll)"
+              >
+                <ZoomIn className="w-4 h-4" />
+              </button>
+              <button
+                onClick={handleZoomOut}
+                className="p-1.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+                title="Zoom out (Ctrl+scroll)"
+              >
+                <ZoomOut className="w-4 h-4" />
+              </button>
+              <span className="text-xs text-theme-text-tertiary">
+                {zoom < 1 ? `${Math.round(zoom * 60)}m` : zoom >= 24 ? `${Math.round(zoom / 24)}d` : `${zoom}h`} window
+              </span>
+              {panOffset > 0 && (
+                <button
+                  onClick={() => setPanOffset(0)}
+                  className="px-2 py-1 text-xs text-blue-600 dark:text-blue-300 hover:text-blue-700 dark:hover:text-blue-200 hover:bg-theme-elevated rounded"
+                  title="Jump to current time"
+                >
+                  → Now
+                </button>
+              )}
+            </div>
+            {/* Sort by latest */}
+            <button
+              onClick={handleRefreshSort}
+              className="flex items-center gap-1.5 px-2 py-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+              title="Re-sort by importance"
+            >
+              <ArrowUpDown className="w-3.5 h-3.5" />
+              Sort
+            </button>
+          </div>
+          <div className="flex items-center gap-4">
+            <span className="text-xs text-theme-text-tertiary">
+              {visibleLanes.length} resource{visibleLanes.length !== 1 ? 's' : ''} · {filteredEvents.length} event
+              {filteredEvents.length !== 1 ? 's' : ''}
+              {searchTerm && ` (filtered)`}
+            </span>
+            {/* Group by app toggle */}
+            <Tooltip content="Group related resources (Deployment, Service, Pod) by their app.kubernetes.io/name label" position="bottom">
+              <label className="flex items-center gap-1.5 text-xs text-theme-text-secondary cursor-pointer hover:text-theme-text-primary">
+                <input
+                  type="checkbox"
+                  checked={groupByApp}
+                  onChange={(e) => setGroupByApp(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded border-theme-border-light bg-theme-elevated text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                />
+                <span className="border-b border-dotted border-theme-text-tertiary">Group by app</span>
+              </label>
+            </Tooltip>
+            {/* View toggle */}
+            {onViewModeChange && (
+              <div className="flex items-center gap-1 bg-theme-elevated rounded-lg p-1">
+                <button
+                  onClick={() => onViewModeChange('list')}
+                  className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors ${
+                    viewMode === 'list' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
+                  }`}
+                >
+                  <List className="w-3.5 h-3.5" />
+                  List
+                </button>
+                <button
+                  onClick={() => onViewModeChange('swimlane')}
+                  className={`flex items-center gap-1.5 px-2 py-1 text-xs rounded-md transition-colors ${
+                    viewMode === 'swimlane' ? 'bg-theme-hover text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary'
+                  }`}
+                >
+                  <GanttChart className="w-3.5 h-3.5" />
+                  Timeline
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+        {/* Legend */}
+        <div className="flex flex-wrap items-center gap-3 px-4 pb-2 text-xs text-theme-text-secondary">
+          <LegendItem color="bg-green-500" label="created" description="Resource was created" />
+          <LegendItem color="bg-blue-500" label="modified" description="Resource was updated/changed" />
+          <LegendItem color="bg-red-500" label="deleted" description="Resource was removed" />
+          <LegendItem color="bg-amber-500" label="warning" description="Warning event (CrashLoopBackOff, Failed, etc.)" />
+          <LegendItem color="bg-theme-text-tertiary" label="historical" description="Inferred from resource metadata (creation time, etc.)" dashed />
+          <span className="w-px h-3 bg-theme-border-light mx-1" />
+          <HealthBarLegendItem color="bg-green-500/60" label="healthy" description="Resource is fully operational" />
+          <HealthBarLegendItem color="bg-blue-500/60" label="rolling" description="Expected degradation during deployment rollout" />
+          <HealthBarLegendItem color="bg-amber-500/60" label="degraded" description="Unexpected partial availability" />
+          <HealthBarLegendItem color="bg-red-500/60" label="unhealthy" description="Resource is failing or not ready" />
         </div>
       </div>
 
