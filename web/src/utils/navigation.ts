@@ -56,6 +56,79 @@ export function kindToPlural(kind: string): string {
 }
 
 /**
+ * Convert a plural API resource name (e.g., "deployments") back to singular PascalCase kind (e.g., "Deployment").
+ * Inverse of kindToPlural. Used by ResourceDetailPage which receives the plural form from the URL
+ * but needs the singular PascalCase form for internal logic (health checks, badge colors, hierarchy matching).
+ */
+export function pluralToKind(plural: string): string {
+  const lower = plural.toLowerCase()
+
+  // Explicit reverse mappings for irregular/aliased plurals
+  const reverseMap: Record<string, string> = {
+    pods: 'Pod',
+    services: 'Service',
+    deployments: 'Deployment',
+    daemonsets: 'DaemonSet',
+    statefulsets: 'StatefulSet',
+    replicasets: 'ReplicaSet',
+    ingresses: 'Ingress',
+    gateways: 'Gateway',
+    httproutes: 'HTTPRoute',
+    grpcroutes: 'GRPCRoute',
+    tcproutes: 'TCPRoute',
+    tlsroutes: 'TLSRoute',
+    configmaps: 'ConfigMap',
+    secrets: 'Secret',
+    namespaces: 'Namespace',
+    events: 'Event',
+    nodes: 'Node',
+    jobs: 'Job',
+    cronjobs: 'CronJob',
+    horizontalpodautoscalers: 'HorizontalPodAutoscaler',
+    persistentvolumeclaims: 'PersistentVolumeClaim',
+    persistentvolumes: 'PersistentVolume',
+    storageclasses: 'StorageClass',
+    poddisruptionbudgets: 'PodDisruptionBudget',
+    rollouts: 'Rollout',
+    applications: 'Application',
+    kustomizations: 'Kustomization',
+    helmreleases: 'HelmRelease',
+    gitrepositories: 'GitRepository',
+    certificates: 'Certificate',
+    roles: 'Role',
+    clusterroles: 'ClusterRole',
+    rolebindings: 'RoleBinding',
+    clusterrolebindings: 'ClusterRoleBinding',
+    serviceaccounts: 'ServiceAccount',
+    networkpolicies: 'NetworkPolicy',
+    verticalpodautoscalers: 'VerticalPodAutoscaler',
+    virtualservices: 'VirtualService',
+    destinationrules: 'DestinationRule',
+    serviceentries: 'ServiceEntry',
+    peerauthentications: 'PeerAuthentication',
+    authorizationpolicies: 'AuthorizationPolicy',
+  }
+
+  if (reverseMap[lower]) return reverseMap[lower]
+
+  // If it already looks like a singular PascalCase kind (starts with uppercase), return as-is
+  if (plural[0] === plural[0].toUpperCase() && plural[0] !== plural[0].toLowerCase()) {
+    return plural
+  }
+
+  // Fallback: basic de-pluralization + capitalize first letter
+  let singular = lower
+  if (singular.endsWith('ies')) {
+    singular = singular.slice(0, -3) + 'y'
+  } else if (singular.endsWith('ses') || singular.endsWith('xes') || singular.endsWith('ches') || singular.endsWith('shes')) {
+    singular = singular.slice(0, -2)
+  } else if (singular.endsWith('s')) {
+    singular = singular.slice(0, -1)
+  }
+  return singular.charAt(0).toUpperCase() + singular.slice(1)
+}
+
+/**
  * Convert a ResourceRef (from backend relationships) to a SelectedResource (for navigation).
  * Handles kind singular→plural conversion.
  */

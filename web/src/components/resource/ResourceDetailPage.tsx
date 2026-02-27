@@ -20,7 +20,7 @@ import {
 } from 'lucide-react'
 import type { TimelineEvent, TimeRange, ResourceRef, Relationships } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
-import { refToSelectedResource } from '../../utils/navigation'
+import { refToSelectedResource, pluralToKind, kindToPlural } from '../../utils/navigation'
 import { isChangeEvent, isHistoricalEvent } from '../../types'
 import { useChanges, useResourceWithRelationships, usePodLogs, useDeleteResource, useTopology } from '../../api/client'
 import { ForceDeleteConfirmDialog } from '../ui/ForceDeleteConfirmDialog'
@@ -53,19 +53,26 @@ interface ResourceDetailPageProps {
 }
 
 export function ResourceDetailPage({
-  kind,
+  kind: kindProp,
   namespace,
   name,
   onBack,
   onNavigateToResource,
 }: ResourceDetailPageProps) {
+  // The kind prop comes as plural lowercase from the URL (e.g., "deployments").
+  // Normalize to singular PascalCase (e.g., "Deployment") for internal logic
+  // (health checks, badge colors, hierarchy lane matching, switch statements).
+  // Keep the original plural form for API calls.
+  const kind = pluralToKind(kindProp)
+  const apiKind = kindProp
+
   const [activeTab, setActiveTab] = useState<TabType>('events')
   const [selectedEventId, setSelectedEventId] = useState<string | null>(null)
   const [zoom, setZoom] = useState<ZoomLevel>(1) // 1 hour default
   const [selectedPod, setSelectedPod] = useState<string | null>(null)
 
-  // Fetch resource with relationships
-  const { data: resourceResponse, isLoading: resourceLoading } = useResourceWithRelationships<any>(kind, namespace, name)
+  // Fetch resource with relationships (API expects plural lowercase kind)
+  const { data: resourceResponse, isLoading: resourceLoading } = useResourceWithRelationships<any>(apiKind, namespace, name)
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
 
@@ -515,7 +522,7 @@ function ActionsDropdown({ kind, namespace, name, onBack }: { kind: string; name
 
   function handleDeleteConfirm(force: boolean) {
     deleteMutation.mutate(
-      { kind: kind.toLowerCase() + 's', namespace, name, force }, // Convert kind to plural for API
+      { kind: kindToPlural(kind), namespace, name, force },
       {
         onSuccess: () => {
           setShowDeleteConfirm(false)
