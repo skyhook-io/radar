@@ -338,7 +338,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
+      <div className="flex-1 overflow-y-auto" style={{ viewTransitionName: 'helm-drawer-content' }}>
         {isLoading ? (
           <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Loading...</div>
         ) : !releaseDetail ? (

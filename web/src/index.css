@@ -445,11 +445,13 @@ body {
 }
 
 /* View Transitions: drawer content cross-fade */
-::view-transition-old(drawer-content) {
+::view-transition-old(drawer-content),
+::view-transition-old(helm-drawer-content) {
   animation-duration: 100ms;
   animation-timing-function: ease-out;
 }
-::view-transition-new(drawer-content) {
+::view-transition-new(drawer-content),
+::view-transition-new(helm-drawer-content) {
   animation-duration: 200ms;
   animation-timing-function: ease-in;
 }
