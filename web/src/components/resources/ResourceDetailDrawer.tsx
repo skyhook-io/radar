@@ -1,4 +1,6 @@
 import { useState, useCallback, useEffect, useRef, useMemo } from 'react'
+import { flushSync } from 'react-dom'
+import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import {
@@ -191,6 +193,8 @@ interface ResourceDetailDrawerProps {
   onNavigate?: (resource: SelectedResource) => void
   /** Open directly to YAML view */
   initialTab?: 'detail' | 'yaml'
+  /** Controls slide-in/out animation (driven by useAnimatedUnmount) */
+  isOpen?: boolean
 }
 
 const MIN_WIDTH = 400
@@ -215,7 +219,7 @@ function getDefaultWidth(kind: string): number {
   return WIDE_KINDS.has(kind.toLowerCase()) ? WIDE_WIDTH : DEFAULT_WIDTH
 }
 
-export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab }: ResourceDetailDrawerProps) {
+export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab, isOpen = true }: ResourceDetailDrawerProps) {
   const [copied, setCopied] = useState<string | null>(null)
   const [showYaml, setShowYaml] = useState(initialTab === 'yaml')
   const [isEditing, setIsEditing] = useState(false)
@@ -231,6 +235,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
   useEffect(() => {
     setShowYaml(initialTab === 'yaml')
   }, [resource.kind, resource.namespace, resource.name, initialTab])
+
 
   // Reset drawer width when resource kind changes
   useEffect(() => {
@@ -256,6 +261,15 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
     }
   }, [onNavigate])
 
+  const switchView = useCallback((yaml: boolean) => {
+    const update = () => flushSync(() => setShowYaml(yaml))
+    if (document.startViewTransition) {
+      document.startViewTransition(update)
+    } else {
+      setShowYaml(yaml)
+    }
+  }, [])
+
   // Drawer keyboard shortcuts
   const drawerShortcuts = useMemo(() => [
     {
@@ -264,7 +278,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
       description: 'Switch to YAML view',
       category: 'Drawer' as const,
       scope: 'drawer' as const,
-      handler: () => setShowYaml(true),
+      handler: () => switchView(true),
       enabled: true,
     },
     {
@@ -273,7 +287,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
       description: 'Switch to detail view',
       category: 'Drawer' as const,
       scope: 'drawer' as const,
-      handler: () => setShowYaml(false),
+      handler: () => switchView(false),
       enabled: true,
     },
     {
@@ -285,7 +299,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
       handler: () => onClose(),
       enabled: true,
     },
-  ], [onClose])
+  ], [onClose, switchView])
   useRegisterShortcuts(drawerShortcuts)
 
   // Resize handlers
@@ -408,7 +422,11 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
 
   return (
     <div
-      className="fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-2xl z-40"
+      className={clsx(
+        'fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-2xl z-40',
+        TRANSITION_DRAWER,
+        isOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'
+      )}
       style={{ width: drawerWidth, top: headerHeight, height: `calc(100vh - ${headerHeight}px)` }}
     >
       {/* Resize handle - wider for easier grab, hidden on mobile */}
@@ -426,7 +444,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
         resource={resource}
         resourceData={resourceData}
         showYaml={showYaml}
-        setShowYaml={setShowYaml}
+        setShowYaml={switchView}
         isRefetching={isRefreshAnimating}
         onRefetch={refetch}
         onClose={onClose}
@@ -437,8 +455,8 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
       {/* Success animation overlay */}
       {saveSuccess && <SaveSuccessAnimation />}
 
-      {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      {/* Content — viewTransitionName scopes View Transitions API cross-fade to this element */}
+      <div className="flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
         {isLoading ? (
           <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Loading...</div>
         ) : !resourceData ? (

@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { flushSync } from 'react-dom'
 import { useRefreshAnimation } from './hooks/useRefreshAnimation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams } from 'react-router-dom'
@@ -30,6 +31,7 @@ import { CommandPalette } from './components/ui/CommandPalette'
 import { useEventSource } from './hooks/useEventSource'
 import { useNamespaces, useSwitchContext } from './api/client'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
+import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { Loader2 } from 'lucide-react'
 import { RefreshCw, FolderTree, Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
@@ -195,6 +197,31 @@ function AppInner() {
   // Command palette state
   const [showCommandPalette, setShowCommandPalette] = useState(false)
 
+  // Animation hooks for smooth mount/unmount transitions
+  const resourceDrawer = useAnimatedUnmount(!!selectedResource, 300)
+  const helmDrawer = useAnimatedUnmount(!!(mainView === 'helm' && selectedHelmRelease), 300)
+  const helpOverlay = useAnimatedUnmount(showHelp, 300)
+  const commandPaletteAnim = useAnimatedUnmount(showCommandPalette, 300)
+
+  // Hold last valid values so drawers can animate out before data disappears
+  const lastResourceRef = useRef(selectedResource)
+  if (selectedResource) lastResourceRef.current = selectedResource
+  const drawerResource = selectedResource || lastResourceRef.current
+
+  const lastHelmReleaseRef = useRef(selectedHelmRelease)
+  if (selectedHelmRelease) lastHelmReleaseRef.current = selectedHelmRelease
+  const drawerHelmRelease = selectedHelmRelease || lastHelmReleaseRef.current
+
+  // Navigate to a resource — uses View Transitions cross-fade when drawer is already open
+  const navigateToResource = useCallback((res: SelectedResource, tab: 'detail' | 'yaml' = 'detail') => {
+    const update = () => { setDrawerInitialTab(tab); setSelectedResource(res) }
+    if (selectedResource && document.startViewTransition) {
+      document.startViewTransition(() => flushSync(update))
+    } else {
+      update()
+    }
+  }, [selectedResource])
+
   // Pending navigation that needs namespace filter confirmation
   const [pendingKindNav, setPendingKindNav] = useState<{ kind: string; group: string } | null>(null)
 
@@ -329,7 +356,7 @@ function AppInner() {
     // TODO: Could show a list of pods in the group
     if (node.kind === 'PodGroup') return
 
-    setSelectedResource({
+    navigateToResource({
       kind: kindToPlural(node.kind),
       namespace: (node.data.namespace as string) || '',
       name: node.name,
@@ -536,7 +563,7 @@ function AppInner() {
                 onClick={() => setMainView(view)}
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm rounded-md transition-colors ${
                   mainView === view
-                    ? 'bg-blue-500 text-theme-text-primary'
+                    ? 'bg-blue-500 text-theme-text-primary shadow-[0_0_12px_rgba(45,122,255,0.25)]'
                     : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover'
                 }`}
               >
@@ -791,8 +818,8 @@ function AppInner() {
           <ResourcesView
             namespaces={namespaces}
             selectedResource={selectedResource}
-            onResourceClick={setSelectedResource}
-            onResourceClickYaml={(res) => { setDrawerInitialTab('yaml'); setSelectedResource(res) }}
+            onResourceClick={(res) => navigateToResource(res)}
+            onResourceClickYaml={(res) => navigateToResource(res, 'yaml')}
             onKindChange={() => setSelectedResource(null)}
           />
         )}
@@ -845,19 +872,21 @@ function AppInner() {
       </div>}
 
       {/* Resource detail drawer (shared by topology and resources views) */}
-      {selectedResource && (
+      {resourceDrawer.shouldRender && drawerResource && (
         <ResourceDetailDrawer
-          resource={selectedResource}
+          resource={drawerResource}
           initialTab={drawerInitialTab}
+          isOpen={resourceDrawer.isOpen}
           onClose={() => { setSelectedResource(null); setDrawerInitialTab('detail') }}
-          onNavigate={(res) => { setDrawerInitialTab('detail'); setSelectedResource(res) }}
+          onNavigate={(res) => navigateToResource(res)}
         />
       )}
 
       {/* Helm release drawer */}
-      {mainView === 'helm' && selectedHelmRelease && (
+      {helmDrawer.shouldRender && drawerHelmRelease && (
         <HelmReleaseDrawer
-          release={selectedHelmRelease}
+          release={drawerHelmRelease}
+          isOpen={helmDrawer.isOpen}
           onClose={() => setSelectedHelmRelease(null)}
           onNavigateToResource={(resource) => {
             // Navigate to resources view with kind in path and open the resource detail drawer
@@ -887,11 +916,12 @@ function AppInner() {
       <HelpButton showHelp={showHelp} showCommandPalette={showCommandPalette} onClick={() => setShowHelp(true)} />
 
       {/* Keyboard shortcut help overlay */}
-      {showHelp && <ShortcutHelpOverlay onClose={() => setShowHelp(false)} currentView={mainView} />}
+      {helpOverlay.shouldRender && <ShortcutHelpOverlay isOpen={helpOverlay.isOpen} onClose={() => setShowHelp(false)} currentView={mainView} />}
 
       {/* Command palette */}
-      {showCommandPalette && (
+      {commandPaletteAnim.shouldRender && (
         <CommandPalette
+          isOpen={commandPaletteAnim.isOpen}
           onClose={() => setShowCommandPalette(false)}
           onNavigateView={(view) => setMainView(view)}
           onNavigateKind={(kind, group) => {

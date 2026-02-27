@@ -1,4 +1,5 @@
 import { createContext, useContext, useState, useCallback, ReactNode, useEffect } from 'react'
+import { DURATION_TOAST_EXIT } from '../../utils/animation'
 import { Check, Terminal, X, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
 
@@ -9,6 +10,7 @@ interface Toast {
   command?: string
   type?: 'success' | 'info' | 'warning' | 'error'
   position?: { x: number; y: number }
+  dismissing?: boolean
 }
 
 interface ToastContextType {
@@ -73,6 +75,13 @@ export function useToast() {
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
 
+  const animateDismiss = useCallback((id: string) => {
+    setToasts(prev => prev.map(t => t.id === id ? { ...t, dismissing: true } : t))
+    setTimeout(() => {
+      setToasts(prev => prev.filter(t => t.id !== id))
+    }, DURATION_TOAST_EXIT)
+  }, [])
+
   const showToast = useCallback((message: string, options?: { detail?: string; command?: string; type?: Toast['type']; position?: { x: number; y: number } }) => {
     const id = Math.random().toString(36).slice(2)
     const toast: Toast = { id, message, ...options }
@@ -82,9 +91,9 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     // Auto-dismiss: errors stay longer (8s), others 5s
     const dismissTime = options?.type === 'error' ? 8000 : 5000
     setTimeout(() => {
-      setToasts(prev => prev.filter(t => t.id !== id))
+      animateDismiss(id)
     }, dismissTime)
-  }, [])
+  }, [animateDismiss])
 
   const showCopied = useCallback((command: string, label?: string, event?: React.MouseEvent) => {
     navigator.clipboard.writeText(command)
@@ -108,8 +117,8 @@ export function ToastProvider({ children }: { children: ReactNode }) {
   }, [showToast])
 
   const dismissToast = useCallback((id: string) => {
-    setToasts(prev => prev.filter(t => t.id !== id))
-  }, [])
+    animateDismiss(id)
+  }, [animateDismiss])
 
   // Wire up singleton for use outside React components
   useEffect(() => {
@@ -151,8 +160,9 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
   return (
     <div
       className={clsx(
-        'flex items-start gap-3 p-3 rounded-lg shadow-2xl border animate-in',
+        'flex items-start gap-3 p-3 rounded-lg shadow-2xl border',
         'w-[400px] max-w-[calc(100vw-32px)]',
+        toast.dismissing ? 'animate-out' : 'animate-in',
         isError
           ? 'bg-red-950/90 border-red-800/50'
           : isSuccess

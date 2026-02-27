@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
+import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { Search, X, ChevronRight } from 'lucide-react'
 import { Home, Network, List, Clock, Package, Activity, Sun } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -14,6 +15,8 @@ interface CommandPaletteProps {
   onSwitchContext: (name: string) => void
   onSetNamespaces: (ns: string[]) => void
   onToggleTheme: () => void
+  /** Controls fade-in/out animation (driven by useAnimatedUnmount) */
+  isOpen?: boolean
 }
 
 interface CommandItem {
@@ -61,6 +64,7 @@ export function CommandPalette({
   onSwitchContext,
   onSetNamespaces,
   onToggleTheme,
+  isOpen = true,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -256,10 +260,21 @@ export function CommandPalette({
   return (
     <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[15vh]">
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-theme-base/60 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className={clsx(
+          'absolute inset-0 bg-theme-base/60 backdrop-blur-sm',
+          TRANSITION_BACKDROP,
+          isOpen ? 'opacity-100' : 'opacity-0'
+        )}
+        onClick={onClose}
+      />
 
       {/* Panel */}
-      <div className="relative w-full max-w-lg mx-4 bg-theme-surface border border-theme-border rounded-xl shadow-2xl overflow-hidden">
+      <div className={clsx(
+        'relative w-full max-w-lg mx-4 bg-theme-surface border border-theme-border rounded-xl shadow-2xl overflow-hidden',
+        TRANSITION_PANEL,
+        isOpen ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-[0.97] translate-y-3'
+      )}>
         {/* Search input */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border">
           <Search className="w-5 h-5 text-theme-text-secondary shrink-0" />

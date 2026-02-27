@@ -1314,7 +1314,6 @@ export function parseColumnFilters(filtersParam: string | null): Record<string, 
       if (key && value) filters[key] = value
     }
   }
-  console.debug('[filters] parseColumnFilters:', JSON.stringify(filtersParam), '→', filters)
   return filters
 }
 
@@ -1324,9 +1323,6 @@ export function serializeColumnFilters(filters: Record<string, string>): string 
     .filter(([, v]) => v)
     .map(([k, v]) => `${k}:${v}`)
     .join('|')
-  if (result || Object.keys(filters).length > 0) {
-    console.debug('[filters] serializeColumnFilters:', filters, '→', JSON.stringify(result))
-  }
   return result
 }
 

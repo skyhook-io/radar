@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronDown, ChevronRight, Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers } from 'lucide-react'
+import { ChevronRight, Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers } from 'lucide-react'
 import { clsx } from 'clsx'
 import { formatAge } from './resource-utils'
 import { Tooltip } from '../ui/Tooltip'
@@ -43,11 +43,18 @@ export function Section({ title, icon: Icon, children, defaultExpanded = true }:
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-2 w-full text-left mb-2 hover:text-theme-text-primary transition-colors"
       >
-        {expanded ? <ChevronDown className="w-4 h-4 text-theme-text-tertiary" /> : <ChevronRight className="w-4 h-4 text-theme-text-tertiary" />}
+        <ChevronRight className={clsx('w-4 h-4 text-theme-text-tertiary transition-transform duration-200', expanded && 'rotate-90')} />
         {Icon && <Icon className="w-4 h-4 text-theme-text-secondary" />}
         <span className="text-sm font-medium text-theme-text-secondary">{title}</span>
       </button>
-      {expanded && <div className="pl-6">{children}</div>}
+      <div
+        className="grid transition-[grid-template-rows] duration-200 ease-out"
+        style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
+      >
+        <div className="overflow-hidden">
+          <div className="pl-6">{children}</div>
+        </div>
+      </div>
     </div>
   )
 }
@@ -67,10 +74,17 @@ export function ExpandableSection({ title, children, defaultExpanded = true }: E
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-2 text-sm text-theme-text-secondary hover:text-theme-text-primary transition-colors mb-1"
       >
-        {expanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
+        <ChevronRight className={clsx('w-3.5 h-3.5 transition-transform duration-200', expanded && 'rotate-90')} />
         {title}
       </button>
-      {expanded && <div className="ml-5">{children}</div>}
+      <div
+        className="grid transition-[grid-template-rows] duration-200 ease-out"
+        style={{ gridTemplateRows: expanded ? '1fr' : '0fr' }}
+      >
+        <div className="overflow-hidden">
+          <div className="ml-5">{children}</div>
+        </div>
+      </div>
     </div>
   )
 }

@@ -1,10 +1,14 @@
 import { useEffect, useRef } from 'react'
 import { X } from 'lucide-react'
+import { clsx } from 'clsx'
+import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { useActiveShortcuts, type ShortcutCategory } from '../../hooks/useKeyboardShortcuts'
 
 interface ShortcutHelpOverlayProps {
   onClose: () => void
   currentView?: string
+  /** Controls fade-in/out animation (driven by useAnimatedUnmount) */
+  isOpen?: boolean
 }
 
 // Categories that always appear at the top
@@ -173,7 +177,7 @@ function TwoColumnSection({ categories, grouped }: { categories: ShortcutCategor
   )
 }
 
-export function ShortcutHelpOverlay({ onClose, currentView }: ShortcutHelpOverlayProps) {
+export function ShortcutHelpOverlay({ onClose, currentView, isOpen = true }: ShortcutHelpOverlayProps) {
   const shortcuts = useActiveShortcuts()
   const overlayRef = useRef<HTMLDivElement>(null)
 
@@ -221,12 +225,23 @@ export function ShortcutHelpOverlay({ onClose, currentView }: ShortcutHelpOverla
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
       {/* Backdrop */}
-      <div className="absolute inset-0 bg-theme-base/70 backdrop-blur-sm" onClick={onClose} />
+      <div
+        className={clsx(
+          'absolute inset-0 bg-theme-base/70 backdrop-blur-sm',
+          TRANSITION_BACKDROP,
+          isOpen ? 'opacity-100' : 'opacity-0'
+        )}
+        onClick={onClose}
+      />
 
       {/* Panel */}
       <div
         ref={overlayRef}
-        className="relative w-full max-w-2xl max-h-[80vh] bg-theme-surface border border-theme-border rounded-xl shadow-2xl overflow-hidden flex flex-col"
+        className={clsx(
+          'relative w-full max-w-2xl max-h-[80vh] bg-theme-surface border border-theme-border rounded-xl shadow-2xl overflow-hidden flex flex-col',
+          TRANSITION_PANEL,
+          isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-[0.97]'
+        )}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-5 py-3.5 border-b border-theme-border">

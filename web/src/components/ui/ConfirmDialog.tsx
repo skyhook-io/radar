@@ -1,7 +1,10 @@
 import { useEffect, useRef, ReactNode } from 'react'
+import { createPortal } from 'react-dom'
 import { AlertTriangle, X } from 'lucide-react'
 import { clsx } from 'clsx'
 import { SEVERITY_TEXT, SEVERITY_BADGE_BORDERED } from '../../utils/badge-colors'
+import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
+import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 
 interface ConfirmDialogProps {
   open: boolean
@@ -31,6 +34,7 @@ export function ConfirmDialog({
   children,
 }: ConfirmDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
+  const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
 
   // Handle ESC key
   useEffect(() => {
@@ -52,16 +56,20 @@ export function ConfirmDialog({
     }
   }, [open])
 
-  if (!open) return null
+  if (!shouldRender) return null
 
   const isDanger = variant === 'danger'
   const severity = isDanger ? 'error' : 'warning'
 
-  return (
+  return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center">
       {/* Backdrop */}
       <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+        className={clsx(
+          'absolute inset-0 bg-black/60 backdrop-blur-sm',
+          TRANSITION_BACKDROP,
+          isOpen ? 'opacity-100' : 'opacity-0'
+        )}
         onClick={isLoading ? undefined : onClose}
       />
 
@@ -69,7 +77,11 @@ export function ConfirmDialog({
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="relative bg-theme-surface border border-theme-border rounded-lg shadow-2xl max-w-md w-full mx-4 outline-none"
+        className={clsx(
+          'relative bg-theme-surface border border-theme-border rounded-lg shadow-2xl max-w-md w-full mx-4 outline-none',
+          TRANSITION_PANEL,
+          isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
+        )}
       >
         {/* Header */}
         <div className="flex items-start gap-3 p-4 border-b border-theme-border">
@@ -168,6 +180,7 @@ export function ConfirmDialog({
           </button>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   )
 }

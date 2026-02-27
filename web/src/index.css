@@ -1,5 +1,7 @@
 @import "tailwindcss";
 @config "../tailwind.config.js";
+@import "@fontsource-variable/dm-sans";
+@import "@fontsource/dm-mono";
 
 /* ============================================
    THEME SYSTEM - Central Color Definitions
@@ -7,7 +9,7 @@
 
 :root {
   /* Font settings */
-  font-family: Inter, system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'DM Sans Variable', 'DM Sans', system-ui, sans-serif;
   line-height: 1.5;
   font-weight: 400;
 
@@ -34,11 +36,11 @@
 [data-theme="dark"] {
   color-scheme: dark;
 
-  /* Backgrounds */
-  --bg-base: #0f172a;        /* slate-900 - main background */
-  --bg-surface: #1e293b;     /* slate-800 - cards, panels */
-  --bg-elevated: #334155;    /* slate-700 - elevated elements */
-  --bg-hover: #475569;       /* slate-600 - hover states */
+  /* Backgrounds (navy-tinted) */
+  --bg-base: #0c1425;        /* navy base - main background */
+  --bg-surface: #162033;     /* navy surface - cards, panels */
+  --bg-elevated: #1e2d45;    /* navy elevated - elevated elements */
+  --bg-hover: #2a3d58;       /* navy hover - hover states */
   --bg-active: #1e3a5f;      /* blue tinted - active/selected */
 
   /* Text */
@@ -48,8 +50,8 @@
   --text-disabled: #64748b;  /* slate-500 - disabled text */
 
   /* Borders */
-  --border-default: #334155; /* slate-700 */
-  --border-light: #475569;   /* slate-600 */
+  --border-default: #1e2d45; /* navy-700 */
+  --border-light: #2a3d58;   /* navy-600 */
   --border-subtle: rgba(255, 255, 255, 0.02);  /* very subtle white for table dividers */
   --border-focus: var(--color-brand);
 
@@ -59,21 +61,19 @@
   --accent-muted: rgba(45, 122, 255, 0.2);
   --accent-text: #93c5fd;    /* blue-300 */
 
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.4);
+  /* Shadows (soft ambient, two-layer) */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.2), 0 1px 2px rgba(0,0,0,0.1);
+  --shadow-md: 0 4px 12px -2px rgba(0,0,0,0.25), 0 2px 4px rgba(0,0,0,0.1);
+  --shadow-lg: 0 12px 32px -6px rgba(0,0,0,0.3), 0 4px 8px rgba(0,0,0,0.1);
 
   /* Topology node styling */
   --topology-node-border: rgba(255, 255, 255, 0.08);
-  --topology-node-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.3),
-    0 4px 12px rgba(0, 0, 0, 0.2);
+  --topology-node-shadow: 0 2px 6px rgba(0,0,0,0.2), 0 6px 16px rgba(0,0,0,0.15);
 
   /* Scrollbar */
-  --scrollbar-track: #1e293b;
-  --scrollbar-thumb: #475569;
-  --scrollbar-thumb-hover: #64748b;
+  --scrollbar-track: #162033;
+  --scrollbar-thumb: #2a3d58;
+  --scrollbar-thumb-hover: #3d5474;
 
   /* Group border colors (visible in dark mode) */
   --group-border-namespace: rgba(59, 130, 246, 0.4);
@@ -94,17 +94,17 @@
   --group-icon-label: #fbbf24;
 
   /* Topology background dots */
-  --topology-bg-dots: #334155;
+  --topology-bg-dots: #1e2d45;
 }
 
 /* Light Theme */
 [data-theme="light"] {
   color-scheme: light;
 
-  /* Backgrounds */
-  --bg-base: #f8fafc;        /* slate-50 - main background */
+  /* Backgrounds (subtle blue tint) */
+  --bg-base: #f7f9fc;        /* blue-tinted white - main background */
   --bg-surface: #ffffff;     /* white - cards, panels */
-  --bg-elevated: #f1f5f9;    /* slate-100 - elevated elements */
+  --bg-elevated: #edf2f8;    /* blue-tinted slate-100 - elevated elements */
   --bg-hover: #e2e8f0;       /* slate-200 - hover states */
   --bg-active: #dbeafe;      /* blue-100 - active/selected */
 
@@ -126,16 +126,14 @@
   --accent-muted: rgba(45, 122, 255, 0.1);
   --accent-text: #1d4ed8;    /* blue-700 */
 
-  /* Shadows */
-  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05);
-  --shadow-md: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
-  --shadow-lg: 0 10px 15px -3px rgba(0, 0, 0, 0.1);
+  /* Shadows (soft ambient, two-layer) */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02);
+  --shadow-md: 0 4px 12px -2px rgba(0,0,0,0.06), 0 2px 4px rgba(0,0,0,0.03);
+  --shadow-lg: 0 12px 32px -6px rgba(0,0,0,0.08), 0 4px 8px rgba(0,0,0,0.04);
 
   /* Topology node styling */
   --topology-node-border: rgba(0, 0, 0, 0.10);
-  --topology-node-shadow:
-    0 1px 3px rgba(0, 0, 0, 0.08),
-    0 4px 12px rgba(0, 0, 0, 0.05);
+  --topology-node-shadow: 0 2px 6px rgba(0,0,0,0.05), 0 6px 16px rgba(0,0,0,0.04);
 
   /* Scrollbar */
   --scrollbar-track: #f1f5f9;
@@ -380,11 +378,11 @@ body {
 }
 
 [data-theme="dark"] .react-flow__minimap-mask {
-  fill: rgba(15, 23, 42, 0.8);
+  fill: rgba(12, 20, 37, 0.8);
 }
 
 [data-theme="light"] .react-flow__minimap-mask {
-  fill: rgba(248, 250, 252, 0.8);
+  fill: rgba(247, 249, 252, 0.8);
 }
 
 /* ============================================
@@ -435,6 +433,25 @@ body {
 
 .animate-in {
   animation: slide-in-from-right 0.2s ease-out;
+}
+
+@keyframes slide-out-to-right {
+  from { transform: translateX(0); opacity: 1; }
+  to { transform: translateX(100%); opacity: 0; }
+}
+
+.animate-out {
+  animation: slide-out-to-right 0.2s ease-in forwards;
+}
+
+/* View Transitions: drawer content cross-fade */
+::view-transition-old(drawer-content) {
+  animation-duration: 100ms;
+  animation-timing-function: ease-out;
+}
+::view-transition-new(drawer-content) {
+  animation-duration: 200ms;
+  animation-timing-function: ease-in;
 }
 
 @keyframes fade-in-up {

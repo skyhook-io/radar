@@ -1,4 +1,5 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
+import { DURATION_DOCK } from '../../utils/animation'
 import { X, ChevronDown, ChevronUp, Terminal, FileText, Trash2, Layers } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useDock, DockTab } from './DockContext'
@@ -69,7 +70,7 @@ export function BottomDock() {
   return (
     <div
       className="fixed bottom-0 left-0 right-0 bg-theme-base border-t border-theme-border flex flex-col z-40"
-      style={{ height: isExpanded ? height : 36 }}
+      style={{ height: isExpanded ? height : 36, transition: `height ${DURATION_DOCK}ms ease-out` }}
     >
       {/* Resize handle */}
       {isExpanded && (

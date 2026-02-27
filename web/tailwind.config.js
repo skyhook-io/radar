@@ -8,6 +8,10 @@ export default {
   ],
   darkMode: ['selector', '[data-theme="dark"]'],
   theme: {
+    fontFamily: {
+      sans: ['"DM Sans Variable"', '"DM Sans"', 'system-ui', 'sans-serif'],
+      mono: ['"DM Mono"', 'ui-monospace', 'SFMono-Regular', 'Menlo', 'monospace'],
+    },
     screens: {
       'sm': '900px',
       'md': '1100px',
@@ -88,6 +92,10 @@ export default {
       },
       ringColor: {
         'accent': 'var(--accent)',
+      },
+      borderRadius: {
+        'lg': '0.625rem',   /* 10px (was 8px) */
+        'xl': '0.875rem',   /* 14px (was 12px) */
       },
       ringOffsetColor: {
         'theme-base': 'var(--bg-base)',

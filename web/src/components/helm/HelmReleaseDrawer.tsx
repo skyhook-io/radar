@@ -1,4 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
+import { flushSync } from 'react-dom'
+import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { X, Copy, Check, RefreshCw, Package, Code, History, FileText, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2 } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -20,6 +22,8 @@ interface HelmReleaseDrawerProps {
   release: SelectedHelmRelease
   onClose: () => void
   onNavigateToResource?: NavigateToResource
+  /** Controls slide-in/out animation (driven by useAnimatedUnmount) */
+  isOpen?: boolean
 }
 
 type TabId = 'overview' | 'history' | 'manifest' | 'values' | 'resources' | 'hooks' | 'diff'
@@ -28,7 +32,7 @@ const MIN_WIDTH = 500
 const MAX_WIDTH_PERCENT = 0.8
 const DEFAULT_WIDTH = 1000
 
-export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: HelmReleaseDrawerProps) {
+export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true }: HelmReleaseDrawerProps) {
   const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [copied, setCopied] = useState<string | null>(null)
   const [drawerWidth, setDrawerWidth] = useState(DEFAULT_WIDTH)
@@ -128,14 +132,23 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
     setTimeout(() => setCopied(null), 2000)
   }, [])
 
+  const switchTab = useCallback((tab: TabId) => {
+    const update = () => flushSync(() => setActiveTab(tab))
+    if (document.startViewTransition) {
+      document.startViewTransition(update)
+    } else {
+      setActiveTab(tab)
+    }
+  }, [])
+
   const handleCompareRevisions = (rev1: number, rev2: number) => {
     setDiffRevisions({ rev1, rev2 })
-    setActiveTab('diff')
+    switchTab('diff')
   }
 
   const handleViewRevision = (revision: number) => {
     setSelectedRevision(revision)
-    setActiveTab('manifest')
+    switchTab('manifest')
   }
 
   const handleRollbackRequest = (revision: number) => {
@@ -207,7 +220,11 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
 
   return (
     <div
-      className="fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-2xl z-40"
+      className={clsx(
+        'fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-2xl z-40',
+        TRANSITION_DRAWER,
+        isOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'
+      )}
       style={{ width: drawerWidth, top: headerHeight, height: `calc(100vh - ${headerHeight}px)` }}
     >
       {/* Resize handle */}
@@ -305,7 +322,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
           {tabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => setActiveTab(tab.id)}
+              onClick={() => switchTab(tab.id)}
               className={clsx(
                 'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors whitespace-nowrap',
                 activeTab === tab.id
@@ -321,7 +338,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource }: He
       </div>
 
       {/* Content */}
-      <div className="flex-1 overflow-y-auto">
+      <div className="flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
         {isLoading ? (
           <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Loading...</div>
         ) : !releaseDetail ? (
