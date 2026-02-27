@@ -109,14 +109,28 @@ function nodeIdToLaneId(nodeId: string): string | null {
     grpcroute: 'GRPCRoute', tcproute: 'TCPRoute', tlsroute: 'TLSRoute',
     configmap: 'ConfigMap', secret: 'Secret',
     persistentvolumeclaim: 'PersistentVolumeClaim',
+    persistentvolume: 'PersistentVolume', storageclass: 'StorageClass',
     job: 'Job', cronjob: 'CronJob',
     horizontalpodautoscaler: 'HorizontalPodAutoscaler',
+    verticalpodautoscaler: 'VerticalPodAutoscaler',
+    poddisruptionbudget: 'PodDisruptionBudget',
     podgroup: 'PodGroup', rollout: 'Rollout', namespace: 'Namespace',
+    node: 'Node',
     application: 'Application', applicationset: 'ApplicationSet', appproject: 'AppProject',
     kustomization: 'Kustomization',
     helmrelease: 'HelmRelease', helmrepository: 'HelmRepository',
     helmchart: 'HelmChart', gitrepository: 'GitRepository',
     ocirepository: 'OCIRepository', certificate: 'Certificate',
+    // Istio
+    virtualservice: 'VirtualService', destinationrule: 'DestinationRule',
+    istiogateway: 'IstioGateway', serviceentry: 'ServiceEntry',
+    peerauthentication: 'PeerAuthentication', authorizationpolicy: 'AuthorizationPolicy',
+    // KEDA
+    scaledobject: 'ScaledObject', scaledjob: 'ScaledJob',
+    // Karpenter
+    nodepool: 'NodePool', nodeclaim: 'NodeClaim',
+    // cert-manager
+    issuer: 'Issuer', clusterissuer: 'ClusterIssuer',
   }
   return `${kindMap[kind] || kind}/${namespace}/${name}`
 }

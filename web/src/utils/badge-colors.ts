@@ -31,6 +31,18 @@ export const KIND_BADGE_COLORS: Record<string, string> = {
   HorizontalPodAutoscaler: 'bg-pink-500/15 text-pink-700 dark:bg-pink-900/50 dark:text-pink-300',
   PersistentVolumeClaim: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300',
 
+  // Argo Rollouts
+  Rollout: 'bg-emerald-500/15 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300',
+
+  // GitOps
+  Application: 'bg-orange-500/15 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300',
+  Kustomization: 'bg-indigo-500/15 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
+  GitRepository: 'bg-indigo-500/15 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300',
+
+  // Cluster-scoped
+  Node: 'bg-sky-500/15 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300',
+  Namespace: 'bg-gray-500/15 text-gray-700 dark:bg-gray-900/50 dark:text-gray-300',
+
   // Special
   HelmRelease: 'bg-purple-500/20 text-purple-700 dark:text-purple-300',
   Event: 'bg-slate-500/15 text-slate-700 dark:bg-slate-900/50 dark:text-slate-300',
@@ -67,6 +79,18 @@ export const KIND_BADGE_BORDERED: Record<string, string> = {
   // Autoscaling & Storage
   HorizontalPodAutoscaler: 'bg-pink-500/20 text-pink-700 dark:text-pink-300 border border-pink-500/30',
   PersistentVolumeClaim: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30',
+
+  // Argo Rollouts
+  Rollout: 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border border-emerald-500/30',
+
+  // GitOps
+  Application: 'bg-orange-500/20 text-orange-700 dark:text-orange-300 border border-orange-500/30',
+  Kustomization: 'bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30',
+  GitRepository: 'bg-indigo-500/20 text-indigo-700 dark:text-indigo-300 border border-indigo-500/30',
+
+  // Cluster-scoped
+  Node: 'bg-sky-500/20 text-sky-700 dark:text-sky-300 border border-sky-500/30',
+  Namespace: 'bg-gray-500/20 text-gray-700 dark:text-gray-300 border border-gray-500/30',
 }
 
 // Event type colors - for K8s event types (Normal, Warning)

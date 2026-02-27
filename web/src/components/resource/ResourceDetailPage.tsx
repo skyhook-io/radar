@@ -13,8 +13,6 @@ import {
   Activity,
   BarChart3,
   MoreVertical,
-  RotateCcw,
-  Scale,
   Copy,
   Check,
 } from 'lucide-react'
@@ -82,7 +80,7 @@ export function ResourceDetailPage({
   // Convert zoom level to TimeRange for API
   const timeRange: TimeRange = zoom <= 0.5 ? '30m' : zoom <= 1 ? '1h' : zoom <= 6 ? '6h' : zoom <= 24 ? '24h' : 'all'
 
-  // Fetch events - fetch from all namespaces to capture related resources in other namespaces
+  // Fetch events for this resource's namespace
   const { data: allEvents, isLoading: eventsLoading } = useChanges({
     namespaces: [namespace],
     timeRange,
@@ -142,6 +140,21 @@ export function ResourceDetailPage({
     return pods
   }, [resourceLanes])
 
+  // Deduplicate pods from relationships and hierarchy by namespace/name
+  const allPods: ResourceRef[] = useMemo(() => {
+    const combined = [
+      ...pods,
+      ...childPods.map(p => ({ kind: 'Pod' as const, namespace: p.namespace, name: p.name })),
+    ]
+    const seen = new Set<string>()
+    return combined.filter(p => {
+      const key = `${p.namespace}/${p.name}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }, [pods, childPods])
+
   return (
     <div className="flex flex-col h-full w-full bg-theme-base">
       {/* Compact Header */}
@@ -161,7 +174,9 @@ export function ResourceDetailPage({
             </div>
             <div className="flex items-center gap-4 text-sm text-theme-text-secondary">
               <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', getKindBadgeColor(kind))}>{kind}</span>
-              <span>Namespace: <span className="text-theme-text-primary">{namespace}</span></span>
+              {namespace && namespace !== '_' && (
+                <span>Namespace: <span className="text-theme-text-primary">{namespace}</span></span>
+              )}
               {metadata.find(m => m.label === 'Image') && (
                 <span className="truncate max-w-md font-mono text-xs">{metadata.find(m => m.label === 'Image')?.value}</span>
               )}
@@ -209,10 +224,12 @@ export function ResourceDetailPage({
               <span className="ml-1 px-1.5 py-0.5 text-xs bg-theme-elevated rounded">{resourceEvents.length}</span>
             )}
           </TabButton>
-          <TabButton active={activeTab === 'logs'} onClick={() => setActiveTab('logs')}>
-            <Terminal className="w-4 h-4" />
-            Logs
-          </TabButton>
+          {allPods.length > 0 && (
+            <TabButton active={activeTab === 'logs'} onClick={() => setActiveTab('logs')}>
+              <Terminal className="w-4 h-4" />
+              Logs
+            </TabButton>
+          )}
           <TabButton active={activeTab === 'info'} onClick={() => setActiveTab('info')}>
             <Layers className="w-4 h-4" />
             Info
@@ -245,9 +262,9 @@ export function ResourceDetailPage({
             onSelectEvent={setSelectedEventId}
           />
         )}
-        {activeTab === 'logs' && (
+        {activeTab === 'logs' && allPods.length > 0 && (
           <LogsTab
-            pods={[...pods, ...childPods.map(p => ({ kind: 'Pod', namespace: p.namespace, name: p.name }))]}
+            pods={allPods}
             namespace={namespace}
             selectedPod={selectedPod}
             onSelectPod={setSelectedPod}
@@ -290,10 +307,16 @@ function extractStats(kind: string, resource: any, events: TimelineEvent[]): {
     const status = resource.status
     const spec = resource.spec || {}
 
-    if (['Deployment', 'Rollout', 'StatefulSet', 'DaemonSet', 'ReplicaSet'].includes(kind)) {
+    if (['Deployment', 'Rollout', 'StatefulSet', 'ReplicaSet'].includes(kind)) {
       const ready = status.readyReplicas || 0
       const total = spec.replicas ?? status.replicas ?? 0
       replicas = `${ready}/${total}`
+    }
+
+    if (kind === 'DaemonSet') {
+      const ready = status.numberReady || 0
+      const desired = status.desiredNumberScheduled || 0
+      replicas = `${ready}/${desired}`
     }
 
     if (kind === 'Pod') {
@@ -354,20 +377,36 @@ function extractMetadata(kind: string, resource: any): { label: string; value: s
   switch (kind) {
     case 'Deployment':
     case 'StatefulSet':
-    case 'DaemonSet':
+    case 'Rollout':
       if (spec.replicas !== undefined) {
         const ready = status.readyReplicas || 0
         items.push({ label: 'Replicas', value: `${ready}/${spec.replicas}` })
       }
       // Get image from first container
-      const containers = spec.template?.spec?.containers || []
-      if (containers[0]?.image) {
-        items.push({ label: 'Image', value: containers[0].image })
+      {
+        const containers = spec.template?.spec?.containers || []
+        if (containers[0]?.image) {
+          items.push({ label: 'Image', value: containers[0].image })
+        }
+        if (spec.selector?.matchLabels?.app) {
+          items.push({ label: 'App', value: spec.selector.matchLabels.app })
+        }
+      }
+      break
+
+    case 'DaemonSet': {
+      const ready = status.numberReady || 0
+      const desired = status.desiredNumberScheduled || 0
+      items.push({ label: 'Replicas', value: `${ready}/${desired}` })
+      const dsContainers = spec.template?.spec?.containers || []
+      if (dsContainers[0]?.image) {
+        items.push({ label: 'Image', value: dsContainers[0].image })
       }
       if (spec.selector?.matchLabels?.app) {
         items.push({ label: 'App', value: spec.selector.matchLabels.app })
       }
       break
+    }
 
     case 'ReplicaSet': {
       const rsReady = status.readyReplicas || 0
@@ -434,10 +473,18 @@ function determineHealth(kind: string, resource: any): string {
   switch (kind) {
     case 'Deployment':
     case 'StatefulSet':
-    case 'DaemonSet': {
+    case 'Rollout': {
       const desired = resource.spec?.replicas || 0
       const ready = status.readyReplicas || 0
       const updated = status.updatedReplicas || 0
+      if (ready === 0 && desired > 0) return 'unhealthy'
+      if (ready < desired || updated < desired) return 'degraded'
+      return 'healthy'
+    }
+    case 'DaemonSet': {
+      const desired = status.desiredNumberScheduled || 0
+      const ready = status.numberReady || 0
+      const updated = status.updatedNumberScheduled || 0
       if (ready === 0 && desired > 0) return 'unhealthy'
       if (ready < desired || updated < desired) return 'degraded'
       return 'healthy'
@@ -532,11 +579,7 @@ function ActionsDropdown({ kind, namespace, name, onBack }: { kind: string; name
     )
   }
 
-  // Placeholder actions - would need backend support
   const actions = [
-    { label: 'Describe', icon: FileText, action: () => console.log('describe') },
-    { label: 'Restart', icon: RotateCcw, action: () => console.log('restart'), disabled: !['Deployment', 'Rollout', 'StatefulSet', 'DaemonSet'].includes(kind) },
-    { label: 'Scale', icon: Scale, action: () => console.log('scale'), disabled: !['Deployment', 'Rollout', 'StatefulSet'].includes(kind) },
     { label: 'Delete', icon: Trash2, action: () => setShowDeleteConfirm(true), danger: true },
   ]
 
@@ -556,12 +599,9 @@ function ActionsDropdown({ kind, namespace, name, onBack }: { kind: string; name
               <button
                 key={i}
                 onClick={() => { action.action(); setOpen(false) }}
-                disabled={action.disabled}
                 className={clsx(
                   'w-full px-3 py-2 text-sm text-left flex items-center gap-2 transition-colors',
-                  action.disabled
-                    ? 'text-theme-text-disabled cursor-not-allowed'
-                    : action.danger
+                  action.danger
                     ? 'text-red-400 hover:bg-red-900/30'
                     : 'text-theme-text-secondary hover:bg-theme-elevated'
                 )}
@@ -1189,11 +1229,17 @@ function RelatedResources({
   const sections: { title: string; items: ResourceRef[] }[] = []
 
   if (relationships.owner) sections.push({ title: 'Owner', items: [relationships.owner] })
+  if (relationships.deployment) sections.push({ title: 'Deployment', items: [relationships.deployment] })
   if (relationships.services?.length) sections.push({ title: 'Services', items: relationships.services })
   if (relationships.ingresses?.length) sections.push({ title: 'Ingresses', items: relationships.ingresses })
   if (relationships.gateways?.length) sections.push({ title: 'Gateways', items: relationships.gateways })
+  if (relationships.routes?.length) sections.push({ title: 'Routes', items: relationships.routes })
   if (relationships.children?.length) sections.push({ title: 'Children', items: relationships.children.slice(0, 5) })
   if (relationships.configRefs?.length) sections.push({ title: 'Config', items: relationships.configRefs })
+  if (relationships.scalers?.length) sections.push({ title: 'Scalers', items: relationships.scalers })
+  if (relationships.scaleTarget) sections.push({ title: 'Scale Target', items: [relationships.scaleTarget] })
+  if (relationships.policies?.length) sections.push({ title: 'Policies', items: relationships.policies })
+  if (relationships.consumers?.length) sections.push({ title: 'Consumers', items: relationships.consumers })
   if (relationships.pods?.length) sections.push({ title: 'Pods', items: relationships.pods.slice(0, 5) })
 
   if (sections.length === 0) {

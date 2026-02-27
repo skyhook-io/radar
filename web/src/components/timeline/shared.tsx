@@ -577,12 +577,17 @@ export function buildHealthSpans(
 
   for (const evt of sorted) {
     const ts = new Date(evt.timestamp).getTime()
-    if (ts < startTime) continue
     if (ts < existsFrom) continue // Resource didn't exist yet
     if (ts > existsUntil) continue // Resource was deleted
 
     // Use getEffectiveHealthState to distinguish rollouts from unexpected degradation
     const newHealth = getEffectiveHealthState(evt)
+
+    if (ts < startTime) {
+      // Pre-window event: track health state but don't create a span yet
+      currentHealth = newHealth
+      continue
+    }
 
     if (newHealth !== currentHealth && currentHealth !== 'unknown') {
       spans.push({ start: spanStart, end: ts, health: currentHealth })
