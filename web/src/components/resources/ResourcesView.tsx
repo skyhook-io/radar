@@ -3252,8 +3252,8 @@ const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps
         )}
       >
         <Icon className="w-4 h-4 shrink-0" />
-        <Tooltip content={forbidden ? `${resource.kind} (no access)` : resource.kind} position="right">
-          <span className="flex-1 text-left truncate">
+        <Tooltip content={forbidden ? `${resource.kind} (no access)` : resource.kind} position="right" wrapperClassName="min-w-0 flex-1 overflow-hidden">
+          <span className="text-left truncate block">
             {resource.kind}
           </span>
         </Tooltip>

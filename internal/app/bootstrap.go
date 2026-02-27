@@ -186,11 +186,15 @@ func InitializeCluster() {
 	// connectivity..." / "Retrying cluster connectivity..." from CheckClusterAccess.
 	var connected atomic.Bool
 
-	// Hard 10s deadline for the entire connectivity check — tight enough to
-	// fail fast on expired GKE/EKS auth (exec plugins can block 40s+),
-	// generous enough for healthy clusters where the exec plugin + HTTP
-	// round-trip typically takes 2-5s.
-	versionCtx, versionCancel := context.WithTimeout(ctx, 10*time.Second)
+	// Exec credential plugins (EKS, GKE) may need 7-10s on first invocation
+	// to refresh SSO/OAuth tokens. Give them a longer deadline so the retry
+	// loop has room for two full attempts. Without exec auth, 10s is plenty
+	// for two 5s attempts.
+	versionDeadline := 10 * time.Second
+	if k8s.UsesExecAuth() {
+		versionDeadline = 25 * time.Second
+	}
+	versionCtx, versionCancel := context.WithTimeout(ctx, versionDeadline)
 
 	versionErr := make(chan error, 1)
 	go func() {
@@ -293,20 +297,35 @@ func Shutdown(srv *server.Server) {
 //
 // Retries once after a 2-second pause to handle transient timeouts.
 // Deterministic errors (auth, RBAC, network) skip the retry — retrying
-// expired credentials or unreachable hosts won't help; the user can click
-// "Retry" in the UI after fixing the underlying issue.
+// expired credentials or unreachable hosts won't help. Exception: exec auth
+// timeouts ARE retried because the first call triggers a token refresh
+// (e.g., AWS SSO), and the cached token is available on the next attempt.
 func CheckClusterAccess(ctx context.Context) error {
 	clientset := k8s.GetClient()
 	if clientset == nil {
 		return fmt.Errorf("kubernetes client not initialized")
 	}
 
+	execAuth := k8s.UsesExecAuth()
+
+	// Exec credential plugins (EKS aws, GKE gcloud) may need 7-10s on first
+	// invocation to refresh SSO/OAuth tokens. The standard 5s is too tight.
+	attemptTimeout := 5 * time.Second
+	if execAuth {
+		attemptTimeout = 10 * time.Second
+	}
+
 	var lastErr error
 	for attempt := range 2 {
 		if attempt > 0 {
-			// Don't retry errors that won't resolve on their own
+			// Don't retry errors that won't resolve on their own.
+			// Exception: exec auth timeouts are retryable — the first call
+			// triggers a token refresh, and the cached token is ready by retry.
 			errType := k8s.ClassifyError(lastErr)
-			if errType == "auth" || errType == "rbac" || errType == "network" {
+			if errType == "rbac" || errType == "network" {
+				break
+			}
+			if errType == "auth" && !execAuth {
 				break
 			}
 			// Don't retry if the parent context is already done
@@ -329,7 +348,7 @@ func CheckClusterAccess(ctx context.Context) error {
 		}
 
 		t := time.Now()
-		attemptCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		attemptCtx, cancel := context.WithTimeout(ctx, attemptTimeout)
 
 		// Run the API call in a goroutine so we can select on the parent
 		// context. This guarantees we return when the deadline hits even
