@@ -343,7 +343,7 @@ function AreaChart({ series, color, fillColor, unit }: {
     const yMax = maxVal + padding
 
     return { minTs, maxTs, yMax, series }
-  }, [series])
+  }, [series, unit])
 
   if (!chartData) return null
 

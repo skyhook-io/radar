@@ -144,16 +144,16 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
   const { data: metricsHistory } = usePodMetricsHistory(namespace, podName)
 
   // Hide metrics-server section only when Prometheus actually has CPU data for this pod.
-  // Also hide while Prometheus data is loading to avoid a brief flash of metrics-server.
-  const { data: prometheusStatus, isLoading: prometheusStatusLoading } = usePrometheusStatus()
+  // Also hide while the CPU probe is loading (when Prometheus is connected) to avoid a brief flash.
+  const { data: prometheusStatus } = usePrometheusStatus()
   const prometheusConnected = prometheusStatus?.connected === true
-  const { data: prometheusCPU, isLoading: prometheusCPULoading } = usePrometheusResourceMetrics(
+  const { data: prometheusCPU, isLoading: prometheusCPULoading, error: prometheusCPUError } = usePrometheusResourceMetrics(
     'Pod', namespace ?? '', podName ?? '', 'cpu', '1h', prometheusConnected,
   )
-  const prometheusHasCPU = prometheusCPU?.result?.series?.some(
+  const prometheusHasCPU = !prometheusCPUError && (prometheusCPU?.result?.series?.some(
     s => s.dataPoints?.length > 0,
-  ) ?? false
-  const hideMetricsServer = prometheusHasCPU || prometheusStatusLoading || (prometheusConnected && prometheusCPULoading)
+  ) ?? false)
+  const hideMetricsServer = prometheusHasCPU || (prometheusConnected && prometheusCPULoading)
 
   // Check for problems
   const problems = getPodProblems(data)
