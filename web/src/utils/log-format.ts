@@ -63,6 +63,99 @@ export function escapeHtml(text: string): string {
 }
 
 /**
+ * Strip ANSI escape sequences from text.
+ * Covers common CSI sequences (e.g. \x1b[32m, \x1b[0m) found in pod logs.
+ * Used for search matching and log level detection on raw log content.
+ */
+export function stripAnsi(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+}
+
+// ANSI SGR (Select Graphic Rendition) code → CSS style mapping.
+// Colors are chosen to be legible on a dark background (terminal-standard palette).
+const SGR_STYLES: Record<number, string> = {
+  1: 'font-weight:bold',
+  2: 'opacity:0.6',
+  3: 'font-style:italic',
+  4: 'text-decoration:underline',
+  // Standard foreground colors (30-37)
+  30: 'color:#4c4c4c',
+  31: 'color:#cd3131',
+  32: 'color:#0dbc79',
+  33: 'color:#e5e510',
+  34: 'color:#2472c8',
+  35: 'color:#bc3fbc',
+  36: 'color:#11a8cd',
+  37: 'color:#e5e5e5',
+  // Bright foreground colors (90-97)
+  90: 'color:#767676',
+  91: 'color:#f14c4c',
+  92: 'color:#23d18b',
+  93: 'color:#f5f543',
+  94: 'color:#3b8eea',
+  95: 'color:#d670d6',
+  96: 'color:#29b8db',
+  97: 'color:#e5e5e5',
+}
+
+/**
+ * Convert ANSI SGR escape codes in a log line to HTML <span> elements.
+ * HTML-escapes the text first so the output is safe for dangerouslySetInnerHTML.
+ * Each call is independent — all opened spans are closed before returning.
+ * Only SGR sequences (\x1b[...m) are handled; other ANSI sequences are stripped.
+ */
+export function ansiToHtml(text: string): string {
+  // HTML-escape first: ANSI escape sequences contain no HTML special characters
+  // (&, <, >) so escaping won't interfere with the ANSI pattern matching below.
+  const escaped = escapeHtml(text)
+
+  let result = ''
+  let openSpans = 0
+  // eslint-disable-next-line no-control-regex
+  const ansiRe = /\x1b\[([0-9;]*)m/g
+  let lastIndex = 0
+  let match: RegExpExecArray | null
+
+  while ((match = ansiRe.exec(escaped)) !== null) {
+    result += escaped.slice(lastIndex, match.index)
+    lastIndex = match.index + match[0].length
+
+    const codes = match[1] === '' ? [0] : match[1].split(';').map(Number)
+
+    const resetIdx = codes.indexOf(0)
+    if (resetIdx !== -1) {
+      // Close all open spans on reset
+      result += '</span>'.repeat(openSpans)
+      openSpans = 0
+      // Apply any codes that follow the reset in the same sequence (e.g. \x1b[0;32m)
+      const afterReset = codes.slice(resetIdx + 1)
+      const styles = afterReset
+        .map(c => SGR_STYLES[c])
+        .filter(Boolean)
+        .join(';')
+      if (styles) {
+        result += `<span style="${styles}">`
+        openSpans++
+      }
+    } else {
+      const styles = codes
+        .map(c => SGR_STYLES[c])
+        .filter(Boolean)
+        .join(';')
+      if (styles) {
+        result += `<span style="${styles}">`
+        openSpans++
+      }
+    }
+  }
+
+  result += escaped.slice(lastIndex)
+  result += '</span>'.repeat(openSpans)
+  return result
+}
+
+/**
  * Escape special regex characters in a string.
  */
 export function escapeRegExp(text: string): string {

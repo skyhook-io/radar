@@ -7,7 +7,8 @@ import {
   getLogLevelColor,
   highlightSearchMatches,
   parseLogLine,
-  escapeHtml,
+  stripAnsi,
+  ansiToHtml,
 } from '../../utils/log-format'
 
 interface LogLine {
@@ -321,10 +322,10 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
 
 // Individual log line component
 function LogLineItem({ line, searchQuery }: { line: LogLine; searchQuery: string }) {
-  const levelColor = getLogLevelColor(line.content)
+  const levelColor = getLogLevelColor(stripAnsi(line.content))
   const content = searchQuery
-    ? highlightSearchMatches(line.content, searchQuery)
-    : escapeHtml(line.content)
+    ? highlightSearchMatches(stripAnsi(line.content), searchQuery)
+    : ansiToHtml(line.content)
 
   return (
     <div className="flex hover:bg-theme-surface/50 group leading-5">

@@ -7,7 +7,8 @@ import {
   formatLogTimestamp,
   getLogLevelColor,
   highlightSearchMatches,
-  escapeHtml,
+  stripAnsi,
+  ansiToHtml,
 } from '../../utils/log-format'
 
 interface LogLine {
@@ -500,10 +501,10 @@ function WorkloadLogLineItem({
   searchQuery: string
   podColor: string
 }) {
-  const levelColor = getLogLevelColor(line.content)
+  const levelColor = getLogLevelColor(stripAnsi(line.content))
   const content = searchQuery
-    ? highlightSearchMatches(line.content, searchQuery)
-    : escapeHtml(line.content)
+    ? highlightSearchMatches(stripAnsi(line.content), searchQuery)
+    : ansiToHtml(line.content)
 
   // Extract short pod name (last two segments after -)
   const shortPodName = line.pod.split('-').slice(-2).join('-')
