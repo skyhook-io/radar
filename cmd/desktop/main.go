@@ -126,13 +126,14 @@ func main() {
 
 	// Run Wails application
 	err := wails.Run(&options.App{
-		Title:     windowTitle,
-		Width:     1440,
-		Height:    900,
-		MinWidth:  800,
-		MinHeight: 600,
-		MaxWidth:  7680,
-		MaxHeight: 4320,
+		Title:            windowTitle,
+		Width:            1440,
+		Height:           900,
+		MinWidth:         800,
+		MinHeight:        600,
+		MaxWidth:         7680,
+		MaxHeight:        4320,
+		WindowStartState: options.Maximised,
 
 		AssetServer: &assetserver.Options{
 			Handler: NewRedirectHandler(srv.ActualAddr()),

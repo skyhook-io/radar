@@ -5,7 +5,45 @@ import { BrowserRouter } from 'react-router-dom'
 import App from './App'
 import { ToastProvider, showApiError, showApiSuccess } from './components/ui/Toast'
 import { ThemeProvider } from './context/ThemeContext'
+import { openExternal } from './utils/navigation'
 import './index.css'
+
+// Intercept external link clicks in the Wails desktop app.
+// <a target="_blank"> is swallowed by WKWebView/WebView2 — route through openExternal()
+// which calls the backend /api/desktop/open-url endpoint to open in the system browser.
+window.addEventListener('click', (e: MouseEvent) => {
+  const anchor = (e.target as HTMLElement).closest?.('a[href]') as HTMLAnchorElement | null
+  if (!anchor) return
+  const href = anchor.href
+  if (!href || href.startsWith(window.location.origin) || href.startsWith('/') || href.startsWith('#')) return
+  // External URL — open via system browser
+  e.preventDefault()
+  openExternal(href)
+})
+
+// Patch document.execCommand('paste') for Wails WebView compatibility.
+// WKWebView blocks execCommand('paste') from non-native UI elements (like Monaco's
+// right-click context menu). This intercept reads from the async clipboard API and
+// inserts text into the active element. The async nature means it won't return
+// synchronously, but the text will arrive in the editor shortly after the click.
+const _origExecCommand = document.execCommand.bind(document)
+document.execCommand = function (command: string, showUI?: boolean, value?: string) {
+  if (command === 'paste') {
+    navigator.clipboard.readText().then((text) => {
+      if (!text) return
+      const el = document.activeElement || document.body
+      try {
+        const dt = new DataTransfer()
+        dt.setData('text/plain', text)
+        const ev = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true })
+        if (!el.dispatchEvent(ev)) return
+      } catch (_e) { /* fallback below */ }
+      _origExecCommand('insertText', false, text)
+    }).catch((err) => { console.warn('[Radar] Paste failed:', err) })
+    return true
+  }
+  return _origExecCommand(command, showUI, value)
+} as typeof document.execCommand
 
 // Mouse back/forward button navigation for desktop webview.
 // On Windows (WebView2/Chromium), these events fire natively — this handles them.
