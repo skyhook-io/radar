@@ -1,6 +1,6 @@
 import { useRef, useCallback, useState, useMemo, useEffect, type ReactNode } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Play, Pause, Square, Download, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter } from 'lucide-react'
+import { Play, Square, Download, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter } from 'lucide-react'
 import type { LogEntry, LogLevel } from './useLogBuffer'
 import { useLogSearch } from './useLogSearch'
 import { JsonLogLine } from './JsonLogLine'
@@ -19,12 +19,8 @@ interface LogCoreProps {
   entries: LogEntry[]
   isLoading: boolean
   isStreaming: boolean
-  isPaused?: boolean
-  pausedCount?: number
   onStartStream: () => void
   onStopStream: () => void
-  onPause?: () => void
-  onResume?: () => void
   onRefresh: () => void
   onDownload: (format: DownloadFormat) => void
   onClear?: () => void
@@ -46,12 +42,8 @@ export function LogCore({
   entries,
   isLoading,
   isStreaming,
-  isPaused = false,
-  pausedCount = 0,
   onStartStream,
   onStopStream,
-  onPause,
-  onResume,
   onRefresh,
   onDownload,
   onClear,
@@ -179,39 +171,20 @@ export function LogCore({
       <div className="flex items-center gap-2 px-3 py-2 border-b border-theme-border bg-theme-surface">
         {toolbarExtra}
 
-        {/* Stream toggle */}
+        {/* Stream / Stop toggle */}
         <Tooltip content={isStreaming ? 'Stop streaming' : 'Start streaming'} delay={TIP_DELAY} position="bottom">
           <button
             onClick={isStreaming ? onStopStream : onStartStream}
             className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors ${
               isStreaming
-                ? 'bg-green-600 text-theme-text-primary hover:bg-green-700'
+                ? 'bg-green-600 text-white hover:bg-green-700'
                 : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover'
             }`}
           >
             {isStreaming ? <Square className="w-3 h-3" /> : <Play className="w-3 h-3" />}
-            <span className="hidden sm:inline">{isStreaming ? 'Streaming' : 'Stream'}</span>
+            <span className="hidden sm:inline">{isStreaming ? 'Stop' : 'Stream'}</span>
           </button>
         </Tooltip>
-
-        {/* Pause/Resume (only when streaming) */}
-        {isStreaming && onPause && onResume && (
-          <Tooltip content={isPaused ? 'Resume log updates' : 'Pause log updates'} delay={TIP_DELAY} position="bottom">
-            <button
-              onClick={isPaused ? onResume : onPause}
-              className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors ${
-                isPaused
-                  ? 'bg-yellow-600 text-theme-text-primary hover:bg-yellow-700'
-                  : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover'
-              }`}
-            >
-              {isPaused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
-              {isPaused && pausedCount > 0 && (
-                <span className="bg-yellow-500/30 px-1 rounded text-[10px]">{pausedCount} new</span>
-              )}
-            </button>
-          </Tooltip>
-        )}
 
         {/* Refresh */}
         <Tooltip content="Refresh logs" delay={TIP_DELAY} position="bottom">
@@ -462,7 +435,7 @@ export function LogCore({
           {!atBottom && (
             <button
               onClick={scrollToBottom}
-              className="absolute bottom-4 right-14 px-3 py-1.5 bg-blue-600 text-theme-text-primary text-xs rounded-full shadow-lg hover:bg-blue-700 z-10"
+              className="absolute bottom-4 right-14 px-3 py-1.5 bg-blue-600 text-white text-xs rounded-full shadow-lg hover:bg-blue-700 z-10"
             >
               Scroll to bottom
             </button>

@@ -37,7 +37,7 @@ export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewer
   const eventSourceRef = useRef<EventSource | null>(null)
   const podColorsRef = useRef(podColors)
   podColorsRef.current = podColors
-  const { entries, append, set, clear, isPaused, pause, resume, pausedCount } = useLogBuffer()
+  const { entries, append, set, clear } = useLogBuffer()
 
   // Fetch initial logs (non-streaming)
   const { data: logsData, refetch, isLoading } = useWorkloadLogs(kind, namespace, name, {
@@ -366,12 +366,8 @@ export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewer
       entries={filteredEntries}
       isLoading={isLoading}
       isStreaming={isStreaming}
-      isPaused={isPaused}
-      pausedCount={pausedCount}
       onStartStream={startStreaming}
       onStopStream={stopStreaming}
-      onPause={pause}
-      onResume={resume}
       onRefresh={() => refetch()}
       onDownload={downloadLogs}
       onClear={clear}

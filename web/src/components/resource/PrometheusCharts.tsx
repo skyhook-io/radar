@@ -159,22 +159,15 @@ export function PrometheusCharts({ kind, namespace, name }: PrometheusChartsProp
         </div>
 
         {/* Time range selector */}
-        <div className="flex items-center gap-1">
+        <select
+          value={timeRange}
+          onChange={e => setTimeRange(e.target.value as PrometheusTimeRange)}
+          className="px-2 py-1 text-xs rounded-md bg-theme-elevated border border-theme-border text-theme-text-secondary cursor-pointer focus:outline-none focus:ring-1 focus:ring-blue-500/50"
+        >
           {TIME_RANGES.map(tr => (
-            <button
-              key={tr.value}
-              onClick={() => setTimeRange(tr.value)}
-              className={clsx(
-                'px-2 py-1 text-xs rounded-md transition-colors',
-                timeRange === tr.value
-                  ? 'bg-blue-600/20 text-blue-400 font-medium'
-                  : 'text-theme-text-quaternary hover:text-theme-text-tertiary'
-              )}
-            >
-              {tr.label}
-            </button>
+            <option key={tr.value} value={tr.value}>{tr.label}</option>
           ))}
-        </div>
+        </select>
       </div>
 
       {/* Chart area — fixed min-height prevents layout shift while loading */}

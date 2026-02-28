@@ -23,7 +23,7 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
   const sinceSeconds = logRange.startsWith('since:') ? Number(logRange.slice(6)) : undefined
 
   const eventSourceRef = useRef<EventSource | null>(null)
-  const { entries, append, set, clear, isPaused, pause, resume, pausedCount } = useLogBuffer()
+  const { entries, append, set, clear } = useLogBuffer()
 
   // Fetch initial logs (non-streaming)
   const { data: logsData, refetch, isLoading } = usePodLogs(namespace, podName, {
@@ -212,12 +212,8 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
       entries={entries}
       isLoading={isLoading}
       isStreaming={isStreaming}
-      isPaused={isPaused}
-      pausedCount={pausedCount}
       onStartStream={startStreaming}
       onStopStream={stopStreaming}
-      onPause={pause}
-      onResume={resume}
       onRefresh={() => refetch()}
       onDownload={downloadLogs}
       onClear={clear}

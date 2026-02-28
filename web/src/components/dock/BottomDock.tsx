@@ -1,6 +1,6 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { DURATION_DOCK } from '../../utils/animation'
-import { X, ChevronDown, ChevronUp, Terminal, FileText, Trash2, Layers } from 'lucide-react'
+import { X, ChevronDown, ChevronUp, Terminal, FileText, Trash2, Layers, Maximize2, Minimize2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useDock, DockTab } from './DockContext'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
@@ -11,10 +11,12 @@ import { WorkloadLogsTab } from './WorkloadLogsTab'
 const MIN_HEIGHT = 200
 const DEFAULT_HEIGHT = 400
 const MAX_HEIGHT_RATIO = 0.7
+const MAXIMIZED_TOP_OFFSET = 48 // leave room for top bar
 
 export function BottomDock() {
   const { tabs, activeTabId, isExpanded, removeTab, setActiveTab, toggleExpanded, closeAll } = useDock()
   const [height, setHeight] = useState(DEFAULT_HEIGHT)
+  const [isMaximized, setIsMaximized] = useState(false)
   const isDragging = useRef(false)
   const startY = useRef(0)
   const startHeight = useRef(0)
@@ -51,6 +53,22 @@ export function BottomDock() {
     }
   }, [])
 
+  const toggleMaximized = useCallback(() => {
+    setIsMaximized(prev => !prev)
+  }, [])
+
+  // Escape exits maximized mode
+  useEffect(() => {
+    if (!isMaximized) return
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setIsMaximized(false)
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown)
+    return () => window.removeEventListener('keydown', handleKeyDown)
+  }, [isMaximized])
+
   // Dock toggle shortcut (Ctrl+`)
   useRegisterShortcut({
     id: 'dock-toggle',
@@ -67,13 +85,15 @@ export function BottomDock() {
     return null
   }
 
+  const effectiveHeight = !isExpanded ? 36 : isMaximized ? `calc(100vh - ${MAXIMIZED_TOP_OFFSET}px)` : height
+
   return (
     <div
       className="fixed bottom-0 left-0 right-0 bg-theme-base border-t border-theme-border flex flex-col z-40"
-      style={{ height: isExpanded ? height : 36, transition: `height ${DURATION_DOCK}ms ease-out` }}
+      style={{ height: effectiveHeight, transition: `height ${DURATION_DOCK}ms ease-out` }}
     >
-      {/* Resize handle */}
-      {isExpanded && (
+      {/* Resize handle (hidden when maximized) */}
+      {isExpanded && !isMaximized && (
         <div
           className="absolute top-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-blue-500/50 transition-colors"
           onMouseDown={handleMouseDown}
@@ -107,8 +127,21 @@ export function BottomDock() {
               <Trash2 className="w-3.5 h-3.5" />
             </button>
           )}
+          {isExpanded && (
+            <button
+              onClick={toggleMaximized}
+              className="p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+              title={isMaximized ? 'Restore (Esc)' : 'Maximize'}
+            >
+              {isMaximized ? (
+                <Minimize2 className="w-3.5 h-3.5" />
+              ) : (
+                <Maximize2 className="w-3.5 h-3.5" />
+              )}
+            </button>
+          )}
           <button
-            onClick={toggleExpanded}
+            onClick={() => { if (isMaximized) setIsMaximized(false); toggleExpanded() }}
             className="p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
             title={isExpanded ? 'Collapse' : 'Expand'}
           >
