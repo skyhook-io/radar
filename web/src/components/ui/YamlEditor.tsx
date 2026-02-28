@@ -135,9 +135,15 @@ export function YamlEditor({
     applyDecorations()
   }, [applyDecorations])
 
+  // Expose editor globally for desktop clipboard interception (see main.tsx).
+  useEffect(() => {
+    return () => { delete (window as any).__radarMonacoEditor }
+  }, [])
+
   const handleEditorMount: OnMount = useCallback((editor, monaco) => {
     editorRef.current = editor
     monacoRef.current = monaco
+    ;(window as any).__radarMonacoEditor = editor
 
     // Add CSS for editable line highlighting
     const styleId = 'yaml-editor-styles'

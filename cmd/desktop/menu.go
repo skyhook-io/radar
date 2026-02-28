@@ -19,12 +19,19 @@ func createMenu(desktopApp *DesktopApp) *menu.Menu {
 		runtime.Quit(desktopApp.ctx)
 	})
 
-	// Edit menu — use explicit JS callbacks instead of nil.
-	// On macOS, nil callbacks rely on the WKWebView responder chain for clipboard
-	// actions, but this doesn't work for complex editors like Monaco (used for YAML
-	// editing). By using WindowExecJS we ensure clipboard operations reach the web
-	// content regardless of which element is focused.
-	// See: https://github.com/microsoft/monaco-editor/issues/2205
+	// Edit menu — clipboard handling strategy:
+	//
+	// Copy/Cut: Use nil callbacks to delegate to macOS's native responder chain.
+	// WKWebView does NOT dispatch DOM copy/cut events from the native selectors.
+	// Instead, the JS keydown handler in main.tsx intercepts Cmd+C/X before macOS
+	// consumes the event, reads the selection (including Monaco virtual selection),
+	// and writes to the clipboard via navigator.clipboard.writeText().
+	//
+	// Paste: Must use explicit WindowExecJS because WKWebView's native paste:
+	// doesn't work for complex editors like Monaco. We read from the clipboard
+	// API and dispatch a synthetic ClipboardEvent.
+	//
+	// Undo/Redo/SelectAll: Use WindowExecJS (these work fine via execCommand).
 	editMenu := appMenu.AddSubmenu("Edit")
 	editMenu.AddText("Undo", keys.CmdOrCtrl("z"), func(_ *menu.CallbackData) {
 		runtime.WindowExecJS(desktopApp.ctx, "document.execCommand('undo')")
@@ -33,16 +40,9 @@ func createMenu(desktopApp *DesktopApp) *menu.Menu {
 		runtime.WindowExecJS(desktopApp.ctx, "document.execCommand('redo')")
 	})
 	editMenu.AddSeparator()
-	editMenu.AddText("Cut", keys.CmdOrCtrl("x"), func(_ *menu.CallbackData) {
-		runtime.WindowExecJS(desktopApp.ctx, "document.execCommand('cut')")
-	})
-	editMenu.AddText("Copy", keys.CmdOrCtrl("c"), func(_ *menu.CallbackData) {
-		runtime.WindowExecJS(desktopApp.ctx, "document.execCommand('copy')")
-	})
+	editMenu.AddText("Cut", keys.CmdOrCtrl("x"), nil)
+	editMenu.AddText("Copy", keys.CmdOrCtrl("c"), nil)
 	editMenu.AddText("Paste", keys.CmdOrCtrl("v"), func(_ *menu.CallbackData) {
-		// Paste requires special handling: read clipboard text, then dispatch a
-		// synthetic ClipboardEvent so Monaco's paste handler processes it correctly.
-		// Falls back to document.execCommand('insertText') for plain inputs.
 		runtime.WindowExecJS(desktopApp.ctx, `
 			navigator.clipboard.readText().then(function(text) {
 				if (!text) return;
@@ -52,7 +52,7 @@ func createMenu(desktopApp *DesktopApp) *menu.Menu {
 					dt.setData('text/plain', text);
 					var ev = new ClipboardEvent('paste', {clipboardData: dt, bubbles: true, cancelable: true});
 					if (!el.dispatchEvent(ev)) return;
-				} catch(e) {}
+				} catch(e) { /* ClipboardEvent dispatch failed, fall back to insertText */ }
 				document.execCommand('insertText', false, text);
 			}).catch(function(err) { console.warn('[Radar] Paste failed:', err); });
 		`)
