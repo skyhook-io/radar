@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import type { VirtuosoHandle } from 'react-virtuoso'
 import type { LogEntry } from './useLogBuffer'
-import { stripAnsi } from '../../utils/log-format'
+import { stripAnsi, escapeRegExp } from '../../utils/log-format'
 
 interface UseLogSearchReturn {
   query: string
@@ -37,12 +37,10 @@ export function useLogSearch(
   const [isFilterMode, setIsFilterMode] = useState(false)
   const [currentMatch, setCurrentMatch] = useState(0)
   const [isOpen, setIsOpen] = useState(false)
-  const [regexError, setRegexError] = useState<string | null>(null)
 
-  const matchIndices = useMemo(() => {
+  const { matchIndices, regexError } = useMemo(() => {
     if (!query) {
-      setRegexError(null)
-      return []
+      return { matchIndices: [] as number[], regexError: null }
     }
 
     try {
@@ -50,11 +48,9 @@ export function useLogSearch(
       if (isRegex) {
         pattern = new RegExp(query, isCaseSensitive ? 'g' : 'gi')
       } else {
-        const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
-        pattern = new RegExp(escaped, isCaseSensitive ? 'g' : 'gi')
+        pattern = new RegExp(escapeRegExp(query), isCaseSensitive ? 'g' : 'gi')
       }
 
-      setRegexError(null)
       const indices: number[] = []
       for (let i = 0; i < entries.length; i++) {
         const plain = stripAnsi(entries[i].content)
@@ -63,10 +59,9 @@ export function useLogSearch(
         }
         pattern.lastIndex = 0
       }
-      return indices
+      return { matchIndices: indices, regexError: null }
     } catch (e) {
-      setRegexError(e instanceof Error ? e.message : 'Invalid regex')
-      return []
+      return { matchIndices: [] as number[], regexError: e instanceof Error ? e.message : 'Invalid regex' }
     }
   }, [entries, query, isRegex, isCaseSensitive])
 

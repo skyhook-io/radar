@@ -38,11 +38,25 @@ export function getLevelColor(level: LogLevel): string {
  * Highlight search query matches in text with a mark tag.
  * Returns HTML string safe for dangerouslySetInnerHTML.
  */
-export function highlightSearchMatches(text: string, query: string): string {
+export function highlightSearchMatches(
+  text: string, query: string, isRegex = false, isCaseSensitive = false,
+): string {
   if (!query) return escapeHtml(text)
   const escaped = escapeHtml(text)
-  const escapedQuery = escapeHtml(query)
-  const regex = new RegExp(`(${escapeRegExp(escapedQuery)})`, 'gi')
+  const flags = isCaseSensitive ? 'g' : 'gi'
+  let pattern: string
+  if (isRegex) {
+    try {
+      // Validate the regex first — if invalid, fall back to literal
+      new RegExp(query)
+      pattern = query
+    } catch {
+      pattern = escapeRegExp(escapeHtml(query))
+    }
+  } else {
+    pattern = escapeRegExp(escapeHtml(query))
+  }
+  const regex = new RegExp(`(${pattern})`, flags)
   return escaped.replace(regex, '<mark style="background:rgba(234,179,8,0.4);color:inherit;border-radius:2px;padding:0 1px">$1</mark>')
 }
 
@@ -254,4 +268,33 @@ export function parseLogLine(line: string): { timestamp: string; content: string
     }
   }
   return { timestamp: '', content: line }
+}
+
+/**
+ * Parse a log range string (e.g. "500" or "since:300") into tailLines/sinceSeconds params.
+ */
+export function parseLogRange(logRange: string): { tailLines?: number; sinceSeconds?: number } {
+  if (logRange.startsWith('since:')) {
+    return { sinceSeconds: Number(logRange.slice(6)) }
+  }
+  return { tailLines: Number(logRange) }
+}
+
+/**
+ * Handle SSE error events from log streams.
+ * Parses server-sent error data and logs it, then calls onClose.
+ */
+export function handleSSEError(event: Event, prefix: string, onClose: () => void): void {
+  const me = event as MessageEvent
+  if (me.data) {
+    try {
+      const data = JSON.parse(me.data)
+      console.error(`${prefix}:`, data.error || data.message || me.data)
+    } catch {
+      console.error(`${prefix}:`, me.data)
+    }
+  } else {
+    console.error(`${prefix} connection error`)
+  }
+  onClose()
 }

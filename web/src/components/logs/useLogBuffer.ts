@@ -62,21 +62,13 @@ interface UseLogBufferReturn {
   appendBatch: (entries: Omit<LogEntry, 'id' | 'level' | 'isJson'>[]) => void
   set: (entries: Omit<LogEntry, 'id' | 'level' | 'isJson'>[]) => void
   clear: () => void
-  isPaused: boolean
-  pause: () => void
-  resume: () => void
-  pausedCount: number
 }
 
 export function useLogBuffer(): UseLogBufferReturn {
   const [entries, setEntries] = useState<LogEntry[]>([])
-  const [isPaused, setIsPaused] = useState(false)
-  const [pausedCount, setPausedCount] = useState(0)
   const idCounter = useRef(0)
   const pendingRef = useRef<Omit<LogEntry, 'id' | 'level' | 'isJson'>[]>([])
   const rafRef = useRef<number | null>(null)
-  const pausedRef = useRef(false)
-  const pausedBufferRef = useRef<Omit<LogEntry, 'id' | 'level' | 'isJson'>[]>([])
 
   const enrichEntry = useCallback((raw: Omit<LogEntry, 'id' | 'level' | 'isJson'>): LogEntry => {
     return {
@@ -104,11 +96,6 @@ export function useLogBuffer(): UseLogBufferReturn {
   }, [enrichEntry])
 
   const append = useCallback((entry: Omit<LogEntry, 'id' | 'level' | 'isJson'>) => {
-    if (pausedRef.current) {
-      pausedBufferRef.current.push(entry)
-      setPausedCount(pausedBufferRef.current.length)
-      return
-    }
     pendingRef.current.push(entry)
     if (rafRef.current === null) {
       rafRef.current = requestAnimationFrame(flushPending)
@@ -116,11 +103,6 @@ export function useLogBuffer(): UseLogBufferReturn {
   }, [flushPending])
 
   const appendBatch = useCallback((batch: Omit<LogEntry, 'id' | 'level' | 'isJson'>[]) => {
-    if (pausedRef.current) {
-      pausedBufferRef.current.push(...batch)
-      setPausedCount(pausedBufferRef.current.length)
-      return
-    }
     pendingRef.current.push(...batch)
     if (rafRef.current === null) {
       rafRef.current = requestAnimationFrame(flushPending)
@@ -152,27 +134,5 @@ export function useLogBuffer(): UseLogBufferReturn {
     setEntries([])
   }, [])
 
-  const pause = useCallback(() => {
-    pausedRef.current = true
-    setIsPaused(true)
-    setPausedCount(0)
-    pausedBufferRef.current = []
-  }, [])
-
-  const resume = useCallback(() => {
-    pausedRef.current = false
-    setIsPaused(false)
-    // Flush paused buffer
-    const buffered = pausedBufferRef.current
-    pausedBufferRef.current = []
-    setPausedCount(0)
-    if (buffered.length > 0) {
-      pendingRef.current.push(...buffered)
-      if (rafRef.current === null) {
-        rafRef.current = requestAnimationFrame(flushPending)
-      }
-    }
-  }, [flushPending])
-
-  return { entries, append, appendBatch, set, clear, isPaused, pause, resume, pausedCount }
+  return { entries, append, appendBatch, set, clear }
 }

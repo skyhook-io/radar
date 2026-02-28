@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useCallback } from 'react'
 import { usePodLogs, createLogStream, type LogStreamEvent } from '../../api/client'
 import { ChevronDown } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
-import { parseLogLine } from '../../utils/log-format'
+import { parseLogLine, parseLogRange, handleSSEError } from '../../utils/log-format'
 import { useLogBuffer } from './useLogBuffer'
 import { LogCore, type DownloadFormat } from './LogCore'
 
@@ -19,8 +19,7 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
   const [logRange, setLogRange] = useState('500')  // lines:N or since:N
   const [showPrevious, setShowPrevious] = useState(false)
 
-  const tailLines = logRange.startsWith('since:') ? undefined : Number(logRange)
-  const sinceSeconds = logRange.startsWith('since:') ? Number(logRange.slice(6)) : undefined
+  const { tailLines, sinceSeconds } = parseLogRange(logRange)
 
   const eventSourceRef = useRef<EventSource | null>(null)
   const { entries, append, set, clear } = useLogBuffer()
@@ -79,19 +78,7 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
     })
 
     es.addEventListener('error', (event) => {
-      const me = event as MessageEvent
-      if (me.data) {
-        try {
-          const data = JSON.parse(me.data)
-          console.error('Log stream error:', data.error || data.message || me.data)
-        } catch {
-          console.error('Log stream error:', me.data)
-        }
-      } else {
-        console.error('Log stream connection error')
-      }
-      setIsStreaming(false)
-      es.close()
+      handleSSEError(event, 'Log stream error', () => { setIsStreaming(false); es.close() })
     })
 
     eventSourceRef.current = es

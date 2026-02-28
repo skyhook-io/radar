@@ -423,6 +423,8 @@ export function LogCore({
               <LogLine
                 entry={entry}
                 searchQuery={search.query}
+                searchIsRegex={search.isRegex}
+                searchIsCaseSensitive={search.isCaseSensitive}
                 showPodName={showPodName}
                 showTimestamp={showTimestamps}
                 isCurrentMatch={entry.id === currentHighlightId}
@@ -466,6 +468,8 @@ function Shortcut({ keys, label }: { keys: string; label: string }) {
 function LogLine({
   entry,
   searchQuery,
+  searchIsRegex,
+  searchIsCaseSensitive,
   showPodName,
   showTimestamp,
   isCurrentMatch,
@@ -473,6 +477,8 @@ function LogLine({
 }: {
   entry: LogEntry
   searchQuery: string
+  searchIsRegex: boolean
+  searchIsCaseSensitive: boolean
   showPodName: boolean
   showTimestamp: boolean
   isCurrentMatch: boolean
@@ -484,7 +490,7 @@ function LogLine({
   let contentElement: React.ReactNode
   if (searchQuery) {
     const plain = stripAnsi(entry.content)
-    const highlighted = highlightSearchMatches(plain, searchQuery)
+    const highlighted = highlightSearchMatches(plain, searchQuery, searchIsRegex, searchIsCaseSensitive)
     contentElement = (
       <span
         className={`${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'} ${levelColor}`}

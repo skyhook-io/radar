@@ -3,6 +3,7 @@ import { useWorkloadLogs, createWorkloadLogStream } from '../../api/client'
 import type { WorkloadPodInfo, WorkloadLogStreamEvent } from '../../types'
 import { ChevronDown, Filter } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
+import { parseLogRange, handleSSEError } from '../../utils/log-format'
 import { useLogBuffer } from './useLogBuffer'
 import { LogCore, type DownloadFormat } from './LogCore'
 
@@ -29,8 +30,7 @@ export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewer
   const [isStreaming, setIsStreaming] = useState(false)
   const [showPodFilter, setShowPodFilter] = useState(false)
   const [logRange, setLogRange] = useState('100')  // lines:N or since:N
-  const tailLines = logRange.startsWith('since:') ? undefined : Number(logRange)
-  const sinceSeconds = logRange.startsWith('since:') ? Number(logRange.slice(6)) : undefined
+  const { tailLines, sinceSeconds } = parseLogRange(logRange)
   const [pods, setPods] = useState<WorkloadPodInfo[]>([])
   const [podColors, setPodColors] = useState<Map<string, string>>(new Map())
 
@@ -56,6 +56,7 @@ export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewer
   }, [pods])
 
   // Parse logs data into entries
+  const podsInitialized = useRef(false)
   useEffect(() => {
     if (logsData) {
       const podsList = logsData.pods || []
@@ -69,7 +70,8 @@ export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewer
       })
       setPodColors(colors)
 
-      if (selectedPods.size === 0 && podsList.length > 0) {
+      if (!podsInitialized.current && podsList.length > 0) {
+        podsInitialized.current = true
         setSelectedPods(new Set(podsList.map(p => p.name)))
       }
 
@@ -82,7 +84,7 @@ export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewer
       }))
       set(lines)
     }
-  }, [logsData, selectedPods.size, set])
+  }, [logsData, set])
 
   // Start streaming
   const startStreaming = useCallback(() => {
@@ -172,19 +174,7 @@ export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewer
     })
 
     es.addEventListener('error', (event) => {
-      const me = event as MessageEvent
-      if (me.data) {
-        try {
-          const data = JSON.parse(me.data)
-          console.error('Workload log stream error:', data.error || data.message || me.data)
-        } catch {
-          console.error('Workload log stream error:', me.data)
-        }
-      } else {
-        console.error('Workload log stream connection error')
-      }
-      setIsStreaming(false)
-      es.close()
+      handleSSEError(event, 'Workload log stream error', () => { setIsStreaming(false); es.close() })
     })
 
     eventSourceRef.current = es
