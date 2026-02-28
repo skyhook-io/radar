@@ -1035,15 +1035,12 @@ function DockSpacer() {
 
 // Floating ? button that positions itself above the dock
 function HelpButton({ showHelp, showCommandPalette, onClick }: { showHelp: boolean; showCommandPalette: boolean; onClick: () => void }) {
-  const { tabs, isExpanded } = useDock()
   if (showHelp || showCommandPalette) return null
-  const bottomOffset = tabs.length > 0 ? (isExpanded ? 300 : 36) + 12 : 16
   return (
     <Tooltip content="Keyboard shortcuts (?)" position="top">
       <button
         onClick={onClick}
-        style={{ bottom: bottomOffset }}
-        className="fixed right-4 z-40 w-7 h-7 flex items-center justify-center rounded-full bg-theme-elevated/80 hover:bg-theme-hover border border-theme-border-light text-theme-text-tertiary hover:text-theme-text-secondary text-xs font-medium shadow-sm backdrop-blur-sm transition-all"
+        className="fixed bottom-2 right-2 z-40 w-7 h-7 flex items-center justify-center rounded-full bg-theme-elevated/80 hover:bg-theme-hover border border-theme-border-light text-theme-text-tertiary hover:text-theme-text-secondary text-xs font-medium shadow-sm backdrop-blur-sm transition-all"
       >
         ?
       </button>

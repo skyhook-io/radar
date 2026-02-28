@@ -3,41 +3,35 @@
  * Shared between LogsViewer and WorkloadLogsViewer components.
  */
 
+import type { LogLevel } from '../components/logs/useLogBuffer'
+
 /**
  * Format a K8s log timestamp for display.
  * Extracts and formats the time portion (HH:MM:SS).
  */
 export function formatLogTimestamp(ts: string): string {
-  try {
-    const date = new Date(ts)
-    return date.toLocaleTimeString('en-US', {
-      hour12: false,
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit',
-    })
-  } catch {
+  const date = new Date(ts)
+  if (isNaN(date.getTime())) {
     // Fallback: extract HH:MM:SS from ISO timestamp
-    return ts.slice(11, 19)
+    return ts.slice(11, 19) || ts
   }
+  return date.toLocaleTimeString('en-US', {
+    hour12: false,
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  })
 }
 
-/**
- * Determine the color class for a log line based on its content.
- * Detects common log level keywords.
- */
-export function getLogLevelColor(content: string): string {
-  const lower = content.toLowerCase()
-  if (lower.includes('error') || lower.includes('fatal') || lower.includes('panic')) {
-    return 'text-red-400'
+/** Map a detected LogLevel to a Tailwind color class. */
+export function getLevelColor(level: LogLevel): string {
+  switch (level) {
+    case 'error': return 'text-red-400'
+    case 'warn': return 'text-yellow-400'
+    case 'debug': return 'text-theme-text-secondary'
+    case 'info': return 'text-theme-text-primary'
+    default: return 'text-theme-text-primary'
   }
-  if (lower.includes('warn')) {
-    return 'text-yellow-400'
-  }
-  if (lower.includes('debug') || lower.includes('trace')) {
-    return 'text-theme-text-secondary'
-  }
-  return 'text-theme-text-primary'
 }
 
 /**
@@ -49,7 +43,7 @@ export function highlightSearchMatches(text: string, query: string): string {
   const escaped = escapeHtml(text)
   const escapedQuery = escapeHtml(query)
   const regex = new RegExp(`(${escapeRegExp(escapedQuery)})`, 'gi')
-  return escaped.replace(regex, '<mark class="bg-yellow-500/30 text-yellow-200">$1</mark>')
+  return escaped.replace(regex, '<mark style="background:rgba(234,179,8,0.4);color:inherit;border-radius:2px;padding:0 1px">$1</mark>')
 }
 
 /**
@@ -72,6 +66,30 @@ export function stripAnsi(text: string): string {
   return text.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
 }
 
+// Standard 256-color palette (indices 0-255)
+// 0-7: standard colors, 8-15: bright colors, 16-231: 6x6x6 color cube, 232-255: grayscale
+const ANSI_256_COLORS: string[] = (() => {
+  const colors: string[] = [
+    '#4c4c4c', '#cd3131', '#0dbc79', '#e5e510', '#2472c8', '#bc3fbc', '#11a8cd', '#e5e5e5',
+    '#767676', '#f14c4c', '#23d18b', '#f5f543', '#3b8eea', '#d670d6', '#29b8db', '#e5e5e5',
+  ]
+  // 6x6x6 color cube (indices 16-231)
+  const levels = [0, 95, 135, 175, 215, 255]
+  for (let r = 0; r < 6; r++) {
+    for (let g = 0; g < 6; g++) {
+      for (let b = 0; b < 6; b++) {
+        colors.push(`#${levels[r].toString(16).padStart(2, '0')}${levels[g].toString(16).padStart(2, '0')}${levels[b].toString(16).padStart(2, '0')}`)
+      }
+    }
+  }
+  // Grayscale (indices 232-255)
+  for (let i = 0; i < 24; i++) {
+    const v = (8 + i * 10).toString(16).padStart(2, '0')
+    colors.push(`#${v}${v}${v}`)
+  }
+  return colors
+})()
+
 // ANSI SGR (Select Graphic Rendition) code → CSS style mapping.
 // Colors are chosen to be legible on a dark background (terminal-standard palette).
 const SGR_STYLES: Record<number, string> = {
@@ -88,6 +106,15 @@ const SGR_STYLES: Record<number, string> = {
   35: 'color:#bc3fbc',
   36: 'color:#11a8cd',
   37: 'color:#e5e5e5',
+  // Standard background colors (40-47)
+  40: 'background-color:#4c4c4c',
+  41: 'background-color:#cd3131',
+  42: 'background-color:#0dbc79',
+  43: 'background-color:#e5e510',
+  44: 'background-color:#2472c8',
+  45: 'background-color:#bc3fbc',
+  46: 'background-color:#11a8cd',
+  47: 'background-color:#e5e5e5',
   // Bright foreground colors (90-97)
   90: 'color:#767676',
   91: 'color:#f14c4c',
@@ -97,6 +124,65 @@ const SGR_STYLES: Record<number, string> = {
   95: 'color:#d670d6',
   96: 'color:#29b8db',
   97: 'color:#e5e5e5',
+  // Bright background colors (100-107)
+  100: 'background-color:#767676',
+  101: 'background-color:#f14c4c',
+  102: 'background-color:#23d18b',
+  103: 'background-color:#f5f543',
+  104: 'background-color:#3b8eea',
+  105: 'background-color:#d670d6',
+  106: 'background-color:#29b8db',
+  107: 'background-color:#e5e5e5',
+}
+
+/**
+ * Resolve an array of SGR codes to a CSS style string.
+ * Handles 256-color (38;5;N / 48;5;N) sequences.
+ */
+function resolveSgrStyles(codes: number[]): string {
+  const parts: string[] = []
+  let i = 0
+  while (i < codes.length) {
+    // RGB foreground: 38;2;r;g;b
+    if (codes[i] === 38 && codes[i + 1] === 2 && codes[i + 4] !== undefined) {
+      const r = codes[i + 2], g = codes[i + 3], b = codes[i + 4]
+      parts.push(`color:rgb(${r},${g},${b})`)
+      i += 5
+      continue
+    }
+    // RGB background: 48;2;r;g;b
+    if (codes[i] === 48 && codes[i + 1] === 2 && codes[i + 4] !== undefined) {
+      const r = codes[i + 2], g = codes[i + 3], b = codes[i + 4]
+      parts.push(`background-color:rgb(${r},${g},${b})`)
+      i += 5
+      continue
+    }
+    // 256-color foreground: 38;5;N
+    if (codes[i] === 38 && codes[i + 1] === 5 && codes[i + 2] !== undefined) {
+      const colorIdx = codes[i + 2]
+      if (colorIdx >= 0 && colorIdx < 256) {
+        parts.push(`color:${ANSI_256_COLORS[colorIdx]}`)
+      }
+      i += 3
+      continue
+    }
+    // 256-color background: 48;5;N
+    if (codes[i] === 48 && codes[i + 1] === 5 && codes[i + 2] !== undefined) {
+      const colorIdx = codes[i + 2]
+      if (colorIdx >= 0 && colorIdx < 256) {
+        parts.push(`background-color:${ANSI_256_COLORS[colorIdx]}`)
+      }
+      i += 3
+      continue
+    }
+    // Standard SGR code
+    const style = SGR_STYLES[codes[i]]
+    if (style) {
+      parts.push(style)
+    }
+    i++
+  }
+  return parts.join(';')
 }
 
 /**
@@ -130,19 +216,13 @@ export function ansiToHtml(text: string): string {
       openSpans = 0
       // Apply any codes that follow the reset in the same sequence (e.g. \x1b[0;32m)
       const afterReset = codes.slice(resetIdx + 1)
-      const styles = afterReset
-        .map(c => SGR_STYLES[c])
-        .filter(Boolean)
-        .join(';')
+      const styles = resolveSgrStyles(afterReset)
       if (styles) {
         result += `<span style="${styles}">`
         openSpans++
       }
     } else {
-      const styles = codes
-        .map(c => SGR_STYLES[c])
-        .filter(Boolean)
-        .join(';')
+      const styles = resolveSgrStyles(codes)
       if (styles) {
         result += `<span style="${styles}">`
         openSpans++

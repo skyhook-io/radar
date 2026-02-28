@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -31,13 +30,10 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	container := r.URL.Query().Get("container")
 	previous := r.URL.Query().Get("previous") == "true"
 	tailLinesStr := r.URL.Query().Get("tailLines")
+	sinceSecondsStr := r.URL.Query().Get("sinceSeconds")
 
-	tailLines := int64(500) // default
-	if tailLinesStr != "" {
-		if t, err := strconv.ParseInt(tailLinesStr, 10, 64); err == nil && t > 0 {
-			tailLines = t
-		}
-	}
+	tailLines := parseTailLines(tailLinesStr, 500)
+	sinceSeconds := parseSinceSeconds(sinceSecondsStr)
 
 	client := k8s.GetClient()
 	if client == nil {
@@ -72,7 +68,7 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 
 	if container != "" {
 		// Fetch logs for specific container
-		logContent, err := s.fetchContainerLogs(r.Context(), namespace, podName, container, tailLines, previous)
+		logContent, err := s.fetchContainerLogs(r.Context(), namespace, podName, container, tailLines, previous, sinceSeconds)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to fetch logs: %v", err))
 			return
@@ -81,7 +77,7 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Fetch logs for all containers
 		for _, c := range containers {
-			logContent, err := s.fetchContainerLogs(r.Context(), namespace, podName, c, tailLines, previous)
+			logContent, err := s.fetchContainerLogs(r.Context(), namespace, podName, c, tailLines, previous, sinceSeconds)
 			if err != nil {
 				logs[c] = fmt.Sprintf("Error fetching logs: %v", err)
 			} else {
@@ -108,12 +104,10 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 	previous := r.URL.Query().Get("previous") == "true"
 	tailLinesStr := r.URL.Query().Get("tailLines")
 
-	tailLines := int64(100) // default for streaming
-	if tailLinesStr != "" {
-		if t, err := strconv.ParseInt(tailLinesStr, 10, 64); err == nil && t > 0 {
-			tailLines = t
-		}
-	}
+	sinceStr := r.URL.Query().Get("sinceSeconds")
+
+	tailLines := parseTailLines(tailLinesStr, 100)
+	sinceSeconds := parseSinceSeconds(sinceStr)
 
 	// Set SSE headers
 	w.Header().Set("Content-Type", "text/event-stream")
@@ -151,6 +145,9 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 		TailLines:  &tailLines,
 		Previous:   previous,
 		Timestamps: true,
+	}
+	if sinceSeconds != nil {
+		opts.SinceSeconds = sinceSeconds
 	}
 
 	// Get log stream
@@ -209,7 +206,7 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 }
 
 // fetchContainerLogs fetches logs for a specific container
-func (s *Server) fetchContainerLogs(ctx context.Context, namespace, podName, container string, tailLines int64, previous bool) (string, error) {
+func (s *Server) fetchContainerLogs(ctx context.Context, namespace, podName, container string, tailLines int64, previous bool, sinceSeconds *int64) (string, error) {
 	client := k8s.GetClient()
 	if client == nil {
 		return "", fmt.Errorf("kubernetes client not available")
@@ -220,6 +217,9 @@ func (s *Server) fetchContainerLogs(ctx context.Context, namespace, podName, con
 		TailLines:  &tailLines,
 		Previous:   previous,
 		Timestamps: true,
+	}
+	if sinceSeconds != nil {
+		opts.SinceSeconds = sinceSeconds
 	}
 
 	req := client.CoreV1().Pods(namespace).GetLogs(podName, opts)

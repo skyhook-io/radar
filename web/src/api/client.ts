@@ -995,15 +995,17 @@ export function usePodLogs(namespace: string, podName: string, options?: {
   container?: string
   tailLines?: number
   previous?: boolean
+  sinceSeconds?: number
 }) {
   const params = new URLSearchParams()
   if (options?.container) params.set('container', options.container)
   if (options?.tailLines) params.set('tailLines', String(options.tailLines))
   if (options?.previous) params.set('previous', 'true')
+  if (options?.sinceSeconds) params.set('sinceSeconds', String(options.sinceSeconds))
   const queryString = params.toString()
 
   return useQuery<LogsResponse>({
-    queryKey: ['pod-logs', namespace, podName, options?.container, options?.tailLines, options?.previous],
+    queryKey: ['pod-logs', namespace, podName, options?.container, options?.tailLines, options?.previous, options?.sinceSeconds],
     queryFn: () => fetchJSON(`/pods/${namespace}/${podName}/logs${queryString ? `?${queryString}` : ''}`),
     enabled: Boolean(namespace && podName),
     staleTime: 5000, // Allow refetch after 5 seconds
@@ -1018,12 +1020,14 @@ export function createLogStream(
     container?: string
     tailLines?: number
     previous?: boolean
+    sinceSeconds?: number
   }
 ): EventSource {
   const params = new URLSearchParams()
   if (options?.container) params.set('container', options.container)
   if (options?.tailLines) params.set('tailLines', String(options.tailLines))
   if (options?.previous) params.set('previous', 'true')
+  if (options?.sinceSeconds) params.set('sinceSeconds', String(options.sinceSeconds))
   const queryString = params.toString()
 
   return new EventSource(`${API_BASE}/pods/${namespace}/${podName}/logs/stream${queryString ? `?${queryString}` : ''}`)
@@ -2052,15 +2056,17 @@ export function useWorkloadLogs(
   options?: {
     container?: string
     tailLines?: number
+    sinceSeconds?: number
   }
 ) {
   const params = new URLSearchParams()
   if (options?.container) params.set('container', options.container)
   if (options?.tailLines) params.set('tailLines', String(options.tailLines))
+  if (options?.sinceSeconds) params.set('sinceSeconds', String(options.sinceSeconds))
   const queryString = params.toString()
 
   return useQuery<WorkloadLogsResponse>({
-    queryKey: ['workload-logs', kind, namespace, name, options?.container, options?.tailLines],
+    queryKey: ['workload-logs', kind, namespace, name, options?.container, options?.tailLines, options?.sinceSeconds],
     queryFn: () => fetchJSON(`/workloads/${kind}/${namespace}/${name}/logs${queryString ? `?${queryString}` : ''}`),
     enabled: Boolean(kind && namespace && name),
     staleTime: 5000,
@@ -2075,11 +2081,13 @@ export function createWorkloadLogStream(
   options?: {
     container?: string
     tailLines?: number
+    sinceSeconds?: number
   }
 ): EventSource {
   const params = new URLSearchParams()
   if (options?.container) params.set('container', options.container)
   if (options?.tailLines) params.set('tailLines', String(options.tailLines))
+  if (options?.sinceSeconds) params.set('sinceSeconds', String(options.sinceSeconds))
   const queryString = params.toString()
 
   return new EventSource(`${API_BASE}/workloads/${kind}/${namespace}/${name}/logs/stream${queryString ? `?${queryString}` : ''}`)

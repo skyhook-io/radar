@@ -65,6 +65,7 @@ func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	container := r.URL.Query().Get("container")
 	tailLines := parseTailLines(r.URL.Query().Get("tailLines"), 100)
+	sinceSeconds := parseSinceSeconds(r.URL.Query().Get("sinceSeconds"))
 
 	pods, err := s.getWorkloadPods(kind, namespace, name)
 	if err != nil {
@@ -87,7 +88,7 @@ func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Collect logs from all pods concurrently
-	allLogs := collectLogsFromPods(r.Context(), client, namespace, pods, container, tailLines)
+	allLogs := collectLogsFromPods(r.Context(), client, namespace, pods, container, tailLines, sinceSeconds)
 
 	// Sort by timestamp (string comparison works for RFC3339 format)
 	sortLogsByTimestamp(allLogs)
@@ -105,6 +106,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	name := chi.URLParam(r, "name")
 	container := r.URL.Query().Get("container")
 	tailLines := parseTailLines(r.URL.Query().Get("tailLines"), 50)
+	sinceSeconds := parseSinceSeconds(r.URL.Query().Get("sinceSeconds"))
 
 	if !validWorkloadKinds[kind] {
 		s.writeError(w, http.StatusBadRequest, "only deployments, statefulsets, and daemonsets are supported")
@@ -125,19 +127,19 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		sendSSEEvent(w, flusher, "error", map[string]string{"message": "resource cache not available"})
+		sendSSEError(w, flusher, "resource cache not available")
 		return
 	}
 
 	client := k8s.GetClient()
 	if client == nil {
-		sendSSEEvent(w, flusher, "error", map[string]string{"message": "kubernetes client not available"})
+		sendSSEError(w, flusher, "kubernetes client not available")
 		return
 	}
 
 	selector, err := k8s.GetWorkloadSelector(cache, kind, namespace, name)
 	if err != nil {
-		sendSSEEvent(w, flusher, "error", map[string]string{"message": err.Error()})
+		sendSSEError(w, flusher, err.Error())
 		return
 	}
 
@@ -187,7 +189,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 					defer streamWg.Done()
 					defer activeStreams.Delete(podName + "/" + containerName)
 
-					streamPodLogs(streamCtx, client, namespace, podName, containerName, tailLines, logCh)
+					streamPodLogs(streamCtx, client, namespace, podName, containerName, tailLines, sinceSeconds, logCh)
 				}(pod.Name, c, streamCtx)
 			}
 		}
@@ -268,12 +270,15 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 }
 
 // streamPodLogs streams logs from a single pod/container to the log channel
-func streamPodLogs(ctx context.Context, client *kubernetes.Clientset, namespace, podName, containerName string, tailLines int64, logCh chan<- workloadLogEntry) {
+func streamPodLogs(ctx context.Context, client *kubernetes.Clientset, namespace, podName, containerName string, tailLines int64, sinceSeconds *int64, logCh chan<- workloadLogEntry) {
 	opts := &corev1.PodLogOptions{
 		Container:  containerName,
 		Follow:     true,
 		TailLines:  &tailLines,
 		Timestamps: true,
+	}
+	if sinceSeconds != nil {
+		opts.SinceSeconds = sinceSeconds
 	}
 
 	req := client.CoreV1().Pods(namespace).GetLogs(podName, opts)
@@ -402,6 +407,17 @@ func (s *Server) writeWorkloadError(w http.ResponseWriter, err *workloadError) {
 	s.writeError(w, err.statusCode, err.message)
 }
 
+// parseSinceSeconds parses sinceSeconds query parameter, returning nil if not set
+func parseSinceSeconds(str string) *int64 {
+	if str == "" {
+		return nil
+	}
+	if s, err := strconv.ParseInt(str, 10, 64); err == nil && s > 0 {
+		return &s
+	}
+	return nil
+}
+
 // parseTailLines parses tailLines query parameter with a default value
 func parseTailLines(str string, defaultVal int64) int64 {
 	if str == "" {
@@ -414,7 +430,7 @@ func parseTailLines(str string, defaultVal int64) int64 {
 }
 
 // collectLogsFromPods fetches logs from all pods concurrently
-func collectLogsFromPods(ctx context.Context, client *kubernetes.Clientset, namespace string, pods []*corev1.Pod, container string, tailLines int64) []workloadLogEntry {
+func collectLogsFromPods(ctx context.Context, client *kubernetes.Clientset, namespace string, pods []*corev1.Pod, container string, tailLines int64, sinceSeconds *int64) []workloadLogEntry {
 	var allLogs []workloadLogEntry
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -426,7 +442,7 @@ func collectLogsFromPods(ctx context.Context, client *kubernetes.Clientset, name
 			go func(podName, containerName string) {
 				defer wg.Done()
 
-				entries := fetchPodContainerLogs(ctx, client, namespace, podName, containerName, tailLines)
+				entries := fetchPodContainerLogs(ctx, client, namespace, podName, containerName, tailLines, sinceSeconds)
 				if len(entries) > 0 {
 					mu.Lock()
 					allLogs = append(allLogs, entries...)
@@ -441,11 +457,14 @@ func collectLogsFromPods(ctx context.Context, client *kubernetes.Clientset, name
 }
 
 // fetchPodContainerLogs fetches logs for a single pod/container
-func fetchPodContainerLogs(ctx context.Context, client *kubernetes.Clientset, namespace, podName, containerName string, tailLines int64) []workloadLogEntry {
+func fetchPodContainerLogs(ctx context.Context, client *kubernetes.Clientset, namespace, podName, containerName string, tailLines int64, sinceSeconds *int64) []workloadLogEntry {
 	opts := &corev1.PodLogOptions{
 		Container:  containerName,
 		TailLines:  &tailLines,
 		Timestamps: true,
+	}
+	if sinceSeconds != nil {
+		opts.SinceSeconds = sinceSeconds
 	}
 
 	req := client.CoreV1().Pods(namespace).GetLogs(podName, opts)

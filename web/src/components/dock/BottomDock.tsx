@@ -9,7 +9,7 @@ import { LogsTab } from './LogsTab'
 import { WorkloadLogsTab } from './WorkloadLogsTab'
 
 const MIN_HEIGHT = 200
-const DEFAULT_HEIGHT = 300
+const DEFAULT_HEIGHT = 400
 const MAX_HEIGHT_RATIO = 0.7
 
 export function BottomDock() {
