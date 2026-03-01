@@ -28,7 +28,7 @@ If applicable, add screenshots to help explain your problem.
 
 ## Diagnostics (optional)
 
-A diagnostics snapshot helps us debug faster — it captures your environment, cluster info, and Radar state automatically. It doesn't include secrets, credentials, or resource contents, but you're welcome to review and redact anything you'd prefer not to share. In Radar, press `Ctrl+Shift+D` → **Copy for GitHub**, or click the bug icon (bottom-right corner) → **Report Bug**.
+A diagnostics snapshot helps us debug faster — it captures your environment, cluster info, and Radar state automatically. It doesn't include secrets, credentials, or resource contents, but you're welcome to review and redact anything you'd prefer not to share. In Radar, press `Ctrl+Shift+D` → **Copy as Markdown**, or click the bug icon (bottom-right corner) → **Report Bug**.
 
 <details><summary>Diagnostics snapshot</summary>
 

@@ -127,7 +127,7 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
 
         {/* Footer */}
         <div className="flex items-center gap-2 px-5 py-3 border-t border-theme-border shrink-0">
-          <CopyButton label="Copy for GitHub" onClick={() => copyToClipboard('formatted')} copied={copied === 'formatted'} />
+          <CopyButton label="Copy as Markdown" onClick={() => copyToClipboard('formatted')} copied={copied === 'formatted'} />
           <CopyButton label="Copy Raw JSON" onClick={() => copyToClipboard('json')} copied={copied === 'json'} />
           <div className="flex-1" />
           <button
