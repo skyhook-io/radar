@@ -28,13 +28,17 @@ If applicable, add screenshots to help explain your problem.
 
 ## Diagnostics (optional)
 
-If relevant, you can include a diagnostics snapshot to help us debug faster. In Radar, press `Ctrl+Shift+D` → **Copy for GitHub**, or click the bug icon (bottom-right corner) → **Report Bug**. Feel free to skip this or redact anything you'd prefer not to share.
+A diagnostics snapshot helps us debug faster — it captures your environment, cluster info, and Radar state automatically. It doesn't include secrets, credentials, or resource contents, but you're welcome to review and redact anything you'd prefer not to share. In Radar, press `Ctrl+Shift+D` → **Copy for GitHub**, or click the bug icon (bottom-right corner) → **Report Bug**.
 
 <details><summary>Diagnostics snapshot</summary>
 
 <!-- Paste here -->
 
 </details>
+
+If you'd rather not include diagnostics, these basics help:
+- Radar version: [e.g., 0.9.0]
+- Kubernetes: [e.g., 1.28, GKE, EKS, minikube]
 
 ## Logs
 
