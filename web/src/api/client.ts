@@ -760,11 +760,13 @@ export interface PodMetricsHistory {
   namespace: string
   name: string
   containers: ContainerMetricsHistory[]
+  collectionError?: string
 }
 
 export interface NodeMetricsHistory {
   name: string
   dataPoints: MetricsDataPoint[]
+  collectionError?: string
 }
 
 // Fetch historical metrics for a pod (last ~1 hour)
@@ -2091,4 +2093,118 @@ export function createWorkloadLogStream(
   const queryString = params.toString()
 
   return new EventSource(`${API_BASE}/workloads/${kind}/${namespace}/${name}/logs/stream${queryString ? `?${queryString}` : ''}`)
+}
+
+// ============================================================================
+// Diagnostics
+// ============================================================================
+
+export interface DiagMetricsSourceHealth {
+  collecting: boolean
+  lastSuccess?: string
+  consecutiveErrors: number
+  lastError?: string
+  trackedCount: number
+}
+
+export interface DiagDropRecord {
+  kind: string
+  namespace: string
+  name: string
+  reason: string
+  operation: string
+  time: string
+}
+
+export interface DiagnosticsSnapshot {
+  timestamp: string
+  radarVersion: string
+  goVersion: string
+  goos: string
+  goarch: string
+  uptime: string
+  uptimeSec: number
+
+  connection?: {
+    state: string
+    context: string
+    clusterName?: string
+    error?: string
+    errorType?: string
+  }
+  cluster?: {
+    platform: string
+    kubernetesVersion: string
+    nodeCount: number
+    namespaceCount: number
+    inCluster: boolean
+  }
+  cache?: {
+    resourceCounts: Record<string, number>
+    totalResources: number
+  }
+  metrics?: {
+    podMetrics: DiagMetricsSourceHealth
+    nodeMetrics: DiagMetricsSourceHealth
+  }
+  timeline?: {
+    storageType: string
+    totalEvents: number
+    oldestEvent?: string
+    newestEvent?: string
+    storeErrors: number
+    totalDrops: number
+  }
+  eventPipeline?: {
+    received: Record<string, number>
+    dropped: Record<string, number>
+    recorded: Record<string, number>
+    recentDrops: DiagDropRecord[]
+    uptime: string
+  }
+  informers?: {
+    typedCount: number
+    dynamicCount: number
+    watchedCRDs: string[]
+  }
+  prometheus?: {
+    connected: boolean
+    address?: string
+    serviceName?: string
+    serviceNamespace?: string
+  }
+  traffic?: {
+    activeSource: string
+    detected: string[]
+    notDetected: string[]
+  }
+  sse?: {
+    connectedClients: number
+  }
+  runtime?: {
+    heapMB: number
+    heapObjectsK: number
+    goroutines: number
+    numCPU: number
+  }
+  config?: {
+    port: number
+    devMode: boolean
+    namespace?: string
+    timelineStorage: string
+    historyLimit: number
+    debugEvents: boolean
+    mcpEnabled: boolean
+    hasPrometheusURL: boolean
+  }
+  errors?: string[]
+}
+
+export function useDiagnostics(enabled: boolean) {
+  return useQuery<DiagnosticsSnapshot>({
+    queryKey: ['diagnostics'],
+    queryFn: enabled ? () => fetchJSON('/diagnostics') : skipToken,
+    staleTime: 0,
+    gcTime: 0,
+  })
 }

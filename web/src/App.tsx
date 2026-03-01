@@ -28,6 +28,7 @@ import { NamespaceSelector } from './components/ui/NamespaceSelector'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { CommandPalette } from './components/ui/CommandPalette'
+import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
 import { useNamespaces, useSwitchContext } from './api/client'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
@@ -197,11 +198,15 @@ function AppInner() {
   // Command palette state
   const [showCommandPalette, setShowCommandPalette] = useState(false)
 
+  // Diagnostics overlay state
+  const [showDiagnostics, setShowDiagnostics] = useState(false)
+
   // Animation hooks for smooth mount/unmount transitions
   const resourceDrawer = useAnimatedUnmount(!!selectedResource, 300)
   const helmDrawer = useAnimatedUnmount(!!(mainView === 'helm' && selectedHelmRelease), 300)
   const helpOverlay = useAnimatedUnmount(showHelp, 300)
   const commandPaletteAnim = useAnimatedUnmount(showCommandPalette, 300)
+  const diagnosticsOverlay = useAnimatedUnmount(showDiagnostics, 300)
 
   // Hold last valid values so drawers can animate out before data disappears
   const lastResourceRef = useRef(selectedResource)
@@ -265,6 +270,14 @@ function AppInner() {
       category: 'General' as const,
       scope: 'global' as const,
       handler: () => setShowCommandPalette(true),
+    },
+    {
+      id: 'diagnostics',
+      keys: 'Ctrl+Shift+d',
+      description: 'Open diagnostics',
+      category: 'General' as const,
+      scope: 'global' as const,
+      handler: () => setShowDiagnostics(prev => !prev),
     },
   ])
 
@@ -944,8 +957,12 @@ function AppInner() {
           onSwitchContext={(name) => switchContext.mutate({ name })}
           onSetNamespaces={setNamespaces}
           onToggleTheme={toggleTheme}
+          onShowDiagnostics={() => setShowDiagnostics(true)}
         />
       )}
+
+      {/* Diagnostics overlay */}
+      {diagnosticsOverlay.shouldRender && <DiagnosticsOverlay isOpen={diagnosticsOverlay.isOpen} onClose={() => setShowDiagnostics(false)} />}
 
       {/* Namespace filter confirmation for command palette navigation */}
       {pendingKindNav && (

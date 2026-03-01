@@ -141,6 +141,16 @@ func CreateServer(cfg AppConfig) *server.Server {
 		DevMode:    cfg.DevMode,
 		StaticFS:   static.FS,
 		StaticRoot: "dist",
+		DiagConfig: &server.DiagConfig{
+			Port:             cfg.Port,
+			DevMode:          cfg.DevMode,
+			Namespace:        cfg.Namespace,
+			TimelineStorage:  cfg.TimelineStorage,
+			HistoryLimit:     cfg.HistoryLimit,
+			DebugEvents:      cfg.DebugEvents,
+			MCPEnabled:       cfg.MCPEnabled,
+			HasPrometheusURL: cfg.PrometheusURL != "",
+		},
 	}
 
 	if cfg.MCPEnabled {

@@ -555,6 +555,13 @@ func (b *SSEBroadcaster) Unsubscribe(ch chan SSEEvent) {
 	b.unregister <- ch
 }
 
+// ClientCount returns the number of connected SSE clients.
+func (b *SSEBroadcaster) ClientCount() int {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return len(b.clients)
+}
+
 // GetCachedTopology returns the most recently built full topology.
 // This is used for relationship lookups without rebuilding the topology.
 func (b *SSEBroadcaster) GetCachedTopology() *topology.Topology {

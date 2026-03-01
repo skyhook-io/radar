@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { Search, X, ChevronRight } from 'lucide-react'
-import { Home, Network, List, Clock, Package, Activity, Sun } from 'lucide-react'
+import { Home, Network, List, Clock, Package, Activity, Sun, Stethoscope } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useNamespaces, useContexts } from '../../api/client'
 import { CORE_RESOURCES, useAPIResources } from '../../api/apiResources'
@@ -15,6 +15,7 @@ interface CommandPaletteProps {
   onSwitchContext: (name: string) => void
   onSetNamespaces: (ns: string[]) => void
   onToggleTheme: () => void
+  onShowDiagnostics?: () => void
   /** Controls fade-in/out animation (driven by useAnimatedUnmount) */
   isOpen?: boolean
 }
@@ -64,6 +65,7 @@ export function CommandPalette({
   onSwitchContext,
   onSetNamespaces,
   onToggleTheme,
+  onShowDiagnostics,
   isOpen = true,
 }: CommandPaletteProps) {
   const [query, setQuery] = useState('')
@@ -180,9 +182,21 @@ export function CommandPalette({
       action: () => { onToggleTheme() },
     })
 
+    if (onShowDiagnostics) {
+      result.push({
+        id: 'action-diagnostics',
+        label: 'Diagnostics',
+        category: 'Actions',
+        icon: Stethoscope,
+        shortcut: 'Ctrl+Shift+D',
+        action: () => { onShowDiagnostics() },
+        searchTerms: ['debug', 'health', 'status', 'snapshot'],
+      })
+    }
+
     return result
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [apiResources, contexts, namespacesData, onNavigateView, onNavigateKind, onSwitchContext, onSetNamespaces, onToggleTheme])
+  }, [apiResources, contexts, namespacesData, onNavigateView, onNavigateKind, onSwitchContext, onSetNamespaces, onToggleTheme, onShowDiagnostics])
 
   // Filter and rank results
   const filteredItems = useMemo(() => {

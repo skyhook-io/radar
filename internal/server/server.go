@@ -46,6 +46,7 @@ type Server struct {
 	listener    net.Listener
 	updater     *updater.Updater
 	mcpHandler  http.Handler
+	diagConfig  *DiagConfig
 }
 
 // Config holds server configuration
@@ -55,6 +56,7 @@ type Config struct {
 	StaticFS   embed.FS     // Embedded frontend files
 	StaticRoot string       // Path within StaticFS
 	MCPHandler http.Handler // MCP server handler (nil = MCP disabled)
+	DiagConfig *DiagConfig  // Sanitized config for diagnostics endpoint
 }
 
 // New creates a new server instance
@@ -66,6 +68,7 @@ func New(cfg Config) *Server {
 		devMode:     cfg.DevMode,
 		startTime:   time.Now(),
 		mcpHandler:  cfg.MCPHandler,
+		diagConfig:  cfg.DiagConfig,
 	}
 
 	// Set up static file system
@@ -126,6 +129,7 @@ func (s *Server) setupRoutes() {
 			r.Use(middleware.Timeout(60 * time.Second))
 
 			r.Get("/health", s.handleHealth)
+			r.Get("/diagnostics", s.handleDiagnostics)
 			r.Get("/version-check", s.handleVersionCheck)
 			r.Get("/dashboard", s.handleDashboard)
 			r.Get("/dashboard/crds", s.handleDashboardCRDs)
@@ -396,11 +400,19 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	runtimeStats["typedInformers"] = 16 // Fixed count of typed informers in cache.go
 	runtimeStats["dynamicInformers"] = dynamicInformerCount
 
+	// Get metrics collection health
+	var metricsHealth *k8s.MetricsCollectionHealth
+	if store := k8s.GetMetricsHistory(); store != nil {
+		h := store.CollectionHealth()
+		metricsHealth = &h
+	}
+
 	s.writeJSON(w, map[string]any{
 		"status":        status,
 		"resourceCount": cache.GetResourceCount(),
 		"timeline":      timelineStats,
 		"runtime":       runtimeStats,
+		"metrics":       metricsHealth,
 	})
 }
 
@@ -1062,11 +1074,15 @@ func (s *Server) handlePodMetricsHistory(w http.ResponseWriter, r *http.Request)
 
 	history := store.GetPodMetricsHistory(namespace, name)
 	if history == nil {
-		// Return empty history instead of error - metrics may not have been collected yet
+		// Return empty history — include collection error if metrics are failing
 		history = &k8s.PodMetricsHistory{
 			Namespace:  namespace,
 			Name:       name,
 			Containers: []k8s.ContainerMetricsHistory{},
+		}
+		health := store.CollectionHealth()
+		if health.PodMetrics.ConsecutiveErrors > 0 {
+			history.CollectionError = health.PodMetrics.LastError
 		}
 	}
 
@@ -1085,10 +1101,13 @@ func (s *Server) handleNodeMetricsHistory(w http.ResponseWriter, r *http.Request
 
 	history := store.GetNodeMetricsHistory(name)
 	if history == nil {
-		// Return empty history instead of error
 		history = &k8s.NodeMetricsHistory{
 			Name:       name,
 			DataPoints: []k8s.MetricsDataPoint{},
+		}
+		health := store.CollectionHealth()
+		if health.NodeMetrics.ConsecutiveErrors > 0 {
+			history.CollectionError = health.NodeMetrics.LastError
 		}
 	}
 
