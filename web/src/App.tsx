@@ -34,7 +34,7 @@ import { useNamespaces, useSwitchContext } from './api/client'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { Loader2 } from 'lucide-react'
-import { RefreshCw, FolderTree, Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search } from 'lucide-react'
+import { RefreshCw, FolderTree, Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, Topology } from './types'
@@ -929,8 +929,8 @@ function AppInner() {
       {/* Spacer for dock */}
       <DockSpacer />
 
-      {/* Keyboard shortcut help button — fixed bottom-right, above dock */}
-      <HelpButton showHelp={showHelp} showCommandPalette={showCommandPalette} onClick={() => setShowHelp(true)} />
+      {/* Floating action buttons — bottom-right, above dock */}
+      <FloatingButtons showHelp={showHelp} showCommandPalette={showCommandPalette} showDiagnostics={showDiagnostics} onHelp={() => setShowHelp(true)} onBugReport={() => setShowDiagnostics(true)} />
 
       {/* Keyboard shortcut help overlay */}
       {helpOverlay.shouldRender && <ShortcutHelpOverlay isOpen={helpOverlay.isOpen} onClose={() => setShowHelp(false)} currentView={mainView} />}
@@ -1054,21 +1054,26 @@ function DockSpacer() {
   return <div style={{ height: isExpanded ? 300 : 36 }} />
 }
 
-// Floating ? button that positions itself above the dock
-function HelpButton({ showHelp, showCommandPalette, onClick }: { showHelp: boolean; showCommandPalette: boolean; onClick: () => void }) {
+// Floating action buttons that position themselves above the dock
+function FloatingButtons({ showHelp, showCommandPalette, showDiagnostics, onHelp, onBugReport }: { showHelp: boolean; showCommandPalette: boolean; showDiagnostics: boolean; onHelp: () => void; onBugReport: () => void }) {
   const { tabs } = useDock()
-  if (showHelp || showCommandPalette) return null
-  // When dock tab bar is visible (36px), shift the button up above it
+  if (showHelp || showCommandPalette || showDiagnostics) return null
+  // When dock tab bar is visible (36px), shift the buttons up above it
   const bottom = tabs.length > 0 ? 'bottom-10' : 'bottom-2'
+  const btnClass = 'w-7 h-7 flex items-center justify-center rounded-full bg-theme-elevated/80 hover:bg-theme-hover border border-theme-border-light text-theme-text-tertiary hover:text-theme-text-secondary text-xs font-medium shadow-sm backdrop-blur-sm transition-all'
   return (
-    <Tooltip content="Keyboard shortcuts (?)" position="top">
-      <button
-        onClick={onClick}
-        className={`fixed ${bottom} right-4 z-40 w-7 h-7 flex items-center justify-center rounded-full bg-theme-elevated/80 hover:bg-theme-hover border border-theme-border-light text-theme-text-tertiary hover:text-theme-text-secondary text-xs font-medium shadow-sm backdrop-blur-sm transition-all`}
-      >
-        ?
-      </button>
-    </Tooltip>
+    <div className={`fixed ${bottom} right-4 z-40 flex items-center gap-1.5`}>
+      <Tooltip content="Report bug / Diagnostics" position="top">
+        <button onClick={onBugReport} className={btnClass}>
+          <Bug className="w-3.5 h-3.5" />
+        </button>
+      </Tooltip>
+      <Tooltip content="Keyboard shortcuts (?)" position="top">
+        <button onClick={onHelp} className={btnClass}>
+          ?
+        </button>
+      </Tooltip>
+    </div>
   )
 }
 

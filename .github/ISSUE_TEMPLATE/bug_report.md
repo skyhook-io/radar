@@ -26,13 +26,15 @@ A clear and concise description of what you expected to happen.
 
 If applicable, add screenshots to help explain your problem.
 
-## Environment
+## Diagnostics (optional)
 
-- OS: [e.g., macOS 14.0, Ubuntu 22.04]
-- Radar version: [e.g., 0.9.0]
-- Kubernetes version: [e.g., 1.28]
-- Cluster type: [e.g., GKE, EKS, minikube, kind]
-- Browser: [e.g., Chrome 120]
+If relevant, you can include a diagnostics snapshot to help us debug faster. In Radar, press `Ctrl+Shift+D` → **Copy for GitHub**, or click the bug icon (bottom-right corner) → **Report Bug**. Feel free to skip this or redact anything you'd prefer not to share.
+
+<details><summary>Diagnostics snapshot</summary>
+
+<!-- Paste here -->
+
+</details>
 
 ## Logs
 

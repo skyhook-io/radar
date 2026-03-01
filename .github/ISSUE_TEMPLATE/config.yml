@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Questions & Discussions
-    url: https://github.com/skyhook-io/explorer/discussions
+    url: https://github.com/skyhook-io/radar/discussions
     about: Ask questions, share ideas, or discuss features with the community
   - name: Documentation
-    url: https://github.com/skyhook-io/explorer#readme
+    url: https://github.com/skyhook-io/radar#readme
     about: Check the README for usage and installation instructions

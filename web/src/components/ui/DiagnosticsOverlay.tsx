@@ -1,7 +1,8 @@
 import { useEffect, useState, useCallback } from 'react'
-import { X, Copy, Check } from 'lucide-react'
+import { X, Copy, Check, ExternalLink } from 'lucide-react'
 import { clsx } from 'clsx'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
+import { openExternal } from '../../utils/navigation'
 import { useDiagnostics } from '../../api/client'
 import type { DiagnosticsSnapshot, DiagMetricsSourceHealth, DiagDropRecord } from '../../api/client'
 
@@ -13,6 +14,7 @@ interface DiagnosticsOverlayProps {
 export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverlayProps) {
   const { data, isLoading, error } = useDiagnostics(true)
   const [copied, setCopied] = useState<'json' | 'formatted' | null>(null)
+  const [reportOpened, setReportOpened] = useState(false)
 
   // Close on Escape (capture phase)
   useEffect(() => {
@@ -40,6 +42,23 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
       // Clipboard API can fail on non-HTTPS origins or without focus
       console.warn('Failed to copy to clipboard')
     }
+  }, [data])
+
+  const openBugReport = useCallback(() => {
+    if (!data) return
+    const body = formatForBugReport(data)
+    const url = `https://github.com/skyhook-io/radar/issues/new?labels=bug&body=${encodeURIComponent(body)}`
+    if (url.length > 8000) {
+      // URL too long for GitHub — copy diagnostics to clipboard and open blank issue
+      navigator.clipboard.writeText(body).catch(() => {})
+      openExternal('https://github.com/skyhook-io/radar/issues/new?labels=bug&template=bug_report.md')
+      setCopied('formatted')
+      setTimeout(() => setCopied(null), 2000)
+      return
+    }
+    openExternal(url)
+    setReportOpened(true)
+    setTimeout(() => setReportOpened(false), 2000)
   }, [data])
 
   return (
@@ -110,6 +129,20 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
         <div className="flex items-center gap-2 px-5 py-3 border-t border-theme-border shrink-0">
           <CopyButton label="Copy for GitHub" onClick={() => copyToClipboard('formatted')} copied={copied === 'formatted'} />
           <CopyButton label="Copy Raw JSON" onClick={() => copyToClipboard('json')} copied={copied === 'json'} />
+          <div className="flex-1" />
+          <button
+            onClick={openBugReport}
+            disabled={!data}
+            className={clsx(
+              'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-md transition-colors disabled:opacity-50 disabled:cursor-not-allowed',
+              reportOpened
+                ? 'bg-green-500/20 text-green-400'
+                : 'bg-theme-elevated text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated/80'
+            )}
+          >
+            {reportOpened ? <Check className="w-3.5 h-3.5" /> : <ExternalLink className="w-3.5 h-3.5" />}
+            {reportOpened ? 'Opened!' : 'Report Bug'}
+          </button>
         </div>
       </div>
     </div>
@@ -350,7 +383,7 @@ function CopyButton({ label, onClick, copied }: { label: string; onClick: () => 
 
 // --- GitHub-friendly formatting ---
 
-function formatForGitHub(data: DiagnosticsSnapshot): string {
+function formatForGitHub(data: DiagnosticsSnapshot, includeRawJson = true): string {
   const lines: string[] = []
   lines.push(`## Radar Diagnostics`)
   lines.push(``)
@@ -476,11 +509,40 @@ function formatForGitHub(data: DiagnosticsSnapshot): string {
     lines.push(``)
   }
 
-  lines.push(`<details><summary>Raw JSON</summary>`)
+  if (includeRawJson) {
+    lines.push(`<details><summary>Raw JSON</summary>`)
+    lines.push(``)
+    lines.push('```json')
+    lines.push(JSON.stringify(data, null, 2))
+    lines.push('```')
+    lines.push(`</details>`)
+  }
+
+  return lines.join('\n')
+}
+
+function formatForBugReport(data: DiagnosticsSnapshot): string {
+  const diagnostics = formatForGitHub(data, false)
+
+  const lines: string[] = []
+  lines.push(`## Describe the bug`)
   lines.push(``)
-  lines.push('```json')
-  lines.push(JSON.stringify(data, null, 2))
-  lines.push('```')
+  lines.push(`<!-- A clear and concise description of what the bug is. -->`)
+  lines.push(``)
+  lines.push(`## To reproduce`)
+  lines.push(``)
+  lines.push(`<!-- Steps to reproduce the behavior -->`)
+  lines.push(``)
+  lines.push(`## Expected behavior`)
+  lines.push(``)
+  lines.push(`<!-- What you expected to happen -->`)
+  lines.push(``)
+  lines.push(`## Diagnostics`)
+  lines.push(``)
+  lines.push(`<details><summary>Diagnostics snapshot</summary>`)
+  lines.push(``)
+  lines.push(diagnostics)
+  lines.push(``)
   lines.push(`</details>`)
 
   return lines.join('\n')
