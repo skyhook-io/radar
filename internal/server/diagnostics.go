@@ -73,8 +73,8 @@ type DiagCluster struct {
 
 // DiagCache holds resource cache info.
 type DiagCache struct {
-	ResourceCounts map[string]int `json:"resourceCounts"`
-	TotalResources int            `json:"totalResources"`
+	WatchedKinds   []string `json:"watchedKinds"`
+	TotalResources int      `json:"totalResources"`
 }
 
 // DiagTimeline holds timeline store info.
@@ -194,15 +194,15 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		enabled := cache.GetEnabledResources()
-		// Convert bool map to count map (1 = enabled/watching, 0 would not appear)
-		counts := make(map[string]int, len(enabled))
+		kinds := make([]string, 0, len(enabled))
 		for kind, ok := range enabled {
 			if ok {
-				counts[kind] = 1
+				kinds = append(kinds, kind)
 			}
 		}
+		sort.Strings(kinds)
 		snap.Cache = &DiagCache{
-			ResourceCounts: counts,
+			WatchedKinds:   kinds,
 			TotalResources: cache.GetResourceCount(),
 		}
 	})
@@ -294,24 +294,15 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		snap.Prometheus = diag
 	})
 
-	// Traffic
+	// Traffic — only read cached state, never trigger network I/O
 	collectSafe("traffic", &errs, func() {
 		manager := traffic.GetManager()
 		if manager == nil {
 			return
 		}
-		diag := &DiagTraffic{
+		snap.Traffic = &DiagTraffic{
 			ActiveSource: manager.GetActiveSourceName(),
 		}
-		// Use cached detection results if available
-		sources, err := manager.DetectSources(r.Context())
-		if err == nil && sources != nil {
-			for _, s := range sources.Detected {
-				diag.Detected = append(diag.Detected, s.Name)
-			}
-			diag.NotDetected = sources.NotDetected
-		}
-		snap.Traffic = diag
 	})
 
 	// SSE

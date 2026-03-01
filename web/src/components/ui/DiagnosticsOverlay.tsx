@@ -32,9 +32,14 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
     const text = type === 'json'
       ? JSON.stringify(data, null, 2)
       : formatForGitHub(data)
-    await navigator.clipboard.writeText(text)
-    setCopied(type)
-    setTimeout(() => setCopied(null), 2000)
+    try {
+      await navigator.clipboard.writeText(text)
+      setCopied(type)
+      setTimeout(() => setCopied(null), 2000)
+    } catch {
+      // Clipboard API can fail on non-HTTPS origins or without focus
+      console.warn('Failed to copy to clipboard')
+    }
   }, [data])
 
   return (
@@ -169,7 +174,7 @@ function CacheSection({ data }: { data: DiagnosticsSnapshot }) {
   return (
     <Section title="Cache">
       <Row label="Total Resources" value={data.cache.totalResources.toLocaleString()} />
-      <Row label="Watched Kinds" value={Object.keys(data.cache.resourceCounts).length} />
+      <Row label="Watched Kinds" value={data.cache.watchedKinds.length} />
     </Section>
   )
 }
@@ -337,7 +342,7 @@ function formatForGitHub(data: DiagnosticsSnapshot): string {
 
   if (data.cache) {
     lines.push(`### Cache`)
-    lines.push(`- Total Resources: ${data.cache.totalResources.toLocaleString()} | Watched Kinds: ${Object.keys(data.cache.resourceCounts).length}`)
+    lines.push(`- Total Resources: ${data.cache.totalResources.toLocaleString()} | Watched Kinds: ${data.cache.watchedKinds.length}`)
     lines.push(``)
   }
 

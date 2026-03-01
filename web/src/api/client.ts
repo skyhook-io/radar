@@ -2140,7 +2140,7 @@ export interface DiagnosticsSnapshot {
     inCluster: boolean
   }
   cache?: {
-    resourceCounts: Record<string, number>
+    watchedKinds: string[]
     totalResources: number
   }
   metrics?: {
