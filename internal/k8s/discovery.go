@@ -222,6 +222,36 @@ func (d *ResourceDiscovery) refresh() error {
 	return nil
 }
 
+// DiscoveryStats holds read-only stats about API discovery state
+type DiscoveryStats struct {
+	TotalResources int
+	CRDCount       int
+	LastRefresh    time.Time
+}
+
+// Stats returns lightweight stats without triggering a refresh
+func (d *ResourceDiscovery) Stats() DiscoveryStats {
+	if d == nil {
+		return DiscoveryStats{}
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	crdCount := 0
+	for _, res := range d.resources {
+		if res.IsCRD {
+			crdCount++
+		}
+	}
+
+	return DiscoveryStats{
+		TotalResources: len(d.resources),
+		CRDCount:       crdCount,
+		LastRefresh:    d.lastRefresh,
+	}
+}
+
 // GetAPIResources returns all discovered API resources
 func (d *ResourceDiscovery) GetAPIResources() ([]APIResource, error) {
 	if d == nil {

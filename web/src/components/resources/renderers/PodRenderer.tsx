@@ -536,8 +536,14 @@ export function PodRenderer({ data, onCopy, copied, onNavigate }: PodRendererPro
       </Section>
 
       {/* Resource Usage (from metrics-server) — hidden when Prometheus has CPU/memory data */}
-      {!hideMetricsServer && !!(metrics?.containers?.length || metricsHistory?.containers?.length) && (
+      {!hideMetricsServer && !!(metrics?.containers?.length || metricsHistory?.containers?.length || metricsHistory?.collectionError) && (
         <Section title="Resource Usage" icon={Activity} defaultExpanded>
+          {metricsHistory?.collectionError && !metricsHistory?.containers?.length && (
+            <div className="mb-3 rounded-lg border border-yellow-500/30 bg-yellow-500/5 px-3 py-2 text-xs text-yellow-400">
+              <span className="font-medium">Metrics collection error:</span>{' '}
+              <span className="break-all">{metricsHistory.collectionError}</span>
+            </div>
+          )}
           <div className="space-y-4">
             {(metricsHistory?.containers || metrics?.containers || []).map((historyContainer) => {
               // Find current metrics for this container

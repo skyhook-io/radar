@@ -226,6 +226,18 @@ func canI(ctx context.Context, namespace, group, resource, verb string) (allowed
 	return result.Status.Allowed, false
 }
 
+// GetCachedCapabilities returns the cached capabilities without triggering
+// RBAC checks. Returns nil if no cached result is available.
+func GetCachedCapabilities() *Capabilities {
+	capabilitiesMu.RLock()
+	defer capabilitiesMu.RUnlock()
+	if cachedCapabilities == nil {
+		return nil
+	}
+	caps := *cachedCapabilities
+	return &caps
+}
+
 // InvalidateCapabilitiesCache forces the next CheckCapabilities call to refresh
 func InvalidateCapabilitiesCache() {
 	capabilitiesMu.Lock()

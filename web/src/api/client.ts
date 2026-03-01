@@ -2105,6 +2105,7 @@ export interface DiagMetricsSourceHealth {
   consecutiveErrors: number
   lastError?: string
   trackedCount: number
+  totalDataPoints: number
 }
 
 export interface DiagDropRecord {
@@ -2146,6 +2147,10 @@ export interface DiagnosticsSnapshot {
   metrics?: {
     podMetrics: DiagMetricsSourceHealth
     nodeMetrics: DiagMetricsSourceHealth
+    lastAttempt?: string
+    totalCollections: number
+    bufferSize: number
+    pollIntervalSec: number
   }
   timeline?: {
     storageType: string
@@ -2177,6 +2182,21 @@ export interface DiagnosticsSnapshot {
     activeSource: string
     detected: string[]
     notDetected: string[]
+  }
+  permissions?: {
+    exec: boolean
+    logs: boolean
+    portForward: boolean
+    secrets: boolean
+    helmWrite: boolean
+    namespaceScoped: boolean
+    namespace?: string
+    restricted?: string[]
+  }
+  apiDiscovery?: {
+    totalResources: number
+    crdCount: number
+    lastRefresh?: string
   }
   sse?: {
     connectedClients: number

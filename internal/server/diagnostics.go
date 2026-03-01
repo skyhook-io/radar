@@ -47,6 +47,8 @@ type DiagnosticsSnapshot struct {
 	Informers     *DiagInformers            `json:"informers,omitempty"`
 	Prometheus    *DiagPrometheus           `json:"prometheus,omitempty"`
 	Traffic       *DiagTraffic              `json:"traffic,omitempty"`
+	Permissions   *DiagPermissions          `json:"permissions,omitempty"`
+	APIDiscovery  *DiagAPIDiscovery         `json:"apiDiscovery,omitempty"`
 	SSE           *DiagSSE                  `json:"sse,omitempty"`
 	Runtime       *DiagRuntime              `json:"runtime,omitempty"`
 	Config        *DiagConfig               `json:"config,omitempty"`
@@ -121,6 +123,25 @@ type DiagTraffic struct {
 // DiagSSE holds SSE broadcaster info.
 type DiagSSE struct {
 	ConnectedClients int `json:"connectedClients"`
+}
+
+// DiagPermissions holds RBAC permission info (read-only from cache).
+type DiagPermissions struct {
+	Exec            bool     `json:"exec"`
+	Logs            bool     `json:"logs"`
+	PortForward     bool     `json:"portForward"`
+	Secrets         bool     `json:"secrets"`
+	HelmWrite       bool     `json:"helmWrite"`
+	NamespaceScoped bool     `json:"namespaceScoped"`
+	Namespace       string   `json:"namespace,omitempty"`
+	Restricted      []string `json:"restricted,omitempty"`
+}
+
+// DiagAPIDiscovery holds API resource discovery info.
+type DiagAPIDiscovery struct {
+	TotalResources int    `json:"totalResources"`
+	CRDCount       int    `json:"crdCount"`
+	LastRefresh    string `json:"lastRefresh,omitempty"`
 }
 
 // DiagRuntime holds Go runtime info.
@@ -303,6 +324,76 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		snap.Traffic = &DiagTraffic{
 			ActiveSource: manager.GetActiveSourceName(),
 		}
+	})
+
+	// Permissions — read-only from cache, no RBAC checks
+	collectSafe("permissions", &errs, func() {
+		caps := k8s.GetCachedCapabilities()
+		permResult := k8s.GetCachedPermissionResult()
+		if caps == nil && permResult == nil {
+			return
+		}
+		diag := &DiagPermissions{}
+		if caps != nil {
+			diag.Exec = caps.Exec
+			diag.Logs = caps.Logs
+			diag.PortForward = caps.PortForward
+			diag.Secrets = caps.Secrets
+			diag.HelmWrite = caps.HelmWrite
+		}
+		if permResult != nil {
+			diag.NamespaceScoped = permResult.NamespaceScoped
+			diag.Namespace = permResult.Namespace
+			if permResult.Perms != nil {
+				// Collect restricted resources
+				type permEntry struct {
+					name    string
+					allowed bool
+				}
+				entries := []permEntry{
+					{"pods", permResult.Perms.Pods},
+					{"services", permResult.Perms.Services},
+					{"deployments", permResult.Perms.Deployments},
+					{"daemonSets", permResult.Perms.DaemonSets},
+					{"statefulSets", permResult.Perms.StatefulSets},
+					{"replicaSets", permResult.Perms.ReplicaSets},
+					{"ingresses", permResult.Perms.Ingresses},
+					{"configMaps", permResult.Perms.ConfigMaps},
+					{"secrets", permResult.Perms.Secrets},
+					{"events", permResult.Perms.Events},
+					{"nodes", permResult.Perms.Nodes},
+					{"jobs", permResult.Perms.Jobs},
+					{"cronJobs", permResult.Perms.CronJobs},
+				}
+				var restricted []string
+				for _, e := range entries {
+					if !e.allowed {
+						restricted = append(restricted, e.name)
+					}
+				}
+				if len(restricted) > 0 {
+					diag.Restricted = restricted
+				}
+			}
+		}
+		snap.Permissions = diag
+	})
+
+	// API Discovery — read-only stats, no refresh
+	collectSafe("apiDiscovery", &errs, func() {
+		discovery := k8s.GetResourceDiscovery()
+		if discovery == nil {
+			return
+		}
+		stats := discovery.Stats()
+		diag := &DiagAPIDiscovery{
+			TotalResources: stats.TotalResources,
+			CRDCount:       stats.CRDCount,
+		}
+		if !stats.LastRefresh.IsZero() {
+			diag.LastRefresh = stats.LastRefresh.Format(time.RFC3339)
+		}
+		snap.APIDiscovery = diag
 	})
 
 	// SSE

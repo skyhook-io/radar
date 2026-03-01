@@ -32,15 +32,17 @@ type ContainerMetricsHistory struct {
 
 // PodMetricsHistory holds historical metrics for a pod
 type PodMetricsHistory struct {
-	Namespace  string                    `json:"namespace"`
-	Name       string                    `json:"name"`
-	Containers []ContainerMetricsHistory `json:"containers"`
+	Namespace       string                    `json:"namespace"`
+	Name            string                    `json:"name"`
+	Containers      []ContainerMetricsHistory `json:"containers"`
+	CollectionError string                    `json:"collectionError,omitempty"`
 }
 
 // NodeMetricsHistory holds historical metrics for a node
 type NodeMetricsHistory struct {
-	Name       string             `json:"name"`
-	DataPoints []MetricsDataPoint `json:"dataPoints"`
+	Name            string             `json:"name"`
+	DataPoints      []MetricsDataPoint `json:"dataPoints"`
+	CollectionError string             `json:"collectionError,omitempty"`
 }
 
 // MetricsHistoryStore stores historical metrics data
@@ -53,6 +55,16 @@ type MetricsHistoryStore struct {
 	// Node metrics: key = node name
 	nodeMetrics map[string]*nodeMetricsBuffer
 
+	// Collection health tracking
+	lastSuccessfulPodCollection  time.Time
+	lastSuccessfulNodeCollection time.Time
+	lastCollectionAttempt        time.Time
+	totalCollections             int64
+	consecutivePodErrors         int
+	consecutiveNodeErrors        int
+	lastPodError                 string
+	lastNodeError                string
+
 	// Control
 	stopCh   chan struct{}
 	stopOnce sync.Once
@@ -64,12 +76,14 @@ type podMetricsBuffer struct {
 	namespace  string
 	name       string
 	containers map[string]*ringBuffer // container name -> ring buffer
+	lastSeen   time.Time              // last time this pod appeared in metrics API
 }
 
 // nodeMetricsBuffer holds a ring buffer for a node
 type nodeMetricsBuffer struct {
-	name   string
-	buffer *ringBuffer
+	name     string
+	buffer   *ringBuffer
+	lastSeen time.Time // last time this node appeared in metrics API
 }
 
 // ringBuffer is a fixed-size circular buffer for metrics
@@ -192,6 +206,11 @@ func (s *MetricsHistoryStore) collectMetrics() {
 
 	now := time.Now()
 
+	s.mu.Lock()
+	s.lastCollectionAttempt = now
+	s.totalCollections++
+	s.mu.Unlock()
+
 	// Collect pod metrics
 	s.collectPodMetrics(ctx, now)
 
@@ -202,18 +221,40 @@ func (s *MetricsHistoryStore) collectMetrics() {
 func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Time) {
 	client := GetDynamicClient()
 	if client == nil {
+		s.mu.Lock()
+		s.consecutivePodErrors++
+		s.lastPodError = "dynamic client not initialized"
+		if s.consecutivePodErrors == 1 || s.consecutivePodErrors%20 == 0 {
+			log.Printf("[metrics] Pod metrics collection failed (count=%d): %s", s.consecutivePodErrors, s.lastPodError)
+		}
+		s.mu.Unlock()
 		return
 	}
 
 	// List all pod metrics
 	result, err := client.Resource(podMetricsGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
-		// Metrics server might not be installed, don't spam logs
+		s.mu.Lock()
+		s.consecutivePodErrors++
+		s.lastPodError = err.Error()
+		// Log on first failure, then every 20th to avoid spam (every ~10 minutes at 30s intervals)
+		if s.consecutivePodErrors == 1 || s.consecutivePodErrors%20 == 0 {
+			log.Printf("[metrics] Pod metrics collection failed (count=%d): %v", s.consecutivePodErrors, err)
+		}
+		s.mu.Unlock()
 		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Reset error state on success
+	if s.consecutivePodErrors > 0 {
+		log.Printf("[metrics] Pod metrics collection recovered after %d failures", s.consecutivePodErrors)
+	}
+	s.consecutivePodErrors = 0
+	s.lastPodError = ""
+	s.lastSuccessfulPodCollection = now
 
 	for _, item := range result.Items {
 		namespace := item.GetNamespace()
@@ -230,6 +271,7 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 			}
 			s.podMetrics[key] = podBuf
 		}
+		podBuf.lastSeen = now
 
 		// Extract container metrics
 		containers, ok := item.Object["containers"].([]any)
@@ -273,22 +315,54 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 			})
 		}
 	}
+
+	// Clean up stale entries for pods no longer reported by the metrics API.
+	// Use 5 minutes as the threshold — enough to survive brief metrics-server blips
+	// but short enough to avoid unbounded growth from deleted pods.
+	staleThreshold := now.Add(-5 * time.Minute)
+	for key, podBuf := range s.podMetrics {
+		if podBuf.lastSeen.Before(staleThreshold) {
+			delete(s.podMetrics, key)
+		}
+	}
 }
 
 func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.Time) {
 	client := GetDynamicClient()
 	if client == nil {
+		s.mu.Lock()
+		s.consecutiveNodeErrors++
+		s.lastNodeError = "dynamic client not initialized"
+		if s.consecutiveNodeErrors == 1 || s.consecutiveNodeErrors%20 == 0 {
+			log.Printf("[metrics] Node metrics collection failed (count=%d): %s", s.consecutiveNodeErrors, s.lastNodeError)
+		}
+		s.mu.Unlock()
 		return
 	}
 
 	// List all node metrics
 	result, err := client.Resource(nodeMetricsGVR).List(ctx, metav1.ListOptions{})
 	if err != nil {
+		s.mu.Lock()
+		s.consecutiveNodeErrors++
+		s.lastNodeError = err.Error()
+		if s.consecutiveNodeErrors == 1 || s.consecutiveNodeErrors%20 == 0 {
+			log.Printf("[metrics] Node metrics collection failed (count=%d): %v", s.consecutiveNodeErrors, err)
+		}
+		s.mu.Unlock()
 		return
 	}
 
 	s.mu.Lock()
 	defer s.mu.Unlock()
+
+	// Reset error state on success
+	if s.consecutiveNodeErrors > 0 {
+		log.Printf("[metrics] Node metrics collection recovered after %d failures", s.consecutiveNodeErrors)
+	}
+	s.consecutiveNodeErrors = 0
+	s.lastNodeError = ""
+	s.lastSuccessfulNodeCollection = now
 
 	for _, item := range result.Items {
 		name := item.GetName()
@@ -302,6 +376,7 @@ func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.T
 			}
 			s.nodeMetrics[name] = nodeBuf
 		}
+		nodeBuf.lastSeen = now
 
 		usage, ok := item.Object["usage"].(map[string]any)
 		if !ok {
@@ -319,6 +394,14 @@ func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.T
 			CPU:       cpu,
 			Memory:    mem,
 		})
+	}
+
+	// Clean up stale node entries
+	staleThreshold := now.Add(-5 * time.Minute)
+	for name, nodeBuf := range s.nodeMetrics {
+		if nodeBuf.lastSeen.Before(staleThreshold) {
+			delete(s.nodeMetrics, name)
+		}
 	}
 }
 
@@ -445,6 +528,82 @@ func (s *MetricsHistoryStore) GetAllNodeMetricsLatest() []TopNodeMetrics {
 		}
 	}
 	return result
+}
+
+// MetricsCollectionHealth reports the health of the metrics collection loop
+type MetricsCollectionHealth struct {
+	PodMetrics       MetricsSourceHealth `json:"podMetrics"`
+	NodeMetrics      MetricsSourceHealth `json:"nodeMetrics"`
+	LastAttempt      string              `json:"lastAttempt,omitempty"`      // RFC3339 — when the poll loop last ran
+	TotalCollections int64               `json:"totalCollections"`           // total poll loop iterations
+	BufferSize       int                 `json:"bufferSize"`                 // ring buffer capacity per container/node
+	PollIntervalSec  int                 `json:"pollIntervalSec"`            // seconds between polls
+}
+
+// MetricsSourceHealth reports health for a single metrics source (pods or nodes)
+type MetricsSourceHealth struct {
+	Collecting        bool   `json:"collecting"`
+	LastSuccess       string `json:"lastSuccess,omitempty"` // RFC3339
+	ConsecutiveErrors int    `json:"consecutiveErrors"`
+	LastError         string `json:"lastError,omitempty"`
+	TrackedCount      int    `json:"trackedCount"`      // number of pods/nodes with history buffers
+	TotalDataPoints   int    `json:"totalDataPoints"`   // total data points stored across all buffers
+}
+
+// CollectionHealth returns the current health of metrics collection
+func (s *MetricsHistoryStore) CollectionHealth() MetricsCollectionHealth {
+	if s == nil {
+		return MetricsCollectionHealth{}
+	}
+
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	// Count total data points across all pod buffers
+	podDataPoints := 0
+	for _, podBuf := range s.podMetrics {
+		for _, containerBuf := range podBuf.containers {
+			podDataPoints += containerBuf.count
+		}
+	}
+
+	// Count total data points across all node buffers
+	nodeDataPoints := 0
+	for _, nodeBuf := range s.nodeMetrics {
+		nodeDataPoints += nodeBuf.buffer.count
+	}
+
+	health := MetricsCollectionHealth{
+		PodMetrics: MetricsSourceHealth{
+			Collecting:        s.consecutivePodErrors == 0 && !s.lastSuccessfulPodCollection.IsZero(),
+			ConsecutiveErrors: s.consecutivePodErrors,
+			LastError:         s.lastPodError,
+			TrackedCount:      len(s.podMetrics),
+			TotalDataPoints:   podDataPoints,
+		},
+		NodeMetrics: MetricsSourceHealth{
+			Collecting:        s.consecutiveNodeErrors == 0 && !s.lastSuccessfulNodeCollection.IsZero(),
+			ConsecutiveErrors: s.consecutiveNodeErrors,
+			LastError:         s.lastNodeError,
+			TrackedCount:      len(s.nodeMetrics),
+			TotalDataPoints:   nodeDataPoints,
+		},
+		TotalCollections: s.totalCollections,
+		BufferSize:       MetricsHistorySize,
+		PollIntervalSec:  int(MetricsPollInterval.Seconds()),
+	}
+
+	if !s.lastSuccessfulPodCollection.IsZero() {
+		health.PodMetrics.LastSuccess = s.lastSuccessfulPodCollection.Format(time.RFC3339)
+	}
+	if !s.lastSuccessfulNodeCollection.IsZero() {
+		health.NodeMetrics.LastSuccess = s.lastSuccessfulNodeCollection.Format(time.RFC3339)
+	}
+	if !s.lastCollectionAttempt.IsZero() {
+		health.LastAttempt = s.lastCollectionAttempt.Format(time.RFC3339)
+	}
+
+	return health
 }
 
 // parseCPU converts Kubernetes CPU string to nanocores

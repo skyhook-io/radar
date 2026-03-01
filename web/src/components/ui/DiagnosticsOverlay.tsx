@@ -93,6 +93,8 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
               <InformersSection data={data} />
               <PrometheusSection data={data} />
               <TrafficSection data={data} />
+              <PermissionsSection data={data} />
+              <APIDiscoverySection data={data} />
               <RuntimeSection data={data} />
               <ConfigSection data={data} />
               {data.errors && data.errors.length > 0 && (
@@ -181,13 +183,16 @@ function CacheSection({ data }: { data: DiagnosticsSnapshot }) {
 
 function MetricsSection({ data }: { data: DiagnosticsSnapshot }) {
   if (!data.metrics) return null
-  const pod = data.metrics.podMetrics
-  const node = data.metrics.nodeMetrics
+  const m = data.metrics
+  const pod = m.podMetrics
+  const node = m.nodeMetrics
   const warn = pod.consecutiveErrors > 0 || node.consecutiveErrors > 0
   return (
     <Section title="Metrics Collection" warn={warn}>
       <MetricsSourceRow label="Pod Metrics" source={pod} />
       <MetricsSourceRow label="Node Metrics" source={node} />
+      <Row label="Poll Loop" value={`${m.totalCollections} collections, every ${m.pollIntervalSec}s, buffer ${m.bufferSize} points`} />
+      {m.lastAttempt && <Row label="Last Attempt" value={new Date(m.lastAttempt).toLocaleTimeString()} />}
     </Section>
   )
 }
@@ -197,7 +202,7 @@ function MetricsSourceRow({ label, source }: { label: string; source: DiagMetric
   const warn = source.consecutiveErrors > 0
   return (
     <>
-      <Row label={label} value={`${status} (${source.trackedCount} tracked)`} warn={warn} />
+      <Row label={label} value={`${status} (${source.trackedCount} tracked, ${source.totalDataPoints} points)`} warn={warn} />
       {source.lastError && <Row label={`  Last Error`} value={source.lastError} warn />}
     </>
   )
@@ -261,6 +266,36 @@ function TrafficSection({ data }: { data: DiagnosticsSnapshot }) {
       <Row label="Active Source" value={t.activeSource || 'none'} />
       {t.detected && t.detected.length > 0 && <Row label="Detected" value={t.detected.join(', ')} />}
       {t.notDetected && t.notDetected.length > 0 && <Row label="Not Detected" value={t.notDetected.join(', ')} />}
+    </Section>
+  )
+}
+
+function PermissionsSection({ data }: { data: DiagnosticsSnapshot }) {
+  if (!data.permissions) return null
+  const p = data.permissions
+  const warn = (p.restricted && p.restricted.length > 0) || false
+  return (
+    <Section title="Permissions" warn={warn}>
+      <Row label="Capabilities" value={[
+        p.exec && 'exec', p.logs && 'logs', p.portForward && 'port-forward',
+        p.secrets && 'secrets', p.helmWrite && 'helm-write',
+      ].filter(Boolean).join(', ') || 'none'} />
+      {p.namespaceScoped && <Row label="Scope" value={`namespace: ${p.namespace}`} warn />}
+      {p.restricted && p.restricted.length > 0 && (
+        <Row label="Restricted" value={p.restricted.join(', ')} warn />
+      )}
+    </Section>
+  )
+}
+
+function APIDiscoverySection({ data }: { data: DiagnosticsSnapshot }) {
+  if (!data.apiDiscovery) return null
+  const d = data.apiDiscovery
+  return (
+    <Section title="API Discovery">
+      <Row label="Total Resources" value={d.totalResources} />
+      <Row label="CRDs" value={d.crdCount} />
+      {d.lastRefresh && <Row label="Last Refresh" value={new Date(d.lastRefresh).toLocaleTimeString()} />}
     </Section>
   )
 }
@@ -347,11 +382,13 @@ function formatForGitHub(data: DiagnosticsSnapshot): string {
   }
 
   if (data.metrics) {
-    const pod = data.metrics.podMetrics
-    const node = data.metrics.nodeMetrics
+    const m = data.metrics
+    const pod = m.podMetrics
+    const node = m.nodeMetrics
     lines.push(`### Metrics Collection`)
-    lines.push(`- Pod: ${pod.collecting ? 'collecting' : 'idle'} (${pod.trackedCount} tracked, ${pod.consecutiveErrors} errors)`)
-    lines.push(`- Node: ${node.collecting ? 'collecting' : 'idle'} (${node.trackedCount} tracked, ${node.consecutiveErrors} errors)`)
+    lines.push(`- Pod: ${pod.collecting ? 'collecting' : 'idle'} (${pod.trackedCount} tracked, ${pod.totalDataPoints} points, ${pod.consecutiveErrors} errors)`)
+    lines.push(`- Node: ${node.collecting ? 'collecting' : 'idle'} (${node.trackedCount} tracked, ${node.totalDataPoints} points, ${node.consecutiveErrors} errors)`)
+    lines.push(`- Poll loop: ${m.totalCollections} collections, every ${m.pollIntervalSec}s, buffer ${m.bufferSize} points`)
     if (pod.lastError) lines.push(`- Pod Error: ${pod.lastError}`)
     if (node.lastError) lines.push(`- Node Error: ${node.lastError}`)
     lines.push(``)
@@ -397,6 +434,22 @@ function formatForGitHub(data: DiagnosticsSnapshot): string {
     const t = data.traffic
     lines.push(`### Traffic`)
     lines.push(`- Active: \`${t.activeSource || 'none'}\`${t.detected?.length ? ` | Detected: ${t.detected.join(', ')}` : ''}`)
+    lines.push(``)
+  }
+
+  if (data.permissions) {
+    const p = data.permissions
+    const caps = [p.exec && 'exec', p.logs && 'logs', p.portForward && 'port-forward', p.secrets && 'secrets', p.helmWrite && 'helm-write'].filter(Boolean).join(', ')
+    lines.push(`### Permissions`)
+    lines.push(`- Capabilities: ${caps || 'none'}${p.namespaceScoped ? ` | Scope: namespace \`${p.namespace}\`` : ''}`)
+    if (p.restricted && p.restricted.length > 0) lines.push(`- Restricted: ${p.restricted.join(', ')}`)
+    lines.push(``)
+  }
+
+  if (data.apiDiscovery) {
+    const d = data.apiDiscovery
+    lines.push(`### API Discovery`)
+    lines.push(`- Total Resources: ${d.totalResources} | CRDs: ${d.crdCount}`)
     lines.push(``)
   }
 
