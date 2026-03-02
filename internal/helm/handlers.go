@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -689,6 +690,9 @@ func writeJSON(w http.ResponseWriter, data any) {
 }
 
 func writeError(w http.ResponseWriter, status int, message string) {
+	if status >= 500 {
+		errorlog.Record("helm", "error", "%s", message)
+	}
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	json.NewEncoder(w).Encode(map[string]string{"error": message})

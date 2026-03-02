@@ -15,6 +15,8 @@ import (
 
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
+
+	"github.com/skyhook-io/radar/internal/errorlog"
 )
 
 // Client is a Prometheus HTTP API client with auto-discovery.
@@ -226,6 +228,7 @@ func (c *Client) doQuery(ctx context.Context, reqURL string) (*QueryResult, erro
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		errorlog.Record("prometheus", "error", "HTTP request failed: %v", err)
 		return nil, fmt.Errorf("querying prometheus: %w", err)
 	}
 	defer resp.Body.Close()
@@ -236,6 +239,7 @@ func (c *Client) doQuery(ctx context.Context, reqURL string) (*QueryResult, erro
 	}
 
 	if resp.StatusCode != http.StatusOK {
+		errorlog.Record("prometheus", "error", "returned status %d: %s", resp.StatusCode, string(body))
 		return nil, fmt.Errorf("prometheus returned status %d: %s", resp.StatusCode, string(body))
 	}
 

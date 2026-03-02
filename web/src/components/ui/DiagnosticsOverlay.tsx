@@ -4,7 +4,7 @@ import { clsx } from 'clsx'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { openExternal } from '../../utils/navigation'
 import { useDiagnostics } from '../../api/client'
-import type { DiagnosticsSnapshot, DiagMetricsSourceHealth, DiagDropRecord } from '../../api/client'
+import type { DiagnosticsSnapshot, DiagMetricsSourceHealth, DiagDropRecord, DiagErrorEntry } from '../../api/client'
 
 interface DiagnosticsOverlayProps {
   onClose: () => void
@@ -104,6 +104,7 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
           )}
           {data && (
             <>
+              <ErrorLogSection data={data} />
               <ConnectionSection data={data} />
               <ClusterSection data={data} />
               <CacheSection data={data} />
@@ -172,6 +173,18 @@ function Row({ label, value, warn }: { label: string; value: React.ReactNode; wa
         warn ? 'text-yellow-400' : 'text-theme-text-primary'
       )}>{value}</span>
     </div>
+  )
+}
+
+function ErrorLogSection({ data }: { data: DiagnosticsSnapshot }) {
+  if (!data.recentErrors || data.recentErrors.length === 0) return null
+  const entries = data.recentErrors.slice(-10).reverse()
+  return (
+    <Section title={`Recent Errors (${data.recentErrors.length})`} warn>
+      {entries.map((e: DiagErrorEntry, i: number) => (
+        <Row key={i} label={`[${e.source}] ${new Date(e.time).toLocaleTimeString()}`} value={e.message} warn={e.level === 'error'} />
+      ))}
+    </Section>
   )
 }
 
@@ -505,6 +518,14 @@ function formatForGitHub(data: DiagnosticsSnapshot, includeRawJson = true): stri
     lines.push(`### Collection Errors`)
     for (const e of data.errors) {
       lines.push(`- ${e}`)
+    }
+    lines.push(``)
+  }
+
+  if (data.recentErrors && data.recentErrors.length > 0) {
+    lines.push(`### Recent Errors (${data.recentErrors.length})`)
+    for (const e of data.recentErrors.slice(-10).reverse()) {
+      lines.push(`- **[${e.source}]** ${e.message} _(${new Date(e.time).toLocaleTimeString()})_`)
     }
     lines.push(``)
   }

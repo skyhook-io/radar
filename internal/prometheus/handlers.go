@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/errorlog"
 )
 
 // RegisterRoutes registers Prometheus metric routes on the given router.
@@ -66,6 +67,7 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 	_, _, err := client.EnsureConnected(r.Context())
 	if err != nil {
 		log.Printf("[prometheus] Connection failed: %v", err)
+		errorlog.Record("prometheus", "error", "connection failed: %v", err)
 		writeError(w, http.StatusBadGateway, "Prometheus connection failed: "+err.Error())
 		return
 	}
@@ -131,6 +133,7 @@ type ResourceMetricsResponse struct {
 	Unit      string         `json:"unit"`
 	Range     string         `json:"range"`
 	Result    *QueryResult   `json:"result"`
+	Query     string         `json:"query,omitempty"` // PromQL query used (included when result is empty for diagnostics)
 }
 
 // handleResourceMetrics returns Prometheus metrics for a specific resource.
@@ -191,11 +194,12 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
 		log.Printf("[prometheus] Query failed for %s/%s/%s (%s): %v", kind, namespace, name, category, err)
+		errorlog.Record("prometheus", "error", "query failed for %s/%s/%s (%s): %v", kind, namespace, name, category, err)
 		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, ResourceMetricsResponse{
+	resp := ResourceMetricsResponse{
 		Kind:      kind,
 		Namespace: namespace,
 		Name:      name,
@@ -203,7 +207,15 @@ func handleResourceMetrics(w http.ResponseWriter, r *http.Request) {
 		Unit:      CategoryUnitForKind(kind, category),
 		Range:     rangeStr,
 		Result:    result,
-	})
+	}
+	// Include the PromQL query when results are empty so users can diagnose
+	// label mismatches or missing metrics in their Prometheus instance.
+	if len(result.Series) == 0 {
+		resp.Query = query
+		log.Printf("[prometheus] Empty result for %s/%s/%s (%s), query: %s", kind, namespace, name, category, query)
+		errorlog.Record("prometheus", "warning", "empty result for %s/%s/%s (%s), query: %s", kind, namespace, name, category, query)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // handleClusterScopedResourceMetrics handles metrics for cluster-scoped resources (e.g. Node).
@@ -254,18 +266,25 @@ func handleClusterScopedResourceMetrics(w http.ResponseWriter, r *http.Request) 
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
 		log.Printf("[prometheus] Query failed for %s/%s (%s): %v", kind, name, category, err)
+		errorlog.Record("prometheus", "error", "query failed for %s/%s (%s): %v", kind, name, category, err)
 		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 		return
 	}
 
-	writeJSON(w, http.StatusOK, ResourceMetricsResponse{
+	resp := ResourceMetricsResponse{
 		Kind:     kind,
 		Name:     name,
 		Category: category,
 		Unit:     CategoryUnitForKind(kind, category),
 		Range:    rangeStr,
 		Result:   result,
-	})
+	}
+	if len(result.Series) == 0 {
+		resp.Query = query
+		log.Printf("[prometheus] Empty result for %s/%s (%s), query: %s", kind, name, category, query)
+		errorlog.Record("prometheus", "warning", "empty result for %s/%s (%s), query: %s", kind, name, category, query)
+	}
+	writeJSON(w, http.StatusOK, resp)
 }
 
 // NamespaceMetricsResponse is the response shape for namespace-level metrics.
@@ -303,6 +322,7 @@ func handleNamespaceMetrics(w http.ResponseWriter, r *http.Request) {
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
 		log.Printf("[prometheus] Namespace query failed for %s (%s): %v", namespace, category, err)
+		errorlog.Record("prometheus", "error", "namespace query failed for %s (%s): %v", namespace, category, err)
 		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 		return
 	}
@@ -349,6 +369,7 @@ func handleClusterMetrics(w http.ResponseWriter, r *http.Request) {
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
 		log.Printf("[prometheus] Cluster query failed (%s): %v", category, err)
+		errorlog.Record("prometheus", "error", "cluster query failed (%s): %v", category, err)
 		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 		return
 	}
@@ -381,6 +402,7 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 		result, err := client.Query(r.Context(), query)
 		if err != nil {
 			log.Printf("[prometheus] Raw instant query failed: %v", err)
+			errorlog.Record("prometheus", "error", "raw instant query failed: %v", err)
 			writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 			return
 		}
@@ -395,6 +417,7 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
 		log.Printf("[prometheus] Raw range query failed: %v", err)
+		errorlog.Record("prometheus", "error", "raw range query failed: %v", err)
 		writeError(w, http.StatusBadGateway, "Prometheus query failed: "+err.Error())
 		return
 	}

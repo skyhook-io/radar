@@ -8,6 +8,7 @@ import (
 	"sort"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -52,6 +53,7 @@ type DiagnosticsSnapshot struct {
 	SSE           *DiagSSE                  `json:"sse,omitempty"`
 	Runtime       *DiagRuntime              `json:"runtime,omitempty"`
 	Config        *DiagConfig               `json:"config,omitempty"`
+	RecentErrors  []errorlog.ErrorEntry     `json:"recentErrors,omitempty"`
 	Errors        []string                  `json:"errors,omitempty"`
 }
 
@@ -419,6 +421,14 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 	collectSafe("config", &errs, func() {
 		if s.diagConfig != nil {
 			snap.Config = s.diagConfig
+		}
+	})
+
+	// Error log
+	collectSafe("errorLog", &errs, func() {
+		entries := errorlog.GetEntries()
+		if len(entries) > 0 {
+			snap.RecentErrors = entries
 		}
 	})
 

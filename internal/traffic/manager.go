@@ -13,6 +13,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
+	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/portforward"
 )
 
@@ -108,6 +109,7 @@ func (m *Manager) DetectSources(ctx context.Context) (*SourcesResponse, error) {
 		result, err := source.Detect(ctx)
 		if err != nil {
 			log.Printf("[traffic] Error detecting %s: %v", name, err)
+			errorlog.Record("traffic", "warning", "error detecting %s: %v", name, err)
 			// Report as error status instead of just "not detected"
 			response.Detected = append(response.Detected, SourceStatus{
 				Name:    name,

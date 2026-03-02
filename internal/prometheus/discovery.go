@@ -11,6 +11,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/portforward"
 )
 
@@ -90,6 +91,7 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 			c.mu.Unlock()
 			return addr, "", nil
 		}
+		errorlog.Record("prometheus", "error", "manual Prometheus URL %s not reachable", addr)
 		return "", "", fmt.Errorf("manual Prometheus URL %s not reachable", addr)
 	}
 
@@ -121,6 +123,7 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 		c.mu.Lock()
 		c.discoveryService = nil
 		c.mu.Unlock()
+		errorlog.Record("prometheus", "warning", "no Prometheus service found in cluster")
 		return "", "", fmt.Errorf("no Prometheus service found in cluster")
 	}
 
@@ -148,6 +151,7 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 	log.Printf("[prometheus] Service %s/%s not reachable in-cluster, starting port-forward...", info.namespace, info.name)
 	connInfo, err := portforward.Start(ctx, info.namespace, info.name, info.targetPort, contextName)
 	if err != nil {
+		errorlog.Record("prometheus", "error", "port-forward to %s/%s failed: %v", info.namespace, info.name, err)
 		return "", "", fmt.Errorf("port-forward to %s/%s failed: %w", info.namespace, info.name, err)
 	}
 
@@ -171,6 +175,7 @@ func (c *Client) discover(ctx context.Context) (string, string, error) {
 	}
 
 	portforward.Stop()
+	errorlog.Record("prometheus", "error", "Prometheus at %s/%s not responding after port-forward", info.namespace, info.name)
 	return "", "", fmt.Errorf("Prometheus at %s/%s not responding after port-forward", info.namespace, info.name)
 }
 

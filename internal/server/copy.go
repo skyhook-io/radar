@@ -18,6 +18,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/tools/remotecommand"
 
+	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
@@ -73,6 +74,7 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 	exec, err := remotecommand.NewSPDYExecutor(config, "POST", req.URL())
 	if err != nil {
 		log.Printf("[copy] Failed to create executor for %s/%s: %v", namespace, podName, err)
+		errorlog.Record("copy", "error", "failed to create executor for %s/%s: %v", namespace, podName, err)
 		s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to create executor: %v", err))
 		return
 	}
@@ -86,10 +88,13 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		// find failed — could be missing command, unsupported flags (e.g. -printf on BusyBox), etc.
 		// Always fall back to ls which is more universally available.
-		log.Printf("[copy] find failed for %s/%s (falling back to ls): %v, stderr: %s", namespace, podName, err, stderr.String())
+		findErrMsg := fmt.Sprintf("%v: %s", err, stderr.String())
+		log.Printf("[copy] find failed for %s/%s (falling back to ls): %s", namespace, podName, findErrMsg)
 		nodes, totalFiles, lsErr := s.listFilesWithLS(r, namespace, podName, container, dirPath)
 		if lsErr != nil {
-			s.writeError(w, http.StatusInternalServerError, "Container lacks 'find' and 'ls' commands. This container may be distroless or minimal.")
+			errMsg := classifyExecError(findErrMsg, lsErr.Error())
+			errorlog.Record("copy", "error", "file list failed for %s/%s: %s", namespace, podName, errMsg)
+			s.writeError(w, http.StatusInternalServerError, errMsg)
 			return
 		}
 		s.writeJSON(w, PodFilesystem{Root: buildRootNode(dirPath, nodes), TotalFiles: totalFiles})
@@ -454,6 +459,50 @@ func formatOctalPerms(octal string) string {
 	}
 
 	return rwx(octal[0]) + rwx(octal[1]) + rwx(octal[2])
+}
+
+// classifyExecError analyzes errors from both find and ls exec attempts and returns
+// a user-friendly message that identifies the actual problem rather than always
+// blaming missing commands.
+func classifyExecError(findErr, lsErr string) string {
+	combined := strings.ToLower(findErr + " " + lsErr)
+
+	// Check for permission denied
+	if strings.Contains(combined, "permission denied") || strings.Contains(combined, "operation not permitted") {
+		return "Permission denied: the container user lacks access to this directory. Try a different path or container."
+	}
+
+	// Check for shell not found (distroless containers)
+	if strings.Contains(combined, "executable file not found") && (strings.Contains(combined, "sh") || strings.Contains(combined, "shell")) {
+		return "Container has no shell (/bin/sh). This is likely a distroless or scratch-based container that cannot be browsed."
+	}
+
+	// Check for both commands genuinely missing
+	findMissing := isCommandNotFound(findErr)
+	lsMissing := isCommandNotFound(lsErr)
+	if findMissing && lsMissing {
+		return "Container lacks 'find' and 'ls' commands. This container may be distroless or minimal."
+	}
+
+	// Check for no such file or directory (path doesn't exist)
+	if strings.Contains(combined, "no such file or directory") && !findMissing && !lsMissing {
+		return "Directory not found. The path may not exist in this container."
+	}
+
+	// Check for connection/network issues
+	if strings.Contains(combined, "error dialing backend") || strings.Contains(combined, "connection refused") ||
+		strings.Contains(combined, "transport") || strings.Contains(combined, "stream error") ||
+		strings.Contains(combined, "websocket") || strings.Contains(combined, "upgrade") {
+		return fmt.Sprintf("Failed to exec into container (connection error): %s", lsErr)
+	}
+
+	// Check for context deadline exceeded
+	if strings.Contains(combined, "context deadline exceeded") || strings.Contains(combined, "context canceled") {
+		return "Exec timed out. The container may be unresponsive or under heavy load."
+	}
+
+	// Default: include the actual ls error so users can diagnose
+	return fmt.Sprintf("Failed to list files: %s", lsErr)
 }
 
 // isCommandNotFound detects errors indicating a command is not available in the container
