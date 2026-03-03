@@ -105,6 +105,10 @@ type MetricsHistoryStore struct {
 	lastPodError                 string
 	lastNodeError                string
 
+	// OnError is called when a metrics collection error is logged.
+	// It allows callers to record errors in an external error log.
+	OnError func(subsystem, level, format string, args ...any)
+
 	stopCh    chan struct{}
 	startOnce sync.Once
 	stopOnce  sync.Once
@@ -219,6 +223,9 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 		s.lastPodError = "dynamic client not initialized"
 		if s.consecutivePodErrors == 1 || s.consecutivePodErrors%20 == 0 {
 			log.Printf("[metrics] Pod metrics collection failed (count=%d): %s", s.consecutivePodErrors, s.lastPodError)
+			if s.OnError != nil {
+				s.OnError("metrics", "error", "pod metrics collection failed (count=%d): %s", s.consecutivePodErrors, s.lastPodError)
+			}
 		}
 		s.mu.Unlock()
 		return
@@ -231,6 +238,9 @@ func (s *MetricsHistoryStore) collectPodMetrics(ctx context.Context, now time.Ti
 		s.lastPodError = err.Error()
 		if s.consecutivePodErrors == 1 || s.consecutivePodErrors%20 == 0 {
 			log.Printf("[metrics] Pod metrics collection failed (count=%d): %v", s.consecutivePodErrors, err)
+			if s.OnError != nil {
+				s.OnError("metrics", "error", "pod metrics collection failed (count=%d): %v", s.consecutivePodErrors, err)
+			}
 		}
 		s.mu.Unlock()
 		return
@@ -311,6 +321,9 @@ func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.T
 		s.lastNodeError = "dynamic client not initialized"
 		if s.consecutiveNodeErrors == 1 || s.consecutiveNodeErrors%20 == 0 {
 			log.Printf("[metrics] Node metrics collection failed (count=%d): %s", s.consecutiveNodeErrors, s.lastNodeError)
+			if s.OnError != nil {
+				s.OnError("metrics", "error", "node metrics collection failed (count=%d): %s", s.consecutiveNodeErrors, s.lastNodeError)
+			}
 		}
 		s.mu.Unlock()
 		return
@@ -323,6 +336,9 @@ func (s *MetricsHistoryStore) collectNodeMetrics(ctx context.Context, now time.T
 		s.lastNodeError = err.Error()
 		if s.consecutiveNodeErrors == 1 || s.consecutiveNodeErrors%20 == 0 {
 			log.Printf("[metrics] Node metrics collection failed (count=%d): %v", s.consecutiveNodeErrors, err)
+			if s.OnError != nil {
+				s.OnError("metrics", "error", "node metrics collection failed (count=%d): %v", s.consecutiveNodeErrors, err)
+			}
 		}
 		s.mu.Unlock()
 		return

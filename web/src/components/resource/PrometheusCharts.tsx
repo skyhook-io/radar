@@ -221,6 +221,21 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
             <p className="text-xs text-theme-text-quaternary mt-1">
               Try a different time range or check that metrics are being collected
             </p>
+            {metrics?.query && (
+              <details className="mt-3 w-full max-w-lg text-left">
+                <summary className="text-xs text-theme-text-quaternary cursor-pointer hover:text-theme-text-tertiary">
+                  Diagnostics: show PromQL query
+                </summary>
+                <div className="mt-2 p-2 bg-theme-base border border-theme-border rounded text-xs font-mono text-theme-text-secondary break-all">
+                  {metrics.query}
+                </div>
+                <p className="mt-1.5 text-xs text-theme-text-quaternary">
+                  This query returned no results. Verify in your Prometheus UI that the metric names and labels
+                  ({activeCategoryDef.key === 'cpu' ? 'pod, namespace, container' : 'pod, namespace'}) exist.
+                  Custom label relabeling in your Prometheus configuration may require adjustments.
+                </p>
+              </details>
+            )}
           </div>
         )}
       </div>

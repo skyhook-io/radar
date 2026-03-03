@@ -3,6 +3,7 @@ package k8s
 import (
 	"sync"
 
+	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -34,6 +35,9 @@ func InitMetricsHistory() {
 	defer metricsHistoryMu.Unlock()
 	metricsHistoryOnce.Do(func() {
 		metricsHistoryStore = k8score.NewMetricsHistoryStore(GetDynamicClient())
+		metricsHistoryStore.OnError = func(subsystem, level, format string, args ...any) {
+			errorlog.Record(subsystem, level, format, args...)
+		}
 		metricsHistoryStore.Start()
 	})
 }
