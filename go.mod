@@ -12,6 +12,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/modelcontextprotocol/go-sdk v1.3.1
+	github.com/skyhook-io/radar/pkg v0.0.0
 	github.com/wailsapp/wails/v2 v2.11.0
 	golang.org/x/term v0.40.0
 	google.golang.org/grpc v1.79.1
@@ -174,3 +175,5 @@ require (
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.1 // indirect
 )
+
+replace github.com/skyhook-io/radar/pkg => ./pkg

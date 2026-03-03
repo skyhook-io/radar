@@ -179,12 +179,93 @@ release_local() {
   warn "For full release, use remote mode or run manually."
 }
 
+release_pkg() {
+  echo ""
+  echo -e "${BLUE}=========================================="
+  echo "  pkg Sub-module Release"
+  echo -e "==========================================${NC}"
+  echo ""
+  echo "This releases github.com/skyhook-io/radar/pkg independently."
+  echo "Tags use the prefix 'pkg/' (e.g. pkg/v0.1.0)."
+  echo ""
+
+  # Fetch tags
+  git fetch --tags 2>/dev/null || true
+
+  LATEST_PKG_TAG=$(git tag -l 'pkg/v*' --sort=-v:refname | head -n1)
+  LATEST_PKG_TAG=${LATEST_PKG_TAG:-pkg/v0.0.0}
+
+  # Strip prefix for version math
+  LATEST_PKG_VER=${LATEST_PKG_TAG#pkg/}
+
+  info "Latest pkg release: $LATEST_PKG_TAG"
+  echo ""
+  echo "Choose release version:"
+  echo "  1) Patch  pkg/$(increment_version "$LATEST_PKG_VER" patch)"
+  echo "  2) Minor  pkg/$(increment_version "$LATEST_PKG_VER" minor)"
+  echo "  3) Major  pkg/$(increment_version "$LATEST_PKG_VER" major)"
+  echo "  4) Custom"
+  echo ""
+  read -p "Choice (1-4): " choice
+
+  case $choice in
+    1) PKG_VERSION="pkg/$(increment_version "$LATEST_PKG_VER" patch)" ;;
+    2) PKG_VERSION="pkg/$(increment_version "$LATEST_PKG_VER" minor)" ;;
+    3) PKG_VERSION="pkg/$(increment_version "$LATEST_PKG_VER" major)" ;;
+    4) read -p "Enter version (e.g., pkg/v0.2.0): " PKG_VERSION ;;
+    *) error "Invalid choice" ;;
+  esac
+
+  if [[ ! $PKG_VERSION =~ ^pkg/v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    error "Invalid version format: $PKG_VERSION (expected pkg/vX.Y.Z)"
+  fi
+
+  if [ -n "$(git status --porcelain)" ]; then
+    warn "You have uncommitted changes"
+    git status --short
+    echo ""
+    read -p "Continue anyway? (y/n): " -n 1 -r
+    echo
+    [[ $REPLY =~ ^[Yy]$ ]] || exit 1
+  fi
+
+  echo ""
+  echo "  Tag: $PKG_VERSION"
+  echo ""
+  read -p "Proceed? (y/n): " -n 1 -r
+  echo
+  [[ $REPLY =~ ^[Yy]$ ]] || exit 1
+
+  git tag "$PKG_VERSION"
+  git push origin "$PKG_VERSION"
+
+  echo ""
+  info "Tag pushed! Go module proxy will serve pkg at $PKG_VERSION"
+  echo ""
+  echo "  Consumers can now run:"
+  echo "    go get github.com/skyhook-io/radar/pkg@${PKG_VERSION#pkg/}"
+  echo ""
+  echo "  Release: $REPO/releases/tag/$PKG_VERSION"
+  echo ""
+}
+
 # Main
 main() {
   echo ""
   echo -e "${BLUE}=========================================="
   echo "  Radar Release"
   echo -e "==========================================${NC}"
+  echo ""
+  echo "What would you like to release?"
+  echo "  1) Radar app  (v*.*.*)"
+  echo "  2) pkg module (pkg/v*.*.*)"
+  echo ""
+  read -p "Choice (1-2): " release_choice
+  case $release_choice in
+    1) : ;; # continue to app release flow below
+    2) release_pkg; exit 0 ;;
+    *) error "Invalid choice" ;;
+  esac
 
   get_version
   choose_version

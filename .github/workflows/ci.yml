@@ -7,6 +7,29 @@ on:
     branches: [main]
 
 jobs:
+  pkg:
+    name: pkg (shared library)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: pkg
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: '1.26'
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Build
+        run: go build ./...
+
   backend:
     name: Backend
     runs-on: ubuntu-latest
