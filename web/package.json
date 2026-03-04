@@ -30,7 +30,7 @@
     "react-dom": "^19.2.4",
     "react-markdown": "^10.1.0",
     "react-router-dom": "^7.13.1",
-    "react-virtuoso": "^4.18.1",
+    "react-virtuoso": "^4.18.3",
     "remark-gfm": "^4.0.1",
     "shiki": "^4.0.1",
     "tailwind-merge": "^3.5.0",
