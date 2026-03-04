@@ -18,7 +18,7 @@ require (
 	google.golang.org/protobuf v1.36.11
 	helm.sh/helm/v3 v3.20.0
 	k8s.io/api v0.35.1
-	k8s.io/apimachinery v0.35.1
+	k8s.io/apimachinery v0.35.2
 	k8s.io/cli-runtime v0.35.1
 	k8s.io/client-go v0.35.1
 	k8s.io/klog/v2 v2.130.1
