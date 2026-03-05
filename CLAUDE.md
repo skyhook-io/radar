@@ -449,7 +449,7 @@ GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbos
 - Owner reference traversal for parent-child relationships
 - Selector-based matching for Service→Pod, Deployment→ReplicaSet
 - Two view modes:
-  - `traffic`: Network flow (Ingress/Gateway → HTTPRoute → Service → Pod, also IstioGateway → VirtualService → Service)
+  - `traffic`: Network flow (Ingress/Gateway → HTTPRoute → Service → Pod, also IstioGateway → VirtualService → Service, also IngressRoute → TraefikService → Service)
   - `resources`: Full hierarchy (Deployment → ReplicaSet → Pod)
 - Node types: Ingress, Gateway, HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, Service, Deployment, DaemonSet, StatefulSet, ReplicaSet, Pod, Job, CronJob, ConfigMap, Secret, HorizontalPodAutoscaler, PersistentVolumeClaim, PersistentVolume, StorageClass, PodDisruptionBudget, VerticalPodAutoscaler
 - Edge type semantics (these drive UI grouping in Related Resources): `EdgeManages` (owner), `EdgeUses` (autoscalers like HPA/VPA/KEDA → Scalers group), `EdgeProtects` (PDB → Policies group), `EdgeConfigures` (ConfigMap/Secret/DestinationRule), `EdgeExposes` (Service/Ingress/Gateway/VirtualService). Choose the right edge type — don't reuse one just because the code pattern is similar.
@@ -465,6 +465,21 @@ GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbos
   - Serving edges: Route → Revision (EdgeExposes, via spec.traffic[].revisionName), Configuration/Revision owner-ref edges
   - Eventing edges: Trigger → Broker (EdgeExposes), Trigger → subscriber (EdgeExposes), Sources → sink (EdgeExposes)
   - Frontend detects Knative vs core kinds via `data.apiVersion?.includes('serving.knative.dev')` etc.
+- Traefik nodes: IngressRoute, IngressRouteTCP, IngressRouteUDP, Middleware, MiddlewareTCP, TraefikService, ServersTransport, ServersTransportTCP, TLSOption, TLSStore
+  - Node IDs use lowercase singular: `ingressroute/{ns}/{name}`, `middleware/{ns}/{name}`, etc.
+  - IngressRoute → Service edges (EdgeExposes, via spec.routes[].services[])
+  - IngressRoute → Middleware edges (EdgeExposes, via spec.routes[].middlewares[])
+  - IngressRoute → TraefikService edges (EdgeExposes, when service kind is "TraefikService")
+  - TraefikService → Service edges (EdgeExposes, via spec.weighted/mirroring/highestRandomWeight services)
+  - TraefikService → TraefikService edges (EdgeExposes, for recursive references)
+  - Middleware chain → Middleware edges (EdgeExposes, via spec.chain.middlewares[])
+  - ServersTransport/ServersTransportTCP → Secret edges (EdgeConfigures, via spec.rootCAs[].secret)
+  - TLSOption → Secret edges (EdgeConfigures, via spec.clientAuth.secretNames[])
+  - TLSStore → Secret edges (EdgeConfigures, via spec.defaultCertificate.secretName)
+  - IngressRoute → ServersTransport edges (EdgeConfigures, via service serversTransport field)
+  - IngressRoute → TLSOption/TLSStore edges (EdgeConfigures, via spec.tls.options/store)
+  - Traffic view uses two-phase processing for TraefikService (Phase 1: nodes + ID map, Phase 2: edges) to handle forward references
+  - Kubernetes informers strip kind/apiVersion from cached objects — use stored prefix from `def.prefix` for ServersTransport lookups, not `GetKind()`
 - GitOps nodes: Application (ArgoCD), Kustomization, HelmRelease, GitRepository (FluxCD)
   - Connected to managed resources via status.resources (ArgoCD) or status.inventory (FluxCD Kustomization)
   - HelmRelease connects to resources via FluxCD labels (`helm.toolkit.fluxcd.io/name`) or standard Helm label (`app.kubernetes.io/instance`). Matches Deployment, Service, StatefulSet, DaemonSet, Job, CronJob, Rollout.
@@ -562,7 +577,7 @@ Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 - Long text in alerts/banners needs `break-all` class for CSS word breaking
 - **Kind collision rule:** When a CRD kind collides with a core K8s kind (e.g., Knative Service vs core Service), you must guard THREE places in `ResourceDetailDrawer.tsx`: (1) the core renderer line, (2) `getResourceStatus()`, (3) action buttons (Port Forward, etc.). Use `data?.apiVersion?.includes('group.name')` checks. Missing any one causes dual rendering bugs.
 - Core K8s renderers: Role, ClusterRole, RoleBinding, ClusterRoleBinding, ServiceAccount, IngressClass, PriorityClass, RuntimeClass, Lease, MutatingWebhookConfiguration, ValidatingWebhookConfiguration
-- CRD integrations: Argo Rollouts, Argo Workflows, cert-manager, Gateway API, Sealed Secrets, FluxCD, ArgoCD, Trivy, Karpenter, KEDA, VPA, Prometheus Operator, Kyverno, Velero, External Secrets, CloudNativePG, Knative, Istio
+- CRD integrations: Argo Rollouts, Argo Workflows, cert-manager, Gateway API, Sealed Secrets, FluxCD, ArgoCD, Trivy, Karpenter, KEDA, VPA, Prometheus Operator, Kyverno, Velero, External Secrets, CloudNativePG, Knative, Istio, Traefik
 
 ## Tech Stack
 

@@ -156,6 +156,41 @@ All provider-specific NodeClass variants are automatically detected and supporte
 
 ---
 
+## Traefik
+
+[Traefik](https://traefik.io/) is a modern reverse proxy and ingress controller for Kubernetes, with dynamic configuration, middleware chains, and advanced traffic management via CRDs.
+
+### What Radar Shows
+
+**Topology:** Full Traefik routing path — IngressRoute → Middleware → Service (or TraefikService → Service) with TLS and transport configuration edges. See how traffic flows from entrypoints through middleware chains and weighted/mirroring TraefikServices to backend Kubernetes Services. Both **Resources** and **Traffic** view modes are supported.
+
+**IngressRoute / IngressRouteTCP / IngressRouteUDP Detail View:**
+- Entry points and TLS configuration (secret, cert resolver, TLS options/stores)
+- Route match expressions with priority and kind badges
+- Per-route services with port, weight, and ServersTransport links
+- Per-route middleware references with cross-namespace indicators
+- Aggregated middleware chain with numbered ordering
+- Alert banners for no-route or no-service configurations
+
+**Resource Browser:** Smart columns show entry points, hosts (extracted from match expressions), route summaries, TLS status, and middleware counts. All 10 Traefik kinds have dedicated table columns — Middleware shows type, TraefikService shows type and targets, ServersTransport shows insecure/serverName, TLSOption shows min TLS version.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| IngressRoute | `traefik.io/v1alpha1` | Yes | Yes | — |
+| IngressRouteTCP | `traefik.io/v1alpha1` | Yes | Yes | — |
+| IngressRouteUDP | `traefik.io/v1alpha1` | Yes | Yes | — |
+| Middleware | `traefik.io/v1alpha1` | Yes | Generic | — |
+| MiddlewareTCP | `traefik.io/v1alpha1` | Yes | Generic | — |
+| TraefikService | `traefik.io/v1alpha1` | Yes | Generic | — |
+| ServersTransport | `traefik.io/v1alpha1` | Yes | Generic | — |
+| ServersTransportTCP | `traefik.io/v1alpha1` | Yes | Generic | — |
+| TLSOption | `traefik.io/v1alpha1` | Yes | Generic | — |
+| TLSStore | `traefik.io/v1alpha1` | Yes | Generic | — |
+
+---
+
 ## cert-manager
 
 [cert-manager](https://cert-manager.io/) automates TLS certificate management — issuing, renewing, and revoking certificates from Let's Encrypt, Vault, Venafi, and other issuers.

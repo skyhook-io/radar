@@ -280,6 +280,7 @@ Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integ
 | **Argo Workflows** | Workflow, WorkflowTemplate |
 | **cert-manager** | Certificate, CertificateRequest, Order, Challenge, Issuer, ClusterIssuer |
 | **Gateway API** | Gateway, GatewayClass, HTTPRoute, GRPCRoute, TCPRoute, TLSRoute |
+| **Traefik** | IngressRoute, IngressRouteTCP, IngressRouteUDP, Middleware, MiddlewareTCP, TraefikService, ServersTransport, ServersTransportTCP, TLSOption, TLSStore |
 | **Knative Serving** | Service, Configuration, Revision, Route, DomainMapping |
 | **Knative Eventing** | Broker, Trigger, EventType, Channel, InMemoryChannel, Subscription |
 | **Knative Sources** | PingSource, ApiServerSource, ContainerSource, SinkBinding |
