@@ -332,10 +332,14 @@ func (rc *ResourceCache) enqueueChange(ch chan<- ResourceChange, kind string, ob
 		rc.safeCallback("OnReceived", func() { rc.config.OnReceived(kind) })
 	}
 
-	// Check if noisy (skip OnChange but still send to channel)
+	// Check if noisy — skip OnChange callback and don't send to changes channel.
+	// Noisy resources (Lease, Endpoints, EndpointSlice updates, etc.) fire constantly
+	// and don't affect topology or produce meaningful k8s_event broadcasts.
 	skipCallback := false
+	isNoisy := false
 	if rc.config.IsNoisyResource != nil && rc.config.IsNoisyResource(kind, name, op) {
 		skipCallback = true
+		isNoisy = true
 		if rc.config.OnDrop != nil {
 			rc.config.OnDrop(kind, ns, name, "noisy_filter", op)
 		}
@@ -366,14 +370,17 @@ func (rc *ResourceCache) enqueueChange(ch chan<- ResourceChange, kind string, ob
 		rc.safeCallback("OnChange", func() { rc.config.OnChange(change, obj, oldObj) })
 	}
 
-	// Non-blocking send to changes channel
-	select {
-	case ch <- change:
-	default:
-		if rc.config.OnDrop != nil {
-			rc.config.OnDrop(kind, ns, name, "channel_full", op)
-		} else {
-			rc.stdlog.Printf("Warning: change channel full, dropped %s %s/%s op=%s", kind, ns, name, op)
+	// Non-blocking send to changes channel (skip noisy resources entirely —
+	// they don't affect topology and would just trigger unnecessary rebuilds)
+	if !isNoisy {
+		select {
+		case ch <- change:
+		default:
+			if rc.config.OnDrop != nil {
+				rc.config.OnDrop(kind, ns, name, "channel_full", op)
+			} else {
+				rc.stdlog.Printf("Warning: change channel full, dropped %s %s/%s op=%s", kind, ns, name, op)
+			}
 		}
 	}
 }
@@ -531,32 +538,56 @@ func (rc *ResourceCache) GetResourceCount() int {
 // kindLister maps a Kind name to a lister accessor for table-driven counting.
 type kindLister struct {
 	kind   string
+	group  string // API group (empty for core, e.g. "apps", "batch", "networking.k8s.io")
 	lister func(rc *ResourceCache) any
 }
 
 // allKindListers is the table of all resource kinds and their lister accessors.
 var allKindListers = []kindLister{
-	{"Pod", func(rc *ResourceCache) any { return rc.Pods() }},
-	{"Service", func(rc *ResourceCache) any { return rc.Services() }},
-	{"Node", func(rc *ResourceCache) any { return rc.Nodes() }},
-	{"Namespace", func(rc *ResourceCache) any { return rc.Namespaces() }},
-	{"ConfigMap", func(rc *ResourceCache) any { return rc.ConfigMaps() }},
-	{"Secret", func(rc *ResourceCache) any { return rc.Secrets() }},
-	{"Event", func(rc *ResourceCache) any { return rc.Events() }},
-	{"PersistentVolumeClaim", func(rc *ResourceCache) any { return rc.PersistentVolumeClaims() }},
-	{"PersistentVolume", func(rc *ResourceCache) any { return rc.PersistentVolumes() }},
-	{"Deployment", func(rc *ResourceCache) any { return rc.Deployments() }},
-	{"DaemonSet", func(rc *ResourceCache) any { return rc.DaemonSets() }},
-	{"StatefulSet", func(rc *ResourceCache) any { return rc.StatefulSets() }},
-	{"ReplicaSet", func(rc *ResourceCache) any { return rc.ReplicaSets() }},
-	{"Ingress", func(rc *ResourceCache) any { return rc.Ingresses() }},
-	{"IngressClass", func(rc *ResourceCache) any { return rc.IngressClasses() }},
-	{"Job", func(rc *ResourceCache) any { return rc.Jobs() }},
-	{"CronJob", func(rc *ResourceCache) any { return rc.CronJobs() }},
-	{"HorizontalPodAutoscaler", func(rc *ResourceCache) any { return rc.HorizontalPodAutoscalers() }},
-	{"StorageClass", func(rc *ResourceCache) any { return rc.StorageClasses() }},
-	{"PodDisruptionBudget", func(rc *ResourceCache) any { return rc.PodDisruptionBudgets() }},
-	{"ServiceAccount", func(rc *ResourceCache) any { return rc.ServiceAccounts() }},
+	{"Pod", "", func(rc *ResourceCache) any { return rc.Pods() }},
+	{"Service", "", func(rc *ResourceCache) any { return rc.Services() }},
+	{"Node", "", func(rc *ResourceCache) any { return rc.Nodes() }},
+	{"Namespace", "", func(rc *ResourceCache) any { return rc.Namespaces() }},
+	{"ConfigMap", "", func(rc *ResourceCache) any { return rc.ConfigMaps() }},
+	{"Secret", "", func(rc *ResourceCache) any { return rc.Secrets() }},
+	{"Event", "", func(rc *ResourceCache) any { return rc.Events() }},
+	{"PersistentVolumeClaim", "", func(rc *ResourceCache) any { return rc.PersistentVolumeClaims() }},
+	{"PersistentVolume", "", func(rc *ResourceCache) any { return rc.PersistentVolumes() }},
+	{"Deployment", "apps", func(rc *ResourceCache) any { return rc.Deployments() }},
+	{"DaemonSet", "apps", func(rc *ResourceCache) any { return rc.DaemonSets() }},
+	{"StatefulSet", "apps", func(rc *ResourceCache) any { return rc.StatefulSets() }},
+	{"ReplicaSet", "apps", func(rc *ResourceCache) any { return rc.ReplicaSets() }},
+	{"Ingress", "networking.k8s.io", func(rc *ResourceCache) any { return rc.Ingresses() }},
+	{"IngressClass", "networking.k8s.io", func(rc *ResourceCache) any { return rc.IngressClasses() }},
+	{"Job", "batch", func(rc *ResourceCache) any { return rc.Jobs() }},
+	{"CronJob", "batch", func(rc *ResourceCache) any { return rc.CronJobs() }},
+	{"HorizontalPodAutoscaler", "autoscaling", func(rc *ResourceCache) any { return rc.HorizontalPodAutoscalers() }},
+	{"StorageClass", "storage.k8s.io", func(rc *ResourceCache) any { return rc.StorageClasses() }},
+	{"PodDisruptionBudget", "policy", func(rc *ResourceCache) any { return rc.PodDisruptionBudgets() }},
+	{"ServiceAccount", "", func(rc *ResourceCache) any { return rc.ServiceAccounts() }},
+}
+
+// AllKindListers returns the table of all resource kinds with their group and lister.
+// Used by the resource-counts endpoint to enumerate typed resources.
+func AllKindListers() []kindLister {
+	return allKindListers
+}
+
+// Kind returns the resource kind name.
+func (kl kindLister) Kind() string { return kl.kind }
+
+// Group returns the API group (empty for core resources).
+func (kl kindLister) Group() string { return kl.group }
+
+// Lister returns the lister accessor function.
+func (kl kindLister) Lister() func(rc *ResourceCache) any { return kl.lister }
+
+// CountKey returns the key used in resource-counts responses: "group/Kind" or just "Kind" for core.
+func (kl kindLister) CountKey() string {
+	if kl.group != "" {
+		return kl.group + "/" + kl.kind
+	}
+	return kl.kind
 }
 
 // GetKindObjectCounts returns the number of cached objects per resource kind.

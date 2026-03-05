@@ -158,6 +158,95 @@ func (rc *ResourceCache) ServiceAccounts() listerscorev1.ServiceAccountLister {
 	return rc.factory.Core().V1().ServiceAccounts().Lister()
 }
 
+// listCountNamespaced counts items from a lister filtered to specific namespaces.
+// If namespaces is empty, it returns the total count (same as listCount).
+func listCountNamespaced(lister any, namespaces []string) int {
+	if lister == nil {
+		return 0
+	}
+	if len(namespaces) == 0 {
+		return listCount(lister)
+	}
+	// Cluster-scoped resources ignore namespace filter
+	if isClusterScoped(lister) {
+		return listCount(lister)
+	}
+	total := 0
+	for _, ns := range namespaces {
+		total += listCountInNamespace(lister, ns)
+	}
+	return total
+}
+
+func isClusterScoped(lister any) bool {
+	switch lister.(type) {
+	case listerscorev1.NodeLister, listerscorev1.NamespaceLister,
+		listerscorev1.PersistentVolumeLister, listersstoragev1.StorageClassLister,
+		listersnetworkingv1.IngressClassLister:
+		return true
+	}
+	return false
+}
+
+func listCountInNamespace(lister any, ns string) int {
+	switch l := lister.(type) {
+	case listerscorev1.PodLister:
+		items, _ := l.Pods(ns).List(labels.Everything())
+		return len(items)
+	case listerscorev1.ServiceLister:
+		items, _ := l.Services(ns).List(labels.Everything())
+		return len(items)
+	case listerscorev1.ConfigMapLister:
+		items, _ := l.ConfigMaps(ns).List(labels.Everything())
+		return len(items)
+	case listerscorev1.SecretLister:
+		items, _ := l.Secrets(ns).List(labels.Everything())
+		return len(items)
+	case listerscorev1.EventLister:
+		items, _ := l.Events(ns).List(labels.Everything())
+		return len(items)
+	case listerscorev1.PersistentVolumeClaimLister:
+		items, _ := l.PersistentVolumeClaims(ns).List(labels.Everything())
+		return len(items)
+	case listerscorev1.ServiceAccountLister:
+		items, _ := l.ServiceAccounts(ns).List(labels.Everything())
+		return len(items)
+	case listersappsv1.DeploymentLister:
+		items, _ := l.Deployments(ns).List(labels.Everything())
+		return len(items)
+	case listersappsv1.DaemonSetLister:
+		items, _ := l.DaemonSets(ns).List(labels.Everything())
+		return len(items)
+	case listersappsv1.StatefulSetLister:
+		items, _ := l.StatefulSets(ns).List(labels.Everything())
+		return len(items)
+	case listersappsv1.ReplicaSetLister:
+		items, _ := l.ReplicaSets(ns).List(labels.Everything())
+		return len(items)
+	case listersnetworkingv1.IngressLister:
+		items, _ := l.Ingresses(ns).List(labels.Everything())
+		return len(items)
+	case listersbatchv1.JobLister:
+		items, _ := l.Jobs(ns).List(labels.Everything())
+		return len(items)
+	case listersbatchv1.CronJobLister:
+		items, _ := l.CronJobs(ns).List(labels.Everything())
+		return len(items)
+	case listersautoscalingv2.HorizontalPodAutoscalerLister:
+		items, _ := l.HorizontalPodAutoscalers(ns).List(labels.Everything())
+		return len(items)
+	case listerspolicyv1.PodDisruptionBudgetLister:
+		items, _ := l.PodDisruptionBudgets(ns).List(labels.Everything())
+		return len(items)
+	}
+	return 0
+}
+
+// ListCountNamespaced is the exported version of listCountNamespaced for use by server handlers.
+func ListCountNamespaced(lister any, namespaces []string) int {
+	return listCountNamespaced(lister, namespaces)
+}
+
 // listCount is a helper that counts items from any known lister type.
 func listCount(lister any) int {
 	if lister == nil {

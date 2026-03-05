@@ -31,9 +31,10 @@ type SSEBroadcaster struct {
 	watchStopCh chan struct{}
 	watchMu     sync.Mutex
 
-	// Cached topology for relationship lookups (updated on each topology rebuild)
-	cachedTopology   *topology.Topology
-	cachedTopologyMu sync.RWMutex
+	// Cached topology for relationship lookups (rebuilt on broadcast or lazily on access)
+	cachedTopology      *topology.Topology
+	cachedTopologyMu    sync.RWMutex
+	cachedTopologyDirty bool // true when changes occurred but topology not yet rebuilt
 }
 
 // ClientInfo stores information about a connected client
@@ -200,9 +201,10 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 	k8s.OnContextSwitch(func(newContext string) {
 		log.Printf("SSE broadcaster: context switched to %q, clearing cached topology", newContext)
 
-		// Clear cached topology
+		// Clear cached topology and dirty flag for the old context
 		b.cachedTopologyMu.Lock()
 		b.cachedTopology = nil
+		b.cachedTopologyDirty = false
 		b.cachedTopologyMu.Unlock()
 
 		// Restart the resource change watcher for the new cache
@@ -362,7 +364,16 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 		return
 	}
 
-	// Debounce changes - wait for 100ms of quiet before sending topology update
+	// Use longer debounce for large clusters to avoid constant topology rebuilds.
+	// On a cluster with 18k+ resources, changes arrive continuously; 500ms means
+	// rebuilding topology ~2x/sec with no quiet period ever.
+	debounceDuration := 500 * time.Millisecond
+	resourceCount := cache.GetResourceCount()
+	if resourceCount > 5000 {
+		debounceDuration = 5 * time.Second
+		log.Printf("SSE watcher: large cluster (%d resources), using %v topology debounce", resourceCount, debounceDuration)
+	}
+
 	debounceTimer := time.NewTimer(0)
 	<-debounceTimer.C // drain initial timer
 	pendingUpdate := false
@@ -403,9 +414,9 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 				})
 			}
 
-			// Schedule debounced topology update (500ms to reduce UI thrashing)
+			// Schedule debounced topology update
 			if !pendingUpdate {
-				debounceTimer.Reset(500 * time.Millisecond)
+				debounceTimer.Reset(debounceDuration)
 				pendingUpdate = true
 			}
 
@@ -431,26 +442,24 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 	maps.Copy(clients, b.clients)
 	b.mu.RUnlock()
 
+	if len(clients) == 0 {
+		// No clients — mark the relationship cache as dirty so it gets
+		// rebuilt on next GetCachedTopology() call. Skip the expensive build.
+		b.cachedTopologyMu.Lock()
+		b.cachedTopologyDirty = true
+		b.cachedTopologyMu.Unlock()
+		return
+	}
+
 	log.Printf("Broadcasting topology update to %d clients", len(clients))
 
-	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
-
-	// Always build and cache a full topology (all namespaces, resources view)
-	// for relationship lookups, even if no clients are connected
-	fullOpts := topology.DefaultBuildOptions()
-	fullOpts.ViewMode = topology.ViewModeResources
-	fullOpts.MaxNodes = 0 // No limit — this topology is only used for relationship lookups, not sent to the browser
-	fullOpts.IncludeReplicaSets = true // Include for relationship lookups
-	if fullTopo, err := builder.Build(fullOpts); err == nil {
+	if fullTopo, err := buildFullTopology(); err == nil {
 		b.updateCachedTopology(fullTopo)
 	} else {
 		log.Printf("Error building full topology for cache: %v", err)
 	}
 
-	if len(clients) == 0 {
-		log.Printf("No SSE clients to broadcast topology to")
-		return
-	}
+	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 
 	// Group clients by namespace filter + viewMode
 	// Use comma-separated namespaces string as map key since slices aren't comparable
@@ -566,10 +575,44 @@ func (b *SSEBroadcaster) ClientCount() int {
 
 // GetCachedTopology returns the most recently built full topology.
 // This is used for relationship lookups without rebuilding the topology.
+// If the cache is dirty (changes occurred with no SSE clients), it rebuilds on demand.
 func (b *SSEBroadcaster) GetCachedTopology() *topology.Topology {
 	b.cachedTopologyMu.RLock()
-	defer b.cachedTopologyMu.RUnlock()
-	return b.cachedTopology
+	dirty := b.cachedTopologyDirty
+	topo := b.cachedTopology
+	b.cachedTopologyMu.RUnlock()
+
+	if dirty && k8s.GetResourceCache() != nil {
+		// Gate: only one goroutine proceeds to rebuild
+		b.cachedTopologyMu.Lock()
+		if !b.cachedTopologyDirty {
+			topo = b.cachedTopology
+			b.cachedTopologyMu.Unlock()
+			return topo
+		}
+		b.cachedTopologyDirty = false
+		b.cachedTopologyMu.Unlock()
+
+		b.rebuildCachedTopology()
+		b.cachedTopologyMu.RLock()
+		topo = b.cachedTopology
+		b.cachedTopologyMu.RUnlock()
+	}
+
+	return topo
+}
+
+// rebuildCachedTopology rebuilds the full topology for relationship lookups.
+func (b *SSEBroadcaster) rebuildCachedTopology() {
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return
+	}
+	if fullTopo, err := buildFullTopology(); err == nil {
+		b.updateCachedTopology(fullTopo)
+	} else {
+		log.Printf("Error rebuilding topology cache on demand: %v", err)
+	}
 }
 
 // updateCachedTopology stores a full topology for relationship lookups
@@ -577,6 +620,18 @@ func (b *SSEBroadcaster) updateCachedTopology(topo *topology.Topology) {
 	b.cachedTopologyMu.Lock()
 	defer b.cachedTopologyMu.Unlock()
 	b.cachedTopology = topo
+	b.cachedTopologyDirty = false
+}
+
+// buildFullTopology constructs a full topology (all namespaces, resources view)
+// for relationship lookups. Used by both broadcast and lazy rebuild paths.
+func buildFullTopology() (*topology.Topology, error) {
+	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
+	opts := topology.DefaultBuildOptions()
+	opts.ViewMode = topology.ViewModeResources
+	opts.MaxNodes = 0
+	opts.IncludeReplicaSets = true
+	return builder.Build(opts)
 }
 
 // HandleSSE is the HTTP handler for the SSE endpoint

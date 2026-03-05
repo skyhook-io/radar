@@ -323,6 +323,37 @@ func (d *DynamicResourceCache) enqueueDynamicChange(kind string, gvr schema.Grou
 // Read methods
 // ---------------------------------------------------------------------------
 
+// Count returns the number of resources for a given GVR, optionally filtered by namespaces.
+// Unlike List(), this avoids allocating a result slice and skips StripUnstructuredFields.
+func (d *DynamicResourceCache) Count(gvr schema.GroupVersionResource, namespaces []string) (int, error) {
+	if d == nil {
+		return 0, fmt.Errorf("dynamic resource cache not initialized")
+	}
+
+	d.mu.RLock()
+	informer, exists := d.informers[gvr]
+	synced := d.syncComplete[gvr]
+	d.mu.RUnlock()
+
+	if !exists || !synced {
+		return 0, fmt.Errorf("informer not found or not synced for %v", gvr)
+	}
+
+	if len(namespaces) == 0 {
+		return len(informer.GetIndexer().List()), nil
+	}
+
+	total := 0
+	for _, ns := range namespaces {
+		items, err := informer.GetIndexer().ByIndex(cache.NamespaceIndex, ns)
+		if err != nil {
+			return 0, fmt.Errorf("failed to count resources in namespace %s: %w", ns, err)
+		}
+		total += len(items)
+	}
+	return total, nil
+}
+
 // List returns all resources of a given GVR, optionally filtered by namespace.
 // This is non-blocking — returns whatever data is available immediately.
 func (d *DynamicResourceCache) List(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {

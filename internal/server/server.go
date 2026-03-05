@@ -139,6 +139,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/topology", s.handleTopology)
 			r.Get("/namespaces", s.handleNamespaces)
 			r.Get("/api-resources", s.handleAPIResources)
+			r.Get("/resource-counts", s.handleResourceCounts)
 			r.Get("/resources/{kind}", s.handleListResources)
 			r.Get("/resources/{kind}/{namespace}/{name}", s.handleGetResource)
 			r.Put("/resources/{kind}/{namespace}/{name}", s.handleUpdateResource)
