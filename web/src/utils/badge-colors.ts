@@ -60,6 +60,18 @@ export const KIND_BADGE_COLORS: Record<string, string> = {
   SinkBinding: 'bg-fuchsia-500/15 text-fuchsia-700 dark:bg-fuchsia-900/50 dark:text-fuchsia-300',
   Channel: 'bg-fuchsia-500/15 text-fuchsia-700 dark:bg-fuchsia-900/50 dark:text-fuchsia-300',
 
+  // Traefik
+  IngressRoute: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300',
+  IngressRouteTCP: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300',
+  IngressRouteUDP: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300',
+  Middleware: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300',
+  MiddlewareTCP: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300',
+  TraefikService: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300',
+  ServersTransport: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300',
+  ServersTransportTCP: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300',
+  TLSOption: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300',
+  TLSStore: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300',
+
   // Special
   HelmRelease: 'bg-purple-500/20 text-purple-700 dark:text-purple-300',
   Event: 'bg-slate-500/15 text-slate-700 dark:bg-slate-900/50 dark:text-slate-300',
@@ -121,6 +133,18 @@ export const KIND_BADGE_BORDERED: Record<string, string> = {
   ContainerSource: 'bg-fuchsia-500/20 text-fuchsia-700 dark:text-fuchsia-300 border border-fuchsia-500/30',
   SinkBinding: 'bg-fuchsia-500/20 text-fuchsia-700 dark:text-fuchsia-300 border border-fuchsia-500/30',
   Channel: 'bg-fuchsia-500/20 text-fuchsia-700 dark:text-fuchsia-300 border border-fuchsia-500/30',
+
+  // Traefik
+  IngressRoute: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30',
+  IngressRouteTCP: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30',
+  IngressRouteUDP: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30',
+  Middleware: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30',
+  MiddlewareTCP: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30',
+  TraefikService: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30',
+  ServersTransport: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30',
+  ServersTransportTCP: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30',
+  TLSOption: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30',
+  TLSStore: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border border-cyan-500/30',
 }
 
 // Event type colors - for K8s event types (Normal, Warning)

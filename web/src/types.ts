@@ -85,6 +85,16 @@ export type CoreNodeKind =
   | 'ContainerSource'
   | 'SinkBinding'
   | 'Channel'
+  | 'IngressRoute'       // Traefik IngressRoute
+  | 'IngressRouteTCP'    // Traefik IngressRouteTCP
+  | 'IngressRouteUDP'    // Traefik IngressRouteUDP
+  | 'Middleware'          // Traefik Middleware
+  | 'MiddlewareTCP'      // Traefik MiddlewareTCP
+  | 'TraefikService'     // Traefik TraefikService
+  | 'ServersTransport'   // Traefik ServersTransport
+  | 'ServersTransportTCP' // Traefik ServersTransportTCP
+  | 'TLSOption'          // Traefik TLSOption
+  | 'TLSStore'           // Traefik TLSStore
 
 // NodeKind can be a core kind or any arbitrary CRD kind string
 export type NodeKind = CoreNodeKind | (string & {})
@@ -101,6 +111,12 @@ export function displayKind(kind: string): string {
     KnativeRoute: 'Route',
     ApiServerSource: 'ApiSrc',
     ContainerSource: 'ContainerSrc',
+    IngressRouteTCP: 'TCP Route',
+    IngressRouteUDP: 'UDP Route',
+    MiddlewareTCP: 'MW TCP',
+    TraefikService: 'Traefik Svc',
+    ServersTransport: 'Transport',
+    ServersTransportTCP: 'Transport TCP',
   }
   return shortNames[kind] || kind
 }

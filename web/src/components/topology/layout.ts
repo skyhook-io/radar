@@ -280,6 +280,16 @@ function pickGroupName(nodes: TopologyNode[]): string {
     'ApiServerSource': 3,
     'ContainerSource': 3,
     'SinkBinding': 3,
+    'IngressRoute': 1,
+    'IngressRouteTCP': 1,
+    'IngressRouteUDP': 1,
+    'TraefikService': 2,
+    'Middleware': 3,
+    'MiddlewareTCP': 3,
+    'ServersTransport': 4,
+    'ServersTransportTCP': 4,
+    'TLSOption': 4,
+    'TLSStore': 4,
   }
 
   // Sort by priority and pick the first

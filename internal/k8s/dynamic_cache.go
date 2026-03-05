@@ -200,6 +200,16 @@ func WarmupCommonCRDs() {
 		"SinkBinding",                  // KNative Sources
 		"Sequence",                     // KNative Flows
 		"Parallel",                     // KNative Flows
+		"IngressRoute",                 // Traefik
+		"IngressRouteTCP",              // Traefik
+		"IngressRouteUDP",              // Traefik
+		"Middleware",                    // Traefik
+		"MiddlewareTCP",                // Traefik
+		"TraefikService",               // Traefik
+		"ServersTransport",             // Traefik
+		"ServersTransportTCP",          // Traefik
+		"TLSOption",                    // Traefik
+		"TLSStore",                     // Traefik
 	}
 
 	var gvrs []schema.GroupVersionResource

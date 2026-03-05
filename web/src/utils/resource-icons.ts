@@ -55,6 +55,12 @@ import {
   Route,
   Settings,
 
+  // Traefik
+  Split,
+  SlidersHorizontal,
+  Lock,
+  ArrowRightLeft,
+
   // Fallback
   Puzzle,
 } from 'lucide-react'
@@ -165,6 +171,18 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   apiserversource: Server,
   containersource: Container,
   sinkbinding: Link,
+
+  // Traefik
+  ingressroute: Globe,
+  ingressroutetcp: Globe,
+  ingressrouteudp: Globe,
+  middleware: SlidersHorizontal,
+  middlewaretcp: SlidersHorizontal,
+  traefikservice: Split,
+  serverstransport: ArrowRightLeft,
+  serverstransporttcp: ArrowRightLeft,
+  tlsoption: Lock,
+  tlsstore: Lock,
 
   // Trivy Operator
   vulnerabilityreport: Shield,

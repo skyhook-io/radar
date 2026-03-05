@@ -88,3 +88,4 @@ export { BrokerRenderer, TriggerRenderer, EventTypeRenderer, ChannelRenderer, In
 export { PingSourceRenderer, ApiServerSourceRenderer, ContainerSourceRenderer, SinkBindingRenderer } from './KnativeSourceRenderer'
 export { KnativeIngressRenderer, KnativeCertificateRenderer, ServerlessServiceRenderer, DomainMappingRenderer } from './KnativeNetworkingRenderer'
 export { SequenceRenderer, ParallelRenderer } from './KnativeFlowRenderer'
+export { TraefikIngressRouteRenderer } from './TraefikIngressRouteRenderer'

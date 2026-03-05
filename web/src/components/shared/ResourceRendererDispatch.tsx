@@ -168,6 +168,7 @@ import {
   PriorityClassRenderer,
   RuntimeClassRenderer,
   LeaseRenderer,
+  TraefikIngressRouteRenderer,
 } from '../resources/renderers'
 import { PrometheusCharts } from '../resource/PrometheusCharts'
 import { useResourceEvents } from '../../api/client'
@@ -206,6 +207,7 @@ const KNOWN_KINDS = new Set([
   'brokers', 'triggers', 'eventtypes', 'pingsources', 'apiserversources', 'containersources', 'sinkbindings',
   'channels', 'inmemorychannels', 'subscriptions', 'sequences', 'parallels',
   'knativeingresses', 'knativecertificates', 'serverlessservices', 'domainmappings',
+  'ingressroutes', 'ingressroutetcps', 'ingressrouteudps',
 ])
 
 // ============================================================================
@@ -384,6 +386,9 @@ export function ResourceRendererDispatch({
         {kind === 'subscriptions' && <SubscriptionRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'sequences' && <SequenceRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'parallels' && <ParallelRenderer data={data} onNavigate={onNavigate} />}
+
+        {/* Traefik */}
+        {(kind === 'ingressroutes' || kind === 'ingressroutetcps' || kind === 'ingressrouteudps') && <TraefikIngressRouteRenderer data={data} onNavigate={onNavigate} />}
 
         {/* Generic renderer for CRDs and unknown resource types */}
         {!isKnownKind && <GenericRenderer data={data} />}

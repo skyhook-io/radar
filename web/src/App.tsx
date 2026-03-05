@@ -48,6 +48,8 @@ const ALL_NODE_KINDS: NodeKind[] = [
   'Application', 'Kustomization', 'HelmRelease', 'GitRepository',
   'KnativeService', 'KnativeConfiguration', 'KnativeRevision', 'KnativeRoute',
   'Broker', 'Trigger', 'PingSource', 'ApiServerSource', 'ContainerSource', 'SinkBinding', 'Channel',
+  'IngressRoute', 'IngressRouteTCP', 'IngressRouteUDP', 'Middleware', 'MiddlewareTCP',
+  'TraefikService', 'ServersTransport', 'ServersTransportTCP', 'TLSOption', 'TLSStore',
 ]
 
 // Default visible kinds (ReplicaSet hidden by default - noisy intermediate object)

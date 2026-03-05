@@ -137,6 +137,12 @@ function nodeIdToLaneId(nodeId: string): string | null {
     broker: 'Broker', trigger: 'Trigger', channel: 'Channel',
     pingsource: 'PingSource', apiserversource: 'ApiServerSource',
     containersource: 'ContainerSource', sinkbinding: 'SinkBinding',
+    // Traefik
+    ingressroute: 'IngressRoute', ingressroutetcp: 'IngressRouteTCP',
+    ingressrouteudp: 'IngressRouteUDP', middleware: 'Middleware',
+    middlewaretcp: 'MiddlewareTCP', traefikservice: 'TraefikService',
+    serverstransport: 'ServersTransport', serverstransporttcp: 'ServersTransportTCP',
+    tlsoption: 'TLSOption', tlsstore: 'TLSStore',
   }
   return `${kindMap[kind] || kind}/${namespace}/${name}`
 }
@@ -410,6 +416,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       'Workflow', 'CronWorkflow',
       'KnativeService', 'KnativeConfiguration', 'KnativeRevision', 'KnativeRoute',
       'Broker', 'Trigger',
+      'IngressRoute', 'IngressRouteTCP', 'IngressRouteUDP',
     ])
 
     // Group lanes by app label
@@ -439,6 +446,8 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         KnativeService: 1, KnativeRoute: 2, Broker: 2, Channel: 2,
         KnativeConfiguration: 3, KnativeRevision: 4, Trigger: 3,
         PingSource: 3, ApiServerSource: 3, ContainerSource: 3, SinkBinding: 3,
+        IngressRoute: 2, IngressRouteTCP: 2, IngressRouteUDP: 2,
+        TraefikService: 3, Middleware: 4, MiddlewareTCP: 4,
       }
 
       const sorted = [...laneIds].sort((a, b) => {
@@ -499,6 +508,8 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
           KnativeService: 1, KnativeRoute: 2, Broker: 1, Channel: 1,
           KnativeConfiguration: 2, KnativeRevision: 3, Trigger: 2,
           PingSource: 3, ApiServerSource: 3, ContainerSource: 3, SinkBinding: 3,
+          IngressRoute: 1, IngressRouteTCP: 1, IngressRouteUDP: 1,
+          TraefikService: 2, Middleware: 3, MiddlewareTCP: 3,
         }
         lane.children.sort((a, b) => {
           const aPriority = kindPriority[a.kind] || 10

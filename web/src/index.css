@@ -333,6 +333,16 @@ body {
 .topology-icon-parallel { background: #d946ef; }
 .topology-icon-domainmapping { background: #d946ef; }
 .topology-icon-serverlessservice { background: #a855f7; }
+.topology-icon-ingressroute { background: #06b6d4; }
+.topology-icon-ingressroutetcp { background: #06b6d4; }
+.topology-icon-ingressrouteudp { background: #06b6d4; }
+.topology-icon-middleware { background: #0891b2; }
+.topology-icon-middlewaretcp { background: #0891b2; }
+.topology-icon-traefikservice { background: #0e7490; }
+.topology-icon-serverstransport { background: #0891b2; }
+.topology-icon-serverstransporttcp { background: #0891b2; }
+.topology-icon-tlsoption { background: #0e7490; }
+.topology-icon-tlsstore { background: #0e7490; }
 
 /* Background dots - uses CSS variable for theme awareness */
 .react-flow__background pattern circle {

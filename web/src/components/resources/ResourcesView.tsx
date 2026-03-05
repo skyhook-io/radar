@@ -137,6 +137,7 @@ import { BackupCell, RestoreCell, ScheduleCell, BackupStorageLocationCell } from
 import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCell } from './renderers/cnpg-cells'
 import { VirtualServiceCell, DestinationRuleCell, IstioGatewayCell, ServiceEntryCell, PeerAuthenticationCell, AuthorizationPolicyCell } from './renderers/istio-cells'
 import { KnativeServiceCell, ConfigurationCell as KnativeConfigurationCell, RevisionCell as KnativeRevisionCell, RouteCell as KnativeRouteCell, BrokerCell, TriggerCell, EventTypeCell, PingSourceCell, ApiServerSourceCell, ContainerSourceCell, SinkBindingCell, ChannelCell, InMemoryChannelCell, SubscriptionCell, SequenceCell, ParallelCell, DomainMappingCell, ServerlessServiceCell, KnativeIngressCell, KnativeCertificateCell } from './renderers/knative-cells'
+import { IngressRouteCell, MiddlewareCell, TraefikServiceCell, ServersTransportCell, TLSOptionCell } from './renderers/traefik-cells'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
@@ -1248,6 +1249,78 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'url', label: 'URL', width: 'w-56' },
     { key: 'age', label: 'Age', width: 'w-20' },
+  ],
+  // Traefik
+  ingressroutes: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
+    { key: 'entrypoints', label: 'Entry Points', width: 'w-32 shrink-0' },
+    { key: 'hosts', label: 'Hosts', width: 'min-w-44' },
+    { key: 'routes', label: 'Routes', width: 'min-w-48', hideOnMobile: true },
+    { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
+    { key: 'middlewares', label: 'MW', width: 'w-14 shrink-0', tooltip: 'Unique middleware count' },
+    { key: 'age', label: 'Age', width: 'w-16 shrink-0' },
+  ],
+  ingressroutetcps: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
+    { key: 'entrypoints', label: 'Entry Points', width: 'w-32 shrink-0' },
+    { key: 'hosts', label: 'Hosts', width: 'min-w-44' },
+    { key: 'routes', label: 'Routes', width: 'min-w-48', hideOnMobile: true },
+    { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
+    { key: 'middlewares', label: 'MW', width: 'w-14 shrink-0', tooltip: 'Unique middleware count' },
+    { key: 'age', label: 'Age', width: 'w-16 shrink-0' },
+  ],
+  ingressrouteudps: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
+    { key: 'entrypoints', label: 'Entry Points', width: 'w-32 shrink-0' },
+    { key: 'routes', label: 'Routes', width: 'min-w-48' },
+    { key: 'age', label: 'Age', width: 'w-16 shrink-0' },
+  ],
+  middlewares: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
+    { key: 'type', label: 'Type', width: 'w-32 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-16 shrink-0' },
+  ],
+  middlewaretcps: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
+    { key: 'type', label: 'Type', width: 'w-32 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-16 shrink-0' },
+  ],
+  traefikservices: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
+    { key: 'type', label: 'Type', width: 'w-36 shrink-0' },
+    { key: 'targets', label: 'Targets', width: 'min-w-48' },
+    { key: 'age', label: 'Age', width: 'w-16 shrink-0' },
+  ],
+  serverstransports: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
+    { key: 'serverName', label: 'Server Name', width: 'w-40' },
+    { key: 'insecure', label: 'Skip Verify', width: 'w-24 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-16 shrink-0' },
+  ],
+  serverstransporttcps: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
+    { key: 'serverName', label: 'Server Name', width: 'w-40' },
+    { key: 'insecure', label: 'Skip Verify', width: 'w-24 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-16 shrink-0' },
+  ],
+  tlsoptions: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
+    { key: 'minVersion', label: 'Min TLS', width: 'w-24 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-16 shrink-0' },
+  ],
+  tlsstores: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-16 shrink-0' },
   ],
 }
 
@@ -4007,6 +4080,21 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion }
       return <KnativeIngressCell resource={resource} column={column} />
     case 'knativecertificates':
       return <KnativeCertificateCell resource={resource} column={column} />
+    // Traefik
+    case 'ingressroutes':
+    case 'ingressroutetcps':
+    case 'ingressrouteudps':
+      return <IngressRouteCell resource={resource} column={column} />
+    case 'middlewares':
+    case 'middlewaretcps':
+      return <MiddlewareCell resource={resource} column={column} />
+    case 'traefikservices':
+      return <TraefikServiceCell resource={resource} column={column} />
+    case 'serverstransports':
+    case 'serverstransporttcps':
+      return <ServersTransportCell resource={resource} column={column} />
+    case 'tlsoptions':
+      return <TLSOptionCell resource={resource} column={column} />
     default:
       // Generic cell for CRDs and unknown resources
       return <GenericCell resource={resource} column={column} />

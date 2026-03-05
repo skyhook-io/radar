@@ -124,6 +124,16 @@ export const NODE_DIMENSIONS: Record<NodeKind, { width: number; height: number }
   ApiServerSource: { width: 280, height: 56 },
   ContainerSource: { width: 280, height: 56 },
   SinkBinding: { width: 280, height: 56 },
+  IngressRoute: { width: 280, height: 56 },
+  IngressRouteTCP: { width: 280, height: 56 },
+  IngressRouteUDP: { width: 280, height: 56 },
+  Middleware: { width: 280, height: 56 },
+  MiddlewareTCP: { width: 280, height: 56 },
+  TraefikService: { width: 280, height: 56 },
+  ServersTransport: { width: 280, height: 56 },
+  ServersTransportTCP: { width: 300, height: 56 },
+  TLSOption: { width: 280, height: 56 },
+  TLSStore: { width: 280, height: 56 },
 }
 
 

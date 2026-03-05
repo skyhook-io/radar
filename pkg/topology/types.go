@@ -67,6 +67,16 @@ const (
 	KindContainerSource      NodeKind = "ContainerSource"      // KNative Eventing ContainerSource
 	KindSinkBinding          NodeKind = "SinkBinding"          // KNative Eventing SinkBinding
 	KindChannel              NodeKind = "Channel"              // KNative Messaging Channel
+	KindIngressRoute         NodeKind = "IngressRoute"         // Traefik IngressRoute
+	KindIngressRouteTCP      NodeKind = "IngressRouteTCP"      // Traefik IngressRouteTCP
+	KindIngressRouteUDP      NodeKind = "IngressRouteUDP"      // Traefik IngressRouteUDP
+	KindMiddleware           NodeKind = "Middleware"            // Traefik Middleware
+	KindMiddlewareTCP        NodeKind = "MiddlewareTCP"        // Traefik MiddlewareTCP
+	KindTraefikService       NodeKind = "TraefikService"       // Traefik TraefikService (advanced LB)
+	KindServersTransport     NodeKind = "ServersTransport"     // Traefik ServersTransport
+	KindServersTransportTCP  NodeKind = "ServersTransportTCP"  // Traefik ServersTransportTCP
+	KindTLSOption            NodeKind = "TLSOption"            // Traefik TLSOption
+	KindTLSStore             NodeKind = "TLSStore"             // Traefik TLSStore
 	KindDaemonSet            NodeKind = "DaemonSet"
 	KindStatefulSet   NodeKind = "StatefulSet"
 	KindReplicaSet    NodeKind = "ReplicaSet"

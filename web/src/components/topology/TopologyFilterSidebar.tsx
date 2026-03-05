@@ -65,6 +65,18 @@ const RESOURCE_KINDS: {
   { kind: 'ApiServerSource', label: 'ApiServerSource', icon: getTopologyIcon('ApiServerSource'), color: 'text-fuchsia-400', category: 'custom' },
   { kind: 'ContainerSource', label: 'ContainerSource', icon: getTopologyIcon('ContainerSource'), color: 'text-fuchsia-400', category: 'custom' },
   { kind: 'SinkBinding', label: 'SinkBinding', icon: getTopologyIcon('SinkBinding'), color: 'text-fuchsia-400', category: 'custom' },
+
+  // Traefik
+  { kind: 'IngressRoute', label: 'IngressRoute', icon: getTopologyIcon('IngressRoute'), color: 'text-cyan-400', category: 'networking' },
+  { kind: 'IngressRouteTCP', label: 'TCP Route', icon: getTopologyIcon('IngressRouteTCP'), color: 'text-cyan-400', category: 'networking' },
+  { kind: 'IngressRouteUDP', label: 'UDP Route', icon: getTopologyIcon('IngressRouteUDP'), color: 'text-cyan-400', category: 'networking' },
+  { kind: 'Middleware', label: 'Middleware', icon: getTopologyIcon('Middleware'), color: 'text-cyan-400', category: 'custom' },
+  { kind: 'MiddlewareTCP', label: 'MW TCP', icon: getTopologyIcon('MiddlewareTCP'), color: 'text-cyan-400', category: 'custom' },
+  { kind: 'TraefikService', label: 'Traefik Svc', icon: getTopologyIcon('TraefikService'), color: 'text-cyan-400', category: 'custom' },
+  { kind: 'ServersTransport', label: 'Transport', icon: getTopologyIcon('ServersTransport'), color: 'text-cyan-400', category: 'custom' },
+  { kind: 'ServersTransportTCP', label: 'Transport TCP', icon: getTopologyIcon('ServersTransportTCP'), color: 'text-cyan-400', category: 'custom' },
+  { kind: 'TLSOption', label: 'TLS Option', icon: getTopologyIcon('TLSOption'), color: 'text-cyan-400', category: 'custom' },
+  { kind: 'TLSStore', label: 'TLS Store', icon: getTopologyIcon('TLSStore'), color: 'text-cyan-400', category: 'custom' },
 ]
 
 const CATEGORIES = [
