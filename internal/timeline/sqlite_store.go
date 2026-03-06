@@ -298,7 +298,7 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 		}
 	}
 
-	var events []TimelineEvent
+	events := make([]TimelineEvent, 0)
 	for rows.Next() {
 		event, err := s.scanEvent(rows)
 		if err != nil {
@@ -420,7 +420,7 @@ func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 	}
 	defer rows.Close()
 
-	var events []TimelineEvent
+	events := make([]TimelineEvent, 0)
 	for rows.Next() {
 		event, err := s.scanEvent(rows)
 		if err != nil {
