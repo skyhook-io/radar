@@ -1948,6 +1948,11 @@ func (s *Server) handleConnectionRetry(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) writeJSON(w http.ResponseWriter, data any) {
 	w.Header().Set("Content-Type", "application/json")
+	// Nil slices serialize as "null" in JSON — normalize to empty array "[]"
+	// to avoid frontend errors when the response is expected to be an array.
+	if data == nil || (reflect.TypeOf(data) != nil && reflect.TypeOf(data).Kind() == reflect.Slice && reflect.ValueOf(data).IsNil()) {
+		data = []any{}
+	}
 	if err := json.NewEncoder(w).Encode(data); err != nil {
 		// Can't change HTTP status at this point, but log for debugging
 		log.Printf("Failed to encode JSON response: %v", err)
