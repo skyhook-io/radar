@@ -1530,14 +1530,7 @@ export function ResourcesView({
 }: ResourcesViewProps) {
   const location = useMemo(() => ({ search: locationSearch, pathname: locationPathname }), [locationSearch, locationPathname])
   const initialFilters = getInitialFiltersFromURL()
-  const [selectedKind, setSelectedKindInternal] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath))
-  // Wrap setSelectedKind to notify parent
-  const setSelectedKind = useCallback((kindOrFn: SelectedKindInfo | ((prev: SelectedKindInfo) => SelectedKindInfo)) => {
-    setSelectedKindInternal(prev => {
-      const next = typeof kindOrFn === 'function' ? kindOrFn(prev) : kindOrFn
-      return next
-    })
-  }, [])
+  const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath))
   // Notify parent of selected kind changes (including initial mount)
   useEffect(() => {
     onSelectedKindChange?.(selectedKind)
@@ -2379,8 +2372,8 @@ export function ResourcesView({
 
   // Track which resource kinds returned 403 Forbidden
   const forbiddenKinds = useMemo(() => {
-    if (useNewCountsMode && resourceForbiddenProp) {
-      return new Set(resourceForbiddenProp)
+    if (useNewCountsMode) {
+      return new Set(resourceForbiddenProp ?? [])
     }
     // Legacy: derive from full query errors
     const result = new Set<string>()

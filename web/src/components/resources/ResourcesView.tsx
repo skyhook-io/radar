@@ -1,4 +1,4 @@
-import { useState, useMemo, useCallback } from 'react'
+import { useState, useMemo } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ApiError, fetchJSON, isForbiddenError, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics } from '../../api/client'
@@ -36,10 +36,6 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // Track the selected kind from the k8s-ui component
   const [selectedKind, setSelectedKind] = useState<{ name: string; kind: string; group: string } | null>(null)
 
-  const handleSelectedKindChange = useCallback((kind: { name: string; kind: string; group: string }) => {
-    setSelectedKind(kind)
-  }, [])
-
   // Lightweight resource counts for sidebar badges (~2KB instead of ~608MB)
   const namespacesParam = namespaces.join(',')
   const { data: countsData } = useQuery({
@@ -72,10 +68,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       if (isSelectedCrd && selectedKind.group) params.set('group', selectedKind.group)
       const res = await fetch(`/api/resources/${selectedKind.name}?${params}`)
       if (!res.ok) {
-        if (res.status === 403) {
-          throw new ApiError('Insufficient permissions', 403)
-        }
-        return []
+        const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
+        throw new ApiError(errorData.error || `Failed to fetch ${selectedKind.name}`, res.status, errorData)
       }
       return res.json()
     },
@@ -134,7 +128,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       resourceCounts={countsData?.counts}
       resourceForbidden={countsData?.forbidden}
       selectedKindQuery={selectedKindQueryResult}
-      onSelectedKindChange={handleSelectedKindChange}
+      onSelectedKindChange={setSelectedKind}
       topPodMetrics={topPodMetrics}
       topNodeMetrics={topNodeMetrics}
       certExpiry={certExpiry}
