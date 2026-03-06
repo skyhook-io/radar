@@ -482,12 +482,12 @@ GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbos
 - Traefik nodes: IngressRoute, IngressRouteTCP, IngressRouteUDP, Middleware, MiddlewareTCP, TraefikService, ServersTransport, ServersTransportTCP, TLSOption, TLSStore
   - Node IDs use lowercase singular: `ingressroute/{ns}/{name}`, `middleware/{ns}/{name}`, etc.
   - IngressRoute → Service edges (EdgeExposes, via spec.routes[].services[])
-  - IngressRoute → Middleware edges (EdgeExposes, via spec.routes[].middlewares[])
+  - IngressRoute → Middleware edges (EdgeConfigures, via spec.routes[].middlewares[])
   - IngressRoute → TraefikService edges (EdgeExposes, when service kind is "TraefikService")
   - TraefikService → Service edges (EdgeExposes, via spec.weighted/mirroring/highestRandomWeight services)
   - TraefikService → TraefikService edges (EdgeExposes, for recursive references)
-  - Middleware chain → Middleware edges (EdgeExposes, via spec.chain.middlewares[])
-  - ServersTransport/ServersTransportTCP → Secret edges (EdgeConfigures, via spec.rootCAs[].secret)
+  - Middleware chain → Middleware edges (EdgeConfigures, via spec.chain.middlewares[])
+  - ServersTransport/ServersTransportTCP → Secret edges (EdgeConfigures, via spec.rootCAsSecrets[] and spec.certificatesSecrets[])
   - TLSOption → Secret edges (EdgeConfigures, via spec.clientAuth.secretNames[])
   - TLSStore → Secret edges (EdgeConfigures, via spec.defaultCertificate.secretName)
   - IngressRoute → ServersTransport edges (EdgeConfigures, via service serversTransport field)
