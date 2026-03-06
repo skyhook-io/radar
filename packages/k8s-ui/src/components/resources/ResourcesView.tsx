@@ -2707,21 +2707,20 @@ export function ResourcesView({
   filteredResourceCountRef.current = filteredResources.length
   highlightedResourceRef.current = highlightedIndex >= 0 ? filteredResources[highlightedIndex] ?? null : null
 
-  // Scroll to selected row when selection changes (but not on group expand/filteredResources change)
+  // Scroll to selected row when selection changes or data loads
   const lastScrolledResource = useRef<string | null>(null)
   useEffect(() => {
-    if (!selectedResource) return
+    if (!selectedResource || filteredResources.length === 0) return
     const resourceKey = `${selectedResource.kind}/${selectedResource.namespace}/${selectedResource.name}`
     if (lastScrolledResource.current === resourceKey) return
-    lastScrolledResource.current = resourceKey
 
     const timer = setTimeout(() => {
-      // Find the index of the selected resource in filtered list
       const idx = filteredResources.findIndex((r: any) =>
         r.metadata?.name === selectedResource.name &&
         r.metadata?.namespace === (selectedResource.namespace || '')
       )
       if (idx >= 0) {
+        lastScrolledResource.current = resourceKey
         virtuosoRef.current?.scrollToIndex({ index: idx, align: 'center', behavior: 'smooth' })
       }
     }, 100)
