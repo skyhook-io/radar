@@ -510,7 +510,6 @@ func isCommandNotFound(errMsg string) bool {
 	lower := strings.ToLower(errMsg)
 	patterns := []string{
 		"executable file not found",
-		"no such file or directory",
 		"command not found",
 		"not found in $path",
 	}

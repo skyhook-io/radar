@@ -2229,6 +2229,7 @@ export interface DiagnosticsSnapshot {
     hasPrometheusURL: boolean
   }
   recentErrors?: DiagErrorEntry[]
+  totalErrorsRecorded?: number
   errors?: string[]
 }
 

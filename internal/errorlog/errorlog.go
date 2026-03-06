@@ -18,8 +18,9 @@ type ErrorEntry struct {
 
 // ErrorLog is a bounded ring buffer of recent backend errors.
 type ErrorLog struct {
-	mu      sync.RWMutex
-	entries []ErrorEntry
+	mu            sync.RWMutex
+	entries       []ErrorEntry
+	totalRecorded int64
 }
 
 var (
@@ -51,6 +52,8 @@ func Record(source, level, format string, args ...any) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
+	l.totalRecorded++
+
 	if len(l.entries) >= maxEntries {
 		copy(l.entries, l.entries[1:])
 		l.entries[len(l.entries)-1] = entry
@@ -78,10 +81,19 @@ func Count() int {
 	return len(l.entries)
 }
 
+// TotalRecorded returns the total number of errors ever recorded (including evicted ones).
+func TotalRecorded() int64 {
+	l := instance()
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+	return l.totalRecorded
+}
+
 // Reset clears all entries (useful for testing).
 func Reset() {
 	l := instance()
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.entries = l.entries[:0]
+	l.totalRecorded = 0
 }

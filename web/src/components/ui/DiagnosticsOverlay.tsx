@@ -180,7 +180,7 @@ function ErrorLogSection({ data }: { data: DiagnosticsSnapshot }) {
   if (!data.recentErrors || data.recentErrors.length === 0) return null
   const entries = data.recentErrors.slice(-10).reverse()
   return (
-    <Section title={`Recent Errors (${data.recentErrors.length})`} warn>
+    <Section title={`Recent Errors (${data.recentErrors.length}${data.totalErrorsRecorded && data.totalErrorsRecorded > data.recentErrors.length ? ` of ${data.totalErrorsRecorded} total` : ''})`} warn>
       {entries.map((e: DiagErrorEntry, i: number) => (
         <Row key={i} label={`[${e.source}] ${new Date(e.time).toLocaleTimeString()}`} value={e.message} warn={e.level === 'error'} />
       ))}
@@ -523,7 +523,7 @@ function formatForGitHub(data: DiagnosticsSnapshot, includeRawJson = true): stri
   }
 
   if (data.recentErrors && data.recentErrors.length > 0) {
-    lines.push(`### Recent Errors (${data.recentErrors.length})`)
+    lines.push(`### Recent Errors (${data.recentErrors.length}${data.totalErrorsRecorded && data.totalErrorsRecorded > data.recentErrors.length ? ` of ${data.totalErrorsRecorded} total` : ''})`)
     for (const e of data.recentErrors.slice(-10).reverse()) {
       lines.push(`- **[${e.source}]** ${e.message} _(${new Date(e.time).toLocaleTimeString()})_`)
     }

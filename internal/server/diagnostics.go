@@ -53,7 +53,8 @@ type DiagnosticsSnapshot struct {
 	SSE           *DiagSSE                  `json:"sse,omitempty"`
 	Runtime       *DiagRuntime              `json:"runtime,omitempty"`
 	Config        *DiagConfig               `json:"config,omitempty"`
-	RecentErrors  []errorlog.ErrorEntry     `json:"recentErrors,omitempty"`
+	RecentErrors       []errorlog.ErrorEntry `json:"recentErrors,omitempty"`
+	TotalErrorsRecorded int64                `json:"totalErrorsRecorded,omitempty"`
 	Errors        []string                  `json:"errors,omitempty"`
 }
 
@@ -429,6 +430,9 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		entries := errorlog.GetEntries()
 		if len(entries) > 0 {
 			snap.RecentErrors = entries
+		}
+		if total := errorlog.TotalRecorded(); total > 0 {
+			snap.TotalErrorsRecorded = total
 		}
 	})
 
