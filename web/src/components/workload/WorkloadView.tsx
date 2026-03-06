@@ -7,11 +7,20 @@ import {
 } from '@skyhook/k8s-ui'
 import type { SelectedResource, ResourceRef } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
-import { useChanges, useResourceWithRelationships, usePodLogs, useTopology, useUpdateResource } from '../../api/client'
+import {
+  useChanges, useResourceWithRelationships, usePodLogs, useTopology, useUpdateResource,
+  useDeleteResource, useTriggerCronJob, useSuspendCronJob, useResumeCronJob,
+  useRestartWorkload, useWorkloadRevisions, useRollbackWorkload,
+  useFluxReconcile, useFluxSyncWithSource, useFluxSuspend, useFluxResume,
+  useArgoSync, useArgoRefresh, useArgoSuspend, useArgoResume,
+} from '../../api/client'
 import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
-import { useCanUpdateSecrets } from '../../contexts/CapabilitiesContext'
+import { useCanUpdateSecrets, useCanExec, useCanViewLogs, useCanPortForward } from '../../contexts/CapabilitiesContext'
+import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs } from '../dock'
+import { PortForwardButton } from '../portforward/PortForwardButton'
+import { useToast } from '../ui/Toast'
 
 type TabType = 'overview' | 'timeline' | 'logs' | 'metrics' | 'yaml'
 
@@ -84,6 +93,80 @@ interface WorkloadViewProps {
   group?: string
 }
 
+function useActionsBarProps(kind: string, namespace: string, name: string) {
+  const { showCopied } = useToast()
+  const openTerminal = useOpenTerminal()
+  const openLogs = useOpenLogs()
+  const openWorkloadLogs = useOpenWorkloadLogs()
+  const canExec = useCanExec()
+  const canViewLogs = useCanViewLogs()
+  const canPortForward = useCanPortForward()
+
+  const deleteMutation = useDeleteResource()
+  const restartWorkloadMutation = useRestartWorkload()
+  const rollbackMutation = useRollbackWorkload()
+  const triggerCronJobMutation = useTriggerCronJob()
+  const suspendCronJobMutation = useSuspendCronJob()
+  const resumeCronJobMutation = useResumeCronJob()
+
+  const isRollbackKind = ['deployments', 'statefulsets', 'daemonsets'].includes(kind.toLowerCase())
+  const { data: revisionsList, isLoading: revisionsLoading, error: revisionsError } = useWorkloadRevisions(kind.toLowerCase(), namespace, name, isRollbackKind)
+
+  const fluxReconcileMutation = useFluxReconcile()
+  const fluxSyncWithSourceMutation = useFluxSyncWithSource()
+  const fluxSuspendMutation = useFluxSuspend()
+  const fluxResumeMutation = useFluxResume()
+
+  const argoSyncMutation = useArgoSync()
+  const argoRefreshMutation = useArgoRefresh()
+  const argoSuspendMutation = useArgoSuspend()
+  const argoResumeMutation = useArgoResume()
+
+  return {
+    canExec,
+    canViewLogs,
+    canPortForward,
+    onOpenTerminal: openTerminal,
+    onOpenLogs: openLogs,
+    onOpenWorkloadLogs: openWorkloadLogs,
+    onCopyCommand: (text: string, message: string, event: React.MouseEvent) => showCopied(text, message, event),
+    renderPortForward: ({ type, namespace: ns, name: n, className }: { type: 'pod' | 'service'; namespace: string; name: string; className?: string }) => (
+      <PortForwardButton type={type} namespace={ns} name={n} className={className} />
+    ),
+    onDelete: (params: any, callbacks?: any) => deleteMutation.mutate(params, { onSuccess: callbacks?.onSuccess }),
+    isDeleting: deleteMutation.isPending,
+    onRestart: (params: any) => restartWorkloadMutation.mutate(params),
+    isRestarting: restartWorkloadMutation.isPending,
+    revisions: revisionsList,
+    revisionsLoading,
+    revisionsError: revisionsError ?? null,
+    onRollback: (params: any, callbacks?: any) => rollbackMutation.mutate(params, { onSuccess: callbacks?.onSuccess }),
+    isRollingBack: rollbackMutation.isPending,
+    onTriggerCronJob: (params: any) => triggerCronJobMutation.mutate(params),
+    isTriggeringCronJob: triggerCronJobMutation.isPending,
+    onSuspendCronJob: (params: any) => suspendCronJobMutation.mutate(params),
+    isSuspendingCronJob: suspendCronJobMutation.isPending,
+    onResumeCronJob: (params: any) => resumeCronJobMutation.mutate(params),
+    isResumingCronJob: resumeCronJobMutation.isPending,
+    onFluxReconcile: (params: any) => fluxReconcileMutation.mutate(params),
+    isFluxReconciling: fluxReconcileMutation.isPending,
+    onFluxSyncWithSource: (params: any) => fluxSyncWithSourceMutation.mutate(params),
+    isFluxSyncing: fluxSyncWithSourceMutation.isPending,
+    onFluxSuspend: (params: any) => fluxSuspendMutation.mutate(params),
+    isFluxSuspending: fluxSuspendMutation.isPending,
+    onFluxResume: (params: any) => fluxResumeMutation.mutate(params),
+    isFluxResuming: fluxResumeMutation.isPending,
+    onArgoSync: (params: any) => argoSyncMutation.mutate(params),
+    isArgoSyncing: argoSyncMutation.isPending,
+    onArgoRefresh: (params: any) => argoRefreshMutation.mutate(params),
+    isArgoRefreshing: argoRefreshMutation.isPending,
+    onArgoSuspend: (params: any) => argoSuspendMutation.mutate(params),
+    isArgoSuspending: argoSuspendMutation.isPending,
+    onArgoResume: (params: any) => argoResumeMutation.mutate(params),
+    isArgoResuming: argoResumeMutation.isPending,
+  }
+}
+
 export function WorkloadView({
   kind: kindProp,
   namespace,
@@ -131,6 +214,7 @@ export function WorkloadView({
   // RBAC
   const canUpdateSecrets = useCanUpdateSecrets()
   const updateResource = useUpdateResource()
+  const actionsBarProps = useActionsBarProps(kindProp, namespace, name)
 
   const handleUpdateResource = useCallback(async (params: { kind: string; namespace: string; name: string; yaml: string }) => {
     await updateResource.mutateAsync(params)
@@ -169,6 +253,7 @@ export function WorkloadView({
       isMetricsAvailable={(kind, res) =>
         isPrometheusSupported(kind) && !(kind === 'Pod' && res?.status?.phase === 'Pending')
       }
+      actionsBarProps={actionsBarProps}
     />
   )
 }
