@@ -179,6 +179,76 @@ release_local() {
   warn "For full release, use remote mode or run manually."
 }
 
+release_k8s_ui() {
+  echo ""
+  echo -e "${BLUE}=========================================="
+  echo "  @skyhook/k8s-ui Release"
+  echo -e "==========================================${NC}"
+  echo ""
+  echo "This publishes @skyhook/k8s-ui to GitHub Packages."
+  echo "Tags use the prefix 'k8s-ui-' (e.g. k8s-ui-v0.1.0)."
+  echo ""
+
+  # Fetch tags
+  git fetch --tags 2>/dev/null || true
+
+  LATEST_K8S_UI_TAG=$(git tag -l 'k8s-ui-v*' --sort=-v:refname | head -n1)
+  LATEST_K8S_UI_TAG=${LATEST_K8S_UI_TAG:-k8s-ui-v0.0.0}
+
+  # Strip prefix for version math
+  LATEST_K8S_UI_VER=${LATEST_K8S_UI_TAG#k8s-ui-}
+
+  info "Latest k8s-ui release: $LATEST_K8S_UI_TAG"
+  echo ""
+  echo "Choose release version:"
+  echo "  1) Patch  k8s-ui-$(increment_version "$LATEST_K8S_UI_VER" patch)"
+  echo "  2) Minor  k8s-ui-$(increment_version "$LATEST_K8S_UI_VER" minor)"
+  echo "  3) Major  k8s-ui-$(increment_version "$LATEST_K8S_UI_VER" major)"
+  echo "  4) Custom"
+  echo ""
+  read -p "Choice (1-4): " choice
+
+  case $choice in
+    1) K8S_UI_VERSION="k8s-ui-$(increment_version "$LATEST_K8S_UI_VER" patch)" ;;
+    2) K8S_UI_VERSION="k8s-ui-$(increment_version "$LATEST_K8S_UI_VER" minor)" ;;
+    3) K8S_UI_VERSION="k8s-ui-$(increment_version "$LATEST_K8S_UI_VER" major)" ;;
+    4) read -p "Enter version (e.g., k8s-ui-v0.2.0): " K8S_UI_VERSION ;;
+    *) error "Invalid choice" ;;
+  esac
+
+  if [[ ! $K8S_UI_VERSION =~ ^k8s-ui-v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    error "Invalid version format: $K8S_UI_VERSION (expected k8s-ui-vX.Y.Z)"
+  fi
+
+  if [ -n "$(git status --porcelain)" ]; then
+    warn "You have uncommitted changes"
+    git status --short
+    echo ""
+    read -p "Continue anyway? (y/n): " -n 1 -r
+    echo
+    [[ $REPLY =~ ^[Yy]$ ]] || exit 1
+  fi
+
+  echo ""
+  echo "  Tag: $K8S_UI_VERSION"
+  echo ""
+  read -p "Proceed? (y/n): " -n 1 -r
+  echo
+  [[ $REPLY =~ ^[Yy]$ ]] || exit 1
+
+  git tag "$K8S_UI_VERSION"
+  git push origin "$K8S_UI_VERSION"
+
+  echo ""
+  info "Tag pushed! GitHub Actions will publish @skyhook/k8s-ui to GitHub Packages."
+  echo ""
+  echo "  Consumers can now run:"
+  echo "    npm install @skyhook/k8s-ui@${K8S_UI_VERSION#k8s-ui-v}"
+  echo ""
+  echo "  Watch progress: gh run watch"
+  echo ""
+}
+
 release_pkg() {
   echo ""
   echo -e "${BLUE}=========================================="
@@ -257,13 +327,15 @@ main() {
   echo -e "==========================================${NC}"
   echo ""
   echo "What would you like to release?"
-  echo "  1) Radar app  (v*.*.*)"
-  echo "  2) pkg module (pkg/v*.*.*)"
+  echo "  1) Radar app      (v*.*.*)"
+  echo "  2) pkg module     (pkg/v*.*.*)"
+  echo "  3) @skyhook/k8s-ui (k8s-ui-v*.*.*)"
   echo ""
-  read -p "Choice (1-2): " release_choice
+  read -p "Choice (1-3): " release_choice
   case $release_choice in
     1) : ;; # continue to app release flow below
     2) release_pkg; exit 0 ;;
+    3) release_k8s_ui; exit 0 ;;
     *) error "Invalid choice" ;;
   esac
 
