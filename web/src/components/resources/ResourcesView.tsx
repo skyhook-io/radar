@@ -1,18 +1,22 @@
-import { useMemo } from 'react'
+import { useState, useMemo, useCallback } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
-import { useQueries } from '@tanstack/react-query'
-import { ApiError, isForbiddenError, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics } from '../../api/client'
+import { useQuery } from '@tanstack/react-query'
+import { ApiError, fetchJSON, isForbiddenError, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics } from '../../api/client'
 import { useAPIResources } from '../../api/apiResources'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import {
   ResourcesView as BaseResourcesView,
-  categorizeResources,
   CORE_RESOURCES,
 } from '@skyhook/k8s-ui'
 import type { ResourceQueryResult } from '@skyhook/k8s-ui'
 import type { SelectedResource } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
+
+interface ResourceCountsResponse {
+  counts: Record<string, number>
+  forbidden?: string[]
+}
 
 interface ResourcesViewProps {
   namespaces: string[]
@@ -29,68 +33,72 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   // API resources discovery
   const { data: apiResources } = useAPIResources()
 
-  // Compute resourcesToCount from categories (same logic as package)
-  const categories = useMemo(() => {
-    if (!apiResources) return null
-    return categorizeResources(apiResources)
-  }, [apiResources])
+  // Track the selected kind from the k8s-ui component
+  const [selectedKind, setSelectedKind] = useState<{ name: string; kind: string; group: string } | null>(null)
 
-  const resourcesToCount = useMemo(() => {
-    if (categories) {
-      return categories.flatMap(c => c.resources).map(r => ({
-        kind: r.kind,
-        name: r.name,
-        group: r.group,
-        isCrd: r.isCrd,
-      }))
-    }
-    return CORE_RESOURCES.map(r => ({
-      kind: r.kind,
-      name: r.name,
-      group: r.group,
-      isCrd: r.isCrd,
-    }))
-  }, [categories])
+  const handleSelectedKindChange = useCallback((kind: { name: string; kind: string; group: string }) => {
+    setSelectedKind(kind)
+  }, [])
 
-  // Fetch ALL resources using useQueries
-  const resourceQueries = useQueries({
-    queries: resourcesToCount.map((resource) => ({
-      // Only include group in query key for CRDs — core K8s resources (apps, batch, etc.)
-      // must NOT send ?group= because the backend skips the fast typed cache when group is set.
-      queryKey: ['resources', resource.name, resource.isCrd ? resource.group : '', namespaces],
-      queryFn: async () => {
-        const params = new URLSearchParams()
-        if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
-        if (resource.isCrd && resource.group) params.set('group', resource.group)
-        const res = await fetch(`/api/resources/${resource.name}?${params}`)
-        if (!res.ok) {
-          if (res.status === 403) {
-            throw new ApiError('Insufficient permissions', 403)
-          }
-          return []
-        }
-        return res.json()
-      },
-      staleTime: 30000,
-      refetchInterval: 30000,
-      retry: (failureCount: number, error: Error) => {
-        if (isForbiddenError(error)) return false
-        return failureCount < 3
-      },
-    })),
+  // Lightweight resource counts for sidebar badges (~2KB instead of ~608MB)
+  const namespacesParam = namespaces.join(',')
+  const { data: countsData } = useQuery({
+    queryKey: ['resource-counts', namespacesParam],
+    queryFn: async () => {
+      const params = new URLSearchParams()
+      if (namespaces.length > 0) params.set('namespaces', namespacesParam)
+      return fetchJSON<ResourceCountsResponse>(`/resource-counts?${params}`)
+    },
+    staleTime: 10000,
+    refetchInterval: 15000,
   })
 
-  // Map react-query results to ResourceQueryResult shape
-  const resourceQueryResults: ResourceQueryResult[] = useMemo(() =>
-    resourceQueries.map(q => ({
-      data: q.data as any[] | undefined,
-      isLoading: q.isLoading,
-      error: q.error,
-      refetch: q.refetch,
-      dataUpdatedAt: q.dataUpdatedAt,
-    })),
-    [resourceQueries]
-  )
+  // Determine if selected kind is a CRD (only CRDs should send ?group= to backend)
+  const isSelectedCrd = useMemo(() => {
+    if (!selectedKind) return false
+    // Check API resources first, fall back to CORE_RESOURCES
+    const match = apiResources?.find(r => r.name === selectedKind.name && r.group === selectedKind.group)
+      ?? CORE_RESOURCES.find(r => r.name === selectedKind.name && r.group === selectedKind.group)
+    return match?.isCrd ?? (!!selectedKind.group) // default: has group = likely CRD
+  }, [selectedKind, apiResources])
+
+  // Fetch full data only for the selected kind
+  const selectedKindQuery = useQuery({
+    queryKey: ['resources', selectedKind?.name, isSelectedCrd ? selectedKind?.group : '', namespaces],
+    queryFn: async () => {
+      if (!selectedKind) return []
+      const params = new URLSearchParams()
+      if (namespaces.length > 0) params.set('namespaces', namespacesParam)
+      if (isSelectedCrd && selectedKind.group) params.set('group', selectedKind.group)
+      const res = await fetch(`/api/resources/${selectedKind.name}?${params}`)
+      if (!res.ok) {
+        if (res.status === 403) {
+          throw new ApiError('Insufficient permissions', 403)
+        }
+        return []
+      }
+      return res.json()
+    },
+    enabled: !!selectedKind,
+    staleTime: 30000,
+    refetchInterval: 30000,
+    retry: (failureCount: number, error: Error) => {
+      if (isForbiddenError(error)) return false
+      return failureCount < 3
+    },
+  })
+
+  // Map to ResourceQueryResult shape
+  const selectedKindQueryResult: ResourceQueryResult | undefined = useMemo(() => {
+    if (!selectedKind) return undefined
+    return {
+      data: selectedKindQuery.data as any[] | undefined,
+      isLoading: selectedKindQuery.isLoading,
+      error: selectedKindQuery.error,
+      refetch: selectedKindQuery.refetch,
+      dataUpdatedAt: selectedKindQuery.dataUpdatedAt,
+    }
+  }, [selectedKind, selectedKindQuery.data, selectedKindQuery.isLoading, selectedKindQuery.error, selectedKindQuery.refetch, selectedKindQuery.dataUpdatedAt])
 
   // Metrics
   const { data: topPodMetrics } = useTopPodMetrics()
@@ -122,7 +130,11 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       onKindChange={onKindChange}
       // Injected data
       apiResources={apiResources}
-      resourceQueries={resourceQueryResults}
+      // Lightweight counts for sidebar (replaces 233 parallel queries)
+      resourceCounts={countsData?.counts}
+      resourceForbidden={countsData?.forbidden}
+      selectedKindQuery={selectedKindQueryResult}
+      onSelectedKindChange={handleSelectedKindChange}
       topPodMetrics={topPodMetrics}
       topNodeMetrics={topNodeMetrics}
       certExpiry={certExpiry}

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef, forwardRef, useContext } from 'react'
+import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import type { TopPodMetrics, TopNodeMetrics } from '../../types'
 import {
@@ -1426,7 +1427,13 @@ interface ResourcesViewProps {
   onKindChange?: () => void // Called when user changes resource type in sidebar
   // Injected data (replacing hooks)
   apiResources?: APIResource[]
+  /** @deprecated Use resourceCounts + resourceForbidden + selectedKindQuery instead */
   resourceQueries?: ResourceQueryResult[]
+  // Lightweight counts for sidebar badges (from /api/resource-counts)
+  resourceCounts?: Record<string, number>
+  resourceForbidden?: string[]
+  // Single query for the currently selected kind's full data
+  selectedKindQuery?: ResourceQueryResult
   topPodMetrics?: TopPodMetrics[]
   topNodeMetrics?: TopNodeMetrics[]
   certExpiry?: Record<string, { expired?: boolean; daysLeft: number }>
@@ -1444,6 +1451,8 @@ interface ResourcesViewProps {
   // Dock actions
   onOpenLogs?: (params: { namespace: string; podName: string; containers: string[]; containerName?: string }) => void
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
+  // Callback when selected kind changes — used by parent to fetch data for the selected kind
+  onSelectedKindChange?: (kind: { name: string; kind: string; group: string }) => void
 }
 
 // Default selected kind
@@ -1501,6 +1510,9 @@ export function ResourcesView({
   namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange,
   apiResources: apiResourcesProp,
   resourceQueries: resourceQueriesProp,
+  resourceCounts: resourceCountsProp,
+  resourceForbidden: resourceForbiddenProp,
+  selectedKindQuery: selectedKindQueryProp,
   topPodMetrics,
   topNodeMetrics,
   certExpiry,
@@ -1514,10 +1526,22 @@ export function ResourcesView({
   basePath = '/resources',
   onOpenLogs,
   onOpenWorkloadLogs,
+  onSelectedKindChange,
 }: ResourcesViewProps) {
   const location = useMemo(() => ({ search: locationSearch, pathname: locationPathname }), [locationSearch, locationPathname])
   const initialFilters = getInitialFiltersFromURL()
-  const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath))
+  const [selectedKind, setSelectedKindInternal] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath))
+  // Wrap setSelectedKind to notify parent
+  const setSelectedKind = useCallback((kindOrFn: SelectedKindInfo | ((prev: SelectedKindInfo) => SelectedKindInfo)) => {
+    setSelectedKindInternal(prev => {
+      const next = typeof kindOrFn === 'function' ? kindOrFn(prev) : kindOrFn
+      return next
+    })
+  }, [])
+  // Notify parent of selected kind changes (including initial mount)
+  useEffect(() => {
+    onSelectedKindChange?.(selectedKind)
+  }, [selectedKind.name, selectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
   const [searchTerm, setSearchTerm] = useState(initialFilters.search)
   const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
     () => persistedExpandedCategories ?? new Set(['Workloads', 'Networking', 'Configuration'])
@@ -1592,8 +1616,6 @@ export function ResourcesView({
   // Set by sidebar kind change to push a browser history entry (vs replace for filter changes)
   const shouldPushHistory = useRef(false)
 
-  // Ref to selected row for scrolling into view on deeplink
-  const selectedRowRef = useRef<HTMLTableCellElement>(null)
   // Ref to selected sidebar item for scrolling into view on deeplink
   const selectedSidebarRef = useRef<HTMLButtonElement>(null)
   // Ref to search input for keyboard shortcut
@@ -1780,7 +1802,7 @@ export function ResourcesView({
 
   // Keyboard navigation: highlighted row state
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
-  const highlightedRowRef = useRef<HTMLTableCellElement>(null)
+  const virtuosoRef = useRef<TableVirtuosoHandle>(null)
 
   // Reset highlight when kind, search, sort, or namespace changes
   const namespacesKey = namespaces.join(',')
@@ -1788,8 +1810,8 @@ export function ResourcesView({
 
   // Scroll highlighted row into view
   useEffect(() => {
-    if (highlightedIndex >= 0 && highlightedRowRef.current) {
-      highlightedRowRef.current.scrollIntoView({ block: 'nearest' })
+    if (highlightedIndex >= 0) {
+      virtuosoRef.current?.scrollToIndex({ index: highlightedIndex, align: 'center', behavior: 'auto' })
     }
   }, [highlightedIndex])
 
@@ -2306,17 +2328,18 @@ export function ResourcesView({
     }
   }, [apiResources, resourcesToCount, selectedKind.name, selectedKind.kind, selectedKind.group])
 
-  // Resource queries — provided via props (array of query results matching resourcesToCount order)
+  // Resource data — prefer new lightweight props over legacy resourceQueries array
   const resourceQueries = resourceQueriesProp ?? []
+  const useNewCountsMode = !!resourceCountsProp
 
-  // Find the selected kind's query and derive resources/isLoading/refetch from it
+  // Find the selected kind's query
   const selectedQueryIndex = useMemo(() => {
     return resourcesToCount.findIndex(r =>
       r.name === selectedKind.name && r.group === selectedKind.group
     )
   }, [resourcesToCount, selectedKind.name, selectedKind.group])
 
-  const selectedQuery = resourceQueries[selectedQueryIndex]
+  const selectedQuery = selectedKindQueryProp ?? resourceQueries[selectedQueryIndex]
   const resources = selectedQuery?.data
   const isLoading = selectedQuery?.isLoading ?? true
   const selectedQueryError = selectedQuery?.error
@@ -2333,8 +2356,18 @@ export function ResourcesView({
     }
   }, [dataUpdatedAt])
 
-  // Derive counts from all query results (keyed by group/kind to handle collisions like KNative Service vs core Service)
+  // Derive counts — prefer lightweight resourceCounts prop over full query data
   const counts = useMemo(() => {
+    if (useNewCountsMode) {
+      // resourceCountsProp uses "group/Kind" keys for CRDs, "Kind" for core — same format as sidebar
+      const results: Record<string, number> = {}
+      for (const resource of resourcesToCount) {
+        const key = resource.group ? `${resource.group}/${resource.kind}` : resource.kind
+        results[key] = resourceCountsProp![key] ?? 0
+      }
+      return results
+    }
+    // Legacy: derive counts from full query data
     const results: Record<string, number> = {}
     resourcesToCount.forEach((resource, index) => {
       const data = resourceQueries[index]?.data
@@ -2342,10 +2375,14 @@ export function ResourcesView({
       results[key] = Array.isArray(data) ? data.length : 0
     })
     return results
-  }, [resourcesToCount, resourceQueries])
+  }, [useNewCountsMode, resourcesToCount, resourceCountsProp, resourceQueries])
 
-  // Track which resource kinds returned 403 Forbidden (keyed by group/kind for collision safety)
+  // Track which resource kinds returned 403 Forbidden
   const forbiddenKinds = useMemo(() => {
+    if (useNewCountsMode && resourceForbiddenProp) {
+      return new Set(resourceForbiddenProp)
+    }
+    // Legacy: derive from full query errors
     const result = new Set<string>()
     resourcesToCount.forEach((resource, index) => {
       if (isForbiddenError(resourceQueries[index]?.error)) {
@@ -2353,7 +2390,7 @@ export function ResourcesView({
       }
     })
     return result
-  }, [resourcesToCount, resourceQueries])
+  }, [useNewCountsMode, resourceForbiddenProp, resourcesToCount, resourceQueries])
 
   // Reset sort and filters when kind changes (but not when syncing from URL navigation)
   // Track previous kind to skip on mount (where the effect fires but kind hasn't actually changed)
@@ -2686,14 +2723,18 @@ export function ResourcesView({
     lastScrolledResource.current = resourceKey
 
     const timer = setTimeout(() => {
-      selectedRowRef.current?.scrollIntoView({
-        behavior: 'smooth',
-        block: 'center',
-      })
+      // Find the index of the selected resource in filtered list
+      const idx = filteredResources.findIndex((r: any) =>
+        r.metadata?.name === selectedResource.name &&
+        r.metadata?.namespace === (selectedResource.namespace || '')
+      )
+      if (idx >= 0) {
+        virtuosoRef.current?.scrollToIndex({ index: idx, align: 'center', behavior: 'smooth' })
+      }
     }, 100)
 
     return () => clearTimeout(timer)
-  }, [selectedResource])
+  }, [selectedResource, filteredResources])
 
   // Scroll sidebar to show selected kind when deep linking (but not on manual category expand)
   const lastScrolledKind = useRef<string | null>(null)
@@ -2823,24 +2864,35 @@ export function ResourcesView({
     return allColumns.filter(c => visibleColumns.has(c.key))
   }, [allColumns, visibleColumns])
 
-  // CSS Grid template for column sizing
-  const gridTemplateColumns = useMemo(() => {
-    if (hasResizedColumns) {
-      // After resize: fixed pixel widths + spacer column absorbs remaining space
-      const colWidths = columns.map(col => {
-        const w = columnWidths[col.key]
-        if (w) return `${w}px`
-        return `minmax(${getColumnMinWidth(col)}px, 1fr)`
-      }).join(' ')
-      return `${colWidths} minmax(0, 1fr)`
-    }
-    // Before resize: auto-distribute with minimums (like auto table layout)
-    return columns.map(col => {
-      const min = getColumnMinWidth(col)
-      const fr = col.key === 'name' ? '2fr' : '1fr'
-      return `minmax(${min}px, ${fr})`
-    }).join(' ')
-  }, [columns, columnWidths, hasResizedColumns])
+  // Stable virtuoso components — memoized to avoid remounting the table on every render
+  const virtuosoComponents = useMemo(() => ({
+    Table: React.forwardRef<HTMLTableElement, React.TableHTMLAttributes<HTMLTableElement>>(function VirtuosoTable(props, ref) {
+      return (
+        <table
+          {...props}
+          ref={ref}
+          className="w-full"
+          style={{ ...props.style, tableLayout: 'fixed' }}
+        >
+          <colgroup>
+            {columns.map(col => (
+              <col
+                key={col.key}
+                style={{
+                  width: columnWidths[col.key]
+                    ? `${columnWidths[col.key]}px`
+                    : col.key === 'name' ? undefined : `${getColumnMinWidth(col)}px`,
+                }}
+              />
+            ))}
+            {hasResizedColumns && <col />}
+          </colgroup>
+          {props.children}
+        </table>
+      )
+    }),
+    TableRow: VirtuosoTableRow,
+  }), [columns, columnWidths, hasResizedColumns])
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
@@ -3502,9 +3554,15 @@ export function ResourcesView({
             </div>
           ) : (
             <MetricsContext.Provider value={metricsLookup}>
-            <table className="w-full" style={{ display: 'grid', gridTemplateColumns }}>
-              <thead style={{ display: 'contents' }}>
-                <tr style={{ display: 'contents' }}>
+            <TableVirtuoso
+              ref={virtuosoRef}
+              data={filteredResources}
+              increaseViewportBy={400}
+              overscan={200}
+              computeItemKey={(index, resource) => resource.metadata?.uid || `${resource.metadata?.namespace}-${resource.metadata?.name}-${index}`}
+              components={virtuosoComponents}
+              fixedHeaderContent={() => (
+                <tr>
                   {columns.map((col, colIdx) => {
                     const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object', 'cpu', 'memory'].includes(col.key)
                     const isSorted = sortColumn === col.key
@@ -3518,7 +3576,7 @@ export function ResourcesView({
                         key={col.key}
                         className={clsx(
                           'text-left px-4 py-3 text-xs font-medium uppercase tracking-wide relative group/th',
-                          'sticky top-0 z-10 bg-theme-surface border-b border-theme-border',
+                          'bg-theme-surface border-b border-theme-border',
                           !isLastCol && 'border-r-subtle',
                           isSortable ? 'text-theme-text-secondary hover:text-theme-text-primary cursor-pointer select-none' : 'text-theme-text-secondary'
                         )}
@@ -3668,37 +3726,34 @@ export function ResourcesView({
                       </th>
                     )
                   })}
-                  {hasResizedColumns && <th className="sticky top-0 z-10 bg-theme-surface border-b border-theme-border p-0" />}
+                  {hasResizedColumns && <th className="bg-theme-surface border-b border-theme-border p-0" />}
                 </tr>
-              </thead>
-              <tbody style={{ display: 'contents' }}>
-                {filteredResources.map((resource: any, index: number) => {
-                  const isSelected = selectedResource?.kind === selectedKind.name &&
-                    selectedResource?.namespace === resource.metadata?.namespace &&
-                    selectedResource?.name === resource.metadata?.name
-                  const isHighlighted = index === highlightedIndex
-                  return (
-                    <ResourceRow
-                      key={resource.metadata?.uid || `${resource.metadata?.namespace}-${resource.metadata?.name}`}
-                      ref={isSelected ? selectedRowRef : isHighlighted ? highlightedRowRef : null}
-                      resource={resource}
-                      kind={selectedKind.name}
-                      group={selectedKind.group}
-                      columns={columns}
-                      hasSpacerColumn={hasResizedColumns}
-                      isSelected={isSelected}
-                      isHighlighted={isHighlighted}
-                      majorityNodeMinorVersion={majorityNodeMinorVersion}
-                      onClick={() => {
-                        const res = { kind: selectedKind.name, namespace: resource.metadata?.namespace || '', name: resource.metadata?.name, group: selectedKind.group }
-                        onResourceClick?.(isSelected ? null : res)
-                      }}
-                      onMouseEnter={() => setHighlightedIndex(-1)}
-                    />
-                  )
-                })}
-              </tbody>
-            </table>
+              )}
+              itemContent={(index, resource) => {
+                const isSelected = selectedResource?.kind === selectedKind.name &&
+                  selectedResource?.namespace === resource.metadata?.namespace &&
+                  selectedResource?.name === resource.metadata?.name
+                const isHighlighted = index === highlightedIndex
+                return (
+                  <ResourceRowCells
+                    resource={resource}
+                    kind={selectedKind.name}
+                    group={selectedKind.group}
+                    columns={columns}
+                    hasSpacerColumn={hasResizedColumns}
+                    isSelected={isSelected}
+                    isHighlighted={isHighlighted}
+                    majorityNodeMinorVersion={majorityNodeMinorVersion}
+                    onClick={() => {
+                      const res = { kind: selectedKind.name, namespace: resource.metadata?.namespace || '', name: resource.metadata?.name, group: selectedKind.group }
+                      onResourceClick?.(isSelected ? null : res)
+                    }}
+                    onMouseEnter={() => setHighlightedIndex(-1)}
+                  />
+                )
+              }}
+              className="h-full"
+            />
             {/* Resize indicator line — full table height, shown only while dragging */}
             {resizeLineX !== null && (
               <div
@@ -3783,7 +3838,7 @@ const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps
   }
 )
 
-interface ResourceRowProps {
+interface ResourceRowCellsProps {
   resource: any
   kind: string
   group?: string
@@ -3796,16 +3851,12 @@ interface ResourceRowProps {
   onMouseEnter?: () => void
 }
 
-const ResourceRow = forwardRef<HTMLTableCellElement, ResourceRowProps>(
-  function ResourceRow({ resource, kind, group, columns, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter }, ref) {
-    return (
-      <tr
-        className="group/row contents"
-      >
-      {columns.map((col, i) => (
+function ResourceRowCells({ resource, kind, group, columns, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter }: ResourceRowCellsProps) {
+  return (
+    <>
+      {columns.map((col) => (
         <td
           key={col.key}
-          ref={i === 0 ? ref : undefined}
           onClick={onClick}
           onMouseEnter={onMouseEnter}
           className={clsx(
@@ -3822,8 +3873,13 @@ const ResourceRow = forwardRef<HTMLTableCellElement, ResourceRowProps>(
         </td>
       ))}
       {hasSpacerColumn && <td className="border-b-subtle p-0" />}
-      </tr>
-    )
+    </>
+  )
+}
+
+const VirtuosoTableRow = React.forwardRef<HTMLTableRowElement, React.HTMLAttributes<HTMLTableRowElement>>(
+  function VirtuosoTableRow(props, ref) {
+    return <tr {...props} ref={ref} className="group/row" />
   }
 )
 
