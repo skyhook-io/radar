@@ -1,5 +1,5 @@
 import { type ComponentProps } from 'react'
-import { CodeViewer as BaseCodeViewer } from '@skyhook/k8s-ui'
+import { CodeViewer as BaseCodeViewer } from '@skyhook-io/k8s-ui'
 import { useTheme } from '../../context/ThemeContext'
 
 export function CodeViewer(props: Omit<ComponentProps<typeof BaseCodeViewer>, 'theme'>) {

@@ -1,1 +1,1 @@
-export * from '@skyhook/k8s-ui/components/resources/renderers/CNPGBackupRenderer'
+export * from '@skyhook-io/k8s-ui/components/resources/renderers/CNPGBackupRenderer'

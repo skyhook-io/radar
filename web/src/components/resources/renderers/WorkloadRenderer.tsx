@@ -1,4 +1,4 @@
-import { WorkloadRenderer as BaseWorkloadRenderer } from '@skyhook/k8s-ui/components/resources/renderers/WorkloadRenderer'
+import { WorkloadRenderer as BaseWorkloadRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/WorkloadRenderer'
 import { useNavigate } from 'react-router-dom'
 import { useScaleWorkload } from '../../../api/client'
 import { useQueryClient } from '@tanstack/react-query'

@@ -1,1 +1,1 @@
-export * from '@skyhook/k8s-ui/components/resources/renderers/KarpenterEC2NodeClassRenderer'
+export * from '@skyhook-io/k8s-ui/components/resources/renderers/KarpenterEC2NodeClassRenderer'

@@ -2,7 +2,7 @@ import { type ComponentProps } from 'react'
 import {
   ResourceRendererDispatch as BaseResourceRendererDispatch,
   getResourceStatus,
-} from '@skyhook/k8s-ui'
+} from '@skyhook-io/k8s-ui'
 import { PrometheusCharts } from '../resource/PrometheusCharts'
 import { useResourceEvents } from '../../api/client'
 

@@ -4,7 +4,7 @@ import { clsx } from 'clsx'
 import { Terminal } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
-} from '@skyhook/k8s-ui'
+} from '@skyhook-io/k8s-ui'
 import type { SelectedResource, ResourceRef } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 import {

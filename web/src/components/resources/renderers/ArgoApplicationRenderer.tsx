@@ -1,4 +1,4 @@
-import { ArgoApplicationRenderer as BaseArgoApplicationRenderer } from '@skyhook/k8s-ui/components/resources/renderers/ArgoApplicationRenderer'
+import { ArgoApplicationRenderer as BaseArgoApplicationRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/ArgoApplicationRenderer'
 import { useArgoTerminate } from '../../../api/client'
 
 interface ArgoApplicationRendererProps {

@@ -1,1 +1,1 @@
-export { useLogSearch } from '@skyhook/k8s-ui'
+export { useLogSearch } from '@skyhook-io/k8s-ui'

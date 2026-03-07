@@ -1,4 +1,4 @@
-import { ResourceDetailDrawer as BaseResourceDetailDrawer } from '@skyhook/k8s-ui'
+import { ResourceDetailDrawer as BaseResourceDetailDrawer } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { WorkloadView } from '../workload/WorkloadView'
 

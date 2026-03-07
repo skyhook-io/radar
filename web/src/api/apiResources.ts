@@ -2,8 +2,8 @@ import { useQuery } from '@tanstack/react-query'
 import type { APIResource } from '../types'
 
 // Re-export pure functions from package
-export { categorizeResources, CORE_RESOURCES, formatGroupName, shortenGroupName, getKindLabel, getKindPlural } from '@skyhook/k8s-ui'
-export type { ResourceCategory } from '@skyhook/k8s-ui'
+export { categorizeResources, CORE_RESOURCES, formatGroupName, shortenGroupName, getKindLabel, getKindPlural } from '@skyhook-io/k8s-ui'
+export type { ResourceCategory } from '@skyhook-io/k8s-ui'
 
 const API_BASE = '/api'
 

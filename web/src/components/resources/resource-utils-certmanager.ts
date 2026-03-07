@@ -1,2 +1,2 @@
-// Re-export from the shared @skyhook/k8s-ui package.
-export * from '@skyhook/k8s-ui/components/resources/resource-utils-certmanager'
+// Re-export from the shared @skyhook-io/k8s-ui package.
+export * from '@skyhook-io/k8s-ui/components/resources/resource-utils-certmanager'

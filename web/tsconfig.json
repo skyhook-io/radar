@@ -18,8 +18,8 @@
     "baseUrl": ".",
     "paths": {
       "@/*": ["./src/*"],
-      "@skyhook/k8s-ui": ["../packages/k8s-ui/src/index.ts"],
-      "@skyhook/k8s-ui/*": ["../packages/k8s-ui/src/*"]
+      "@skyhook-io/k8s-ui": ["../packages/k8s-ui/src/index.ts"],
+      "@skyhook-io/k8s-ui/*": ["../packages/k8s-ui/src/*"]
     }
   },
   "include": ["src", "../packages/k8s-ui/src"],

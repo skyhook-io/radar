@@ -1,4 +1,4 @@
-import { NodeRenderer as BaseNodeRenderer } from '@skyhook/k8s-ui/components/resources/renderers/NodeRenderer'
+import { NodeRenderer as BaseNodeRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/NodeRenderer'
 import { useNavigate } from 'react-router-dom'
 import { useNodeMetrics, useNodeMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
 import { serializeColumnFilters } from '../resource-utils'

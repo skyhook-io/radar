@@ -1,1 +1,1 @@
-export { GitOpsActions, SyncButton, SuspendToggle } from '@skyhook/k8s-ui/components/gitops/GitOpsActions'
+export { GitOpsActions, SyncButton, SuspendToggle } from '@skyhook-io/k8s-ui/components/gitops/GitOpsActions'

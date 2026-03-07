@@ -1,1 +1,1 @@
-export * from '@skyhook/k8s-ui/components/resources/renderers/KnativeEventingRenderer'
+export * from '@skyhook-io/k8s-ui/components/resources/renderers/KnativeEventingRenderer'

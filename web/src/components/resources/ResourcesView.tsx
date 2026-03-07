@@ -8,8 +8,8 @@ import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import {
   ResourcesView as BaseResourcesView,
   CORE_RESOURCES,
-} from '@skyhook/k8s-ui'
-import type { ResourceQueryResult } from '@skyhook/k8s-ui'
+} from '@skyhook-io/k8s-ui'
+import type { ResourceQueryResult } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 

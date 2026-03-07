@@ -1,1 +1,1 @@
-export * from '@skyhook/k8s-ui/components/resources/renderers/SealedSecretRenderer'
+export * from '@skyhook-io/k8s-ui/components/resources/renderers/SealedSecretRenderer'

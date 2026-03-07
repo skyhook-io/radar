@@ -1,1 +1,1 @@
-export { HealthRing } from '@skyhook/k8s-ui/components/ui/HealthRing'
+export { HealthRing } from '@skyhook-io/k8s-ui/components/ui/HealthRing'

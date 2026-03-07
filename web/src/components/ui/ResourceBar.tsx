@@ -1,1 +1,1 @@
-export { ResourceBar } from '@skyhook/k8s-ui'
+export { ResourceBar } from '@skyhook-io/k8s-ui'

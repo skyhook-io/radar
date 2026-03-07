@@ -1,1 +1,1 @@
-export { JsonLogLine } from '@skyhook/k8s-ui'
+export { JsonLogLine } from '@skyhook-io/k8s-ui'

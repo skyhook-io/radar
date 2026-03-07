@@ -12,7 +12,7 @@
     "lint": "eslint src --ext ts,tsx"
   },
   "dependencies": {
-    "@skyhook/k8s-ui": "*",
+    "@skyhook-io/k8s-ui": "*",
     "@fontsource-variable/dm-sans": "^5.2.8",
     "@fontsource/dm-mono": "^5.2.7",
     "@monaco-editor/react": "^4.7.0",

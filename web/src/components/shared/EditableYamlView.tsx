@@ -2,7 +2,7 @@ import { type ComponentProps } from 'react'
 import {
   EditableYamlView as BaseEditableYamlView,
   SaveSuccessAnimation,
-} from '@skyhook/k8s-ui'
+} from '@skyhook-io/k8s-ui'
 import { useUpdateResource } from '../../api/client'
 
 // Re-export SaveSuccessAnimation as-is (pure component, no wrapper needed)

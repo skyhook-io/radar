@@ -1,1 +1,1 @@
-export * from '@skyhook/k8s-ui/components/resources/renderers/VeleroBackupRenderer'
+export * from '@skyhook-io/k8s-ui/components/resources/renderers/VeleroBackupRenderer'

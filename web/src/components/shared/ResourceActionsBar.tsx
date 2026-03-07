@@ -1,6 +1,6 @@
 import {
   ResourceActionsBar as BaseResourceActionsBar,
-} from '@skyhook/k8s-ui'
+} from '@skyhook-io/k8s-ui'
 import {
   useDeleteResource,
   useTriggerCronJob,

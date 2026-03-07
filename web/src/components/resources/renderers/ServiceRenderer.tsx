@@ -1,4 +1,4 @@
-import { ServiceRenderer as BaseServiceRenderer } from '@skyhook/k8s-ui/components/resources/renderers/ServiceRenderer'
+import { ServiceRenderer as BaseServiceRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/ServiceRenderer'
 import { PortForwardInlineButton } from '../../portforward/PortForwardButton'
 
 interface ServiceRendererProps {

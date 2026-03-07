@@ -1,4 +1,4 @@
-import { TerminalTab as SharedTerminalTab } from '@skyhook/k8s-ui'
+import { TerminalTab as SharedTerminalTab } from '@skyhook-io/k8s-ui'
 
 interface TerminalTabProps {
   namespace: string

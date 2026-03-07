@@ -1,4 +1,4 @@
-import { BottomDock as K8sBottomDock, DockTab } from '@skyhook/k8s-ui'
+import { BottomDock as K8sBottomDock, DockTab } from '@skyhook-io/k8s-ui'
 import { TerminalTab } from './TerminalTab'
 import { LogsTab } from './LogsTab'
 import { WorkloadLogsTab } from './WorkloadLogsTab'

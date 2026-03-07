@@ -1,1 +1,1 @@
-export * from '@skyhook/k8s-ui/components/resources/renderers/KustomizationRenderer'
+export * from '@skyhook-io/k8s-ui/components/resources/renderers/KustomizationRenderer'

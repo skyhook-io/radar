@@ -1,1 +1,1 @@
-export * from '@skyhook/k8s-ui/components/resources/renderers/PodMonitorRenderer'
+export * from '@skyhook-io/k8s-ui/components/resources/renderers/PodMonitorRenderer'

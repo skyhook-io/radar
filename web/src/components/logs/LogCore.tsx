@@ -1,2 +1,2 @@
-export { LogCore } from '@skyhook/k8s-ui'
-export type { DownloadFormat } from '@skyhook/k8s-ui'
+export { LogCore } from '@skyhook-io/k8s-ui'
+export type { DownloadFormat } from '@skyhook-io/k8s-ui'

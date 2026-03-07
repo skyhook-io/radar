@@ -1,1 +1,1 @@
-export { useRefreshAnimation } from '@skyhook/k8s-ui'
+export { useRefreshAnimation } from '@skyhook-io/k8s-ui'

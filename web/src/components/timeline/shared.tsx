@@ -1,1 +1,1 @@
-export * from '@skyhook/k8s-ui/components/timeline/shared'
+export * from '@skyhook-io/k8s-ui/components/timeline/shared'

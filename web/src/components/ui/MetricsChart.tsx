@@ -1,1 +1,1 @@
-export { MetricsChart, MetricsSparkline } from '@skyhook/k8s-ui/components/ui/MetricsChart'
+export { MetricsChart, MetricsSparkline } from '@skyhook-io/k8s-ui/components/ui/MetricsChart'

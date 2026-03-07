@@ -1,7 +1,7 @@
 import { useCallback } from 'react'
 import { fetchJSON, createLogStream } from '../../api/client'
-import { LogsViewer as SharedLogsViewer } from '@skyhook/k8s-ui'
-import type { LogsFetchParams } from '@skyhook/k8s-ui'
+import { LogsViewer as SharedLogsViewer } from '@skyhook-io/k8s-ui'
+import type { LogsFetchParams } from '@skyhook-io/k8s-ui'
 
 interface LogsViewerProps {
   namespace: string

@@ -1,1 +1,1 @@
-export { ConfirmDialog } from '@skyhook/k8s-ui/components/ui/ConfirmDialog'
+export { ConfirmDialog } from '@skyhook-io/k8s-ui/components/ui/ConfirmDialog'

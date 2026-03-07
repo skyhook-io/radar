@@ -1,5 +1,5 @@
-import { PodRenderer as BasePodRenderer } from '@skyhook/k8s-ui/components/resources/renderers/PodRenderer'
-import type { CopyHandler } from '@skyhook/k8s-ui/components/ui/drawer-components'
+import { PodRenderer as BasePodRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/PodRenderer'
+import type { CopyHandler } from '@skyhook-io/k8s-ui/components/ui/drawer-components'
 import { useOpenTerminal, useOpenLogs } from '../../dock'
 import { useCanExec, useCanViewLogs, useCanPortForward } from '../../../contexts/CapabilitiesContext'
 import { usePodMetrics, usePodMetricsHistory, usePrometheusResourceMetrics, usePrometheusStatus } from '../../../api/client'
