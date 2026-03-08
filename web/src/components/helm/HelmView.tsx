@@ -25,13 +25,16 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
 
   const { data: releases, isLoading, error: releasesError, refetch: refetchReleases } = useHelmReleases(namespace || undefined)
   const isForbidden = isForbiddenError(releasesError)
-  const [handleRefresh, isRefreshAnimating] = useRefreshAnimation(refetchReleases)
 
   // Lazy load upgrade info after releases are loaded
-  const { data: upgradeInfo, isLoading: upgradeLoading } = useHelmBatchUpgradeInfo(
+  const { data: upgradeInfo, isLoading: upgradeLoading, refetch: refetchUpgradeInfo } = useHelmBatchUpgradeInfo(
     namespace || undefined,
     Boolean(releases && releases.length > 0)
   )
+
+  const [handleRefresh, isRefreshAnimating] = useRefreshAnimation(async () => {
+    await Promise.all([refetchReleases(), refetchUpgradeInfo()])
+  })
 
   const isFullyLoaded = !isLoading && !upgradeLoading
 

@@ -1390,7 +1390,7 @@ export function useHelmUpgradeInfo(namespace: string, name: string, enabled = tr
     queryKey: ['helm-upgrade-info', namespace, name],
     queryFn: () => fetchJSON(`/helm/releases/${namespace}/${name}/upgrade-info`),
     enabled: Boolean(namespace && name && enabled),
-    staleTime: 300000, // 5 minutes - upgrade info doesn't change frequently
+    staleTime: 30000, // 30 seconds - keep in sync with release list
     retry: false, // Don't retry on failure - repo might not be configured
   })
 }
@@ -1402,7 +1402,7 @@ export function useHelmBatchUpgradeInfo(namespace?: string, enabled = true) {
     queryKey: ['helm-batch-upgrade-info', namespace],
     queryFn: () => fetchJSON(`/helm/upgrade-check${params}`),
     enabled,
-    staleTime: 300000, // 5 minutes
+    staleTime: 30000, // 30 seconds - keep in sync with release list
     retry: false,
   })
 }
