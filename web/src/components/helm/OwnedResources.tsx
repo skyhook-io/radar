@@ -36,7 +36,10 @@ function groupByKind(resources: HelmOwnedResource[]): Map<string, HelmOwnedResou
 type HealthFilter = 'all' | 'healthy' | 'warning' | 'error'
 
 // Determine health status of a resource
-function getResourceHealth(status?: string): 'healthy' | 'warning' | 'error' | 'unknown' {
+function getResourceHealth(resource: HelmOwnedResource): 'healthy' | 'warning' | 'error' | 'unknown' {
+  // An issue field always indicates a problem regardless of status
+  if (resource.issue) return 'error'
+  const status = resource.status
   if (!status) return 'unknown'
   const s = status.toLowerCase()
   if (['running', 'active', 'succeeded', 'bound', 'available'].includes(s)) return 'healthy'
@@ -53,7 +56,7 @@ function computeHealthSummary(resources: HelmOwnedResource[]) {
   let unknown = 0
 
   for (const r of resources) {
-    const health = getResourceHealth(r.status)
+    const health = getResourceHealth(r)
     if (health === 'healthy') healthy++
     else if (health === 'warning') warning++
     else if (health === 'error') error++
@@ -80,7 +83,7 @@ export function OwnedResources({ resources, onNavigate }: OwnedResourcesProps) {
   // Filter resources by health status
   const filteredResources = healthFilter === 'all'
     ? resources
-    : resources.filter(r => getResourceHealth(r.status) === healthFilter)
+    : resources.filter(r => getResourceHealth(r) === healthFilter)
 
   const grouped = groupByKind(filteredResources)
 
@@ -258,8 +261,18 @@ function ResourceItem({ resource, onNavigate }: ResourceItemProps) {
           </span>
         )}
 
+        {/* Issue summary (e.g., "OOMKilled", "CrashLoopBackOff") */}
+        {resource.issue && (
+          <span
+            className="text-xs text-red-400"
+            title={resource.summary || resource.issue}
+          >
+            {resource.issue}
+          </span>
+        )}
+
         {/* Error icon with message tooltip */}
-        {isError && resource.message && (
+        {isError && resource.message && !resource.issue && (
           <span title={resource.message}>
             <AlertCircle className="w-3.5 h-3.5 text-red-400" />
           </span>

@@ -1335,7 +1335,8 @@ export function useHelmRelease(namespace: string, name: string) {
     queryKey: ['helm-release', namespace, name],
     queryFn: () => fetchJSON(`/helm/releases/${namespace}/${name}`),
     enabled: Boolean(namespace && name),
-    staleTime: 30000,
+    staleTime: 5000,
+    refetchInterval: 10000, // Poll for live resource status updates (post-upgrade/rollback)
   })
 }
 
@@ -1411,32 +1412,6 @@ export function useHelmBatchUpgradeInfo(namespace?: string, enabled = true) {
 // Helm Actions (mutations)
 // ============================================================================
 
-// Rollback a release to a previous revision
-export function useHelmRollback() {
-  const queryClient = useQueryClient()
-
-  return useMutation({
-    mutationFn: async ({ namespace, name, revision }: { namespace: string; name: string; revision: number }) => {
-      const response = await fetch(`${API_BASE}/helm/releases/${namespace}/${name}/rollback?revision=${revision}`, {
-        method: 'POST',
-      })
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
-        throw new Error(error.error || `HTTP ${response.status}`)
-      }
-      return response.json()
-    },
-    meta: {
-      errorMessage: 'Rollback failed',
-      successMessage: 'Release rolled back',
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
-      queryClient.invalidateQueries({ queryKey: ['helm-release', variables.namespace, variables.name] })
-    },
-  })
-}
-
 // Uninstall a release
 export function useHelmUninstall() {
   const queryClient = useQueryClient()
@@ -1463,32 +1438,91 @@ export function useHelmUninstall() {
   })
 }
 
-// Upgrade a release to a new version
-export function useHelmUpgrade() {
-  const queryClient = useQueryClient()
+// Stream SSE progress events from a Helm operation endpoint.
+// Resolves on 'complete', rejects on 'error'. Returns the complete event data for install (which includes release).
+function streamHelmProgress(
+  url: string,
+  options: RequestInit,
+  onProgress: (event: InstallProgressEvent) => void,
+  failureLabel: string,
+): Promise<InstallProgressEvent> {
+  return new Promise((resolve, reject) => {
+    fetch(url, options)
+      .then(async (response) => {
+        if (!response.ok) {
+          const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+          reject(new Error(error.error || `HTTP ${response.status}`))
+          return
+        }
 
-  return useMutation({
-    mutationFn: async ({ namespace, name, version }: { namespace: string; name: string; version: string }) => {
-      const response = await fetch(`${API_BASE}/helm/releases/${namespace}/${name}/upgrade?version=${encodeURIComponent(version)}`, {
-        method: 'POST',
+        const reader = response.body?.getReader()
+        if (!reader) {
+          reject(new Error('No response body'))
+          return
+        }
+
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          buffer += decoder.decode(value, { stream: true })
+
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6)) as InstallProgressEvent
+                onProgress(data)
+
+                if (data.type === 'complete') {
+                  resolve(data)
+                } else if (data.type === 'error') {
+                  reject(new Error(data.message || failureLabel))
+                }
+              } catch {
+                // Ignore parse errors
+              }
+            }
+          }
+        }
       })
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
-        throw new Error(error.error || `HTTP ${response.status}`)
-      }
-      return response.json()
-    },
-    meta: {
-      errorMessage: 'Upgrade failed',
-      successMessage: 'Release upgraded',
-    },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
-      queryClient.invalidateQueries({ queryKey: ['helm-release', variables.namespace, variables.name] })
-      queryClient.invalidateQueries({ queryKey: ['helm-upgrade-info', variables.namespace, variables.name] })
-      queryClient.invalidateQueries({ queryKey: ['helm-batch-upgrade-info'] })
-    },
+      .catch(reject)
   })
+}
+
+// Upgrade a release with progress streaming via SSE
+export function upgradeWithProgress(
+  namespace: string,
+  name: string,
+  version: string,
+  onProgress: (event: InstallProgressEvent) => void
+): Promise<void> {
+  return streamHelmProgress(
+    `${API_BASE}/helm/releases/${namespace}/${name}/upgrade-stream?version=${encodeURIComponent(version)}`,
+    { method: 'POST' },
+    onProgress,
+    'Upgrade failed',
+  ).then(() => {})
+}
+
+// Rollback a release with progress streaming via SSE
+export function rollbackWithProgress(
+  namespace: string,
+  name: string,
+  revision: number,
+  onProgress: (event: InstallProgressEvent) => void
+): Promise<void> {
+  return streamHelmProgress(
+    `${API_BASE}/helm/releases/${namespace}/${name}/rollback-stream?revision=${revision}`,
+    { method: 'POST' },
+    onProgress,
+    'Rollback failed',
+  ).then(() => {})
 }
 
 // Preview values change (dry-run upgrade)
@@ -1645,59 +1679,12 @@ export function installChartWithProgress(
   req: InstallChartRequest,
   onProgress: (event: InstallProgressEvent) => void
 ): Promise<HelmRelease> {
-  return new Promise((resolve, reject) => {
-    // Use fetch with streaming response since we need to POST
-    fetch(`${API_BASE}/helm/releases/install-stream`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req),
-    })
-      .then(async (response) => {
-        if (!response.ok) {
-          const error = await response.json().catch(() => ({ error: 'Unknown error' }))
-          reject(new Error(error.error || `HTTP ${response.status}`))
-          return
-        }
-
-        const reader = response.body?.getReader()
-        if (!reader) {
-          reject(new Error('No response body'))
-          return
-        }
-
-        const decoder = new TextDecoder()
-        let buffer = ''
-
-        while (true) {
-          const { done, value } = await reader.read()
-          if (done) break
-
-          buffer += decoder.decode(value, { stream: true })
-
-          // Parse SSE events from buffer
-          const lines = buffer.split('\n')
-          buffer = lines.pop() || '' // Keep incomplete line in buffer
-
-          for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              try {
-                const data = JSON.parse(line.slice(6)) as InstallProgressEvent
-                onProgress(data)
-
-                if (data.type === 'complete' && data.release) {
-                  resolve(data.release)
-                } else if (data.type === 'error') {
-                  reject(new Error(data.message || 'Install failed'))
-                }
-              } catch {
-                // Ignore parse errors
-              }
-            }
-          }
-        }
-      })
-      .catch(reject)
-  })
+  return streamHelmProgress(
+    `${API_BASE}/helm/releases/install-stream`,
+    { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(req) },
+    onProgress,
+    'Install failed',
+  ).then((event) => event.release as HelmRelease)
 }
 
 // ============================================================================

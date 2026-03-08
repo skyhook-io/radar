@@ -1598,8 +1598,6 @@ export function ResourcesView({
   // Pinned kinds (favorites) — provided via props
   const [favoritesExpanded, setFavoritesExpanded] = useState(() => pinned.length > 0)
 
-  console.debug('[filters] ResourcesView render:', { kind: selectedKind.name, columnFilters, searchTerm, url: location.search })
-
   useEffect(() => { persistedExpandedCategories = expandedCategories }, [expandedCategories])
   // Track if this is the initial mount to avoid re-syncing on first render
   const isInitialMount = useRef(true)

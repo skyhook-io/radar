@@ -44,7 +44,9 @@ func (h *Handlers) RegisterRoutes(r chi.Router) {
 		r.Get("/upgrade-check", h.handleBatchUpgradeCheck)
 		// Actions (write operations)
 		r.Post("/releases/{namespace}/{name}/rollback", h.handleRollback)
+		r.Post("/releases/{namespace}/{name}/rollback-stream", h.handleRollbackStream)
 		r.Post("/releases/{namespace}/{name}/upgrade", h.handleUpgrade)
+		r.Post("/releases/{namespace}/{name}/upgrade-stream", h.handleUpgradeStream)
 		r.Post("/releases/{namespace}/{name}/values/preview", h.handlePreviewValues)
 		r.Put("/releases/{namespace}/{name}/values", h.handleApplyValues)
 		r.Delete("/releases/{namespace}/{name}", h.handleUninstall)
@@ -279,6 +281,96 @@ func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, map[string]string{"status": "success", "message": "Rollback completed"})
 }
 
+// handleRollbackStream rolls back a release with SSE progress streaming
+func (h *Handlers) handleRollbackStream(w http.ResponseWriter, r *http.Request) {
+	if !requireHelmWrite(w, r) {
+		return
+	}
+
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	revStr := r.URL.Query().Get("revision")
+	if revStr == "" {
+		writeError(w, http.StatusBadRequest, "revision parameter is required")
+		return
+	}
+
+	revision, err := strconv.Atoi(revStr)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "invalid revision parameter")
+		return
+	}
+
+	// Set up SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	progressCh := make(chan InstallProgress, 10)
+	defer close(progressCh)
+
+	resultCh := make(chan error, 1)
+	go func() {
+		resultCh <- client.RollbackWithProgress(namespace, name, revision, progressCh)
+	}()
+
+	for {
+		select {
+		case progress, ok := <-progressCh:
+			if !ok {
+				return
+			}
+			event := map[string]any{
+				"type":    "progress",
+				"phase":   progress.Phase,
+				"message": progress.Message,
+			}
+			if progress.Detail != "" {
+				event["detail"] = progress.Detail
+			}
+			data, _ := json.Marshal(event)
+			w.Write([]byte("data: " + string(data) + "\n\n"))
+			flusher.Flush()
+
+		case err := <-resultCh:
+			if err != nil {
+				event := map[string]any{
+					"type":    "error",
+					"message": err.Error(),
+				}
+				data, _ := json.Marshal(event)
+				w.Write([]byte("data: " + string(data) + "\n\n"))
+			} else {
+				event := map[string]any{
+					"type":    "complete",
+					"message": "Rollback completed successfully",
+				}
+				data, _ := json.Marshal(event)
+				w.Write([]byte("data: " + string(data) + "\n\n"))
+			}
+			flusher.Flush()
+			return
+
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
 // handleUninstall removes a release
 func (h *Handlers) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	if !requireHelmWrite(w, r) {
@@ -337,6 +429,90 @@ func (h *Handlers) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, map[string]string{"status": "success", "message": "Upgrade completed"})
+}
+
+// handleUpgradeStream upgrades a release with SSE progress streaming
+func (h *Handlers) handleUpgradeStream(w http.ResponseWriter, r *http.Request) {
+	if !requireHelmWrite(w, r) {
+		return
+	}
+
+	client := GetClient()
+	if client == nil {
+		writeError(w, http.StatusServiceUnavailable, "Helm client not initialized")
+		return
+	}
+
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	version := r.URL.Query().Get("version")
+	if version == "" {
+		writeError(w, http.StatusBadRequest, "version parameter is required")
+		return
+	}
+
+	// Set up SSE headers
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("X-Accel-Buffering", "no")
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, http.StatusInternalServerError, "streaming not supported")
+		return
+	}
+
+	progressCh := make(chan InstallProgress, 10)
+	defer close(progressCh)
+
+	resultCh := make(chan error, 1)
+	go func() {
+		resultCh <- client.UpgradeWithProgress(namespace, name, version, progressCh)
+	}()
+
+	for {
+		select {
+		case progress, ok := <-progressCh:
+			if !ok {
+				return
+			}
+			event := map[string]any{
+				"type":    "progress",
+				"phase":   progress.Phase,
+				"message": progress.Message,
+			}
+			if progress.Detail != "" {
+				event["detail"] = progress.Detail
+			}
+			data, _ := json.Marshal(event)
+			w.Write([]byte("data: " + string(data) + "\n\n"))
+			flusher.Flush()
+
+		case err := <-resultCh:
+			if err != nil {
+				event := map[string]any{
+					"type":    "error",
+					"message": err.Error(),
+				}
+				data, _ := json.Marshal(event)
+				w.Write([]byte("data: " + string(data) + "\n\n"))
+			} else {
+				event := map[string]any{
+					"type":    "complete",
+					"message": "Upgrade completed successfully",
+				}
+				data, _ := json.Marshal(event)
+				w.Write([]byte("data: " + string(data) + "\n\n"))
+			}
+			flusher.Flush()
+			return
+
+		case <-r.Context().Done():
+			return
+		}
+	}
 }
 
 // handlePreviewValues previews the effect of new values on a release

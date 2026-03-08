@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/skyhook-io/radar/internal/k8s"
 
 	"helm.sh/helm/v3/pkg/action"
@@ -871,54 +872,60 @@ func findBestUpgradeVersion(candidates []repoVersionInfo) (latestVersion, repoNa
 // compareVersions compares two semver strings
 // Returns: 1 if v1 > v2, -1 if v1 < v2, 0 if equal
 func compareVersions(v1, v2 string) int {
-	// Strip 'v' prefix if present
-	v1 = strings.TrimPrefix(v1, "v")
-	v2 = strings.TrimPrefix(v2, "v")
+	sv1, err1 := semver.NewVersion(v1)
+	sv2, err2 := semver.NewVersion(v2)
 
-	parts1 := strings.Split(v1, ".")
-	parts2 := strings.Split(v2, ".")
-
-	maxLen := max(len(parts2), len(parts1))
-
-	for i := range maxLen {
-		var n1, n2 int
-		if i < len(parts1) {
-			// Extract numeric part (ignore prerelease suffixes)
-			numStr := strings.Split(parts1[i], "-")[0]
-			fmt.Sscanf(numStr, "%d", &n1)
-		}
-		if i < len(parts2) {
-			numStr := strings.Split(parts2[i], "-")[0]
-			fmt.Sscanf(numStr, "%d", &n2)
-		}
-
-		if n1 > n2 {
-			return 1
-		}
-		if n1 < n2 {
-			return -1
-		}
+	// If both parse, use proper semver comparison (handles prereleases correctly)
+	if err1 == nil && err2 == nil {
+		return sv1.Compare(sv2)
 	}
 
+	// Fallback: lexicographic comparison for non-semver strings
+	if v1 > v2 {
+		return 1
+	}
+	if v1 < v2 {
+		return -1
+	}
 	return 0
 }
 
 // Rollback rolls back a release to a previous revision
 func (c *Client) Rollback(namespace, name string, revision int) error {
+	return c.RollbackWithProgress(namespace, name, revision, nil)
+}
+
+// RollbackWithProgress rolls back a release with progress reporting via a channel.
+// If progressCh is nil, progress messages are silently discarded.
+func (c *Client) RollbackWithProgress(namespace, name string, revision int, progressCh chan<- InstallProgress) error {
+	sendProgress := func(phase, message, detail string) {
+		if progressCh == nil {
+			return
+		}
+		select {
+		case progressCh <- InstallProgress{Phase: phase, Message: message, Detail: detail}:
+		default:
+		}
+	}
+
+	sendProgress("preparing", fmt.Sprintf("Preparing rollback of %s to revision %d...", name, revision), "")
+
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return err
 	}
 
+	sendProgress("rolling-back", fmt.Sprintf("Rolling back %s to revision %d...", name, revision), "")
+
 	rollbackAction := action.NewRollback(actionConfig)
 	rollbackAction.Version = revision
-	rollbackAction.Wait = true
-	rollbackAction.Timeout = 300 * time.Second
+	rollbackAction.Timeout = 120 * time.Second
 
 	if err := rollbackAction.Run(name); err != nil {
 		return fmt.Errorf("rollback failed: %w", err)
 	}
 
+	sendProgress("complete", fmt.Sprintf("Successfully rolled back %s to revision %d", name, revision), "")
 	return nil
 }
 
@@ -930,8 +937,7 @@ func (c *Client) Uninstall(namespace, name string) error {
 	}
 
 	uninstallAction := action.NewUninstall(actionConfig)
-	uninstallAction.Wait = true
-	uninstallAction.Timeout = 300 * time.Second
+	uninstallAction.Timeout = 120 * time.Second
 
 	_, err = uninstallAction.Run(name)
 	if err != nil {
@@ -943,6 +949,24 @@ func (c *Client) Uninstall(namespace, name string) error {
 
 // Upgrade upgrades a release to a new version
 func (c *Client) Upgrade(namespace, name, targetVersion string) error {
+	return c.UpgradeWithProgress(namespace, name, targetVersion, nil)
+}
+
+// UpgradeWithProgress upgrades a release with progress reporting via a channel.
+// If progressCh is nil, progress messages are silently discarded.
+func (c *Client) UpgradeWithProgress(namespace, name, targetVersion string, progressCh chan<- InstallProgress) error {
+	sendProgress := func(phase, message, detail string) {
+		if progressCh == nil {
+			return
+		}
+		select {
+		case progressCh <- InstallProgress{Phase: phase, Message: message, Detail: detail}:
+		default:
+		}
+	}
+
+	sendProgress("preparing", fmt.Sprintf("Getting current release %s...", name), "")
+
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return err
@@ -956,18 +980,17 @@ func (c *Client) Upgrade(namespace, name, targetVersion string) error {
 	}
 
 	chartName := rel.Chart.Metadata.Name
+	sendProgress("resolving", fmt.Sprintf("Finding %s version %s in repositories...", chartName, targetVersion), "")
 
 	// Find the chart in local repos
 	repoFile := c.settings.RepositoryConfig
 	repoCache := c.settings.RepositoryCache
 
-	// Load repo file
 	repos, err := repo.LoadFile(repoFile)
 	if err != nil {
 		return fmt.Errorf("failed to load repo file: %w", err)
 	}
 
-	// Find the chart in repos
 	var chartPath string
 	for _, r := range repos.Repositories {
 		indexPath := filepath.Join(repoCache, r.Name+"-index.yaml")
@@ -979,11 +1002,8 @@ func (c *Client) Upgrade(namespace, name, targetVersion string) error {
 		if entries, ok := idx.Entries[chartName]; ok {
 			for _, entry := range entries {
 				if entry.Version == targetVersion {
-					// Found the chart - we need to download it
 					if len(entry.URLs) > 0 {
-						// Use helm's chart downloader
 						chartPath = entry.URLs[0]
-						// If relative URL, prepend repo URL
 						if !strings.HasPrefix(chartPath, "http://") && !strings.HasPrefix(chartPath, "https://") {
 							chartPath = strings.TrimSuffix(r.URL, "/") + "/" + chartPath
 						}
@@ -1001,29 +1021,33 @@ func (c *Client) Upgrade(namespace, name, targetVersion string) error {
 		return fmt.Errorf("chart %s version %s not found in configured repositories", chartName, targetVersion)
 	}
 
-	// Create upgrade action
+	sendProgress("downloading", fmt.Sprintf("Downloading %s-%s...", chartName, targetVersion), chartPath)
+
+	// Create upgrade action — don't use Wait=true because Radar already
+	// shows real-time resource status via SSE. Waiting blocks the dialog
+	// for minutes with zero feedback; users can monitor the rollout in the UI.
 	upgradeAction := action.NewUpgrade(actionConfig)
 	upgradeAction.Namespace = namespace
-	upgradeAction.Wait = true
-	upgradeAction.Timeout = 300 * time.Second
+	upgradeAction.Timeout = 120 * time.Second
 	upgradeAction.ReuseValues = true // Keep existing values
 
-	// Download and load the chart
 	// Use ChartPathOptions to locate/download the chart
 	client := action.NewInstall(actionConfig)
 	client.Version = targetVersion
 
-	// Get chart path (will download if needed)
 	cp, err := client.ChartPathOptions.LocateChart(chartPath, c.settings)
 	if err != nil {
 		return fmt.Errorf("failed to locate chart: %w", err)
 	}
 
-	// Load the chart from the path
+	sendProgress("loading", "Loading chart...", cp)
+
 	chart, err := loader.Load(cp)
 	if err != nil {
 		return fmt.Errorf("failed to load chart: %w", err)
 	}
+
+	sendProgress("upgrading", fmt.Sprintf("Applying %s %s...", chartName, targetVersion), "")
 
 	// Run the upgrade
 	_, err = upgradeAction.Run(name, chart, rel.Config)
@@ -1031,6 +1055,7 @@ func (c *Client) Upgrade(namespace, name, targetVersion string) error {
 		return fmt.Errorf("upgrade failed: %w", err)
 	}
 
+	sendProgress("complete", fmt.Sprintf("Successfully upgraded %s to %s", name, targetVersion), "")
 	return nil
 }
 
@@ -1193,11 +1218,10 @@ func (c *Client) ApplyValues(namespace, name string, newValues map[string]any) e
 		return fmt.Errorf("failed to get current release: %w", err)
 	}
 
-	// Create upgrade action
+	// Create upgrade action — no Wait, Radar shows resource status in real-time
 	upgradeAction := action.NewUpgrade(actionConfig)
 	upgradeAction.Namespace = namespace
-	upgradeAction.Wait = true
-	upgradeAction.Timeout = 300 * time.Second
+	upgradeAction.Timeout = 120 * time.Second
 	upgradeAction.ResetValues = true // Use only the provided values, don't merge
 
 	// Run the upgrade with the existing chart and new values
@@ -1616,8 +1640,7 @@ func (c *Client) Install(req *InstallRequest) (*HelmRelease, error) {
 	installAction.ReleaseName = req.ReleaseName
 	installAction.Namespace = req.Namespace
 	installAction.CreateNamespace = req.CreateNamespace
-	installAction.Wait = true
-	installAction.Timeout = 300 * time.Second
+	installAction.Timeout = 120 * time.Second
 	installAction.Version = req.Version
 
 	// Locate/download chart
@@ -1792,8 +1815,7 @@ func (c *Client) InstallWithProgress(req *InstallRequest, progressCh chan<- Inst
 	installAction.ReleaseName = req.ReleaseName
 	installAction.Namespace = req.Namespace
 	installAction.CreateNamespace = req.CreateNamespace
-	installAction.Wait = true
-	installAction.Timeout = 300 * time.Second
+	installAction.Timeout = 120 * time.Second
 	installAction.Version = req.Version
 
 	cp, err := installAction.ChartPathOptions.LocateChart(chartURL, c.settings)

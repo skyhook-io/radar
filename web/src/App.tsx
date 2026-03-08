@@ -412,6 +412,17 @@ function AppInner() {
     const urlNamespaces = parseNamespacesFromURL(searchParams)
 
     if (urlNamespaces.join(',') !== namespacesKey) setNamespaces(urlNamespaces)
+
+    // Restore helm release from URL (back navigation)
+    const releaseParam = searchParams.get('release')
+    if (releaseParam) {
+      const slashIdx = releaseParam.indexOf('/')
+      if (slashIdx > 0) {
+        const ns = releaseParam.slice(0, slashIdx)
+        const name = releaseParam.slice(slashIdx + 1)
+        setSelectedHelmRelease({ namespace: ns, name })
+      }
+    }
   }, [searchParams])
 
   // Auto-adjust grouping when namespaces change
@@ -437,13 +448,17 @@ function AppInner() {
     }
 
     const navigatingToResources = mainView === 'resources' && prevMainView.current !== 'resources'
+    const navigatingToHelm = mainView === 'helm' && prevMainView.current !== 'helm'
     prevMainView.current = mainView
 
     // Don't clear selectedResource when navigating TO resources view (deep link from Helm)
     if (!navigatingToResources) {
       setSelectedResource(null)
     }
-    setSelectedHelmRelease(null)
+    // Don't clear helm release when navigating TO helm (back button restores from URL)
+    if (!navigatingToHelm) {
+      setSelectedHelmRelease(null)
+    }
     setDrawerExpanded(false)
   }, [mainView])
 
@@ -578,7 +593,8 @@ function AppInner() {
           {crdDiscoveryStatus === 'discovering' && (
             <div className="flex items-center gap-1.5 text-xs text-amber-400">
               <Loader2 className="w-3 h-3 animate-spin" />
-              <span className="hidden md:inline">Discovering CRDs...</span>
+              <span className="hidden sm:inline lg:hidden">CRDs</span>
+              <span className="hidden lg:inline">Discovering CRDs...</span>
             </div>
           )}
           {/* Namespace selector with search */}
@@ -812,6 +828,9 @@ function AppInner() {
             selectedRelease={selectedHelmRelease}
             onReleaseClick={(ns, name) => {
               setSelectedHelmRelease({ namespace: ns, name })
+              const params = new URLSearchParams(window.location.search)
+              params.set('release', `${ns}/${name}`)
+              setSearchParams(params, { replace: true })
             }}
           />
         )}
@@ -865,7 +884,12 @@ function AppInner() {
         <HelmReleaseDrawer
           release={drawerHelmRelease}
           isOpen={helmDrawer.isOpen}
-          onClose={() => setSelectedHelmRelease(null)}
+          onClose={() => {
+            setSelectedHelmRelease(null)
+            const params = new URLSearchParams(window.location.search)
+            params.delete('release')
+            setSearchParams(params, { replace: true })
+          }}
           onNavigateToResource={(resource) => {
             // Navigate to resources view with kind in path and open the resource detail drawer
             setSelectedHelmRelease(null)

@@ -18,6 +18,7 @@ interface ConfirmDialogProps {
   cancelLabel?: string
   variant?: 'danger' | 'warning'
   isLoading?: boolean
+  isClosable?: boolean // Allow closing even when isLoading (e.g., for long-running ops the user can dismiss)
   children?: ReactNode // Optional custom content (e.g., checkboxes)
 }
 
@@ -32,8 +33,10 @@ export function ConfirmDialog({
   cancelLabel = 'Cancel',
   variant = 'danger',
   isLoading = false,
+  isClosable = false,
   children,
 }: ConfirmDialogProps) {
+  const canClose = !isLoading || isClosable
   const dialogRef = useRef<HTMLDivElement>(null)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
 
@@ -42,14 +45,14 @@ export function ConfirmDialog({
     if (!open) return
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape' && !isLoading) {
+      if (e.key === 'Escape' && canClose) {
         e.stopPropagation()
         onClose()
       }
     }
     document.addEventListener('keydown', handleKeyDown, true)
     return () => document.removeEventListener('keydown', handleKeyDown, true)
-  }, [open, onClose, isLoading])
+  }, [open, onClose, canClose])
 
   // Focus trap
   useEffect(() => {
@@ -72,7 +75,7 @@ export function ConfirmDialog({
           TRANSITION_BACKDROP,
           isOpen ? 'opacity-100' : 'opacity-0'
         )}
-        onClick={isLoading ? undefined : onClose}
+        onClick={canClose ? onClose : undefined}
       />
 
       {/* Dialog */}
@@ -101,7 +104,7 @@ export function ConfirmDialog({
           </div>
           <button
             onClick={onClose}
-            disabled={isLoading}
+            disabled={!canClose}
             className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
           >
             <X className="w-5 h-5" />
@@ -124,28 +127,30 @@ export function ConfirmDialog({
           </div>
         )}
 
-        {/* Warning message */}
-        <div className="p-4">
-          <div
-            className={clsx(
-              'flex items-start gap-2 p-3 rounded text-sm',
-              SEVERITY_BADGE_BORDERED[severity]
-            )}
-          >
-            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
-            <span>
-              {isDanger
-                ? 'This action cannot be undone. Please make sure you want to proceed.'
-                : 'Please confirm you want to proceed with this action.'}
-            </span>
+        {/* Warning message — hidden once the action is in progress */}
+        {!isLoading && !children && (
+          <div className="p-4">
+            <div
+              className={clsx(
+                'flex items-start gap-2 p-3 rounded text-sm',
+                SEVERITY_BADGE_BORDERED[severity]
+              )}
+            >
+              <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+              <span>
+                {isDanger
+                  ? 'This action cannot be undone. Please make sure you want to proceed.'
+                  : 'Please confirm you want to proceed with this action.'}
+              </span>
+            </div>
           </div>
-        </div>
+        )}
 
         {/* Actions */}
         <div className="flex items-center justify-end gap-3 p-4 border-t border-theme-border">
           <button
             onClick={onClose}
-            disabled={isLoading}
+            disabled={!canClose}
             className="px-4 py-2 text-sm font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg transition-colors disabled:opacity-50"
           >
             {cancelLabel}

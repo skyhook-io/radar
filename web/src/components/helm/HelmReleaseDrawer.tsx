@@ -4,7 +4,8 @@ import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { X, Copy, Check, RefreshCw, Package, Code, History, FileText, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2 } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useHelmRelease, useHelmManifest, useHelmValues, useHelmManifestDiff, useHelmUpgradeInfo, useHelmRollback, useHelmUninstall, useHelmUpgrade } from '../../api/client'
+import { useHelmRelease, useHelmManifest, useHelmValues, useHelmManifestDiff, useHelmUpgradeInfo, useHelmUninstall, upgradeWithProgress, rollbackWithProgress } from '../../api/client'
+import { useQueryClient } from '@tanstack/react-query'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { Markdown } from '../ui/Markdown'
 import type { SelectedHelmRelease, HelmHook, ChartDependency } from '../../types'
@@ -82,9 +83,12 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   )
 
   // Mutations for actions
-  const rollbackMutation = useHelmRollback()
   const uninstallMutation = useHelmUninstall()
-  const upgradeMutation = useHelmUpgrade()
+  const queryClient = useQueryClient()
+  const [upgradeProgress, setUpgradeProgress] = useState<{ phase: string; message: string }[]>([])
+  const [isUpgrading, setIsUpgrading] = useState(false)
+  const [rollbackProgress, setRollbackProgress] = useState<{ phase: string; message: string }[]>([])
+  const [isRollingBack, setIsRollingBack] = useState(false)
 
   // ESC key handler
   useEffect(() => {
@@ -155,20 +159,48 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     setRollbackRevision(revision)
   }
 
-  const handleRollbackConfirm = () => {
+  const handleRollbackConfirm = async () => {
     if (rollbackRevision === null) return
-    rollbackMutation.mutate(
-      { namespace: release.namespace, name: release.name, revision: rollbackRevision },
-      {
-        onSuccess: () => {
-          setRollbackRevision(null)
-          refetch()
-        },
-        onError: () => {
-          // Keep dialog open on error so user can see the error state
-        },
-      }
-    )
+    setIsRollingBack(true)
+    setRollbackProgress([])
+
+    try {
+      await rollbackWithProgress(
+        release.namespace,
+        release.name,
+        rollbackRevision,
+        (event) => {
+          if (event.type === 'progress' && event.message) {
+            setRollbackProgress(prev => [...prev, {
+              phase: event.phase || 'progress',
+              message: event.message || '',
+            }])
+          }
+        }
+      )
+
+      setRollbackProgress(prev => [...prev, {
+        phase: 'complete',
+        message: `Successfully rolled back to revision ${rollbackRevision}`,
+      }])
+
+      queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
+      queryClient.invalidateQueries({ queryKey: ['helm-release', release.namespace, release.name] })
+
+      setTimeout(() => {
+        setRollbackRevision(null)
+        setRollbackProgress([])
+        refetch()
+        switchTab('resources')
+      }, 1500)
+    } catch (err) {
+      setRollbackProgress(prev => [...prev, {
+        phase: 'error',
+        message: err instanceof Error ? err.message : 'Rollback failed',
+      }])
+    } finally {
+      setIsRollingBack(false)
+    }
   }
 
   const handleUninstallConfirm = () => {
@@ -186,20 +218,51 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     )
   }
 
-  const handleUpgradeConfirm = () => {
+  const handleUpgradeConfirm = async () => {
     if (!upgradeInfo?.latestVersion) return
-    upgradeMutation.mutate(
-      { namespace: release.namespace, name: release.name, version: upgradeInfo.latestVersion },
-      {
-        onSuccess: () => {
-          setShowUpgradeConfirm(false)
-          refetch()
-        },
-        onError: () => {
-          // Keep dialog open on error so user can see the error state
-        },
-      }
-    )
+    setIsUpgrading(true)
+    setUpgradeProgress([])
+
+    try {
+      await upgradeWithProgress(
+        release.namespace,
+        release.name,
+        upgradeInfo.latestVersion,
+        (event) => {
+          if (event.type === 'progress' && event.message) {
+            setUpgradeProgress(prev => [...prev, {
+              phase: event.phase || 'progress',
+              message: event.message || '',
+            }])
+          }
+        }
+      )
+
+      setUpgradeProgress(prev => [...prev, {
+        phase: 'complete',
+        message: `Successfully upgraded to ${upgradeInfo.latestVersion}`,
+      }])
+
+      // Invalidate queries
+      queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
+      queryClient.invalidateQueries({ queryKey: ['helm-release', release.namespace, release.name] })
+      queryClient.invalidateQueries({ queryKey: ['helm-upgrade-info', release.namespace, release.name] })
+      queryClient.invalidateQueries({ queryKey: ['helm-batch-upgrade-info'] })
+
+      setTimeout(() => {
+        setShowUpgradeConfirm(false)
+        setUpgradeProgress([])
+        refetch()
+        switchTab('resources')
+      }, 1500)
+    } catch (err) {
+      setUpgradeProgress(prev => [...prev, {
+        phase: 'error',
+        message: err instanceof Error ? err.message : 'Upgrade failed',
+      }])
+    } finally {
+      setIsUpgrading(false)
+    }
   }
 
   const headerHeight = 49
@@ -407,15 +470,28 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
       {/* Rollback confirmation dialog */}
       <ConfirmDialog
         open={rollbackRevision !== null}
-        onClose={() => setRollbackRevision(null)}
+        onClose={() => {
+          setRollbackRevision(null)
+          setRollbackProgress([])
+          if (isRollingBack) {
+            setIsRollingBack(false)
+            switchTab('resources')
+          }
+        }}
         onConfirm={handleRollbackConfirm}
         title="Rollback Release"
-        message={`Are you sure you want to rollback "${release.name}" to revision ${rollbackRevision}?`}
-        details={`This will create a new revision that reverts the release to the state it was in at revision ${rollbackRevision}. The rollback will be applied to your cluster immediately.`}
+        message={`Rollback "${release.name}" to revision ${rollbackRevision}?`}
+        details={rollbackProgress.length === 0
+          ? `This will create a new revision that reverts the release to the state it was in at revision ${rollbackRevision}. The rollback will be applied to your cluster immediately.`
+          : undefined
+        }
         confirmLabel="Rollback"
         variant="warning"
-        isLoading={rollbackMutation.isPending}
-      />
+        isLoading={isRollingBack}
+        isClosable
+      >
+        {rollbackProgress.length > 0 && <ProgressLog entries={rollbackProgress} />}
+      </ConfirmDialog>
 
       {/* Uninstall confirmation dialog */}
       <ConfirmDialog
@@ -433,15 +509,56 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
       {/* Upgrade confirmation dialog */}
       <ConfirmDialog
         open={showUpgradeConfirm}
-        onClose={() => setShowUpgradeConfirm(false)}
+        onClose={() => {
+          setShowUpgradeConfirm(false)
+          setUpgradeProgress([])
+          if (isUpgrading) {
+            // Upgrade continues server-side — switch to resources tab to monitor
+            setIsUpgrading(false)
+            switchTab('resources')
+          }
+        }}
         onConfirm={handleUpgradeConfirm}
         title="Upgrade Release"
         message={`Upgrade "${release.name}" to version ${upgradeInfo?.latestVersion}?`}
-        details={`This will upgrade the chart from version ${upgradeInfo?.currentVersion} to ${upgradeInfo?.latestVersion}. Your existing values will be preserved. The upgrade will be applied to your cluster immediately.`}
+        details={upgradeProgress.length === 0
+          ? `This will upgrade the chart from version ${upgradeInfo?.currentVersion} to ${upgradeInfo?.latestVersion}. Your existing values will be preserved. The upgrade will be applied to your cluster immediately.`
+          : undefined
+        }
         confirmLabel="Upgrade"
         variant="warning"
-        isLoading={upgradeMutation.isPending}
-      />
+        isLoading={isUpgrading}
+        isClosable
+      >
+        {upgradeProgress.length > 0 && <ProgressLog entries={upgradeProgress} />}
+      </ConfirmDialog>
+    </div>
+  )
+}
+
+// Shared progress log for streaming Helm operations
+function ProgressLog({ entries }: { entries: { phase: string; message: string }[] }) {
+  return (
+    <div className="space-y-1.5 max-h-48 overflow-auto">
+      {entries.map((log, i) => (
+        <div key={i} className="flex items-start gap-2 text-xs">
+          <span className={clsx(
+            'px-1.5 py-0.5 rounded font-medium shrink-0',
+            log.phase === 'error' ? 'bg-red-500/20 text-red-400' :
+            log.phase === 'complete' ? 'bg-green-500/20 text-green-400' :
+            'bg-blue-500/20 text-blue-400'
+          )}>
+            {log.phase}
+          </span>
+          <span className={clsx(
+            log.phase === 'error' ? 'text-red-400' :
+            log.phase === 'complete' ? 'text-green-400' :
+            'text-theme-text-secondary'
+          )}>
+            {log.message}
+          </span>
+        </div>
+      ))}
     </div>
   )
 }
