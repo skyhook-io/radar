@@ -79,8 +79,10 @@ type informerSetup struct {
 }
 
 // NewResourceCache creates and starts a ResourceCache from the given config.
-// It blocks until critical (non-deferred) informers have synced, then returns.
-// Deferred informers sync in the background.
+// It blocks until critical (non-deferred) informers have synced or SyncTimeout
+// elapses, whichever comes first. On timeout, unsynced critical informers are
+// promoted to deferred and continue syncing in the background.
+// Deferred informers are started after the critical phase completes.
 func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	if cfg.Client == nil {
 		return nil, fmt.Errorf("CacheConfig.Client must not be nil")
@@ -123,7 +125,8 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	// Factory serves as informer registry and shutdown coordinator.
 	// We don't call factory.Start() — informers are Run() individually
 	// to stagger critical vs deferred starts. Shutdown() still works
-	// because informers are registered via buildInformerSetups below.
+	// because each informer's factory getter (e.g. factory.Core().V1().Pods().Informer())
+	// registers it internally when called in the setup loop below.
 	factory := informers.NewSharedInformerFactoryWithOptions(
 		cfg.Client,
 		0, // no resync — updates come via watch
@@ -212,9 +215,9 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 
 	// Start critical informers first. Deferred informers are started after
 	// Phase 1 completes to reduce concurrent LIST pressure on the API server.
-	// On large clusters (300+ nodes), 12 concurrent LISTs is significantly
-	// lighter than 19+, giving the heaviest resources (Pods, ReplicaSets)
-	// more API server bandwidth during the critical path.
+	// On large clusters (300+ nodes), ~10 concurrent LISTs is significantly
+	// lighter than ~19, giving the heaviest resource (Pods) more API server
+	// bandwidth during the critical path.
 	for _, e := range allEntries {
 		if !e.deferred {
 			go e.informer.Run(stopCh)
@@ -702,14 +705,15 @@ func (rc *ResourceCache) GetSyncStatus() CacheSyncStatus {
 		}
 	}
 
-	phase := SyncPhaseNotStarted
-	if rc.syncStartTime.IsZero() {
+	var phase SyncPhase
+	switch {
+	case rc.syncStartTime.IsZero():
 		phase = SyncPhaseNotStarted
-	} else if !rc.syncComplete.Load() {
+	case !rc.syncComplete.Load():
 		phase = SyncPhaseCritical
-	} else if !rc.IsDeferredSynced() {
+	case !rc.IsDeferredSynced():
 		phase = SyncPhaseDeferred
-	} else {
+	default:
 		phase = SyncPhaseComplete
 	}
 

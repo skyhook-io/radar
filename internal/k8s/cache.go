@@ -59,8 +59,6 @@ var deferredResources = map[string]bool{
 	"storageclasses":           true,
 	"poddisruptionbudgets":     true,
 	"replicasets":              true, // topology-only (Deployment→RS→Pod); can be very large
-	"ingressclasses":           true, // renderer detail only
-	"serviceaccounts":          true, // renderer detail only
 	"horizontalpodautoscalers": true, // problems detection, not critical for first render
 }
 
