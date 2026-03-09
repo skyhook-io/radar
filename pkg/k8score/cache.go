@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"sort"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -208,6 +210,20 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	}
 	logf("    Phase 1 sync (%d critical informers): %v", len(criticalSyncFuncs), time.Since(syncStart))
 	stdlog.Printf("Critical resource caches synced in %v — UI can render", time.Since(syncStart))
+
+	// Log per-type resource counts for startup diagnostics
+	if counts := rc.GetKindObjectCounts(); len(counts) > 0 {
+		total := 0
+		var parts []string
+		for kind, count := range counts {
+			if count > 0 {
+				parts = append(parts, fmt.Sprintf("%s:%d", kind, count))
+				total += count
+			}
+		}
+		sort.Strings(parts)
+		stdlog.Printf("Resource breakdown (%d total): %s", total, strings.Join(parts, ", "))
+	}
 
 	rc.syncComplete.Store(true)
 
