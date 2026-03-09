@@ -10,6 +10,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
@@ -101,11 +102,12 @@ type DiagEventPipeline struct {
 	Uptime      string                  `json:"uptime"`
 }
 
-// DiagInformers holds informer counts.
+// DiagInformers holds informer counts and sync status.
 type DiagInformers struct {
-	TypedCount   int      `json:"typedCount"`
-	DynamicCount int      `json:"dynamicCount"`
-	WatchedCRDs  []string `json:"watchedCRDs"`
+	TypedCount   int                      `json:"typedCount"`
+	DynamicCount int                      `json:"dynamicCount"`
+	WatchedCRDs  []string                 `json:"watchedCRDs"`
+	SyncStatus   *k8score.CacheSyncStatus `json:"syncStatus,omitempty"`
 }
 
 // DiagPrometheus holds Prometheus connection info.
@@ -283,9 +285,23 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 
 	// Informers
 	collectSafe("informers", &errs, func() {
-		diag := &DiagInformers{
-			TypedCount: 16, // Fixed count of typed informers in cache.go
+		diag := &DiagInformers{}
+
+		// Get typed informer count and sync status from cache
+		cache := k8s.GetResourceCache()
+		if cache != nil {
+			enabled := cache.GetEnabledResources()
+			count := 0
+			for _, ok := range enabled {
+				if ok {
+					count++
+				}
+			}
+			diag.TypedCount = count
+			syncStatus := cache.GetSyncStatus()
+			diag.SyncStatus = &syncStatus
 		}
+
 		dynCache := k8s.GetDynamicResourceCache()
 		if dynCache != nil {
 			diag.DynamicCount = dynCache.GetInformerCount()

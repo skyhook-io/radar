@@ -10,6 +10,7 @@ package k8score
 
 import (
 	"log"
+	"time"
 
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
@@ -136,6 +137,12 @@ type CacheConfig struct {
 	// In Radar mode this is false (Radar's callback decides per-add).
 	// In connector mode this is true.
 	SuppressInitialAdds bool
+
+	// SyncTimeout is the maximum time to wait for critical informers to sync
+	// before proceeding with partial data. Unsynced critical informers are
+	// promoted to deferred and continue syncing in the background.
+	// Zero means wait indefinitely (original behavior).
+	SyncTimeout time.Duration
 
 	// DebugEvents enables verbose event debug logging.
 	DebugEvents bool

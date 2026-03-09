@@ -46,16 +46,22 @@ var logTiming = LogTiming
 var initialSyncComplete bool
 
 // deferredResources lists informer keys that are NOT required for the initial
-// topology/dashboard render. These sync in the background after the critical
-// informers complete, so the UI can render immediately with core resources.
+// dashboard render. These sync in the background after the critical informers
+// complete, so the UI can render immediately with core resources.
+// Critical: pods, deployments, services, statefulsets, daemonsets, nodes,
+//           namespaces, ingresses, jobs, cronjobs
 var deferredResources = map[string]bool{
-	"secrets":                true,
-	"events":                 true,
-	"configmaps":             true,
-	"persistentvolumeclaims": true,
-	"persistentvolumes":      true,
-	"storageclasses":         true,
-	"poddisruptionbudgets":   true,
+	"secrets":                  true,
+	"events":                   true,
+	"configmaps":               true,
+	"persistentvolumeclaims":   true,
+	"persistentvolumes":        true,
+	"storageclasses":           true,
+	"poddisruptionbudgets":     true,
+	"replicasets":              true, // topology-only (Deployment→RS→Pod); can be very large
+	"ingressclasses":           true, // renderer detail only
+	"serviceaccounts":          true, // renderer detail only
+	"horizontalpodautoscalers": true, // problems detection, not critical for first render
 }
 
 // ResourceChange is a type alias for the canonical definition in pkg/k8score.
@@ -129,6 +135,7 @@ func InitResourceCache(ctx context.Context) error {
 			Namespace:       permResult.Namespace,
 			DebugEvents:     DebugEvents,
 			TimingLogger:    logTiming,
+			SyncTimeout:     90 * time.Second,
 
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)
