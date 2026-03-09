@@ -34,7 +34,8 @@ type DashboardResponse struct {
 	MetricsServerAvailable bool                        `json:"metricsServerAvailable"`
 	CertificateHealth      *DashboardCertificateHealth `json:"certificateHealth,omitempty"`
 	NodeVersionSkew        *k8s.VersionSkew            `json:"nodeVersionSkew,omitempty"`
-	DeferredLoading        bool                        `json:"deferredLoading,omitempty"` // True while deferred informers (secrets, events, etc.) are still syncing
+	DeferredLoading        bool                        `json:"deferredLoading,omitempty"`   // True while deferred informers (secrets, events, etc.) are still syncing
+	PartialData            []string                    `json:"partialData,omitempty"`       // Resource kinds that timed out during critical sync (e.g. ["Pod", "Deployment"])
 }
 
 // DashboardCRDsResponse is the response for CRD counts (loaded lazily)
@@ -221,6 +222,12 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	// Signal to the frontend that some data (events, secrets, configmaps, etc.)
 	// may be incomplete because deferred informers are still syncing.
 	resp.DeferredLoading = !cache.IsDeferredSynced()
+
+	// If critical sync timed out, tell the frontend which resource kinds
+	// may be missing so it can show a banner.
+	if promoted := cache.PromotedKinds(); len(promoted) > 0 && resp.DeferredLoading {
+		resp.PartialData = promoted
+	}
 
 	// --- Slow network calls: run in parallel ---
 	var wg sync.WaitGroup

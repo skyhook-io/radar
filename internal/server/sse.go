@@ -273,7 +273,6 @@ func (b *SSEBroadcaster) initCachedTopology() {
 	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 	opts := topology.DefaultBuildOptions()
 	opts.ViewMode = topology.ViewModeResources
-	opts.MaxNodes = 0 // No limit — this topology is only used for relationship lookups, not sent to the browser
 	// Include ReplicaSets in the cache so relationship lookups work for them
 	opts.IncludeReplicaSets = true
 
@@ -698,7 +697,6 @@ func buildFullTopology() (*topology.Topology, error) {
 	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 	opts := topology.DefaultBuildOptions()
 	opts.ViewMode = topology.ViewModeResources
-	opts.MaxNodes = 0
 	opts.IncludeReplicaSets = true
 	return builder.Build(opts)
 }

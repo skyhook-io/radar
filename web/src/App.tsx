@@ -36,6 +36,7 @@ import { Loader2 } from 'lucide-react'
 import { RefreshCw, Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
+import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, Topology } from './types'
 import { kindToPlural, openExternal } from './utils/navigation'
 
@@ -755,45 +756,69 @@ function AppInner() {
         {/* Topology view */}
         {mainView === 'topology' && (
           <>
-            {/* Filter sidebar */}
-            <TopologyFilterSidebar
-              nodes={topology?.nodes || []}
-              visibleKinds={visibleKinds}
-              onToggleKind={handleToggleKind}
-              onShowAll={handleShowAllKinds}
-              onHideAll={handleHideAllKinds}
-              collapsed={filterSidebarCollapsed}
-              onToggleCollapse={() => setFilterSidebarCollapsed(prev => !prev)}
-              hiddenKinds={topology?.hiddenKinds}
-              onEnableHiddenKind={(kind) => {
-                // Add the kind to visible kinds - the actual data is not available
-                // since it was hidden server-side, but this prepares for when
-                // we add query params to request specific kinds
-                setVisibleKinds(prev => new Set(prev).add(kind as NodeKind))
-                // TODO: Re-fetch topology with this kind enabled via query param
-                console.log(`[topology] User requested to show hidden kind: ${kind}`)
-              }}
-            />
+            {topology?.requiresNamespaceFilter ? (
+              /* Large cluster: prompt user to select a namespace */
+              <div className="flex-1 flex items-center justify-center">
+                <div className="max-w-md w-full mx-4 text-center">
+                  <div className="bg-theme-surface border border-theme-border rounded-xl shadow-lg p-6">
+                    <div className="w-12 h-12 mx-auto mb-4 rounded-full bg-blue-500/10 flex items-center justify-center">
+                      <Network className="w-6 h-6 text-blue-400" />
+                    </div>
+                    <h2 className="text-lg font-semibold text-theme-text-primary mb-2">
+                      Large Cluster Detected
+                    </h2>
+                    <p className="text-sm text-theme-text-secondary mb-5">
+                      This cluster has too many resources to render the full topology.
+                      Select a namespace to explore.
+                    </p>
+                    <div className="relative">
+                      <LargeClusterNamespacePicker
+                        namespaces={availableNamespaces}
+                        onSelect={(ns) => setNamespaces([ns])}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <>
+                {/* Filter sidebar */}
+                <TopologyFilterSidebar
+                  nodes={topology?.nodes || []}
+                  visibleKinds={visibleKinds}
+                  onToggleKind={handleToggleKind}
+                  onShowAll={handleShowAllKinds}
+                  onHideAll={handleHideAllKinds}
+                  collapsed={filterSidebarCollapsed}
+                  onToggleCollapse={() => setFilterSidebarCollapsed(prev => !prev)}
+                  hiddenKinds={topology?.hiddenKinds}
+                  onEnableHiddenKind={(kind) => {
+                    setVisibleKinds(prev => new Set(prev).add(kind as NodeKind))
+                    console.log(`[topology] User requested to show hidden kind: ${kind}`)
+                  }}
+                />
 
-            <div className="flex-1 relative">
-              <TopologyGraph
-                topology={filteredTopology}
-                viewMode={topologyMode}
-                groupingMode={effectiveGroupingMode}
-                hideGroupHeader={hideGroupHeader}
-                onNodeClick={handleNodeClick}
-                selectedNodeId={selectedResource ? `${apiResourceToNodeIdPrefix(selectedResource.kind)}-${selectedResource.namespace}-${selectedResource.name}` : undefined}
-              />
+                <div className="flex-1 relative">
+                  <TopologyGraph
+                    topology={filteredTopology}
+                    viewMode={topologyMode}
+                    groupingMode={effectiveGroupingMode}
+                    hideGroupHeader={hideGroupHeader}
+                    onNodeClick={handleNodeClick}
+                    selectedNodeId={selectedResource ? `${apiResourceToNodeIdPrefix(selectedResource.kind)}-${selectedResource.namespace}-${selectedResource.name}` : undefined}
+                  />
 
-              {/* Topology controls overlay - top right */}
-              <TopologyControls
-                viewMode={topologyMode}
-                onViewModeChange={setTopologyMode}
-                groupingMode={groupingMode}
-                onGroupingModeChange={setGroupingMode}
-                showNoGrouping={hasNamespaceFilter}
-              />
-            </div>
+                  {/* Topology controls overlay - top right */}
+                  <TopologyControls
+                    viewMode={topologyMode}
+                    onViewModeChange={setTopologyMode}
+                    groupingMode={groupingMode}
+                    onGroupingModeChange={setGroupingMode}
+                    showNoGrouping={hasNamespaceFilter}
+                  />
+                </div>
+              </>
+            )}
           </>
         )}
 
@@ -818,6 +843,9 @@ function AppInner() {
             initialViewMode={(searchParams.get('view') as 'list' | 'swimlane') || undefined}
             initialFilter={(searchParams.get('filter') as 'all' | 'changes' | 'k8s_events' | 'warnings' | 'unhealthy') || undefined}
             initialTimeRange={(searchParams.get('time') as '5m' | '30m' | '1h' | '6h' | '24h' | 'all') || undefined}
+            requiresNamespaceFilter={topology?.requiresNamespaceFilter && namespaces.length === 0}
+            availableNamespaces={availableNamespaces}
+            onNamespaceSelect={(ns) => setNamespaces([ns])}
           />
         )}
 
@@ -1031,6 +1059,7 @@ function NamespaceFilterDialog({ namespaces, onConfirm, onKeep, onClose }: {
     </div>
   )
 }
+
 
 // Spacer component that adds padding when dock is open
 function DockSpacer() {

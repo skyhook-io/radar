@@ -19,7 +19,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { toCanvas } from 'html-to-image'
 
-import { AlertTriangle, Download, Loader2, RotateCw, Scissors, Shield } from 'lucide-react'
+import { AlertTriangle, Download, Loader2, RotateCw, Shield } from 'lucide-react'
 import { useToast } from '../ui/Toast'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 
@@ -541,23 +541,8 @@ export function TopologyGraph({
 
   return (
     <ReactFlowProvider>
-      {/* Truncation banner - shown when topology has too many nodes */}
-      {topology?.truncated && (
-        <div className="absolute top-2 left-2 right-2 z-10 bg-blue-500/10 border border-blue-500/30 rounded-lg p-2 backdrop-blur-sm">
-          <div className="flex items-center gap-2">
-            <Scissors className="w-4 h-4 text-blue-400 shrink-0" />
-            <div className="text-sm">
-              <span className="font-medium text-blue-400">Large cluster:</span>
-              <span className="text-theme-text-secondary ml-1">
-                Showing {topology.nodes.length} of {topology.totalNodes} nodes.
-                Select a namespace for better performance.
-              </span>
-            </div>
-          </div>
-        </div>
-      )}
       {/* Warning banner for partial topology data */}
-      {topology?.warnings && topology.warnings.length > 0 && !topology.truncated && (() => {
+      {topology?.warnings && topology.warnings.length > 0 && (() => {
         const rbacWarnings = topology.warnings.filter(w => w.includes('RBAC not granted'))
         const otherWarnings = topology.warnings.filter(w => !w.includes('RBAC not granted'))
         const isAllRbac = otherWarnings.length === 0

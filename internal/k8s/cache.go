@@ -133,7 +133,7 @@ func InitResourceCache(ctx context.Context) error {
 			Namespace:       permResult.Namespace,
 			DebugEvents:     DebugEvents,
 			TimingLogger:    logTiming,
-			SyncTimeout:     90 * time.Second,
+			SyncTimeout:     60 * time.Second,
 
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)
