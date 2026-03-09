@@ -1,4 +1,4 @@
-.PHONY: build install clean dev frontend backend test lint help restart restart-fe kill watch-backend watch-frontend
+.PHONY: build install clean dev frontend backend test test-e2e lint help restart restart-fe kill watch-backend watch-frontend
 .PHONY: release release-binaries-dry docker docker-test docker-multiarch docker-push
 .PHONY: desktop desktop-binary desktop-dev desktop-package-darwin desktop-package-windows desktop-package-linux
 
@@ -111,6 +111,10 @@ clean:
 # Run tests
 test:
 	go test -v ./...
+
+# Run e2e tests against the current kubeconfig cluster (on-demand, not in CI)
+test-e2e:
+	go test -tags e2e -v -timeout 5m ./internal/k8s/
 
 # Run linter
 lint:

@@ -421,7 +421,11 @@ export function TimelineList({ namespaces, onViewChange, currentView = 'list', o
                 Some resource types are not monitored due to RBAC restrictions
               </p>
             )}
-            {namespaces && namespaces.length > 0 && <p className="text-sm mt-1 text-theme-text-disabled">Searching in: {namespaces.length === 1 ? namespaces[0] : `${namespaces.length} namespaces`}</p>}
+            {namespaces && namespaces.length > 0 && (
+              <p className="text-sm mt-2 text-theme-text-secondary">
+                Filtering by namespace: <span className="font-medium text-theme-text-primary">{namespaces.length === 1 ? namespaces[0] : `${namespaces.length} namespaces`}</span>
+              </p>
+            )}
           </div>
         ) : (
           <div className="p-4 space-y-6">

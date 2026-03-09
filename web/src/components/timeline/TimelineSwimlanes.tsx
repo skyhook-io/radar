@@ -633,6 +633,11 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                 <>
                   <p className="text-lg">No events yet</p>
                   <p className="text-sm mt-1">Events will appear here as resources change</p>
+                  {namespaces && namespaces.length > 0 && (
+                    <p className="text-sm mt-2 text-theme-text-secondary">
+                      Filtering by namespace: <span className="font-medium text-theme-text-primary">{namespaces.length === 1 ? namespaces[0] : `${namespaces.length} namespaces`}</span>
+                    </p>
+                  )}
                   {hasLimitedAccess && (
                     <p className="flex items-center gap-1 text-sm mt-2 text-amber-400/80">
                       <Shield className="w-3.5 h-3.5" />
