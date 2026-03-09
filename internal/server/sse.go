@@ -35,6 +35,11 @@ type SSEBroadcaster struct {
 	cachedTopology      *topology.Topology
 	cachedTopologyMu    sync.RWMutex
 	cachedTopologyDirty bool // true when changes occurred but topology not yet rebuilt
+
+	// warmupDone is closed when deferred informers finish syncing. During warmup,
+	// topology broadcasts use longer debounce and skip the expensive full-topology
+	// cache build. Protected by watchMu (same as watchStopCh).
+	warmupDone chan struct{}
 }
 
 // ClientInfo stores information about a connected client
@@ -75,6 +80,7 @@ func NewSSEBroadcaster() *SSEBroadcaster {
 		unregister:  make(chan chan SSEEvent),
 		stopCh:      make(chan struct{}),
 		watchStopCh: make(chan struct{}),
+		warmupDone:  make(chan struct{}),
 	}
 }
 
@@ -109,6 +115,19 @@ func (b *SSEBroadcaster) registerCRDDiscoveryCallback() {
 	})
 }
 
+// isWarmingUp returns true if the initial warmup phase is still in progress.
+func (b *SSEBroadcaster) isWarmingUp() bool {
+	b.watchMu.Lock()
+	ch := b.warmupDone
+	b.watchMu.Unlock()
+	select {
+	case <-ch:
+		return false
+	default:
+		return true
+	}
+}
+
 // watchDeferredSync waits for deferred informers (secrets, events, etc.) to
 // finish syncing and then broadcasts a topology update + deferred_ready event
 // so the UI can fill in the missing data (config edges, event counts, etc.).
@@ -117,6 +136,7 @@ func (b *SSEBroadcaster) registerCRDDiscoveryCallback() {
 func (b *SSEBroadcaster) watchDeferredSync() {
 	b.watchMu.Lock()
 	watchStop := b.watchStopCh
+	warmupCh := b.warmupDone // capture local copy — context switch may replace the field
 	b.watchMu.Unlock()
 
 	// Wait for cache to exist first
@@ -139,6 +159,18 @@ func (b *SSEBroadcaster) watchDeferredSync() {
 					Data:  map[string]any{},
 				})
 				b.broadcastTopologyUpdate()
+
+				// Signal warmup complete — debounce can drop to normal.
+				// Close the local copy (not b.warmupDone) so a context switch
+				// that replaced the field won't have its new channel closed.
+				select {
+				case <-warmupCh:
+					// Already closed (e.g. context switch race)
+				default:
+					log.Printf("SSE broadcaster: warmup phase complete, switching to normal debounce")
+					close(warmupCh)
+				}
+
 				return
 			case <-b.stopCh:
 				return
@@ -206,6 +238,12 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 		b.cachedTopology = nil
 		b.cachedTopologyDirty = false
 		b.cachedTopologyMu.Unlock()
+
+		// Reset warmup phase for the new context (under watchMu to synchronize
+		// with isWarmingUp and watchDeferredSync which read this field)
+		b.watchMu.Lock()
+		b.warmupDone = make(chan struct{})
+		b.watchMu.Unlock()
 
 		// Restart the resource change watcher for the new cache
 		b.restartResourceWatcher()
@@ -364,15 +402,18 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 		return
 	}
 
-	// Use longer debounce for large clusters to avoid constant topology rebuilds.
-	// On a cluster with 18k+ resources, changes arrive continuously; 500ms means
-	// rebuilding topology ~2x/sec with no quiet period ever.
-	debounceDuration := 500 * time.Millisecond
-	resourceCount := cache.GetResourceCount()
-	if resourceCount > 5000 {
-		debounceDuration = 5 * time.Second
-		log.Printf("SSE watcher: large cluster (%d resources), using %v topology debounce", resourceCount, debounceDuration)
-	}
+	// Debounce strategy:
+	// - During warmup (initial sync + CRD discovery): 3s to avoid constant
+	//   topology rebuilds from dynamic informer syncs. The UI shows a connecting
+	//   spinner anyway, so the delay is invisible.
+	// - After warmup: re-evaluate based on cluster size. Large clusters (>5000
+	//   resources) use 5s; smaller clusters use 500ms.
+	const warmupDebounce = 3 * time.Second
+	debounceDuration := warmupDebounce
+	b.watchMu.Lock()
+	warmupCh := b.warmupDone // local copy under lock; nil-ed after firing to avoid closed-channel spin
+	b.watchMu.Unlock()
+	log.Printf("SSE watcher: using %v warmup debounce until initial sync completes", debounceDuration)
 
 	debounceTimer := time.NewTimer(0)
 	<-debounceTimer.C // drain initial timer
@@ -385,6 +426,17 @@ func (b *SSEBroadcaster) watchResourceChanges() {
 
 		case <-watchStop:
 			return
+
+		case <-warmupCh:
+			// Warmup complete — re-evaluate debounce based on actual cluster size
+			warmupCh = nil // prevent closed-channel spin on next iteration
+			resourceCount := cache.GetResourceCount()
+			if resourceCount > 5000 {
+				debounceDuration = 5 * time.Second
+			} else {
+				debounceDuration = 500 * time.Millisecond
+			}
+			log.Printf("SSE watcher: warmup complete (%d resources), switching to %v debounce", resourceCount, debounceDuration)
 
 		case change, ok := <-changes:
 			if !ok {
@@ -453,10 +505,19 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 
 	log.Printf("Broadcasting topology update to %d clients", len(clients))
 
-	if fullTopo, err := buildFullTopology(); err == nil {
-		b.updateCachedTopology(fullTopo)
+	// During warmup, skip the expensive full-topology cache build. Nobody is
+	// clicking into resource details while the connecting spinner is showing,
+	// so the relationship cache isn't needed yet. Mark dirty for lazy rebuild.
+	if b.isWarmingUp() {
+		b.cachedTopologyMu.Lock()
+		b.cachedTopologyDirty = true
+		b.cachedTopologyMu.Unlock()
 	} else {
-		log.Printf("Error building full topology for cache: %v", err)
+		if fullTopo, err := buildFullTopology(); err == nil {
+			b.updateCachedTopology(fullTopo)
+		} else {
+			log.Printf("Error building full topology for cache: %v", err)
+		}
 	}
 
 	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))

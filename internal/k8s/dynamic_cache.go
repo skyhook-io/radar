@@ -226,6 +226,19 @@ func WarmupCommonCRDs() {
 		log.Printf("Warming up CRD: Application (argoproj.io)")
 	}
 
+	// Istio kinds that have topology edges (VirtualService→Service, Gateway→VirtualService, DestinationRule→Service)
+	istioQualified := []struct{ kind, group string }{
+		{"VirtualService", "networking.istio.io"},
+		{"DestinationRule", "networking.istio.io"},
+		{"Gateway", "networking.istio.io"},
+	}
+	for _, iq := range istioQualified {
+		if gvr, ok := discovery.GetGVRWithGroup(iq.kind, iq.group); ok {
+			gvrs = append(gvrs, gvr)
+			log.Printf("Warming up CRD: %s (%s)", iq.kind, iq.group)
+		}
+	}
+
 	// KNative kinds that collide with core/other CRDs
 	knativeQualified := []struct{ kind, group string }{
 		{"Service", "serving.knative.dev"},

@@ -193,6 +193,38 @@ func (d *DynamicResourceCache) probeAccess(gvr schema.GroupVersionResource) erro
 	return nil
 }
 
+// probeCount does a quick list with limit=1 and returns the approximate resource count.
+// Returns -1 if access is denied, -2 if the probe failed for non-auth reasons (caller
+// should defer), or the count (items + remainingItemCount) on success.
+func (d *DynamicResourceCache) probeCount(gvr schema.GroupVersionResource) int {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	var list *unstructured.UnstructuredList
+	var err error
+	if d.config.NamespaceScoped && d.config.Namespace != "" {
+		list, err = d.config.DynamicClient.Resource(gvr).Namespace(d.config.Namespace).List(ctx, metav1.ListOptions{Limit: 1})
+	} else {
+		list, err = d.config.DynamicClient.Resource(gvr).List(ctx, metav1.ListOptions{Limit: 1})
+	}
+
+	if err != nil {
+		errLower := strings.ToLower(err.Error())
+		if strings.Contains(errLower, "forbidden") || strings.Contains(errLower, "unauthorized") {
+			return -1
+		}
+		log.Printf("[dynamic cache] probeCount for %s.%s/%s returned non-auth error (deferring): %v",
+			gvr.Resource, gvr.Group, gvr.Version, err)
+		return -2
+	}
+
+	count := len(list.Items)
+	if list.GetRemainingItemCount() != nil {
+		count += int(*list.GetRemainingItemCount())
+	}
+	return count
+}
+
 // gvrToKind converts a GVR to a Kind name using resource discovery.
 func (d *DynamicResourceCache) gvrToKind(gvr schema.GroupVersionResource) string {
 	if d.config.Discovery != nil {
@@ -628,7 +660,12 @@ func (d *DynamicResourceCache) WarmupParallel(gvrs []schema.GroupVersionResource
 	}
 }
 
-// DiscoverAllCRDs discovers and starts watching all CRDs that support list/watch.
+// DiscoverAllCRDs discovers all CRDs that support list/watch and decides which
+// to watch eagerly vs on-demand. Known integrations (cert-manager, KEDA, etc.)
+// are already watching from WarmupCommonCRDs. For the rest, CRDs with ≤100
+// resources are watched eagerly (cheap, full timeline coverage). CRDs with >100
+// resources (calico, cilium, etc.) are deferred to on-demand via EnsureWatching()
+// when the user browses them, avoiding expensive watch connections.
 func (d *DynamicResourceCache) DiscoverAllCRDs() {
 	if d == nil {
 		log.Println("[CRD Discovery] Cache is nil, skipping")
@@ -721,8 +758,79 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 			return
 		}
 
-		log.Printf("Discovering %d CRDs...", len(gvrs))
-		d.WarmupParallel(gvrs, 30*time.Second)
+		// Filter out GVRs already watched from Phase 1 warmup
+		d.mu.RLock()
+		alreadyWatching := len(d.informers)
+		var remaining []schema.GroupVersionResource
+		for _, gvr := range gvrs {
+			if _, exists := d.informers[gvr]; !exists {
+				remaining = append(remaining, gvr)
+			}
+		}
+		d.mu.RUnlock()
+
+		if len(remaining) == 0 {
+			log.Printf("Discovered %d watchable CRDs (all %d already watching from warmup)", len(gvrs), alreadyWatching)
+			return
+		}
+
+		// Probe each remaining CRD to get resource count. CRDs with few resources
+		// (≤100) are cheap to watch and give full timeline coverage. CRDs with many
+		// resources (calico policies, cilium endpoints) are deferred to on-demand.
+		const maxEagerResources = 100
+		const maxConcurrentProbes = 50
+		type probeResult struct {
+			gvr   schema.GroupVersionResource
+			count int // -1 = no access
+		}
+		results := make(chan probeResult, len(remaining))
+		sem := make(chan struct{}, maxConcurrentProbes)
+		for _, gvr := range remaining {
+			go func(g schema.GroupVersionResource) {
+				sem <- struct{}{}
+				defer func() {
+					<-sem
+					if r := recover(); r != nil {
+						log.Printf("[CRD Discovery] Panic probing %s.%s/%s: %v", g.Resource, g.Group, g.Version, r)
+						results <- probeResult{gvr: g, count: -1}
+					}
+				}()
+				count := d.probeCount(g)
+				results <- probeResult{gvr: g, count: count}
+			}(gvr)
+		}
+
+		var eager []schema.GroupVersionResource
+		var deferredCount int
+		var noAccessCount int
+		for range remaining {
+			r := <-results
+			if r.count == -1 {
+				noAccessCount++
+				continue
+			}
+			if r.count == -2 {
+				// Probe failed (timeout, network error) — defer to be safe
+				deferredCount++
+				continue
+			}
+			if r.count <= maxEagerResources {
+				eager = append(eager, r.gvr)
+			} else {
+				deferredCount++
+				if d.config.DebugEvents {
+					kind := d.gvrToKind(r.gvr)
+					log.Printf("[CRD Discovery] Deferring %s (%d resources > %d threshold)", kind, r.count, maxEagerResources)
+				}
+			}
+		}
+
+		log.Printf("Discovered %d watchable CRDs (%d already watching, %d small → eager, %d large → on-demand, %d no access)",
+			len(gvrs), alreadyWatching, len(eager), deferredCount, noAccessCount)
+
+		if len(eager) > 0 {
+			d.WarmupParallel(eager, 30*time.Second)
+		}
 	}()
 }
 
