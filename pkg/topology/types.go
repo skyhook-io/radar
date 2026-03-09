@@ -167,7 +167,8 @@ type BuildOptions struct {
 	IncludeConfigMaps  bool     // Include ConfigMap nodes
 	IncludePVCs        bool     // Include PersistentVolumeClaim nodes
 	IncludeReplicaSets bool     // Include ReplicaSet nodes (noisy intermediate objects)
-	IncludeGenericCRDs bool     // Include CRDs with owner refs to topology nodes (default: true)
+	IncludeGenericCRDs     bool // Include CRDs with owner refs to topology nodes (default: true)
+	ForRelationshipCache   bool // Skip large cluster guard — used for internal relationship cache builds
 }
 
 // MatchesNamespace returns true if ns is in the allowed list, or if the list is empty (all allowed).

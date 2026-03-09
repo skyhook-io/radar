@@ -275,6 +275,7 @@ func (b *SSEBroadcaster) initCachedTopology() {
 	opts.ViewMode = topology.ViewModeResources
 	// Include ReplicaSets in the cache so relationship lookups work for them
 	opts.IncludeReplicaSets = true
+	opts.ForRelationshipCache = true
 
 	if topo, err := builder.Build(opts); err == nil {
 		b.updateCachedTopology(topo)
@@ -698,6 +699,7 @@ func buildFullTopology() (*topology.Topology, error) {
 	opts := topology.DefaultBuildOptions()
 	opts.ViewMode = topology.ViewModeResources
 	opts.IncludeReplicaSets = true
+	opts.ForRelationshipCache = true
 	return builder.Build(opts)
 }
 

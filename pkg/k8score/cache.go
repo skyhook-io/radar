@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"runtime"
 	"slices"
 	"sort"
 	"strings"
@@ -83,10 +84,10 @@ type informerSetup struct {
 }
 
 // NewResourceCache creates and starts a ResourceCache from the given config.
-// It blocks until critical (non-deferred) informers have synced or SyncTimeout
-// elapses, whichever comes first. On timeout, unsynced critical informers are
-// promoted to deferred and continue syncing in the background.
-// Deferred informers are started after the critical phase completes.
+// Startup has three tiers:
+//   - Critical informers block until synced (or SyncTimeout, then promoted to deferred)
+//   - Deferred informers sync in the background after critical completes
+//   - Background informers (e.g. Events) sync independently on their own goroutine
 func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 	if cfg.Client == nil {
 		return nil, fmt.Errorf("CacheConfig.Client must not be nil")
@@ -668,7 +669,9 @@ func (rc *ResourceCache) enqueueEvent(ch chan<- ResourceChange, obj any, op stri
 func (rc *ResourceCache) safeCallback(name string, fn func()) {
 	defer func() {
 		if r := recover(); r != nil {
-			rc.stdlog.Printf("ERROR: k8score %s callback panicked: %v", name, r)
+			buf := make([]byte, 4096)
+			n := runtime.Stack(buf, false)
+			rc.stdlog.Printf("ERROR: k8score %s callback panicked: %v\n%s", name, r, buf[:n])
 		}
 	}()
 	fn()
@@ -731,8 +734,9 @@ func (rc *ResourceCache) IsSyncComplete() bool {
 	return rc.syncComplete.Load()
 }
 
-// IsDeferredSynced returns true when all deferred informers have completed sync
-// successfully. Returns false if still syncing or if sync failed.
+// IsDeferredSynced returns true when all deferred (non-background) informers have
+// completed sync. Background informers (e.g. Events) sync independently and are
+// not included. Returns false if still syncing or if sync failed.
 func (rc *ResourceCache) IsDeferredSynced() bool {
 	if rc == nil {
 		return false
@@ -745,8 +749,8 @@ func (rc *ResourceCache) IsDeferredSynced() bool {
 	}
 }
 
-// DeferredDone returns a channel that is closed when all deferred informers
-// have completed their initial sync.
+// DeferredDone returns a channel that is closed when all deferred (non-background)
+// informers have completed their initial sync. Background informers sync independently.
 func (rc *ResourceCache) DeferredDone() <-chan struct{} {
 	if rc == nil {
 		return nil

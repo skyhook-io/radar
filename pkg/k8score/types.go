@@ -118,8 +118,9 @@ type CacheConfig struct {
 	// old and new objects. Returns nil if no meaningful changes. May be nil.
 	ComputeDiff func(kind string, oldObj, newObj any) *DiffInfo
 
-	// IsNoisyResource returns true if this resource change should skip the
-	// OnChange callback (but still be sent to the changes channel for SSE).
+	// IsNoisyResource returns true if this resource change should skip both the
+	// OnChange callback and the changes channel. Noisy resources are silently
+	// dropped to reduce pressure on the event pipeline.
 	// May be nil (nothing is treated as noisy).
 	IsNoisyResource func(kind, name, op string) bool
 

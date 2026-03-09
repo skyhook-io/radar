@@ -45,10 +45,13 @@ func (b *Builder) Build(opts BuildOptions) (*Topology, error) {
 
 	// Large clusters without a namespace filter: skip the expensive build entirely.
 	// The frontend shows a "select namespace" prompt instead of a blank graph.
-	if isLargeCluster && len(opts.Namespaces) == 0 {
+	// ForRelationshipCache bypasses this guard — internal builds need the full graph
+	// for resource detail "Related Resources" lookups.
+	if isLargeCluster && len(opts.Namespaces) == 0 && !opts.ForRelationshipCache {
 		return &Topology{
 			Nodes:                   []Node{},
 			Edges:                   []Edge{},
+			Warnings:                []string{"Cluster too large for all-namespace topology. Filter to a specific namespace."},
 			LargeCluster:            true,
 			HiddenKinds:             hiddenKinds,
 			RequiresNamespaceFilter: true,
