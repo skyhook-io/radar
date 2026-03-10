@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -423,6 +424,21 @@ func get(t *testing.T, path string) *http.Response {
 	return resp
 }
 
+// put issues a PUT with a JSON body and returns the response.
+func put(t *testing.T, path string, body string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodPut, testServer.URL+path, bytes.NewBufferString(body))
+	if err != nil {
+		t.Fatalf("PUT %s: %v", path, err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT %s: %v", path, err)
+	}
+	return resp
+}
+
 // assertOK checks for HTTP 200 and decodes the body as JSON into dst.
 // dst may be a *map[string]any or *[]any; pass nil to skip decoding.
 func assertOK(t *testing.T, resp *http.Response, dst any) {
@@ -701,6 +717,136 @@ func TestSmokeMetricsNilDynamicClient(t *testing.T) {
 				t.Fatalf("expected valid JSON response (not a panic), got decode error: %v (status=%d)", err, resp.StatusCode)
 			}
 		})
+	}
+}
+
+// --- requireConnected guard (table-driven) ---
+
+// --- Settings & Config endpoints ---
+
+func TestSmokeGetSettings(t *testing.T) {
+	var body map[string]any
+	assertOK(t, get(t, "/api/settings"), &body)
+	// Should return valid JSON (may have theme, pinnedKinds, or be empty)
+}
+
+func TestSmokePutSettings(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	payload := `{"theme":"light","logsWrap":false}`
+	resp := put(t, "/api/settings", payload)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["theme"] != "light" {
+		t.Errorf("theme = %v, want light", body["theme"])
+	}
+	if body["logsWrap"] != false {
+		t.Errorf("logsWrap = %v, want false", body["logsWrap"])
+	}
+
+	// Verify it persists — GET should return the same values
+	var loaded map[string]any
+	assertOK(t, get(t, "/api/settings"), &loaded)
+	if loaded["theme"] != "light" {
+		t.Errorf("persisted theme = %v, want light", loaded["theme"])
+	}
+}
+
+func TestSmokePutSettingsPreservesExisting(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Set theme first
+	put(t, "/api/settings", `{"theme":"dark"}`)
+
+	// Now set logsTimestamps without theme — theme should be preserved
+	resp := put(t, "/api/settings", `{"logsTimestamps":false}`)
+	defer resp.Body.Close()
+
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["theme"] != "dark" {
+		t.Errorf("theme was overwritten: got %v", body["theme"])
+	}
+	if body["logsTimestamps"] != false {
+		t.Errorf("logsTimestamps = %v, want false", body["logsTimestamps"])
+	}
+}
+
+func TestSmokeGetConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	var body map[string]any
+	assertOK(t, get(t, "/api/config"), &body)
+	assertKeys(t, body, "file", "effective", "isDesktop")
+}
+
+func TestSmokePutConfig(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	resp := put(t, "/api/config", `{"kubeconfig":"/tmp/test-kube","port":9999,"namespace":"staging"}`)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var saved map[string]any
+	json.NewDecoder(resp.Body).Decode(&saved)
+	if saved["kubeconfig"] != "/tmp/test-kube" {
+		t.Errorf("kubeconfig = %v, want /tmp/test-kube", saved["kubeconfig"])
+	}
+	if saved["port"] != float64(9999) {
+		t.Errorf("port = %v, want 9999", saved["port"])
+	}
+
+	// Verify persisted via GET
+	var got map[string]any
+	assertOK(t, get(t, "/api/config"), &got)
+	file, _ := got["file"].(map[string]any)
+	if file["kubeconfig"] != "/tmp/test-kube" {
+		t.Errorf("persisted kubeconfig = %v", file["kubeconfig"])
+	}
+}
+
+func TestSmokePutConfigReplaces(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// First write with kubeconfig and port
+	put(t, "/api/config", `{"kubeconfig":"/a","port":1111}`)
+
+	// Second write with only namespace — kubeconfig and port should be gone (full replace)
+	put(t, "/api/config", `{"namespace":"prod"}`)
+
+	var got map[string]any
+	assertOK(t, get(t, "/api/config"), &got)
+	file, _ := got["file"].(map[string]any)
+	if file["kubeconfig"] != nil {
+		t.Errorf("kubeconfig should be cleared after full replace, got %v", file["kubeconfig"])
+	}
+	if file["namespace"] != "prod" {
+		t.Errorf("namespace = %v, want prod", file["namespace"])
+	}
+}
+
+func TestSmokePutSettingsInvalidBody(t *testing.T) {
+	resp := put(t, "/api/settings", "not json")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid body, got %d", resp.StatusCode)
+	}
+}
+
+func TestSmokePutConfigInvalidBody(t *testing.T) {
+	resp := put(t, "/api/config", "not json")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("expected 400 for invalid body, got %d", resp.StatusCode)
 	}
 }
 
