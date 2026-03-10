@@ -23,6 +23,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 
+	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/images"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -37,38 +38,41 @@ import (
 
 // Server is the Explorer HTTP server
 type Server struct {
-	router      *chi.Mux
-	broadcaster *SSEBroadcaster
-	port        int
-	devMode     bool
-	staticFS    fs.FS
-	startTime   time.Time
-	listener    net.Listener
-	updater     *updater.Updater
-	mcpHandler  http.Handler
-	diagConfig  *DiagConfig
+	router          *chi.Mux
+	broadcaster     *SSEBroadcaster
+	port            int
+	devMode         bool
+	staticFS        fs.FS
+	startTime       time.Time
+	listener        net.Listener
+	updater         *updater.Updater
+	mcpHandler      http.Handler
+	diagConfig      *DiagConfig
+	effectiveConfig *config.Config // running config for GET /api/config
 }
 
 // Config holds server configuration
 type Config struct {
-	Port       int
-	DevMode    bool         // Serve frontend from filesystem instead of embedded
-	StaticFS   embed.FS     // Embedded frontend files
-	StaticRoot string       // Path within StaticFS
-	MCPHandler http.Handler // MCP server handler (nil = MCP disabled)
-	DiagConfig *DiagConfig  // Sanitized config for diagnostics endpoint
+	Port            int
+	DevMode         bool           // Serve frontend from filesystem instead of embedded
+	StaticFS        embed.FS       // Embedded frontend files
+	StaticRoot      string         // Path within StaticFS
+	MCPHandler      http.Handler   // MCP server handler (nil = MCP disabled)
+	DiagConfig      *DiagConfig    // Sanitized config for diagnostics endpoint
+	EffectiveConfig *config.Config // Running startup config for GET /api/config
 }
 
 // New creates a new server instance
 func New(cfg Config) *Server {
 	s := &Server{
-		router:      chi.NewRouter(),
-		broadcaster: NewSSEBroadcaster(),
-		port:        cfg.Port,
-		devMode:     cfg.DevMode,
-		startTime:   time.Now(),
-		mcpHandler:  cfg.MCPHandler,
-		diagConfig:  cfg.DiagConfig,
+		router:          chi.NewRouter(),
+		broadcaster:     NewSSEBroadcaster(),
+		port:            cfg.Port,
+		devMode:         cfg.DevMode,
+		startTime:       time.Now(),
+		mcpHandler:      cfg.MCPHandler,
+		diagConfig:      cfg.DiagConfig,
+		effectiveConfig: cfg.EffectiveConfig,
 	}
 
 	// Set up static file system
@@ -250,6 +254,10 @@ func (s *Server) setupRoutes() {
 			// Settings (persisted user preferences)
 			r.Get("/settings", s.handleGetSettings)
 			r.Put("/settings", s.handlePutSettings)
+
+			// Config (persisted startup configuration)
+			r.Get("/config", s.handleGetConfig)
+			r.Put("/config", s.handlePutConfig)
 
 			// Desktop routes
 			r.Post("/desktop/open-url", s.handleDesktopOpenURL)
@@ -1996,6 +2004,12 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		if patch.PinnedKinds != nil {
 			current.PinnedKinds = patch.PinnedKinds
 		}
+		if patch.LogsWrap != nil {
+			current.LogsWrap = patch.LogsWrap
+		}
+		if patch.LogsTimestamps != nil {
+			current.LogsTimestamps = patch.LogsTimestamps
+		}
 	})
 	if err != nil {
 		log.Printf("[settings] Failed to save settings: %v", err)
@@ -2003,6 +2017,39 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s.writeJSON(w, result)
+}
+
+// Config handlers (persistent startup configuration)
+
+type configResponse struct {
+	File      config.Config `json:"file"`
+	Effective config.Config `json:"effective"`
+	IsDesktop bool          `json:"isDesktop"`
+}
+
+func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	resp := configResponse{
+		File:      config.Load(),
+		IsDesktop: version.IsDesktop(),
+	}
+	if s.effectiveConfig != nil {
+		resp.Effective = *s.effectiveConfig
+	}
+	s.writeJSON(w, resp)
+}
+
+func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
+	var updated config.Config
+	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
+		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	if err := config.Save(updated); err != nil {
+		log.Printf("[config] Failed to save config: %v", err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, updated)
 }
 
 // Debug handlers for event pipeline diagnostics

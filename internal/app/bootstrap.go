@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
@@ -136,11 +137,25 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 
 // CreateServer creates the HTTP server with the given configuration.
 func CreateServer(cfg AppConfig) *server.Server {
+	effectiveCfg := &config.Config{
+		Kubeconfig:      cfg.Kubeconfig,
+		KubeconfigDirs:  cfg.KubeconfigDirs,
+		Namespace:       cfg.Namespace,
+		Port:            cfg.Port,
+		NoBrowser:       cfg.NoBrowser,
+		TimelineStorage: cfg.TimelineStorage,
+		TimelineDBPath:  cfg.TimelineDBPath,
+		HistoryLimit:    cfg.HistoryLimit,
+		PrometheusURL:   cfg.PrometheusURL,
+		MCP:             &cfg.MCPEnabled,
+	}
+
 	serverCfg := server.Config{
-		Port:       cfg.Port,
-		DevMode:    cfg.DevMode,
-		StaticFS:   static.FS,
-		StaticRoot: "dist",
+		Port:            cfg.Port,
+		DevMode:         cfg.DevMode,
+		StaticFS:        static.FS,
+		StaticRoot:      "dist",
+		EffectiveConfig: effectiveCfg,
 		DiagConfig: &server.DiagConfig{
 			Port:             cfg.Port,
 			DevMode:          cfg.DevMode,

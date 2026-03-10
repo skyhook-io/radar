@@ -17,8 +17,10 @@ type PinnedKind struct {
 
 // Settings holds user preferences persisted across restarts.
 type Settings struct {
-	Theme       string       `json:"theme,omitempty"`
-	PinnedKinds []PinnedKind `json:"pinnedKinds,omitempty"`
+	Theme          string       `json:"theme,omitempty"`
+	PinnedKinds    []PinnedKind `json:"pinnedKinds,omitempty"`
+	LogsWrap       *bool        `json:"logsWrap,omitempty"`       // nil = default (true)
+	LogsTimestamps *bool        `json:"logsTimestamps,omitempty"` // nil = default (true)
 }
 
 // mu serializes Load-Decode-Save cycles to prevent concurrent PUTs from

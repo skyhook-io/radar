@@ -15,6 +15,10 @@ func createMenu(desktopApp *DesktopApp) *menu.Menu {
 		// Future: open a new window with a different context
 	})
 	fileMenu.AddSeparator()
+	fileMenu.AddText("Settings...", keys.CmdOrCtrl(","), func(_ *menu.CallbackData) {
+		runtime.EventsEmit(desktopApp.ctx, "open-settings")
+	})
+	fileMenu.AddSeparator()
 	fileMenu.AddText("Quit", keys.CmdOrCtrl("q"), func(_ *menu.CallbackData) {
 		runtime.Quit(desktopApp.ctx)
 	})

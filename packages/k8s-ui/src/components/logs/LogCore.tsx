@@ -28,6 +28,10 @@ interface LogCoreProps {
   showPodName?: boolean
   emptyMessage?: string
   errorMessage?: string | null
+  initialLogsWrap?: boolean
+  initialLogsTimestamps?: boolean
+  onLogsWrapChange?: (value: boolean) => void
+  onLogsTimestampsChange?: (value: boolean) => void
 }
 
 const LEVEL_OPTIONS: { level: LogLevel; label: string; color: string; activeColor: string }[] = [
@@ -52,13 +56,19 @@ export function LogCore({
   showPodName = false,
   emptyMessage = 'No logs available',
   errorMessage,
+  initialLogsWrap,
+  initialLogsTimestamps,
+  onLogsWrapChange,
+  onLogsTimestampsChange,
 }: LogCoreProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const [atBottom, setAtBottom] = useState(true)
   const [wordWrap, setWordWrap] = useState(() => {
+    if (initialLogsWrap !== undefined) return initialLogsWrap
     try { return localStorage.getItem('radar-logs-wrap') !== 'false' } catch { return true }
   })
   const [showTimestamps, setShowTimestamps] = useState(() => {
+    if (initialLogsTimestamps !== undefined) return initialLogsTimestamps
     try { return localStorage.getItem('radar-logs-timestamps') !== 'false' } catch { return true }
   })
   const [enabledLevels, setEnabledLevels] = useState<Set<LogLevel>>(
@@ -136,17 +146,19 @@ export function LogCore({
     setWordWrap(prev => {
       const next = !prev
       try { localStorage.setItem('radar-logs-wrap', String(next)) } catch {}
+      onLogsWrapChange?.(next)
       return next
     })
-  }, [])
+  }, [onLogsWrapChange])
 
   const toggleTimestamps = useCallback(() => {
     setShowTimestamps(prev => {
       const next = !prev
       try { localStorage.setItem('radar-logs-timestamps', String(next)) } catch {}
+      onLogsTimestampsChange?.(next)
       return next
     })
-  }, [])
+  }, [onLogsTimestampsChange])
 
   const toggleLevel = useCallback((level: LogLevel) => {
     setEnabledLevels(prev => {
