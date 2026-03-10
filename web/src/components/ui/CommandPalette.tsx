@@ -128,10 +128,9 @@ export function CommandPalette({
       const kindKey = `${r.name}/${r.group}`
       if (seenKinds.has(kindKey)) continue
       seenKinds.add(kindKey)
-      const pluralLabel = r.name.charAt(0).toUpperCase() + r.name.slice(1)
       result.push({
         id: `kind-${r.name}-${r.group}`,
-        label: pluralLabel,
+        label: r.kind,
         sublabel: r.group || 'core',
         category: 'Resource Kinds',
         icon: getResourceIcon(r.kind),
