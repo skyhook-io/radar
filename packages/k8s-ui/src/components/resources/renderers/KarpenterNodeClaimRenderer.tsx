@@ -1,6 +1,7 @@
 import { Server, Cpu, Settings } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { kindToPlural } from '../../../utils/navigation'
 import {
   getNodeClaimStatus,
   getNodeClaimInstanceType,
@@ -73,7 +74,7 @@ export function KarpenterNodeClaimRenderer({ data, onNavigate }: KarpenterNodeCl
               value={nodeClassRef.name ? (
                 <ResourceLink
                   name={nodeClassRef.name}
-                  kind={(nodeClassRef.kind || 'EC2NodeClass').toLowerCase() + 's'}
+                  kind={kindToPlural(nodeClassRef.kind || 'EC2NodeClass')}
                   namespace=""
                   group={nodeClassRef.group}
                   label={`${nodeClassRef.kind || 'EC2NodeClass'}/${nodeClassRef.name}`}

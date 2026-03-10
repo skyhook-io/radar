@@ -23,6 +23,7 @@
   },
   "scripts": {
     "tsc": "tsc --noEmit",
+    "test": "vitest run",
     "format": "prettier --write \"src/**/*.{ts,tsx}\""
   },
   "dependencies": {
@@ -59,6 +60,7 @@
     "react": "^19.2.4",
     "react-dom": "^19.2.4",
     "typescript": "^5.9.3",
+    "vitest": "^4.0.18",
     "yaml": "^2.7.1"
   }
 }

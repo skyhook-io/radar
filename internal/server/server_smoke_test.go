@@ -505,6 +505,19 @@ func TestSmokeListResources(t *testing.T) {
 	}
 }
 
+func TestSmokeListResourcesCaseInsensitive(t *testing.T) {
+	// handleListResources should normalize the kind parameter to lowercase,
+	// matching the behavior of handleGetResource.
+	kinds := []string{"Pods", "PODS", "Deployments", "Services"}
+	for _, kind := range kinds {
+		kind := kind
+		t.Run(kind, func(t *testing.T) {
+			var body []any
+			assertOK(t, get(t, "/api/resources/"+kind), &body)
+		})
+	}
+}
+
 func TestSmokeListResourcesNamespaceFilter(t *testing.T) {
 	var body []any
 	assertOK(t, get(t, "/api/resources/deployments?namespace=default"), &body)

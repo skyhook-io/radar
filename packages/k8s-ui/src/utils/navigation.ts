@@ -6,13 +6,64 @@ import type { SelectedResource, ResourceRef } from '../types/core'
  */
 export type NavigateToResource = (resource: SelectedResource) => void
 
+// Known plural API resource names → singular PascalCase kind.
+// Shared between kindToPlural (idempotency guard) and pluralToKind (reverse lookup).
+const PLURAL_TO_KIND: Record<string, string> = {
+  pods: 'Pod',
+  services: 'Service',
+  deployments: 'Deployment',
+  daemonsets: 'DaemonSet',
+  statefulsets: 'StatefulSet',
+  replicasets: 'ReplicaSet',
+  ingresses: 'Ingress',
+  gateways: 'Gateway',
+  httproutes: 'HTTPRoute',
+  grpcroutes: 'GRPCRoute',
+  tcproutes: 'TCPRoute',
+  tlsroutes: 'TLSRoute',
+  configmaps: 'ConfigMap',
+  secrets: 'Secret',
+  namespaces: 'Namespace',
+  events: 'Event',
+  nodes: 'Node',
+  jobs: 'Job',
+  cronjobs: 'CronJob',
+  horizontalpodautoscalers: 'HorizontalPodAutoscaler',
+  persistentvolumeclaims: 'PersistentVolumeClaim',
+  persistentvolumes: 'PersistentVolume',
+  storageclasses: 'StorageClass',
+  poddisruptionbudgets: 'PodDisruptionBudget',
+  rollouts: 'Rollout',
+  applications: 'Application',
+  kustomizations: 'Kustomization',
+  helmreleases: 'HelmRelease',
+  gitrepositories: 'GitRepository',
+  certificates: 'Certificate',
+  roles: 'Role',
+  clusterroles: 'ClusterRole',
+  rolebindings: 'RoleBinding',
+  clusterrolebindings: 'ClusterRoleBinding',
+  serviceaccounts: 'ServiceAccount',
+  networkpolicies: 'NetworkPolicy',
+  verticalpodautoscalers: 'VerticalPodAutoscaler',
+  virtualservices: 'VirtualService',
+  destinationrules: 'DestinationRule',
+  serviceentries: 'ServiceEntry',
+  peerauthentications: 'PeerAuthentication',
+  authorizationpolicies: 'AuthorizationPolicy',
+}
+
 /**
  * Convert a singular kind (e.g., "Deployment") to plural API resource name (e.g., "deployments").
  * Single source of truth — uses English pluralization rules with a small alias map for
  * abbreviations and special mappings that aren't simple plurals.
+ * Idempotent: already-plural inputs (e.g., "secrets") are returned as-is.
  */
 export function kindToPlural(kind: string): string {
   const kindLower = kind.toLowerCase()
+
+  // Already a known plural — return as-is to prevent double-pluralization
+  if (kindLower in PLURAL_TO_KIND) return kindLower
 
   // Aliases: abbreviations or mappings to a different resource name
   const aliases: Record<string, string> = {
@@ -40,53 +91,7 @@ export function kindToPlural(kind: string): string {
 export function pluralToKind(plural: string): string {
   const lower = plural.toLowerCase()
 
-  // Explicit reverse mappings for irregular/aliased plurals
-  const reverseMap: Record<string, string> = {
-    pods: 'Pod',
-    services: 'Service',
-    deployments: 'Deployment',
-    daemonsets: 'DaemonSet',
-    statefulsets: 'StatefulSet',
-    replicasets: 'ReplicaSet',
-    ingresses: 'Ingress',
-    gateways: 'Gateway',
-    httproutes: 'HTTPRoute',
-    grpcroutes: 'GRPCRoute',
-    tcproutes: 'TCPRoute',
-    tlsroutes: 'TLSRoute',
-    configmaps: 'ConfigMap',
-    secrets: 'Secret',
-    namespaces: 'Namespace',
-    events: 'Event',
-    nodes: 'Node',
-    jobs: 'Job',
-    cronjobs: 'CronJob',
-    horizontalpodautoscalers: 'HorizontalPodAutoscaler',
-    persistentvolumeclaims: 'PersistentVolumeClaim',
-    persistentvolumes: 'PersistentVolume',
-    storageclasses: 'StorageClass',
-    poddisruptionbudgets: 'PodDisruptionBudget',
-    rollouts: 'Rollout',
-    applications: 'Application',
-    kustomizations: 'Kustomization',
-    helmreleases: 'HelmRelease',
-    gitrepositories: 'GitRepository',
-    certificates: 'Certificate',
-    roles: 'Role',
-    clusterroles: 'ClusterRole',
-    rolebindings: 'RoleBinding',
-    clusterrolebindings: 'ClusterRoleBinding',
-    serviceaccounts: 'ServiceAccount',
-    networkpolicies: 'NetworkPolicy',
-    verticalpodautoscalers: 'VerticalPodAutoscaler',
-    virtualservices: 'VirtualService',
-    destinationrules: 'DestinationRule',
-    serviceentries: 'ServiceEntry',
-    peerauthentications: 'PeerAuthentication',
-    authorizationpolicies: 'AuthorizationPolicy',
-  }
-
-  if (reverseMap[lower]) return reverseMap[lower]
+  if (PLURAL_TO_KIND[lower]) return PLURAL_TO_KIND[lower]
 
   // If it already looks like a singular PascalCase kind (starts with uppercase), return as-is
   if (plural[0] === plural[0].toUpperCase() && plural[0] !== plural[0].toLowerCase()) {

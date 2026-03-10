@@ -1,5 +1,6 @@
 import { Server, Settings, Shield, Cpu, Tag } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { kindToPlural } from '../../../utils/navigation'
 import {
   getNodePoolStatus,
   getNodePoolNodeClassRef,
@@ -47,7 +48,7 @@ export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoo
             value={nodeClassRef?.name ? (
               <ResourceLink
                 name={nodeClassRef.name}
-                kind={(nodeClassRef.kind || 'EC2NodeClass').toLowerCase() + 's'}
+                kind={kindToPlural(nodeClassRef.kind || 'EC2NodeClass')}
                 namespace=""
                 group={nodeClassRef.group}
                 label={getNodePoolNodeClassRef(data)}

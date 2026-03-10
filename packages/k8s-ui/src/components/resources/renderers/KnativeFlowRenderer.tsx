@@ -1,6 +1,7 @@
 import { ListOrdered, GitFork } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, KnativeNotReadyBanner, ResourceLink } from '../../ui/drawer-components'
+import { kindToPlural } from '../../../utils/navigation'
 import { getKnativeConditionStatus } from '../resource-utils-knative'
 
 interface RendererProps {
@@ -15,7 +16,7 @@ function RefDisplay({ ref: destRef, ns, onNavigate }: { ref: any; ns: string; on
     return (
       <ResourceLink
         name={destRef.ref.name}
-        kind={(destRef.ref.kind?.toLowerCase() || 'services') + (destRef.ref.kind?.toLowerCase().endsWith('s') ? '' : 's')}
+        kind={kindToPlural(destRef.ref.kind || 'Service')}
         namespace={destRef.ref.namespace || ns}
         onNavigate={onNavigate}
       />

@@ -1,5 +1,6 @@
 import { Cpu } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { kindToPlural } from '../../../utils/navigation'
 import {
   getScaledObjectStatus,
   getScaledObjectTarget,
@@ -66,7 +67,7 @@ export function KedaScaledObjectRenderer({ data, onNavigate }: KedaScaledObjectR
               return (
                 <ResourceLink
                   name={target.name}
-                  kind={(target.kind || 'Deployment').toLowerCase() + 's'}
+                  kind={kindToPlural(target.kind || 'Deployment')}
                   namespace={data.metadata?.namespace || ''}
                   label={getScaledObjectTarget(data)}
                   onNavigate={onNavigate}

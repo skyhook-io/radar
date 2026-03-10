@@ -1,6 +1,7 @@
 import { Cpu, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ResourceLink } from '../../ui/drawer-components'
+import { kindToPlural } from '../../../utils/navigation'
 import { formatAge } from '../resource-utils'
 
 interface HPARendererProps {
@@ -113,7 +114,7 @@ export function HPARenderer({ data, onNavigate }: HPARendererProps) {
             spec.scaleTargetRef?.name ? (
               <ResourceLink
                 name={spec.scaleTargetRef.name}
-                kind={(spec.scaleTargetRef.kind || 'Deployment').toLowerCase() + 's'}
+                kind={kindToPlural(spec.scaleTargetRef.kind || 'Deployment')}
                 namespace={data.metadata?.namespace || ''}
                 label={`${spec.scaleTargetRef.kind}/${spec.scaleTargetRef.name}`}
                 onNavigate={onNavigate}

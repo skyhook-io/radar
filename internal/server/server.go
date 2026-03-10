@@ -573,7 +573,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	kind := chi.URLParam(r, "kind")
+	kind := normalizeKind(chi.URLParam(r, "kind"))
 	namespaces := parseNamespaces(r.URL.Query())
 	group := r.URL.Query().Get("group") // API group for CRD disambiguation
 

@@ -1,6 +1,7 @@
 import { Cpu } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { kindToPlural } from '../../../utils/navigation'
 
 interface VPARendererProps {
   data: any
@@ -65,7 +66,7 @@ export function VPARenderer({ data, onNavigate }: VPARendererProps) {
             targetRef.name ? (
               <ResourceLink
                 name={targetRef.name}
-                kind={(targetRef.kind || 'Deployment').toLowerCase() + 's'}
+                kind={kindToPlural(targetRef.kind || 'Deployment')}
                 namespace={data.metadata?.namespace || ''}
                 label={`${targetRef.kind}/${targetRef.name}`}
                 onNavigate={onNavigate}
