@@ -182,7 +182,9 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
         ref={dialogRef}
         tabIndex={-1}
         className={clsx(
-          'relative bg-theme-surface border border-theme-border rounded-lg shadow-2xl w-full max-w-lg mx-4 outline-none max-h-[85vh] flex flex-col',
+          'relative bg-theme-surface border border-theme-border shadow-2xl w-full outline-none flex flex-col',
+          'max-sm:inset-0 max-sm:absolute max-sm:rounded-none max-sm:max-h-full max-sm:border-0',
+          'sm:rounded-lg sm:max-w-xl sm:mx-4 sm:max-h-[85vh]',
           TRANSITION_PANEL,
           isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
         )}

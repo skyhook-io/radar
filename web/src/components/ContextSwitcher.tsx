@@ -297,7 +297,7 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
         ) : (
           <Server className="w-3.5 h-3.5 text-theme-text-secondary" />
         )}
-        <span className="max-w-[220px] truncate">
+        <span className="max-w-[120px] sm:max-w-[220px] truncate">
           {switchContext.isPending ? 'Switching...' : currentDisplayName}
         </span>
         <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
