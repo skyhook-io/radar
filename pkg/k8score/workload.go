@@ -318,8 +318,12 @@ func (m *WorkloadManager) ScaleWorkload(ctx context.Context, kind, namespace, na
 }
 
 // ScaleWorkloadDirect scales a Deployment or StatefulSet without requiring a WorkloadManager.
-// It follows the same pattern as the standalone gitops functions (takes dynamic.Interface directly).
+// It accepts a dynamic.Interface directly, for use by callers that don't have a full WorkloadManager.
 func ScaleWorkloadDirect(ctx context.Context, dynClient dynamic.Interface, kind, namespace, name string, replicas int32) error {
+	if dynClient == nil {
+		return fmt.Errorf("dynamic client must not be nil")
+	}
+
 	normalizedKind := NormalizeWorkloadKind(kind)
 
 	var gvr schema.GroupVersionResource

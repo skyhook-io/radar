@@ -14,7 +14,8 @@ import (
 )
 
 // ParsePEMCertificates decodes PEM-encoded certificate data and returns parsed
-// CertificateInfo for each certificate in the chain (leaf-first order).
+// CertificateInfo for each certificate found, in the order they appear in the PEM data.
+// Non-CERTIFICATE PEM blocks and certificates that fail to parse are silently skipped.
 func ParsePEMCertificates(certData []byte) []CertificateInfo {
 	var result []CertificateInfo
 
