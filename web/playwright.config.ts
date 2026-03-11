@@ -10,4 +10,10 @@ export default defineConfig({
   projects: [
     { name: 'chromium', use: { browserName: 'chromium' } },
   ],
+  webServer: {
+    command: 'go run ../cmd/testserver',
+    port: 9281,
+    reuseExistingServer: true,
+    timeout: 60000,
+  },
 })

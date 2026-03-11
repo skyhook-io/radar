@@ -4,7 +4,8 @@ test.describe('URL routing: kind in path', () => {
 
   test('/resources defaults to /resources/pods', async ({ page }) => {
     await page.goto('/resources')
-    await page.waitForURL('**/resources/pods**', { timeout: 10000 })
+    // The redirect uses history.replaceState (not navigate), so use polling assertion
+    await expect(page).toHaveURL(/\/resources\/pods/, { timeout: 10000 })
     expect(page.url()).not.toContain('kind=')
   })
 
