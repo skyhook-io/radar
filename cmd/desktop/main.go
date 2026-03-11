@@ -84,6 +84,7 @@ func main() {
 		TimelineDBPath:   *timelineDBPath,
 		PrometheusURL:    *prometheusURL,
 		Version:          version,
+		MCPEnabled:       fileCfg.MCPEnabledOr(true),
 	}
 
 	app.SetGlobals(cfg)

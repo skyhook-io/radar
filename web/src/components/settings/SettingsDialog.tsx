@@ -397,13 +397,11 @@ function StartupConfigTab({
             onChange={(v) => onChange('prometheusUrl', v || undefined)}
           />
 
-          {!isDesktop && (
-            <ConfigToggle
-              label="MCP Server (AI tools)"
-              value={config.mcp ?? true}
-              onChange={(v) => onChange('mcp', v)}
-            />
-          )}
+          <ConfigToggle
+            label="MCP Server (AI tools)"
+            value={config.mcp ?? true}
+            onChange={(v) => onChange('mcp', v)}
+          />
         </div>
       </div>
     </div>
