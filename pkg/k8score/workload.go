@@ -12,6 +12,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 	"sigs.k8s.io/yaml"
@@ -307,6 +308,32 @@ func (m *WorkloadManager) ScaleWorkload(ctx context.Context, kind, namespace, na
 
 	patch := fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas)
 	_, err := m.dynClient.Resource(gvr).Namespace(namespace).Patch(
+		ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{},
+	)
+	if err != nil {
+		return fmt.Errorf("failed to scale workload: %w", err)
+	}
+
+	return nil
+}
+
+// ScaleWorkloadDirect scales a Deployment or StatefulSet without requiring a WorkloadManager.
+// It follows the same pattern as the standalone gitops functions (takes dynamic.Interface directly).
+func ScaleWorkloadDirect(ctx context.Context, dynClient dynamic.Interface, kind, namespace, name string, replicas int32) error {
+	normalizedKind := NormalizeWorkloadKind(kind)
+
+	var gvr schema.GroupVersionResource
+	switch normalizedKind {
+	case "deployments":
+		gvr = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	case "statefulsets":
+		gvr = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}
+	default:
+		return fmt.Errorf("scaling not supported for %s (only deployments and statefulsets)", kind)
+	}
+
+	patch := fmt.Sprintf(`{"spec":{"replicas":%d}}`, replicas)
+	_, err := dynClient.Resource(gvr).Namespace(namespace).Patch(
 		ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{},
 	)
 	if err != nil {

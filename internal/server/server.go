@@ -1094,7 +1094,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// Enrich TLS secrets with parsed certificate info
 	if secret, ok := resource.(*corev1.Secret); ok && secret.Type == corev1.SecretTypeTLS {
 		if certPEM, exists := secret.Data["tls.crt"]; exists && len(certPEM) > 0 {
-			certs := parsePEMCertificates(certPEM)
+			certs := topology.ParsePEMCertificates(certPEM)
 			if len(certs) > 0 {
 				response.CertificateInfo = &SecretCertificateInfo{Certificates: certs}
 			}
