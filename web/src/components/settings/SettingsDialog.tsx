@@ -133,6 +133,9 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
         setEditedConfig({})
         setConfigDirty(false)
         setSaveMessage('Config reset to defaults. Changes take effect on next launch.')
+      } else {
+        const data = await res.json().catch(() => null)
+        setSaveMessage(`Error: ${data?.error || res.statusText}`)
       }
     } catch (err) {
       setSaveMessage(`Error: ${err}`)

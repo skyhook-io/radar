@@ -36,6 +36,15 @@ func main() {
 	port := flag.Int("port", 9281, "port to listen on")
 	flag.Parse()
 
+	// Isolate config/settings writes to a temp directory so e2e tests
+	// don't touch the developer's real ~/.radar/config.json.
+	tmpHome, err := os.MkdirTemp("", "radar-testserver-*")
+	if err != nil {
+		log.Fatalf("Failed to create temp HOME: %v", err)
+	}
+	os.Setenv("HOME", tmpHome)
+	defer os.RemoveAll(tmpHome)
+
 	// --- Fake K8s client with seed data ---
 
 	replicas := int32(2)

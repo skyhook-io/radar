@@ -2044,12 +2044,13 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if err := config.Save(updated); err != nil {
+	result, err := config.Update(func(c *config.Config) { *c = updated })
+	if err != nil {
 		log.Printf("[config] Failed to save config: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	s.writeJSON(w, updated)
+	s.writeJSON(w, result)
 }
 
 // Debug handlers for event pipeline diagnostics

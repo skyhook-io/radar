@@ -2,6 +2,7 @@ import { useCallback } from 'react'
 import { fetchJSON, createLogStream } from '../../api/client'
 import { LogsViewer as SharedLogsViewer } from '@skyhook-io/k8s-ui'
 import type { LogsFetchParams } from '@skyhook-io/k8s-ui'
+import { useLogPreferences } from '../../hooks/useLogPreferences'
 
 interface LogsViewerProps {
   namespace: string
@@ -11,6 +12,7 @@ interface LogsViewerProps {
 }
 
 export function LogsViewer({ namespace, podName, containers, initialContainer }: LogsViewerProps) {
+  const { logsWrap, logsTimestamps, setLogsWrap, setLogsTimestamps } = useLogPreferences()
   const fetchLogs = useCallback(async (params: LogsFetchParams) => {
     const query = new URLSearchParams()
     query.set('container', params.container)
@@ -35,6 +37,10 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
       initialContainer={initialContainer}
       fetchLogs={fetchLogs}
       createStream={makeStream}
+      initialLogsWrap={logsWrap}
+      initialLogsTimestamps={logsTimestamps}
+      onLogsWrapChange={setLogsWrap}
+      onLogsTimestampsChange={setLogsTimestamps}
     />
   )
 }
