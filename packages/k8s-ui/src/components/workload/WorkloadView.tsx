@@ -38,7 +38,7 @@ import {
 } from '../timeline/shared'
 import { ResourceActionsBar } from '../shared/ResourceActionsBar'
 import { EditableYamlView, SaveSuccessAnimation } from '../shared/EditableYamlView'
-import { ResourceRendererDispatch, getResourceStatus } from '../shared/ResourceRendererDispatch'
+import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from '../shared/ResourceRendererDispatch'
 import { getKindColor, formatKindName } from '../ui/drawer-components'
 
 type TabType = 'overview' | 'timeline' | 'logs' | 'metrics' | 'yaml'
@@ -94,6 +94,8 @@ interface WorkloadViewProps {
   onUpdateResource?: (params: { kind: string; namespace: string; name: string; yaml: string }) => Promise<void>
   /** Whether the resource is being updated */
   isUpdatingResource?: boolean
+  /** Error message from the last update attempt */
+  updateResourceError?: string | null
 
   // ── Tab state (optional URL sync) ────────────────────────────────────────
   /** Controlled active tab. If not provided, managed internally. */
@@ -123,6 +125,10 @@ interface WorkloadViewProps {
   // ── ResourceActionsBar props (passed through) ────────────────────────────
   /** All props for the actions bar (forwarded as-is) */
   actionsBarProps?: Record<string, any>
+
+  // ── Renderer overrides ──────────────────────────────────────────────────
+  /** Platform-specific renderer overrides (e.g. with hooks for metrics, exec, port-forward) */
+  rendererOverrides?: RendererOverrides
 }
 
 export function WorkloadView({
@@ -152,6 +158,7 @@ export function WorkloadView({
   // Mutations
   onUpdateResource,
   isUpdatingResource,
+  updateResourceError,
   // Tab state
   activeTab: controlledTab,
   onTabChange,
@@ -161,6 +168,8 @@ export function WorkloadView({
   isMetricsAvailable,
   // Actions bar
   actionsBarProps,
+  // Renderer overrides
+  rendererOverrides,
 }: WorkloadViewProps) {
   // Normalize kind: URL has plural lowercase, internal logic uses singular PascalCase
   const kind = pluralToKind(kindProp)
@@ -416,6 +425,9 @@ export function WorkloadView({
               onCopy={(text) => copyToClipboard(text, 'yaml')}
               copied={copied === 'yaml'}
               onSaved={handleSaved}
+              onSave={onUpdateResource}
+              isSaving={isUpdatingResource}
+              saveError={updateResourceError}
             />
           ) : (
             <ResourceRendererDispatch
@@ -428,6 +440,7 @@ export function WorkloadView({
               onNavigate={onNavigateToResource ? (ref) => onNavigateToResource(refToSelectedResource(ref)) : undefined}
               onSaveSecretValue={canUpdateSecrets ? handleSaveSecretValue : undefined}
               isSavingSecret={isUpdatingResource}
+              rendererOverrides={rendererOverrides}
             />
           )}
         </div>
@@ -566,6 +579,7 @@ export function WorkloadView({
             isSavingSecret={isUpdatingResource}
             onOpenLogs={handleOpenLogs}
             onSwitchToTimeline={() => handleSetTab('timeline')}
+            rendererOverrides={rendererOverrides}
           />
         )}
         {activeTab === 'timeline' && (
@@ -613,6 +627,9 @@ export function WorkloadView({
                 onCopy={(text) => copyToClipboard(text, 'yaml')}
                 copied={copied === 'yaml'}
                 onSaved={handleSaved}
+                onSave={onUpdateResource}
+                isSaving={isUpdatingResource}
+                saveError={updateResourceError}
               />
             )}
           </div>
@@ -1044,6 +1061,7 @@ function InfoTab({
   isSavingSecret,
   onOpenLogs,
   onSwitchToTimeline,
+  rendererOverrides,
 }: {
   resource: any
   selectedResource: SelectedResource
@@ -1056,6 +1074,7 @@ function InfoTab({
   isSavingSecret?: boolean
   onOpenLogs?: (podName: string, containerName: string) => void
   onSwitchToTimeline?: () => void
+  rendererOverrides?: RendererOverrides
 }) {
   if (isLoading) {
     return (
@@ -1088,6 +1107,7 @@ function InfoTab({
         showCommonSections={true}
         showMetrics={false}
         onOpenLogs={onOpenLogs}
+        rendererOverrides={rendererOverrides}
         eventsHint={onSwitchToTimeline && (
           <button
             onClick={onSwitchToTimeline}

@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { Terminal } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
+  type RendererOverrides,
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource, ResourceRef } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
@@ -21,8 +22,17 @@ import { useCanUpdateSecrets, useCanExec, useCanViewLogs, useCanPortForward } fr
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import { PortForwardButton } from '../portforward/PortForwardButton'
 import { useToast } from '../ui/Toast'
+import { PodRenderer } from '../resources/renderers/PodRenderer'
+import { NodeRenderer } from '../resources/renderers/NodeRenderer'
+import { ServiceRenderer } from '../resources/renderers/ServiceRenderer'
+import { WorkloadRenderer } from '../resources/renderers/WorkloadRenderer'
 
 type TabType = 'overview' | 'timeline' | 'logs' | 'metrics' | 'yaml'
+
+// Stable reference — web renderer wrappers inject platform hooks internally
+const rendererOverrides: RendererOverrides = {
+  PodRenderer, NodeRenderer, ServiceRenderer, WorkloadRenderer,
+}
 
 // ============================================================================
 // ROUTE WRAPPER — parses kind/ns/name from URL
@@ -242,6 +252,7 @@ export function WorkloadView({
       // Mutations
       onUpdateResource={handleUpdateResource}
       isUpdatingResource={updateResource.isPending}
+      updateResourceError={updateResource.error?.message ?? null}
       // Tab state (URL-synced)
       activeTab={migratedTab}
       onTabChange={handleTabChange}
@@ -254,6 +265,7 @@ export function WorkloadView({
         isPrometheusSupported(kind) && !(kind === 'Pod' && res?.status?.phase === 'Pending')
       }
       actionsBarProps={actionsBarProps}
+      rendererOverrides={rendererOverrides}
     />
   )
 }

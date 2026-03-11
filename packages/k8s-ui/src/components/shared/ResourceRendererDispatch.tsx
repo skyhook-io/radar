@@ -171,6 +171,32 @@ import {
   TraefikIngressRouteRenderer,
 } from '../resources/renderers'
 import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo } from '../../types'
+import type { CopyHandler } from '../ui/drawer-components'
+
+/**
+ * Override map letting each platform consumer swap in its own renderer components.
+ * Each override receives the same base props that ResourceRendererDispatch already passes,
+ * and internally manages its own platform hooks (metrics, exec, port-forward, etc.).
+ *
+ * When an override is not provided, the base (shared) renderer is used.
+ */
+export interface RendererOverrides {
+  PodRenderer?: React.ComponentType<{
+    data: any; onCopy: CopyHandler; copied: string | null
+    onNavigate?: (ref: ResourceRef) => void
+    onOpenLogs?: (podName: string, containerName: string) => void
+  }>
+  NodeRenderer?: React.ComponentType<{
+    data: any; relationships?: Relationships
+  }>
+  ServiceRenderer?: React.ComponentType<{
+    data: any; onCopy: CopyHandler; copied: string | null
+  }>
+  WorkloadRenderer?: React.ComponentType<{
+    kind: string; data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
+}
 
 // Known resource types with specific renderers (module-level to avoid re-allocation)
 const KNOWN_KINDS = new Set([
@@ -238,6 +264,8 @@ interface ResourceRendererDispatchProps {
   eventsLoading?: boolean
   /** Render prop for Prometheus metrics charts — injected by the platform wrapper */
   renderMetrics?: (props: { kind: string; namespace: string; name: string }) => React.ReactNode
+  /** Platform-specific renderer overrides (e.g. with hooks for metrics, exec, port-forward) */
+  rendererOverrides?: RendererOverrides
 }
 
 export function ResourceRendererDispatch({
@@ -258,10 +286,17 @@ export function ResourceRendererDispatch({
   events,
   eventsLoading,
   renderMetrics,
+  rendererOverrides,
 }: ResourceRendererDispatchProps) {
   const kind = resource.kind.toLowerCase()
 
   const isKnownKind = KNOWN_KINDS.has(kind)
+
+  // Resolve renderer components — use platform override when provided, otherwise base
+  const PodComp = rendererOverrides?.PodRenderer ?? PodRenderer
+  const WorkloadComp = rendererOverrides?.WorkloadRenderer ?? WorkloadRenderer
+  const NodeComp = rendererOverrides?.NodeRenderer ?? NodeRenderer
+  const ServiceComp = rendererOverrides?.ServiceRenderer ?? ServiceRenderer
 
   const sidebarContent = showCommonSections && (
     <>
@@ -277,17 +312,17 @@ export function ResourceRendererDispatch({
     <div className={renderSidebar ? 'lg:flex' : ''}>
       <div className={clsx('p-4 space-y-4', renderSidebar && 'lg:flex-1 lg:min-w-0')}>
         {/* Kind-specific content - delegates to modular renderers */}
-        {kind === 'pods' && <PodRenderer data={data} onCopy={onCopy} copied={copied} onNavigate={onNavigate} onOpenLogs={onOpenLogs} />}
-        {['deployments', 'statefulsets', 'daemonsets'].includes(kind) && <WorkloadRenderer kind={kind} data={data} onNavigate={onNavigate} />}
+        {kind === 'pods' && <PodComp data={data} onCopy={onCopy} copied={copied} onNavigate={onNavigate} onOpenLogs={onOpenLogs} />}
+        {['deployments', 'statefulsets', 'daemonsets'].includes(kind) && <WorkloadComp kind={kind} data={data} onNavigate={onNavigate} />}
         {kind === 'replicasets' && <ReplicaSetRenderer data={data} />}
-        {kind === 'services' && !data?.apiVersion?.includes('serving.knative.dev') && <ServiceRenderer data={data} onCopy={onCopy} copied={copied} />}
+        {kind === 'services' && !data?.apiVersion?.includes('serving.knative.dev') && <ServiceComp data={data} onCopy={onCopy} copied={copied} />}
         {kind === 'ingresses' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <IngressRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'configmaps' && <ConfigMapRenderer data={data} />}
         {kind === 'secrets' && <SecretRenderer data={data} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && <JobRenderer data={data} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
         {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPARenderer data={data} onNavigate={onNavigate} />}
-        {kind === 'nodes' && <NodeRenderer data={data} relationships={relationships} />}
+        {kind === 'nodes' && <NodeComp data={data} relationships={relationships} />}
         {kind === 'persistentvolumeclaims' && <PVCRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'rollouts' && <RolloutRenderer data={data} />}
         {kind === 'certificates' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <CertificateRenderer data={data} />}
