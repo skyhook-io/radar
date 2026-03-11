@@ -17,6 +17,7 @@ import {
 import { createTwoFilesPatch } from 'diff'
 import { clsx } from 'clsx'
 import { ForceDeleteConfirmDialog } from '../ui/ForceDeleteConfirmDialog'
+import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
 import { formatKindName } from '../ui/drawer-components'
 
@@ -619,7 +620,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
   const [confirmRevision, setConfirmRevision] = useState<number | null>(null)
   const [diffRevision, setDiffRevision] = useState<number | null>(null)
 
-  if (!open) return null
+  const handleClose = () => { setDiffRevision(null); onClose() }
 
   const currentRevision = revisions?.find(r => r.isCurrent)
   const selectedRevision = revisions?.find(r => r.number === diffRevision)
@@ -660,160 +661,158 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div
-        className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-        onClick={isRollingBack ? undefined : () => { setDiffRevision(null); onClose() }}
-      />
-
-      <div className={clsx(
-        "relative bg-theme-surface border border-theme-border rounded-lg shadow-2xl mx-4 outline-none flex flex-col",
+    <DialogPortal
+      open={open}
+      onClose={handleClose}
+      closable={!isRollingBack}
+      className={clsx(
+        "flex flex-col",
         diffRevision ? "max-w-5xl w-full max-h-[85vh]" : "max-w-lg w-full"
-      )}>
-        <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
-          <div className="flex items-center gap-2">
-            <History className="w-5 h-5 text-amber-500" />
-            <h3 className="text-lg font-semibold text-theme-text-primary">Revision History</h3>
-            {diffRevision && currentRevision && (
-              <span className="flex items-center gap-1 ml-2 px-2 py-0.5 text-xs bg-blue-500/15 text-blue-400 rounded">
-                <GitCompare className="w-3 h-3" />
-                #{currentRevision.number} vs #{diffRevision}
-              </span>
-            )}
-          </div>
-          <button
-            onClick={() => { setDiffRevision(null); onClose() }}
-            disabled={isRollingBack}
-            className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
-          >
-            <X className="w-5 h-5" />
-          </button>
+      )}
+    >
+      <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
+        <div className="flex items-center gap-2">
+          <History className="w-5 h-5 text-amber-500" />
+          <h3 className="text-lg font-semibold text-theme-text-primary">Revision History</h3>
+          {diffRevision && currentRevision && (
+            <span className="flex items-center gap-1 ml-2 px-2 py-0.5 text-xs bg-blue-500/15 text-blue-400 rounded">
+              <GitCompare className="w-3 h-3" />
+              #{currentRevision.number} vs #{diffRevision}
+            </span>
+          )}
         </div>
+        <button
+          onClick={handleClose}
+          disabled={isRollingBack}
+          className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-50"
+        >
+          <X className="w-5 h-5" />
+        </button>
+      </div>
 
-        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-          <div className={clsx("p-4 overflow-y-auto", diffRevision ? "max-h-48 shrink-0" : "max-h-80")}>
-            {isLoading && (
-              <div className="flex items-center justify-center py-8 text-theme-text-secondary text-sm">
-                Loading revisions...
-              </div>
-            )}
+      <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+        <div className={clsx("p-4 overflow-y-auto", diffRevision ? "max-h-48 shrink-0" : "max-h-80")}>
+          {isLoading && (
+            <div className="flex items-center justify-center py-8 text-theme-text-secondary text-sm">
+              Loading revisions...
+            </div>
+          )}
 
-            {error && (
-              <div className="flex items-center justify-center py-8 text-red-400 text-sm">
-                Failed to load revisions: {error instanceof Error ? error.message : 'Unknown error'}
-              </div>
-            )}
+          {error && (
+            <div className="flex items-center justify-center py-8 text-red-400 text-sm">
+              Failed to load revisions: {error instanceof Error ? error.message : 'Unknown error'}
+            </div>
+          )}
 
-            {revisions && revisions.length === 0 && (
-              <div className="flex items-center justify-center py-8 text-theme-text-secondary text-sm">
-                No revisions found
-              </div>
-            )}
+          {revisions && revisions.length === 0 && (
+            <div className="flex items-center justify-center py-8 text-theme-text-secondary text-sm">
+              No revisions found
+            </div>
+          )}
 
-            {revisions && revisions.length > 0 && (
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="text-theme-text-secondary text-left text-xs uppercase tracking-wider">
-                    <th className="pb-2 pr-3 font-medium">Rev</th>
-                    <th className="pb-2 pr-3 font-medium">Image</th>
-                    <th className="pb-2 pr-3 font-medium">Age</th>
-                    <th className="pb-2 font-medium text-right">Action</th>
+          {revisions && revisions.length > 0 && (
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-theme-text-secondary text-left text-xs uppercase tracking-wider">
+                  <th className="pb-2 pr-3 font-medium">Rev</th>
+                  <th className="pb-2 pr-3 font-medium">Image</th>
+                  <th className="pb-2 pr-3 font-medium">Age</th>
+                  <th className="pb-2 font-medium text-right">Action</th>
+                </tr>
+              </thead>
+              <tbody>
+                {revisions.map((rev: WorkloadRevision) => (
+                  <tr
+                    key={rev.number}
+                    className={clsx(
+                      "border-t border-theme-border/50",
+                      diffRevision === rev.number && "bg-blue-500/10"
+                    )}
+                  >
+                    <td className="py-2 pr-3 text-theme-text-primary font-mono">
+                      #{rev.number}
+                    </td>
+                    <td className="py-2 pr-3 text-theme-text-secondary font-mono truncate max-w-[180px]" title={rev.image}>
+                      {getImageTag(rev.image)}
+                    </td>
+                    <td className="py-2 pr-3 text-theme-text-secondary whitespace-nowrap">
+                      {formatTimeAgo(rev.createdAt)}
+                    </td>
+                    <td className="py-2 text-right">
+                      <div className="flex items-center gap-1 justify-end">
+                        {!rev.isCurrent && rev.template && currentRevision?.template && (
+                          <button
+                            onClick={() => setDiffRevision(diffRevision === rev.number ? null : rev.number)}
+                            className={clsx(
+                              "px-2 py-0.5 text-xs font-medium rounded transition-colors flex items-center gap-1",
+                              diffRevision === rev.number
+                                ? "bg-blue-500/20 text-blue-400 border border-blue-400/50"
+                                : "text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 border border-transparent"
+                            )}
+                            title={`Compare with current revision`}
+                          >
+                            <GitCompare className="w-3 h-3" />
+                            Diff
+                          </button>
+                        )}
+                        {rev.isCurrent ? (
+                          <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium bg-green-500/20 text-green-400 rounded">
+                            Current
+                          </span>
+                        ) : confirmRevision === rev.number ? (
+                          <>
+                            <button
+                              onClick={() => handleRollback(rev.number)}
+                              disabled={isRollingBack}
+                              className="px-2 py-0.5 text-xs font-medium text-white bg-amber-600 hover:bg-amber-700 rounded transition-colors disabled:opacity-50"
+                            >
+                              {isRollingBack ? 'Rolling back...' : 'Confirm'}
+                            </button>
+                            <button
+                              onClick={() => setConfirmRevision(null)}
+                              disabled={isRollingBack}
+                              className="px-2 py-0.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary rounded transition-colors disabled:opacity-50"
+                            >
+                              Cancel
+                            </button>
+                          </>
+                        ) : (
+                          <button
+                            onClick={() => setConfirmRevision(rev.number)}
+                            className="px-2 py-0.5 text-xs font-medium text-amber-400 hover:text-white hover:bg-amber-600 border border-amber-400/50 hover:border-amber-600 rounded transition-colors"
+                          >
+                            Rollback
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
-                </thead>
-                <tbody>
-                  {revisions.map((rev: WorkloadRevision) => (
-                    <tr
-                      key={rev.number}
-                      className={clsx(
-                        "border-t border-theme-border/50",
-                        diffRevision === rev.number && "bg-blue-500/10"
-                      )}
-                    >
-                      <td className="py-2 pr-3 text-theme-text-primary font-mono">
-                        #{rev.number}
-                      </td>
-                      <td className="py-2 pr-3 text-theme-text-secondary font-mono truncate max-w-[180px]" title={rev.image}>
-                        {getImageTag(rev.image)}
-                      </td>
-                      <td className="py-2 pr-3 text-theme-text-secondary whitespace-nowrap">
-                        {formatTimeAgo(rev.createdAt)}
-                      </td>
-                      <td className="py-2 text-right">
-                        <div className="flex items-center gap-1 justify-end">
-                          {!rev.isCurrent && rev.template && currentRevision?.template && (
-                            <button
-                              onClick={() => setDiffRevision(diffRevision === rev.number ? null : rev.number)}
-                              className={clsx(
-                                "px-2 py-0.5 text-xs font-medium rounded transition-colors flex items-center gap-1",
-                                diffRevision === rev.number
-                                  ? "bg-blue-500/20 text-blue-400 border border-blue-400/50"
-                                  : "text-blue-400 hover:text-blue-300 hover:bg-blue-500/10 border border-transparent"
-                              )}
-                              title={`Compare with current revision`}
-                            >
-                              <GitCompare className="w-3 h-3" />
-                              Diff
-                            </button>
-                          )}
-                          {rev.isCurrent ? (
-                            <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium bg-green-500/20 text-green-400 rounded">
-                              Current
-                            </span>
-                          ) : confirmRevision === rev.number ? (
-                            <>
-                              <button
-                                onClick={() => handleRollback(rev.number)}
-                                disabled={isRollingBack}
-                                className="px-2 py-0.5 text-xs font-medium text-white bg-amber-600 hover:bg-amber-700 rounded transition-colors disabled:opacity-50"
-                              >
-                                {isRollingBack ? 'Rolling back...' : 'Confirm'}
-                              </button>
-                              <button
-                                onClick={() => setConfirmRevision(null)}
-                                disabled={isRollingBack}
-                                className="px-2 py-0.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary rounded transition-colors disabled:opacity-50"
-                              >
-                                Cancel
-                              </button>
-                            </>
-                          ) : (
-                            <button
-                              onClick={() => setConfirmRevision(rev.number)}
-                              className="px-2 py-0.5 text-xs font-medium text-amber-400 hover:text-white hover:bg-amber-600 border border-amber-400/50 hover:border-amber-600 rounded transition-colors"
-                            >
-                              Rollback
-                            </button>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-
-          {diffRevision && hasDiffData && (
-            <RevisionDiffView
-              currentTemplate={currentRevision!.template!}
-              selectedTemplate={selectedRevision!.template!}
-              currentRevision={currentRevision!.number}
-              selectedRevision={diffRevision}
-            />
+                ))}
+              </tbody>
+            </table>
           )}
         </div>
 
-        <div className="flex items-center justify-end p-4 border-t border-theme-border shrink-0">
-          <button
-            onClick={() => { setDiffRevision(null); onClose() }}
-            disabled={isRollingBack}
-            className="px-4 py-2 text-sm font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg transition-colors disabled:opacity-50"
-          >
-            Close
-          </button>
-        </div>
+        {diffRevision && hasDiffData && (
+          <RevisionDiffView
+            currentTemplate={currentRevision!.template!}
+            selectedTemplate={selectedRevision!.template!}
+            currentRevision={currentRevision!.number}
+            selectedRevision={diffRevision}
+          />
+        )}
       </div>
-    </div>
+
+      <div className="flex items-center justify-end p-4 border-t border-theme-border shrink-0">
+        <button
+          onClick={handleClose}
+          disabled={isRollingBack}
+          className="px-4 py-2 text-sm font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg transition-colors disabled:opacity-50"
+        >
+          Close
+        </button>
+      </div>
+    </DialogPortal>
   )
 }
 

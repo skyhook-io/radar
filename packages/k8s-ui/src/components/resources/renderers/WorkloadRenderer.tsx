@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Server, ExternalLink, Scale, Minus, Plus, Loader2 } from 'lucide-react'
 import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { DialogPortal } from '../../ui/DialogPortal'
 
 interface WorkloadRendererProps {
   kind: string
@@ -213,67 +214,64 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
       </Section>
 
       {/* Scale Dialog */}
-      {showScaleDialog && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
-          <div className="bg-theme-surface border border-theme-border rounded-lg shadow-xl w-80 p-4">
-            <h3 className="text-sm font-medium text-theme-text-primary mb-4">
-              Scale {metadata.name}
-            </h3>
+      <DialogPortal open={showScaleDialog} onClose={() => setShowScaleDialog(false)} className="w-80 p-4">
+        <h3 className="text-sm font-medium text-theme-text-primary mb-4">
+          Scale {metadata.name}
+        </h3>
 
-            <div className="flex items-center justify-center gap-4 mb-4">
-              <button
-                onClick={() => setTargetReplicas(Math.max(0, targetReplicas - 1))}
-                className="p-2 rounded-lg bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
-                disabled={targetReplicas <= 0}
-              >
-                <Minus className="w-5 h-5" />
-              </button>
+        <div className="flex items-center justify-center gap-4 mb-4">
+          <button
+            onClick={() => setTargetReplicas(Math.max(0, targetReplicas - 1))}
+            className="p-2 rounded-lg bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+            disabled={targetReplicas <= 0}
+          >
+            <Minus className="w-5 h-5" />
+          </button>
 
-              <input
-                type="number"
-                min="0"
-                max="10000"
-                value={targetReplicas}
-                onChange={(e) => setTargetReplicas(Math.min(10000, Math.max(0, parseInt(e.target.value) || 0)))}
-                className="w-20 text-center text-2xl font-semibold bg-theme-elevated border border-theme-border rounded-lg py-2 text-theme-text-primary focus:outline-none focus:border-blue-500"
-              />
+          <input
+            type="number"
+            min="0"
+            max="10000"
+            value={targetReplicas}
+            onChange={(e) => setTargetReplicas(Math.min(10000, Math.max(0, parseInt(e.target.value) || 0)))}
+            className="w-20 text-center text-2xl font-semibold bg-theme-elevated border border-theme-border rounded-lg py-2 text-theme-text-primary focus:outline-none focus:border-blue-500"
+            autoFocus
+          />
 
-              <button
-                onClick={() => setTargetReplicas(Math.min(10000, targetReplicas + 1))}
-                disabled={targetReplicas >= 10000}
-                className="p-2 rounded-lg bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <Plus className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="text-xs text-theme-text-tertiary text-center mb-4">
-              Current: {spec.replicas || 0} replicas
-              {targetReplicas !== (spec.replicas || 0) && (
-                <span className="text-theme-text-secondary">
-                  {' '}→ {targetReplicas}
-                </span>
-              )}
-            </div>
-
-            <div className="flex gap-2">
-              <button
-                onClick={() => setShowScaleDialog(false)}
-                className="flex-1 px-3 py-2 text-sm text-theme-text-secondary hover:text-theme-text-primary bg-theme-elevated hover:bg-theme-hover border border-theme-border rounded-lg transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleScale}
-                disabled={isScalePending || targetReplicas === (spec.replicas || 0)}
-                className="flex-1 px-3 py-2 text-sm text-white bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed rounded-lg transition-colors"
-              >
-                {isScalePending ? 'Scaling...' : 'Apply'}
-              </button>
-            </div>
-          </div>
+          <button
+            onClick={() => setTargetReplicas(Math.min(10000, targetReplicas + 1))}
+            disabled={targetReplicas >= 10000}
+            className="p-2 rounded-lg bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Plus className="w-5 h-5" />
+          </button>
         </div>
-      )}
+
+        <div className="text-xs text-theme-text-tertiary text-center mb-4">
+          Current: {spec.replicas || 0} replicas
+          {targetReplicas !== (spec.replicas || 0) && (
+            <span className="text-theme-text-secondary">
+              {' '}→ {targetReplicas}
+            </span>
+          )}
+        </div>
+
+        <div className="flex gap-2">
+          <button
+            onClick={() => setShowScaleDialog(false)}
+            className="flex-1 px-3 py-2 text-sm text-theme-text-secondary hover:text-theme-text-primary bg-theme-elevated hover:bg-theme-hover border border-theme-border rounded-lg transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={handleScale}
+            disabled={isScalePending || targetReplicas === (spec.replicas || 0)}
+            className="flex-1 px-3 py-2 text-sm text-white bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed rounded-lg transition-colors"
+          >
+            {isScalePending ? 'Scaling...' : 'Apply'}
+          </button>
+        </div>
+      </DialogPortal>
 
       <Section title="Strategy">
         <PropertyList>

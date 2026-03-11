@@ -1,4 +1,5 @@
 export { Tooltip } from './Tooltip'
+export { DialogPortal } from './DialogPortal'
 export { ConfirmDialog } from './ConfirmDialog'
 export { HealthRing } from './HealthRing'
 export { MetricsChart, MetricsSparkline } from './MetricsChart'

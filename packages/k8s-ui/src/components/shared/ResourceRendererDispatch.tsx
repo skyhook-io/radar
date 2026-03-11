@@ -175,8 +175,9 @@ import type { CopyHandler } from '../ui/drawer-components'
 
 /**
  * Override map letting each platform consumer swap in its own renderer components.
- * Each override receives the same base props that ResourceRendererDispatch already passes,
- * and internally manages its own platform hooks (metrics, exec, port-forward, etc.).
+ * Each override receives only the props that ResourceRendererDispatch passes at its
+ * call site — a subset of the base renderer's full props. The override is responsible
+ * for wiring any additional behavior (metrics, exec, port-forward, scale, etc.) internally.
  *
  * When an override is not provided, the base (shared) renderer is used.
  */
