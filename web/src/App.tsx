@@ -545,7 +545,7 @@ function AppInner() {
                   !connected
                     ? 'Disconnected'
                     : crdDiscoveryStatus === 'discovering'
-                      ? 'Connected — discovering CRDs...'
+                      ? 'Connected — discovering Custom Resources...'
                       : 'Connected'
                 }
                 delay={100}
@@ -562,7 +562,11 @@ function AppInner() {
                 />
               </Tooltip>
               <span className="text-xs text-theme-text-tertiary hidden xl:inline">
-                {connected ? 'Connected' : 'Disconnected'}
+                {!connected
+                  ? 'Disconnected'
+                  : crdDiscoveryStatus === 'discovering'
+                    ? 'Discovering Custom Resources...'
+                    : 'Connected'}
               </span>
               {!connected && (
                 <button
