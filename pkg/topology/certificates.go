@@ -8,6 +8,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"math"
 	"strings"
 	"time"
@@ -15,7 +16,7 @@ import (
 
 // ParsePEMCertificates decodes PEM-encoded certificate data and returns parsed
 // CertificateInfo for each certificate found, in the order they appear in the PEM data.
-// Non-CERTIFICATE PEM blocks and certificates that fail to parse are silently skipped.
+// Non-CERTIFICATE PEM blocks are silently skipped; certificates that fail to parse are logged and skipped.
 func ParsePEMCertificates(certData []byte) []CertificateInfo {
 	var result []CertificateInfo
 
@@ -32,6 +33,7 @@ func ParsePEMCertificates(certData []byte) []CertificateInfo {
 
 		cert, err := x509.ParseCertificate(block.Bytes)
 		if err != nil {
+			log.Printf("[certificate] Failed to parse certificate block %d in PEM chain: %v", len(result)+1, err)
 			continue
 		}
 
