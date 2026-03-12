@@ -540,11 +540,27 @@ function AppInner() {
             <ContextSwitcher />
             {/* Connection status - next to cluster name */}
             <div className="flex items-center gap-1.5 ml-1">
-              <span
-                className={`w-2 h-2 rounded-full ${
-                  connected ? 'bg-green-500' : 'bg-red-500'
-                }`}
-              />
+              <Tooltip
+                content={
+                  !connected
+                    ? 'Disconnected'
+                    : crdDiscoveryStatus === 'discovering'
+                      ? 'Connected — discovering CRDs...'
+                      : 'Connected'
+                }
+                delay={100}
+                position="bottom"
+              >
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    !connected
+                      ? 'bg-red-500'
+                      : crdDiscoveryStatus === 'discovering'
+                        ? 'bg-amber-400 animate-pulse'
+                        : 'bg-green-500'
+                  }`}
+                />
+              </Tooltip>
               <span className="text-xs text-theme-text-tertiary hidden xl:inline">
                 {connected ? 'Connected' : 'Disconnected'}
               </span>
@@ -590,14 +606,6 @@ function AppInner() {
 
         {/* Right: Controls */}
         <div className="flex items-center gap-3 shrink-0">
-          {/* CRD Discovery indicator */}
-          {crdDiscoveryStatus === 'discovering' && (
-            <div className="flex items-center gap-1.5 text-xs text-amber-400">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              <span className="hidden sm:inline lg:hidden">CRDs</span>
-              <span className="hidden lg:inline">Discovering CRDs...</span>
-            </div>
-          )}
           {/* Namespace selector with search */}
           <NamespaceSelector
             value={namespaces}
