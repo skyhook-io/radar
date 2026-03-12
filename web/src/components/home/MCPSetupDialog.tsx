@@ -1,5 +1,5 @@
-import { useRef, useEffect, useState } from 'react'
-import { X, Copy, Check, Radio, Terminal, MessageSquare, Code2, ChevronRight } from 'lucide-react'
+import { useRef, useEffect, useState, useCallback } from 'react'
+import { X, Copy, Check, Radio, Terminal, MessageSquare, Code2, ChevronRight, Pin } from 'lucide-react'
 
 interface MCPSetupDialogProps {
   open: boolean
@@ -40,6 +40,46 @@ function CodeBlock({ children }: { children: string }) {
 
 export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
+  const [isDesktop, setIsDesktop] = useState(false)
+  const [portPinned, setPortPinned] = useState(false)
+  const [pinning, setPinning] = useState(false)
+  const [pinSuccess, setPinSuccess] = useState(false)
+
+  useEffect(() => {
+    if (!open) return
+    setPinSuccess(false)
+    fetch('/api/config')
+      .then((res) => res.ok ? res.json() : null)
+      .then((data) => {
+        if (data) {
+          setIsDesktop(data.isDesktop ?? false)
+          setPortPinned(data.file?.port != null && data.file.port > 0)
+        }
+      })
+      .catch(() => {})
+  }, [open])
+
+  const handlePinPort = useCallback(async () => {
+    const currentPort = Number(window.location.port) || 80
+    setPinning(true)
+    try {
+      const configRes = await fetch('/api/config')
+      if (!configRes.ok) return
+      const configData = await configRes.json()
+      const updated = { ...configData.file, port: currentPort }
+      const res = await fetch('/api/config', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(updated),
+      })
+      if (res.ok) {
+        setPortPinned(true)
+        setPinSuccess(true)
+      }
+    } catch {} finally {
+      setPinning(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -57,6 +97,8 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
   }, [open])
 
   if (!open) return null
+
+  const currentPort = Number(window.location.port) || 80
 
   const claudeDesktopConfig = JSON.stringify({
     mcpServers: {
@@ -169,6 +211,40 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
               </div>
               <CopyButton text={mcpUrl} />
             </div>
+
+            {isDesktop && !portPinned && (
+              <div className="flex items-center gap-2 px-3 py-2 text-xs bg-amber-500/10 border border-amber-500/20 rounded-md">
+                <span className="text-amber-700 dark:text-amber-300 flex-1">
+                  Port changes on every restart. Pin it to keep a stable MCP endpoint.
+                </span>
+                <button
+                  onClick={handlePinPort}
+                  disabled={pinning}
+                  className="shrink-0 flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-amber-800 dark:text-amber-200 hover:text-amber-900 dark:hover:text-white bg-amber-500/20 hover:bg-amber-500/30 rounded transition-colors disabled:opacity-50"
+                >
+                  <Pin className="w-3 h-3" />
+                  Pin port {currentPort}
+                </button>
+              </div>
+            )}
+
+            {isDesktop && pinSuccess && (
+              <p className="text-xs text-green-700 dark:text-green-400/80 px-0.5">
+                Port {currentPort} pinned. MCP endpoint will remain stable across restarts.
+              </p>
+            )}
+
+            {isDesktop && (
+              <p className="text-xs text-theme-text-tertiary px-0.5">
+                You can change the port in{' '}
+                <button
+                  onClick={() => { onClose(); window.dispatchEvent(new Event('radar:open-settings')) }}
+                  className="text-purple-500 dark:text-purple-400 hover:underline underline-offset-2"
+                >
+                  Settings
+                </button>.
+              </p>
+            )}
           </div>
 
           {/* Setup instructions */}

@@ -11,13 +11,19 @@ import (
 // browser mode.
 type RedirectHandler struct {
 	serverAddr string // e.g. "localhost:54321"
+	namespace  string // initial namespace filter (empty = all)
 }
 
-func NewRedirectHandler(serverAddr string) *RedirectHandler {
-	return &RedirectHandler{serverAddr: serverAddr}
+func NewRedirectHandler(serverAddr, namespace string) *RedirectHandler {
+	return &RedirectHandler{serverAddr: serverAddr, namespace: namespace}
 }
 
 func (h *RedirectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	target := "http://" + h.serverAddr
+	if h.namespace != "" {
+		target += "?namespace=" + h.namespace
+	}
+
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	fmt.Fprintf(w, `<!DOCTYPE html>
 <html>
@@ -49,7 +55,7 @@ func (h *RedirectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
   @keyframes spin { to { transform: rotate(360deg); } }
 </style>
 <script>
-  window.location.replace("http://%s");
+  window.location.replace("%s");
 </script>
 </head>
 <body>
@@ -58,5 +64,5 @@ func (h *RedirectHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
   <div>Starting Radar...</div>
 </div>
 </body>
-</html>`, h.serverAddr)
+</html>`, target)
 }

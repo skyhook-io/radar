@@ -720,8 +720,6 @@ func TestSmokeMetricsNilDynamicClient(t *testing.T) {
 	}
 }
 
-// --- requireConnected guard (table-driven) ---
-
 // --- Settings & Config endpoints ---
 
 func TestSmokeGetSettings(t *testing.T) {
@@ -733,7 +731,7 @@ func TestSmokeGetSettings(t *testing.T) {
 func TestSmokePutSettings(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	payload := `{"theme":"light","logsWrap":false}`
+	payload := `{"theme":"light"}`
 	resp := put(t, "/api/settings", payload)
 	defer resp.Body.Close()
 
@@ -745,9 +743,6 @@ func TestSmokePutSettings(t *testing.T) {
 	json.NewDecoder(resp.Body).Decode(&body)
 	if body["theme"] != "light" {
 		t.Errorf("theme = %v, want light", body["theme"])
-	}
-	if body["logsWrap"] != false {
-		t.Errorf("logsWrap = %v, want false", body["logsWrap"])
 	}
 
 	// Verify it persists — GET should return the same values
@@ -764,8 +759,8 @@ func TestSmokePutSettingsPreservesExisting(t *testing.T) {
 	// Set theme first
 	put(t, "/api/settings", `{"theme":"dark"}`)
 
-	// Now set logsTimestamps without theme — theme should be preserved
-	resp := put(t, "/api/settings", `{"logsTimestamps":false}`)
+	// Now set pinnedKinds without theme — theme should be preserved
+	resp := put(t, "/api/settings", `{"pinnedKinds":[{"name":"pods","kind":"Pod","group":""}]}`)
 	defer resp.Body.Close()
 
 	var body map[string]any
@@ -773,8 +768,9 @@ func TestSmokePutSettingsPreservesExisting(t *testing.T) {
 	if body["theme"] != "dark" {
 		t.Errorf("theme was overwritten: got %v", body["theme"])
 	}
-	if body["logsTimestamps"] != false {
-		t.Errorf("logsTimestamps = %v, want false", body["logsTimestamps"])
+	pinnedKinds, ok := body["pinnedKinds"].([]any)
+	if !ok || len(pinnedKinds) != 1 {
+		t.Errorf("pinnedKinds = %v, want 1 entry", body["pinnedKinds"])
 	}
 }
 

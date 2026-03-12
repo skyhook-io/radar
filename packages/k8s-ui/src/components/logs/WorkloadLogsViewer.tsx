@@ -42,14 +42,6 @@ export interface WorkloadLogsViewerProps {
    * Called to open an SSE connection for the whole workload.
    */
   createStream?: (params: WorkloadLogsFetchParams) => EventSource
-  /** Initial word-wrap preference (overrides localStorage) */
-  initialLogsWrap?: boolean
-  /** Initial timestamps preference (overrides localStorage) */
-  initialLogsTimestamps?: boolean
-  /** Called when word-wrap preference changes */
-  onLogsWrapChange?: (value: boolean) => void
-  /** Called when timestamps preference changes */
-  onLogsTimestampsChange?: (value: boolean) => void
 }
 
 const POD_COLORS = [
@@ -57,7 +49,7 @@ const POD_COLORS = [
   'text-pink-400', 'text-cyan-400', 'text-orange-400', 'text-lime-400',
 ]
 
-export function WorkloadLogsViewer({ name, fetchAll, createStream, initialLogsWrap, initialLogsTimestamps, onLogsWrapChange, onLogsTimestampsChange }: WorkloadLogsViewerProps) {
+export function WorkloadLogsViewer({ name, fetchAll, createStream }: WorkloadLogsViewerProps) {
   const [selectedContainer, setSelectedContainer] = useState<string>('')
   const [pods, setPods] = useState<WorkloadPodInfo[]>([])
   const [selectedPods, setSelectedPods] = useState<Set<string>>(new Set())
@@ -266,10 +258,6 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, initialLogsWr
       showPodName
       emptyMessage={pods.length === 0 ? 'No pods found' : 'No logs available'}
       errorMessage={fetchError}
-      initialLogsWrap={initialLogsWrap}
-      initialLogsTimestamps={initialLogsTimestamps}
-      onLogsWrapChange={onLogsWrapChange}
-      onLogsTimestampsChange={onLogsTimestampsChange}
     />
   )
 }

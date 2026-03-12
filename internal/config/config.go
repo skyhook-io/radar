@@ -24,12 +24,15 @@ type Config struct {
 	MCP             *bool    `json:"mcp,omitempty"` // nil = default (true), false = disabled
 }
 
+// mu serializes Load-mutate-Save cycles to prevent concurrent writes
+// from overwriting each other's changes.
 var mu sync.Mutex
 
 // Path returns the config file path (~/.radar/config.json).
 func Path() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
+		log.Printf("[config] Cannot determine home directory: %v (config will not be persisted)", err)
 		return ""
 	}
 	return filepath.Join(homeDir, ".radar", "config.json")
@@ -74,7 +77,11 @@ func Save(c Config) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp) // best-effort cleanup
+		return err
+	}
+	return nil
 }
 
 // Update atomically loads, applies a mutation, and saves config.

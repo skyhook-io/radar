@@ -11,7 +11,7 @@ func TestLoadMissing(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
 	s := Load()
-	if s.Theme != "" || s.PinnedKinds != nil || s.LogsWrap != nil || s.LogsTimestamps != nil {
+	if s.Theme != "" || s.PinnedKinds != nil {
 		t.Errorf("expected zero-value Settings, got %+v", s)
 	}
 }
@@ -19,13 +19,9 @@ func TestLoadMissing(t *testing.T) {
 func TestSaveAndLoad(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	wrap := true
-	ts := false
 	want := Settings{
-		Theme:          "dark",
-		PinnedKinds:    []PinnedKind{{Name: "pods", Kind: "Pod", Group: ""}},
-		LogsWrap:       &wrap,
-		LogsTimestamps: &ts,
+		Theme:       "dark",
+		PinnedKinds: []PinnedKind{{Name: "pods", Kind: "Pod", Group: ""}},
 	}
 
 	if err := Save(want); err != nil {
@@ -39,12 +35,6 @@ func TestSaveAndLoad(t *testing.T) {
 	if len(got.PinnedKinds) != 1 || got.PinnedKinds[0].Name != "pods" {
 		t.Errorf("PinnedKinds = %v, want 1 entry with Name=pods", got.PinnedKinds)
 	}
-	if got.LogsWrap == nil || *got.LogsWrap != true {
-		t.Errorf("LogsWrap = %v, want true", got.LogsWrap)
-	}
-	if got.LogsTimestamps == nil || *got.LogsTimestamps != false {
-		t.Errorf("LogsTimestamps = %v, want false", got.LogsTimestamps)
-	}
 }
 
 func TestUpdateMergesFields(t *testing.T) {
@@ -53,10 +43,9 @@ func TestUpdateMergesFields(t *testing.T) {
 	// Set initial state
 	Save(Settings{Theme: "light"})
 
-	// Update only LogsWrap — Theme should be preserved
-	wrap := false
+	// Update only PinnedKinds — Theme should be preserved
 	result, err := Update(func(s *Settings) {
-		s.LogsWrap = &wrap
+		s.PinnedKinds = []PinnedKind{{Name: "services", Kind: "Service", Group: ""}}
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
@@ -64,33 +53,26 @@ func TestUpdateMergesFields(t *testing.T) {
 	if result.Theme != "light" {
 		t.Errorf("Theme was overwritten: got %q", result.Theme)
 	}
-	if result.LogsWrap == nil || *result.LogsWrap != false {
-		t.Errorf("LogsWrap = %v, want false", result.LogsWrap)
+	if len(result.PinnedKinds) != 1 || result.PinnedKinds[0].Name != "services" {
+		t.Errorf("PinnedKinds = %v, want 1 entry with Name=services", result.PinnedKinds)
 	}
 
 	// Verify it persisted
 	loaded := Load()
-	if loaded.Theme != "light" || loaded.LogsWrap == nil || *loaded.LogsWrap != false {
+	if loaded.Theme != "light" || len(loaded.PinnedKinds) != 1 {
 		t.Errorf("persisted state doesn't match: %+v", loaded)
 	}
 }
 
-func TestNilBoolsOmittedInJSON(t *testing.T) {
-	// Settings with nil bool pointers should produce clean JSON without those fields
-	s := Settings{Theme: "dark"}
+func TestEmptySettingsProducesMinimalJSON(t *testing.T) {
+	s := Settings{}
 	data, err := json.Marshal(s)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	var parsed map[string]any
-	json.Unmarshal(data, &parsed)
-
-	if _, ok := parsed["logsWrap"]; ok {
-		t.Error("nil LogsWrap should be omitted from JSON")
-	}
-	if _, ok := parsed["logsTimestamps"]; ok {
-		t.Error("nil LogsTimestamps should be omitted from JSON")
+	if string(data) != "{}" {
+		t.Errorf("zero-value Settings should marshal to {}, got %s", data)
 	}
 }
 

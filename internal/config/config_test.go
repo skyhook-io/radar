@@ -26,8 +26,10 @@ func TestSaveAndLoad(t *testing.T) {
 	mcp := true
 	want := Config{
 		Kubeconfig:      "/tmp/kubeconfig",
+		KubeconfigDirs:  []string{"/dir1", "/dir2"},
 		Namespace:       "prod",
 		Port:            9999,
+		NoBrowser:       true,
 		TimelineStorage: "sqlite",
 		HistoryLimit:    5000,
 		PrometheusURL:   "http://prom:9090",
@@ -48,11 +50,17 @@ func TestSaveAndLoad(t *testing.T) {
 	if got.Kubeconfig != want.Kubeconfig {
 		t.Errorf("Kubeconfig = %q, want %q", got.Kubeconfig, want.Kubeconfig)
 	}
+	if len(got.KubeconfigDirs) != 2 || got.KubeconfigDirs[0] != "/dir1" || got.KubeconfigDirs[1] != "/dir2" {
+		t.Errorf("KubeconfigDirs = %v, want %v", got.KubeconfigDirs, want.KubeconfigDirs)
+	}
 	if got.Port != want.Port {
 		t.Errorf("Port = %d, want %d", got.Port, want.Port)
 	}
 	if got.Namespace != want.Namespace {
 		t.Errorf("Namespace = %q, want %q", got.Namespace, want.Namespace)
+	}
+	if got.NoBrowser != want.NoBrowser {
+		t.Errorf("NoBrowser = %v, want %v", got.NoBrowser, want.NoBrowser)
 	}
 	if got.TimelineStorage != want.TimelineStorage {
 		t.Errorf("TimelineStorage = %q, want %q", got.TimelineStorage, want.TimelineStorage)

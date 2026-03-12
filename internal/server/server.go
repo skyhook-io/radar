@@ -2004,12 +2004,6 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		if patch.PinnedKinds != nil {
 			current.PinnedKinds = patch.PinnedKinds
 		}
-		if patch.LogsWrap != nil {
-			current.LogsWrap = patch.LogsWrap
-		}
-		if patch.LogsTimestamps != nil {
-			current.LogsTimestamps = patch.LogsTimestamps
-		}
 	})
 	if err != nil {
 		log.Printf("[settings] Failed to save settings: %v", err)
@@ -2021,12 +2015,15 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 
 // Config handlers (persistent startup configuration)
 
+// configResponse bundles the on-disk config file with the effective startup
+// config so the UI can show "currently running" hints for values that differ.
 type configResponse struct {
 	File      config.Config `json:"file"`
 	Effective config.Config `json:"effective"`
 	IsDesktop bool          `json:"isDesktop"`
 }
 
+// handleGetConfig returns the on-disk config file alongside the effective startup config.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	resp := configResponse{
 		File:      config.Load(),
@@ -2038,6 +2035,8 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, resp)
 }
 
+// handlePutConfig replaces the entire config file. Changes take effect on next restart.
+// Unlike handlePutSettings (which merges fields), this is a full replacement.
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	var updated config.Config
 	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {

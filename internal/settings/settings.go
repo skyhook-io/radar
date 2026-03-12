@@ -17,10 +17,8 @@ type PinnedKind struct {
 
 // Settings holds user preferences persisted across restarts.
 type Settings struct {
-	Theme          string       `json:"theme,omitempty"`
-	PinnedKinds    []PinnedKind `json:"pinnedKinds,omitempty"`
-	LogsWrap       *bool        `json:"logsWrap,omitempty"`       // nil = default (true)
-	LogsTimestamps *bool        `json:"logsTimestamps,omitempty"` // nil = default (true)
+	Theme       string       `json:"theme,omitempty"`
+	PinnedKinds []PinnedKind `json:"pinnedKinds,omitempty"`
 }
 
 // mu serializes Load-Decode-Save cycles to prevent concurrent PUTs from
@@ -31,6 +29,7 @@ var mu sync.Mutex
 func Path() string {
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
+		log.Printf("[settings] Cannot determine home directory: %v (settings will not be persisted)", err)
 		return ""
 	}
 	return filepath.Join(homeDir, ".radar", "settings.json")
@@ -74,7 +73,11 @@ func Save(s Settings) error {
 	if err := os.WriteFile(tmp, data, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	if err := os.Rename(tmp, path); err != nil {
+		os.Remove(tmp) // best-effort cleanup
+		return err
+	}
+	return nil
 }
 
 // Update atomically loads, applies a mutation, and saves settings.

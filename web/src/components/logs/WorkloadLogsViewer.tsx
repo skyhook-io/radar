@@ -2,7 +2,6 @@ import { useCallback } from 'react'
 import { fetchJSON, createWorkloadLogStream } from '../../api/client'
 import { WorkloadLogsViewer as SharedWorkloadLogsViewer } from '@skyhook-io/k8s-ui'
 import type { WorkloadLogsFetchParams, WorkloadLogsResult } from '@skyhook-io/k8s-ui'
-import { useLogPreferences } from '../../hooks/useLogPreferences'
 
 interface WorkloadLogsViewerProps {
   kind: string
@@ -11,7 +10,6 @@ interface WorkloadLogsViewerProps {
 }
 
 export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewerProps) {
-  const { logsWrap, logsTimestamps, setLogsWrap, setLogsTimestamps } = useLogPreferences()
   const fetchAll = useCallback(async (params: WorkloadLogsFetchParams): Promise<WorkloadLogsResult> => {
     const query = new URLSearchParams()
     if (params.container) query.set('container', params.container)
@@ -33,10 +31,6 @@ export function WorkloadLogsViewer({ kind, namespace, name }: WorkloadLogsViewer
       name={name}
       fetchAll={fetchAll}
       createStream={makeStream}
-      initialLogsWrap={logsWrap}
-      initialLogsTimestamps={logsTimestamps}
-      onLogsWrapChange={setLogsWrap}
-      onLogsTimestampsChange={setLogsTimestamps}
     />
   )
 }

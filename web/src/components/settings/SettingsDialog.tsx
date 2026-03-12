@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { Settings, X, RotateCcw, Loader2 } from 'lucide-react'
+import { Settings, X, RotateCcw, Loader2, Copy, Check, Pin } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
@@ -11,7 +11,7 @@ interface Config {
   namespace?: string
   port?: number
   noBrowser?: boolean
-  timelineStorage?: string
+  timelineStorage?: 'memory' | 'sqlite'
   timelineDbPath?: string
   historyLimit?: number
   prometheusUrl?: string
@@ -24,8 +24,6 @@ interface ConfigResponse {
   isDesktop: boolean
 }
 
-type Tab = 'startup' | 'preferences'
-
 interface SettingsDialogProps {
   open: boolean
   onClose: () => void
@@ -34,42 +32,33 @@ interface SettingsDialogProps {
 export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
-  const [activeTab, setActiveTab] = useState<Tab>('startup')
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
   const [editedConfig, setEditedConfig] = useState<Config>({})
   const [saving, setSaving] = useState(false)
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [configDirty, setConfigDirty] = useState(false)
+  const [loadError, setLoadError] = useState<string | null>(null)
 
-  // Preferences state
-  const [logsWrap, setLogsWrap] = useState<boolean | null>(null)
-  const [logsTimestamps, setLogsTimestamps] = useState<boolean | null>(null)
-
-  // Load config and settings on open
+  // Load config on open
   useEffect(() => {
     if (!open) return
     setSaveMessage(null)
     setConfigDirty(false)
+    setLoadError(null)
 
     fetch('/api/config')
-      .then((res) => res.ok ? res.json() : null)
-      .then((data: ConfigResponse | null) => {
-        if (data) {
-          setConfigData(data)
-          setEditedConfig(data.file)
-        }
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.json()
       })
-      .catch((err) => console.warn('[settings] Failed to load config:', err))
-
-    fetch('/api/settings')
-      .then((res) => res.ok ? res.json() : null)
-      .then((data) => {
-        if (data) {
-          setLogsWrap(data.logsWrap ?? null)
-          setLogsTimestamps(data.logsTimestamps ?? null)
-        }
+      .then((data: ConfigResponse) => {
+        setConfigData(data)
+        setEditedConfig(data.file)
       })
-      .catch((err) => console.warn('[settings] Failed to load settings:', err))
+      .catch((err) => {
+        console.warn('[settings] Failed to load config:', err)
+        setLoadError('Failed to load configuration.')
+      })
   }, [open])
 
   // ESC key
@@ -121,44 +110,10 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     }
   }, [editedConfig])
 
-  const resetConfig = useCallback(async () => {
-    setSaving(true)
-    try {
-      const res = await fetch('/api/config', {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({}),
-      })
-      if (res.ok) {
-        setEditedConfig({})
-        setConfigDirty(false)
-        setSaveMessage('Config reset to defaults. Changes take effect on next launch.')
-      } else {
-        const data = await res.json().catch(() => null)
-        setSaveMessage(`Error: ${data?.error || res.statusText}`)
-      }
-    } catch (err) {
-      setSaveMessage(`Error: ${err}`)
-    } finally {
-      setSaving(false)
-    }
-  }, [])
-
-  const updatePreference = useCallback((field: string, value: boolean) => {
-    if (field === 'logsWrap') setLogsWrap(value)
-    if (field === 'logsTimestamps') setLogsTimestamps(value)
-
-    // Also update localStorage for immediate effect
-    try {
-      if (field === 'logsWrap') localStorage.setItem('radar-logs-wrap', String(value))
-      if (field === 'logsTimestamps') localStorage.setItem('radar-logs-timestamps', String(value))
-    } catch {}
-
-    fetch('/api/settings', {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ [field]: value }),
-    }).catch((err) => console.warn('[settings] Failed to save preference:', err))
+  const resetConfig = useCallback(() => {
+    setEditedConfig({})
+    setConfigDirty(true)
+    setSaveMessage('All fields cleared. Press Save to apply.')
   }, [])
 
   if (!shouldRender) return null
@@ -203,54 +158,23 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
           </button>
         </div>
 
-        {/* Tabs */}
-        <div className="flex border-b border-theme-border shrink-0">
-          <button
-            onClick={() => setActiveTab('startup')}
-            className={clsx(
-              'px-4 py-2 text-sm font-medium transition-colors',
-              activeTab === 'startup'
-                ? 'text-theme-text-primary border-b-2 border-blue-500'
-                : 'text-theme-text-secondary hover:text-theme-text-primary'
-            )}
-          >
-            Configuration
-          </button>
-          <button
-            onClick={() => setActiveTab('preferences')}
-            className={clsx(
-              'px-4 py-2 text-sm font-medium transition-colors',
-              activeTab === 'preferences'
-                ? 'text-theme-text-primary border-b-2 border-blue-500'
-                : 'text-theme-text-secondary hover:text-theme-text-primary'
-            )}
-          >
-            Preferences
-          </button>
-        </div>
-
         {/* Content */}
         <div className="overflow-y-auto p-4 flex-1">
-          {activeTab === 'startup' && (
-            <StartupConfigTab
-              config={editedConfig}
-              effectiveConfig={configData?.effective}
-              isDesktop={isDesktop}
-              onChange={updateConfigField}
-            />
+          {loadError && (
+            <div className="mb-3 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-md">
+              {loadError}
+            </div>
           )}
-          {activeTab === 'preferences' && (
-            <PreferencesTab
-              logsWrap={logsWrap}
-              logsTimestamps={logsTimestamps}
-              onChange={updatePreference}
-            />
-          )}
+          <StartupConfigTab
+            config={editedConfig}
+            effectiveConfig={configData?.effective}
+            isDesktop={isDesktop}
+            onChange={updateConfigField}
+          />
         </div>
 
         {/* Footer */}
-        {activeTab === 'startup' && (
-          <div className="flex items-center justify-between gap-3 p-4 border-t border-theme-border shrink-0">
+        <div className="flex items-center justify-between gap-3 p-4 border-t border-theme-border shrink-0">
             <div className="flex items-center gap-2">
               <button
                 onClick={resetConfig}
@@ -279,7 +203,6 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
               Save
             </button>
           </div>
-        )}
       </div>
     </div>,
     document.body
@@ -335,16 +258,16 @@ function StartupConfigTab({
         onChange={(v) => onChange('namespace', v || undefined)}
       />
 
-      {!isDesktop && (
-        <ConfigNumberField
-          label="Port"
-          help="Server port"
-          value={config.port}
-          effectiveValue={effectiveConfig?.port}
-          placeholder="9280"
-          onChange={(v) => onChange('port', v)}
-        />
-      )}
+      <ConfigNumberField
+        label="Port"
+        help={isDesktop
+          ? 'Fixed server port (leave empty for random). Set this to keep a stable MCP endpoint.'
+          : 'Server port'}
+        value={config.port}
+        effectiveValue={effectiveConfig?.port}
+        placeholder={isDesktop ? 'Random' : '9280'}
+        onChange={(v) => onChange('port', v)}
+      />
 
       {!isDesktop && (
         <ConfigToggle
@@ -364,7 +287,7 @@ function StartupConfigTab({
             </label>
             <select
               value={config.timelineStorage ?? 'memory'}
-              onChange={(e) => onChange('timelineStorage', e.target.value === 'memory' ? undefined : e.target.value)}
+              onChange={(e) => onChange('timelineStorage', e.target.value === 'memory' ? undefined : e.target.value as 'sqlite')}
               className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary focus:outline-none focus:border-blue-500"
             >
               <option value="memory">Memory (default)</option>
@@ -397,10 +320,12 @@ function StartupConfigTab({
             onChange={(v) => onChange('prometheusUrl', v || undefined)}
           />
 
-          <ConfigToggle
-            label="MCP Server (AI tools)"
-            value={config.mcp ?? true}
-            onChange={(v) => onChange('mcp', v)}
+          <MCPSection
+            mcpEnabled={config.mcp ?? true}
+            onToggle={(v) => onChange('mcp', v)}
+            isDesktop={isDesktop}
+            portPinned={config.port != null && config.port > 0}
+            onPinPort={(port) => onChange('port', port)}
           />
         </div>
       </div>
@@ -408,38 +333,84 @@ function StartupConfigTab({
   )
 }
 
-// -- Preferences Tab ----------------------------------------------------------
+// -- MCP Section --------------------------------------------------------------
 
-function PreferencesTab({
-  logsWrap,
-  logsTimestamps,
-  onChange,
+function MCPSection({
+  mcpEnabled,
+  onToggle,
+  isDesktop,
+  portPinned,
+  onPinPort,
 }: {
-  logsWrap: boolean | null
-  logsTimestamps: boolean | null
-  onChange: (field: string, value: boolean) => void
+  mcpEnabled: boolean
+  onToggle: (value: boolean) => void
+  isDesktop: boolean
+  portPinned: boolean
+  onPinPort: (port: number) => void
 }) {
+  const [copied, setCopied] = useState(false)
+
+  const currentPort = Number(window.location.port) || 80
+  const mcpUrl = `http://localhost:${currentPort}/mcp`
+
+  const handleCopy = () => {
+    navigator.clipboard.writeText(mcpUrl)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  const handlePinPort = () => {
+    onPinPort(currentPort)
+  }
+
   return (
-    <div className="space-y-4">
-      <p className="text-xs text-theme-text-tertiary">
-        These preferences apply immediately.
-      </p>
+    <div className="space-y-3">
+      <ConfigToggle
+        label="MCP Server (AI tools)"
+        value={mcpEnabled}
+        onChange={onToggle}
+      />
 
-      <div className="space-y-3">
-        <h4 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider">Log Viewer</h4>
+      {mcpEnabled && (
+        <div className="space-y-2 pl-0.5">
+          <div>
+            <label className="block text-xs text-theme-text-secondary mb-1">MCP Endpoint</label>
+            <div className="flex items-center gap-2">
+              <code className="flex-1 px-2.5 py-1.5 text-xs font-mono bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary truncate">
+                {mcpUrl}
+              </code>
+              <button
+                onClick={handleCopy}
+                className="shrink-0 p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors"
+                title="Copy MCP URL"
+              >
+                {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
+              </button>
+            </div>
+          </div>
 
-        <ConfigToggle
-          label="Word wrap"
-          value={logsWrap ?? true}
-          onChange={(v) => onChange('logsWrap', v)}
-        />
+          {isDesktop && !portPinned && (
+            <div className="flex items-start gap-2 px-2.5 py-2 text-xs bg-amber-500/10 border border-amber-500/20 rounded-md">
+              <span className="text-amber-700 dark:text-amber-300 flex-1">
+                Port changes on every restart. Pin it to keep a stable MCP endpoint.
+              </span>
+              <button
+                onClick={handlePinPort}
+                className="shrink-0 flex items-center gap-1 px-2 py-0.5 text-xs font-medium text-amber-800 dark:text-amber-200 hover:text-amber-900 dark:hover:text-white bg-amber-500/20 hover:bg-amber-500/30 rounded transition-colors"
+              >
+                <Pin className="w-3 h-3" />
+                Pin port {currentPort}
+              </button>
+            </div>
+          )}
 
-        <ConfigToggle
-          label="Show timestamps"
-          value={logsTimestamps ?? true}
-          onChange={(v) => onChange('logsTimestamps', v)}
-        />
-      </div>
+          {isDesktop && portPinned && (
+            <p className="text-xs text-green-600 dark:text-green-400/80 px-0.5">
+              Port is pinned. MCP endpoint will remain stable across restarts.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -557,8 +528,8 @@ function EffectiveHint({
   if (currentStr === effectiveStr) return null
 
   return (
-    <p className="text-xs text-amber-400/80 mt-0.5">
-      Currently running: {effectiveStr} (from CLI flag)
+    <p className="text-xs text-amber-600 dark:text-amber-400/80 mt-0.5">
+      Currently running: {effectiveStr} (restart to apply)
     </p>
   )
 }

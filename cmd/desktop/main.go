@@ -74,7 +74,7 @@ func main() {
 		Kubeconfig:       *kubeconfig,
 		KubeconfigDirs:   app.ParseKubeconfigDirs(*kubeconfigDir),
 		Namespace:        *namespace,
-		Port:             0, // Random port — no conflicts with CLI
+		Port:             fileCfg.PortOr(0), // Configured port, or random to avoid conflicts with CLI
 		DevMode:          false,
 		HistoryLimit:     *historyLimit,
 		DebugEvents:      *debugEvents,
@@ -100,7 +100,7 @@ func main() {
 	timelineStoreCfg := app.BuildTimelineStoreConfig(cfg)
 	app.RegisterCallbacks(cfg, timelineStoreCfg)
 
-	// Create server on random port and attach desktop updater
+	// Create server and attach desktop updater
 	srv := app.CreateServer(cfg)
 	desktopUpdater := updater.New()
 	srv.SetUpdater(desktopUpdater)
@@ -113,6 +113,9 @@ func main() {
 		}
 	}()
 	<-ready
+
+	// Write port file so MCP clients can discover the running server
+	app.WriteMCPPortFile(srv.ActualPort())
 
 	// Initialize cluster in background (browser will see progress via SSE)
 	go app.InitializeCluster()
@@ -141,7 +144,7 @@ func main() {
 		WindowStartState: options.Maximised,
 
 		AssetServer: &assetserver.Options{
-			Handler: NewRedirectHandler(srv.ActualAddr()),
+			Handler: NewRedirectHandler(srv.ActualAddr(), cfg.Namespace),
 		},
 
 		Menu: createMenu(desktopApp),

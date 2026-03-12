@@ -16,36 +16,21 @@ test.describe('Settings dialog', () => {
     const dialog = page.locator('text=Settings')
     await expect(dialog.first()).toBeVisible()
 
-    // Should have Configuration and Preferences tabs
-    await expect(page.locator('button:text("Configuration")')).toBeVisible()
-    await expect(page.locator('button:text("Preferences")')).toBeVisible()
+    // Should show configuration fields
+    await expect(page.getByText('Kubeconfig', { exact: true })).toBeVisible()
   })
 
-  test('Configuration tab shows startup fields', async ({ page }) => {
+  test('Configuration fields are visible', async ({ page }) => {
     await page.goto('/')
     await page.waitForSelector('header', { timeout: 10000 })
 
     await page.locator('button[title="Settings"]').click()
 
-    // Should show the Configuration tab content by default
+    // Should show the Configuration content
     await expect(page.locator('text=Changes require a restart')).toBeVisible()
     await expect(page.getByText('Kubeconfig', { exact: true })).toBeVisible()
     await expect(page.locator('label:text("Default Namespace")')).toBeVisible()
     await expect(page.locator('label:text("Storage Backend")')).toBeVisible()
-  })
-
-  test('Preferences tab shows log viewer settings', async ({ page }) => {
-    await page.goto('/')
-    await page.waitForSelector('header', { timeout: 10000 })
-
-    await page.locator('button[title="Settings"]').click()
-
-    // Switch to Preferences tab
-    await page.locator('button:text("Preferences")').click()
-
-    await expect(page.locator('text=These preferences apply immediately')).toBeVisible()
-    await expect(page.locator('text=Word wrap')).toBeVisible()
-    await expect(page.locator('text=Show timestamps')).toBeVisible()
   })
 
   test('ESC closes the settings dialog', async ({ page }) => {
@@ -53,11 +38,11 @@ test.describe('Settings dialog', () => {
     await page.waitForSelector('header', { timeout: 10000 })
 
     await page.locator('button[title="Settings"]').click()
-    await expect(page.locator('button:text("Configuration")')).toBeVisible()
+    await expect(page.getByText('Kubeconfig', { exact: true })).toBeVisible()
 
     await page.keyboard.press('Escape')
     // Dialog should be gone after animation
-    await expect(page.locator('button:text("Configuration")')).not.toBeVisible({ timeout: 1000 })
+    await expect(page.getByText('Kubeconfig', { exact: true })).not.toBeVisible({ timeout: 1000 })
   })
 
   test('backdrop click closes the dialog', async ({ page }) => {
@@ -65,11 +50,11 @@ test.describe('Settings dialog', () => {
     await page.waitForSelector('header', { timeout: 10000 })
 
     await page.locator('button[title="Settings"]').click()
-    await expect(page.locator('button:text("Configuration")')).toBeVisible()
+    await expect(page.getByText('Kubeconfig', { exact: true })).toBeVisible()
 
     // Click the backdrop (outside the dialog)
     await page.locator('.bg-black\\/60').click({ position: { x: 10, y: 10 } })
-    await expect(page.locator('button:text("Configuration")')).not.toBeVisible({ timeout: 1000 })
+    await expect(page.getByText('Kubeconfig', { exact: true })).not.toBeVisible({ timeout: 1000 })
   })
 })
 
@@ -115,20 +100,20 @@ test.describe('Settings API', () => {
     await request.put('/api/config', { data: {} })
   })
 
-  test('PUT /api/settings with logsWrap persists correctly', async ({ request }) => {
+  test('PUT /api/settings with theme persists correctly', async ({ request }) => {
     const putRes = await request.put('/api/settings', {
-      data: { logsWrap: false },
+      data: { theme: 'dark' },
     })
     expect(putRes.ok()).toBeTruthy()
     const body = await putRes.json()
-    expect(body.logsWrap).toBe(false)
+    expect(body.theme).toBe('dark')
 
     // Read back
     const getRes = await request.get('/api/settings')
     const getBody = await getRes.json()
-    expect(getBody.logsWrap).toBe(false)
+    expect(getBody.theme).toBe('dark')
 
-    // Clean up — set back to default
-    await request.put('/api/settings', { data: { logsWrap: true } })
+    // Clean up
+    await request.put('/api/settings', { data: { theme: 'system' } })
   })
 })

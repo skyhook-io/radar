@@ -25,14 +25,6 @@ export interface LogsViewerProps {
   fetchLogs: (params: LogsFetchParams) => Promise<{ [container: string]: string }>
   /** If provided, the stream button is enabled. Called to open an SSE connection. */
   createStream?: (params: Omit<LogsFetchParams, 'previous'>) => EventSource
-  /** Initial word-wrap preference (overrides localStorage) */
-  initialLogsWrap?: boolean
-  /** Initial timestamps preference (overrides localStorage) */
-  initialLogsTimestamps?: boolean
-  /** Called when word-wrap preference changes */
-  onLogsWrapChange?: (value: boolean) => void
-  /** Called when timestamps preference changes */
-  onLogsTimestampsChange?: (value: boolean) => void
 }
 
 export function LogsViewer({
@@ -42,10 +34,6 @@ export function LogsViewer({
   initialContainer,
   fetchLogs,
   createStream,
-  initialLogsWrap,
-  initialLogsTimestamps,
-  onLogsWrapChange,
-  onLogsTimestampsChange,
 }: LogsViewerProps) {
   const [selectedContainer, setSelectedContainer] = useState(initialContainer || containers[0] || '')
   const [isLoading, setIsLoading] = useState(false)
@@ -153,10 +141,6 @@ export function LogsViewer({
       onDownload={downloadLogs}
       onClear={clear}
       toolbarExtra={toolbarExtra}
-      initialLogsWrap={initialLogsWrap}
-      initialLogsTimestamps={initialLogsTimestamps}
-      onLogsWrapChange={onLogsWrapChange}
-      onLogsTimestampsChange={onLogsTimestampsChange}
     />
   )
 }

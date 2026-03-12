@@ -182,6 +182,13 @@ function AppInner() {
     return wailsRuntime.EventsOn('open-settings', () => setShowSettings(true))
   }, [])
 
+  // Listen for "open-settings" DOM event (used by MCPSetupDialog etc.)
+  useEffect(() => {
+    const handler = () => setShowSettings(true)
+    window.addEventListener('radar:open-settings', handler)
+    return () => window.removeEventListener('radar:open-settings', handler)
+  }, [])
+
   // Diagnostics overlay state
   const [showDiagnostics, setShowDiagnostics] = useState(false)
 
