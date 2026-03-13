@@ -42,13 +42,15 @@ func handleSummary(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query per-namespace CPU cost
-	// container_cpu_allocation is a gauge (current allocated cores), not a counter — use avg_over_time
+	// container_cpu_allocation is a gauge (current allocated cores), not a counter — use avg_over_time.
+	// label_replace handles honor_labels=false setups where Prometheus renames the original
+	// namespace label to exported_namespace and sets namespace to the scrape target's namespace.
 	cpuResult, err := client.Query(r.Context(),
-		`sum by (namespace) (avg_over_time(container_cpu_allocation{namespace!=""}[1h]) * on(node) group_left() node_cpu_hourly_cost)`)
+		`sum by (namespace) (label_replace(avg_over_time(container_cpu_allocation{namespace!=""}[1h]), "namespace", "$1", "exported_namespace", "(.+)") * on(node) group_left() node_cpu_hourly_cost)`)
 	if err != nil {
 		// Try the opencost_container metric name variant (this IS a counter, so rate is correct)
 		cpuResult, err = client.Query(r.Context(),
-			`sum by (namespace) (rate(opencost_container_cpu_cost_total[1h]))`)
+			`sum by (namespace) (label_replace(rate(opencost_container_cpu_cost_total[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
 		if err != nil {
 			log.Printf("[opencost] CPU cost query failed: %v", err)
 			writeJSON(w, http.StatusOK, CostSummary{Available: false, Reason: ReasonQueryError})
@@ -59,11 +61,11 @@ func handleSummary(w http.ResponseWriter, r *http.Request) {
 	// Query per-namespace memory cost
 	// container_memory_allocation_bytes is a gauge — use avg_over_time
 	memResult, err := client.Query(r.Context(),
-		`sum by (namespace) (avg_over_time(container_memory_allocation_bytes{namespace!=""}[1h]) / 1073741824 * on(node) group_left() node_ram_hourly_cost)`)
+		`sum by (namespace) (label_replace(avg_over_time(container_memory_allocation_bytes{namespace!=""}[1h]), "namespace", "$1", "exported_namespace", "(.+)") / 1073741824 * on(node) group_left() node_ram_hourly_cost)`)
 	if err != nil {
 		// Try the opencost_container metric name variant (this IS a counter, so rate is correct)
 		memResult, err = client.Query(r.Context(),
-			`sum by (namespace) (rate(opencost_container_memory_cost_total[1h]))`)
+			`sum by (namespace) (label_replace(rate(opencost_container_memory_cost_total[1h]), "namespace", "$1", "exported_namespace", "(.+)"))`)
 		if err != nil {
 			log.Printf("[opencost] Memory cost query failed: %v", err)
 			writeJSON(w, http.StatusOK, CostSummary{Available: false, Reason: ReasonQueryError})
@@ -278,11 +280,14 @@ func handleWorkloads(w http.ResponseWriter, r *http.Request) {
 	// Sanitize namespace for safe PromQL label interpolation
 	safeNS := prometheuspkg.SanitizeLabelValue(ns)
 
-	// Query per-pod CPU cost in this namespace
-	cpuQuery := `sum by (pod) (avg_over_time(container_cpu_allocation{namespace="` + safeNS + `"}[1h]) * on(node) group_left() node_cpu_hourly_cost)`
+	// Query per-pod CPU cost in this namespace.
+	// Use "or" to handle both honor_labels configurations:
+	//   exported_namespace="X"  → honor_labels=false (namespace was renamed)
+	//   namespace="X", exported_namespace=""  → honor_labels=true (no renaming, label absent)
+	cpuQuery := `sum by (pod) ((avg_over_time(container_cpu_allocation{exported_namespace="` + safeNS + `"}[1h]) or avg_over_time(container_cpu_allocation{namespace="` + safeNS + `", exported_namespace=""}[1h])) * on(node) group_left() node_cpu_hourly_cost)`
 	cpuResult, err := client.Query(r.Context(), cpuQuery)
 	if err != nil {
-		cpuQuery = `sum by (pod) (rate(opencost_container_cpu_cost_total{namespace="` + safeNS + `"}[1h]))`
+		cpuQuery = `sum by (pod) (rate(opencost_container_cpu_cost_total{exported_namespace="` + safeNS + `"}[1h]) or rate(opencost_container_cpu_cost_total{namespace="` + safeNS + `", exported_namespace=""}[1h]))`
 		cpuResult, err = client.Query(r.Context(), cpuQuery)
 		if err != nil {
 			log.Printf("[opencost] Workload CPU cost query failed for %s: %v", ns, err)
@@ -292,10 +297,10 @@ func handleWorkloads(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Query per-pod memory cost in this namespace
-	memQuery := `sum by (pod) (avg_over_time(container_memory_allocation_bytes{namespace="` + safeNS + `"}[1h]) / 1073741824 * on(node) group_left() node_ram_hourly_cost)`
+	memQuery := `sum by (pod) ((avg_over_time(container_memory_allocation_bytes{exported_namespace="` + safeNS + `"}[1h]) or avg_over_time(container_memory_allocation_bytes{namespace="` + safeNS + `", exported_namespace=""}[1h])) / 1073741824 * on(node) group_left() node_ram_hourly_cost)`
 	memResult, err := client.Query(r.Context(), memQuery)
 	if err != nil {
-		memQuery = `sum by (pod) (rate(opencost_container_memory_cost_total{namespace="` + safeNS + `"}[1h]))`
+		memQuery = `sum by (pod) (rate(opencost_container_memory_cost_total{exported_namespace="` + safeNS + `"}[1h]) or rate(opencost_container_memory_cost_total{namespace="` + safeNS + `", exported_namespace=""}[1h]))`
 		memResult, err = client.Query(r.Context(), memQuery)
 		if err != nil {
 			log.Printf("[opencost] Workload memory cost query failed for %s: %v", ns, err)
@@ -332,10 +337,10 @@ func handleWorkloads(w http.ResponseWriter, r *http.Request) {
 
 	// Build per-pod cost map
 	type podCost struct {
-		cpuCost      float64
-		memoryCost   float64
-		cpuUsage     float64
-		memoryUsage  float64
+		cpuCost     float64
+		memoryCost  float64
+		cpuUsage    float64
+		memoryUsage float64
 	}
 	podCosts := make(map[string]*podCost)
 
@@ -522,12 +527,14 @@ func handleTrend(w http.ResponseWriter, r *http.Request) {
 	rangeStr := r.URL.Query().Get("range")
 	start, end, step, label := parseCostTimeRange(rangeStr)
 
-	// Combined CPU + memory allocation cost per namespace over time
+	// Combined CPU + memory allocation cost per namespace over time.
+	// label_replace normalises exported_namespace → namespace when honor_labels=false.
 	query := `sum by (namespace) (
-  avg_over_time(container_cpu_allocation{namespace!=""}[1h]) * on(node) group_left() node_cpu_hourly_cost
+  label_replace(avg_over_time(container_cpu_allocation{namespace!=""}[1h]), "namespace", "$1", "exported_namespace", "(.+)") * on(node) group_left() node_cpu_hourly_cost
 ) + sum by (namespace) (
-  avg_over_time(container_memory_allocation_bytes{namespace!=""}[1h]) / 1073741824 * on(node) group_left() node_ram_hourly_cost
+  label_replace(avg_over_time(container_memory_allocation_bytes{namespace!=""}[1h]), "namespace", "$1", "exported_namespace", "(.+)") / 1073741824 * on(node) group_left() node_ram_hourly_cost
 )`
+
 	result, err := client.QueryRange(r.Context(), query, start, end, step)
 	if err != nil {
 		log.Printf("[opencost] Trend query failed: %v", err)
