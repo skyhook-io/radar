@@ -686,6 +686,32 @@ See the main [README](../README.md#gitops) for GitOps integration details.
 | Certificate | `networking.internal.knative.dev/v1alpha1` | — | Yes | — |
 | ServerlessService | `networking.internal.knative.dev/v1alpha1` | — | Yes | — |
 
+## OpenCost
+
+[OpenCost](https://www.opencost.io/) is a CNCF tool for Kubernetes cost monitoring, exposing cloud provider pricing and workload resource allocation as Prometheus metrics.
+
+Radar discovers if Opencost metrics are available in the already-discovered Prometheus. If OpenCost is installed and scraping into Prometheus, cost data appears automatically with no additional configuration. The integration is passive and read-only.
+
+### What Radar Shows
+
+**Resource Costs** 
+
+**Dashboard Cost Card:** Cluster hourly cost and projected monthly cost, top 5 most expensive namespaces with a horizontal bar chart. Clicking navigates to the full Cost Insights view.
+
+**Cost Insights View (`/cost`):**
+- Header: cluster hourly/monthly cost, efficiency %, idle cost projection
+- Resource cost split bar: CPU / Memory / Storage percentage breakdown
+- Cost trend chart with 6h/24h/7d range selector and per-namespace hover tooltips
+- Namespace breakdown table (sortable by cost, efficiency, CPU/memory split) — click any row to expand per-workload costs on demand
+- Node costs table: instance type, region, and hourly/monthly pricing per machine
+- Efficiency color coding: green (50%+), amber (25–50%), red (below 25%)
+
+### Prerequisites
+
+1. OpenCost (or Kubecost) deployed in your cluster, with it's metrics being scraped by Prometheus
+
+OpenCost cost data is not CRD-based — no custom resources are required. Cost views appear automatically when metrics are detected; they are hidden when no OpenCost metrics are found in Prometheus.
+
 ---
 
 ## Any Other CRD
