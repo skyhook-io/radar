@@ -7,6 +7,15 @@
     <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Radar</title>
+    <script>
+      // Prevent flash of wrong theme before React hydrates
+      (function() {
+        var t = localStorage.getItem('radar-theme');
+        if (!t) t = window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark';
+        if (t === 'dark') document.documentElement.classList.add('dark');
+        document.documentElement.style.colorScheme = t;
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

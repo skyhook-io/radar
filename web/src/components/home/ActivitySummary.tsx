@@ -19,10 +19,10 @@ const MAX_LANES = 6
 const SPAN_MINUTES = 60
 
 const HEALTH_SPAN_COLORS: Record<string, string> = {
-  healthy: 'bg-green-500/50',
-  rolling: 'bg-blue-500/50',
-  degraded: 'bg-yellow-500/50',
-  unhealthy: 'bg-red-500/50',
+  healthy: 'bg-green-500/50 dark:bg-green-600/50',
+  rolling: 'bg-blue-500/50 dark:bg-blue-500/50',
+  degraded: 'bg-amber-500/50 dark:bg-[#b8861e]',
+  unhealthy: 'bg-red-500/50 dark:bg-red-500/50',
 }
 
 // Simplified interestingness scoring for the mini view

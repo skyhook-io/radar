@@ -166,7 +166,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
         isError
           ? 'bg-red-950/90 border-red-800/50'
           : isSuccess
-            ? 'bg-emerald-950/90 border-emerald-700/50 dark:bg-emerald-950/90 dark:border-emerald-700/50'
+            ? 'bg-green-950/90 border-green-700/50'
             : 'bg-theme-surface border-theme-border'
       )}
       style={style}
@@ -189,13 +189,13 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
       {/* Content */}
       <div className="flex-1 min-w-0">
         <div className="flex items-center gap-2">
-          <span className={clsx('text-sm font-medium', isError ? 'text-red-200' : isSuccess ? 'text-emerald-100' : 'text-theme-text-primary')}>
+          <span className={clsx('text-sm font-medium', isError ? 'text-red-200' : isSuccess ? 'text-green-100' : 'text-theme-text-primary')}>
             {toast.message}
           </span>
-          {!isError && <Check className={clsx('w-3.5 h-3.5 shrink-0', isSuccess ? 'text-emerald-300' : 'text-green-400')} />}
+          {!isError && <Check className={clsx('w-3.5 h-3.5 shrink-0', isSuccess ? 'text-green-300' : 'text-green-400')} />}
         </div>
         {toast.detail && (
-          <p className={clsx('mt-1 text-xs', isError ? 'text-red-300/80' : isSuccess ? 'text-emerald-300/80' : 'text-theme-text-secondary')}>
+          <p className={clsx('mt-1 text-xs', isError ? 'text-red-300/80' : isSuccess ? 'text-green-300/80' : 'text-theme-text-secondary')}>
             {toast.detail}
           </p>
         )}
@@ -214,7 +214,7 @@ function ToastItem({ toast, onDismiss }: { toast: Toast; onDismiss: () => void }
           isError
             ? 'text-red-400 hover:text-red-300 hover:bg-red-900/50'
             : isSuccess
-              ? 'text-emerald-400 hover:text-emerald-300 hover:bg-emerald-900/50'
+              ? 'text-green-400 hover:text-green-300 hover:bg-green-900/50'
               : 'text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated'
         )}
       >

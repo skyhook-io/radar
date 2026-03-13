@@ -19,7 +19,11 @@
     "./resources": "./src/components/resources/index.ts",
     "./logs": "./src/components/logs/index.ts",
     "./timeline": "./src/components/timeline/index.ts",
-    "./topology": "./src/components/topology/index.ts"
+    "./topology": "./src/components/topology/index.ts",
+    "./theme/variables.css": "./src/theme/variables.css",
+    "./theme/tailwind-theme.css": "./src/theme/tailwind-theme.css",
+    "./theme": "./src/theme/index.ts",
+    "./topology.css": "./src/components/topology/topology.css"
   },
   "scripts": {
     "tsc": "tsc --noEmit",

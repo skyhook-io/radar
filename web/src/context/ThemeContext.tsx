@@ -48,7 +48,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   // Apply theme to document
   useEffect(() => {
-    document.documentElement.setAttribute('data-theme', theme)
+    document.documentElement.classList.toggle('dark', theme === 'dark')
+    document.documentElement.style.colorScheme = theme
   }, [theme])
 
   // Sync theme from server (persisted settings survive port changes in desktop app)

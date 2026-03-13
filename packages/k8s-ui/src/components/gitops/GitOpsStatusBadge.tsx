@@ -1,6 +1,7 @@
 import { clsx } from 'clsx'
 import { CheckCircle2, AlertCircle, Loader2, Pause, HelpCircle, XCircle } from 'lucide-react'
 import type { GitOpsStatus, SyncStatus, GitOpsHealthStatus } from '../../types/gitops'
+import { SEVERITY_BADGE_BORDERED, SEVERITY_BADGE } from '../../utils/badge-colors'
 
 interface GitOpsStatusBadgeProps {
   status: GitOpsStatus
@@ -66,22 +67,12 @@ function getStatusIcon(status: GitOpsStatus) {
 }
 
 function getStatusColorClass(status: GitOpsStatus): string {
-  if (status.suspended) {
-    return 'bg-yellow-500/20 text-yellow-400 border border-yellow-500/30'
-  }
-  if (status.sync === 'Synced' && status.health === 'Healthy') {
-    return 'bg-green-500/20 text-green-400 border border-green-500/30'
-  }
-  if (status.health === 'Degraded') {
-    return 'bg-red-500/20 text-red-400 border border-red-500/30'
-  }
-  if (status.sync === 'OutOfSync') {
-    return 'bg-orange-500/20 text-orange-400 border border-orange-500/30'
-  }
-  if (status.sync === 'Reconciling' || status.health === 'Progressing') {
-    return 'bg-blue-500/20 text-blue-400 border border-blue-500/30'
-  }
-  return 'bg-gray-500/20 text-gray-400 border border-gray-500/30'
+  if (status.suspended) return SEVERITY_BADGE_BORDERED.warning
+  if (status.sync === 'Synced' && status.health === 'Healthy') return SEVERITY_BADGE_BORDERED.success
+  if (status.health === 'Degraded') return SEVERITY_BADGE_BORDERED.error
+  if (status.sync === 'OutOfSync') return SEVERITY_BADGE_BORDERED.warning
+  if (status.sync === 'Reconciling' || status.health === 'Progressing') return SEVERITY_BADGE_BORDERED.info
+  return SEVERITY_BADGE_BORDERED.neutral
 }
 
 function getStatusLabel(status: GitOpsStatus): string {
@@ -115,41 +106,17 @@ function HealthIndicator({ health }: HealthIndicatorProps) {
 function getHealthInfo(health: GitOpsHealthStatus) {
   switch (health) {
     case 'Healthy':
-      return {
-        icon: CheckCircle2,
-        color: 'bg-green-500/10 text-green-400',
-        label: 'Healthy',
-      }
+      return { icon: CheckCircle2, color: SEVERITY_BADGE.success, label: 'Healthy' }
     case 'Progressing':
-      return {
-        icon: Loader2,
-        color: 'bg-blue-500/10 text-blue-400',
-        label: 'Progressing',
-      }
+      return { icon: Loader2, color: SEVERITY_BADGE.info, label: 'Progressing' }
     case 'Degraded':
-      return {
-        icon: XCircle,
-        color: 'bg-red-500/10 text-red-400',
-        label: 'Degraded',
-      }
+      return { icon: XCircle, color: SEVERITY_BADGE.error, label: 'Degraded' }
     case 'Suspended':
-      return {
-        icon: Pause,
-        color: 'bg-yellow-500/10 text-yellow-400',
-        label: 'Suspended',
-      }
+      return { icon: Pause, color: SEVERITY_BADGE.warning, label: 'Suspended' }
     case 'Missing':
-      return {
-        icon: AlertCircle,
-        color: 'bg-orange-500/10 text-orange-400',
-        label: 'Missing',
-      }
+      return { icon: AlertCircle, color: SEVERITY_BADGE.warning, label: 'Missing' }
     default:
-      return {
-        icon: HelpCircle,
-        color: 'bg-gray-500/10 text-gray-400',
-        label: 'Unknown',
-      }
+      return { icon: HelpCircle, color: SEVERITY_BADGE.neutral, label: 'Unknown' }
   }
 }
 
@@ -159,7 +126,7 @@ function getHealthInfo(health: GitOpsHealthStatus) {
 export function SyncStatusBadge({ sync, suspended }: { sync: SyncStatus; suspended?: boolean }) {
   if (suspended) {
     return (
-      <span className="px-2 py-0.5 rounded text-xs font-medium bg-yellow-500/20 text-yellow-400 border border-yellow-500/30 inline-flex items-center gap-1">
+      <span className={clsx('px-2 py-0.5 rounded text-xs font-medium inline-flex items-center gap-1', SEVERITY_BADGE_BORDERED.warning)}>
         <Pause className="w-3 h-3" />
         Suspended
       </span>
@@ -180,29 +147,13 @@ export function SyncStatusBadge({ sync, suspended }: { sync: SyncStatus; suspend
 function getSyncConfig(sync: SyncStatus) {
   switch (sync) {
     case 'Synced':
-      return {
-        icon: CheckCircle2,
-        color: 'bg-green-500/20 text-green-400 border border-green-500/30',
-        label: 'Synced',
-      }
+      return { icon: CheckCircle2, color: SEVERITY_BADGE_BORDERED.success, label: 'Synced' }
     case 'OutOfSync':
-      return {
-        icon: AlertCircle,
-        color: 'bg-orange-500/20 text-orange-400 border border-orange-500/30',
-        label: 'OutOfSync',
-      }
+      return { icon: AlertCircle, color: SEVERITY_BADGE_BORDERED.warning, label: 'OutOfSync' }
     case 'Reconciling':
-      return {
-        icon: Loader2,
-        color: 'bg-blue-500/20 text-blue-400 border border-blue-500/30',
-        label: 'Syncing',
-      }
+      return { icon: Loader2, color: SEVERITY_BADGE_BORDERED.info, label: 'Syncing' }
     default:
-      return {
-        icon: HelpCircle,
-        color: 'bg-gray-500/20 text-gray-400 border border-gray-500/30',
-        label: 'Unknown',
-      }
+      return { icon: HelpCircle, color: SEVERITY_BADGE_BORDERED.neutral, label: 'Unknown' }
   }
 }
 

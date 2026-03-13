@@ -164,10 +164,10 @@ export function ConditionsSection({ conditions }: { conditions?: any[] }) {
 // ============================================================================
 
 const ALERT_COLORS = {
-  error:   { bg: 'bg-red-500/10', border: 'border-red-500/30', title: 'text-red-400', message: 'text-red-300/80', list: 'text-red-300', bullet: 'text-red-400/60' },
-  warning: { bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', title: 'text-yellow-400', message: 'text-yellow-300/80', list: 'text-yellow-300', bullet: 'text-yellow-400/60' },
-  info:    { bg: 'bg-blue-500/10', border: 'border-blue-500/30', title: 'text-blue-400', message: 'text-blue-300/80', list: 'text-blue-300', bullet: 'text-blue-400/60' },
-  success: { bg: 'bg-green-500/10', border: 'border-green-500/30', title: 'text-green-400', message: 'text-green-300/80', list: 'text-green-300', bullet: 'text-green-400/60' },
+  error:   { bg: 'bg-red-500/10', border: 'border-red-500/30', title: 'text-red-700 dark:text-red-400', message: 'text-red-600/80 dark:text-red-400/80', list: 'text-red-600 dark:text-red-400', bullet: 'text-red-500/60 dark:text-red-400/60' },
+  warning: { bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', title: 'text-yellow-700 dark:text-yellow-400', message: 'text-yellow-600/80 dark:text-yellow-400/80', list: 'text-yellow-600 dark:text-yellow-400', bullet: 'text-yellow-500/60 dark:text-yellow-400/60' },
+  info:    { bg: 'bg-blue-500/10', border: 'border-blue-500/30', title: 'text-blue-700 dark:text-blue-400', message: 'text-blue-600/80 dark:text-blue-400/80', list: 'text-blue-600 dark:text-blue-400', bullet: 'text-blue-500/60 dark:text-blue-400/60' },
+  success: { bg: 'bg-green-500/10', border: 'border-green-500/30', title: 'text-green-700 dark:text-green-400', message: 'text-green-600/80 dark:text-green-400/80', list: 'text-green-600 dark:text-green-400', bullet: 'text-green-500/60 dark:text-green-400/60' },
 } as const
 
 const DEFAULT_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -453,24 +453,24 @@ export function AppInfoSection({ data }: { data: any }) {
 export function getKindColor(kind: string): string {
   const k = kind.toLowerCase()
   // Use darker text for light mode contrast, brighter for dark mode
-  if (k.includes('pod')) return 'bg-lime-500/20 text-lime-700 dark:text-lime-300 border-lime-500/30'
-  if (k.includes('deployment')) return 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-300 border-emerald-500/30'
-  if (k.includes('service')) return 'bg-blue-500/20 text-blue-700 dark:text-blue-300 border-blue-500/30'
-  if (k.includes('gateway')) return 'bg-violet-500/20 text-violet-700 dark:text-violet-300 border-violet-500/30'
-  if (k.includes('route')) return 'bg-purple-500/20 text-purple-700 dark:text-purple-300 border-purple-500/30'
-  if (k.includes('ingress')) return 'bg-violet-500/20 text-violet-700 dark:text-violet-300 border-violet-500/30'
-  if (k.includes('configmap')) return 'bg-amber-500/20 text-amber-700 dark:text-amber-300 border-amber-500/30'
-  if (k.endsWith('report')) return 'bg-rose-500/20 text-rose-700 dark:text-rose-300 border-rose-500/30'
-  if (k.includes('secret')) return 'bg-red-500/20 text-red-700 dark:text-red-300 border-red-500/30'
-  if (k.includes('daemonset')) return 'bg-teal-500/20 text-teal-700 dark:text-teal-300 border-teal-500/30'
-  if (k.includes('statefulset')) return 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-300 border-cyan-500/30'
-  if (k.includes('replicaset')) return 'bg-green-500/20 text-green-700 dark:text-green-300 border-green-500/30'
-  if (k.includes('hpa') || k.includes('horizontalpodautoscaler')) return 'bg-pink-500/20 text-pink-700 dark:text-pink-300 border-pink-500/30'
-  if (k.includes('cronjob')) return 'bg-orange-500/20 text-orange-700 dark:text-orange-300 border-orange-500/30'
-  if (k.includes('job')) return 'bg-orange-500/20 text-orange-700 dark:text-orange-300 border-orange-500/30'
-  if (k.includes('node')) return 'bg-gray-500/20 text-gray-700 dark:text-gray-300 border-gray-500/30'
-  if (k.includes('namespace')) return 'bg-blue-500/20 text-blue-700 dark:text-blue-300 border-blue-500/30'
-  if (k.includes('persistentvolume')) return 'bg-purple-500/20 text-purple-700 dark:text-purple-300 border-purple-500/30'
+  if (k.includes('pod')) return 'bg-lime-500/20 text-lime-700 dark:text-lime-400 border-lime-500/30'
+  if (k.includes('deployment')) return 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
+  if (k.includes('service')) return 'bg-blue-500/20 text-blue-700 dark:text-blue-400 border-blue-500/30'
+  if (k.includes('gateway')) return 'bg-violet-500/20 text-violet-700 dark:text-violet-400 border-violet-500/30'
+  if (k.includes('route')) return 'bg-purple-500/20 text-purple-700 dark:text-purple-400 border-purple-500/30'
+  if (k.includes('ingress')) return 'bg-violet-500/20 text-violet-700 dark:text-violet-400 border-violet-500/30'
+  if (k.includes('configmap')) return 'bg-amber-500/20 text-amber-700 dark:text-amber-400 border-amber-500/30'
+  if (k.endsWith('report')) return 'bg-rose-500/20 text-rose-700 dark:text-rose-400 border-rose-500/30'
+  if (k.includes('secret')) return 'bg-red-500/20 text-red-700 dark:text-red-400 border-red-500/30'
+  if (k.includes('daemonset')) return 'bg-teal-500/20 text-teal-700 dark:text-teal-400 border-teal-500/30'
+  if (k.includes('statefulset')) return 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-400 border-cyan-500/30'
+  if (k.includes('replicaset')) return 'bg-green-500/20 text-green-700 dark:text-green-400 border-green-500/30'
+  if (k.includes('hpa') || k.includes('horizontalpodautoscaler')) return 'bg-pink-500/20 text-pink-700 dark:text-pink-400 border-pink-500/30'
+  if (k.includes('cronjob')) return 'bg-orange-500/20 text-orange-700 dark:text-orange-400 border-orange-500/30'
+  if (k.includes('job')) return 'bg-orange-500/20 text-orange-700 dark:text-orange-400 border-orange-500/30'
+  if (k.includes('node')) return 'bg-gray-500/20 text-gray-700 dark:text-gray-400 border-gray-500/30'
+  if (k.includes('namespace')) return 'bg-blue-500/20 text-blue-700 dark:text-blue-400 border-blue-500/30'
+  if (k.includes('persistentvolume')) return 'bg-purple-500/20 text-purple-700 dark:text-purple-400 border-purple-500/30'
   // Default color for CRDs
   return 'bg-fuchsia-500/20 text-fuchsia-700 dark:text-fuchsia-300 border-fuchsia-500/30'
 }

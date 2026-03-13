@@ -16,6 +16,7 @@ import {
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { AddonMode } from './TrafficView'
+import { getNamespaceColor } from '../../utils/traffic-colors'
 
 // Fast tooltip component using portal to escape overflow
 function Tooltip({ children, content }: { children: React.ReactNode; content: string }) {
@@ -52,54 +53,6 @@ function Tooltip({ children, content }: { children: React.ReactNode; content: st
       )}
     </div>
   )
-}
-
-// Namespace color palette (must match TrafficGraph.tsx)
-// Using maximally distinct colors spread across the hue spectrum
-const NAMESPACE_PALETTE = [
-  '#dc2626', // red-600
-  '#2563eb', // blue-600
-  '#16a34a', // green-600
-  '#9333ea', // purple-600
-  '#ea580c', // orange-600
-  '#0891b2', // cyan-600
-  '#c026d3', // fuchsia-600
-  '#65a30d', // lime-600
-  '#0d9488', // teal-600
-  '#e11d48', // rose-600
-  '#7c3aed', // violet-600
-  '#ca8a04', // yellow-600
-  '#4f46e5', // indigo-600
-  '#db2777', // pink-600
-  '#059669', // emerald-600
-  '#d97706', // amber-600
-]
-
-const NAMESPACE_NAMED_COLORS: Record<string, string> = {
-  production: '#991b1b', prod: '#991b1b',
-  staging: '#854d0e', stg: '#854d0e',
-  dev: '#1e40af', development: '#1e40af',
-  default: '#374151',
-}
-
-// Track assigned colors to avoid repetition
-const assignedColors = new Map<string, string>()
-let colorIndex = 0
-
-function getNamespaceColor(namespace: string): string {
-  const lower = namespace.toLowerCase()
-  if (NAMESPACE_NAMED_COLORS[lower]) return NAMESPACE_NAMED_COLORS[lower]
-
-  // Check if already assigned
-  if (assignedColors.has(namespace)) {
-    return assignedColors.get(namespace)!
-  }
-
-  // Assign next color in sequence (avoids hash collisions)
-  const color = NAMESPACE_PALETTE[colorIndex % NAMESPACE_PALETTE.length]
-  assignedColors.set(namespace, color)
-  colorIndex++
-  return color
 }
 
 // Connection threshold options

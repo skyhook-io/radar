@@ -1,0 +1,103 @@
+/*
+ * @skyhook-io/k8s-ui Theme Variables
+ *
+ * Single source of truth for the theme contract.
+ * Uses light-dark() for dual-value definitions.
+ * Consumers @import this file, then override any variables via CSS cascade.
+ *
+ * Toggle mechanism:
+ *   document.documentElement.classList.toggle('dark', isDark)
+ *   document.documentElement.style.colorScheme = isDark ? 'dark' : 'light'
+ */
+
+:root {
+  color-scheme: light dark;
+
+  /* ── Brand ── */
+  --color-brand: #2D7AFF;
+  --color-brand-light: light-dark(#1A5FCC, #5A9AFF);
+
+  /* ── Semantic status (theme-independent) ── */
+  --color-success: #22C55E;
+  --color-success-light: #4ADE80;
+  --color-success-dark: #16A34A;
+  --color-warning: #F59E0B;
+  --color-warning-light: #FBBF24;
+  --color-warning-dark: #D97706;
+  --color-error: #EF4444;
+  --color-error-light: #F87171;
+  --color-error-dark: #DC2626;
+  --color-info: #3B82F6;
+
+  /* ── Backgrounds ── */
+  --bg-base: light-dark(#f7f9fc, #0c1425);
+  --bg-surface: light-dark(#ffffff, #162033);
+  --bg-elevated: light-dark(#edf2f8, #1e2d45);
+  --bg-hover: light-dark(#e2e8f0, #2a3d58);
+  --bg-active: light-dark(#dbeafe, #1e3a5f);
+
+  /* ── Text ── */
+  --text-primary: light-dark(#0f172a, #f8fafc);
+  --text-secondary: light-dark(#475569, #cbd5e1);
+  --text-tertiary: light-dark(#64748b, #94a3b8);
+  --text-disabled: light-dark(#94a3b8, #64748b);
+
+  /* ── Borders ── */
+  --border-default: light-dark(#e2e8f0, #1e2d45);
+  --border-light: light-dark(#cbd5e1, #2a3d58);
+  --border-subtle: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.02));
+  --border-focus: var(--color-brand);
+
+  /* ── Accent ── */
+  --accent: var(--color-brand);
+  --accent-light: var(--color-brand-light);
+  --accent-muted: light-dark(rgba(45, 122, 255, 0.1), rgba(45, 122, 255, 0.2));
+  --accent-text: light-dark(#1d4ed8, #93c5fd);
+
+  /* ── Shadows (light defaults — can't use light-dark() for comma-separated values) ── */
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02);
+  --shadow-md: 0 4px 12px -2px rgba(0,0,0,0.06), 0 2px 4px rgba(0,0,0,0.03);
+  --shadow-lg: 0 12px 32px -6px rgba(0,0,0,0.08), 0 4px 8px rgba(0,0,0,0.04);
+
+  /* ── Topology ── */
+  --topology-node-border: light-dark(rgba(0, 0, 0, 0.10), rgba(255, 255, 255, 0.08));
+  --topology-node-shadow: 0 2px 6px rgba(0,0,0,0.05), 0 6px 16px rgba(0,0,0,0.04);
+  --topology-bg-dots: light-dark(rgba(148, 163, 184, 0.25), #1e2d45);
+
+  /* Topology edge colors (theme-independent identity colors) */
+  --edge-routes-to: #22c55e;
+  --edge-exposes: #3b82f6;
+  --edge-manages: #64748b;
+  --edge-configures: #f59e0b;
+  --edge-uses: #ec4899;
+
+  /* ── Group styling ── */
+  --group-border-namespace: light-dark(rgba(59, 130, 246, 0.3), rgba(59, 130, 246, 0.4));
+  --group-border-app: light-dark(rgba(16, 185, 129, 0.3), rgba(16, 185, 129, 0.4));
+  --group-border-label: light-dark(rgba(245, 158, 11, 0.3), rgba(245, 158, 11, 0.4));
+
+  --group-header-namespace: light-dark(rgba(59, 130, 246, 0.15), rgba(59, 130, 246, 0.2));
+  --group-header-app: light-dark(rgba(16, 185, 129, 0.15), rgba(16, 185, 129, 0.2));
+  --group-header-label: light-dark(rgba(245, 158, 11, 0.15), rgba(245, 158, 11, 0.2));
+
+  --group-label-namespace: light-dark(#1d4ed8, #93c5fd);
+  --group-label-app: light-dark(#047857, #6ee7b7);
+  --group-label-label: light-dark(#b45309, #fcd34d);
+
+  --group-icon-namespace: light-dark(#2563eb, #60a5fa);
+  --group-icon-app: light-dark(#059669, #34d399);
+  --group-icon-label: light-dark(#d97706, #fbbf24);
+
+  /* ── Scrollbar ── */
+  --scrollbar-track: light-dark(#f1f5f9, #162033);
+  --scrollbar-thumb: light-dark(#cbd5e1, #2a3d58);
+  --scrollbar-thumb-hover: light-dark(#94a3b8, #3d5474);
+}
+
+/* Dark overrides for comma-separated values that can't use light-dark() */
+.dark {
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.2), 0 1px 2px rgba(0,0,0,0.1);
+  --shadow-md: 0 4px 12px -2px rgba(0,0,0,0.25), 0 2px 4px rgba(0,0,0,0.1);
+  --shadow-lg: 0 12px 32px -6px rgba(0,0,0,0.3), 0 4px 8px rgba(0,0,0,0.1);
+  --topology-node-shadow: 0 2px 6px rgba(0,0,0,0.2), 0 6px 16px rgba(0,0,0,0.15);
+}

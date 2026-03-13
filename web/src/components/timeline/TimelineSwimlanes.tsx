@@ -562,10 +562,10 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
           <LegendItem color="bg-amber-500" label="warning" description="Warning event (CrashLoopBackOff, Failed, etc.)" />
           <LegendItem color="bg-theme-text-tertiary" label="historical" description="Inferred from resource metadata (creation time, etc.)" dashed />
           <span className="w-px h-3 bg-theme-border-light mx-1" />
-          <HealthBarLegendItem color="bg-green-500/60" label="healthy" description="Resource is fully operational" />
-          <HealthBarLegendItem color="bg-blue-500/60" label="rolling" description="Expected degradation during deployment rollout" />
-          <HealthBarLegendItem color="bg-amber-500/60" label="degraded" description="Unexpected partial availability" />
-          <HealthBarLegendItem color="bg-red-500/60" label="unhealthy" description="Resource is failing or not ready" />
+          <HealthBarLegendItem color="bg-green-500/60 dark:bg-green-600/60" label="healthy" description="Resource is fully operational" />
+          <HealthBarLegendItem color="bg-blue-500/60 dark:bg-blue-500/60" label="rolling" description="Expected degradation during deployment rollout" />
+          <HealthBarLegendItem color="bg-amber-500/60 dark:bg-[#b8861e]" label="degraded" description="Unexpected partial availability" />
+          <HealthBarLegendItem color="bg-red-500/60 dark:bg-red-500/60" label="unhealthy" description="Resource is failing or not ready" />
         </div>
       </div>
 

@@ -401,8 +401,7 @@ export function CodeViewer({
       </div>
 
       <style>{`
-        :root[data-theme="light"] { --code-line-number: #8b949e; }
-        :root[data-theme="dark"] { --code-line-number: #484f58; }
+        :root { --code-line-number: light-dark(#8b949e, #484f58); }
         .shiki-viewer pre {
           margin: 0;
           padding: 12px;

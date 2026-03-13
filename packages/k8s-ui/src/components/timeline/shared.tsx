@@ -123,19 +123,19 @@ export function HealthSpanLegend() {
   return (
     <div className="flex items-center gap-4 text-xs text-theme-text-tertiary">
       <span className="flex items-center gap-1">
-        <span className="w-4 h-2 rounded-sm bg-green-500/60" />
+        <span className="w-4 h-2 rounded-sm bg-green-500/60 dark:bg-green-600/60" />
         <span>Healthy</span>
       </span>
       <span className="flex items-center gap-1">
-        <span className="w-4 h-2 rounded-sm bg-blue-500/60" />
+        <span className="w-4 h-2 rounded-sm bg-blue-500/60 dark:bg-blue-500/60" />
         <span>Rolling</span>
       </span>
       <span className="flex items-center gap-1">
-        <span className="w-4 h-2 rounded-sm bg-amber-500/60" />
+        <span className="w-4 h-2 rounded-sm bg-amber-500/60 dark:bg-[#b8861e]" />
         <span>Degraded</span>
       </span>
       <span className="flex items-center gap-1">
-        <span className="w-4 h-2 rounded-sm bg-red-500/60" />
+        <span className="w-4 h-2 rounded-sm bg-red-500/60 dark:bg-red-500/60" />
         <span>Unhealthy</span>
       </span>
     </div>
@@ -402,15 +402,13 @@ export function HealthSpan({ health, left, width, title, createdBefore }: Health
   const getHealthColor = () => {
     switch (health) {
       case 'healthy':
-        return 'bg-green-500/60'
+        return 'bg-green-500/60 dark:bg-green-600/60'
       case 'rolling':
-        // Blue/purple for expected degradation during rollout
-        return 'bg-blue-500/60'
+        return 'bg-blue-500/60 dark:bg-blue-500/60'
       case 'degraded':
-        // Amber for unexpected degradation
-        return 'bg-amber-500/60'
+        return 'bg-amber-500/60 dark:bg-[#b8861e]'
       case 'unhealthy':
-        return 'bg-red-500/60'
+        return 'bg-red-500/60 dark:bg-red-500/60'
       default:
         // Unknown or other states
         return 'bg-gray-400/40'
