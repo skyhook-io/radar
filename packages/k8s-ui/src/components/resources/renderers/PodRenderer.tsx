@@ -146,12 +146,12 @@ function SecretValueCell({ value }: { value: string }) {
   const [revealed, setRevealed] = useState(false)
   return (
     <span className="flex items-center gap-1 min-w-0">
-      <span className={clsx('break-all text-yellow-400/80', !revealed && 'blur-[3px] select-none')}>
+      <span className={clsx('break-all text-amber-700 dark:text-yellow-400/80', !revealed && 'blur-[3px] select-none')}>
         {value || '•••'}
       </span>
       <button
         onClick={() => setRevealed(r => !r)}
-        className="shrink-0 text-theme-text-tertiary hover:text-yellow-400 transition-colors"
+        className="shrink-0 text-theme-text-tertiary hover:text-amber-700 dark:hover:text-yellow-400 transition-colors"
         title={revealed ? 'Hide value' : 'Reveal value'}
       >
         {revealed ? <EyeOff className="w-3 h-3" /> : <Eye className="w-3 h-3" />}
@@ -184,7 +184,7 @@ function EnvRow({ name, value, isSecret }: { name: string; value: string; isSecr
 function resolveEnvValueNode(env: any): JSX.Element {
   if (env.valueFrom?.secretKeyRef) {
     const { name, key } = env.valueFrom.secretKeyRef
-    return <span className="text-yellow-400/60 text-[10px] shrink-0 self-center px-1 py-0.5 bg-yellow-500/10 rounded">secret:{name}[{key}]</span>
+    return <span className="text-amber-700 dark:text-yellow-400/60 text-[10px] shrink-0 self-center px-1 py-0.5 bg-amber-500/10 dark:bg-yellow-500/10 rounded">secret:{name}[{key}]</span>
   }
   if (env.valueFrom?.configMapKeyRef) {
     const { name, key } = env.valueFrom.configMapKeyRef
@@ -246,7 +246,7 @@ function EnvVarsSection({
                       <div className="flex items-center gap-1.5 text-xs font-mono py-0.5">
                         <span className={clsx(
                           'shrink-0 px-1 py-0.5 rounded text-[10px]',
-                          isSecret ? 'bg-yellow-500/10 text-yellow-400' : 'bg-blue-500/10 text-blue-400'
+                          isSecret ? 'bg-amber-500/10 dark:bg-yellow-500/10 text-amber-700 dark:text-yellow-400' : 'bg-blue-500/10 text-blue-400'
                         )}>
                           {prefix}
                         </span>

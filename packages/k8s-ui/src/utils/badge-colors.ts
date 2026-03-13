@@ -21,7 +21,7 @@ export const KIND_BADGE_COLORS: Record<string, string> = {
 
   // Config
   ConfigMap: 'bg-amber-500/15 text-amber-700 dark:bg-amber-900/50 dark:text-amber-400',
-  Secret: 'bg-red-500/15 text-red-700 dark:bg-red-900/50 dark:text-red-400',
+  Secret: 'bg-red-500/15 text-red-800 dark:bg-red-900/50 dark:text-red-400',
 
   // Jobs
   Job: 'bg-purple-500/15 text-purple-700 dark:bg-purple-900/50 dark:text-purple-400',
@@ -99,7 +99,7 @@ export const KIND_BADGE_BORDERED: Record<string, string> = {
 
   // Config
   ConfigMap: 'bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/30',
-  Secret: 'bg-red-500/20 text-red-700 dark:text-red-400 border border-red-500/30',
+  Secret: 'bg-red-500/20 text-red-800 dark:text-red-400 border border-red-500/30',
 
   // Jobs
   Job: 'bg-purple-500/20 text-purple-700 dark:text-purple-400 border border-purple-500/30',
@@ -157,21 +157,21 @@ export const EVENT_TYPE_COLORS: Record<string, string> = {
 export const OPERATION_COLORS: Record<string, string> = {
   add: 'text-green-700 dark:text-green-400',
   update: 'text-blue-700 dark:text-blue-400',
-  delete: 'text-red-700 dark:text-red-400',
+  delete: 'text-red-800 dark:text-red-400',
 }
 
 // Operation background colors - for badges with background
 export const OPERATION_BADGE_COLORS: Record<string, string> = {
   add: 'bg-green-500/20 text-green-700 dark:text-green-400',
   update: 'bg-blue-500/20 text-blue-700 dark:text-blue-400',
-  delete: 'bg-red-500/20 text-red-700 dark:text-red-400',
+  delete: 'bg-red-500/20 text-red-800 dark:text-red-400',
 }
 
 // Health badge colors - for health state indicators
 export const HEALTH_BADGE_COLORS: Record<string, string> = {
   healthy: 'bg-green-500/20 text-green-700 dark:text-green-400',
   degraded: 'bg-yellow-500/20 text-yellow-700 dark:text-yellow-400',
-  unhealthy: 'bg-red-500/20 text-red-700 dark:text-red-400',
+  unhealthy: 'bg-red-500/20 text-red-800 dark:text-red-400',
   unknown: 'bg-theme-hover/50 text-theme-text-secondary',
 }
 
@@ -179,7 +179,7 @@ export const HEALTH_BADGE_COLORS: Record<string, string> = {
 export const HELM_STATUS_COLORS: Record<string, string> = {
   deployed: 'bg-green-500/20 text-green-700 dark:text-green-400',
   superseded: 'bg-theme-hover/50 text-theme-text-secondary',
-  failed: 'bg-red-500/20 text-red-700 dark:text-red-400',
+  failed: 'bg-red-500/20 text-red-800 dark:text-red-400',
   'pending-install': 'bg-yellow-500/20 text-yellow-700 dark:text-yellow-400',
   'pending-upgrade': 'bg-yellow-500/20 text-yellow-700 dark:text-yellow-400',
   'pending-rollback': 'bg-yellow-500/20 text-yellow-700 dark:text-yellow-400',
@@ -198,7 +198,7 @@ export const DEFAULT_BADGE_COLOR = 'bg-theme-elevated text-theme-text-secondary'
 export const SEVERITY_BADGE = {
   success: 'bg-green-500/20 text-green-700 dark:text-green-400',
   warning: 'bg-amber-500/20 text-amber-700 dark:text-amber-400',
-  error: 'bg-red-500/20 text-red-700 dark:text-red-400',
+  error: 'bg-red-500/20 text-red-800 dark:text-red-400',
   info: 'bg-blue-500/20 text-blue-700 dark:text-blue-400',
   neutral: 'bg-theme-hover/50 text-theme-text-secondary',
 } as const
@@ -207,7 +207,7 @@ export const SEVERITY_BADGE = {
 export const SEVERITY_TEXT = {
   success: 'text-green-700 dark:text-green-400',
   warning: 'text-amber-700 dark:text-amber-400',
-  error: 'text-red-700 dark:text-red-400',
+  error: 'text-red-800 dark:text-red-400',
   info: 'text-blue-700 dark:text-blue-400',
   neutral: 'text-theme-text-secondary',
 } as const
@@ -234,7 +234,7 @@ export const SEVERITY_BORDER = {
 export const SEVERITY_BADGE_BORDERED = {
   success: 'bg-green-500/20 text-green-700 dark:text-green-400 border border-green-500/30',
   warning: 'bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/30',
-  error: 'bg-red-500/20 text-red-700 dark:text-red-400 border border-red-500/30',
+  error: 'bg-red-500/20 text-red-800 dark:text-red-400 border border-red-500/30',
   info: 'bg-blue-500/20 text-blue-700 dark:text-blue-400 border border-blue-500/30',
   neutral: 'bg-theme-hover/50 text-theme-text-secondary border border-theme-border',
 } as const
