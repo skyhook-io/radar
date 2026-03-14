@@ -309,9 +309,10 @@ func handleWorkloads(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Query per-pod CPU usage cost (for efficiency)
+	// Query per-pod CPU usage cost (for efficiency).
+	// Use "or" to handle both honor_labels configurations (same pattern as allocation queries above).
 	podCPUUsage := make(map[string]float64)
-	cpuUsageQuery := `sum by (pod) (label_replace(rate(container_cpu_usage_seconds_total{container!="", namespace="` + safeNS + `"}[1h]), "node", "$1", "instance", "(.+?)(?::\\d+)?$") * on(node) group_left() node_cpu_hourly_cost)`
+	cpuUsageQuery := `sum by (pod) (label_replace(rate(container_cpu_usage_seconds_total{container!="", exported_namespace="` + safeNS + `"}[1h]) or rate(container_cpu_usage_seconds_total{container!="", namespace="` + safeNS + `", exported_namespace=""}[1h]), "node", "$1", "instance", "(.+?)(?::\\d+)?$") * on(node) group_left() node_cpu_hourly_cost)`
 	cpuUsageResult, usageErr := client.Query(r.Context(), cpuUsageQuery)
 	if usageErr == nil {
 		for _, s := range cpuUsageResult.Series {
@@ -322,9 +323,10 @@ func handleWorkloads(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// Query per-pod memory usage cost (for efficiency)
+	// Query per-pod memory usage cost (for efficiency).
+	// Use "or" to handle both honor_labels configurations (same pattern as allocation queries above).
 	podMemUsage := make(map[string]float64)
-	memUsageQuery := `sum by (pod) (label_replace(container_memory_working_set_bytes{container!="", namespace="` + safeNS + `"}, "node", "$1", "instance", "(.+?)(?::\\d+)?$") / 1073741824 * on(node) group_left() node_ram_hourly_cost)`
+	memUsageQuery := `sum by (pod) (label_replace(container_memory_working_set_bytes{container!="", exported_namespace="` + safeNS + `"} or container_memory_working_set_bytes{container!="", namespace="` + safeNS + `", exported_namespace=""}, "node", "$1", "instance", "(.+?)(?::\\d+)?$") / 1073741824 * on(node) group_left() node_ram_hourly_cost)`
 	memUsageResult, usageErr := client.Query(r.Context(), memUsageQuery)
 	if usageErr == nil {
 		for _, s := range memUsageResult.Series {

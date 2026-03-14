@@ -708,7 +708,7 @@ Radar discovers if Opencost metrics are available in the already-discovered Prom
 
 ### Prerequisites
 
-1. OpenCost (or Kubecost) deployed in your cluster, with it's metrics being scraped by Prometheus
+1. OpenCost (or Kubecost) deployed in your cluster, with its metrics being scraped by Prometheus
 
 OpenCost cost data is not CRD-based — no custom resources are required. Cost views appear automatically when metrics are detected; they are hidden when no OpenCost metrics are found in Prometheus.
 
