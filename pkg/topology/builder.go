@@ -1794,6 +1794,70 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
+	// 1q. Add Contour HTTPProxy nodes (CRD - fetched via dynamic cache)
+	// Edges are created in a second pass after service IDs are populated.
+	httpProxyIDs := make(map[string]string)                   // ns/name → nodeID
+	var httpProxyResources []*unstructured.Unstructured       // Store for edge creation
+	{
+		var httpProxyGVR schema.GroupVersionResource
+		hasHTTPProxy := false
+		if resourceDiscovery != nil {
+			httpProxyGVR, hasHTTPProxy = resourceDiscovery.GetGVR("HTTPProxy")
+		}
+		if hasHTTPProxy && dynamicCache != nil {
+			resources, listErr := dynamicCache.List(httpProxyGVR, opts.NamespaceFilter())
+			if listErr != nil {
+				log.Printf("WARNING [topology] Failed to list Contour HTTPProxy: %v", listErr)
+				warnings = append(warnings, fmt.Sprintf("Failed to list Contour HTTPProxy: %v", listErr))
+			}
+			for _, res := range resources {
+				ns := res.GetNamespace()
+				if !opts.MatchesNamespaceFilter(ns) {
+					continue
+				}
+				name := res.GetName()
+
+				resID := fmt.Sprintf("httpproxy/%s/%s", ns, name)
+				httpProxyIDs[ns+"/"+name] = resID
+
+				// Extract spec fields
+				fqdn, _, _ := unstructured.NestedString(res.Object, "spec", "virtualhost", "fqdn")
+				routes, _, _ := unstructured.NestedSlice(res.Object, "spec", "routes")
+				includes, _, _ := unstructured.NestedSlice(res.Object, "spec", "includes")
+				_, hasTLS, _ := unstructured.NestedMap(res.Object, "spec", "virtualhost", "tls")
+
+				// Status logic using status.currentStatus
+				nodeStatus := extractGenericStatus(res)
+				currentStatus, _, _ := unstructured.NestedString(res.Object, "status", "currentStatus")
+				switch strings.ToLower(currentStatus) {
+				case "valid":
+					nodeStatus = StatusHealthy
+				case "invalid":
+					nodeStatus = StatusUnhealthy
+				case "orphaned":
+					nodeStatus = StatusDegraded
+				}
+
+				nodes = append(nodes, Node{
+					ID:     resID,
+					Kind:   KindHTTPProxy,
+					Name:   name,
+					Status: nodeStatus,
+					Data: map[string]any{
+						"namespace":    ns,
+						"fqdn":         fqdn,
+						"routeCount":   len(routes),
+						"includeCount": len(includes),
+						"hasTLS":       hasTLS,
+						"labels":       res.GetLabels(),
+					},
+				})
+
+				httpProxyResources = append(httpProxyResources, res)
+			}
+		}
+	}
+
 	// 2. Add DaemonSet nodes
 	var daemonsets []*appsv1.DaemonSet
 	{
@@ -4244,6 +4308,149 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
+	// 15e. Create Contour HTTPProxy edges
+	// HTTPProxy → Service (EdgeExposes, via spec.routes[].services[])
+	// HTTPProxy → HTTPProxy (EdgeExposes, via spec.includes[])
+	// HTTPProxy → Secret (EdgeConfigures, via spec.virtualhost.tls.secretName)
+	// HTTPProxy → Service via tcpproxy (EdgeExposes, via spec.tcpproxy.services[])
+	contourEdgeSeen := make(map[string]bool) // dedup: sourceID|targetID
+
+	for _, res := range httpProxyResources {
+		resNs := res.GetNamespace()
+		resID := httpProxyIDs[resNs+"/"+res.GetName()]
+		if resID == "" {
+			continue
+		}
+
+		// HTTPProxy → Service edges (via spec.routes[].services[])
+		routes, _, _ := unstructured.NestedSlice(res.Object, "spec", "routes")
+		for _, route := range routes {
+			routeMap, ok := route.(map[string]any)
+			if !ok {
+				continue
+			}
+			svcs, _, _ := unstructured.NestedSlice(routeMap, "services")
+			for _, svc := range svcs {
+				svcMap, ok := svc.(map[string]any)
+				if !ok {
+					continue
+				}
+				svcName, _ := svcMap["name"].(string)
+				if svcName == "" {
+					continue
+				}
+				svcNs := resNs
+				targetID := serviceIDs[svcNs+"/"+svcName]
+				if targetID == "" {
+					continue
+				}
+				dedupeKey := resID + "|" + targetID
+				if contourEdgeSeen[dedupeKey] {
+					continue
+				}
+				contourEdgeSeen[dedupeKey] = true
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", resID, targetID),
+					Source: resID,
+					Target: targetID,
+					Type:   EdgeExposes,
+				})
+			}
+		}
+
+		// HTTPProxy → HTTPProxy edges (via spec.includes[])
+		includes, _, _ := unstructured.NestedSlice(res.Object, "spec", "includes")
+		for _, incl := range includes {
+			inclMap, ok := incl.(map[string]any)
+			if !ok {
+				continue
+			}
+			inclName, _ := inclMap["name"].(string)
+			if inclName == "" {
+				continue
+			}
+			inclNs, _ := inclMap["namespace"].(string)
+			if inclNs == "" {
+				inclNs = resNs
+			}
+			targetID := httpProxyIDs[inclNs+"/"+inclName]
+			if targetID == "" {
+				continue
+			}
+			dedupeKey := resID + "|" + targetID
+			if contourEdgeSeen[dedupeKey] {
+				continue
+			}
+			contourEdgeSeen[dedupeKey] = true
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("%s-to-%s", resID, targetID),
+				Source: resID,
+				Target: targetID,
+				Type:   EdgeExposes,
+			})
+		}
+
+		// HTTPProxy → Secret edges (via spec.virtualhost.tls.secretName)
+		tlsSecretName, _, _ := unstructured.NestedString(res.Object, "spec", "virtualhost", "tls", "secretName")
+		if tlsSecretName != "" {
+			secretNodeID := fmt.Sprintf("secret/%s/%s", resNs, tlsSecretName)
+			// Check if secret node exists; if not, check serviceIDs as a proxy for the secret
+			dedupeKey := resID + "|" + secretNodeID
+			if !contourEdgeSeen[dedupeKey] {
+				contourEdgeSeen[dedupeKey] = true
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", resID, secretNodeID),
+					Source: resID,
+					Target: secretNodeID,
+					Type:   EdgeConfigures,
+				})
+			}
+			// Also check for cert-manager Certificate edge
+			certID := certBySecret[resNs+"/"+tlsSecretName]
+			if certID != "" {
+				dedupeKey2 := resID + "|" + certID
+				if !contourEdgeSeen[dedupeKey2] {
+					contourEdgeSeen[dedupeKey2] = true
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s", resID, certID),
+						Source: resID,
+						Target: certID,
+						Type:   EdgeConfigures,
+					})
+				}
+			}
+		}
+
+		// HTTPProxy → Service via tcpproxy (via spec.tcpproxy.services[])
+		tcpSvcs, _, _ := unstructured.NestedSlice(res.Object, "spec", "tcpproxy", "services")
+		for _, svc := range tcpSvcs {
+			svcMap, ok := svc.(map[string]any)
+			if !ok {
+				continue
+			}
+			svcName, _ := svcMap["name"].(string)
+			if svcName == "" {
+				continue
+			}
+			svcNs := resNs
+			targetID := serviceIDs[svcNs+"/"+svcName]
+			if targetID == "" {
+				continue
+			}
+			dedupeKey := resID + "|" + targetID
+			if contourEdgeSeen[dedupeKey] {
+				continue
+			}
+			contourEdgeSeen[dedupeKey] = true
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("%s-to-%s", resID, targetID),
+				Source: resID,
+				Target: targetID,
+				Type:   EdgeExposes,
+			})
+		}
+	}
+
 	// 16. Add generic CRD nodes connected via owner references
 	// Only includes CRDs already being watched and with owner refs to existing nodes
 	if opts.IncludeGenericCRDs {
@@ -4625,6 +4832,61 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
+	// Collect Contour HTTPProxy resources from dynamic cache
+	var trafficHTTPProxies []*unstructured.Unstructured
+	if trafficDynamicCache != nil && trafficResourceDiscovery != nil {
+		if gvr, ok := trafficResourceDiscovery.GetGVR("HTTPProxy"); ok {
+			hps, err := trafficDynamicCache.List(gvr, opts.NamespaceFilter())
+			if err != nil {
+				log.Printf("WARNING [topology/traffic] Failed to list Contour HTTPProxy: %v", err)
+				warnings = append(warnings, fmt.Sprintf("Failed to list Contour HTTPProxy: %v", err))
+			} else {
+				trafficHTTPProxies = hps
+			}
+		}
+	}
+
+	// Step 1f: Find services referenced by Contour HTTPProxy
+	servicesFromContour := make(map[string]bool)
+	for _, hp := range trafficHTTPProxies {
+		ns := hp.GetNamespace()
+		if !opts.MatchesNamespaceFilter(ns) {
+			continue
+		}
+		routes, _, _ := unstructured.NestedSlice(hp.Object, "spec", "routes")
+		for _, route := range routes {
+			routeMap, ok := route.(map[string]any)
+			if !ok {
+				continue
+			}
+			svcs, _, _ := unstructured.NestedSlice(routeMap, "services")
+			for _, svc := range svcs {
+				svcMap, ok := svc.(map[string]any)
+				if !ok {
+					continue
+				}
+				svcName, _ := svcMap["name"].(string)
+				if svcName == "" {
+					continue
+				}
+				servicesFromContour[ns+"/"+svcName] = true
+			}
+		}
+		// Also check tcpproxy services
+		tcpSvcs, _, _ := unstructured.NestedSlice(hp.Object, "spec", "tcpproxy", "services")
+		for _, svc := range tcpSvcs {
+			svcMap, ok := svc.(map[string]any)
+			if !ok {
+				continue
+			}
+			svcName, _ := svcMap["name"].(string)
+			if svcName == "" {
+				continue
+			}
+			servicesFromContour[ns+"/"+svcName] = true
+		}
+	}
+
 	// Step 2: Find all services and check which have pods
 	for _, svc := range services {
 		if !opts.MatchesNamespaceFilter(svc.Namespace) {
@@ -4641,8 +4903,8 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			}
 		}
 
-		// Include service if: referenced by ingress, gateway route, istio VS, knative, OR has matching pods
-		if servicesFromIngress[svcKey] || servicesFromGateway[svcKey] || servicesFromIstio[svcKey] || servicesFromKnative[svcKey] || servicesFromTraefik[svcKey] || hasPods {
+		// Include service if: referenced by ingress, gateway route, istio VS, knative, contour, OR has matching pods
+		if servicesFromIngress[svcKey] || servicesFromGateway[svcKey] || servicesFromIstio[svcKey] || servicesFromKnative[svcKey] || servicesFromTraefik[svcKey] || servicesFromContour[svcKey] || hasPods {
 			servicesToInclude[svcKey] = svc
 		}
 	}
@@ -5408,8 +5670,171 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 
+	// Step 3f: Build Contour HTTPProxy nodes/edges for traffic view
+	// Traffic flow: Internet → HTTPProxy (root) → HTTPProxy (child) → Service → Pods
+	trafficHTTPProxyIDs := make([]string, 0)
+	trafficHTTPProxyIDMap := make(map[string]string) // ns/name → ID
+	trafficContourEdgeSeen := make(map[string]bool)
+
+	// Phase 1: Create all HTTPProxy nodes and populate ID map
+	for _, hp := range trafficHTTPProxies {
+		ns := hp.GetNamespace()
+		if !opts.MatchesNamespaceFilter(ns) {
+			continue
+		}
+		name := hp.GetName()
+		hpID := fmt.Sprintf("httpproxy/%s/%s", ns, name)
+		trafficHTTPProxyIDMap[ns+"/"+name] = hpID
+
+		fqdn, _, _ := unstructured.NestedString(hp.Object, "spec", "virtualhost", "fqdn")
+		routes, _, _ := unstructured.NestedSlice(hp.Object, "spec", "routes")
+		includes, _, _ := unstructured.NestedSlice(hp.Object, "spec", "includes")
+		_, hasTLS, _ := unstructured.NestedMap(hp.Object, "spec", "virtualhost", "tls")
+
+		nodeStatus := extractGenericStatus(hp)
+		currentStatus, _, _ := unstructured.NestedString(hp.Object, "status", "currentStatus")
+		switch strings.ToLower(currentStatus) {
+		case "valid":
+			nodeStatus = StatusHealthy
+		case "invalid":
+			nodeStatus = StatusUnhealthy
+		case "orphaned":
+			nodeStatus = StatusDegraded
+		}
+
+		// Root proxies have spec.virtualhost set
+		isRoot := fqdn != ""
+		if isRoot {
+			trafficHTTPProxyIDs = append(trafficHTTPProxyIDs, hpID)
+		}
+
+		nodes = append(nodes, Node{
+			ID:     hpID,
+			Kind:   KindHTTPProxy,
+			Name:   name,
+			Status: nodeStatus,
+			Data: map[string]any{
+				"namespace":    ns,
+				"fqdn":         fqdn,
+				"routeCount":   len(routes),
+				"includeCount": len(includes),
+				"hasTLS":       hasTLS,
+				"labels":       hp.GetLabels(),
+			},
+		})
+	}
+
+	// Phase 2: Create edges (all IDs populated)
+	for _, hp := range trafficHTTPProxies {
+		ns := hp.GetNamespace()
+		if !opts.MatchesNamespaceFilter(ns) {
+			continue
+		}
+		name := hp.GetName()
+		hpID := trafficHTTPProxyIDMap[ns+"/"+name]
+		if hpID == "" {
+			continue
+		}
+
+		// HTTPProxy → Service edges (via spec.routes[].services[])
+		routes, _, _ := unstructured.NestedSlice(hp.Object, "spec", "routes")
+		for _, route := range routes {
+			routeMap, ok := route.(map[string]any)
+			if !ok {
+				continue
+			}
+			svcs, _, _ := unstructured.NestedSlice(routeMap, "services")
+			for _, svc := range svcs {
+				svcMap, ok := svc.(map[string]any)
+				if !ok {
+					continue
+				}
+				svcName, _ := svcMap["name"].(string)
+				if svcName == "" {
+					continue
+				}
+				svcNs := ns
+				svcKey := svcNs + "/" + svcName
+				if _, ok := servicesToInclude[svcKey]; ok {
+					svcID := fmt.Sprintf("service/%s/%s", svcNs, svcName)
+					serviceIDs[svcKey] = svcID
+					dedupeKey := hpID + "|" + svcID
+					if !trafficContourEdgeSeen[dedupeKey] {
+						trafficContourEdgeSeen[dedupeKey] = true
+						edges = append(edges, Edge{
+							ID:     fmt.Sprintf("%s-to-%s", hpID, svcID),
+							Source: hpID,
+							Target: svcID,
+							Type:   EdgeExposes,
+						})
+					}
+				}
+			}
+		}
+
+		// HTTPProxy → HTTPProxy edges (via spec.includes[])
+		includes, _, _ := unstructured.NestedSlice(hp.Object, "spec", "includes")
+		for _, incl := range includes {
+			inclMap, ok := incl.(map[string]any)
+			if !ok {
+				continue
+			}
+			inclName, _ := inclMap["name"].(string)
+			if inclName == "" {
+				continue
+			}
+			inclNs, _ := inclMap["namespace"].(string)
+			if inclNs == "" {
+				inclNs = ns
+			}
+			targetID := trafficHTTPProxyIDMap[inclNs+"/"+inclName]
+			if targetID == "" {
+				continue
+			}
+			dedupeKey := hpID + "|" + targetID
+			if !trafficContourEdgeSeen[dedupeKey] {
+				trafficContourEdgeSeen[dedupeKey] = true
+				edges = append(edges, Edge{
+					ID:     fmt.Sprintf("%s-to-%s", hpID, targetID),
+					Source: hpID,
+					Target: targetID,
+					Type:   EdgeExposes,
+				})
+			}
+		}
+
+		// HTTPProxy → Service via tcpproxy (via spec.tcpproxy.services[])
+		tcpSvcs, _, _ := unstructured.NestedSlice(hp.Object, "spec", "tcpproxy", "services")
+		for _, svc := range tcpSvcs {
+			svcMap, ok := svc.(map[string]any)
+			if !ok {
+				continue
+			}
+			svcName, _ := svcMap["name"].(string)
+			if svcName == "" {
+				continue
+			}
+			svcNs := ns
+			svcKey := svcNs + "/" + svcName
+			if _, ok := servicesToInclude[svcKey]; ok {
+				svcID := fmt.Sprintf("service/%s/%s", svcNs, svcName)
+				serviceIDs[svcKey] = svcID
+				dedupeKey := hpID + "|" + svcID
+				if !trafficContourEdgeSeen[dedupeKey] {
+					trafficContourEdgeSeen[dedupeKey] = true
+					edges = append(edges, Edge{
+						ID:     fmt.Sprintf("%s-to-%s", hpID, svcID),
+						Source: hpID,
+						Target: svcID,
+						Type:   EdgeExposes,
+					})
+				}
+			}
+		}
+	}
+
 	// Step 4: Add Internet node if we have ingresses, gateways, Istio gateways, or KNative services with URLs
-	if len(ingressIDs) > 0 || len(trafficGatewayIDs) > 0 || len(trafficIstioGatewayIDs) > 0 || len(trafficKnativeServiceIDs) > 0 || len(trafficTraefikRouteIDs) > 0 {
+	if len(ingressIDs) > 0 || len(trafficGatewayIDs) > 0 || len(trafficIstioGatewayIDs) > 0 || len(trafficKnativeServiceIDs) > 0 || len(trafficTraefikRouteIDs) > 0 || len(trafficHTTPProxyIDs) > 0 {
 		nodes = append([]Node{{
 			ID:     "internet",
 			Kind:   KindInternet,
@@ -5455,6 +5880,14 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				ID:     fmt.Sprintf("internet-to-%s", trID),
 				Source: "internet",
 				Target: trID,
+				Type:   EdgeRoutesTo,
+			})
+		}
+		for _, hpID := range trafficHTTPProxyIDs {
+			edges = append(edges, Edge{
+				ID:     fmt.Sprintf("internet-to-%s", hpID),
+				Source: "internet",
+				Target: hpID,
 				Type:   EdgeRoutesTo,
 			})
 		}
@@ -6306,6 +6739,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		"traefikservice": true,                                                          // Traefik service
 		"serverstransport": true, "serverstransporttcp": true,                           // Traefik transport
 		"tlsoption": true, "tlsstore": true,                                             // Traefik TLS
+		"httpproxy": true,                                                               // Contour
 		// Trivy Operator reports - high cardinality, excluded from topology
 		"vulnerabilityreport": true, "configauditreport": true,
 		"exposedsecretreport": true, "sbomreport": true,

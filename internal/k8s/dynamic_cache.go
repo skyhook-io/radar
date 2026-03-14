@@ -210,6 +210,7 @@ func WarmupCommonCRDs() {
 		"ServersTransportTCP",          // Traefik
 		"TLSOption",                    // Traefik
 		"TLSStore",                     // Traefik
+		"HTTPProxy",                    // Contour
 	}
 
 	var gvrs []schema.GroupVersionResource

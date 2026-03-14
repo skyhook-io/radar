@@ -136,6 +136,7 @@ import { CNPGClusterCell, CNPGBackupCell, CNPGScheduledBackupCell, CNPGPoolerCel
 import { VirtualServiceCell, DestinationRuleCell, IstioGatewayCell, ServiceEntryCell, PeerAuthenticationCell, AuthorizationPolicyCell } from './renderers/istio-cells'
 import { KnativeServiceCell, ConfigurationCell as KnativeConfigurationCell, RevisionCell as KnativeRevisionCell, RouteCell as KnativeRouteCell, BrokerCell, TriggerCell, EventTypeCell, PingSourceCell, ApiServerSourceCell, ContainerSourceCell, SinkBindingCell, ChannelCell, InMemoryChannelCell, SubscriptionCell, SequenceCell, ParallelCell, DomainMappingCell, ServerlessServiceCell, KnativeIngressCell, KnativeCertificateCell } from './renderers/knative-cells'
 import { IngressRouteCell, MiddlewareCell, TraefikServiceCell, ServersTransportCell, TLSOptionCell } from './renderers/traefik-cells'
+import { HTTPProxyCell } from './renderers/contour-cells'
 import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 
 // Pod problem filter options (special multi-select, not a single column value)
@@ -1318,6 +1319,17 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-16 shrink-0' },
   ],
+  // Contour
+  httpproxies: [
+    { key: 'name', label: 'Name', width: 'min-w-40' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
+    { key: 'fqdn', label: 'FQDN', width: 'min-w-44' },
+    { key: 'routes', label: 'Routes', width: 'w-20 shrink-0' },
+    { key: 'includes', label: 'Includes', width: 'w-24 shrink-0' },
+    { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
+    { key: 'status', label: 'Status', width: 'w-24 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-16 shrink-0' },
+  ],
 }
 
 // Map (plural, group) → KNOWN_COLUMNS key for kinds that collide with core K8s
@@ -1344,6 +1356,8 @@ function normalizeKindToPlural(kind: string, group?: string): string {
   if (!lower.endsWith('s') && KNOWN_COLUMNS[lower + 's']) return lower + 's'
   // Try 'es' for kinds ending in s/sh/ch/x/z (e.g., "ingress" → "ingresses")
   if (KNOWN_COLUMNS[lower + 'es']) return lower + 'es'
+  // Try 'ies' for kinds ending in y (e.g., "httpproxy" → "httpproxies")
+  if (lower.endsWith('y') && KNOWN_COLUMNS[lower.slice(0, -1) + 'ies']) return lower.slice(0, -1) + 'ies'
   return lower
 }
 
@@ -4211,6 +4225,9 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion }
       return <ServersTransportCell resource={resource} column={column} />
     case 'tlsoptions':
       return <TLSOptionCell resource={resource} column={column} />
+    // Contour
+    case 'httpproxies':
+      return <HTTPProxyCell resource={resource} column={column} />
     default:
       // Generic cell for CRDs and unknown resources
       return <GenericCell resource={resource} column={column} />

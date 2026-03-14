@@ -143,6 +143,8 @@ function nodeIdToLaneId(nodeId: string): string | null {
     middlewaretcp: 'MiddlewareTCP', traefikservice: 'TraefikService',
     serverstransport: 'ServersTransport', serverstransporttcp: 'ServersTransportTCP',
     tlsoption: 'TLSOption', tlsstore: 'TLSStore',
+    // Contour
+    httpproxy: 'HTTPProxy',
   }
   return `${kindMap[kind] || kind}/${namespace}/${name}`
 }
@@ -417,6 +419,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
       'KnativeService', 'KnativeConfiguration', 'KnativeRevision', 'KnativeRoute',
       'Broker', 'Trigger',
       'IngressRoute', 'IngressRouteTCP', 'IngressRouteUDP',
+      'HTTPProxy', // Contour
     ])
 
     // Group lanes by app label
@@ -448,6 +451,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         PingSource: 3, ApiServerSource: 3, ContainerSource: 3, SinkBinding: 3,
         IngressRoute: 2, IngressRouteTCP: 2, IngressRouteUDP: 2,
         TraefikService: 3, Middleware: 4, MiddlewareTCP: 4,
+        HTTPProxy: 2, // Contour
       }
 
       const sorted = [...laneIds].sort((a, b) => {
@@ -510,6 +514,7 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
           PingSource: 3, ApiServerSource: 3, ContainerSource: 3, SinkBinding: 3,
           IngressRoute: 1, IngressRouteTCP: 1, IngressRouteUDP: 1,
           TraefikService: 2, Middleware: 3, MiddlewareTCP: 3,
+          HTTPProxy: 1, // Contour
         }
         lane.children.sort((a, b) => {
           const aPriority = kindPriority[a.kind] || 10

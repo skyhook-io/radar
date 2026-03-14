@@ -96,6 +96,7 @@
 .topology-icon-nodepool { background: #6366f1; }
 .topology-icon-nodeclaim { background: #6366f1; }
 .topology-icon-nodeclass { background: #6366f1; }
+.topology-icon-httpproxy { background: #7c3aed; }
 
 /* Background dots - uses CSS variable for theme awareness */
 .react-flow__background pattern circle {

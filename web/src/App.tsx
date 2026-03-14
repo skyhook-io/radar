@@ -51,6 +51,7 @@ const ALL_NODE_KINDS: NodeKind[] = [
   'Broker', 'Trigger', 'PingSource', 'ApiServerSource', 'ContainerSource', 'SinkBinding', 'Channel',
   'IngressRoute', 'IngressRouteTCP', 'IngressRouteUDP', 'Middleware', 'MiddlewareTCP',
   'TraefikService', 'ServersTransport', 'ServersTransportTCP', 'TLSOption', 'TLSStore',
+  'HTTPProxy', // Contour
 ]
 
 // Default visible kinds (ReplicaSet hidden by default - noisy intermediate object)
@@ -78,6 +79,7 @@ function apiResourceToNodeIdPrefix(apiResource: string): string {
     'cronjobs': 'cronjob',
     'persistentvolumeclaims': 'persistentvolumeclaim',
     'namespaces': 'namespace',
+    'httpproxies': 'httpproxy', // Contour
   }
   return prefixMap[apiResource] || apiResource.replace(/s$/, '')
 }

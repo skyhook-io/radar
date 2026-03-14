@@ -77,6 +77,7 @@ const (
 	KindServersTransportTCP  NodeKind = "ServersTransportTCP"  // Traefik ServersTransportTCP
 	KindTLSOption            NodeKind = "TLSOption"            // Traefik TLSOption
 	KindTLSStore             NodeKind = "TLSStore"             // Traefik TLSStore
+	KindHTTPProxy            NodeKind = "HTTPProxy"            // Contour HTTPProxy
 	KindDaemonSet            NodeKind = "DaemonSet"
 	KindStatefulSet   NodeKind = "StatefulSet"
 	KindReplicaSet    NodeKind = "ReplicaSet"

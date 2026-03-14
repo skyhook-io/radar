@@ -43,6 +43,8 @@ func summarizeUnstructured(obj *unstructured.Unstructured) *ResourceSummary {
 		return summarizeGatewayClass(obj)
 	case group == "gateway.networking.k8s.io" && (kind == "HTTPRoute" || kind == "GRPCRoute" || kind == "TCPRoute" || kind == "TLSRoute"):
 		return summarizeGatewayRoute(obj)
+	case group == "projectcontour.io" && kind == "HTTPProxy":
+		return summarizeContourHTTPProxy(obj)
 	}
 
 	// Generic fallback
@@ -604,4 +606,79 @@ func summarizeGatewayRoute(obj *unstructured.Unstructured) *ResourceSummary {
 	}
 
 	return s
+}
+
+func summarizeContourHTTPProxy(obj *unstructured.Unstructured) *ResourceSummary {
+	s := &ResourceSummary{
+		Kind:      "HTTPProxy",
+		Name:      obj.GetName(),
+		Namespace: obj.GetNamespace(),
+		Age:       age(obj.GetCreationTimestamp().Time),
+	}
+
+	// Status from currentStatus field
+	currentStatus, _, _ := unstructured.NestedString(obj.Object, "status", "currentStatus")
+	if currentStatus != "" {
+		s.Status = currentStatus
+	} else {
+		// Contour uses "Valid" condition, not "Ready"
+		s.Status = extractConditionByType(obj, "Valid")
+	}
+
+	// FQDN
+	fqdn, _, _ := unstructured.NestedString(obj.Object, "spec", "virtualhost", "fqdn")
+	if fqdn != "" {
+		s.Type = fqdn
+	}
+
+	// Route and service counts
+	routes, found, _ := unstructured.NestedSlice(obj.Object, "spec", "routes")
+	svcCount := 0
+	if found {
+		for _, r := range routes {
+			if rm, ok := r.(map[string]any); ok {
+				if svcs, _, _ := unstructured.NestedSlice(rm, "services"); svcs != nil {
+					svcCount += len(svcs)
+				}
+			}
+		}
+		s.Strategy = fmt.Sprintf("%d routes, %d services", len(routes), svcCount)
+	}
+
+	// Includes count
+	includes, found, _ := unstructured.NestedSlice(obj.Object, "spec", "includes")
+	if found && len(includes) > 0 {
+		s.Ready = fmt.Sprintf("%d includes", len(includes))
+	}
+
+	return s
+}
+
+// extractConditionByType extracts the status of a specific condition type from a K8s resource.
+func extractConditionByType(obj *unstructured.Unstructured, conditionType string) string {
+	conditions, found, _ := unstructured.NestedSlice(obj.Object, "status", "conditions")
+	if !found || len(conditions) == 0 {
+		return ""
+	}
+
+	for _, c := range conditions {
+		cond, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		condType, _ := cond["type"].(string)
+		if condType != conditionType {
+			continue
+		}
+		condStatus, _ := cond["status"].(string)
+		if condStatus == "True" {
+			return conditionType
+		}
+		reason, _ := cond["reason"].(string)
+		if reason != "" {
+			return reason
+		}
+		return "Not" + conditionType
+	}
+	return ""
 }

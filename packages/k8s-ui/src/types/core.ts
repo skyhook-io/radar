@@ -95,6 +95,7 @@ export type CoreNodeKind =
   | 'ServersTransportTCP' // Traefik ServersTransportTCP
   | 'TLSOption'          // Traefik TLSOption
   | 'TLSStore'           // Traefik TLSStore
+  | 'HTTPProxy'          // Contour HTTPProxy
 
 // NodeKind can be a core kind or any arbitrary CRD kind string
 export type NodeKind = CoreNodeKind | (string & {})

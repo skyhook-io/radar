@@ -308,6 +308,7 @@ func buildNodeID(kind, namespace, name string, dp DynamicProvider) string {
 		"serverstransporttcps":     "serverstransporttcp",
 		"tlsoptions":               "tlsoption",
 		"tlsstores":                "tlsstore",
+		"httpproxies":              "httpproxy",           // Contour
 		"persistentvolumes":        "persistentvolume",
 		"pvs":                      "persistentvolume",
 		"storageclasses":           "storageclass",
@@ -432,6 +433,7 @@ func normalizeKind(kind string, dp DynamicProvider) string {
 		"serverstransporttcp":     "ServersTransportTCP",
 		"tlsoption":               "TLSOption",
 		"tlsstore":                "TLSStore",
+		"httpproxy":               "HTTPProxy",            // Contour
 		"internet":                "Internet",
 		"persistentvolume":        "PersistentVolume",
 		"storageclass":            "StorageClass",

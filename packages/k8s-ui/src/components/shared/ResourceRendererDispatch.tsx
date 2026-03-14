@@ -64,6 +64,7 @@ import {
   getKnativeConditionStatus,
   getRevisionStatus,
 } from '../resources/resource-utils-knative'
+import { getHTTPProxyStatus } from '../resources/resource-utils-contour'
 import {
   PodRenderer,
   WorkloadRenderer,
@@ -169,6 +170,7 @@ import {
   RuntimeClassRenderer,
   LeaseRenderer,
   TraefikIngressRouteRenderer,
+  ContourHTTPProxyRenderer,
 } from '../resources/renderers'
 import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo, ResolvedEnvFrom } from '../../types'
 import type { CopyHandler } from '../ui/drawer-components'
@@ -234,6 +236,7 @@ const KNOWN_KINDS = new Set([
   'channels', 'inmemorychannels', 'subscriptions', 'sequences', 'parallels',
   'knativeingresses', 'knativecertificates', 'serverlessservices', 'domainmappings',
   'ingressroutes', 'ingressroutetcps', 'ingressrouteudps',
+  'httpproxies',
 ])
 
 // ============================================================================
@@ -429,6 +432,9 @@ export function ResourceRendererDispatch({
         {/* Traefik */}
         {(kind === 'ingressroutes' || kind === 'ingressroutetcps' || kind === 'ingressrouteudps') && <TraefikIngressRouteRenderer data={data} onNavigate={onNavigate} />}
 
+        {/* Contour */}
+        {kind === 'httpproxies' && <ContourHTTPProxyRenderer data={data} onNavigate={onNavigate} />}
+
         {/* Generic renderer for CRDs and unknown resource types */}
         {!isKnownKind && <GenericRenderer data={data} />}
 
@@ -540,6 +546,15 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'serviceentries') return getServiceEntryStatus(data)
   if (k === 'peerauthentications') return getPeerAuthenticationStatus(data)
   if (k === 'authorizationpolicies') return getAuthorizationPolicyStatus(data)
+
+  // Contour HTTPProxy
+  if (k === 'httpproxies') {
+    const s = getHTTPProxyStatus(data)
+    if (s.status === 'healthy') return { text: s.label, color: 'bg-green-500/20 text-green-400' }
+    if (s.status === 'unhealthy') return { text: s.label, color: 'bg-red-500/20 text-red-400' }
+    if (s.status === 'degraded') return { text: s.label, color: 'bg-yellow-500/20 text-yellow-400' }
+    return null
+  }
 
   // Knative Revisions have custom status logic (scaled-to-zero, activating)
   if (k === 'knativerevisions') {

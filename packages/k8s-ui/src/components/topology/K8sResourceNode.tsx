@@ -134,6 +134,7 @@ export const NODE_DIMENSIONS: Record<NodeKind, { width: number; height: number }
   ServersTransportTCP: { width: 300, height: 56 },
   TLSOption: { width: 280, height: 56 },
   TLSStore: { width: 280, height: 56 },
+  HTTPProxy: { width: 280, height: 56 }, // Contour
 }
 
 

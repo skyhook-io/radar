@@ -72,6 +72,9 @@ export const KIND_BADGE_COLORS: Record<string, string> = {
   TLSOption: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-400',
   TLSStore: 'bg-cyan-500/15 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-400',
 
+  // Contour
+  HTTPProxy: 'bg-violet-500/15 text-violet-700 dark:bg-violet-900/50 dark:text-violet-400',
+
   // Special
   HelmRelease: 'bg-purple-500/20 text-purple-700 dark:text-purple-400',
   Event: 'bg-slate-500/15 text-slate-700 dark:bg-slate-900/50 dark:text-slate-400',
@@ -145,6 +148,9 @@ export const KIND_BADGE_BORDERED: Record<string, string> = {
   ServersTransportTCP: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-400 border border-cyan-500/30',
   TLSOption: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-400 border border-cyan-500/30',
   TLSStore: 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-400 border border-cyan-500/30',
+
+  // Contour
+  HTTPProxy: 'bg-violet-500/20 text-violet-700 dark:text-violet-400 border border-violet-500/30',
 }
 
 // Event type colors - for K8s event types (Normal, Warning)

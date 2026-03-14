@@ -77,6 +77,9 @@ const RESOURCE_KINDS: {
   { kind: 'ServersTransportTCP', label: 'Transport TCP', icon: getTopologyIcon('ServersTransportTCP'), color: 'text-cyan-400', category: 'custom' },
   { kind: 'TLSOption', label: 'TLS Option', icon: getTopologyIcon('TLSOption'), color: 'text-cyan-400', category: 'custom' },
   { kind: 'TLSStore', label: 'TLS Store', icon: getTopologyIcon('TLSStore'), color: 'text-cyan-400', category: 'custom' },
+
+  // Contour
+  { kind: 'HTTPProxy', label: 'HTTPProxy', icon: getTopologyIcon('HTTPProxy'), color: 'text-violet-400', category: 'networking' },
 ]
 
 const CATEGORIES = [

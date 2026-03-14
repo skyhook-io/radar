@@ -184,6 +184,9 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   tlsoption: Lock,
   tlsstore: Lock,
 
+  // Contour
+  httpproxy: Globe,
+
   // Trivy Operator
   vulnerabilityreport: Shield,
   configauditreport: ShieldCheck,

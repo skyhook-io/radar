@@ -444,6 +444,7 @@ function pickGroupName(nodes: TopologyNode[]): string {
     'ServersTransportTCP': 4,
     'TLSOption': 4,
     'TLSStore': 4,
+    'HTTPProxy': 1, // Contour
   }
 
   // Sort by priority and pick the first
