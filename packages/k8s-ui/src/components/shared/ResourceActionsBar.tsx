@@ -140,7 +140,6 @@ export function ResourceActionsBar({
   const [showCordonConfirm, setShowCordonConfirm] = useState(false)
   const [showDrainConfirm, setShowDrainConfirm] = useState(false)
   const [drainForce, setDrainForce] = useState(false)
-  const [drainDeleteLocal, setDrainDeleteLocal] = useState(false)
 
   // Rollback dialog state
   const [showRevisions, setShowRevisions] = useState(false)
@@ -522,16 +521,14 @@ export function ResourceActionsBar({
         onClose={() => {
           setShowDrainConfirm(false)
           setDrainForce(false)
-          setDrainDeleteLocal(false)
         }}
         onConfirm={() => {
           onDrainNode?.({
             name: resource.name,
-            options: { force: drainForce, deleteEmptyDirData: drainDeleteLocal },
+            options: { deleteEmptyDirData: true, force: drainForce || undefined },
           })
           setShowDrainConfirm(false)
           setDrainForce(false)
-          setDrainDeleteLocal(false)
         }}
         title="Drain Node"
         message={`Cordon and evict all pods from node "${resource.name}"? DaemonSet pods will be skipped.`}
@@ -549,15 +546,6 @@ export function ResourceActionsBar({
               className="rounded border-theme-border"
             />
             Force (evict pods not managed by a controller)
-          </label>
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={drainDeleteLocal}
-              onChange={(e) => setDrainDeleteLocal(e.target.checked)}
-              className="rounded border-theme-border"
-            />
-            Delete local data (emptyDir volumes)
           </label>
         </div>
       </ConfirmDialog>

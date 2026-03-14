@@ -15,7 +15,7 @@ import (
 
 // DrainRequest is the optional JSON body for the drain endpoint.
 type DrainRequest struct {
-	DeleteEmptyDirData bool   `json:"deleteEmptyDirData"`
+	DeleteEmptyDirData *bool  `json:"deleteEmptyDirData,omitempty"` // Default true if omitted
 	Force              bool   `json:"force"`
 	GracePeriodSeconds *int64 `json:"gracePeriodSeconds,omitempty"`
 	Timeout            int    `json:"timeout,omitempty"` // seconds, default 60
@@ -94,9 +94,15 @@ func (s *Server) handleDrainNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// DeleteEmptyDirData defaults true (matching kubectl drain --delete-emptydir-data).
+	// Most pods use emptyDir for tmp/caches; without this, drain skips almost everything.
+	deleteLocal := true
+	if req.DeleteEmptyDirData != nil {
+		deleteLocal = *req.DeleteEmptyDirData
+	}
 	opts := k8s.DrainOptions{
 		IgnoreDaemonSets:   true,
-		DeleteEmptyDirData: req.DeleteEmptyDirData,
+		DeleteEmptyDirData: deleteLocal,
 		Force:              req.Force,
 		GracePeriodSeconds: req.GracePeriodSeconds,
 		Timeout:            60 * time.Second,

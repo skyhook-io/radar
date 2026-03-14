@@ -269,7 +269,7 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 type manageNodeInput struct {
 	Action             string `json:"action" jsonschema:"action to perform: cordon, uncordon, or drain"`
 	Name               string `json:"name" jsonschema:"node name"`
-	DeleteEmptyDirData bool   `json:"delete_empty_dir_data,omitempty" jsonschema:"allow draining pods with emptyDir volumes (default false)"`
+	DeleteEmptyDirData *bool  `json:"delete_empty_dir_data,omitempty" jsonschema:"evict pods with emptyDir volumes (default true, set false to skip them)"`
 	Force              bool   `json:"force,omitempty" jsonschema:"force evict pods not managed by a controller (default false)"`
 	Timeout            int    `json:"timeout,omitempty" jsonschema:"drain timeout in seconds (default 60)"`
 }
@@ -299,9 +299,14 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 		})
 
 	case "drain":
+		// Default deleteEmptyDirData to true (most pods use emptyDir for tmp/caches)
+		deleteLocal := true
+		if input.DeleteEmptyDirData != nil {
+			deleteLocal = *input.DeleteEmptyDirData
+		}
 		opts := k8s.DrainOptions{
 			IgnoreDaemonSets:   true,
-			DeleteEmptyDirData: input.DeleteEmptyDirData,
+			DeleteEmptyDirData: deleteLocal,
 			Force:              input.Force,
 			Timeout:            60 * time.Second,
 		}
