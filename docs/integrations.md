@@ -191,6 +191,37 @@ All provider-specific NodeClass variants are automatically detected and supporte
 
 ---
 
+## Contour
+
+[Contour](https://projectcontour.io/) is a Kubernetes ingress controller using Envoy proxy, providing a powerful HTTPProxy CRD with route delegation, weighted routing, TLS termination, and TCP proxying.
+
+### What Radar Shows
+
+**Topology:** Full Contour routing path — HTTPProxy (root) → HTTPProxy (child, via delegation) → Service, with TLS secret configuration edges. Root proxies with `spec.virtualhost` appear as entry points; child proxies referenced via `spec.includes` are connected via delegation edges. Both **Resources** and **Traffic** view modes are supported.
+
+<p align="center">
+  <img src="screenshots/integrations/contour-topology.png" alt="Contour Topology" width="800">
+  <br><em>Contour in Topology View — HTTPProxy → Service routing with delegation</em>
+</p>
+
+**HTTPProxy Detail View:**
+- Status banner for invalid or orphaned proxies
+- Virtual host FQDN and TLS configuration with clickable Secret links
+- Routes with prefix/header conditions and backend services (name, port, weight)
+- Delegation includes with cross-namespace indicators and condition prefixes
+- TCP proxy services for passthrough configurations
+- Status conditions (Valid/Invalid/Orphaned)
+
+**Resource Browser:** Smart columns show FQDN, route count, include count, TLS status (shield icon), and validity status at a glance.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| HTTPProxy | `projectcontour.io/v1` | Yes | Yes | Yes |
+
+---
+
 ## cert-manager
 
 [cert-manager](https://cert-manager.io/) automates TLS certificate management — issuing, renewing, and revoking certificates from Let's Encrypt, Vault, Venafi, and other issuers.
