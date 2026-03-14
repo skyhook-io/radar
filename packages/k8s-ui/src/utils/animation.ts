@@ -18,7 +18,7 @@ export const CSS_EASE = 'cubic-bezier(0.32, 0.72, 0, 1)'
 /** Standard UI transitions: overlays, panels, toasts */
 export const DURATION_NORMAL = 300
 /** Dock height, subtle layout shifts */
-export const DURATION_DOCK = 250
+export const DURATION_DOCK = 150
 /** Toast exit animation */
 export const DURATION_TOAST_EXIT = 200
 

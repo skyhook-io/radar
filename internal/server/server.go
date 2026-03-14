@@ -125,6 +125,7 @@ func (s *Server) setupRoutes() {
 		r.Get("/events/stream", s.broadcaster.HandleSSE)
 		r.Get("/pods/{namespace}/{name}/logs/stream", s.handlePodLogsStream)
 		r.Get("/pods/{namespace}/{name}/exec", s.handlePodExec)
+		r.Get("/local-terminal", s.handleLocalTerminal)
 		r.Get("/pods/{namespace}/{name}/files/download", s.handlePodFileDownload)
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
 
@@ -376,6 +377,7 @@ func (s *Server) Handler() http.Handler {
 
 // Stop gracefully stops the server and releases the listening port.
 func (s *Server) Stop() {
+	StopAllLocalTermSessions()
 	s.broadcaster.Stop()
 	if s.listener != nil {
 		s.listener.Close()
@@ -1825,18 +1827,21 @@ func (s *Server) handleRollbackWorkload(w http.ResponseWriter, r *http.Request) 
 
 // SessionCounts returns counts of active sessions
 type SessionCounts struct {
-	PortForwards int `json:"portForwards"`
-	ExecSessions int `json:"execSessions"`
-	Total        int `json:"total"`
+	PortForwards   int `json:"portForwards"`
+	ExecSessions   int `json:"execSessions"`
+	LocalTerminals int `json:"localTerminals"`
+	Total          int `json:"total"`
 }
 
 func (s *Server) handleGetSessions(w http.ResponseWriter, r *http.Request) {
 	pf := GetPortForwardCount()
 	exec := GetExecSessionCount()
+	lt := GetLocalTermSessionCount()
 	s.writeJSON(w, SessionCounts{
-		PortForwards: pf,
-		ExecSessions: exec,
-		Total:        pf + exec,
+		PortForwards:   pf,
+		ExecSessions:   exec,
+		LocalTerminals: lt,
+		Total:          pf + exec + lt,
 	})
 }
 

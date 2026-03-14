@@ -3,49 +3,30 @@ import { Terminal as XTerm } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import { WebLinksAddon } from '@xterm/addon-web-links'
 import '@xterm/xterm/css/xterm.css'
-import { RefreshCw, ChevronDown, Bug } from 'lucide-react'
+import { RefreshCw } from 'lucide-react'
 import { clsx } from 'clsx'
 
-export interface TerminalTabProps {
-  namespace: string
-  podName: string
-  containerName: string
-  containers: string[]
+export interface LocalTerminalTabProps {
   isActive?: boolean
-  /** Returns the WebSocket URL to connect to for a given container. */
-  createSession: (containerName: string) => Promise<{ wsUrl: string }>
-  /** Optional: creates a debug (ephemeral) container. If omitted, the debug button is hidden. */
-  createDebugContainer?: (targetContainer: string) => Promise<{ containerName: string }>
+  /** Returns the WebSocket URL for the local terminal session */
+  createSession: () => Promise<{ wsUrl: string }>
 }
 
-export function TerminalTab({
-  namespace,
-  podName,
-  containerName,
-  containers,
+export function LocalTerminalTab({
   isActive = true,
   createSession,
-  createDebugContainer,
-}: TerminalTabProps) {
+}: LocalTerminalTabProps) {
   const terminalRef = useRef<HTMLDivElement>(null)
   const xtermRef = useRef<XTerm | null>(null)
   const fitAddonRef = useRef<FitAddon | null>(null)
   const wsRef = useRef<WebSocket | null>(null)
-  // Cleanup ref holds the ResizeObserver disconnect from an async setup
   const cleanupRef = useRef<(() => void) | undefined>(undefined)
-  // Prevents stale .then() callbacks from running after unmount or reconnect
   const cancelledRef = useRef(false)
-  // Stable refs for callbacks — avoids effect re-runs when consumers pass unstable functions
   const createSessionRef = useRef(createSession)
-  const createDebugContainerRef = useRef(createDebugContainer)
   useLayoutEffect(() => { createSessionRef.current = createSession }, [createSession])
-  useLayoutEffect(() => { createDebugContainerRef.current = createDebugContainer }, [createDebugContainer])
   const [isConnected, setIsConnected] = useState(false)
   const [isConnecting, setIsConnecting] = useState(true)
   const [error, setError] = useState<string | null>(null)
-  const [errorType, setErrorType] = useState<string | null>(null)
-  const [isCreatingDebug, setIsCreatingDebug] = useState(false)
-  const [selectedContainer, setSelectedContainer] = useState(containerName)
 
   const connect = useCallback(() => {
     if (!terminalRef.current) return
@@ -53,7 +34,6 @@ export function TerminalTab({
     cancelledRef.current = false
     setIsConnecting(true)
     setError(null)
-    setErrorType(null)
 
     // Clean up existing terminal and connection
     cleanupRef.current?.()
@@ -113,7 +93,7 @@ export function TerminalTab({
       setTimeout(doFit, 100)
     })
 
-    createSessionRef.current(selectedContainer)
+    createSessionRef.current()
       .then(({ wsUrl }) => {
         if (cancelledRef.current) return
         const ws = new WebSocket(wsUrl)
@@ -140,8 +120,6 @@ export function TerminalTab({
             xterm.write('\r\n\x1b[2m[Process exited]\x1b[0m\r\n')
           } else if (msg.type === 'error' && msg.data) {
             setError(msg.data)
-            // Support both camelCase (radar) and snake_case (conduit) error type field
-            setErrorType(msg.errorType ?? msg.error_type ?? 'exec_error')
             setIsConnected(false)
           }
         }
@@ -164,7 +142,7 @@ export function TerminalTab({
           }
         })
 
-        // Debounced resize to avoid infinite loops
+        // Debounced resize
         let resizeTimeout: ReturnType<typeof setTimeout> | null = null
         let lastWidth = 0
         let lastHeight = 0
@@ -195,10 +173,9 @@ export function TerminalTab({
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : 'Failed to connect')
-        setErrorType('exec_error')
         setIsConnecting(false)
       })
-  }, [namespace, podName, selectedContainer])
+  }, [])
 
   useEffect(() => {
     connect()
@@ -210,27 +187,7 @@ export function TerminalTab({
     }
   }, [connect])
 
-  const handleContainerChange = useCallback((container: string) => {
-    setSelectedContainer(container)
-  }, [])
-
-  const handleCreateDebugContainer = useCallback(async () => {
-    if (!createDebugContainerRef.current) return
-    setIsCreatingDebug(true)
-    try {
-      const { containerName: newContainer } = await createDebugContainerRef.current(selectedContainer)
-      setError(null)
-      setErrorType(null)
-      setSelectedContainer(newContainer)
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to create debug container')
-      setErrorType('exec_error')
-    } finally {
-      setIsCreatingDebug(false)
-    }
-  }, [selectedContainer])
-
-  // Refit when tab becomes active (may have been resized while hidden)
+  // Refit when tab becomes active
   useEffect(() => {
     if (isActive && fitAddonRef.current && xtermRef.current) {
       const dims = fitAddonRef.current.proposeDimensions()
@@ -250,22 +207,7 @@ export function TerminalTab({
             isConnected ? 'bg-green-500' : isConnecting ? 'bg-yellow-500 animate-pulse' : 'bg-red-500'
           )}
         />
-        <span className="text-xs text-theme-text-tertiary">{podName}</span>
-
-        {containers.length > 1 && (
-          <div className="relative">
-            <select
-              value={selectedContainer}
-              onChange={(e) => handleContainerChange(e.target.value)}
-              className="appearance-none bg-theme-elevated text-xs text-theme-text-primary px-2 py-0.5 pr-5 rounded border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500"
-            >
-              {containers.map((c) => (
-                <option key={c} value={c}>{c}</option>
-              ))}
-            </select>
-            <ChevronDown className="absolute right-1 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-text-tertiary pointer-events-none" />
-          </div>
-        )}
+        <span className="text-xs text-theme-text-tertiary">Local Terminal</span>
 
         {!isConnected && !isConnecting && (
           <button
@@ -278,52 +220,18 @@ export function TerminalTab({
         )}
       </div>
 
-      {/* Terminal or error — key forces xterm canvas unmount/remount on toggle */}
+      {/* Terminal or error */}
       {error ? (
         <div key="error" className="absolute top-8 left-0 right-0 bottom-0 flex flex-col items-center justify-center p-4 text-center bg-slate-900">
-          {errorType === 'shell_not_found' ? (
-            <>
-              <div className="text-amber-400 mb-2 text-sm">Shell not available</div>
-              <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
-                This container doesn&apos;t have a shell (/bin/sh). This is common with distroless
-                or minimal container images. You can create a debug container to troubleshoot.
-              </div>
-              <div className="flex gap-2">
-                {createDebugContainerRef.current && (
-                  <button
-                    onClick={handleCreateDebugContainer}
-                    disabled={isCreatingDebug}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 disabled:opacity-50"
-                  >
-                    {isCreatingDebug ? (
-                      <><RefreshCw className="w-3 h-3 animate-spin" />Creating debug container...</>
-                    ) : (
-                      <><Bug className="w-3 h-3" />Start debug container</>
-                    )}
-                  </button>
-                )}
-                <button
-                  onClick={connect}
-                  className="flex items-center gap-2 px-3 py-1.5 bg-theme-elevated text-theme-text-primary text-xs rounded hover:bg-theme-hover"
-                >
-                  <RefreshCw className="w-3 h-3" />
-                  Retry
-                </button>
-              </div>
-            </>
-          ) : (
-            <>
-              <div className="text-red-400 mb-2 text-sm">Failed to connect</div>
-              <div className="text-xs text-theme-text-disabled mb-3">{error}</div>
-              <button
-                onClick={connect}
-                className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
-              >
-                <RefreshCw className="w-3 h-3" />
-                Retry
-              </button>
-            </>
-          )}
+          <div className="text-red-400 mb-2 text-sm">Failed to connect</div>
+          <div className="text-xs text-theme-text-disabled mb-3">{error}</div>
+          <button
+            onClick={connect}
+            className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+          >
+            <RefreshCw className="w-3 h-3" />
+            Retry
+          </button>
         </div>
       ) : (
         <div key="terminal" ref={terminalRef} className="absolute top-8 left-0 right-0 bottom-0 bg-[#0f172a] [&_.xterm-viewport]:!bg-[#0f172a]" />

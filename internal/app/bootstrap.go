@@ -35,8 +35,9 @@ type AppConfig struct {
 	DebugEvents      bool
 	FakeInCluster    bool
 	DisableHelmWrite bool
-	DisableExec      bool
-	TimelineStorage  string
+	DisableExec          bool
+	DisableLocalTerminal bool
+	TimelineStorage      string
 	TimelineDBPath   string
 	PrometheusURL    string
 	Version          string
@@ -50,6 +51,7 @@ func SetGlobals(cfg AppConfig) {
 	k8s.ForceInCluster = cfg.FakeInCluster
 	k8s.ForceDisableHelmWrite = cfg.DisableHelmWrite
 	k8s.ForceDisableExec = cfg.DisableExec
+	k8s.ForceDisableLocalTerminal = cfg.DisableLocalTerminal
 	versionpkg.SetCurrent(cfg.Version)
 }
 

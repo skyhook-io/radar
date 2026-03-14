@@ -54,6 +54,7 @@ type PermissionCheckResult struct {
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
 	Exec          bool                 `json:"exec"`                // Can create pods/exec (terminal feature)
+	LocalTerminal bool                 `json:"localTerminal"`       // Local terminal available (not in-cluster, not disabled)
 	Logs          bool                 `json:"logs"`                // Can get pods/log (log viewer)
 	PortForward   bool                 `json:"portForward"`         // Can create pods/portforward
 	Secrets       bool                 `json:"secrets"`             // Can list secrets
@@ -75,6 +76,8 @@ var (
 	ForceDisableHelmWrite bool
 	// ForceDisableExec overrides the exec capability to false (for dev testing)
 	ForceDisableExec bool
+	// ForceDisableLocalTerminal overrides the localTerminal capability to false (for dev testing)
+	ForceDisableLocalTerminal bool
 )
 
 // CheckCapabilities checks RBAC permissions using SelfSubjectAccessReview.
@@ -166,6 +169,9 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 
 	wg.Wait()
 	logTiming("   [caps] CheckCapabilities RBAC checks done (%v)", time.Since(capStart))
+
+	// Local terminal is not RBAC-gated — it depends on runtime mode only
+	caps.LocalTerminal = !IsInCluster() && !ForceDisableLocalTerminal
 
 	if ForceDisableHelmWrite {
 		caps.HelmWrite = false

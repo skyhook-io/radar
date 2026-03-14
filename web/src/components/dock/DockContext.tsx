@@ -6,5 +6,6 @@ export {
   useOpenLogs,
   useOpenWorkloadLogs,
   useOpenNodeTerminal,
+  useOpenLocalTerminal,
 } from '@skyhook-io/k8s-ui'
 export type { DockTab, DockTabType, DockContextValue } from '@skyhook-io/k8s-ui'

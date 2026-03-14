@@ -86,8 +86,8 @@ export function BottomDock({ renderTabContent, leftOffset = 0 }: BottomDockProps
 
   return (
     <div
-      className="fixed bottom-0 right-0 bg-theme-base border-t border-theme-border flex flex-col z-40"
-      style={{ height: effectiveHeight, left: leftOffset, transition: `height ${DURATION_DOCK}ms ease-out, left ${DURATION_DOCK}ms ease-out` }}
+      className="fixed bottom-0 right-0 bg-theme-base border-t border-theme-border flex flex-col z-40 overflow-hidden"
+      style={{ height: effectiveHeight, left: leftOffset, transition: `height ${DURATION_DOCK}ms cubic-bezier(0.4, 0, 0.2, 1), left ${DURATION_DOCK}ms ease-out` }}
     >
       {isExpanded && !isMaximized && (
         <div
@@ -149,18 +149,16 @@ export function BottomDock({ renderTabContent, leftOffset = 0 }: BottomDockProps
         </div>
       </div>
 
-      {isExpanded && (
-        <div className="flex-1 overflow-hidden w-full relative">
-          {tabs.map(tab => (
-            <div
-              key={tab.id}
-              className={tab.id === activeTabId ? 'absolute inset-0' : 'absolute inset-0 invisible'}
-            >
-              {renderTabContent(tab, tab.id === activeTabId)}
-            </div>
-          ))}
-        </div>
-      )}
+      <div className="flex-1 overflow-hidden w-full relative">
+        {tabs.map(tab => (
+          <div
+            key={tab.id}
+            className={tab.id === activeTabId ? 'absolute inset-0' : 'absolute inset-0 invisible'}
+          >
+            {renderTabContent(tab, tab.id === activeTabId)}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -176,7 +174,8 @@ function TabButton({
   onSelect: () => void
   onClose: () => void
 }) {
-  const Icon = tab.type === 'terminal' ? Terminal : tab.type === 'workload-logs' ? Layers : FileText
+  const Icon = tab.type === 'terminal' || tab.type === 'node-terminal' || tab.type === 'local-terminal'
+    ? Terminal : tab.type === 'workload-logs' ? Layers : FileText
 
   return (
     <div

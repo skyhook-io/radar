@@ -1,6 +1,6 @@
 import { createContext, useContext, useState, useCallback, useRef, useEffect, ReactNode } from 'react'
 
-export type DockTabType = 'terminal' | 'logs' | 'workload-logs' | 'node-terminal'
+export type DockTabType = 'terminal' | 'logs' | 'workload-logs' | 'node-terminal' | 'local-terminal'
 
 export interface DockTab {
   id: string
@@ -58,6 +58,9 @@ export function DockProvider({ children }: { children: ReactNode }) {
       }
       if (t.type === 'node-terminal') {
         return t.nodeName === tabData.nodeName
+      }
+      if (t.type === 'local-terminal') {
+        return false // Allow multiple local terminals
       }
       return t.namespace === tabData.namespace &&
              t.podName === tabData.podName &&
@@ -232,6 +235,17 @@ export function useOpenNodeTerminal() {
       orgId: opts.orgId,
       clusterId: opts.clusterId,
       clusterName: opts.clusterName,
+    })
+  }
+}
+
+export function useOpenLocalTerminal() {
+  const { addTab } = useDock()
+
+  return () => {
+    addTab({
+      type: 'local-terminal',
+      title: 'Terminal',
     })
   }
 }

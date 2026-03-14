@@ -5,6 +5,7 @@ import type { Capabilities, ResourcePermissions } from '../types'
 // Default capabilities for local development (when running locally, all features work)
 const defaultCapabilities: Capabilities = {
   exec: true,
+  localTerminal: true,
   logs: true,
   portForward: true,
   secrets: true,
@@ -17,6 +18,7 @@ const defaultCapabilities: Capabilities = {
 // Restricted capabilities for error/failure cases (fail-closed)
 const restrictedCapabilities: Capabilities = {
   exec: false,
+  localTerminal: false,
   logs: false,
   portForward: false,
   secrets: false,

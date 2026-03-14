@@ -3,6 +3,7 @@ import { TerminalTab } from './TerminalTab'
 import { LogsTab } from './LogsTab'
 import { WorkloadLogsTab } from './WorkloadLogsTab'
 import { NodeTerminalTab } from './NodeTerminalTab'
+import { LocalTerminalTab } from './LocalTerminalTab'
 
 function renderTabContent(tab: DockTab, isActive: boolean) {
   if (tab.type === 'terminal') {
@@ -44,6 +45,12 @@ function renderTabContent(tab: DockTab, isActive: boolean) {
         nodeName={tab.nodeName!}
         isActive={isActive}
       />
+    )
+  }
+
+  if (tab.type === 'local-terminal') {
+    return (
+      <LocalTerminalTab isActive={isActive} />
     )
   }
 

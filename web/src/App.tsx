@@ -16,12 +16,13 @@ import { TrafficView } from './components/traffic/TrafficView'
 import { CostView } from './components/cost/CostView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardManager, usePortForwardCount } from './components/portforward/PortForwardManager'
-import { DockProvider, BottomDock, useDock } from './components/dock'
+import { DockProvider, BottomDock, useDock, useOpenLocalTerminal } from './components/dock'
+import { DURATION_DOCK } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitchContext'
 import { ConnectionProvider, useConnection } from './context/ConnectionContext'
 import { ConnectionErrorView } from './components/ConnectionErrorView'
-import { CapabilitiesProvider } from './contexts/CapabilitiesContext'
+import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { NamespaceSelector } from './components/ui/NamespaceSelector'
 import { UpdateNotification } from './components/ui/UpdateNotification'
@@ -33,7 +34,7 @@ import { useNamespaces, useSwitchContext } from './api/client'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { Loader2 } from 'lucide-react'
-import { RefreshCw, Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, Settings } from 'lucide-react'
+import { RefreshCw, Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, Settings, SquareTerminal } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
@@ -105,6 +106,8 @@ function AppInner() {
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
+  const capabilities = useCapabilitiesContext()
+  const openLocalTerminal = useOpenLocalTerminal()
 
   // Parse namespaces from URL (supports both 'namespaces' and legacy 'namespace')
   const parseNamespacesFromURL = (params: URLSearchParams): string[] => {
@@ -658,6 +661,17 @@ function AppInner() {
             <GitHubStarButton />
           </div>
 
+          {/* Local terminal */}
+          {capabilities.localTerminal && (
+            <button
+              onClick={openLocalTerminal}
+              className="p-1.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+              title="Open local terminal"
+            >
+              <SquareTerminal className="w-4 h-4" />
+            </button>
+          )}
+
           {/* Theme toggle */}
           <div className="hidden md:block">
             <ThemeToggle />
@@ -1111,7 +1125,7 @@ function NamespaceFilterDialog({ namespaces, onConfirm, onKeep, onClose }: {
 function DockSpacer() {
   const { tabs, isExpanded } = useDock()
   if (tabs.length === 0) return null
-  return <div style={{ height: isExpanded ? 300 : 36 }} />
+  return <div style={{ height: isExpanded ? 300 : 36, transition: `height ${DURATION_DOCK}ms cubic-bezier(0.4, 0, 0.2, 1)` }} />
 }
 
 // Floating action buttons that position themselves above the dock

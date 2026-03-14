@@ -25,6 +25,7 @@ export interface ResourcePermissions {
 // Feature capabilities based on RBAC permissions
 export interface Capabilities {
   exec: boolean           // Terminal feature (pods/exec)
+  localTerminal: boolean  // Local terminal available (not in-cluster, not disabled)
   logs: boolean           // Log viewer (pods/log)
   portForward: boolean    // Port forwarding (pods/portforward)
   secrets: boolean        // List secrets
