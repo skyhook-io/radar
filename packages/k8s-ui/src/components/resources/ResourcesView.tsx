@@ -2646,13 +2646,13 @@ export function ResourcesView({
       const kindLower = normalizeKindToPlural(selectedKind.name, selectedKind.group)
 
       if (kindLower === 'pods') {
-        // Completed pods at bottom
+        // Completed pods at bottom, then sort by name for stability across refreshes
         result = [...result].sort((a: any, b: any) => {
           const aCompleted = a.status?.phase === 'Succeeded'
           const bCompleted = b.status?.phase === 'Succeeded'
           if (aCompleted && !bCompleted) return 1
           if (!aCompleted && bCompleted) return -1
-          return 0
+          return (a.metadata?.name || '').localeCompare(b.metadata?.name || '')
         })
       } else if (kindLower === 'daemonsets') {
         // DaemonSets with 0 desired (empty/inactive) at bottom, then sort by ready desc
@@ -2676,11 +2676,12 @@ export function ResourcesView({
           return (a.metadata?.name || '').localeCompare(b.metadata?.name || '')
         })
       } else if (kindLower === 'events') {
-        // Events: most recently seen first
+        // Events: most recently seen first, name tiebreaker for same-timestamp stability
         result = [...result].sort((a: any, b: any) => {
           const aTime = new Date(a.lastTimestamp || a.metadata?.creationTimestamp || 0).getTime()
           const bTime = new Date(b.lastTimestamp || b.metadata?.creationTimestamp || 0).getTime()
-          return bTime - aTime
+          if (bTime !== aTime) return bTime - aTime
+          return (a.metadata?.name || '').localeCompare(b.metadata?.name || '')
         })
       } else if (['deployments', 'statefulsets', 'replicasets'].includes(kindLower)) {
         // Workloads: unhealthy first, scaled-to-zero at bottom
@@ -2703,6 +2704,11 @@ export function ResourcesView({
           // Finally sort by name
           return (a.metadata?.name || '').localeCompare(b.metadata?.name || '')
         })
+      } else {
+        // All other kinds: sort by name for stability across refreshes
+        result = [...result].sort((a: any, b: any) =>
+          (a.metadata?.name || '').localeCompare(b.metadata?.name || '')
+        )
       }
     }
 
