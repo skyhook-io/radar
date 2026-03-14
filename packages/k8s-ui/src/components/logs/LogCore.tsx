@@ -1,9 +1,9 @@
 import { useRef, useCallback, useState, useMemo, useEffect, type ReactNode } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Play, Square, Download, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter } from 'lucide-react'
+import { Play, Square, Download, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter, Braces } from 'lucide-react'
 import type { LogEntry, LogLevel } from './useLogBuffer'
 import { useLogSearch } from './useLogSearch'
-import { JsonLogLine } from './JsonLogLine'
+import { StructuredLogLine } from './StructuredLogLine'
 import { Tooltip } from '../ui/Tooltip'
 import {
   formatLogTimestamp,
@@ -65,6 +65,7 @@ export function LogCore({
     new Set(['error', 'warn', 'info', 'debug'])
   )
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
+  const [expandAllStructured, setExpandAllStructured] = useState(false)
 
   // Level-filtered entries
   // 'unknown' logs are shown when all 4 known levels are enabled (no active filtering)
@@ -82,6 +83,8 @@ export function LogCore({
     }
     return counts
   }, [entries])
+
+  const hasStructuredEntries = useMemo(() => entries.some(e => e.isJson || e.isLogfmt), [entries])
 
   // Search
   const search = useLogSearch(levelFilteredEntries, virtuosoRef)
@@ -224,6 +227,20 @@ export function LogCore({
         </div>
 
         <div className="flex-1" />
+
+        {/* Expand all structured logs toggle */}
+        {hasStructuredEntries && (
+          <Tooltip content={expandAllStructured ? 'Collapse all structured' : 'Expand all structured'} delay={TIP_DELAY} position="bottom">
+            <button
+              onClick={() => setExpandAllStructured(prev => !prev)}
+              className={`p-1.5 rounded transition-colors ${
+                expandAllStructured ? 'bg-blue-600/50 text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
+              }`}
+            >
+              <Braces className="w-4 h-4" />
+            </button>
+          </Tooltip>
+        )}
 
         {/* Timestamp toggle */}
         <Tooltip content={showTimestamps ? 'Hide timestamps' : 'Show timestamps'} delay={TIP_DELAY} position="bottom">
@@ -438,6 +455,7 @@ export function LogCore({
                 showTimestamp={showTimestamps}
                 isCurrentMatch={entry.id === currentHighlightId}
                 wordWrap={wordWrap}
+                defaultExpanded={expandAllStructured}
               />
             )}
             className="h-full font-mono text-xs"
@@ -483,6 +501,7 @@ function LogLine({
   showTimestamp,
   isCurrentMatch,
   wordWrap,
+  defaultExpanded,
 }: {
   entry: LogEntry
   searchQuery: string
@@ -492,6 +511,7 @@ function LogLine({
   showTimestamp: boolean
   isCurrentMatch: boolean
   wordWrap: boolean
+  defaultExpanded: boolean
 }) {
   const levelColor = getLevelColor(entry.level)
 
@@ -506,9 +526,15 @@ function LogLine({
         dangerouslySetInnerHTML={{ __html: highlighted }}
       />
     )
-  } else if (entry.isJson) {
+  } else if (entry.isJson || entry.isLogfmt) {
     contentElement = (
-      <JsonLogLine content={entry.content} level={entry.level} wordWrap={wordWrap} />
+      <StructuredLogLine
+        content={entry.content}
+        level={entry.level}
+        wordWrap={wordWrap}
+        isLogfmt={entry.isLogfmt}
+        defaultExpanded={defaultExpanded}
+      />
     )
   } else {
     const html = ansiToHtml(entry.content)

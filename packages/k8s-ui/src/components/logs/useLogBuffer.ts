@@ -1,4 +1,5 @@
 import { useState, useRef, useCallback } from 'react'
+import { isLogfmt } from '../../utils/log-format'
 
 export type LogLevel = 'error' | 'warn' | 'info' | 'debug' | 'unknown'
 
@@ -11,6 +12,7 @@ export interface LogEntry {
   podColor?: string
   level: LogLevel
   isJson: boolean
+  isLogfmt: boolean
 }
 
 const MAX_BUFFER_SIZE = 10_000
@@ -56,26 +58,30 @@ function isJsonContent(content: string): boolean {
   return trimmed[0] === '{' && trimmed[trimmed.length - 1] === '}'
 }
 
+type RawLogEntry = Omit<LogEntry, 'id' | 'level' | 'isJson' | 'isLogfmt'>
+
 interface UseLogBufferReturn {
   entries: LogEntry[]
-  append: (entry: Omit<LogEntry, 'id' | 'level' | 'isJson'>) => void
-  appendBatch: (entries: Omit<LogEntry, 'id' | 'level' | 'isJson'>[]) => void
-  set: (entries: Omit<LogEntry, 'id' | 'level' | 'isJson'>[]) => void
+  append: (entry: RawLogEntry) => void
+  appendBatch: (entries: RawLogEntry[]) => void
+  set: (entries: RawLogEntry[]) => void
   clear: () => void
 }
 
 export function useLogBuffer(): UseLogBufferReturn {
   const [entries, setEntries] = useState<LogEntry[]>([])
   const idCounter = useRef(0)
-  const pendingRef = useRef<Omit<LogEntry, 'id' | 'level' | 'isJson'>[]>([])
+  const pendingRef = useRef<RawLogEntry[]>([])
   const rafRef = useRef<number | null>(null)
 
-  const enrichEntry = useCallback((raw: Omit<LogEntry, 'id' | 'level' | 'isJson'>): LogEntry => {
+  const enrichEntry = useCallback((raw: RawLogEntry): LogEntry => {
+    const isJ = isJsonContent(raw.content)
     return {
       ...raw,
       id: idCounter.current++,
       level: detectLogLevel(raw.content),
-      isJson: isJsonContent(raw.content),
+      isJson: isJ,
+      isLogfmt: !isJ && isLogfmt(raw.content),
     }
   }, [])
 
@@ -95,21 +101,21 @@ export function useLogBuffer(): UseLogBufferReturn {
     })
   }, [enrichEntry])
 
-  const append = useCallback((entry: Omit<LogEntry, 'id' | 'level' | 'isJson'>) => {
+  const append = useCallback((entry: RawLogEntry) => {
     pendingRef.current.push(entry)
     if (rafRef.current === null) {
       rafRef.current = requestAnimationFrame(flushPending)
     }
   }, [flushPending])
 
-  const appendBatch = useCallback((batch: Omit<LogEntry, 'id' | 'level' | 'isJson'>[]) => {
+  const appendBatch = useCallback((batch: RawLogEntry[]) => {
     pendingRef.current.push(...batch)
     if (rafRef.current === null) {
       rafRef.current = requestAnimationFrame(flushPending)
     }
   }, [flushPending])
 
-  const set = useCallback((rawEntries: Omit<LogEntry, 'id' | 'level' | 'isJson'>[]) => {
+  const set = useCallback((rawEntries: RawLogEntry[]) => {
     // Cancel any pending RAF
     if (rafRef.current !== null) {
       cancelAnimationFrame(rafRef.current)

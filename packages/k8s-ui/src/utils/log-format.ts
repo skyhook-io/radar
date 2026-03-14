@@ -281,6 +281,83 @@ export function parseLogRange(logRange: string): { tailLines?: number; sinceSeco
 }
 
 /**
+ * Syntax-highlight a pretty-printed JSON string for HTML display.
+ * Wraps keys, string values, numbers, booleans, and null in colored spans.
+ * Input must already be HTML-escaped or will be escaped here.
+ */
+export function highlightJson(json: string): string {
+  const escaped = escapeHtml(json)
+  // Process in a single pass: match JSON tokens and wrap with color spans.
+  // Order matters — keys (string followed by colon) must match before standalone strings.
+  return escaped.replace(
+    /(&quot;(?:\\.|[^&])*?&quot;)\s*:/g,
+    '<span style="color:#7cacf8">$1</span>:'
+  ).replace(
+    /:\s*(&quot;(?:\\.|[^&])*?&quot;)/g,
+    ': <span style="color:#73c991">$1</span>'
+  ).replace(
+    /:\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/g,
+    ': <span style="color:#e5c07b">$1</span>'
+  ).replace(
+    /:\s*(true|false)\b/g,
+    ': <span style="color:#c678dd">$1</span>'
+  ).replace(
+    /:\s*(null)\b/g,
+    ': <span style="color:#808080">$1</span>'
+  )
+}
+
+/**
+ * Unescape common escape sequences within JSON string values.
+ * Converts literal \n, \t, \r\n in pretty-printed JSON to real whitespace,
+ * making stack traces and multi-line messages readable in the expanded view.
+ */
+export function unescapeJsonStrings(text: string): string {
+  return text.replace(/"(?:[^"\\]|\\.)*"/g, (match) => {
+    return match
+      .replace(/\\r\\n/g, '\r\n')
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+  })
+}
+
+// logfmt detection and parsing
+
+const LOGFMT_PAIR_RE = /(?:^|\s)([a-zA-Z_][\w.]*)=((?:"(?:[^"\\]|\\.)*")|(?:[^\s]*))/g
+
+/**
+ * Detect if a log line is in logfmt format (key=value pairs).
+ * Requires at least 2 pairs to avoid false positives on URLs or shell assignments.
+ */
+export function isLogfmt(content: string): boolean {
+  const trimmed = content.trimStart()
+  if (trimmed[0] === '{') return false
+  const matches = trimmed.match(LOGFMT_PAIR_RE)
+  return matches !== null && matches.length >= 2
+}
+
+/**
+ * Parse a logfmt line into a key-value record.
+ * Handles quoted values with escape sequences.
+ */
+export function parseLogfmt(content: string): Record<string, string> | null {
+  const result: Record<string, string> = {}
+  let count = 0
+  let match: RegExpExecArray | null
+  const re = new RegExp(LOGFMT_PAIR_RE.source, 'g')
+  while ((match = re.exec(content)) !== null) {
+    const key = match[1]
+    let val = match[2]
+    if (val.startsWith('"') && val.endsWith('"')) {
+      val = val.slice(1, -1).replace(/\\"/g, '"').replace(/\\n/g, '\n').replace(/\\t/g, '\t')
+    }
+    result[key] = val
+    count++
+  }
+  return count >= 2 ? result : null
+}
+
+/**
  * Handle SSE error events from log streams.
  * Parses server-sent error data and logs it, then calls onClose.
  */
