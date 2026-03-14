@@ -485,11 +485,17 @@ export function formatKindName(kind: string): string {
     secrets: 'Secret', jobs: 'Job', cronjobs: 'CronJob', hpas: 'HPA',
     horizontalpodautoscalers: 'HPA', nodes: 'Node', namespaces: 'Namespace',
     persistentvolumeclaims: 'PVC', persistentvolumes: 'PV',
+    httpproxies: 'HTTPProxy',
   }
   if (names[k]) return names[k]
 
   // For unknown kinds (CRDs), use the original kind name
   // or format it nicely if it's a plural name
+  if (k.endsWith('ies')) {
+    // Handle -ies → -y (e.g., httpproxies → Httpproxy)
+    const singular = kind.slice(0, -3) + 'y'
+    return singular.charAt(0).toUpperCase() + singular.slice(1)
+  }
   if (kind.endsWith('s') && !kind.endsWith('ss')) {
     // Try to singularize simple plurals
     const singular = kind.slice(0, -1)
