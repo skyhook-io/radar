@@ -15,6 +15,7 @@ interface UseEventSourceOptions {
   onContextChanged?: (context: string) => void
   onConnectionStateChange?: (status: ConnectionState) => void
   onDeferredReady?: () => void
+  onK8sEvent?: (event: K8sEvent) => void
 }
 
 const MAX_EVENTS = 100 // Keep last 100 events
@@ -154,6 +155,7 @@ export function useEventSource(
         const data = JSON.parse(event.data) as K8sEvent
         data.timestamp = Date.now()
         setEvents((prev) => [data, ...prev].slice(0, MAX_EVENTS))
+        optionsRef.current?.onK8sEvent?.(data)
       } catch (e) {
         console.error('Failed to parse event:', e)
       }

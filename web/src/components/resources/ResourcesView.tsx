@@ -46,7 +46,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       return fetchJSON<ResourceCountsResponse>(`/resource-counts?${params}`)
     },
     staleTime: 10000,
-    refetchInterval: 15000,
+    refetchInterval: 60000, // Safety net — SSE k8s_event drives real-time invalidation
   })
 
   // Determine if selected kind is a CRD (only CRDs should send ?group= to backend)
@@ -75,7 +75,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
     },
     enabled: !!selectedKind,
     staleTime: 30000,
-    refetchInterval: 30000,
+    refetchInterval: 120000, // Safety net — SSE k8s_event drives real-time invalidation
     retry: (failureCount: number, error: Error) => {
       if (isForbiddenError(error)) return false
       return failureCount < 3
