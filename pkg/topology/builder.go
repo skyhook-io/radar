@@ -4394,7 +4394,20 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		tlsSecretName, _, _ := unstructured.NestedString(res.Object, "spec", "virtualhost", "tls", "secretName")
 		if tlsSecretName != "" {
 			secretNodeID := fmt.Sprintf("secret/%s/%s", resNs, tlsSecretName)
-			// Check if secret node exists; if not, check serviceIDs as a proxy for the secret
+			// Create stub Secret node if it doesn't already exist (same pattern as Traefik)
+			if !existingSecretNodes[secretNodeID] {
+				existingSecretNodes[secretNodeID] = true
+				nodes = append(nodes, Node{
+					ID:     secretNodeID,
+					Kind:   KindSecret,
+					Name:   tlsSecretName,
+					Status: StatusHealthy,
+					Data: map[string]any{
+						"namespace": resNs,
+						"labels":    map[string]string{},
+					},
+				})
+			}
 			dedupeKey := resID + "|" + secretNodeID
 			if !contourEdgeSeen[dedupeKey] {
 				contourEdgeSeen[dedupeKey] = true

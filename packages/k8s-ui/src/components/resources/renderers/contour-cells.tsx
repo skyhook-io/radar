@@ -43,6 +43,6 @@ export function HTTPProxyCell({ resource, column }: { resource: any; column: str
       return <span className={`text-sm ${color}`}>{label}</span>
     }
     default:
-      return null
+      return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }

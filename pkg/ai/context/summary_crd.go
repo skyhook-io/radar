@@ -642,6 +642,13 @@ func summarizeContourHTTPProxy(obj *unstructured.Unstructured) *ResourceSummary 
 				}
 			}
 		}
+	}
+	// Also count tcpproxy services
+	tcpSvcs, tcpFound, _ := unstructured.NestedSlice(obj.Object, "spec", "tcpproxy", "services")
+	if tcpFound {
+		svcCount += len(tcpSvcs)
+	}
+	if len(routes) > 0 || svcCount > 0 {
 		s.Strategy = fmt.Sprintf("%d routes, %d services", len(routes), svcCount)
 	}
 
