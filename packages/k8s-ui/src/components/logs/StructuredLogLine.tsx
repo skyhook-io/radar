@@ -45,23 +45,34 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
 
   const fieldCount = Object.keys(parsed).length
 
+  const toggle = () => setLocalExpanded(!expanded)
+  const chevron = expanded
+    ? <ChevronDown className="w-3 h-3 shrink-0 text-theme-text-tertiary" />
+    : <ChevronRight className="w-3 h-3 shrink-0 text-theme-text-tertiary" />
+
   return (
     <span>
-      <button
-        onClick={() => setLocalExpanded(!expanded)}
-        className="inline-flex items-center gap-0.5 hover:bg-theme-surface/50 rounded px-0.5 -ml-0.5 align-middle"
-      >
-        {expanded
-          ? <ChevronDown className="w-3 h-3 shrink-0 text-theme-text-tertiary" />
-          : <ChevronRight className="w-3 h-3 shrink-0 text-theme-text-tertiary" />
-        }
-      </button>
       {!expanded ? (
-        <span className={wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}>
+        // Collapsed: entire summary line is clickable
+        <span
+          onClick={toggle}
+          className={`cursor-pointer hover:bg-theme-surface/50 rounded px-0.5 -ml-0.5 ${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}
+        >
+          <span className="inline-flex items-center align-middle mr-0.5">{chevron}</span>
           <SummaryLine obj={parsed} />
           <span className="text-theme-text-tertiary ml-1">{`{${fieldCount} fields}`}</span>
         </span>
       ) : (
+        // Expanded: summary header is clickable to collapse, JSON content is selectable
+        <>
+        <span
+          onClick={toggle}
+          className="cursor-pointer hover:bg-theme-surface/50 rounded px-0.5 -ml-0.5"
+        >
+          <span className="inline-flex items-center align-middle mr-0.5">{chevron}</span>
+          <SummaryLine obj={parsed} />
+          <span className="text-theme-text-tertiary ml-1">{`{${fieldCount} fields}`}</span>
+        </span>
         <span className={`block ml-4 ${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}>
           {isLogfmt ? (
             <ExpandedLogfmt obj={parsed} />
@@ -71,6 +82,7 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
             }} />
           )}
         </span>
+        </>
       )}
     </span>
   )

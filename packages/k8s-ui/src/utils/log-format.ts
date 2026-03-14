@@ -105,49 +105,55 @@ const ANSI_256_COLORS: string[] = (() => {
 })()
 
 // ANSI SGR (Select Graphic Rendition) code → CSS style mapping.
-// Colors are chosen to be legible on a dark background (terminal-standard palette).
+// Uses CSS custom properties from variables.css for theme-aware light/dark colors.
 const SGR_STYLES: Record<number, string> = {
   1: 'font-weight:bold',
   2: 'opacity:0.6',
   3: 'font-style:italic',
   4: 'text-decoration:underline',
   // Standard foreground colors (30-37)
-  30: 'color:#4c4c4c',
-  31: 'color:#cd3131',
-  32: 'color:#0dbc79',
-  33: 'color:#e5e510',
-  34: 'color:#2472c8',
-  35: 'color:#bc3fbc',
-  36: 'color:#11a8cd',
-  37: 'color:#e5e5e5',
+  30: 'color:var(--ansi-black)',
+  31: 'color:var(--ansi-red)',
+  32: 'color:var(--ansi-green)',
+  33: 'color:var(--ansi-yellow)',
+  34: 'color:var(--ansi-blue)',
+  35: 'color:var(--ansi-magenta)',
+  36: 'color:var(--ansi-cyan)',
+  37: 'color:var(--ansi-white)',
   // Standard background colors (40-47)
-  40: 'background-color:#4c4c4c',
-  41: 'background-color:#cd3131',
-  42: 'background-color:#0dbc79',
-  43: 'background-color:#e5e510',
-  44: 'background-color:#2472c8',
-  45: 'background-color:#bc3fbc',
-  46: 'background-color:#11a8cd',
-  47: 'background-color:#e5e5e5',
+  40: 'background-color:var(--ansi-black)',
+  41: 'background-color:var(--ansi-red)',
+  42: 'background-color:var(--ansi-green)',
+  43: 'background-color:var(--ansi-yellow)',
+  44: 'background-color:var(--ansi-blue)',
+  45: 'background-color:var(--ansi-magenta)',
+  46: 'background-color:var(--ansi-cyan)',
+  47: 'background-color:var(--ansi-white)',
   // Bright foreground colors (90-97)
-  90: 'color:#767676',
-  91: 'color:#f14c4c',
-  92: 'color:#23d18b',
-  93: 'color:#f5f543',
-  94: 'color:#3b8eea',
-  95: 'color:#d670d6',
-  96: 'color:#29b8db',
-  97: 'color:#e5e5e5',
+  90: 'color:var(--ansi-bright-black)',
+  91: 'color:var(--ansi-bright-red)',
+  92: 'color:var(--ansi-bright-green)',
+  93: 'color:var(--ansi-bright-yellow)',
+  94: 'color:var(--ansi-bright-blue)',
+  95: 'color:var(--ansi-bright-magenta)',
+  96: 'color:var(--ansi-bright-cyan)',
+  97: 'color:var(--ansi-bright-white)',
   // Bright background colors (100-107)
-  100: 'background-color:#767676',
-  101: 'background-color:#f14c4c',
-  102: 'background-color:#23d18b',
-  103: 'background-color:#f5f543',
-  104: 'background-color:#3b8eea',
-  105: 'background-color:#d670d6',
-  106: 'background-color:#29b8db',
-  107: 'background-color:#e5e5e5',
+  100: 'background-color:var(--ansi-bright-black)',
+  101: 'background-color:var(--ansi-bright-red)',
+  102: 'background-color:var(--ansi-bright-green)',
+  103: 'background-color:var(--ansi-bright-yellow)',
+  104: 'background-color:var(--ansi-bright-blue)',
+  105: 'background-color:var(--ansi-bright-magenta)',
+  106: 'background-color:var(--ansi-bright-cyan)',
+  107: 'background-color:var(--ansi-bright-white)',
 }
+
+// Maps 256-color palette indices 0-15 to CSS variable names for theme-aware rendering
+const ANSI_16_NAMES = [
+  'black', 'red', 'green', 'yellow', 'blue', 'magenta', 'cyan', 'white',
+  'bright-black', 'bright-red', 'bright-green', 'bright-yellow', 'bright-blue', 'bright-magenta', 'bright-cyan', 'bright-white',
+]
 
 /**
  * Resolve an array of SGR codes to a CSS style string.
@@ -174,7 +180,10 @@ function resolveSgrStyles(codes: number[]): string {
     // 256-color foreground: 38;5;N
     if (codes[i] === 38 && codes[i + 1] === 5 && codes[i + 2] !== undefined) {
       const colorIdx = codes[i + 2]
-      if (colorIdx >= 0 && colorIdx < 256) {
+      if (colorIdx >= 0 && colorIdx < 16) {
+        // Map 256-color indices 0-15 to theme-aware CSS variables
+        parts.push(`color:var(--ansi-${ANSI_16_NAMES[colorIdx]})`)
+      } else if (colorIdx < 256) {
         parts.push(`color:${ANSI_256_COLORS[colorIdx]}`)
       }
       i += 3
@@ -183,7 +192,9 @@ function resolveSgrStyles(codes: number[]): string {
     // 256-color background: 48;5;N
     if (codes[i] === 48 && codes[i + 1] === 5 && codes[i + 2] !== undefined) {
       const colorIdx = codes[i + 2]
-      if (colorIdx >= 0 && colorIdx < 256) {
+      if (colorIdx >= 0 && colorIdx < 16) {
+        parts.push(`background-color:var(--ansi-${ANSI_16_NAMES[colorIdx]})`)
+      } else if (colorIdx < 256) {
         parts.push(`background-color:${ANSI_256_COLORS[colorIdx]}`)
       }
       i += 3
@@ -294,23 +305,17 @@ const SYNTAX_COLOR_NULL = '#808080'
  */
 export function highlightJson(json: string): string {
   const escaped = escapeHtml(json)
-  // Order matters — keys (string followed by colon) must match before standalone strings.
-  return escaped.replace(
-    /("(?:\\.|[^"\\])*")\s*:/g,
-    `<span style="color:${SYNTAX_COLOR_KEY}">$1</span>:`
-  ).replace(
-    /:\s*("(?:\\.|[^"\\])*")/g,
-    `: <span style="color:${SYNTAX_COLOR_STRING}">$1</span>`
-  ).replace(
-    /:\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/g,
-    `: <span style="color:${SYNTAX_COLOR_NUMBER}">$1</span>`
-  ).replace(
-    /:\s*(true|false)\b/g,
-    `: <span style="color:${SYNTAX_COLOR_BOOLEAN}">$1</span>`
-  ).replace(
-    /:\s*(null)\b/g,
-    `: <span style="color:${SYNTAX_COLOR_NULL}">$1</span>`
-  )
+  // Single-pass tokenizer: matches all JSON tokens at once so content inside strings
+  // is consumed and can't be re-matched by number/boolean/null patterns.
+  const tokenRe = /("(?:\\.|[^"\\])*")\s*:|("(?:\\.|[^"\\])*")|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|\b(true|false)\b|\b(null)\b/g
+  return escaped.replace(tokenRe, (match, key, str, num, bool, nil) => {
+    if (key) return `<span style="color:${SYNTAX_COLOR_KEY}">${key}</span>:`
+    if (str) return `<span style="color:${SYNTAX_COLOR_STRING}">${str}</span>`
+    if (num) return `<span style="color:${SYNTAX_COLOR_NUMBER}">${num}</span>`
+    if (bool) return `<span style="color:${SYNTAX_COLOR_BOOLEAN}">${bool}</span>`
+    if (nil) return `<span style="color:${SYNTAX_COLOR_NULL}">${nil}</span>`
+    return match
+  })
 }
 
 /**
@@ -333,13 +338,17 @@ const LOGFMT_PAIR_RE = /(?:^|\s)([a-zA-Z_][\w.]*)=((?:"(?:[^"\\]|\\.)*")|(?:[^\s
 
 /**
  * Detect if a log line is in logfmt format (key=value pairs).
- * Requires at least 2 pairs to avoid false positives on URLs or shell assignments.
+ * Requires at least 3 pairs AND that the matched pairs cover most of the line,
+ * to avoid false positives on prose text that happens to contain a few key=value fragments.
  */
 export function isLogfmt(content: string): boolean {
   const trimmed = content.trimStart()
   if (trimmed[0] === '{') return false
   const matches = trimmed.match(LOGFMT_PAIR_RE)
-  return matches !== null && matches.length >= 2
+  if (!matches || matches.length < 3) return false
+  // Check that key=value pairs cover at least 60% of the line length
+  const matchedLength = matches.reduce((sum, m) => sum + m.trim().length, 0)
+  return matchedLength / trimmed.length >= 0.6
 }
 
 /**

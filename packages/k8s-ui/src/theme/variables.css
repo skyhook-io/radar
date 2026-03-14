@@ -88,6 +88,24 @@
   --group-icon-app: light-dark(#059669, #34d399);
   --group-icon-label: light-dark(#d97706, #fbbf24);
 
+  /* ── ANSI terminal colors (theme-aware for log viewer) ── */
+  --ansi-black:   light-dark(#3b3b3b, #4c4c4c);
+  --ansi-red:     light-dark(#cd3131, #cd3131);
+  --ansi-green:   light-dark(#00a854, #0dbc79);
+  --ansi-yellow:  light-dark(#b8860b, #e5e510);
+  --ansi-blue:    light-dark(#2472c8, #2472c8);
+  --ansi-magenta: light-dark(#bc3fbc, #bc3fbc);
+  --ansi-cyan:    light-dark(#11a8cd, #11a8cd);
+  --ansi-white:   light-dark(#e5e5e5, #e5e5e5);
+  --ansi-bright-black:   light-dark(#555555, #767676);
+  --ansi-bright-red:     light-dark(#f14c4c, #f14c4c);
+  --ansi-bright-green:   light-dark(#17b96a, #23d18b);
+  --ansi-bright-yellow:  light-dark(#c49700, #f5f543);
+  --ansi-bright-blue:    light-dark(#3b8eea, #3b8eea);
+  --ansi-bright-magenta: light-dark(#d670d6, #d670d6);
+  --ansi-bright-cyan:    light-dark(#29b8db, #29b8db);
+  --ansi-bright-white:   light-dark(#e5e5e5, #e5e5e5);
+
   /* ── Scrollbar ── */
   --scrollbar-track: light-dark(#f1f5f9, #162033);
   --scrollbar-thumb: light-dark(#cbd5e1, #2a3d58);
