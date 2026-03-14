@@ -2,17 +2,59 @@
 
 This document covers Radar's cluster connection behavior. For CLI flags and basic usage, see the [README](../README.md#usage).
 
+## Persistent Configuration
+
+Radar stores configuration in two files under `~/.radar/`:
+
+### Config File (`~/.radar/config.json`)
+
+Persistent defaults for CLI flags. CLI flags always override these values. Managed via the Settings dialog in the UI or `PUT /api/config`.
+
+```json
+{
+  "kubeconfig": "",
+  "kubeconfigDirs": [],
+  "namespace": "",
+  "port": 9280,
+  "noBrowser": false,
+  "timelineStorage": "memory",
+  "timelineDbPath": "~/.radar/timeline.db",
+  "historyLimit": 10000,
+  "prometheusUrl": "",
+  "mcp": true
+}
+```
+
+All fields are optional — omitted fields use built-in defaults.
+
+### Settings File (`~/.radar/settings.json`)
+
+User preferences for the UI. Managed via the Settings dialog or `PUT /api/settings`.
+
+```json
+{
+  "theme": "system",
+  "pinnedKinds": [
+    { "name": "Deployments", "kind": "Deployment", "group": "" }
+  ]
+}
+```
+
+| Field | Values | Description |
+|-------|--------|-------------|
+| `theme` | `light`, `dark`, `system` | UI theme preference |
+| `pinnedKinds` | Array of `{name, kind, group}` | Resource kinds pinned to the sidebar |
+
 ## Cluster Connection Precedence
 
-Radar connects to Kubernetes clusters using the same configuration sources as `kubectl`, resolved in this order:
+Radar connects to Kubernetes clusters using the same configuration sources as `kubectl`:
 
 | Priority | Source | Description |
 |----------|--------|-------------|
 | 1 | `--kubeconfig` flag | Explicit path to kubeconfig file |
-| 2 | `KUBECONFIG` env var | Environment variable pointing to kubeconfig file(s) |
-| 3 | `--kubeconfig-dir` flag | Directory containing multiple kubeconfig files |
-| 4 | In-cluster config | Automatic when running inside a Kubernetes pod |
-| 5 | `~/.kube/config` | Default kubeconfig location |
+| 2 | `KUBECONFIG` env var / `--kubeconfig-dir` flag | Either can provide kubeconfig(s); mutually exclusive alternatives |
+| 3 | In-cluster config | Automatic when running inside a Kubernetes pod (`KUBERNETES_SERVICE_HOST` is set) |
+| 4 | `~/.kube/config` | Default kubeconfig location |
 
 ## KUBECONFIG vs In-Cluster Detection
 

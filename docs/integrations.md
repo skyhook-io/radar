@@ -58,7 +58,8 @@ Radar automatically discovers and displays **any** Custom Resource Definition (C
 | NodePool | `karpenter.sh/v1` | Yes | Yes | Yes |
 | NodeClaim | `karpenter.sh/v1` | Yes | Yes | Yes |
 | EC2NodeClass | `karpenter.k8s.aws/v1` | Yes | Yes | Yes |
-| AKSNodeClass | `karpenter.azure.com/v1alpha2` | Yes | Yes | Yes |
+| AKSNodeClass | `karpenter.azure.com/v1alpha2` | Yes | Generic | Yes |
+| GCPNodeClass | `karpenter.gcp.compute.com/v1alpha1` | Yes | Generic | Yes |
 
 All provider-specific NodeClass variants are automatically detected and supported.
 
@@ -119,6 +120,26 @@ All provider-specific NodeClass variants are automatically detected and supporte
 | ScaledJob | `keda.sh/v1alpha1` | Yes | Yes | Yes |
 | TriggerAuthentication | `keda.sh/v1alpha1` | — | Yes | Yes |
 | ClusterTriggerAuthentication | `keda.sh/v1alpha1` | — | Yes | Yes |
+
+---
+
+## Vertical Pod Autoscaler (VPA)
+
+[VPA](https://github.com/kubernetes/autoscaler/tree/master/vertical-pod-autoscaler) automatically adjusts CPU and memory requests/limits for pods based on observed usage.
+
+### What Radar Shows
+
+**Topology:** VPA nodes appear in the Resources view with `EdgeUses` edges to target workloads, grouped in the Scalers section alongside HPA and KEDA.
+
+**Detail View:** Target workload, update mode, per-container resource recommendations (target, lower bound, upper bound, uncapped), resource policy, and conditions.
+
+**Problem Detection:** Alerts for unsupported configurations, missing recommendations, and low confidence scores.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| VerticalPodAutoscaler | `autoscaling.k8s.io/v1` | Yes | Yes | — |
 
 ---
 
@@ -265,10 +286,10 @@ All provider-specific NodeClass variants are automatically detected and supporte
 
 | CRD | Group | Topology | Detail View | AI Summary |
 |-----|-------|----------|-------------|------------|
-| ServiceMonitor | `monitoring.coreos.com/v1` | — | Yes | Yes |
-| PodMonitor | `monitoring.coreos.com/v1` | — | Yes | Yes |
-| PrometheusRule | `monitoring.coreos.com/v1` | — | Yes | Yes |
-| Alertmanager | `monitoring.coreos.com/v1` | — | Generic | Yes |
+| ServiceMonitor | `monitoring.coreos.com/v1` | — | Yes | — |
+| PodMonitor | `monitoring.coreos.com/v1` | — | Yes | — |
+| PrometheusRule | `monitoring.coreos.com/v1` | — | Yes | — |
+| Alertmanager | `monitoring.coreos.com/v1` | — | Generic | — |
 
 ---
 
@@ -293,6 +314,11 @@ All provider-specific NodeClass variants are automatically detected and supporte
 | ExposedSecretReport | `aquasecurity.github.io/v1alpha1` | — | Yes | — |
 | ClusterComplianceReport | `aquasecurity.github.io/v1alpha1` | — | Yes | — |
 | SbomReport | `aquasecurity.github.io/v1alpha1` | — | Yes | — |
+| RbacAssessmentReport | `aquasecurity.github.io/v1alpha1` | — | Yes | — |
+| ClusterRbacAssessmentReport | `aquasecurity.github.io/v1alpha1` | — | Yes | — |
+| InfraAssessmentReport | `aquasecurity.github.io/v1alpha1` | — | Yes | — |
+| ClusterInfraAssessmentReport | `aquasecurity.github.io/v1alpha1` | — | Yes | — |
+| ClusterSbomReport | `aquasecurity.github.io/v1alpha1` | — | Yes | — |
 
 ---
 
@@ -320,7 +346,7 @@ See the main [README](../README.md#gitops) for GitOps integration details.
 
 | CRD | Group | Topology | Detail View | AI Summary |
 |-----|-------|----------|-------------|------------|
-| GitRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | Yes |
+| GitRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
 | OCIRepository | `source.toolkit.fluxcd.io/v1beta2` | Yes | Yes | — |
 | HelmRepository | `source.toolkit.fluxcd.io/v1` | Yes | Yes | — |
 | Kustomization | `kustomize.toolkit.fluxcd.io/v1` | Yes | Yes | Yes |
@@ -355,6 +381,7 @@ See the main [README](../README.md#gitops) for GitOps integration details.
 |-----|-------|----------|-------------|------------|
 | Workflow | `argoproj.io/v1alpha1` | — | Yes | — |
 | WorkflowTemplate | `argoproj.io/v1alpha1` | — | Yes | — |
+| CronWorkflow | `argoproj.io/v1alpha1` | — | Generic | — |
 
 ---
 

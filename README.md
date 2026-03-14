@@ -141,6 +141,8 @@ radar
 | `--timeline-storage` | `memory` | Timeline storage backend: `memory` or `sqlite` |
 | `--timeline-db` | `~/.radar/timeline.db` | Path to SQLite database (when using sqlite storage) |
 | `--history-limit` | `10000` | Maximum events to retain in timeline |
+| `--disable-exec` | `false` | Disable terminal and debug shell |
+| `--disable-helm-write` | `false` | Disable Helm write operations |
 | `--no-mcp` | `false` | Disable MCP server for AI tool integration |
 | `--version` | | Show version and exit |
 
@@ -247,7 +249,7 @@ Visualize live network traffic between services using Hubble or Caretta.
   <br><em>Traffic View — See how services communicate in real-time</em>
 </p>
 
-- Auto-detects Hubble (Cilium) or Caretta as traffic data sources
+- Auto-detects Hubble (Cilium), Caretta, or Istio as traffic data sources
 - Animated flow graph showing requests per second between services
 - Filter by namespace, protocol, or status code
 - Setup wizard to install a traffic source if none is detected
@@ -256,7 +258,7 @@ Visualize live network traffic between services using Hubble or Caretta.
 
 Radar includes a built-in [Model Context Protocol](https://modelcontextprotocol.io) (MCP) server that lets AI assistants — Claude, Cursor, Copilot, and others — query your cluster through Radar.
 
-Instead of raw `kubectl` output (verbose YAML that burns through LLM context windows), your AI gets pre-processed, token-optimized data: topology graphs, health assessments, deduplicated events, and filtered logs. All read-only by design.
+Instead of raw `kubectl` output (verbose YAML that burns through LLM context windows), your AI gets pre-processed, token-optimized data: topology graphs, health assessments, deduplicated events, and filtered logs. Read tools are strictly read-only; write tools (restart, scale, sync) are clearly annotated and non-destructive.
 
 Enabled by default. Disable with `--no-mcp`. See the **[MCP Guide](docs/mcp.md)** for setup instructions.
 
@@ -272,7 +274,7 @@ Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integ
 | **Networking** | Services, Ingresses, NetworkPolicies, Endpoints, PodDisruptionBudgets |
 | **Configuration** | ConfigMaps, Secrets (names only, values hidden) |
 | **Storage** | PersistentVolumeClaims, PersistentVolumes, StorageClasses |
-| **Autoscaling** | HorizontalPodAutoscalers |
+| **Autoscaling** | HorizontalPodAutoscalers, VerticalPodAutoscalers |
 | **Cluster** | Nodes, Namespaces, ServiceAccounts, Events |
 | **GitOps (FluxCD)** | GitRepository, OCIRepository, HelmRepository, Kustomization, HelmRelease, Alert |
 | **GitOps (ArgoCD)** | Application, ApplicationSet, AppProject |
@@ -289,7 +291,8 @@ Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integ
 | **Karpenter** | NodePool, NodeClaim (+ provider-specific NodeClasses via auto-discovery) |
 | **KEDA** | ScaledObject, ScaledJob, TriggerAuthentication, ClusterTriggerAuthentication |
 | **Prometheus Operator** | ServiceMonitor, PodMonitor, PrometheusRule, Alertmanager |
-| **Security (Trivy)** | VulnerabilityReport, ConfigAuditReport, ExposedSecretReport, ClusterComplianceReport, SbomReport |
+| **Security (Trivy)** | VulnerabilityReport, ConfigAuditReport, ExposedSecretReport, ClusterComplianceReport, SbomReport, RbacAssessmentReport, InfraAssessmentReport |
+| **Cost (OpenCost)** | Namespace/workload/node cost breakdown via Prometheus (no CRDs) |
 | **CRDs** | Any Custom Resource Definition in your cluster (auto-discovered) |
 
 ---
@@ -298,16 +301,22 @@ Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integ
 
 | Shortcut | Action |
 |----------|--------|
-| `Escape` | Close panel/modal |
+| `1`–`6` | Switch view (Home, Topology, Resources, Timeline, Helm, Traffic) |
+| `t` | Toggle dark/light theme |
 | `?` | Show keyboard shortcuts |
-| `/` | Focus search |
-| `Ctrl+F` | Search within current view |
-| `r` | Refresh topology |
-| `f` | Fit view to screen |
-| `1` | Traffic view |
-| `2` | Resources view |
+| `⌘K` | Open command palette |
+| `/` | Focus search (context-aware) |
+| `f` | Fit topology to screen |
+| `+` / `-` / `0` | Zoom in / out / reset (topology) |
+| `j` / `k` | Navigate rows (resources, helm) |
+| `g g` / `G` | Jump to first / last row |
+| `Enter` / `d` | Open selected resource detail |
+| `y` | Open YAML view |
+| `l` | Open logs (pods/workloads) |
+| `[` / `]` | Previous / next resource kind |
+| `Escape` | Close panel/modal/search |
 
-**Navigation:** Pan (drag), Zoom (scroll), Select (click), Multi-select (Shift+click)
+**Topology:** Pan (drag), Zoom (scroll), Select (click), Multi-select (Shift+click)
 
 ---
 

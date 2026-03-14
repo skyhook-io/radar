@@ -82,25 +82,35 @@ npm run tsc
 ### Building
 
 ```bash
-# Full build (frontend + embedded binary)
+# Full build (frontend + embed + binary)
 make build
 
-# Backend only
-go build -o radar ./cmd/explorer
+# Frontend only (builds to web/dist)
+cd web && npm run build
 
-# Frontend only
-cd web
-npm run build
+# IMPORTANT: Never run `go build` directly after `npm run build` —
+# it skips the embed step that copies web/dist → internal/static/dist.
+# Always use `make build` for a complete build.
 ```
 
 ## Project Structure
 
 ```
-├── cmd/explorer/       # CLI entry point
+├── cmd/
+│   ├── explorer/       # CLI entry point
+│   └── desktop/        # Desktop app entry point (Wails v2)
 ├── internal/
 │   ├── k8s/           # Kubernetes client and caching
 │   ├── server/        # HTTP server, REST API, SSE
-│   └── topology/      # Graph construction logic
+│   ├── helm/          # Helm SDK client and handlers
+│   ├── mcp/           # MCP (Model Context Protocol) server
+│   └── ...            # opencost, prometheus, config, settings, traffic
+├── pkg/
+│   ├── k8score/       # Shared K8s caching layer (informers, listers)
+│   ├── topology/      # Graph construction and relationships
+│   ├── ai/context/    # AI context minification
+│   └── timeline/      # Timeline event storage
+├── packages/k8s-ui/   # Shared UI package (@skyhook-io/k8s-ui)
 ├── web/               # React frontend
 │   ├── src/
 │   │   ├── api/       # API client and hooks

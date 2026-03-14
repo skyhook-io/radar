@@ -169,19 +169,19 @@ Add to `~/.gemini/settings.json`:
 | `list_resources` | List resources of a kind with minified summaries (pods, deployments, services, CRDs, etc.) | `kind` (required), `namespace` (optional) |
 | `get_resource` | Detailed view of a single resource — minified spec, status, metadata. Optionally include related context to avoid extra tool calls. | `kind` (required), `namespace` (required), `name` (required), `include` (optional: `events,relationships,metrics,logs`) |
 | `get_topology` | Topology graph showing resource relationships (nodes and edges). Use `summary` format for LLM-friendly text descriptions of resource chains. | `namespace` (optional), `view` (optional: `traffic` or `resources`), `format` (optional: `graph` or `summary`) |
-| `get_events` | Recent warning events, deduplicated and sorted by recency. Filter by resource kind/name to scope to a specific resource. | `namespace` (optional), `limit` (optional, default 20), `kind` (optional), `name` (optional) |
-| `get_pod_logs` | Filtered pod logs prioritizing errors/warnings, with secret redaction | `namespace` (required), `name` (required), `container` (optional), `tail_lines` (optional) |
+| `get_events` | Recent Kubernetes events, deduplicated and sorted by recency. Filter by resource kind/name to scope to a specific resource. | `namespace` (optional), `limit` (optional, default 20, max 100), `kind` (optional), `name` (optional) |
+| `get_pod_logs` | Filtered pod logs prioritizing errors/warnings, with secret redaction | `namespace` (required), `name` (required), `container` (optional), `tail_lines` (optional, default 200) |
 | `list_namespaces` | List all namespaces with status | (none) |
 | `get_changes` | Recent resource changes (creates, updates, deletes) from the cluster timeline. Use to investigate what changed before an incident. | `namespace` (optional), `kind` (optional), `name` (optional), `since` (optional, e.g. `1h`, `30m`; default `1h`), `limit` (optional, default 20, max 50) |
 | `list_helm_releases` | List all Helm releases with status and health | `namespace` (optional) |
-| `get_helm_release` | Detailed Helm release info with optional values, history, and manifest diff | `namespace` (required), `name` (required), `include` (optional: `values,history,diff`), `diff_revision_1` / `diff_revision_2` (optional) |
-| `get_workload_logs` | Aggregated, AI-filtered logs from all pods of a workload (Deployment, StatefulSet, DaemonSet) | `kind` (required), `namespace` (required), `name` (required), `container` (optional), `tail_lines` (optional) |
+| `get_helm_release` | Detailed Helm release info with optional values, history, and manifest diff | `namespace` (required), `name` (required), `include` (optional: `values,history,diff`), `diff_revision_1` (required when `include=diff`) / `diff_revision_2` (optional) |
+| `get_workload_logs` | Aggregated, AI-filtered logs from all pods of a workload (Deployment, StatefulSet, DaemonSet) | `kind` (required), `namespace` (required), `name` (required), `container` (optional), `tail_lines` (optional, default 100 per pod) |
 
 ### Write Tools
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| `manage_workload` | Restart, scale, or rollback a Deployment, StatefulSet, or DaemonSet | `action` (required: `restart`, `scale`, `rollback`), `kind` (required), `namespace` (required), `name` (required), `replicas` (for scale), `revision` (for rollback) |
+| `manage_workload` | Restart, scale, or rollback a Deployment, StatefulSet, or DaemonSet. Note: `scale` is not supported for DaemonSets. | `action` (required: `restart`, `scale`, `rollback`), `kind` (required), `namespace` (required), `name` (required), `replicas` (for scale), `revision` (for rollback) |
 | `manage_cronjob` | Trigger, suspend, or resume a CronJob | `action` (required: `trigger`, `suspend`, `resume`), `namespace` (required), `name` (required) |
 | `manage_gitops` | Manage ArgoCD and FluxCD resources — sync, reconcile, suspend, resume | `action` (required), `tool` (required: `argocd` or `fluxcd`), `namespace` (required), `name` (required), `kind` (FluxCD only) |
 

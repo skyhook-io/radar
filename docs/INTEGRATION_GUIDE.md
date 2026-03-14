@@ -49,7 +49,7 @@ Add your CRD kinds to the warmup list so they're cached immediately on startup.
 
 ### 2. Backend: Topology Types
 
-**File:** `internal/topology/types.go`
+**File:** `pkg/topology/types.go`
 
 Add `NodeKind` constants for each resource that will appear in topology:
 ```go
@@ -60,7 +60,7 @@ KindKnativeService NodeKind = "KnativeService"
 
 ### 3. Backend: Topology Builder
 
-**File:** `internal/topology/builder.go` — `buildResourcesTopology()`
+**File:** `pkg/topology/builder.go` — `buildResourcesTopology()`
 
 Add a new section that:
 1. **Lists resources** from the dynamic cache (handle errors, don't discard with `_`)
@@ -79,7 +79,7 @@ Edge type semantics (choose carefully):
 
 **Performance tip:** If you need the same resource list for both node creation and edge creation, store it in a slice during phase 1 and reuse in phase 2. Don't re-fetch.
 
-**File:** `internal/topology/relationships.go`
+**File:** `pkg/topology/relationships.go`
 
 Add your kinds to `buildNodeID` and `normalizeKind` maps.
 - ** Collision:** Use a unique ID prefix (e.g., `knativeservice/`, `istiogateway/`)
@@ -129,7 +129,7 @@ Also verify `normalizeKindToPlural()` handles your kind correctly (watch out for
 
 Cell components that render rich table cells (status badges, links, etc.).
 
-**File:** `packages/k8s-ui/src/components/resources/ResourcesView.tsx` — `renderCellContent()`
+**File:** `packages/k8s-ui/src/components/resources/ResourcesView.tsx` — `CellContent` component
 
 Add cases for your kinds.
 - ** Collision:** Use `apiVersion` checks:
@@ -188,15 +188,15 @@ Update these files to support new topology node kinds:
 
 | File | What to Add |
 |------|-------------|
-| `web/src/types.ts` | Kind to `CoreNodeKind` type union + `displayKind` map |
+| `packages/k8s-ui/src/types/core.ts` | Kind to `CoreNodeKind` type union + `displayKind` map |
 | `web/src/App.tsx` | Kind to `ALL_NODE_KINDS` array |
 | `packages/k8s-ui/src/utils/resource-icons.ts` | Icon mapping |
 | `packages/k8s-ui/src/utils/badge-colors.ts` | Badge CSS class |
-| `web/src/components/topology/TopologyFilterSidebar.tsx` | Filter sidebar entry |
-| `web/src/components/topology/K8sResourceNode.tsx` | Node dimensions |
-| `web/src/components/topology/layout.ts` | `kindPriority` entry |
+| `packages/k8s-ui/src/components/topology/TopologyFilterSidebar.tsx` | Filter sidebar entry |
+| `packages/k8s-ui/src/components/topology/K8sResourceNode.tsx` | Node dimensions |
+| `packages/k8s-ui/src/components/topology/layout.ts` | `kindPriority` entry |
 | `packages/k8s-ui/src/utils/resource-hierarchy.ts` | `appLabelEligibleKinds` (if groupable by app label) |
-| `web/src/index.css` | `.topology-icon-{kind}` CSS class with color |
+| `packages/k8s-ui/src/components/topology/topology.css` | `.topology-icon-{kind}` CSS class with color |
 
 ### 10. Documentation
 

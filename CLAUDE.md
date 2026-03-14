@@ -43,9 +43,9 @@ radar/
 │   ├── explorer/              # CLI entry point (main.go)
 │   └── desktop/               # Desktop app entry point (Wails v2)
 ├── internal/
-│   ├── ai/
-│   │   └── context/           # AI context minification for LLM-friendly output
 │   ├── app/                   # Application lifecycle management
+│   ├── config/                # Configuration management
+│   ├── errorlog/              # Error logging utilities
 │   ├── helm/                  # Helm client integration
 │   │   ├── client.go          # Helm SDK wrapper
 │   │   ├── handlers.go        # HTTP handlers for Helm operations
@@ -69,41 +69,65 @@ radar/
 │   │   ├── fetch.go           # Resource fetching for AI/MCP consumers
 │   │   ├── metrics.go         # Pod/node metrics collection
 │   │   ├── metrics_history.go # Metrics history tracking
+│   │   ├── problems.go        # Problem detection
 │   │   ├── subsystems.go      # Cache subsystem management
-│   │   └── update.go          # Resource update/delete operations
+│   │   ├── topology_adapter.go # Topology adaptation layer
+│   │   ├── update.go          # Resource update/delete operations
+│   │   └── workload.go        # Workload operations (restart, scale, rollback)
 │   ├── mcp/                   # MCP (Model Context Protocol) server
 │   │   ├── server.go          # MCP HTTP handler setup
-│   │   ├── tools.go           # MCP tool definitions (7 tools)
+│   │   ├── tools.go           # MCP tool definitions (14 tools)
+│   │   ├── tools_helm.go      # Helm-specific MCP tools
+│   │   ├── tools_gitops.go    # GitOps-specific MCP tools
+│   │   ├── tools_workloads.go # Workload-specific MCP tools
 │   │   └── resources.go       # MCP resource definitions (3 resources)
+│   ├── opencost/              # OpenCost integration (cost analysis)
+│   │   ├── handlers.go        # HTTP handlers for cost endpoints
+│   │   └── types.go           # Cost data types
+│   ├── prometheus/            # Prometheus client integration
+│   │   ├── client.go          # Prometheus API client
+│   │   ├── discovery.go       # Auto-discovery of Prometheus/VictoriaMetrics
+│   │   ├── handlers.go        # HTTP handlers for Prometheus endpoints
+│   │   └── queries.go         # PromQL query helpers
 │   ├── server/
 │   │   ├── server.go          # chi router, main REST endpoints
 │   │   ├── sse.go             # Server-Sent Events broadcaster
 │   │   ├── certificate.go     # TLS certificate parsing and expiry
+│   │   ├── copy.go            # Copy operations
+│   │   ├── desktop_open_url.go # Desktop URL handling
+│   │   ├── desktop_update.go  # Desktop app auto-update handlers
+│   │   ├── diagnostics.go     # Diagnostics endpoints
 │   │   ├── exec.go            # WebSocket pod terminal exec
 │   │   ├── logs.go            # Pod logs streaming
 │   │   ├── workload_logs.go   # Workload-level log aggregation
 │   │   ├── portforward.go     # Port forwarding sessions
+│   │   ├── resource_counts.go # Resource counting
 │   │   ├── dashboard.go       # Dashboard summary endpoint
 │   │   ├── argo_handlers.go   # ArgoCD sync/refresh/suspend handlers
 │   │   ├── flux_handlers.go   # FluxCD reconcile/suspend handlers
 │   │   ├── gitops_types.go    # Shared GitOps request/response types
 │   │   ├── ai_handlers.go     # AI resource preview endpoints
-│   │   ├── traffic_handlers.go # Service mesh traffic flow handlers
-│   │   └── desktop_update.go  # Desktop app auto-update handlers
+│   │   └── traffic_handlers.go # Service mesh traffic flow handlers
+│   ├── settings/              # Application settings management
 │   ├── static/                # Embedded frontend files
-│   ├── timeline/              # Timeline event storage (memory/SQLite)
-│   ├── topology/
-│   │   ├── builder.go         # Topology graph construction
-│   │   ├── pod_grouping.go    # Pod grouping/collapsing logic
-│   │   ├── relationships.go   # Resource relationship detection
-│   │   └── types.go           # Node, edge, topology definitions
 │   ├── traffic/               # Service mesh traffic analysis
 │   ├── updater/               # Binary self-update logic
 │   └── version/               # Version information
 ├── pkg/
-│   └── k8score/               # Shared K8s caching layer (informers, listers, transforms)
+│   ├── ai/
+│   │   └── context/           # AI context minification for LLM-friendly output
+│   ├── gitops/                # GitOps operations abstraction
+│   ├── k8score/               # Shared K8s caching layer (informers, listers, transforms)
+│   ├── portforward/           # Port forwarding logic
+│   ├── timeline/              # Timeline event storage (memory/SQLite)
+│   └── topology/
+│       ├── builder.go         # Topology graph construction
+│       ├── certificates.go    # Certificate relationship detection
+│       ├── pod_grouping.go    # Pod grouping/collapsing logic
+│       ├── relationships.go   # Resource relationship detection
+│       └── types.go           # Node, edge, topology definitions
 ├── packages/
-│   └── k8s-ui/                # Shared UI package (@skyhook/k8s-ui)
+│   └── k8s-ui/                # Shared UI package (@skyhook-io/k8s-ui)
 │       └── src/
 │           ├── components/
 │           │   ├── resources/  # ResourcesView, resource-utils, renderers
@@ -128,10 +152,14 @@ radar/
 │   │   │   ├── portforward/   # Port forward manager
 │   │   │   ├── resource/      # Single resource detail page
 │   │   │   ├── resource-drawer/ # Resource drawer overlay
-│   │   │   ├── resources/     # Resource list panels (thin wrappers over @skyhook/k8s-ui)
+│   │   │   ├── resources/     # Resource list panels (thin wrappers over @skyhook-io/k8s-ui)
+│   │   │   ├── cost/           # Cost tracking and visualization
+│   │   │   ├── settings/      # Settings dialog
+│   │   │   ├── shared/        # Shared components (namespace picker, YAML editor)
 │   │   │   ├── timeline/      # Timeline view (activity & changes)
 │   │   │   ├── topology/      # Graph visualization
 │   │   │   ├── traffic/       # Traffic flow visualization
+│   │   │   ├── workload/      # Workload detail view
 │   │   │   └── ui/            # Base shadcn/ui components
 │   │   ├── context/           # React contexts (connection, theme, context-switch)
 │   │   ├── contexts/          # React contexts (capabilities)
@@ -238,6 +266,7 @@ make clean          # Remove build artifacts
 --debug-events      Enable verbose event debugging (logs all event drops)
 --fake-in-cluster   Simulate in-cluster mode for testing (shows kubectl copy buttons instead of port-forward)
 --disable-helm-write Simulate restricted Helm permissions (disables install/upgrade/rollback/uninstall)
+--disable-exec      Simulate restricted exec permissions (disables terminal, debug shell)
 --no-mcp            Disable MCP (Model Context Protocol) server for AI tools
 ```
 
@@ -249,6 +278,7 @@ GET  /api/health                              # Health check with resource count
 GET  /api/version-check                       # Check for newer radar versions
 GET  /api/dashboard                           # Dashboard summary (counts, health)
 GET  /api/dashboard/crds                      # CRD summary for dashboard
+GET  /api/dashboard/helm                      # Helm release status for dashboard
 GET  /api/cluster-info                        # Platform detection (GKE, EKS, AKS, etc.)
 GET  /api/capabilities                        # Cluster capability flags
 GET  /api/namespaces                          # List all namespaces
@@ -258,6 +288,15 @@ POST /api/connection/retry                    # Retry failed connection
 GET  /api/contexts                            # List kubeconfig contexts
 POST /api/contexts/{name}                     # Switch kubeconfig context
 GET  /api/sessions                            # List active sessions
+GET  /api/diagnostics                         # Diagnostic information
+GET  /api/resource-counts                     # Resource count summary by kind
+GET  /api/settings                            # Get application settings
+PUT  /api/settings                            # Update application settings
+GET  /api/config                              # Get running configuration
+PUT  /api/config                              # Update configuration
+GET  /api/github/starred                      # Get GitHub star status
+POST /api/github/star                         # Star on GitHub
+POST /api/github/dismiss                      # Dismiss GitHub star prompt
 ```
 
 ### Topology
@@ -300,6 +339,17 @@ GET  /api/pods/{ns}/{name}/logs               # Fetch pod logs (non-streaming)
 GET  /api/pods/{ns}/{name}/logs/stream        # Stream pod logs via SSE
 GET  /api/pods/{ns}/{name}/exec               # WebSocket for pod terminal exec
 POST /api/pods/{ns}/{name}/debug              # Create ephemeral debug container
+GET  /api/pods/{ns}/{name}/files              # List files in pod container
+GET  /api/pods/{ns}/{name}/files/download     # Download file from pod container
+```
+
+### Node Operations
+```
+POST /api/nodes/{name}/debug                  # Create ephemeral debug pod on node
+DELETE /api/nodes/{name}/debug                # Cleanup node debug pod
+POST /api/nodes/{name}/cordon                 # Mark node as unschedulable
+POST /api/nodes/{name}/uncordon               # Mark node as schedulable
+POST /api/nodes/{name}/drain                  # Cordon + evict all non-DaemonSet pods
 ```
 
 ### Workload Operations
@@ -326,6 +376,8 @@ GET  /api/metrics/pods/{ns}/{name}            # Current pod metrics
 GET  /api/metrics/pods/{ns}/{name}/history    # Pod metrics history
 GET  /api/metrics/nodes/{name}                # Current node metrics
 GET  /api/metrics/nodes/{name}/history        # Node metrics history
+GET  /api/metrics/top/pods                    # Top pods by resource usage
+GET  /api/metrics/top/nodes                   # Top nodes by resource usage
 ```
 
 ### Port Forwarding
@@ -356,6 +408,8 @@ GET    /api/helm/releases/{ns}/{name}/upgrade-info # Check upgrade availability
 GET    /api/helm/upgrade-check                     # Batch check for upgrades
 POST   /api/helm/releases/{ns}/{name}/rollback     # Rollback to previous revision
 POST   /api/helm/releases/{ns}/{name}/upgrade      # Upgrade to new version
+POST   /api/helm/releases/{ns}/{name}/upgrade-stream # Upgrade with streaming progress
+POST   /api/helm/releases/{ns}/{name}/rollback-stream # Rollback with streaming progress
 POST   /api/helm/releases/{ns}/{name}/values/preview # Preview values change
 PUT    /api/helm/releases/{ns}/{name}/values       # Apply values change
 DELETE /api/helm/releases/{ns}/{name}              # Uninstall release
@@ -393,6 +447,9 @@ POST /api/flux/{kind}/{ns}/{name}/resume          # Resume reconciliation
 ### Cost (OpenCost)
 ```
 GET  /api/opencost/summary                    # Namespace-level cost summary (requires OpenCost + Prometheus)
+GET  /api/opencost/workloads                  # Workload-level cost breakdown for a namespace
+GET  /api/opencost/trend                      # Cost trend data over time
+GET  /api/opencost/nodes                      # Per-node cost breakdown
 ```
 
 ### Traffic (Service Mesh)
@@ -412,6 +469,7 @@ GET  /api/traffic/connection                  # Traffic connection status
 POST /api/desktop/update                      # Start desktop app update download
 GET  /api/desktop/update/status               # Check update download progress
 POST /api/desktop/update/apply                # Apply downloaded update
+POST /api/desktop/open-url                    # Open URL in system browser (desktop only)
 ```
 
 ### Debug
@@ -443,7 +501,7 @@ GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbos
 - Memory-efficient with field stripping (removes managed fields, last-applied annotations)
 - Change notifications via channel for real-time SSE updates
 - Application-specific behavior injected via `CacheConfig` callbacks: `OnChange`, `OnEventChange`, `OnReceived`, `OnDrop`, `ComputeDiff`, `IsNoisyResource`
-- Supports: Pods, Services, Deployments, DaemonSets, StatefulSets, ReplicaSets, Ingresses, ConfigMaps, Secrets, Events, Jobs, CronJobs, HorizontalPodAutoscalers, PersistentVolumeClaims, PersistentVolumes, StorageClasses, PodDisruptionBudgets, Nodes, Namespaces
+- Supports: Pods, Services, Deployments, DaemonSets, StatefulSets, ReplicaSets, Ingresses, IngressClasses, ConfigMaps, Secrets, Events, Jobs, CronJobs, HorizontalPodAutoscalers, PersistentVolumeClaims, PersistentVolumes, StorageClasses, PodDisruptionBudgets, ServiceAccounts, Nodes, Namespaces
 
 ### Server-Sent Events (SSE)
 - Central `SSEBroadcaster` manages connected clients
@@ -465,9 +523,9 @@ GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbos
 - Two view modes:
   - `traffic`: Network flow (Ingress/Gateway → HTTPRoute → Service → Pod, also IstioGateway → VirtualService → Service, also IngressRoute → TraefikService → Service)
   - `resources`: Full hierarchy (Deployment → ReplicaSet → Pod)
-- Node types: Ingress, Gateway, HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, Service, Deployment, DaemonSet, StatefulSet, ReplicaSet, Pod, Job, CronJob, ConfigMap, Secret, HorizontalPodAutoscaler, PersistentVolumeClaim, PersistentVolume, StorageClass, PodDisruptionBudget, VerticalPodAutoscaler
+- Node types: Internet, Ingress, Gateway, GatewayClass, HTTPRoute, GRPCRoute, TCPRoute, TLSRoute, Service, Deployment, DaemonSet, StatefulSet, ReplicaSet, Pod, Job, CronJob, ConfigMap, Secret, HorizontalPodAutoscaler, PersistentVolumeClaim, PersistentVolume, StorageClass, PodDisruptionBudget, VerticalPodAutoscaler, Rollout (Argo), Node, Namespace, NodePool, NodeClaim, NodeClass (Karpenter), ScaledObject, ScaledJob (KEDA)
 - Edge type semantics (these drive UI grouping in Related Resources): `EdgeManages` (owner), `EdgeUses` (autoscalers like HPA/VPA/KEDA → Scalers group), `EdgeProtects` (PDB → Policies group), `EdgeConfigures` (ConfigMap/Secret/DestinationRule), `EdgeExposes` (Service/Ingress/Gateway/VirtualService). Choose the right edge type — don't reuse one just because the code pattern is similar.
-- Istio service mesh nodes: VirtualService, DestinationRule, IstioGateway (note: uses "istiogateway" node ID prefix to disambiguate from Gateway API's "gateway"), ServiceEntry, PeerAuthentication, AuthorizationPolicy
+- Istio service mesh nodes: VirtualService, DestinationRule, IstioGateway (note: uses "istiogateway" node ID prefix to disambiguate from Gateway API's "gateway")
   - VirtualService → Service edges (EdgeExposes, via spec.http/tcp/tls route destinations, parses short/FQDN Istio host format)
   - Istio Gateway → VirtualService edges (EdgeExposes, via spec.gateways[] references)
   - DestinationRule → Service edges (EdgeConfigures, via spec.host)
@@ -522,11 +580,11 @@ GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbos
 
 ### MCP Server
 - Stateless HTTP handler mounted at `/mcp` (JSON-RPC over HTTP)
-- 14 tools organized into read and write categories:
+- 15 tools organized into read and write categories:
   - **Read tools** (8): `get_dashboard` (with problem-correlated changes), `list_resources`, `get_resource` (with optional `include`: events, relationships, metrics, logs), `get_topology` (with `format`: graph or summary), `get_events` (with optional `kind`/`name` resource filter), `get_pod_logs`, `list_namespaces`, `get_changes` (timeline of resource mutations)
   - **Read tools — Helm** (2): `list_helm_releases`, `get_helm_release` (with optional values/history/diff)
   - **Read tools — Logs** (1): `get_workload_logs` (aggregated, AI-filtered logs across all pods)
-  - **Write tools** (3): `manage_workload` (restart/scale/rollback), `manage_cronjob` (trigger/suspend/resume), `manage_gitops` (ArgoCD sync/suspend/resume, FluxCD reconcile/suspend/resume)
+  - **Write tools** (4): `manage_workload` (restart/scale/rollback), `manage_cronjob` (trigger/suspend/resume), `manage_gitops` (ArgoCD sync/suspend/resume, FluxCD reconcile/suspend/resume), `manage_node` (cordon/uncordon/drain)
 - 3 resources: `cluster://health`, `cluster://topology`, `cluster://events`
 - Tool annotations: read-only tools use `readOnlyHint`, write tools use `destructiveHint: false`
 - Respects cluster RBAC
@@ -583,23 +641,46 @@ useMutation({
 
 Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 
-### Shared UI Package (@skyhook/k8s-ui)
+### Shared UI Package (@skyhook-io/k8s-ui)
 - Located at `packages/k8s-ui/` — shared presentation components decoupled from data fetching
 - Components in the package are pure: data fetching hooks live in `web/`, injected via props/callbacks
 - `web/src/components/resources/ResourcesView.tsx` is a thin wrapper that instantiates hooks and passes data to the package's `ResourcesView`
-- Linked via npm workspaces; Vite aliases `@skyhook/k8s-ui` to `../packages/k8s-ui/src` (source-level, no build step)
+- Linked via npm workspaces; Vite aliases `@skyhook-io/k8s-ui` to `../packages/k8s-ui/src` (source-level, no build step)
 - Key exports: `ResourcesView`, `ResourceRendererDispatch`, `ResourceActionsBar`, `EditableYamlView`, all renderers, resource-utils, `categorizeResources`, `getKindLabel`, `getKindPlural`
 
 ### Resource Renderers
 - **Adding a new CRD integration? See [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md)** for the full step-by-step checklist with all files, patterns, and collision gotchas.
 - Renderers, resource-utils, and table column config live in `packages/k8s-ui/src/components/resources/`
 - Sections with data should use `defaultExpanded` (true) — only collapse empty or low-priority sections
-- Register in: `packages/k8s-ui/src/components/resources/renderers/index.ts` (export), `web/src/components/resources/ResourceDetailDrawer.tsx` (import + knownKinds + render line + `getResourceStatus()`)
+- Register in: `packages/k8s-ui/src/components/resources/renderers/index.ts` (export), `packages/k8s-ui/src/components/shared/ResourceRendererDispatch.tsx` (KNOWN_KINDS + render line + `getResourceStatus()`)
 - Use `AlertBanner` for problem detection, `ConditionsSection` for K8s conditions
 - Long text in alerts/banners needs `break-all` class for CSS word breaking
-- **Kind collision rule:** When a CRD kind collides with a core K8s kind (e.g., Knative Service vs core Service), you must guard THREE places in `ResourceDetailDrawer.tsx`: (1) the core renderer line, (2) `getResourceStatus()`, (3) action buttons (Port Forward, etc.). Use `data?.apiVersion?.includes('group.name')` checks. Missing any one causes dual rendering bugs.
-- Core K8s renderers: Role, ClusterRole, RoleBinding, ClusterRoleBinding, ServiceAccount, IngressClass, PriorityClass, RuntimeClass, Lease, MutatingWebhookConfiguration, ValidatingWebhookConfiguration
-- CRD integrations: Argo Rollouts, Argo Workflows, cert-manager, Gateway API, Sealed Secrets, FluxCD, ArgoCD, Trivy, Karpenter, KEDA, VPA, Prometheus Operator, Kyverno, Velero, External Secrets, CloudNativePG, Knative, Istio, Traefik
+- **Kind collision rule:** When a CRD kind collides with a core K8s kind (e.g., Knative Service vs core Service), you must guard THREE places in `ResourceRendererDispatch.tsx`: (1) the core renderer line, (2) `getResourceStatus()`, (3) action buttons (Port Forward, etc.). Use `data?.apiVersion?.includes('group.name')` checks. Missing any one causes dual rendering bugs.
+- Core K8s renderers: Pod, Service, ConfigMap, Secret, Ingress, PersistentVolume, ReplicaSet, StorageClass, NetworkPolicy, Event, Workload (Deployment/StatefulSet/DaemonSet), Role, ClusterRole, RoleBinding, ClusterRoleBinding, ServiceAccount, IngressClass, PriorityClass, RuntimeClass, Lease, MutatingWebhookConfiguration, ValidatingWebhookConfiguration
+- CRD integrations (88 renderer components total):
+
+  | Integration | Rendered Kinds |
+  |-------------|---------------|
+  | **Argo Rollouts** | Rollout |
+  | **Argo Workflows** | Workflow, WorkflowTemplate |
+  | **ArgoCD** | Application |
+  | **cert-manager** | Certificate, CertificateRequest, Issuer, ClusterIssuer, Order, Challenge |
+  | **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler |
+  | **External Secrets** | ExternalSecret, ClusterExternalSecret, SecretStore |
+  | **FluxCD** | HelmRelease, Kustomization, GitRepository, HelmRepository, OCIRepository, Alert |
+  | **Gateway API** | Gateway, HTTPRoute, GRPCRoute |
+  | **Istio** | VirtualService, DestinationRule, Gateway, ServiceEntry, PeerAuthentication, AuthorizationPolicy |
+  | **Karpenter** | NodePool, NodeClaim, EC2NodeClass |
+  | **KEDA** | ScaledObject, ScaledJob, TriggerAuthentication |
+  | **Knative Serving** | Service, Configuration, Revision, Route, DomainMapping, Ingress, Certificate, ServerlessService |
+  | **Knative Eventing** | Broker, Trigger, Subscription, Channel, InMemoryChannel, Sequence, Parallel, PingSource, ContainerSource, SinkBinding, EventType |
+  | **Kyverno** | PolicyReport |
+  | **Prometheus Operator** | ServiceMonitor, PodMonitor, PrometheusRule |
+  | **Sealed Secrets** | SealedSecret |
+  | **Traefik** | IngressRoute |
+  | **Trivy** | VulnerabilityReport, ConfigAuditReport, ExposedSecretReport, SbomReport, ClusterComplianceReport |
+  | **Velero** | Backup, Schedule, Restore, BackupStorageLocation, VolumeSnapshotLocation |
+  | **VPA** | VerticalPodAutoscaler |
 
 ## Tech Stack
 

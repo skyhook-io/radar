@@ -50,14 +50,30 @@ make desktop-package-darwin  # Package macOS .app bundle
 
 ```
 radar/
-├── cmd/explorer/           # CLI entry point (main.go)
+├── cmd/
+│   ├── explorer/           # CLI entry point (main.go)
+│   └── desktop/            # Desktop app entry point (Wails v2)
 ├── internal/
-│   ├── k8s/               # Kubernetes client, informers, caching
-│   ├── server/            # HTTP server, REST API, SSE, WebSocket
-│   ├── topology/          # Graph construction and relationships
+│   ├── app/               # Application lifecycle management
+│   ├── config/            # Persistent configuration (~/.radar/config.json)
 │   ├── helm/              # Helm SDK client and handlers
-│   ├── traffic/           # Traffic visualization (Caretta, Hubble)
-│   └── static/            # Embedded frontend (built from web/)
+│   ├── images/            # Container image inspection
+│   ├── k8s/               # Kubernetes client, informers, caching
+│   ├── mcp/               # MCP (Model Context Protocol) server
+│   ├── opencost/          # OpenCost integration (cost analysis)
+│   ├── prometheus/        # Prometheus client and discovery
+│   ├── server/            # HTTP server, REST API, SSE, WebSocket
+│   ├── settings/          # User preferences (~/.radar/settings.json)
+│   ├── static/            # Embedded frontend (built from web/)
+│   ├── traffic/           # Traffic visualization (Hubble, Caretta, Istio)
+│   └── ...                # errorlog, updater, version
+├── pkg/
+│   ├── ai/context/        # AI context minification for LLM-friendly output
+│   ├── k8score/           # Shared K8s caching layer (informers, listers)
+│   ├── timeline/          # Timeline event storage (memory/SQLite)
+│   └── topology/          # Graph construction and relationships
+├── packages/
+│   └── k8s-ui/            # Shared UI package (@skyhook-io/k8s-ui)
 ├── web/                    # React frontend
 │   ├── src/
 │   │   ├── api/           # API client, React Query hooks, SSE
@@ -146,8 +162,8 @@ For the full API reference, see [CLAUDE.md](CLAUDE.md#api-endpoints).
 ### New Resource Type
 
 1. Add informer in `internal/k8s/cache.go`
-2. Add to topology builder in `internal/topology/builder.go`
-3. Add TypeScript type in `web/src/types.ts`
+2. Add to topology builder in `pkg/topology/builder.go`
+3. Add TypeScript type in `packages/k8s-ui/src/types/core.ts`
 
 ### New UI Component
 
@@ -175,16 +191,15 @@ make watch-frontend  # Terminal 2
 # Interactive release (prompts for version and targets)
 make release
 
-# Or release specific components
-make release-binaries     # CLI via goreleaser → GitHub Releases + Homebrew
-make release-docker       # Docker image → GHCR
+# Dry-run goreleaser (local test, no publish)
+make release-binaries-dry
 ```
 
 | Target | Command | Output |
 |--------|---------|--------|
-| CLI binaries | `make release-binaries` | GitHub Releases + Homebrew tap |
-| Docker | `make release-docker` | `ghcr.io/skyhook-io/radar:VERSION` |
-| All | `make release` | Interactive, choose targets |
+| All | `make release` | Interactive — runs `scripts/release.sh` |
+| Dry run | `make release-binaries-dry` | Local goreleaser snapshot (no publish) |
+| Docker | `make docker-multiarch` | Multi-arch Docker image build |
 
 ### Prerequisites for Releasing
 

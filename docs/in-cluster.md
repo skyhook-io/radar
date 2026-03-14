@@ -8,7 +8,8 @@ Deploy Radar to your Kubernetes cluster for shared team access.
 
 ```bash
 helm repo add skyhook https://skyhook-io.github.io/helm-charts
-helm install radar skyhook/radar -n radar --create-namespace
+helm repo update skyhook
+helm upgrade --install radar skyhook/radar -n radar --create-namespace
 ```
 
 Access via port-forward:
@@ -126,14 +127,16 @@ Radar uses its ServiceAccount to access the Kubernetes API. The Helm chart creat
 
 ### Opt-in Permissions
 
-Some features require additional permissions that are **disabled by default** for security:
+Some features require additional permissions. Most are disabled by default for security:
 
-| Feature | Value | Description |
-|---------|-------|-------------|
-| Secrets | `rbac.secrets: true` | Show secrets in resource list |
-| Terminal | `rbac.podExec: true` | Shell access to pods |
-| Port Forward | `rbac.portForward: true` | Port forwarding to pods/services |
-| Logs | `rbac.podLogs: true` | View pod logs (enabled by default) |
+| Feature | Value | Default | Description |
+|---------|-------|---------|-------------|
+| Secrets | `rbac.secrets: true` | `false` | Show secrets in resource list |
+| Terminal | `rbac.podExec: true` | `false` | Shell access to pods |
+| Port Forward | `rbac.portForward: true` | `false` | Port forwarding to pods/services |
+| Logs | `rbac.podLogs: true` | `true` | View pod logs |
+| Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets) |
+| Traffic TLS | `rbac.traffic: true` | `true` | Read Hubble relay TLS certs for Cilium traffic observation |
 
 Enable features as needed:
 
@@ -144,6 +147,31 @@ rbac:
   podExec: true       # Enable terminal feature
   podLogs: true       # Enable log viewer (default)
   portForward: true   # Enable port forwarding
+  helm: false         # Enable Helm write operations (broad permissions)
+```
+
+### CRD Permissions
+
+Radar reads CRDs from many popular tools. Each CRD group can be toggled individually:
+
+```yaml
+rbac:
+  crdGroups:
+    all: false          # Wildcard — grant read access to ALL API groups
+    # Individual groups (all default to true):
+    argo: true          # argoproj.io
+    certManager: true   # cert-manager.io
+    flux: true          # *.toolkit.fluxcd.io
+    istio: true         # networking.istio.io, security.istio.io
+    karpenter: true     # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com
+    keda: true          # keda.sh
+    knative: true       # *.knative.dev
+    prometheus: true    # monitoring.coreos.com
+    traefik: true       # traefik.io
+    velero: true        # velero.io
+    # ... and 25+ more (see values.yaml for full list)
+  additionalCrdGroups: []   # Add custom API groups
+  additionalRules: []       # Arbitrary extra ClusterRole rules
 ```
 
 ### Graceful RBAC Degradation
@@ -216,11 +244,20 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `ingress.enabled` | Enable ingress | `false` |
 | `ingress.className` | Ingress class | `""` |
 | `service.port` | Service port | `9280` |
+| `mcp.enabled` | Enable MCP server for AI tools | `true` |
 | `timeline.storage` | Event storage (memory/sqlite) | `memory` |
+| `timeline.dbPath` | SQLite database path | `/data/timeline.db` |
+| `timeline.historyLimit` | Max events to retain | `10000` |
+| `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL | `""` (auto-discover) |
+| `persistence.enabled` | Enable PVC for SQLite storage | `false` |
+| `persistence.size` | PVC size | `1Gi` |
 | `rbac.podLogs` | Enable log viewer | `true` |
 | `rbac.podExec` | Enable terminal feature | `false` |
 | `rbac.portForward` | Enable port forwarding | `false` |
 | `rbac.secrets` | Show secrets in resource list | `false` |
+| `rbac.helm` | Enable Helm write operations | `false` |
+| `rbac.traffic` | Read Hubble TLS certs | `true` |
+| `rbac.crdGroups.all` | Wildcard CRD read access | `false` |
 
 ## Troubleshooting
 
