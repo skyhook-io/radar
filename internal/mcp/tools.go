@@ -173,6 +173,19 @@ func registerTools(server *mcp.Server) {
 			DestructiveHint: boolPtr(false),
 		},
 	}, logToolCall("manage_gitops", handleManageGitOps))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "manage_node",
+		Description: "Perform operations on a Kubernetes node. " +
+			"Supported actions: 'cordon' marks the node as unschedulable (no new pods will be scheduled), " +
+			"'uncordon' marks the node as schedulable again, " +
+			"'drain' cordons the node and evicts all non-DaemonSet pods. " +
+			"Drain options: 'delete_empty_dir_data' (allow evicting pods with emptyDir volumes), " +
+			"'force' (evict pods not managed by a controller), 'timeout' (seconds, default 60).",
+		Annotations: &mcp.ToolAnnotations{
+			DestructiveHint: boolPtr(false),
+		},
+	}, logToolCall("manage_node", handleManageNode))
 }
 
 // Tool input types

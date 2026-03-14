@@ -30,6 +30,7 @@ export interface Capabilities {
   secrets: boolean        // List secrets
   secretsUpdate: boolean  // Update secrets (inline editing)
   helmWrite: boolean      // Helm write operations (install, upgrade, rollback, uninstall, apply values)
+  nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
   mcpEnabled: boolean     // MCP server is running
   resources?: ResourcePermissions // Per-resource-type permissions
 }

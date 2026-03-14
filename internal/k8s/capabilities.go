@@ -59,6 +59,7 @@ type Capabilities struct {
 	Secrets       bool                 `json:"secrets"`             // Can list secrets
 	SecretsUpdate bool                 `json:"secretsUpdate"`       // Can update secrets (inline editing)
 	HelmWrite     bool                 `json:"helmWrite"`           // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite     bool                 `json:"nodeWrite"`           // Can patch nodes (cordon/uncordon/drain)
 	MCPEnabled    bool                 `json:"mcpEnabled"`          // MCP server is running
 	Resources     *ResourcePermissions `json:"resources,omitempty"` // Per-resource-type permissions
 }
@@ -135,6 +136,7 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 		{"secrets", "list", &caps.Secrets},
 		{"secrets", "update", &caps.SecretsUpdate},
 		{"secrets", "create", &caps.HelmWrite},
+		{"nodes", "patch", &caps.NodeWrite},
 	}
 
 	var wg sync.WaitGroup

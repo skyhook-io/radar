@@ -6,6 +6,8 @@ import {
   Trash2,
   Play,
   Pause,
+  Ban,
+  AlertTriangle,
   Box,
   ChevronDown,
   History,
@@ -17,6 +19,7 @@ import {
 import { createTwoFilesPatch } from 'diff'
 import { clsx } from 'clsx'
 import { ForceDeleteConfirmDialog } from '../ui/ForceDeleteConfirmDialog'
+import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
 import { formatKindName } from '../ui/drawer-components'
@@ -92,6 +95,15 @@ interface ResourceActionsBarProps {
 
   // Node debug shell
   onOpenNodeTerminal?: (params: { nodeName: string }) => void
+
+  // Node operations (cordon/uncordon/drain)
+  canNodeWrite?: boolean
+  onCordonNode?: (params: { name: string }) => void
+  isCordoningNode?: boolean
+  onUncordonNode?: (params: { name: string }) => void
+  isUncordoningNode?: boolean
+  onDrainNode?: (params: { name: string; options?: { deleteEmptyDirData?: boolean; force?: boolean } }) => void
+  isDrainingNode?: boolean
 }
 
 export function ResourceActionsBar({
@@ -114,11 +126,21 @@ export function ResourceActionsBar({
   onArgoSuspend, isArgoSuspending,
   onArgoResume, isArgoResuming,
   onOpenNodeTerminal,
+  canNodeWrite,
+  onCordonNode, isCordoningNode,
+  onUncordonNode, isUncordoningNode,
+  onDrainNode, isDrainingNode,
 }: ResourceActionsBarProps) {
   const kind = resource.kind.toLowerCase()
 
   // Delete confirmation state
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+
+  // Node operation confirmation state
+  const [showCordonConfirm, setShowCordonConfirm] = useState(false)
+  const [showDrainConfirm, setShowDrainConfirm] = useState(false)
+  const [drainForce, setDrainForce] = useState(false)
+  const [drainDeleteLocal, setDrainDeleteLocal] = useState(false)
 
   // Rollback dialog state
   const [showRevisions, setShowRevisions] = useState(false)
@@ -232,14 +254,57 @@ export function ResourceActionsBar({
       )}
 
       {/* Node actions */}
-      {kind === 'nodes' && canExec && onOpenNodeTerminal && (
-        <button
-          onClick={() => onOpenNodeTerminal({ nodeName: resource.name })}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
-        >
-          <Terminal className="w-3.5 h-3.5" />
-          Debug Shell
-        </button>
+      {kind === 'nodes' && (
+        <>
+          {canExec && onOpenNodeTerminal && (
+            <button
+              onClick={() => onOpenNodeTerminal({ nodeName: resource.name })}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+            >
+              <Terminal className="w-3.5 h-3.5" />
+              Debug Shell
+            </button>
+          )}
+
+          {canNodeWrite && (
+            <>
+              {data?.spec?.unschedulable ? (
+                onUncordonNode && (
+                  <button
+                    onClick={() => onUncordonNode({ name: resource.name })}
+                    disabled={isUncordoningNode}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    <Play className={`w-3.5 h-3.5 ${isUncordoningNode ? 'animate-pulse' : ''}`} />
+                    {isUncordoningNode ? 'Uncordoning...' : 'Uncordon'}
+                  </button>
+                )
+              ) : (
+                onCordonNode && (
+                  <button
+                    onClick={() => setShowCordonConfirm(true)}
+                    disabled={isCordoningNode}
+                    className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    <Ban className={`w-3.5 h-3.5 ${isCordoningNode ? 'animate-pulse' : ''}`} />
+                    {isCordoningNode ? 'Cordoning...' : 'Cordon'}
+                  </button>
+                )
+              )}
+
+              {onDrainNode && (
+                <button
+                  onClick={() => setShowDrainConfirm(true)}
+                  disabled={isDrainingNode}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  <AlertTriangle className={`w-3.5 h-3.5 ${isDrainingNode ? 'animate-pulse' : ''}`} />
+                  {isDrainingNode ? 'Draining...' : 'Drain'}
+                </button>
+              )}
+            </>
+          )}
+        </>
       )}
 
       {/* Service actions */}
@@ -435,6 +500,67 @@ export function ResourceActionsBar({
         namespaceName={resource.namespace}
         isLoading={isDeleting ?? false}
       />
+
+      {/* Node cordon confirmation */}
+      <ConfirmDialog
+        open={showCordonConfirm}
+        onClose={() => setShowCordonConfirm(false)}
+        onConfirm={() => {
+          onCordonNode?.({ name: resource.name })
+          setShowCordonConfirm(false)
+        }}
+        title="Cordon Node"
+        message={`Mark node "${resource.name}" as unschedulable? No new pods will be scheduled on this node.`}
+        confirmLabel="Cordon"
+        variant="warning"
+        isLoading={isCordoningNode}
+      />
+
+      {/* Node drain confirmation */}
+      <ConfirmDialog
+        open={showDrainConfirm}
+        onClose={() => {
+          setShowDrainConfirm(false)
+          setDrainForce(false)
+          setDrainDeleteLocal(false)
+        }}
+        onConfirm={() => {
+          onDrainNode?.({
+            name: resource.name,
+            options: { force: drainForce, deleteEmptyDirData: drainDeleteLocal },
+          })
+          setShowDrainConfirm(false)
+          setDrainForce(false)
+          setDrainDeleteLocal(false)
+        }}
+        title="Drain Node"
+        message={`Cordon and evict all pods from node "${resource.name}"? DaemonSet pods will be skipped.`}
+        confirmLabel={isDrainingNode ? 'Draining...' : 'Drain'}
+        variant="danger"
+        isLoading={isDrainingNode}
+        isClosable
+      >
+        <div className="flex flex-col gap-2 text-sm text-theme-text-secondary">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={drainForce}
+              onChange={(e) => setDrainForce(e.target.checked)}
+              className="rounded border-theme-border"
+            />
+            Force (evict pods not managed by a controller)
+          </label>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={drainDeleteLocal}
+              onChange={(e) => setDrainDeleteLocal(e.target.checked)}
+              className="rounded border-theme-border"
+            />
+            Delete local data (emptyDir volumes)
+          </label>
+        </div>
+      </ConfirmDialog>
 
       {showRevisions && ['deployments', 'statefulsets', 'daemonsets'].includes(kind) && (
         <RevisionHistoryDialog

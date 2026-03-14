@@ -128,6 +128,9 @@ func (s *Server) setupRoutes() {
 		r.Get("/pods/{namespace}/{name}/files/download", s.handlePodFileDownload)
 		r.Get("/workloads/{kind}/{namespace}/{name}/logs/stream", s.handleWorkloadLogsStream)
 
+		// Node drain — outside 60s timeout group (drain may need minutes for PDB backoff)
+		r.Post("/nodes/{name}/drain", s.handleDrainNode)
+
 		// All other API routes get a 60-second timeout
 		r.Group(func(r chi.Router) {
 			r.Use(middleware.Timeout(60 * time.Second))
@@ -162,6 +165,10 @@ func (s *Server) setupRoutes() {
 			// Node debug (privileged debug pod)
 			r.Post("/nodes/{name}/debug", s.handleNodeDebug)
 			r.Delete("/nodes/{name}/debug", s.handleNodeDebugCleanup)
+
+			// Node operations (cordon/uncordon)
+			r.Post("/nodes/{name}/cordon", s.handleCordonNode)
+			r.Post("/nodes/{name}/uncordon", s.handleUncordonNode)
 
 			// Pod file browser
 			r.Get("/pods/{namespace}/{name}/files", s.handlePodFileList)

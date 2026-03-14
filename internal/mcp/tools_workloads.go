@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
@@ -261,6 +262,73 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 		"pods":     len(pods),
 		"logs":     allLogs,
 	})
+}
+
+// Node tool input and handler
+
+type manageNodeInput struct {
+	Action             string `json:"action" jsonschema:"action to perform: cordon, uncordon, or drain"`
+	Name               string `json:"name" jsonschema:"node name"`
+	DeleteEmptyDirData bool   `json:"delete_empty_dir_data,omitempty" jsonschema:"allow draining pods with emptyDir volumes (default false)"`
+	Force              bool   `json:"force,omitempty" jsonschema:"force evict pods not managed by a controller (default false)"`
+	Timeout            int    `json:"timeout,omitempty" jsonschema:"drain timeout in seconds (default 60)"`
+}
+
+func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manageNodeInput) (*mcp.CallToolResult, any, error) {
+	if input.Name == "" {
+		return nil, nil, fmt.Errorf("node name is required")
+	}
+
+	switch strings.ToLower(input.Action) {
+	case "cordon":
+		if err := k8s.CordonNode(ctx, input.Name); err != nil {
+			return nil, nil, fmt.Errorf("cordon failed: %w", err)
+		}
+		return toJSONResult(map[string]string{
+			"status":  "ok",
+			"message": fmt.Sprintf("Node %s cordoned (marked unschedulable)", input.Name),
+		})
+
+	case "uncordon":
+		if err := k8s.UncordonNode(ctx, input.Name); err != nil {
+			return nil, nil, fmt.Errorf("uncordon failed: %w", err)
+		}
+		return toJSONResult(map[string]string{
+			"status":  "ok",
+			"message": fmt.Sprintf("Node %s uncordoned (marked schedulable)", input.Name),
+		})
+
+	case "drain":
+		opts := k8s.DrainOptions{
+			IgnoreDaemonSets:   true,
+			DeleteEmptyDirData: input.DeleteEmptyDirData,
+			Force:              input.Force,
+			Timeout:            60 * time.Second,
+		}
+		if input.Timeout > 0 {
+			opts.Timeout = time.Duration(input.Timeout) * time.Second
+		}
+		result, err := k8s.DrainNode(ctx, input.Name, opts)
+		if err != nil {
+			return nil, nil, fmt.Errorf("drain failed: %w", err)
+		}
+		status := "ok"
+		msg := fmt.Sprintf("Drained node %s: %d pods evicted", input.Name, len(result.EvictedPods))
+		if len(result.Errors) > 0 {
+			status = "partial"
+			msg = fmt.Sprintf("Drain partially completed on node %s: %d evicted, %d failed",
+				input.Name, len(result.EvictedPods), len(result.Errors))
+		}
+		return toJSONResult(map[string]any{
+			"status":      status,
+			"message":     msg,
+			"evictedPods": result.EvictedPods,
+			"errors":      result.Errors,
+		})
+
+	default:
+		return nil, nil, fmt.Errorf("unknown action %q: must be cordon, uncordon, or drain", input.Action)
+	}
 }
 
 // normalizeWorkloadKind converts various kind formats to the plural lowercase form.

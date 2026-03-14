@@ -10,6 +10,7 @@ const defaultCapabilities: Capabilities = {
   secrets: true,
   secretsUpdate: true,
   helmWrite: true,
+  nodeWrite: true,
   mcpEnabled: true,
 }
 
@@ -21,6 +22,7 @@ const restrictedCapabilities: Capabilities = {
   secrets: false,
   secretsUpdate: false,
   helmWrite: false,
+  nodeWrite: false,
   mcpEnabled: false,
 }
 
@@ -79,6 +81,10 @@ export function useCanUpdateSecrets(): boolean {
 
 export function useCanHelmWrite(): boolean {
   return useContext(CapabilitiesContext).helmWrite
+}
+
+export function useCanNodeWrite(): boolean {
+  return useContext(CapabilitiesContext).nodeWrite
 }
 
 // RBAC resource permission hooks

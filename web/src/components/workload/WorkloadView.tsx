@@ -15,12 +15,13 @@ import {
   useRestartWorkload, useWorkloadRevisions, useRollbackWorkload,
   useFluxReconcile, useFluxSyncWithSource, useFluxSuspend, useFluxResume,
   useArgoSync, useArgoRefresh, useArgoSuspend, useArgoResume,
+  useCordonNode, useUncordonNode, useDrainNode,
   fetchJSON,
 } from '../../api/client'
 import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
-import { useCanUpdateSecrets, useCanExec, useCanViewLogs, useCanPortForward } from '../../contexts/CapabilitiesContext'
+import { useCanUpdateSecrets, useCanExec, useCanViewLogs, useCanPortForward, useCanNodeWrite } from '../../contexts/CapabilitiesContext'
 import { useOpenTerminal, useOpenLogs, useOpenWorkloadLogs, useOpenNodeTerminal } from '../dock'
 import { PortForwardButton } from '../portforward/PortForwardButton'
 import { useToast } from '../ui/Toast'
@@ -135,6 +136,11 @@ function useActionsBarProps(kind: string, namespace: string, name: string) {
   const argoSuspendMutation = useArgoSuspend()
   const argoResumeMutation = useArgoResume()
 
+  const canNodeWrite = useCanNodeWrite()
+  const cordonMutation = useCordonNode()
+  const uncordonMutation = useUncordonNode()
+  const drainMutation = useDrainNode()
+
   return {
     canExec,
     canViewLogs,
@@ -178,6 +184,13 @@ function useActionsBarProps(kind: string, namespace: string, name: string) {
     isArgoSuspending: argoSuspendMutation.isPending,
     onArgoResume: (params: any) => argoResumeMutation.mutate(params),
     isArgoResuming: argoResumeMutation.isPending,
+    canNodeWrite,
+    onCordonNode: (params: any) => cordonMutation.mutate(params),
+    isCordoningNode: cordonMutation.isPending,
+    onUncordonNode: (params: any) => uncordonMutation.mutate(params),
+    isUncordoningNode: uncordonMutation.isPending,
+    onDrainNode: (params: any) => drainMutation.mutate(params),
+    isDrainingNode: drainMutation.isPending,
   }
 }
 
