@@ -114,6 +114,7 @@ import {
   getServiceAccountSecretCount,
   getRoleRuleCount,
   formatAge,
+  formatDuration,
   truncate,
   getCellFilterValue,
   parseColumnFilters,
@@ -4315,16 +4316,82 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
               sq.status === 'terminated' ? 'bg-red-500' :
               'bg-theme-text-tertiary/30 border border-dashed border-theme-text-tertiary'
             const ringClass = sq.restarts > 0 ? 'ring-2 ring-orange-400' : ''
+            const dotColor =
+              sq.status === 'ready' ? 'bg-green-500' :
+              sq.status === 'completed' ? 'bg-theme-text-tertiary' :
+              sq.status === 'running' ? 'bg-yellow-500' :
+              sq.status === 'waiting' || sq.status === 'terminated' ? 'bg-red-500' :
+              'bg-theme-text-tertiary'
+            // Relative time helper
+            const timeAgo = (dateStr?: string) => {
+              if (!dateStr) return null
+              const ms = Date.now() - new Date(dateStr).getTime()
+              if (isNaN(ms) || ms < 0) return null
+              if (ms < 60000) return 'just now'
+              return formatDuration(ms) + ' ago'
+            }
+            const runDuration = (start?: string, end?: string) => {
+              if (!start || !end) return null
+              const ms = new Date(end).getTime() - new Date(start).getTime()
+              return ms > 0 ? formatDuration(ms, true) : null
+            }
+            const stateLabel =
+              sq.status === 'ready' ? 'Running' :
+              sq.status === 'completed' ? 'Completed' :
+              sq.status === 'running' ? 'Running (not ready)' :
+              sq.status === 'waiting' ? 'Waiting' :
+              sq.status === 'terminated' ? 'Terminated' : 'Unknown'
+            const uptime = sq.status === 'ready' || sq.status === 'running' ? timeAgo(sq.startedAt) : null
+            const duration = (sq.status === 'completed' || sq.status === 'terminated') ? runDuration(sq.startedAt, sq.finishedAt) : null
+            const lt = sq.lastTermination
+            const restartRecencyMs = lt?.finishedAt ? Date.now() - new Date(lt.finishedAt).getTime() : null
+            const restartColor = restartRecencyMs !== null && restartRecencyMs < 600000 ? 'text-red-400' : restartRecencyMs !== null && restartRecencyMs < 3600000 ? 'text-yellow-400' : 'text-orange-400'
             const tooltipContent = (
-              <div className="whitespace-normal">
-                <div className="font-medium">{sq.isInit ? '(init) ' : ''}{sq.name} — {sq.reason || sq.status}</div>
-                {sq.message && <div className="text-theme-text-secondary mt-0.5">{sq.message}</div>}
-                {sq.exitCode !== undefined && sq.status !== 'ready' && sq.status !== 'running' && (
-                  <div className="text-theme-text-secondary mt-0.5">Exit code: {sq.exitCode}</div>
+              <div className="whitespace-normal space-y-1">
+                {/* Header: dot + name + state */}
+                <div className="flex items-center gap-1.5">
+                  <div className={clsx('w-2 h-2 rounded-full shrink-0', dotColor)} />
+                  <span className="font-medium">{sq.isInit ? <span className="text-theme-text-tertiary font-normal">init · </span> : ''}{sq.name}</span>
+                  <span className="text-theme-text-tertiary">·</span>
+                  <span className="text-theme-text-secondary">{stateLabel}</span>
+                </div>
+                {/* Reason (when different from state label) */}
+                {sq.reason && sq.reason !== stateLabel && (
+                  <div className={clsx(
+                    'font-medium',
+                    (sq.status === 'waiting' || sq.status === 'terminated') ? 'text-red-400' : 'text-theme-text-secondary'
+                  )}>{sq.reason}</div>
                 )}
-                {sq.restarts > 0 && <div className="text-orange-400 mt-0.5">{sq.restarts} restart{sq.restarts !== 1 ? 's' : ''}</div>}
-                {sq.startedAt && <div className="text-theme-text-tertiary mt-0.5">Started: {new Date(sq.startedAt).toLocaleString()}</div>}
-                {sq.finishedAt && <div className="text-theme-text-tertiary">Finished: {new Date(sq.finishedAt).toLocaleString()}</div>}
+                {/* Message — truncated for tooltip */}
+                {sq.message && (
+                  <div className="text-theme-text-secondary text-[11px] leading-tight">
+                    {sq.message.length > 120 ? sq.message.slice(0, 120) + '...' : sq.message}
+                  </div>
+                )}
+                {/* Exit code + uptime/duration on same line */}
+                {(sq.exitCode !== undefined && sq.status !== 'ready' && sq.status !== 'running') || uptime || duration ? (
+                  <div className="text-theme-text-tertiary flex items-center gap-1.5">
+                    {sq.exitCode !== undefined && sq.status !== 'ready' && sq.status !== 'running' && (
+                      <span className={sq.exitCode !== 0 ? 'text-red-400' : ''}>exit {sq.exitCode}</span>
+                    )}
+                    {uptime && <span>up {uptime.replace(' ago', '')}</span>}
+                    {duration && <span>ran {duration}</span>}
+                  </div>
+                ) : null}
+                {/* Restarts + last crash info */}
+                {sq.restarts > 0 && (
+                  <div className={clsx('border-t border-theme-border/50 pt-1 space-y-0.5', restartColor)}>
+                    <div className="flex items-center gap-1.5">
+                      <span>{sq.restarts} restart{sq.restarts !== 1 ? 's' : ''}</span>
+                      {lt?.finishedAt && <span className="text-theme-text-tertiary">· last {timeAgo(lt.finishedAt)}</span>}
+                    </div>
+                    {lt?.reason && (
+                      <div className="text-theme-text-tertiary">
+                        {lt.reason}{lt.exitCode !== undefined && lt.exitCode !== 0 ? ` (exit ${lt.exitCode})` : ''}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             )
             return (

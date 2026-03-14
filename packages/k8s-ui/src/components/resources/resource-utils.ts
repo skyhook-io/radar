@@ -207,6 +207,13 @@ export interface ContainerSquareState {
   startedAt?: string
   finishedAt?: string
   isInit?: boolean
+  /** Last termination info — crucial for debugging CrashLoopBackOff */
+  lastTermination?: {
+    reason?: string
+    exitCode?: number
+    startedAt?: string
+    finishedAt?: string
+  }
 }
 
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
@@ -228,6 +235,7 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
       status = 'terminated'
     }
     const stateDetail = cs.state?.[stateKey]
+    const lastTerm = cs.lastState?.terminated
     result.push({
       name: cs.name,
       status,
@@ -238,6 +246,7 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
       startedAt: stateDetail?.startedAt,
       finishedAt: stateDetail?.finishedAt,
       isInit: true,
+      lastTermination: lastTerm ? { reason: lastTerm.reason, exitCode: lastTerm.exitCode, startedAt: lastTerm.startedAt, finishedAt: lastTerm.finishedAt } : undefined,
     })
   }
 
@@ -257,6 +266,7 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
         status = 'waiting'
       }
       const stateDetail = cs.state?.[stateKey]
+      const lastTerm = cs.lastState?.terminated
       result.push({
         name: cs.name,
         status,
@@ -266,6 +276,7 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
         exitCode: stateDetail?.exitCode,
         startedAt: stateDetail?.startedAt,
         finishedAt: stateDetail?.finishedAt,
+        lastTermination: lastTerm ? { reason: lastTerm.reason, exitCode: lastTerm.exitCode, startedAt: lastTerm.startedAt, finishedAt: lastTerm.finishedAt } : undefined,
       })
     }
   } else {
