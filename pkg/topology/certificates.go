@@ -12,6 +12,8 @@ import (
 	"math"
 	"strings"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
 )
 
 // ParsePEMCertificates decodes PEM-encoded certificate data and returns parsed
@@ -117,3 +119,72 @@ func ecCurveName(curve elliptic.Curve) string {
 		return "unknown"
 	}
 }
+
+// CertExpiry is a lightweight certificate expiry entry for list views.
+type CertExpiry struct {
+	DaysLeft int  `json:"daysLeft"`
+	Expired  bool `json:"expired,omitempty"`
+}
+
+// GetCertificateExpiry returns certificate expiry for all TLS secrets,
+// keyed by "namespace/name". If namespaces is non-empty, only matching
+// namespaces are included.
+func GetCertificateExpiry(provider ResourceProvider, namespaces []string) (map[string]CertExpiry, error) {
+	secrets, err := provider.Secrets()
+	if err != nil {
+		// RBAC not granted or lister unavailable — return empty (not an error).
+		// Matches topology builder pattern: log + continue with empty data.
+		return make(map[string]CertExpiry), nil
+	}
+
+	result := make(map[string]CertExpiry)
+	for _, secret := range secrets {
+		if !MatchesNamespace(namespaces, secret.Namespace) {
+			continue
+		}
+		if secret.Type != corev1.SecretTypeTLS {
+			continue
+		}
+		certPEM, exists := secret.Data["tls.crt"]
+		if !exists || len(certPEM) == 0 {
+			continue
+		}
+		certs := ParsePEMCertificates(certPEM)
+		if len(certs) == 0 {
+			continue
+		}
+		key := secret.Namespace + "/" + secret.Name
+		result[key] = CertExpiry{
+			DaysLeft: certs[0].DaysLeft,
+			Expired:  certs[0].Expired,
+		}
+	}
+
+	return result, nil
+}
+
+// GetSecretCertificateInfo returns detailed certificate chain info for a single TLS secret.
+func GetSecretCertificateInfo(provider ResourceProvider, namespace, name string) (*SecretCertificateInfo, error) {
+	secrets, err := provider.Secrets()
+	if err != nil {
+		return nil, fmt.Errorf("list secrets: %w", err)
+	}
+
+	for _, secret := range secrets {
+		if secret.Namespace != namespace || secret.Name != name {
+			continue
+		}
+		if secret.Type != corev1.SecretTypeTLS {
+			return nil, fmt.Errorf("secret %s/%s is not a TLS secret", namespace, name)
+		}
+		certPEM, exists := secret.Data["tls.crt"]
+		if !exists || len(certPEM) == 0 {
+			return nil, fmt.Errorf("secret %s/%s has no tls.crt data", namespace, name)
+		}
+		certs := ParsePEMCertificates(certPEM)
+		return &SecretCertificateInfo{Certificates: certs}, nil
+	}
+
+	return nil, fmt.Errorf("secret %s/%s not found", namespace, name)
+}
+
