@@ -242,6 +242,7 @@ export const SEVERITY_BADGE_BORDERED = {
   warning: 'bg-amber-500/20 text-amber-700 dark:text-amber-400 border border-amber-500/30',
   error: 'bg-red-500/20 text-red-800 dark:text-red-400 border border-red-500/30',
   info: 'bg-blue-500/20 text-blue-700 dark:text-blue-400 border border-blue-500/30',
+  debug: 'bg-gray-500/15 text-gray-600 dark:text-gray-400 border border-gray-400/30 dark:border-gray-500/30',
   neutral: 'bg-theme-hover/50 text-theme-text-secondary border border-theme-border',
 } as const
 

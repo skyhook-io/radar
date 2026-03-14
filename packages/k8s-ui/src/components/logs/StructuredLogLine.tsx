@@ -9,6 +9,7 @@ import {
   SYNTAX_COLOR_KEY,
   SYNTAX_COLOR_STRING,
 } from '../../utils/log-format'
+import { SEVERITY_BADGE_BORDERED } from '../../utils/badge-colors'
 
 interface StructuredLogLineProps {
   content: string
@@ -139,6 +140,7 @@ function formatLevel(lvl: unknown): string {
 function getLevelBadgeColor(lvl: unknown): string {
   let normalized: string
   if (typeof lvl === 'number') {
+    // Pino/bunyan numeric levels: 10=trace, 20=debug, 30=info, 40=warn, 50=error, 60=fatal
     if (lvl >= 50) normalized = 'error'
     else if (lvl >= 40) normalized = 'warn'
     else if (lvl >= 30) normalized = 'info'
@@ -146,9 +148,9 @@ function getLevelBadgeColor(lvl: unknown): string {
   } else {
     normalized = String(lvl).toLowerCase()
   }
-  if (/^(error|err|fatal|panic|critical|crit)$/.test(normalized)) return 'bg-red-500/20 text-red-400'
-  if (/^(warn|warning)$/.test(normalized)) return 'bg-yellow-500/20 text-yellow-400'
-  if (/^(info|information|notice)$/.test(normalized)) return 'bg-blue-500/20 text-blue-400'
-  if (/^(debug|dbg|trace|verbose)$/.test(normalized)) return 'bg-gray-500/20 text-gray-400'
-  return 'bg-gray-500/20 text-theme-text-secondary'
+  if (/^(error|err|fatal|panic|critical|crit)$/.test(normalized)) return SEVERITY_BADGE_BORDERED.error
+  if (/^(warn|warning)$/.test(normalized)) return SEVERITY_BADGE_BORDERED.warning
+  if (/^(info|information|notice)$/.test(normalized)) return SEVERITY_BADGE_BORDERED.info
+  if (/^(debug|dbg|trace|verbose)$/.test(normalized)) return SEVERITY_BADGE_BORDERED.debug
+  return SEVERITY_BADGE_BORDERED.neutral
 }
