@@ -1,30 +1,14 @@
 import { AlertBanner } from '../../ui/drawer-components'
+import {
+  VULN_SEVERITY_BADGE,
+  VULN_SEVERITY_BAR,
+  VULN_SEVERITY_TEXT,
+} from '../../../utils/badge-colors'
 
-// Shared severity color maps for all Trivy report renderers
-
-export const SEVERITY_BADGE_COLORS: Record<string, string> = {
-  CRITICAL: 'bg-red-500/20 text-red-400',
-  HIGH: 'bg-orange-500/20 text-orange-400',
-  MEDIUM: 'bg-yellow-500/20 text-yellow-400',
-  LOW: 'bg-blue-500/20 text-blue-400',
-  UNKNOWN: 'bg-gray-500/20 text-gray-400',
-}
-
-export const SEVERITY_BAR_COLORS: Record<string, string> = {
-  CRITICAL: 'bg-red-500',
-  HIGH: 'bg-orange-500',
-  MEDIUM: 'bg-yellow-500',
-  LOW: 'bg-blue-500',
-  UNKNOWN: 'bg-gray-500',
-}
-
-export const SEVERITY_TEXT_COLORS: Record<string, string> = {
-  CRITICAL: 'text-red-400',
-  HIGH: 'text-orange-400',
-  MEDIUM: 'text-yellow-400',
-  LOW: 'text-blue-400',
-  UNKNOWN: 'text-gray-400',
-}
+// Re-export from centralized badge-colors under the legacy names used by Trivy renderers
+export const SEVERITY_BADGE_COLORS = VULN_SEVERITY_BADGE
+export const SEVERITY_BAR_COLORS = VULN_SEVERITY_BAR
+export const SEVERITY_TEXT_COLORS = VULN_SEVERITY_TEXT
 
 export const SEVERITY_ORDER: Record<string, number> = {
   CRITICAL: 0,

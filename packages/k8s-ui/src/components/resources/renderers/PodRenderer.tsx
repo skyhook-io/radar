@@ -3,6 +3,7 @@ import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, Circle
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { formatResources, formatDuration } from '../resource-utils'
+import { getResourceStatusColor } from '../../../utils/badge-colors'
 import type { ResolvedEnvFrom } from '../../../types'
 import { Tooltip } from '../../ui/Tooltip'
 import { MetricsChart } from '../../ui/MetricsChart'
@@ -432,23 +433,20 @@ export function PodRenderer({
 
               // Status label and color
               let statusLabel: string
-              let statusColor: string
               if (isCompleted) {
                 statusLabel = 'Completed'
-                statusColor = 'bg-green-500/20 text-green-400'
               } else if (isFailed) {
                 statusLabel = `Exit ${exitCode}`
-                statusColor = 'bg-red-500/20 text-red-400'
               } else if (isInitRunning) {
                 statusLabel = 'Running'
-                statusColor = 'bg-blue-500/20 text-blue-400'
               } else if (isWaiting) {
                 statusLabel = state?.waiting?.reason || 'Waiting'
-                statusColor = 'bg-yellow-500/20 text-yellow-400'
               } else {
                 statusLabel = 'Pending'
-                statusColor = 'bg-gray-500/20 text-gray-400'
               }
+              const statusColor = getResourceStatusColor(
+                isCompleted ? 'succeeded' : isFailed ? 'failed' : isInitRunning ? 'running' : isWaiting ? 'waiting' : 'pending'
+              )
 
               // Build command string
               const command = container.command || container.args

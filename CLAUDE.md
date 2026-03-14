@@ -431,6 +431,7 @@ Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 - `web/src/components/resources/ResourcesView.tsx` is a thin wrapper that instantiates hooks and passes data to the package's `ResourcesView`
 - Linked via npm workspaces; Vite aliases `@skyhook-io/k8s-ui` to `../packages/k8s-ui/src` (source-level, no build step)
 - Key exports: `ResourcesView`, `ResourceRendererDispatch`, `ResourceActionsBar`, `EditableYamlView`, all renderers, resource-utils, `categorizeResources`, `getKindLabel`, `getKindPlural`
+- **Badge/status colors**: `packages/k8s-ui/src/utils/badge-colors.ts` is the single source of truth for all badge and status colors. Use `SEVERITY_BADGE`, `SEVERITY_BADGE_BORDERED`, `SEVERITY_TEXT`, `KIND_BADGE_COLORS`, `HEALTH_BADGE_COLORS`, etc. instead of ad-hoc Tailwind color classes. Covers: severity levels, K8s resource kinds, health states, event types, Helm statuses, operations.
 
 ### Resource Renderers
 - **Adding a new CRD integration? You MUST read [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md) first** — it has the full step-by-step checklist with all files, patterns, and collision gotchas. Do not skip this.
