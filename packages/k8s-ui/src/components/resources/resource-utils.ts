@@ -202,6 +202,10 @@ export interface ContainerSquareState {
   status: 'ready' | 'running' | 'waiting' | 'completed' | 'terminated' | 'unknown'
   restarts: number
   reason?: string
+  message?: string
+  exitCode?: number
+  startedAt?: string
+  finishedAt?: string
   isInit?: boolean
 }
 
@@ -223,11 +227,16 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
     } else if (stateKey === 'terminated') {
       status = 'terminated'
     }
+    const stateDetail = cs.state?.[stateKey]
     result.push({
       name: cs.name,
       status,
       restarts: cs.restartCount || 0,
-      reason: cs.state?.[stateKey]?.reason,
+      reason: stateDetail?.reason,
+      message: stateDetail?.message,
+      exitCode: stateDetail?.exitCode,
+      startedAt: stateDetail?.startedAt,
+      finishedAt: stateDetail?.finishedAt,
       isInit: true,
     })
   }
@@ -247,11 +256,16 @@ export function getContainerSquareStates(pod: any): ContainerSquareState[] {
       } else if (stateKey === 'waiting') {
         status = 'waiting'
       }
+      const stateDetail = cs.state?.[stateKey]
       result.push({
         name: cs.name,
         status,
         restarts: cs.restartCount || 0,
-        reason: cs.state?.[stateKey]?.reason,
+        reason: stateDetail?.reason,
+        message: stateDetail?.message,
+        exitCode: stateDetail?.exitCode,
+        startedAt: stateDetail?.startedAt,
+        finishedAt: stateDetail?.finishedAt,
       })
     }
   } else {

@@ -4315,11 +4315,22 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
               sq.status === 'terminated' ? 'bg-red-500' :
               'bg-theme-text-tertiary/30 border border-dashed border-theme-text-tertiary'
             const ringClass = sq.restarts > 0 ? 'ring-2 ring-orange-400' : ''
-            const label = `${sq.isInit ? '(init) ' : ''}${sq.name}: ${sq.reason || sq.status}${sq.restarts > 0 ? ` (${sq.restarts} restarts)` : ''}`
+            const tooltipContent = (
+              <div className="whitespace-normal">
+                <div className="font-medium">{sq.isInit ? '(init) ' : ''}{sq.name} — {sq.reason || sq.status}</div>
+                {sq.message && <div className="text-theme-text-secondary mt-0.5">{sq.message}</div>}
+                {sq.exitCode !== undefined && sq.status !== 'ready' && sq.status !== 'running' && (
+                  <div className="text-theme-text-secondary mt-0.5">Exit code: {sq.exitCode}</div>
+                )}
+                {sq.restarts > 0 && <div className="text-orange-400 mt-0.5">{sq.restarts} restart{sq.restarts !== 1 ? 's' : ''}</div>}
+                {sq.startedAt && <div className="text-theme-text-tertiary mt-0.5">Started: {new Date(sq.startedAt).toLocaleString()}</div>}
+                {sq.finishedAt && <div className="text-theme-text-tertiary">Finished: {new Date(sq.finishedAt).toLocaleString()}</div>}
+              </div>
+            )
             return (
               <React.Fragment key={i}>
                 {showSeparator && <div className="w-px h-3 bg-theme-text-tertiary/40 mx-0.5" />}
-                <Tooltip content={label}>
+                <Tooltip content={tooltipContent} className="whitespace-normal max-w-xs">
                   <div className={clsx('w-2.5 h-2.5 rounded-sm', bgClass, ringClass)} />
                 </Tooltip>
               </React.Fragment>
