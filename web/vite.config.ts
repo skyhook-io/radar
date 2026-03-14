@@ -24,6 +24,15 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    // Split large vendor chunk to avoid Vite build-import-analysis parse failures
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          vendor: ['react', 'react-dom', 'react-router-dom'],
+          ui: ['@xyflow/react', '@monaco-editor/react', '@xterm/xterm'],
+        },
+      },
+    },
   },
   // Handle client-side routing - serve index.html for all routes
   appType: 'spa',
