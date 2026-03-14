@@ -6,6 +6,19 @@ This file provides guidance to Claude Code (claude.ai/code) when working with th
 
 Radar is a modern Kubernetes visibility tool — local-first, no account required, no cloud dependency, fast. It provides topology visualization, event timeline, service traffic maps, resource browsing, and Helm management. Runs as a kubectl plugin (`kubectl-radar`) or standalone binary and opens a web UI in the browser. Open source, free forever. Built by Skyhook.
 
+## Reference Docs — MUST READ before making changes
+
+Not everything is in this file. The following files contain critical details that are **not duplicated here**. You MUST read them when working in the relevant area — do not guess or rely on memory.
+
+| When you are... | Read this file FIRST |
+|-----------------|---------------------|
+| Adding or modifying **HTTP endpoints** | `internal/server/server.go` — all routes are defined here |
+| Adding or modifying **CLI flags** | `cmd/explorer/main.go` — flag definitions and defaults |
+| Adding a **new CRD integration** (renderer, topology, discovery) | [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md) — full checklist with collision gotchas |
+| Working on **resource renderers** | `packages/k8s-ui/src/components/resources/renderers/` — all existing renderers live here |
+| Understanding **cluster connection behavior** | [docs/configuration.md](docs/configuration.md) — kubeconfig precedence, multi-context, in-cluster |
+| Working on **MCP tools or AI context** | [docs/mcp.md](docs/mcp.md) + `internal/mcp/tools.go` — tool definitions and design rationale |
+
 ## Architecture
 
 ```
@@ -249,246 +262,17 @@ make clean          # Remove build artifacts
 - **9280**: Backend API server (Go)
 - **9273**: Vite dev server (proxies /api to 9280)
 
-## CLI Flags
+## API Endpoints & CLI Flags
 
-```
---kubeconfig        Path to kubeconfig file (default: ~/.kube/config)
---kubeconfig-dir    Comma-separated directories containing kubeconfig files (mutually exclusive with --kubeconfig)
---namespace         Initial namespace filter (empty = all namespaces)
---port              Server port (default: 9280)
---no-browser        Don't auto-open browser
---dev               Development mode (serve frontend from web/dist instead of embedded)
---version           Show version and exit
---timeline-storage  Timeline storage backend: memory or sqlite (default: memory)
---timeline-db       Path to timeline SQLite database (default: ~/.radar/timeline.db)
---history-limit     Maximum number of events to retain in timeline (default: 10000)
---prometheus-url    Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)
---debug-events      Enable verbose event debugging (logs all event drops)
---fake-in-cluster   Simulate in-cluster mode for testing (shows kubectl copy buttons instead of port-forward)
---disable-helm-write Simulate restricted Helm permissions (disables install/upgrade/rollback/uninstall)
---disable-exec      Simulate restricted exec permissions (disables terminal, debug shell)
---no-mcp            Disable MCP (Model Context Protocol) server for AI tools
-```
-
-## API Endpoints
-
-### Core
-```
-GET  /api/health                              # Health check with resource count
-GET  /api/version-check                       # Check for newer radar versions
-GET  /api/dashboard                           # Dashboard summary (counts, health)
-GET  /api/dashboard/crds                      # CRD summary for dashboard
-GET  /api/dashboard/helm                      # Helm release status for dashboard
-GET  /api/cluster-info                        # Platform detection (GKE, EKS, AKS, etc.)
-GET  /api/capabilities                        # Cluster capability flags
-GET  /api/namespaces                          # List all namespaces
-GET  /api/api-resources                       # API resource discovery for CRDs
-GET  /api/connection                          # Connection status
-POST /api/connection/retry                    # Retry failed connection
-GET  /api/contexts                            # List kubeconfig contexts
-POST /api/contexts/{name}                     # Switch kubeconfig context
-GET  /api/sessions                            # List active sessions
-GET  /api/diagnostics                         # Diagnostic information
-GET  /api/resource-counts                     # Resource count summary by kind
-GET  /api/settings                            # Get application settings
-PUT  /api/settings                            # Update application settings
-GET  /api/config                              # Get running configuration
-PUT  /api/config                              # Update configuration
-GET  /api/github/starred                      # Get GitHub star status
-POST /api/github/star                         # Star on GitHub
-POST /api/github/dismiss                      # Dismiss GitHub star prompt
-```
-
-### Topology
-```
-GET  /api/topology                            # Full topology graph
-GET  /api/topology?namespace=X                # Namespace-filtered (single)
-GET  /api/topology?namespaces=X,Y             # Multi-namespace filtered
-GET  /api/topology?view=traffic|resources     # View mode selection
-```
-
-### Resources
-```
-GET    /api/resources/{kind}                  # List resources by kind
-GET    /api/resources/{kind}?namespace=X      # Namespace-filtered list (single)
-GET    /api/resources/{kind}?namespaces=X,Y   # Multi-namespace filtered list
-GET    /api/resources/{kind}/{ns}/{name}      # Single resource with relationships
-PUT    /api/resources/{kind}/{ns}/{name}      # Update resource from YAML
-DELETE /api/resources/{kind}/{ns}/{name}      # Delete resource
-```
-
-### Certificate Expiry
-```
-GET  /api/secrets/certificate-expiry          # TLS certificate expiry for all secrets
-```
-
-### Events & Changes
-```
-GET  /api/events                              # Recent K8s events
-GET  /api/events?namespace=X                  # Namespace-filtered events (single)
-GET  /api/events?namespaces=X,Y               # Multi-namespace filtered events
-GET  /api/events/stream                       # SSE stream for real-time events
-GET  /api/changes                             # Timeline of resource changes
-GET  /api/changes?namespaces=X,Y&kind=Z&limit=N # Filtered change history
-GET  /api/changes/{kind}/{ns}/{name}/children # Child resource changes
-```
-
-### Pod Operations
-```
-GET  /api/pods/{ns}/{name}/logs               # Fetch pod logs (non-streaming)
-GET  /api/pods/{ns}/{name}/logs/stream        # Stream pod logs via SSE
-GET  /api/pods/{ns}/{name}/exec               # WebSocket for pod terminal exec
-POST /api/pods/{ns}/{name}/debug              # Create ephemeral debug container
-GET  /api/pods/{ns}/{name}/files              # List files in pod container
-GET  /api/pods/{ns}/{name}/files/download     # Download file from pod container
-```
-
-### Node Operations
-```
-POST /api/nodes/{name}/debug                  # Create ephemeral debug pod on node
-DELETE /api/nodes/{name}/debug                # Cleanup node debug pod
-POST /api/nodes/{name}/cordon                 # Mark node as unschedulable
-POST /api/nodes/{name}/uncordon               # Mark node as schedulable
-POST /api/nodes/{name}/drain                  # Cordon + evict all non-DaemonSet pods
-```
-
-### Workload Operations
-```
-GET  /api/workloads/{kind}/{ns}/{name}/logs        # Aggregated logs across pods
-GET  /api/workloads/{kind}/{ns}/{name}/logs/stream # Stream aggregated workload logs
-GET  /api/workloads/{kind}/{ns}/{name}/pods        # List pods for a workload
-POST /api/workloads/{kind}/{ns}/{name}/restart     # Rolling restart workload
-POST /api/workloads/{kind}/{ns}/{name}/scale       # Scale workload replicas
-GET  /api/workloads/{kind}/{ns}/{name}/revisions   # List revision history (Deployments, StatefulSets, DaemonSets)
-POST /api/workloads/{kind}/{ns}/{name}/rollback    # Rollback to a specific revision
-```
-
-### CronJob Operations
-```
-POST /api/cronjobs/{ns}/{name}/trigger        # Trigger manual job from CronJob
-POST /api/cronjobs/{ns}/{name}/suspend        # Suspend CronJob schedule
-POST /api/cronjobs/{ns}/{name}/resume         # Resume CronJob schedule
-```
-
-### Metrics
-```
-GET  /api/metrics/pods/{ns}/{name}            # Current pod metrics
-GET  /api/metrics/pods/{ns}/{name}/history    # Pod metrics history
-GET  /api/metrics/nodes/{name}                # Current node metrics
-GET  /api/metrics/nodes/{name}/history        # Node metrics history
-GET  /api/metrics/top/pods                    # Top pods by resource usage
-GET  /api/metrics/top/nodes                   # Top nodes by resource usage
-```
-
-### Port Forwarding
-```
-GET    /api/portforwards                           # List active port forward sessions
-POST   /api/portforwards                           # Start a new port forward
-DELETE /api/portforwards/{id}                      # Stop a port forward
-GET    /api/portforwards/available/{type}/{ns}/{name} # Get available ports for pod/service
-```
-
-### Image Inspection
-```
-GET  /api/images/metadata                          # Image metadata (cached or lightweight)
-GET  /api/images/inspect                           # Full image filesystem tree
-GET  /api/images/file                              # Download individual file from image
-```
-
-### Helm Management
-```
-GET    /api/helm/releases                          # List all Helm releases
-POST   /api/helm/releases                          # Install a new Helm release
-POST   /api/helm/releases/install-stream           # Install with streaming progress
-GET    /api/helm/releases/{ns}/{name}              # Get release details
-GET    /api/helm/releases/{ns}/{name}/manifest     # Get rendered manifest
-GET    /api/helm/releases/{ns}/{name}/values       # Get release values
-GET    /api/helm/releases/{ns}/{name}/diff         # Diff between revisions
-GET    /api/helm/releases/{ns}/{name}/upgrade-info # Check upgrade availability
-GET    /api/helm/upgrade-check                     # Batch check for upgrades
-POST   /api/helm/releases/{ns}/{name}/rollback     # Rollback to previous revision
-POST   /api/helm/releases/{ns}/{name}/upgrade      # Upgrade to new version
-POST   /api/helm/releases/{ns}/{name}/upgrade-stream # Upgrade with streaming progress
-POST   /api/helm/releases/{ns}/{name}/rollback-stream # Rollback with streaming progress
-POST   /api/helm/releases/{ns}/{name}/values/preview # Preview values change
-PUT    /api/helm/releases/{ns}/{name}/values       # Apply values change
-DELETE /api/helm/releases/{ns}/{name}              # Uninstall release
-```
-
-### Helm Chart Browser
-```
-GET  /api/helm/repositories                        # List local Helm repositories
-POST /api/helm/repositories/{name}/update          # Update repository index
-GET  /api/helm/charts                              # Search charts across repositories
-GET  /api/helm/charts/{repo}/{chart}               # Get chart details
-GET  /api/helm/charts/{repo}/{chart}/{version}     # Get specific chart version
-GET  /api/helm/artifacthub/search                  # Search ArtifactHub
-GET  /api/helm/artifacthub/charts/{repo}/{chart}   # Get ArtifactHub chart details
-GET  /api/helm/artifacthub/charts/{repo}/{chart}/{version} # Get ArtifactHub chart version
-```
-
-### GitOps — ArgoCD
-```
-POST /api/argo/applications/{ns}/{name}/sync      # Trigger ArgoCD sync
-POST /api/argo/applications/{ns}/{name}/refresh   # Refresh application state
-POST /api/argo/applications/{ns}/{name}/terminate # Terminate running sync
-POST /api/argo/applications/{ns}/{name}/suspend   # Suspend auto-sync
-POST /api/argo/applications/{ns}/{name}/resume    # Resume auto-sync
-```
-
-### GitOps — FluxCD
-```
-POST /api/flux/{kind}/{ns}/{name}/reconcile       # Trigger reconciliation
-POST /api/flux/{kind}/{ns}/{name}/sync-with-source # Reconcile with source update
-POST /api/flux/{kind}/{ns}/{name}/suspend         # Suspend reconciliation
-POST /api/flux/{kind}/{ns}/{name}/resume          # Resume reconciliation
-```
-
-### Cost (OpenCost)
-```
-GET  /api/opencost/summary                    # Namespace-level cost summary (requires OpenCost + Prometheus)
-GET  /api/opencost/workloads                  # Workload-level cost breakdown for a namespace
-GET  /api/opencost/trend                      # Cost trend data over time
-GET  /api/opencost/nodes                      # Per-node cost breakdown
-```
-
-### Traffic (Service Mesh)
-Three traffic sources: **Hubble** (Cilium eBPF via gRPC), **Caretta** (eBPF via Prometheus), **Istio** (`istio_requests_total`/`istio_tcp_connections_opened_total` via Prometheus). Auto-detected at startup; user can switch active source via the UI dropdown when multiple are available.
-```
-GET  /api/traffic/sources                     # Available traffic data sources
-GET  /api/traffic/source                      # Active traffic source
-POST /api/traffic/source                      # Set active traffic source
-GET  /api/traffic/flows                       # Current traffic flows
-GET  /api/traffic/flows/stream                # SSE stream for traffic flows
-POST /api/traffic/connect                     # Connect to traffic source
-GET  /api/traffic/connection                  # Traffic connection status
-```
-
-### Desktop Update (only active when updater is set)
-```
-POST /api/desktop/update                      # Start desktop app update download
-GET  /api/desktop/update/status               # Check update download progress
-POST /api/desktop/update/apply                # Apply downloaded update
-POST /api/desktop/open-url                    # Open URL in system browser (desktop only)
-```
-
-### Debug
-```
-GET  /api/debug/events                        # Event pipeline metrics and recent drops
-GET  /api/debug/events/diagnose               # Diagnose missing events for a resource
-GET  /api/debug/informers                     # List active typed and dynamic informers
-```
-
-### AI Resource Preview
-```
-GET  /api/ai/resources/{kind}                 # Minified resource list (verbosity: summary|detail|compact)
-GET  /api/ai/resources/{kind}/{ns}/{name}     # Minified single resource (verbosity: summary|detail|compact)
-```
-
-### MCP (Model Context Protocol)
-```
-/mcp                                          # MCP Streamable HTTP endpoint (POST for JSON-RPC, GET for SSE)
-```
+**You MUST read `internal/server/server.go` before adding or modifying any endpoint** — it is the single source of truth for all routes. CLI flags live in `cmd/explorer/main.go`. Key URL patterns:
+- REST resources: `/api/resources/{kind}`, `/api/resources/{kind}/{ns}/{name}`
+- SSE streaming: `/api/events/stream`, `/api/traffic/flows/stream`
+- WebSocket: `/api/pods/{ns}/{name}/exec`
+- MCP: `/mcp` (Streamable HTTP — POST for JSON-RPC, GET for SSE)
+- Helm: `/api/helm/releases/...`
+- Workloads: `/api/workloads/{kind}/{ns}/{name}/...` (logs, restart, scale, rollback)
+- GitOps: `/api/argo/applications/...`, `/api/flux/{kind}/...`
+- Nodes: `/api/nodes/{name}/...` (cordon, uncordon, drain, debug)
 
 ## Key Patterns
 
@@ -649,7 +433,7 @@ Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 - Key exports: `ResourcesView`, `ResourceRendererDispatch`, `ResourceActionsBar`, `EditableYamlView`, all renderers, resource-utils, `categorizeResources`, `getKindLabel`, `getKindPlural`
 
 ### Resource Renderers
-- **Adding a new CRD integration? See [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md)** for the full step-by-step checklist with all files, patterns, and collision gotchas.
+- **Adding a new CRD integration? You MUST read [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md) first** — it has the full step-by-step checklist with all files, patterns, and collision gotchas. Do not skip this.
 - Renderers, resource-utils, and table column config live in `packages/k8s-ui/src/components/resources/`
 - Sections with data should use `defaultExpanded` (true) — only collapse empty or low-priority sections
 - Register in: `packages/k8s-ui/src/components/resources/renderers/index.ts` (export), `packages/k8s-ui/src/components/shared/ResourceRendererDispatch.tsx` (KNOWN_KINDS + render line + `getResourceStatus()`)
@@ -657,30 +441,7 @@ Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 - Long text in alerts/banners needs `break-all` class for CSS word breaking
 - **Kind collision rule:** When a CRD kind collides with a core K8s kind (e.g., Knative Service vs core Service), you must guard THREE places in `ResourceRendererDispatch.tsx`: (1) the core renderer line, (2) `getResourceStatus()`, (3) action buttons (Port Forward, etc.). Use `data?.apiVersion?.includes('group.name')` checks. Missing any one causes dual rendering bugs.
 - Core K8s renderers: Pod, Service, ConfigMap, Secret, Ingress, PersistentVolume, ReplicaSet, StorageClass, NetworkPolicy, Event, Workload (Deployment/StatefulSet/DaemonSet), Role, ClusterRole, RoleBinding, ClusterRoleBinding, ServiceAccount, IngressClass, PriorityClass, RuntimeClass, Lease, MutatingWebhookConfiguration, ValidatingWebhookConfiguration
-- CRD integrations (88 renderer components total):
-
-  | Integration | Rendered Kinds |
-  |-------------|---------------|
-  | **Argo Rollouts** | Rollout |
-  | **Argo Workflows** | Workflow, WorkflowTemplate |
-  | **ArgoCD** | Application |
-  | **cert-manager** | Certificate, CertificateRequest, Issuer, ClusterIssuer, Order, Challenge |
-  | **CloudNativePG** | Cluster, Backup, ScheduledBackup, Pooler |
-  | **External Secrets** | ExternalSecret, ClusterExternalSecret, SecretStore |
-  | **FluxCD** | HelmRelease, Kustomization, GitRepository, HelmRepository, OCIRepository, Alert |
-  | **Gateway API** | Gateway, HTTPRoute, GRPCRoute |
-  | **Istio** | VirtualService, DestinationRule, Gateway, ServiceEntry, PeerAuthentication, AuthorizationPolicy |
-  | **Karpenter** | NodePool, NodeClaim, EC2NodeClass |
-  | **KEDA** | ScaledObject, ScaledJob, TriggerAuthentication |
-  | **Knative Serving** | Service, Configuration, Revision, Route, DomainMapping, Ingress, Certificate, ServerlessService |
-  | **Knative Eventing** | Broker, Trigger, Subscription, Channel, InMemoryChannel, Sequence, Parallel, PingSource, ContainerSource, SinkBinding, EventType |
-  | **Kyverno** | PolicyReport |
-  | **Prometheus Operator** | ServiceMonitor, PodMonitor, PrometheusRule |
-  | **Sealed Secrets** | SealedSecret |
-  | **Traefik** | IngressRoute |
-  | **Trivy** | VulnerabilityReport, ConfigAuditReport, ExposedSecretReport, SbomReport, ClusterComplianceReport |
-  | **Velero** | Backup, Schedule, Restore, BackupStorageLocation, VolumeSnapshotLocation |
-  | **VPA** | VerticalPodAutoscaler |
+- 88 CRD renderer components across 20+ integrations — see `packages/k8s-ui/src/components/resources/renderers/` for the full list, and **[docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md)** for the step-by-step checklist when adding new ones
 
 ## Tech Stack
 
