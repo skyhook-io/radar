@@ -1,7 +1,14 @@
 import { useState, useMemo } from 'react'
 import { ChevronRight, ChevronDown } from 'lucide-react'
 import type { LogLevel } from './useLogBuffer'
-import { highlightJson, unescapeJsonStrings, parseLogfmt } from '../../utils/log-format'
+import {
+  getLevelColor,
+  highlightJson,
+  unescapeJsonStrings,
+  parseLogfmt,
+  SYNTAX_COLOR_KEY,
+  SYNTAX_COLOR_STRING,
+} from '../../utils/log-format'
 
 interface StructuredLogLineProps {
   content: string
@@ -12,6 +19,7 @@ interface StructuredLogLineProps {
 }
 
 export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultExpanded }: StructuredLogLineProps) {
+  // null = user hasn't toggled this line; defers to defaultExpanded (global toggle)
   const [localExpanded, setLocalExpanded] = useState<boolean | null>(null)
   const expanded = localExpanded ?? defaultExpanded ?? false
 
@@ -27,9 +35,8 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
   }, [content, isLogfmt])
 
   if (!parsed) {
-    const levelColor = getLevelTextColor(level)
     return (
-      <span className={`${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'} ${levelColor}`}>
+      <span className={`${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'} ${getLevelColor(level)}`}>
         {content}
       </span>
     )
@@ -59,7 +66,7 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
             <ExpandedLogfmt obj={parsed} />
           ) : (
             <span dangerouslySetInnerHTML={{
-              __html: highlightJson(unescapeJsonStrings(formatJsonExpanded(parsed)))
+              __html: highlightJson(unescapeJsonStrings(JSON.stringify(parsed, null, 2)))
             }} />
           )}
         </span>
@@ -71,7 +78,10 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
 function SummaryLine({ obj }: { obj: Record<string, unknown> }) {
   const lvl = obj.level ?? obj.severity ?? obj.lvl ?? nestedField(obj, 'log', 'level')
   const msg = obj.msg ?? obj.message
-  const err = obj.error ?? obj.err ?? nestedField(obj, 'error', 'message')
+  const rawErr = obj.error ?? obj.err
+  const err = typeof rawErr === 'string'
+    ? rawErr
+    : nestedField(obj, 'error', 'message') ?? nestedField(obj, 'err', 'message')
   const caller = obj.caller ?? obj.source
 
   return (
@@ -99,9 +109,9 @@ function ExpandedLogfmt({ obj }: { obj: Record<string, unknown> }) {
     <>
       {Object.entries(obj).map(([key, val]) => (
         <div key={key}>
-          <span style={{ color: '#7cacf8' }}>{key}</span>
+          <span style={{ color: SYNTAX_COLOR_KEY }}>{key}</span>
           <span className="text-theme-text-tertiary">=</span>
-          <span style={{ color: '#73c991' }}>{String(val)}</span>
+          <span style={{ color: SYNTAX_COLOR_STRING }}>{String(val)}</span>
         </div>
       ))}
     </>
@@ -127,30 +137,18 @@ function formatLevel(lvl: unknown): string {
 }
 
 function getLevelBadgeColor(lvl: unknown): string {
-  const s = typeof lvl === 'number'
-    ? (lvl >= 50 ? 'error' : lvl >= 40 ? 'warn' : lvl >= 30 ? 'info' : 'debug')
-    : String(lvl).toLowerCase()
-  if (/^(error|err|fatal|panic|critical|crit)$/.test(s)) return 'bg-red-500/20 text-red-400'
-  if (/^(warn|warning)$/.test(s)) return 'bg-yellow-500/20 text-yellow-400'
-  if (/^(info|information|notice)$/.test(s)) return 'bg-blue-500/20 text-blue-400'
-  if (/^(debug|dbg|trace|verbose)$/.test(s)) return 'bg-gray-500/20 text-gray-400'
+  let normalized: string
+  if (typeof lvl === 'number') {
+    if (lvl >= 50) normalized = 'error'
+    else if (lvl >= 40) normalized = 'warn'
+    else if (lvl >= 30) normalized = 'info'
+    else normalized = 'debug'
+  } else {
+    normalized = String(lvl).toLowerCase()
+  }
+  if (/^(error|err|fatal|panic|critical|crit)$/.test(normalized)) return 'bg-red-500/20 text-red-400'
+  if (/^(warn|warning)$/.test(normalized)) return 'bg-yellow-500/20 text-yellow-400'
+  if (/^(info|information|notice)$/.test(normalized)) return 'bg-blue-500/20 text-blue-400'
+  if (/^(debug|dbg|trace|verbose)$/.test(normalized)) return 'bg-gray-500/20 text-gray-400'
   return 'bg-gray-500/20 text-theme-text-secondary'
-}
-
-function getLevelTextColor(level: LogLevel): string {
-  switch (level) {
-    case 'error': return 'text-red-400'
-    case 'warn': return 'text-yellow-400'
-    case 'debug': return 'text-theme-text-secondary'
-    case 'info': return 'text-theme-text-primary'
-    default: return 'text-theme-text-primary'
-  }
-}
-
-function formatJsonExpanded(obj: Record<string, unknown>): string {
-  try {
-    return JSON.stringify(obj, null, 2)
-  } catch {
-    return String(obj)
-  }
 }

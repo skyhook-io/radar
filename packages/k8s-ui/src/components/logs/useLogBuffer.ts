@@ -19,7 +19,7 @@ const MAX_BUFFER_SIZE = 10_000
 
 /**
  * Detect log level from content using word-boundary matching.
- * For JSON logs, prefer the `level` or `severity` field.
+ * For JSON logs, prefer the `level`, `severity`, or `lvl` field.
  */
 export function detectLogLevel(content: string): LogLevel {
   // Fast path for JSON: check level/severity field

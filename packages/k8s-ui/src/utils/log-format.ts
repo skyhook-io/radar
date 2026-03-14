@@ -280,30 +280,36 @@ export function parseLogRange(logRange: string): { tailLines?: number; sinceSeco
   return { tailLines: Number(logRange) }
 }
 
+// Syntax highlight colors shared between JSON and logfmt rendering
+export const SYNTAX_COLOR_KEY = '#7cacf8'
+export const SYNTAX_COLOR_STRING = '#73c991'
+const SYNTAX_COLOR_NUMBER = '#e5c07b'
+const SYNTAX_COLOR_BOOLEAN = '#c678dd'
+const SYNTAX_COLOR_NULL = '#808080'
+
 /**
  * Syntax-highlight a pretty-printed JSON string for HTML display.
  * Wraps keys, string values, numbers, booleans, and null in colored spans.
- * Input must already be HTML-escaped or will be escaped here.
+ * Applies HTML escaping internally — do not pre-escape the input.
  */
 export function highlightJson(json: string): string {
   const escaped = escapeHtml(json)
-  // Process in a single pass: match JSON tokens and wrap with color spans.
   // Order matters — keys (string followed by colon) must match before standalone strings.
   return escaped.replace(
-    /(&quot;(?:\\.|[^&])*?&quot;)\s*:/g,
-    '<span style="color:#7cacf8">$1</span>:'
+    /("(?:\\.|[^"\\])*")\s*:/g,
+    `<span style="color:${SYNTAX_COLOR_KEY}">$1</span>:`
   ).replace(
-    /:\s*(&quot;(?:\\.|[^&])*?&quot;)/g,
-    ': <span style="color:#73c991">$1</span>'
+    /:\s*("(?:\\.|[^"\\])*")/g,
+    `: <span style="color:${SYNTAX_COLOR_STRING}">$1</span>`
   ).replace(
     /:\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)\b/g,
-    ': <span style="color:#e5c07b">$1</span>'
+    `: <span style="color:${SYNTAX_COLOR_NUMBER}">$1</span>`
   ).replace(
     /:\s*(true|false)\b/g,
-    ': <span style="color:#c678dd">$1</span>'
+    `: <span style="color:${SYNTAX_COLOR_BOOLEAN}">$1</span>`
   ).replace(
     /:\s*(null)\b/g,
-    ': <span style="color:#808080">$1</span>'
+    `: <span style="color:${SYNTAX_COLOR_NULL}">$1</span>`
   )
 }
 
