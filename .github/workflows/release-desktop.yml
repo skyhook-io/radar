@@ -59,9 +59,13 @@ jobs:
       - name: Ad-hoc codesign
         run: |
           APP="build/bin/radar-desktop.app"
-          # Sign all nested binaries and frameworks first, then the bundle
+          # Ad-hoc sign the .app bundle (no Apple Developer identity).
+          # --deep recursively signs nested binaries/frameworks in one pass.
+          # NOTE: --deep is deprecated since macOS 13; acceptable for ad-hoc
+          # but should be replaced with inside-out signing if we adopt a
+          # Developer ID certificate.
           codesign --force --deep --sign - "$APP"
-          # Verify the signature
+          # Fail early if the signature is malformed
           codesign --verify --verbose "$APP"
 
       - name: Create archive
