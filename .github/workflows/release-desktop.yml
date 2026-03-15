@@ -56,6 +56,14 @@ jobs:
       - name: Build macOS .app (universal)
         run: cd cmd/desktop && wails build -platform darwin/universal -ldflags "-X main.version=${GITHUB_REF_NAME#v}"
 
+      - name: Ad-hoc codesign
+        run: |
+          APP="build/bin/radar-desktop.app"
+          # Sign all nested binaries and frameworks first, then the bundle
+          codesign --force --deep --sign - "$APP"
+          # Verify the signature
+          codesign --verify --verbose "$APP"
+
       - name: Create archive
         run: |
           VERSION="${GITHUB_REF_NAME}"
@@ -386,9 +394,8 @@ jobs:
             app "Radar.app"
 
             caveats <<~EOS
-              Radar Desktop is not yet code-signed. On first launch:
+              Radar Desktop is not yet notarized with Apple. On first launch:
                 Right-click Radar.app → Open → click "Open"
-              Or install with: brew install --cask --no-quarantine radar-desktop
             EOS
           end
           CASK
