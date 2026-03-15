@@ -18,7 +18,7 @@ import {
 } from 'lucide-react'
 import { createTwoFilesPatch } from 'diff'
 import { clsx } from 'clsx'
-import { ForceDeleteConfirmDialog } from '../ui/ForceDeleteConfirmDialog'
+import { ForceDeleteConfirmDialog, type CascadeDependent } from '../ui/ForceDeleteConfirmDialog'
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
@@ -53,6 +53,8 @@ interface ResourceActionsBarProps {
   // Delete
   onDelete?: (params: { kind: string; namespace: string; name: string; force: boolean }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isDeleting?: boolean
+  cascadeDependents?: CascadeDependent[]
+  cascadeLoading?: boolean
 
   // Workload restart
   onRestart?: (params: { kind: string; namespace: string; name: string }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
@@ -111,7 +113,7 @@ export function ResourceActionsBar({
   canExec, canViewLogs, canPortForward,
   onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
   renderPortForward,
-  onDelete, isDeleting,
+  onDelete, isDeleting, cascadeDependents, cascadeLoading,
   onRestart, isRestarting,
   revisions: revisionsList, revisionsLoading, revisionsError, onRollback, isRollingBack,
   onTriggerCronJob, isTriggeringCronJob,
@@ -498,6 +500,8 @@ export function ResourceActionsBar({
         resourceKind={formatKindName(resource.kind)}
         namespaceName={resource.namespace}
         isLoading={isDeleting ?? false}
+        cascadeDependents={cascadeDependents}
+        cascadeLoading={cascadeLoading}
       />
 
       {/* Node cordon confirmation */}

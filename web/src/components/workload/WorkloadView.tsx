@@ -16,6 +16,7 @@ import {
   useFluxReconcile, useFluxSyncWithSource, useFluxSuspend, useFluxResume,
   useArgoSync, useArgoRefresh, useArgoSuspend, useArgoResume,
   useCordonNode, useUncordonNode, useDrainNode,
+  useCascadeDeletePreview,
   fetchJSON,
 } from '../../api/client'
 import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
@@ -134,6 +135,8 @@ function useActionsBarProps(kind: string, namespace: string, name: string) {
   const argoSuspendMutation = useArgoSuspend()
   const argoResumeMutation = useArgoResume()
 
+  const { data: cascadePreview, isLoading: cascadeLoading } = useCascadeDeletePreview(kind, namespace, name, true)
+
   const canNodeWrite = useCanNodeWrite()
   const cordonMutation = useCordonNode()
   const uncordonMutation = useUncordonNode()
@@ -153,6 +156,8 @@ function useActionsBarProps(kind: string, namespace: string, name: string) {
     ),
     onDelete: (params: any, callbacks?: any) => deleteMutation.mutate(params, { onSuccess: callbacks?.onSuccess }),
     isDeleting: deleteMutation.isPending,
+    cascadeDependents: cascadePreview?.dependents,
+    cascadeLoading,
     onRestart: (params: any) => restartWorkloadMutation.mutate(params),
     isRestarting: restartWorkloadMutation.isPending,
     revisions: revisionsList,

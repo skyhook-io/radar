@@ -151,6 +151,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/resources/{kind}", s.handleListResources)
 			r.Get("/resources/{kind}/{namespace}/{name}", s.handleGetResource)
 			r.Put("/resources/{kind}/{namespace}/{name}", s.handleUpdateResource)
+			r.Get("/resources/{kind}/{namespace}/{name}/cascade-preview", s.handleCascadeDeletePreview)
 			r.Delete("/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)
 			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
 			r.Get("/events", s.handleEvents)
@@ -1592,6 +1593,27 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// handleCascadeDeletePreview returns a preview of resources that would be garbage-collected
+// if the specified resource is deleted (via Kubernetes owner reference cascade).
+func (s *Server) handleCascadeDeletePreview(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+
+	kind := chi.URLParam(r, "kind")
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+	if namespace == "_" {
+		namespace = ""
+	}
+
+	cachedTopo := s.broadcaster.GetCachedTopology()
+	dp := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
+	preview := topology.GetCascadeDeletePreview(kind, namespace, name, cachedTopo, dp)
+
+	s.writeJSON(w, preview)
 }
 
 // handleTriggerCronJob creates a Job from a CronJob

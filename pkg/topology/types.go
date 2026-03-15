@@ -256,6 +256,13 @@ type SecretCertificateInfo struct {
 	Certificates []CertificateInfo `json:"certificates"`
 }
 
+// CascadeDeletePreview represents all resources that will be garbage-collected
+// when a parent resource is deleted via Kubernetes owner reference cascade.
+type CascadeDeletePreview struct {
+	Root       ResourceRef   `json:"root"`
+	Dependents []ResourceRef `json:"dependents"`
+}
+
 // ResourceWithRelationships wraps a K8s resource with computed relationships
 type ResourceWithRelationships struct {
 	Resource        any                    `json:"resource"`

@@ -1106,6 +1106,21 @@ export function useUpdateResource() {
   })
 }
 
+// Cascade delete preview — shows resources that will be garbage-collected
+export interface CascadeDeletePreview {
+  root: { kind: string; namespace: string; name: string; group?: string }
+  dependents: { kind: string; namespace: string; name: string; group?: string }[]
+}
+
+export function useCascadeDeletePreview(kind: string, namespace: string, name: string, enabled: boolean) {
+  return useQuery<CascadeDeletePreview>({
+    queryKey: ['cascade-preview', kind, namespace, name],
+    queryFn: () => fetchJSON<CascadeDeletePreview>(`/resources/${kind}/${namespace}/${name}/cascade-preview`),
+    enabled,
+    staleTime: 30_000,
+  })
+}
+
 // Delete a resource
 export function useDeleteResource() {
   const queryClient = useQueryClient()
