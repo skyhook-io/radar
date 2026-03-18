@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -134,13 +136,17 @@ func fetchLatestRelease(ctx context.Context) *UpdateInfo {
 	if os.Getenv("KUBERNETES_SERVICE_HOST") != "" {
 		mode = "in-cluster"
 	}
-	proxyURL := fmt.Sprintf("%s?%s", releasesURL, url.Values{
+	params := url.Values{
 		"v":      {Current},
 		"os":     {runtime.GOOS},
 		"arch":   {runtime.GOARCH},
 		"method": {string(method)},
 		"mode":   {mode},
-	}.Encode())
+	}
+	if t := radarDirBirthtime(); t != 0 {
+		params.Set("t", strconv.FormatInt(t, 10))
+	}
+	proxyURL := fmt.Sprintf("%s?%s", releasesURL, params.Encode())
 
 	req, err := http.NewRequestWithContext(ctx, "GET", proxyURL, nil)
 	if err != nil {
@@ -218,6 +224,16 @@ func truncateNotes(s string, maxLen int) string {
 		return s
 	}
 	return s[:maxLen] + "..."
+}
+
+// radarDirBirthtime returns the creation timestamp of ~/.radar/ as Unix epoch
+// seconds, or 0 if unavailable.
+func radarDirBirthtime() int64 {
+	homeDir, err := os.UserHomeDir()
+	if err != nil {
+		return 0
+	}
+	return dirBirthtime(filepath.Join(homeDir, ".radar"))
 }
 
 // detectInstallMethod determines how Radar was installed based on binary path

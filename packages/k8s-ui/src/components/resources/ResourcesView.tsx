@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback, useRef, forwardRef, useContext } from 'react'
+import React, { useState, useMemo, useEffect, useCallback, useRef, useContext } from 'react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import type { TopPodMetrics, TopNodeMetrics } from '../../types'
@@ -9,17 +9,13 @@ import {
   Globe,
   Shield,
   ChevronDown,
-  ChevronRight,
   ChevronUp,
-  Eye,
-  EyeOff,
   ArrowUpDown,
   Clock,
   ListFilter,
   X,
   Columns3,
   RotateCcw,
-  Pin,
   Trash2,
   Tag,
   Copy,
@@ -121,7 +117,6 @@ import {
   serializeColumnFilters,
 } from './resource-utils'
 import { Tooltip } from '../ui/Tooltip'
-import { getResourceIcon } from '../../utils/resource-icons'
 // CRD-specific cell components (extracted)
 import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell } from './renderers/flux-cells'
 import { ArgoApplicationCell, ArgoApplicationSetCell, ArgoAppProjectCell } from './renderers/argo-cells'
@@ -139,6 +134,8 @@ import { KnativeServiceCell, ConfigurationCell as KnativeConfigurationCell, Revi
 import { IngressRouteCell, MiddlewareCell, TraefikServiceCell, ServersTransportCell, TLSOptionCell } from './renderers/traefik-cells'
 import { HTTPProxyCell } from './renderers/contour-cells'
 import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
+import { ResourcesSidebar } from './ResourcesSidebar'
+import type { SelectedKindInfo } from './ResourcesSidebar'
 
 // Pod problem filter options (special multi-select, not a single column value)
 const POD_PROBLEMS = ['CrashLoopBackOff', 'ImagePullBackOff', 'OOMKilled', 'Unschedulable', 'Not Ready', 'High Restarts'] as const
@@ -157,53 +154,6 @@ const SKIP_FILTER_COLUMNS = new Set([
   'generators', 'applications', 'destinations', 'sources', 'budget', 'healthy', 'allowed',
   'secrets', 'subjects', 'role', 'entrypoint', 'templates',
 ])
-
-// Fallback resource types when API resources aren't loaded yet
-const CORE_RESOURCE_TYPES = [
-  { kind: 'pods', label: 'Pods' },
-  { kind: 'deployments', label: 'Deployments' },
-  { kind: 'daemonsets', label: 'DaemonSets' },
-  { kind: 'statefulsets', label: 'StatefulSets' },
-  { kind: 'replicasets', label: 'ReplicaSets' },
-  { kind: 'services', label: 'Services' },
-  { kind: 'ingresses', label: 'Ingresses' },
-  { kind: 'configmaps', label: 'ConfigMaps' },
-  { kind: 'secrets', label: 'Secrets' },
-  { kind: 'jobs', label: 'Jobs' },
-  { kind: 'cronjobs', label: 'CronJobs' },
-  { kind: 'hpas', label: 'HPAs' },
-] as const
-
-// Core kinds that are always shown even with 0 instances
-// These are the most commonly used Kubernetes resources (using Kind names, not plural names)
-const ALWAYS_SHOWN_KINDS = new Set([
-  'Pod',
-  'Deployment',
-  'DaemonSet',
-  'StatefulSet',
-  'ReplicaSet',
-  'Service',
-  'Ingress',
-  'ConfigMap',
-  'Secret',
-  'Job',
-  'CronJob',
-  'HorizontalPodAutoscaler',
-  'PersistentVolumeClaim',
-  'Node',
-  'Namespace',
-  'ServiceAccount',
-  'NetworkPolicy',
-  'Event',
-])
-
-
-// Selected resource type info (need both name for API and kind for display)
-interface SelectedKindInfo {
-  name: string      // Plural name for API calls (e.g., 'pods')
-  kind: string      // Kind for display (e.g., 'Pod')
-  group: string     // API group for disambiguation (e.g., '', 'metrics.k8s.io')
-}
 
 // Column definitions per resource kind
 interface Column {
@@ -1468,6 +1418,8 @@ interface ResourcesViewProps {
   onOpenWorkloadLogs?: (params: { namespace: string; workloadKind: string; workloadName: string }) => void
   // Callback when selected kind changes — used by parent to fetch data for the selected kind
   onSelectedKindChange?: (kind: { name: string; kind: string; group: string }) => void
+  /** When true, the sidebar is not rendered. Useful when a standalone ResourcesSidebar is used externally. */
+  hideSidebar?: boolean
 }
 
 // Default selected kind
@@ -1517,10 +1469,6 @@ function getInitialFiltersFromURL() {
 // Sort state type
 type SortDirection = 'asc' | 'desc' | null
 
-// Persisted across remounts so collapsed categories survive tab switches
-let persistedExpandedCategories: Set<string> | null = null
-let lastAutoExpandedKind: string | null = null
-
 export function ResourcesView({
   namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange,
   apiResources: apiResourcesProp,
@@ -1542,20 +1490,23 @@ export function ResourcesView({
   onOpenLogs,
   onOpenWorkloadLogs,
   onSelectedKindChange,
+  hideSidebar = false,
 }: ResourcesViewProps) {
   const location = useMemo(() => ({ search: locationSearch, pathname: locationPathname }), [locationSearch, locationPathname])
   const initialFilters = getInitialFiltersFromURL()
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath))
+  // Sync selectedKind from URL when locationPathname changes (e.g., browser back, external sidebar navigation)
+  useEffect(() => {
+    const kindFromURL = getInitialKindFromURL(basePath)
+    if (kindFromURL.name !== selectedKind.name || kindFromURL.group !== selectedKind.group) {
+      setSelectedKind(kindFromURL)
+    }
+  }, [locationPathname]) // eslint-disable-line react-hooks/exhaustive-deps
   // Notify parent of selected kind changes (including initial mount)
   useEffect(() => {
     onSelectedKindChange?.(selectedKind)
   }, [selectedKind.name, selectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
   const [searchTerm, setSearchTerm] = useState(initialFilters.search)
-  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(
-    () => persistedExpandedCategories ?? new Set(['Workloads', 'Networking', 'Configuration'])
-  )
-  const [showEmptyKinds, setShowEmptyKinds] = useState(false)
-  const [kindFilter, setKindFilter] = useState('')
   const [sortColumn, setSortColumn] = useState<string | null>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
@@ -1610,10 +1561,6 @@ export function ResourcesView({
     })
   }, [])
 
-  // Pinned kinds (favorites) — provided via props
-  const [favoritesExpanded, setFavoritesExpanded] = useState(() => pinned.length > 0)
-
-  useEffect(() => { persistedExpandedCategories = expandedCategories }, [expandedCategories])
   // Track if this is the initial mount to avoid re-syncing on first render
   const isInitialMount = useRef(true)
   const isSyncingFromURL = useRef(false)
@@ -1622,8 +1569,6 @@ export function ResourcesView({
   // Set by sidebar kind change to push a browser history entry (vs replace for filter changes)
   const shouldPushHistory = useRef(false)
 
-  // Ref to selected sidebar item for scrolling into view on deeplink
-  const selectedSidebarRef = useRef<HTMLButtonElement>(null)
   // Ref to search input for keyboard shortcut
   const searchInputRef = useRef<HTMLInputElement>(null)
   // Resize state
@@ -1997,7 +1942,7 @@ export function ResourcesView({
   const filteredResourceCountRef = useRef(0)
   const highlightedResourceRef = useRef<any>(null)
 
-  // Ref for flat kind list used by [ / ] sidebar navigation (populated after filteredCategories is computed)
+  // Ref for flat kind list used by [ / ] sidebar navigation (populated from categories)
   const flatKindListRef = useRef<SelectedKindInfo[]>([])
 
   // Sidebar kind navigation: [ = previous kind, ] = next kind
@@ -2155,8 +2100,9 @@ export function ResourcesView({
     } else {
       params.delete('showInactive')
     }
-    if (resourceNs && resourceName) {
-      params.set('resource', `${resourceNs}/${resourceName}`)
+    if (resourceName) {
+      // Namespaced: ns/name, cluster-scoped: just name
+      params.set('resource', resourceNs ? `${resourceNs}/${resourceName}` : resourceName)
     } else {
       params.delete('resource')
     }
@@ -2204,9 +2150,15 @@ export function ResourcesView({
     const params = new URLSearchParams(window.location.search)
     const resourceParam = params.get('resource')
     if (resourceParam && onResourceClick) {
-      const [ns, name] = resourceParam.split('/')
-      if (ns && name) {
+      const slashIndex = resourceParam.indexOf('/')
+      if (slashIndex > 0) {
+        // Namespaced: ?resource=namespace/name
+        const ns = resourceParam.slice(0, slashIndex)
+        const name = resourceParam.slice(slashIndex + 1)
         onResourceClick({ kind: selectedKind.name, namespace: ns, name, group: selectedKind.group })
+      } else {
+        // Cluster-scoped: ?resource=name (no namespace)
+        onResourceClick({ kind: selectedKind.name, namespace: '', name: resourceParam, group: selectedKind.group })
       }
     }
     // Signal that initial resource param has been processed — URL update effect can now run
@@ -2290,22 +2242,6 @@ export function ResourcesView({
     if (!apiResources) return null
     return categorizeResources(apiResources)
   }, [apiResources])
-
-  // Auto-expand the sidebar category containing the selected kind (e.g., when deep-linking to a CRD)
-  // Skip if the kind hasn't changed since last auto-expand (preserves user's collapsed state on remount)
-  useEffect(() => {
-    if (!categories) return
-    const kindKey = `${selectedKind.group}/${selectedKind.kind}`
-    if (lastAutoExpandedKind === kindKey) return
-    lastAutoExpandedKind = kindKey
-    for (const cat of categories) {
-      const match = cat.resources.some(r => r.kind === selectedKind.kind || r.name === selectedKind.name)
-      if (match && !expandedCategories.has(cat.name)) {
-        setExpandedCategories(prev => new Set([...prev, cat.name]))
-        break
-      }
-    }
-  }, [categories, selectedKind.kind, selectedKind.name])
 
   // Get resources to count - use kind as unique key since name can conflict (e.g., pods vs PodMetrics)
   const resourcesToCount = useMemo(() => {
@@ -2757,91 +2693,7 @@ export function ResourcesView({
     return () => clearTimeout(timer)
   }, [selectedResource, filteredResources])
 
-  // Scroll sidebar to show selected kind when deep linking (but not on manual category expand)
-  const lastScrolledKind = useRef<string | null>(null)
-  useEffect(() => {
-    const kindKey = `${selectedKind.group}/${selectedKind.name}`
-
-    if (lastScrolledKind.current === kindKey) return
-    lastScrolledKind.current = kindKey
-
-    requestAnimationFrame(() => {
-      if (selectedSidebarRef.current) {
-        selectedSidebarRef.current.scrollIntoView({
-          behavior: 'smooth',
-          block: 'center',
-        })
-      }
-    })
-  }, [selectedKind.name, selectedKind.group, expandedCategories])
-
-  // Calculate category totals, filter empty kinds/groups, and sort (empty categories at bottom)
-  const { sortedCategories, hiddenKindsCount, hiddenGroupsCount } = useMemo(() => {
-    if (!categories) return { sortedCategories: null, hiddenKindsCount: 0, hiddenGroupsCount: 0 }
-
-    let totalHiddenKinds = 0
-    let totalHiddenGroups = 0
-
-    const withTotals = categories.map(category => {
-      const total = category.resources.reduce(
-        (sum, resource) => sum + (counts?.[(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)] ?? 0),
-        0
-      )
-
-      // Filter resources: show if has instances, is core kind, or showEmptyKinds is true
-      const visibleResources = category.resources.filter(resource => {
-        const count = counts?.[(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)] ?? 0
-        const isCore = ALWAYS_SHOWN_KINDS.has(resource.kind)
-        const shouldShow = count > 0 || isCore || showEmptyKinds
-        if (!shouldShow) totalHiddenKinds++
-        return shouldShow
-      })
-
-      return { ...category, total, visibleResources }
-    })
-
-    // Sort: categories with resources first, empty ones at bottom
-    const sorted = withTotals.sort((a, b) => {
-      if (a.total === 0 && b.total > 0) return 1
-      if (a.total > 0 && b.total === 0) return -1
-      return 0
-    })
-
-    // Filter out empty groups unless they have visible resources (core kinds) or showEmptyKinds is true
-    const visibleCategories = sorted.filter(category => {
-      // Show if: has resources with instances, OR has visible resources (core kinds), OR showEmptyKinds
-      const shouldShow = category.total > 0 || category.visibleResources.length > 0 || showEmptyKinds
-      if (!shouldShow) totalHiddenGroups++
-      return shouldShow
-    })
-
-    return { sortedCategories: visibleCategories, hiddenKindsCount: totalHiddenKinds, hiddenGroupsCount: totalHiddenGroups }
-  }, [categories, counts, showEmptyKinds])
-
-  // Filter sidebar categories/kinds by the kind search term
-  const filteredCategories = useMemo(() => {
-    if (!sortedCategories || !kindFilter.trim()) return sortedCategories
-    const term = kindFilter.toLowerCase()
-    return sortedCategories
-      .map(category => {
-        const categoryMatches = category.name.toLowerCase().includes(term)
-        // If the group name matches, show all its resources
-        if (categoryMatches) return category
-        const matchingResources = category.visibleResources.filter((resource: any) =>
-          resource.kind.toLowerCase().includes(term) ||
-          resource.name.toLowerCase().includes(term)
-        )
-        if (matchingResources.length === 0) return null
-        return {
-          ...category,
-          visibleResources: matchingResources,
-        }
-      })
-      .filter(Boolean) as typeof sortedCategories
-  }, [sortedCategories, kindFilter])
-
   // Build flat kind list for [ / ] sidebar navigation
-  // Includes pinned kinds first, then all visible kinds from categories (deduped)
   useEffect(() => {
     const list: SelectedKindInfo[] = []
     const seen = new Set<string>()
@@ -2850,34 +2702,15 @@ export function ResourcesView({
       if (!seen.has(key)) { seen.add(key); list.push(k) }
     }
     for (const p of pinned) addKind({ name: p.name, kind: p.kind, group: p.group })
-    if (filteredCategories) {
-      for (const cat of filteredCategories) {
-        for (const r of cat.visibleResources) {
+    if (categories) {
+      for (const cat of categories) {
+        for (const r of cat.resources) {
           addKind({ name: r.name, kind: r.kind, group: r.group })
         }
       }
     }
     flatKindListRef.current = list
-  }, [pinned, filteredCategories])
-
-  // Auto-expand all categories when filtering
-  const isKindFiltering = kindFilter.trim().length > 0
-  const effectiveExpandedCategories = useMemo(() => {
-    if (!isKindFiltering || !filteredCategories) return expandedCategories
-    return new Set(filteredCategories.map(c => c.name))
-  }, [isKindFiltering, filteredCategories, expandedCategories])
-
-  const toggleCategory = (categoryName: string) => {
-    setExpandedCategories(prev => {
-      const next = new Set(prev)
-      if (next.has(categoryName)) {
-        next.delete(categoryName)
-      } else {
-        next.add(categoryName)
-      }
-      return next
-    })
-  }
+  }, [pinned, categories])
 
   // Filter columns by visibility
   const columns = useMemo(() => {
@@ -3070,194 +2903,22 @@ export function ResourcesView({
     <ResourcesViewDataContext.Provider value={resourcesViewDataContextValue}>
     <div className="flex h-full w-full">
       {/* Sidebar - Resource Types */}
-      <div className="w-56 2xl:w-72 bg-theme-surface border-r border-theme-border overflow-y-auto overflow-x-hidden shrink-0">
-        <div className="px-2 py-2 border-b border-theme-border">
-          <div className="relative">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-tertiary" />
-            <input
-              type="text"
-              placeholder="Filter resources..."
-              value={kindFilter}
-              onChange={(e) => setKindFilter(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Escape') { setKindFilter(''); (e.target as HTMLInputElement).blur() } }}
-              className="w-full pl-7 pr-7 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
-            />
-            {kindFilter && (
-              <button
-                onClick={() => setKindFilter('')}
-                className="absolute right-1.5 top-1/2 -translate-y-1/2 p-0.5 rounded hover:bg-theme-surface text-theme-text-tertiary hover:text-theme-text-secondary"
-              >
-                <X className="w-3 h-3" />
-              </button>
-            )}
-          </div>
-        </div>
-        <nav className="p-2">
-          {/* Favorites (pinned kinds) section — always visible */}
-          <div className="mb-2">
-            <button
-              onClick={() => setFavoritesExpanded((v) => !v)}
-              className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-medium text-theme-text-tertiary hover:text-theme-text-secondary uppercase tracking-wide"
-            >
-              {favoritesExpanded ? (
-                <ChevronDown className="w-3 h-3" />
-              ) : (
-                <ChevronRight className="w-3 h-3" />
-              )}
-              <span className="flex-1 text-left">Favorites</span>
-              {!favoritesExpanded && pinned.length > 0 && (
-                <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center', pinned.length < 1000 ? 'w-8' : 'w-9')}>
-                  {pinned.length}
-                </span>
-              )}
-            </button>
-            {favoritesExpanded && (
-              <div className="space-y-0.5">
-                {pinned.length === 0 ? (
-                  <div className="px-3 py-2 text-xs text-theme-text-disabled">
-                    No pinned resources. Click <Pin className="w-3 h-3 inline" /> on any resource type to pin it here.
-                  </div>
-                ) : (
-                  pinned.map((p) => {
-                    const isResourceSelected =
-                      (selectedKind.name === p.name && selectedKind.group === p.group) ||
-                      (selectedKind.kind.toLowerCase() === p.kind.toLowerCase() && selectedKind.group === p.group)
-                    return (
-                      <ResourceTypeButton
-                        key={`${p.name}-${p.group}`}
-                        ref={isResourceSelected ? selectedSidebarRef : null}
-                        resource={{ name: p.name, kind: p.kind, group: p.group, version: '', namespaced: true, isCrd: false, verbs: [] }}
-                        count={counts?.[(p.group ? `${p.group}/${p.kind}` : p.kind)] ?? 0}
-                        isSelected={isResourceSelected}
-                        isForbidden={forbiddenKinds.has(p.group ? `${p.group}/${p.kind}` : p.kind)}
-                        isPinned={true}
-                        onTogglePin={() => togglePin(p)}
-                        onClick={() => {
-                          shouldPushHistory.current = true
-                          setSelectedKind({ name: p.name, kind: p.kind, group: p.group })
-                          onKindChange?.()
-                        }}
-                      />
-                    )
-                  })
-                )}
-              </div>
-            )}
-          </div>
-          {filteredCategories ? (
-            // Dynamic categories from API
-            filteredCategories.map((category) => {
-              const isExpanded = effectiveExpandedCategories.has(category.name)
-              return (
-                <div key={category.name} className="mb-2">
-                  <button
-                    onClick={() => toggleCategory(category.name)}
-                    className="w-full flex items-center gap-2 px-2 py-1.5 text-xs font-semibold text-theme-text-tertiary hover:text-theme-text-secondary uppercase tracking-wide"
-                  >
-                    {isExpanded ? (
-                      <ChevronDown className="w-3 h-3" />
-                    ) : (
-                      <ChevronRight className="w-3 h-3" />
-                    )}
-                    <span className="flex-1 text-left">{category.name}</span>
-                    {!isExpanded && (
-                      <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center', category.total < 1000 ? 'w-8' : 'w-9')}>
-                        {category.total}
-                      </span>
-                    )}
-                  </button>
-                  {isExpanded && (
-                    <div className="space-y-0.5">
-                      {category.visibleResources.map((resource) => {
-                        const isResourceSelected =
-                          (selectedKind.name === resource.name && selectedKind.group === resource.group) ||
-                          (selectedKind.kind.toLowerCase() === resource.kind.toLowerCase() && selectedKind.group === resource.group)
-                        return (
-                        <ResourceTypeButton
-                          key={resource.name}
-                          ref={isResourceSelected ? selectedSidebarRef : null}
-                          resource={resource}
-                          count={counts?.[(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)] ?? 0}
-                          isSelected={isResourceSelected}
-                          isForbidden={forbiddenKinds.has(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)}
-                          isPinned={isPinned(resource.name, resource.group)}
-                          onTogglePin={() => togglePin({ name: resource.name, kind: resource.kind, group: resource.group })}
-                          onClick={() => {
-                            shouldPushHistory.current = true
-                            setSelectedKind({ name: resource.name, kind: resource.kind, group: resource.group })
-                            onKindChange?.()
-                          }}
-                        />
-                        )
-                      })}
-                    </div>
-                  )}
-                </div>
-              )
-            })
-          ) : (
-            // Fallback to core resources while loading
-            CORE_RESOURCE_TYPES.map((type) => {
-              // Fallback: type.label is display name like 'Pods', counts are keyed by Kind like 'Pod'
-              // Remove trailing 's' for singular kind lookup (hacky but works for fallback)
-              const kindKey = type.label.endsWith('s') && !type.label.endsWith('ss')
-                ? type.label.slice(0, -1)
-                : type.label
-              const Icon = getResourceIcon(kindKey)
-              const count = counts?.[kindKey] ?? 0
-              const isSelected = selectedKind.name === type.kind && !selectedKind.group
-              return (
-                <button
-                  key={type.kind}
-                  onClick={() => {
-                    shouldPushHistory.current = true
-                    setSelectedKind({ name: type.kind, kind: type.label, group: '' })
-                    onKindChange?.()
-                  }}
-                  className={clsx(
-                    'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors',
-                    isSelected
-                      ? 'bg-blue-500/20 text-blue-700 dark:text-blue-300'
-                      : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
-                  )}
-                >
-                  <Icon className="w-4 h-4 shrink-0" />
-                  <span className="flex-1 text-left">{type.label}</span>
-                  <span className={clsx(
-                    'text-xs px-2 py-0.5 rounded',
-                    isSelected ? 'bg-blue-500/30 text-blue-700 dark:text-blue-300' : 'bg-theme-elevated'
-                  )}>
-                    {count}
-                  </span>
-                </button>
-              )
-            })
-          )}
-
-          {/* Toggle for showing/hiding empty kinds and groups */}
-          {hiddenKindsCount > 0 || hiddenGroupsCount > 0 || showEmptyKinds ? (
-            <button
-              onClick={() => setShowEmptyKinds(!showEmptyKinds)}
-              className="w-full flex items-center gap-2 px-3 py-2 mt-2 text-xs text-theme-text-tertiary hover:text-theme-text-secondary border-t border-theme-border"
-            >
-              {showEmptyKinds ? (
-                <>
-                  <EyeOff className="w-3.5 h-3.5" />
-                  <span>Hide empty</span>
-                </>
-              ) : (
-                <>
-                  <Eye className="w-3.5 h-3.5" />
-                  <span>
-                    Show {hiddenKindsCount + hiddenGroupsCount} empty
-                    {hiddenGroupsCount > 0 && ` (${hiddenGroupsCount} groups)`}
-                  </span>
-                </>
-              )}
-            </button>
-          ) : null}
-        </nav>
-      </div>
+      {!hideSidebar && (
+        <ResourcesSidebar
+          selectedKind={selectedKind}
+          onSelectedKindChange={(kind) => {
+            shouldPushHistory.current = true
+            setSelectedKind(kind)
+          }}
+          onKindChange={onKindChange}
+          apiResources={apiResourcesProp}
+          resourceCounts={counts}
+          resourceForbidden={Array.from(forbiddenKinds)}
+          pinned={pinned}
+          togglePin={togglePin}
+          isPinned={isPinned}
+        />
+      )}
 
       {/* Main Content - Resource Table */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
@@ -3788,77 +3449,6 @@ export function ResourcesView({
     </ResourcesViewDataContext.Provider>
   )
 }
-
-// Resource type button in sidebar
-interface ResourceTypeButtonProps {
-  resource: APIResource
-  count: number
-  isSelected: boolean
-  isForbidden?: boolean
-  isPinned?: boolean
-  onTogglePin?: () => void
-  onClick: () => void
-}
-
-const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps>(
-  function ResourceTypeButton({ resource, count, isSelected, isForbidden: forbidden, isPinned, onTogglePin, onClick }, ref) {
-    const Icon = getResourceIcon(resource.kind)
-    return (
-      <button
-        ref={ref}
-        onClick={onClick}
-        className={clsx(
-          'w-full flex items-center gap-2 px-2 xl:px-3 py-1.5 rounded-lg text-sm transition-colors group/kind min-w-0',
-          isSelected
-            ? 'bg-blue-500/20 text-blue-700 dark:text-blue-300'
-            : forbidden
-              ? 'text-theme-text-disabled hover:bg-theme-elevated hover:text-theme-text-secondary'
-              : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
-        )}
-      >
-        <Icon className="w-4 h-4 shrink-0" />
-        <Tooltip content={forbidden ? `${resource.kind} (no access)` : resource.kind} position="right" wrapperClassName="min-w-0 flex-1 overflow-hidden">
-          <span className="text-left truncate block">
-            {resource.kind}
-          </span>
-        </Tooltip>
-        <div className="ml-auto flex items-center gap-1 shrink-0">
-          {onTogglePin && (
-            <span
-              role="button"
-              onClick={(e) => {
-                e.stopPropagation()
-                onTogglePin()
-              }}
-              className={clsx(
-                'p-0.5 rounded transition-all hover:bg-theme-hover',
-                isPinned
-                  ? 'text-theme-text-secondary'
-                  : 'opacity-0 group-hover/kind:opacity-100 text-theme-text-disabled'
-              )}
-              title={isPinned ? 'Unpin from favorites' : 'Pin to favorites'}
-            >
-              <Pin className={clsx('w-3 h-3', isPinned && 'fill-current')} />
-            </span>
-          )}
-          {forbidden ? (
-            <Tooltip content="Insufficient permissions" position="left">
-              <Shield className="w-3.5 h-3.5 text-amber-400/60" />
-            </Tooltip>
-          ) : (
-            <span className={clsx(
-              'text-xs py-0.5 rounded text-center',
-              isSelected ? 'bg-blue-500/30 text-blue-700 dark:text-blue-300' : 'bg-theme-elevated',
-              count < 1000 ? 'w-8' : 'w-9'
-            )}>
-              {count}
-            </span>
-          )}
-        </div>
-      </button>
-    )
-  }
-)
 
 interface ResourceRowCellsProps {
   resource: any
