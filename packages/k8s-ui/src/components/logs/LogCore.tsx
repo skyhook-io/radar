@@ -1,6 +1,6 @@
 import { useRef, useCallback, useState, useMemo, useEffect, type ReactNode } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Play, Square, Download, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter, Braces } from 'lucide-react'
+import { Play, Square, Download, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter, Braces, Sun, Moon } from 'lucide-react'
 import type { LogEntry, LogLevel } from './useLogBuffer'
 import { useLogSearch } from './useLogSearch'
 import { StructuredLogLine } from './StructuredLogLine'
@@ -58,6 +58,9 @@ export function LogCore({
 }: LogCoreProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const [atBottom, setAtBottom] = useState(true)
+  const [isDark, setIsDark] = useState(() => {
+    try { const v = localStorage.getItem('radar-logs-dark'); return v !== null ? v !== 'false' : forceDark } catch { return forceDark }
+  })
   const [wordWrap, setWordWrap] = useState(() => {
     try { return localStorage.getItem('radar-logs-wrap') !== 'false' } catch { return true }
   })
@@ -174,7 +177,7 @@ export function LogCore({
     : -1
 
   return (
-    <div className={`flex flex-col h-full bg-theme-base${forceDark ? ' dark' : ''}`} style={{ fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace" }}>
+    <div className={`flex flex-col h-full bg-theme-base${isDark ? ' dark' : ''}`} style={{ colorScheme: isDark ? 'dark' : 'light', fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace" }}>
       {/* Toolbar */}
       <div className="flex items-center gap-2 px-3 py-2 border-b border-theme-border bg-theme-surface">
         {toolbarExtra}
@@ -305,6 +308,20 @@ export function LogCore({
             </div>
           )}
         </div>
+
+        {/* Dark/Light toggle */}
+        <Tooltip content={isDark ? 'Light mode' : 'Dark mode'} delay={TIP_DELAY} position="bottom">
+          <button
+            onClick={() => {
+              const next = !isDark
+              setIsDark(next)
+              try { localStorage.setItem('radar-logs-dark', String(next)) } catch {}
+            }}
+            className="p-1.5 rounded text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated"
+          >
+            {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+          </button>
+        </Tooltip>
 
         {/* Clear */}
         {onClear && (
