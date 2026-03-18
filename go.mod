@@ -14,7 +14,7 @@ require (
 	github.com/modelcontextprotocol/go-sdk v1.4.1
 	github.com/skyhook-io/radar/pkg v0.0.0
 	github.com/wailsapp/wails/v2 v2.11.0
-	golang.org/x/sys v0.41.0
+	golang.org/x/sys v0.42.0
 	golang.org/x/term v0.40.0
 	google.golang.org/grpc v1.79.2
 	google.golang.org/protobuf v1.36.11
