@@ -732,3 +732,173 @@ func extractContainerImageFromData(obj map[string]any) string {
 	}
 	return extractContainerImage(data)
 }
+
+// RestartWorkloadDirect performs a rolling restart on a Deployment, StatefulSet, or DaemonSet
+// without requiring a WorkloadManager. Follows the same pattern as ScaleWorkloadDirect.
+func RestartWorkloadDirect(ctx context.Context, dynClient dynamic.Interface, kind, namespace, name string) error {
+	if dynClient == nil {
+		return fmt.Errorf("dynamic client must not be nil")
+	}
+
+	normalizedKind := NormalizeWorkloadKind(kind)
+	var gvr schema.GroupVersionResource
+	switch normalizedKind {
+	case "deployments":
+		gvr = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	case "statefulsets":
+		gvr = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}
+	case "daemonsets":
+		gvr = schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"}
+	default:
+		return fmt.Errorf("restart not supported for %s (only deployments, statefulsets, daemonsets)", kind)
+	}
+
+	restartTime := time.Now().Format(time.RFC3339)
+	patch := fmt.Sprintf(`{"spec":{"template":{"metadata":{"annotations":{"kubectl.kubernetes.io/restartedAt":%q}}}}}`, restartTime)
+	_, err := dynClient.Resource(gvr).Namespace(namespace).Patch(ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to restart workload: %w", err)
+	}
+	return nil
+}
+
+// SetCronJobSuspendDirect sets the suspend field on a CronJob without requiring a WorkloadManager.
+func SetCronJobSuspendDirect(ctx context.Context, dynClient dynamic.Interface, namespace, name string, suspend bool) error {
+	if dynClient == nil {
+		return fmt.Errorf("dynamic client must not be nil")
+	}
+	gvr := schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"}
+	patch := fmt.Sprintf(`{"spec":{"suspend":%t}}`, suspend)
+	_, err := dynClient.Resource(gvr).Namespace(namespace).Patch(ctx, name, types.MergePatchType, []byte(patch), metav1.PatchOptions{})
+	if err != nil {
+		return fmt.Errorf("failed to set cronjob suspend=%v: %w", suspend, err)
+	}
+	return nil
+}
+
+// TriggerCronJobDirect creates a Job from a CronJob without requiring a WorkloadManager.
+// Job names are truncated to the Kubernetes 63-character limit.
+// Returns the created Job object, whose GetName() gives the job name.
+func TriggerCronJobDirect(ctx context.Context, dynClient dynamic.Interface, namespace, name string) (*unstructured.Unstructured, error) {
+	if dynClient == nil {
+		return nil, fmt.Errorf("dynamic client must not be nil")
+	}
+
+	cronJobGVR := schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "cronjobs"}
+	jobGVR := schema.GroupVersionResource{Group: "batch", Version: "v1", Resource: "jobs"}
+
+	cj, err := dynClient.Resource(cronJobGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to get cronjob: %w", err)
+	}
+
+	jobName := fmt.Sprintf("%s-manual-%d", name, time.Now().Unix())
+	if len(jobName) > 63 {
+		jobName = jobName[:63]
+	}
+
+	job := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "batch/v1",
+		"kind":       "Job",
+		"metadata": map[string]any{
+			"name":      jobName,
+			"namespace": namespace,
+			"annotations": map[string]any{
+				"cronjob.kubernetes.io/instantiate": "manual",
+			},
+			"ownerReferences": []any{
+				map[string]any{
+					"apiVersion":         cj.GetAPIVersion(),
+					"kind":               cj.GetKind(),
+					"name":               cj.GetName(),
+					"uid":                string(cj.GetUID()),
+					"controller":         true,
+					"blockOwnerDeletion": true,
+				},
+			},
+		},
+	}}
+
+	if spec, found, _ := unstructured.NestedMap(cj.Object, "spec", "jobTemplate", "spec"); found {
+		if err := unstructured.SetNestedMap(job.Object, spec, "spec"); err != nil {
+			return nil, fmt.Errorf("failed to set job spec: %w", err)
+		}
+	}
+	if labels, found, _ := unstructured.NestedStringMap(cj.Object, "spec", "jobTemplate", "metadata", "labels"); found {
+		if err := unstructured.SetNestedStringMap(job.Object, labels, "metadata", "labels"); err != nil {
+			return nil, fmt.Errorf("failed to set job labels: %w", err)
+		}
+	}
+
+	result, err := dynClient.Resource(jobGVR).Namespace(namespace).Create(ctx, job, metav1.CreateOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to create job: %w", err)
+	}
+	return result, nil
+}
+
+// DeleteResourceDirect deletes a Kubernetes resource via a pre-resolved GVR without requiring a WorkloadManager.
+// If force is true, finalizers are stripped first and grace period is set to zero.
+// After a non-force delete, returns an error if the resource is stuck in Terminating with finalizers.
+func DeleteResourceDirect(ctx context.Context, dynClient dynamic.Interface, gvr schema.GroupVersionResource, namespace, name string, force bool) error {
+	if dynClient == nil {
+		return fmt.Errorf("dynamic client must not be nil")
+	}
+
+	doPatch := func(body []byte) {
+		var patchErr error
+		if namespace != "" {
+			_, patchErr = dynClient.Resource(gvr).Namespace(namespace).Patch(ctx, name, types.MergePatchType, body, metav1.PatchOptions{})
+		} else {
+			_, patchErr = dynClient.Resource(gvr).Patch(ctx, name, types.MergePatchType, body, metav1.PatchOptions{})
+		}
+		if patchErr != nil && !apierrors.IsNotFound(patchErr) && !apierrors.IsForbidden(patchErr) {
+			log.Printf("[delete] failed to strip finalizers from %s/%s: %v", namespace, name, patchErr)
+		}
+	}
+
+	doDelete := func(opts metav1.DeleteOptions) error {
+		if namespace != "" {
+			return dynClient.Resource(gvr).Namespace(namespace).Delete(ctx, name, opts)
+		}
+		return dynClient.Resource(gvr).Delete(ctx, name, opts)
+	}
+
+	doGet := func() *unstructured.Unstructured {
+		var obj *unstructured.Unstructured
+		if namespace != "" {
+			obj, _ = dynClient.Resource(gvr).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+		} else {
+			obj, _ = dynClient.Resource(gvr).Get(ctx, name, metav1.GetOptions{})
+		}
+		return obj
+	}
+
+	if force {
+		doPatch([]byte(`{"metadata":{"finalizers":null}}`))
+	}
+
+	deleteOpts := metav1.DeleteOptions{}
+	if force {
+		gracePeriod := int64(0)
+		deleteOpts.GracePeriodSeconds = &gracePeriod
+	} else {
+		prop := metav1.DeletePropagationForeground
+		deleteOpts.PropagationPolicy = &prop
+	}
+
+	if err := doDelete(deleteOpts); err != nil {
+		if force && apierrors.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to delete resource: %w", err)
+	}
+
+	if !force {
+		if obj := doGet(); obj != nil && obj.GetDeletionTimestamp() != nil && len(obj.GetFinalizers()) > 0 {
+			return fmt.Errorf("resource is stuck in Terminating state due to finalizers — use force delete to remove it")
+		}
+	}
+
+	return nil
+}
