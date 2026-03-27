@@ -35,7 +35,7 @@
     "remark-gfm": "^4.0.1",
     "shiki": "^4.0.1",
     "tailwind-merge": "^3.5.0",
-    "yaml": "^2.8.2"
+    "yaml": "^2.8.3"
   },
   "devDependencies": {
     "@playwright/test": "^1.58.2",
