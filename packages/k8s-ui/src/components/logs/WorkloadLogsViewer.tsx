@@ -131,6 +131,29 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, forceDark }: 
             })
           }
         },
+        onPodAdded: (data: any) => {
+          if (data?.pods) {
+            const newPods = data.pods as WorkloadPodInfo[]
+            setPods(prev => {
+              const existing = new Set(prev.map(p => p.name))
+              const toAdd = newPods.filter(p => !existing.has(p.name))
+              return toAdd.length > 0 ? [...prev, ...toAdd] : prev
+            })
+            setSelectedPods(prev => {
+              const next = new Set(prev)
+              newPods.forEach(p => next.add(p.name))
+              return next
+            })
+          }
+        },
+        onPodRemoved: (data: any) => {
+          if (data?.pod) {
+            const removedName = data.pod as string
+            setPods(prev => prev.filter(p => p.name !== removedName))
+            // Don't remove from selectedPods — keep old log entries visible
+            // while new pod logs start flowing in
+          }
+        },
       },
       'Workload log stream error',
     )
@@ -152,8 +175,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, forceDark }: 
   }, [])
 
   const toggleAllPods = useCallback(() => {
-    setSelectedPods(selectedPods.size === pods.length ? new Set() : new Set(pods.map(p => p.name)))
-  }, [selectedPods.size, pods])
+    const allSelected = pods.every(p => selectedPods.has(p.name))
+    setSelectedPods(allSelected ? new Set() : new Set(pods.map(p => p.name)))
+  }, [selectedPods, pods])
 
   const filteredEntries = useMemo(
     () => entries.filter(e => !e.pod || selectedPods.has(e.pod)),
@@ -200,7 +224,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, forceDark }: 
           }`}
         >
           <Filter className="w-3 h-3" />
-          <span>{selectedPods.size}/{pods.length} pods</span>
+          <span>{pods.filter(p => selectedPods.has(p.name)).length}/{pods.length} pods</span>
           <ChevronDown className="w-3 h-3" />
         </button>
 
@@ -208,7 +232,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, forceDark }: 
           <div className="absolute top-full left-0 mt-1 w-64 bg-theme-elevated border border-theme-border rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
             <div className="p-2 border-b border-theme-border">
               <button onClick={toggleAllPods} className="text-xs text-blue-400 hover:text-blue-300">
-                {selectedPods.size === pods.length ? 'Deselect all' : 'Select all'}
+                {pods.every(p => selectedPods.has(p.name)) ? 'Deselect all' : 'Select all'}
               </button>
             </div>
             {pods.map(pod => (

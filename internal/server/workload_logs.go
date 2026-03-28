@@ -169,7 +169,7 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	logCh := make(chan workloadLogEntry, 1000)
 
 	// Track active streams
-	var activeStreams sync.Map // podName+containerName -> cancel func
+	var activeStreams sync.Map // podName/containerName -> cancel func
 	var streamWg sync.WaitGroup
 
 	// Start streaming from each pod/container
@@ -186,12 +186,12 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 				activeStreams.Store(key, streamCancel)
 
 				streamWg.Add(1)
-				go func(podName, containerName string, streamCtx context.Context) {
+				go func(podName, containerName, key string, streamCtx context.Context) {
 					defer streamWg.Done()
-					defer activeStreams.Delete(podName + "/" + containerName)
+					defer activeStreams.Delete(key)
 
 					streamPodLogs(streamCtx, client, namespace, podName, containerName, tailLines, sinceSeconds, logCh)
-				}(pod.Name, c, streamCtx)
+				}(pod.Name, c, key, streamCtx)
 			}
 		}
 	}
@@ -228,10 +228,8 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 			}
 
 			// Check for new pods
-			var newPods []*corev1.Pod
 			for _, p := range currentPods {
 				if !knownPods[p.Name] {
-					newPods = append(newPods, p)
 					knownPods[p.Name] = true
 					// Notify frontend about new pod
 					sendSSEEvent(w, flusher, "pod_added", map[string]any{
@@ -262,10 +260,10 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 				}
 			}
 
-			// Start streams for new pods
-			if len(newPods) > 0 {
-				startPodStreams(newPods)
-			}
+			// Start streams for all current pods — startPodStreams skips pods
+			// that already have active streams, so this safely retries pods
+			// whose initial stream failed (e.g., container wasn't ready yet)
+			startPodStreams(currentPods)
 		}
 	}
 }

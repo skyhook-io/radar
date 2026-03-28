@@ -6,6 +6,10 @@ export interface LogStreamHandlers {
   onConnected?: (data: unknown) => void
   /** Called for each log event with parsed event data */
   onLog: (data: unknown) => void
+  /** Called when new pods are discovered during streaming (workload logs only) */
+  onPodAdded?: (data: unknown) => void
+  /** Called when pods are terminated during streaming (workload logs only) */
+  onPodRemoved?: (data: unknown) => void
 }
 
 /**
@@ -42,6 +46,22 @@ export function useLogStream() {
     es.addEventListener('log', (event) => {
       try { handlers.onLog(JSON.parse((event as MessageEvent).data)) } catch (e) {
         console.error('Failed to parse log event:', e)
+      }
+    })
+
+    es.addEventListener('pod_added', (event) => {
+      if (handlers.onPodAdded) {
+        try { handlers.onPodAdded(JSON.parse((event as MessageEvent).data)) } catch (e) {
+          console.error('Failed to parse pod_added event:', e)
+        }
+      }
+    })
+
+    es.addEventListener('pod_removed', (event) => {
+      if (handlers.onPodRemoved) {
+        try { handlers.onPodRemoved(JSON.parse((event as MessageEvent).data)) } catch (e) {
+          console.error('Failed to parse pod_removed event:', e)
+        }
       }
     })
 
