@@ -17,7 +17,7 @@ export function HealthRing({ segments, size = 48, strokeWidth = 5, label }: Heal
       <svg width={size} height={size} viewBox="0 0 100 100" className="shrink-0">
         <circle cx="50" cy="50" r="40" fill="none" stroke="currentColor" strokeWidth={strokeWidth} className="text-theme-border" />
         {label && (
-          <text x="50" y="50" textAnchor="middle" dominantBaseline="central" className="fill-theme-text-tertiary text-[22px] font-semibold">
+          <text x="50" y="50" textAnchor="middle" dominantBaseline="central" className="fill-theme-text-tertiary text-[22px] font-semibold font-mono">
             0
           </text>
         )}
@@ -63,7 +63,7 @@ export function HealthRing({ segments, size = 48, strokeWidth = 5, label }: Heal
       ))}
       {/* Center label */}
       {label && (
-        <text x="50" y="50" textAnchor="middle" dominantBaseline="central" className="fill-theme-text-primary text-[22px] font-semibold">
+        <text x="50" y="50" textAnchor="middle" dominantBaseline="central" className="fill-theme-text-primary text-[22px] font-semibold font-mono">
           {label}
         </text>
       )}

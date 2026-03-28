@@ -180,7 +180,7 @@ export function ClusterHealthCard({
               {cluster.version && (
                 <span>Kubernetes {cluster.version}</span>
               )}
-              <span>{counts.namespaces} namespaces</span>
+              <span><span className="font-mono">{counts.namespaces}</span> namespaces</span>
             </div>
             {nodeVersionSkew && (
               <Tooltip
@@ -236,7 +236,7 @@ export function ClusterHealthCard({
               >
                 <HealthRing segments={podsRingSegments} size={88} strokeWidth={8} label={String(podsTotal)} />
                 <span className="text-xs font-medium text-theme-text-secondary">Pods</span>
-                <div className="flex items-center gap-2 text-[11px]">
+                <div className="flex items-center gap-2 text-[11px] font-mono">
                   {health.healthy > 0 && (
                     <span className="flex items-center gap-0.5 text-green-500">
                       <CheckCircle className="w-3 h-3" />
@@ -269,7 +269,7 @@ export function ClusterHealthCard({
               >
                 <HealthRing segments={deploymentsRingSegments} size={88} strokeWidth={8} label={String(counts.deployments.total)} />
                 <span className="text-xs font-medium text-theme-text-secondary">Deployments</span>
-                <div className="flex items-center gap-2 text-[11px]">
+                <div className="flex items-center gap-2 text-[11px] font-mono">
                   <span className="text-green-500">{counts.deployments.available} available</span>
                   {counts.deployments.unavailable > 0 && (
                     <span className="text-red-500">{counts.deployments.unavailable} unavailable</span>
@@ -288,7 +288,7 @@ export function ClusterHealthCard({
               >
                 <HealthRing segments={nodesRingSegments} size={88} strokeWidth={8} label={String(counts.nodes.total)} />
                 <span className="text-xs font-medium text-theme-text-secondary">Nodes</span>
-                <div className="flex items-center gap-2 text-[11px]">
+                <div className="flex items-center gap-2 text-[11px] font-mono">
                   <span className="text-green-500">{counts.nodes.ready} ready</span>
                   {cordonedCount > 0 && (
                     <span className="text-yellow-500">{cordonedCount} cordoned</span>
@@ -369,7 +369,7 @@ export function ClusterHealthCard({
               className="flex items-center gap-1.5 w-fit px-2.5 py-1.5 bg-yellow-500/10 hover:bg-yellow-500/20 border border-yellow-500/30 rounded-md transition-colors"
             >
               <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />
-              <span className="text-xs text-yellow-500 font-medium">{health.warningEvents} Warning Events</span>
+              <span className="text-xs text-yellow-500 font-medium"><span className="font-mono">{health.warningEvents}</span> Warning Events</span>
             </button>
           )}
           {problems.length > 0 && (
@@ -400,7 +400,7 @@ export function ClusterHealthCard({
               ) : (
                 <>
                   <res.icon className={clsx('w-3.5 h-3.5', res.hasIssues ? 'text-yellow-500' : 'text-theme-text-tertiary')} />
-                  <span className="text-theme-text-primary font-medium">{res.total}</span>
+                  <span className="text-theme-text-primary font-medium font-mono">{res.total}</span>
                   <span className="text-theme-text-secondary">{res.label}</span>
                 </>
               )}
@@ -463,8 +463,8 @@ function ResourceBar({
   return (
     <div>
       <div className="flex justify-between items-baseline mb-0.5">
-        <span className="text-[10px] text-theme-text-tertiary">{label}: {used} / {total}</span>
-        <span className="text-[10px] font-medium text-theme-text-secondary">{percent}%</span>
+        <span className="text-[10px] text-theme-text-tertiary font-mono">{label}: {used} / {total}</span>
+        <span className="text-[10px] font-medium text-theme-text-secondary font-mono">{percent}%</span>
       </div>
       <div className="h-2 bg-theme-border rounded overflow-hidden">
         <div

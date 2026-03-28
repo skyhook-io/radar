@@ -146,7 +146,7 @@ const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps
             </Tooltip>
           ) : (
             <span className={clsx(
-              'text-xs py-0.5 rounded text-center',
+              'text-xs py-0.5 rounded text-center font-mono',
               isSelected ? 'bg-blue-500/30 text-blue-700 dark:text-blue-300' : 'bg-theme-elevated',
               count < 1000 ? 'w-8' : 'w-9'
             )}>
@@ -393,7 +393,7 @@ export function ResourcesSidebar({
             )}
             <span className="flex-1 text-left">Favorites</span>
             {!favoritesExpanded && pinned.length > 0 && (
-              <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center', pinned.length < 1000 ? 'w-8' : 'w-9')}>
+              <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center font-mono', pinned.length < 1000 ? 'w-8' : 'w-9')}>
                 {pinned.length}
               </span>
             )}
@@ -444,7 +444,7 @@ export function ResourcesSidebar({
                   )}
                   <span className="flex-1 text-left">{category.name}</span>
                   {!isExpanded && (
-                    <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center', category.total < 1000 ? 'w-8' : 'w-9')}>
+                    <span className={clsx('text-xs py-0.5 rounded bg-theme-elevated text-theme-text-secondary font-normal normal-case text-center font-mono', category.total < 1000 ? 'w-8' : 'w-9')}>
                       {category.total}
                     </span>
                   )}
@@ -504,7 +504,7 @@ export function ResourcesSidebar({
                 <Icon className="w-4 h-4 shrink-0" />
                 <span className="flex-1 text-left">{type.label}</span>
                 <span className={clsx(
-                  'text-xs px-2 py-0.5 rounded',
+                  'text-xs px-2 py-0.5 rounded font-mono',
                   isSelected ? 'bg-blue-500/30 text-blue-700 dark:text-blue-300' : 'bg-theme-elevated'
                 )}>
                   {count}

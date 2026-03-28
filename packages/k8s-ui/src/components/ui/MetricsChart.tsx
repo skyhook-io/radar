@@ -111,7 +111,7 @@ export function MetricsChart({
       {/* Chart with Y-axis */}
       <div className="flex">
         {/* Y-axis labels */}
-        <div className="flex flex-col justify-between text-[9px] text-theme-text-tertiary pr-1 w-12 text-right" style={{ height }}>
+        <div className="flex flex-col justify-between text-[9px] text-theme-text-tertiary pr-1 w-12 text-right font-mono" style={{ height }}>
           <span className="leading-none">{format(yAxisMax)}</span>
           <span className="leading-none">{format(yAxisMid)}</span>
           <span className="leading-none">0</span>
@@ -197,7 +197,7 @@ export function MetricsChart({
       )}
 
       {/* Current value */}
-      <div className="flex items-baseline gap-2 mt-1 ml-12">
+      <div className="flex items-baseline gap-2 mt-1 ml-12 font-mono">
         <span className={clsx(
           'text-sm font-medium',
           type === 'cpu' ? 'text-blue-400' : 'text-purple-400'
