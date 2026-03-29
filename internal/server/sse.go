@@ -565,8 +565,6 @@ func (b *SSEBroadcaster) broadcastTopologyUpdate() {
 		for _, ch := range group.channels {
 			safeSend(ch, event)
 		}
-		log.Printf("Sent topology (%d nodes, %d edges) to %d clients (ns=%v, view=%s)",
-			len(topo.Nodes), len(topo.Edges), len(group.channels), group.namespaces, key.viewMode)
 	}
 }
 
@@ -612,10 +610,14 @@ func (b *SSEBroadcaster) Subscribe(namespaces []string, viewMode string) chan SS
 		return nil
 	}
 
-	// Sort namespaces once at subscription time for consistent grouping during broadcasts
-	sortedNs := make([]string, len(namespaces))
-	copy(sortedNs, namespaces)
-	sort.Strings(sortedNs)
+	// Sort namespaces once at subscription time for consistent grouping during broadcasts.
+	// Preserve nil (all namespaces) vs empty slice (no access) — they have different semantics.
+	var sortedNs []string
+	if namespaces != nil {
+		sortedNs = make([]string, len(namespaces))
+		copy(sortedNs, namespaces)
+		sort.Strings(sortedNs)
+	}
 
 	ch := make(chan SSEEvent, 10)
 	b.register <- clientRegistration{ch: ch, namespaces: sortedNs, viewMode: viewMode}

@@ -153,6 +153,29 @@ timeline:
   # Maximum number of events to retain
   historyLimit: 10000
 
+# Authentication and RBAC configuration
+auth:
+  # Authentication mode: "none" (default), "proxy", or "oidc"
+  mode: none
+  # HMAC secret for session cookies (auto-generated if empty)
+  secret: ""
+  # Use an existing secret for the auth HMAC key
+  existingSecret: ""
+  existingSecretKey: "auth-secret"
+  # Session cookie TTL
+  cookieTTL: "24h"
+  # Proxy mode settings
+  proxy:
+    userHeader: "X-Forwarded-User"
+    groupsHeader: "X-Forwarded-Groups"
+  # OIDC mode settings
+  oidc:
+    issuerURL: ""
+    clientID: ""
+    clientSecret: ""
+    redirectURL: ""
+    groupsClaim: "groups"
+
 # MCP (Model Context Protocol) server for AI tools
 mcp:
   # Set to false to disable the MCP server (useful when deployed behind authentication)

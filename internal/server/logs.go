@@ -32,6 +32,12 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	tailLinesStr := r.URL.Query().Get("tailLines")
 	sinceSecondsStr := r.URL.Query().Get("sinceSeconds")
 
+	// Check namespace access for authenticated users
+	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
+		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+		return
+	}
+
 	tailLines := parseTailLines(tailLinesStr, 500)
 	sinceSeconds := parseSinceSeconds(sinceSecondsStr)
 
@@ -103,6 +109,12 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 	container := r.URL.Query().Get("container")
 	previous := r.URL.Query().Get("previous") == "true"
 	tailLinesStr := r.URL.Query().Get("tailLines")
+
+	// Check namespace access for authenticated users
+	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
+		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+		return
+	}
 
 	sinceStr := r.URL.Query().Get("sinceSeconds")
 

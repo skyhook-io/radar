@@ -33,7 +33,7 @@ func ToRuntimeObjects[T runtime.Object](items []T) []runtime.Object {
 func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) ([]runtime.Object, error) {
 	// listPerNs merges results across namespaces using generic conversion.
 	listPerNs := func(listAll func() ([]runtime.Object, error), listNs func(string) ([]runtime.Object, error)) ([]runtime.Object, error) {
-		if len(namespaces) == 0 {
+		if namespaces == nil {
 			return listAll()
 		}
 		if len(namespaces) == 1 {

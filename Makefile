@@ -8,6 +8,26 @@ DOCKER_REPO ?= ghcr.io/skyhook-io/radar
 RADAR_FLAGS ?=
 PORT ?= 9280
 
+## Quick in-cluster test deploy (full build: frontend + embed + Go binary)
+# Usage: make deploy-test   (or make deploy-test TEST_IMAGE=... CLUSTER_NS=... CLUSTER_DEPLOY=...)
+TEST_IMAGE   ?= gcr.io/koalabackend/radar:auth-rbac
+CLUSTER_NS   ?= radar
+CLUSTER_DEPLOY ?= radar
+
+deploy-test: frontend embed
+	@echo "=== Fast test deploy: Go build → push → rollout ==="
+	@echo "Building Go binary for linux/amd64..."
+	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o /tmp/radar-linux ./cmd/explorer
+	@echo "Building minimal Docker image..."
+	@echo 'FROM gcr.io/distroless/static-debian12:nonroot' > /tmp/Dockerfile.test
+	@echo 'COPY radar-linux /app/radar' >> /tmp/Dockerfile.test
+	@echo 'ENTRYPOINT ["/app/radar"]' >> /tmp/Dockerfile.test
+	docker build -t $(TEST_IMAGE) -f /tmp/Dockerfile.test /tmp
+	docker push $(TEST_IMAGE)
+	kubectl rollout restart deploy/$(CLUSTER_DEPLOY) -n $(CLUSTER_NS)
+	kubectl rollout status deploy/$(CLUSTER_DEPLOY) -n $(CLUSTER_NS) --timeout=60s
+	@echo "=== Done. Tail logs: kubectl logs -n $(CLUSTER_NS) -l app.kubernetes.io/name=$(CLUSTER_DEPLOY) -f ==="
+
 ## Build targets
 
 # Build the complete application (frontend + embedded binary)

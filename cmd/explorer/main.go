@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/app"
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	_ "k8s.io/client-go/plugin/pkg/client/auth" // Register all auth provider plugins (OIDC, GCP, Azure, etc.)
@@ -50,6 +51,17 @@ func main() {
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	// MCP server
 	noMCP := flag.Bool("no-mcp", !fileCfg.MCPEnabledOr(true), "Disable MCP (Model Context Protocol) server for AI tools")
+	// Auth flags
+	authMode := flag.String("auth-mode", "none", "Authentication mode: none, proxy, or oidc")
+	authSecret := flag.String("auth-secret", "", "HMAC secret key for session cookies (auto-generated if empty)")
+	authCookieTTL := flag.Duration("auth-cookie-ttl", 24*time.Hour, "Session cookie TTL")
+	authUserHeader := flag.String("auth-user-header", "X-Forwarded-User", "Header for username (proxy mode)")
+	authGroupsHeader := flag.String("auth-groups-header", "X-Forwarded-Groups", "Header for groups (proxy mode)")
+	authOIDCIssuer := flag.String("auth-oidc-issuer", "", "OIDC issuer URL")
+	authOIDCClientID := flag.String("auth-oidc-client-id", "", "OIDC client ID")
+	authOIDCClientSecret := flag.String("auth-oidc-client-secret", "", "OIDC client secret")
+	authOIDCRedirectURL := flag.String("auth-oidc-redirect-url", "", "OIDC redirect URL")
+	authOIDCGroupsClaim := flag.String("auth-oidc-groups-claim", "groups", "JWT claim for groups")
 	flag.Parse()
 
 	if *showVersion {
@@ -89,6 +101,18 @@ func main() {
 		PrometheusURL:    *prometheusURL,
 		MCPEnabled:       !*noMCP,
 		Version:          version,
+		AuthConfig: auth.Config{
+			Mode:            *authMode,
+			Secret:          *authSecret,
+			CookieTTL:       *authCookieTTL,
+			UserHeader:      *authUserHeader,
+			GroupsHeader:    *authGroupsHeader,
+			OIDCIssuer:      *authOIDCIssuer,
+			OIDCClientID:    *authOIDCClientID,
+			OIDCClientSecret: *authOIDCClientSecret,
+			OIDCRedirectURL: *authOIDCRedirectURL,
+			OIDCGroupsClaim: *authOIDCGroupsClaim,
+		},
 	}
 
 	// Set global flags

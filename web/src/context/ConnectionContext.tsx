@@ -126,7 +126,16 @@ export function ConnectionProvider({ children }: { children: ReactNode }) {
   const updateFromSSE = useCallback((status: ConnectionState) => {
     // Mark SSE as active - it's now the authoritative source for connection state
     sseActiveRef.current = true
-    setConnection(status)
+    setConnection(prev => {
+      // Don't transition back to 'connecting' from 'connected'. This happens when the
+      // pod restarts and the SSE reconnects while the new pod's K8s cache is still
+      // syncing. Hiding the main content here causes a flash — keep the 'connected'
+      // state and wait for either 'connected' (sync done) or 'disconnected' (failure).
+      if (prev.state === 'connected' && status.state === 'connecting') {
+        return prev
+      }
+      return status
+    })
 
     // If we just connected, invalidate queries to fetch fresh data
     if (status.state === 'connected') {

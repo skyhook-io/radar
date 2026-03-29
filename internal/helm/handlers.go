@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
@@ -269,7 +270,14 @@ func (h *Handlers) handleRollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := client.Rollback(namespace, name, revision); err != nil {
+	auth.AuditLog(r, namespace, name)
+	var rollbackErr error
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		rollbackErr = client.RollbackAsUser(namespace, name, revision, user.Username, user.Groups)
+	} else {
+		rollbackErr = client.Rollback(namespace, name, revision)
+	}
+	if err := rollbackErr; err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to rollback Helm release")
 			return
@@ -386,7 +394,14 @@ func (h *Handlers) handleUninstall(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	if err := client.Uninstall(namespace, name); err != nil {
+	auth.AuditLog(r, namespace, name)
+	var uninstallErr error
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		uninstallErr = client.UninstallAsUser(namespace, name, user.Username, user.Groups)
+	} else {
+		uninstallErr = client.Uninstall(namespace, name)
+	}
+	if err := uninstallErr; err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to uninstall Helm release")
 			return
@@ -419,7 +434,14 @@ func (h *Handlers) handleUpgrade(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := client.Upgrade(namespace, name, version); err != nil {
+	auth.AuditLog(r, namespace, name)
+	var upgradeErr error
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		upgradeErr = client.UpgradeAsUser(namespace, name, version, user.Username, user.Groups)
+	} else {
+		upgradeErr = client.Upgrade(namespace, name, version)
+	}
+	if err := upgradeErr; err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to upgrade Helm release")
 			return
@@ -562,7 +584,14 @@ func (h *Handlers) handleApplyValues(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := client.ApplyValues(namespace, name, req.Values); err != nil {
+	auth.AuditLog(r, namespace, name)
+	var applyErr error
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		applyErr = client.ApplyValuesAsUser(namespace, name, req.Values, user.Username, user.Groups)
+	} else {
+		applyErr = client.ApplyValues(namespace, name, req.Values)
+	}
+	if err := applyErr; err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to apply Helm values")
 			return
@@ -718,8 +747,15 @@ func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	release, err := client.Install(&req)
-	if err != nil {
+	auth.AuditLog(r, req.Namespace, req.ReleaseName)
+	var release *HelmRelease
+	var installErr error
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		release, installErr = client.InstallAsUser(&req, user.Username, user.Groups)
+	} else {
+		release, installErr = client.Install(&req)
+	}
+	if err := installErr; err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to install Helm release")
 			return
@@ -784,9 +820,17 @@ func (h *Handlers) handleInstallStream(w http.ResponseWriter, r *http.Request) {
 	defer close(progressCh)
 
 	// Start install in goroutine
+	auth.AuditLog(r, req.Namespace, req.ReleaseName)
+	user := auth.UserFromContext(r.Context())
 	resultCh := make(chan installResult, 1)
 	go func() {
-		release, err := client.InstallWithProgress(&req, progressCh)
+		var release *HelmRelease
+		var err error
+		if user != nil {
+			release, err = client.InstallWithProgressAsUser(&req, progressCh, user.Username, user.Groups)
+		} else {
+			release, err = client.InstallWithProgress(&req, progressCh)
+		}
 		resultCh <- installResult{release: release, err: err}
 	}()
 

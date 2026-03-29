@@ -45,11 +45,47 @@ spec:
             {{- if not .Values.mcp.enabled }}
             - --no-mcp
             {{- end }}
+            {{- if ne .Values.auth.mode "none" }}
+            - --auth-mode={{ .Values.auth.mode }}
+            - --auth-cookie-ttl={{ .Values.auth.cookieTTL }}
+            {{- if .Values.auth.proxy.userHeader }}
+            - --auth-user-header={{ .Values.auth.proxy.userHeader }}
+            {{- end }}
+            {{- if .Values.auth.proxy.groupsHeader }}
+            - --auth-groups-header={{ .Values.auth.proxy.groupsHeader }}
+            {{- end }}
+            {{- if .Values.auth.oidc.issuerURL }}
+            - --auth-oidc-issuer={{ .Values.auth.oidc.issuerURL }}
+            {{- end }}
+            {{- if .Values.auth.oidc.clientID }}
+            - --auth-oidc-client-id={{ .Values.auth.oidc.clientID }}
+            {{- end }}
+            {{- if .Values.auth.oidc.clientSecret }}
+            - --auth-oidc-client-secret={{ .Values.auth.oidc.clientSecret }}
+            {{- end }}
+            {{- if .Values.auth.oidc.redirectURL }}
+            - --auth-oidc-redirect-url={{ .Values.auth.oidc.redirectURL }}
+            {{- end }}
+            {{- if .Values.auth.oidc.groupsClaim }}
+            - --auth-oidc-groups-claim={{ .Values.auth.oidc.groupsClaim }}
+            {{- end }}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
               protocol: TCP
           env:
+            {{- if and (ne .Values.auth.mode "none") (or .Values.auth.secret .Values.auth.existingSecret) }}
+            - name: RADAR_AUTH_SECRET
+              {{- if .Values.auth.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.auth.existingSecret }}
+                  key: {{ .Values.auth.existingSecretKey }}
+              {{- else }}
+              value: {{ .Values.auth.secret | quote }}
+              {{- end }}
+            {{- end }}
             - name: HELM_CACHE_HOME
               value: "/tmp/helm/cache"
             - name: HELM_CONFIG_HOME

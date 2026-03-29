@@ -221,15 +221,40 @@ roleRef:
 
 Set `rbac.create: false` in the Helm values and apply the custom Role/RoleBinding above. Radar will detect the namespace-scoped permissions and work within `my-team` only.
 
+## Authentication
+
+For shared team access, enable authentication so each user gets per-user permissions via Kubernetes RBAC. See the **[Authentication & Authorization Guide](authentication.md)** for full setup instructions.
+
+**Quick start with proxy auth:**
+```yaml
+# values.yaml
+auth:
+  mode: proxy
+```
+
+Then deploy an auth proxy (e.g., oauth2-proxy) in front of Radar. Users authenticate through the proxy, and Radar uses K8s impersonation so each user's actions are governed by their own K8s RBAC bindings.
+
+**Quick start with OIDC:**
+```yaml
+# values.yaml
+auth:
+  mode: oidc
+  oidc:
+    issuerURL: https://accounts.google.com
+    clientID: your-client-id
+    clientSecret: your-client-secret
+    redirectURL: https://radar.example.com/auth/callback
+```
+
 ## Security Considerations
 
 When deploying Radar in-cluster:
 
-1. **Authentication**: Always enable authentication when exposing via ingress. Use basic auth (shown above) or an auth proxy like oauth2-proxy.
+1. **Authentication**: Always enable authentication when exposing via ingress. Use [built-in auth](authentication.md) (proxy or OIDC mode) or basic auth (shown above) at minimum.
 
 2. **RBAC scope**: The default ClusterRole grants cluster-wide read access. For namespace-restricted access, set `rbac.create: false` and create a custom Role/RoleBinding. Radar will gracefully adapt to the available permissions.
 
-3. **Privileged features**: Terminal (`podExec`) and port forwarding grant significant access. Only enable these in trusted environments or when using per-user authentication.
+3. **Privileged features**: Terminal (`podExec`) and port forwarding grant significant access. Only enable these in trusted environments or when using [per-user authentication](authentication.md).
 
 4. **Network access**: Consider using NetworkPolicies to restrict which pods can reach Radar.
 

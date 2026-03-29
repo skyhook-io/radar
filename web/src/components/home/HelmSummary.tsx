@@ -82,7 +82,7 @@ export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
             <span className="text-xs font-medium text-theme-text-secondary">Access Restricted</span>
             <span className="text-[11px] mt-1">Insufficient permissions to list Helm releases</span>
           </div>
-        ) : data.releases.length === 0 ? (
+        ) : !data.releases || data.releases.length === 0 ? (
           <div className="flex items-center justify-center h-full py-4 text-xs text-theme-text-tertiary">
             No Helm releases found
           </div>
@@ -116,7 +116,7 @@ export function HelmSummary({ data, onNavigate }: HelmSummaryProps) {
 
       <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-between">
         <span className="text-[10px] text-theme-text-tertiary">
-          {data && data.total > data.releases.length ? `+${data.total - data.releases.length} more` : ''}
+          {data && data.releases && data.total > data.releases.length ? `+${data.total - data.releases.length} more` : ''}
         </span>
         <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-theme-text-secondary group-hover:text-theme-text-primary transition-colors">
           Open Helm

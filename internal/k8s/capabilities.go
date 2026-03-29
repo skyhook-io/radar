@@ -7,6 +7,10 @@ import (
 	"sync/atomic"
 	"time"
 
+	authv1 "k8s.io/api/authorization/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes"
+
 	"github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -53,16 +57,18 @@ type PermissionCheckResult struct {
 
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
-	Exec          bool                 `json:"exec"`                // Can create pods/exec (terminal feature)
-	LocalTerminal bool                 `json:"localTerminal"`       // Local terminal available (not in-cluster, not disabled)
-	Logs          bool                 `json:"logs"`                // Can get pods/log (log viewer)
-	PortForward   bool                 `json:"portForward"`         // Can create pods/portforward
-	Secrets       bool                 `json:"secrets"`             // Can list secrets
-	SecretsUpdate bool                 `json:"secretsUpdate"`       // Can update secrets (inline editing)
-	HelmWrite     bool                 `json:"helmWrite"`           // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite     bool                 `json:"nodeWrite"`           // Can patch nodes (cordon/uncordon/drain)
-	MCPEnabled    bool                 `json:"mcpEnabled"`          // MCP server is running
-	Resources     *ResourcePermissions `json:"resources,omitempty"` // Per-resource-type permissions
+	Exec          bool                 `json:"exec"`                    // Can create pods/exec (terminal feature)
+	LocalTerminal bool                 `json:"localTerminal"`           // Local terminal available (not in-cluster, not disabled)
+	Logs          bool                 `json:"logs"`                    // Can get pods/log (log viewer)
+	PortForward   bool                 `json:"portForward"`             // Can create pods/portforward
+	Secrets       bool                 `json:"secrets"`                 // Can list secrets
+	SecretsUpdate bool                 `json:"secretsUpdate"`           // Can update secrets (inline editing)
+	HelmWrite     bool                 `json:"helmWrite"`               // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite     bool                 `json:"nodeWrite"`               // Can patch nodes (cordon/uncordon/drain)
+	MCPEnabled    bool                 `json:"mcpEnabled"`              // MCP server is running
+	AuthEnabled   bool                 `json:"authEnabled,omitempty"`   // Auth is enabled on the server
+	Username      string               `json:"username,omitempty"`      // Authenticated username (when auth enabled)
+	Resources     *ResourcePermissions `json:"resources,omitempty"`     // Per-resource-type permissions
 }
 
 // NamespaceCapabilities holds the effective exec/logs/portForward capabilities
@@ -347,6 +353,137 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string, globalCap
 	nsCapMu.Unlock()
 
 	return result, nil
+}
+
+// Per-user capabilities cache (keyed by username)
+var (
+	userCapabilitiesCache   sync.Map // map[string]*userCapEntry
+	userCapabilitiesTTL     = 60 * time.Second
+)
+
+type userCapEntry struct {
+	caps      *Capabilities
+	expiresAt time.Time
+}
+
+// CheckCapabilitiesForUser runs SubjectAccessReview as the given user
+// to determine what the user can do (exec, logs, delete, helm, etc.)
+// Results are cached per-user with 60s TTL.
+func CheckCapabilitiesForUser(ctx context.Context, username string, groups []string) (*Capabilities, error) {
+	// Check cache
+	if entry, ok := userCapabilitiesCache.Load(username); ok {
+		e := entry.(*userCapEntry)
+		if time.Now().Before(e.expiresAt) {
+			caps := *e.caps
+			return &caps, nil
+		}
+	}
+
+	k8sClient := GetClient()
+	if k8sClient == nil {
+		return &Capabilities{}, nil
+	}
+
+	if GetConnectionStatus().State == StateDisconnected {
+		return &Capabilities{}, nil
+	}
+
+	checkCtx, cancel := NewOperationContext(10 * time.Second)
+	defer cancel()
+
+	type capCheck struct {
+		resource string
+		verb     string
+		result   *bool
+	}
+
+	caps := &Capabilities{}
+	checks := []capCheck{
+		{"pods/exec", "create", &caps.Exec},
+		{"pods/log", "get", &caps.Logs},
+		{"pods/portforward", "create", &caps.PortForward},
+		{"secrets", "list", &caps.Secrets},
+		{"secrets", "update", &caps.SecretsUpdate},
+		{"secrets", "create", &caps.HelmWrite},
+	}
+
+	var wg sync.WaitGroup
+	wg.Add(len(checks))
+
+	for _, check := range checks {
+		go func(c capCheck) {
+			defer wg.Done()
+			allowed, _ := canIAs(checkCtx, k8sClient, username, groups, "", "", c.resource, c.verb)
+			if allowed {
+				*c.result = true
+				return
+			}
+			// Try namespace-scoped fallback
+			if fallbackNs := GetEffectiveNamespace(); fallbackNs != "" {
+				allowed, _ = canIAs(checkCtx, k8sClient, username, groups, fallbackNs, "", c.resource, c.verb)
+				if allowed {
+					*c.result = true
+				}
+			}
+		}(check)
+	}
+
+	wg.Wait()
+
+	if ForceDisableHelmWrite {
+		caps.HelmWrite = false
+	}
+
+	// Cache result
+	userCapabilitiesCache.Store(username, &userCapEntry{
+		caps:      caps,
+		expiresAt: time.Now().Add(userCapabilitiesTTL),
+	})
+
+	return caps, nil
+}
+
+// canIAs checks if a specific user can perform an action using SubjectAccessReview.
+// Unlike canI which uses SelfSubjectAccessReview (checks the ServiceAccount),
+// this checks on behalf of a specific user.
+func canIAs(ctx context.Context, client *kubernetes.Clientset, username string, groups []string, namespace, group, resource, verb string) (bool, bool) {
+	if ctx.Err() != nil {
+		return false, true
+	}
+	if client == nil {
+		return false, true
+	}
+
+	review := &authv1.SubjectAccessReview{
+		Spec: authv1.SubjectAccessReviewSpec{
+			User:   username,
+			Groups: groups,
+			ResourceAttributes: &authv1.ResourceAttributes{
+				Namespace: namespace,
+				Group:     group,
+				Verb:      verb,
+				Resource:  resource,
+			},
+		},
+	}
+
+	result, err := client.AuthorizationV1().SubjectAccessReviews().Create(ctx, review, metav1.CreateOptions{})
+	if err != nil {
+		if ctx.Err() == nil {
+			log.Printf("Warning: SubjectAccessReview failed for user=%s %s %s: %v", username, verb, resource, err)
+		}
+		return false, true
+	}
+
+	return result.Status.Allowed, false
+}
+
+// InvalidateUserCapabilitiesCache clears all per-user capability caches
+func InvalidateUserCapabilitiesCache() {
+	userCapabilitiesCache.Range(func(key, _ any) bool {
+		userCapabilitiesCache.Delete(key)
+		return true
+	})
 }
 
 var (

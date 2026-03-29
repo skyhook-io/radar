@@ -9,7 +9,7 @@ import { TrafficSummary } from './TrafficSummary'
 import { CertificateHealthCard } from './CertificateHealthCard'
 import { CostCard } from './CostCard'
 import { ClusterHealthCard } from './ClusterHealthCard'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { AlertTriangle, Loader2, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 
 interface HomeViewProps {
@@ -41,6 +41,22 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
     return (
       <div className="flex-1 flex items-center justify-center text-theme-text-secondary">
         <p>Failed to load dashboard data</p>
+      </div>
+    )
+  }
+
+  if (data.accessRestricted) {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-theme-base">
+        <div className="flex flex-col items-center gap-3 max-w-md text-center">
+          <div className="w-12 h-12 rounded-full bg-amber-500/10 flex items-center justify-center">
+            <Shield className="w-6 h-6 text-amber-500" />
+          </div>
+          <p className="text-lg font-medium text-theme-text-primary">No Namespace Access</p>
+          <p className="text-sm text-theme-text-secondary">
+            Your account does not have access to any namespaces in this cluster. Contact your administrator to add a Kubernetes RoleBinding or ClusterRoleBinding for your user.
+          </p>
+        </div>
       </div>
     )
   }

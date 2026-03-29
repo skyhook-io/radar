@@ -22,6 +22,10 @@ import (
 	"k8s.io/client-go/tools/portforward"
 	"k8s.io/client-go/transport/spdy"
 
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
+
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -38,8 +42,10 @@ type PortForwardSession struct {
 	Status        string    `json:"status"` // "running", "stopped", "error"
 	Error         string    `json:"error,omitempty"`
 
-	cancel context.CancelFunc
-	stopCh chan struct{}
+	cancel     context.CancelFunc
+	stopCh     chan struct{}
+	restConfig *rest.Config          // impersonated or shared config
+	k8sClient  kubernetes.Interface  // impersonated or shared client
 }
 
 // PortForwardManager manages active port forward sessions
@@ -116,12 +122,13 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	client := k8s.GetClient()
-	config := k8s.GetConfig()
+	client := s.getClientForRequest(r)
+	config := s.getConfigForRequest(r)
 	if client == nil || config == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "K8s client not initialized")
 		return
 	}
+	auth.AuditLog(r, req.Namespace, req.PodName)
 
 	// If service name provided, find a pod backing it and resolve the target port
 	podName := req.PodName
@@ -192,6 +199,8 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 		Status:        "starting",
 		cancel:        cancel,
 		stopCh:        stopCh,
+		restConfig:    config,
+		k8sClient:     client,
 	}
 	pfManager.sessions[sessionID] = session
 	pfManager.mu.Unlock()
@@ -257,8 +266,8 @@ func (s *Server) handleStopPortForward(w http.ResponseWriter, r *http.Request) {
 }
 
 func runPortForward(ctx context.Context, session *PortForwardSession) error {
-	client := k8s.GetClient()
-	config := k8s.GetConfig()
+	client := session.k8sClient
+	config := session.restConfig
 
 	// Build port forward request
 	req := client.CoreV1().RESTClient().Post().

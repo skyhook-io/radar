@@ -29,9 +29,11 @@ rules:
     verbs: ["create", "update", "patch", "delete"]
   {{- end }}
 
-  {{- if or .Values.rbac.secrets .Values.rbac.helm }}
-  # Secrets access - required for Helm release storage (rbac.helm)
-  # or for showing secrets in the resource browser (rbac.secrets)
+  {{- if or .Values.rbac.secrets .Values.rbac.helm (ne .Values.auth.mode "none") }}
+  # Secrets access - required for Helm release storage (rbac.helm),
+  # showing secrets in the resource browser (rbac.secrets),
+  # or Helm visibility when auth is enabled (Helm reads use the ServiceAccount
+  # since users with the K8s 'view' role cannot list secrets)
   - apiGroups: [""]
     resources:
       - secrets
@@ -289,6 +291,17 @@ rules:
     {{- toYaml . | nindent 6 }}
     resources: ["*"]
     verbs: ["get", "list", "watch"]
+  {{- end }}
+
+  {{- if ne .Values.auth.mode "none" }}
+  # Auth: Impersonation permissions for user-scoped operations
+  - apiGroups: [""]
+    resources: ["users", "groups"]
+    verbs: ["impersonate"]
+  # Auth: SubjectAccessReview for per-user permission checks
+  - apiGroups: ["authorization.k8s.io"]
+    resources: ["subjectaccessreviews"]
+    verbs: ["create"]
   {{- end }}
 
   {{- with .Values.rbac.additionalRules }}

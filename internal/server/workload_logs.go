@@ -64,6 +64,13 @@ func (s *Server) handleWorkloadLogs(w http.ResponseWriter, r *http.Request) {
 	kind := strings.ToLower(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
+
+	// Check namespace access for authenticated users
+	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
+		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+		return
+	}
+
 	container := r.URL.Query().Get("container")
 	tailLines := parseTailLines(r.URL.Query().Get("tailLines"), 100)
 	sinceSeconds := parseSinceSeconds(r.URL.Query().Get("sinceSeconds"))
@@ -105,6 +112,13 @@ func (s *Server) handleWorkloadLogsStream(w http.ResponseWriter, r *http.Request
 	kind := strings.ToLower(chi.URLParam(r, "kind"))
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
+
+	// Check namespace access for authenticated users
+	if allowed := s.getUserNamespaces(r, []string{namespace}); noNamespaceAccess(allowed) {
+		s.writeError(w, http.StatusForbidden, "no access to namespace "+namespace)
+		return
+	}
+
 	container := r.URL.Query().Get("container")
 	tailLines := parseTailLines(r.URL.Query().Get("tailLines"), 50)
 	sinceSeconds := parseSinceSeconds(r.URL.Query().Get("sinceSeconds"))

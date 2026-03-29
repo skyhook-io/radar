@@ -12,6 +12,7 @@ import {
   type Node,
   type Edge,
   type NodeTypes,
+  type NodeChange,
   type Viewport,
   BackgroundVariant,
   MarkerType,
@@ -19,7 +20,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { toCanvas } from 'html-to-image'
 
-import { AlertTriangle, Download, Loader2, RotateCw, Shield } from 'lucide-react'
+import { AlertTriangle, Download, Loader2, Pause, Play, RotateCw, Shield } from 'lucide-react'
 import { useToast } from '../ui/Toast'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 
@@ -156,6 +157,8 @@ interface TopologyGraphProps {
   selectedNodeId?: string
   /** Show image export button in controls. Default: true */
   showExportButton?: boolean
+  paused?: boolean
+  onTogglePause?: () => void
 }
 
 export function TopologyGraph({
@@ -166,10 +169,22 @@ export function TopologyGraph({
   onNodeClick,
   selectedNodeId,
   showExportButton = true,
+  paused = false,
+  onTogglePause,
 }: TopologyGraphProps) {
   const isTrafficView = viewMode === 'traffic'
-  const [nodes, setNodes, onNodesChange] = useNodesState([] as Node[])
+  const [nodes, setNodes, onNodesChangeBase] = useNodesState([] as Node[])
   const [edges, setEdges, onEdgesChange] = useEdgesState([] as Edge[])
+
+  // Wrap onNodesChange to track user-dragged positions so they survive re-layouts.
+  const onNodesChange = useCallback((changes: NodeChange<Node>[]) => {
+    onNodesChangeBase(changes)
+    for (const change of changes) {
+      if (change.type === 'position' && change.position) {
+        savedPositionsRef.current.set(change.id, change.position)
+      }
+    }
+  }, [onNodesChangeBase])
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(new Set())
   const [expandedPodGroups, setExpandedPodGroups] = useState<Set<string>>(new Set())
   const [layoutError, setLayoutError] = useState<string | null>(null)
@@ -177,6 +192,10 @@ export function TopologyGraph({
   const [isExporting, setIsExporting] = useState(false)
   const prevStructureRef = useRef<string>('')
   const layoutVersionRef = useRef(0) // Used to invalidate stale layout results
+  // Saved node positions for preservation across topology updates.
+  // Prevents every cluster change from re-running a full ELK layout (which shifts all nodes).
+  const savedPositionsRef = useRef<Map<string, { x: number; y: number }>>(new Map())
+  const prevRetryCountRef = useRef(0)
 
   // Toggle group collapse
   const handleToggleCollapse = useCallback((groupId: string) => {
@@ -373,6 +392,7 @@ export function TopologyGraph({
       setNodes([])
       setEdges([])
       prevStructureRef.current = ''
+      savedPositionsRef.current.clear() // Clear on context switch / topology reset
       return
     }
 
@@ -381,6 +401,20 @@ export function TopologyGraph({
     if (!structureChanged) {
       return
     }
+
+    // Detect explicit re-layout request (Retry button) — clear saved positions so
+    // ELK computes a fresh layout from scratch instead of preserving old positions.
+    const isRetry = layoutRetryCount !== prevRetryCountRef.current
+    if (isRetry) {
+      prevRetryCountRef.current = layoutRetryCount
+      savedPositionsRef.current.clear()
+    }
+
+    // For the initial layout (no saved positions yet) run ELK for all nodes.
+    // For subsequent updates, preserve existing positions — only new nodes get
+    // ELK-computed positions. This prevents the whole graph from shifting every
+    // time the cluster adds a new resource.
+    const isInitialLayout = savedPositionsRef.current.size === 0
 
     prevStructureRef.current = structureKey
 
@@ -418,8 +452,29 @@ export function TopologyGraph({
       }
       setLayoutError(null)
 
+      // Preserve positions for nodes that already have a saved position (i.e. were
+      // present in a previous layout). New nodes use the ELK-computed position.
+      // This prevents the whole graph from shifting every time the topology changes.
+      // isInitialLayout is captured in the outer effect scope.
+      const positionedNodes = isInitialLayout
+        ? layoutedNodes
+        : layoutedNodes.map(node => {
+            const saved = savedPositionsRef.current.get(node.id)
+            return saved ? { ...node, position: saved } : node
+          })
+
+      // Update saved positions: add/overwrite with positions from this layout run.
+      // Remove stale entries for nodes no longer in the topology.
+      const currentIds = new Set(positionedNodes.map(n => n.id))
+      for (const id of savedPositionsRef.current.keys()) {
+        if (!currentIds.has(id)) savedPositionsRef.current.delete(id)
+      }
+      for (const node of positionedNodes) {
+        savedPositionsRef.current.set(node.id, node.position)
+      }
+
       // Add expand/collapse handlers to pod-related nodes
-      const nodesWithHandlers = layoutedNodes.map(node => {
+      const nodesWithHandlers = positionedNodes.map(node => {
         const isPodGroup = node.data?.kind === 'PodGroup'
         const nodeData = node.data?.nodeData as Record<string, unknown> | undefined
         const expandedFromGroup = nodeData?.expandedFromGroup as string | undefined
@@ -622,8 +677,17 @@ export function TopologyGraph({
           showInteractive={false}
         >
           {showExportButton && <ExportImageButton onExportingChange={setIsExporting} />}
+          {onTogglePause && (
+            <button
+              className={`react-flow__controls-button ${paused ? 'text-amber-400' : ''}`}
+              onClick={onTogglePause}
+              title={paused ? 'Resume live updates' : 'Pause live updates'}
+            >
+              {paused ? <Play className="w-3 h-3" /> : <Pause className="w-3 h-3" />}
+            </button>
+          )}
         </Controls>
-        <ViewportController structureKey={structureKey} />
+        <ViewportController viewMode={viewMode} layoutRetryCount={layoutRetryCount} />
       </ReactFlow>
     </ReactFlowProvider>
   )
@@ -904,10 +968,17 @@ const VIEWPORT_ANIMATION_DURATION = 400
 
 // Inner component to handle animated viewport transitions and zoom-based CSS variables
 // Must be inside ReactFlow to use useReactFlow hook
-function ViewportController({ structureKey }: { structureKey: string }) {
+function ViewportController({
+  viewMode,
+  layoutRetryCount,
+}: {
+  viewMode: string
+  layoutRetryCount: number
+}) {
   const { fitView, zoomIn, zoomOut, setViewport, getViewport } = useReactFlow()
   const nodes = useNodes() // Reactive hook to watch node changes
-  const prevStructureKeyRef = useRef<string>('')
+  const prevViewModeRef = useRef<string>(viewMode)
+  const prevRetryCountRef = useRef(layoutRetryCount)
   const prevNodesLengthRef = useRef(0)
 
   // Topology keyboard shortcuts
@@ -978,34 +1049,29 @@ function ViewportController({ structureKey }: { structureKey: string }) {
     updateZoomOffset(getViewport())
   }, [updateZoomOffset, getViewport])
 
-  // Fit view when nodes become available or structure changes
-  // This handles both initial mount and view switching scenarios
+  // Fit view only on intentional changes: initial load, namespace/view switch, explicit retry.
+  // Background topology updates (new pods, status changes) must NOT trigger fitView —
+  // doing so would cause the viewport to zoom/pan every few seconds in active clusters.
   useEffect(() => {
-    const structureChanged = structureKey !== prevStructureKeyRef.current
     const nodesJustPopulated = prevNodesLengthRef.current === 0 && nodes.length > 0
+    const viewModeChanged = viewMode !== prevViewModeRef.current
+    const retryRequested = layoutRetryCount !== prevRetryCountRef.current
 
-    // Update refs
     prevNodesLengthRef.current = nodes.length
-    if (structureChanged) {
-      prevStructureKeyRef.current = structureKey
-    }
+    prevViewModeRef.current = viewMode
+    prevRetryCountRef.current = layoutRetryCount
 
-    // Fit view when:
-    // 1. Nodes just became available (were 0, now > 0) - handles initial mount/view switch
-    // 2. Structure changed AND nodes already exist - handles topology changes
-    if (nodesJustPopulated || (structureChanged && nodes.length > 0)) {
-      // Small delay to ensure DOM is updated
+    if (nodesJustPopulated || viewModeChanged || retryRequested) {
       const timeoutId = setTimeout(() => {
         fitView({
           padding: 0.15,
-          // No animation when nodes first appear, animate on subsequent structure changes
           duration: nodesJustPopulated ? 0 : VIEWPORT_ANIMATION_DURATION,
         })
       }, 10)
 
       return () => clearTimeout(timeoutId)
     }
-  }, [structureKey, nodes.length, fitView])
+  }, [viewMode, layoutRetryCount, nodes.length, fitView])
 
   return null
 }

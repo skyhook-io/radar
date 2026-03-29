@@ -33,7 +33,11 @@ func (s *Server) handleSecretCertExpiry(w http.ResponseWriter, r *http.Request) 
 	}
 
 	provider := k8s.NewTopologyResourceProvider(cache)
-	namespaces := parseNamespaces(r.URL.Query())
+	namespaces := s.parseNamespacesForUser(r)
+	if noNamespaceAccess(namespaces) {
+		s.writeJSON(w, map[string]CertExpiry{})
+		return
+	}
 
 	result, err := topology.GetCertificateExpiry(provider, namespaces)
 	if err != nil {

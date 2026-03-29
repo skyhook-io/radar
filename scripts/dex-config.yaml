@@ -1,0 +1,25 @@
+issuer: http://localhost:5556/dex
+
+storage:
+  type: memory
+
+web:
+  http: 0.0.0.0:5556
+
+oauth2:
+  skipApprovalScreen: true
+
+staticClients:
+  - id: radar
+    secret: radar-secret
+    name: Radar
+    redirectURIs:
+      - http://localhost:9280/auth/callback
+      - http://localhost:9273/auth/callback
+
+enablePasswordDB: true
+staticPasswords:
+  - email: admin@example.com
+    hash: "$2a$10$2b2cU8CPhOTaGrs1HRQuAueS7JTT5ZHsHSzYiFPm1leZck7Mc8T4W" # password
+    username: admin
+    userID: "1"

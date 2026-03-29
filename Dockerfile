@@ -10,20 +10,23 @@
 # =============================================================================
 FROM node:20-alpine AS frontend-builder
 
-WORKDIR /app/web
+WORKDIR /app
 
-# Install dependencies
-COPY web/package*.json ./
+# Install dependencies (workspace root + all packages)
+COPY package*.json ./
+COPY web/package*.json ./web/
+COPY packages/k8s-ui/package*.json ./packages/k8s-ui/
 RUN npm ci --prefer-offline --no-audit
 
 # Build frontend
-COPY web/ ./
-RUN npm run build
+COPY web/ ./web/
+COPY packages/k8s-ui/ ./packages/k8s-ui/
+RUN npm run build --workspace=web
 
 # =============================================================================
 # Stage 2: Build Go backend
 # =============================================================================
-FROM golang:1.25-alpine AS backend-builder
+FROM golang:1.26-alpine AS backend-builder
 
 # Install build dependencies
 RUN apk add --no-cache git ca-certificates
@@ -32,6 +35,7 @@ WORKDIR /app
 
 # Download Go modules first (cacheable layer)
 COPY go.mod go.sum ./
+COPY pkg/ pkg/
 RUN go mod download
 
 # Copy source code

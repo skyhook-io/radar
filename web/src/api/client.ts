@@ -27,6 +27,39 @@ import type { GitOpsOperationResponse } from '../types/gitops'
 
 const API_BASE = '/api'
 
+// Module-level query client reference for invalidating auth state from apiFetch.
+// Set by setAuthQueryClient() from the app root.
+let _authQueryClient: import('@tanstack/react-query').QueryClient | null = null
+export function setAuthQueryClient(qc: import('@tanstack/react-query').QueryClient) {
+  _authQueryClient = qc
+}
+
+// Wrapper around fetch that always includes credentials (for session cookies)
+// and handles 401 responses globally.
+function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  return fetch(input, { credentials: 'same-origin', ...init }).then(async response => {
+    if (response.status === 401 && !window.location.pathname.startsWith('/auth')) {
+      // Invalidate auth state so AuthBarrier activates
+      _authQueryClient?.setQueryData(['auth-me'], { authEnabled: true, authMode: 'unknown' })
+
+      // Check authMode from 401 body to handle proxy vs OIDC differently
+      try {
+        const body = await response.clone().json()
+        if (body.authMode) {
+          _authQueryClient?.setQueryData(['auth-me'], { authEnabled: true, authMode: body.authMode })
+        }
+        if (body.authMode !== 'proxy') {
+          window.location.href = '/auth/login'
+        }
+      } catch {
+        // Can't parse 401 body — don't redirect blindly (proxy mode has no /auth/login)
+        console.warn('Authentication required (unable to determine auth mode)')
+      }
+    }
+    return response
+  })
+}
+
 // ApiError preserves HTTP status code for callers to distinguish 403/404/500 etc.
 export class ApiError extends Error {
   status: number
@@ -44,7 +77,7 @@ export function isForbiddenError(error: unknown): boolean {
 }
 
 export async function fetchJSON<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`)
+  const response = await apiFetch(`${API_BASE}${path}`)
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({ error: 'Unknown error' }))
     throw new ApiError(errorData.error || `HTTP ${response.status}`, response.status, errorData)
@@ -199,6 +232,7 @@ export interface DashboardResponse {
   certificateHealth: DashboardCertificateHealth | null
   nodeVersionSkew: { versions: Record<string, string[]>; minVersion: string; maxVersion: string } | null
   deferredLoading?: boolean // True while deferred informers (secrets, events, etc.) are still syncing
+  accessRestricted?: boolean // True when user has no namespace access (RBAC)
 }
 
 export interface DashboardCRDsResponse {
@@ -434,7 +468,7 @@ export interface DesktopUpdateStatus {
 export function useStartDesktopUpdate() {
   return useMutation({
     mutationFn: async () => {
-      const response = await fetch(`${API_BASE}/desktop/update`, {
+      const response = await apiFetch(`${API_BASE}/desktop/update`, {
         method: 'POST',
       })
       if (!response.ok) {
@@ -462,7 +496,7 @@ export function useDesktopUpdateStatus(enabled: boolean) {
 export function useApplyDesktopUpdate() {
   return useMutation({
     mutationFn: async () => {
-      const response = await fetch(`${API_BASE}/desktop/update/apply`, {
+      const response = await apiFetch(`${API_BASE}/desktop/update/apply`, {
         method: 'POST',
       })
       if (!response.ok) {
@@ -524,6 +558,22 @@ export function useNamespaceCapabilities(namespace: string | undefined, globalCa
     queryFn: () => fetchJSON(`/capabilities?namespace=${encodeURIComponent(namespace!)}`),
     enabled: !!needsCheck,
     staleTime: 60000,
+  })
+}
+
+// Auth
+export interface AuthMe {
+  authEnabled: boolean
+  authMode?: string
+  username?: string
+  groups?: string[]
+}
+
+export function useAuthMe() {
+  return useQuery<AuthMe>({
+    queryKey: ['auth-me'],
+    queryFn: () => fetchJSON('/auth/me'),
+    staleTime: 300000, // 5 minutes
   })
 }
 
@@ -913,7 +963,7 @@ export function usePrometheusConnect() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async () => {
-      const resp = await fetch(`${API_BASE}/prometheus/connect`, { method: 'POST' })
+      const resp = await apiFetch(`${API_BASE}/prometheus/connect`, { method: 'POST' })
       if (!resp.ok) {
         const body = await resp.json().catch(() => ({ error: 'Unknown error' }))
         throw new Error(body.error || `HTTP ${resp.status}`)
@@ -1084,7 +1134,7 @@ export function useUpdateResource() {
 
   return useMutation({
     mutationFn: async ({ kind, namespace, name, yaml }: { kind: string; namespace: string; name: string; yaml: string }) => {
-      const response = await fetch(`${API_BASE}/resources/${kind}/${namespace}/${name}`, {
+      const response = await apiFetch(`${API_BASE}/resources/${kind}/${namespace}/${name}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'text/plain' },
         body: yaml,
@@ -1132,7 +1182,7 @@ export function useDeleteResource() {
       if (force) {
         url.searchParams.set('force', 'true')
       }
-      const response = await fetch(url.toString(), {
+      const response = await apiFetch(url.toString(), {
         method: 'DELETE',
       })
       if (!response.ok) {
@@ -1163,7 +1213,7 @@ export function useTriggerCronJob() {
 
   return useMutation({
     mutationFn: async ({ namespace, name }: { namespace: string; name: string }) => {
-      const response = await fetch(`${API_BASE}/cronjobs/${namespace}/${name}/trigger`, {
+      const response = await apiFetch(`${API_BASE}/cronjobs/${namespace}/${name}/trigger`, {
         method: 'POST',
       })
       if (!response.ok) {
@@ -1190,7 +1240,7 @@ export function useSuspendCronJob() {
 
   return useMutation({
     mutationFn: async ({ namespace, name }: { namespace: string; name: string }) => {
-      const response = await fetch(`${API_BASE}/cronjobs/${namespace}/${name}/suspend`, {
+      const response = await apiFetch(`${API_BASE}/cronjobs/${namespace}/${name}/suspend`, {
         method: 'POST',
       })
       if (!response.ok) {
@@ -1216,7 +1266,7 @@ export function useResumeCronJob() {
 
   return useMutation({
     mutationFn: async ({ namespace, name }: { namespace: string; name: string }) => {
-      const response = await fetch(`${API_BASE}/cronjobs/${namespace}/${name}/resume`, {
+      const response = await apiFetch(`${API_BASE}/cronjobs/${namespace}/${name}/resume`, {
         method: 'POST',
       })
       if (!response.ok) {
@@ -1246,7 +1296,7 @@ export function useRestartWorkload() {
 
   return useMutation({
     mutationFn: async ({ kind, namespace, name }: { kind: string; namespace: string; name: string }) => {
-      const response = await fetch(`${API_BASE}/workloads/${kind}/${namespace}/${name}/restart`, {
+      const response = await apiFetch(`${API_BASE}/workloads/${kind}/${namespace}/${name}/restart`, {
         method: 'POST',
       })
       if (!response.ok) {
@@ -1272,7 +1322,7 @@ export function useScaleWorkload() {
 
   return useMutation({
     mutationFn: async ({ kind, namespace, name, replicas }: { kind: string; namespace: string; name: string; replicas: number }) => {
-      const response = await fetch(`${API_BASE}/workloads/${kind}/${namespace}/${name}/scale`, {
+      const response = await apiFetch(`${API_BASE}/workloads/${kind}/${namespace}/${name}/scale`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ replicas }),
@@ -1321,7 +1371,7 @@ export function useRollbackWorkload() {
   const queryClient = useQueryClient()
   return useMutation({
     mutationFn: async ({ kind, namespace, name, revision }: { kind: string; namespace: string; name: string; revision: number }) => {
-      const response = await fetch(`${API_BASE}/workloads/${kind}/${namespace}/${name}/rollback`, {
+      const response = await apiFetch(`${API_BASE}/workloads/${kind}/${namespace}/${name}/rollback`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ revision }),
@@ -1476,7 +1526,7 @@ export function useHelmManifest(namespace: string, name: string, revision?: numb
   return useQuery<string>({
     queryKey: ['helm-manifest', namespace, name, revision],
     queryFn: async () => {
-      const response = await fetch(`${API_BASE}/helm/releases/${namespace}/${name}/manifest${params}`)
+      const response = await apiFetch(`${API_BASE}/helm/releases/${namespace}/${name}/manifest${params}`)
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Unknown error' }))
         throw new Error(error.error || `HTTP ${response.status}`)
@@ -1542,13 +1592,39 @@ export function useHelmBatchUpgradeInfo(namespace?: string, enabled = true) {
 // Helm Actions (mutations)
 // ============================================================================
 
+// Rollback a release to a previous revision
+export function useHelmRollback() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ namespace, name, revision }: { namespace: string; name: string; revision: number }) => {
+      const response = await apiFetch(`${API_BASE}/helm/releases/${namespace}/${name}/rollback?revision=${revision}`, {
+        method: 'POST',
+      })
+      if (!response.ok) {
+        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+        throw new Error(error.error || `HTTP ${response.status}`)
+      }
+      return response.json()
+    },
+    meta: {
+      errorMessage: 'Rollback failed',
+      successMessage: 'Release rolled back',
+    },
+    onSuccess: (_, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['helm-releases'] })
+      queryClient.invalidateQueries({ queryKey: ['helm-release', variables.namespace, variables.name] })
+    },
+  })
+}
+
 // Uninstall a release
 export function useHelmUninstall() {
   const queryClient = useQueryClient()
 
   return useMutation({
     mutationFn: async ({ namespace, name }: { namespace: string; name: string }) => {
-      const response = await fetch(`${API_BASE}/helm/releases/${namespace}/${name}`, {
+      const response = await apiFetch(`${API_BASE}/helm/releases/${namespace}/${name}`, {
         method: 'DELETE',
       })
       if (!response.ok) {
@@ -1659,7 +1735,7 @@ export function rollbackWithProgress(
 export function useHelmPreviewValues() {
   return useMutation<ValuesPreviewResponse, Error, { namespace: string; name: string; values: Record<string, unknown> }>({
     mutationFn: async ({ namespace, name, values }) => {
-      const response = await fetch(`${API_BASE}/helm/releases/${namespace}/${name}/values/preview`, {
+      const response = await apiFetch(`${API_BASE}/helm/releases/${namespace}/${name}/values/preview`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ values }),
@@ -1679,7 +1755,7 @@ export function useHelmApplyValues() {
 
   return useMutation({
     mutationFn: async ({ namespace, name, values }: { namespace: string; name: string; values: Record<string, unknown> }) => {
-      const response = await fetch(`${API_BASE}/helm/releases/${namespace}/${name}/values`, {
+      const response = await apiFetch(`${API_BASE}/helm/releases/${namespace}/${name}/values`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ values }),
@@ -1720,7 +1796,7 @@ export function useUpdateRepository() {
 
   return useMutation({
     mutationFn: async (repoName: string) => {
-      const response = await fetch(`${API_BASE}/helm/repositories/${repoName}/update`, {
+      const response = await apiFetch(`${API_BASE}/helm/repositories/${repoName}/update`, {
         method: 'POST',
       })
       if (!response.ok) {
@@ -1774,7 +1850,7 @@ export function useInstallChart() {
 
   return useMutation({
     mutationFn: async (req: InstallChartRequest) => {
-      const response = await fetch(`${API_BASE}/helm/releases`, {
+      const response = await apiFetch(`${API_BASE}/helm/releases`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req),
@@ -1880,7 +1956,7 @@ function createGitOpsMutation<TVariables>(config: GitOpsMutationConfig<TVariable
     const queryClient = useQueryClient()
     return useMutation<GitOpsOperationResponse, Error, TVariables>({
       mutationFn: async (variables: TVariables): Promise<GitOpsOperationResponse> => {
-        const response = await fetch(`${API_BASE}${config.getPath(variables)}`, {
+        const response = await apiFetch(`${API_BASE}${config.getPath(variables)}`, {
           method: 'POST',
         })
         if (!response.ok) {
@@ -1993,7 +2069,7 @@ export function useArgoRefresh() {
   return useMutation({
     mutationFn: async ({ namespace, name, hard = false }: { namespace: string; name: string; hard?: boolean }) => {
       const params = hard ? '?type=hard' : ''
-      const response = await fetch(`${API_BASE}/argo/applications/${namespace}/${name}/refresh${params}`, {
+      const response = await apiFetch(`${API_BASE}/argo/applications/${namespace}/${name}/refresh${params}`, {
         method: 'POST',
       })
       if (!response.ok) {
@@ -2051,7 +2127,7 @@ export function useSwitchContext() {
       const timeoutId = setTimeout(() => controller.abort(), CONTEXT_SWITCH_TIMEOUT)
 
       try {
-        const response = await fetch(`${API_BASE}/contexts/${encodeURIComponent(name)}`, {
+        const response = await apiFetch(`${API_BASE}/contexts/${encodeURIComponent(name)}`, {
           method: 'POST',
           signal: controller.signal,
         })

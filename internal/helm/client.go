@@ -161,6 +161,54 @@ func (c *Client) getActionConfig(namespace string) (*action.Configuration, error
 	return actionConfig, nil
 }
 
+// getActionConfigForUser creates an action configuration with K8s impersonation set.
+// Used for write operations when auth is enabled.
+func (c *Client) getActionConfigForUser(namespace, username string, groups []string) (*action.Configuration, error) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+
+	actionConfig := new(action.Configuration)
+
+	configFlags := genericclioptions.NewConfigFlags(false)
+	if homeDir, err := os.UserHomeDir(); err != nil || !isDirWritable(homeDir) {
+		kubeCacheDir := "/tmp/helm/kube-cache"
+		configFlags.CacheDir = &kubeCacheDir
+	}
+	if c.kubeconfig != "" {
+		configFlags.KubeConfig = &c.kubeconfig
+	}
+	if namespace != "" {
+		configFlags.Namespace = &namespace
+	}
+
+	currentContext := k8s.GetContextName()
+	if currentContext != "" && currentContext != "in-cluster" {
+		configFlags.Context = &currentContext
+	}
+
+	// Set impersonation
+	configFlags.Impersonate = &username
+	configFlags.ImpersonateGroup = &groups
+
+	if err := actionConfig.Init(configFlags, namespace, "secrets", log.Printf); err != nil {
+		return nil, fmt.Errorf("failed to initialize helm action config for user %s: %w", username, err)
+	}
+
+	return actionConfig, nil
+}
+
+// GetActionConfig returns an action configuration for the given namespace.
+// Exported for use by handlers that need to pass user-specific configs.
+func (c *Client) GetActionConfig(namespace string) (*action.Configuration, error) {
+	return c.getActionConfig(namespace)
+}
+
+// GetActionConfigForUser returns an action configuration with K8s impersonation.
+// Exported for use by handlers that need to pass user-specific configs.
+func (c *Client) GetActionConfigForUser(namespace, username string, groups []string) (*action.Configuration, error) {
+	return c.getActionConfigForUser(namespace, username, groups)
+}
+
 // ListReleases returns all Helm releases, optionally filtered by namespace
 func (c *Client) ListReleases(namespace string) ([]HelmRelease, error) {
 	actionConfig, err := c.getActionConfig(namespace)
@@ -914,9 +962,24 @@ func (c *Client) RollbackWithProgress(namespace, name string, revision int, prog
 	if err != nil {
 		return err
 	}
-
 	sendProgress("rolling-back", fmt.Sprintf("Rolling back %s to revision %d...", name, revision), "")
+	if err := c.rollbackWith(actionConfig, name, revision); err != nil {
+		return err
+	}
+	sendProgress("complete", fmt.Sprintf("Successfully rolled back %s to revision %d", name, revision), "")
+	return nil
+}
 
+// RollbackAsUser performs a rollback with K8s impersonation.
+func (c *Client) RollbackAsUser(namespace, name string, revision int, username string, groups []string) error {
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return err
+	}
+	return c.rollbackWith(actionConfig, name, revision)
+}
+
+func (c *Client) rollbackWith(actionConfig *action.Configuration, name string, revision int) error {
 	rollbackAction := action.NewRollback(actionConfig)
 	rollbackAction.Version = revision
 	rollbackAction.Timeout = 120 * time.Second
@@ -925,7 +988,6 @@ func (c *Client) RollbackWithProgress(namespace, name string, revision int, prog
 		return fmt.Errorf("rollback failed: %w", err)
 	}
 
-	sendProgress("complete", fmt.Sprintf("Successfully rolled back %s to revision %d", name, revision), "")
 	return nil
 }
 
@@ -935,11 +997,23 @@ func (c *Client) Uninstall(namespace, name string) error {
 	if err != nil {
 		return err
 	}
+	return c.uninstallWith(actionConfig, name)
+}
 
+// UninstallAsUser removes a release with K8s impersonation.
+func (c *Client) UninstallAsUser(namespace, name string, username string, groups []string) error {
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return err
+	}
+	return c.uninstallWith(actionConfig, name)
+}
+
+func (c *Client) uninstallWith(actionConfig *action.Configuration, name string) error {
 	uninstallAction := action.NewUninstall(actionConfig)
 	uninstallAction.Timeout = 120 * time.Second
 
-	_, err = uninstallAction.Run(name)
+	_, err := uninstallAction.Run(name)
 	if err != nil {
 		return fmt.Errorf("uninstall failed: %w", err)
 	}
@@ -971,7 +1045,20 @@ func (c *Client) UpgradeWithProgress(namespace, name, targetVersion string, prog
 	if err != nil {
 		return err
 	}
+	return c.upgradeWith(actionConfig, namespace, name, targetVersion, sendProgress)
+}
 
+// UpgradeAsUser upgrades a release with K8s impersonation.
+func (c *Client) UpgradeAsUser(namespace, name, targetVersion string, username string, groups []string) error {
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return err
+	}
+	noop := func(phase, message, detail string) {}
+	return c.upgradeWith(actionConfig, namespace, name, targetVersion, noop)
+}
+
+func (c *Client) upgradeWith(actionConfig *action.Configuration, namespace, name, targetVersion string, sendProgress func(phase, message, detail string)) error {
 	// First, get the current release to find chart info
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -1210,7 +1297,19 @@ func (c *Client) ApplyValues(namespace, name string, newValues map[string]any) e
 	if err != nil {
 		return err
 	}
+	return c.applyValuesWith(actionConfig, namespace, name, newValues)
+}
 
+// ApplyValuesAsUser applies values with K8s impersonation.
+func (c *Client) ApplyValuesAsUser(namespace, name string, newValues map[string]any, username string, groups []string) error {
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return err
+	}
+	return c.applyValuesWith(actionConfig, namespace, name, newValues)
+}
+
+func (c *Client) applyValuesWith(actionConfig *action.Configuration, namespace, name string, newValues map[string]any) error {
 	// Get the current release to reuse its chart
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -1509,6 +1608,19 @@ func (c *Client) Install(req *InstallRequest) (*HelmRelease, error) {
 	if err != nil {
 		return nil, err
 	}
+	return c.installWith(actionConfig, req)
+}
+
+// InstallAsUser installs a new Helm release with K8s impersonation.
+func (c *Client) InstallAsUser(req *InstallRequest, username string, groups []string) (*HelmRelease, error) {
+	actionConfig, err := c.getActionConfigForUser(req.Namespace, username, groups)
+	if err != nil {
+		return nil, err
+	}
+	return c.installWith(actionConfig, req)
+}
+
+func (c *Client) installWith(actionConfig *action.Configuration, req *InstallRequest) (*HelmRelease, error) {
 
 	var chartURL string
 
@@ -1675,17 +1787,29 @@ func (c *Client) Install(req *InstallRequest) (*HelmRelease, error) {
 
 // InstallWithProgress installs a new Helm release and streams progress updates
 func (c *Client) InstallWithProgress(req *InstallRequest, progressCh chan<- InstallProgress) (*HelmRelease, error) {
+	actionConfig, err := c.getActionConfig(req.Namespace)
+	if err != nil {
+		return nil, err
+	}
+	return c.installWithProgressUsing(actionConfig, req, progressCh)
+}
+
+// InstallWithProgressAsUser installs a new Helm release with K8s impersonation and streams progress.
+func (c *Client) InstallWithProgressAsUser(req *InstallRequest, progressCh chan<- InstallProgress, username string, groups []string) (*HelmRelease, error) {
+	actionConfig, err := c.getActionConfigForUser(req.Namespace, username, groups)
+	if err != nil {
+		return nil, err
+	}
+	return c.installWithProgressUsing(actionConfig, req, progressCh)
+}
+
+func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, req *InstallRequest, progressCh chan<- InstallProgress) (*HelmRelease, error) {
 	sendProgress := func(phase, message, detail string) {
 		select {
 		case progressCh <- InstallProgress{Phase: phase, Message: message, Detail: detail}:
 		default:
 			// Channel full or closed, skip
 		}
-	}
-
-	actionConfig, err := c.getActionConfig(req.Namespace)
-	if err != nil {
-		return nil, err
 	}
 
 	var chartURL string

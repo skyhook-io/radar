@@ -23,6 +23,7 @@ import { ContextSwitchProvider, useContextSwitch } from './context/ContextSwitch
 import { ConnectionProvider, useConnection } from './context/ConnectionContext'
 import { ConnectionErrorView } from './components/ConnectionErrorView'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
+import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
 import { NamespaceSelector } from './components/ui/NamespaceSelector'
 import { UpdateNotification } from './components/ui/UpdateNotification'
@@ -30,7 +31,7 @@ import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { CommandPalette } from './components/ui/CommandPalette'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { useNamespaces, useSwitchContext } from './api/client'
+import { useNamespaces, useSwitchContext, useAuthMe, setAuthQueryClient } from './api/client'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { Loader2 } from 'lucide-react'
@@ -102,12 +103,55 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   return 'home'
 }
 
+function AuthBarrier({ authMode }: { authMode: string }) {
+  useEffect(() => {
+    if (authMode === 'oidc') {
+      window.location.href = '/auth/login'
+    }
+  }, [authMode])
+
+  if (authMode === 'oidc') {
+    return (
+      <div className="flex-1 flex items-center justify-center bg-theme-base">
+        <div className="flex flex-col items-center gap-4">
+          <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
+          <p className="text-sm text-theme-text-secondary">Redirecting to login...</p>
+        </div>
+      </div>
+    )
+  }
+
+  return (
+    <div className="flex-1 flex items-center justify-center bg-theme-base">
+      <div className="flex flex-col items-center gap-4 max-w-md text-center">
+        <div className="w-12 h-12 rounded-full bg-amber-500/10 flex items-center justify-center">
+          <svg className="w-6 h-6 text-amber-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m0 0v2m0-2h2m-2 0H10m4-6V7a4 4 0 00-8 0v4h8z" />
+            <rect x="5" y="11" width="14" height="11" rx="2" strokeLinecap="round" strokeLinejoin="round" />
+          </svg>
+        </div>
+        <div>
+          <p className="text-lg font-medium text-theme-text-primary">Authentication Required</p>
+          <p className="text-sm text-theme-text-secondary mt-2">
+            Radar is configured with proxy authentication. Access it through your organization's auth proxy to authenticate.
+          </p>
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function AppInner() {
   const navigate = useNavigate()
   const location = useLocation()
   const [searchParams, setSearchParams] = useSearchParams()
   const capabilities = useCapabilitiesContext()
   const openLocalTerminal = useOpenLocalTerminal()
+
+  // Auth check — detect if auth is enabled but user is not authenticated
+  const { data: authMe, isPending: authMePending } = useAuthMe()
+  const authQC = useQueryClient()
+  useEffect(() => { setAuthQueryClient(authQC) }, [authQC])
 
   // Parse namespaces from URL (supports both 'namespaces' and legacy 'namespace')
   const parseNamespacesFromURL = (params: URLSearchParams): string[] => {
@@ -168,6 +212,13 @@ function AppInner() {
   // Topology filter state
   const [visibleKinds, setVisibleKinds] = useState<Set<NodeKind>>(() => new Set(DEFAULT_VISIBLE_KINDS))
   const [filterSidebarCollapsed, setFilterSidebarCollapsed] = useState(false)
+  // Track CRD kinds that have been auto-added to visibleKinds so we don't override user toggles
+  const seededCRDKindsRef = useRef<Set<string>>(new Set())
+
+  // Topology live-update pause state
+  const [topologyPaused, setTopologyPaused] = useState(false)
+  const [displayedTopology, setDisplayedTopology] = useState<typeof topology>(null)
+  const pendingTopologyRef = useRef<typeof topology>(null)
 
   // Help overlay state
   const [showHelp, setShowHelp] = useState(false)
@@ -401,6 +452,10 @@ function AppInner() {
       // Reset URL to current view with no resource-specific params.
       // Old cluster's selected pod/resource/kind don't exist on the new cluster.
       navigate({ pathname: location.pathname, search: '' }, { replace: true })
+
+      // Auto-unpause so the new cluster's topology loads immediately
+      setTopologyPaused(false)
+      pendingTopologyRef.current = null
     },
     onConnectionStateChange: updateConnectionFromSSE,
     onDeferredReady: () => {
@@ -412,6 +467,27 @@ function AppInner() {
   })
   const [reconnect, isReconnecting] = useRefreshAnimation(reconnectSSE)
 
+  // Apply live topology updates only when not paused. While paused, buffer the
+  // latest snapshot so we can apply it instantly when the user resumes.
+  useEffect(() => {
+    if (!topologyPaused) {
+      setDisplayedTopology(topology)
+    } else {
+      pendingTopologyRef.current = topology
+    }
+  }, [topology, topologyPaused])
+
+  const handleTogglePause = useCallback(() => {
+    setTopologyPaused(prev => {
+      if (prev && pendingTopologyRef.current !== null) {
+        // Resuming — apply the buffered snapshot immediately
+        setDisplayedTopology(pendingTopologyRef.current)
+        pendingTopologyRef.current = null
+      }
+      return !prev
+    })
+  }, [])
+
   // Track CRD discovery status from topology (more direct than cluster-info)
   // When discovery completes, topology will auto-update via SSE with new CRD nodes
   const crdDiscoveryStatus = topology?.crdDiscoveryStatus
@@ -422,6 +498,28 @@ function AppInner() {
       console.log('[CRD Discovery] Status:', crdDiscoveryStatus)
     }
   }, [crdDiscoveryStatus])
+
+  // Auto-add CRD kinds (not in ALL_NODE_KINDS) to visibleKinds the first time they appear.
+  // Uses a ref to track which kinds have been seeded so user toggle-off choices are preserved.
+  const allNodeKindsSet = useMemo(() => new Set<string>(ALL_NODE_KINDS), [])
+  useEffect(() => {
+    if (!topology?.nodes) return
+    const newKinds: NodeKind[] = []
+    for (const node of topology.nodes) {
+      const k = node.kind as string
+      if (!allNodeKindsSet.has(k) && !seededCRDKindsRef.current.has(k)) {
+        seededCRDKindsRef.current.add(k)
+        newKinds.push(node.kind)
+      }
+    }
+    if (newKinds.length > 0) {
+      setVisibleKinds(prev => {
+        const next = new Set(prev)
+        for (const k of newKinds) next.add(k)
+        return next
+      })
+    }
+  }, [topology, allNodeKindsSet])
 
   // Handle node selection - convert TopologyNode to SelectedResource for the drawer
   const handleNodeClick = useCallback((node: TopologyNode) => {
@@ -544,16 +642,16 @@ function AppInner() {
     setSelectedHelmRelease(null)
   }, [namespacesKey])
 
-  // Filter topology based on visible kinds
+  // Filter topology based on visible kinds (uses displayedTopology which respects pause)
   const filteredTopology = useMemo((): Topology | null => {
-    if (!topology) return null
+    if (!displayedTopology) return null
 
-    const filteredNodes = topology.nodes.filter(node => visibleKinds.has(node.kind))
+    const filteredNodes = displayedTopology.nodes.filter(node => visibleKinds.has(node.kind))
     const filteredNodeIds = new Set(filteredNodes.map(n => n.id))
 
     // Keep edges where both source and target are visible
     // Also respect skipIfKindVisible - hide shortcut edges when intermediate kind is shown
-    const filteredEdges = topology.edges.filter(edge => {
+    const filteredEdges = displayedTopology.edges.filter(edge => {
       // Both endpoints must be visible
       if (!filteredNodeIds.has(edge.source) || !filteredNodeIds.has(edge.target)) {
         return false
@@ -569,7 +667,7 @@ function AppInner() {
       nodes: filteredNodes,
       edges: filteredEdges,
     }
-  }, [topology, visibleKinds])
+  }, [displayedTopology, visibleKinds])
 
   // Filter handlers
   const handleToggleKind = useCallback((kind: NodeKind) => {
@@ -734,11 +832,22 @@ function AppInner() {
           >
             <Settings className="w-4 h-4" />
           </button>
+
+          {/* User menu (when auth enabled) */}
+          <UserMenu />
         </div>
       </header>
 
+      {/* Auth barrier - show when auth is enabled but user is not authenticated */}
+      {authMe?.authEnabled && !authMe?.username && authMe.authMode === 'proxy' && (
+        <AuthBarrier authMode="proxy" />
+      )}
+      {authMe?.authEnabled && !authMe?.username && authMe.authMode === 'oidc' && (
+        <AuthBarrier authMode="oidc" />
+      )}
+
       {/* Connection error view - show when disconnected */}
-      {!isSwitching && connection.state === 'disconnected' && (
+      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'disconnected' && (
         <ConnectionErrorView
           connection={connection}
           onRetry={retryConnection}
@@ -747,7 +856,7 @@ function AppInner() {
       )}
 
       {/* Connecting view - show during initial connection or retry */}
-      {!isSwitching && connection.state === 'connecting' && (
+      {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connecting' && (
         <div className="flex-1 flex items-center justify-center bg-theme-base">
           <div className="flex flex-col items-center gap-4 text-theme-text-secondary">
             <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
@@ -806,8 +915,8 @@ function AppInner() {
         </div>
       )}
 
-      {/* Main content - only show when connected */}
-      {!isSwitching && connection.state === 'connected' && <div className="flex-1 flex overflow-hidden">
+      {/* Main content - only show when connected and authenticated */}
+      {!isSwitching && !authMePending && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connected' && <div className="flex-1 flex overflow-hidden">
         <ErrorBoundary>
         {/* Home dashboard */}
         {mainView === 'home' && (
@@ -912,6 +1021,8 @@ function AppInner() {
                     hideGroupHeader={hideGroupHeader}
                     onNodeClick={handleNodeClick}
                     selectedNodeId={selectedResource ? `${apiResourceToNodeIdPrefix(selectedResource.kind)}-${selectedResource.namespace}-${selectedResource.name}` : undefined}
+                    paused={topologyPaused}
+                    onTogglePause={handleTogglePause}
                   />
 
                   {/* Topology controls overlay - top right */}

@@ -19,7 +19,11 @@ func (s *Server) handleResourceCounts(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	namespaces := parseNamespaces(r.URL.Query())
+	namespaces := s.parseNamespacesForUser(r)
+	if noNamespaceAccess(namespaces) {
+		s.writeJSON(w, ResourceCountsResponse{Counts: map[string]int{}})
+		return
+	}
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {

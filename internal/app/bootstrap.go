@@ -11,6 +11,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -42,6 +43,7 @@ type AppConfig struct {
 	PrometheusURL    string
 	Version          string
 	MCPEnabled       bool
+	AuthConfig       auth.Config
 }
 
 // SetGlobals applies debug/test flags to global state.
@@ -170,6 +172,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 			MCPEnabled:       cfg.MCPEnabled,
 			HasPrometheusURL: cfg.PrometheusURL != "",
 		},
+		AuthConfig: cfg.AuthConfig,
 	}
 
 	if cfg.MCPEnabled {

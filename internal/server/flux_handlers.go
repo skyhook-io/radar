@@ -6,8 +6,8 @@ import (
 
 	"github.com/go-chi/chi/v5"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/pkg/gitops"
-	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // handleFluxReconcile triggers a reconciliation by setting the reconcile annotation
@@ -22,13 +22,14 @@ func (s *Server) handleFluxReconcile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := k8s.GetDynamicClient()
+	client := s.getDynamicClientForRequest(r)
 	if client == nil {
 		log.Printf("[flux] Dynamic client unavailable for %s %s/%s", kind, namespace, name)
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
 
+	auth.AuditLog(r, namespace, name)
 	result, err := gitops.ReconcileFlux(r.Context(), client, entry, namespace, name)
 	if err != nil {
 		s.writeGitOpsError(w, err, "flux", "reconcile", namespace, name)
@@ -65,13 +66,14 @@ func (s *Server) fluxSetSuspend(w http.ResponseWriter, r *http.Request, suspend 
 		action = "resume"
 	}
 
-	client := k8s.GetDynamicClient()
+	client := s.getDynamicClientForRequest(r)
 	if client == nil {
 		log.Printf("[flux] Dynamic client unavailable for %s %s/%s", kind, namespace, name)
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
 
+	auth.AuditLog(r, namespace, name)
 	result, err := gitops.SetFluxSuspend(r.Context(), client, entry, namespace, name, suspend)
 	if err != nil {
 		s.writeGitOpsError(w, err, "flux", action, namespace, name)
@@ -93,13 +95,14 @@ func (s *Server) handleFluxSyncWithSource(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	client := k8s.GetDynamicClient()
+	client := s.getDynamicClientForRequest(r)
 	if client == nil {
 		log.Printf("[flux] Dynamic client unavailable for %s %s/%s", kind, namespace, name)
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
 
+	auth.AuditLog(r, namespace, name)
 	result, err := gitops.SyncFluxWithSource(r.Context(), client, kind, namespace, name)
 	if err != nil {
 		s.writeGitOpsError(w, err, "flux", "sync-with-source", namespace, name)

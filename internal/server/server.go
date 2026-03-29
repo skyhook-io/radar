@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"embed"
 	"encoding/json"
 	"fmt"
@@ -22,7 +23,11 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/dynamic"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/images"
@@ -49,6 +54,9 @@ type Server struct {
 	mcpHandler      http.Handler
 	diagConfig      *DiagConfig
 	effectiveConfig *config.Config // running config for GET /api/config
+	authConfig      auth.Config
+	permCache       *auth.PermissionCache
+	oidcHandler     *auth.OIDCHandler
 }
 
 // Config holds server configuration
@@ -60,10 +68,13 @@ type Config struct {
 	MCPHandler      http.Handler   // MCP server handler (nil = MCP disabled)
 	DiagConfig      *DiagConfig    // Sanitized config for diagnostics endpoint
 	EffectiveConfig *config.Config // Running startup config for GET /api/config
+	AuthConfig      auth.Config    // Authentication configuration
 }
 
 // New creates a new server instance
 func New(cfg Config) *Server {
+	cfg.AuthConfig.Defaults()
+
 	s := &Server{
 		router:          chi.NewRouter(),
 		broadcaster:     NewSSEBroadcaster(),
@@ -73,6 +84,38 @@ func New(cfg Config) *Server {
 		mcpHandler:      cfg.MCPHandler,
 		diagConfig:      cfg.DiagConfig,
 		effectiveConfig: cfg.EffectiveConfig,
+		authConfig:      cfg.AuthConfig,
+	}
+
+	// Initialize auth components when auth is enabled
+	if s.authConfig.Enabled() {
+		s.permCache = auth.NewPermissionCache()
+
+		if s.authConfig.Mode == "oidc" {
+			// Validate required OIDC fields before attempting provider discovery
+			if s.authConfig.OIDCIssuer == "" {
+				log.Fatalf("[auth] --auth-oidc-issuer is required when auth-mode=oidc")
+			}
+			if s.authConfig.OIDCClientID == "" {
+				log.Fatalf("[auth] --auth-oidc-client-id is required when auth-mode=oidc")
+			}
+			if s.authConfig.OIDCClientSecret == "" {
+				log.Fatalf("[auth] --auth-oidc-client-secret is required when auth-mode=oidc")
+			}
+			if s.authConfig.OIDCRedirectURL == "" {
+				log.Fatalf("[auth] --auth-oidc-redirect-url is required when auth-mode=oidc")
+			}
+			oidcHandler, err := auth.NewOIDCHandler(context.Background(), s.authConfig)
+			if err != nil {
+				log.Fatalf("[auth] OIDC initialization failed (issuer=%s): %v — cannot start with auth-mode=oidc", s.authConfig.OIDCIssuer, err)
+			}
+			s.oidcHandler = oidcHandler
+		}
+
+		if s.authConfig.Mode == "proxy" {
+			log.Printf("WARNING: Auth mode is 'proxy'. Ensure your ingress strips %s and %s headers from external requests to prevent spoofing.",
+				s.authConfig.UserHeader, s.authConfig.GroupsHeader)
+		}
 	}
 
 	// Set up static file system
@@ -103,6 +146,21 @@ func (s *Server) setupRoutes() {
 		AllowCredentials: true,
 	}))
 
+	// Auth middleware (when auth is enabled)
+	if s.authConfig.Enabled() {
+		r.Use(auth.Authenticate(s.authConfig))
+	}
+
+	// Auth routes
+	if s.oidcHandler != nil {
+		r.Get("/auth/login", s.oidcHandler.HandleLogin)
+		r.Get("/auth/callback", s.oidcHandler.HandleCallback)
+		r.Get("/auth/logout", s.oidcHandler.HandleLogout)
+	} else if s.authConfig.Enabled() {
+		// Proxy mode: register a simple logout that clears the session cookie
+		r.Get("/auth/logout", s.handleLogout)
+	}
+
 	// pprof routes for profiling (dev mode only, but always available for debugging)
 	r.Route("/debug/pprof", func(r chi.Router) {
 		r.Get("/", pprof.Index)
@@ -122,7 +180,7 @@ func (s *Server) setupRoutes() {
 	// API routes
 	r.Route("/api", func(r chi.Router) {
 		// Streaming endpoints (SSE/WebSocket) - no timeout
-		r.Get("/events/stream", s.broadcaster.HandleSSE)
+		r.Get("/events/stream", s.handleSSE)
 		r.Get("/pods/{namespace}/{name}/logs/stream", s.handlePodLogsStream)
 		r.Get("/pods/{namespace}/{name}/exec", s.handlePodExec)
 		r.Get("/local-terminal", s.handleLocalTerminal)
@@ -138,6 +196,7 @@ func (s *Server) setupRoutes() {
 
 			r.Get("/health", s.handleHealth)
 			r.Get("/diagnostics", s.handleDiagnostics)
+			r.Get("/auth/me", s.handleAuthMe)
 			r.Get("/version-check", s.handleVersionCheck)
 			r.Get("/dashboard", s.handleDashboard)
 			r.Get("/dashboard/crds", s.handleDashboardCRDs)
@@ -454,13 +513,25 @@ func (s *Server) handleClusterInfo(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
-	caps, err := k8s.CheckCapabilities(r.Context())
+	var caps *k8s.Capabilities
+	var err error
+
+	// When auth is enabled, check capabilities for the specific user
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		caps, err = k8s.CheckCapabilitiesForUser(r.Context(), user.Username, user.Groups)
+	} else {
+		caps, err = k8s.CheckCapabilities(r.Context())
+	}
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 
 	caps.MCPEnabled = s.mcpHandler != nil
+	caps.AuthEnabled = s.authConfig.Enabled()
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		caps.Username = user.Username
+	}
 
 	// Namespace-scoped re-check: when exec/logs/portForward are denied by the
 	// initial RBAC checks (cluster-wide + effective-namespace fallback), re-check
@@ -504,6 +575,22 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, caps)
 }
 
+// parseNamespacesForUser parses namespace query params and filters by user permissions.
+// Returns nil for "all namespaces" (no filter), a populated slice for specific namespaces,
+// or an empty non-nil slice when the user has no namespace access.
+// Use noNamespaceAccess() to check the no-access case.
+func (s *Server) parseNamespacesForUser(r *http.Request) []string {
+	namespaces := parseNamespaces(r.URL.Query())
+	return s.getUserNamespaces(r, namespaces)
+}
+
+// noNamespaceAccess returns true when a namespace filter explicitly grants no access
+// (non-nil empty slice from auth filtering). Handlers with custom namespace logic
+// should check this and return empty results.
+func noNamespaceAccess(namespaces []string) bool {
+	return namespaces != nil && len(namespaces) == 0
+}
+
 // parseNamespaces parses the namespace filter from query parameters.
 // Supports both "namespaces" (comma-separated, preferred) and "namespace" (single, backward compat).
 func parseNamespaces(query url.Values) []string {
@@ -539,7 +626,11 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	namespaces := parseNamespaces(r.URL.Query())
+	namespaces := s.parseNamespacesForUser(r)
+	if noNamespaceAccess(namespaces) {
+		s.writeJSON(w, map[string]any{"nodes": []any{}, "edges": []any{}})
+		return
+	}
 	viewMode := r.URL.Query().Get("view")
 
 	opts := topology.DefaultBuildOptions()
@@ -580,8 +671,25 @@ func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Trigger namespace discovery for user (populates perm cache)
+	_ = s.parseNamespacesForUser(r)
+
+	// Filter namespace list using the resolved permissions
+	var allowedSet map[string]bool
+	if user := auth.UserFromContext(r.Context()); user != nil && s.permCache != nil {
+		if perms := s.permCache.Get(user.Username); perms != nil && perms.AllowedNamespaces != nil {
+			allowedSet = make(map[string]bool, len(perms.AllowedNamespaces))
+			for _, ns := range perms.AllowedNamespaces {
+				allowedSet[ns] = true
+			}
+		}
+	}
+
 	result := make([]map[string]any, 0, len(namespaces))
 	for _, ns := range namespaces {
+		if allowedSet != nil && !allowedSet[ns.Name] {
+			continue
+		}
 		result = append(result, map[string]any{
 			"name":   ns.Name,
 			"status": string(ns.Status.Phase),
@@ -612,7 +720,11 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	kind := normalizeKind(chi.URLParam(r, "kind"))
-	namespaces := parseNamespaces(r.URL.Query())
+	namespaces := s.parseNamespacesForUser(r)
+	if noNamespaceAccess(namespaces) {
+		s.writeJSON(w, []any{})
+		return
+	}
 	group := r.URL.Query().Get("group") // API group for CRD disambiguation
 
 	cache := k8s.GetResourceCache()
@@ -627,7 +739,7 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	// listPerNs is a helper that merges results across multiple namespaces.
 	// listAll returns all items; listNs returns items for a single namespace.
 	listPerNs := func(listAll func() (any, error), listNs func(string) (any, error)) (any, error) {
-		if len(namespaces) == 0 {
+		if namespaces == nil {
 			return listAll()
 		}
 		if len(namespaces) == 1 {
@@ -921,6 +1033,15 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// Handle cluster-scoped resources: "_" is used as placeholder for empty namespace
 	if namespace == "_" {
 		namespace = ""
+	}
+
+	// Check namespace access for namespaced resources
+	if namespace != "" {
+		allowed := s.getUserNamespaces(r, []string{namespace})
+		if noNamespaceAccess(allowed) {
+			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", namespace))
+			return
+		}
 	}
 
 	cache := k8s.GetResourceCache()
@@ -1379,7 +1500,7 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	namespaces := parseNamespaces(r.URL.Query())
+	namespaces := s.parseNamespacesForUser(r)
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {
@@ -1396,7 +1517,10 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	var events any
 	var err error
 
-	if len(namespaces) == 1 {
+	if noNamespaceAccess(namespaces) {
+		s.writeJSON(w, []any{})
+		return
+	} else if len(namespaces) == 1 {
 		events, err = eventsLister.Events(namespaces[0]).List(labels.Everything())
 	} else if len(namespaces) > 1 {
 		var merged []any
@@ -1427,7 +1551,11 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	namespaces := parseNamespaces(r.URL.Query())
+	namespaces := s.parseNamespacesForUser(r)
+	if noNamespaceAccess(namespaces) {
+		s.writeJSON(w, []any{})
+		return
+	}
 	kind := r.URL.Query().Get("kind")
 	sinceStr := r.URL.Query().Get("since")
 	limitStr := r.URL.Query().Get("limit")
@@ -1530,13 +1658,19 @@ func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 	}
 	defer r.Body.Close()
 
-	// Update the resource
-	result, err := k8s.UpdateResource(r.Context(), k8s.UpdateResourceOptions{
+	// Update the resource (use impersonated client when auth is enabled)
+	auth.AuditLog(r, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+	result, err := k8s.UpdateResourceWithClient(r.Context(), k8s.UpdateResourceOptions{
 		Kind:      kind,
 		Namespace: namespace,
 		Name:      name,
 		YAML:      string(body),
-	})
+	}, client)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, err.Error())
@@ -1568,12 +1702,18 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	force := r.URL.Query().Get("force") == "true"
 
-	err := k8s.DeleteResource(r.Context(), k8s.DeleteResourceOptions{
+	auth.AuditLog(r, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+	err := k8s.DeleteResourceWithClient(r.Context(), k8s.DeleteResourceOptions{
 		Kind:      kind,
 		Namespace: namespace,
 		Name:      name,
 		Force:     force,
-	})
+	}, client)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, err.Error())
@@ -1621,7 +1761,13 @@ func (s *Server) handleTriggerCronJob(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	result, err := k8s.TriggerCronJob(r.Context(), namespace, name)
+	auth.AuditLog(r, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+	result, err := k8s.TriggerCronJobWithClient(r.Context(), namespace, name, client)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			s.writeError(w, http.StatusNotFound, err.Error())
@@ -1642,7 +1788,13 @@ func (s *Server) handleSuspendCronJob(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	err := k8s.SetCronJobSuspend(r.Context(), namespace, name, true)
+	auth.AuditLog(r, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+	err := k8s.SetCronJobSuspendWithClient(r.Context(), namespace, name, true, client)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			s.writeError(w, http.StatusNotFound, err.Error())
@@ -1660,7 +1812,13 @@ func (s *Server) handleResumeCronJob(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	err := k8s.SetCronJobSuspend(r.Context(), namespace, name, false)
+	auth.AuditLog(r, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+	err := k8s.SetCronJobSuspendWithClient(r.Context(), namespace, name, false, client)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
 			s.writeError(w, http.StatusNotFound, err.Error())
@@ -1691,7 +1849,13 @@ func (s *Server) handleRestartWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := k8s.RestartWorkload(r.Context(), kind, namespace, name)
+	auth.AuditLog(r, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+	err := k8s.RestartWorkloadWithClient(r.Context(), kind, namespace, name, client)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, err.Error())
@@ -1733,7 +1897,13 @@ func (s *Server) handleScaleWorkload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := k8s.ScaleWorkload(r.Context(), kind, namespace, name, req.Replicas)
+	auth.AuditLog(r, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+	err := k8s.ScaleWorkloadWithClient(r.Context(), kind, namespace, name, req.Replicas, client)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, err.Error())
@@ -1833,7 +2003,13 @@ func (s *Server) handleRollbackWorkload(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	err := k8s.RollbackWorkload(r.Context(), kind, namespace, name, req.Revision)
+	auth.AuditLog(r, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+	err := k8s.RollbackWorkloadWithClient(r.Context(), kind, namespace, name, req.Revision, client)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, err.Error())
@@ -1925,6 +2101,11 @@ func (s *Server) handleSwitchContext(w http.ResponseWriter, r *http.Request) {
 
 	// Stop all active sessions before switching
 	StopAllSessions()
+
+	// Invalidate per-user permission cache (different cluster = different RBAC)
+	if s.permCache != nil {
+		s.permCache.Invalidate()
+	}
 
 	// Perform the context switch
 	if err := k8s.PerformContextSwitch(name); err != nil {
@@ -2037,6 +2218,138 @@ func (s *Server) requireConnected(w http.ResponseWriter) bool {
 		return false
 	}
 	return true
+}
+
+// Auth handlers and helpers
+
+func (s *Server) handleLogout(w http.ResponseWriter, r *http.Request) {
+	http.SetCookie(w, auth.ClearSessionCookie())
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "logged out"})
+}
+
+func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
+	resp := map[string]any{
+		"authEnabled": s.authConfig.Enabled(),
+		"authMode":    s.authConfig.Mode,
+	}
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		resp["username"] = user.Username
+		resp["groups"] = user.Groups
+	}
+	s.writeJSON(w, resp)
+}
+
+// getDynamicClientForRequest returns an impersonated dynamic client when auth is enabled,
+// or the shared client when auth is disabled. Returns nil if impersonation fails
+// (never falls back to the ServiceAccount client). Callers must handle nil.
+func (s *Server) getDynamicClientForRequest(r *http.Request) dynamic.Interface {
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		client, err := k8s.ImpersonatedDynamicClient(user.Username, user.Groups)
+		if err != nil {
+			log.Printf("[auth] Impersonation failed for %s: %v", user.Username, err)
+			return nil
+		}
+		return client
+	}
+	return k8s.GetDynamicClient()
+}
+
+// getConfigForRequest returns an impersonated REST config when auth is enabled,
+// or the shared config when auth is disabled. Returns nil if impersonation fails
+// (never falls back to the ServiceAccount config). Callers must handle nil.
+func (s *Server) getConfigForRequest(r *http.Request) *rest.Config {
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		cfg, err := k8s.ImpersonatedConfig(user.Username, user.Groups)
+		if err != nil {
+			log.Printf("[auth] Impersonation failed for %s: %v", user.Username, err)
+			return nil
+		}
+		return cfg
+	}
+	return k8s.GetConfig()
+}
+
+// getClientForRequest returns an impersonated typed client when auth is enabled,
+// or the shared client when auth is disabled. Returns nil if impersonation fails
+// (never falls back to the ServiceAccount client). Callers must handle nil.
+func (s *Server) getClientForRequest(r *http.Request) kubernetes.Interface {
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		client, err := k8s.ImpersonatedClient(user.Username, user.Groups)
+		if err != nil {
+			log.Printf("[auth] Impersonation failed for %s: %v", user.Username, err)
+			return nil
+		}
+		return client
+	}
+	return k8s.GetClient()
+}
+
+// getUserNamespaces returns namespace filtering for the current user.
+// When auth is disabled, returns the requested namespaces unchanged.
+// When auth is enabled, intersects with the user's allowed namespaces.
+func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string {
+	user := auth.UserFromContext(r.Context())
+	if user == nil || s.permCache == nil {
+		return requested
+	}
+
+	perms := s.permCache.Get(user.Username)
+	if perms != nil {
+		log.Printf("[auth] Using cached permissions for %s: allowed=%v", user.Username, perms.AllowedNamespaces == nil)
+	}
+	if perms == nil {
+		log.Printf("[auth] No cached permissions for %s — discovering namespaces", user.Username)
+		// Discover namespaces synchronously on first request
+		client := k8s.GetClient()
+		if client == nil {
+			log.Printf("[auth] K8s client not available for namespace discovery (user=%s) — denying access", user.Username)
+			return []string{} // fail-closed: cannot verify permissions
+		}
+
+		// Get all namespace names from cache
+		var allNamespaces []string
+		if cache := k8s.GetResourceCache(); cache != nil {
+			if nsLister := cache.Namespaces(); nsLister != nil {
+				nsList, _ := nsLister.List(labels.Everything())
+				for _, ns := range nsList {
+					allNamespaces = append(allNamespaces, ns.Name)
+				}
+			}
+		}
+
+		allowed, err := auth.DiscoverNamespaces(r.Context(), client, user.Username, user.Groups, allNamespaces)
+		if err != nil {
+			log.Printf("[auth] Failed to discover namespaces for %s: %v — denying access (fail-closed)", user.Username, err)
+			return []string{} // fail-closed: no access on discovery error
+		}
+
+		log.Printf("[auth] DiscoverNamespaces result for %s: allowed=%v (nil=all, []=none)", user.Username, allowed)
+		perms = &auth.UserPermissions{AllowedNamespaces: allowed}
+		s.permCache.Set(user.Username, perms)
+	}
+
+	return auth.FilterNamespacesForUser(requested, user, perms)
+}
+
+// handleSSE wraps the SSEBroadcaster's HandleSSE with per-user namespace filtering.
+func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+	// Apply user namespace filtering to SSE subscriptions
+	namespaces := s.parseNamespacesForUser(r)
+	// Re-encode filtered namespaces back into query params for the broadcaster
+	q := r.URL.Query()
+	q.Del("namespace")
+	q.Del("namespaces")
+	if namespaces != nil {
+		if len(namespaces) == 0 {
+			// User has no namespace access — use impossible filter to block all events
+			q.Set("namespaces", "__no_access__")
+		} else {
+			q.Set("namespaces", strings.Join(namespaces, ","))
+		}
+	}
+	r.URL.RawQuery = q.Encode()
+	s.broadcaster.HandleSSE(w, r)
 }
 
 // Settings handlers
