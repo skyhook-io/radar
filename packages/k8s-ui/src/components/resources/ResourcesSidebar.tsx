@@ -109,7 +109,7 @@ const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps
         className={clsx(
           'w-full flex items-center gap-2 px-2 xl:px-3 py-1.5 rounded-lg text-sm transition-colors group/kind min-w-0',
           isSelected
-            ? 'bg-blue-500/20 text-blue-700 dark:text-blue-300'
+            ? 'selection-strong selection-text'
             : forbidden
               ? 'text-theme-text-disabled hover:bg-theme-elevated hover:text-theme-text-secondary'
               : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
@@ -147,7 +147,7 @@ const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps
           ) : (
             <span className={clsx(
               'text-xs py-0.5 rounded text-center font-mono',
-              isSelected ? 'bg-blue-500/30 text-blue-700 dark:text-blue-300' : 'bg-theme-elevated',
+              isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated',
               count < 1000 ? 'w-8' : 'w-9'
             )}>
               {count}
@@ -357,7 +357,7 @@ export function ResourcesSidebar({
   }, [effectiveSelectedKind.name, effectiveSelectedKind.group])
 
   return (
-    <div className={clsx('w-56 2xl:w-72 bg-theme-surface border-r border-theme-border overflow-y-auto overflow-x-hidden shrink-0', className)}>
+    <div className={clsx('w-56 2xl:w-72 bg-theme-surface dark:bg-theme-base border-r border-theme-border overflow-y-auto overflow-x-hidden shrink-0', className)}>
       <div className="px-2 py-2 border-b border-theme-border">
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-tertiary" />
@@ -367,7 +367,7 @@ export function ResourcesSidebar({
             value={kindFilter}
             onChange={(e) => setKindFilter(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Escape') { setKindFilter(''); (e.target as HTMLInputElement).blur() } }}
-            className="w-full pl-7 pr-7 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full pl-7 pr-7 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-skyhook-500"
           />
           {kindFilter && (
             <button
@@ -497,15 +497,15 @@ export function ResourcesSidebar({
                 className={clsx(
                   'w-full flex items-center gap-3 px-3 py-2 rounded-lg text-sm transition-colors',
                   isSelected
-                    ? 'bg-blue-500/20 text-blue-700 dark:text-blue-300'
+                    ? 'selection-strong selection-text'
                     : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
                 )}
               >
                 <Icon className="w-4 h-4 shrink-0" />
                 <span className="flex-1 text-left">{type.label}</span>
                 <span className={clsx(
-                  'text-xs px-2 py-0.5 rounded font-mono',
-                  isSelected ? 'bg-blue-500/30 text-blue-700 dark:text-blue-300' : 'bg-theme-elevated'
+                  'badge font-mono',
+                  isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated'
                 )}>
                   {count}
                 </span>

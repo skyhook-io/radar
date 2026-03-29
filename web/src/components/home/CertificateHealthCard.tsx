@@ -10,28 +10,20 @@ interface CertificateHealthCardProps {
 export function CertificateHealthCard({ data, onNavigate }: CertificateHealthCardProps) {
   const hasIssues = data.expired > 0 || data.critical > 0
   const hasWarnings = data.warning > 0
-  const borderColor = hasIssues
-    ? 'border-red-500/30 hover:border-red-500/60'
-    : hasWarnings
-      ? 'border-yellow-500/30 hover:border-yellow-500/60'
-      : 'border-green-500/30 hover:border-green-500/60'
   const accentColor = hasIssues ? 'text-red-500' : hasWarnings ? 'text-yellow-500' : 'text-green-500'
   const accentBg = hasIssues ? 'bg-red-500/10' : hasWarnings ? 'bg-yellow-500/10' : 'bg-green-500/10'
 
   return (
     <button
       onClick={onNavigate}
-      className={clsx(
-        'group h-[260px] rounded-lg border-[3px] bg-theme-surface/50 hover:-translate-y-1 hover:shadow-[0_12px_24px_rgba(0,0,0,0.12)] transition-all duration-200 text-left animate-fade-in-up',
-        borderColor
-      )}
+      className="group h-[260px] rounded-xl bg-theme-surface shadow-theme-sm hover:-translate-y-1 hover:shadow-theme-md transition-all duration-200 text-left animate-fade-in-up"
     >
       <div className="flex flex-col h-full w-full">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-theme-border">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50">
         <div className="flex items-center gap-2">
           <Shield className={clsx('w-4 h-4', accentColor)} />
-          <span className={clsx('text-sm font-semibold', accentColor)}>TLS Certificates</span>
-          <span className={clsx('text-[11px] px-1.5 py-0.5 rounded', accentBg, accentColor)}>
+          <span className={clsx('text-xs font-semibold uppercase tracking-wider', accentColor)}>TLS Certificates</span>
+          <span className={clsx('badge-sm', accentBg, accentColor)}>
             {data.total}
           </span>
         </div>
@@ -78,9 +70,9 @@ export function CertificateHealthCard({ data, onNavigate }: CertificateHealthCar
         </div>
       </div>
 
-      <div className="px-4 py-1.5 border-t border-theme-border flex items-center justify-end">
+      <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-end">
         <span className={clsx(
-          'flex items-center gap-1.5 text-xs font-medium transition-colors',
+          'flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider transition-colors',
           accentColor,
           hasIssues ? 'group-hover:text-red-400' : hasWarnings ? 'group-hover:text-yellow-400' : 'group-hover:text-green-400'
         )}>

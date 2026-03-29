@@ -240,7 +240,7 @@ export function LogCore({
             <button
               onClick={() => setExpandAllStructured(prev => !prev)}
               className={`p-1.5 rounded transition-colors ${
-                expandAllStructured ? 'bg-blue-600/50 text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
+                expandAllStructured ? 'btn-brand-toggle' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
               }`}
             >
               <Braces className="w-4 h-4" />
@@ -253,7 +253,7 @@ export function LogCore({
           <button
             onClick={toggleTimestamps}
             className={`p-1.5 rounded transition-colors ${
-              showTimestamps ? 'bg-blue-600/50 text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
+              showTimestamps ? 'btn-brand-toggle' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
             }`}
           >
             <Clock className="w-4 h-4" />
@@ -265,7 +265,7 @@ export function LogCore({
           <button
             onClick={toggleWrap}
             className={`p-1.5 rounded transition-colors ${
-              wordWrap ? 'bg-blue-600/50 text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
+              wordWrap ? 'btn-brand-toggle' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
             }`}
           >
             <WrapText className="w-4 h-4" />
@@ -277,7 +277,7 @@ export function LogCore({
           <button
             onClick={() => search.isOpen ? search.close() : search.open()}
             className={`p-1.5 rounded transition-colors ${
-              search.isOpen ? 'bg-blue-600 text-theme-text-primary' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
+              search.isOpen ? 'btn-brand-toggle' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
             }`}
           >
             <Search className="w-4 h-4" />
@@ -365,7 +365,7 @@ export function LogCore({
             <button
               onClick={search.toggleRegex}
               className={`p-1 rounded transition-colors ${
-                search.isRegex ? 'bg-blue-600 text-theme-text-primary' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
+                search.isRegex ? 'btn-brand-toggle' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
               }`}
             >
               <Regex className="w-3.5 h-3.5" />
@@ -377,7 +377,7 @@ export function LogCore({
             <button
               onClick={search.toggleCaseSensitive}
               className={`p-1 rounded transition-colors ${
-                search.isCaseSensitive ? 'bg-blue-600 text-theme-text-primary' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
+                search.isCaseSensitive ? 'btn-brand-toggle' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
               }`}
             >
               <CaseSensitive className="w-3.5 h-3.5" />
@@ -389,7 +389,7 @@ export function LogCore({
             <button
               onClick={search.toggleFilterMode}
               className={`p-1 rounded transition-colors ${
-                search.isFilterMode ? 'bg-blue-600 text-theme-text-primary' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
+                search.isFilterMode ? 'btn-brand-toggle' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
               }`}
             >
               <Filter className="w-3.5 h-3.5" />
@@ -484,7 +484,7 @@ export function LogCore({
           {!atBottom && (
             <button
               onClick={scrollToBottom}
-              className="absolute bottom-4 right-14 px-3 py-1.5 bg-blue-600 text-white text-xs rounded-full shadow-lg hover:bg-blue-700 z-10"
+              className="absolute bottom-4 right-14 px-3 py-1.5 btn-brand text-xs rounded-full shadow-lg z-10"
             >
               Scroll to bottom
             </button>

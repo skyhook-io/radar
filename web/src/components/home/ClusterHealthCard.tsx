@@ -159,9 +159,9 @@ export function ClusterHealthCard({
   const platformInfo = getPlatformInfo(cluster.platform)
 
   return (
-    <div className="rounded-lg border border-theme-border-light bg-theme-surface/50 overflow-hidden">
+    <div className="rounded-xl bg-theme-surface shadow-theme-sm overflow-hidden">
       {/* Main health section - three columns */}
-      <div className="px-6 py-5 border-b border-theme-border-light">
+      <div className="px-6 py-5 border-b border-theme-border/50">
         <div className="flex items-stretch gap-8">
           {/* Left: Cluster info */}
           <div className="flex flex-col justify-center w-[300px] shrink-0 pr-8 border-r border-theme-border/50">
@@ -235,8 +235,8 @@ export function ClusterHealthCard({
                 className="flex flex-col items-center gap-2 hover:-translate-y-1 hover:scale-105 transition-all duration-200"
               >
                 <HealthRing segments={podsRingSegments} size={88} strokeWidth={8} label={String(podsTotal)} />
-                <span className="text-xs font-medium text-theme-text-secondary">Pods</span>
-                <div className="flex items-center gap-2 text-[11px] font-mono">
+                <span className="text-sm font-semibold uppercase tracking-wider text-theme-text-secondary">Pods</span>
+                <div className="flex items-center gap-2 text-xs font-mono">
                   {health.healthy > 0 && (
                     <span className="flex items-center gap-0.5 text-green-500">
                       <CheckCircle className="w-3 h-3" />
@@ -268,8 +268,8 @@ export function ClusterHealthCard({
                 className="flex flex-col items-center gap-2 hover:-translate-y-1 hover:scale-105 transition-all duration-200"
               >
                 <HealthRing segments={deploymentsRingSegments} size={88} strokeWidth={8} label={String(counts.deployments.total)} />
-                <span className="text-xs font-medium text-theme-text-secondary">Deployments</span>
-                <div className="flex items-center gap-2 text-[11px] font-mono">
+                <span className="text-sm font-semibold uppercase tracking-wider text-theme-text-secondary">Deployments</span>
+                <div className="flex items-center gap-2 text-xs font-mono">
                   <span className="text-green-500">{counts.deployments.available} available</span>
                   {counts.deployments.unavailable > 0 && (
                     <span className="text-red-500">{counts.deployments.unavailable} unavailable</span>
@@ -287,8 +287,8 @@ export function ClusterHealthCard({
                 className="flex flex-col items-center gap-2 hover:-translate-y-1 hover:scale-105 transition-all duration-200"
               >
                 <HealthRing segments={nodesRingSegments} size={88} strokeWidth={8} label={String(counts.nodes.total)} />
-                <span className="text-xs font-medium text-theme-text-secondary">Nodes</span>
-                <div className="flex items-center gap-2 text-[11px] font-mono">
+                <span className="text-sm font-semibold uppercase tracking-wider text-theme-text-secondary">Nodes</span>
+                <div className="flex items-center gap-2 text-xs font-mono">
                   <span className="text-green-500">{counts.nodes.ready} ready</span>
                   {cordonedCount > 0 && (
                     <span className="text-yellow-500">{cordonedCount} cordoned</span>
@@ -305,13 +305,13 @@ export function ClusterHealthCard({
           <div className="flex flex-col justify-center w-[300px] shrink-0 pl-8 border-l border-theme-border/50">
             <div className="flex items-center gap-2 mb-3">
               <Boxes className="w-4 h-4 text-theme-text-tertiary" />
-              <span className="text-xs text-theme-text-secondary">Resource Utilization</span>
+              <span className="text-[10px] uppercase tracking-wider text-theme-text-tertiary">Resource Utilization</span>
             </div>
 
             <div className="space-y-3">
               {metrics?.cpu && (
                 <div className="space-y-2">
-                  <div className="flex items-center gap-1.5 text-xs text-theme-text-secondary">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-theme-text-tertiary">
                     <Cpu className="w-3.5 h-3.5 text-theme-text-tertiary" />
                     CPU
                   </div>
@@ -331,7 +331,7 @@ export function ClusterHealthCard({
               )}
               {metrics?.memory && (
                 <div className="space-y-2">
-                  <div className="flex items-center gap-1.5 text-xs text-theme-text-secondary">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wider text-theme-text-tertiary">
                     <MemoryStick className="w-3.5 h-3.5 text-theme-text-tertiary" />
                     Memory
                   </div>
@@ -366,20 +366,20 @@ export function ClusterHealthCard({
             <button
               onClick={onWarningEventsClick}
               title="Native Kubernetes Warning events (e.g., ImagePullBackOff, FailedScheduling)"
-              className="flex items-center gap-1.5 w-fit px-2.5 py-1.5 bg-yellow-500/10 hover:bg-yellow-500/20 border border-yellow-500/30 rounded-md transition-colors"
+              className="badge status-degraded w-fit gap-1.5 hover:opacity-80 transition-opacity"
             >
-              <AlertTriangle className="w-3.5 h-3.5 text-yellow-500" />
-              <span className="text-xs text-yellow-500 font-medium"><span className="font-mono">{health.warningEvents}</span> Warning Events</span>
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              <span><span className="font-mono">{health.warningEvents}</span> Warning Events</span>
             </button>
           )}
           {problems.length > 0 && (
             <button
               onClick={onUnhealthyClick}
               title="View timeline of unhealthy/degraded workload events"
-              className="flex items-center gap-1.5 w-fit px-2.5 py-1.5 bg-red-500/10 hover:bg-red-500/20 border border-red-500/30 rounded-md transition-colors"
+              className="badge status-unhealthy w-fit gap-1.5 hover:opacity-80 transition-opacity"
             >
-              <AlertTriangle className="w-3.5 h-3.5 text-red-500" />
-              <span className="text-xs text-red-500 font-medium">View unhealthy workload events</span>
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+              <span>View unhealthy workload events</span>
             </button>
           )}
         </div>
@@ -412,7 +412,7 @@ export function ClusterHealthCard({
         <div className="flex items-center justify-center w-1/4 shrink-0 pl-4 border-l border-theme-border/50">
           <button
             onClick={onNavigateToView}
-            className="flex items-center gap-2 text-base font-medium text-blue-500 hover:text-blue-400 transition-colors"
+            className="flex items-center gap-2 text-base font-medium text-theme-text-secondary hover:text-theme-text-primary transition-colors"
           >
             Browse All Resources
             <ArrowRight className="w-5 h-5" />
@@ -424,6 +424,10 @@ export function ClusterHealthCard({
 }
 
 function RestrictedRing({ label }: { label: string }) {
+  const radius = 36
+  const circumference = 2 * Math.PI * radius
+  const arcLength = 0.75 * circumference
+  const gapLength = circumference - arcLength
   return (
     <div className="flex flex-col items-center gap-2">
       <div className="relative w-[88px] h-[88px] flex items-center justify-center">
@@ -431,17 +435,19 @@ function RestrictedRing({ label }: { label: string }) {
           <circle
             cx={44}
             cy={44}
-            r={36}
+            r={radius}
             fill="none"
             stroke="currentColor"
             strokeWidth={8}
-            strokeDasharray="6 4"
+            strokeDasharray={`6 4 ${arcLength - 10} ${gapLength + 10}`}
+            strokeLinecap="round"
+            transform="rotate(135 44 44)"
             className="text-theme-border"
           />
         </svg>
         <Shield className="w-6 h-6 text-amber-400" />
       </div>
-      <span className="text-xs font-medium text-theme-text-secondary">{label}</span>
+      <span className="text-xs font-semibold uppercase tracking-wider text-theme-text-secondary">{label}</span>
       <span className="text-[11px] text-amber-400">Restricted</span>
     </div>
   )

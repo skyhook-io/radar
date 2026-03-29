@@ -63,7 +63,7 @@ export function ChallengeRenderer({ data }: { data: any }) {
           <Property
             label="State"
             value={
-              <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', getChallengeStateBadge(state).color)}>
+              <span className={clsx('badge', getChallengeStateBadge(state).color)}>
                 {getChallengeStateBadge(state).text}
               </span>
             }
@@ -71,7 +71,7 @@ export function ChallengeRenderer({ data }: { data: any }) {
           <Property
             label="Type"
             value={
-              <span className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary font-medium">
+              <span className="badge bg-theme-elevated text-theme-text-secondary">
                 {challengeType}
               </span>
             }

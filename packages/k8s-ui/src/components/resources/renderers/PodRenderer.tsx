@@ -3,7 +3,7 @@ import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, Circle
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { formatResources, formatDuration } from '../resource-utils'
-import { getResourceStatusColor } from '../../../utils/badge-colors'
+import { getResourceStatusColor, SEVERITY_BADGE_BORDERED } from '../../../utils/badge-colors'
 import type { ResolvedEnvFrom } from '../../../types'
 import { Tooltip } from '../../ui/Tooltip'
 import { MetricsChart } from '../../ui/MetricsChart'
@@ -479,7 +479,7 @@ export function PodRenderer({
                           </button>
                         </Tooltip>
                       )}
-                      <span className={clsx('px-2 py-0.5 text-xs rounded', statusColor)}>
+                      <span className={clsx('badge', statusColor)}>
                         {statusLabel}
                       </span>
                     </div>
@@ -554,7 +554,7 @@ export function PodRenderer({
             const currentTerminated = status?.state?.terminated
 
             return (
-              <div key={container.name} className="bg-theme-elevated/30 rounded-lg p-3">
+              <div key={container.name} className="card-inner-lg">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-theme-text-primary">{container.name}</span>
                   <div className="flex items-center gap-2">
@@ -589,16 +589,16 @@ export function PodRenderer({
                       </Tooltip>
                     )}
                     <span className={clsx(
-                      'px-2 py-0.5 text-xs rounded',
-                      isReady ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
+                      'badge',
+                      isReady ? SEVERITY_BADGE_BORDERED.success : SEVERITY_BADGE_BORDERED.error
                     )}>
                       {isReady ? 'Ready' : 'Not Ready'}
                     </span>
                     <span className={clsx(
-                      'px-2 py-0.5 text-xs rounded',
-                      stateKey === 'running' ? 'bg-green-500/20 text-green-400' :
-                      stateKey === 'waiting' ? 'bg-yellow-500/20 text-yellow-400' :
-                      'bg-red-500/20 text-red-400'
+                      'badge',
+                      stateKey === 'running' ? SEVERITY_BADGE_BORDERED.success :
+                      stateKey === 'waiting' ? SEVERITY_BADGE_BORDERED.warning :
+                      SEVERITY_BADGE_BORDERED.error
                     )}>
                       {stateKey}
                     </span>
@@ -731,7 +731,7 @@ export function PodRenderer({
               const dataPoints = 'dataPoints' in historyContainer ? historyContainer.dataPoints : []
 
               return (
-                <div key={historyContainer.name} className="bg-theme-elevated/30 rounded-lg p-3">
+                <div key={historyContainer.name} className="card-inner-lg">
                   <div className="flex items-center justify-between mb-3">
                     <span className="text-sm font-medium text-theme-text-primary">{historyContainer.name}</span>
                   </div>

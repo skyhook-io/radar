@@ -105,7 +105,7 @@ export function KarpenterNodeClaimRenderer({ data, onNavigate }: KarpenterNodeCl
         <Section title={`Requirements (${requirements.length})`} icon={Settings}>
           <div className="space-y-1">
             {requirements.map((req: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2">
+              <div key={i} className="card-inner">
                 <div className="flex items-center gap-2 text-sm">
                   <span className="text-theme-text-primary font-medium">{req.key}</span>
                   <span className="text-theme-text-tertiary">{req.operator}</span>
@@ -113,7 +113,7 @@ export function KarpenterNodeClaimRenderer({ data, onNavigate }: KarpenterNodeCl
                 {req.values && req.values.length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">
                     {req.values.map((v: string, vi: number) => (
-                      <span key={vi} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                      <span key={vi} className="badge-sm bg-theme-hover text-theme-text-secondary">
                         {v}
                       </span>
                     ))}

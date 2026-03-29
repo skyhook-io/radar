@@ -120,14 +120,14 @@ export const ResourceDrawer = memo(function ResourceDrawer({
       />
 
       {/* Drawer */}
-      <div className="fixed right-0 top-0 bottom-0 w-96 bg-theme-surface border-l border-theme-border z-50 flex flex-col shadow-2xl">
+      <div className="fixed right-0 top-0 bottom-0 w-96 bg-theme-surface border-l border-theme-border z-50 flex flex-col shadow-drawer">
         {/* Header */}
         <div className="flex items-start justify-between p-4 border-b border-theme-border">
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 mb-2">
               <span
                 className={clsx(
-                  'px-2 py-0.5 text-xs font-medium rounded',
+                  'badge',
                   getKindBadgeBordered(node.kind)
                 )}
               >
@@ -135,7 +135,7 @@ export const ResourceDrawer = memo(function ResourceDrawer({
               </span>
               <span
                 className={clsx(
-                  'px-2 py-0.5 text-xs font-medium rounded border',
+                  'badge',
                   getStatusBadge(node.status)
                 )}
               >
@@ -202,7 +202,7 @@ export const ResourceDrawer = memo(function ResourceDrawer({
               // TODO: Open kubectl command or link to dashboard
               console.log('View in dashboard:', node)
             }}
-            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 text-theme-text-primary rounded-lg transition-colors"
+            className="w-full flex items-center justify-center gap-2 px-4 py-2 btn-brand rounded-lg"
           >
             <ExternalLink className="w-4 h-4" />
             View Full Resource

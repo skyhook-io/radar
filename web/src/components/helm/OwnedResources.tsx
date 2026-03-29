@@ -254,7 +254,7 @@ function ResourceItem({ resource, onNavigate }: ResourceItemProps) {
         {/* Status badge */}
         {resource.status && (
           <span
-            className={clsx('px-1.5 py-0.5 text-xs rounded', getResourceStatusColor(resource.status || ''))}
+            className={clsx('badge-sm', getResourceStatusColor(resource.status || ''))}
             title={resource.message || resource.status}
           >
             {resource.status}

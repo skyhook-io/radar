@@ -69,7 +69,7 @@ export function StorageClassRenderer({ data }: StorageClassRendererProps) {
             {mountOptions.map((option: string) => (
               <span
                 key={option}
-                className="px-2 py-0.5 rounded text-xs bg-blue-500/20 text-blue-400"
+                className="badge status-neutral"
               >
                 {option}
               </span>

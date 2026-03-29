@@ -31,21 +31,21 @@
   --color-accent-muted: var(--accent-muted);
   --color-accent-text: var(--accent-text);
 
-  /* Skyhook brand */
-  --color-skyhook: #2D7AFF;
-  --color-skyhook-50: #E6F0FF;
-  --color-skyhook-100: #CCE0FF;
-  --color-skyhook-200: #99C2FF;
-  --color-skyhook-300: #66A3FF;
-  --color-skyhook-400: #3385FF;
-  --color-skyhook-500: #2D7AFF;
-  --color-skyhook-600: #0052CC;
-  --color-skyhook-700: #003D99;
-  --color-skyhook-800: #002966;
-  --color-skyhook-900: #001433;
+  /* Skyhook brand (refined blue palette — more saturated) */
+  --color-skyhook: #5088CC;
+  --color-skyhook-50: #EBF2FA;
+  --color-skyhook-100: #D2E2F4;
+  --color-skyhook-200: #A8C7E8;
+  --color-skyhook-300: #7EACDC;
+  --color-skyhook-400: #6A9FE0;
+  --color-skyhook-500: #5088CC;
+  --color-skyhook-600: #4A7CC9;
+  --color-skyhook-700: #3B66A8;
+  --color-skyhook-800: #2D4E82;
+  --color-skyhook-900: #1F365C;
 
   /* K8s resource type colors */
-  --color-k8s-internet: #2D7AFF;
+  --color-k8s-internet: #5088CC;
   --color-k8s-ingress: #8b5cf6;
   --color-k8s-service: #3b82f6;
   --color-k8s-deployment: #10b981;

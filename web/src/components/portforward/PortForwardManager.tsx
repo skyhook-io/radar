@@ -16,6 +16,7 @@ import {
   PenLine,
 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import { useToast } from '../ui/Toast'
 import { openExternal } from '../../utils/navigation'
 
@@ -190,17 +191,17 @@ export function PortForwardManager({
   }
 
   return (
-    <div className="fixed bottom-4 left-4 z-40 w-80 bg-theme-surface border border-theme-border rounded-lg shadow-2xl overflow-hidden">
+    <div className="fixed bottom-4 left-4 z-40 w-80 dialog overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between px-3 py-2 bg-theme-elevated border-b border-theme-border">
         <div className="flex items-center gap-2">
           <Plug className="w-4 h-4 text-accent-text" />
           <span className="text-sm font-medium text-theme-text-primary">Port Forwards</span>
-          <span className="text-xs px-1.5 py-0.5 bg-theme-hover rounded text-theme-text-secondary">
+          <span className="badge-sm bg-theme-hover text-theme-text-secondary">
             {activeSessions.length}
           </span>
           {errorSessions.length > 0 && (
-            <span className="text-xs px-1.5 py-0.5 bg-red-500/20 rounded text-red-400">
+            <span className={clsx('badge-sm', SEVERITY_BADGE.error)}>
               {errorSessions.length} failed
             </span>
           )}
@@ -255,7 +256,7 @@ export function PortForwardManager({
                         {session.serviceName || session.podName}
                       </span>
                       {session.status === 'error' && (
-                        <span className="text-xs px-1.5 py-0.5 bg-red-500/20 rounded text-red-400">
+                        <span className={clsx('badge-sm', SEVERITY_BADGE.error)}>
                           Failed
                         </span>
                       )}
@@ -326,7 +327,7 @@ export function PortForwardManager({
                           className={clsx(
                             'flex items-center gap-1 px-1.5 py-0.5 text-xs rounded transition-colors',
                             session.listenAddress === '0.0.0.0'
-                              ? 'bg-amber-500/20 text-amber-400 hover:bg-amber-500/30'
+                              ? `${SEVERITY_BADGE.warning} hover:bg-amber-500/30`
                               : 'bg-theme-elevated text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary'
                           )}
                           title={session.listenAddress === '0.0.0.0'

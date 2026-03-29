@@ -96,7 +96,7 @@ export function VPARenderer({ data, onNavigate }: VPARendererProps) {
         <Section title="Recommendations" defaultExpanded>
           <div className="space-y-3">
             {recommendations.map((rec: any) => (
-              <div key={rec.containerName} className="bg-theme-elevated/30 rounded-lg p-3">
+              <div key={rec.containerName} className="card-inner-lg">
                 <div className="text-sm font-medium text-theme-text-primary mb-2">{rec.containerName}</div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
@@ -144,7 +144,7 @@ export function VPARenderer({ data, onNavigate }: VPARendererProps) {
         <Section title="Resource Policy" defaultExpanded>
           <div className="space-y-3">
             {containerPolicies.map((policy: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded-lg p-3">
+              <div key={i} className="card-inner-lg">
                 <div className="flex items-center gap-2 mb-2">
                   <span className="text-sm font-medium text-theme-text-primary">{policy.containerName || '*'}</span>
                   {policy.mode && (

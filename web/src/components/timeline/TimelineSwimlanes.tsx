@@ -1084,7 +1084,7 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
           case 'delete':
             return 'bg-red-500/20 border-2 border-dashed border-red-500/60'
           case 'update':
-            return 'bg-blue-500/20 border-2 border-dashed border-blue-500/60'
+            return 'bg-skyhook-500/20 border-2 border-dashed border-skyhook-500/60'
         }
       }
       return 'bg-theme-hover/30 border-2 border-dashed border-theme-border-light'
@@ -1227,13 +1227,13 @@ function EventDetailPanel({ event, onClose, onResourceClick }: EventDetailPanelP
 
   return (
     <div className={clsx(
-      "fixed bottom-0 left-0 right-0 z-50 border-t p-4 max-h-72 overflow-auto shadow-2xl",
+      "fixed bottom-0 left-0 right-0 z-50 border-t p-4 max-h-72 overflow-auto shadow-theme-lg",
       isProblematic ? "border-amber-300 dark:border-amber-700 bg-amber-50 dark:bg-amber-950" : "border-theme-border bg-theme-surface"
     )}>
       <div className="flex items-start justify-between mb-3">
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-xs px-1.5 py-0.5 bg-theme-elevated rounded text-theme-text-secondary">
+            <span className="badge-sm bg-theme-elevated text-theme-text-secondary">
               {displayKind(event.kind)}
             </span>
             <button
@@ -1246,7 +1246,7 @@ function EventDetailPanel({ event, onClose, onResourceClick }: EventDetailPanelP
               <span className="text-xs text-theme-text-tertiary">in {event.namespace}</span>
             )}
             {isHistorical && (
-              <span className="text-xs px-1.5 py-0.5 bg-theme-hover rounded text-theme-text-secondary flex items-center gap-1">
+              <span className="badge-sm bg-theme-hover text-theme-text-secondary">
                 <Clock className="w-3 h-3" />
                 historical
               </span>
@@ -1275,7 +1275,7 @@ function EventDetailPanel({ event, onClose, onResourceClick }: EventDetailPanelP
               {event.eventType}
             </span>
             {event.healthState && event.healthState !== 'unknown' && (
-              <span className={clsx('text-xs px-1.5 py-0.5 rounded', getHealthBadgeColor(event.healthState))}>
+              <span className={clsx('badge-sm', getHealthBadgeColor(event.healthState))}>
                 {event.healthState}
               </span>
             )}
@@ -1289,7 +1289,7 @@ function EventDetailPanel({ event, onClose, onResourceClick }: EventDetailPanelP
               {event.reason}
             </span>
             {event.eventType && (
-              <span className={clsx('text-xs px-1.5 py-0.5 rounded', getEventTypeColor(event.eventType))}>
+              <span className={clsx('badge-sm', getEventTypeColor(event.eventType))}>
                 {event.eventType}
               </span>
             )}

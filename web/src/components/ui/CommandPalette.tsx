@@ -295,7 +295,7 @@ export function CommandPalette({
 
       {/* Panel */}
       <div className={clsx(
-        'relative w-full max-w-lg mx-4 bg-theme-surface border border-theme-border rounded-xl shadow-2xl overflow-hidden',
+        'relative w-full max-w-lg mx-4 dialog overflow-hidden',
         TRANSITION_PANEL,
         isOpen ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-[0.97] translate-y-3'
       )}>
@@ -355,13 +355,13 @@ export function CommandPalette({
                     }}
                     className={clsx(
                       'w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors',
-                      isSelected ? 'bg-blue-500/15' : 'hover:bg-theme-elevated/30'
+                      isSelected ? 'selection' : 'hover:bg-theme-elevated/30'
                     )}
                   >
                     {Icon && (
                       <div className={clsx(
                         'flex items-center justify-center w-7 h-7 rounded-md shrink-0',
-                        isSelected ? 'bg-blue-500/20' : 'bg-theme-elevated/50'
+                        isSelected ? 'selection-strong' : 'bg-theme-elevated/50'
                       )}>
                         <Icon className="w-3.5 h-3.5 text-theme-text-secondary" />
                       </div>

@@ -818,7 +818,7 @@ function ExportImageButton({ onExportingChange }: { onExportingChange: (v: boole
               <button
                 key={mode}
                 onClick={() => setCaptureMode(mode)}
-                className={`flex-1 px-2 py-1.5 text-xs rounded transition-colors ${captureMode === mode ? 'bg-blue-600 text-white' : 'bg-theme-base text-theme-text-secondary hover:text-theme-text-primary border border-theme-border'}`}
+                className={`flex-1 px-2 py-1.5 text-xs rounded transition-colors ${captureMode === mode ? 'btn-brand' : 'bg-theme-base text-theme-text-secondary hover:text-theme-text-primary border border-theme-border'}`}
               >
                 {mode === 'full' ? 'Entire graph' : 'Visible area'}
               </button>
@@ -832,7 +832,7 @@ function ExportImageButton({ onExportingChange }: { onExportingChange: (v: boole
                   <button
                     key={f}
                     onClick={() => setFormat(f)}
-                    className={`flex-1 px-2 py-1.5 text-xs rounded transition-colors ${format === f ? 'bg-blue-600 text-white' : 'bg-theme-base text-theme-text-secondary hover:text-theme-text-primary border border-theme-border'}`}
+                    className={`flex-1 px-2 py-1.5 text-xs rounded transition-colors ${format === f ? 'btn-brand' : 'bg-theme-base text-theme-text-secondary hover:text-theme-text-primary border border-theme-border'}`}
                   >
                     {FORMAT_LABELS[f]}
                   </button>
@@ -880,7 +880,7 @@ function ExportImageButton({ onExportingChange }: { onExportingChange: (v: boole
             <button
               onClick={doExport}
               disabled={exporting}
-              className="flex-1 px-3 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors disabled:opacity-50 flex items-center justify-center gap-1.5"
+              className="flex-1 px-3 py-1.5 text-sm font-medium btn-brand rounded flex items-center justify-center gap-1.5"
             >
               {exporting ? <Loader2 className="w-3 h-3 animate-spin" /> : <Download className="w-3 h-3" />}
               Export

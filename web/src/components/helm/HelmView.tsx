@@ -6,6 +6,7 @@ import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
 import type { HelmRelease, SelectedHelmRelease, UpgradeInfo, ChartSource } from '../../types'
 import { getStatusColor, formatAge, truncate } from './helm-utils'
+import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { ChartBrowser } from './ChartBrowser'
 import { InstallWizard } from './InstallWizard'
@@ -177,7 +178,7 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
             <List className="w-4 h-4" />
             Installed
             {releases && (
-              <span className="text-xs bg-theme-elevated px-1.5 py-0.5 rounded">
+              <span className="badge-sm bg-theme-elevated">
                 {releases.length}
               </span>
             )}
@@ -255,7 +256,7 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
                   {!searchTerm && (
                     <button
                       onClick={() => setActiveTab('charts')}
-                      className="mt-2 px-4 py-2 text-sm text-blue-400 hover:text-blue-300 border border-blue-500/30 rounded-lg hover:bg-blue-500/10 transition-colors"
+                      className="mt-2 px-4 py-2 text-sm text-skyhook-400 hover:text-skyhook-300 border border-skyhook-500/30 rounded-lg hover:bg-skyhook-500/10 transition-colors"
                     >
                       Browse charts to install
                     </button>
@@ -416,9 +417,9 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
       className={clsx(
         'cursor-pointer transition-colors',
         isSelected
-          ? 'bg-blue-500/20 hover:bg-blue-500/30'
+          ? 'selection-strong hover:bg-skyhook-500/30'
           : isHighlighted
-            ? 'bg-blue-500/10 ring-1 ring-inset ring-blue-400/30'
+            ? 'selection selection-ring'
             : 'hover:bg-theme-surface/50'
       )}
     >
@@ -429,7 +430,7 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           {getHealthBadge()}
           {upgradeInfo?.updateAvailable && (
             <Tooltip content={`Upgrade available: ${release.chartVersion} → ${upgradeInfo.latestVersion}`}>
-              <span className="flex items-center gap-0.5 px-1.5 py-0.5 text-xs font-medium rounded bg-amber-500/20 text-amber-400 border border-amber-500/30 shrink-0">
+              <span className={clsx('badge-sm shrink-0', SEVERITY_BADGE.warning)}>
                 <ArrowUpCircle className="w-3 h-3" />
               </span>
             </Tooltip>
@@ -452,7 +453,7 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
       <td className="px-4 py-3 w-28">
         <span
           className={clsx(
-            'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
+            'badge',
             getStatusColor(release.status)
           )}
         >

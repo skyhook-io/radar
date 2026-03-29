@@ -64,7 +64,7 @@ export function RoleRenderer({ data }: RoleRendererProps) {
       <Section title={`Rules (${rules.length})`} icon={Shield} defaultExpanded>
         <div className="space-y-3">
           {rules.map((rule: any, i: number) => (
-            <div key={i} className="bg-theme-elevated/30 rounded p-3">
+            <div key={i} className="card-inner-lg">
               {/* API Groups */}
               {rule.apiGroups && rule.apiGroups.length > 0 && (
                 <div className="mb-2">
@@ -73,7 +73,7 @@ export function RoleRenderer({ data }: RoleRendererProps) {
                     {rule.apiGroups.map((group: string, gi: number) => (
                       <span
                         key={gi}
-                        className="px-2 py-0.5 rounded text-xs bg-theme-elevated text-theme-text-secondary"
+                        className="badge bg-theme-elevated text-theme-text-secondary"
                       >
                         {group === '' ? 'core' : group}
                       </span>
@@ -90,7 +90,7 @@ export function RoleRenderer({ data }: RoleRendererProps) {
                     {rule.resources.map((resource: string) => (
                       <span
                         key={resource}
-                        className="px-2 py-0.5 rounded text-xs bg-purple-500/20 text-purple-400"
+                        className="badge bg-purple-500/20 text-purple-400"
                       >
                         {resource}
                       </span>
@@ -108,7 +108,7 @@ export function RoleRenderer({ data }: RoleRendererProps) {
                       <span
                         key={verb}
                         className={clsx(
-                          'px-2 py-0.5 rounded text-xs',
+                          'badge',
                           getVerbColor(verb)
                         )}
                       >
@@ -127,7 +127,7 @@ export function RoleRenderer({ data }: RoleRendererProps) {
                     {rule.resourceNames.map((name: string) => (
                       <span
                         key={name}
-                        className="px-2 py-0.5 rounded text-xs bg-cyan-500/20 text-cyan-400"
+                        className="badge bg-cyan-500/20 text-cyan-400"
                       >
                         {name}
                       </span>
@@ -144,7 +144,7 @@ export function RoleRenderer({ data }: RoleRendererProps) {
                     {rule.nonResourceURLs.map((url: string) => (
                       <span
                         key={url}
-                        className="px-2 py-0.5 rounded text-xs bg-orange-500/20 text-orange-400"
+                        className="badge bg-orange-500/20 text-orange-400"
                       >
                         {url}
                       </span>
@@ -166,14 +166,14 @@ export function RoleRenderer({ data }: RoleRendererProps) {
         <Section title="Aggregation Rule" defaultExpanded>
           <div className="space-y-3">
             {aggregationRule.clusterRoleSelectors.map((selector: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-3">
+              <div key={i} className="card-inner-lg">
                 <div className="text-xs text-theme-text-tertiary mb-1">Match Labels</div>
                 {selector.matchLabels && Object.keys(selector.matchLabels).length > 0 ? (
                   <div className="flex flex-wrap gap-1">
                     {Object.entries(selector.matchLabels).map(([k, v]) => (
                       <span
                         key={k}
-                        className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary"
+                        className="badge bg-theme-elevated text-theme-text-secondary"
                       >
                         {k}={String(v)}
                       </span>

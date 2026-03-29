@@ -77,7 +77,7 @@ export function TraefikIngressRouteRenderer({ data, onNavigate }: TraefikIngress
             const middlewares = route.middlewares || []
 
             return (
-              <div key={i} className="bg-theme-elevated/30 rounded p-3">
+              <div key={i} className="card-inner-lg">
                 {/* Match expression */}
                 <div className="flex items-start gap-2 mb-2">
                   <span className="text-sm font-medium text-theme-text-primary break-all">

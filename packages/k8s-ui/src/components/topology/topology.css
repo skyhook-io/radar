@@ -14,7 +14,7 @@
 
 /* Topology node card styling */
 .topology-node-card {
-  border: 1px solid var(--topology-node-border);
+  border: 0.5px solid var(--topology-node-border);
   box-shadow: var(--topology-node-shadow);
 }
 

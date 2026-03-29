@@ -128,7 +128,7 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
           <button
             onClick={() => connectMutation.mutate()}
             disabled={connectMutation.isPending}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-blue-600 hover:bg-blue-500 text-white transition-colors disabled:opacity-50"
+            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg btn-brand"
           >
             {connectMutation.isPending ? (
               <Loader2 className="w-4 h-4 animate-spin" />

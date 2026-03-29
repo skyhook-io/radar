@@ -28,7 +28,7 @@ export function CNPGClusterCell({ resource, column }: { resource: any; column: s
     case 'status': {
       const status = getCNPGClusterStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -65,7 +65,7 @@ export function CNPGBackupCell({ resource, column }: { resource: any; column: st
     case 'status': {
       const status = getCNPGBackupStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -92,7 +92,7 @@ export function CNPGScheduledBackupCell({ resource, column }: { resource: any; c
     case 'status': {
       const status = getCNPGScheduledBackupStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -127,7 +127,7 @@ export function CNPGPoolerCell({ resource, column }: { resource: any; column: st
     case 'status': {
       const status = getCNPGPoolerStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -140,7 +140,7 @@ export function CNPGPoolerCell({ resource, column }: { resource: any; column: st
       const type = getCNPGPoolerType(resource)
       return (
         <span className={clsx(
-          'inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium',
+          'badge-sm',
           type === 'rw' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'
         )}>
           {type}

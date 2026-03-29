@@ -58,7 +58,7 @@ export function RoleBindingRenderer({ data, onNavigate }: RoleBindingRendererPro
             label="Kind"
             value={
               roleRef.kind ? (
-                <span className={clsx('px-2 py-0.5 rounded text-xs', getRoleRefKindBadgeClass(roleRef.kind))}>
+                <span className={clsx('badge', getRoleRefKindBadgeClass(roleRef.kind))}>
                   {roleRef.kind}
                 </span>
               ) : undefined
@@ -74,9 +74,9 @@ export function RoleBindingRenderer({ data, onNavigate }: RoleBindingRendererPro
       <Section title={`Subjects (${subjects.length})`} icon={Users} defaultExpanded>
         <div className="space-y-2">
           {subjects.map((subject: any, i: number) => (
-            <div key={`${subject.kind}-${subject.name}-${i}`} className="bg-theme-elevated/30 rounded p-2 text-sm">
+            <div key={`${subject.kind}-${subject.name}-${i}`} className="card-inner text-sm">
               <div className="flex items-center gap-2">
-                <span className={clsx('px-2 py-0.5 rounded text-xs', getSubjectKindBadgeClass(subject.kind))}>
+                <span className={clsx('badge', getSubjectKindBadgeClass(subject.kind))}>
                   {subject.kind}
                 </span>
                 {subject.kind === 'ServiceAccount' ? (

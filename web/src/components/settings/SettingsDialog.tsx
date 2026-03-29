@@ -137,9 +137,9 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
         ref={dialogRef}
         tabIndex={-1}
         className={clsx(
-          'relative bg-theme-surface border border-theme-border shadow-2xl w-full outline-none flex flex-col',
+          'relative bg-theme-surface border border-theme-border shadow-theme-lg w-full outline-none flex flex-col',
           'max-sm:inset-0 max-sm:absolute max-sm:rounded-none max-sm:max-h-full max-sm:border-0',
-          'sm:rounded-lg sm:max-w-xl sm:mx-4 sm:max-h-[85vh]',
+          'sm:rounded-xl sm:max-w-xl sm:mx-4 sm:max-h-[85vh]',
           TRANSITION_PANEL,
           isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-95'
         )}
@@ -197,7 +197,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
             <button
               onClick={saveConfig}
               disabled={saving || !configDirty}
-              className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-md transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-4 py-1.5 text-sm font-medium btn-brand rounded-md"
             >
               {saving && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
               Save
@@ -501,7 +501,7 @@ function ConfigToggle({
         onClick={() => onChange(!value)}
         className={clsx(
           'relative w-9 h-5 rounded-full transition-colors',
-          value ? 'bg-blue-600' : 'bg-theme-elevated border border-theme-border'
+          value ? 'bg-skyhook-600' : 'bg-theme-elevated border border-theme-border'
         )}
       >
         <span

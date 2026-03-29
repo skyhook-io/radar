@@ -184,7 +184,7 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
             <button
               onClick={handleSaveEdit}
               disabled={isPending || yamlErrors.length > 0}
-              className="flex items-center gap-1 px-3 py-1.5 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-1 px-3 py-1.5 text-xs btn-brand rounded disabled:cursor-not-allowed"
             >
               {isPending ? (
                 <RefreshCw className="w-3.5 h-3.5 animate-spin" />

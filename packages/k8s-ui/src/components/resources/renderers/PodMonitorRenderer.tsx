@@ -28,19 +28,19 @@ export function PodMonitorRenderer({ data }: PodMonitorRendererProps) {
         <Section title={`Pod Metrics Endpoints (${endpoints.length})`} defaultExpanded>
           <div className="space-y-2">
             {endpoints.map((ep, i) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2 text-sm">
+              <div key={i} className="card-inner text-sm">
                 <div className="flex items-center gap-2 flex-wrap">
                   {ep.port && (
                     <span className="text-theme-text-primary font-medium">{ep.port}</span>
                   )}
                   <span className="text-theme-text-secondary">{ep.path}</span>
                   {ep.interval && (
-                    <span className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                    <span className="badge-sm bg-theme-hover text-theme-text-secondary">
                       every {ep.interval}
                     </span>
                   )}
                   {ep.scheme && ep.scheme !== 'http' && (
-                    <span className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                    <span className="badge-sm bg-theme-hover text-theme-text-secondary">
                       {ep.scheme}
                     </span>
                   )}

@@ -70,7 +70,7 @@ function IssuerRendererBase({ data, kind }: { data: any; kind: string }) {
             label="Ready"
             value={
               <span className={clsx(
-                'px-2 py-0.5 rounded text-xs font-medium',
+                'badge',
                 isReady
                   ? 'bg-green-500/20 text-green-400'
                   : 'bg-red-500/20 text-red-400'
@@ -103,9 +103,9 @@ function IssuerRendererBase({ data, kind }: { data: any; kind: string }) {
             {solvers.map((solver: any, i: number) => {
               const { type, detail } = getSolverType(solver)
               return (
-                <div key={i} className="bg-theme-elevated/30 rounded p-3">
+                <div key={i} className="card-inner-lg">
                   <div className="flex items-center gap-2">
-                    <span className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary font-medium">
+                    <span className="badge bg-theme-elevated text-theme-text-secondary">
                       {type}
                     </span>
                     {detail && (

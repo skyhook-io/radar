@@ -14,7 +14,7 @@ export function PolicyReportCell({ resource, column }: { resource: any; column: 
     case 'status': {
       const status = getPolicyReportStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -54,7 +54,7 @@ export function KyvernoPolicyCell({ resource, column }: { resource: any; column:
     case 'status': {
       const status = getKyvernoPolicyStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -63,7 +63,7 @@ export function KyvernoPolicyCell({ resource, column }: { resource: any; column:
       const action = getKyvernoPolicyAction(resource)
       return (
         <span className={clsx(
-          'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
+          'badge',
           action === 'Enforce' ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400',
         )}>
           {action}

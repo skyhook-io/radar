@@ -21,7 +21,7 @@ export function KnativeRouteRenderer({ data, onNavigate }: KnativeRouteRendererP
       <Section title="Overview" icon={Route} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />

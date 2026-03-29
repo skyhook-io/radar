@@ -28,7 +28,7 @@ export function BrokerRenderer({ data, onNavigate }: RendererProps) {
       <Section title="Overview" icon={Radio} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
@@ -91,7 +91,7 @@ export function TriggerRenderer({ data, onNavigate }: RendererProps) {
       <Section title="Overview" icon={Filter} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
@@ -122,7 +122,7 @@ export function TriggerRenderer({ data, onNavigate }: RendererProps) {
         <Section title={`Filter (${filterEntries.length} attributes)`} defaultExpanded>
           <div className="flex flex-wrap gap-1">
             {filterEntries.map(([key, val]) => (
-              <span key={key} className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary">
+              <span key={key} className="badge bg-theme-elevated text-theme-text-secondary">
                 {key}={String(val)}
               </span>
             ))}
@@ -176,7 +176,7 @@ export function ChannelRenderer({ data }: RendererProps) {
       <Section title="Overview" icon={Inbox} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
@@ -241,7 +241,7 @@ export function SubscriptionRenderer({ data, onNavigate }: RendererProps) {
       <Section title="Overview" icon={ArrowRightLeft} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />

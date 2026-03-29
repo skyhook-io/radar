@@ -204,7 +204,7 @@ export function ResourceActionsBar({
           {isRunning && canExec && onOpenTerminal && (
             <button
               onClick={handleOpenTerminal}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
             >
               <Terminal className="w-3.5 h-3.5" />
               Terminal
@@ -218,7 +218,7 @@ export function ResourceActionsBar({
             >
               <button
                 onClick={() => handleOpenLogs(containers.length === 1 ? containers[0] : undefined)}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
               >
                 <FileText className="w-3.5 h-3.5" />
                 Logs
@@ -260,7 +260,7 @@ export function ResourceActionsBar({
           {canExec && onOpenNodeTerminal && (
             <button
               onClick={() => onOpenNodeTerminal({ nodeName: resource.name })}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
             >
               <Terminal className="w-3.5 h-3.5" />
               Debug Shell
@@ -329,7 +329,7 @@ export function ResourceActionsBar({
                 name: resource.name,
               })}
               disabled={isRestarting}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
             >
               <RefreshCw className={`w-3.5 h-3.5 ${isRestarting ? 'animate-spin' : ''}`} />
               {isRestarting ? 'Restarting...' : 'Restart'}
@@ -358,7 +358,7 @@ export function ResourceActionsBar({
                 workloadKind: kind,
                 workloadName: resource.name,
               })}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
             >
               <FileText className="w-3.5 h-3.5" />
               Logs
@@ -377,7 +377,7 @@ export function ResourceActionsBar({
                 name: resource.name,
               })}
               disabled={isTriggeringCronJob}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
             >
               <Play className={`w-3.5 h-3.5 ${isTriggeringCronJob ? 'animate-pulse' : ''}`} />
               {isTriggeringCronJob ? 'Triggering...' : 'Trigger'}
@@ -405,7 +405,7 @@ export function ResourceActionsBar({
                   name: resource.name,
                 })}
                 disabled={isSuspendingCronJob}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors disabled:opacity-50"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
               >
                 <Pause className="w-3.5 h-3.5" />
                 {isSuspendingCronJob ? 'Suspending...' : 'Suspend'}
@@ -455,7 +455,7 @@ export function ResourceActionsBar({
             'Logs command copied',
             e
           )}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
         >
           <FileText className="w-3.5 h-3.5" />
           Logs
@@ -472,8 +472,8 @@ export function ResourceActionsBar({
           className={clsx(
             'flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg transition-colors',
             showYaml
-              ? 'text-white bg-blue-600 hover:bg-blue-700'
-              : 'text-theme-text-secondary hover:text-theme-text-primary border border-theme-border hover:bg-theme-elevated'
+              ? 'btn-brand'
+              : 'text-theme-text-secondary hover:text-theme-text-primary border border-theme-border-light hover:bg-theme-elevated'
           )}
           title="Toggle YAML view"
         >
@@ -596,7 +596,7 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
             name: resource.name,
           })}
           disabled={isReconciling || isSuspended}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
           title={isSuspended ? 'Cannot reconcile while suspended' : 'Trigger reconciliation'}
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isReconciling ? 'animate-spin' : ''}`} />
@@ -644,7 +644,7 @@ function FluxActions({ resource, data, onReconcile, isReconciling, onSyncWithSou
               name: resource.name,
             })}
             disabled={isSuspending}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
           >
             <Pause className="w-3.5 h-3.5" />
             {isSuspending ? 'Suspending...' : 'Suspend'}
@@ -677,7 +677,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
             name: resource.name,
           })}
           disabled={isSyncing}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand rounded-lg"
           title="Sync application"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isSyncing ? 'animate-spin' : ''}`} />
@@ -693,7 +693,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
             hard: false,
           })}
           disabled={isRefreshing}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors disabled:opacity-50"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
           title="Refresh (re-read from git)"
         >
           <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -709,7 +709,7 @@ function ArgoActions({ resource, data, onSync, isSyncing, onRefresh, isRefreshin
               name: resource.name,
             })}
             disabled={isSuspending}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-slate-600 hover:bg-slate-500 rounded-lg transition-colors disabled:opacity-50"
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted rounded-lg"
           >
             <Pause className="w-3.5 h-3.5" />
             {isSuspending ? 'Suspending...' : 'Suspend'}
@@ -808,7 +808,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
           <History className="w-5 h-5 text-amber-500" />
           <h3 className="text-lg font-semibold text-theme-text-primary">Revision History</h3>
           {diffRevision && currentRevision && (
-            <span className="flex items-center gap-1 ml-2 px-2 py-0.5 text-xs bg-blue-500/15 text-blue-400 rounded">
+            <span className="badge ml-2 bg-blue-500/15 text-blue-400">
               <GitCompare className="w-3 h-3" />
               #{currentRevision.number} vs #{diffRevision}
             </span>
@@ -889,7 +889,7 @@ export function RevisionHistoryDialog({ kind, namespace, name, open, onClose, re
                           </button>
                         )}
                         {rev.isCurrent ? (
-                          <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium bg-green-500/20 text-green-400 rounded">
+                          <span className="badge status-healthy">
                             Current
                           </span>
                         ) : confirmRevision === rev.number ? (

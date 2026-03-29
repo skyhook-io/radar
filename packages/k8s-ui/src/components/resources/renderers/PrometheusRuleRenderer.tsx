@@ -32,12 +32,12 @@ export function PrometheusRuleRenderer({ data }: PrometheusRuleRendererProps) {
         <Section title={`Rule Groups (${groups.length})`} defaultExpanded>
           <div className="space-y-2">
             {groups.map((group, i) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2 text-sm">
+              <div key={i} className="card-inner text-sm">
                 <div className="flex items-center justify-between">
                   <span className="text-theme-text-primary font-medium">{group.name}</span>
                   <div className="flex items-center gap-2">
                     {group.interval && (
-                      <span className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                      <span className="badge-sm bg-theme-hover text-theme-text-secondary">
                         {group.interval}
                       </span>
                     )}

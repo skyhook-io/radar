@@ -428,7 +428,7 @@ function GenericConditionsSection({ conditions }: { conditions: any[] }) {
                 <div className="flex items-center gap-2 flex-wrap">
                   <span className="text-theme-text-primary font-medium">{cond.type}</span>
                   <span className={clsx(
-                    'px-1.5 py-0.5 rounded text-xs font-medium',
+                    'badge-sm',
                     isTrue ? 'bg-theme-elevated text-theme-text-secondary' : 'bg-red-500/20 text-red-400'
                   )}>
                     {cond.status}

@@ -27,7 +27,7 @@ export function KnativeIngressRenderer({ data }: RendererProps) {
       <Section title="Overview" icon={Network} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
@@ -40,10 +40,10 @@ export function KnativeIngressRenderer({ data }: RendererProps) {
         <Section title={`Rules (${rules.length})`} defaultExpanded>
           <div className="space-y-3">
             {rules.map((rule: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-3">
+              <div key={i} className="card-inner-lg">
                 <div className="flex flex-wrap gap-1 mb-2">
                   {(rule.hosts || []).map((host: string, hi: number) => (
-                    <span key={hi} className="px-1.5 py-0.5 bg-blue-500/10 text-blue-400 rounded text-xs">
+                    <span key={hi} className="badge-sm bg-blue-500/10 text-blue-400">
                       {host}
                     </span>
                   ))}
@@ -104,7 +104,7 @@ export function KnativeCertificateRenderer({ data }: RendererProps) {
       <Section title="Overview" icon={ShieldCheck} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
@@ -117,7 +117,7 @@ export function KnativeCertificateRenderer({ data }: RendererProps) {
         <Section title={`DNS Names (${dnsNames.length})`} defaultExpanded>
           <div className="flex flex-wrap gap-1">
             {dnsNames.map((name: string, i: number) => (
-              <span key={i} className="px-1.5 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary">
+              <span key={i} className="badge-sm bg-theme-elevated text-theme-text-secondary">
                 {name}
               </span>
             ))}
@@ -152,13 +152,13 @@ export function ServerlessServiceRenderer({ data, onNavigate }: RendererProps) {
       <Section title="Overview" icon={Server} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
           <Property label="Mode" value={mode ? (
             <span className={clsx(
-              'px-2 py-0.5 rounded text-xs font-medium',
+              'badge',
               mode === 'Proxy' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'
             )}>
               {mode}
@@ -204,7 +204,7 @@ export function DomainMappingRenderer({ data, onNavigate }: RendererProps) {
       <Section title="Overview" icon={Globe} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />

@@ -43,7 +43,7 @@ export function IstioGatewayRenderer({ data }: IstioGatewayRendererProps) {
       <Section title="Gateway" icon={Globe} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
@@ -64,7 +64,7 @@ export function IstioGatewayRenderer({ data }: IstioGatewayRendererProps) {
               const protocol = server.port.protocol || 'TCP'
 
               return (
-                <div key={i} className="bg-theme-elevated/30 rounded p-3">
+                <div key={i} className="card-inner-lg">
                   <div className="flex items-center justify-between mb-2">
                     <div className="flex items-center gap-2">
                       {isSecure && <Lock className="w-3.5 h-3.5 text-green-400" />}

@@ -176,10 +176,10 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="relative bg-theme-surface border border-theme-border rounded-lg shadow-2xl max-w-2xl w-full mx-4 outline-none max-h-[85vh] flex flex-col"
+        className="relative dialog max-w-3xl w-full mx-4 outline-none max-h-[85vh] flex flex-col"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-theme-border shrink-0">
+        <div className="flex items-center justify-between px-6 py-4 border-b border-theme-border/50 shrink-0">
           <div className="flex items-center gap-3">
             <Radio className="w-5 h-5 text-purple-400" />
             <h3 className="text-lg font-semibold text-theme-text-primary">MCP Server</h3>
@@ -216,7 +216,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
             <h4 className="text-sm font-semibold text-theme-text-primary">Endpoint</h4>
             <div className="relative">
               <div className="flex items-center gap-3 bg-theme-base rounded-md px-3 py-2.5">
-                <span className="text-xs font-medium text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded">HTTP</span>
+                <span className="badge text-purple-400 bg-purple-500/10">HTTP</span>
                 <code className="text-sm font-mono text-theme-text-primary">{mcpUrl}</code>
               </div>
               <CopyButton text={mcpUrl} />
@@ -373,13 +373,13 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
                   { name: 'kind', required: false, desc: 'FluxCD resource kind (e.g. kustomization, helmrelease)' },
                 ]},
               ].map((tool) => (
-                <div key={tool.name} className="px-3 py-2 rounded bg-theme-base/50 space-y-1.5">
+                <div key={tool.name} className="card-inner space-y-1.5">
                   <code className="text-[11px] font-mono text-purple-400">{tool.name}</code>
                   <p className="text-[11px] text-theme-text-tertiary leading-relaxed">{tool.desc}</p>
                   {tool.params.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 pt-0.5">
                       {tool.params.map((p) => (
-                        <span key={p.name} className="inline-flex items-center gap-1 text-[10px] font-mono bg-theme-elevated px-1.5 py-0.5 rounded" title={p.desc}>
+                        <span key={p.name} className="badge-sm font-mono bg-theme-elevated text-theme-text-secondary" title={p.desc}>
                           <span className="text-theme-text-secondary">{p.name}</span>
                           {p.required && <span className="text-red-400">*</span>}
                         </span>
@@ -393,7 +393,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
         </div>
 
         {/* Footer */}
-        <div className="flex items-center justify-between px-6 py-3 border-t border-theme-border shrink-0">
+        <div className="flex items-center justify-between px-6 py-3 border-t border-theme-border/50 shrink-0">
           <a
             href="https://github.com/skyhook-io/radar/blob/main/docs/mcp.md"
             target="_blank"

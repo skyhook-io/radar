@@ -20,7 +20,7 @@ export function ScaledObjectCell({ resource, column }: { resource: any; column: 
     case 'status': {
       const status = getScaledObjectStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -47,7 +47,7 @@ export function ScaledJobCell({ resource, column }: { resource: any; column: str
     case 'status': {
       const status = getScaledJobStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )

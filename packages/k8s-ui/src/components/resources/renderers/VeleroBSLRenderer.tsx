@@ -29,7 +29,7 @@ export function VeleroBSLRenderer({ data }: VeleroBSLRendererProps) {
       <Section title="Status" icon={Clock} defaultExpanded>
         <PropertyList>
           <Property label="Phase" value={
-            <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', bslStatus.color)}>
+            <span className={clsx('badge', bslStatus.color)}>
               {bslStatus.text}
             </span>
           } />
@@ -58,7 +58,7 @@ export function VeleroBSLRenderer({ data }: VeleroBSLRendererProps) {
             <div className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-1">Config</div>
             <div className="flex flex-wrap gap-1">
               {Object.entries(config).map(([k, v]) => (
-                <span key={k} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                <span key={k} className="badge-sm bg-theme-hover text-theme-text-secondary">
                   {k}: {String(v)}
                 </span>
               ))}

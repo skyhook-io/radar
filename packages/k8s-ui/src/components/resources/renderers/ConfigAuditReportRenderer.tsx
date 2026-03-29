@@ -134,12 +134,12 @@ export function ConfigAuditReportRenderer({ data }: ConfigAuditReportRendererPro
             { label: 'Medium', count: medium, key: 'MEDIUM' },
             { label: 'Low', count: low, key: 'LOW' },
           ].filter(({ count }) => count > 0).map(({ label, count, key }) => (
-            <span key={key} className={clsx('px-2 py-0.5 rounded text-xs font-medium', SEVERITY_BADGE_COLORS[key])}>
+            <span key={key} className={clsx('badge', SEVERITY_BADGE_COLORS[key])}>
               {count} {label}
             </span>
           ))}
           {failCount === 0 && (
-            <span className="px-2 py-0.5 rounded text-xs font-medium bg-green-500/20 text-green-400">All checks passed</span>
+            <span className="badge status-healthy">All checks passed</span>
           )}
         </div>
       </Section>

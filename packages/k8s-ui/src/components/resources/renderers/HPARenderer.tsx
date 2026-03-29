@@ -136,7 +136,7 @@ export function HPARenderer({ data, onNavigate }: HPARendererProps) {
               const current = metric.resource?.current?.averageUtilization || metric.resource?.current?.averageValue
               const target = spec.metrics?.[i]?.resource?.target?.averageUtilization || spec.metrics?.[i]?.resource?.target?.averageValue
               return (
-                <div key={i} className="bg-theme-elevated/30 rounded p-2">
+                <div key={i} className="card-inner">
                   <div className="flex items-center justify-between text-sm">
                     <span className="text-theme-text-primary">{metric.resource?.name || metric.type}</span>
                     <span className="text-theme-text-secondary">{current}{typeof current === 'number' ? '%' : ''} / {target}{typeof target === 'number' ? '%' : ''}</span>

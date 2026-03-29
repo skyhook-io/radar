@@ -25,7 +25,7 @@ export function ArgoApplicationCell({ resource, column }: { resource: any; colum
     case 'sync': {
       const { status, color } = getArgoApplicationSync(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', color)}>
+        <span className={clsx('badge', color)}>
           {status}
         </span>
       )
@@ -33,7 +33,7 @@ export function ArgoApplicationCell({ resource, column }: { resource: any; colum
     case 'health': {
       const { status, color } = getArgoApplicationHealth(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', color)}>
+        <span className={clsx('badge', color)}>
           {status}
         </span>
       )
@@ -76,7 +76,7 @@ export function ArgoApplicationSetCell({ resource, column }: { resource: any; co
     case 'status': {
       const status = getArgoApplicationSetStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )

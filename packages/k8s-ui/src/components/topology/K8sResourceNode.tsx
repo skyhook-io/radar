@@ -317,13 +317,13 @@ export const K8sResourceNode = memo(function K8sResourceNode({
         <div
           className={clsx(
             'flex items-center gap-2 px-4 py-2 rounded-full',
-            'bg-blue-500/10 border border-blue-500/30',
-            'shadow-lg shadow-blue-500/20',
-            selected && 'ring-2 ring-blue-400'
+            'selection border border-skyhook-500/30',
+            'shadow-lg shadow-skyhook-500/20',
+            selected && 'ring-2 ring-skyhook-400'
           )}
         >
           <span className="topology-icon topology-icon-internet" style={{ width: 20, height: 20 }} />
-          <span className="text-sm font-medium text-blue-300">Internet</span>
+          <span className="text-sm font-medium text-skyhook-300">Internet</span>
           <span className="w-2 h-2 rounded-full bg-green-500" />
         </div>
         <Handle
@@ -347,7 +347,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
         className={clsx(
           'relative rounded-lg overflow-hidden',
           'bg-theme-surface topology-node-card',
-          selected && 'ring-2 ring-blue-400',
+          selected && 'ring-2 ring-skyhook-400',
           isSmallNode && 'opacity-90',
           // Status bar via CSS pseudo-element (defined in index.css)
           (status === 'healthy' || status === 'unknown') && 'topology-node-status-bar',

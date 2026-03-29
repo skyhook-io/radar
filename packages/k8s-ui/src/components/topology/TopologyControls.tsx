@@ -40,7 +40,7 @@ export function TopologyControls({
           onClick={() => onViewModeChange('resources')}
           className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
             viewMode === 'resources'
-              ? 'bg-blue-500 text-theme-text-primary'
+              ? 'bg-skyhook-600 text-white'
               : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
           }`}
         >
@@ -50,7 +50,7 @@ export function TopologyControls({
           onClick={() => onViewModeChange('traffic')}
           className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
             viewMode === 'traffic'
-              ? 'bg-blue-500 text-theme-text-primary'
+              ? 'bg-skyhook-600 text-white'
               : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
           }`}
         >

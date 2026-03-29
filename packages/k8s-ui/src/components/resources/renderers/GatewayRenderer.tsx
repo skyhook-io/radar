@@ -68,7 +68,7 @@ export function GatewayRenderer({ data, onNavigate }: GatewayRendererProps) {
             label="Accepted"
             value={
               <span className={clsx(
-                'px-2 py-0.5 rounded text-xs font-medium',
+                'badge',
                 isAccepted
                   ? 'bg-green-500/20 text-green-400'
                   : isNotAccepted
@@ -83,7 +83,7 @@ export function GatewayRenderer({ data, onNavigate }: GatewayRendererProps) {
             label="Programmed"
             value={
               <span className={clsx(
-                'px-2 py-0.5 rounded text-xs font-medium',
+                'badge',
                 isProgrammed
                   ? 'bg-green-500/20 text-green-400'
                   : isNotProgrammed
@@ -127,7 +127,7 @@ export function GatewayRenderer({ data, onNavigate }: GatewayRendererProps) {
             const isHTTPS = listener.protocol === 'HTTPS' || listener.protocol === 'TLS'
 
             return (
-              <div key={listener.name} className="bg-theme-elevated/30 rounded p-3">
+              <div key={listener.name} className="card-inner-lg">
                 <div className="flex items-center justify-between mb-2">
                   <div className="flex items-center gap-2">
                     {isHTTPS && <Lock className="w-3.5 h-3.5 text-green-400" />}

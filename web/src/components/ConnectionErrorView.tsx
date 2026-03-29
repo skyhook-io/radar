@@ -206,7 +206,7 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
             <button
               onClick={onRetry}
               disabled={isRetrying}
-              className="inline-flex items-center gap-2 px-4 py-2 bg-blue-500 hover:bg-blue-600 disabled:bg-blue-500/50 text-white rounded-lg transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2 btn-brand rounded-lg"
             >
               {isRetrying ? (
                 <>

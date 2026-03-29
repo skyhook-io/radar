@@ -60,7 +60,7 @@ export function ConfigAuditReportCell({ resource, column }: { resource: any; col
     case 'status': {
       const status = getConfigAuditReportStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -96,7 +96,7 @@ export function RbacAssessmentReportCell({ resource, column }: { resource: any; 
     case 'status': {
       const status = getRbacAssessmentReportStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -113,7 +113,7 @@ export function ClusterComplianceReportCell({ resource, column }: { resource: an
     case 'status': {
       const status = getClusterComplianceReportStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -142,7 +142,7 @@ export function SbomReportCell({ resource, column }: { resource: any; column: st
     case 'status': {
       const status = getSbomReportStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )

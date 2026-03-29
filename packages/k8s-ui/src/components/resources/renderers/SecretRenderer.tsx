@@ -161,7 +161,7 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
             const canEdit = onSaveSecretValue && !isImmutable && !isBinary
 
             return (
-              <div key={key} className="bg-theme-elevated/30 rounded p-2">
+              <div key={key} className="card-inner">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-sm text-theme-text-primary truncate">{key}</span>
                   <div className="flex items-center gap-1 shrink-0">
@@ -211,7 +211,7 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
                       <button
                         onClick={() => setShowSaveConfirm(true)}
                         disabled={isSaving}
-                        className="flex items-center gap-1 px-2.5 py-1 text-xs text-white bg-blue-600 hover:bg-blue-700 rounded transition-colors disabled:opacity-50"
+                        className="flex items-center gap-1 px-2.5 py-1 text-xs btn-brand rounded"
                       >
                         {isSaving ? (
                           <RefreshCw className="w-3 h-3 animate-spin" />
@@ -285,7 +285,7 @@ function CertificateInfoSection({ cert, index, total }: { cert: CertificateInfo;
           <Property label="SANs" value={
             <div className="flex flex-wrap gap-1">
               {cert.sans.map(san => (
-                <span key={san} className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary">
+                <span key={san} className="badge bg-theme-elevated text-theme-text-secondary">
                   {san}
                 </span>
               ))}

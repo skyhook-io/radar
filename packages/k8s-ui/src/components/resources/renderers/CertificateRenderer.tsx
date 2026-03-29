@@ -103,7 +103,7 @@ export function CertificateRenderer({ data }: CertificateRendererProps) {
             label="Status"
             value={
               <span className={clsx(
-                'px-2 py-0.5 rounded text-xs font-medium',
+                'badge',
                 isReady
                   ? 'bg-green-500/20 text-green-400'
                   : 'bg-red-500/20 text-red-400'
@@ -168,7 +168,7 @@ export function CertificateRenderer({ data }: CertificateRendererProps) {
             {dnsNames.map((name: string) => (
               <span
                 key={name}
-                className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary"
+                className="badge bg-theme-elevated text-theme-text-secondary"
               >
                 {name}
               </span>
@@ -193,7 +193,7 @@ export function CertificateRenderer({ data }: CertificateRendererProps) {
             {usages.map((usage: string) => (
               <span
                 key={usage}
-                className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary"
+                className="badge bg-theme-elevated text-theme-text-secondary"
               >
                 {usage}
               </span>

@@ -5,6 +5,7 @@ import { useHelmRepositories, useSearchCharts, useUpdateRepository, useArtifactH
 import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
 import type { ChartInfo, HelmRepository, ArtifactHubChart, ChartSource } from '../../types'
 import { formatAge } from './helm-utils'
+import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 
 interface ChartBrowserProps {
@@ -88,7 +89,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
           <Package className="w-5 h-5" />
           <span className="font-medium">Charts</span>
           {!isLoading && (
-            <span className="text-xs bg-theme-elevated px-2 py-0.5 rounded">
+            <span className="badge bg-theme-elevated">
               {totalCount}
             </span>
           )}
@@ -101,7 +102,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
             className={clsx(
               'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors',
               chartSource === 'local'
-                ? 'bg-blue-500/20 text-blue-400 font-medium'
+                ? `${SEVERITY_BADGE.info} font-medium`
                 : 'text-theme-text-secondary hover:text-theme-text-primary'
             )}
           >
@@ -113,7 +114,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
             className={clsx(
               'flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-md transition-colors',
               chartSource === 'artifacthub'
-                ? 'bg-blue-500/20 text-blue-400 font-medium'
+                ? `${SEVERITY_BADGE.info} font-medium`
                 : 'text-theme-text-secondary hover:text-theme-text-primary'
             )}
           >
@@ -416,7 +417,7 @@ function LocalChartCard({ chart, onSelect }: LocalChartCardProps) {
           <div className="flex items-center gap-2">
             <h4 className="text-sm font-medium text-theme-text-primary truncate">{chart.name}</h4>
             {chart.deprecated && (
-              <span className="px-1 py-0.5 text-[10px] rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+              <span className={clsx('px-1 py-0.5 text-[10px] rounded', SEVERITY_BADGE.warning)}>
                 deprecated
               </span>
             )}
@@ -520,7 +521,7 @@ function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
         {/* Keywords/category */}
         <div className="flex items-center gap-2">
           {chart.deprecated && (
-            <span className="px-2 py-0.5 text-[10px] rounded bg-amber-500/20 text-amber-400 border border-amber-500/30">
+            <span className={clsx('px-2 py-0.5 text-[10px] rounded', SEVERITY_BADGE.warning)}>
               deprecated
             </span>
           )}
@@ -537,7 +538,7 @@ function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
           <Tooltip content={chart.hasValuesSchema ? 'Has values schema' : 'No values schema'}>
             <span className={clsx(
               'p-1.5 rounded',
-              chart.hasValuesSchema ? 'bg-orange-500/20 text-orange-400' : 'bg-theme-elevated/50 text-theme-text-disabled'
+              chart.hasValuesSchema ? SEVERITY_BADGE.warning : 'bg-theme-elevated/50 text-theme-text-disabled'
             )}>
               <FileJson className="w-4 h-4" />
             </span>
@@ -547,7 +548,7 @@ function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
           <Tooltip content={chart.signed ? 'Signed package' : 'Not signed'}>
             <span className={clsx(
               'p-1.5 rounded',
-              chart.signed ? 'bg-blue-500/20 text-blue-400' : 'bg-theme-elevated/50 text-theme-text-disabled'
+              chart.signed ? SEVERITY_BADGE.info : 'bg-theme-elevated/50 text-theme-text-disabled'
             )}>
               <PenTool className="w-4 h-4" />
             </span>
@@ -557,7 +558,7 @@ function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
           <Tooltip content={chart.repository.verifiedPublisher ? 'Verified publisher' : 'Not verified'}>
             <span className={clsx(
               'p-1.5 rounded',
-              chart.repository.verifiedPublisher ? 'bg-green-500/20 text-green-400' : 'bg-theme-elevated/50 text-theme-text-disabled'
+              chart.repository.verifiedPublisher ? SEVERITY_BADGE.success : 'bg-theme-elevated/50 text-theme-text-disabled'
             )}>
               <Shield className="w-4 h-4" />
             </span>
@@ -567,7 +568,7 @@ function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
           <Tooltip content={chart.repository.official ? 'Official package' : 'Community package'}>
             <span className={clsx(
               'p-1.5 rounded',
-              chart.repository.official ? 'bg-green-500/20 text-green-400' : 'bg-theme-elevated/50 text-theme-text-disabled'
+              chart.repository.official ? SEVERITY_BADGE.success : 'bg-theme-elevated/50 text-theme-text-disabled'
             )}>
               <Star className={clsx('w-4 h-4', chart.repository.official && 'fill-current')} />
             </span>

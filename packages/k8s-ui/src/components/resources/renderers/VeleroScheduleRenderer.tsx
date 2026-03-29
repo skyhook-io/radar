@@ -49,7 +49,7 @@ export function VeleroScheduleRenderer({ data }: VeleroScheduleRendererProps) {
       <Section title="Schedule" icon={Clock} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', scheduleStatus.color)}>
+            <span className={clsx('badge', scheduleStatus.color)}>
               {scheduleStatus.text}
             </span>
           } />
@@ -75,7 +75,7 @@ export function VeleroScheduleRenderer({ data }: VeleroScheduleRendererProps) {
             <Property label="Included Namespaces" value={
               <div className="flex flex-wrap gap-1">
                 {templateIncludedNs.map((ns: string) => (
-                  <span key={ns} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">{ns}</span>
+                  <span key={ns} className="badge-sm bg-theme-hover text-theme-text-secondary">{ns}</span>
                 ))}
               </div>
             } />
@@ -87,7 +87,7 @@ export function VeleroScheduleRenderer({ data }: VeleroScheduleRendererProps) {
             <Property label="Excluded Namespaces" value={
               <div className="flex flex-wrap gap-1">
                 {templateExcludedNs.map((ns: string) => (
-                  <span key={ns} className="px-1.5 py-0.5 bg-red-500/10 rounded text-xs text-red-400">{ns}</span>
+                  <span key={ns} className="badge-sm bg-red-500/10 text-red-400">{ns}</span>
                 ))}
               </div>
             } />
@@ -96,7 +96,7 @@ export function VeleroScheduleRenderer({ data }: VeleroScheduleRendererProps) {
             <Property label="Included Resources" value={
               <div className="flex flex-wrap gap-1">
                 {templateIncludedResources.map((r: string) => (
-                  <span key={r} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">{r}</span>
+                  <span key={r} className="badge-sm bg-theme-hover text-theme-text-secondary">{r}</span>
                 ))}
               </div>
             } />
@@ -105,7 +105,7 @@ export function VeleroScheduleRenderer({ data }: VeleroScheduleRendererProps) {
             <Property label="Excluded Resources" value={
               <div className="flex flex-wrap gap-1">
                 {templateExcludedResources.map((r: string) => (
-                  <span key={r} className="px-1.5 py-0.5 bg-red-500/10 rounded text-xs text-red-400">{r}</span>
+                  <span key={r} className="badge-sm bg-red-500/10 text-red-400">{r}</span>
                 ))}
               </div>
             } />
@@ -120,7 +120,7 @@ export function VeleroScheduleRenderer({ data }: VeleroScheduleRendererProps) {
             <Property label="Volume Snapshot Locations" value={
               <div className="flex flex-wrap gap-1">
                 {template.volumeSnapshotLocations.map((loc: string) => (
-                  <span key={loc} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">{loc}</span>
+                  <span key={loc} className="badge-sm bg-theme-hover text-theme-text-secondary">{loc}</span>
                 ))}
               </div>
             } />

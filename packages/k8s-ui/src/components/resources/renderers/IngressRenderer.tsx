@@ -53,7 +53,7 @@ export function IngressRenderer({ data, onNavigate }: IngressRendererProps) {
       <Section title="Rules" defaultExpanded>
         <div className="space-y-3">
           {rules.map((rule: any, i: number) => (
-            <div key={i} className="bg-theme-elevated/30 rounded p-3">
+            <div key={i} className="card-inner-lg">
               <div className="flex items-center gap-2 mb-2">
                 {tls.some((t: any) => t.hosts?.includes(rule.host)) && (
                   <Shield className="w-3.5 h-3.5 text-green-400" />

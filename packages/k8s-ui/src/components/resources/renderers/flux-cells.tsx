@@ -45,7 +45,7 @@ export function GitRepositoryCell({ resource, column }: { resource: any; column:
     case 'status': {
       const status = getGitRepositoryStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -78,7 +78,7 @@ export function OCIRepositoryCell({ resource, column }: { resource: any; column:
     case 'status': {
       const status = getOCIRepositoryStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -111,7 +111,7 @@ export function HelmRepositoryCell({ resource, column }: { resource: any; column
     case 'status': {
       const status = getHelmRepositoryStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -138,7 +138,7 @@ export function KustomizationCell({ resource, column }: { resource: any; column:
     case 'status': {
       const status = getKustomizationStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -197,7 +197,7 @@ export function FluxHelmReleaseCell({ resource, column }: { resource: any; colum
     case 'status': {
       const status = getFluxHelmReleaseStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -242,7 +242,7 @@ export function FluxAlertCell({ resource, column }: { resource: any; column: str
     case 'status': {
       const status = getFluxAlertStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )

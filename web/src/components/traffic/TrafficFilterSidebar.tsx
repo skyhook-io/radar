@@ -126,7 +126,7 @@ function ToggleOption({
   return (
     <div className={clsx(
       'flex items-center gap-2 px-2 py-1.5 rounded transition-colors',
-      enabled ? 'bg-blue-500/10' : 'hover:bg-theme-elevated'
+      enabled ? 'selection' : 'hover:bg-theme-elevated'
     )}>
       <button
         onClick={onToggle}
@@ -134,11 +134,11 @@ function ToggleOption({
       >
         <Icon className={clsx(
           'w-3.5 h-3.5 shrink-0',
-          enabled ? 'text-blue-400' : 'text-theme-text-tertiary'
+          enabled ? 'selection-text' : 'text-theme-text-tertiary'
         )} />
         <span className={clsx(
           'flex-1 text-xs',
-          enabled ? 'text-blue-400' : 'text-theme-text-primary'
+          enabled ? 'selection-text' : 'text-theme-text-primary'
         )}>
           {label}
         </span>
@@ -150,7 +150,7 @@ function ToggleOption({
         onClick={onToggle}
         className={clsx(
           'w-7 h-4 rounded-full transition-colors relative shrink-0',
-          enabled ? 'bg-blue-500' : 'bg-theme-elevated'
+          enabled ? 'bg-skyhook-500' : 'bg-theme-elevated'
         )}
       >
         <div className={clsx(
@@ -209,7 +209,7 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
             onClick={() => setHideSystem(!hideSystem)}
             className={clsx(
               'p-1.5 rounded transition-colors',
-              hideSystem ? 'bg-blue-500/20 text-blue-400' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
+              hideSystem ? 'selection-strong selection-text' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
             )}
             title="Hide system traffic"
           >
@@ -219,7 +219,7 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
             onClick={() => setHideExternal(!hideExternal)}
             className={clsx(
               'p-1.5 rounded transition-colors',
-              hideExternal ? 'bg-blue-500/20 text-blue-400' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
+              hideExternal ? 'selection-strong selection-text' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
             )}
             title="Hide external traffic"
           >
@@ -229,7 +229,7 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
             onClick={() => setShowNamespaceGroups(!showNamespaceGroups)}
             className={clsx(
               'p-1.5 rounded transition-colors',
-              showNamespaceGroups ? 'bg-blue-500/20 text-blue-400' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
+              showNamespaceGroups ? 'selection-strong selection-text' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
             )}
             title="Show namespace groups"
           >
@@ -326,7 +326,7 @@ export const TrafficFilterSidebar = memo(function TrafficFilterSidebar({
                   className={clsx(
                     'flex-1 px-2 py-1.5 text-[10px] font-medium transition-colors capitalize',
                     addonMode === mode
-                      ? 'bg-blue-500 text-white'
+                      ? 'bg-skyhook-500 text-white'
                       : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover'
                   )}
                 >

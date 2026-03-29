@@ -139,13 +139,13 @@ export function TopologyPreview({ topology, summary, onNavigate }: TopologyPrevi
   return (
     <button
       onClick={onNavigate}
-      className="group h-[260px] rounded-lg border-[3px] border-blue-500/30 bg-theme-surface/50 hover:-translate-y-1 hover:shadow-[0_12px_24px_rgba(0,0,0,0.12)] hover:border-blue-500/60 transition-all duration-200 text-left overflow-hidden"
+      className="group h-[260px] rounded-xl bg-theme-surface shadow-theme-sm hover:-translate-y-1 hover:shadow-theme-md transition-all duration-200 text-left overflow-hidden"
     >
       <div className="flex flex-col h-full w-full">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-theme-border">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50">
         <div className="flex items-center gap-2">
-          <Network className="w-4 h-4 text-blue-500" />
-          <span className="text-sm font-semibold text-blue-500">Topology</span>
+          <Network className="w-4 h-4 text-theme-text-tertiary" />
+          <span className="text-xs font-semibold uppercase tracking-wider text-theme-text-secondary">Topology</span>
         </div>
         <span className="text-[11px] text-theme-text-tertiary">
           {summary.nodeCount} resources &middot; {summary.edgeCount} conn
@@ -209,7 +209,7 @@ export function TopologyPreview({ topology, summary, onNavigate }: TopologyPrevi
         </div>
       </div>
 
-      <div className="px-4 py-1.5 border-t border-theme-border flex items-center justify-end gap-1.5 text-xs font-medium text-blue-500 group-hover:text-blue-400 transition-colors">
+      <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-end gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-theme-text-secondary group-hover:text-theme-text-primary transition-colors">
         Open Topology
         <ArrowRight className="w-3.5 h-3.5 transition-transform group-hover:translate-x-0.5" />
       </div>

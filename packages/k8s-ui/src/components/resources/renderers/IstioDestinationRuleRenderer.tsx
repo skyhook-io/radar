@@ -151,7 +151,7 @@ export function IstioDestinationRuleRenderer({ data, onNavigate }: IstioDestinat
         <Section title={`Subsets (${subsets.length})`} defaultExpanded>
           <div className="space-y-3">
             {subsets.map((subset, i) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-3">
+              <div key={i} className="card-inner-lg">
                 <div className="text-sm font-medium text-theme-text-primary mb-2">{subset.name}</div>
                 {Object.keys(subset.labels).length > 0 && (
                   <div className="mb-2">

@@ -101,7 +101,7 @@ export function NodeTerminalTab({
         <div className="text-xs text-theme-text-tertiary text-center max-w-md break-all">{error}</div>
         <button
           onClick={createPod}
-          className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+          className="flex items-center gap-2 px-3 py-1.5 btn-brand text-xs rounded"
         >
           <RefreshCw className="w-3 h-3" />
           Retry

@@ -229,7 +229,7 @@ function DesktopUpdateControls({
         <button
           onClick={onStart}
           disabled={starting}
-          className="mt-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white text-xs font-medium rounded transition-colors disabled:opacity-50"
+          className="mt-2 px-3 py-1.5 btn-brand text-xs font-medium rounded"
         >
           {starting ? (
             <span className="inline-flex items-center gap-1.5">

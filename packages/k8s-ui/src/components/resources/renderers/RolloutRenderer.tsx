@@ -102,7 +102,7 @@ export function RolloutRenderer({ data }: RolloutRendererProps) {
           <Property
             label="Phase"
             value={
-              <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', phaseColor)}>
+              <span className={clsx('badge', phaseColor)}>
                 {phase}
               </span>
             }

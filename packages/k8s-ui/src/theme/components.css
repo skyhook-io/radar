@@ -1,0 +1,195 @@
+/* ============================================
+   SHARED COMPONENT CLASSES (@skyhook-io/k8s-ui)
+   All in @layer components so Tailwind utilities can override them.
+   Import: @skyhook-io/k8s-ui/theme/components.css
+   Requires: @skyhook-io/k8s-ui/theme/variables.css imported first.
+   ============================================ */
+
+@layer components {
+
+  /* ── BRAND BUTTONS ── */
+
+  .btn-brand {
+    background-color: var(--color-brand);
+    color: white;
+    border-radius: 0.625rem;
+    transition: background-color 0.15s ease;
+  }
+  .btn-brand:hover {
+    background-color: var(--color-brand-light);
+  }
+  .btn-brand:disabled {
+    opacity: 0.5;
+  }
+
+  .btn-brand-muted {
+    background-color: light-dark(var(--color-brand-light), color-mix(in srgb, var(--color-brand) 60%, black));
+    color: white;
+    border-radius: 0.625rem;
+    transition: background-color 0.15s ease;
+  }
+  .btn-brand-muted:hover {
+    background-color: var(--color-brand);
+  }
+  .btn-brand-muted:disabled {
+    opacity: 0.5;
+  }
+
+  .btn-brand-toggle {
+    background-color: color-mix(in srgb, var(--color-brand) 50%, transparent);
+    color: var(--text-primary);
+    border-radius: 0.375rem;
+  }
+
+  /* ── SELECTION / HIGHLIGHT ── */
+
+  .selection {
+    background-color: var(--selection-bg);
+  }
+  .selection-strong {
+    background-color: var(--selection-bg-strong);
+  }
+  .selection-ring {
+    box-shadow: inset 0 0 0 1px var(--selection-border);
+  }
+  .selection-text {
+    color: var(--selection-text);
+  }
+
+  /* ── DIALOG / MODAL ── */
+
+  .dialog {
+    background-color: var(--bg-surface);
+    border: 0.5px solid var(--border-default);
+    border-radius: 0.875rem;
+    box-shadow: var(--shadow-lg);
+  }
+
+  /* ── BADGES ── */
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.125rem 0.5rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    border-radius: 0.375rem;
+    border-width: 0.5px;
+    border-style: solid;
+    border-color: transparent;
+    line-height: 1.25rem;
+  }
+
+  .badge-sm {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    padding: 0.125rem 0.375rem;
+    font-size: 0.75rem;
+    border-radius: 0.375rem;
+    border-width: 0.5px;
+    border-style: solid;
+    border-color: transparent;
+    line-height: 1.25rem;
+  }
+
+  /* ── INNER CARDS ── */
+
+  .card-inner {
+    background: var(--bg-base);
+    border-radius: 0.375rem;
+    border: 1px solid var(--border-subtle);
+    padding: 0.5rem;
+  }
+
+  .card-inner-lg {
+    background: var(--bg-base);
+    border-radius: 0.625rem;
+    border: 1px solid var(--border-subtle);
+    padding: 0.75rem;
+  }
+
+  /* ── SUBTLE BORDERS ── */
+
+  .table-divide-subtle > * + * {
+    border-top-width: 0.5px;
+    border-top-style: solid;
+    border-top-color: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.07));
+  }
+
+  .border-b-subtle {
+    border-bottom: 0.5px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.07));
+  }
+
+  .border-r-subtle {
+    border-right: 0.5px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.07));
+  }
+
+  .border-t-subtle {
+    border-top: 0.5px solid light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.07));
+  }
+
+  /* ── STATUS BADGE COLORS ── */
+
+  /* Healthy/Success - emerald */
+  .status-healthy {
+    background-color: light-dark(#d1fae5, rgba(6, 78, 59, 0.5));
+    color: light-dark(#047857, #6ee7b7);
+    border-color: light-dark(#6ee7b7, rgba(6, 78, 59, 0.4));
+  }
+
+  /* Degraded/Warning - amber */
+  .status-degraded {
+    background-color: light-dark(#fef3c7, rgba(120, 53, 15, 0.5));
+    color: light-dark(#92400e, #fcd34d);
+    border-color: light-dark(#fcd34d, rgba(120, 53, 15, 0.4));
+  }
+
+  /* Unhealthy/Error - red */
+  .status-unhealthy {
+    background-color: light-dark(#fee2e2, rgba(127, 29, 29, 0.5));
+    color: light-dark(#b91c1c, #fca5a5);
+    border-color: light-dark(#fca5a5, rgba(127, 29, 29, 0.4));
+  }
+
+  /* Neutral/Info - sky */
+  .status-neutral {
+    background-color: light-dark(#e0f2fe, rgba(12, 74, 110, 0.5));
+    color: light-dark(#0369a1, #7dd3fc);
+    border-color: light-dark(#7dd3fc, rgba(12, 74, 110, 0.4));
+  }
+
+  /* Unknown/Muted - gray */
+  .status-unknown {
+    background-color: var(--bg-elevated);
+    color: var(--text-secondary);
+    border-color: var(--border-default);
+  }
+
+  /* Special status colors — no border-color (renders borderless within .badge) */
+  .status-violet {
+    background-color: light-dark(rgba(139, 92, 246, 0.15), rgba(139, 92, 246, 0.2));
+    color: light-dark(#7c3aed, #a78bfa);
+    border-color: transparent;
+  }
+
+  .status-purple {
+    background-color: light-dark(rgba(168, 85, 247, 0.15), rgba(168, 85, 247, 0.2));
+    color: light-dark(#9333ea, #c084fc);
+    border-color: transparent;
+  }
+
+  .status-orange {
+    background-color: light-dark(rgba(249, 115, 22, 0.15), rgba(249, 115, 22, 0.2));
+    color: light-dark(#ea580c, #fb923c);
+    border-color: transparent;
+  }
+
+  .status-cyan {
+    background-color: light-dark(rgba(6, 182, 212, 0.15), rgba(6, 182, 212, 0.2));
+    color: light-dark(#0891b2, #22d3ee);
+    border-color: transparent;
+  }
+
+} /* end @layer components */

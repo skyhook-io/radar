@@ -15,7 +15,7 @@ export default defineConfig({
     port: 9273,
     proxy: {
       '/api': {
-        target: 'http://localhost:9280',
+        target: `http://localhost:${process.env.RADAR_PORT || '9280'}`,
         changeOrigin: true,
         ws: true, // WebSocket/SSE support
       },

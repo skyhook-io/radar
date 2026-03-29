@@ -50,7 +50,7 @@ export function PingSourceRenderer({ data, onNavigate }: RendererProps) {
       <Section title="Overview" icon={Clock} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
@@ -86,7 +86,7 @@ export function ApiServerSourceRenderer({ data, onNavigate }: RendererProps) {
       <Section title="Overview" icon={Server} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
@@ -100,7 +100,7 @@ export function ApiServerSourceRenderer({ data, onNavigate }: RendererProps) {
         <Section title={`Watched Resources (${resources.length})`} defaultExpanded>
           <div className="space-y-1.5">
             {resources.map((r: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2 text-sm">
+              <div key={i} className="card-inner text-sm">
                 <span className="text-theme-text-primary">{r.apiVersion}/{r.kind}</span>
                 {r.selector && (
                   <div className="text-xs text-theme-text-tertiary mt-0.5">
@@ -136,7 +136,7 @@ export function ContainerSourceRenderer({ data, onNavigate }: RendererProps) {
       <Section title="Overview" icon={Container} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
@@ -148,7 +148,7 @@ export function ContainerSourceRenderer({ data, onNavigate }: RendererProps) {
         <Section title={`Containers (${containers.length})`} defaultExpanded>
           <div className="space-y-2">
             {containers.map((c: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2 text-sm">
+              <div key={i} className="card-inner text-sm">
                 <div className="font-medium text-theme-text-primary">{c.name || 'container'}</div>
                 <div className="text-xs text-theme-text-secondary truncate" title={c.image}>{c.image}</div>
                 {c.args && c.args.length > 0 && (
@@ -184,7 +184,7 @@ export function SinkBindingRenderer({ data, onNavigate }: RendererProps) {
       <Section title="Overview" icon={Link2} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />

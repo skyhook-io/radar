@@ -196,7 +196,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, forceDark }: 
         <button
           onClick={() => setShowPodFilter(v => !v)}
           className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors ${
-            showPodFilter ? 'bg-blue-600 text-theme-text-primary' : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover'
+            showPodFilter ? 'btn-brand-toggle' : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover'
           }`}
         >
           <Filter className="w-3 h-3" />

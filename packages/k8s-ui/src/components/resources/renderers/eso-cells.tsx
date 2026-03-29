@@ -20,7 +20,7 @@ export function ExternalSecretCell({ resource, column }: { resource: any; column
     case 'status': {
       const status = getExternalSecretStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -55,7 +55,7 @@ export function ClusterExternalSecretCell({ resource, column }: { resource: any;
     case 'status': {
       const status = getClusterExternalSecretStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -81,7 +81,7 @@ export function SecretStoreCell({ resource, column }: { resource: any; column: s
     case 'status': {
       const status = getSecretStoreStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -100,7 +100,7 @@ export function ClusterSecretStoreCell({ resource, column }: { resource: any; co
     case 'status': {
       const status = getClusterSecretStoreStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )

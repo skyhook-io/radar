@@ -1,4 +1,5 @@
 import { clsx } from 'clsx'
+import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import {
   getPodStatus,
   getWorkloadStatus,
@@ -550,9 +551,9 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   // Contour HTTPProxy
   if (k === 'httpproxies') {
     const s = getHTTPProxyStatus(data)
-    if (s.status === 'healthy') return { text: s.label, color: 'bg-green-500/20 text-green-400' }
-    if (s.status === 'unhealthy') return { text: s.label, color: 'bg-red-500/20 text-red-400' }
-    if (s.status === 'degraded') return { text: s.label, color: 'bg-yellow-500/20 text-yellow-400' }
+    if (s.status === 'healthy') return { text: s.label, color: SEVERITY_BADGE.success }
+    if (s.status === 'unhealthy') return { text: s.label, color: SEVERITY_BADGE.error }
+    if (s.status === 'degraded') return { text: s.label, color: SEVERITY_BADGE.warning }
     return null
   }
 
@@ -587,9 +588,9 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
       const isWarning = warningPhases.includes(phase)
       return {
         text: phase,
-        color: isHealthy ? 'bg-green-500/20 text-green-400' :
-               isWarning ? 'bg-yellow-500/20 text-yellow-400' :
-               'bg-red-500/20 text-red-400'
+        color: isHealthy ? SEVERITY_BADGE.success :
+               isWarning ? SEVERITY_BADGE.warning :
+               SEVERITY_BADGE.error
       }
     }
 
@@ -601,7 +602,7 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
         const isReady = readyCondition.status === 'True'
         return {
           text: isReady ? 'Ready' : 'Not Ready',
-          color: isReady ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'
+          color: isReady ? SEVERITY_BADGE.success : SEVERITY_BADGE.warning
         }
       }
     }

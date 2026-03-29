@@ -68,7 +68,7 @@ export function ServiceAccountRenderer({ data }: ServiceAccountRendererProps) {
             {imagePullSecrets.map((secret: any) => (
               <span
                 key={secret.name}
-                className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary"
+                className="badge bg-theme-elevated text-theme-text-secondary"
               >
                 {secret.name}
               </span>

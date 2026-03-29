@@ -51,7 +51,7 @@ export function CertificateRequestRenderer({ data }: CertificateRequestRendererP
             label="Ready"
             value={
               <span className={clsx(
-                'px-2 py-0.5 rounded text-xs font-medium',
+                'badge',
                 isReady
                   ? 'bg-green-500/20 text-green-400'
                   : 'bg-red-500/20 text-red-400'
@@ -64,7 +64,7 @@ export function CertificateRequestRenderer({ data }: CertificateRequestRendererP
             label="Approved"
             value={
               <span className={clsx(
-                'px-2 py-0.5 rounded text-xs font-medium',
+                'badge',
                 isApproved
                   ? 'bg-green-500/20 text-green-400'
                   : isDenied
@@ -103,7 +103,7 @@ export function CertificateRequestRenderer({ data }: CertificateRequestRendererP
                   {usages.map((usage: string) => (
                     <span
                       key={usage}
-                      className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary"
+                      className="badge bg-theme-elevated text-theme-text-secondary"
                     >
                       {usage}
                     </span>

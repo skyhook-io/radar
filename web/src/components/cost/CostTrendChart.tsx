@@ -59,7 +59,7 @@ export function CostTrendChart() {
               className={clsx(
                 'px-2 py-1 text-xs rounded-md transition-colors',
                 timeRange === tr.value
-                  ? 'bg-blue-600/20 text-blue-400 font-medium'
+                  ? 'bg-skyhook-600/20 text-blue-400 font-medium'
                   : 'text-theme-text-quaternary hover:text-theme-text-tertiary'
               )}
             >

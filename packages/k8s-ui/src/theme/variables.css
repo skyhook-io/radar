@@ -13,9 +13,10 @@
 :root {
   color-scheme: light dark;
 
-  /* ── Brand ── */
-  --color-brand: #2D7AFF;
-  --color-brand-light: light-dark(#1A5FCC, #5A9AFF);
+  /* ── Brand (refined blue — more life than slate, less generic than tech blue) ── */
+  --color-brand: light-dark(#4A7CC9, #6A9FE0);
+  --color-brand-light: light-dark(#3B66A8, #8BB5EA);
+  --brand-rgb: light-dark(74 124 201, 106 159 224);
 
   /* ── Semantic status (theme-independent) ── */
   --color-success: #22C55E;
@@ -29,40 +30,55 @@
   --color-error-dark: #DC2626;
   --color-info: #3B82F6;
 
-  /* ── Backgrounds ── */
-  --bg-base: light-dark(#f7f9fc, #0c1425);
-  --bg-surface: light-dark(#ffffff, #162033);
-  --bg-elevated: light-dark(#edf2f8, #1e2d45);
-  --bg-hover: light-dark(#e2e8f0, #2a3d58);
-  --bg-active: light-dark(#dbeafe, #1e3a5f);
+  /* ── Backgrounds ──
+     base     = page bg, header/toolbar chrome (barely-blue cool gray)
+     surface  = sidebars, content panels, cards (near-white)
+     elevated = inputs, count badges, dropdowns (very lightly blue-tinted) */
+  --bg-base: light-dark(#F0F3F9, #0B0F1E);
+  --bg-surface: light-dark(#F8FBFE, #14192A);
+  --bg-elevated: light-dark(#E6ECF5, #1E2338);
+  --bg-hover: light-dark(#DDE5F2, #282E48);
+  --bg-active: light-dark(#D3DCEC, #1C2840);
 
-  /* ── Text ── */
-  --text-primary: light-dark(#0f172a, #f8fafc);
-  --text-secondary: light-dark(#475569, #cbd5e1);
-  --text-tertiary: light-dark(#64748b, #94a3b8);
-  --text-disabled: light-dark(#94a3b8, #64748b);
+  /* ── Text (cool neutral) ── */
+  --text-primary: light-dark(#1A1C20, #F5F6F8);
+  --text-secondary: light-dark(#555860, #D8DAE0);
+  --text-tertiary: light-dark(#7E828A, #B0B5C0);
+  --text-disabled: light-dark(#A0A4AC, #6A7080);
 
-  /* ── Borders ── */
-  --border-default: light-dark(#e2e8f0, #1e2d45);
-  --border-light: light-dark(#cbd5e1, #2a3d58);
-  --border-subtle: light-dark(rgba(0, 0, 0, 0.06), rgba(255, 255, 255, 0.02));
+  /* ── Borders (lightly blue-tinted in light mode) ── */
+  --border-default: light-dark(#D8E0EE, #222840);
+  --border-light: light-dark(#CDD6E8, #2C324A);
+  --border-subtle: light-dark(rgba(74, 100, 180, 0.07), rgba(255, 255, 255, 0.04));
   --border-focus: var(--color-brand);
 
   /* ── Accent ── */
   --accent: var(--color-brand);
   --accent-light: var(--color-brand-light);
-  --accent-muted: light-dark(rgba(45, 122, 255, 0.1), rgba(45, 122, 255, 0.2));
-  --accent-text: light-dark(#1d4ed8, #93c5fd);
+  --accent-muted: light-dark(rgba(74, 124, 201, 0.12), rgba(106, 159, 224, 0.18));
+  --accent-text: light-dark(#3B66A8, #8BB5EA);
+
+  /* ── Selection / highlight (used for selected rows, items, filters) ── */
+  --selection-bg: light-dark(rgba(74, 124, 201, 0.10), rgba(106, 159, 224, 0.15));
+  --selection-bg-strong: light-dark(rgba(74, 124, 201, 0.20), rgba(106, 159, 224, 0.25));
+  --selection-text: light-dark(#3B66A8, #8BB5EA);
+  --selection-border: light-dark(rgba(74, 124, 201, 0.30), rgba(106, 159, 224, 0.30));
+
+  /* ── Glow ── */
+  --glow-brand: light-dark(rgba(74, 124, 201, 0.2), rgba(106, 159, 224, 0.25));
+  --glow-brand-sm: 0 0 8px var(--glow-brand);
+  --glow-brand-md: 0 0 16px var(--glow-brand);
 
   /* ── Shadows (light defaults — can't use light-dark() for comma-separated values) ── */
   --shadow-sm: 0 1px 3px rgba(0,0,0,0.04), 0 1px 2px rgba(0,0,0,0.02);
   --shadow-md: 0 4px 12px -2px rgba(0,0,0,0.06), 0 2px 4px rgba(0,0,0,0.03);
   --shadow-lg: 0 12px 32px -6px rgba(0,0,0,0.08), 0 4px 8px rgba(0,0,0,0.04);
+  --shadow-drawer: -12px 0 40px rgba(0,0,0,0.15), -4px 0 12px rgba(0,0,0,0.08);
 
   /* ── Topology ── */
-  --topology-node-border: light-dark(rgba(0, 0, 0, 0.10), rgba(255, 255, 255, 0.08));
+  --topology-node-border: light-dark(rgba(0, 0, 0, 0.08), rgba(255, 255, 255, 0.08));
   --topology-node-shadow: 0 2px 6px rgba(0,0,0,0.05), 0 6px 16px rgba(0,0,0,0.04);
-  --topology-bg-dots: light-dark(rgba(148, 163, 184, 0.25), #1e2d45);
+  --topology-bg-dots: light-dark(rgba(126, 130, 138, 0.2), #1E2338);
 
   /* Topology edge colors (theme-independent identity colors) */
   --edge-routes-to: #22c55e;
@@ -107,15 +123,16 @@
   --ansi-bright-white:   light-dark(#e5e5e5, #e5e5e5);
 
   /* ── Scrollbar ── */
-  --scrollbar-track: light-dark(#f1f5f9, #162033);
-  --scrollbar-thumb: light-dark(#cbd5e1, #2a3d58);
-  --scrollbar-thumb-hover: light-dark(#94a3b8, #3d5474);
+  --scrollbar-track: light-dark(#E6ECF5, #0F1322);
+  --scrollbar-thumb: light-dark(#CDD6E8, #2C324A);
+  --scrollbar-thumb-hover: light-dark(#AABACF, #484C55);
 }
 
 /* Dark overrides for comma-separated values that can't use light-dark() */
 .dark {
-  --shadow-sm: 0 1px 3px rgba(0,0,0,0.2), 0 1px 2px rgba(0,0,0,0.1);
-  --shadow-md: 0 4px 12px -2px rgba(0,0,0,0.25), 0 2px 4px rgba(0,0,0,0.1);
+  --shadow-sm: 0 1px 3px rgba(0,0,0,0.3), 0 1px 2px rgba(0,0,0,0.2), 0 0 0 1px rgba(255,255,255,0.06);
+  --shadow-md: 0 4px 12px -2px rgba(0,0,0,0.35), 0 2px 4px rgba(0,0,0,0.15), 0 0 0 1px rgba(255,255,255,0.06);
   --shadow-lg: 0 12px 32px -6px rgba(0,0,0,0.3), 0 4px 8px rgba(0,0,0,0.1);
+  --shadow-drawer: -16px 0 60px rgba(0,0,0,0.6), -6px 0 20px rgba(0,0,0,0.4);
   --topology-node-shadow: 0 2px 6px rgba(0,0,0,0.2), 0 6px 16px rgba(0,0,0,0.15);
 }

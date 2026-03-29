@@ -32,7 +32,7 @@ import {
 function StatusCell({ resource, getStatus }: { resource: any; getStatus: (r: any) => { text: string; color: string } }) {
   const status = getStatus(resource)
   return (
-    <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+    <span className={clsx('badge', status.color)}>
       {status.text}
     </span>
   )
@@ -383,7 +383,7 @@ export function ServerlessServiceCell({ resource, column }: { resource: any; col
       const mode = getServerlessServiceMode(resource)
       return (
         <span className={clsx(
-          'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
+          'badge',
           mode === 'Proxy' ? 'bg-yellow-500/20 text-yellow-400' : 'bg-green-500/20 text-green-400'
         )}>
           {mode}

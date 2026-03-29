@@ -132,7 +132,7 @@ export function ImageFilesystemModal({
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="relative bg-theme-surface border border-theme-border rounded-lg shadow-2xl w-full max-w-4xl mx-4 max-h-[85vh] flex flex-col outline-none"
+        className="relative dialog w-full max-w-4xl mx-4 max-h-[85vh] flex flex-col outline-none"
       >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">
@@ -384,7 +384,7 @@ function DownloadConfirmation({ metadata, onConfirm, onCancel }: DownloadConfirm
         </button>
         <button
           onClick={onConfirm}
-          className="px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors"
+          className="px-4 py-2 text-sm btn-brand rounded-lg"
         >
           Download & View
         </button>
@@ -483,7 +483,7 @@ function AuthenticationHelp({ image, registryType, onRetry }: AuthenticationHelp
       <button
         onClick={handleRetry}
         disabled={retrying}
-        className="flex items-center gap-2 px-4 py-2 text-sm text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50"
+        className="flex items-center gap-2 px-4 py-2 text-sm btn-brand rounded-lg"
       >
         <RefreshCw className={clsx('w-4 h-4', retrying && 'animate-spin')} />
         {retrying ? 'Retrying...' : 'Retry'}

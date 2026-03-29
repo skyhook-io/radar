@@ -120,7 +120,7 @@ export function PersistentVolumeRenderer({ data, onNavigate }: PersistentVolumeR
               <div key={termIdx} className="space-y-1">
                 {term.matchExpressions?.map((expr: any, exprIdx: number) => (
                   <div key={exprIdx} className="flex flex-wrap gap-1">
-                    <span className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary">
+                    <span className="badge bg-theme-elevated text-theme-text-secondary">
                       {expr.key} {expr.operator} {expr.values?.join(', ')}
                     </span>
                   </div>

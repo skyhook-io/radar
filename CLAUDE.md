@@ -431,7 +431,13 @@ Error responses are parsed as `{"error": "message"}` and displayed in toasts.
 - `web/src/components/resources/ResourcesView.tsx` is a thin wrapper that instantiates hooks and passes data to the package's `ResourcesView`
 - Linked via npm workspaces; Vite aliases `@skyhook-io/k8s-ui` to `../packages/k8s-ui/src` (source-level, no build step)
 - Key exports: `ResourcesView`, `ResourceRendererDispatch`, `ResourceActionsBar`, `EditableYamlView`, all renderers, resource-utils, `categorizeResources`, `getKindLabel`, `getKindPlural`
-- **Badge/status colors**: `packages/k8s-ui/src/utils/badge-colors.ts` is the single source of truth for all badge and status colors. Use `SEVERITY_BADGE`, `SEVERITY_BADGE_BORDERED`, `SEVERITY_TEXT`, `KIND_BADGE_COLORS`, `HEALTH_BADGE_COLORS`, etc. instead of ad-hoc Tailwind color classes. Covers: severity levels, K8s resource kinds, health states, event types, Helm statuses, operations.
+- **Badge colors**: `packages/k8s-ui/src/components/ui/Badge.tsx` is the source of truth for badge color definitions (static strings for Tailwind scanning — never use template literals for class names). `packages/k8s-ui/src/utils/badge-colors.ts` re-exports these and provides derived constants (`SEVERITY_BADGE`, `KIND_BADGE_COLORS`, `HEALTH_BADGE_COLORS`, `HELM_STATUS_COLORS`, etc.). For status badges in tables, use CSS classes `.status-healthy`, `.status-degraded`, `.status-unhealthy`, `.status-neutral`, `.status-unknown` defined in `packages/k8s-ui/src/theme/components.css`.
+- **Centralized CSS classes** (all in `@layer components` in `packages/k8s-ui/src/theme/components.css` — Tailwind utilities can override them):
+  - `.badge` / `.badge-sm` — badge structure (padding, radius, border-width)
+  - `.btn-brand` / `.btn-brand-muted` / `.btn-brand-toggle` — brand buttons (reference `--color-brand` CSS variables)
+  - `.card-inner` / `.card-inner-lg` — nested containers in drawers/renderers
+  - `.selection` / `.selection-strong` / `.selection-text` / `.selection-ring` — selected rows/items (reference `--selection-*` CSS variables)
+  - `.dialog` — modal/dialog containers
 
 ### Resource Renderers
 - **Adding a new CRD integration? You MUST read [docs/INTEGRATION_GUIDE.md](docs/INTEGRATION_GUIDE.md) first** — it has the full step-by-step checklist with all files, patterns, and collision gotchas. Do not skip this.

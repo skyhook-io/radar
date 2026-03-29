@@ -55,7 +55,7 @@ export function OrderRenderer({ data }: { data: any }) {
           <Property
             label="State"
             value={
-              <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', getOrderStateBadge(state).color)}>
+              <span className={clsx('badge', getOrderStateBadge(state).color)}>
                 {getOrderStateBadge(state).text}
               </span>
             }
@@ -69,7 +69,7 @@ export function OrderRenderer({ data }: { data: any }) {
         <Section title="Domains" icon={Globe}>
           <div className="flex flex-wrap gap-1.5">
             {dnsNames.map((name: string) => (
-              <span key={name} className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary font-medium">
+              <span key={name} className="badge bg-theme-elevated text-theme-text-secondary">
                 {name}
               </span>
             ))}
@@ -93,7 +93,7 @@ export function OrderRenderer({ data }: { data: any }) {
         <Section title={`Authorizations (${authorizations.length})`} icon={ShoppingCart}>
           <div className="space-y-1">
             {authorizations.map((auth: any, i: number) => (
-              <div key={i} className="text-xs text-theme-text-secondary bg-theme-elevated/30 rounded p-2">
+              <div key={i} className="text-xs text-theme-text-secondary card-inner">
                 {auth.url || `Authorization ${i + 1}`}
               </div>
             ))}

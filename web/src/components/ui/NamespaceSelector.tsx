@@ -276,7 +276,7 @@ export function NamespaceSelector({
                       type="button"
                       onClick={addManualNamespace}
                       disabled={!manualInput.trim()}
-                      className="px-2 py-1 text-xs bg-blue-500 hover:bg-blue-600 disabled:bg-blue-500/30 text-white rounded transition-colors"
+                      className="px-2 py-1 text-xs btn-brand rounded"
                     >
                       Add
                     </button>

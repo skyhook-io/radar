@@ -82,7 +82,7 @@ export function CNPGClusterRenderer({ data, onNavigate }: CNPGClusterRendererPro
               {instanceNames.map((name: string) => (
                 <span
                   key={name}
-                  className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary font-mono"
+                  className="badge-sm bg-theme-hover text-theme-text-secondary font-mono"
                 >
                   {name}
                 </span>

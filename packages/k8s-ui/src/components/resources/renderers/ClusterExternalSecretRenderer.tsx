@@ -59,7 +59,7 @@ export function ClusterExternalSecretRenderer({ data }: ClusterExternalSecretRen
             <div className="text-xs text-theme-text-secondary mb-1.5">Explicit Namespaces</div>
             <div className="flex flex-wrap gap-1">
               {explicitNamespaces.map((ns: string) => (
-                <span key={ns} className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-primary">
+                <span key={ns} className="badge bg-theme-elevated text-theme-text-primary">
                   {ns}
                 </span>
               ))}
@@ -70,7 +70,7 @@ export function ClusterExternalSecretRenderer({ data }: ClusterExternalSecretRen
             <div className="text-xs text-theme-text-secondary mb-1.5">Label Selector</div>
             <div className="flex flex-wrap gap-1">
               {Object.entries(namespaceSelector).map(([k, v]) => (
-                <span key={k} className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary">
+                <span key={k} className="badge bg-theme-elevated text-theme-text-secondary">
                   {k}={v}
                 </span>
               ))}
@@ -86,7 +86,7 @@ export function ClusterExternalSecretRenderer({ data }: ClusterExternalSecretRen
         <Section title={`Provisioned Namespaces (${provisionedNamespaces.length})`} defaultExpanded={provisionedNamespaces.length <= 10}>
           <div className="flex flex-wrap gap-1">
             {provisionedNamespaces.map((ns: string) => (
-              <span key={ns} className="px-2 py-0.5 bg-green-500/10 text-green-400 rounded text-xs">
+              <span key={ns} className="badge bg-green-500/10 text-green-400">
                 {ns}
               </span>
             ))}

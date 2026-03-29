@@ -78,7 +78,7 @@ function KubectlCommandDialog({
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="relative bg-theme-surface border border-theme-border rounded-lg shadow-2xl max-w-lg w-full mx-4 outline-none"
+        className="relative dialog max-w-lg w-full mx-4 outline-none"
       >
         <div className="flex items-center justify-between p-4 border-b border-theme-border">
           <div className="flex items-center gap-2">
@@ -119,7 +119,7 @@ function KubectlCommandDialog({
             </code>
             <button
               onClick={handleCopy}
-              className="shrink-0 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded-lg transition-colors flex items-center gap-1.5"
+              className="shrink-0 px-3 py-2 btn-brand text-sm rounded-lg flex items-center gap-1.5"
             >
               {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
               {copied ? 'Copied' : copyFallback ? 'Press Ctrl+C' : 'Copy'}
@@ -253,7 +253,7 @@ export function PortForwardButton({
                     className={clsx(
                       'flex-1 flex items-center justify-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors',
                       listenAddress === '127.0.0.1'
-                        ? 'bg-blue-600 text-white'
+                        ? 'btn-brand-toggle'
                         : 'bg-theme-elevated text-theme-text-tertiary hover:text-theme-text-primary'
                     )}
                     title="Only accessible from this machine"

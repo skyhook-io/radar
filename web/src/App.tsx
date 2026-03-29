@@ -602,7 +602,7 @@ function AppInner() {
   return (
     <div className="flex flex-col h-screen bg-theme-base min-w-[800px]">
       {/* Header */}
-      <header className="relative flex items-center justify-between px-4 py-2 bg-theme-surface border-b border-theme-border">
+      <header className="relative z-50 flex items-center justify-between px-4 py-2 bg-theme-base/90 backdrop-blur-sm border-b border-theme-border/50">
         {/* Left: Logo + Cluster info */}
         <div className="flex items-center gap-4 shrink-0">
           <div className="flex items-center gap-2.5">
@@ -657,7 +657,7 @@ function AppInner() {
         </div>
 
         {/* Center: View tabs — absolute centered on wide, flows after left section on narrow */}
-        <div className="md:absolute md:left-1/2 md:-translate-x-1/2 flex items-center gap-1 bg-theme-elevated/50 rounded-lg p-1 ml-2 md:ml-0">
+        <div className="md:absolute md:left-1/2 md:-translate-x-1/2 flex items-center gap-1 bg-theme-elevated/50 rounded-full p-1 ml-2 md:ml-0">
           {([
             { view: 'home' as const, icon: Home, label: 'Home' },
             { view: 'topology' as const, icon: Network, label: 'Topology' },
@@ -669,9 +669,9 @@ function AppInner() {
             <Tooltip key={view} content={label} delay={100} position="bottom">
               <button
                 onClick={() => setMainView(view)}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm rounded-md transition-colors ${
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-full transition-colors ${
                   mainView === view
-                    ? 'bg-blue-500 text-theme-text-primary shadow-[0_0_12px_rgba(45,122,255,0.25)]'
+                    ? 'bg-skyhook-600 dark:bg-skyhook-500 text-white shadow-glow-brand-sm'
                     : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover'
                 }`}
               >
@@ -1142,7 +1142,7 @@ function NamespaceFilterDialog({ namespaces, onConfirm, onKeep, onClose }: {
   return (
     <div className="fixed inset-0 z-[100] flex items-start justify-center pt-[20vh]">
       <div className="absolute inset-0 bg-theme-base/60 backdrop-blur-sm" onClick={onClose} />
-      <div className="relative bg-theme-surface border border-theme-border rounded-xl shadow-2xl max-w-sm w-full mx-4 p-4">
+      <div className="relative dialog max-w-sm w-full mx-4 p-4">
         <p className="text-sm text-theme-text-primary mb-1">
           Namespace filter is active
         </p>
@@ -1159,7 +1159,7 @@ function NamespaceFilterDialog({ namespaces, onConfirm, onKeep, onClose }: {
           <button
             ref={confirmRef}
             onClick={onConfirm}
-            className="px-3 py-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-700 text-white rounded-lg transition-colors focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1 focus:ring-offset-theme-surface"
+            className="px-3 py-1.5 text-xs font-medium btn-brand rounded-lg focus:outline-none focus:ring-2 focus:ring-skyhook-500 focus:ring-offset-1 focus:ring-offset-theme-surface"
           >
             Clear filter
           </button>

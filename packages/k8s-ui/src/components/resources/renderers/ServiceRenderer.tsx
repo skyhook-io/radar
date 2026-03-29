@@ -67,7 +67,7 @@ export function ServiceRenderer({ data, onCopy, copied, renderPortAction }: Serv
       <Section title="Ports" defaultExpanded>
         <div className="space-y-2">
           {ports.map((port: any, i: number) => (
-            <div key={`${port.port}-${port.protocol || 'TCP'}`} className="bg-theme-elevated/30 rounded p-2 text-sm">
+            <div key={`${port.port}-${port.protocol || 'TCP'}`} className="card-inner text-sm">
               <div className="flex items-center justify-between">
                 <span className="text-theme-text-primary font-medium">{port.name || `port-${i + 1}`}</span>
                 <div className="flex items-center gap-2">

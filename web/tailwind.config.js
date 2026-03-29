@@ -24,6 +24,9 @@ export default {
         'theme-sm': 'var(--shadow-sm)',
         'theme-md': 'var(--shadow-md)',
         'theme-lg': 'var(--shadow-lg)',
+        'glow-brand-sm': 'var(--glow-brand-sm)',
+        'glow-brand-md': 'var(--glow-brand-md)',
+        'drawer': 'var(--shadow-drawer)',
       },
       animation: {
         'fade-in-out': 'fadeInOut 2s ease-in-out forwards',
@@ -40,8 +43,10 @@ export default {
         'accent': 'var(--accent)',
       },
       borderRadius: {
-        'lg': '0.625rem',   /* 10px (was 8px) */
-        'xl': '0.875rem',   /* 14px (was 12px) */
+        DEFAULT: '0.375rem', /* 6px (was 4px) — rounder badges & inline elements */
+        'md': '0.5rem',      /* 8px (was 6px) — inputs, small containers */
+        'lg': '0.625rem',    /* 10px (was 8px) — buttons, dropdowns */
+        'xl': '0.875rem',    /* 14px (was 12px) — cards, modals */
       },
       ringOffsetColor: {
         'theme-base': 'var(--bg-base)',

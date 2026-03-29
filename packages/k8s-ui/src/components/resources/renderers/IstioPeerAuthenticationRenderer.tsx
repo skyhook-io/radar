@@ -32,7 +32,7 @@ export function IstioPeerAuthenticationRenderer({ data }: IstioPeerAuthenticatio
         <PropertyList>
           <Property label="mTLS Mode" value={
             <span className={clsx(
-              'px-2 py-0.5 rounded text-xs font-medium',
+              'badge',
               modeColors[mode] || modeColors.UNSET
             )}>
               {mode}
@@ -67,7 +67,7 @@ export function IstioPeerAuthenticationRenderer({ data }: IstioPeerAuthenticatio
               <div key={port} className="flex items-center gap-2 text-sm">
                 <span className="text-theme-text-secondary font-mono">Port {port}</span>
                 <span className={clsx(
-                  'px-1.5 py-0.5 rounded text-xs font-medium',
+                  'badge-sm',
                   modeColors[config.mode] || modeColors.UNSET
                 )}>
                   {config.mode}

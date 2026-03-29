@@ -22,7 +22,7 @@ export function NodePoolCell({ resource, column }: { resource: any; column: stri
     case 'status': {
       const status = getNodePoolStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -53,7 +53,7 @@ export function NodeClaimCell({ resource, column }: { resource: any; column: str
     case 'status': {
       const status = getNodeClaimStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -80,7 +80,7 @@ export function EC2NodeClassCell({ resource, column }: { resource: any; column: 
     case 'status': {
       const status = getEC2NodeClassStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )

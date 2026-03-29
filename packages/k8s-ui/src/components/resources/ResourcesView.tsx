@@ -116,6 +116,7 @@ import {
   parseColumnFilters,
   serializeColumnFilters,
 } from './resource-utils'
+import { SEVERITY_BADGE, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 // CRD-specific cell components (extracted)
 import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell } from './renderers/flux-cells'
@@ -2921,9 +2922,9 @@ export function ResourcesView({
       )}
 
       {/* Main Content - Resource Table */}
-      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-theme-surface">
         {/* Toolbar */}
-        <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0">
+        <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border bg-theme-base shrink-0">
           <div className="flex-1 relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
             <input
@@ -2932,7 +2933,7 @@ export function ResourcesView({
               placeholder="Search... (press /)"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
+              className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-skyhook-500"
             />
           </div>
 
@@ -2944,14 +2945,14 @@ export function ResourcesView({
                 className={clsx(
                   'flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs transition-colors',
                   problemFilters.length > 0
-                    ? 'bg-red-500/20 text-red-700 dark:text-red-300 hover:bg-red-500/30'
+                    ? `${SEVERITY_BADGE.error} hover:bg-red-500/30`
                     : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
                 )}
               >
                 <AlertTriangle className="w-3.5 h-3.5" />
                 <span>Problems</span>
                 {problemFilters.length > 0 && (
-                  <span className="px-1.5 py-0.5 text-xs bg-red-500/30 text-red-700 dark:text-red-300 rounded">
+                  <span className={clsx('badge-sm', SEVERITY_BADGE.error)}>
                     {problemFilters.length}
                   </span>
                 )}
@@ -2972,7 +2973,7 @@ export function ResourcesView({
                         className={clsx(
                           'w-full text-left px-3 py-1.5 text-xs flex items-center justify-between gap-2 transition-colors',
                           problemFilters.includes(value)
-                            ? 'bg-red-500/20 text-red-700 dark:text-red-300'
+                            ? SEVERITY_BADGE.error
                             : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
                         )}
                       >
@@ -2994,14 +2995,14 @@ export function ResourcesView({
                 className={clsx(
                   'flex items-center gap-1.5 px-2.5 py-2 rounded-lg text-xs transition-colors',
                   activeLabelPairs.length > 0
-                    ? 'bg-green-500/20 text-green-700 dark:text-green-300 hover:bg-green-500/30'
+                    ? `${SEVERITY_BADGE.success} hover:bg-emerald-500/30`
                     : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
                 )}
               >
                 <Tag className="w-3.5 h-3.5" />
                 <span>Labels</span>
                 {activeLabelPairs.length > 0 && (
-                  <span className="px-1.5 py-0.5 text-xs bg-green-500/30 text-green-700 dark:text-green-300 rounded">
+                  <span className={clsx('badge-sm', SEVERITY_BADGE.success)}>
                     {activeLabelPairs.length}
                   </span>
                 )}
@@ -3022,7 +3023,7 @@ export function ResourcesView({
                           value={labelSearch}
                           onChange={(e) => setLabelSearch(e.target.value)}
                           autoFocus
-                          className="w-full pl-7 pr-2 py-1.5 text-xs bg-theme-elevated border border-theme-border-light rounded text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-1 focus:ring-blue-500"
+                          className="w-full pl-7 pr-2 py-1.5 text-xs bg-theme-elevated border border-theme-border-light rounded text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-1 focus:ring-skyhook-500"
                         />
                       </div>
                       {activeLabelPairs.length > 0 && (
@@ -3037,7 +3038,7 @@ export function ResourcesView({
                           className={clsx(
                             'w-full text-left px-3 py-1.5 text-xs flex items-center justify-between gap-2 transition-colors',
                             activeLabelPairs.includes(value)
-                              ? 'bg-green-500/20 text-green-700 dark:text-green-300'
+                              ? SEVERITY_BADGE.success
                               : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
                           )}
                         >
@@ -3062,7 +3063,7 @@ export function ResourcesView({
                 type="checkbox"
                 checked={showInactiveReplicaSets}
                 onChange={(e) => setShowInactiveReplicaSets(e.target.checked)}
-                className="w-3 h-3 rounded border-theme-border-light accent-blue-500"
+                className="w-3 h-3 rounded border-theme-border-light accent-skyhook-500"
               />
               Show inactive ({inactiveReplicaSetCount})
             </label>
@@ -3070,7 +3071,7 @@ export function ResourcesView({
 
           {/* Active filter badges — owner only (column filters shown on header, problems/labels on their buttons) */}
           {hasOwnerFilter && (
-            <span className="flex items-center gap-1 px-2 py-1 text-xs bg-purple-500/20 text-purple-700 dark:text-purple-300 rounded">
+            <span className={clsx('flex items-center gap-1 px-2 py-1 text-xs rounded', SEVERITY_BADGE.info)}>
               {ownerKind}: {ownerName}
               <button
                 onClick={() => {
@@ -3201,7 +3202,7 @@ export function ResourcesView({
                       <button
                         key={key}
                         onClick={() => clearColumnFilter(key)}
-                        className="flex items-center gap-1 px-2 py-1 text-xs bg-blue-500/15 text-blue-700 dark:text-blue-300 rounded-md hover:bg-blue-500/25 transition-colors"
+                        className="flex items-center gap-1 px-2 py-1 text-xs selection selection-text rounded-md hover:selection-strong transition-colors"
                       >
                         <ListFilter className="w-3 h-3" />
                         <span>{key}: {vals.join(', ')}</span>
@@ -3256,7 +3257,7 @@ export function ResourcesView({
                         key={col.key}
                         className={clsx(
                           'text-left px-4 py-3 text-xs font-medium uppercase tracking-wide relative group/th',
-                          'bg-theme-surface border-b border-theme-border',
+                          'bg-theme-base border-b border-theme-border',
                           !isLastCol && 'border-r-subtle',
                           isSortable ? 'text-theme-text-secondary hover:text-theme-text-primary cursor-pointer select-none' : 'text-theme-text-secondary'
                         )}
@@ -3299,7 +3300,7 @@ export function ResourcesView({
                                 className={clsx(
                                   'rounded-l transition-colors flex items-center gap-0.5',
                                   hasActiveFilter
-                                    ? 'px-1.5 py-0.5 -my-0.5 bg-blue-500/20 text-blue-700 dark:text-blue-300 hover:bg-blue-500/30'
+                                    ? 'px-1.5 py-0.5 -my-0.5 selection-strong selection-text hover:bg-skyhook-500/30'
                                     : isFilterOpen
                                       ? 'p-0.5 text-theme-text-primary'
                                       : 'p-0.5 text-theme-text-disabled opacity-0 group-hover/th:opacity-100 hover:text-theme-text-primary'
@@ -3316,7 +3317,7 @@ export function ResourcesView({
                                     clearColumnFilter(col.key)
                                     setOpenColumnFilter(null)
                                   }}
-                                  className="rounded-r px-0.5 py-0.5 -my-0.5 bg-blue-500/20 text-blue-700 dark:text-blue-300 hover:bg-blue-500/30 transition-colors"
+                                  className="rounded-r px-0.5 py-0.5 -my-0.5 selection-strong selection-text hover:bg-skyhook-500/30 transition-colors"
                                   title="Clear filter"
                                 >
                                   <X className="w-3 h-3" />
@@ -3350,7 +3351,7 @@ export function ResourcesView({
                                       value={columnFilterSearch}
                                       onChange={(e) => setColumnFilterSearch(e.target.value)}
                                       autoFocus
-                                      className="w-full pl-7 pr-2 py-1.5 text-xs bg-theme-elevated border border-theme-border-light rounded text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-1 focus:ring-blue-500"
+                                      className="w-full pl-7 pr-2 py-1.5 text-xs bg-theme-elevated border border-theme-border-light rounded text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-1 focus:ring-skyhook-500"
                                     />
                                   </div>
                                   {activeFilterValues.length > 0 && (
@@ -3373,11 +3374,11 @@ export function ResourcesView({
                                       className={clsx(
                                         'w-full text-left px-3 py-1.5 text-xs flex items-center gap-2 transition-colors',
                                         isSelected
-                                          ? 'bg-blue-500/20 text-blue-700 dark:text-blue-300'
+                                          ? 'selection-strong selection-text'
                                           : 'text-theme-text-secondary hover:bg-theme-elevated hover:text-theme-text-primary'
                                       )}
                                     >
-                                      <span className={clsx('w-3 h-3 shrink-0 rounded-sm border flex items-center justify-center', isSelected ? 'bg-blue-500 border-blue-500' : 'border-theme-border')}>
+                                      <span className={clsx('w-3 h-3 shrink-0 rounded-sm border flex items-center justify-center', isSelected ? 'bg-skyhook-500 border-skyhook-500' : 'border-theme-border')}>
                                         {isSelected && <Check className="w-2 h-2 text-white" />}
                                       </span>
                                       <span className="truncate" title={value}>{value}</span>
@@ -3406,7 +3407,7 @@ export function ResourcesView({
                       </th>
                     )
                   })}
-                  {hasResizedColumns && <th className="bg-theme-surface border-b border-theme-border p-0" />}
+                  {hasResizedColumns && <th className="bg-theme-base border-b border-theme-border p-0" />}
                 </tr>
               )}
               itemContent={(index, resource) => {
@@ -3437,7 +3438,7 @@ export function ResourcesView({
             {/* Resize indicator line — full table height, shown only while dragging */}
             {resizeLineX !== null && (
               <div
-                className="absolute top-0 bottom-0 w-0.5 bg-blue-500 pointer-events-none"
+                className="absolute top-0 bottom-0 w-0.5 bg-skyhook-500 pointer-events-none"
                 style={{ left: resizeLineX, zIndex: 20 }}
               />
             )}
@@ -3475,9 +3476,9 @@ function ResourceRowCells({ resource, kind, group, columns, hasSpacerColumn, isS
             'px-4 py-3 border-b-subtle cursor-pointer transition-colors',
             col.key !== 'status' && 'overflow-hidden truncate',
             isSelected
-              ? 'bg-blue-500/20 group-hover/row:bg-blue-500/30'
+              ? 'selection-strong group-hover/row:bg-skyhook-500/30'
               : isHighlighted
-                ? 'bg-blue-500/10 ring-1 ring-inset ring-blue-400/30'
+                ? 'selection selection-ring'
                 : 'group-hover/row:bg-theme-surface/50'
           )}
         >
@@ -3846,7 +3847,7 @@ function GenericCell({ resource, column }: { resource: any; column: string }) {
         const isWarning = ['Pending', 'Progressing', 'Unknown'].includes(phase)
         return (
           <span className={clsx(
-            'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
+            'badge',
             isHealthy ? 'status-healthy' :
             isWarning ? 'status-degraded' :
             'status-unhealthy'
@@ -3863,7 +3864,7 @@ function GenericCell({ resource, column }: { resource: any; column: string }) {
           const isReady = readyCondition.status === 'True'
           return (
             <span className={clsx(
-              'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
+              'badge',
               isReady ? 'status-healthy' : 'status-degraded'
             )}>
               {isReady ? 'Ready' : 'Not Ready'}
@@ -4007,7 +4008,7 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
       const problems = getPodProblems(resource)
       return (
         <div className="flex items-center gap-2">
-          <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+          <span className={clsx('badge', status.color)}>
             {status.text}
           </span>
           {problems.length > 0 && (
@@ -4208,7 +4209,7 @@ function ReplicaSetCell({ resource, column }: { resource: any; column: string })
       const isActive = isReplicaSetActive(resource)
       return (
         <span className={clsx(
-          'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
+          'badge',
           isActive ? 'status-neutral' : 'status-unknown'
         )}>
           {isActive ? 'Active' : 'Old'}
@@ -4225,7 +4226,7 @@ function ServiceCell({ resource, column }: { resource: any; column: string }) {
     case 'type': {
       const status = getServiceStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -4243,7 +4244,7 @@ function ServiceCell({ resource, column }: { resource: any; column: string }) {
     case 'endpoints': {
       const { status, color } = getServiceEndpointsStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', color)}>
+        <span className={clsx('badge', color)}>
           {status}
         </span>
       )
@@ -4346,7 +4347,7 @@ function SecretCell({ resource, column }: { resource: any; column: string }) {
     case 'type': {
       const { type, color } = getSecretType(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', color)}>
+        <span className={clsx('badge', color)}>
           {type}
         </span>
       )
@@ -4385,7 +4386,7 @@ function JobCell({ resource, column }: { resource: any; column: string }) {
     case 'status': {
       const status = getJobStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -4425,7 +4426,7 @@ function CronJobCell({ resource, column }: { resource: any; column: string }) {
     case 'status': {
       const status = getCronJobStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -4465,7 +4466,7 @@ function HPACell({ resource, column }: { resource: any; column: string }) {
     case 'status': {
       const status = getHPAStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -4566,7 +4567,7 @@ function NodeCell({ resource, column, majorityNodeMinorVersion }: { resource: an
       const { problems } = getNodeConditions(resource)
       return (
         <div className="flex items-center gap-2">
-          <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+          <span className={clsx('badge', status.color)}>
             {status.text}
           </span>
           {problems.length > 0 && (
@@ -4645,7 +4646,7 @@ function PVCCell({ resource, column }: { resource: any; column: string }) {
     case 'status': {
       const status = getPVCStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -4676,7 +4677,7 @@ function RolloutCell({ resource, column }: { resource: any; column: string }) {
     case 'status': {
       const status = getRolloutStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -4719,7 +4720,7 @@ function WorkflowCell({ resource, column }: { resource: any; column: string }) {
     case 'status': {
       const status = getWorkflowStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -4751,7 +4752,7 @@ function PersistentVolumeCell({ resource, column }: { resource: any; column: str
     case 'status': {
       const status = getPVStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -4823,7 +4824,7 @@ function GatewayCell({ resource, column }: { resource: any; column: string }) {
     case 'status': {
       const status = getGatewayStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -4858,7 +4859,7 @@ function GatewayClassCell({ resource, column }: { resource: any; column: string 
     case 'status': {
       const status = getGatewayClassStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -4890,7 +4891,7 @@ function RouteCell({ resource, column }: { resource: any; column: string }) {
     case 'status': {
       const status = getRouteStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -4925,7 +4926,7 @@ function SealedSecretCell({ resource, column }: { resource: any; column: string 
     case 'status': {
       const status = getSealedSecretStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -4976,7 +4977,7 @@ function PDBCell({ resource, column }: { resource: any; column: string }) {
     case 'status': {
       const status = getPDBStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -5027,10 +5028,10 @@ function RoleBindingCell({ resource, column }: { resource: any; column: string }
     case 'role': {
       const ref = resource.roleRef
       if (!ref?.name) return <span className="text-sm text-theme-text-tertiary">-</span>
-      const kindColor = ref.kind === 'ClusterRole' ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'
+      const kindColor = SEVERITY_BADGE.info
       return (
         <span className="text-sm text-theme-text-secondary inline-flex items-center gap-1.5">
-          <span className={clsx('px-1.5 py-0.5 rounded text-xs', kindColor)}>{ref.kind === 'ClusterRole' ? 'CR' : 'R'}</span>
+          <span className={clsx('badge-sm', kindColor)}>{ref.kind === 'ClusterRole' ? 'CR' : 'R'}</span>
           {ref.name}
         </span>
       )
@@ -5117,7 +5118,7 @@ function WebhookConfigCell({ resource, column }: { resource: any; column: string
     case 'failurePolicy': {
       const hasFail = webhooks.some((w: any) => w.failurePolicy === 'Fail')
       return hasFail
-        ? <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-500/20 text-red-400">Fail</span>
+        ? <span className={clsx('badge', SEVERITY_BADGE.error)}>Fail</span>
         : <span className="text-sm text-theme-text-secondary">Ignore</span>
     }
     case 'target': {
@@ -5141,8 +5142,8 @@ function EventCell({ resource, column }: { resource: any; column: string }) {
     case 'type':
       return (
         <span className={clsx(
-          'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
-          isWarning ? 'bg-amber-500/20 text-amber-400' : 'bg-blue-500/20 text-blue-400'
+          'badge',
+          EVENT_TYPE_COLORS[eventType] || SEVERITY_BADGE.info
         )}>
           {eventType}
         </span>

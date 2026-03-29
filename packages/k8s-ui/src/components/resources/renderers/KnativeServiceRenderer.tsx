@@ -34,7 +34,7 @@ export function KnativeServiceRenderer({ data, onNavigate }: KnativeServiceRende
       <Section title="Overview" icon={Globe} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
@@ -118,7 +118,7 @@ export function KnativeServiceRenderer({ data, onNavigate }: KnativeServiceRende
         <Section title="Template" icon={Container} defaultExpanded>
           <div className="space-y-2">
             {containers.map((c: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2 text-sm">
+              <div key={i} className="card-inner text-sm">
                 <div className="font-medium text-theme-text-primary">{c.name || 'container'}</div>
                 <div className="text-xs text-theme-text-secondary truncate" title={c.image}>{c.image}</div>
                 {c.ports && c.ports.length > 0 && (

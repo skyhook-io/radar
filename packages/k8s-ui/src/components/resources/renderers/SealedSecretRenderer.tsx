@@ -54,7 +54,7 @@ export function SealedSecretRenderer({ data }: SealedSecretRendererProps) {
             label="Synced"
             value={
               <span className={clsx(
-                'px-2 py-0.5 rounded text-xs font-medium',
+                'badge',
                 isSynced
                   ? 'bg-green-500/20 text-green-400'
                   : isNotSynced
@@ -78,7 +78,7 @@ export function SealedSecretRenderer({ data }: SealedSecretRendererProps) {
             {encryptedKeys.map((key) => (
               <span
                 key={key}
-                className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary"
+                className="badge bg-theme-elevated text-theme-text-secondary"
               >
                 {key}
               </span>

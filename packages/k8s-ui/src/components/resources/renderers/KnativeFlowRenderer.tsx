@@ -48,7 +48,7 @@ export function SequenceRenderer({ data, onNavigate }: RendererProps) {
       <Section title="Overview" icon={ListOrdered} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
@@ -65,7 +65,7 @@ export function SequenceRenderer({ data, onNavigate }: RendererProps) {
         <Section title={`Steps (${steps.length})`} defaultExpanded>
           <div className="space-y-2">
             {steps.map((step: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2 flex items-center gap-2">
+              <div key={i} className="card-inner flex items-center gap-2">
                 <span className="text-xs font-medium text-theme-text-tertiary w-6 shrink-0">#{i + 1}</span>
                 <RefDisplay ref={step} ns={ns} onNavigate={onNavigate} />
               </div>
@@ -97,7 +97,7 @@ export function ParallelRenderer({ data, onNavigate }: RendererProps) {
       <Section title="Overview" icon={GitFork} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
@@ -114,7 +114,7 @@ export function ParallelRenderer({ data, onNavigate }: RendererProps) {
         <Section title={`Branches (${branches.length})`} defaultExpanded>
           <div className="space-y-3">
             {branches.map((branch: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-3">
+              <div key={i} className="card-inner-lg">
                 <div className="text-sm font-medium text-theme-text-primary mb-2">Branch {i + 1}</div>
                 <PropertyList>
                   {branch.filter && (

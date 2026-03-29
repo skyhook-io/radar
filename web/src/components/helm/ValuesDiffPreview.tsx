@@ -52,7 +52,7 @@ export function ValuesDiffPreview({
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="relative bg-theme-surface border border-theme-border rounded-lg shadow-2xl max-w-4xl w-full mx-4 max-h-[85vh] flex flex-col outline-none"
+        className="relative dialog max-w-4xl w-full mx-4 max-h-[85vh] flex flex-col outline-none"
       >
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-theme-border shrink-0">
@@ -113,7 +113,7 @@ export function ValuesDiffPreview({
             <button
               onClick={onApply}
               disabled={isApplying}
-              className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50"
+              className="flex items-center gap-2 px-4 py-2 text-sm font-medium btn-brand rounded-lg"
             >
               {isApplying ? (
                 <Loader2 className="w-4 h-4 animate-spin" />

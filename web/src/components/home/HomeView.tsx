@@ -49,7 +49,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
 
   return (
     <div className="flex-1 overflow-y-auto">
-      <div className="max-w-[1600px] mx-auto px-6 py-6 space-y-5">
+      <div className="max-w-[1600px] mx-auto px-6 py-6 space-y-6">
         {/* Row 1: Cluster Health Card (combined health + resource counts) */}
         <ClusterHealthCard
           health={data.health}
@@ -68,11 +68,11 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
 
         {/* Row 2: Main content columns — teasers left, problems right (if any) */}
         <div className={clsx(
-          'grid gap-5',
+          'grid gap-6',
           hasProblems ? 'grid-cols-1 lg:grid-cols-[1fr_420px]' : 'grid-cols-1'
         )}>
           {/* Left column: teaser cards in 2-col grid */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-5 auto-rows-min">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-6 auto-rows-min">
             <TopologyPreview
               topology={topology}
               summary={data.topologySummary}
@@ -125,13 +125,13 @@ interface ProblemsPanelProps {
 
 function ProblemsPanel({ problems, onResourceClick }: ProblemsPanelProps) {
   return (
-    <div className="rounded-lg border-[3px] border-red-500/30 bg-theme-surface/50 flex flex-col lg:max-h-[calc(100vh-280px)] lg:sticky lg:top-0">
-      <div className="flex items-center justify-between px-4 py-2 border-b border-theme-border shrink-0">
+    <div className="rounded-xl bg-theme-surface shadow-theme-sm flex flex-col lg:max-h-[calc(100vh-280px)] lg:sticky lg:top-0">
+      <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50 shrink-0">
         <div className="flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-red-500" />
-          <span className="text-sm font-semibold text-red-500">Unhealthy Workloads</span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-red-500">Unhealthy Workloads</span>
         </div>
-        <span className="text-[11px] bg-red-500/10 text-red-500 px-2 py-0.5 rounded-full font-medium">{problems.length}</span>
+        <span className="badge status-unhealthy rounded-full">{problems.length}</span>
       </div>
       <div className="overflow-y-auto flex-1 min-h-0">
         <div className="divide-y divide-theme-border">

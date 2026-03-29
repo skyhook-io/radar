@@ -35,7 +35,7 @@ export function GatewayClassRenderer({ data }: GatewayClassRendererProps) {
             label="Accepted"
             value={
               <span className={clsx(
-                'px-2 py-0.5 rounded text-xs font-medium',
+                'badge',
                 isAccepted
                   ? 'bg-green-500/20 text-green-400'
                   : isNotAccepted

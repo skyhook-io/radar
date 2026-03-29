@@ -130,9 +130,9 @@ export function ExternalSecretRenderer({ data, onNavigate }: ExternalSecretRende
         <Section title={`Data Sources (${dataFromSources.length})`} defaultExpanded>
           <div className="space-y-1">
             {dataFromSources.map((source, i) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2">
+              <div key={i} className="card-inner">
                 <div className="flex items-center gap-2 text-sm">
-                  <span className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary font-medium">
+                  <span className="badge-sm bg-theme-hover text-theme-text-secondary">
                     {source.type}
                   </span>
                   {source.details && (

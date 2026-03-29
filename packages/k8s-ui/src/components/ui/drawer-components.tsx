@@ -3,6 +3,7 @@ import { ChevronRight, Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLin
 import { clsx } from 'clsx'
 import { formatAge } from '../resources/resource-utils'
 import { Tooltip } from './Tooltip'
+import { getKindColorClass } from '../ui/Badge'
 
 // ============================================================================
 // UI COMPONENTS
@@ -10,7 +11,7 @@ import { Tooltip } from './Tooltip'
 
 export function KeyValueBadge({ k, v }: { k: string; v: string }) {
   return (
-    <span className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary">
+    <span className="badge bg-theme-elevated text-theme-text-secondary">
       {k}={v}
     </span>
   )
@@ -164,10 +165,10 @@ export function ConditionsSection({ conditions }: { conditions?: any[] }) {
 // ============================================================================
 
 const ALERT_COLORS = {
-  error:   { bg: 'bg-red-500/10', border: 'border-red-500/30', title: 'text-red-700 dark:text-red-400', message: 'text-red-600/80 dark:text-red-400/80', list: 'text-red-600 dark:text-red-400', bullet: 'text-red-500/60 dark:text-red-400/60' },
-  warning: { bg: 'bg-yellow-500/10', border: 'border-yellow-500/30', title: 'text-yellow-700 dark:text-yellow-400', message: 'text-yellow-600/80 dark:text-yellow-400/80', list: 'text-yellow-600 dark:text-yellow-400', bullet: 'text-yellow-500/60 dark:text-yellow-400/60' },
-  info:    { bg: 'bg-blue-500/10', border: 'border-blue-500/30', title: 'text-blue-700 dark:text-blue-400', message: 'text-blue-600/80 dark:text-blue-400/80', list: 'text-blue-600 dark:text-blue-400', bullet: 'text-blue-500/60 dark:text-blue-400/60' },
-  success: { bg: 'bg-green-500/10', border: 'border-green-500/30', title: 'text-green-700 dark:text-green-400', message: 'text-green-600/80 dark:text-green-400/80', list: 'text-green-600 dark:text-green-400', bullet: 'text-green-500/60 dark:text-green-400/60' },
+  error:   { bg: 'bg-red-50 dark:bg-red-950/30', border: 'border-red-200 dark:border-red-800/30', title: 'text-red-700 dark:text-red-300', message: 'text-red-600/80 dark:text-red-300/70', list: 'text-red-600 dark:text-red-400', bullet: 'text-red-400/60 dark:text-red-400/50' },
+  warning: { bg: 'bg-amber-50 dark:bg-amber-950/30', border: 'border-amber-200 dark:border-amber-800/30', title: 'text-amber-700 dark:text-amber-300', message: 'text-amber-600/80 dark:text-amber-300/70', list: 'text-amber-600 dark:text-amber-400', bullet: 'text-amber-400/60 dark:text-amber-400/50' },
+  info:    { bg: 'bg-sky-50 dark:bg-sky-950/30', border: 'border-sky-200 dark:border-sky-800/30', title: 'text-sky-700 dark:text-sky-300', message: 'text-sky-600/80 dark:text-sky-300/70', list: 'text-sky-600 dark:text-sky-400', bullet: 'text-sky-400/60 dark:text-sky-400/50' },
+  success: { bg: 'bg-emerald-50 dark:bg-emerald-950/30', border: 'border-emerald-200 dark:border-emerald-800/30', title: 'text-emerald-700 dark:text-emerald-300', message: 'text-emerald-600/80 dark:text-emerald-300/70', list: 'text-emerald-600 dark:text-emerald-400', bullet: 'text-emerald-400/60 dark:text-emerald-400/50' },
 } as const
 
 const DEFAULT_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -313,7 +314,7 @@ export function PodTemplateSection({ template }: { template: any }) {
         <>
           <div className="text-xs text-theme-text-tertiary font-medium uppercase tracking-wide">Init Containers</div>
           {initContainers.map((c: any) => (
-            <div key={c.name} className="bg-theme-elevated/30 rounded p-2 text-sm border-l-2 border-yellow-500/40">
+            <div key={c.name} className="card-inner text-sm border-l-2 border-yellow-500/40">
               <div className="font-medium text-theme-text-primary">{c.name}</div>
               <div className="text-xs text-theme-text-secondary truncate" title={c.image}>{c.image}</div>
               {(c.command || c.args) && (
@@ -327,7 +328,7 @@ export function PodTemplateSection({ template }: { template: any }) {
         </>
       )}
       {containers.map((c: any) => (
-        <div key={c.name} className="bg-theme-elevated/30 rounded p-2 text-sm">
+        <div key={c.name} className="card-inner text-sm">
           <div className="font-medium text-theme-text-primary">{c.name}</div>
           <div className="text-xs text-theme-text-secondary truncate" title={c.image}>{c.image}</div>
           {c.ports && (
@@ -450,29 +451,9 @@ export function AppInfoSection({ data }: { data: any }) {
 // HELPERS
 // ============================================================================
 
+/** Get kind badge color — delegates to Badge.tsx's static color lookup */
 export function getKindColor(kind: string): string {
-  const k = kind.toLowerCase()
-  // Use darker text for light mode contrast, brighter for dark mode
-  if (k.includes('pod')) return 'bg-lime-500/20 text-lime-700 dark:text-lime-400 border-lime-500/30'
-  if (k.includes('deployment')) return 'bg-emerald-500/20 text-emerald-700 dark:text-emerald-400 border-emerald-500/30'
-  if (k.includes('service')) return 'bg-blue-500/20 text-blue-700 dark:text-blue-400 border-blue-500/30'
-  if (k.includes('gateway')) return 'bg-violet-500/20 text-violet-700 dark:text-violet-400 border-violet-500/30'
-  if (k.includes('route')) return 'bg-purple-500/20 text-purple-700 dark:text-purple-400 border-purple-500/30'
-  if (k.includes('ingress')) return 'bg-violet-500/20 text-violet-700 dark:text-violet-400 border-violet-500/30'
-  if (k.includes('configmap')) return 'bg-amber-500/20 text-amber-700 dark:text-amber-400 border-amber-500/30'
-  if (k.endsWith('report')) return 'bg-rose-500/20 text-rose-700 dark:text-rose-400 border-rose-500/30'
-  if (k.includes('secret')) return 'bg-red-500/20 text-red-700 dark:text-red-400 border-red-500/30'
-  if (k.includes('daemonset')) return 'bg-teal-500/20 text-teal-700 dark:text-teal-400 border-teal-500/30'
-  if (k.includes('statefulset')) return 'bg-cyan-500/20 text-cyan-700 dark:text-cyan-400 border-cyan-500/30'
-  if (k.includes('replicaset')) return 'bg-green-500/20 text-green-700 dark:text-green-400 border-green-500/30'
-  if (k.includes('hpa') || k.includes('horizontalpodautoscaler')) return 'bg-pink-500/20 text-pink-700 dark:text-pink-400 border-pink-500/30'
-  if (k.includes('cronjob')) return 'bg-orange-500/20 text-orange-700 dark:text-orange-400 border-orange-500/30'
-  if (k.includes('job')) return 'bg-orange-500/20 text-orange-700 dark:text-orange-400 border-orange-500/30'
-  if (k.includes('node')) return 'bg-gray-500/20 text-gray-700 dark:text-gray-400 border-gray-500/30'
-  if (k.includes('namespace')) return 'bg-blue-500/20 text-blue-700 dark:text-blue-400 border-blue-500/30'
-  if (k.includes('persistentvolume')) return 'bg-purple-500/20 text-purple-700 dark:text-purple-400 border-purple-500/30'
-  // Default color for CRDs
-  return 'bg-fuchsia-500/20 text-fuchsia-700 dark:text-fuchsia-300 border-fuchsia-500/30'
+  return getKindColorClass(kind)
 }
 
 export function formatKindName(kind: string): string {
@@ -648,7 +629,7 @@ export function ResourceRefBadge({ resourceRef, onClick }: ResourceRefBadgeProps
       <button
         onClick={() => onClick(resourceRef)}
         className={clsx(
-          'px-2 py-0.5 text-xs rounded border transition-colors hover:brightness-125',
+          'badge hover:brightness-[0.92] dark:hover:brightness-125 transition-[filter]',
           kindClass
         )}
         title={`${resourceRef.kind}: ${resourceRef.namespace}/${resourceRef.name}`}
@@ -661,7 +642,7 @@ export function ResourceRefBadge({ resourceRef, onClick }: ResourceRefBadgeProps
 
   return (
     <span
-      className={clsx('px-2 py-0.5 text-xs rounded border', kindClass)}
+      className={clsx('badge', kindClass)}
       title={`${resourceRef.kind}: ${resourceRef.namespace}/${resourceRef.name}`}
     >
       <span className="opacity-60">{kindName}/</span>

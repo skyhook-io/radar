@@ -163,7 +163,7 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
           {metricsHistory?.dataPoints && metricsHistory.dataPoints.length > 0 ? (
             <div className="space-y-4">
               {/* CPU Usage with Chart */}
-              <div className="bg-theme-elevated/30 rounded-lg p-3">
+              <div className="card-inner-lg">
                 <div className="text-xs text-theme-text-tertiary mb-1 flex items-center justify-between">
                   <span>CPU</span>
                   <span className="text-theme-text-quaternary">
@@ -179,7 +179,7 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
               </div>
 
               {/* Memory Usage with Chart */}
-              <div className="bg-theme-elevated/30 rounded-lg p-3">
+              <div className="card-inner-lg">
                 <div className="text-xs text-theme-text-tertiary mb-1 flex items-center justify-between">
                   <span>Memory</span>
                   <span className="text-theme-text-quaternary">
@@ -197,7 +197,7 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
           ) : metrics?.usage ? (
             /* Fallback to simple display if no history yet */
             <div className="space-y-3">
-              <div className="bg-theme-elevated/30 rounded-lg p-3">
+              <div className="card-inner-lg">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-theme-text-primary">CPU</span>
                 </div>
@@ -208,7 +208,7 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
                   </span>
                 </div>
               </div>
-              <div className="bg-theme-elevated/30 rounded-lg p-3">
+              <div className="card-inner-lg">
                 <div className="flex items-center justify-between mb-2">
                   <span className="text-sm font-medium text-theme-text-primary">Memory</span>
                 </div>
@@ -262,7 +262,7 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
             {taints.map((taint: any, i: number) => (
               <div key={`${taint.key}-${taint.effect}-${i}`} className="text-sm">
                 <span className={clsx(
-                  'px-2 py-0.5 rounded text-xs',
+                  'badge',
                   taint.effect === 'NoSchedule' ? 'bg-yellow-500/20 text-yellow-400' :
                   taint.effect === 'NoExecute' ? 'bg-red-500/20 text-red-400' :
                   'bg-blue-500/20 text-blue-400'

@@ -351,11 +351,11 @@ export function WorkloadView({
           {/* Top row: badges and controls */}
           <div className="flex items-center justify-between px-4 pt-3 pb-2">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className={clsx('px-2 py-0.5 text-xs font-medium rounded border', getKindColor(apiKind))}>
+              <span className={clsx('badge', getKindColor(apiKind))}>
                 {formatKindName(apiKind)}
               </span>
               {status && (
-                <span className={clsx('px-2 py-0.5 text-xs font-medium rounded', status.color)}>
+                <span className={clsx('badge', status.color)}>
                   {status.text}
                 </span>
               )}
@@ -454,7 +454,7 @@ export function WorkloadView({
 
   // ── Expanded (full) mode ─────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full w-full bg-theme-base">
+    <div className="flex flex-col h-full w-full bg-theme-surface">
       {/* Header */}
       <div className="shrink-0 border-b border-theme-border bg-theme-surface">
         <div className="px-6 py-3 flex items-start gap-4">
@@ -480,11 +480,11 @@ export function WorkloadView({
               </button>
             </div>
             <div className="flex items-center gap-3 text-sm text-theme-text-secondary">
-              <span className={clsx('px-2 py-0.5 text-xs font-medium rounded border', getKindColor(apiKind))}>
+              <span className={clsx('badge', getKindColor(apiKind))}>
                 {formatKindName(apiKind)}
               </span>
               {status && (
-                <span className={clsx('px-2 py-0.5 text-xs font-medium rounded', status.color)}>
+                <span className={clsx('badge', status.color)}>
                   {status.text}
                 </span>
               )}
@@ -539,7 +539,7 @@ export function WorkloadView({
               <Activity className="w-4 h-4" />
               Timeline
               {resourceEvents.length > 0 && (
-                <span className="ml-1 px-1.5 py-0.5 text-xs bg-theme-elevated rounded">{resourceEvents.length}</span>
+                <span className="ml-1 badge-sm bg-theme-elevated">{resourceEvents.length}</span>
               )}
             </TabButton>
             {allPods.length > 0 && renderLogsTab && (
@@ -692,7 +692,7 @@ function TabButton({ active, onClick, children }: { active: boolean; onClick: ()
       className={clsx(
         'flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 transition-colors',
         active
-          ? 'text-theme-text-primary border-blue-500'
+          ? 'text-theme-text-primary border-skyhook-500'
           : 'text-theme-text-secondary border-transparent hover:text-theme-text-primary hover:border-theme-border-light'
       )}
     >
@@ -1016,15 +1016,15 @@ function EventsTab({
                       {new Date(evt.timestamp).toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' })}
                     </td>
                     <td className="px-4 py-3">
-                      <span className={clsx('text-xs px-1.5 py-0.5 rounded', getKindBadgeColor(evt.kind))}>
+                      <span className={clsx('badge-sm', getKindBadgeColor(evt.kind))}>
                         {evt.kind}
                       </span>
                     </td>
                     <td className="px-4 py-3">
                       {isWarning ? (
-                        <span className="text-xs px-2 py-0.5 rounded bg-amber-500/20 text-amber-500">Active</span>
+                        <span className="badge status-degraded">Active</span>
                       ) : evt.healthState ? (
-                        <span className={clsx('text-xs px-2 py-0.5 rounded', getHealthBadgeColor(evt.healthState))}>{evt.healthState}</span>
+                        <span className={clsx('badge', getHealthBadgeColor(evt.healthState))}>{evt.healthState}</span>
                       ) : null}
                     </td>
                   </tr>

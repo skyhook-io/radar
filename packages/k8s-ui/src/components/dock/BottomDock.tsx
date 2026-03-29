@@ -91,7 +91,7 @@ export function BottomDock({ renderTabContent, leftOffset = 0 }: BottomDockProps
     >
       {isExpanded && !isMaximized && (
         <div
-          className="absolute top-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-blue-500/50 transition-colors"
+          className="absolute top-0 left-0 right-0 h-1 cursor-ns-resize hover:bg-skyhook-500/50 transition-colors"
           onMouseDown={handleMouseDown}
         />
       )}

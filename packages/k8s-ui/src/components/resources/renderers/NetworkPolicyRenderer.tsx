@@ -34,7 +34,7 @@ export function NetworkPolicyRenderer({ data }: NetworkPolicyRendererProps) {
               {Object.entries(matchLabels).map(([k, v]) => (
                 <span
                   key={k}
-                  className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary"
+                  className="badge bg-theme-elevated text-theme-text-secondary"
                 >
                   {k}={String(v)}
                 </span>
@@ -50,7 +50,7 @@ export function NetworkPolicyRenderer({ data }: NetworkPolicyRendererProps) {
                 <span
                   key={type}
                   className={clsx(
-                    'px-2 py-0.5 rounded text-xs border',
+                    'badge',
                     type === 'Ingress'
                       ? 'bg-blue-500/20 text-blue-400 border-blue-500/30'
                       : 'bg-purple-500/20 text-purple-400 border-purple-500/30'
@@ -106,7 +106,7 @@ function IngressEgressRuleCard({
   const ports: any[] = rule.ports || []
 
   return (
-    <div className="bg-theme-elevated/30 rounded p-3">
+    <div className="card-inner-lg">
       {peers.length > 0 && (
         <div className="mb-2">
           <div className="text-xs text-theme-text-tertiary mb-1 capitalize">{direction}</div>
@@ -125,7 +125,7 @@ function IngressEgressRuleCard({
             {ports.map((port: any, j: number) => (
               <span
                 key={j}
-                className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary"
+                className="badge bg-theme-elevated text-theme-text-secondary"
               >
                 {port.protocol || 'TCP'}/{port.port}
               </span>
@@ -153,7 +153,7 @@ function PeerEntry({ peer }: { peer: any }) {
             {Object.entries(labels).map(([k, v]) => (
               <span
                 key={k}
-                className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary"
+                className="badge bg-theme-elevated text-theme-text-secondary"
               >
                 {k}={String(v)}
               </span>
@@ -177,7 +177,7 @@ function PeerEntry({ peer }: { peer: any }) {
             {Object.entries(labels).map(([k, v]) => (
               <span
                 key={k}
-                className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary"
+                className="badge bg-theme-elevated text-theme-text-secondary"
               >
                 {k}={String(v)}
               </span>

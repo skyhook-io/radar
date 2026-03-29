@@ -61,7 +61,7 @@ export function ContourHTTPProxyRenderer({ data, onNavigate }: ContourHTTPProxyR
             const routeConditions = route.conditions || []
 
             return (
-              <div key={i} className="bg-theme-elevated/30 rounded p-3">
+              <div key={i} className="card-inner-lg">
                 {/* Conditions (prefix match, header match, etc.) */}
                 {routeConditions.length > 0 && (
                   <div className="flex items-start gap-2 mb-2">

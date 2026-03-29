@@ -72,7 +72,7 @@ export function VeleroBackupRenderer({ data }: VeleroBackupRendererProps) {
       <Section title="Status" icon={Archive} defaultExpanded>
         <PropertyList>
           <Property label="Phase" value={
-            <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', backupStatus.color)}>
+            <span className={clsx('badge', backupStatus.color)}>
               {backupStatus.text}
             </span>
           } />
@@ -116,7 +116,7 @@ export function VeleroBackupRenderer({ data }: VeleroBackupRendererProps) {
               <Property label="Included Namespaces" value={
                 <div className="flex flex-wrap gap-1">
                   {includedNamespaces.map((ns: string) => (
-                    <span key={ns} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">{ns}</span>
+                    <span key={ns} className="badge-sm bg-theme-hover text-theme-text-secondary">{ns}</span>
                   ))}
                 </div>
               } />
@@ -128,7 +128,7 @@ export function VeleroBackupRenderer({ data }: VeleroBackupRendererProps) {
               <Property label="Excluded Namespaces" value={
                 <div className="flex flex-wrap gap-1">
                   {excludedNamespaces.map((ns: string) => (
-                    <span key={ns} className="px-1.5 py-0.5 bg-red-500/10 rounded text-xs text-red-400">{ns}</span>
+                    <span key={ns} className="badge-sm bg-red-500/10 text-red-400">{ns}</span>
                   ))}
                 </div>
               } />
@@ -137,7 +137,7 @@ export function VeleroBackupRenderer({ data }: VeleroBackupRendererProps) {
               <Property label="Included Resources" value={
                 <div className="flex flex-wrap gap-1">
                   {includedResources.map((r: string) => (
-                    <span key={r} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">{r}</span>
+                    <span key={r} className="badge-sm bg-theme-hover text-theme-text-secondary">{r}</span>
                   ))}
                 </div>
               } />
@@ -146,7 +146,7 @@ export function VeleroBackupRenderer({ data }: VeleroBackupRendererProps) {
               <Property label="Excluded Resources" value={
                 <div className="flex flex-wrap gap-1">
                   {excludedResources.map((r: string) => (
-                    <span key={r} className="px-1.5 py-0.5 bg-red-500/10 rounded text-xs text-red-400">{r}</span>
+                    <span key={r} className="badge-sm bg-red-500/10 text-red-400">{r}</span>
                   ))}
                 </div>
               } />
@@ -170,7 +170,7 @@ export function VeleroBackupRenderer({ data }: VeleroBackupRendererProps) {
             <Property label="Volume Snapshot Locations" value={
               <div className="flex flex-wrap gap-1">
                 {vslLocations.map((loc: string) => (
-                  <span key={loc} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">{loc}</span>
+                  <span key={loc} className="badge-sm bg-theme-hover text-theme-text-secondary">{loc}</span>
                 ))}
               </div>
             } />

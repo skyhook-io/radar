@@ -45,7 +45,7 @@ export function WorkflowTemplateRenderer({ data }: WorkflowTemplateRendererProps
               const type = getTemplateType(template)
               const image = getTemplateImage(template)
               return (
-                <div key={template.name} className="bg-theme-elevated/30 rounded px-3 py-2 text-sm">
+                <div key={template.name} className="card-inner px-3 py-2 text-sm">
                   <div className="font-medium text-theme-text-primary">{template.name}</div>
                   <div className="text-xs text-theme-text-secondary mt-0.5">{type}</div>
                   {image && (
@@ -78,7 +78,7 @@ export function WorkflowTemplateRenderer({ data }: WorkflowTemplateRendererProps
             {imagePullSecrets.map((secret: any) => (
               <span
                 key={secret.name}
-                className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary"
+                className="badge bg-theme-elevated text-theme-text-secondary"
               >
                 {secret.name}
               </span>

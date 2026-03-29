@@ -64,7 +64,7 @@ export function VeleroRestoreRenderer({ data }: VeleroRestoreRendererProps) {
       <Section title="Status" icon={ArchiveRestore} defaultExpanded>
         <PropertyList>
           <Property label="Phase" value={
-            <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', restoreStatus.color)}>
+            <span className={clsx('badge', restoreStatus.color)}>
               {restoreStatus.text}
             </span>
           } />
@@ -108,7 +108,7 @@ export function VeleroRestoreRenderer({ data }: VeleroRestoreRendererProps) {
               <Property label="Included Namespaces" value={
                 <div className="flex flex-wrap gap-1">
                   {includedNamespaces.map((ns: string) => (
-                    <span key={ns} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">{ns}</span>
+                    <span key={ns} className="badge-sm bg-theme-hover text-theme-text-secondary">{ns}</span>
                   ))}
                 </div>
               } />
@@ -120,7 +120,7 @@ export function VeleroRestoreRenderer({ data }: VeleroRestoreRendererProps) {
               <Property label="Excluded Namespaces" value={
                 <div className="flex flex-wrap gap-1">
                   {excludedNamespaces.map((ns: string) => (
-                    <span key={ns} className="px-1.5 py-0.5 bg-red-500/10 rounded text-xs text-red-400">{ns}</span>
+                    <span key={ns} className="badge-sm bg-red-500/10 text-red-400">{ns}</span>
                   ))}
                 </div>
               } />
@@ -129,7 +129,7 @@ export function VeleroRestoreRenderer({ data }: VeleroRestoreRendererProps) {
               <Property label="Included Resources" value={
                 <div className="flex flex-wrap gap-1">
                   {includedResources.map((r: string) => (
-                    <span key={r} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">{r}</span>
+                    <span key={r} className="badge-sm bg-theme-hover text-theme-text-secondary">{r}</span>
                   ))}
                 </div>
               } />
@@ -138,7 +138,7 @@ export function VeleroRestoreRenderer({ data }: VeleroRestoreRendererProps) {
               <Property label="Excluded Resources" value={
                 <div className="flex flex-wrap gap-1">
                   {excludedResources.map((r: string) => (
-                    <span key={r} className="px-1.5 py-0.5 bg-red-500/10 rounded text-xs text-red-400">{r}</span>
+                    <span key={r} className="badge-sm bg-red-500/10 text-red-400">{r}</span>
                   ))}
                 </div>
               } />

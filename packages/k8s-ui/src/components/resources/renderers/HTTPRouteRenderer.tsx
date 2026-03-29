@@ -77,7 +77,7 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
               hostnames.length > 0 ? (
                 <div className="flex flex-wrap gap-1">
                   {hostnames.map((h: string) => (
-                    <span key={h} className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary">{h}</span>
+                    <span key={h} className="badge bg-theme-elevated text-theme-text-secondary">{h}</span>
                   ))}
                 </div>
               ) : (
@@ -111,7 +111,7 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
             const multiBackend = backendRefs.length > 1
 
             return (
-              <div key={ruleIdx} className="bg-theme-elevated/30 rounded p-2.5">
+              <div key={ruleIdx} className="card-inner">
                 <div className="text-xs font-medium text-theme-text-tertiary mb-1.5">
                   Rule {ruleIdx + 1}
                 </div>
@@ -256,7 +256,7 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
               const resolved = conditions.find((c: any) => c.type === 'ResolvedRefs')
 
               return (
-                <div key={`${ref.namespace || ''}-${ref.name}-${idx}`} className="bg-theme-elevated/30 rounded p-2.5">
+                <div key={`${ref.namespace || ''}-${ref.name}-${idx}`} className="card-inner">
                   <div className="text-sm font-medium text-theme-text-primary mb-1.5">
                     {ref.namespace ? `${ref.namespace}/` : ''}{ref.name || 'unknown'}
                     {ref.sectionName ? ` (${ref.sectionName})` : ''}
@@ -264,7 +264,7 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
                   <div className="flex flex-wrap gap-2">
                     {accepted && (
                       <span className={clsx(
-                        'px-2 py-0.5 rounded text-xs font-medium',
+                        'badge',
                         accepted.status === 'True' ? 'bg-green-500/20 text-green-400' : 'bg-red-500/20 text-red-400'
                       )}>
                         {accepted.status === 'True' ? 'Accepted' : 'Not Accepted'}
@@ -272,7 +272,7 @@ export function HTTPRouteRenderer({ data, onNavigate }: HTTPRouteRendererProps) 
                     )}
                     {resolved && (
                       <span className={clsx(
-                        'px-2 py-0.5 rounded text-xs font-medium',
+                        'badge',
                         resolved.status === 'True' ? 'bg-green-500/20 text-green-400' : 'bg-yellow-500/20 text-yellow-400'
                       )}>
                         {resolved.status === 'True' ? 'Refs Resolved' : 'Unresolved Refs'}

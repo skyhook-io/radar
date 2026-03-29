@@ -132,7 +132,7 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
             value={
               <span
                 className={clsx(
-                  'px-2 py-0.5 rounded text-xs font-medium',
+                  'badge',
                   syncPolicy.automated ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
                 )}
               >
@@ -175,7 +175,7 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
               value={
                 <span
                   className={clsx(
-                    'px-2 py-0.5 rounded text-xs font-medium',
+                    'badge',
                     operationState.phase === 'Succeeded'
                       ? 'bg-green-500/20 text-green-400'
                       : operationState.phase === 'Running'

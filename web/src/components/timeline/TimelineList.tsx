@@ -20,7 +20,7 @@ import { useChanges } from '../../api/client'
 import { DiffViewer, DiffBadge } from './DiffViewer'
 import type { TimelineEvent, TimeRange } from '../../types'
 import { isChangeEvent, isK8sEvent, isHistoricalEvent, isOperation } from '../../types'
-import { getOperationColor, getHealthBadgeColor } from '../../utils/badge-colors'
+import { getOperationColor, getHealthBadgeColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import { ResourceRefBadge } from '../resources/drawer-components'
 import type { NavigateToResource } from '../../utils/navigation'
 import { kindToPlural, refToSelectedResource } from '../../utils/navigation'
@@ -486,10 +486,10 @@ interface FilterButtonProps {
 
 function FilterButton({ active, onClick, icon, label, count, color, tooltip }: FilterButtonProps) {
   const colorClasses = {
-    blue: 'bg-blue-500/20 text-blue-700 dark:text-blue-300',
-    amber: 'bg-amber-500/20 text-amber-700 dark:text-amber-300',
-    green: 'bg-green-500/20 text-green-700 dark:text-green-300',
-    red: 'bg-red-500/20 text-red-700 dark:text-red-300',
+    blue: SEVERITY_BADGE.info,
+    amber: SEVERITY_BADGE.warning,
+    green: SEVERITY_BADGE.success,
+    red: SEVERITY_BADGE.error,
   }
 
   return (
@@ -594,7 +594,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
                 }}
                 className="flex items-center gap-2 hover:bg-theme-elevated/50 rounded px-1 -ml-1 transition-colors group"
               >
-                <span className="text-xs px-1.5 py-0.5 bg-theme-elevated rounded text-theme-text-secondary group-hover:bg-theme-hover">
+                <span className="badge-sm bg-theme-elevated text-theme-text-secondary group-hover:bg-theme-hover">
                   {item.kind}
                 </span>
                 <span className="text-sm font-medium text-theme-text-primary truncate group-hover:text-blue-300">{item.name}</span>
@@ -625,7 +625,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
                   </span>
                   {item.diff && <DiffBadge diff={item.diff} />}
                   {item.healthState && item.healthState !== 'unknown' && (
-                    <span className={clsx('text-xs px-1.5 py-0.5 rounded', getHealthBadgeColor(item.healthState))}>
+                    <span className={clsx('badge-sm', getHealthBadgeColor(item.healthState))}>
                       {item.healthState}
                     </span>
                   )}
@@ -730,7 +730,7 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
                 }}
                 className="flex items-center gap-2 hover:bg-theme-elevated/50 rounded px-1 -ml-1 transition-colors group"
               >
-                <span className="text-xs px-1.5 py-0.5 bg-theme-elevated rounded text-theme-text-secondary group-hover:bg-theme-hover">
+                <span className="badge-sm bg-theme-elevated text-theme-text-secondary group-hover:bg-theme-hover">
                   {first.kind}
                 </span>
                 <span className="text-sm font-medium text-theme-text-primary truncate group-hover:text-blue-300">{first.name}</span>
@@ -744,8 +744,8 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
                 {reason}
               </span>
               <span className={clsx(
-                'text-xs px-1.5 py-0.5 rounded font-medium',
-                isWarning ? 'bg-amber-500/20 text-amber-400' : 'bg-red-500/20 text-red-400'
+                'badge-sm',
+                isWarning ? SEVERITY_BADGE.warning : SEVERITY_BADGE.error
               )}>
                 x{count}
               </span>

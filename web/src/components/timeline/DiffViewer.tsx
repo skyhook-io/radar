@@ -120,8 +120,8 @@ export const DiffBadge = memo(function DiffBadge({ diff }: DiffBadgeProps) {
   return (
     <span
       className={clsx(
-        'inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs',
-        'bg-blue-500/10 text-blue-400 border border-blue-500/20'
+        'badge',
+        'bg-skyhook-500/10 text-skyhook-400 border border-skyhook-500/20'
       )}
     >
       <RefreshCw className="w-3 h-3" />

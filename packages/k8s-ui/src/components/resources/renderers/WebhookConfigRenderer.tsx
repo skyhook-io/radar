@@ -43,9 +43,9 @@ export function WebhookConfigRenderer({ data, isMutating }: WebhookConfigRendere
             label="Failure Policy"
             value={
               hasFailPolicy ? (
-                <span className="px-1.5 py-0.5 rounded text-xs bg-red-500/20 text-red-400">Fail</span>
+                <span className="badge-sm status-unhealthy">Fail</span>
               ) : allIgnore ? (
-                <span className="px-1.5 py-0.5 rounded text-xs bg-theme-elevated text-theme-text-secondary">Ignore</span>
+                <span className="badge-sm bg-theme-elevated text-theme-text-secondary">Ignore</span>
               ) : (
                 'Mixed'
               )
@@ -69,30 +69,30 @@ export function WebhookConfigRenderer({ data, isMutating }: WebhookConfigRendere
             const objLabels = wh.objectSelector?.matchLabels
 
             return (
-              <div key={i} className="bg-theme-elevated/30 rounded p-3">
+              <div key={i} className="card-inner-lg">
                 <div className="text-sm font-medium text-theme-text-primary">{wh.name}</div>
                 <div className="text-xs text-theme-text-secondary mt-0.5">{target}</div>
 
                 {/* Policy badges */}
                 <div className="flex flex-wrap gap-1.5 mt-2">
-                  <span className={clsx('px-1.5 py-0.5 rounded text-xs', wh.failurePolicy === 'Fail' ? 'bg-red-500/20 text-red-400' : 'bg-theme-elevated text-theme-text-secondary')}>
+                  <span className={clsx('badge-sm', wh.failurePolicy === 'Fail' ? 'bg-red-500/20 text-red-400' : 'bg-theme-elevated text-theme-text-secondary')}>
                     {wh.failurePolicy || 'Fail'}
                   </span>
                   {wh.sideEffects && (
-                    <span className={clsx('px-1.5 py-0.5 rounded text-xs', getSideEffectsColor(wh.sideEffects))}>
+                    <span className={clsx('badge-sm', getSideEffectsColor(wh.sideEffects))}>
                       {wh.sideEffects}
                     </span>
                   )}
-                  <span className="px-1.5 py-0.5 rounded text-xs bg-theme-elevated text-theme-text-secondary">
+                  <span className="badge-sm bg-theme-elevated text-theme-text-secondary">
                     {wh.timeoutSeconds ?? 10}s
                   </span>
                   {wh.matchPolicy && (
-                    <span className="px-1.5 py-0.5 rounded text-xs bg-theme-elevated text-theme-text-secondary">
+                    <span className="badge-sm bg-theme-elevated text-theme-text-secondary">
                       {wh.matchPolicy}
                     </span>
                   )}
                   {isMutating && wh.reinvocationPolicy && (
-                    <span className="px-1.5 py-0.5 rounded text-xs bg-theme-elevated text-theme-text-secondary">
+                    <span className="badge-sm bg-theme-elevated text-theme-text-secondary">
                       {wh.reinvocationPolicy}
                     </span>
                   )}
@@ -126,7 +126,7 @@ export function WebhookConfigRenderer({ data, isMutating }: WebhookConfigRendere
                         <div className="text-xs text-theme-text-tertiary mb-1">Namespace Selector</div>
                         <div className="flex flex-wrap gap-1">
                           {Object.entries(nsLabels).map(([k, v]) => (
-                            <span key={k} className="px-1.5 py-0.5 rounded text-xs bg-theme-elevated text-theme-text-secondary">{k}={String(v)}</span>
+                            <span key={k} className="badge-sm bg-theme-elevated text-theme-text-secondary">{k}={String(v)}</span>
                           ))}
                         </div>
                       </div>
@@ -136,7 +136,7 @@ export function WebhookConfigRenderer({ data, isMutating }: WebhookConfigRendere
                         <div className="text-xs text-theme-text-tertiary mb-1">Object Selector</div>
                         <div className="flex flex-wrap gap-1">
                           {Object.entries(objLabels).map(([k, v]) => (
-                            <span key={k} className="px-1.5 py-0.5 rounded text-xs bg-theme-elevated text-theme-text-secondary">{k}={String(v)}</span>
+                            <span key={k} className="badge-sm bg-theme-elevated text-theme-text-secondary">{k}={String(v)}</span>
                           ))}
                         </div>
                       </div>

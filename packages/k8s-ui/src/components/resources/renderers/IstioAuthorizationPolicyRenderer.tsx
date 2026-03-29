@@ -51,7 +51,7 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
         <PropertyList>
           <Property label="Action" value={
             <span className={clsx(
-              'px-2 py-0.5 rounded text-xs font-medium',
+              'badge',
               actionColors[action] || 'bg-gray-500/20 text-gray-400'
             )}>
               {action}
@@ -77,7 +77,7 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
         <Section title={`Rules (${rules.length})`} defaultExpanded>
           <div className="space-y-3">
             {rules.map((rule: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-3">
+              <div key={i} className="card-inner-lg">
                 <div className="text-sm font-medium text-theme-text-primary mb-2">Rule {i + 1}</div>
 
                 {/* From (sources) */}
@@ -87,22 +87,22 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
                     {rule.from.map((f: any, fi: number) => (
                       <div key={fi} className="flex flex-wrap gap-1 mb-1">
                         {f.source?.principals?.map((p: string, pi: number) => (
-                          <span key={`p-${pi}`} className="px-1.5 py-0.5 bg-blue-500/10 text-blue-400 rounded text-xs">
+                          <span key={`p-${pi}`} className="badge-sm bg-blue-500/10 text-blue-400">
                             principal: {p}
                           </span>
                         ))}
                         {f.source?.namespaces?.map((n: string, ni: number) => (
-                          <span key={`n-${ni}`} className="px-1.5 py-0.5 bg-purple-500/10 text-purple-400 rounded text-xs">
+                          <span key={`n-${ni}`} className="badge-sm bg-purple-500/10 text-purple-400">
                             namespace: {n}
                           </span>
                         ))}
                         {f.source?.ipBlocks?.map((ip: string, ipi: number) => (
-                          <span key={`ip-${ipi}`} className="px-1.5 py-0.5 bg-orange-500/10 text-orange-400 rounded text-xs">
+                          <span key={`ip-${ipi}`} className="badge-sm bg-orange-500/10 text-orange-400">
                             IP: {ip}
                           </span>
                         ))}
                         {f.source?.requestPrincipals?.map((rp: string, rpi: number) => (
-                          <span key={`rp-${rpi}`} className="px-1.5 py-0.5 bg-cyan-500/10 text-cyan-400 rounded text-xs">
+                          <span key={`rp-${rpi}`} className="badge-sm bg-cyan-500/10 text-cyan-400">
                             reqPrincipal: {rp}
                           </span>
                         ))}
@@ -118,22 +118,22 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
                     {rule.to.map((t: any, ti: number) => (
                       <div key={ti} className="flex flex-wrap gap-1 mb-1">
                         {t.operation?.hosts?.map((h: string, hi: number) => (
-                          <span key={`h-${hi}`} className="px-1.5 py-0.5 bg-blue-500/10 text-blue-400 rounded text-xs">
+                          <span key={`h-${hi}`} className="badge-sm bg-blue-500/10 text-blue-400">
                             host: {h}
                           </span>
                         ))}
                         {t.operation?.ports?.map((p: string, pi: number) => (
-                          <span key={`p-${pi}`} className="px-1.5 py-0.5 bg-orange-500/10 text-orange-400 rounded text-xs">
+                          <span key={`p-${pi}`} className="badge-sm bg-orange-500/10 text-orange-400">
                             port: {p}
                           </span>
                         ))}
                         {t.operation?.methods?.map((m: string, mi: number) => (
-                          <span key={`m-${mi}`} className="px-1.5 py-0.5 bg-green-500/10 text-green-400 rounded text-xs">
+                          <span key={`m-${mi}`} className="badge-sm bg-green-500/10 text-green-400">
                             method: {m}
                           </span>
                         ))}
                         {t.operation?.paths?.map((p: string, pi: number) => (
-                          <span key={`path-${pi}`} className="px-1.5 py-0.5 bg-purple-500/10 text-purple-400 rounded text-xs">
+                          <span key={`path-${pi}`} className="badge-sm bg-purple-500/10 text-purple-400">
                             path: {p}
                           </span>
                         ))}

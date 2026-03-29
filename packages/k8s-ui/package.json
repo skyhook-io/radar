@@ -22,6 +22,7 @@
     "./topology": "./src/components/topology/index.ts",
     "./theme/variables.css": "./src/theme/variables.css",
     "./theme/tailwind-theme.css": "./src/theme/tailwind-theme.css",
+    "./theme/components.css": "./src/theme/components.css",
     "./theme": "./src/theme/index.ts",
     "./topology.css": "./src/components/topology/topology.css"
   },

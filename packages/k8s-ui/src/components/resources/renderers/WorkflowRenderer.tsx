@@ -155,7 +155,7 @@ export function WorkflowRenderer({ data }: WorkflowRendererProps) {
       <Section title="Status" icon={Play}>
         <PropertyList>
           <Property label="Phase" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs', getPhaseBadgeClass(phase))}>
+            <span className={clsx('badge', getPhaseBadgeClass(phase))}>
               {phase}
             </span>
           } />
@@ -174,7 +174,7 @@ export function WorkflowRenderer({ data }: WorkflowRendererProps) {
         <Section title={`Steps (${steps.length})`} defaultExpanded>
           <div className="space-y-1.5">
             {steps.map(step => (
-              <div key={step.id} className="flex items-center gap-2 text-sm bg-theme-elevated/30 rounded px-3 py-2">
+              <div key={step.id} className="flex items-center gap-2 text-sm card-inner px-3 py-2">
                 <StepStatusIcon phase={step.phase} />
                 <span className="flex-1 text-theme-text-primary">{step.displayName}</span>
                 <span className="text-xs text-theme-text-secondary">{getStepDuration(step) || '-'}</span>

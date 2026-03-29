@@ -11,7 +11,7 @@ import { Markdown } from '../ui/Markdown'
 import type { SelectedHelmRelease, HelmHook, ChartDependency } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 import { formatDate } from './helm-utils'
-import { getHelmStatusColor } from '../../utils/badge-colors'
+import { getHelmStatusColor, SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
 import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
 import { RevisionHistory } from './RevisionHistory'
 import { ManifestViewer } from './ManifestViewer'
@@ -284,7 +284,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   return (
     <div
       className={clsx(
-        'fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-2xl z-40',
+        'fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-drawer z-40',
         TRANSITION_DRAWER,
         isOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'
       )}
@@ -304,17 +304,17 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
       <div className="border-b border-theme-border shrink-0">
         <div className="flex items-center justify-between px-4 pt-3 pb-2">
           <div className="flex items-center gap-2 flex-wrap">
-            <span className="px-2 py-0.5 text-xs font-medium rounded bg-purple-500/20 text-purple-700 dark:text-purple-300">
+            <span className={clsx('badge', SEVERITY_BADGE.info)}>
               Helm Release
             </span>
             {releaseDetail && (
-              <span className={clsx('px-2 py-0.5 text-xs font-medium rounded', getHelmStatusColor(releaseDetail.status))}>
+              <span className={clsx('badge', getHelmStatusColor(releaseDetail.status))}>
                 {releaseDetail.status}
               </span>
             )}
             {/* Upgrade indicator */}
             {upgradeLoading ? (
-              <span className="px-2 py-0.5 text-xs font-medium rounded bg-theme-hover/50 text-theme-text-secondary animate-pulse">
+              <span className="badge bg-theme-hover/50 text-theme-text-secondary animate-pulse">
                 checking...
               </span>
             ) : upgradeInfo?.updateAvailable ? (
@@ -322,7 +322,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                 onClick={() => setShowUpgradeConfirm(true)}
                 disabled={!canHelmWrite}
                 className={clsx(
-                  'flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded bg-amber-500/20 text-amber-700 dark:text-amber-300 transition-colors',
+                  'badge transition-colors', SEVERITY_BADGE.warning,
                   canHelmWrite ? 'hover:bg-amber-500/30 cursor-pointer' : 'opacity-50 cursor-not-allowed'
                 )}
                 title={canHelmWrite ? `Click to upgrade: ${upgradeInfo.currentVersion} → ${upgradeInfo.latestVersion}${upgradeInfo.repositoryName ? ` (${upgradeInfo.repositoryName})` : ''}` : 'Helm write permissions required (rbac.helm=true)'}
@@ -331,7 +331,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                 {upgradeInfo.latestVersion}
               </button>
             ) : upgradeInfo && !upgradeInfo.error ? (
-              <span className="px-2 py-0.5 text-xs font-medium rounded bg-green-500/20 text-green-700 dark:text-green-300" title="Chart is up to date">
+              <span className={clsx('badge', SEVERITY_BADGE.success)} title="Chart is up to date">
                 latest
               </span>
             ) : null}
@@ -544,15 +544,15 @@ function ProgressLog({ entries }: { entries: { phase: string; message: string }[
         <div key={i} className="flex items-start gap-2 text-xs">
           <span className={clsx(
             'px-1.5 py-0.5 rounded font-medium shrink-0',
-            log.phase === 'error' ? 'bg-red-500/20 text-red-400' :
-            log.phase === 'complete' ? 'bg-green-500/20 text-green-400' :
-            'bg-blue-500/20 text-blue-400'
+            log.phase === 'error' ? SEVERITY_BADGE.error :
+            log.phase === 'complete' ? SEVERITY_BADGE.success :
+            SEVERITY_BADGE.info
           )}>
             {log.phase}
           </span>
           <span className={clsx(
-            log.phase === 'error' ? 'text-red-400' :
-            log.phase === 'complete' ? 'text-green-400' :
+            log.phase === 'error' ? SEVERITY_TEXT.error :
+            log.phase === 'complete' ? SEVERITY_TEXT.success :
             'text-theme-text-secondary'
           )}>
             {log.message}
@@ -656,10 +656,10 @@ function OverviewTab({ release, onCopy, copied }: OverviewTabProps) {
                     <span className="text-xs text-theme-text-tertiary">{dep.condition}</span>
                   )}
                   <span className={clsx(
-                    'px-1.5 py-0.5 text-xs rounded',
+                    'badge-sm',
                     dep.enabled
-                      ? 'bg-green-500/20 text-green-400'
-                      : 'bg-theme-hover/50 text-theme-text-secondary'
+                      ? SEVERITY_BADGE.success
+                      : SEVERITY_BADGE.neutral
                   )}>
                     {dep.enabled ? 'enabled' : 'disabled'}
                   </span>
@@ -711,25 +711,25 @@ function HooksTab({ hooks }: HooksTabProps) {
   }
 
   const getHookStatusColor = (status?: string) => {
-    if (!status) return 'bg-theme-hover/50 text-theme-text-secondary'
+    if (!status) return SEVERITY_BADGE.neutral
     switch (status.toLowerCase()) {
       case 'succeeded':
-        return 'bg-green-500/20 text-green-400'
+        return SEVERITY_BADGE.success
       case 'failed':
-        return 'bg-red-500/20 text-red-400'
+        return SEVERITY_BADGE.error
       case 'running':
-        return 'bg-blue-500/20 text-blue-400'
+        return SEVERITY_BADGE.info
       default:
-        return 'bg-theme-hover/50 text-theme-text-secondary'
+        return SEVERITY_BADGE.neutral
     }
   }
 
   const getEventColor = (event: string) => {
-    if (event.includes('delete')) return 'bg-red-500/20 text-red-400 border-red-500/30'
-    if (event.includes('install')) return 'bg-green-500/20 text-green-400 border-green-500/30'
-    if (event.includes('upgrade')) return 'bg-blue-500/20 text-blue-400 border-blue-500/30'
-    if (event.includes('rollback')) return 'bg-yellow-500/20 text-yellow-400 border-yellow-500/30'
-    return 'bg-theme-hover/50 text-theme-text-secondary border-theme-border'
+    if (event.includes('delete')) return SEVERITY_BADGE.error
+    if (event.includes('install')) return SEVERITY_BADGE.success
+    if (event.includes('upgrade')) return SEVERITY_BADGE.info
+    if (event.includes('rollback')) return SEVERITY_BADGE.warning
+    return SEVERITY_BADGE.neutral
   }
 
   return (
@@ -743,7 +743,7 @@ function HooksTab({ hooks }: HooksTabProps) {
             <div>
               <div className="flex items-center gap-2">
                 <span className="text-theme-text-primary font-medium">{hook.name}</span>
-                <span className="px-1.5 py-0.5 text-xs rounded bg-theme-hover/50 text-theme-text-secondary">
+                <span className="badge-sm bg-theme-hover/50 text-theme-text-secondary">
                   {hook.kind}
                 </span>
               </div>
@@ -752,7 +752,7 @@ function HooksTab({ hooks }: HooksTabProps) {
               </div>
             </div>
             {hook.status && (
-              <span className={clsx('px-2 py-0.5 text-xs rounded', getHookStatusColor(hook.status))}>
+              <span className={clsx('badge', getHookStatusColor(hook.status))}>
                 {hook.status}
               </span>
             )}
@@ -761,7 +761,7 @@ function HooksTab({ hooks }: HooksTabProps) {
             {hook.events.map((event) => (
               <span
                 key={event}
-                className={clsx('px-2 py-0.5 text-xs rounded border', getEventColor(event))}
+                className={clsx('badge', getEventColor(event))}
               >
                 {event}
               </span>

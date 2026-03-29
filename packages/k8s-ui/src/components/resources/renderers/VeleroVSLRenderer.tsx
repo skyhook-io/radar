@@ -23,7 +23,7 @@ export function VeleroVSLRenderer({ data }: VeleroVSLRendererProps) {
             <div className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-1">Config</div>
             <div className="flex flex-wrap gap-1">
               {Object.entries(config).map(([k, v]) => (
-                <span key={k} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                <span key={k} className="badge-sm bg-theme-hover text-theme-text-secondary">
                   {k}: {String(v)}
                 </span>
               ))}

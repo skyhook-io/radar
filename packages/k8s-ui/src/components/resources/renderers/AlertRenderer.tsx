@@ -88,7 +88,7 @@ export function AlertRenderer({ data }: AlertRendererProps) {
             label="Event Severity"
             value={
               <span className={clsx(
-                'px-2 py-0.5 rounded text-xs font-medium',
+                'badge',
                 eventSeverity === 'error' ? 'bg-red-500/20 text-red-400' :
                 eventSeverity === 'warning' ? 'bg-yellow-500/20 text-yellow-400' :
                 'bg-blue-500/20 text-blue-400'
@@ -108,7 +108,7 @@ export function AlertRenderer({ data }: AlertRendererProps) {
             {eventSources.map((source: any, idx: number) => (
               <div
                 key={idx}
-                className="p-2 bg-theme-elevated/30 rounded text-sm"
+                className="card-inner text-sm"
               >
                 <div className="flex items-center gap-2">
                   <span className="text-theme-text-tertiary">{source.kind}</span>

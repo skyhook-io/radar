@@ -3,6 +3,7 @@ import { History, Eye, GitCompare, Check, RotateCcw } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { HelmRevision } from '../../types'
 import { getStatusColor, formatDate, formatAge } from './helm-utils'
+import { SEVERITY_BADGE } from '../../utils/badge-colors'
 
 interface RevisionHistoryProps {
   history: HelmRevision[]
@@ -96,11 +97,11 @@ export function RevisionHistory({ history, currentRevision, onViewRevision, onCo
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2 flex-wrap">
                     <span className="text-sm font-medium text-theme-text-primary">{revision.chart}</span>
-                    <span className={clsx('px-1.5 py-0.5 text-xs font-medium rounded', getStatusColor(revision.status))}>
+                    <span className={clsx('badge-sm', getStatusColor(revision.status))}>
                       {revision.status}
                     </span>
                     {isCurrent && (
-                      <span className="px-1.5 py-0.5 text-xs font-medium rounded bg-green-500/20 text-green-400">
+                      <span className={clsx('badge-sm', SEVERITY_BADGE.success)}>
                         Current
                       </span>
                     )}

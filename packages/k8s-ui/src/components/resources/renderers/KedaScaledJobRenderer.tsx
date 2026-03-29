@@ -57,14 +57,14 @@ export function KedaScaledJobRenderer({ data }: KedaScaledJobRendererProps) {
         <Section title={`Triggers (${triggers.length})`} defaultExpanded>
           <div className="space-y-2">
             {triggers.map((trigger, i) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2">
+              <div key={i} className="card-inner">
                 <div className="flex items-center gap-2 text-sm">
                   <span className="text-theme-text-primary font-medium">{trigger.type}</span>
                   {trigger.name && (
                     <span className="text-theme-text-tertiary">({trigger.name})</span>
                   )}
                   {trigger.authenticationRef && (
-                    <span className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                    <span className="badge-sm bg-theme-hover text-theme-text-secondary">
                       auth: {trigger.authenticationRef.name}
                     </span>
                   )}
@@ -72,7 +72,7 @@ export function KedaScaledJobRenderer({ data }: KedaScaledJobRendererProps) {
                 {trigger.metadata && Object.keys(trigger.metadata).length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">
                     {Object.entries(trigger.metadata).map(([k, v]) => (
-                      <span key={k} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                      <span key={k} className="badge-sm bg-theme-hover text-theme-text-secondary">
                         {k}: {v}
                       </span>
                     ))}

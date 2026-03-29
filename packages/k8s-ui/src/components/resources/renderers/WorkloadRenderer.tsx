@@ -266,7 +266,7 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
           <button
             onClick={handleScale}
             disabled={isScalePending || targetReplicas === (spec.replicas || 0)}
-            className="flex-1 px-3 py-2 text-sm text-white bg-blue-600 hover:bg-blue-500 disabled:bg-blue-600/50 disabled:cursor-not-allowed rounded-lg transition-colors"
+            className="flex-1 px-3 py-2 text-sm btn-brand disabled:cursor-not-allowed rounded-lg"
           >
             {isScalePending ? 'Scaling...' : 'Apply'}
           </button>

@@ -92,7 +92,7 @@ export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoo
           <div className="mt-2 space-y-1">
             <div className="text-xs text-theme-text-tertiary font-medium mb-1">Budgets</div>
             {disruption.budgets.map((budget: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2 text-sm text-theme-text-secondary">
+              <div key={i} className="card-inner text-sm text-theme-text-secondary">
                 {budget.nodes && <span>Nodes: {budget.nodes}</span>}
                 {budget.schedule && <span className="ml-2">Schedule: {budget.schedule}</span>}
                 {budget.duration && <span className="ml-2">Duration: {budget.duration}</span>}
@@ -109,7 +109,7 @@ export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoo
             {Object.entries(templateLabels).map(([key, val]) => (
               <span
                 key={key}
-                className="inline-flex items-center px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary"
+                className="badge-sm bg-theme-hover text-theme-text-secondary"
               >
                 {key}: {String(val)}
               </span>
@@ -123,7 +123,7 @@ export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoo
         <Section title={`Requirements (${requirements.length})`} icon={Settings} defaultExpanded>
           <div className="space-y-1">
             {requirements.map((req: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2">
+              <div key={i} className="card-inner">
                 <div className="flex items-center gap-2 text-sm">
                   <span className="text-theme-text-primary font-medium">{req.key}</span>
                   <span className="text-theme-text-tertiary">{req.operator}</span>
@@ -131,7 +131,7 @@ export function KarpenterNodePoolRenderer({ data, onNavigate }: KarpenterNodePoo
                 {req.values && req.values.length > 0 && (
                   <div className="mt-1 flex flex-wrap gap-1">
                     {req.values.map((v: string, vi: number) => (
-                      <span key={vi} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                      <span key={vi} className="badge-sm bg-theme-hover text-theme-text-secondary">
                         {v}
                       </span>
                     ))}

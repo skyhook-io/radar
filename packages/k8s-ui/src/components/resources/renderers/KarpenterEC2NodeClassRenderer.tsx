@@ -50,7 +50,7 @@ export function KarpenterEC2NodeClassRenderer({ data }: KarpenterEC2NodeClassRen
         <Section title={`Block Devices (${blockDevices.length})`} icon={HardDrive}>
           <div className="space-y-2">
             {blockDevices.map((bd: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2">
+              <div key={i} className="card-inner">
                 <div className="text-sm font-medium text-theme-text-primary mb-1">
                   {bd.deviceName || `/dev/xvda`}
                 </div>
@@ -102,9 +102,9 @@ export function KarpenterEC2NodeClassRenderer({ data }: KarpenterEC2NodeClassRen
           <div className="mb-3">
             <div className="text-xs text-theme-text-tertiary font-medium mb-1">Subnet Selector</div>
             {subnetTerms.map((term: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2 mb-1">
+              <div key={i} className="card-inner mb-1">
                 {term.tags && Object.entries(term.tags).map(([key, val]) => (
-                  <span key={key} className="inline-flex items-center px-1.5 py-0.5 mr-1 mb-1 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                  <span key={key} className="badge-sm mr-1 mb-1 bg-theme-hover text-theme-text-secondary">
                     {key}: {String(val)}
                   </span>
                 ))}
@@ -119,9 +119,9 @@ export function KarpenterEC2NodeClassRenderer({ data }: KarpenterEC2NodeClassRen
           <div>
             <div className="text-xs text-theme-text-tertiary font-medium mb-1">Security Group Selector</div>
             {sgTerms.map((term: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2 mb-1">
+              <div key={i} className="card-inner mb-1">
                 {term.tags && Object.entries(term.tags).map(([key, val]) => (
-                  <span key={key} className="inline-flex items-center px-1.5 py-0.5 mr-1 mb-1 bg-theme-hover rounded text-xs text-theme-text-secondary">
+                  <span key={key} className="badge-sm mr-1 mb-1 bg-theme-hover text-theme-text-secondary">
                     {key}: {String(val)}
                   </span>
                 ))}

@@ -75,7 +75,7 @@ export function DiagnosticsOverlay({ onClose, isOpen = true }: DiagnosticsOverla
 
       {/* Panel */}
       <div className={clsx(
-        'relative w-full max-w-2xl mx-4 bg-theme-surface border border-theme-border rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[84vh]',
+        'relative w-full max-w-2xl mx-4 dialog overflow-hidden flex flex-col max-h-[84vh]',
         TRANSITION_PANEL,
         isOpen ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-[0.97] translate-y-3'
       )}>

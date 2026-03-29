@@ -86,7 +86,7 @@ export function PodDisruptionBudgetRenderer({ data }: PodDisruptionBudgetRendere
           <Property label="Expected Pods" value={expectedPods} />
         </PropertyList>
         {currentHealthy !== undefined && expectedPods !== undefined && expectedPods > 0 && (
-          <div className="mt-3 bg-theme-elevated/30 rounded p-2 text-sm">
+          <div className="mt-3 card-inner text-sm">
             <div className="flex items-center justify-between">
               <span className="text-theme-text-secondary">Health</span>
               <span className={clsx(

@@ -1,5 +1,6 @@
 import { RefreshCw, Pause, Play, Loader2 } from 'lucide-react'
 import { clsx } from 'clsx'
+import { SEVERITY_BADGE } from '../../utils/badge-colors'
 
 interface GitOpsActionsProps {
   /** The GitOps tool type */
@@ -53,10 +54,10 @@ export function GitOpsActions({
             'flex items-center rounded font-medium transition-colors',
             buttonClass,
             isSyncing
-              ? 'bg-blue-500/20 text-blue-400 cursor-wait'
+              ? `${SEVERITY_BADGE.info} cursor-wait`
               : suspended
               ? 'bg-theme-elevated text-theme-text-tertiary cursor-not-allowed'
-              : 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30'
+              : `${SEVERITY_BADGE.info} hover:bg-sky-500/30`
           )}
           title={suspended ? 'Cannot sync while suspended' : syncLabel}
         >
@@ -79,8 +80,8 @@ export function GitOpsActions({
               'flex items-center rounded font-medium transition-colors',
               buttonClass,
               isSuspending
-                ? 'bg-green-500/20 text-green-400 cursor-wait'
-                : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+                ? `${SEVERITY_BADGE.success} cursor-wait`
+                : `${SEVERITY_BADGE.success} hover:bg-emerald-500/30`
             )}
           >
             {isSuspending ? (
@@ -100,8 +101,8 @@ export function GitOpsActions({
               'flex items-center rounded font-medium transition-colors',
               buttonClass,
               isSuspending
-                ? 'bg-yellow-500/20 text-yellow-400 cursor-wait'
-                : 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30'
+                ? `${SEVERITY_BADGE.warning} cursor-wait`
+                : `${SEVERITY_BADGE.warning} hover:bg-amber-500/30`
             )}
           >
             {isSuspending ? (
@@ -147,7 +148,7 @@ export function SyncButton({
         buttonClass,
         loading || disabled
           ? 'bg-theme-elevated text-theme-text-tertiary cursor-not-allowed'
-          : 'bg-blue-500/20 text-blue-400 hover:bg-blue-500/30'
+          : `${SEVERITY_BADGE.info} hover:bg-sky-500/30`
       )}
     >
       {loading ? (
@@ -190,8 +191,8 @@ export function SuspendToggle({
           'flex items-center rounded font-medium transition-colors',
           buttonClass,
           loading
-            ? 'bg-green-500/20 text-green-400 cursor-wait'
-            : 'bg-green-500/20 text-green-400 hover:bg-green-500/30'
+            ? `${SEVERITY_BADGE.success} cursor-wait`
+            : `${SEVERITY_BADGE.success} hover:bg-emerald-500/30`
         )}
       >
         {loading ? (
@@ -212,8 +213,8 @@ export function SuspendToggle({
         'flex items-center rounded font-medium transition-colors',
         buttonClass,
         loading
-          ? 'bg-yellow-500/20 text-yellow-400 cursor-wait'
-          : 'bg-yellow-500/20 text-yellow-400 hover:bg-yellow-500/30'
+          ? `${SEVERITY_BADGE.warning} cursor-wait`
+          : `${SEVERITY_BADGE.warning} hover:bg-amber-500/30`
       )}
     >
       {loading ? (

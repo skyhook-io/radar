@@ -101,7 +101,7 @@ export function KustomizationRenderer({ data }: KustomizationRendererProps) {
             {spec.healthChecks.map((check: any, idx: number) => (
               <div
                 key={idx}
-                className="text-sm px-2 py-1 bg-theme-elevated/30 rounded"
+                className="text-sm card-inner"
               >
                 <span className="text-theme-text-tertiary">{check.kind}/</span>
                 <span className="text-theme-text-primary">{check.name}</span>

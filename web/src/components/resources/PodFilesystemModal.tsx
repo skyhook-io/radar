@@ -126,7 +126,7 @@ export function PodFilesystemModal({
       <div
         ref={dialogRef}
         tabIndex={-1}
-        className="relative bg-theme-surface border border-theme-border rounded-lg shadow-2xl w-full max-w-4xl mx-4 max-h-[85vh] flex flex-col outline-none"
+        className="relative dialog w-full max-w-4xl mx-4 max-h-[85vh] flex flex-col outline-none"
       >
         {/* Header */}
         <div className="flex items-center justify-between p-4 border-b border-theme-border shrink-0">

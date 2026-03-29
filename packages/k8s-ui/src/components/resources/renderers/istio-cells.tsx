@@ -43,7 +43,7 @@ export function VirtualServiceCell({ resource, column }: { resource: any; column
     case 'status': {
       const status = getVirtualServiceStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -70,7 +70,7 @@ export function DestinationRuleCell({ resource, column }: { resource: any; colum
     case 'status': {
       const status = getDestinationRuleStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -97,7 +97,7 @@ export function IstioGatewayCell({ resource, column }: { resource: any; column: 
     case 'status': {
       const status = getIstioGatewayStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -120,7 +120,7 @@ export function ServiceEntryCell({ resource, column }: { resource: any; column: 
     case 'status': {
       const status = getServiceEntryStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -133,7 +133,7 @@ export function ServiceEntryCell({ resource, column }: { resource: any; column: 
       const location = getServiceEntryLocation(resource)
       return (
         <span className={clsx(
-          'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
+          'badge',
           location === 'MESH_EXTERNAL' ? 'bg-orange-500/20 text-orange-400' : 'bg-blue-500/20 text-blue-400'
         )}>
           {location === 'MESH_EXTERNAL' ? 'External' : 'Internal'}
@@ -154,7 +154,7 @@ export function PeerAuthenticationCell({ resource, column }: { resource: any; co
     case 'status': {
       const status = getPeerAuthenticationStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -163,7 +163,7 @@ export function PeerAuthenticationCell({ resource, column }: { resource: any; co
       const mode = getPeerAuthenticationMode(resource)
       return (
         <span className={clsx(
-          'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
+          'badge',
           modeColors[mode] || 'bg-gray-500/20 text-gray-400'
         )}>
           {mode}
@@ -184,7 +184,7 @@ export function AuthorizationPolicyCell({ resource, column }: { resource: any; c
     case 'status': {
       const status = getAuthorizationPolicyStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -193,7 +193,7 @@ export function AuthorizationPolicyCell({ resource, column }: { resource: any; c
       const action = getAuthorizationPolicyAction(resource)
       return (
         <span className={clsx(
-          'inline-flex items-center px-2 py-0.5 rounded text-xs font-medium',
+          'badge',
           actionColors[action] || 'bg-gray-500/20 text-gray-400'
         )}>
           {action}

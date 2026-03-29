@@ -238,7 +238,7 @@ export function ShortcutHelpOverlay({ onClose, currentView, isOpen = true }: Sho
       <div
         ref={overlayRef}
         className={clsx(
-          'relative w-full max-w-2xl max-h-[80vh] bg-theme-surface border border-theme-border rounded-xl shadow-2xl overflow-hidden flex flex-col',
+          'relative w-full max-w-2xl max-h-[80vh] dialog overflow-hidden flex flex-col',
           TRANSITION_PANEL,
           isOpen ? 'opacity-100 scale-100' : 'opacity-0 scale-[0.97]'
         )}

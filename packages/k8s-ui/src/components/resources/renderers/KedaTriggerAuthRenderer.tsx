@@ -43,7 +43,7 @@ export function KedaTriggerAuthRenderer({ data, onNavigate }: KedaTriggerAuthRen
         <Section title={`Secret References (${secretRefs.length})`} icon={KeyRound} defaultExpanded>
           <div className="space-y-2">
             {secretRefs.map((ref, i) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2">
+              <div key={i} className="card-inner">
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
                   <span className="text-theme-text-primary font-medium">{ref.parameter}</span>
                   <span className="text-theme-text-secondary">
@@ -61,7 +61,7 @@ export function KedaTriggerAuthRenderer({ data, onNavigate }: KedaTriggerAuthRen
         <Section title={`Environment Variables (${envVars.length})`} defaultExpanded>
           <div className="space-y-2">
             {envVars.map((env, i) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2">
+              <div key={i} className="card-inner">
                 <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
                   <span className="text-theme-text-primary font-medium">{env.parameter}</span>
                   <span className="text-theme-text-secondary">Env: {env.name}</span>
@@ -90,7 +90,7 @@ export function KedaTriggerAuthRenderer({ data, onNavigate }: KedaTriggerAuthRen
             <div className="mt-2 space-y-1">
               <div className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-1">Secrets</div>
               {vault.secrets.map((s: any, i: number) => (
-                <div key={i} className="bg-theme-elevated/30 rounded p-2 text-sm">
+                <div key={i} className="card-inner text-sm">
                   <span className="text-theme-text-primary font-medium">{s.parameter}</span>
                   <span className="text-theme-text-secondary ml-2">{s.path} / {s.key}</span>
                 </div>
@@ -113,7 +113,7 @@ export function KedaTriggerAuthRenderer({ data, onNavigate }: KedaTriggerAuthRen
             <div className="mt-2 space-y-1">
               <div className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-1">Secrets</div>
               {azureKeyVault.secrets.map((s: any, i: number) => (
-                <div key={i} className="bg-theme-elevated/30 rounded p-2 text-sm">
+                <div key={i} className="card-inner text-sm">
                   <span className="text-theme-text-primary font-medium">{s.parameter}</span>
                   <span className="text-theme-text-secondary ml-2">{s.name}</span>
                 </div>
@@ -135,7 +135,7 @@ export function KedaTriggerAuthRenderer({ data, onNavigate }: KedaTriggerAuthRen
             <div className="mt-2 space-y-1">
               <div className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-1">Secrets</div>
               {awsSecretManager.secrets.map((s: any, i: number) => (
-                <div key={i} className="bg-theme-elevated/30 rounded p-2 text-sm">
+                <div key={i} className="card-inner text-sm">
                   <span className="text-theme-text-primary font-medium">{s.parameter}</span>
                   <span className="text-theme-text-secondary ml-2">{s.name}</span>
                 </div>

@@ -25,15 +25,15 @@ function CostCardContent({ data, onNavigate }: { data: OpenCostSummary; onNaviga
   return (
     <div
       onClick={onNavigate}
-      className={`h-[260px] rounded-lg border-[3px] border-indigo-500/30 bg-theme-surface/50 text-left animate-fade-in-up ${onNavigate ? 'cursor-pointer hover:-translate-y-1 hover:shadow-[0_12px_24px_rgba(0,0,0,0.12)] hover:border-indigo-500/50 transition-all duration-200' : ''}`}
+      className={`h-[260px] rounded-xl bg-theme-surface shadow-theme-sm text-left animate-fade-in-up ${onNavigate ? 'cursor-pointer hover:-translate-y-1 hover:shadow-theme-md transition-all duration-200' : ''}`}
     >
       <div className="flex flex-col h-full w-full">
-        <div className="flex items-center justify-between px-4 py-2 border-b border-theme-border">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50">
           <div className="flex items-center gap-2">
             <DollarSign className="w-4 h-4 text-indigo-500" />
-            <span className="text-sm font-semibold text-indigo-500">Cost Insights</span>
+            <span className="text-xs font-semibold uppercase tracking-wider text-indigo-500">Cost Insights</span>
             {namespaces.length > 0 && (
-              <span className="text-[11px] bg-indigo-500/10 px-1.5 py-0.5 rounded text-indigo-500">
+              <span className="badge-sm bg-indigo-100 text-indigo-700 border-indigo-300 dark:bg-indigo-950/50 dark:text-indigo-400 dark:border-indigo-700/40">
                 {namespaces.length} ns
               </span>
             )}
@@ -82,11 +82,11 @@ function CostCardContent({ data, onNavigate }: { data: OpenCostSummary; onNaviga
           </div>
         </div>
 
-        <div className="px-4 py-1.5 border-t border-theme-border flex items-center justify-between">
+        <div className="px-4 py-1.5 border-t border-theme-border/50 flex items-center justify-between">
           <span className="text-[10px] text-theme-text-tertiary">
             {data.currency ?? 'USD'} &middot; {data.window ?? '1h'} window
           </span>
-          <span className="flex items-center gap-1.5 text-xs font-medium text-indigo-500">
+          <span className="flex items-center gap-1.5 text-[10px] font-semibold uppercase tracking-wider text-indigo-500">
             OpenCost
           </span>
         </div>

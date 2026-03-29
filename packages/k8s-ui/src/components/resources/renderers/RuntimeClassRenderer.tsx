@@ -42,7 +42,7 @@ export function RuntimeClassRenderer({ data }: RuntimeClassRendererProps) {
                   {Object.entries(nodeSelector).map(([key, value]) => (
                     <span
                       key={key}
-                      className="px-2 py-0.5 rounded text-xs bg-blue-500/20 text-blue-400"
+                      className="badge status-neutral"
                     >
                       {key}={value as string}
                     </span>
@@ -59,7 +59,7 @@ export function RuntimeClassRenderer({ data }: RuntimeClassRendererProps) {
                     const effect = t.effect ? `: ${t.effect}` : ''
                     const seconds = t.tolerationSeconds != null ? ` (${t.tolerationSeconds}s)` : ''
                     return (
-                      <div key={i} className="bg-theme-elevated/30 rounded p-2 text-xs text-theme-text-secondary">
+                      <div key={i} className="card-inner text-xs text-theme-text-secondary">
                         {parts}{effect}{seconds}
                       </div>
                     )

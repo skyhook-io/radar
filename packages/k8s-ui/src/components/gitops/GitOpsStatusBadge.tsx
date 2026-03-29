@@ -21,7 +21,7 @@ export function GitOpsStatusBadge({ status, showHealth = true, compact = false }
   if (compact) {
     return (
       <span
-        className={clsx('px-2 py-0.5 rounded text-xs font-medium inline-flex items-center gap-1', colorClass)}
+        className={clsx('badge', colorClass)}
         title={status.message}
       >
         <Icon className="w-3 h-3" />
@@ -37,7 +37,7 @@ export function GitOpsStatusBadge({ status, showHealth = true, compact = false }
   return (
     <div className="flex items-center gap-2">
       <span
-        className={clsx('px-2 py-0.5 rounded text-xs font-medium inline-flex items-center gap-1', colorClass)}
+        className={clsx('badge', colorClass)}
         title={status.message}
       >
         <Icon className="w-3.5 h-3.5" />
@@ -94,7 +94,7 @@ function HealthIndicator({ health }: HealthIndicatorProps) {
 
   return (
     <span
-      className={clsx('px-1.5 py-0.5 rounded text-xs inline-flex items-center gap-1', color)}
+      className={clsx('badge-sm', color)}
       title={`Health: ${label}`}
     >
       <Icon className="w-3 h-3" />
@@ -126,7 +126,7 @@ function getHealthInfo(health: GitOpsHealthStatus) {
 export function SyncStatusBadge({ sync, suspended }: { sync: SyncStatus; suspended?: boolean }) {
   if (suspended) {
     return (
-      <span className={clsx('px-2 py-0.5 rounded text-xs font-medium inline-flex items-center gap-1', SEVERITY_BADGE_BORDERED.warning)}>
+      <span className={clsx('badge', SEVERITY_BADGE_BORDERED.warning)}>
         <Pause className="w-3 h-3" />
         Suspended
       </span>
@@ -137,7 +137,7 @@ export function SyncStatusBadge({ sync, suspended }: { sync: SyncStatus; suspend
   const Icon = config.icon
 
   return (
-    <span className={clsx('px-2 py-0.5 rounded text-xs font-medium inline-flex items-center gap-1', config.color)}>
+    <span className={clsx('badge', config.color)}>
       <Icon className={clsx('w-3 h-3', sync === 'Reconciling' && 'animate-spin')} />
       {config.label}
     </span>
@@ -164,7 +164,7 @@ export function HealthStatusBadge({ health }: { health: GitOpsHealthStatus }) {
   const { icon: Icon, color, label } = getHealthInfo(health)
 
   return (
-    <span className={clsx('px-2 py-0.5 rounded text-xs font-medium inline-flex items-center gap-1', color)}>
+    <span className={clsx('badge', color)}>
       <Icon className={clsx('w-3 h-3', health === 'Progressing' && 'animate-spin')} />
       {label}
     </span>

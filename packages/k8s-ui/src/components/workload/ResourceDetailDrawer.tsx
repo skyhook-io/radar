@@ -115,12 +115,12 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
   return (
     <div
       className={clsx(
-        'fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-2xl z-40',
+        'fixed right-0 bg-theme-surface border-l border-theme-border flex flex-col shadow-drawer z-40',
         TRANSITION_DRAWER,
         isOpen
           ? 'translate-x-0 opacity-100'
           : 'translate-x-full opacity-0',
-        expanded && 'bg-theme-base !border-l-0',
+        expanded && '!border-l-0',
       )}
       style={{
         width: expanded ? `calc(100vw - ${leftOffset}px)` : drawerWidth,
@@ -136,9 +136,9 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
         <div
           onMouseDown={handleResizeStart}
           className={clsx(
-            'absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-10 hover:bg-blue-500/50 transition-colors',
+            'absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-10 hover:bg-skyhook-500/50 transition-colors',
             'hidden sm:block',
-            isResizing && 'bg-blue-500/50'
+            isResizing && 'bg-skyhook-500/50'
           )}
         />
       )}

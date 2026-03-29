@@ -191,7 +191,7 @@ export function FluxHelmReleaseRenderer({ data }: FluxHelmReleaseRendererProps) 
                   </span>
                   <span
                     className={clsx(
-                      'px-1.5 py-0.5 rounded text-xs',
+                      'badge-sm',
                       release.status === 'deployed'
                         ? 'status-healthy'
                         : release.status === 'failed'

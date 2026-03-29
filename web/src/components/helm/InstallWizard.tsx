@@ -10,6 +10,7 @@ import type { ChartSource, ChartDetail, ArtifactHubChartDetail } from '../../typ
 import { YamlEditor } from '../ui/YamlEditor'
 import { Tooltip } from '../ui/Tooltip'
 import { Markdown } from '../ui/Markdown'
+import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
 
 // Deep merge two objects — values from `overrides` take priority
 function deepMerge(base: Record<string, unknown>, overrides: Record<string, unknown>): Record<string, unknown> {
@@ -196,7 +197,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
 
       {/* Dialog */}
-      <div className="relative bg-theme-surface border border-theme-border rounded-lg shadow-2xl max-w-3xl w-full mx-4 max-h-[90vh] flex flex-col">
+      <div className="relative dialog max-w-3xl w-full mx-4 max-h-[90vh] flex flex-col">
         {/* Header */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-theme-border shrink-0">
           <div className="flex items-center gap-3">
@@ -256,7 +257,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                   className={clsx(
                     'flex items-center gap-2 px-3 py-1.5 rounded-full text-sm transition-colors',
                     step === s.id
-                      ? 'bg-blue-500/20 text-blue-400'
+                      ? SEVERITY_BADGE.info
                       : 'text-theme-text-secondary hover:text-theme-text-primary'
                   )}
                 >
@@ -387,7 +388,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                   <button
                     onClick={handleInstall}
                     disabled={!canInstall || isInstalling || !canHelmWrite}
-                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex items-center gap-2 px-4 py-2 text-sm font-medium btn-brand rounded-lg disabled:cursor-not-allowed"
                     title={!canHelmWrite ? 'Helm write permissions required (rbac.helm=true)' : undefined}
                   >
                     {isInstalling ? (
@@ -401,7 +402,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                   <button
                     onClick={() => setStep(step === 'info' ? 'values' : 'review')}
                     disabled={step === 'info' && !canProceedFromInfo}
-                    className="flex items-center gap-1 px-4 py-2 text-sm font-medium text-white bg-blue-600 hover:bg-blue-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="flex items-center gap-1 px-4 py-2 text-sm font-medium btn-brand rounded-lg disabled:cursor-not-allowed"
                   >
                     Next
                     <ChevronRight className="w-4 h-4" />
@@ -668,7 +669,7 @@ function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartD
               {hasDefaults && !hasValues && (
                 <button
                   onClick={() => setValuesYaml(defaultValues)}
-                  className="text-xs px-3 py-1.5 bg-blue-500/20 border border-blue-500/30 rounded hover:bg-blue-500/30 transition-colors text-blue-400"
+                  className={clsx('text-xs px-3 py-1.5 rounded hover:bg-sky-500/30 transition-colors', SEVERITY_BADGE.info)}
                 >
                   Load default values
                 </button>
@@ -1019,16 +1020,16 @@ function InstallingStep({
                 {log.timestamp.toLocaleTimeString()}
               </span>
               <span className={clsx(
-                'shrink-0 px-1.5 py-0.5 rounded text-xs uppercase',
-                log.phase === 'error' ? 'bg-red-500/20 text-red-400' :
-                  log.phase === 'complete' ? 'bg-green-500/20 text-green-400' :
+                'shrink-0 badge-sm uppercase',
+                log.phase === 'error' ? SEVERITY_BADGE.error :
+                  log.phase === 'complete' ? SEVERITY_BADGE.success :
                     'bg-theme-elevated text-theme-text-tertiary'
               )}>
                 {log.phase}
               </span>
               <span className={clsx(
-                log.phase === 'error' ? 'text-red-400' :
-                  log.phase === 'complete' ? 'text-green-400' :
+                log.phase === 'error' ? SEVERITY_TEXT.error :
+                  log.phase === 'complete' ? SEVERITY_TEXT.success :
                     'text-theme-text-secondary'
               )}>
                 {log.message}

@@ -76,7 +76,7 @@ function ResultRow({ result }: { result: any }) {
       </div>
       {expanded && message && (
         <div className="px-2 pb-2 pl-7">
-          <div className="text-xs text-theme-text-secondary break-all bg-theme-elevated/30 rounded p-2">
+          <div className="text-xs text-theme-text-secondary break-all card-inner">
             {message}
           </div>
           {result.category && (
@@ -253,7 +253,7 @@ export function KyvernoPolicyRenderer({ data }: KyvernoPolicyRendererProps) {
         <PropertyList>
           <Property label="Failure Action" value={
             <span className={clsx(
-              'px-2 py-0.5 rounded text-xs font-medium',
+              'badge',
               isEnforce ? 'bg-red-500/20 text-red-400' : 'bg-yellow-500/20 text-yellow-400',
             )}>
               {action}
@@ -301,7 +301,7 @@ export function KyvernoPolicyRenderer({ data }: KyvernoPolicyRendererProps) {
         <Section title={`Rules (${ruleCount})`} icon={FileWarning} defaultExpanded>
           <div className="space-y-2">
             {rules.map((rule, i) => (
-              <div key={i} className="bg-theme-elevated/30 rounded-lg p-3">
+              <div key={i} className="card-inner-lg">
                 <div className="flex items-center gap-2 mb-1">
                   <span className="text-sm font-medium text-theme-text-primary">{rule.name}</span>
                   <span className={clsx('px-1.5 py-0.5 rounded text-[10px] font-medium', ruleTypeColorMap[rule.type] || 'bg-theme-hover text-theme-text-tertiary')}>
@@ -325,7 +325,7 @@ export function KyvernoPolicyRenderer({ data }: KyvernoPolicyRendererProps) {
             {autogenRules.map((name: string) => (
               <span
                 key={name}
-                className="px-2 py-0.5 bg-theme-elevated rounded text-xs text-theme-text-secondary"
+                className="badge bg-theme-elevated text-theme-text-secondary"
               >
                 {name}
               </span>

@@ -293,7 +293,7 @@ export function TerminalTab({
                   <button
                     onClick={handleCreateDebugContainer}
                     disabled={isCreatingDebug}
-                    className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700 disabled:opacity-50"
+                    className="flex items-center gap-2 px-3 py-1.5 btn-brand text-xs rounded"
                   >
                     {isCreatingDebug ? (
                       <><RefreshCw className="w-3 h-3 animate-spin" />Creating debug container...</>
@@ -317,7 +317,7 @@ export function TerminalTab({
               <div className="text-xs text-theme-text-disabled mb-3">{error}</div>
               <button
                 onClick={connect}
-                className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 text-white text-xs rounded hover:bg-blue-700"
+                className="flex items-center gap-2 px-3 py-1.5 btn-brand text-xs rounded"
               >
                 <RefreshCw className="w-3 h-3" />
                 Retry

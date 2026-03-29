@@ -19,7 +19,7 @@ export function ServiceMonitorCell({ resource, column }: { resource: any; column
     case 'status': {
       const status = getServiceMonitorStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -40,7 +40,7 @@ export function PrometheusRuleCell({ resource, column }: { resource: any; column
     case 'status': {
       const status = getPrometheusRuleStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -59,7 +59,7 @@ export function PodMonitorCell({ resource, column }: { resource: any; column: st
     case 'status': {
       const status = getPodMonitorStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )

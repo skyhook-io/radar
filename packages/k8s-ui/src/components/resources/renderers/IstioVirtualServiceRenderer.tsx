@@ -51,7 +51,7 @@ export function IstioVirtualServiceRenderer({ data, onNavigate }: IstioVirtualSe
       <Section title="Routing" icon={Network} defaultExpanded>
         <PropertyList>
           <Property label="Status" value={
-            <span className={clsx('px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+            <span className={clsx('badge', status.color)}>
               {status.text}
             </span>
           } />
@@ -62,7 +62,7 @@ export function IstioVirtualServiceRenderer({ data, onNavigate }: IstioVirtualSe
                 {gateways.map((gw, i) => {
                   // Gateway reference can be "namespace/name" or just "name" or "mesh"
                   if (gw === 'mesh') {
-                    return <span key={i} className="px-1.5 py-0.5 bg-theme-hover rounded text-xs text-theme-text-secondary">mesh</span>
+                    return <span key={i} className="badge-sm bg-theme-hover text-theme-text-secondary">mesh</span>
                   }
                   const parts = gw.split('/')
                   const gwNs = parts.length === 2 ? parts[0] : ns
@@ -88,7 +88,7 @@ export function IstioVirtualServiceRenderer({ data, onNavigate }: IstioVirtualSe
         <Section title={`HTTP Routes (${httpRoutes.length})`} icon={Route} defaultExpanded>
           <div className="space-y-3">
             {httpRoutes.map((route: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-3">
+              <div key={i} className="card-inner-lg">
                 {/* Route header */}
                 <div className="flex items-center gap-2 mb-2">
                   <span className="text-sm font-medium text-theme-text-primary">
@@ -239,7 +239,7 @@ export function IstioVirtualServiceRenderer({ data, onNavigate }: IstioVirtualSe
         <Section title={`TCP Routes (${tcpRoutes.length})`} defaultExpanded>
           <div className="space-y-2">
             {tcpRoutes.map((route: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2">
+              <div key={i} className="card-inner">
                 {route.match && (
                   <div className="text-xs text-theme-text-tertiary mb-1">
                     Match: {JSON.stringify(route.match)}
@@ -263,7 +263,7 @@ export function IstioVirtualServiceRenderer({ data, onNavigate }: IstioVirtualSe
         <Section title={`TLS Routes (${tlsRoutes.length})`} defaultExpanded>
           <div className="space-y-2">
             {tlsRoutes.map((route: any, i: number) => (
-              <div key={i} className="bg-theme-elevated/30 rounded p-2">
+              <div key={i} className="card-inner">
                 {route.match && (
                   <div className="text-xs text-theme-text-tertiary mb-1">
                     SNI: {route.match.map((m: any) => m.sniHosts?.join(', ')).join('; ')}

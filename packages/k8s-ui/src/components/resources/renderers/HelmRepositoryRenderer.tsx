@@ -97,7 +97,7 @@ export function HelmRepositoryRenderer({ data }: HelmRepositoryRendererProps) {
             label="Type"
             value={
               <span className={clsx(
-                'px-2 py-0.5 rounded text-xs font-medium',
+                'badge',
                 isOCI ? 'bg-purple-500/20 text-purple-400' : 'bg-blue-500/20 text-blue-400'
               )}>
                 {isOCI ? 'OCI' : 'HTTP'}

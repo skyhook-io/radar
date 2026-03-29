@@ -211,9 +211,9 @@ export function TrafficWizard({
             {recommendation && (
               <div className="space-y-4">
                 {/* Primary option */}
-                <div className="border border-blue-500/30 bg-blue-500/5 rounded-lg p-4 space-y-3">
+                <div className="border border-skyhook-500/30 bg-skyhook-500/5 rounded-lg p-4 space-y-3">
                   <div className="flex items-start gap-2">
-                    <span className="px-2 py-0.5 text-xs font-medium bg-blue-500 text-white rounded">
+                    <span className="badge btn-brand">
                       Recommended
                     </span>
                     <span className="font-medium capitalize text-theme-text-primary">{recommendation.name}</span>
@@ -224,7 +224,7 @@ export function TrafficWizard({
                   {recommendation.helmChart ? (
                     <button
                       onClick={() => setShowHelmInstall(true)}
-                      className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded bg-blue-500 text-white hover:bg-blue-600 transition-colors"
+                      className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm font-medium rounded btn-brand"
                     >
                       <Package className="h-4 w-4" />
                       Install {recommendation.name} with Helm
@@ -232,7 +232,7 @@ export function TrafficWizard({
                   ) : (
                     <button
                       onClick={() => setStep('install')}
-                      className="w-full flex items-center justify-center gap-1 px-4 py-2 text-sm font-medium rounded bg-blue-500 text-white hover:bg-blue-600 transition-colors"
+                      className="w-full flex items-center justify-center gap-1 px-4 py-2 text-sm font-medium rounded btn-brand"
                     >
                       View install instructions
                       <ArrowRight className="h-4 w-4" />
@@ -257,7 +257,7 @@ export function TrafficWizard({
                 {recommendation.alternativeName && (
                   <div className="border border-theme-border rounded-lg p-4 space-y-3">
                     <div className="flex items-start gap-2">
-                      <span className="px-2 py-0.5 text-xs font-medium bg-theme-elevated text-theme-text-secondary rounded">
+                      <span className="badge bg-theme-elevated text-theme-text-secondary">
                         Alternative
                       </span>
                       <span className="font-medium capitalize text-theme-text-primary">{recommendation.alternativeName}</span>
@@ -337,7 +337,7 @@ export function TrafficWizard({
 
           {/* Platform-specific notes */}
           {cluster?.platform === 'gke' && cluster?.cni === 'cilium' && (
-            <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-4 text-sm">
+            <div className="bg-skyhook-500/10 border border-skyhook-500/20 rounded-lg p-4 text-sm">
               <p className="text-blue-400 font-medium">GKE Dataplane V2</p>
               <p className="text-theme-text-secondary mt-1">
                 Your cluster uses Cilium natively. The command above enables the Hubble
@@ -373,7 +373,7 @@ export function TrafficWizard({
                 setState('checking')
                 setLastChecked(null)
               }}
-              className="flex-1 px-4 py-2 text-sm font-medium rounded bg-blue-500 text-white hover:bg-blue-600 transition-colors"
+              className="flex-1 px-4 py-2 text-sm font-medium rounded btn-brand"
             >
               I've run the command
             </button>

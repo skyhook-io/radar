@@ -30,7 +30,7 @@ export function BackupCell({ resource, column }: { resource: any; column: string
     case 'status': {
       const status = getBackupStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -76,7 +76,7 @@ export function RestoreCell({ resource, column }: { resource: any; column: strin
     case 'status': {
       const status = getRestoreStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -110,7 +110,7 @@ export function ScheduleCell({ resource, column }: { resource: any; column: stri
     case 'status': {
       const status = getScheduleStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
@@ -137,7 +137,7 @@ export function BackupStorageLocationCell({ resource, column }: { resource: any;
     case 'status': {
       const status = getBSLStatus(resource)
       return (
-        <span className={clsx('inline-flex items-center px-2 py-0.5 rounded text-xs font-medium', status.color)}>
+        <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
       )
