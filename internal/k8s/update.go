@@ -105,6 +105,12 @@ func ListWorkloadRevisions(ctx context.Context, kind, namespace, name string) ([
 	return getWorkloadManager().ListWorkloadRevisions(ctx, kind, namespace, name)
 }
 
+// ListWorkloadRevisionsWithClient returns revision history using the provided client.
+// Use this when auth is enabled to ensure K8s RBAC applies to the requesting user.
+func ListWorkloadRevisionsWithClient(ctx context.Context, kind, namespace, name string, client dynamic.Interface) ([]WorkloadRevision, error) {
+	return getWorkloadManagerWithClient(client).ListWorkloadRevisions(ctx, kind, namespace, name)
+}
+
 // RollbackWorkload rolls back a Deployment, StatefulSet, or DaemonSet to a specific revision.
 func RollbackWorkload(ctx context.Context, kind, namespace, name string, revision int64) error {
 	return getWorkloadManager().RollbackWorkload(ctx, kind, namespace, name, revision)

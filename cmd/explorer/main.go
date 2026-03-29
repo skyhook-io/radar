@@ -78,7 +78,13 @@ func main() {
 
 	log.Printf("Radar %s starting...", version)
 
-	// Validate mutually exclusive flags
+	// Validate flags
+	switch *authMode {
+	case "none", "proxy", "oidc":
+		// valid
+	default:
+		log.Fatalf("Invalid --auth-mode %q: must be none, proxy, or oidc", *authMode)
+	}
 	if *kubeconfig != "" && *kubeconfigDir != "" {
 		log.Fatalf("--kubeconfig and --kubeconfig-dir are mutually exclusive")
 	}

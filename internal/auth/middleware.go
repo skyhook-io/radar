@@ -13,7 +13,6 @@ import (
 // Soft-auth paths (e.g. /api/auth/me) attempt auth but don't 401 on failure.
 func Authenticate(cfg Config) func(http.Handler) http.Handler {
 	cfg.Defaults()
-	secure := cfg.Mode == "oidc" // Secure cookies for OIDC (typically behind TLS)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -22,6 +21,11 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 				next.ServeHTTP(w, r)
 				return
 			}
+
+			// Determine whether to set Secure flag on cookies per-request.
+			// OIDC is always behind TLS. Proxy mode detects TLS via X-Forwarded-Proto
+			// (set by the upstream reverse proxy) or a direct TLS connection.
+			secure := cfg.Mode == "oidc" || r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"
 
 			// Try to get user from session cookie first
 			if user := ParseSessionCookie(r, cfg.Secret); user != nil {

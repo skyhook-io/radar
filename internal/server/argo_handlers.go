@@ -18,14 +18,13 @@ func (s *Server) handleArgoSync(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
+	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
 		log.Printf("[argo] Dynamic client unavailable for sync Application %s/%s", namespace, name)
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
-
-	auth.AuditLog(r, namespace, name)
 	result, err := gitops.SyncArgoApp(r.Context(), client, namespace, name)
 	if err != nil {
 		s.writeGitOpsError(w, err, "argo", "sync", namespace, name)
@@ -48,6 +47,7 @@ func (s *Server) handleArgoRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
 		log.Printf("[argo] Dynamic client unavailable for refresh Application %s/%s", namespace, name)
@@ -55,7 +55,6 @@ func (s *Server) handleArgoRefresh(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	auth.AuditLog(r, namespace, name)
 	result, err := gitops.RefreshArgoApp(r.Context(), client, namespace, name, refreshType)
 	if err != nil {
 		s.writeGitOpsError(w, err, "argo", "refresh", namespace, name)
@@ -70,6 +69,7 @@ func (s *Server) handleArgoTerminate(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
+	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
 		log.Printf("[argo] Dynamic client unavailable for terminate Application %s/%s", namespace, name)
@@ -77,7 +77,6 @@ func (s *Server) handleArgoTerminate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	auth.AuditLog(r, namespace, name)
 	result, err := gitops.TerminateArgoSync(r.Context(), client, namespace, name)
 	if err != nil {
 		s.writeGitOpsError(w, err, "argo", "terminate", namespace, name)
@@ -92,6 +91,7 @@ func (s *Server) handleArgoSuspend(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
+	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
 		log.Printf("[argo] Dynamic client unavailable for suspend Application %s/%s", namespace, name)
@@ -99,7 +99,6 @@ func (s *Server) handleArgoSuspend(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	auth.AuditLog(r, namespace, name)
 	result, err := gitops.SetArgoAutoSync(r.Context(), client, namespace, name, false)
 	if err != nil {
 		s.writeGitOpsError(w, err, "argo", "suspend", namespace, name)
@@ -114,6 +113,7 @@ func (s *Server) handleArgoResume(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
+	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
 		log.Printf("[argo] Dynamic client unavailable for resume Application %s/%s", namespace, name)
@@ -121,7 +121,6 @@ func (s *Server) handleArgoResume(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	auth.AuditLog(r, namespace, name)
 	result, err := gitops.SetArgoAutoSync(r.Context(), client, namespace, name, true)
 	if err != nil {
 		s.writeGitOpsError(w, err, "argo", "resume", namespace, name)

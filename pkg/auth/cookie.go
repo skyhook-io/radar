@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 	"time"
@@ -30,7 +31,11 @@ func CreateSessionCookie(user *User, secret string, ttl time.Duration, secure bo
 		ExpiresAt: time.Now().Add(ttl).Unix(),
 	}
 
-	data, _ := json.Marshal(payload)
+	data, err := json.Marshal(payload)
+	if err != nil {
+		// Should never happen for this struct — fail loudly rather than issue a broken cookie
+		log.Fatalf("[auth] Failed to marshal session cookie payload for user %s: %v", user.Username, err)
+	}
 	encoded := base64.RawURLEncoding.EncodeToString(data)
 
 	sig := signData(encoded, secret)
@@ -64,6 +69,7 @@ func ParseSessionCookie(r *http.Request, secret string) *User {
 	// Verify HMAC signature
 	expected := signData(encoded, secret)
 	if !hmac.Equal([]byte(sig), []byte(expected)) {
+		log.Printf("[auth] Session cookie HMAC verification failed — possible tampered cookie from %s", r.RemoteAddr)
 		return nil
 	}
 
@@ -80,6 +86,7 @@ func ParseSessionCookie(r *http.Request, secret string) *User {
 
 	// Check expiration
 	if time.Now().Unix() > p.ExpiresAt {
+		log.Printf("[auth] Session cookie expired for user %q — prompting re-auth", p.Username)
 		return nil
 	}
 

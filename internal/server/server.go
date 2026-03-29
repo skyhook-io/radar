@@ -1949,7 +1949,13 @@ func (s *Server) handleWorkloadRevisions(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	revisions, err := k8s.ListWorkloadRevisions(r.Context(), kind, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
+		return
+	}
+
+	revisions, err := k8s.ListWorkloadRevisionsWithClient(r.Context(), kind, namespace, name, client)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, err.Error())

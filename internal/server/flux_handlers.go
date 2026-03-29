@@ -22,6 +22,7 @@ func (s *Server) handleFluxReconcile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
 		log.Printf("[flux] Dynamic client unavailable for %s %s/%s", kind, namespace, name)
@@ -29,7 +30,6 @@ func (s *Server) handleFluxReconcile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	auth.AuditLog(r, namespace, name)
 	result, err := gitops.ReconcileFlux(r.Context(), client, entry, namespace, name)
 	if err != nil {
 		s.writeGitOpsError(w, err, "flux", "reconcile", namespace, name)
@@ -66,6 +66,7 @@ func (s *Server) fluxSetSuspend(w http.ResponseWriter, r *http.Request, suspend 
 		action = "resume"
 	}
 
+	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
 		log.Printf("[flux] Dynamic client unavailable for %s %s/%s", kind, namespace, name)
@@ -73,7 +74,6 @@ func (s *Server) fluxSetSuspend(w http.ResponseWriter, r *http.Request, suspend 
 		return
 	}
 
-	auth.AuditLog(r, namespace, name)
 	result, err := gitops.SetFluxSuspend(r.Context(), client, entry, namespace, name, suspend)
 	if err != nil {
 		s.writeGitOpsError(w, err, "flux", action, namespace, name)
@@ -95,6 +95,7 @@ func (s *Server) handleFluxSyncWithSource(w http.ResponseWriter, r *http.Request
 		return
 	}
 
+	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
 		log.Printf("[flux] Dynamic client unavailable for %s %s/%s", kind, namespace, name)
@@ -102,7 +103,6 @@ func (s *Server) handleFluxSyncWithSource(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	auth.AuditLog(r, namespace, name)
 	result, err := gitops.SyncFluxWithSource(r.Context(), client, kind, namespace, name)
 	if err != nil {
 		s.writeGitOpsError(w, err, "flux", "sync-with-source", namespace, name)
