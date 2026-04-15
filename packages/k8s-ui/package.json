@@ -59,7 +59,7 @@
     "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.10.1",
     "clsx": "^2.1.1",
-    "diff": "^8.0.3",
+    "diff": "^9.0.0",
     "elkjs": "^0.11.1",
     "lucide-react": "^0.575.0",
     "react": "^19.2.4",
