@@ -120,6 +120,12 @@ func (s *Server) handleLocalTerminal(w http.ResponseWriter, r *http.Request) {
 		env = setEnv(env, "KUBECONFIG", tmpKubeconfig)
 	}
 
+	// Ensure TERM is set so the shell's terminfo binds the escape sequences
+	// xterm.js emits (e.g. Backspace → 0x7f, Delete → CSI 3~). When Radar is
+	// launched from a GUI (desktop app, browser), the inherited env often has
+	// no TERM, leaving backspace/delete keys broken.
+	env = setEnv(env, "TERM", "xterm-256color")
+
 	// Get home directory (cross-platform)
 	homeDir, _ := os.UserHomeDir()
 
