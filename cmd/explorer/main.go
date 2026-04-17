@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"flag"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/app"
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
 	_ "k8s.io/client-go/plugin/pkg/client/auth" // Register all auth provider plugins (OIDC, GCP, Azure, etc.)
@@ -69,6 +71,11 @@ func main() {
 	authOIDCInsecureSkipVerify := flag.Bool("auth-oidc-insecure-skip-verify", false, "Skip TLS certificate verification for OIDC provider (insecure, dev/test only)")
 	authOIDCCACert := flag.String("auth-oidc-ca-cert", "", "Path to CA certificate file for OIDC provider TLS verification")
 	authOIDCBackchannelLogout := flag.Bool("auth-oidc-backchannel-logout", false, "Enable OIDC Back-Channel Logout endpoint (single-replica only)")
+	// Radar Hub (cloud) flags — enable hosted mode when --hub-url is set.
+	// Local-binary behavior is unchanged when these flags are empty.
+	hubURL := flag.String("hub-url", "", "Radar Hub WebSocket URL (e.g. wss://api.radar.skyhook.io/agent) — empty = local-only")
+	hubToken := flag.String("hub-token", "", "Cluster token from the Radar Hub install wizard (rhc_<random>)")
+	hubClusterName := flag.String("cluster-name", "", "Human-readable cluster name for Radar Hub (required with --hub-url)")
 	flag.Parse()
 
 	if *showVersion {
@@ -195,6 +202,27 @@ func main() {
 	// Now initialize cluster connection and caches (browser will see progress via SSE)
 	app.InitializeCluster()
 	k8s.LogTiming(" Total startup (to connected): %v", time.Since(startupStart))
+
+	// Radar Hub: when --hub-url is set, dial out to the hub and serve our
+	// existing router over yamux-tunneled streams. No behavior change when
+	// the flags are empty.
+	if *hubURL != "" {
+		if *hubToken == "" || *hubClusterName == "" {
+			log.Fatalf("--hub-url requires --hub-token and --cluster-name")
+		}
+		go func() {
+			runErr := cloud.Run(context.Background(), cloud.Config{
+				HubURL:      *hubURL,
+				Token:       *hubToken,
+				ClusterID:   *hubClusterName, // POC: cluster name doubles as ID; real registry derives ID from token
+				ClusterName: *hubClusterName,
+				Handler:     srv.Handler(),
+			})
+			if runErr != nil {
+				log.Printf("[cloud] Run exited: %v", runErr)
+			}
+		}()
+	}
 
 	// Track opens and maybe prompt to star the repo on GitHub (non-blocking)
 	app.MaybePromptGitHubStar()
