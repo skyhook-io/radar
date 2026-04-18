@@ -16,3 +16,4 @@ export {
   getApiBase,
   getBasename,
 } from '../../../web/src/api/config';
+export type { NavCustomization } from '../../../web/src/context/NavCustomization';

@@ -24,6 +24,8 @@ import App from './App';
 import { ThemeProvider } from './context/ThemeContext';
 import { ToastProvider, showApiError, showApiSuccess } from './components/ui/Toast';
 import { setApiBase, setBasename } from './api/config';
+import { NavCustomizationProvider } from './context/NavCustomization';
+import type { NavCustomization } from './context/NavCustomization';
 
 export interface RadarAppProps {
   /** API base URL (REST + SSE + WS). Defaults to '/api' (same-origin). */
@@ -46,6 +48,13 @@ export interface RadarAppProps {
    * prefer to share its client rather than nest two providers.
    */
   queryClient?: QueryClient;
+  /**
+   * Slot-based customization of Radar's top nav. Use to inject host-app
+   * brand, replace the kubeconfig context picker with a product-level
+   * cluster switcher, and append items to the right action bar.
+   * See ./context/NavCustomization for the slot shape.
+   */
+  navSlots?: NavCustomization;
 }
 
 // Default QueryClient with the same shape Radar's standalone binary uses.
@@ -84,6 +93,7 @@ export function RadarApp({
   basename,
   router = 'browser',
   queryClient,
+  navSlots,
 }: RadarAppProps): React.ReactElement {
   // Apply runtime config before any child reads it. These are module-level
   // singletons; setting them before the tree renders is sufficient because
@@ -99,7 +109,9 @@ export function RadarApp({
     <ThemeProvider>
       <QueryClientProvider client={client}>
         <ToastProvider>
-          <App />
+          <NavCustomizationProvider value={navSlots}>
+            <App />
+          </NavCustomizationProvider>
         </ToastProvider>
       </QueryClientProvider>
     </ThemeProvider>
