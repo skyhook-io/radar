@@ -19,6 +19,22 @@ Not everything is in this file. The following files contain critical details tha
 | Understanding **cluster connection behavior** | [docs/configuration.md](docs/configuration.md) — kubeconfig precedence, multi-context, in-cluster |
 | Working on **MCP tools or AI context** | [docs/mcp.md](docs/mcp.md) + `internal/mcp/tools.go` — tool definitions and design rationale |
 | Writing or modifying **frontend UI / styling** | [DESIGN.md](DESIGN.md) — theme tokens, do's/don'ts, component patterns |
+| Touching anything library consumers import | [packages/radar-app/](packages/radar-app/) — `@skyhook-io/radar-app` re-exports from `web/src/RadarApp.tsx` + runtime config + nav slots. Consumers (Radar Hub, ws8 Skyhook-integration) depend on the shape of these exports. |
+| Adding or changing **api/fetch call sites** | `web/src/api/config.ts` — all fetches go through `getApiBase()`, `apiUrl()`, `getWsUrl()`, `getAuthHeaders()`, `getCredentialsMode()`. New fetch sites must use these helpers so library consumers (Radar Hub) can override per-cluster. |
+| Embedding Radar inside another app | `web/src/RadarApp.tsx` + `web/src/context/NavCustomization.tsx` — `apiBase`, `basename`, `router`, `navSlots` props. Changes to this API surface are breaking. |
+
+## Library distribution
+
+In addition to the standalone binary, Radar's frontend is published as **`@skyhook-io/radar-app`** (source-only npm package, same model as `@skyhook-io/k8s-ui`). Source: `packages/radar-app/`, which re-exports from `web/src/RadarApp.tsx`.
+
+Consumers get:
+- `<RadarApp apiBase basename router navSlots queryClient />` — the whole app as one component
+- Runtime config setters for cross-cutting behavior (`setApiBase`, `setBasename`, `setAuthHeadersProvider`, `setCredentialsMode`) for non-React code paths
+- `NavCustomization` type for nav slot injection
+
+Known consumers: Radar Hub (`skyhook-dev/radar-hub-web`), ws8 Skyhook-integration (`skyhook-dev/koala-frontend` — pending that plan).
+
+**Backwards-compat rule:** adding props is fine; removing or renaming `apiBase` / `basename` / `navSlots` fields is breaking. Bump major version.
 
 ## Architecture
 
