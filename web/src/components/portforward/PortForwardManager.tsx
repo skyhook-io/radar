@@ -29,6 +29,7 @@ import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
 import { openExternal } from '../../utils/navigation'
+import { apiUrl } from '../../api/config'
 
 // --- Types -------------------------------------------------------------------
 
@@ -51,7 +52,7 @@ function usePortForwardQuery() {
   return useQuery<PortForwardSession[]>({
     queryKey: ['portforwards'],
     queryFn: async () => {
-      const res = await fetch('/api/portforwards')
+      const res = await fetch(apiUrl('/portforwards'))
       if (!res.ok) throw new Error('Failed to fetch port forwards')
       return res.json()
     },
@@ -374,7 +375,7 @@ export function PortForwardPanel() {
   const stopPortForward = useCallback(async (id: string) => {
     setStoppingIds(prev => new Set(prev).add(id))
     try {
-      const res = await fetch(`/api/portforwards/${id}`, { method: 'DELETE' })
+      const res = await fetch(apiUrl(`/portforwards/${id}`), { method: 'DELETE' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         throw new Error(body.error || `Failed to stop port forward (HTTP ${res.status})`)
@@ -404,13 +405,13 @@ export function PortForwardPanel() {
     // apart from "original gone and recreate failed = data loss."
     let deleted = false
     try {
-      const delRes = await fetch(`/api/portforwards/${session.id}`, { method: 'DELETE' })
+      const delRes = await fetch(apiUrl(`/portforwards/${session.id}`), { method: 'DELETE' })
       if (!delRes.ok) {
         const body = await delRes.json().catch(() => ({}))
         throw new Error(body.error || `Failed to stop existing port forward (HTTP ${delRes.status})`)
       }
       deleted = true
-      const res = await fetch('/api/portforwards', {
+      const res = await fetch(apiUrl('/portforwards'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -458,13 +459,13 @@ export function PortForwardPanel() {
     // apart from "original gone and recreate failed = data loss."
     let deleted = false
     try {
-      const delRes = await fetch(`/api/portforwards/${session.id}`, { method: 'DELETE' })
+      const delRes = await fetch(apiUrl(`/portforwards/${session.id}`), { method: 'DELETE' })
       if (!delRes.ok) {
         const body = await delRes.json().catch(() => ({}))
         throw new Error(body.error || `Failed to stop existing port forward (HTTP ${delRes.status})`)
       }
       deleted = true
-      const res = await fetch('/api/portforwards', {
+      const res = await fetch(apiUrl('/portforwards'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -839,7 +840,7 @@ export function useStartPortForward() {
       localPort?: number
       listenAddress?: string // "127.0.0.1" (default) or "0.0.0.0"
     }) => {
-      const res = await fetch('/api/portforwards', {
+      const res = await fetch(apiUrl('/portforwards'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(req),

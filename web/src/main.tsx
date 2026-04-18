@@ -1,10 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { QueryClient, QueryClientProvider, MutationCache, QueryCache } from '@tanstack/react-query'
-import { BrowserRouter } from 'react-router-dom'
-import App from './App'
-import { ToastProvider, showApiError, showApiSuccess } from './components/ui/Toast'
-import { ThemeProvider } from './context/ThemeContext'
+import { RadarApp } from './RadarApp'
 import { openExternal } from './utils/navigation'
 import './index.css'
 
@@ -163,49 +159,10 @@ declare module '@tanstack/react-query' {
   }
 }
 
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      refetchOnWindowFocus: false,
-      retry: 1,
-    },
-  },
-  mutationCache: new MutationCache({
-    onError: (error, _variables, _context, mutation) => {
-      // Only show toast if errorMessage is explicitly provided in meta
-      // This allows mutations to opt-out by not providing meta (e.g., context switch has its own dialog)
-      const message = mutation.options.meta?.errorMessage
-      if (message) {
-        showApiError(message, error.message)
-      }
-    },
-    onSuccess: (_data, _variables, _context, mutation) => {
-      const message = mutation.options.meta?.successMessage
-      if (message) {
-        showApiSuccess(message, mutation.options.meta?.successDetail)
-      }
-    },
-  }),
-  queryCache: new QueryCache({
-    onError: (error, query) => {
-      // Log background refetch failures (when stale data exists)
-      if (query.state.data !== undefined) {
-        console.warn('[Background sync failed]', query.queryKey, error.message)
-      }
-    },
-  }),
-})
-
+// Standalone Radar binary: same-origin API, router at root. Library consumers
+// (e.g. radar-hub-web) render <RadarApp apiBase="..." basename="..." /> instead.
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
-    <BrowserRouter>
-      <ThemeProvider>
-        <QueryClientProvider client={queryClient}>
-          <ToastProvider>
-            <App />
-          </ToastProvider>
-        </QueryClientProvider>
-      </ThemeProvider>
-    </BrowserRouter>
+    <RadarApp />
   </React.StrictMode>
 )

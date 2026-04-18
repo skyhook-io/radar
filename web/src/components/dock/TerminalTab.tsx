@@ -1,4 +1,5 @@
 import { TerminalTab as SharedTerminalTab } from '@skyhook-io/k8s-ui'
+import { apiUrl, getWsUrl } from '../../api/config'
 
 interface TerminalTabProps {
   namespace: string
@@ -9,15 +10,13 @@ interface TerminalTabProps {
 }
 
 export function TerminalTab({ namespace, podName, containerName, containers, isActive }: TerminalTabProps) {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-
   const createSession = (container: string) =>
     Promise.resolve({
-      wsUrl: `${protocol}//${window.location.host}/api/pods/${namespace}/${podName}/exec?container=${container}`,
+      wsUrl: getWsUrl(`/pods/${namespace}/${podName}/exec?container=${container}`),
     })
 
   const createDebugContainer = async (targetContainer: string) => {
-    const response = await fetch(`/api/pods/${namespace}/${podName}/debug`, {
+    const response = await fetch(apiUrl(`/pods/${namespace}/${podName}/debug`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ targetContainer, image: 'busybox:latest' }),

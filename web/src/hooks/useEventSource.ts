@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Topology, K8sEvent, ViewMode } from '../types'
 import type { ConnectionState } from '../context/ConnectionContext'
+import { getApiBase } from '../api/config'
 
 interface UseEventSourceReturn {
   topology: Topology | null
@@ -86,10 +87,12 @@ export function useEventSource(
     if (showPolicyEffect) {
       params.set('policyEffect', 'true')
     }
-    const url = `/api/events/stream${params.toString() ? `?${params}` : ''}`
+    const url = `${getApiBase()}/events/stream${params.toString() ? `?${params}` : ''}`
 
-    // Create new EventSource
-    const es = new EventSource(url)
+    // Create new EventSource — withCredentials so session cookies flow
+    // cross-origin when Radar is embedded in another app (e.g. Radar Hub).
+    // Same-origin standalone is unaffected (cookies always go).
+    const es = new EventSource(url, { withCredentials: true })
     eventSourceRef.current = es
 
     es.onopen = () => {

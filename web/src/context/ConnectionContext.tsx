@@ -1,8 +1,7 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { ContextInfo } from '../types'
-
-const API_BASE = '/api'
+import { getApiBase, getAuthHeaders, getCredentialsMode } from '../api/config'
 
 export type ConnectionStateType = 'connected' | 'disconnected' | 'connecting'
 
@@ -30,7 +29,10 @@ interface ConnectionContextValue {
 const ConnectionContext = createContext<ConnectionContextValue | null>(null)
 
 async function fetchConnectionStatus(): Promise<ConnectionStatusResponse> {
-  const response = await fetch(`${API_BASE}/connection`)
+  const response = await fetch(`${getApiBase()}/connection`, {
+    credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
+  })
   if (!response.ok) {
     throw new Error('Failed to fetch connection status')
   }
@@ -38,7 +40,11 @@ async function fetchConnectionStatus(): Promise<ConnectionStatusResponse> {
 }
 
 async function retryConnection(): Promise<ConnectionState> {
-  const response = await fetch(`${API_BASE}/connection/retry`, { method: 'POST' })
+  const response = await fetch(`${getApiBase()}/connection/retry`, {
+    method: 'POST',
+    credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
+  })
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }))
     throw new Error(error.error || `HTTP ${response.status}`)

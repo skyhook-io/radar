@@ -1,0 +1,5 @@
+/* Radar's full stylesheet. Pulls in the same index.css that Radar's binary
+ * ships, plus any CSS assets from transitive imports. Consumers import
+ * `@skyhook-io/radar-app/style.css` once at the app root.
+ */
+@import "../../../web/src/index.css";
