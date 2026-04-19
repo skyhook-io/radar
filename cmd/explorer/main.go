@@ -72,10 +72,12 @@ func main() {
 	authOIDCCACert := flag.String("auth-oidc-ca-cert", "", "Path to CA certificate file for OIDC provider TLS verification")
 	authOIDCBackchannelLogout := flag.Bool("auth-oidc-backchannel-logout", false, "Enable OIDC Back-Channel Logout endpoint (single-replica only)")
 	// Radar Hub (cloud) flags — enable hosted mode when --hub-url is set.
-	// Local-binary behavior is unchanged when these flags are empty.
-	hubURL := flag.String("hub-url", "", "Radar Hub WebSocket URL (e.g. wss://api.radar.skyhook.io/agent) — empty = local-only")
-	hubToken := flag.String("hub-token", "", "Cluster token from the Radar Hub install wizard (rhc_<random>)")
-	hubClusterName := flag.String("cluster-name", "", "Human-readable cluster name for Radar Hub (required with --hub-url)")
+	// Local-binary behavior is unchanged when these flags are empty. Each
+	// flag falls back to an env var so Kubernetes deployments can source
+	// the token from a Secret without exposing it in `ps` output.
+	hubURL := flag.String("hub-url", os.Getenv("RADAR_HUB_URL"), "Radar Hub WebSocket URL (e.g. wss://api.radar.skyhook.io/agent) — empty = local-only. Env: RADAR_HUB_URL")
+	hubToken := flag.String("hub-token", os.Getenv("RADAR_HUB_TOKEN"), "Cluster token from the Radar Hub install wizard (rhc_<random>). Env: RADAR_HUB_TOKEN")
+	hubClusterName := flag.String("cluster-name", os.Getenv("RADAR_HUB_CLUSTER_NAME"), "Human-readable cluster name for Radar Hub (required with --hub-url). Env: RADAR_HUB_CLUSTER_NAME")
 	flag.Parse()
 
 	if *showVersion {

@@ -194,6 +194,25 @@ auth:
     # Single-replica only — revocations are stored in memory and lost on pod restart.
     backchannelLogout: false
 
+# Radar Hub (hosted SaaS) — outbound-only tunnel. When enabled, this Radar
+# instance dials out to a hub over WebSocket and serves its existing API
+# through yamux streams. No inbound ports required beyond the Pod's.
+# Leave disabled for standalone OSS deployments.
+hub:
+  enabled: false
+  # Hub WebSocket URL. Must start with ws:// or wss://. Example:
+  # wss://api.radar.skyhook.io/agent
+  url: ""
+  # Human-readable cluster identifier from the hub install wizard.
+  clusterName: ""
+  # Cluster bearer token (rhc_<random>) issued by the hub. Inline for
+  # convenience in dev; production should use existingSecret instead.
+  token: ""
+  # Source the token from an existing Secret instead of inlining it above.
+  # The Secret must contain a key matching existingSecretKey.
+  existingSecret: ""
+  existingSecretKey: "token"
+
 # MCP (Model Context Protocol) server for AI tools
 mcp:
   # Set to false to disable the MCP server (useful when deployed behind authentication)

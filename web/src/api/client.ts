@@ -1193,7 +1193,9 @@ export function createLogStream(
   if (options?.sinceSeconds) params.set('sinceSeconds', String(options.sinceSeconds))
   const queryString = params.toString()
 
-  return new EventSource(`${getApiBase()}/pods/${namespace}/${podName}/logs/stream${queryString ? `?${queryString}` : ''}`)
+  return new EventSource(`${getApiBase()}/pods/${namespace}/${podName}/logs/stream${queryString ? `?${queryString}` : ''}`, {
+    withCredentials: getCredentialsMode() === 'include',
+  })
 }
 
 // ============================================================================
@@ -1534,7 +1536,7 @@ export function useCordonNode() {
 
   return useMutation({
     mutationFn: async ({ name }: { name: string }) => {
-      const response = await fetch(`${getApiBase()}/nodes/${name}/cordon`, {
+      const response = await apiFetch(`${getApiBase()}/nodes/${name}/cordon`, {
         method: 'POST',
       })
       if (!response.ok) {
@@ -1560,7 +1562,7 @@ export function useUncordonNode() {
 
   return useMutation({
     mutationFn: async ({ name }: { name: string }) => {
-      const response = await fetch(`${getApiBase()}/nodes/${name}/uncordon`, {
+      const response = await apiFetch(`${getApiBase()}/nodes/${name}/uncordon`, {
         method: 'POST',
       })
       if (!response.ok) {
@@ -1591,7 +1593,7 @@ export function useDrainNode() {
 
   return useMutation({
     mutationFn: async ({ name, options }: { name: string; options?: DrainNodeOptions }) => {
-      const response = await fetch(`${getApiBase()}/nodes/${name}/drain`, {
+      const response = await apiFetch(`${getApiBase()}/nodes/${name}/drain`, {
         method: 'POST',
         headers: options ? { 'Content-Type': 'application/json' } : {},
         body: options ? JSON.stringify(options) : undefined,
@@ -1782,8 +1784,12 @@ function streamHelmProgress(
   onProgress: (event: InstallProgressEvent) => void,
   failureLabel: string,
 ): Promise<InstallProgressEvent> {
+  const headers = new Headers(options.headers)
+  for (const [k, v] of Object.entries(getAuthHeaders())) {
+    if (!headers.has(k)) headers.set(k, v)
+  }
   return new Promise((resolve, reject) => {
-    fetch(url, options)
+    fetch(url, { credentials: getCredentialsMode(), ...options, headers })
       .then(async (response) => {
         if (!response.ok) {
           const error = await response.json().catch(() => ({ error: 'Unknown error' }))
@@ -2419,7 +2425,9 @@ export function createWorkloadLogStream(
   if (options?.sinceSeconds) params.set('sinceSeconds', String(options.sinceSeconds))
   const queryString = params.toString()
 
-  return new EventSource(`${getApiBase()}/workloads/${kind}/${namespace}/${name}/logs/stream${queryString ? `?${queryString}` : ''}`)
+  return new EventSource(`${getApiBase()}/workloads/${kind}/${namespace}/${name}/logs/stream${queryString ? `?${queryString}` : ''}`, {
+    withCredentials: getCredentialsMode() === 'include',
+  })
 }
 
 // ============================================================================

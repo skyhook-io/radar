@@ -86,6 +86,11 @@ spec:
             - --auth-oidc-backchannel-logout
             {{- end }}
             {{- end }}
+            {{- if .Values.hub.enabled }}
+            - --hub-url={{ required "hub.url is required when hub.enabled=true" .Values.hub.url }}
+            - --cluster-name={{ required "hub.clusterName is required when hub.enabled=true" .Values.hub.clusterName }}
+            {{- /* hub.token is injected via RADAR_HUB_TOKEN env var below, not the command line */}}
+            {{- end }}
           ports:
             - name: http
               containerPort: {{ .Values.service.port }}
@@ -119,6 +124,19 @@ spec:
               value: "/tmp/helm/config"
             - name: HELM_DATA_HOME
               value: "/tmp/helm/data"
+            {{- if .Values.hub.enabled }}
+            {{- if or .Values.hub.token .Values.hub.existingSecret }}
+            - name: RADAR_HUB_TOKEN
+              {{- if .Values.hub.existingSecret }}
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.hub.existingSecret }}
+                  key: {{ .Values.hub.existingSecretKey }}
+              {{- else }}
+              value: {{ .Values.hub.token | quote }}
+              {{- end }}
+            {{- end }}
+            {{- end }}
             {{- with .Values.env }}
             {{- toYaml . | nindent 12 }}
             {{- end }}

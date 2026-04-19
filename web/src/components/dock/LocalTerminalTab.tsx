@@ -1,4 +1,5 @@
 import { LocalTerminalTab as SharedLocalTerminalTab } from '@skyhook-io/k8s-ui'
+import { getWsUrl } from '../../api/config'
 
 interface LocalTerminalTabProps {
   isActive?: boolean
@@ -6,11 +7,9 @@ interface LocalTerminalTabProps {
 }
 
 export function LocalTerminalTab({ isActive, initialCommand }: LocalTerminalTabProps) {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-
   const createSession = () =>
     Promise.resolve({
-      wsUrl: `${protocol}//${window.location.host}/api/local-terminal`,
+      wsUrl: getWsUrl('/local-terminal'),
     })
 
   return (
