@@ -1,8 +1,23 @@
 {
-  "name": "radar",
-  "private": true,
+  "name": "@skyhook-io/radar-app",
   "version": "0.1.0",
+  "description": "Radar's full web UI as a reusable React component. Used by Radar's own binary and by external consumers like Radar Hub.",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/skyhook-io/radar",
+    "directory": "web"
+  },
+  "license": "Apache-2.0",
   "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./style.css": "./src/index.css"
+  },
+  "files": [
+    "src"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
@@ -15,39 +30,52 @@
     "@fontsource-variable/dm-sans": "^5.2.8",
     "@fontsource/dm-mono": "^5.2.7",
     "@monaco-editor/react": "^4.7.0",
-    "@skyhook-io/k8s-ui": "*",
     "@tailwindcss/typography": "^0.5.19",
-    "@tailwindcss/vite": "^4.2.1",
-    "@tanstack/react-query": "^5.99.0",
     "@xterm/addon-fit": "^0.11.0",
     "@xterm/addon-web-links": "^0.12.0",
     "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.10.2",
-    "clsx": "^2.1.1",
     "diff": "^9.0.0",
     "elkjs": "^0.11.1",
-    "lucide-react": "^1.8.0",
-    "react": "^19.2.5",
-    "react-dom": "^19.2.5",
     "react-markdown": "^10.1.0",
-    "react-router-dom": "^7.13.1",
     "react-virtuoso": "^4.18.5",
     "remark-gfm": "^4.0.1",
     "shiki": "^4.0.1",
-    "tailwind-merge": "^3.5.0",
     "yaml": "^2.8.3"
+  },
+  "peerDependencies": {
+    "@skyhook-io/k8s-ui": ">=1.4.0",
+    "@tanstack/react-query": ">=5",
+    "react": ">=19",
+    "react-dom": ">=19",
+    "react-router-dom": ">=7",
+    "clsx": ">=2",
+    "lucide-react": "*",
+    "tailwind-merge": ">=2"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
+    "@skyhook-io/k8s-ui": "*",
+    "@tailwindcss/vite": "^4.2.1",
+    "@tanstack/react-query": "^5.99.0",
     "@types/diff": "^8.0.0",
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.1",
+    "clsx": "^2.1.1",
+    "lucide-react": "^1.8.0",
     "postcss": "^8.5.8",
     "prettier": "^3.8.1",
+    "react": "^19.2.5",
+    "react-dom": "^19.2.5",
+    "react-router-dom": "^7.13.1",
+    "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.2",
     "typescript": "^6.0.2",
     "vite": "^8.0.5"
-  }
+  },
+  "sideEffects": [
+    "*.css"
+  ]
 }
