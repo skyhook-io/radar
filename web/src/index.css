@@ -4,7 +4,7 @@
 @import "@skyhook-io/k8s-ui/theme/variables.css";
 @import "@skyhook-io/k8s-ui/theme/tailwind-theme.css";
 @import "@skyhook-io/k8s-ui/theme/components.css";
-@import "@skyhook-io/k8s-ui/components/topology/topology.css";
+@import "@skyhook-io/k8s-ui/topology.css";
 @import "@fontsource-variable/dm-sans";
 @import "@fontsource/dm-mono";
 
