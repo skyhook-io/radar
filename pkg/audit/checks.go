@@ -127,21 +127,52 @@ func checkPodSpecSecurity(kind, namespace, name string, spec corev1.PodSpec) []F
 	}
 
 	// Container-level checks (iterate init and regular separately to avoid
-	// mutating the InitContainers backing array via append)
+	// mutating the InitContainers backing array via append).
+	// Pod-level SecurityContext is passed so container checks can honor
+	// fields like runAsNonRoot/runAsUser that inherit from the pod.
 	for i := range spec.InitContainers {
-		checkContainerSecurity(f, &spec.InitContainers[i])
+		checkContainerSecurity(f, &spec.InitContainers[i], spec.SecurityContext)
 	}
 	for i := range spec.Containers {
-		checkContainerSecurity(f, &spec.Containers[i])
+		checkContainerSecurity(f, &spec.Containers[i], spec.SecurityContext)
 	}
 
 	return findings
 }
 
-func checkContainerSecurity(f func(string, string, string), c *corev1.Container) {
+// effectivelyNonRoot reports whether a container is guaranteed not to run as
+// root, merging the pod-level PodSecurityContext with the container-level
+// override. A container is non-root if runAsNonRoot is true OR runAsUser is
+// set to a non-zero UID, at either scope. Container-level settings override
+// pod-level for each field independently.
+func effectivelyNonRoot(sc *corev1.SecurityContext, podSC *corev1.PodSecurityContext) bool {
+	var runAsNonRoot *bool
+	var runAsUser *int64
+	if podSC != nil {
+		runAsNonRoot = podSC.RunAsNonRoot
+		runAsUser = podSC.RunAsUser
+	}
+	if sc != nil {
+		if sc.RunAsNonRoot != nil {
+			runAsNonRoot = sc.RunAsNonRoot
+		}
+		if sc.RunAsUser != nil {
+			runAsUser = sc.RunAsUser
+		}
+	}
+	if runAsNonRoot != nil && *runAsNonRoot {
+		return true
+	}
+	if runAsUser != nil && *runAsUser != 0 {
+		return true
+	}
+	return false
+}
+
+func checkContainerSecurity(f func(string, string, string), c *corev1.Container, podSC *corev1.PodSecurityContext) {
 	sc := c.SecurityContext
 
-	if sc == nil || sc.RunAsNonRoot == nil || !*sc.RunAsNonRoot {
+	if !effectivelyNonRoot(sc, podSC) {
 		f("runAsRoot", SeverityWarning, fmt.Sprintf("Container %q may run as root (runAsNonRoot not set)", c.Name))
 	}
 

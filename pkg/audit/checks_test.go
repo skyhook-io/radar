@@ -133,6 +133,100 @@ func TestSecurityChecks_Secure(t *testing.T) {
 	}
 }
 
+func TestSecurityChecks_RunAsNonRootInheritedFromPod(t *testing.T) {
+	// Pod-level PodSecurityContext.RunAsNonRoot=true should satisfy the
+	// runAsRoot check for containers that don't set it themselves.
+	// Regression for https://github.com/skyhook-io/radar/issues/484
+	input := &CheckInput{
+		Deployments: []*appsv1.Deployment{{
+			ObjectMeta: metav1.ObjectMeta{Name: "pod-nonroot", Namespace: "default"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(int32(2)),
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "x"}},
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr(true)},
+						Containers: []corev1.Container{{
+							Name: "app", Image: "nginx:1.25",
+							SecurityContext: &corev1.SecurityContext{
+								ReadOnlyRootFilesystem:   ptr(true),
+								AllowPrivilegeEscalation: ptr(false),
+							},
+						}},
+					},
+				},
+			},
+		}},
+	}
+	for _, f := range RunChecks(input).Findings {
+		if f.CheckID == "runAsRoot" {
+			t.Errorf("runAsRoot flagged despite pod-level RunAsNonRoot=true: %s", f.Message)
+		}
+	}
+}
+
+func TestSecurityChecks_RunAsUserNonZeroSatisfiesNonRoot(t *testing.T) {
+	// A non-zero runAsUser at the pod level also means the container
+	// doesn't run as root, even without RunAsNonRoot being set.
+	input := &CheckInput{
+		Deployments: []*appsv1.Deployment{{
+			ObjectMeta: metav1.ObjectMeta{Name: "pod-uid", Namespace: "default"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(int32(2)),
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "x"}},
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						SecurityContext: &corev1.PodSecurityContext{RunAsUser: ptr(int64(1000))},
+						Containers: []corev1.Container{{
+							Name: "app", Image: "nginx:1.25",
+							SecurityContext: &corev1.SecurityContext{
+								ReadOnlyRootFilesystem:   ptr(true),
+								AllowPrivilegeEscalation: ptr(false),
+							},
+						}},
+					},
+				},
+			},
+		}},
+	}
+	for _, f := range RunChecks(input).Findings {
+		if f.CheckID == "runAsRoot" {
+			t.Errorf("runAsRoot flagged despite pod-level RunAsUser=1000: %s", f.Message)
+		}
+	}
+}
+
+func TestSecurityChecks_ContainerOverridesPod(t *testing.T) {
+	// Container-level RunAsNonRoot=false must override pod-level true.
+	input := &CheckInput{
+		Deployments: []*appsv1.Deployment{{
+			ObjectMeta: metav1.ObjectMeta{Name: "override", Namespace: "default"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(int32(2)),
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "x"}},
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr(true)},
+						Containers: []corev1.Container{{
+							Name: "app", Image: "nginx:1.25",
+							SecurityContext: &corev1.SecurityContext{RunAsNonRoot: ptr(false)},
+						}},
+					},
+				},
+			},
+		}},
+	}
+	found := false
+	for _, f := range RunChecks(input).Findings {
+		if f.CheckID == "runAsRoot" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("expected runAsRoot finding when container overrides pod with RunAsNonRoot=false")
+	}
+}
+
 func TestReliabilityChecks(t *testing.T) {
 	input := &CheckInput{
 		Deployments: []*appsv1.Deployment{{
