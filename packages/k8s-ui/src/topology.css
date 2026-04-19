@@ -1,0 +1,6 @@
+/* Top-level re-export of topology.css so both npm-exports resolution and
+ * source-alias resolution (in the radar monorepo's Vite config) land on
+ * the same stylesheet. Keeps external consumers' @import paths simple
+ * (@skyhook-io/k8s-ui/topology.css) without forcing them to know the
+ * components/ subdirectory layout. */
+@import "./components/topology/topology.css";

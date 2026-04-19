@@ -1,5 +1,4 @@
 @import "tailwindcss";
-@config "../tailwind.config.js";
 @variant dark (&:where(.dark, .dark *));
 @import "@skyhook-io/k8s-ui/theme/variables.css";
 @import "@skyhook-io/k8s-ui/theme/tailwind-theme.css";
@@ -7,6 +6,49 @@
 @import "@skyhook-io/k8s-ui/topology.css";
 @import "@fontsource-variable/dm-sans";
 @import "@fontsource/dm-mono";
+
+/*
+ * Tailwind v4 theme tokens. Migrated from the legacy v3 tailwind.config.js
+ * to CSS-first @theme so library consumers (e.g. radar-hub-web) don't need
+ * to pick up radar's Node config or its `@tailwindcss/typography` plugin
+ * when they consume this package from npm.
+ */
+@theme {
+  /* Fonts — DM Sans for UI, DM Mono for code/metric panes. */
+  --font-sans: "DM Sans Variable", "DM Sans", system-ui, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  /* Breakpoints — desktop-first K8s UI; tighter than Tailwind defaults. */
+  --breakpoint-sm: 900px;
+  --breakpoint-md: 1100px;
+  --breakpoint-lg: 1280px;
+  --breakpoint-xl: 1536px;
+
+  /* Shadows (mapped to the --shadow-* CSS vars from k8s-ui/theme). */
+  --shadow-theme-sm: var(--shadow-sm);
+  --shadow-theme-md: var(--shadow-md);
+  --shadow-theme-lg: var(--shadow-lg);
+  --shadow-glow-brand-sm: var(--glow-brand-sm);
+  --shadow-glow-brand-md: var(--glow-brand-md);
+  --shadow-drawer: var(--shadow-drawer);
+
+  /* Ring (focus outline) color — follow the accent CSS var. */
+  --color-accent: var(--accent);
+
+  /* Border radius — rounder than Tailwind defaults to match the brand. */
+  --radius: 0.375rem;    /* default (was 0.25rem) */
+  --radius-md: 0.5rem;   /* was 0.375rem */
+  --radius-lg: 0.625rem; /* was 0.5rem */
+  --radius-xl: 0.875rem; /* was 0.75rem */
+
+  /* Custom transient toast animation used in a few spots. */
+  --animate-fade-in-out: fadeInOut 2s ease-in-out forwards;
+}
+
+@keyframes fadeInOut {
+  0%, 100% { opacity: 0; transform: translateY(-8px); }
+  15%, 85% { opacity: 1; transform: translateY(0); }
+}
 
 /* Global: pointer cursor for all interactive elements */
 button, [role="button"], a, label, select, summary, [tabindex]:not([tabindex="-1"]) {
