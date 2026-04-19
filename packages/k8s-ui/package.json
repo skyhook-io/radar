@@ -12,9 +12,13 @@
   "exports": {
     ".": "./src/index.ts",
     "./types": "./src/types/index.ts",
+    "./types/*": "./src/types/*.ts",
     "./utils": "./src/utils/index.ts",
+    "./utils/*": "./src/utils/*.ts",
     "./components/resources/*": "./src/components/resources/*.ts",
     "./components/ui/*": "./src/components/ui/*.tsx",
+    "./components/gitops/*": "./src/components/gitops/*.tsx",
+    "./components/timeline/*": "./src/components/timeline/*.tsx",
     "./hooks/*": "./src/hooks/*.ts",
     "./resources": "./src/components/resources/index.ts",
     "./logs": "./src/components/logs/index.ts",

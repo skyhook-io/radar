@@ -3,6 +3,7 @@ import ReactDOM from 'react-dom/client'
 import { RadarApp } from './RadarApp'
 import { openExternal } from './utils/navigation'
 import './index.css'
+import './react-query-meta'
 
 // Intercept external link clicks in the Wails desktop app.
 // <a target="_blank"> is swallowed by WKWebView/WebView2 — route through openExternal()
@@ -148,16 +149,6 @@ window.addEventListener('mouseup', (e: MouseEvent) => {
   }
 }, true)
 
-// Type the meta property for mutations
-declare module '@tanstack/react-query' {
-  interface Register {
-    mutationMeta: {
-      errorMessage?: string      // e.g., "Failed to delete resource"
-      successMessage?: string    // e.g., "Resource deleted"
-      successDetail?: string     // e.g., "Pod 'nginx' removed"
-    }
-  }
-}
 
 // Standalone Radar binary: same-origin API, router at root. Library consumers
 // (e.g. radar-hub-web) render <RadarApp apiBase="..." basename="..." /> instead.

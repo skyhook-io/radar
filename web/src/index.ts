@@ -6,6 +6,8 @@
 //
 // Radar's own binary entry (main.tsx) renders the same RadarApp component,
 // so standalone and embedded modes share exactly one code path.
+import './react-query-meta';
+
 export { RadarApp, type RadarAppProps } from './RadarApp';
 export {
   setApiBase,
