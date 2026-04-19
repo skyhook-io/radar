@@ -4,6 +4,7 @@
 // endpoint that shows the native OS save dialog instead.
 
 import { fetchJSON } from '../api/client'
+import { apiUrl, getAuthHeaders, getCredentialsMode } from '../api/config'
 
 let desktopCheck: Promise<boolean> | null = null
 
@@ -22,9 +23,10 @@ export function isDesktopApp(): Promise<boolean> {
 
 /** Save text content via native save dialog. Returns the chosen file path, or throws with message 'cancelled' if the user dismisses the dialog. */
 export async function desktopSaveFile(content: string, filename: string): Promise<string> {
-  const res = await fetch('/api/desktop/save-file', {
+  const res = await fetch(apiUrl('/desktop/save-file'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    credentials: getCredentialsMode(),
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ content, filename }),
   })
   if (res.status === 204) throw new Error('cancelled')
@@ -48,9 +50,10 @@ export async function desktopSaveBlob(blob: Blob, filename: string): Promise<str
     reader.readAsDataURL(blob)
   })
 
-  const res = await fetch('/api/desktop/save-file', {
+  const res = await fetch(apiUrl('/desktop/save-file'), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    credentials: getCredentialsMode(),
+    headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
     body: JSON.stringify({ contentBase64, filename }),
   })
   if (res.status === 204) throw new Error('cancelled')

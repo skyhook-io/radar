@@ -24,7 +24,7 @@ import type {
   ArtifactHubChartDetail,
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
-import { getApiBase, getAuthHeaders, getCredentialsMode } from './config'
+import { getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath } from './config'
 
 // Wrapper around fetch that always includes credentials (for session cookies)
 // and handles 401 responses globally. Merges caller-provided headers with
@@ -36,7 +36,8 @@ function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respons
     if (!headers.has(k)) headers.set(k, v)
   }
   return fetch(input, { credentials: getCredentialsMode(), ...init, headers }).then(async response => {
-    if (response.status === 401 && !window.location.pathname.startsWith('/auth')) {
+    const authPrefix = `${getBasename()}/auth`
+    if (response.status === 401 && !window.location.pathname.startsWith(authPrefix)) {
       // Save current location so user returns to where they were after re-auth.
       // Editor draft is auto-saved by EditableYamlView via sessionStorage.
       try { sessionStorage.setItem('radar_return_path', window.location.pathname + window.location.search) } catch { /* best-effort */ }
@@ -50,7 +51,7 @@ function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Respons
       }
 
       if (authMode === 'oidc') {
-        window.location.href = '/auth/login'
+        window.location.href = routePath('/auth/login')
       } else {
         // Proxy mode or unknown — reload is safe for both (proxy re-injects headers,
         // unknown avoids redirecting to /auth/login which doesn't exist in proxy mode).

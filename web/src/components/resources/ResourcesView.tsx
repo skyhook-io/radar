@@ -2,6 +2,7 @@ import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { ApiError, fetchJSON, isForbiddenError, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics } from '../../api/client'
+import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useAPIResources } from '../../api/apiResources'
 import { initNavigationMap } from '@skyhook-io/k8s-ui'
 import { usePinnedKinds } from '../../hooks/useFavorites'
@@ -74,7 +75,10 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       const params = new URLSearchParams()
       if (namespaces.length > 0) params.set('namespaces', namespacesParam)
       if (isSelectedCrd && selectedKind.group) params.set('group', selectedKind.group)
-      const res = await fetch(`/api/resources/${selectedKind.name}?${params}`)
+      const res = await fetch(apiUrl(`/resources/${selectedKind.name}?${params}`), {
+        credentials: getCredentialsMode(),
+        headers: getAuthHeaders(),
+      })
       if (!res.ok) {
         const errorData = await res.json().catch(() => ({ error: `HTTP ${res.status}` }))
         throw new ApiError(errorData.error || `Failed to fetch ${selectedKind.name}`, res.status, errorData)

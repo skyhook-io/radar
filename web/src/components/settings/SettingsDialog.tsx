@@ -4,6 +4,7 @@ import { Settings, X, RotateCcw, Loader2, Copy, Check, Pin } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
+import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 
 interface Config {
   kubeconfig?: string
@@ -46,7 +47,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     setConfigDirty(false)
     setLoadError(null)
 
-    fetch('/api/config')
+    fetch(apiUrl('/config'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
       .then((res) => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         return res.json()
@@ -91,9 +92,10 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
     setSaving(true)
     setSaveMessage(null)
     try {
-      const res = await fetch('/api/config', {
+      const res = await fetch(apiUrl('/config'), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: getCredentialsMode(),
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(editedConfig),
       })
       if (!res.ok) {

@@ -10,6 +10,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useOpenTerminal, useOpenLogs } from '../dock'
 import { useStartPortForward } from '../portforward/PortForwardManager'
 import { useAvailablePorts } from '../../api/client'
+import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useNamespacedCapabilities } from '../../contexts/CapabilitiesContext'
 
 interface OwnedResourcesProps {
@@ -316,7 +317,10 @@ function PodQuickActions({ namespace, podName, isRunning }: PodQuickActionsProps
     return queryClient.fetchQuery({
       queryKey: ['resource', 'pods', namespace, podName],
       queryFn: async () => {
-        const response = await fetch(`/api/resources/pods/${namespace}/${podName}`)
+        const response = await fetch(apiUrl(`/resources/pods/${namespace}/${podName}`), {
+          credentials: getCredentialsMode(),
+          headers: getAuthHeaders(),
+        })
         if (!response.ok) throw new Error('Failed to fetch pod')
         return response.json()
       },

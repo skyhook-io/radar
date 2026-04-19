@@ -1,4 +1,5 @@
 import { useState, useCallback, useEffect } from 'react'
+import { apiUrl, getAuthHeaders, getCredentialsMode } from '../api/config'
 
 export interface PinnedKind {
   name: string       // plural name for API calls, e.g. "pods", "deployments"
@@ -24,7 +25,7 @@ function savePinned(pinned: PinnedKind[]) {
   } catch {
     // ignore storage errors
   }
-  fetch('/api/settings', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ pinnedKinds: pinned }) })
+  fetch(apiUrl('/settings'), { method: 'PUT', credentials: getCredentialsMode(), headers: { 'Content-Type': 'application/json', ...getAuthHeaders() }, body: JSON.stringify({ pinnedKinds: pinned }) })
     .then((res) => { if (!res.ok) console.warn('[settings] Failed to persist pinned kinds:', res.status) })
     .catch((err) => console.warn('[settings] Failed to persist pinned kinds:', err))
 }
@@ -38,7 +39,7 @@ export function usePinnedKinds() {
 
   // Sync from server (persisted settings survive port changes in desktop app)
   useEffect(() => {
-    fetch('/api/settings')
+    fetch(apiUrl('/settings'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (data?.pinnedKinds?.length && loadPinned().length === 0) {

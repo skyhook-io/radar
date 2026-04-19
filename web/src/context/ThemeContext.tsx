@@ -1,4 +1,5 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react'
+import { apiUrl, getAuthHeaders, getCredentialsMode } from '../api/config'
 
 type Theme = 'dark' | 'light'
 
@@ -33,9 +34,10 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const setTheme = (newTheme: Theme) => {
     setThemeState(newTheme)
     localStorage.setItem(THEME_STORAGE_KEY, newTheme)
-    fetch('/api/settings', {
+    fetch(apiUrl('/settings'), {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      credentials: getCredentialsMode(),
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({ theme: newTheme }),
     }).then((res) => {
       if (!res.ok) console.warn('[settings] Failed to persist theme:', res.status)
@@ -54,7 +56,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   // Sync theme from server (persisted settings survive port changes in desktop app)
   useEffect(() => {
-    fetch('/api/settings')
+    fetch(apiUrl('/settings'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (data?.theme && (data.theme === 'dark' || data.theme === 'light') && data.theme !== theme) {

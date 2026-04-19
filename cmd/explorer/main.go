@@ -163,12 +163,19 @@ func main() {
 	srv := app.CreateServer(cfg)
 	k8s.LogTiming(" Server created: %v", time.Since(t))
 
+	// Root context cancelled on SIGINT/SIGTERM. Long-running background
+	// workers (hub tunnel, etc.) observe this to shut down cleanly before
+	// the process exits.
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+	defer rootCancel()
+
 	// Handle shutdown signals
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
 	go func() {
 		<-sigCh
+		rootCancel()
 		app.Shutdown(srv)
 		os.Exit(0)
 	}()
@@ -203,23 +210,27 @@ func main() {
 	app.InitializeCluster()
 	k8s.LogTiming(" Total startup (to connected): %v", time.Since(startupStart))
 
-	// Radar Hub: when --hub-url is set, dial out to the hub and serve our
-	// existing router over yamux-tunneled streams. No behavior change when
-	// the flags are empty.
+	// When --hub-url is set, dial out to the hub and serve the existing
+	// router over yamux-tunneled streams. No behavior change when empty.
 	if *hubURL != "" {
 		if *hubToken == "" || *hubClusterName == "" {
 			log.Fatalf("--hub-url requires --hub-token and --cluster-name")
 		}
 		go func() {
-			runErr := cloud.Run(context.Background(), cloud.Config{
+			defer func() {
+				if r := recover(); r != nil {
+					log.Printf("[cloud] panic in hub tunnel: %v — local Radar continues to serve", r)
+				}
+			}()
+			runErr := cloud.Run(rootCtx, cloud.Config{
 				HubURL:      *hubURL,
 				Token:       *hubToken,
-				ClusterID:   *hubClusterName, // POC: cluster name doubles as ID; real registry derives ID from token
+				ClusterID:   *hubClusterName,
 				ClusterName: *hubClusterName,
 				Handler:     srv.Handler(),
 			})
-			if runErr != nil {
-				log.Printf("[cloud] Run exited: %v", runErr)
+			if runErr != nil && !errors.Is(runErr, context.Canceled) {
+				log.Printf("[cloud] tunnel exited: %v", runErr)
 			}
 		}()
 	}

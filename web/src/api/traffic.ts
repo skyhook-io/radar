@@ -1,10 +1,12 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { TrafficSourcesResponse, TrafficFlowsResponse } from '../types'
-
-const API_BASE = '/api'
+import { apiUrl, getAuthHeaders, getCredentialsMode } from './config'
 
 async function fetchJSON<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`)
+  const response = await fetch(apiUrl(path), {
+    credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
+  })
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }))
     throw new Error(error.error || `HTTP ${response.status}`)
@@ -73,9 +75,10 @@ export function useSetTrafficSource() {
 
   return useMutation({
     mutationFn: async (source: string) => {
-      const response = await fetch(`${API_BASE}/traffic/source`, {
+      const response = await fetch(apiUrl('/traffic/source'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: getCredentialsMode(),
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify({ source }),
       })
       if (!response.ok) {
@@ -116,9 +119,10 @@ export function useTrafficConnect() {
 
   return useMutation<TrafficConnectionInfo, Error>({
     mutationFn: async () => {
-      const response = await fetch(`${API_BASE}/traffic/connect`, {
+      const response = await fetch(apiUrl('/traffic/connect'), {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: getCredentialsMode(),
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       })
       if (!response.ok) {
         const error = await response.json().catch(() => ({ error: 'Unknown error' }))

@@ -13,20 +13,33 @@
 import { createContext, useContext } from 'react';
 import type { ReactNode } from 'react';
 
-export interface NavCustomization {
+interface NavCustomizationBase {
   /** Replaces Radar's Skyhook/radar logo + wordmark. */
   brandSlot?: ReactNode;
   /** Replaces the ContextSwitcher (kubeconfig-context picker). */
   contextSlot?: ReactNode;
-  /** Appended to the right of the action bar (before or in place of UserMenu). */
-  rightExtras?: ReactNode;
-  /**
-   * Hide OSS-distribution-specific chrome: GitHub star button,
-   * update-available notifier, Radar's own auth UserMenu. Consumers
-   * should render equivalent product-level chrome via `rightExtras`.
-   */
-  embedded?: boolean;
 }
+
+/**
+ * Slot-based customization of Radar's top nav.
+ *
+ * Standalone-mode consumers pass `embedded: false` (or omit it) and may
+ * optionally append items via `rightExtras`. Embedded-mode consumers must
+ * supply `rightExtras` — Radar's OSS chrome (GitHub star, update notifier,
+ * built-in UserMenu) is hidden, so the host app owns the right side of the
+ * nav and must render its own user/auth UI there.
+ */
+export type NavCustomization =
+  | (NavCustomizationBase & {
+      embedded?: false;
+      /** Appended to the right of the action bar (before the UserMenu). */
+      rightExtras?: ReactNode;
+    })
+  | (NavCustomizationBase & {
+      embedded: true;
+      /** Required in embedded mode: Radar's own UserMenu is hidden. */
+      rightExtras: ReactNode;
+    });
 
 const NavCustomizationContext = createContext<NavCustomization>({});
 

@@ -35,11 +35,12 @@ export interface RadarAppProps {
   /**
    * Router strategy:
    *   - 'browser' (default): BrowserRouter — URL bar reflects all navigation.
-   *     Use when Radar owns routing (standalone binary).
+   *     Use when Radar owns routing. Library consumers should mount RadarApp
+   *     above their own router (or replace the host's router with this one)
+   *     and pass `basename` — React Router forbids nesting routers.
    *   - 'memory': MemoryRouter — URL bar does NOT change as Radar navigates.
-   *     Use when embedding Radar inside another SPA that already has its own
-   *     BrowserRouter; React Router forbids nesting browser routers, so this
-   *     keeps Radar's internal nav working without hijacking the parent URL.
+   *     Escape hatch for tests and for host apps that can't restructure
+   *     around a single top-level BrowserRouter.
    */
   router?: 'browser' | 'memory';
   /**
@@ -95,9 +96,12 @@ export function RadarApp({
   queryClient,
   navSlots,
 }: RadarAppProps): React.ReactElement {
-  // Apply runtime config before any child reads it. These are module-level
-  // singletons; setting them before the tree renders is sufficient because
-  // children only observe them on first call (not via subscription).
+  // Apply runtime config during render so module-level singletons are set
+  // before children construct URLs. getApiBase() / getAuthHeaders() /
+  // getCredentialsMode() are read on every fetch, SSE connect, and WS
+  // connect — so later calls to setApiBase() also take effect, but there's
+  // no subscription so React won't re-render on change. Host apps should
+  // pass props rather than mutate via setters after mount.
   if (apiBase !== undefined) setApiBase(apiBase);
   if (basename !== undefined) setBasename(basename);
 
@@ -117,11 +121,6 @@ export function RadarApp({
     </ThemeProvider>
   );
 
-  // MemoryRouter only kept for tests / explicit opt-in. Nested BrowserRouter
-  // error applies to any Router nested in any other Router, including memory
-  // — so in practice library consumers embedding Radar should render it at
-  // the top of their tree, not inside another Router. See RadarApp's
-  // comment at the top for the integration pattern.
   if (router === 'memory') {
     return <MemoryRouter initialEntries={['/']}>{inner}</MemoryRouter>;
   }

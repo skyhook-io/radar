@@ -1,4 +1,5 @@
 import { NodeTerminalTab as SharedNodeTerminalTab } from '@skyhook-io/k8s-ui'
+import { apiUrl, getWsUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 
 interface NodeTerminalTabProps {
   nodeName: string
@@ -6,12 +7,11 @@ interface NodeTerminalTabProps {
 }
 
 export function NodeTerminalTab({ nodeName, isActive }: NodeTerminalTabProps) {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
-
   const createNodeDebugPod = async (name: string) => {
-    const response = await fetch(`/api/nodes/${encodeURIComponent(name)}/debug`, {
+    const response = await fetch(apiUrl(`/nodes/${encodeURIComponent(name)}/debug`), {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      credentials: getCredentialsMode(),
+      headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
       body: JSON.stringify({}),
     })
     if (!response.ok) {
@@ -23,8 +23,10 @@ export function NodeTerminalTab({ nodeName, isActive }: NodeTerminalTabProps) {
 
   const cleanupNodeDebugPod = async (name: string) => {
     try {
-      await fetch(`/api/nodes/${encodeURIComponent(name)}/debug`, {
+      await fetch(apiUrl(`/nodes/${encodeURIComponent(name)}/debug`), {
         method: 'DELETE',
+        credentials: getCredentialsMode(),
+        headers: getAuthHeaders(),
         keepalive: true,
       })
     } catch (err) {
@@ -33,7 +35,7 @@ export function NodeTerminalTab({ nodeName, isActive }: NodeTerminalTabProps) {
   }
 
   const createSession = async (namespace: string, podName: string, containerName: string) => ({
-    wsUrl: `${protocol}//${window.location.host}/api/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/exec?container=${encodeURIComponent(containerName)}`,
+    wsUrl: getWsUrl(`/pods/${encodeURIComponent(namespace)}/${encodeURIComponent(podName)}/exec?container=${encodeURIComponent(containerName)}`),
   })
 
   return (

@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import type { Topology, K8sEvent, ViewMode } from '../types'
 import type { ConnectionState } from '../context/ConnectionContext'
-import { getApiBase } from '../api/config'
+import { getApiBase, getCredentialsMode } from '../api/config'
 
 interface UseEventSourceReturn {
   topology: Topology | null
@@ -89,10 +89,11 @@ export function useEventSource(
     }
     const url = `${getApiBase()}/events/stream${params.toString() ? `?${params}` : ''}`
 
-    // Create new EventSource — withCredentials so session cookies flow
-    // cross-origin when Radar is embedded in another app (e.g. Radar Hub).
-    // Same-origin standalone is unaffected (cookies always go).
-    const es = new EventSource(url, { withCredentials: true })
+    // Mirror the fetch credentials mode: 'include' sets withCredentials so
+    // cookies flow cross-origin (embedded in Radar Hub); 'omit' turns them
+    // off (pure-bearer auth). Default same-origin standalone behaves as
+    // before.
+    const es = new EventSource(url, { withCredentials: getCredentialsMode() === 'include' })
     eventSourceRef.current = es
 
     es.onopen = () => {

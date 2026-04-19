@@ -34,6 +34,7 @@ import { CommandPalette } from './components/ui/CommandPalette'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
 import { useNamespaces, useSwitchContext, useAuthMe } from './api/client'
+import { routePath, apiUrl, getAuthHeaders, getCredentialsMode } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import { Loader2 } from 'lucide-react'
@@ -132,7 +133,7 @@ function getViewFromPath(pathname: string): ExtendedMainView {
 function AuthBarrier({ authMode }: { authMode: string }) {
   useEffect(() => {
     if (authMode === 'oidc') {
-      window.location.href = '/auth/login'
+      window.location.href = routePath('/auth/login')
     }
   }, [authMode])
 
@@ -1390,7 +1391,7 @@ function GitHubStarButton() {
       .catch(() => {})
 
     // Check if user already starred (via backend/gh CLI) and whether to show prompt
-    fetch('/api/github/starred')
+    fetch(apiUrl('/github/starred'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
       .then(res => res.ok ? res.json() : null)
       .then(data => {
         if (data) {
@@ -1399,7 +1400,7 @@ function GitHubStarButton() {
           if (data.shouldPrompt && !data.starred) {
             // Delay the callout, then re-check in case CLI prompted during the wait
             setTimeout(() => {
-              fetch('/api/github/starred')
+              fetch(apiUrl('/github/starred'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
                 .then(res => res.ok ? res.json() : null)
                 .then(fresh => {
                   if (fresh?.shouldPrompt && !fresh.starred) {
@@ -1416,7 +1417,7 @@ function GitHubStarButton() {
 
   const handleDismiss = useCallback(() => {
     setShowCallout(false)
-    fetch('/api/github/dismiss', { method: 'POST' }).catch(() => {})
+    fetch(apiUrl('/github/dismiss'), { method: 'POST', credentials: getCredentialsMode(), headers: getAuthHeaders() }).catch(() => {})
   }, [])
 
   // Close callout when clicking outside
@@ -1440,7 +1441,7 @@ function GitHubStarButton() {
     if (ghAvailable) {
       // Star via backend gh CLI
       e.preventDefault()
-      fetch('/api/github/star', { method: 'POST' })
+      fetch(apiUrl('/github/star'), { method: 'POST', credentials: getCredentialsMode(), headers: getAuthHeaders() })
         .then(res => res.ok ? res.json() : null)
         .then(data => {
           if (data?.starred) {
@@ -1456,7 +1457,7 @@ function GitHubStarButton() {
     } else {
       // No gh CLI — link opens GitHub; dismiss the callout
       setShowCallout(false)
-      fetch('/api/github/dismiss', { method: 'POST' }).catch(() => {})
+      fetch(apiUrl('/github/dismiss'), { method: 'POST', credentials: getCredentialsMode(), headers: getAuthHeaders() }).catch(() => {})
     }
   }
 

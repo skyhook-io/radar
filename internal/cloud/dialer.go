@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/hashicorp/yamux"
@@ -24,13 +25,24 @@ func dial(ctx context.Context, cfg Config) (*yamux.Session, error) {
 	u.RawQuery = q.Encode()
 
 	headers := http.Header{}
-	headers.Set("Authorization", cfg.Token)
+	headers.Set("Authorization", "Bearer "+cfg.Token)
 
-	dialer := websocket.DefaultDialer
+	dialer := *websocket.DefaultDialer
+	dialer.HandshakeTimeout = 10 * time.Second
 	ws, resp, err := dialer.DialContext(ctx, u.String(), headers)
 	if err != nil {
 		if resp != nil {
-			return nil, fmt.Errorf("hub rejected connection: status=%d %w", resp.StatusCode, err)
+			defer resp.Body.Close()
+			switch resp.StatusCode {
+			case http.StatusUnauthorized:
+				return nil, fmt.Errorf("hub rejected token (401) — check --hub-token")
+			case http.StatusForbidden:
+				return nil, fmt.Errorf("hub rejected cluster (403) — token may be revoked or cluster disabled")
+			case http.StatusNotFound:
+				return nil, fmt.Errorf("hub endpoint not found (404) — check --hub-url path")
+			default:
+				return nil, fmt.Errorf("hub rejected connection: status=%d: %w", resp.StatusCode, err)
+			}
 		}
 		return nil, fmt.Errorf("ws dial: %w", err)
 	}

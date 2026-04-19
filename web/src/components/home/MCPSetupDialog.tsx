@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { X, Copy, Check, Radio, Terminal, MessageSquare, Code2, ChevronRight, Pin } from 'lucide-react'
+import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 
 interface MCPSetupDialogProps {
   open: boolean
@@ -50,7 +51,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
     if (!open) return
     setPinSuccess(false)
     setPinError('')
-    fetch('/api/config')
+    fetch(apiUrl('/config'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
       .then((res) => res.ok ? res.json() : null)
       .then((data) => {
         if (data) {
@@ -66,16 +67,17 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
     setPinning(true)
     setPinError('')
     try {
-      const configRes = await fetch('/api/config')
+      const configRes = await fetch(apiUrl('/config'), { credentials: getCredentialsMode(), headers: getAuthHeaders() })
       if (!configRes.ok) {
         setPinError('Failed to load current config')
         return
       }
       const configData = await configRes.json()
       const updated = { ...configData.file, port: currentPort }
-      const res = await fetch('/api/config', {
+      const res = await fetch(apiUrl('/config'), {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        credentials: getCredentialsMode(),
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
         body: JSON.stringify(updated),
       })
       if (res.ok) {

@@ -5,8 +5,7 @@ import { clsx } from 'clsx'
 import type { FileNode } from '../../types'
 import { formatBytes } from '../../utils/format'
 import { downloadBlob, filterTree } from './file-browser-utils'
-
-const API_BASE = '/api'
+import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 
 interface PodFilesystem {
   root: FileNode
@@ -23,7 +22,10 @@ async function fetchPodFiles(
   params.set('container', container)
   params.set('path', dirPath)
 
-  const response = await fetch(`${API_BASE}/pods/${namespace}/${podName}/files?${params.toString()}`)
+  const response = await fetch(apiUrl(`/pods/${namespace}/${podName}/files?${params.toString()}`), {
+    credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
+  })
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }))
     throw new Error(error.error || `HTTP ${response.status}`)
@@ -325,7 +327,10 @@ function PodFileTreeNode({ node, namespace, podName, container, onNavigate }: Po
       params.set('container', container)
       params.set('path', node.path)
 
-      const response = await fetch(`${API_BASE}/pods/${namespace}/${podName}/files/download?${params.toString()}`)
+      const response = await fetch(apiUrl(`/pods/${namespace}/${podName}/files/download?${params.toString()}`), {
+        credentials: getCredentialsMode(),
+        headers: getAuthHeaders(),
+      })
       if (!response.ok) {
         const err = await response.json().catch(() => ({ error: 'Download failed' }))
         throw new Error(err.error || `HTTP ${response.status}`)

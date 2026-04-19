@@ -23,10 +23,19 @@ func serve(ctx context.Context, sess *yamux.Session, handler http.Handler) error
 	// ctx cancellation.
 	srv := &http.Server{Handler: handler}
 
+	// The watcher exits either on ctx cancel (which triggers shutdown) or
+	// when Serve returns on its own — the `done` channel prevents the
+	// goroutine from leaking across many reconnects if the session dies
+	// before ctx is cancelled.
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
-		<-ctx.Done()
-		_ = srv.Close()
-		_ = sess.Close()
+		select {
+		case <-ctx.Done():
+			_ = srv.Close()
+			_ = sess.Close()
+		case <-done:
+		}
 	}()
 
 	err := srv.Serve(listener)

@@ -6,8 +6,7 @@ import { useImageMetadata, ApiError } from '../../api/client'
 import type { FileNode, ImageFilesystem } from '../../types'
 import { formatBytes } from '../../utils/format'
 import { downloadBlob, filterTree } from './file-browser-utils'
-
-const API_BASE = '/api'
+import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 
 // Manual fetch function for filesystem (not a hook - gives us full control)
 async function fetchImageFilesystem(
@@ -22,7 +21,10 @@ async function fetchImageFilesystem(
   if (podName) params.set('pod', podName)
   if (pullSecrets.length > 0) params.set('pullSecrets', pullSecrets.join(','))
 
-  const response = await fetch(`${API_BASE}/images/inspect?${params.toString()}`)
+  const response = await fetch(apiUrl(`/images/inspect?${params.toString()}`), {
+    credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
+  })
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Request failed' }))
     throw new Error(error.error || `HTTP ${response.status}`)
@@ -633,7 +635,10 @@ function FileTreeNode({ node, depth, defaultExpanded = true, image, namespace, p
       if (podName) params.set('pod', podName)
       if (pullSecrets.length > 0) params.set('pullSecrets', pullSecrets.join(','))
 
-      const response = await fetch(`${API_BASE}/images/file?${params.toString()}`)
+      const response = await fetch(apiUrl(`/images/file?${params.toString()}`), {
+        credentials: getCredentialsMode(),
+        headers: getAuthHeaders(),
+      })
       if (!response.ok) {
         throw new Error('Failed to download file')
       }

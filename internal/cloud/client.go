@@ -16,6 +16,7 @@ import (
 	"errors"
 	"log"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -45,6 +46,9 @@ func (c Config) validate() error {
 	if c.HubURL == "" {
 		return errors.New("cloud: HubURL is required")
 	}
+	if !strings.HasPrefix(c.HubURL, "ws://") && !strings.HasPrefix(c.HubURL, "wss://") {
+		return errors.New("cloud: HubURL must start with ws:// or wss://")
+	}
 	if c.Token == "" {
 		return errors.New("cloud: Token is required")
 	}
@@ -67,6 +71,9 @@ func Run(ctx context.Context, cfg Config) error {
 
 	backoff := 1 * time.Second
 	const maxBackoff = 30 * time.Second
+	const warnAfterFailures = 5
+
+	failures := 0
 
 	for {
 		if ctx.Err() != nil {
@@ -76,16 +83,21 @@ func Run(ctx context.Context, cfg Config) error {
 		log.Printf("[cloud] dialing hub: %s cluster=%s", cfg.HubURL, cfg.ClusterID)
 		sess, err := dial(ctx, cfg)
 		if err != nil {
+			failures++
 			log.Printf("[cloud] dial failed: %v (retry in %s)", err, backoff)
+			if failures == warnAfterFailures {
+				log.Printf("[cloud] WARN: %d consecutive failures — verify --hub-url, --hub-token, and --cluster-name", failures)
+			}
 			if !sleep(ctx, backoff) {
 				return ctx.Err()
 			}
 			backoff = nextBackoff(backoff, maxBackoff)
 			continue
 		}
+		failures = 0
 
 		log.Printf("[cloud] connected to hub; serving streams")
-		backoff = 1 * time.Second // reset on successful connect
+		connectedAt := time.Now()
 
 		err = serve(ctx, sess, cfg.Handler)
 		if err != nil && !errors.Is(err, context.Canceled) {
@@ -95,7 +107,19 @@ func Run(ctx context.Context, cfg Config) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		// Reconnect.
+
+		// Only reset backoff if the session stayed up long enough to count
+		// as healthy — otherwise a hub that accepts-then-immediately-kills
+		// the stream causes a tight dial→die→dial loop. Sleep before the
+		// next dial in the short-session case.
+		if time.Since(connectedAt) >= 30*time.Second {
+			backoff = 1 * time.Second
+		} else {
+			if !sleep(ctx, backoff) {
+				return ctx.Err()
+			}
+			backoff = nextBackoff(backoff, maxBackoff)
+		}
 	}
 }
 

@@ -10,8 +10,7 @@ import (
 )
 
 // wsConn adapts a gorilla WebSocket into a net.Conn so yamux can run on top
-// of it. Mirror of the hub's adapter; duplicated to keep this package
-// self-contained and avoid cross-repo coupling.
+// of it.
 //
 // Writes are serialized (gorilla forbids concurrent WriteMessage). Reads
 // chain successive binary frames into a single byte stream so yamux sees a
@@ -58,11 +57,16 @@ func (c *wsConn) Write(b []byte) (int, error) {
 	return len(b), nil
 }
 
-func (c *wsConn) Close() error                       { return c.ws.Close() }
-func (c *wsConn) LocalAddr() net.Addr                { return c.ws.LocalAddr() }
-func (c *wsConn) RemoteAddr() net.Addr               { return c.ws.RemoteAddr() }
-func (c *wsConn) SetDeadline(t time.Time) error      { return c.ws.UnderlyingConn().SetDeadline(t) }
-func (c *wsConn) SetReadDeadline(t time.Time) error  { return c.ws.UnderlyingConn().SetReadDeadline(t) }
-func (c *wsConn) SetWriteDeadline(t time.Time) error { return c.ws.UnderlyingConn().SetWriteDeadline(t) }
+func (c *wsConn) Close() error          { return c.ws.Close() }
+func (c *wsConn) LocalAddr() net.Addr   { return c.ws.LocalAddr() }
+func (c *wsConn) RemoteAddr() net.Addr  { return c.ws.RemoteAddr() }
+func (c *wsConn) SetReadDeadline(t time.Time) error  { return c.ws.SetReadDeadline(t) }
+func (c *wsConn) SetWriteDeadline(t time.Time) error { return c.ws.SetWriteDeadline(t) }
+func (c *wsConn) SetDeadline(t time.Time) error {
+	if err := c.ws.SetReadDeadline(t); err != nil {
+		return err
+	}
+	return c.ws.SetWriteDeadline(t)
+}
 
 var _ net.Conn = (*wsConn)(nil)

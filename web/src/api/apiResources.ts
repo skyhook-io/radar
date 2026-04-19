@@ -1,14 +1,16 @@
 import { useQuery } from '@tanstack/react-query'
 import type { APIResource } from '../types'
+import { apiUrl, getAuthHeaders, getCredentialsMode } from './config'
 
 // Re-export pure functions from package
 export { categorizeResources, CORE_RESOURCES, formatGroupName, shortenGroupName, getKindLabel, getKindPlural } from '@skyhook-io/k8s-ui'
 export type { ResourceCategory } from '@skyhook-io/k8s-ui'
 
-const API_BASE = '/api'
-
 async function fetchJSON<T>(path: string): Promise<T> {
-  const response = await fetch(`${API_BASE}${path}`)
+  const response = await fetch(apiUrl(path), {
+    credentials: getCredentialsMode(),
+    headers: getAuthHeaders(),
+  })
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }))
     throw new Error(error.error || `HTTP ${response.status}`)
