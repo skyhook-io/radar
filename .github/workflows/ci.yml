@@ -73,3 +73,44 @@ jobs:
       - name: Build
         run: npm run build
         working-directory: web
+
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install Helm
+        uses: azure/setup-helm@v4
+
+      - name: Lint
+        run: helm lint deploy/helm/radar
+
+      - name: Render default values
+        run: helm template radar deploy/helm/radar > /dev/null
+
+      - name: Render hub.enabled with inline token
+        run: |
+          helm template radar deploy/helm/radar \
+            --set hub.enabled=true \
+            --set hub.url=wss://hub.example/agent \
+            --set hub.clusterName=test \
+            --set hub.token=rhc_deadbeef > /dev/null
+
+      - name: Render hub.enabled with existingSecret
+        run: |
+          helm template radar deploy/helm/radar \
+            --set hub.enabled=true \
+            --set hub.url=wss://hub.example/agent \
+            --set hub.clusterName=test \
+            --set hub.existingSecret=my-hub-token > /dev/null
+
+      - name: Reject hub.enabled without token or existingSecret
+        run: |
+          if helm template radar deploy/helm/radar \
+            --set hub.enabled=true \
+            --set hub.url=wss://hub.example/agent \
+            --set hub.clusterName=test 2>/dev/null; then
+            echo "ERROR: helm template should have failed with no token set"
+            exit 1
+          fi

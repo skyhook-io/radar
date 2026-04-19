@@ -27,6 +27,20 @@ import { setApiBase, setBasename } from './api/config';
 import { NavCustomizationProvider } from './context/NavCustomization';
 import type { NavCustomization } from './context/NavCustomization';
 
+// Declare the shape of mutation meta here — inlined rather than in a
+// separate side-effect-only module so consumers that tree-shake aggressively
+// (package.json sets sideEffects: ["*.css"]) can't drop the augmentation.
+// Any consumer that imports RadarApp will pull in this declaration.
+declare module '@tanstack/react-query' {
+  interface Register {
+    mutationMeta: {
+      errorMessage?: string;
+      successMessage?: string;
+      successDetail?: string;
+    };
+  }
+}
+
 export interface RadarAppProps {
   /** API base URL (REST + SSE + WS). Defaults to '/api' (same-origin). */
   apiBase?: string;

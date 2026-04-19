@@ -15,11 +15,30 @@
     "./types/*": "./src/types/*.ts",
     "./utils": "./src/utils/index.ts",
     "./utils/*": "./src/utils/*.ts",
-    "./components/resources/*": "./src/components/resources/*.ts",
-    "./components/ui/*": "./src/components/ui/*.tsx",
-    "./components/gitops/*": "./src/components/gitops/*.tsx",
-    "./components/timeline/*": "./src/components/timeline/*.tsx",
-    "./hooks/*": "./src/hooks/*.ts",
+    "./components/resources/*": [
+      "./src/components/resources/*.ts",
+      "./src/components/resources/*.tsx"
+    ],
+    "./components/resources/renderers/*": [
+      "./src/components/resources/renderers/*.tsx",
+      "./src/components/resources/renderers/*.ts"
+    ],
+    "./components/ui/*": [
+      "./src/components/ui/*.tsx",
+      "./src/components/ui/*.ts"
+    ],
+    "./components/gitops/*": [
+      "./src/components/gitops/*.tsx",
+      "./src/components/gitops/*.ts"
+    ],
+    "./components/timeline/*": [
+      "./src/components/timeline/*.tsx",
+      "./src/components/timeline/*.ts"
+    ],
+    "./hooks/*": [
+      "./src/hooks/*.ts",
+      "./src/hooks/*.tsx"
+    ],
     "./resources": "./src/components/resources/index.ts",
     "./logs": "./src/components/logs/index.ts",
     "./timeline": "./src/components/timeline/index.ts",

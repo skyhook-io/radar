@@ -3,7 +3,6 @@ import ReactDOM from 'react-dom/client'
 import { RadarApp } from './RadarApp'
 import { openExternal } from './utils/navigation'
 import './index.css'
-import './react-query-meta'
 
 // Intercept external link clicks in the Wails desktop app.
 // <a target="_blank"> is swallowed by WKWebView/WebView2 — route through openExternal()
