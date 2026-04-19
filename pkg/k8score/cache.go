@@ -549,6 +549,7 @@ func buildInformerSetups(factory informers.SharedInformerFactory) []informerSetu
 		{PodDisruptionBudgets, "PodDisruptionBudget", func() cache.SharedIndexInformer { return factory.Policy().V1().PodDisruptionBudgets().Informer() }, false},
 		{NetworkPolicies, "NetworkPolicy", func() cache.SharedIndexInformer { return factory.Networking().V1().NetworkPolicies().Informer() }, false},
 		{ServiceAccounts, "ServiceAccount", func() cache.SharedIndexInformer { return factory.Core().V1().ServiceAccounts().Informer() }, false},
+		{LimitRanges, "LimitRange", func() cache.SharedIndexInformer { return factory.Core().V1().LimitRanges().Informer() }, false},
 	}
 }
 
@@ -927,6 +928,7 @@ var allKindListers = []kindLister{
 	{"PodDisruptionBudget", "policy", func(rc *ResourceCache) any { return rc.PodDisruptionBudgets() }},
 	{"NetworkPolicy", "networking.k8s.io", func(rc *ResourceCache) any { return rc.NetworkPolicies() }},
 	{"ServiceAccount", "", func(rc *ResourceCache) any { return rc.ServiceAccounts() }},
+	{"LimitRange", "", func(rc *ResourceCache) any { return rc.LimitRanges() }},
 }
 
 // AllKindListers returns the table of all resource kinds with their group and lister.

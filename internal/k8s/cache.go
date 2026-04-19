@@ -61,6 +61,8 @@ var deferredResources = map[string]bool{
 	"networkpolicies":          true,
 	"replicasets":              true, // topology-only (Deployment→RS→Pod); can be very large
 	"horizontalpodautoscalers": true, // problems detection, not critical for first render
+	"serviceaccounts":          true, // audit inheritance lookups, not first-render
+	"limitranges":              true, // audit inheritance lookups, not first-render
 }
 
 // ResourceChange is a type alias for the canonical definition in pkg/k8score.
@@ -125,6 +127,8 @@ func InitResourceCache(ctx context.Context) error {
 			"storageclasses":           perms.StorageClasses,
 			"poddisruptionbudgets":     perms.PodDisruptionBudgets,
 			"networkpolicies":          perms.NetworkPolicies,
+			"serviceaccounts":          perms.ServiceAccounts,
+			"limitranges":              perms.LimitRanges,
 		}
 
 		cfg := k8score.CacheConfig{

@@ -36,6 +36,8 @@ func RunFromCache(cache *k8s.ResourceCache, namespaces []string, opts *RunOption
 		PodDisruptionBudgets:     listNamespaced(cache.PodDisruptionBudgets(), namespaces),
 		ConfigMaps:               listNamespaced(cache.ConfigMaps(), namespaces),
 		Secrets:                  listNamespaced(cache.Secrets(), namespaces),
+		ServiceAccounts:          listNamespaced(cache.ServiceAccounts(), namespaces),
+		LimitRanges:              listNamespaced(cache.LimitRanges(), namespaces),
 	}
 
 	if opts != nil {
@@ -100,6 +102,10 @@ func extractNamespace(obj any) string {
 	case *corev1.ConfigMap:
 		return v.Namespace
 	case *corev1.Secret:
+		return v.Namespace
+	case *corev1.ServiceAccount:
+		return v.Namespace
+	case *corev1.LimitRange:
 		return v.Namespace
 	}
 	return ""

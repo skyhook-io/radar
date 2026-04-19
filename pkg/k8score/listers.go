@@ -165,6 +165,13 @@ func (rc *ResourceCache) ServiceAccounts() listerscorev1.ServiceAccountLister {
 	return rc.factory.Core().V1().ServiceAccounts().Lister()
 }
 
+func (rc *ResourceCache) LimitRanges() listerscorev1.LimitRangeLister {
+	if rc == nil || !rc.isEnabled(LimitRanges) {
+		return nil
+	}
+	return rc.factory.Core().V1().LimitRanges().Lister()
+}
+
 // listCountNamespaced counts items from a lister filtered to specific namespaces.
 // If namespaces is empty, it returns the total count (same as listCount).
 func listCountNamespaced(lister any, namespaces []string) int {
@@ -217,6 +224,9 @@ func listCountInNamespace(lister any, ns string) int {
 		return len(items)
 	case listerscorev1.ServiceAccountLister:
 		items, _ := l.ServiceAccounts(ns).List(labels.Everything())
+		return len(items)
+	case listerscorev1.LimitRangeLister:
+		items, _ := l.LimitRanges(ns).List(labels.Everything())
 		return len(items)
 	case listersappsv1.DeploymentLister:
 		items, _ := l.Deployments(ns).List(labels.Everything())
@@ -291,6 +301,9 @@ func listCount(lister any) int {
 		items, _ := l.List(labels.Everything())
 		return len(items)
 	case listerscorev1.ServiceAccountLister:
+		items, _ := l.List(labels.Everything())
+		return len(items)
+	case listerscorev1.LimitRangeLister:
 		items, _ := l.List(labels.Everything())
 		return len(items)
 	case listersappsv1.DeploymentLister:

@@ -42,6 +42,7 @@ const (
 	PodDisruptionBudgets     ResourceType = "poddisruptionbudgets"
 	NetworkPolicies          ResourceType = "networkpolicies"
 	ServiceAccounts          ResourceType = "serviceaccounts"
+	LimitRanges              ResourceType = "limitranges"
 )
 
 // Operation constants for resource change events.

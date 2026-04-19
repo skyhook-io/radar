@@ -18,6 +18,7 @@ rules:
       - persistentvolumeclaims
       - serviceaccounts
       - endpoints
+      - limitranges
     verbs: ["get", "list", "watch"]
 
   {{- if .Values.rbac.helm }}

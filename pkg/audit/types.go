@@ -22,6 +22,8 @@ type CheckInput struct {
 	PodDisruptionBudgets     []*policyv1.PodDisruptionBudget
 	ConfigMaps               []*corev1.ConfigMap
 	Secrets                  []*corev1.Secret
+	ServiceAccounts          []*corev1.ServiceAccount
+	LimitRanges              []*corev1.LimitRange
 	// ClusterVersion is the K8s server version (e.g. "1.30"). Used for deprecated API checks.
 	ClusterVersion string
 	// ServedAPIs lists API group/versions the cluster still serves (e.g. ["apps/v1", "batch/v1beta1"]).
