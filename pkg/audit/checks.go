@@ -226,9 +226,10 @@ func tokenAutoMounted(namespace string, spec corev1.PodSpec, saByKey map[string]
 
 // effectivelyNonRoot reports whether a container is guaranteed not to run as
 // root, merging the pod-level PodSecurityContext with the container-level
-// override. A container is non-root if runAsNonRoot is true OR runAsUser is
-// set to a non-zero UID, at either scope. Container-level settings override
-// pod-level for each field independently.
+// override. Each field (runAsNonRoot, runAsUser) independently inherits from
+// the pod and is overridden by any non-nil container-level value. After the
+// merge, the container is non-root if runAsNonRoot is true OR runAsUser is
+// set to a non-zero UID.
 func effectivelyNonRoot(sc *corev1.SecurityContext, podSC *corev1.PodSecurityContext) bool {
 	var runAsNonRoot *bool
 	var runAsUser *int64

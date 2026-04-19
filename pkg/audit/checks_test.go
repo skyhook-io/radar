@@ -345,6 +345,160 @@ func TestEfficiencyChecks_LimitRangeDefaults(t *testing.T) {
 	}
 }
 
+func TestEfficiencyChecks_LimitRangePodTypeDoesNotSuppress(t *testing.T) {
+	// LimitRanges with Type=Pod apply to aggregate pod limits, not to
+	// container defaults — container-level findings must still fire.
+	input := &CheckInput{
+		Deployments: []*appsv1.Deployment{{
+			ObjectMeta: metav1.ObjectMeta{Name: "pod-limits", Namespace: "team"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(int32(2)),
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "x"}},
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "app", Image: "nginx:1.25"}},
+					},
+				},
+			},
+		}},
+		LimitRanges: []*corev1.LimitRange{{
+			ObjectMeta: metav1.ObjectMeta{Name: "pod-scope", Namespace: "team"},
+			Spec: corev1.LimitRangeSpec{
+				Limits: []corev1.LimitRangeItem{{
+					Type: corev1.LimitTypePod,
+					Default: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("1"),
+						corev1.ResourceMemory: resource.MustParse("1Gi"),
+					},
+				}},
+			},
+		}},
+	}
+	need := map[string]bool{"cpuRequestMissing": true, "memoryRequestMissing": true, "cpuLimitMissing": true, "memoryLimitMissing": true}
+	for _, f := range RunChecks(input).Findings {
+		delete(need, f.CheckID)
+	}
+	if len(need) > 0 {
+		t.Errorf("LimitType=Pod should not suppress container findings; missing: %v", need)
+	}
+}
+
+func TestEfficiencyChecks_LimitRangeMaxDoesNotSuppress(t *testing.T) {
+	// LimitRange items with Max/Min but no Default/DefaultRequest enforce
+	// constraints — they do not inject values, so missing-request/limit
+	// findings must still fire.
+	input := &CheckInput{
+		Deployments: []*appsv1.Deployment{{
+			ObjectMeta: metav1.ObjectMeta{Name: "max-only", Namespace: "team"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(int32(2)),
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "x"}},
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "app", Image: "nginx:1.25"}},
+					},
+				},
+			},
+		}},
+		LimitRanges: []*corev1.LimitRange{{
+			ObjectMeta: metav1.ObjectMeta{Name: "max-only", Namespace: "team"},
+			Spec: corev1.LimitRangeSpec{
+				Limits: []corev1.LimitRangeItem{{
+					Type: corev1.LimitTypeContainer,
+					Max: corev1.ResourceList{
+						corev1.ResourceCPU:    resource.MustParse("2"),
+						corev1.ResourceMemory: resource.MustParse("4Gi"),
+					},
+				}},
+			},
+		}},
+	}
+	need := map[string]bool{"cpuRequestMissing": true, "memoryRequestMissing": true, "cpuLimitMissing": true, "memoryLimitMissing": true}
+	for _, f := range RunChecks(input).Findings {
+		delete(need, f.CheckID)
+	}
+	if len(need) > 0 {
+		t.Errorf("LimitRange.Max-only should not suppress missing-resource findings; missing: %v", need)
+	}
+}
+
+func TestEfficiencyChecks_LimitRangePartialDefaults(t *testing.T) {
+	// LimitRange sets only DefaultRequest.cpu — only cpuRequestMissing should
+	// be suppressed; the other three findings must still fire.
+	input := &CheckInput{
+		Deployments: []*appsv1.Deployment{{
+			ObjectMeta: metav1.ObjectMeta{Name: "partial", Namespace: "team"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(int32(2)),
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "x"}},
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "app", Image: "nginx:1.25"}},
+					},
+				},
+			},
+		}},
+		LimitRanges: []*corev1.LimitRange{{
+			ObjectMeta: metav1.ObjectMeta{Name: "cpu-req-only", Namespace: "team"},
+			Spec: corev1.LimitRangeSpec{
+				Limits: []corev1.LimitRangeItem{{
+					Type: corev1.LimitTypeContainer,
+					DefaultRequest: corev1.ResourceList{
+						corev1.ResourceCPU: resource.MustParse("100m"),
+					},
+				}},
+			},
+		}},
+	}
+	flagged := map[string]bool{}
+	for _, f := range RunChecks(input).Findings {
+		flagged[f.CheckID] = true
+	}
+	if flagged["cpuRequestMissing"] {
+		t.Error("cpuRequestMissing should be suppressed by LimitRange DefaultRequest.cpu")
+	}
+	for _, id := range []string{"memoryRequestMissing", "cpuLimitMissing", "memoryLimitMissing"} {
+		if !flagged[id] {
+			t.Errorf("%s should still fire — LimitRange covered only cpu request", id)
+		}
+	}
+}
+
+func TestSecurityChecks_AutomountDefaultServiceAccount(t *testing.T) {
+	// Pod doesn't set ServiceAccountName — implicit "default" SA applies.
+	// If the default SA has automount=false, no finding should fire.
+	input := &CheckInput{
+		Deployments: []*appsv1.Deployment{{
+			ObjectMeta: metav1.ObjectMeta{Name: "implicit-default", Namespace: "team"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: ptr(int32(2)),
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "x"}},
+				Template: corev1.PodTemplateSpec{
+					Spec: corev1.PodSpec{
+						SecurityContext: &corev1.PodSecurityContext{RunAsNonRoot: ptr(true)},
+						Containers: []corev1.Container{{
+							Name: "app", Image: "nginx:1.25",
+							SecurityContext: &corev1.SecurityContext{
+								ReadOnlyRootFilesystem:   ptr(true),
+								AllowPrivilegeEscalation: ptr(false),
+							},
+						}},
+					},
+				},
+			},
+		}},
+		ServiceAccounts: []*corev1.ServiceAccount{{
+			ObjectMeta:                   metav1.ObjectMeta{Name: "default", Namespace: "team"},
+			AutomountServiceAccountToken: ptr(false),
+		}},
+	}
+	for _, f := range RunChecks(input).Findings {
+		if f.CheckID == "automountServiceAccountToken" {
+			t.Errorf("automount flagged despite implicit default SA with automount=false: %s", f.Message)
+		}
+	}
+}
+
 func TestReliabilityChecks(t *testing.T) {
 	input := &CheckInput{
 		Deployments: []*appsv1.Deployment{{
