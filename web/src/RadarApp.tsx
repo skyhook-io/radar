@@ -8,7 +8,7 @@
 // Config model:
 //   - apiBase  — base URL for REST/SSE/WS. Default '/api' (same-origin,
 //                Radar's own binary). Hub passes a cluster-scoped URL
-//                like '/c/abc/api' or 'https://api.radar.skyhook.io/c/abc/api'.
+//                like '/c/abc/api' or 'https://api.radarhq.io/c/abc/api'.
 //   - basename — router basename. Default '' (mounted at root). Hub
 //                passes '/c/abc' when embedding, so Radar's internal
 //                paths (/topology, /resources/...) resolve correctly.

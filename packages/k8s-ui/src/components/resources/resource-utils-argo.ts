@@ -14,7 +14,7 @@ export function getArgoApplicationStatus(app: any): StatusBadge {
 
   // Check for suspended (no automated sync policy)
   const hasAutomatedSync = !!app.spec?.syncPolicy?.automated
-  if (health === 'Suspended' || (!hasAutomatedSync && app.metadata?.annotations?.['radar.skyhook.io/suspended-prune'])) {
+  if (health === 'Suspended' || (!hasAutomatedSync && app.metadata?.annotations?.['radarhq.io/suspended-prune'])) {
     return { text: 'Suspended', color: healthColors.degraded, level: 'degraded' }
   }
 

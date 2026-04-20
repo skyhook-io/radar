@@ -69,7 +69,7 @@ func CreateNodeDebugPod(ctx context.Context, client kubernetes.Interface, nodeNa
 			Namespace: "default",
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "radar",
-				"radar.skyhook.io/debug-node":  labelValue,
+				"radarhq.io/debug-node":  labelValue,
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -157,7 +157,7 @@ func DeleteNodeDebugPods(ctx context.Context, client kubernetes.Interface, nodeN
 	return client.CoreV1().Pods("default").DeleteCollection(ctx,
 		metav1.DeleteOptions{GracePeriodSeconds: &gracePeriod},
 		metav1.ListOptions{
-			LabelSelector: fmt.Sprintf("radar.skyhook.io/debug-node=%s", sanitizeLabelValue(nodeName)),
+			LabelSelector: fmt.Sprintf("radarhq.io/debug-node=%s", sanitizeLabelValue(nodeName)),
 		},
 	)
 }

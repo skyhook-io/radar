@@ -128,6 +128,11 @@ spec:
             - name: HELM_DATA_HOME
               value: "/tmp/helm/data"
             {{- if .Values.hub.enabled }}
+            # Signals hub-mode to the Radar binary: forces --auth-mode=proxy,
+            # accepts forwarded identity headers from the tunnel, disables
+            # startup-config fields that don't apply under a hosted Hub.
+            - name: RADAR_HUB_MODE
+              value: "true"
             {{- if or .Values.hub.token .Values.hub.existingSecret }}
             - name: RADAR_HUB_TOKEN
               {{- if .Values.hub.existingSecret }}

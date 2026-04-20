@@ -206,7 +206,7 @@ auth:
 hub:
   enabled: false
   # Hub WebSocket URL. Must start with ws:// or wss://. Example:
-  # wss://api.radar.skyhook.io/agent
+  # wss://api.radarhq.io/agent
   url: ""
   # Human-readable cluster identifier from the hub install wizard.
   clusterName: ""
@@ -217,6 +217,23 @@ hub:
   # The Secret must contain a key matching existingSecretKey.
   existingSecret: ""
   existingSecretKey: "token"
+  # Default ClusterRoleBindings for Hub identity groups. Hub injects
+  # X-Forwarded-Groups containing hub:<role> on every proxied request;
+  # these bindings give each role a sensible default K8s capability.
+  # Cluster admins who want fine-grained control should set create=false
+  # and author their own bindings (possibly against hub:user:<id> groups
+  # for per-user overrides).
+  defaultRbac:
+    create: true
+    owner: true
+    member: true
+    viewer: true
+    # ClusterRoles the three Hub roles bind to. Swap for custom ClusterRoles
+    # to tighten the defaults (e.g., replace cluster-admin with a custom
+    # role that excludes RBAC verbs).
+    ownerClusterRole: cluster-admin
+    memberClusterRole: edit
+    viewerClusterRole: view
 
 # MCP (Model Context Protocol) server for AI tools
 mcp:

@@ -28,7 +28,7 @@ export function getApiBase(): string {
  *
  * Accepts either:
  *   - A relative path: `/api`, `/c/abc/api` (URLs derive scheme + host from window.location)
- *   - An absolute URL: `https://api.radar.skyhook.io/c/abc/api` (URLs use that origin)
+ *   - An absolute URL: `https://api.radarhq.io/c/abc/api` (URLs use that origin)
  */
 export function setApiBase(url: string): void {
   apiBase = url.replace(/\/+$/, '');

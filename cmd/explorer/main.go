@@ -75,10 +75,29 @@ func main() {
 	// Local-binary behavior is unchanged when these flags are empty. Each
 	// flag falls back to an env var so Kubernetes deployments can source
 	// the token from a Secret without exposing it in `ps` output.
-	hubURL := flag.String("hub-url", os.Getenv("RADAR_HUB_URL"), "Radar Hub WebSocket URL (e.g. wss://api.radar.skyhook.io/agent) — empty = local-only. Env: RADAR_HUB_URL")
+	hubURL := flag.String("hub-url", os.Getenv("RADAR_HUB_URL"), "Radar Hub WebSocket URL (e.g. wss://api.radarhq.io/agent) — empty = local-only. Env: RADAR_HUB_URL")
 	hubToken := flag.String("hub-token", os.Getenv("RADAR_HUB_TOKEN"), "Cluster token from the Radar Hub install wizard (rhc_<random>). Env: RADAR_HUB_TOKEN")
 	hubClusterName := flag.String("cluster-name", os.Getenv("RADAR_HUB_CLUSTER_NAME"), "Human-readable cluster name for Radar Hub (required with --hub-url). Env: RADAR_HUB_CLUSTER_NAME")
 	flag.Parse()
+
+	// Hub-mode: Radar runs inside a customer cluster and fronts Radar Hub.
+	// Under hub-mode the tunnel is the only path to this listener and it
+	// delivers Hub-authenticated identity headers on every request. Force
+	// --auth-mode=proxy so Radar impersonates the Hub user against the K8s
+	// API instead of falling back to the ServiceAccount (which would give
+	// every Hub user full SA permissions).
+	hubMode := os.Getenv("RADAR_HUB_MODE") == "true"
+	if hubMode {
+		if *authMode != "none" && *authMode != "proxy" {
+			log.Fatalf("RADAR_HUB_MODE=true incompatible with --auth-mode=%q: Hub owns authn, only 'proxy' is supported", *authMode)
+		}
+		*authMode = "proxy"
+		// Pin the header names to the Hub's wire contract. Operators don't
+		// get to retarget these; Hub always sends X-Forwarded-User/Groups.
+		*authUserHeader = "X-Forwarded-User"
+		*authGroupsHeader = "X-Forwarded-Groups"
+		log.Printf("[hub] RADAR_HUB_MODE=true: auth-mode forced to proxy, trusting tunnel-supplied identity headers")
+	}
 
 	if *showVersion {
 		fmt.Printf("radar %s\n", version)

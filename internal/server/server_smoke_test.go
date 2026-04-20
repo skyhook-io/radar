@@ -774,6 +774,49 @@ func TestSmokePutSettingsPreservesExisting(t *testing.T) {
 	}
 }
 
+// TestSmokeHubMode_SettingsGetStripsUserScoped: under RADAR_HUB_MODE the
+// GET /api/settings response must omit theme/pinnedKinds so Hub's intercept
+// layer owns the contract. Audit stays (cluster-shared admin policy).
+func TestSmokeHubMode_SettingsGetStripsUserScoped(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	// Seed real values into the persisted store so we can prove they're
+	// stripped at the HTTP boundary, not just missing from the file.
+	put(t, "/api/settings", `{"theme":"dark","pinnedKinds":[{"name":"pods","kind":"Pod","group":""}]}`)
+
+	t.Setenv("RADAR_HUB_MODE", "true")
+
+	var body map[string]any
+	assertOK(t, get(t, "/api/settings"), &body)
+	if _, has := body["theme"]; has && body["theme"] != "" {
+		t.Errorf("theme leaked under hub mode: %v", body["theme"])
+	}
+	if _, has := body["pinnedKinds"]; has && body["pinnedKinds"] != nil {
+		t.Errorf("pinnedKinds leaked under hub mode: %v", body["pinnedKinds"])
+	}
+}
+
+// TestSmokeHubMode_SettingsPutRejectsUserScoped: under RADAR_HUB_MODE, a
+// raw PUT attempting to set theme/pinnedKinds must be rejected. Hub's
+// intercept layer splits the body before forwarding; anything that
+// reaches this endpoint with those fields set has bypassed the intercept
+// and must not mutate shared settings.json.
+func TestSmokeHubMode_SettingsPutRejectsUserScoped(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv("RADAR_HUB_MODE", "true")
+
+	resp := put(t, "/api/settings", `{"theme":"dark"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("PUT with theme under hub mode got %d, want 400", resp.StatusCode)
+	}
+
+	resp2 := put(t, "/api/settings", `{"pinnedKinds":[{"name":"pods","kind":"Pod","group":""}]}`)
+	defer resp2.Body.Close()
+	if resp2.StatusCode != http.StatusBadRequest {
+		t.Errorf("PUT with pinnedKinds under hub mode got %d, want 400", resp2.StatusCode)
+	}
+}
+
 func TestSmokeGetConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

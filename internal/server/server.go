@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"net/url"
+	"os"
 	"reflect"
 	"runtime"
 	"strings"
@@ -2696,14 +2697,38 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 // Settings handlers
 
+// hubMode reports whether Radar is running under Radar Hub. The Helm chart
+// sets RADAR_HUB_MODE=true when hub.enabled. When true, user-scoped fields
+// (theme, pinnedKinds) are owned by Hub's user_preferences table — not
+// settings.json — because a single in-cluster Radar is shared across every
+// Hub user of the cluster and can't meaningfully store per-user state.
+func hubMode() bool {
+	return os.Getenv("RADAR_HUB_MODE") == "true"
+}
+
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
-	s.writeJSON(w, settings.Load())
+	loaded := settings.Load()
+	if hubMode() {
+		// Strip user-scoped fields — Hub's intercept layer fills them from
+		// user_preferences. Audit stays because it's cluster-shared policy.
+		loaded.Theme = ""
+		loaded.PinnedKinds = nil
+	}
+	s.writeJSON(w, loaded)
 }
 
 func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 	var patch settings.Settings
 	if err := json.NewDecoder(r.Body).Decode(&patch); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+	// Under hub mode, reject writes to user-scoped fields. Hub's intercept
+	// layer splits the PUT before forwarding — this is a defense-in-depth
+	// check so a raw call bypasses the intercept doesn't silently succeed
+	// and cause a cluster-shared settings.json to get mutated by one user.
+	if hubMode() && (patch.Theme != "" || patch.PinnedKinds != nil) {
+		s.writeError(w, http.StatusBadRequest, "theme and pinnedKinds are managed by Radar Hub; use /api/preferences instead")
 		return
 	}
 	result, err := settings.Update(func(current *settings.Settings) {
@@ -2718,6 +2743,10 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		log.Printf("[settings] Failed to save settings: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
+	}
+	if hubMode() {
+		result.Theme = ""
+		result.PinnedKinds = nil
 	}
 	s.writeJSON(w, result)
 }

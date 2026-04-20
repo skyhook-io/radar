@@ -23,7 +23,7 @@ import (
 // Config is the runtime configuration for connecting to a Radar Hub.
 type Config struct {
 	// HubURL is the WebSocket URL of the hub's /agent endpoint,
-	// e.g. wss://api.radar.skyhook.io/agent
+	// e.g. wss://api.radarhq.io/agent
 	HubURL string
 
 	// Token is the cluster bearer token issued by the hub install wizard.
