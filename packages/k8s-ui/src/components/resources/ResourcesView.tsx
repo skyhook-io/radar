@@ -213,7 +213,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'restarts', label: 'Restarts', width: 'w-24' },
     { key: 'podIP', label: 'Pod IP', width: 'w-32', defaultVisible: false },
     { key: 'node', label: 'Node', width: 'w-44', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-14' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   deployments: [
     { key: 'name', label: 'Name' },
@@ -222,7 +222,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'upToDate', label: 'Up-to-date', width: 'w-24', hideOnMobile: true, tooltip: 'Number of pods running the current pod template' },
     { key: 'available', label: 'Available', width: 'w-24', hideOnMobile: true, tooltip: 'Number of pods available (ready for minReadySeconds)' },
     { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   daemonsets: [
     { key: 'name', label: 'Name' },
@@ -232,7 +232,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'upToDate', label: 'Up-to-date', width: 'w-24', hideOnMobile: true, tooltip: 'Number of pods running the current pod template spec' },
     { key: 'available', label: 'Available', width: 'w-24', hideOnMobile: true, tooltip: 'Number of pods available (ready for minReadySeconds duration)' },
     { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   statefulsets: [
     { key: 'name', label: 'Name' },
@@ -240,7 +240,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
     { key: 'upToDate', label: 'Up-to-date', width: 'w-24', hideOnMobile: true, tooltip: 'Number of pods running the current pod template' },
     { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   replicasets: [
     { key: 'name', label: 'Name' },
@@ -248,7 +248,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ready', label: 'Ready', width: 'w-24' },
     { key: 'owner', label: 'Owner', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-24', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   services: [
     { key: 'name', label: 'Name' },
@@ -258,7 +258,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'endpoints', label: 'Endpoints', width: 'w-24' },
     { key: 'ports', label: 'Ports', width: 'w-40' },
     { key: 'externalIP', label: 'External', width: 'w-40', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   ingresses: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -268,7 +268,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'rules', label: 'Rules', width: 'min-w-56', hideOnMobile: true },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
     { key: 'address', label: 'Address', width: 'min-w-32', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   nodes: [
     { key: 'name', label: 'Name' },
@@ -280,14 +280,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'conditions', label: 'Conditions', width: 'w-40', hideOnMobile: true },
     { key: 'taints', label: 'Taints', width: 'w-24', hideOnMobile: true },
     { key: 'version', label: 'Version', width: 'w-28' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   configmaps: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'keys', label: 'Keys', width: 'w-48' },
     { key: 'size', label: 'Size', width: 'w-24' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   secrets: [
     { key: 'name', label: 'Name' },
@@ -295,7 +295,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'type', label: 'Type', width: 'w-28' },
     { key: 'keys', label: 'Keys', width: 'w-20' },
     { key: 'expires', label: 'Expires', width: 'w-24', tooltip: 'Certificate expiry for TLS secrets' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   jobs: [
     { key: 'name', label: 'Name' },
@@ -303,7 +303,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'completions', label: 'Completions', width: 'w-28' },
     { key: 'duration', label: 'Duration', width: 'w-24', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   cronjobs: [
     { key: 'name', label: 'Name' },
@@ -311,7 +311,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'schedule', label: 'Schedule', width: 'w-40' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'lastRun', label: 'Last Run', width: 'w-28', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   hpas: [
     { key: 'name', label: 'Name' },
@@ -320,7 +320,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'replicas', label: 'Replicas', width: 'w-32' },
     { key: 'metrics', label: 'Metrics', width: 'w-36', hideOnMobile: true },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   horizontalpodautoscalers: [
     { key: 'name', label: 'Name' },
@@ -329,7 +329,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'replicas', label: 'Replicas', width: 'w-32' },
     { key: 'metrics', label: 'Metrics', width: 'w-36', hideOnMobile: true },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   persistentvolumeclaims: [
     { key: 'name', label: 'Name' },
@@ -339,7 +339,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'storageClass', label: 'Storage Class', width: 'w-36', hideOnMobile: true },
     { key: 'accessModes', label: 'Access', width: 'w-20', tooltip: 'Access modes: RWO=ReadWriteOnce, RWX=ReadWriteMany, ROX=ReadOnlyMany' },
     { key: 'volume', label: 'Volume', width: 'w-48', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   rollouts: [
     { key: 'name', label: 'Name' },
@@ -349,7 +349,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'strategy', label: 'Strategy', width: 'w-24' },
     { key: 'step', label: 'Step', width: 'w-20', hideOnMobile: true, tooltip: 'Current canary step / Total steps' },
     { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   workflows: [
     { key: 'name', label: 'Name' },
@@ -358,7 +358,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'progress', label: 'Progress', width: 'w-24', hideOnMobile: true, tooltip: 'Succeeded steps / Total steps' },
     { key: 'template', label: 'Template', width: 'w-40', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   certificates: [
     { key: 'name', label: 'Name' },
@@ -367,7 +367,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'domains', label: 'Domains', width: 'w-48' },
     { key: 'issuer', label: 'Issuer', width: 'w-36', hideOnMobile: true },
     { key: 'expires', label: 'Expires', width: 'w-24', tooltip: 'Days until certificate expires' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   persistentvolumes: [
     { key: 'name', label: 'Name' },
@@ -377,7 +377,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'reclaimPolicy', label: 'Reclaim', width: 'w-20' },
     { key: 'storageClass', label: 'Storage Class', width: 'w-36', hideOnMobile: true },
     { key: 'claim', label: 'Claim', width: 'w-48', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   storageclasses: [
     { key: 'name', label: 'Name' },
@@ -385,7 +385,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'reclaimPolicy', label: 'Reclaim', width: 'w-20' },
     { key: 'bindingMode', label: 'Binding Mode', width: 'w-36' },
     { key: 'expansion', label: 'Expansion', width: 'w-24', tooltip: 'Whether volumes can be expanded after creation' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   certificaterequests: [
     { key: 'name', label: 'Name' },
@@ -393,20 +393,20 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'issuer', label: 'Issuer', width: 'w-36' },
     { key: 'approved', label: 'Approved', width: 'w-24' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clusterissuers: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Ready', width: 'w-24' },
     { key: 'issuerType', label: 'Type', width: 'w-24' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   issuers: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Ready', width: 'w-24' },
     { key: 'issuerType', label: 'Type', width: 'w-24' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   orders: [
     { key: 'name', label: 'Name' },
@@ -414,7 +414,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'state', label: 'State', width: 'w-24' },
     { key: 'domains', label: 'Domains', width: 'w-48' },
     { key: 'issuer', label: 'Issuer', width: 'w-36', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   challenges: [
     { key: 'name', label: 'Name' },
@@ -423,7 +423,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'state', label: 'State', width: 'w-24' },
     { key: 'domain', label: 'Domain', width: 'w-48' },
     { key: 'presented', label: 'Presented', width: 'w-24', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   gateways: [
     { key: 'name', label: 'Name' },
@@ -433,7 +433,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'listeners', label: 'Listeners', width: 'w-40', tooltip: 'Protocol:Port for each listener' },
     { key: 'routes', label: 'Routes', width: 'w-20', tooltip: 'Total attached routes across all listeners' },
     { key: 'addresses', label: 'Addresses', width: 'w-48', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   httproutes: [
     { key: 'name', label: 'Name' },
@@ -443,14 +443,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
     { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   gatewayclasses: [
     { key: 'name', label: 'Name' },
     { key: 'controller', label: 'Controller', width: 'w-64', tooltip: 'Gateway controller implementation (spec.controllerName)' },
     { key: 'description', label: 'Description', width: 'w-64', hideOnMobile: true },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   nodepools: [
     { key: 'name', label: 'Name' },
@@ -458,7 +458,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'nodeClass', label: 'Node Class', width: 'w-36' },
     { key: 'limits', label: 'Limits', width: 'w-36', tooltip: 'CPU and memory limits' },
     { key: 'disruption', label: 'Disruption', width: 'w-40', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   nodeclaims: [
     { key: 'name', label: 'Name' },
@@ -469,7 +469,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'zone', label: 'Zone', width: 'w-28', hideOnMobile: true },
     { key: 'nodePool', label: 'Node Pool', width: 'w-32' },
     { key: 'nodeName', label: 'Node', width: 'w-40', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   ec2nodeclasses: [
     { key: 'name', label: 'Name' },
@@ -477,7 +477,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ami', label: 'AMI', width: 'w-36', tooltip: 'AMI selector alias or ID' },
     { key: 'role', label: 'IAM Role', width: 'w-48' },
     { key: 'volumeSize', label: 'Volume', width: 'w-24', tooltip: 'Root volume size' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   scaledobjects: [
     { key: 'name', label: 'Name' },
@@ -486,7 +486,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'target', label: 'Target', width: 'w-48', tooltip: 'Scale target workload' },
     { key: 'replicas', label: 'Replicas', width: 'w-28', tooltip: 'Min-Max replica range' },
     { key: 'triggerTypes', label: 'Trigger Types', width: 'w-40' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   scaledjobs: [
     { key: 'name', label: 'Name' },
@@ -495,7 +495,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'target', label: 'Job Target', width: 'w-48' },
     { key: 'strategy', label: 'Strategy', width: 'w-28' },
     { key: 'triggerTypes', label: 'Trigger Types', width: 'w-40' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   triggerauthentications: [
     { key: 'name', label: 'Name' },
@@ -503,14 +503,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'secretTargetRef', label: 'Secret Refs', width: 'w-20' },
     { key: 'env', label: 'Env Vars', width: 'w-20' },
     { key: 'hashiCorpVault', label: 'Vault', width: 'w-20' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clustertriggerauthentications: [
     { key: 'name', label: 'Name' },
     { key: 'secretTargetRef', label: 'Secret Refs', width: 'w-20' },
     { key: 'env', label: 'Env Vars', width: 'w-20' },
     { key: 'hashiCorpVault', label: 'Vault', width: 'w-20' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   servicemonitors: [
     { key: 'name', label: 'Name' },
@@ -519,7 +519,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'endpoints', label: 'Endpoints', width: 'w-20', tooltip: 'Number of scrape endpoints' },
     { key: 'jobLabel', label: 'Job Label', width: 'w-32' },
     { key: 'selector', label: 'Selector', width: 'w-48' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   prometheusrules: [
     { key: 'name', label: 'Name' },
@@ -527,7 +527,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'groups', label: 'Groups', width: 'w-20' },
     { key: 'rules', label: 'Rules', width: 'w-20', tooltip: 'Total alert + recording rules' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   podmonitors: [
     { key: 'name', label: 'Name' },
@@ -535,7 +535,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'endpoints', label: 'Endpoints', width: 'w-20', tooltip: 'Number of pod metrics endpoints' },
     { key: 'selector', label: 'Selector', width: 'w-48' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // ============================================================================
   // KYVERNO / POLICY REPORT RESOURCES
@@ -549,7 +549,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'warn', label: 'Warn', width: 'w-16' },
     { key: 'error', label: 'Err', width: 'w-16' },
     { key: 'skip', label: 'Skip', width: 'w-16' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clusterpolicyreports: [
     { key: 'name', label: 'Name' },
@@ -559,7 +559,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'warn', label: 'Warn', width: 'w-16' },
     { key: 'error', label: 'Err', width: 'w-16' },
     { key: 'skip', label: 'Skip', width: 'w-16' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   kyvernopolicies: [
     { key: 'name', label: 'Name' },
@@ -567,14 +567,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'action', label: 'Action', width: 'w-24', tooltip: 'Validation failure action (Enforce or Audit)' },
     { key: 'rules', label: 'Rules', width: 'w-16' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clusterpolicies: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'action', label: 'Action', width: 'w-24', tooltip: 'Validation failure action (Enforce or Audit)' },
     { key: 'rules', label: 'Rules', width: 'w-16' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   grpcroutes: [
     { key: 'name', label: 'Name' },
@@ -584,7 +584,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
     { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   tcproutes: [
     { key: 'name', label: 'Name' },
@@ -593,7 +593,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
     { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   tlsroutes: [
     { key: 'name', label: 'Name' },
@@ -603,7 +603,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'parents', label: 'Gateways', width: 'w-36' },
     { key: 'backends', label: 'Backends', width: 'w-48', tooltip: 'Backend services receiving traffic' },
     { key: 'rules', label: 'Rules', width: 'w-16', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   sealedsecrets: [
     { key: 'name', label: 'Name' },
@@ -611,14 +611,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Synced', width: 'w-24' },
     { key: 'keys', label: 'Keys', width: 'w-20' },
     { key: 'type', label: 'Type', width: 'w-36', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   workflowtemplates: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'entrypoint', label: 'Entrypoint', width: 'w-36' },
     { key: 'templates', label: 'Templates', width: 'w-24' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   networkpolicies: [
     { key: 'name', label: 'Name' },
@@ -626,7 +626,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'policyTypes', label: 'Types', width: 'w-28' },
     { key: 'selector', label: 'Pod Selector', width: 'w-48' },
     { key: 'rules', label: 'Rules', width: 'w-24', tooltip: 'Ingress / Egress rule count' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   poddisruptionbudgets: [
     { key: 'name', label: 'Name' },
@@ -635,51 +635,51 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'budget', label: 'Budget', width: 'w-36' },
     { key: 'healthy', label: 'Healthy', width: 'w-24' },
     { key: 'allowed', label: 'Allowed', width: 'w-24', tooltip: 'Number of disruptions currently allowed' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   serviceaccounts: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'automount', label: 'Automount', width: 'w-24', tooltip: 'Whether token is automatically mounted in pods' },
     { key: 'secrets', label: 'Secrets', width: 'w-20' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   roles: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'rules', label: 'Rules', width: 'w-20' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clusterroles: [
     { key: 'name', label: 'Name' },
     { key: 'rules', label: 'Rules', width: 'w-20' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   rolebindings: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'role', label: 'Role', width: 'w-48' },
     { key: 'subjects', label: 'Subjects', width: 'w-20' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clusterrolebindings: [
     { key: 'name', label: 'Name' },
     { key: 'role', label: 'Role', width: 'w-48' },
     { key: 'subjects', label: 'Subjects', width: 'w-20' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   ingressclasses: [
     { key: 'name', label: 'Name' },
     { key: 'controller', label: 'Controller', width: 'w-64' },
     { key: 'default', label: 'Default', width: 'w-20' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   leases: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'holder', label: 'Holder', width: 'w-48' },
     { key: 'renewTime', label: 'Last Renewed', width: 'w-28' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   priorityclasses: [
     { key: 'name', label: 'Name' },
@@ -687,26 +687,26 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'globalDefault', label: 'Global Default', width: 'w-28' },
     { key: 'preemptionPolicy', label: 'Preemption', width: 'w-32' },
     { key: 'description', label: 'Description', width: 'w-64', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   runtimeclasses: [
     { key: 'name', label: 'Name' },
     { key: 'handler', label: 'Handler', width: 'w-48' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   mutatingwebhookconfigurations: [
     { key: 'name', label: 'Name' },
     { key: 'webhooks', label: 'Webhooks', width: 'w-20' },
     { key: 'failurePolicy', label: 'Failure Policy', width: 'w-28' },
     { key: 'target', label: 'Target', width: 'w-48', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   validatingwebhookconfigurations: [
     { key: 'name', label: 'Name' },
     { key: 'webhooks', label: 'Webhooks', width: 'w-20' },
     { key: 'failurePolicy', label: 'Failure Policy', width: 'w-28' },
     { key: 'target', label: 'Target', width: 'w-48', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   events: [
     { key: 'name', label: 'Name' },
@@ -728,7 +728,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ref', label: 'Ref', width: 'w-32', tooltip: 'Branch, tag, or semver' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'revision', label: 'Revision', width: 'w-24', hideOnMobile: true, tooltip: 'Last fetched commit SHA' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   ocirepositories: [
     { key: 'name', label: 'Name' },
@@ -737,7 +737,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ref', label: 'Tag', width: 'w-24', tooltip: 'OCI tag or semver' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'revision', label: 'Digest', width: 'w-24', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   helmrepositories: [
     { key: 'name', label: 'Name' },
@@ -745,7 +745,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'url', label: 'URL', width: 'w-64' },
     { key: 'type', label: 'Type', width: 'w-20', tooltip: 'default (Helm) or oci' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   kustomizations: [
     { key: 'name', label: 'Name' },
@@ -756,7 +756,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'revision', label: 'Revision', width: 'w-48', hideOnMobile: true, tooltip: 'Applied git revision' },
     { key: 'inventory', label: 'Resources', width: 'w-24', tooltip: 'Number of managed resources' },
     { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since last successful reconciliation' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   helmreleases: [
     { key: 'name', label: 'Name' },
@@ -766,7 +766,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'revision', label: 'Rev', width: 'w-16', hideOnMobile: true, tooltip: 'Helm release revision number' },
     { key: 'lastUpdated', label: 'Last Updated', width: 'w-28', tooltip: 'Time since last successful reconciliation' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   alerts: [
     { key: 'name', label: 'Name' },
@@ -774,7 +774,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'provider', label: 'Provider', width: 'w-40' },
     { key: 'events', label: 'Events', width: 'w-24', tooltip: 'Number of event sources' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // ============================================================================
   // ARGOCD GITOPS RESOURCES
@@ -786,7 +786,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'sync', label: 'Sync', width: 'w-24' },
     { key: 'health', label: 'Health', width: 'w-24' },
     { key: 'repo', label: 'Repository', width: 'w-48', hideOnMobile: true },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   applicationsets: [
     { key: 'name', label: 'Name' },
@@ -795,14 +795,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'template', label: 'Template', width: 'w-40', hideOnMobile: true },
     { key: 'applications', label: 'Apps', width: 'w-20', tooltip: 'Number of generated applications' },
     { key: 'status', label: 'Status', width: 'w-24' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   appprojects: [
     { key: 'name', label: 'Name' },
     { key: 'description', label: 'Description', width: 'w-64' },
     { key: 'destinations', label: 'Destinations', width: 'w-24', tooltip: 'Allowed cluster/namespace destinations' },
     { key: 'sources', label: 'Sources', width: 'w-20', tooltip: 'Allowed source repositories' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Trivy Operator
   vulnerabilityreports: [
@@ -906,27 +906,27 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'provider', label: 'Provider', width: 'w-28' },
     { key: 'refreshInterval', label: 'Refresh', width: 'w-24' },
     { key: 'lastSync', label: 'Last Sync', width: 'w-24' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clusterexternalsecrets: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'namespaces', label: 'Namespaces', width: 'w-24' },
     { key: 'failed', label: 'Failed', width: 'w-20' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   secretstores: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'provider', label: 'Provider', width: 'w-32' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clustersecretstores: [
     { key: 'name', label: 'Name' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'provider', label: 'Provider', width: 'w-32' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // ============================================================================
   // VELERO BACKUP & DISASTER RECOVERY
@@ -940,7 +940,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'expiry', label: 'Expires', width: 'w-24' },
     { key: 'errors', label: 'Errors', width: 'w-16' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   restores: [
     { key: 'name', label: 'Name' },
@@ -949,7 +949,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'backupName', label: 'Backup', width: 'w-40' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'errors', label: 'Errors', width: 'w-16' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   schedules: [
     { key: 'name', label: 'Name' },
@@ -958,7 +958,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'schedule', label: 'Schedule', width: 'w-32' },
     { key: 'lastBackup', label: 'Last Backup', width: 'w-28' },
     { key: 'paused', label: 'Paused', width: 'w-16' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   backupstoragelocations: [
     { key: 'name', label: 'Name' },
@@ -968,7 +968,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'bucket', label: 'Bucket', width: 'w-40' },
     { key: 'default', label: 'Default', width: 'w-16' },
     { key: 'lastValidation', label: 'Validated', width: 'w-28' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // ============================================================================
   // CLOUDNATIVEPG (CNPG) POSTGRESQL
@@ -981,7 +981,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'primary', label: 'Primary', width: 'w-36' },
     { key: 'image', label: 'Image', width: 'w-28' },
     { key: 'storage', label: 'Storage', width: 'w-20' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   scheduledbackups: [
     { key: 'name', label: 'Name' },
@@ -991,7 +991,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'schedule', label: 'Schedule', width: 'w-36' },
     { key: 'lastSchedule', label: 'Last Run', width: 'w-24' },
     { key: 'suspended', label: 'Suspended', width: 'w-20' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   poolers: [
     { key: 'name', label: 'Name' },
@@ -1001,7 +1001,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'type', label: 'Type', width: 'w-16' },
     { key: 'poolMode', label: 'Pool Mode', width: 'w-28' },
     { key: 'instances', label: 'Instances', width: 'w-24', tooltip: 'Ready/Total' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // ============================================================================
   // ISTIO SERVICE MESH
@@ -1013,7 +1013,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'hosts', label: 'Hosts', width: 'w-48' },
     { key: 'gateways', label: 'Gateways', width: 'w-40' },
     { key: 'routes', label: 'Routes', width: 'w-20', tooltip: 'HTTP + TCP + TLS routes' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   destinationrules: [
     { key: 'name', label: 'Name' },
@@ -1022,7 +1022,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'host', label: 'Host', width: 'w-48' },
     { key: 'subsets', label: 'Subsets', width: 'w-20' },
     { key: 'loadBalancer', label: 'LB Policy', width: 'w-28' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   serviceentries: [
     { key: 'name', label: 'Name' },
@@ -1031,7 +1031,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'hosts', label: 'Hosts', width: 'w-48' },
     { key: 'location', label: 'Location', width: 'w-28' },
     { key: 'ports', label: 'Ports', width: 'w-32' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   peerauthentications: [
     { key: 'name', label: 'Name' },
@@ -1039,7 +1039,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'mode', label: 'mTLS Mode', width: 'w-28' },
     { key: 'selector', label: 'Selector', width: 'w-48' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   authorizationpolicies: [
     { key: 'name', label: 'Name' },
@@ -1048,7 +1048,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'action', label: 'Action', width: 'w-24' },
     { key: 'rules', label: 'Rules', width: 'w-20' },
     { key: 'selector', label: 'Selector', width: 'w-48' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Knative Serving
   knativeservices: [
@@ -1058,7 +1058,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'url', label: 'URL', width: 'w-56' },
     { key: 'latestRevision', label: 'Latest Revision', width: 'w-44' },
     { key: 'traffic', label: 'Traffic', width: 'w-48' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   knativeconfigurations: [
     { key: 'name', label: 'Name' },
@@ -1066,7 +1066,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'latestCreated', label: 'Latest Created', width: 'w-48' },
     { key: 'latestReady', label: 'Latest Ready', width: 'w-48' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   knativerevisions: [
     { key: 'name', label: 'Name' },
@@ -1075,7 +1075,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'routing', label: 'Traffic', width: 'w-20', tooltip: 'Whether this revision is receiving traffic' },
     { key: 'image', label: 'Image', width: 'w-48' },
     { key: 'concurrency', label: 'Concurrency', width: 'w-24' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   knativeroutes: [
     { key: 'name', label: 'Name' },
@@ -1083,7 +1083,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'url', label: 'URL', width: 'w-56' },
     { key: 'traffic', label: 'Traffic', width: 'w-48' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Knative Eventing
   brokers: [
@@ -1091,7 +1091,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'address', label: 'Address', width: 'w-56' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   triggers: [
     { key: 'name', label: 'Name' },
@@ -1100,7 +1100,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'broker', label: 'Broker', width: 'w-36' },
     { key: 'subscriber', label: 'Subscriber', width: 'w-48' },
     { key: 'filter', label: 'Filter', width: 'w-48' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   eventtypes: [
     { key: 'name', label: 'Name' },
@@ -1108,7 +1108,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'type', label: 'Type', width: 'w-48' },
     { key: 'source', label: 'Source', width: 'w-44' },
     { key: 'reference', label: 'Reference', width: 'w-40' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Knative Sources
   pingsources: [
@@ -1118,21 +1118,21 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'schedule', label: 'Schedule', width: 'w-36' },
     { key: 'sink', label: 'Sink', width: 'w-48' },
     { key: 'data', label: 'Data', width: 'w-36' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   apiserversources: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'sink', label: 'Sink', width: 'w-48' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   containersources: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'sink', label: 'Sink', width: 'w-48' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   sinkbindings: [
     { key: 'name', label: 'Name' },
@@ -1140,7 +1140,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'sink', label: 'Sink', width: 'w-48' },
     { key: 'subject', label: 'Subject', width: 'w-48' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Knative Messaging
   channels: [
@@ -1148,14 +1148,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'address', label: 'Address', width: 'w-56' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   inmemorychannels: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'address', label: 'Address', width: 'w-56' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   subscriptions: [
     { key: 'name', label: 'Name' },
@@ -1163,7 +1163,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'channel', label: 'Channel', width: 'w-44' },
     { key: 'subscriber', label: 'Subscriber', width: 'w-44' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Knative Flows
   sequences: [
@@ -1171,14 +1171,14 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'steps', label: 'Steps', width: 'w-16' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   parallels: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'branches', label: 'Branches', width: 'w-20' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Knative Networking
   knativeingresses: [
@@ -1188,7 +1188,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ingressClass', label: 'Class', width: 'w-24' },
     { key: 'hosts', label: 'Hosts', width: 'w-56' },
     { key: 'visibility', label: 'Visibility', width: 'w-28' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   knativecertificates: [
     { key: 'name', label: 'Name' },
@@ -1196,21 +1196,21 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'dnsNames', label: 'DNS Names', width: 'w-56' },
     { key: 'secretName', label: 'Secret', width: 'w-44' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   serverlessservices: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'mode', label: 'Mode', width: 'w-20' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   domainmappings: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'url', label: 'URL', width: 'w-56' },
-    { key: 'age', label: 'Age', width: 'w-20' },
+    { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // Traefik
   ingressroutes: [
@@ -1221,7 +1221,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'routes', label: 'Routes', width: 'min-w-48', hideOnMobile: true },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
     { key: 'middlewares', label: 'MW', width: 'w-14 shrink-0', tooltip: 'Unique middleware count' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   ingressroutetcps: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -1231,58 +1231,58 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'routes', label: 'Routes', width: 'min-w-48', hideOnMobile: true },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
     { key: 'middlewares', label: 'MW', width: 'w-14 shrink-0', tooltip: 'Unique middleware count' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   ingressrouteudps: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'entrypoints', label: 'Entry Points', width: 'w-32 shrink-0' },
     { key: 'routes', label: 'Routes', width: 'min-w-48' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   middlewares: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'type', label: 'Type', width: 'w-32 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   middlewaretcps: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'type', label: 'Type', width: 'w-32 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   traefikservices: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'type', label: 'Type', width: 'w-36 shrink-0' },
     { key: 'targets', label: 'Targets', width: 'min-w-48' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   serverstransports: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'serverName', label: 'Server Name', width: 'w-40' },
     { key: 'insecure', label: 'Skip Verify', width: 'w-24 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   serverstransporttcps: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'serverName', label: 'Server Name', width: 'w-40' },
     { key: 'insecure', label: 'Skip Verify', width: 'w-24 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   tlsoptions: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'minVersion', label: 'Min TLS', width: 'w-24 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   tlsstores: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   // Cluster API (CAPI)
   capiclusters: [
@@ -1294,7 +1294,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'workerReplicas', label: 'Workers', width: 'w-20 shrink-0', tooltip: 'Worker replicas (ready/desired)' },
     { key: 'phase', label: 'Phase', width: 'w-28 shrink-0' },
     { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   machinedeployments: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -1303,7 +1303,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ready', label: 'Ready', width: 'w-20 shrink-0', tooltip: 'Ready replicas / desired' },
     { key: 'phase', label: 'Phase', width: 'w-28 shrink-0' },
     { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   machines: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -1313,7 +1313,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'phase', label: 'Phase', width: 'w-28 shrink-0' },
     { key: 'node', label: 'Node', width: 'w-32 shrink-0' },
     { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   machinesets: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -1321,7 +1321,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'cluster', label: 'Cluster', width: 'w-32 shrink-0' },
     { key: 'ready', label: 'Ready', width: 'w-20 shrink-0' },
     { key: 'phase', label: 'Phase', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   machinepools: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -1329,7 +1329,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'cluster', label: 'Cluster', width: 'w-32 shrink-0' },
     { key: 'ready', label: 'Ready', width: 'w-20 shrink-0' },
     { key: 'phase', label: 'Phase', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   kubeadmcontrolplanes: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -1338,13 +1338,13 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'ready', label: 'Ready', width: 'w-20 shrink-0' },
     { key: 'initialized', label: 'Initialized', width: 'w-24 shrink-0' },
     { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   clusterclasses: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   machinehealthchecks: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -1352,7 +1352,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'cluster', label: 'Cluster', width: 'w-32 shrink-0' },
     { key: 'healthy', label: 'Healthy', width: 'w-20 shrink-0', tooltip: 'Healthy machines / expected' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   // AWS CAPI Infrastructure Provider
   awsmanagedcontrolplanes: [
@@ -1362,7 +1362,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'region', label: 'Region', width: 'w-28 shrink-0' },
     { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   awsmanagedmachinepools: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -1371,7 +1371,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'replicas', label: 'Ready', width: 'w-20 shrink-0', tooltip: 'Ready replicas' },
     { key: 'capacityType', label: 'Capacity', width: 'w-28 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   awsmachines: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -1380,21 +1380,21 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'instanceState', label: 'State', width: 'w-24 shrink-0' },
     { key: 'instanceID', label: 'Instance ID', width: 'w-40 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   awsmachinetemplates: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'instanceType', label: 'Instance', width: 'w-28 shrink-0' },
     { key: 'capacity', label: 'Capacity', width: 'w-32 shrink-0', tooltip: 'Computed CPU/memory' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   awsmanagedclusters: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'endpoint', label: 'Endpoint', width: 'min-w-44' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   // GCP CAPI Infrastructure Provider
   gcpmanagedcontrolplanes: [
@@ -1405,7 +1405,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'location', label: 'Location', width: 'w-28 shrink-0' },
     { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   gcpmanagedmachinepools: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -1413,7 +1413,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'machineType', label: 'Machine Type', width: 'w-32 shrink-0' },
     { key: 'replicas', label: 'Replicas', width: 'w-20 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   gcpmachines: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -1421,20 +1421,20 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'instanceType', label: 'Instance', width: 'w-28 shrink-0' },
     { key: 'zone', label: 'Zone', width: 'w-28 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   gcpmachinetemplates: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'instanceType', label: 'Instance', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   gcpmanagedclusters: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'project', label: 'Project', width: 'w-36 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   // Azure CAPI Infrastructure Provider
   azuremanagedcontrolplanes: [
@@ -1444,7 +1444,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'resourceGroup', label: 'Resource Group', width: 'w-40 shrink-0' },
     { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   azuremanagedmachinepools: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
@@ -1454,26 +1454,26 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'replicas', label: 'Replicas', width: 'w-20 shrink-0' },
     { key: 'priority', label: 'Priority', width: 'w-24 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   azuremachines: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'vmSize', label: 'VM Size', width: 'w-32 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   azuremachinetemplates: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'vmSize', label: 'VM Size', width: 'w-32 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   azuremanagedclusters: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   // Contour
   httpproxies: [
@@ -1484,7 +1484,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'includes', label: 'Includes', width: 'w-24 shrink-0' },
     { key: 'tls', label: 'TLS', width: 'w-14 shrink-0' },
     { key: 'status', label: 'Status', width: 'w-28 shrink-0' },
-    { key: 'age', label: 'Age', width: 'w-20 shrink-0' },
+    { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
 }
 
