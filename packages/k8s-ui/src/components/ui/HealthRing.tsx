@@ -35,7 +35,7 @@ export function HealthRing({ segments, size = 48, strokeWidth = 5, label }: Heal
           className="text-theme-border"
         />
         {label && (
-          <text x="50" y="48" textAnchor="middle" dominantBaseline="central" className="fill-theme-text-tertiary text-[22px] font-semibold font-mono">
+          <text x="50" y="48" textAnchor="middle" dominantBaseline="central" fill="currentColor" className="text-theme-text-tertiary text-[22px] font-semibold font-mono">
             0
           </text>
         )}
@@ -98,7 +98,7 @@ export function HealthRing({ segments, size = 48, strokeWidth = 5, label }: Heal
       </g>
       {/* Center label — nudged up slightly for visual centering in 270° arc */}
       {label && (
-        <text x="50" y="48" textAnchor="middle" dominantBaseline="central" className="fill-theme-text-primary text-[22px] font-semibold font-mono">
+        <text x="50" y="48" textAnchor="middle" dominantBaseline="central" fill="currentColor" className="text-theme-text-primary text-[22px] font-semibold font-mono">
           {label}
         </text>
       )}
