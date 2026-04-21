@@ -176,21 +176,26 @@ func (s *Server) setupRoutes() {
 		r.Get("/auth/logout", s.handleLogout)
 	}
 
-	// pprof routes for profiling (dev mode only, but always available for debugging)
-	r.Route("/debug/pprof", func(r chi.Router) {
-		r.Get("/", pprof.Index)
-		r.Get("/cmdline", pprof.Cmdline)
-		r.Get("/profile", pprof.Profile)
-		r.Get("/symbol", pprof.Symbol)
-		r.Get("/trace", pprof.Trace)
-		r.Get("/allocs", pprof.Handler("allocs").ServeHTTP)
-		r.Get("/block", pprof.Handler("block").ServeHTTP)
-		r.Get("/goroutine", pprof.Handler("goroutine").ServeHTTP)
-		r.Get("/heap", pprof.Handler("heap").ServeHTTP)
-		r.Get("/mutex", pprof.Handler("mutex").ServeHTTP)
-		r.Get("/threadcreate", pprof.Handler("threadcreate").ServeHTTP)
-		r.Get("/goroutineleak", pprof.Handler("goroutineleak").ServeHTTP) // requires GOEXPERIMENT=goroutineleakprofile at build time
-	})
+	// pprof routes for profiling. Not mounted under hub-mode — they'd be
+	// reachable via the Hub tunnel and leak the in-memory K8s cache (every
+	// Secret, ConfigMap, Pod spec) via /debug/pprof/heap. Local/standalone
+	// installs keep them for debugging.
+	if !hubMode() {
+		r.Route("/debug/pprof", func(r chi.Router) {
+			r.Get("/", pprof.Index)
+			r.Get("/cmdline", pprof.Cmdline)
+			r.Get("/profile", pprof.Profile)
+			r.Get("/symbol", pprof.Symbol)
+			r.Get("/trace", pprof.Trace)
+			r.Get("/allocs", pprof.Handler("allocs").ServeHTTP)
+			r.Get("/block", pprof.Handler("block").ServeHTTP)
+			r.Get("/goroutine", pprof.Handler("goroutine").ServeHTTP)
+			r.Get("/heap", pprof.Handler("heap").ServeHTTP)
+			r.Get("/mutex", pprof.Handler("mutex").ServeHTTP)
+			r.Get("/threadcreate", pprof.Handler("threadcreate").ServeHTTP)
+			r.Get("/goroutineleak", pprof.Handler("goroutineleak").ServeHTTP) // requires GOEXPERIMENT=goroutineleakprofile at build time
+		})
+	}
 
 	// API routes
 	r.Route("/api", func(r chi.Router) {
@@ -2384,9 +2389,9 @@ func (s *Server) handleCAPIClusterKubeconfig(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	client := k8s.GetClient()
+	client := s.getClientForRequest(r)
 	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "kubernetes client not initialized")
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
 
@@ -2439,9 +2444,9 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	client := k8s.GetClient()
+	client := s.getClientForRequest(r)
 	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "kubernetes client not initialized")
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
 

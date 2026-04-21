@@ -209,13 +209,30 @@ func (c *Client) GetActionConfigForUser(namespace, username string, groups []str
 	return c.getActionConfigForUser(namespace, username, groups)
 }
 
+// ListReleasesAsUser is ListReleases with K8s impersonation.
+// When username is empty, falls back to the ServiceAccount identity (same
+// behavior as ListReleases).
+func (c *Client) ListReleasesAsUser(namespace, username string, groups []string) ([]HelmRelease, error) {
+	if username == "" {
+		return c.ListReleases(namespace)
+	}
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return nil, err
+	}
+	return listReleasesWith(actionConfig, namespace)
+}
+
 // ListReleases returns all Helm releases, optionally filtered by namespace
 func (c *Client) ListReleases(namespace string) ([]HelmRelease, error) {
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
+	return listReleasesWith(actionConfig, namespace)
+}
 
+func listReleasesWith(actionConfig *action.Configuration, namespace string) ([]HelmRelease, error) {
 	listAction := action.NewList(actionConfig)
 	listAction.All = true
 	listAction.AllNamespaces = namespace == ""
@@ -242,13 +259,29 @@ func (c *Client) ListReleases(namespace string) ([]HelmRelease, error) {
 	return result, nil
 }
 
+// GetReleaseAsUser is GetRelease with K8s impersonation.
+// When username is empty, falls back to the ServiceAccount identity.
+func (c *Client) GetReleaseAsUser(namespace, name, username string, groups []string) (*HelmReleaseDetail, error) {
+	if username == "" {
+		return c.GetRelease(namespace, name)
+	}
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return nil, err
+	}
+	return getReleaseWith(actionConfig, namespace, name)
+}
+
 // GetRelease returns details for a specific release
 func (c *Client) GetRelease(namespace, name string) (*HelmReleaseDetail, error) {
 	actionConfig, err := c.getActionConfig(namespace)
 	if err != nil {
 		return nil, err
 	}
+	return getReleaseWith(actionConfig, namespace, name)
+}
 
+func getReleaseWith(actionConfig *action.Configuration, namespace, name string) (*HelmReleaseDetail, error) {
 	// Get the latest release
 	getAction := action.NewGet(actionConfig)
 	rel, err := getAction.Run(name)
@@ -317,7 +350,22 @@ func (c *Client) GetManifest(namespace, name string, revision int) (string, erro
 	if err != nil {
 		return "", err
 	}
+	return getManifestWith(actionConfig, name, revision)
+}
 
+// GetManifestAsUser is GetManifest with K8s impersonation.
+func (c *Client) GetManifestAsUser(namespace, name string, revision int, username string, groups []string) (string, error) {
+	if username == "" {
+		return c.GetManifest(namespace, name, revision)
+	}
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return "", err
+	}
+	return getManifestWith(actionConfig, name, revision)
+}
+
+func getManifestWith(actionConfig *action.Configuration, name string, revision int) (string, error) {
 	getAction := action.NewGet(actionConfig)
 	if revision > 0 {
 		getAction.Version = revision
@@ -337,7 +385,22 @@ func (c *Client) GetValues(namespace, name string, allValues bool) (*HelmValues,
 	if err != nil {
 		return nil, err
 	}
+	return getValuesWith(actionConfig, name, allValues)
+}
 
+// GetValuesAsUser is GetValues with K8s impersonation.
+func (c *Client) GetValuesAsUser(namespace, name string, allValues bool, username string, groups []string) (*HelmValues, error) {
+	if username == "" {
+		return c.GetValues(namespace, name, allValues)
+	}
+	actionConfig, err := c.getActionConfigForUser(namespace, username, groups)
+	if err != nil {
+		return nil, err
+	}
+	return getValuesWith(actionConfig, name, allValues)
+}
+
+func getValuesWith(actionConfig *action.Configuration, name string, allValues bool) (*HelmValues, error) {
 	getValuesAction := action.NewGetValues(actionConfig)
 	getValuesAction.AllValues = allValues
 
@@ -365,12 +428,21 @@ func (c *Client) GetValues(namespace, name string, allValues bool) (*HelmValues,
 
 // GetManifestDiff returns the diff between two revisions
 func (c *Client) GetManifestDiff(namespace, name string, revision1, revision2 int) (*ManifestDiff, error) {
-	manifest1, err := c.GetManifest(namespace, name, revision1)
+	return c.getManifestDiff(namespace, name, revision1, revision2, "", nil)
+}
+
+// GetManifestDiffAsUser is GetManifestDiff with K8s impersonation.
+func (c *Client) GetManifestDiffAsUser(namespace, name string, revision1, revision2 int, username string, groups []string) (*ManifestDiff, error) {
+	return c.getManifestDiff(namespace, name, revision1, revision2, username, groups)
+}
+
+func (c *Client) getManifestDiff(namespace, name string, revision1, revision2 int, username string, groups []string) (*ManifestDiff, error) {
+	manifest1, err := c.GetManifestAsUser(namespace, name, revision1, username, groups)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get manifest for revision %d: %w", revision1, err)
 	}
 
-	manifest2, err := c.GetManifest(namespace, name, revision2)
+	manifest2, err := c.GetManifestAsUser(namespace, name, revision2, username, groups)
 	if err != nil {
 		return nil, fmt.Errorf("failed to get manifest for revision %d: %w", revision2, err)
 	}

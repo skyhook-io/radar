@@ -219,19 +219,27 @@ hub:
   existingSecretKey: "token"
   # Default ClusterRoleBindings for Hub identity groups. Hub injects
   # X-Forwarded-Groups containing hub:<role> on every proxied request;
-  # these bindings give each role a sensible default K8s capability.
-  # Cluster admins who want fine-grained control should set create=false
-  # and author their own bindings (possibly against hub:user:<id> groups
-  # for per-user overrides).
+  # Radar impersonates that identity against the K8s API and against every
+  # user-initiated handler (REST, MCP, workload logs, node-debug, Helm
+  # read/write), so these bindings are what K8s RBAC actually enforces.
+  #
+  # Defaults map Hub's role tiers onto standard K8s ClusterRoles:
+  #   hub:owner   → "admin"  (namespace-everything, no cluster-scoped writes)
+  #   hub:member  → "edit"   (read+write on standard resources, no RBAC)
+  #   hub:viewer  → "view"   (read-only)
+  #
+  # Set ownerClusterRole=cluster-admin to grant cluster-wide admin. Set
+  # any of the booleans to false to suppress that binding entirely — then
+  # author your own (e.g. namespace-scoped RoleBindings, or per-user
+  # bindings against hub:user:<id> groups) for fine-grained control.
   defaultRbac:
     create: true
     owner: true
     member: true
     viewer: true
     # ClusterRoles the three Hub roles bind to. Swap for custom ClusterRoles
-    # to tighten the defaults (e.g., replace cluster-admin with a custom
-    # role that excludes RBAC verbs).
-    ownerClusterRole: cluster-admin
+    # to tighten or loosen the defaults.
+    ownerClusterRole: admin
     memberClusterRole: edit
     viewerClusterRole: view
 

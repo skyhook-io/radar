@@ -9,7 +9,19 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/skyhook-io/radar/internal/helm"
+	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
+
+// userFromContext extracts the auth user attached by the HTTP middleware,
+// returning ("", nil) when no user is present (auth disabled / local binary).
+// The *AsUser Helm methods treat empty username as "use the SA identity",
+// so callers can thread this straight through.
+func userFromContext(ctx context.Context) (string, []string) {
+	if user := pkgauth.UserFromContext(ctx); user != nil {
+		return user.Username, user.Groups
+	}
+	return "", nil
+}
 
 // Helm tool input types
 
@@ -33,7 +45,8 @@ func handleListHelmReleases(ctx context.Context, req *mcp.CallToolRequest, input
 		return nil, nil, fmt.Errorf("helm is not available (no releases found or helm not installed)")
 	}
 
-	releases, err := helmClient.ListReleases(input.Namespace)
+	username, groups := userFromContext(ctx)
+	releases, err := helmClient.ListReleasesAsUser(input.Namespace, username, groups)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list helm releases: %w", err)
 	}
@@ -50,7 +63,8 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 		return nil, nil, fmt.Errorf("helm is not available (no releases found or helm not installed)")
 	}
 
-	detail, err := helmClient.GetRelease(input.Namespace, input.Name)
+	username, groups := userFromContext(ctx)
+	detail, err := helmClient.GetReleaseAsUser(input.Namespace, input.Name, username, groups)
 	if err != nil {
 		return nil, nil, fmt.Errorf("release %s/%s not found: %w", input.Namespace, input.Name, err)
 	}
@@ -79,7 +93,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	includes := parseIncludes(input.Include)
 
 	if includes["values"] {
-		values, err := helmClient.GetValues(input.Namespace, input.Name, false)
+		values, err := helmClient.GetValuesAsUser(input.Namespace, input.Name, false, username, groups)
 		if err != nil {
 			log.Printf("[mcp] Failed to get values for %s/%s: %v", input.Namespace, input.Name, err)
 			result["valuesError"] = err.Error()
@@ -97,7 +111,7 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 		if rev2 == 0 {
 			rev2 = detail.Revision // default to current revision
 		}
-		diff, err := helmClient.GetManifestDiff(input.Namespace, input.Name, input.DiffRev1, rev2)
+		diff, err := helmClient.GetManifestDiffAsUser(input.Namespace, input.Name, input.DiffRev1, rev2, username, groups)
 		if err != nil {
 			log.Printf("[mcp] Failed to get manifest diff for %s/%s: %v", input.Namespace, input.Name, err)
 			result["diffError"] = err.Error()

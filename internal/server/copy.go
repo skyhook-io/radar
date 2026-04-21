@@ -19,7 +19,6 @@ import (
 
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/images"
-	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // PodFilesystem represents the file listing response for a pod container
@@ -48,10 +47,10 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 	// container, but filepath is OS-specific and converts to backslashes on Windows.
 	dirPath = path.Clean(dirPath)
 
-	client := k8s.GetClient()
-	config := k8s.GetConfig()
+	client := s.getClientForRequest(r)
+	config := s.getConfigForRequest(r)
 	if client == nil || config == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "K8s client not initialized")
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
 
@@ -111,8 +110,11 @@ func (s *Server) handlePodFileList(w http.ResponseWriter, r *http.Request) {
 
 // listFilesWithLS is a fallback when find is not available
 func (s *Server) listFilesWithLS(r *http.Request, namespace, podName, container, dirPath string) ([]*images.FileNode, int, error) {
-	client := k8s.GetClient()
-	config := k8s.GetConfig()
+	client := s.getClientForRequest(r)
+	config := s.getConfigForRequest(r)
+	if client == nil || config == nil {
+		return nil, 0, fmt.Errorf("cluster client not available")
+	}
 
 	cmd := []string{"/bin/sh", "-c", fmt.Sprintf("ls -la %s", shellQuote(dirPath))}
 
@@ -165,10 +167,10 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 	filePath = path.Clean(filePath)
 	fileName := path.Base(filePath)
 
-	client := k8s.GetClient()
-	config := k8s.GetConfig()
+	client := s.getClientForRequest(r)
+	config := s.getConfigForRequest(r)
 	if client == nil || config == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "K8s client not initialized")
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
 
@@ -267,8 +269,11 @@ func (s *Server) handlePodFileDownload(w http.ResponseWriter, r *http.Request) {
 
 // downloadWithCat is a fallback when tar is not available
 func (s *Server) downloadWithCat(r *http.Request, namespace, podName, container, filePath string) ([]byte, error) {
-	client := k8s.GetClient()
-	config := k8s.GetConfig()
+	client := s.getClientForRequest(r)
+	config := s.getConfigForRequest(r)
+	if client == nil || config == nil {
+		return nil, fmt.Errorf("cluster client not available")
+	}
 
 	cmd := []string{"cat", filePath}
 

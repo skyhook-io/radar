@@ -4,9 +4,15 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 )
+
+// hubMode reports whether Radar is running under Radar Hub. Mirrored in the
+// server package; duplicated here to avoid an import cycle and because the
+// auth tightening under hub-mode is its own concern.
+func hubMode() bool { return os.Getenv("RADAR_HUB_MODE") == "true" }
 
 // Authenticate returns a chi middleware that extracts user identity from
 // proxy headers or session cookies. Returns 401 if unauthenticated.
@@ -109,6 +115,20 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 
 // isExemptPath returns true for paths that don't require authentication
 func isExemptPath(path string) bool {
+	// Under hub-mode the listener is only reachable via the Hub tunnel, but
+	// we still harden against a misconfigured intercept forwarding debug
+	// paths or static-asset requests. Keep the exempt set minimal: health
+	// for kubelet probes, /auth/* for the login/callback roundtrip.
+	// /debug/pprof/* in particular leaks the entire in-memory K8s cache,
+	// so it must pass through auth (and is not mounted at all under
+	// hub-mode — see server.go).
+	if hubMode() {
+		if path == "/api/health" || strings.HasPrefix(path, "/auth/") {
+			return true
+		}
+		return false
+	}
+
 	exemptPrefixes := []string{
 		"/api/health",
 		"/api/connection",

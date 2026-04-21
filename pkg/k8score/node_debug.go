@@ -69,7 +69,7 @@ func CreateNodeDebugPod(ctx context.Context, client kubernetes.Interface, nodeNa
 			Namespace: "default",
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by": "radar",
-				"radarhq.io/debug-node":  labelValue,
+				"radarhq.io/debug-node":        labelValue,
 			},
 		},
 		Spec: corev1.PodSpec{
@@ -147,18 +147,29 @@ func WaitForPodRunning(ctx context.Context, client kubernetes.Interface, namespa
 	}
 }
 
-// DeleteNodeDebugPods deletes all debug pods for the given node.
+// DeleteNodeDebugPods deletes all debug pods for the given node. Matches both
+// the current "radarhq.io/debug-node" label and the legacy "radar.skyhook.io/
+// debug-node" label so a Radar binary upgraded mid-debug-session can still
+// GC in-flight privileged pods created by the prior version.
 func DeleteNodeDebugPods(ctx context.Context, client kubernetes.Interface, nodeName string) error {
 	if client == nil {
 		return fmt.Errorf("kubernetes client not initialized")
 	}
 
 	gracePeriod := int64(0)
-	return client.CoreV1().Pods("default").DeleteCollection(ctx,
-		metav1.DeleteOptions{GracePeriodSeconds: &gracePeriod},
-		metav1.ListOptions{
-			LabelSelector: fmt.Sprintf("radarhq.io/debug-node=%s", sanitizeLabelValue(nodeName)),
-		},
-	)
+	selectors := []string{
+		fmt.Sprintf("radarhq.io/debug-node=%s", sanitizeLabelValue(nodeName)),
+		fmt.Sprintf("radar.skyhook.io/debug-node=%s", sanitizeLabelValue(nodeName)),
+	}
+	var firstErr error
+	for _, sel := range selectors {
+		if err := client.CoreV1().Pods("default").DeleteCollection(ctx,
+			metav1.DeleteOptions{GracePeriodSeconds: &gracePeriod},
+			metav1.ListOptions{LabelSelector: sel},
+		); err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	return firstErr
 }
 

@@ -431,7 +431,7 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 
 	if includes["logs"] {
 		if isPodKind(kind) {
-			if client := k8s.GetClient(); client != nil {
+			if client := k8s.ClientFromContext(ctx); client != nil {
 				tailLines := int64(100)
 				opts := &corev1.PodLogOptions{TailLines: &tailLines}
 				stream, err := client.CoreV1().Pods(namespace).GetLogs(name, opts).Stream(ctx)
@@ -828,7 +828,7 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 }
 
 func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLogsInput) (*mcp.CallToolResult, any, error) {
-	clientset := k8s.GetClient()
+	clientset := k8s.ClientFromContext(ctx)
 	if clientset == nil {
 		return nil, nil, fmt.Errorf("not connected to cluster")
 	}
@@ -1128,7 +1128,8 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 
 	// Helm releases — sort failed-first before slicing
 	if helmClient := helm.GetClient(); helmClient != nil {
-		releases, err := helmClient.ListReleases(namespace)
+		username, groups := userFromContext(ctx)
+		releases, err := helmClient.ListReleasesAsUser(namespace, username, groups)
 		if err == nil {
 			d.HelmReleases.Total = len(releases)
 
@@ -1151,9 +1152,11 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		}
 	}
 
-	// Metrics (best-effort — silently skip if metrics-server unavailable)
-	if client := k8s.GetClient(); client != nil {
-		data, err := client.RESTClient().Get().
+	// Metrics (best-effort — silently skip if metrics-server unavailable).
+	// Metrics-server forwards the impersonation headers, so a user without
+	// metrics.k8s.io/nodes access gets a 403 here and the field is left empty.
+	if client := k8s.ClientFromContext(ctx); client != nil {
+		data, err := client.CoreV1().RESTClient().Get().
 			AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").
 			DoRaw(ctx)
 		if err == nil {

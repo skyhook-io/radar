@@ -37,14 +37,19 @@ func handleApplyResource(ctx context.Context, req *mcp.CallToolRequest, input ap
 		return nil, nil, fmt.Errorf("no valid YAML documents found")
 	}
 
+	dynClient := k8s.DynamicClientFromContext(ctx)
+	if dynClient == nil {
+		return nil, nil, fmt.Errorf("not connected to cluster")
+	}
+
 	var results []map[string]any
 	for i, doc := range docs {
-		result, err := k8s.ApplyResource(ctx, k8s.ApplyResourceOptions{
+		result, err := k8s.ApplyResourceWithClient(ctx, k8s.ApplyResourceOptions{
 			YAML:              doc,
 			Mode:              mode,
 			DryRun:            input.DryRun,
 			NamespaceOverride: input.Namespace,
-		})
+		}, dynClient)
 		if err != nil {
 			if len(docs) > 1 {
 				return nil, nil, fmt.Errorf("failed on document %d: %w", i+1, err)

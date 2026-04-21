@@ -24,7 +24,7 @@ type manageGitOpsInput struct {
 // GitOps tool handler
 
 func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input manageGitOpsInput) (*mcp.CallToolResult, any, error) {
-	dynClient := k8s.GetDynamicClient()
+	dynClient := k8s.DynamicClientFromContext(ctx)
 	if dynClient == nil {
 		return nil, nil, fmt.Errorf("not connected to cluster")
 	}

@@ -441,9 +441,10 @@ func (s *Server) handleNodeDebug(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := k8s.GetClient()
+	auth.AuditLog(r, "", nodeName)
+	client := s.getClientForRequest(r)
 	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "K8s client not initialized")
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
 
@@ -489,9 +490,10 @@ func (s *Server) handleNodeDebugCleanup(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	client := k8s.GetClient()
+	auth.AuditLog(r, "", nodeName)
+	client := s.getClientForRequest(r)
 	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "K8s client not initialized")
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
 

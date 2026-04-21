@@ -18,9 +18,16 @@ import (
 // Annotation keys written by SetArgoAutoSync when suspending auto-sync, to remember
 // the original prune/selfHeal settings so they can be restored on resume.
 // Exported so consumers can identify or clean up these annotations independently.
+//
+// Legacy* constants honor Applications suspended by older Radar builds so
+// resuming still restores their prune/selfHeal settings. Legacy keys are
+// cleared on resume and never re-written.
 const (
-	ArgoSuspendedPruneAnnotation    = "skyhook.io/suspended-prune"
-	ArgoSuspendedSelfHealAnnotation = "skyhook.io/suspended-selfheal"
+	ArgoSuspendedPruneAnnotation    = "radarhq.io/suspended-prune"
+	ArgoSuspendedSelfHealAnnotation = "radarhq.io/suspended-selfheal"
+
+	legacyArgoSuspendedPruneAnnotation    = "skyhook.io/suspended-prune"
+	legacyArgoSuspendedSelfHealAnnotation = "skyhook.io/suspended-selfheal"
 )
 
 // argoAppGVR is the GVR for ArgoCD Application resources.
@@ -160,10 +167,16 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 
 		annotations, _, _ := unstructured.NestedStringMap(app.Object, "metadata", "annotations")
 		if annotations != nil {
+			// Prefer the current key; fall back to the legacy key for
+			// Applications suspended by older Radar builds.
 			if v, ok := annotations[ArgoSuspendedPruneAnnotation]; ok {
+				prune = v == "true"
+			} else if v, ok := annotations[legacyArgoSuspendedPruneAnnotation]; ok {
 				prune = v == "true"
 			}
 			if v, ok := annotations[ArgoSuspendedSelfHealAnnotation]; ok {
+				selfHeal = v == "true"
+			} else if v, ok := annotations[legacyArgoSuspendedSelfHealAnnotation]; ok {
 				selfHeal = v == "true"
 			}
 		}
@@ -171,8 +184,10 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 		patch = map[string]any{
 			"metadata": map[string]any{
 				"annotations": map[string]any{
-					ArgoSuspendedPruneAnnotation:    nil,
-					ArgoSuspendedSelfHealAnnotation: nil,
+					ArgoSuspendedPruneAnnotation:          nil,
+					ArgoSuspendedSelfHealAnnotation:       nil,
+					legacyArgoSuspendedPruneAnnotation:    nil,
+					legacyArgoSuspendedSelfHealAnnotation: nil,
 				},
 			},
 			"spec": map[string]any{

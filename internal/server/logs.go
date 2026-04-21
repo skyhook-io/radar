@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	"k8s.io/client-go/kubernetes"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -41,9 +42,9 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	tailLines := parseTailLines(tailLinesStr, 500)
 	sinceSeconds := parseSinceSeconds(sinceSecondsStr)
 
-	client := k8s.GetClient()
+	client := s.getClientForRequest(r)
 	if client == nil {
-		s.writeError(w, http.StatusServiceUnavailable, "Kubernetes client not available")
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
 
@@ -74,7 +75,7 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 
 	if container != "" {
 		// Fetch logs for specific container
-		logContent, err := s.fetchContainerLogs(r.Context(), namespace, podName, container, tailLines, previous, sinceSeconds)
+		logContent, err := s.fetchContainerLogs(r.Context(), client, namespace, podName, container, tailLines, previous, sinceSeconds)
 		if err != nil {
 			s.writeError(w, http.StatusInternalServerError, fmt.Sprintf("Failed to fetch logs: %v", err))
 			return
@@ -83,7 +84,7 @@ func (s *Server) handlePodLogs(w http.ResponseWriter, r *http.Request) {
 	} else {
 		// Fetch logs for all containers
 		for _, c := range containers {
-			logContent, err := s.fetchContainerLogs(r.Context(), namespace, podName, c, tailLines, previous, sinceSeconds)
+			logContent, err := s.fetchContainerLogs(r.Context(), client, namespace, podName, c, tailLines, previous, sinceSeconds)
 			if err != nil {
 				logs[c] = fmt.Sprintf("Error fetching logs: %v", err)
 			} else {
@@ -133,9 +134,9 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	client := k8s.GetClient()
+	client := s.getClientForRequest(r)
 	if client == nil {
-		sendSSEError(w, flusher, "Kubernetes client not available")
+		sendSSEError(w, flusher, "cluster client not available — check cluster connection")
 		return
 	}
 
@@ -209,11 +210,11 @@ func (s *Server) handlePodLogsStream(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// fetchContainerLogs fetches logs for a specific container
-func (s *Server) fetchContainerLogs(ctx context.Context, namespace, podName, container string, tailLines int64, previous bool, sinceSeconds *int64) (string, error) {
-	client := k8s.GetClient()
+// fetchContainerLogs fetches logs for a specific container. Callers pass
+// the impersonated client so log reads are subject to the user's K8s RBAC.
+func (s *Server) fetchContainerLogs(ctx context.Context, client kubernetes.Interface, namespace, podName, container string, tailLines int64, previous bool, sinceSeconds *int64) (string, error) {
 	if client == nil {
-		return "", fmt.Errorf("kubernetes client not available")
+		return "", fmt.Errorf("cluster client not available")
 	}
 
 	stream, err := k8score.GetContainerLogs(ctx, client, namespace, podName, container, k8score.LogOptions{

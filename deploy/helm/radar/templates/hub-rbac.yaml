@@ -7,15 +7,17 @@ Hub injects identity headers on every proxied request:
   X-Forwarded-Groups: hub:<role>,hub:org:<org_id>,hub:user:<user_id>
 
 Radar runs with --auth-mode=proxy under hub-mode, so K8s sees the request as
-that impersonated identity. These bindings grant default capability per role:
+that impersonated identity and enforces RBAC on it. These bindings map the
+Hub role tiers to standard K8s ClusterRoles:
 
-  hub:owner   → cluster-admin (can be tightened via values)
+  hub:owner   → K8s "admin" role (namespace-everything, no cluster-scoped writes)
   hub:member  → K8s "edit" role (read+write on standard resources, no RBAC)
   hub:viewer  → K8s "view" role (read-only)
 
 Cluster operators can disable any of these (set hub.defaultRbac.<role>=false)
 and author their own bindings — e.g., per-namespace RoleBindings, or bindings
-for hub:user:<id> groups to grant individuals extra access.
+for hub:user:<id> groups to grant individuals extra access. Set
+hub.defaultRbac.ownerClusterRole=cluster-admin to grant cluster-wide admin.
 */}}
 {{- if and .Values.hub.enabled .Values.hub.defaultRbac.create -}}
 {{- if .Values.hub.defaultRbac.owner -}}

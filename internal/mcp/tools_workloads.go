@@ -50,9 +50,14 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 		return nil, nil, fmt.Errorf("invalid kind %q: must be deployment, statefulset, or daemonset", input.Kind)
 	}
 
+	dynClient := k8s.DynamicClientFromContext(ctx)
+	if dynClient == nil {
+		return nil, nil, fmt.Errorf("not connected to cluster")
+	}
+
 	switch strings.ToLower(input.Action) {
 	case "restart":
-		if err := k8s.RestartWorkload(ctx, kind, input.Namespace, input.Name); err != nil {
+		if err := k8s.RestartWorkloadWithClient(ctx, kind, input.Namespace, input.Name, dynClient); err != nil {
 			return nil, nil, fmt.Errorf("restart failed: %w", err)
 		}
 		return toJSONResult(map[string]string{
@@ -67,7 +72,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 		if kind == "daemonsets" {
 			return nil, nil, fmt.Errorf("scaling is not supported for DaemonSets (only Deployments and StatefulSets)")
 		}
-		if err := k8s.ScaleWorkload(ctx, kind, input.Namespace, input.Name, *input.Replicas); err != nil {
+		if err := k8s.ScaleWorkloadWithClient(ctx, kind, input.Namespace, input.Name, *input.Replicas, dynClient); err != nil {
 			return nil, nil, fmt.Errorf("scale failed: %w", err)
 		}
 		return toJSONResult(map[string]any{
@@ -80,7 +85,7 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 		if input.Revision == nil {
 			return nil, nil, fmt.Errorf("revision is required for rollback action")
 		}
-		if err := k8s.RollbackWorkload(ctx, kind, input.Namespace, input.Name, *input.Revision); err != nil {
+		if err := k8s.RollbackWorkloadWithClient(ctx, kind, input.Namespace, input.Name, *input.Revision, dynClient); err != nil {
 			return nil, nil, fmt.Errorf("rollback failed: %w", err)
 		}
 		return toJSONResult(map[string]any{
@@ -95,9 +100,14 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 }
 
 func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input manageCronJobInput) (*mcp.CallToolResult, any, error) {
+	dynClient := k8s.DynamicClientFromContext(ctx)
+	if dynClient == nil {
+		return nil, nil, fmt.Errorf("not connected to cluster")
+	}
+
 	switch strings.ToLower(input.Action) {
 	case "trigger":
-		job, err := k8s.TriggerCronJob(ctx, input.Namespace, input.Name)
+		job, err := k8s.TriggerCronJobWithClient(ctx, input.Namespace, input.Name, dynClient)
 		if err != nil {
 			return nil, nil, fmt.Errorf("trigger failed: %w", err)
 		}
@@ -108,7 +118,7 @@ func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input ma
 		})
 
 	case "suspend":
-		if err := k8s.SetCronJobSuspend(ctx, input.Namespace, input.Name, true); err != nil {
+		if err := k8s.SetCronJobSuspendWithClient(ctx, input.Namespace, input.Name, true, dynClient); err != nil {
 			return nil, nil, fmt.Errorf("suspend failed: %w", err)
 		}
 		return toJSONResult(map[string]string{
@@ -117,7 +127,7 @@ func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input ma
 		})
 
 	case "resume":
-		if err := k8s.SetCronJobSuspend(ctx, input.Namespace, input.Name, false); err != nil {
+		if err := k8s.SetCronJobSuspendWithClient(ctx, input.Namespace, input.Name, false, dynClient); err != nil {
 			return nil, nil, fmt.Errorf("resume failed: %w", err)
 		}
 		return toJSONResult(map[string]string{
@@ -141,7 +151,7 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 		return nil, nil, fmt.Errorf("not connected to cluster")
 	}
 
-	client := k8s.GetClient()
+	client := k8s.ClientFromContext(ctx)
 	if client == nil {
 		return nil, nil, fmt.Errorf("not connected to cluster")
 	}
@@ -279,9 +289,14 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 		return nil, nil, fmt.Errorf("node name is required")
 	}
 
+	client := k8s.ClientFromContext(ctx)
+	if client == nil {
+		return nil, nil, fmt.Errorf("not connected to cluster")
+	}
+
 	switch strings.ToLower(input.Action) {
 	case "cordon":
-		if err := k8s.CordonNode(ctx, input.Name); err != nil {
+		if err := k8s.CordonNodeWithClient(ctx, input.Name, client); err != nil {
 			return nil, nil, fmt.Errorf("cordon failed: %w", err)
 		}
 		return toJSONResult(map[string]string{
@@ -290,7 +305,7 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 		})
 
 	case "uncordon":
-		if err := k8s.UncordonNode(ctx, input.Name); err != nil {
+		if err := k8s.UncordonNodeWithClient(ctx, input.Name, client); err != nil {
 			return nil, nil, fmt.Errorf("uncordon failed: %w", err)
 		}
 		return toJSONResult(map[string]string{
@@ -313,7 +328,7 @@ func handleManageNode(ctx context.Context, req *mcp.CallToolRequest, input manag
 		if input.Timeout > 0 {
 			opts.Timeout = time.Duration(input.Timeout) * time.Second
 		}
-		result, err := k8s.DrainNode(ctx, input.Name, opts)
+		result, err := k8s.DrainNodeWithClient(ctx, input.Name, opts, client)
 		if err != nil {
 			return nil, nil, fmt.Errorf("drain failed: %w", err)
 		}

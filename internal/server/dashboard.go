@@ -1190,14 +1190,16 @@ func (s *Server) countWarningEvents(cache *k8s.ResourceCache, namespace string) 
 }
 
 func (s *Server) getDashboardMetrics(ctx context.Context) *DashboardMetrics {
-	client := k8s.GetClient()
+	client := k8s.ClientFromContext(ctx)
 	if client == nil {
 		return nil
 	}
 
 	// Query metrics-server via raw REST to avoid adding k8s.io/metrics dependency.
-	// GET /apis/metrics.k8s.io/v1beta1/nodes
-	data, err := client.RESTClient().Get().
+	// GET /apis/metrics.k8s.io/v1beta1/nodes. Metrics-server forwards the
+	// impersonation headers, so a user without metrics.k8s.io/nodes access
+	// gets a 403 here and dashboard metrics are silently omitted.
+	data, err := client.CoreV1().RESTClient().Get().
 		AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").
 		DoRaw(ctx)
 	if err != nil {
