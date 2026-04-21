@@ -306,6 +306,45 @@ func TestIsExemptPath(t *testing.T) {
 	}
 }
 
+// TestIsExemptPath_HubMode verifies that hub-mode narrows the exempt set to
+// /api/health + /auth/*. Under hub-mode, static assets, /api/connection,
+// and /debug/pprof/* must all require auth — a regression that silently
+// re-added them would let an unauthenticated request through the Hub tunnel
+// reach those paths.
+func TestIsExemptPath_HubMode(t *testing.T) {
+	t.Setenv("RADAR_HUB_MODE", "true")
+
+	tests := []struct {
+		path string
+		want bool
+	}{
+		{"/api/health", true},
+		{"/auth/login", true},
+		{"/auth/callback", true},
+		// Under non-hub mode these would be exempt. Under hub-mode they
+		// must require auth.
+		{"/api/connection", false},
+		{"/api/connection/retry", false},
+		{"/", false},
+		{"/index.html", false},
+		{"/assets/main.js", false},
+		{"/debug/pprof/heap", false},
+		{"/debug/pprof/goroutine", false},
+		{"/api/resources/pods", false},
+		{"/api/topology", false},
+		{"/mcp", false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.path, func(t *testing.T) {
+			got := isExemptPath(tt.path)
+			if got != tt.want {
+				t.Errorf("isExemptPath(%q) under hub-mode = %v, want %v", tt.path, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestIsSoftAuthPath(t *testing.T) {
 	tests := []struct {
 		path string

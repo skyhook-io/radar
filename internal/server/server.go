@@ -2630,7 +2630,14 @@ func (s *Server) getClientForRequest(r *http.Request) kubernetes.Interface {
 		}
 		return client
 	}
-	return k8s.GetClient()
+	// Typed-nil guard: k8s.GetClient returns *Clientset, and wrapping a nil
+	// pointer in kubernetes.Interface produces a non-nil interface. Callers
+	// do `if client == nil { ... }`, which would slip past and NPE on the
+	// first method call.
+	if c := k8s.GetClient(); c != nil {
+		return c
+	}
+	return nil
 }
 
 // getUserNamespaces returns namespace filtering for the current user.

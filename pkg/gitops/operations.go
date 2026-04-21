@@ -22,6 +22,10 @@ import (
 // Legacy* constants honor Applications suspended by older Radar builds so
 // resuming still restores their prune/selfHeal settings. Legacy keys are
 // cleared on resume and never re-written.
+//
+// TODO(2026-Q3): remove legacy constants once all installs have rolled
+// through at least one resume cycle past this release (paired with the
+// node-debug legacy-label cleanup in pkg/k8score/node_debug.go).
 const (
 	ArgoSuspendedPruneAnnotation    = "radarhq.io/suspended-prune"
 	ArgoSuspendedSelfHealAnnotation = "radarhq.io/suspended-selfheal"

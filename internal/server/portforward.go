@@ -121,13 +121,15 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Audit before the client check so attempted-but-denied requests still
+	// leave a trail for security review.
+	auth.AuditLog(r, req.Namespace, req.PodName)
 	client := s.getClientForRequest(r)
 	config := s.getConfigForRequest(r)
 	if client == nil || config == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "K8s client not initialized")
 		return
 	}
-	auth.AuditLog(r, req.Namespace, req.PodName)
 
 	// If service name provided, find a pod backing it and resolve the target port
 	podName := req.PodName

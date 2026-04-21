@@ -872,7 +872,23 @@ func extractDependencies(rel *release.Release) []ChartDependency {
 
 // CheckForUpgrade checks if a newer version of the chart is available in configured repos
 func (c *Client) CheckForUpgrade(namespace, name string) (*UpgradeInfo, error) {
-	actionConfig, err := c.getActionConfig(namespace)
+	return c.checkForUpgrade(namespace, name, "", nil)
+}
+
+// CheckForUpgradeAsUser is CheckForUpgrade with K8s impersonation on the
+// release read.
+func (c *Client) CheckForUpgradeAsUser(namespace, name, username string, groups []string) (*UpgradeInfo, error) {
+	return c.checkForUpgrade(namespace, name, username, groups)
+}
+
+func (c *Client) checkForUpgrade(namespace, name, username string, groups []string) (*UpgradeInfo, error) {
+	var actionConfig *action.Configuration
+	var err error
+	if username != "" {
+		actionConfig, err = c.getActionConfigForUser(namespace, username, groups)
+	} else {
+		actionConfig, err = c.getActionConfig(namespace)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -1220,8 +1236,19 @@ func (c *Client) upgradeWith(actionConfig *action.Configuration, namespace, name
 
 // BatchCheckUpgrades checks for upgrades for all releases at once (more efficient)
 func (c *Client) BatchCheckUpgrades(namespace string) (*BatchUpgradeInfo, error) {
+	return c.batchCheckUpgrades(namespace, "", nil)
+}
+
+// BatchCheckUpgradesAsUser is BatchCheckUpgrades with K8s impersonation on
+// the release listing (the repo index reads are local-file only and don't
+// touch K8s).
+func (c *Client) BatchCheckUpgradesAsUser(namespace, username string, groups []string) (*BatchUpgradeInfo, error) {
+	return c.batchCheckUpgrades(namespace, username, groups)
+}
+
+func (c *Client) batchCheckUpgrades(namespace, username string, groups []string) (*BatchUpgradeInfo, error) {
 	// Get all releases
-	releases, err := c.ListReleases(namespace)
+	releases, err := c.ListReleasesAsUser(namespace, username, groups)
 	if err != nil {
 		return nil, fmt.Errorf("failed to list releases: %w", err)
 	}

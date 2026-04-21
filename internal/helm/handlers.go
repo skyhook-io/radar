@@ -22,6 +22,16 @@ func IsForbiddenError(err error) bool {
 	return strings.Contains(errLower, "forbidden") || strings.Contains(errLower, "unauthorized")
 }
 
+// userCreds pulls the auth user off the request for *AsUser helpers.
+// Returns ("", nil) when no user is attached (auth disabled / local binary),
+// which the *AsUser methods treat as "use the SA identity".
+func userCreds(r *http.Request) (string, []string) {
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		return user.Username, user.Groups
+	}
+	return "", nil
+}
+
 // Handlers provides HTTP handlers for Helm endpoints
 type Handlers struct{}
 
@@ -76,7 +86,8 @@ func (h *Handlers) handleListReleases(w http.ResponseWriter, r *http.Request) {
 
 	namespace := r.URL.Query().Get("namespace")
 
-	releases, err := client.ListReleases(namespace)
+	username, groups := userCreds(r)
+	releases, err := client.ListReleasesAsUser(namespace, username, groups)
 	if err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to list Helm releases")
@@ -100,7 +111,8 @@ func (h *Handlers) handleGetRelease(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	release, err := client.GetRelease(namespace, name)
+	username, groups := userCreds(r)
+	release, err := client.GetReleaseAsUser(namespace, name, username, groups)
 	if err != nil {
 		if IsForbiddenError(err) {
 			writeError(w, http.StatusForbidden, "insufficient permissions to get Helm release")
@@ -132,7 +144,8 @@ func (h *Handlers) handleGetManifest(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	manifest, err := client.GetManifest(namespace, name, revision)
+	username, groups := userCreds(r)
+	manifest, err := client.GetManifestAsUser(namespace, name, revision, username, groups)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -155,7 +168,8 @@ func (h *Handlers) handleGetValues(w http.ResponseWriter, r *http.Request) {
 	name := chi.URLParam(r, "name")
 	allValues := r.URL.Query().Get("all") == "true"
 
-	values, err := client.GetValues(namespace, name, allValues)
+	username, groups := userCreds(r)
+	values, err := client.GetValuesAsUser(namespace, name, allValues, username, groups)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -195,7 +209,8 @@ func (h *Handlers) handleGetDiff(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	diff, err := client.GetManifestDiff(namespace, name, rev1, rev2)
+	username, groups := userCreds(r)
+	diff, err := client.GetManifestDiffAsUser(namespace, name, rev1, rev2, username, groups)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -215,7 +230,8 @@ func (h *Handlers) handleCheckUpgrade(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
-	info, err := client.CheckForUpgrade(namespace, name)
+	username, groups := userCreds(r)
+	info, err := client.CheckForUpgradeAsUser(namespace, name, username, groups)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -234,7 +250,8 @@ func (h *Handlers) handleBatchUpgradeCheck(w http.ResponseWriter, r *http.Reques
 
 	namespace := r.URL.Query().Get("namespace")
 
-	info, err := client.BatchCheckUpgrades(namespace)
+	username, groups := userCreds(r)
+	info, err := client.BatchCheckUpgradesAsUser(namespace, username, groups)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, err.Error())
 		return

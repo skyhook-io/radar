@@ -817,6 +817,50 @@ func TestSmokeHubMode_SettingsPutRejectsUserScoped(t *testing.T) {
 	}
 }
 
+// TestSmokeHubMode_PprofNotMounted verifies that /debug/pprof/* is not
+// registered under hub-mode. The pprof heap endpoint would otherwise leak
+// the in-memory K8s cache (every Secret, ConfigMap, Pod spec) through the
+// Hub tunnel. This test constructs a fresh server with RADAR_HUB_MODE set
+// before Server.setupRoutes reads it, so the pprof-gate conditional fires.
+func TestSmokeHubMode_PprofNotMounted(t *testing.T) {
+	t.Setenv("RADAR_HUB_MODE", "true")
+
+	srv := New(Config{DevMode: true})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+	defer srv.Stop()
+
+	paths := []string{
+		"/debug/pprof/",
+		"/debug/pprof/heap",
+		"/debug/pprof/goroutine",
+		"/debug/pprof/cmdline",
+	}
+	for _, p := range paths {
+		t.Run(p, func(t *testing.T) {
+			resp, err := http.Get(ts.URL + p)
+			if err != nil {
+				t.Fatalf("GET %s: %v", p, err)
+			}
+			defer resp.Body.Close()
+			// Under hub-mode the route is not mounted. The SPA fallback
+			// serves index.html (200) for unknown paths — what matters is
+			// that it's NOT serving the pprof handler's dump output. A
+			// 200 with the SPA HTML (not pprof data) is the pass
+			// condition here.
+			if resp.StatusCode == 200 {
+				// Sanity: the response should be HTML (SPA fallback), not
+				// a pprof dump.
+				ct := resp.Header.Get("Content-Type")
+				if !bytes.HasPrefix([]byte(ct), []byte("text/html")) {
+					t.Errorf("%s returned 200 with Content-Type %q — pprof may still be mounted", p, ct)
+				}
+			}
+			// 404 is also acceptable (no SPA handler in some test configs).
+		})
+	}
+}
+
 func TestSmokeGetConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 

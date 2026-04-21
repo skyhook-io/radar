@@ -1130,7 +1130,11 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	if helmClient := helm.GetClient(); helmClient != nil {
 		username, groups := userFromContext(ctx)
 		releases, err := helmClient.ListReleasesAsUser(namespace, username, groups)
-		if err == nil {
+		if err != nil {
+			// Not fatal for the dashboard — a viewer with no helm access
+			// still sees everything else. Log so the absence isn't silent.
+			log.Printf("[mcp] Dashboard helm list failed: %v", err)
+		} else {
 			d.HelmReleases.Total = len(releases)
 
 			// Sort: failed/pending-install first, then unhealthy/degraded

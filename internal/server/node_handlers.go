@@ -10,6 +10,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
@@ -32,7 +33,14 @@ func (s *Server) handleCordonNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := k8s.CordonNode(r.Context(), nodeName); err != nil {
+	auth.AuditLog(r, "", nodeName)
+	client := s.getClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+
+	if err := k8s.CordonNodeWithClient(r.Context(), nodeName, client); err != nil {
 		if apierrors.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -60,7 +68,14 @@ func (s *Server) handleUncordonNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := k8s.UncordonNode(r.Context(), nodeName); err != nil {
+	auth.AuditLog(r, "", nodeName)
+	client := s.getClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+
+	if err := k8s.UncordonNodeWithClient(r.Context(), nodeName, client); err != nil {
 		if apierrors.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, err.Error())
 			return
@@ -111,7 +126,14 @@ func (s *Server) handleDrainNode(w http.ResponseWriter, r *http.Request) {
 		opts.Timeout = time.Duration(req.Timeout) * time.Second
 	}
 
-	result, err := k8s.DrainNode(r.Context(), nodeName, opts)
+	auth.AuditLog(r, "", nodeName)
+	client := s.getClientForRequest(r)
+	if client == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
+		return
+	}
+
+	result, err := k8s.DrainNodeWithClient(r.Context(), nodeName, opts, client)
 	if err != nil {
 		if apierrors.IsNotFound(err) {
 			s.writeError(w, http.StatusNotFound, err.Error())

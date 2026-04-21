@@ -15,6 +15,9 @@ export function getArgoApplicationStatus(app: any): StatusBadge {
   // Check for suspended (no automated sync policy). Honor both the current
   // "radarhq.io/suspended-prune" annotation and the legacy "skyhook.io/..."
   // key still present on Applications suspended by older Radar builds.
+  // The annotation value stores the prior prune state as "true"/"false" for
+  // restore on resume — both strings are truthy in JS, which is intentional:
+  // the *presence* of the annotation is what signals suspended, not its value.
   const hasAutomatedSync = !!app.spec?.syncPolicy?.automated
   const annotations = app.metadata?.annotations
   const suspendedByRadar = annotations?.['radarhq.io/suspended-prune'] || annotations?.['skyhook.io/suspended-prune']

@@ -2,6 +2,7 @@ package k8score
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"regexp"
 	"time"
@@ -151,6 +152,9 @@ func WaitForPodRunning(ctx context.Context, client kubernetes.Interface, namespa
 // the current "radarhq.io/debug-node" label and the legacy "radar.skyhook.io/
 // debug-node" label so a Radar binary upgraded mid-debug-session can still
 // GC in-flight privileged pods created by the prior version.
+//
+// TODO(2026-Q3): drop the legacy selector once the migration window is done
+// (paired with the Argo legacy annotations in pkg/gitops/operations.go).
 func DeleteNodeDebugPods(ctx context.Context, client kubernetes.Interface, nodeName string) error {
 	if client == nil {
 		return fmt.Errorf("kubernetes client not initialized")
@@ -161,15 +165,15 @@ func DeleteNodeDebugPods(ctx context.Context, client kubernetes.Interface, nodeN
 		fmt.Sprintf("radarhq.io/debug-node=%s", sanitizeLabelValue(nodeName)),
 		fmt.Sprintf("radar.skyhook.io/debug-node=%s", sanitizeLabelValue(nodeName)),
 	}
-	var firstErr error
+	var errs []error
 	for _, sel := range selectors {
 		if err := client.CoreV1().Pods("default").DeleteCollection(ctx,
 			metav1.DeleteOptions{GracePeriodSeconds: &gracePeriod},
 			metav1.ListOptions{LabelSelector: sel},
-		); err != nil && firstErr == nil {
-			firstErr = err
+		); err != nil {
+			errs = append(errs, err)
 		}
 	}
-	return firstErr
+	return errors.Join(errs...)
 }
 

@@ -223,8 +223,12 @@ hub:
   # user-initiated handler (REST, MCP, workload logs, node-debug, Helm
   # read/write), so these bindings are what K8s RBAC actually enforces.
   #
-  # Defaults map Hub's role tiers onto standard K8s ClusterRoles:
-  #   hub:owner   → "admin"  (namespace-everything, no cluster-scoped writes)
+  # Defaults map Hub's role tiers onto standard K8s ClusterRoles. These are
+  # ClusterRoleBindings (not RoleBindings), so the grant applies in every
+  # namespace:
+  #   hub:owner   → "admin"  (full read+write in every namespace, including
+  #                          RBAC within namespaces; no writes on cluster-
+  #                          scoped resources like Nodes, CRDs, ClusterRoles)
   #   hub:member  → "edit"   (read+write on standard resources, no RBAC)
   #   hub:viewer  → "view"   (read-only)
   #

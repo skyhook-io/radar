@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -330,7 +331,7 @@ func (s *Server) handleDashboardHelm(w http.ResponseWriter, r *http.Request) {
 	if len(namespaces) == 1 {
 		namespace = namespaces[0]
 	}
-	s.writeJSON(w, s.getDashboardHelmSummary(namespace))
+	s.writeJSON(w, s.getDashboardHelmSummary(r, namespace))
 }
 
 // handleDashboardCRDs returns CRD counts - loaded lazily to keep main dashboard fast
@@ -1125,13 +1126,19 @@ func (s *Server) getDashboardTrafficSummary(ctx context.Context, namespaces []st
 	}
 }
 
-func (s *Server) getDashboardHelmSummary(namespace string) DashboardHelmSummary {
+func (s *Server) getDashboardHelmSummary(r *http.Request, namespace string) DashboardHelmSummary {
 	helmClient := helm.GetClient()
 	if helmClient == nil {
 		return DashboardHelmSummary{Releases: []DashboardHelmRelease{}}
 	}
 
-	releases, err := helmClient.ListReleases(namespace)
+	var username string
+	var groups []string
+	if user := auth.UserFromContext(r.Context()); user != nil {
+		username = user.Username
+		groups = user.Groups
+	}
+	releases, err := helmClient.ListReleasesAsUser(namespace, username, groups)
 	if err != nil {
 		if helm.IsForbiddenError(err) {
 			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
