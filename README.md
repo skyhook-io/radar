@@ -12,7 +12,7 @@ Topology, event timeline, and service traffic — plus resource browsing, Helm m
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 
-Visualize your cluster topology, browse resources, stream logs, exec into pods, inspect container image filesystems, manage Helm releases, monitor GitOps workflows (FluxCD & ArgoCD), and forward ports — all from a single binary with zero cluster-side installation.
+Visualize your cluster topology, browse resources, stream logs, exec into pods, inspect container image filesystems, manage Helm releases, monitor GitOps workflows (FluxCD & ArgoCD), and forward ports - all from a single binary with zero cluster-side installation.
 
 <p align="center">
   <img src="docs/screenshot.png" alt="Radar Screenshot" width="800">
