@@ -89,28 +89,28 @@ jobs:
       - name: Render default values
         run: helm template radar deploy/helm/radar > /dev/null
 
-      - name: Render hub.enabled with inline token
+      - name: Render cloud.enabled with inline token
         run: |
           helm template radar deploy/helm/radar \
-            --set hub.enabled=true \
-            --set hub.url=wss://hub.example/agent \
-            --set hub.clusterName=test \
-            --set hub.token=rhc_deadbeef > /dev/null
+            --set cloud.enabled=true \
+            --set cloud.url=wss://cloud.example/agent \
+            --set cloud.clusterName=test \
+            --set cloud.token=rhc_deadbeef > /dev/null
 
-      - name: Render hub.enabled with existingSecret
+      - name: Render cloud.enabled with existingSecret
         run: |
           helm template radar deploy/helm/radar \
-            --set hub.enabled=true \
-            --set hub.url=wss://hub.example/agent \
-            --set hub.clusterName=test \
-            --set hub.existingSecret=my-hub-token > /dev/null
+            --set cloud.enabled=true \
+            --set cloud.url=wss://cloud.example/agent \
+            --set cloud.clusterName=test \
+            --set cloud.existingSecret=my-cloud-token > /dev/null
 
-      - name: Reject hub.enabled without token or existingSecret
+      - name: Reject cloud.enabled without token or existingSecret
         run: |
           if helm template radar deploy/helm/radar \
-            --set hub.enabled=true \
-            --set hub.url=wss://hub.example/agent \
-            --set hub.clusterName=test 2>/dev/null; then
+            --set cloud.enabled=true \
+            --set cloud.url=wss://cloud.example/agent \
+            --set cloud.clusterName=test 2>/dev/null; then
             echo "ERROR: helm template should have failed with no token set"
             exit 1
           fi
