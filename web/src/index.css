@@ -1,4 +1,12 @@
 @import "tailwindcss";
+/*
+ * Tailwind v4 JIT scans only sources under this CSS file's package (web/).
+ * k8s-ui is a workspace package whose TSX files also use Tailwind classes;
+ * without this @source, any class used *only* in k8s-ui/ (not also in web/)
+ * is silently dropped — e.g. `top-8` in TerminalTab, which collapsed the
+ * terminal to zero height and caused issue #518 (blank terminal).
+ */
+@source "../../packages/k8s-ui/src/**/*.{ts,tsx}";
 @variant dark (&:where(.dark, .dark *));
 @import "@skyhook-io/k8s-ui/theme/variables.css";
 @import "@skyhook-io/k8s-ui/theme/tailwind-theme.css";
