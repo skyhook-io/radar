@@ -96,6 +96,35 @@ export function LocalTerminalTab({
       setTimeout(doFit, 100)
     })
 
+    // Attach ResizeObserver synchronously — before createSession() resolves.
+    // The dock's expand animation runs concurrently with session creation, so
+    // a late-attached observer would miss its size changes and leave the
+    // terminal stuck at whatever dimensions it had when the dock was still
+    // collapsing. Debounced to coalesce animation frames.
+    let resizeTimeout: ReturnType<typeof setTimeout> | null = null
+    let lastWidth = 0
+    let lastHeight = 0
+    const resizeObserver = new ResizeObserver((entries) => {
+      const entry = entries[0]
+      if (!entry) return
+      const { width, height } = entry.contentRect
+      if (Math.abs(width - lastWidth) < 5 && Math.abs(height - lastHeight) < 5) return
+      lastWidth = width
+      lastHeight = height
+      if (resizeTimeout) clearTimeout(resizeTimeout)
+      resizeTimeout = setTimeout(() => {
+        if (!fitAddonRef.current || !xtermRef.current) return
+        const dims = fitAddonRef.current.proposeDimensions()
+        if (dims) xtermRef.current.resize(dims.cols, dims.rows)
+        const conn = wsRef.current
+        if (conn?.readyState === WebSocket.OPEN) {
+          conn.send(JSON.stringify({ type: 'resize', rows: xtermRef.current.rows, cols: xtermRef.current.cols }))
+        }
+      }, 100)
+    })
+    resizeObserver.observe(terminalRef.current)
+    cleanupRef.current = () => resizeObserver.disconnect()
+
     createSessionRef.current()
       .then(({ wsUrl }) => {
         if (cancelledRef.current) return
@@ -152,35 +181,6 @@ export function LocalTerminalTab({
             ws.send(JSON.stringify({ type: 'input', data }))
           }
         })
-
-        // Debounced resize
-        let resizeTimeout: ReturnType<typeof setTimeout> | null = null
-        let lastWidth = 0
-        let lastHeight = 0
-        const resizeObserver = new ResizeObserver((entries) => {
-          const entry = entries[0]
-          if (!entry) return
-          const { width, height } = entry.contentRect
-          if (Math.abs(width - lastWidth) < 5 && Math.abs(height - lastHeight) < 5) return
-          lastWidth = width
-          lastHeight = height
-          if (resizeTimeout) clearTimeout(resizeTimeout)
-          resizeTimeout = setTimeout(() => {
-            if (fitAddonRef.current && xtermRef.current) {
-              const dims = fitAddonRef.current.proposeDimensions()
-              if (dims) xtermRef.current.resize(dims.cols, dims.rows)
-              if (ws.readyState === WebSocket.OPEN) {
-                ws.send(JSON.stringify({ type: 'resize', rows: xtermRef.current.rows, cols: xtermRef.current.cols }))
-              }
-            }
-          }, 100)
-        })
-        if (terminalRef.current) {
-          resizeObserver.observe(terminalRef.current)
-          cleanupRef.current = () => resizeObserver.disconnect()
-        } else {
-          resizeObserver.disconnect()
-        }
       })
       .catch((err) => {
         setError(err instanceof Error ? err.message : 'Failed to connect')
