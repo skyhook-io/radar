@@ -455,6 +455,9 @@ function ConfigField({
 // Comma-separated list input. Keeps a local string buffer so intermediate states
 // like "foo," or "foo,," survive — parsing into an array on every keystroke
 // (split/trim/filter) would otherwise strip trailing commas before they re-render.
+// The focus flag is load-bearing: without it, every parent re-render during typing
+// would overwrite `text` with the canonical joined form and wipe the keystroke.
+// On blur the buffer resyncs to the canonical "a, b" form.
 function ConfigArrayField({
   label,
   help,
