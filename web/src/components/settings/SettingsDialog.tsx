@@ -242,13 +242,13 @@ function StartupConfigTab({
         onChange={(v) => onChange('kubeconfig', v || undefined)}
       />
 
-      <ConfigField
+      <ConfigArrayField
         label="Kubeconfig Directories"
         help="Comma-separated directories containing kubeconfig files"
-        value={config.kubeconfigDirs?.join(', ') ?? ''}
-        effectiveValue={effectiveConfig?.kubeconfigDirs?.join(', ')}
+        value={config.kubeconfigDirs}
+        effectiveValue={effectiveConfig?.kubeconfigDirs}
         placeholder="/path/to/dir1, /path/to/dir2"
-        onChange={(v) => onChange('kubeconfigDirs', v ? v.split(',').map(s => s.trim()).filter(Boolean) : undefined)}
+        onChange={(v) => onChange('kubeconfigDirs', v)}
       />
 
       <ConfigField
@@ -448,6 +448,63 @@ function ConfigField({
         className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-blue-500"
       />
       <EffectiveHint current={value || undefined} effective={effectiveValue} />
+    </div>
+  )
+}
+
+// Comma-separated list input. Keeps a local string buffer so intermediate states
+// like "foo," or "foo,," survive — parsing into an array on every keystroke
+// (split/trim/filter) would otherwise strip trailing commas before they re-render.
+function ConfigArrayField({
+  label,
+  help,
+  value,
+  effectiveValue,
+  placeholder,
+  onChange,
+}: {
+  label: string
+  help?: string
+  value?: string[]
+  effectiveValue?: string[]
+  placeholder?: string
+  onChange: (value: string[] | undefined) => void
+}) {
+  const canonical = (v?: string[]) => v?.join(', ') ?? ''
+  const [text, setText] = useState(() => canonical(value))
+  const focusedRef = useRef(false)
+
+  useEffect(() => {
+    if (!focusedRef.current) setText(canonical(value))
+  }, [value])
+
+  const commit = (raw: string) => {
+    const parts = raw.split(',').map(s => s.trim()).filter(Boolean)
+    onChange(parts.length > 0 ? parts : undefined)
+  }
+
+  return (
+    <div>
+      <label className="block text-sm font-medium text-theme-text-primary mb-1">
+        {label}
+      </label>
+      {help && <p className="text-xs text-theme-text-tertiary mb-1">{help}</p>}
+      <input
+        type="text"
+        value={text}
+        onFocus={() => { focusedRef.current = true }}
+        onBlur={() => {
+          focusedRef.current = false
+          setText(canonical(value))
+        }}
+        onChange={(e) => {
+          setText(e.target.value)
+          commit(e.target.value)
+        }}
+        placeholder={placeholder}
+        className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-blue-500"
+      />
+      <EffectiveHint current={canonical(value) || undefined} effective={canonical(effectiveValue) || undefined} />
     </div>
   )
 }
