@@ -217,25 +217,30 @@ hub:
   # The Secret must contain a key matching existingSecretKey.
   existingSecret: ""
   existingSecretKey: "token"
-  # Default ClusterRoleBindings for Hub identity groups. Hub injects
-  # X-Forwarded-Groups containing hub:<role> on every proxied request;
-  # Radar impersonates that identity against the K8s API and against every
-  # user-initiated handler (REST, MCP, workload logs, node-debug, Helm
-  # read/write), so these bindings are what K8s RBAC actually enforces.
+  # Default ClusterRoleBindings for Hub identity groups.
   #
-  # Defaults map Hub's role tiers onto standard K8s ClusterRoles. These are
-  # ClusterRoleBindings (not RoleBindings), so the grant applies in every
-  # namespace:
+  # How it works: Hub injects X-Forwarded-Groups: hub:<role>,hub:org:<id>,
+  # hub:user:<id> on every proxied request. Radar impersonates that identity
+  # against the K8s API on EVERY user-initiated call (REST, MCP, Helm reads
+  # and writes, workload logs, node ops, pod file browse, CAPI kubeconfig),
+  # so K8s RBAC enforces the tier — no Radar-side "permission" checks.
+  #
+  # Defaults map Hub's tiers onto standard K8s ClusterRoles. These are
+  # ClusterRoleBindings (not namespace-scoped RoleBindings), so the grant
+  # applies in EVERY namespace:
   #   hub:owner   → "admin"  (full read+write in every namespace, including
   #                          RBAC within namespaces; no writes on cluster-
   #                          scoped resources like Nodes, CRDs, ClusterRoles)
   #   hub:member  → "edit"   (read+write on standard resources, no RBAC)
   #   hub:viewer  → "view"   (read-only)
   #
-  # Set ownerClusterRole=cluster-admin to grant cluster-wide admin. Set
-  # any of the booleans to false to suppress that binding entirely — then
-  # author your own (e.g. namespace-scoped RoleBindings, or per-user
-  # bindings against hub:user:<id> groups) for fine-grained control.
+  # These are starting-point grants, not "fallbacks that kick in when the
+  # user has nothing else" — K8s RBAC is strictly ADDITIVE. Operator bindings
+  # stack on top of ours, they can't override or deny. To tighten a tier,
+  # set its boolean below to false (suppresses our binding) and author your
+  # own. To give an individual user extra access, bind hub:user:<id> to an
+  # extra Role/ClusterRole — it will union with their tier's permissions.
+  # To loosen owner, set ownerClusterRole=cluster-admin.
   defaultRbac:
     create: true
     owner: true
