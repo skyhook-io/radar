@@ -2489,8 +2489,10 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Merge into the user's kubeconfig
-	mergedPath, err := k8s.MergeAndSwitchContext(kubeconfigData, contextName)
+	// Merge into the user's kubeconfig. The returned qualifiedName reflects
+	// any disambiguation the registry had to do (e.g. if another file already
+	// owned this context name). Always switch using the qualified name.
+	qualifiedName, mergedPath, err := k8s.MergeAndSwitchContext(kubeconfigData, contextName)
 	if err != nil {
 		log.Printf("[capi] Failed to merge kubeconfig for cluster %s/%s: %v", ns, name, err)
 		s.writeError(w, http.StatusInternalServerError, "failed to connect: "+err.Error())
@@ -2504,10 +2506,10 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 	}
 
 	// Switch to the new context
-	if err := k8s.PerformContextSwitch(contextName); err != nil {
+	if err := k8s.PerformContextSwitch(qualifiedName); err != nil {
 		k8s.SetConnectionStatus(k8s.ConnectionStatus{
 			State:     k8s.StateDisconnected,
-			Context:   contextName,
+			Context:   qualifiedName,
 			Error:     err.Error(),
 			ErrorType: k8s.ClassifyError(err),
 		})
@@ -2521,11 +2523,11 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		ClusterName: k8s.GetClusterName(),
 	})
 
-	log.Printf("[capi] Connected to workload cluster %s/%s (context: %s, kubeconfig: %s)", ns, name, contextName, mergedPath)
+	log.Printf("[capi] Connected to workload cluster %s/%s (context: %s, kubeconfig: %s)", ns, name, qualifiedName, mergedPath)
 
 	s.writeJSON(w, map[string]string{
 		"status":  "connected",
-		"context": contextName,
+		"context": qualifiedName,
 	})
 }
 
