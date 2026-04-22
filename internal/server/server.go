@@ -2523,7 +2523,12 @@ func (s *Server) handleCAPIClusterConnect(w http.ResponseWriter, r *http.Request
 		ClusterName: k8s.GetClusterName(),
 	})
 
-	log.Printf("[capi] Connected to workload cluster %s/%s (context: %s, kubeconfig: %s)", ns, name, qualifiedName, mergedPath)
+	// Use %q on user-influenced values (context name derived from an uploaded
+	// kubeconfig YAML, temp path partly includes the system TMPDIR) so a
+	// crafted context name can't inject forged log lines when Radar's stderr
+	// is scraped by a log aggregator. CodeQL alert "Log entries created from
+	// user input".
+	log.Printf("[capi] Connected to workload cluster %s/%s (context: %q, kubeconfig: %q)", ns, name, qualifiedName, mergedPath)
 
 	s.writeJSON(w, map[string]string{
 		"status":  "connected",

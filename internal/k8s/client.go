@@ -924,7 +924,7 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 				// entry so we don't keep returning it.
 				delete(capiKubeconfigs, contextName)
 			} else {
-				log.Printf("[capi] Updated existing kubeconfig for context %s: %s", contextName, existingPath)
+				log.Printf("[capi] Updated existing kubeconfig for context %q: %q", contextName, existingPath)
 				return qName, existingPath, nil
 			}
 		}
@@ -1004,7 +1004,7 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 	kubeconfigPaths = newPaths
 	capiKubeconfigs[contextName] = tmpPath
 
-	log.Printf("[capi] Added workload cluster kubeconfig: %s (context: %s)", tmpPath, qualifiedName)
+	log.Printf("[capi] Added workload cluster kubeconfig: %q (context: %q)", tmpPath, qualifiedName)
 	return qualifiedName, tmpPath, nil
 }
 
