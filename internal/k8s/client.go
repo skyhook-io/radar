@@ -32,7 +32,7 @@ var (
 	kubeconfigPath     string
 	kubeconfigPaths    []string // Multiple kubeconfig paths when using --kubeconfig-dir or KUBECONFIG env
 	kubeconfigMode     string   // One of: "in-cluster", "single", "multi-env", "multi-dir"
-	mergedContextCount int      // Total number of contexts exposed across all kubeconfig files (pre-#519 this was the post-merge count; kept the variable name to avoid diff churn)
+	totalContextCount int      // Total number of contexts exposed across all kubeconfig files
 	// contextRegistry maps each user-facing context name to its source file and
 	// the name it has inside that file. Populated when Radar loads more than one
 	// kubeconfig file (multi-dir, multi-env with >1 paths, or CAPI-added files).
@@ -43,12 +43,12 @@ var (
 	contextRegistry map[string]contextEntry
 	// perFileConfigs caches each file's parsed api.Config so GetAvailableContexts
 	// doesn't re-read N files on every call. Keyed by absolute file path.
-	perFileConfigs map[string]*clientcmdapi.Config
-	contextName        string
-	clusterName        string
-	contextNamespace   string // Default namespace from kubeconfig context
-	fallbackNamespace  string // Explicit namespace from --namespace flag
-	contextUsesExec    bool   // True when the current context uses an exec credential plugin
+	perFileConfigs    map[string]*clientcmdapi.Config
+	contextName       string
+	clusterName       string
+	contextNamespace  string // Default namespace from kubeconfig context
+	fallbackNamespace string // Explicit namespace from --namespace flag
+	contextUsesExec   bool   // True when the current context uses an exec credential plugin
 	// execPluginCommands is the set of unique exec-auth plugin command basenames
 	// referenced by any context in the merged kubeconfig. Populated from
 	// rawConfig.AuthInfos at load time and refreshed on SwitchContext. Stored
@@ -206,7 +206,7 @@ func doInit(opts InitOptions) error {
 				// contextName was already set to the qualified name by
 				// setupIsolatedLoad; don't overwrite with the original name
 				// inside the single chosen file.
-				mergedContextCount = len(contextRegistry)
+				totalContextCount = len(contextRegistry)
 				cmds, emptyAIs := aggregateExecPluginCommands(kubeconfigPaths, perFileConfigs)
 				execPluginCommands = cmds
 				if len(emptyAIs) > 0 {
@@ -216,7 +216,7 @@ func doInit(opts InitOptions) error {
 				// the registry-resolved file. rawConfig.Contexts is keyed by
 				// the *original* name inside the chosen file.
 				if entry, ok := contextRegistry[contextName]; ok {
-					if ctx, ok := rawConfig.Contexts[entry.OriginalName]; ok {
+					if ctx, ok := rawConfig.Contexts[entry.InFileName]; ok {
 						clusterName = ctx.Cluster
 						contextNamespace = ctx.Namespace
 						if ai, ok := rawConfig.AuthInfos[ctx.AuthInfo]; ok && ai.Exec != nil {
@@ -226,7 +226,7 @@ func doInit(opts InitOptions) error {
 				}
 			} else {
 				contextName = rawConfig.CurrentContext
-				mergedContextCount = len(rawConfig.Contexts)
+				totalContextCount = len(rawConfig.Contexts)
 				cmds, emptyAIs := collectExecPluginCommands(&rawConfig)
 				execPluginCommands = cmds
 				if len(emptyAIs) > 0 {
@@ -251,7 +251,7 @@ func doInit(opts InitOptions) error {
 			// count, which silently hid colliding user/cluster definitions;
 			// now every file's contexts are individually reachable).
 			log.Printf("Kubeconfig loaded: mode=%s, files=%d, contexts=%d, exec-plugins=%d",
-				kubeconfigMode, fileCount, mergedContextCount, len(execPluginCommands))
+				kubeconfigMode, fileCount, totalContextCount, len(execPluginCommands))
 		}
 
 		config, err = kubeConfig.ClientConfig()
@@ -437,7 +437,7 @@ func GetKubeconfigSummary() KubeconfigSummary {
 	if fileCount == 0 && kubeconfigPath != "" {
 		fileCount = 1
 	}
-	contextCount := mergedContextCount
+	contextCount := totalContextCount
 	enriched := enrichedKubeconfigFromShell
 	currentExec := contextUsesExec
 	cmds := append([]string(nil), execPluginCommands...)
@@ -575,7 +575,7 @@ func WriteKubeconfigForCurrentContext() (string, error) {
 			return "", fmt.Errorf("no cached config for file %q", entry.SourceFile)
 		}
 		rawConfig = *cfg.DeepCopy()
-		currentContextForFile = entry.OriginalName
+		currentContextForFile = entry.InFileName
 	} else {
 		if singlePath == "" {
 			return "", fmt.Errorf("kubeconfig path not set")
@@ -708,7 +708,7 @@ func GetAvailableContexts() ([]ContextInfo, error) {
 			if !ok {
 				continue
 			}
-			ctx, ok := cfg.Contexts[entry.OriginalName]
+			ctx, ok := cfg.Contexts[entry.InFileName]
 			if !ok || ctx == nil {
 				continue
 			}
@@ -758,8 +758,15 @@ func SwitchContext(name string) error {
 		return fmt.Errorf("cannot switch context when running in-cluster")
 	}
 
+	// Snapshot registry-related globals under the lock. MergeAndSwitchContext
+	// can mutate all three concurrently, so reads have to be atomic as a set.
 	clientMu.RLock()
 	registry := contextRegistry
+	pathsSnapshot := append([]string(nil), kubeconfigPaths...)
+	configsSnapshot := make(map[string]*clientcmdapi.Config, len(perFileConfigs))
+	for k, v := range perFileConfigs {
+		configsSnapshot[k] = v
+	}
 	clientMu.RUnlock()
 
 	var loadingRules *clientcmd.ClientConfigLoadingRules
@@ -775,7 +782,7 @@ func SwitchContext(name string) error {
 			return fmt.Errorf("context %q not found in kubeconfig", name)
 		}
 		loadingRules = &clientcmd.ClientConfigLoadingRules{ExplicitPath: entry.SourceFile}
-		overrideContextName = entry.OriginalName
+		overrideContextName = entry.InFileName
 	} else {
 		kubeconfig := kubeconfigPath
 		if kubeconfig == "" {
@@ -839,7 +846,7 @@ func SwitchContext(name string) error {
 	var execCmds, emptyAIs []string
 	var totalContexts int
 	if registry != nil {
-		execCmds, emptyAIs = aggregateExecPluginCommands(kubeconfigPaths, perFileConfigs)
+		execCmds, emptyAIs = aggregateExecPluginCommands(pathsSnapshot, configsSnapshot)
 		totalContexts = len(registry)
 	} else {
 		execCmds, emptyAIs = collectExecPluginCommands(&rawConfig)
@@ -858,7 +865,7 @@ func SwitchContext(name string) error {
 	clusterName = ctx.Cluster
 	contextNamespace = ctx.Namespace
 	contextUsesExec = usesExec
-	mergedContextCount = totalContexts
+	totalContextCount = totalContexts
 	execPluginCommands = execCmds
 	clientMu.Unlock()
 
@@ -869,112 +876,133 @@ func SwitchContext(name string) error {
 var capiKubeconfigs = make(map[string]string) // contextName -> tmpPath
 
 // MergeAndSwitchContext writes the provided kubeconfig data to a temporary
-// file and registers its context so that Radar can switch to it. The returned
-// qualifiedName is the identifier the caller should pass to PerformContextSwitch
-// — it may differ from the input contextName if another file already owns that
-// name, in which case the registry disambiguates via qualifyContextName.
+// file and registers its context so that Radar can switch to it. Returns
+// (qualifiedName, tmpPath, error): qualifiedName is the identifier the caller
+// must pass to PerformContextSwitch, and may differ from the input contextName
+// if another file already owns that name (the registry disambiguates via
+// qualifyContextName). tmpPath is the on-disk location of the kubeconfig,
+// exposed for diagnostics / logging only.
 //
-// If Radar started in single-file mode, the first CAPI merge promotes it into
-// isolated-load mode by seeding the registry with the original kubeconfig plus
-// the new CAPI file.
+// If Radar started in single-file mode, the first CAPI merge promotes it
+// into isolated-load mode by seeding the registry with the original
+// kubeconfig plus the new CAPI file — otherwise subsequent CAPI merges
+// would silently revert to client-go's Precedence behavior (issue #519).
+//
+// Concurrency: the entire decision is serialized under clientMu.Lock. The
+// input contextName is the stable key for reuse across reconnects (CAPI
+// re-emits the same context name each time for the same workload cluster),
+// so we can dedupe without having to reverse-lookup the qualified form.
 func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, string, error) {
-	// Parse the incoming kubeconfig
 	newConfig, err := clientcmd.Load(kubeconfigData)
 	if err != nil {
 		return "", "", fmt.Errorf("failed to parse kubeconfig: %w", err)
 	}
-
-	// Verify the context exists
 	if _, ok := newConfig.Contexts[contextName]; !ok {
 		return "", "", fmt.Errorf("context %q not found in provided kubeconfig", contextName)
 	}
 
-	// Reuse existing temp file for same qualified context name (avoids accumulation).
-	// Keyed on the qualified name, which we resolve below — but for the "update
-	// same CAPI context" path we look up by both the qualified and original name
-	// since callers always pass the original.
+	// Hold clientMu for the entire reuse-check + registration path so two
+	// concurrent CAPI merges for the same workload cluster can't both see
+	// "no existing path" and both create orphan temp files.
 	clientMu.Lock()
-	existingPath := capiKubeconfigs[contextName]
-	clientMu.Unlock()
+	defer clientMu.Unlock()
 
-	if existingPath != "" {
-		// Overwrite existing file with fresh kubeconfig data
+	// Fast path: same CAPI context was registered before. Overwrite the
+	// existing temp file so the user gets a fresh exec plugin config, and
+	// return the qualified name we assigned on the original merge.
+	if existingPath, ok := capiKubeconfigs[contextName]; ok {
 		if err := clientcmd.WriteToFile(*newConfig, existingPath); err == nil {
-			log.Printf("[capi] Updated existing kubeconfig for context %s: %s", contextName, existingPath)
-			// Existing path already registered under its qualified name during
-			// the initial merge — look up and return that.
-			clientMu.RLock()
-			qName := findQualifiedNameForPath(contextRegistry, existingPath, contextName)
-			clientMu.RUnlock()
-			if qName == "" {
-				qName = contextName
+			// Refresh the cached parsed config so subsequent GetAvailableContexts
+			// calls reflect any changes in the incoming YAML.
+			if parsed, perr := clientcmd.LoadFromFile(existingPath); perr == nil {
+				perFileConfigs[existingPath] = parsed
 			}
-			return qName, existingPath, nil
+			qName := findQualifiedNameForPath(contextRegistry, existingPath, contextName)
+			if qName == "" {
+				// Registry is missing the entry somehow — rebuild it below by
+				// falling through to the new-file path. Scrub the stale map
+				// entry so we don't keep returning it.
+				delete(capiKubeconfigs, contextName)
+			} else {
+				log.Printf("[capi] Updated existing kubeconfig for context %s: %s", contextName, existingPath)
+				return qName, existingPath, nil
+			}
 		}
-		// If overwrite fails, fall through to create a new file
+		// Overwrite failed — fall through to create a new temp file.
 	}
 
-	// Write to a new temp file
+	// Write to a new temp file.
 	tmpFile, err := os.CreateTemp("", "radar-capi-kubeconfig-*.yaml")
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create temp kubeconfig: %w", err)
 	}
 	tmpPath := tmpFile.Name()
 	tmpFile.Close()
-
 	if err := clientcmd.WriteToFile(*newConfig, tmpPath); err != nil {
 		os.Remove(tmpPath)
 		return "", "", fmt.Errorf("failed to write kubeconfig: %w", err)
 	}
 
-	clientMu.Lock()
-	defer clientMu.Unlock()
+	// Build a local snapshot of the registry additions we're about to make,
+	// then validate before committing to globals. If validation fails we
+	// remove the temp file and leave the globals untouched — no half-state.
+	var newRegistry map[string]contextEntry
+	var newFileConfigs map[string]*clientcmdapi.Config
+	var newPaths []string
 
-	// If we're still in single-file mode, promote to isolated-load mode by
-	// seeding the registry with the original kubeconfig. Otherwise every
-	// future CAPI merge would silently revert to client-go's Precedence
-	// behavior — exactly the bug #519 fixes.
 	if contextRegistry == nil {
+		// Promote single-file mode to isolated-load mode.
 		seedPaths := []string{}
 		if kubeconfigPath != "" {
 			seedPaths = append(seedPaths, kubeconfigPath)
 		}
 		seedPaths = append(seedPaths, tmpPath)
 		registry, fileConfigs := buildContextRegistry(seedPaths)
-		contextRegistry = registry
-		perFileConfigs = fileConfigs
-		kubeconfigPaths = seedPaths
-		// Leave kubeconfigMode as-is — this stays "single" or whatever the
-		// initial mode was for diagnostics, even though we're now running
-		// through the isolated loader.
+		if _, hasTmp := fileConfigs[tmpPath]; !hasTmp {
+			os.Remove(tmpPath)
+			return "", "", fmt.Errorf("internal: failed to register CAPI kubeconfig %s", tmpPath)
+		}
+		newRegistry = registry
+		newFileConfigs = fileConfigs
+		newPaths = seedPaths
 	} else {
-		// Registry already populated — just add this file to it.
 		cfg, err := clientcmd.LoadFromFile(tmpPath)
 		if err != nil {
 			os.Remove(tmpPath)
 			return "", "", fmt.Errorf("failed to re-load temp kubeconfig: %w", err)
 		}
-		perFileConfigs[tmpPath] = cfg
-		kubeconfigPaths = append(kubeconfigPaths, tmpPath)
-		// Qualify the incoming context name against the existing registry
-		// and add every context in the new file (including the target one).
+		// Copy-on-write: stage new maps / slice so we don't publish a
+		// partially-updated registry on any error path below.
+		newRegistry = make(map[string]contextEntry, len(contextRegistry)+len(cfg.Contexts))
+		for k, v := range contextRegistry {
+			newRegistry[k] = v
+		}
+		newFileConfigs = make(map[string]*clientcmdapi.Config, len(perFileConfigs)+1)
+		for k, v := range perFileConfigs {
+			newFileConfigs[k] = v
+		}
+		newFileConfigs[tmpPath] = cfg
+		newPaths = append(append([]string(nil), kubeconfigPaths...), tmpPath)
 		for name := range cfg.Contexts {
-			qName := qualifyContextName(contextRegistry, name, tmpPath)
-			contextRegistry[qName] = contextEntry{
-				SourceFile:   tmpPath,
-				OriginalName: name,
+			qName := qualifyContextName(newRegistry, name, tmpPath)
+			newRegistry[qName] = contextEntry{
+				SourceFile: tmpPath,
+				InFileName: name,
 			}
 		}
 	}
 
-	// Resolve the qualified name for the context the caller asked about.
-	qualifiedName := findQualifiedNameForPath(contextRegistry, tmpPath, contextName)
+	qualifiedName := findQualifiedNameForPath(newRegistry, tmpPath, contextName)
 	if qualifiedName == "" {
 		os.Remove(tmpPath)
 		return "", "", fmt.Errorf("internal: failed to register context %q from %s", contextName, tmpPath)
 	}
 
-	capiKubeconfigs[qualifiedName] = tmpPath
+	// Commit. All globals updated atomically under the single Lock held above.
+	contextRegistry = newRegistry
+	perFileConfigs = newFileConfigs
+	kubeconfigPaths = newPaths
+	capiKubeconfigs[contextName] = tmpPath
 
 	log.Printf("[capi] Added workload cluster kubeconfig: %s (context: %s)", tmpPath, qualifiedName)
 	return qualifiedName, tmpPath, nil
@@ -983,9 +1011,9 @@ func MergeAndSwitchContext(kubeconfigData []byte, contextName string) (string, s
 // findQualifiedNameForPath returns the qualified registry name of the given
 // (file, originalContextName) pair, or "" if none is registered. Used by the
 // CAPI merge path to learn the post-disambiguation identifier.
-func findQualifiedNameForPath(registry map[string]contextEntry, file, originalName string) string {
+func findQualifiedNameForPath(registry map[string]contextEntry, file, inFileName string) string {
 	for qName, entry := range registry {
-		if entry.SourceFile == file && entry.OriginalName == originalName {
+		if entry.SourceFile == file && entry.InFileName == inFileName {
 			return qName
 		}
 	}

@@ -2,18 +2,22 @@ package k8s
 
 import (
 	"fmt"
+	"log"
 	"path/filepath"
 	"sort"
 	"strings"
 
 	"k8s.io/client-go/tools/clientcmd"
 	clientcmdapi "k8s.io/client-go/tools/clientcmd/api"
+
+	"github.com/skyhook-io/radar/internal/errorlog"
 )
 
 // setupIsolatedLoad populates contextRegistry, perFileConfigs, and contextName
 // from the given kubeconfig files, then returns LoadingRules + Overrides that
-// load *only* the initial file via ExplicitPath. Caller must already hold
-// initOnce (we're inside doInit) and has exclusive access to the globals.
+// load *only* the initial file via ExplicitPath. Only called from doInit,
+// inside initOnce, so no concurrent readers exist yet — writes to the globals
+// are safe without clientMu.
 //
 // This is how Radar avoids client-go's Precedence merge when there's more
 // than one kubeconfig file: each file stays an island. A SwitchContext later
@@ -36,7 +40,7 @@ func setupIsolatedLoad(paths []string) (
 	perFileConfigs = fileConfigs
 	contextName = qName
 	return &clientcmd.ClientConfigLoadingRules{ExplicitPath: entry.SourceFile},
-		&clientcmd.ConfigOverrides{CurrentContext: entry.OriginalName},
+		&clientcmd.ConfigOverrides{CurrentContext: entry.InFileName},
 		nil
 }
 
@@ -46,8 +50,8 @@ func setupIsolatedLoad(paths []string) (
 // users, and contexts with shared names across files don't clobber each
 // other via client-go's Precedence merge.
 type contextEntry struct {
-	SourceFile   string // absolute path to the kubeconfig on disk
-	OriginalName string // context name as it appears inside SourceFile
+	SourceFile string // absolute path to the kubeconfig on disk
+	InFileName string // context name as it appears inside SourceFile
 }
 
 // buildContextRegistry loads each kubeconfig file in isolation and produces:
@@ -72,15 +76,20 @@ func buildContextRegistry(paths []string) (map[string]contextEntry, map[string]*
 		if err != nil {
 			// Non-fatal: skip and continue. discoverKubeconfigs has
 			// already validated these, so a failure here is surprising
-			// enough to log but shouldn't block the whole init.
+			// enough to log. The file's basename is safe to surface
+			// via errorlog (see scrubPathError's privacy contract).
+			log.Printf("[k8s-init] skipping kubeconfig %q during registry build: %v", filepath.Base(path), err)
+			errorlog.Record("k8s-init", "warning",
+				"kubeconfig %q failed to load during registry build: %s",
+				filepath.Base(path), scrubPathError(err))
 			continue
 		}
 		fileConfigs[path] = cfg
 		for name := range cfg.Contexts {
 			qName := qualifyContextName(registry, name, path)
 			registry[qName] = contextEntry{
-				SourceFile:   path,
-				OriginalName: name,
+				SourceFile: path,
+				InFileName: name,
 			}
 		}
 	}
@@ -133,9 +142,9 @@ func pickInitialContext(
 		if !ok || cfg.CurrentContext == "" {
 			continue
 		}
-		// Find the registry entry whose (SourceFile, OriginalName) matches.
+		// Find the registry entry whose (SourceFile, InFileName) matches.
 		for qName, entry := range registry {
-			if entry.SourceFile == path && entry.OriginalName == cfg.CurrentContext {
+			if entry.SourceFile == path && entry.InFileName == cfg.CurrentContext {
 				return qName, entry, true
 			}
 		}
@@ -148,7 +157,7 @@ func pickInitialContext(
 		}
 		for name := range cfg.Contexts {
 			for qName, entry := range registry {
-				if entry.SourceFile == path && entry.OriginalName == name {
+				if entry.SourceFile == path && entry.InFileName == name {
 					return qName, entry, true
 				}
 			}

@@ -157,7 +157,7 @@ func TestBuildContextRegistry_ContextNameCollision(t *testing.T) {
 	if registry["my-ctx (staging)"].SourceFile != f2 {
 		t.Errorf("qualified context should resolve to f2")
 	}
-	if registry["my-ctx (staging)"].OriginalName != "my-ctx" {
+	if registry["my-ctx (staging)"].InFileName != "my-ctx" {
 		t.Errorf("original name must remain 'my-ctx' inside f2")
 	}
 }
@@ -262,6 +262,130 @@ func TestPickInitialContext_NoCurrentContextAnywhere(t *testing.T) {
 	}
 	if qName != "only-ctx" {
 		t.Errorf("expected 'only-ctx', got %q", qName)
+	}
+}
+
+// Regression guard for the #519 class of bug. Simulates what SwitchContext does:
+// resolve the qualified name through the registry, then load the target with
+// ExplicitPath. Two files share user and cluster names but carry distinct
+// tokens / server URLs. Each context must resolve to *its own* file's
+// definitions — which is exactly what client-go's Precedence merge would
+// have broken.
+func TestSwitchContextRouting_SharedNames_RoutesToCorrectFile(t *testing.T) {
+	dir := t.TempDir()
+	f1 := writeKubeconfig(t, dir, "file-a.yaml", "kas-107", []kubeEntry{
+		{ctxName: "kas-107", userName: "me", clusterName: "shared"},
+	})
+	f2 := writeKubeconfig(t, dir, "file-b.yaml", "kas-108", []kubeEntry{
+		{ctxName: "kas-108", userName: "me", clusterName: "shared"},
+	})
+	// Replace the shared user/cluster definitions with per-file unique
+	// tokens and server URLs so the test can observe which file a later
+	// ExplicitPath load actually reads from.
+	setUserTokenAndServer(t, f1, "me", "token-from-a", "shared", "https://server-a.test")
+	setUserTokenAndServer(t, f2, "me", "token-from-b", "shared", "https://server-b.test")
+
+	registry, _ := buildContextRegistry([]string{f1, f2})
+
+	entryA, ok := registry["kas-107"]
+	if !ok {
+		t.Fatal("kas-107 missing from registry")
+	}
+	loadedA, err := clientcmd.LoadFromFile(entryA.SourceFile)
+	if err != nil {
+		t.Fatalf("load %s: %v", entryA.SourceFile, err)
+	}
+	if got := loadedA.AuthInfos["me"].Token; got != "token-from-a" {
+		t.Errorf("kas-107 token: got %q, want token-from-a", got)
+	}
+	if got := loadedA.Clusters["shared"].Server; got != "https://server-a.test" {
+		t.Errorf("kas-107 server: got %q, want https://server-a.test", got)
+	}
+
+	entryB, ok := registry["kas-108"]
+	if !ok {
+		t.Fatal("kas-108 missing from registry")
+	}
+	loadedB, err := clientcmd.LoadFromFile(entryB.SourceFile)
+	if err != nil {
+		t.Fatalf("load %s: %v", entryB.SourceFile, err)
+	}
+	if got := loadedB.AuthInfos["me"].Token; got != "token-from-b" {
+		t.Errorf("kas-108 token: got %q, want token-from-b (Precedence-merge regression would show token-from-a)", got)
+	}
+	if got := loadedB.Clusters["shared"].Server; got != "https://server-b.test" {
+		t.Errorf("kas-108 server: got %q, want https://server-b.test", got)
+	}
+}
+
+func setUserTokenAndServer(t *testing.T, path, userName, token, clusterName, server string) {
+	t.Helper()
+	cfg, err := clientcmd.LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("load %s: %v", path, err)
+	}
+	cfg.AuthInfos[userName] = &clientcmdapi.AuthInfo{Token: token}
+	cfg.Clusters[clusterName] = &clientcmdapi.Cluster{
+		Server:                server,
+		InsecureSkipTLSVerify: true,
+	}
+	data, err := clientcmd.Write(*cfg)
+	if err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("writeback %s: %v", path, err)
+	}
+}
+
+func TestAggregateExecPluginCommands_EmptyCommandScopedByFile(t *testing.T) {
+	dir := t.TempDir()
+	// Each file has a user with an exec block but an EMPTY command — a
+	// classic user misconfiguration. The aggregator must report both
+	// separately so diagnostics can point at the right file.
+	f1 := writeKubeconfig(t, dir, "alpha.yaml", "ctx-a", []kubeEntry{
+		{ctxName: "ctx-a", userName: "oidc", clusterName: "c1", execCommand: ""},
+	})
+	f2 := writeKubeconfig(t, dir, "beta.yaml", "ctx-b", []kubeEntry{
+		{ctxName: "ctx-b", userName: "oidc", clusterName: "c2", execCommand: ""},
+	})
+	// Manually inject an empty-command exec block (writeKubeconfig's
+	// execCommand="" falls through to a token — we want an actual exec with
+	// empty Command to hit the aggregator's emptyCommandAuthInfos path).
+	injectEmptyExec(t, f1, "oidc")
+	injectEmptyExec(t, f2, "oidc")
+
+	paths := []string{f1, f2}
+	_, fileConfigs := buildContextRegistry(paths)
+	_, empty := aggregateExecPluginCommands(paths, fileConfigs)
+
+	if len(empty) != 2 {
+		t.Fatalf("expected 2 scoped empty-command entries, got %d: %v", len(empty), empty)
+	}
+	// Should be sorted; "oidc (alpha)" < "oidc (beta)".
+	if empty[0] != "oidc (alpha)" || empty[1] != "oidc (beta)" {
+		t.Errorf("empty-command AuthInfos not scoped by file basename: got %v, want [oidc (alpha) oidc (beta)]", empty)
+	}
+}
+
+func injectEmptyExec(t *testing.T, path, userName string) {
+	t.Helper()
+	cfg, err := clientcmd.LoadFromFile(path)
+	if err != nil {
+		t.Fatalf("load %s: %v", path, err)
+	}
+	cfg.AuthInfos[userName] = &clientcmdapi.AuthInfo{
+		Exec: &clientcmdapi.ExecConfig{
+			APIVersion: "client.authentication.k8s.io/v1beta1",
+			Command:    "", // the bit we care about
+		},
+	}
+	data, err := clientcmd.Write(*cfg)
+	if err != nil {
+		t.Fatalf("write %s: %v", path, err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("writeback %s: %v", path, err)
 	}
 }
 
