@@ -155,17 +155,17 @@ auth:
 
 When using `caCert` in Kubernetes, mount the CA certificate into the pod via a ConfigMap or Secret volume.
 
-### Radar Hub mode
+### Radar Cloud mode
 
-If you see `RADAR_HUB_MODE` or `hub.*` values in the chart, they control a specialized deployment mode used by [Radar Hub](https://radarhq.io) — a hosted SaaS that lets a single Hub frontend manage many in-cluster Radar instances over an outbound tunnel. You don't need to use it to run Radar standalone; leave `hub.enabled: false` (the default).
+If you see `RADAR_CLOUD_MODE` or `cloud.*` values in the chart, they control a specialized deployment mode used by [Radar Cloud](https://radarhq.io) — a hosted SaaS that lets a single Cloud frontend manage many in-cluster Radar instances over an outbound tunnel. You don't need to use it to run Radar standalone; leave `cloud.enabled: false` (the default).
 
-Under hub-mode (`RADAR_HUB_MODE=true`, set automatically by the chart when `hub.enabled=true`), Radar:
+Under cloud-mode (`RADAR_CLOUD_MODE=true`, set automatically by the chart when `cloud.enabled=true`), Radar:
 
-- Forces `--auth-mode=proxy` with pinned `X-Forwarded-User` / `X-Forwarded-Groups` headers — the Hub tunnel is the trust boundary.
-- Ships three default ClusterRoleBindings mapping Hub's `hub:owner` / `hub:member` / `hub:viewer` groups to the standard K8s `admin` / `edit` / `view` ClusterRoles. Configurable via `hub.defaultRbac.*` in `values.yaml`.
+- Forces `--auth-mode=proxy` with pinned `X-Forwarded-User` / `X-Forwarded-Groups` headers — the Cloud tunnel is the trust boundary.
+- Ships three default ClusterRoleBindings mapping Cloud's `cloud:owner` / `cloud:member` / `cloud:viewer` groups to the standard K8s `admin` / `edit` / `view` ClusterRoles. Configurable via `cloud.defaultRbac.*` in `values.yaml`.
 - Hardens the listener (no `/debug/pprof/*`, narrower exempt paths).
 
-Customer-facing documentation for Radar Hub lives on [radarhq.io](https://radarhq.io). The authoritative reference for the Hub-mode chart values is the comment block in [`deploy/helm/radar/values.yaml`](../deploy/helm/radar/values.yaml) under `hub:`.
+Customer-facing documentation for Radar Cloud lives on [radarhq.io](https://radarhq.io). The authoritative reference for the Cloud-mode chart values is the comment block in [`deploy/helm/radar/values.yaml`](../deploy/helm/radar/values.yaml) under `cloud:`.
 
 ## Setting Up User Permissions
 

@@ -176,11 +176,11 @@ func (s *Server) setupRoutes() {
 		r.Get("/auth/logout", s.handleLogout)
 	}
 
-	// pprof routes for profiling. Not mounted under hub-mode — they'd be
-	// reachable via the Hub tunnel and leak the in-memory K8s cache (every
+	// pprof routes for profiling. Not mounted under cloud-mode — they'd be
+	// reachable via the Cloud tunnel and leak the in-memory K8s cache (every
 	// Secret, ConfigMap, Pod spec) via /debug/pprof/heap. Local/standalone
 	// installs keep them for debugging.
-	if !hubMode() {
+	if !cloudMode() {
 		r.Route("/debug/pprof", func(r chi.Router) {
 			r.Get("/", pprof.Index)
 			r.Get("/cmdline", pprof.Cmdline)
@@ -2709,19 +2709,20 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 // Settings handlers
 
-// hubMode reports whether Radar is running under Radar Hub. The Helm chart
-// sets RADAR_HUB_MODE=true when hub.enabled. When true, user-scoped fields
-// (theme, pinnedKinds) are owned by Hub's user_preferences table — not
-// settings.json — because a single in-cluster Radar is shared across every
-// Hub user of the cluster and can't meaningfully store per-user state.
-func hubMode() bool {
-	return os.Getenv("RADAR_HUB_MODE") == "true"
+// cloudMode reports whether Radar is running under Radar Cloud. The Helm
+// chart sets RADAR_CLOUD_MODE=true when cloud.enabled. When true, user-
+// scoped fields (theme, pinnedKinds) are owned by Cloud's user_preferences
+// table — not settings.json — because a single in-cluster Radar is shared
+// across every Cloud user of the cluster and can't meaningfully store
+// per-user state.
+func cloudMode() bool {
+	return os.Getenv("RADAR_CLOUD_MODE") == "true"
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {
 	loaded := settings.Load()
-	if hubMode() {
-		// Strip user-scoped fields — Hub's intercept layer fills them from
+	if cloudMode() {
+		// Strip user-scoped fields — Cloud's intercept layer fills them from
 		// user_preferences. Audit stays because it's cluster-shared policy.
 		loaded.Theme = ""
 		loaded.PinnedKinds = nil
@@ -2735,12 +2736,13 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	// Under hub mode, reject writes to user-scoped fields. Hub's intercept
-	// layer splits the PUT before forwarding — this is a defense-in-depth
-	// check so a raw call bypasses the intercept doesn't silently succeed
-	// and cause a cluster-shared settings.json to get mutated by one user.
-	if hubMode() && (patch.Theme != "" || patch.PinnedKinds != nil) {
-		s.writeError(w, http.StatusBadRequest, "theme and pinnedKinds are managed by Radar Hub; use /api/preferences instead")
+	// Under cloud mode, reject writes to user-scoped fields. Cloud's
+	// intercept layer splits the PUT before forwarding — this is a
+	// defense-in-depth check so a raw call that bypasses the intercept
+	// doesn't silently succeed and cause a cluster-shared settings.json
+	// to get mutated by one user.
+	if cloudMode() && (patch.Theme != "" || patch.PinnedKinds != nil) {
+		s.writeError(w, http.StatusBadRequest, "theme and pinnedKinds are managed by Radar Cloud; use /api/preferences instead")
 		return
 	}
 	result, err := settings.Update(func(current *settings.Settings) {
@@ -2756,7 +2758,7 @@ func (s *Server) handlePutSettings(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
-	if hubMode() {
+	if cloudMode() {
 		result.Theme = ""
 		result.PinnedKinds = nil
 	}

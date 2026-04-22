@@ -774,56 +774,58 @@ func TestSmokePutSettingsPreservesExisting(t *testing.T) {
 	}
 }
 
-// TestSmokeHubMode_SettingsGetStripsUserScoped: under RADAR_HUB_MODE the
-// GET /api/settings response must omit theme/pinnedKinds so Hub's intercept
-// layer owns the contract. Audit stays (cluster-shared admin policy).
-func TestSmokeHubMode_SettingsGetStripsUserScoped(t *testing.T) {
+// TestSmokeCloudMode_SettingsGetStripsUserScoped: under RADAR_CLOUD_MODE
+// the GET /api/settings response must omit theme/pinnedKinds so Cloud's
+// intercept layer owns the contract. Audit stays (cluster-shared admin
+// policy).
+func TestSmokeCloudMode_SettingsGetStripsUserScoped(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	// Seed real values into the persisted store so we can prove they're
 	// stripped at the HTTP boundary, not just missing from the file.
 	put(t, "/api/settings", `{"theme":"dark","pinnedKinds":[{"name":"pods","kind":"Pod","group":""}]}`)
 
-	t.Setenv("RADAR_HUB_MODE", "true")
+	t.Setenv("RADAR_CLOUD_MODE", "true")
 
 	var body map[string]any
 	assertOK(t, get(t, "/api/settings"), &body)
 	if _, has := body["theme"]; has && body["theme"] != "" {
-		t.Errorf("theme leaked under hub mode: %v", body["theme"])
+		t.Errorf("theme leaked under cloud mode: %v", body["theme"])
 	}
 	if _, has := body["pinnedKinds"]; has && body["pinnedKinds"] != nil {
-		t.Errorf("pinnedKinds leaked under hub mode: %v", body["pinnedKinds"])
+		t.Errorf("pinnedKinds leaked under cloud mode: %v", body["pinnedKinds"])
 	}
 }
 
-// TestSmokeHubMode_SettingsPutRejectsUserScoped: under RADAR_HUB_MODE, a
-// raw PUT attempting to set theme/pinnedKinds must be rejected. Hub's
-// intercept layer splits the body before forwarding; anything that
-// reaches this endpoint with those fields set has bypassed the intercept
-// and must not mutate shared settings.json.
-func TestSmokeHubMode_SettingsPutRejectsUserScoped(t *testing.T) {
+// TestSmokeCloudMode_SettingsPutRejectsUserScoped: under RADAR_CLOUD_MODE,
+// a raw PUT attempting to set theme/pinnedKinds must be rejected. Cloud's
+// intercept layer splits the body before forwarding; anything that reaches
+// this endpoint with those fields set has bypassed the intercept and must
+// not mutate shared settings.json.
+func TestSmokeCloudMode_SettingsPutRejectsUserScoped(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
-	t.Setenv("RADAR_HUB_MODE", "true")
+	t.Setenv("RADAR_CLOUD_MODE", "true")
 
 	resp := put(t, "/api/settings", `{"theme":"dark"}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusBadRequest {
-		t.Errorf("PUT with theme under hub mode got %d, want 400", resp.StatusCode)
+		t.Errorf("PUT with theme under cloud mode got %d, want 400", resp.StatusCode)
 	}
 
 	resp2 := put(t, "/api/settings", `{"pinnedKinds":[{"name":"pods","kind":"Pod","group":""}]}`)
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusBadRequest {
-		t.Errorf("PUT with pinnedKinds under hub mode got %d, want 400", resp2.StatusCode)
+		t.Errorf("PUT with pinnedKinds under cloud mode got %d, want 400", resp2.StatusCode)
 	}
 }
 
-// TestSmokeHubMode_PprofNotMounted verifies that /debug/pprof/* is not
-// registered under hub-mode. The pprof heap endpoint would otherwise leak
-// the in-memory K8s cache (every Secret, ConfigMap, Pod spec) through the
-// Hub tunnel. This test constructs a fresh server with RADAR_HUB_MODE set
-// before Server.setupRoutes reads it, so the pprof-gate conditional fires.
-func TestSmokeHubMode_PprofNotMounted(t *testing.T) {
-	t.Setenv("RADAR_HUB_MODE", "true")
+// TestSmokeCloudMode_PprofNotMounted verifies that /debug/pprof/* is not
+// registered under cloud-mode. The pprof heap endpoint would otherwise
+// leak the in-memory K8s cache (every Secret, ConfigMap, Pod spec) through
+// the Cloud tunnel. This test constructs a fresh server with
+// RADAR_CLOUD_MODE set before Server.setupRoutes reads it, so the
+// pprof-gate conditional fires.
+func TestSmokeCloudMode_PprofNotMounted(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "true")
 
 	srv := New(Config{DevMode: true})
 	ts := httptest.NewServer(srv.Handler())
@@ -843,7 +845,7 @@ func TestSmokeHubMode_PprofNotMounted(t *testing.T) {
 				t.Fatalf("GET %s: %v", p, err)
 			}
 			defer resp.Body.Close()
-			// Under hub-mode the route is not mounted. The SPA fallback
+			// Under cloud-mode the route is not mounted. The SPA fallback
 			// serves index.html (200) for unknown paths — what matters is
 			// that it's NOT serving the pprof handler's dump output. A
 			// 200 with the SPA HTML (not pprof data) is the pass

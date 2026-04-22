@@ -86,13 +86,13 @@ spec:
             - --auth-oidc-backchannel-logout
             {{- end }}
             {{- end }}
-            {{- if .Values.hub.enabled }}
-            {{- if not (or .Values.hub.token .Values.hub.existingSecret) }}
-            {{- fail "hub.token or hub.existingSecret must be set when hub.enabled=true" }}
+            {{- if .Values.cloud.enabled }}
+            {{- if not (or .Values.cloud.token .Values.cloud.existingSecret) }}
+            {{- fail "cloud.token or cloud.existingSecret must be set when cloud.enabled=true" }}
             {{- end }}
-            - --hub-url={{ required "hub.url is required when hub.enabled=true" .Values.hub.url }}
-            - --cluster-name={{ required "hub.clusterName is required when hub.enabled=true" .Values.hub.clusterName }}
-            {{- /* hub.token is injected via RADAR_HUB_TOKEN env var below, not the command line */}}
+            - --cloud-url={{ required "cloud.url is required when cloud.enabled=true" .Values.cloud.url }}
+            - --cluster-name={{ required "cloud.clusterName is required when cloud.enabled=true" .Values.cloud.clusterName }}
+            {{- /* cloud.token is injected via RADAR_CLOUD_TOKEN env var below, not the command line */}}
             {{- end }}
           ports:
             - name: http
@@ -127,21 +127,21 @@ spec:
               value: "/tmp/helm/config"
             - name: HELM_DATA_HOME
               value: "/tmp/helm/data"
-            {{- if .Values.hub.enabled }}
-            # Signals hub-mode to the Radar binary: forces --auth-mode=proxy,
+            {{- if .Values.cloud.enabled }}
+            # Signals cloud-mode to the Radar binary: forces --auth-mode=proxy,
             # accepts forwarded identity headers from the tunnel, disables
-            # startup-config fields that don't apply under a hosted Hub.
-            - name: RADAR_HUB_MODE
+            # startup-config fields that don't apply under hosted Radar Cloud.
+            - name: RADAR_CLOUD_MODE
               value: "true"
-            {{- if or .Values.hub.token .Values.hub.existingSecret }}
-            - name: RADAR_HUB_TOKEN
-              {{- if .Values.hub.existingSecret }}
+            {{- if or .Values.cloud.token .Values.cloud.existingSecret }}
+            - name: RADAR_CLOUD_TOKEN
+              {{- if .Values.cloud.existingSecret }}
               valueFrom:
                 secretKeyRef:
-                  name: {{ .Values.hub.existingSecret }}
-                  key: {{ .Values.hub.existingSecretKey }}
+                  name: {{ .Values.cloud.existingSecret }}
+                  key: {{ .Values.cloud.existingSecretKey }}
               {{- else }}
-              value: {{ .Values.hub.token | quote }}
+              value: {{ .Values.cloud.token | quote }}
               {{- end }}
             {{- end }}
             {{- end }}

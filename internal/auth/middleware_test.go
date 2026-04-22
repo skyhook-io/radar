@@ -306,13 +306,13 @@ func TestIsExemptPath(t *testing.T) {
 	}
 }
 
-// TestIsExemptPath_HubMode verifies that hub-mode narrows the exempt set to
-// /api/health + /auth/*. Under hub-mode, static assets, /api/connection,
-// and /debug/pprof/* must all require auth — a regression that silently
-// re-added them would let an unauthenticated request through the Hub tunnel
-// reach those paths.
-func TestIsExemptPath_HubMode(t *testing.T) {
-	t.Setenv("RADAR_HUB_MODE", "true")
+// TestIsExemptPath_CloudMode verifies that cloud-mode narrows the exempt
+// set to /api/health + /auth/*. Under cloud-mode, static assets,
+// /api/connection, and /debug/pprof/* must all require auth — a regression
+// that silently re-added them would let an unauthenticated request through
+// the Cloud tunnel reach those paths.
+func TestIsExemptPath_CloudMode(t *testing.T) {
+	t.Setenv("RADAR_CLOUD_MODE", "true")
 
 	tests := []struct {
 		path string
@@ -321,8 +321,8 @@ func TestIsExemptPath_HubMode(t *testing.T) {
 		{"/api/health", true},
 		{"/auth/login", true},
 		{"/auth/callback", true},
-		// Under non-hub mode these would be exempt. Under hub-mode they
-		// must require auth.
+		// Under non-cloud mode these would be exempt. Under cloud-mode
+		// they must require auth.
 		{"/api/connection", false},
 		{"/api/connection/retry", false},
 		{"/", false},
@@ -339,7 +339,7 @@ func TestIsExemptPath_HubMode(t *testing.T) {
 		t.Run(tt.path, func(t *testing.T) {
 			got := isExemptPath(tt.path)
 			if got != tt.want {
-				t.Errorf("isExemptPath(%q) under hub-mode = %v, want %v", tt.path, got, tt.want)
+				t.Errorf("isExemptPath(%q) under cloud-mode = %v, want %v", tt.path, got, tt.want)
 			}
 		})
 	}

@@ -30,10 +30,10 @@ rules:
     verbs: ["create", "update", "patch", "delete"]
   {{- end }}
 
-  {{- if or .Values.rbac.secrets .Values.rbac.helm (ne .Values.auth.mode "none") .Values.hub.enabled }}
+  {{- if or .Values.rbac.secrets .Values.rbac.helm (ne .Values.auth.mode "none") .Values.cloud.enabled }}
   # Secrets access - required for Helm release storage (rbac.helm),
   # showing secrets in the resource browser (rbac.secrets),
-  # or Helm visibility when auth is enabled / hub-mode (Helm reads use the
+  # or Helm visibility when auth is enabled / cloud-mode (Helm reads use the
   # ServiceAccount since users with the K8s 'view' role cannot list secrets)
   - apiGroups: [""]
     resources:
@@ -304,10 +304,10 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
 
-  {{- if or (ne .Values.auth.mode "none") .Values.hub.enabled }}
+  {{- if or (ne .Values.auth.mode "none") .Values.cloud.enabled }}
   # Auth: Impersonation permissions for user-scoped operations.
-  # Required under hub-mode too — the binary forces --auth-mode=proxy there
-  # and impersonates Hub-injected identities to the K8s API.
+  # Required under cloud-mode too — the binary forces --auth-mode=proxy there
+  # and impersonates Cloud-injected identities to the K8s API.
   - apiGroups: [""]
     resources: ["users", "groups"]
     verbs: ["impersonate"]

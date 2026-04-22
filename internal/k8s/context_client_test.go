@@ -31,11 +31,11 @@ func swapGlobals(t *testing.T, cfg *rest.Config) {
 
 // TestClientFromContext_Impersonation verifies that a user on the context
 // produces an impersonated client whose rest.Config carries the user's
-// identity. This is the core contract the hub-mode retrofit depends on.
+// identity. This is the core contract the cloud-mode retrofit depends on.
 func TestClientFromContext_Impersonation(t *testing.T) {
 	swapGlobals(t, &rest.Config{Host: "https://example.invalid"})
 
-	user := &pkgauth.User{Username: "alice", Groups: []string{"hub:owner"}}
+	user := &pkgauth.User{Username: "alice", Groups: []string{"cloud:owner"}}
 	ctx := pkgauth.ContextWithUser(context.Background(), user)
 
 	client := ClientFromContext(ctx)
@@ -51,8 +51,8 @@ func TestClientFromContext_Impersonation(t *testing.T) {
 	if cfg.Impersonate.UserName != "alice" {
 		t.Errorf("Impersonate.UserName = %q, want %q", cfg.Impersonate.UserName, "alice")
 	}
-	if len(cfg.Impersonate.Groups) != 1 || cfg.Impersonate.Groups[0] != "hub:owner" {
-		t.Errorf("Impersonate.Groups = %v, want [hub:owner]", cfg.Impersonate.Groups)
+	if len(cfg.Impersonate.Groups) != 1 || cfg.Impersonate.Groups[0] != "cloud:owner" {
+		t.Errorf("Impersonate.Groups = %v, want [cloud:owner]", cfg.Impersonate.Groups)
 	}
 }
 
@@ -62,7 +62,7 @@ func TestClientFromContext_Impersonation(t *testing.T) {
 func TestClientFromContext_ImpersonationFailureReturnsNil(t *testing.T) {
 	swapGlobals(t, nil) // no base config
 
-	user := &pkgauth.User{Username: "alice", Groups: []string{"hub:viewer"}}
+	user := &pkgauth.User{Username: "alice", Groups: []string{"cloud:viewer"}}
 	ctx := pkgauth.ContextWithUser(context.Background(), user)
 
 	if client := ClientFromContext(ctx); client != nil {

@@ -71,32 +71,32 @@ func main() {
 	authOIDCInsecureSkipVerify := flag.Bool("auth-oidc-insecure-skip-verify", false, "Skip TLS certificate verification for OIDC provider (insecure, dev/test only)")
 	authOIDCCACert := flag.String("auth-oidc-ca-cert", "", "Path to CA certificate file for OIDC provider TLS verification")
 	authOIDCBackchannelLogout := flag.Bool("auth-oidc-backchannel-logout", false, "Enable OIDC Back-Channel Logout endpoint (single-replica only)")
-	// Radar Hub (cloud) flags — enable hosted mode when --hub-url is set.
+	// Radar Cloud flags — enable hosted mode when --cloud-url is set.
 	// Local-binary behavior is unchanged when these flags are empty. Each
 	// flag falls back to an env var so Kubernetes deployments can source
 	// the token from a Secret without exposing it in `ps` output.
-	hubURL := flag.String("hub-url", os.Getenv("RADAR_HUB_URL"), "Radar Hub WebSocket URL (e.g. wss://api.radarhq.io/agent) — empty = local-only. Env: RADAR_HUB_URL")
-	hubToken := flag.String("hub-token", os.Getenv("RADAR_HUB_TOKEN"), "Cluster token from the Radar Hub install wizard (rhc_<random>). Env: RADAR_HUB_TOKEN")
-	hubClusterName := flag.String("cluster-name", os.Getenv("RADAR_HUB_CLUSTER_NAME"), "Human-readable cluster name for Radar Hub (required with --hub-url). Env: RADAR_HUB_CLUSTER_NAME")
+	cloudURL := flag.String("cloud-url", os.Getenv("RADAR_CLOUD_URL"), "Radar Cloud WebSocket URL (e.g. wss://api.radarhq.io/agent) — empty = local-only. Env: RADAR_CLOUD_URL")
+	cloudToken := flag.String("cloud-token", os.Getenv("RADAR_CLOUD_TOKEN"), "Cluster token from the Radar Cloud install wizard (rhc_<random>). Env: RADAR_CLOUD_TOKEN")
+	cloudClusterName := flag.String("cluster-name", os.Getenv("RADAR_CLOUD_CLUSTER_NAME"), "Human-readable cluster name for Radar Cloud (required with --cloud-url). Env: RADAR_CLOUD_CLUSTER_NAME")
 	flag.Parse()
 
-	// Hub-mode: Radar runs inside a customer cluster and fronts Radar Hub.
-	// Under hub-mode the tunnel is the only path to this listener and it
-	// delivers Hub-authenticated identity headers on every request. Force
-	// --auth-mode=proxy so Radar impersonates the Hub user against the K8s
-	// API instead of falling back to the ServiceAccount (which would give
-	// every Hub user full SA permissions).
-	hubMode := os.Getenv("RADAR_HUB_MODE") == "true"
-	if hubMode {
+	// Cloud-mode: Radar runs inside a customer cluster and fronts Radar
+	// Cloud. Under cloud-mode the tunnel is the only path to this listener
+	// and it delivers Cloud-authenticated identity headers on every request.
+	// Force --auth-mode=proxy so Radar impersonates the Cloud user against
+	// the K8s API instead of falling back to the ServiceAccount (which would
+	// give every Cloud user full SA permissions).
+	cloudMode := os.Getenv("RADAR_CLOUD_MODE") == "true"
+	if cloudMode {
 		if *authMode != "none" && *authMode != "proxy" {
-			log.Fatalf("RADAR_HUB_MODE=true incompatible with --auth-mode=%q: Hub owns authn, only 'proxy' is supported", *authMode)
+			log.Fatalf("RADAR_CLOUD_MODE=true incompatible with --auth-mode=%q: Cloud owns authn, only 'proxy' is supported", *authMode)
 		}
 		*authMode = "proxy"
-		// Pin the header names to the Hub's wire contract. Operators don't
-		// get to retarget these; Hub always sends X-Forwarded-User/Groups.
+		// Pin the header names to the Cloud's wire contract. Operators don't
+		// get to retarget these; Cloud always sends X-Forwarded-User/Groups.
 		*authUserHeader = "X-Forwarded-User"
 		*authGroupsHeader = "X-Forwarded-Groups"
-		log.Printf("[hub] RADAR_HUB_MODE=true: auth-mode forced to proxy, trusting tunnel-supplied identity headers")
+		log.Printf("[cloud] RADAR_CLOUD_MODE=true: auth-mode forced to proxy, trusting tunnel-supplied identity headers")
 	}
 
 	if *showVersion {
@@ -185,7 +185,7 @@ func main() {
 	k8s.LogTiming(" Server created: %v", time.Since(t))
 
 	// Root context cancelled on SIGINT/SIGTERM. Long-running background
-	// workers (hub tunnel, etc.) observe this to shut down cleanly before
+	// workers (cloud tunnel, etc.) observe this to shut down cleanly before
 	// the process exits.
 	rootCtx, rootCancel := context.WithCancel(context.Background())
 	defer rootCancel()
@@ -231,23 +231,24 @@ func main() {
 	app.InitializeCluster()
 	k8s.LogTiming(" Total startup (to connected): %v", time.Since(startupStart))
 
-	// When --hub-url is set, dial out to the hub and serve the existing
-	// router over yamux-tunneled streams. No behavior change when empty.
-	if *hubURL != "" {
-		if *hubToken == "" || *hubClusterName == "" {
-			log.Fatalf("--hub-url requires --hub-token and --cluster-name")
+	// When --cloud-url is set, dial out to Radar Cloud and serve the
+	// existing router over yamux-tunneled streams. No behavior change
+	// when empty.
+	if *cloudURL != "" {
+		if *cloudToken == "" || *cloudClusterName == "" {
+			log.Fatalf("--cloud-url requires --cloud-token and --cluster-name")
 		}
 		go func() {
 			defer func() {
 				if r := recover(); r != nil {
-					log.Printf("[cloud] panic in hub tunnel: %v — local Radar continues to serve", r)
+					log.Printf("[cloud] panic in cloud tunnel: %v — local Radar continues to serve", r)
 				}
 			}()
 			runErr := cloud.Run(rootCtx, cloud.Config{
-				HubURL:      *hubURL,
-				Token:       *hubToken,
-				ClusterID:   *hubClusterName,
-				ClusterName: *hubClusterName,
+				URL:         *cloudURL,
+				Token:       *cloudToken,
+				ClusterID:   *cloudClusterName,
+				ClusterName: *cloudClusterName,
 				Handler:     srv.Handler(),
 			})
 			if runErr != nil && !errors.Is(runErr, context.Canceled) {

@@ -11,13 +11,13 @@ import (
 	"github.com/hashicorp/yamux"
 )
 
-// dial establishes a WebSocket to the hub, authenticates with the cluster
-// bearer token, and returns a yamux session with this side as the *server*.
-// The hub opens streams (one per browser request); we accept them.
+// dial establishes a WebSocket to Radar Cloud, authenticates with the
+// cluster bearer token, and returns a yamux session with this side as the
+// *server*. Cloud opens streams (one per browser request); we accept them.
 func dial(ctx context.Context, cfg Config) (*yamux.Session, error) {
-	u, err := url.Parse(cfg.HubURL)
+	u, err := url.Parse(cfg.URL)
 	if err != nil {
-		return nil, fmt.Errorf("parse hub URL: %w", err)
+		return nil, fmt.Errorf("parse cloud URL: %w", err)
 	}
 	q := u.Query()
 	q.Set("cluster_id", cfg.ClusterID)
@@ -35,19 +35,19 @@ func dial(ctx context.Context, cfg Config) (*yamux.Session, error) {
 			defer resp.Body.Close()
 			switch resp.StatusCode {
 			case http.StatusUnauthorized:
-				return nil, fmt.Errorf("hub rejected token (401) — check --hub-token")
+				return nil, fmt.Errorf("Radar Cloud rejected token (401) — check --cloud-token")
 			case http.StatusForbidden:
-				return nil, fmt.Errorf("hub rejected cluster (403) — token may be revoked or cluster disabled")
+				return nil, fmt.Errorf("Radar Cloud rejected cluster (403) — token may be revoked or cluster disabled")
 			case http.StatusNotFound:
-				return nil, fmt.Errorf("hub endpoint not found (404) — check --hub-url path")
+				return nil, fmt.Errorf("Radar Cloud endpoint not found (404) — check --cloud-url path")
 			default:
-				return nil, fmt.Errorf("hub rejected connection: status=%d: %w", resp.StatusCode, err)
+				return nil, fmt.Errorf("Radar Cloud rejected connection: status=%d: %w", resp.StatusCode, err)
 			}
 		}
 		return nil, fmt.Errorf("ws dial: %w", err)
 	}
 
-	// We are the yamux *server* (accepts streams). The hub is the client
+	// We are the yamux *server* (accepts streams). Cloud is the client
 	// (opens streams when browser requests arrive).
 	mux, err := yamux.Server(newWSConn(ws), yamux.DefaultConfig())
 	if err != nil {
