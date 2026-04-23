@@ -249,6 +249,7 @@ func main() {
 				Token:       *cloudToken,
 				ClusterID:   *cloudClusterName,
 				ClusterName: *cloudClusterName,
+				Namespace:   os.Getenv("MY_POD_NAMESPACE"),
 				Handler:     srv.Handler(),
 			})
 			if runErr != nil && !errors.Is(runErr, context.Canceled) {

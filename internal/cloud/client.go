@@ -37,6 +37,13 @@ type Config struct {
 	// ClusterName is the human-readable label the user chose in the wizard.
 	ClusterName string
 
+	// Namespace is the Kubernetes namespace Radar is running in. Sent to the
+	// hub on connect so it knows where to target Deployment patches on upgrade.
+	// Populated from MY_POD_NAMESPACE (downward API); empty string is fine —
+	// the hub stores whatever it receives and surfaces a "reconnect required"
+	// error if the field is absent when an upgrade is requested.
+	Namespace string
+
 	// Handler is the HTTP handler to serve over tunneled streams — typically
 	// Radar's Server.Handler() (chi router).
 	Handler http.Handler

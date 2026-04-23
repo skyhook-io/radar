@@ -26,6 +26,10 @@ func dial(ctx context.Context, cfg Config) (*yamux.Session, error) {
 
 	headers := http.Header{}
 	headers.Set("Authorization", "Bearer "+cfg.Token)
+	headers.Set("X-Radar-Version", Version)
+	if cfg.Namespace != "" {
+		headers.Set("X-Radar-Namespace", cfg.Namespace)
+	}
 
 	dialer := *websocket.DefaultDialer
 	dialer.HandshakeTimeout = 10 * time.Second
