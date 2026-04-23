@@ -16,7 +16,7 @@ import (
 )
 
 // handleSelfUpgrade patches this Radar Deployment's container image so the
-// pod restarts on a new version. Called by Radar Hub's upgrade-agent endpoint
+// pod restarts on a new version. Called by Radar Cloud's upgrade-agent endpoint
 // over the yamux tunnel — no user terminal or cloud credentials needed.
 //
 // Security: only images under ghcr.io/skyhook-io/radar: are accepted.
