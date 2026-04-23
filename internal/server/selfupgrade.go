@@ -83,11 +83,11 @@ func (s *Server) handleSelfUpgrade(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusForbidden, "SA lacks patch permission on this Deployment (rbac.selfUpgrade=true?)")
 			return
 		}
-		log.Printf("[self-upgrade] patch failed: ns=%s deploy=%s image=%s err=%v", ns, deployment, req.Image, err)
+		log.Printf("[self-upgrade] patch failed: ns=%s deploy=%s tag=%s err=%v", ns, deployment, tag, err)
 		s.writeError(w, http.StatusInternalServerError, "patch failed")
 		return
 	}
 
-	log.Printf("[self-upgrade] initiated: ns=%s deploy=%s image=%s", ns, deployment, req.Image)
+	log.Printf("[self-upgrade] initiated: ns=%s deploy=%s tag=%s", ns, deployment, tag)
 	s.writeJSON(w, map[string]string{"status": "upgrade initiated", "image": req.Image})
 }
