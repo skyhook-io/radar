@@ -1,8 +1,14 @@
 import { ChevronDown } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
+import { getLogPalette } from './log-palette'
 
-const SELECT_CLASS =
-  'appearance-none bg-theme-elevated text-theme-text-primary text-xs rounded px-2 py-1.5 border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500'
+// Explicit dark/light classes — do NOT use theme-* tokens here because the
+// log viewer forces its own color-scheme and `light-dark()` resolution
+// doesn't propagate reliably after the Tailwind v4 migration.
+function selectClass(isDark: boolean): string {
+  const p = getLogPalette(isDark)
+  return `appearance-none ${p.elevatedBg} ${p.textPrimary} text-xs rounded px-2 py-1.5 border ${p.borderLight} focus:outline-none focus:ring-1 focus:ring-blue-500`
+}
 
 // ── ContainerSelect ───────────────────────────────────────────────────────────
 
@@ -12,21 +18,24 @@ interface ContainerSelectProps {
   onChange: (value: string) => void
   /** If true, prepend an "All containers" option with value="" */
   includeAll?: boolean
+  /** Dark/light palette selector. Defaults to `true` (dark viewer). */
+  isDark?: boolean
 }
 
-export function ContainerSelect({ containers, value, onChange, includeAll = false }: ContainerSelectProps) {
+export function ContainerSelect({ containers, value, onChange, includeAll = false, isDark = true }: ContainerSelectProps) {
   if (containers.length <= 1 && !includeAll) return null
+  const p = getLogPalette(isDark)
   return (
     <div className="relative">
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={`${SELECT_CLASS} pr-6`}
+        className={`${selectClass(isDark)} pr-6`}
       >
         {includeAll && <option value="">All containers</option>}
         {containers.map(c => <option key={c} value={c}>{c}</option>)}
       </select>
-      <ChevronDown className="absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 text-theme-text-secondary pointer-events-none" />
+      <ChevronDown className={`absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 ${p.textSecondary} pointer-events-none`} />
     </div>
   )
 }
@@ -39,6 +48,8 @@ interface LogRangeSelectProps {
   /** Line count options to show. Defaults to [100, 500, 1000, 5000]. */
   lineOptions?: number[]
   tooltip?: string
+  /** Dark/light palette selector. Defaults to `true` (dark viewer). */
+  isDark?: boolean
 }
 
 export function LogRangeSelect({
@@ -46,13 +57,14 @@ export function LogRangeSelect({
   onChange,
   lineOptions = [100, 500, 1000, 5000],
   tooltip = 'How many logs to load — by line count or time range',
+  isDark = true,
 }: LogRangeSelectProps) {
   return (
     <Tooltip content={tooltip} position="bottom">
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={`${SELECT_CLASS} pr-5`}
+        className={`${selectClass(isDark)} pr-5`}
       >
         <optgroup label="Lines">
           {lineOptions.map(n => (

@@ -2,7 +2,6 @@ import { useState, useMemo } from 'react'
 import { ChevronRight, ChevronDown, Filter } from 'lucide-react'
 import type { LogLevel } from './useLogBuffer'
 import {
-  getLevelColor,
   unescapeJsonStrings,
   parseLogfmt,
   SYNTAX_COLOR_KEY,
@@ -11,7 +10,7 @@ import {
   SYNTAX_COLOR_BOOLEAN,
   SYNTAX_COLOR_NULL,
 } from '../../utils/log-format'
-import { SEVERITY_BADGE_BORDERED } from '../../utils/badge-colors'
+import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
 
 interface StructuredLogLineProps {
   content: string
@@ -25,9 +24,16 @@ interface StructuredLogLineProps {
    * add the value to the log search/filter.
    */
   onFilterValue?: (value: string) => void
+  /**
+   * Whether the log viewer is in dark mode. Determines the color palette used
+   * for text, hover states, and level badges. Defaults to `true` since the
+   * viewer defaults to dark mode.
+   */
+  isDark?: boolean
 }
 
-export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultExpanded, onFilterValue }: StructuredLogLineProps) {
+export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultExpanded, onFilterValue, isDark = true }: StructuredLogLineProps) {
+  const palette = useMemo(() => getLogPalette(isDark), [isDark])
   // null = user hasn't toggled this line; defers to defaultExpanded (global toggle)
   const [localExpanded, setLocalExpanded] = useState<boolean | null>(null)
   const expanded = localExpanded ?? defaultExpanded ?? false
@@ -45,7 +51,7 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
 
   if (!parsed) {
     return (
-      <span className={`${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'} ${getLevelColor(level)}`}>
+      <span className={`${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'} ${getLogLevelColor(level, isDark)}`}>
         {content}
       </span>
     )
@@ -55,8 +61,8 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
 
   const toggle = () => setLocalExpanded(!expanded)
   const chevron = expanded
-    ? <ChevronDown className="w-3 h-3 shrink-0 text-theme-text-tertiary" />
-    : <ChevronRight className="w-3 h-3 shrink-0 text-theme-text-tertiary" />
+    ? <ChevronDown className={`w-3 h-3 shrink-0 ${palette.textTertiary}`} />
+    : <ChevronRight className={`w-3 h-3 shrink-0 ${palette.textTertiary}`} />
 
   return (
     <span>
@@ -64,30 +70,31 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
         // Collapsed: entire summary line is clickable
         <span
           onClick={toggle}
-          className={`cursor-pointer hover:bg-theme-surface/50 rounded px-0.5 -ml-0.5 ${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}
+          className={`cursor-pointer ${palette.hoverSurface} rounded px-0.5 -ml-0.5 ${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}
         >
           <span className="inline-flex items-center align-middle mr-0.5">{chevron}</span>
-          <SummaryLine obj={parsed} />
-          <span className="text-theme-text-tertiary ml-1">{`{${fieldCount} fields}`}</span>
+          <SummaryLine obj={parsed} palette={palette} isDark={isDark} />
+          <span className={`${palette.textTertiary} ml-1`}>{`{${fieldCount} fields}`}</span>
         </span>
       ) : (
         // Expanded: summary header is clickable to collapse, JSON content is selectable
         <>
         <span
           onClick={toggle}
-          className="cursor-pointer hover:bg-theme-surface/50 rounded px-0.5 -ml-0.5"
+          className={`cursor-pointer ${palette.hoverSurface} rounded px-0.5 -ml-0.5`}
         >
           <span className="inline-flex items-center align-middle mr-0.5">{chevron}</span>
-          <SummaryLine obj={parsed} />
-          <span className="text-theme-text-tertiary ml-1">{`{${fieldCount} fields}`}</span>
+          <SummaryLine obj={parsed} palette={palette} isDark={isDark} />
+          <span className={`${palette.textTertiary} ml-1`}>{`{${fieldCount} fields}`}</span>
         </span>
         <span className={`block ml-4 ${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}>
           {isLogfmt ? (
-            <ExpandedLogfmt obj={parsed} onFilterValue={onFilterValue} />
+            <ExpandedLogfmt obj={parsed} onFilterValue={onFilterValue} palette={palette} />
           ) : (
             <JsonExpanded
               text={unescapeJsonStrings(JSON.stringify(parsed, null, 2))}
               onFilterValue={onFilterValue}
+              palette={palette}
             />
           )}
         </span>
@@ -102,18 +109,18 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
  * Clicking the chip calls onFilter(value) so the caller can push it into log search.
  */
 function FilterableValue({
-  value, onFilter, color,
-}: { value: string; onFilter?: (v: string) => void; color?: string }) {
+  value, onFilter, color, palette,
+}: { value: string; onFilter?: (v: string) => void; color?: string; palette: LogPalette }) {
   if (!onFilter) {
     return <span style={color ? { color } : undefined}>{value}</span>
   }
   return (
-    <span className="group/flt inline-flex items-baseline align-baseline gap-0.5 rounded hover:bg-theme-surface/60">
+    <span className={`group/flt inline-flex items-baseline align-baseline gap-0.5 rounded ${palette.hoverSurface}`}>
       <span style={color ? { color } : undefined}>{value}</span>
       <button
         type="button"
         onClick={(e) => { e.stopPropagation(); onFilter(value) }}
-        className="opacity-0 group-hover/flt:opacity-100 transition-opacity text-theme-text-tertiary hover:text-theme-text-primary px-0.5"
+        className={`opacity-0 group-hover/flt:opacity-100 transition-opacity ${palette.textTertiary} ${palette.hoverText} px-0.5`}
         title={`Filter to lines containing "${value}"`}
         aria-label={`Filter to lines containing ${value}`}
       >
@@ -128,7 +135,7 @@ function FilterableValue({
  * the layout that JSON.stringify(..., null, 2) produces. Tokenizes the string
  * and emits React nodes so the hover chip can be wired per value.
  */
-function JsonExpanded({ text, onFilterValue }: { text: string; onFilterValue?: (v: string) => void }) {
+function JsonExpanded({ text, onFilterValue, palette }: { text: string; onFilterValue?: (v: string) => void; palette: LogPalette }) {
   const tokenRe = /("(?:\\.|[^"\\])*")\s*:|("(?:\\.|[^"\\])*")|(-?\b\d+(?:\.\d+)?(?:[eE][+-]?\d+)?\b)|\b(true|false)\b|\b(null)\b/g
   const nodes: React.ReactNode[] = []
   let lastIndex = 0
@@ -147,15 +154,15 @@ function JsonExpanded({ text, onFilterValue }: { text: string; onFilterValue?: (
       // the displayed string, not JSON-escaped bytes).
       const inner = str.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')
       nodes.push(
-        <FilterableValue key={`s${idx++}`} value={inner} onFilter={onFilterValue} color={SYNTAX_COLOR_STRING} />
+        <FilterableValue key={`s${idx++}`} value={inner} onFilter={onFilterValue} color={SYNTAX_COLOR_STRING} palette={palette} />
       )
     } else if (num !== undefined) {
       nodes.push(
-        <FilterableValue key={`n${idx++}`} value={num} onFilter={onFilterValue} color={SYNTAX_COLOR_NUMBER} />
+        <FilterableValue key={`n${idx++}`} value={num} onFilter={onFilterValue} color={SYNTAX_COLOR_NUMBER} palette={palette} />
       )
     } else if (bool !== undefined) {
       nodes.push(
-        <FilterableValue key={`b${idx++}`} value={bool} onFilter={onFilterValue} color={SYNTAX_COLOR_BOOLEAN} />
+        <FilterableValue key={`b${idx++}`} value={bool} onFilter={onFilterValue} color={SYNTAX_COLOR_BOOLEAN} palette={palette} />
       )
     } else if (nil !== undefined) {
       nodes.push(<span key={`z${idx++}`} style={{ color: SYNTAX_COLOR_NULL }}>{nil}</span>)
@@ -168,7 +175,7 @@ function JsonExpanded({ text, onFilterValue }: { text: string; onFilterValue?: (
   return <>{nodes}</>
 }
 
-function SummaryLine({ obj }: { obj: Record<string, unknown> }) {
+function SummaryLine({ obj, palette, isDark }: { obj: Record<string, unknown>; palette: LogPalette; isDark: boolean }) {
   const lvl = obj.level ?? obj.severity ?? obj.lvl ?? nestedField(obj, 'log', 'level')
   const msg = obj.msg ?? obj.message
   const rawErr = obj.error ?? obj.err
@@ -180,24 +187,24 @@ function SummaryLine({ obj }: { obj: Record<string, unknown> }) {
   return (
     <>
       {lvl != null && (
-        <span className={`${getLevelBadgeColor(lvl)} text-[10px] font-semibold px-1 py-px rounded mr-1.5 inline-block`}>
+        <span className={`${getLevelBadgeColor(lvl, palette)} text-[10px] font-semibold px-1 py-px rounded mr-1.5 inline-block`}>
           {formatLevel(lvl)}
         </span>
       )}
       {typeof msg === 'string' && (
-        <span className="text-theme-text-primary">{msg}</span>
+        <span className={palette.textPrimary}>{msg}</span>
       )}
       {typeof err === 'string' && (
-        <span className="text-red-400 ml-2">error={err}</span>
+        <span className={`${isDark ? 'text-red-400' : 'text-red-700'} ml-2`}>error={err}</span>
       )}
       {typeof caller === 'string' && (
-        <span className="text-theme-text-disabled ml-2">{caller}</span>
+        <span className={`${palette.textDisabled} ml-2`}>{caller}</span>
       )}
     </>
   )
 }
 
-function ExpandedLogfmt({ obj, onFilterValue }: { obj: Record<string, unknown>; onFilterValue?: (v: string) => void }) {
+function ExpandedLogfmt({ obj, onFilterValue, palette }: { obj: Record<string, unknown>; onFilterValue?: (v: string) => void; palette: LogPalette }) {
   return (
     <>
       {Object.entries(obj).map(([key, val]) => {
@@ -205,8 +212,8 @@ function ExpandedLogfmt({ obj, onFilterValue }: { obj: Record<string, unknown>; 
         return (
           <div key={key}>
             <span style={{ color: SYNTAX_COLOR_KEY }}>{key}</span>
-            <span className="text-theme-text-tertiary">=</span>
-            <FilterableValue value={str} onFilter={onFilterValue} color={SYNTAX_COLOR_STRING} />
+            <span className={palette.textTertiary}>=</span>
+            <FilterableValue value={str} onFilter={onFilterValue} color={SYNTAX_COLOR_STRING} palette={palette} />
           </div>
         )
       })}
@@ -232,7 +239,7 @@ function formatLevel(lvl: unknown): string {
   return String(lvl).toUpperCase()
 }
 
-function getLevelBadgeColor(lvl: unknown): string {
+function getLevelBadgeColor(lvl: unknown, palette: LogPalette): string {
   let normalized: string
   if (typeof lvl === 'number') {
     // Pino/bunyan numeric levels: 10=trace, 20=debug, 30=info, 40=warn, 50=error, 60=fatal
@@ -243,9 +250,9 @@ function getLevelBadgeColor(lvl: unknown): string {
   } else {
     normalized = String(lvl).toLowerCase()
   }
-  if (/^(error|err|fatal|panic|critical|crit)$/.test(normalized)) return SEVERITY_BADGE_BORDERED.error
-  if (/^(warn|warning)$/.test(normalized)) return SEVERITY_BADGE_BORDERED.warning
-  if (/^(info|information|notice)$/.test(normalized)) return SEVERITY_BADGE_BORDERED.info
-  if (/^(debug|dbg|trace|verbose)$/.test(normalized)) return SEVERITY_BADGE_BORDERED.debug
-  return SEVERITY_BADGE_BORDERED.neutral
+  if (/^(error|err|fatal|panic|critical|crit)$/.test(normalized)) return palette.levelBadgeError
+  if (/^(warn|warning)$/.test(normalized)) return palette.levelBadgeWarn
+  if (/^(info|information|notice)$/.test(normalized)) return palette.levelBadgeInfo
+  if (/^(debug|dbg|trace|verbose)$/.test(normalized)) return palette.levelBadgeDebug
+  return palette.levelBadgeNeutral
 }

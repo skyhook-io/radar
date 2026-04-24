@@ -117,23 +117,27 @@ export function LogsViewer({
     }
   }, [entries, podName, selectedContainer, overrideDownload, showError, showSuccess])
 
-  const toolbarExtra = (
+  // toolbarExtra is a render function so the inline controls can use the
+  // LogCore palette (dark/light driven by the viewer's own isDark state)
+  // instead of theme-* tokens, which don't resolve inside the forced
+  // color-scheme container.
+  const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: import('./log-palette').LogPalette }) => (
     <>
-      <ContainerSelect containers={containers} value={selectedContainer} onChange={setSelectedContainer} />
+      <ContainerSelect containers={containers} value={selectedContainer} onChange={setSelectedContainer} isDark={isDark} />
 
       <Tooltip content="Show logs from the pod's previous instance (if it was restarted). Useful for troubleshooting crashed containers." position="bottom">
-        <label className="flex items-center gap-1.5 text-xs text-theme-text-secondary">
+        <label className={`flex items-center gap-1.5 text-xs ${palette.textSecondary}`}>
           <input
             type="checkbox"
             checked={showPrevious}
             onChange={(e) => setShowPrevious(e.target.checked)}
-            className="w-3 h-3 rounded border-theme-border-light bg-theme-elevated text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+            className={`w-3 h-3 rounded ${palette.borderLight} ${palette.elevatedBg} text-blue-500 focus:ring-blue-500 focus:ring-offset-0`}
           />
-          <span className="border-b border-dotted border-theme-text-tertiary">Previous</span>
+          <span className={`border-b border-dotted ${isDark ? 'border-slate-500' : 'border-slate-400'}`}>Previous</span>
         </label>
       </Tooltip>
 
-      <LogRangeSelect value={logRange} onChange={setLogRange} />
+      <LogRangeSelect value={logRange} onChange={setLogRange} isDark={isDark} />
     </>
   )
 
@@ -148,7 +152,7 @@ export function LogsViewer({
       onRefresh={loadLogs}
       onDownload={downloadLogs}
       onClear={clear}
-      toolbarExtra={toolbarExtra}
+      toolbarExtra={renderToolbarExtra}
       forceDark={forceDark}
     />
   )

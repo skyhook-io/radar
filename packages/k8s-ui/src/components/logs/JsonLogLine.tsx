@@ -1,17 +1,20 @@
 import { useState, useMemo } from 'react'
 import { ChevronRight, ChevronDown } from 'lucide-react'
-import { getLevelColor } from '../../utils/log-format'
 import type { LogLevel } from './useLogBuffer'
+import { getLogPalette, getLogLevelColor } from './log-palette'
 
 interface JsonLogLineProps {
   content: string
   level: LogLevel
   wordWrap: boolean
+  /** Dark/light palette selector. Defaults to `true` for the dark-by-default viewer. */
+  isDark?: boolean
 }
 
-export function JsonLogLine({ content, level, wordWrap }: JsonLogLineProps) {
+export function JsonLogLine({ content, level, wordWrap, isDark = true }: JsonLogLineProps) {
   const [expanded, setExpanded] = useState(false)
-  const levelColor = getLevelColor(level)
+  const palette = useMemo(() => getLogPalette(isDark), [isDark])
+  const levelColor = getLogLevelColor(level, isDark)
 
   const parsed = useMemo(() => {
     try {
@@ -36,17 +39,17 @@ export function JsonLogLine({ content, level, wordWrap }: JsonLogLineProps) {
     <span className={levelColor}>
       <button
         onClick={() => setExpanded(!expanded)}
-        className="inline-flex items-center gap-0.5 hover:bg-theme-surface/50 rounded px-0.5 -ml-0.5 align-middle"
+        className={`inline-flex items-center gap-0.5 ${palette.hoverSurface} rounded px-0.5 -ml-0.5 align-middle`}
       >
         {expanded
-          ? <ChevronDown className="w-3 h-3 shrink-0 text-theme-text-tertiary" />
-          : <ChevronRight className="w-3 h-3 shrink-0 text-theme-text-tertiary" />
+          ? <ChevronDown className={`w-3 h-3 shrink-0 ${palette.textTertiary}`} />
+          : <ChevronRight className={`w-3 h-3 shrink-0 ${palette.textTertiary}`} />
         }
       </button>
       {!expanded ? (
         <span className={wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}>
           {summary}
-          <span className="text-theme-text-tertiary ml-1">{`{${fieldCount} fields}`}</span>
+          <span className={`${palette.textTertiary} ml-1`}>{`{${fieldCount} fields}`}</span>
         </span>
       ) : (
         <span className={`block ml-4 ${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}>

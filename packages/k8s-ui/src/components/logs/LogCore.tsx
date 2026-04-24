@@ -1,21 +1,29 @@
 import { useRef, useCallback, useState, useMemo, useEffect, type ReactNode } from 'react'
 import { Virtuoso, type VirtuosoHandle } from 'react-virtuoso'
-import { Play, Square, Download, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, ChevronRight, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter, Braces, Palette, ListCollapse } from 'lucide-react'
+import { Play, Square, Download, Search, X, Terminal, RotateCcw, ChevronUp, ChevronDown, ChevronRight, CaseSensitive, Regex, WrapText, Clock, Copy, Trash2, Filter, Braces, Palette, ListCollapse, Sun, Moon } from 'lucide-react'
 import type { LogEntry, LogLevel } from './useLogBuffer'
 import { useLogSearch } from './useLogSearch'
 import { StructuredLogLine } from './StructuredLogLine'
 import { Tooltip } from '../ui/Tooltip'
 import {
   formatLogTimestamp,
-  getLevelColor,
   highlightSearchMatches,
   stripAnsi,
   ansiToHtml,
   type TimestampFormat,
   TIMESTAMP_FORMAT_LABELS,
 } from '../../utils/log-format'
+import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
 
 export type DownloadFormat = 'txt' | 'json' | 'csv'
+
+/**
+ * `toolbarExtra` may be a plain ReactNode, or a function that receives the
+ * current dark/light context so wrappers can produce palette-matched controls.
+ */
+export type ToolbarExtraRenderer =
+  | ReactNode
+  | ((ctx: { isDark: boolean; palette: LogPalette }) => ReactNode)
 
 interface LogCoreProps {
   entries: LogEntry[]
@@ -26,20 +34,40 @@ interface LogCoreProps {
   onRefresh: () => void
   onDownload: (format: DownloadFormat) => void
   onClear?: () => void
-  toolbarExtra?: ReactNode
+  toolbarExtra?: ToolbarExtraRenderer
   showPodName?: boolean
   emptyMessage?: string
   errorMessage?: string | null
-  /** Optionally force dark styling for embedded consumers. */
+  /**
+   * Optional initial dark/light override. When provided, pins the starting
+   * value regardless of `localStorage['radar-logs-dark']`. Users can still
+   * flip the mode via the viewer's built-in Sun/Moon toggle.
+   * @default true
+   */
   forceDark?: boolean
 }
 
-const LEVEL_OPTIONS: { level: LogLevel; label: string; color: string; activeColor: string }[] = [
-  { level: 'error', label: 'ERR', color: 'text-red-400', activeColor: 'bg-red-500/30 dark:bg-red-500/20 text-red-600 dark:text-red-400 border-red-500/60 dark:border-red-500/40' },
-  { level: 'warn', label: 'WARN', color: 'text-yellow-400', activeColor: 'bg-yellow-400/30 dark:bg-yellow-500/20 text-yellow-700 dark:text-yellow-400 border-yellow-500/60 dark:border-yellow-500/40' },
-  { level: 'info', label: 'INFO', color: 'text-blue-400', activeColor: 'bg-blue-500/25 dark:bg-blue-500/20 text-blue-700 dark:text-blue-400 border-blue-500/60 dark:border-blue-500/40' },
-  { level: 'debug', label: 'DBG', color: 'text-theme-text-secondary', activeColor: 'bg-theme-surface text-theme-text-secondary border-theme-border-light' },
+interface LevelOption {
+  level: LogLevel
+  label: string
+}
+
+const LEVEL_OPTIONS: LevelOption[] = [
+  { level: 'error', label: 'ERR' },
+  { level: 'warn', label: 'WARN' },
+  { level: 'info', label: 'INFO' },
+  { level: 'debug', label: 'DBG' },
 ]
+
+function getLevelActiveColor(level: LogLevel, palette: LogPalette): string {
+  switch (level) {
+    case 'error': return palette.levelActiveError
+    case 'warn': return palette.levelActiveWarn
+    case 'info': return palette.levelActiveInfo
+    case 'debug': return palette.levelActiveDebug
+    default: return palette.levelActiveDebug
+  }
+}
 
 const TIMESTAMP_FORMAT_ORDER: TimestampFormat[] = [
   'time-local', 'time-utc', 'iso-local', 'iso-utc', 'relative', 'epoch',
@@ -82,10 +110,30 @@ export function LogCore({
   showPodName = false,
   emptyMessage = 'No logs available',
   errorMessage,
-  forceDark = false,
+  forceDark,
 }: LogCoreProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const [atBottom, setAtBottom] = useState(true)
+  // Dark/light for the log viewer is self-contained — the viewer's own Sun/Moon
+  // toggle flips this, persisted to localStorage. `forceDark` prop pins the
+  // initial value when explicitly provided.
+  const [isDark, setIsDark] = useState<boolean>(() => {
+    if (typeof forceDark === 'boolean') return forceDark
+    try {
+      const v = localStorage.getItem('radar-logs-dark')
+      if (v === 'false') return false
+      if (v === 'true') return true
+    } catch {}
+    return true
+  })
+  const palette = useMemo(() => getLogPalette(isDark), [isDark])
+  const toggleDark = useCallback(() => {
+    setIsDark(prev => {
+      const next = !prev
+      try { localStorage.setItem('radar-logs-dark', String(next)) } catch {}
+      return next
+    })
+  }, [])
   const [wordWrap, setWordWrap] = useState(() => {
     try { return localStorage.getItem('radar-logs-wrap') !== 'false' } catch { return true }
   })
@@ -296,14 +344,32 @@ export function LogCore({
     })
   }, [groupedEntries.length])
 
+  const toolbarExtraNode = typeof toolbarExtra === 'function'
+    ? toolbarExtra({ isDark, palette })
+    : toolbarExtra
+
+  // Shared "inactive toolbar button" classes. All strings are literals so
+  // Tailwind's class scanner picks them up. Two variants differ only in the
+  // default text color (secondary vs tertiary).
+  const iconBtnInactive = isDark
+    ? 'p-1.5 rounded transition-colors text-slate-400 hover:text-slate-100 hover:bg-slate-800'
+    : 'p-1.5 rounded transition-colors text-slate-600 hover:text-slate-900 hover:bg-slate-200'
+  const iconBtnInactiveTertiary = isDark
+    ? 'p-1.5 rounded transition-colors text-slate-500 hover:text-slate-100 hover:bg-slate-800'
+    : 'p-1.5 rounded transition-colors text-slate-400 hover:text-slate-900 hover:bg-slate-200'
+  // "disabled → tertiary on hover" for inactive level filter chips.
+  const levelChipInactive = isDark
+    ? 'border-transparent text-slate-600 hover:text-slate-500'
+    : 'border-transparent text-slate-300 hover:text-slate-400'
+
   return (
     <div
-      className={`flex flex-col h-full bg-theme-base${forceDark ? ' dark' : ''}`}
-      style={{ colorScheme: forceDark ? 'dark' : undefined, fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace" }}
+      className={`flex flex-col h-full ${palette.containerBg}`}
+      style={{ colorScheme: isDark ? 'dark' : 'light', fontFamily: "'SF Mono', 'Cascadia Code', 'Fira Code', Menlo, Consolas, 'DejaVu Sans Mono', monospace" }}
     >
       {/* Toolbar */}
-      <div className="flex items-center gap-2 px-3 py-2 border-b border-theme-border bg-theme-surface">
-        {toolbarExtra}
+      <div className={`flex items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBg}`}>
+        {toolbarExtraNode}
 
         {/* Stream / Stop toggle — only shown when streaming is supported */}
         {onStartStream && (
@@ -313,7 +379,7 @@ export function LogCore({
               className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors ${
                 isStreaming
                   ? 'bg-green-600 text-white hover:bg-green-700'
-                  : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover'
+                  : `${palette.elevatedBg} ${palette.textSecondary} ${palette.hoverBg}`
               }`}
             >
               {isStreaming ? <Square className="w-3 h-3" /> : <Play className="w-3 h-3" />}
@@ -327,7 +393,7 @@ export function LogCore({
           <button
             onClick={onRefresh}
             disabled={isLoading || isStreaming}
-            className="flex items-center gap-1.5 px-2 py-1.5 text-xs rounded bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover disabled:opacity-50 disabled:cursor-not-allowed"
+            className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded ${palette.elevatedBg} ${palette.textSecondary} ${palette.hoverBg} disabled:opacity-50 disabled:cursor-not-allowed`}
           >
             <RotateCcw className={`w-3 h-3 ${isLoading ? 'animate-spin' : ''}`} />
           </button>
@@ -344,8 +410,8 @@ export function LogCore({
                   onClick={() => toggleLevel(opt.level)}
                   className={`px-1.5 py-0.5 text-[10px] font-medium rounded border transition-colors ${
                     active
-                      ? opt.activeColor
-                      : 'border-transparent text-theme-text-disabled hover:text-theme-text-tertiary'
+                      ? getLevelActiveColor(opt.level, palette)
+                      : levelChipInactive
                   }`}
                 >
                   {opt.label}{count > 0 ? ` ${count}` : ''}
@@ -363,7 +429,7 @@ export function LogCore({
             <button
               onClick={() => setExpandAllStructured(prev => !prev)}
               className={`p-1.5 rounded transition-colors ${
-                expandAllStructured ? 'btn-brand-toggle' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
+                expandAllStructured ? 'btn-brand-toggle' : iconBtnInactive
               }`}
             >
               <Braces className="w-4 h-4" />
@@ -377,7 +443,7 @@ export function LogCore({
             <button
               onClick={toggleTimestamps}
               className={`p-1.5 rounded-l transition-colors ${
-                showTimestamps ? 'btn-brand-toggle' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
+                showTimestamps ? 'btn-brand-toggle' : iconBtnInactive
               }`}
             >
               <Clock className="w-4 h-4" />
@@ -388,7 +454,7 @@ export function LogCore({
               <button
                 onClick={() => setShowTsMenu(prev => !prev)}
                 className={`px-2 py-1.5 rounded-r text-[10px] font-medium transition-colors whitespace-nowrap ${
-                  showTimestamps ? 'btn-brand-toggle' : 'text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated'
+                  showTimestamps ? 'btn-brand-toggle' : iconBtnInactiveTertiary
                 }`}
                 aria-label="Pick timestamp format"
               >
@@ -399,20 +465,20 @@ export function LogCore({
               </button>
             </Tooltip>
             {showTsMenu && (
-              <div className="absolute top-full right-0 mt-1 w-44 bg-theme-elevated border border-theme-border rounded-lg shadow-lg z-50">
-                <div className="px-3 py-1.5 text-[10px] uppercase tracking-wide text-theme-text-tertiary border-b border-theme-border">
+              <div className={`absolute top-full right-0 mt-1 w-44 ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50`}>
+                <div className={`px-3 py-1.5 text-[10px] uppercase tracking-wide ${palette.textTertiary} border-b ${palette.border}`}>
                   Timestamp format
                 </div>
                 {TIMESTAMP_FORMAT_ORDER.map(fmt => (
                   <button
                     key={fmt}
                     onClick={() => pickTsFormat(fmt)}
-                    className={`w-full text-left px-3 py-1.5 text-xs hover:bg-theme-hover flex items-center justify-between ${
-                      tsFormat === fmt ? 'text-theme-text-primary' : 'text-theme-text-secondary'
+                    className={`w-full text-left px-3 py-1.5 text-xs ${palette.hoverBg} flex items-center justify-between ${
+                      tsFormat === fmt ? palette.textPrimary : palette.textSecondary
                     }`}
                   >
                     <span>{TIMESTAMP_FORMAT_LABELS[fmt]}</span>
-                    {tsFormat === fmt && <span className="text-[10px] text-blue-400">✓</span>}
+                    {tsFormat === fmt && <span className={`text-[10px] ${isDark ? 'text-blue-400' : 'text-blue-700'}`}>✓</span>}
                   </button>
                 ))}
               </div>
@@ -425,7 +491,7 @@ export function LogCore({
           <button
             onClick={toggleCollapseStacks}
             className={`p-1.5 rounded transition-colors ${
-              collapseStacks ? 'btn-brand-toggle' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
+              collapseStacks ? 'btn-brand-toggle' : iconBtnInactive
             }`}
           >
             <ListCollapse className="w-4 h-4" />
@@ -437,7 +503,7 @@ export function LogCore({
           <button
             onClick={toggleAnsi}
             className={`p-1.5 rounded transition-colors ${
-              ansiEnabled ? 'btn-brand-toggle' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
+              ansiEnabled ? 'btn-brand-toggle' : iconBtnInactive
             }`}
           >
             <Palette className="w-4 h-4" />
@@ -449,7 +515,7 @@ export function LogCore({
           <button
             onClick={toggleWrap}
             className={`p-1.5 rounded transition-colors ${
-              wordWrap ? 'btn-brand-toggle' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
+              wordWrap ? 'btn-brand-toggle' : iconBtnInactive
             }`}
           >
             <WrapText className="w-4 h-4" />
@@ -461,10 +527,21 @@ export function LogCore({
           <button
             onClick={() => search.isOpen ? search.close() : search.open()}
             className={`p-1.5 rounded transition-colors ${
-              search.isOpen ? 'btn-brand-toggle' : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
+              search.isOpen ? 'btn-brand-toggle' : iconBtnInactive
             }`}
           >
             <Search className="w-4 h-4" />
+          </button>
+        </Tooltip>
+
+        {/* Dark/light mode toggle — self-contained, doesn't depend on page theme */}
+        <Tooltip content={isDark ? 'Switch to light mode' : 'Switch to dark mode'} delay={TIP_DELAY} position="bottom">
+          <button
+            onClick={toggleDark}
+            className={iconBtnInactive}
+            aria-label={isDark ? 'Switch log viewer to light mode' : 'Switch log viewer to dark mode'}
+          >
+            {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
           </button>
         </Tooltip>
 
@@ -473,18 +550,18 @@ export function LogCore({
           <Tooltip content="Download logs" delay={TIP_DELAY} position="bottom">
             <button
               onClick={() => setShowDownloadMenu(prev => !prev)}
-              className="p-1.5 rounded text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated"
+              className={iconBtnInactive}
             >
               <Download className="w-4 h-4" />
             </button>
           </Tooltip>
           {showDownloadMenu && (
-            <div className="absolute top-full right-0 mt-1 w-32 bg-theme-elevated border border-theme-border rounded-lg shadow-lg z-50">
+            <div className={`absolute top-full right-0 mt-1 w-32 ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50`}>
               {(['txt', 'json', 'csv'] as DownloadFormat[]).map(fmt => (
                 <button
                   key={fmt}
                   onClick={() => { onDownload(fmt); setShowDownloadMenu(false) }}
-                  className="w-full text-left px-3 py-2 text-xs text-theme-text-primary hover:bg-theme-hover first:rounded-t-lg last:rounded-b-lg"
+                  className={`w-full text-left px-3 py-2 text-xs ${palette.textPrimary} ${palette.hoverBg} first:rounded-t-lg last:rounded-b-lg`}
                 >
                   {fmt.toUpperCase()}
                 </button>
@@ -498,7 +575,7 @@ export function LogCore({
           <Tooltip content="Clear logs" delay={TIP_DELAY} position="bottom">
             <button
               onClick={onClear}
-              className="p-1.5 rounded text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated"
+              className={iconBtnInactive}
             >
               <Trash2 className="w-4 h-4" />
             </button>
@@ -508,8 +585,8 @@ export function LogCore({
 
       {/* Search bar */}
       {search.isOpen && (
-        <div className="flex items-center gap-2 px-3 py-2 border-b border-theme-border bg-theme-surface/50">
-          <Search className="w-4 h-4 text-theme-text-secondary shrink-0" />
+        <div className={`flex items-center gap-2 px-3 py-2 border-b ${palette.border} ${palette.toolbarBgMuted}`}>
+          <Search className={`w-4 h-4 ${palette.textSecondary} shrink-0`} />
           <input
             type="text"
             value={search.query}
@@ -526,7 +603,7 @@ export function LogCore({
               }
             }}
             placeholder="Search logs..."
-            className="flex-1 bg-transparent text-theme-text-primary text-sm placeholder-theme-text-disabled focus:outline-none min-w-0"
+            className={`flex-1 bg-transparent ${palette.textPrimary} text-sm ${palette.placeholder} focus:outline-none min-w-0`}
             autoFocus
           />
 
@@ -535,7 +612,7 @@ export function LogCore({
             <button
               onClick={search.toggleRegex}
               className={`p-1 rounded transition-colors ${
-                search.isRegex ? 'btn-brand-toggle' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
+                search.isRegex ? 'btn-brand-toggle' : `${palette.textTertiary} ${palette.hoverText}`
               }`}
             >
               <Regex className="w-3.5 h-3.5" />
@@ -547,7 +624,7 @@ export function LogCore({
             <button
               onClick={search.toggleCaseSensitive}
               className={`p-1 rounded transition-colors ${
-                search.isCaseSensitive ? 'btn-brand-toggle' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
+                search.isCaseSensitive ? 'btn-brand-toggle' : `${palette.textTertiary} ${palette.hoverText}`
               }`}
             >
               <CaseSensitive className="w-3.5 h-3.5" />
@@ -559,7 +636,7 @@ export function LogCore({
             <button
               onClick={search.toggleFilterMode}
               className={`p-1 rounded transition-colors ${
-                search.isFilterMode ? 'btn-brand-toggle' : 'text-theme-text-tertiary hover:text-theme-text-secondary'
+                search.isFilterMode ? 'btn-brand-toggle' : `${palette.textTertiary} ${palette.hoverText}`
               }`}
             >
               <Filter className="w-3.5 h-3.5" />
@@ -568,7 +645,7 @@ export function LogCore({
 
           {search.query && (
             <>
-              <span className={`text-xs whitespace-nowrap ${search.regexError ? 'text-red-400' : 'text-theme-text-tertiary'}`}>
+              <span className={`text-xs whitespace-nowrap ${search.regexError ? (isDark ? 'text-red-400' : 'text-red-700') : palette.textTertiary}`}>
                 {search.regexError
                   ? 'Invalid regex'
                   : search.matchCount > 0
@@ -581,7 +658,7 @@ export function LogCore({
                 <button
                   onClick={search.goToPrev}
                   disabled={search.matchCount === 0}
-                  className="p-1 rounded text-theme-text-secondary hover:text-theme-text-primary disabled:opacity-30"
+                  className={`p-1 rounded ${palette.textSecondary} ${palette.hoverText} disabled:opacity-30`}
                 >
                   <ChevronUp className="w-3.5 h-3.5" />
                 </button>
@@ -590,7 +667,7 @@ export function LogCore({
                 <button
                   onClick={search.goToNext}
                   disabled={search.matchCount === 0}
-                  className="p-1 rounded text-theme-text-secondary hover:text-theme-text-primary disabled:opacity-30"
+                  className={`p-1 rounded ${palette.textSecondary} ${palette.hoverText} disabled:opacity-30`}
                 >
                   <ChevronDown className="w-3.5 h-3.5" />
                 </button>
@@ -598,7 +675,7 @@ export function LogCore({
 
               <button
                 onClick={() => search.setQuery('')}
-                className="p-1 rounded text-theme-text-secondary hover:text-theme-text-primary"
+                className={`p-1 rounded ${palette.textSecondary} ${palette.hoverText}`}
               >
                 <X className="w-3 h-3" />
               </button>
@@ -609,19 +686,19 @@ export function LogCore({
 
       {/* Log content */}
       {isLoading && entries.length === 0 ? (
-        <div className="flex-1 flex items-center justify-center text-theme-text-tertiary">
+        <div className={`flex-1 flex items-center justify-center ${palette.textTertiary}`}>
           <div className="flex items-center gap-2">
             <RotateCcw className="w-4 h-4 animate-spin" />
             <span>Loading logs...</span>
           </div>
         </div>
       ) : errorMessage ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-red-400 gap-2">
+        <div className={`flex-1 flex flex-col items-center justify-center gap-2 ${isDark ? 'text-red-400' : 'text-red-700'}`}>
           <Terminal className="w-8 h-8" />
           <span>{errorMessage}</span>
         </div>
       ) : groupedEntries.length === 0 ? (
-        <div className="flex-1 flex flex-col items-center justify-center text-theme-text-tertiary gap-2">
+        <div className={`flex-1 flex flex-col items-center justify-center gap-2 ${palette.textTertiary}`}>
           <Terminal className="w-8 h-8" />
           <span>{emptyMessage}</span>
         </div>
@@ -651,6 +728,8 @@ export function LogCore({
                 onFilterValue={handleFilterValue}
                 isStackExpanded={expandedStacks.has(group.head.id)}
                 onToggleStack={toggleStackExpanded}
+                isDark={isDark}
+                palette={palette}
               />
             )}
             className="h-full font-mono text-xs"
@@ -668,20 +747,20 @@ export function LogCore({
       )}
 
       {/* Keyboard shortcut hints */}
-      <div className="flex items-center gap-4 px-3 py-1 border-t border-theme-border bg-theme-surface text-[10px] text-theme-text-disabled">
-        <Shortcut keys="Ctrl+F" label="Search" />
-        <Shortcut keys="Enter" label="Next match" />
-        <Shortcut keys="Shift+Enter" label="Prev match" />
-        <Shortcut keys="Esc" label="Close search" />
+      <div className={`flex items-center gap-4 px-3 py-1 border-t ${palette.border} ${palette.toolbarBg} text-[10px] ${palette.textDisabled}`}>
+        <Shortcut keys="Ctrl+F" label="Search" palette={palette} />
+        <Shortcut keys="Enter" label="Next match" palette={palette} />
+        <Shortcut keys="Shift+Enter" label="Prev match" palette={palette} />
+        <Shortcut keys="Esc" label="Close search" palette={palette} />
       </div>
     </div>
   )
 }
 
-function Shortcut({ keys, label }: { keys: string; label: string }) {
+function Shortcut({ keys, label, palette }: { keys: string; label: string; palette: LogPalette }) {
   return (
     <span className="flex items-center gap-1">
-      <kbd className="px-1 py-px rounded bg-theme-elevated border border-theme-border-light font-mono">{keys}</kbd>
+      <kbd className={`px-1 py-px rounded ${palette.elevatedBg} border ${palette.borderLight} font-mono`}>{keys}</kbd>
       <span>{label}</span>
     </span>
   )
@@ -702,6 +781,8 @@ interface LogLineProps {
   onFilterValue?: (value: string) => void
   /** Optional lead element rendered at the start of the row (e.g. stack-trace toggle). */
   leadSlot?: ReactNode
+  isDark: boolean
+  palette: LogPalette
 }
 
 function LogLine({
@@ -718,8 +799,10 @@ function LogLine({
   defaultExpanded,
   onFilterValue,
   leadSlot,
+  isDark,
+  palette,
 }: LogLineProps) {
-  const levelColor = getLevelColor(entry.level)
+  const levelColor = getLogLevelColor(entry.level, isDark)
 
   // Determine content rendering. Priority: search highlight > structured > ANSI/plain.
   let contentElement: React.ReactNode
@@ -741,6 +824,7 @@ function LogLine({
         isLogfmt={entry.isLogfmt}
         defaultExpanded={defaultExpanded}
         onFilterValue={onFilterValue}
+        isDark={isDark}
       />
     )
   } else if (ansiEnabled) {
@@ -765,11 +849,11 @@ function LogLine({
   }
 
   return (
-    <div className={`flex hover:bg-theme-surface/50 group leading-5 px-2 ${isCurrentMatch ? 'bg-yellow-500/10' : ''}`}>
+    <div className={`flex ${palette.hoverSurface} group leading-5 px-2 ${isCurrentMatch ? palette.currentMatchBg : ''}`}>
       {leadSlot}
       {showTimestamp && entry.timestamp && (
         <span
-          className="text-theme-text-tertiary select-none pr-2 whitespace-nowrap"
+          className={`${palette.textTertiary} select-none pr-2 whitespace-nowrap`}
           title={entry.timestamp}
         >
           {formatLogTimestamp(entry.timestamp, tsFormat)}
@@ -777,7 +861,7 @@ function LogLine({
       )}
       {showPodName && entry.pod && (
         <span
-          className={`${entry.podColor || 'text-theme-text-primary'} select-none pr-2 whitespace-nowrap min-w-[80px] max-w-[120px] truncate`}
+          className={`${entry.podColor || palette.textPrimary} select-none pr-2 whitespace-nowrap min-w-[80px] max-w-[120px] truncate`}
           title={entry.pod}
         >
           [{entry.pod.split('-').slice(-2).join('-')}]
@@ -786,7 +870,7 @@ function LogLine({
       <span className="flex-1 min-w-0">{contentElement}</span>
       <button
         onClick={handleCopy}
-        className="opacity-0 group-hover:opacity-100 ml-1 p-0.5 rounded text-theme-text-tertiary hover:text-theme-text-secondary shrink-0 transition-opacity"
+        className={`opacity-0 group-hover:opacity-100 ml-1 p-0.5 rounded ${palette.textTertiary} ${palette.hoverText} shrink-0 transition-opacity`}
         title="Copy line"
       >
         <Copy className="w-3 h-3" />
@@ -810,16 +894,18 @@ interface LogGroupItemProps {
   onFilterValue: (value: string) => void
   isStackExpanded: boolean
   onToggleStack: (id: number) => void
+  isDark: boolean
+  palette: LogPalette
 }
 
 function LogGroupItem(props: LogGroupItemProps) {
-  const { group, isStackExpanded, onToggleStack, ...rest } = props
+  const { group, isStackExpanded, onToggleStack, palette, ...rest } = props
   const hasStack = group.continuations.length > 0
 
   const stackToggle = hasStack ? (
     <button
       onClick={() => onToggleStack(group.head.id)}
-      className="mr-1 self-start p-0.5 rounded text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-surface/50 shrink-0"
+      className={`mr-1 self-start p-0.5 rounded ${palette.textTertiary} ${palette.hoverText} ${palette.hoverSurface} shrink-0`}
       title={isStackExpanded ? 'Collapse stack trace' : `Expand ${group.continuations.length} stack frames`}
     >
       {isStackExpanded
@@ -833,19 +919,20 @@ function LogGroupItem(props: LogGroupItemProps) {
       <LogLine
         entry={group.head}
         {...rest}
+        palette={palette}
         leadSlot={stackToggle}
       />
       {hasStack && !isStackExpanded && (
         <button
           onClick={() => onToggleStack(group.head.id)}
-          className="block w-full text-left pl-6 pr-2 py-0 text-[10px] text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-surface/40"
+          className={`block w-full text-left pl-6 pr-2 py-0 text-[10px] ${palette.textTertiary} ${palette.hoverText} ${palette.hoverSurface}`}
         >
           [+{group.continuations.length} stack {group.continuations.length === 1 ? 'line' : 'lines'}]
         </button>
       )}
       {hasStack && isStackExpanded && group.continuations.map(cont => (
         <div key={cont.id} className="pl-4">
-          <LogLine entry={cont} {...rest} isCurrentMatch={false} />
+          <LogLine entry={cont} {...rest} palette={palette} isCurrentMatch={false} />
         </div>
       ))}
     </div>

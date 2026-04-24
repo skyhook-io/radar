@@ -217,14 +217,16 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     }
   }, [filteredEntries, name, overrideDownload, showError, showSuccess])
 
-  const toolbarExtra = (
+  // toolbarExtra as a render function so inline controls get the viewer's
+  // current palette (explicit dark/light classes, not theme-* tokens).
+  const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: import('./log-palette').LogPalette }) => (
     <>
       {/* Pod filter */}
       <div className="relative">
         <button
           onClick={() => setShowPodFilter(v => !v)}
           className={`flex items-center gap-1.5 px-2 py-1.5 text-xs rounded transition-colors ${
-            showPodFilter ? 'btn-brand-toggle' : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover'
+            showPodFilter ? 'btn-brand-toggle' : `${palette.elevatedBg} ${palette.textSecondary} ${palette.hoverBg}`
           }`}
         >
           <Filter className="w-3 h-3" />
@@ -233,23 +235,23 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         </button>
 
         {showPodFilter && (
-          <div className="absolute top-full left-0 mt-1 w-64 bg-theme-elevated border border-theme-border rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto">
-            <div className="p-2 border-b border-theme-border">
-              <button onClick={toggleAllPods} className="text-xs text-blue-400 hover:text-blue-300">
+          <div className={`absolute top-full left-0 mt-1 w-64 ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto`}>
+            <div className={`p-2 border-b ${palette.border}`}>
+              <button onClick={toggleAllPods} className={`text-xs ${isDark ? 'text-blue-400 hover:text-blue-300' : 'text-blue-700 hover:text-blue-800'}`}>
                 {pods.every(p => selectedPods.has(p.name)) ? 'Deselect all' : 'Select all'}
               </button>
             </div>
             {pods.map(pod => (
-              <label key={pod.name} className="flex items-center gap-2 px-3 py-2 hover:bg-theme-hover">
+              <label key={pod.name} className={`flex items-center gap-2 px-3 py-2 ${palette.hoverBg}`}>
                 <input
                   type="checkbox"
                   checked={selectedPods.has(pod.name)}
                   onChange={() => togglePod(pod.name)}
-                  className="w-3 h-3 rounded border-theme-border-light bg-theme-elevated text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                  className={`w-3 h-3 rounded ${palette.borderLight} ${palette.elevatedBg} text-blue-500 focus:ring-blue-500 focus:ring-offset-0`}
                 />
                 <span className={`w-2 h-2 rounded-full ${podColors.get(pod.name)?.replace('text-', 'bg-')}`} />
-                <span className="text-xs text-theme-text-primary truncate flex-1">{pod.name}</span>
-                <span className={`text-xs ${pod.ready ? 'text-green-400' : 'text-yellow-400'}`}>
+                <span className={`text-xs ${palette.textPrimary} truncate flex-1`}>{pod.name}</span>
+                <span className={`text-xs ${pod.ready ? (isDark ? 'text-green-400' : 'text-green-700') : (isDark ? 'text-yellow-400' : 'text-yellow-700')}`}>
                   {pod.ready ? 'Ready' : 'Not Ready'}
                 </span>
               </label>
@@ -263,6 +265,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         value={selectedContainer}
         onChange={setSelectedContainer}
         includeAll
+        isDark={isDark}
       />
 
       <LogRangeSelect
@@ -270,6 +273,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         onChange={setLogRange}
         lineOptions={[50, 100, 500, 1000]}
         tooltip="How many logs to load per pod — by line count or time range"
+        isDark={isDark}
       />
     </>
   )
@@ -284,7 +288,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       onRefresh={loadLogs}
       onDownload={downloadLogs}
       onClear={clear}
-      toolbarExtra={toolbarExtra}
+      toolbarExtra={renderToolbarExtra}
       showPodName
       emptyMessage={pods.length === 0 ? 'No pods found' : 'No logs available'}
       errorMessage={fetchError}
