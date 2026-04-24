@@ -1,12 +1,11 @@
 import { ChevronDown } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
-import { getLogPalette } from './log-palette'
+import { getLogPalette, type LogPalette } from './log-palette'
 
 // See log-palette.ts for why the viewer uses explicit palette classes
 // instead of theme-* tokens.
-function selectClass(isDark: boolean): string {
-  const p = getLogPalette(isDark)
-  return `appearance-none ${p.elevatedBg} ${p.textPrimary} text-xs rounded px-2 py-1.5 border ${p.borderLight} focus:outline-none focus:ring-1 focus:ring-blue-500`
+function selectClass(palette: LogPalette): string {
+  return `appearance-none ${palette.elevatedBg} ${palette.textPrimary} text-xs rounded px-2 py-1.5 border ${palette.borderLight} focus:outline-none focus:ring-1 focus:ring-blue-500`
 }
 
 // ── ContainerSelect ───────────────────────────────────────────────────────────
@@ -23,18 +22,18 @@ interface ContainerSelectProps {
 
 export function ContainerSelect({ containers, value, onChange, includeAll = false, isDark = true }: ContainerSelectProps) {
   if (containers.length <= 1 && !includeAll) return null
-  const p = getLogPalette(isDark)
+  const palette = getLogPalette(isDark)
   return (
     <div className="relative">
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={`${selectClass(isDark)} pr-6`}
+        className={`${selectClass(palette)} pr-6`}
       >
         {includeAll && <option value="">All containers</option>}
         {containers.map(c => <option key={c} value={c}>{c}</option>)}
       </select>
-      <ChevronDown className={`absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 ${p.textSecondary} pointer-events-none`} />
+      <ChevronDown className={`absolute right-1.5 top-1/2 -translate-y-1/2 w-3 h-3 ${palette.textSecondary} pointer-events-none`} />
     </div>
   )
 }
@@ -58,12 +57,13 @@ export function LogRangeSelect({
   tooltip = 'How many logs to load — by line count or time range',
   isDark = true,
 }: LogRangeSelectProps) {
+  const palette = getLogPalette(isDark)
   return (
     <Tooltip content={tooltip} position="bottom">
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={`${selectClass(isDark)} pr-5`}
+        className={`${selectClass(palette)} pr-5`}
       >
         <optgroup label="Lines">
           {lineOptions.map(n => (

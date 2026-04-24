@@ -34,8 +34,6 @@ export interface LogPalette {
   textError: string
   /** Accent/link text — blue-family. Used for toolbar toggles, "select all" etc. */
   textAccent: string
-  /** Checkmark green on option-menu items. */
-  textCheckmark: string
 
   // Placeholder (plain class, applied via `placeholder-*` below)
   placeholder: string
@@ -96,7 +94,6 @@ const DARK_PALETTE: LogPalette = {
   textDisabled: 'text-slate-600',
   textError: 'text-red-400',
   textAccent: 'text-blue-400',
-  textCheckmark: 'text-emerald-400',
 
   placeholder: 'placeholder-slate-600',
 
@@ -152,7 +149,6 @@ const LIGHT_PALETTE: LogPalette = {
   textDisabled: 'text-slate-300',
   textError: 'text-red-700',
   textAccent: 'text-blue-700',
-  textCheckmark: 'text-emerald-700',
 
   placeholder: 'placeholder-slate-400',
 

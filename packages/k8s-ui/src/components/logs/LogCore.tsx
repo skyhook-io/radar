@@ -808,6 +808,9 @@ function LogLine({
   palette,
 }: LogLineProps) {
   const levelColor = getLogLevelColor(entry.level, isDark)
+  const podTextColor = entry.podColorIndex !== undefined
+    ? palette.podColors[entry.podColorIndex % palette.podColors.length].text
+    : palette.textPrimary
 
   // Determine content rendering. Priority: search highlight > structured > ANSI/plain.
   let contentElement: React.ReactNode
@@ -866,7 +869,7 @@ function LogLine({
       )}
       {showPodName && entry.pod && (
         <span
-          className={`${entry.podColorIndex !== undefined ? palette.podColors[entry.podColorIndex % palette.podColors.length].text : palette.textPrimary} select-none pr-2 whitespace-nowrap min-w-[80px] max-w-[120px] truncate`}
+          className={`${podTextColor} select-none pr-2 whitespace-nowrap min-w-[80px] max-w-[120px] truncate`}
           title={entry.pod}
         >
           [{entry.pod.split('-').slice(-2).join('-')}]

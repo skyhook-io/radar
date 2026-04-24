@@ -1,10 +1,7 @@
 import { useState, useMemo } from 'react'
 import { ChevronRight, ChevronDown, Filter } from 'lucide-react'
 import type { LogLevel } from './useLogBuffer'
-import {
-  unescapeJsonStrings,
-  parseLogfmt,
-} from '../../utils/log-format'
+import { unescapeJsonStrings, parseLogfmt } from '../../utils/log-format'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
 
 interface StructuredLogLineProps {

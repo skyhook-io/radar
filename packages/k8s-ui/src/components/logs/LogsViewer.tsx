@@ -6,6 +6,7 @@ import { useLogStream } from './useLogStream'
 import { ContainerSelect, LogRangeSelect } from './LogToolbarSelects'
 import { LogCore } from './LogCore'
 import type { DownloadFormat } from './LogCore'
+import type { LogPalette } from './log-palette'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
 
@@ -117,9 +118,7 @@ export function LogsViewer({
     }
   }, [entries, podName, selectedContainer, overrideDownload, showError, showSuccess])
 
-  // Render-function form so inline controls receive the viewer's current
-  // palette — see log-palette.ts.
-  const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: import('./log-palette').LogPalette }) => (
+  const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: LogPalette }) => (
     <>
       <ContainerSelect containers={containers} value={selectedContainer} onChange={setSelectedContainer} isDark={isDark} />
 

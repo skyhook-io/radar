@@ -7,6 +7,7 @@ import { useLogStream } from './useLogStream'
 import { ContainerSelect, LogRangeSelect } from './LogToolbarSelects'
 import { LogCore } from './LogCore'
 import type { DownloadFormat } from './LogCore'
+import type { LogPalette } from './log-palette'
 import type { WorkloadPodInfo } from '../../types'
 import { useToast } from '../ui/Toast'
 
@@ -215,9 +216,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     }
   }, [filteredEntries, name, overrideDownload, showError, showSuccess])
 
-  // Render-function form so inline controls receive the viewer's current
-  // palette — see log-palette.ts.
-  const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: import('./log-palette').LogPalette }) => (
+  const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: LogPalette }) => (
     <>
       {/* Pod filter */}
       <div className="relative">
@@ -239,21 +238,30 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
                 {pods.every(p => selectedPods.has(p.name)) ? 'Deselect all' : 'Select all'}
               </button>
             </div>
-            {pods.map(pod => (
-              <label key={pod.name} className={`flex items-center gap-2 px-3 py-2 ${palette.hoverBg}`}>
-                <input
-                  type="checkbox"
-                  checked={selectedPods.has(pod.name)}
-                  onChange={() => togglePod(pod.name)}
-                  className={`w-3 h-3 rounded ${palette.borderLight} ${palette.elevatedBg} text-blue-500 focus:ring-blue-500 focus:ring-offset-0`}
-                />
-                <span className={`w-2 h-2 rounded-full ${palette.podColors[(podColorIndex.get(pod.name) ?? 0) % palette.podColors.length].bg}`} />
-                <span className={`text-xs ${palette.textPrimary} truncate flex-1`}>{pod.name}</span>
-                <span className={`text-xs ${pod.ready ? (isDark ? 'text-emerald-400' : 'text-emerald-700') : (isDark ? 'text-amber-400' : 'text-amber-700')}`}>
-                  {pod.ready ? 'Ready' : 'Not Ready'}
-                </span>
-              </label>
-            ))}
+            {pods.map(pod => {
+              const dotBg = palette.podColors[(podColorIndex.get(pod.name) ?? 0) % palette.podColors.length].bg
+              let readyColor: string
+              if (pod.ready) {
+                readyColor = isDark ? 'text-emerald-400' : 'text-emerald-700'
+              } else {
+                readyColor = isDark ? 'text-amber-400' : 'text-amber-700'
+              }
+              return (
+                <label key={pod.name} className={`flex items-center gap-2 px-3 py-2 ${palette.hoverBg}`}>
+                  <input
+                    type="checkbox"
+                    checked={selectedPods.has(pod.name)}
+                    onChange={() => togglePod(pod.name)}
+                    className={`w-3 h-3 rounded ${palette.borderLight} ${palette.elevatedBg} text-blue-500 focus:ring-blue-500 focus:ring-offset-0`}
+                  />
+                  <span className={`w-2 h-2 rounded-full ${dotBg}`} />
+                  <span className={`text-xs ${palette.textPrimary} truncate flex-1`}>{pod.name}</span>
+                  <span className={`text-xs ${readyColor}`}>
+                    {pod.ready ? 'Ready' : 'Not Ready'}
+                  </span>
+                </label>
+              )
+            })}
           </div>
         )}
       </div>
