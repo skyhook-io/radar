@@ -76,14 +76,18 @@ assert_not_contains 'MY_POD_NAMESPACE'              "env vars absent without exp
 assert_not_contains 'self-upgrade'                  "no Role/RoleBinding without explicit opt-in"
 echo
 
-render "rbac.create=false + rbac.selfUpgrade=true — pins current PR #9 gating" \
+render "rbac.create=false + rbac.selfUpgrade=true — feature still works" \
   --set rbac.create=false --set rbac.selfUpgrade=true
-# NOTE: this combo is a footgun (env vars render, Role does not → runtime 403).
-# We deliberately lock in the current helm-charts#9 behavior here. If gating
-# is ever redesigned, update this case rather than silently flipping behavior.
-assert_not_contains '^kind: Role$'                  "no Role when rbac.create=false (matches cloud-rbac convention)"
-assert_not_contains '^kind: RoleBinding$'           "no RoleBinding when rbac.create=false"
-assert_contains 'MY_POD_NAMESPACE'                  "env vars still injected — known footgun, tracked separately"
+# `rbac.create` is the master switch for the big cluster-wide ClusterRole —
+# a BYO-RBAC user needs that to live outside the chart. The self-upgrade
+# Role is narrow (get+patch on THIS Deployment by resourceNames), so it
+# doesn't belong under that switch; cloud-rbac.yaml already follows the
+# same "feature gates itself, independent of rbac.create" pattern. Either
+# the feature is on end-to-end or it's off end-to-end — no silent 403.
+assert_contains '^kind: Role$'                      "Role still emitted — narrow scope, independent of rbac.create"
+assert_contains '^kind: RoleBinding$'               "RoleBinding still emitted"
+assert_not_contains '^kind: ClusterRole$'           "no ClusterRole when rbac.create=false (big ClusterRole still suppressed)"
+assert_contains 'MY_POD_NAMESPACE'                  "env vars injected — feature is fully wired"
 echo
 
 if [[ $FAIL -eq 0 ]]; then
