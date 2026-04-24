@@ -58,6 +58,86 @@ func DropManagedFields(obj any) (any, error) {
 	return obj, nil
 }
 
+// DropUnstructuredManagedFields is the dynamic-cache counterpart of
+// DropManagedFields. It's the SharedInformer transform for dynamic
+// informers — which carry *unstructured.Unstructured — and mirrors the
+// typed-cache transform's intent: shrink cached objects before they hit
+// the store.
+//
+// Mutates in-place. This is correct here: SharedInformer transforms run
+// exactly once per object before the cache stores it, and the object is
+// not visible to any other reader until after the transform returns. Do
+// NOT call this from places that hand you an object off the cache —
+// those need StripUnstructuredFields which deep-copies.
+//
+// Always strips:
+//   - metadata.managedFields (like DropManagedFields does for typed kinds)
+//   - kubectl.kubernetes.io/last-applied-configuration annotation
+//
+// For CustomResourceDefinitions specifically, also strips:
+//   - spec.versions[].schema — the OpenAPI v3 schema. On operator-heavy
+//     clusters a single CRD's schema is 50-100KB (think ArgoCD, cert-manager,
+//     Istio) and a cluster with 100+ CRDs easily produces a multi-MB list
+//     response. Radar's UI doesn't render CRD schemas anywhere — the
+//     resource browser shows CRDs with generic name/age columns, and any
+//     future "inspect CRD schema" feature would fetch fresh from the API
+//     server rather than relying on cached list data.
+//   - spec.conversion — the conversion webhook config (caBundle + URL).
+//     Also not rendered. The K8s API server applies conversion webhooks
+//     itself; we only need to display metadata about them, not the
+//     runtime config.
+//
+// Explicitly preserves:
+//   - spec.versions[].name and served/storage/deprecated flags
+//   - spec.versions[].additionalPrinterColumns — these drive column hints
+//     in generic resource list views
+//   - spec.group, spec.names, spec.scope, status.* — all the fields that
+//     describe what the CRD is, as opposed to what shape instances take
+func DropUnstructuredManagedFields(obj any) (any, error) {
+	u, ok := obj.(*unstructured.Unstructured)
+	if !ok {
+		// Dynamic informer should never hand us anything else, but be
+		// defensive — return the object unchanged rather than erroring,
+		// because a transform error is fatal for the informer.
+		return obj, nil
+	}
+
+	unstructured.RemoveNestedField(u.Object, "metadata", "managedFields")
+
+	if annotations := u.GetAnnotations(); annotations != nil {
+		delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
+		if len(annotations) == 0 {
+			u.SetAnnotations(nil)
+		} else {
+			u.SetAnnotations(annotations)
+		}
+	}
+
+	if u.GetKind() == "CustomResourceDefinition" {
+		// Strip .schema from each version entry. Preserve everything
+		// else (name, served, storage, deprecated, additionalPrinterColumns).
+		if versions, found, _ := unstructured.NestedSlice(u.Object, "spec", "versions"); found {
+			for i, v := range versions {
+				vm, ok := v.(map[string]any)
+				if !ok {
+					continue
+				}
+				delete(vm, "schema")
+				versions[i] = vm
+			}
+			// SetNestedSlice can only fail on non-serializable types; slices
+			// of map[string]any are always fine. Ignoring the error is safe.
+			_ = unstructured.SetNestedSlice(u.Object, versions, "spec", "versions")
+		}
+
+		// spec.conversion holds the webhook clientConfig (caBundle + URL)
+		// for conversion webhooks. Not rendered by Radar.
+		unstructured.RemoveNestedField(u.Object, "spec", "conversion")
+	}
+
+	return u, nil
+}
+
 // StripUnstructuredFields removes managedFields and the last-applied-configuration
 // annotation from an unstructured object. Returns a deep copy — the cached object
 // is never mutated. Safe for use by both Radar and skyhook-connector.

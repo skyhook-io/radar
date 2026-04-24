@@ -131,6 +131,14 @@ func (d *DynamicResourceCache) startWatching(gvr schema.GroupVersionResource) er
 	}
 
 	informer := d.factory.ForResource(gvr).Informer()
+	// Apply the dynamic-cache transform BEFORE informer.Run so every
+	// object entering the store is shrunk in place. SetTransform must
+	// be called pre-Run (returns ErrRunning otherwise). If it ever
+	// fails we log and continue — the informer still functions, just
+	// with fattier cached objects.
+	if err := informer.SetTransform(DropUnstructuredManagedFields); err != nil {
+		log.Printf("Warning: SetTransform failed for %v: %v (cache will retain managedFields/CRD schemas)", gvr, err)
+	}
 	d.informers[gvr] = informer
 
 	kind := d.gvrToKind(gvr)
