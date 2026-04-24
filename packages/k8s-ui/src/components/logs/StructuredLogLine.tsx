@@ -4,11 +4,6 @@ import type { LogLevel } from './useLogBuffer'
 import {
   unescapeJsonStrings,
   parseLogfmt,
-  SYNTAX_COLOR_KEY,
-  SYNTAX_COLOR_STRING,
-  SYNTAX_COLOR_NUMBER,
-  SYNTAX_COLOR_BOOLEAN,
-  SYNTAX_COLOR_NULL,
 } from '../../utils/log-format'
 import { getLogPalette, getLogLevelColor, type LogPalette } from './log-palette'
 
@@ -73,7 +68,7 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
           className={`cursor-pointer ${palette.hoverSurface} rounded px-0.5 -ml-0.5 ${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}
         >
           <span className="inline-flex items-center align-middle mr-0.5">{chevron}</span>
-          <SummaryLine obj={parsed} palette={palette} isDark={isDark} />
+          <SummaryLine obj={parsed} palette={palette} />
           <span className={`${palette.textTertiary} ml-1`}>{`{${fieldCount} fields}`}</span>
         </span>
       ) : (
@@ -84,7 +79,7 @@ export function StructuredLogLine({ content, level, wordWrap, isLogfmt, defaultE
           className={`cursor-pointer ${palette.hoverSurface} rounded px-0.5 -ml-0.5`}
         >
           <span className="inline-flex items-center align-middle mr-0.5">{chevron}</span>
-          <SummaryLine obj={parsed} palette={palette} isDark={isDark} />
+          <SummaryLine obj={parsed} palette={palette} />
           <span className={`${palette.textTertiary} ml-1`}>{`{${fieldCount} fields}`}</span>
         </span>
         <span className={`block ml-4 ${wordWrap ? 'whitespace-pre-wrap break-all' : 'whitespace-pre'}`}>
@@ -147,25 +142,25 @@ function JsonExpanded({ text, onFilterValue, palette }: { text: string; onFilter
     }
     const [, key, str, num, bool, nil] = match
     if (key !== undefined) {
-      nodes.push(<span key={`k${idx++}`} style={{ color: SYNTAX_COLOR_KEY }}>{key}</span>)
+      nodes.push(<span key={`k${idx++}`} style={{ color: palette.syntaxKey }}>{key}</span>)
       nodes.push(<span key={`c${idx++}`}>:</span>)
     } else if (str !== undefined) {
       // Unescape the quoted string for the filter value (users expect to filter on
       // the displayed string, not JSON-escaped bytes).
       const inner = str.slice(1, -1).replace(/\\"/g, '"').replace(/\\\\/g, '\\')
       nodes.push(
-        <FilterableValue key={`s${idx++}`} value={inner} onFilter={onFilterValue} color={SYNTAX_COLOR_STRING} palette={palette} />
+        <FilterableValue key={`s${idx++}`} value={inner} onFilter={onFilterValue} color={palette.syntaxString} palette={palette} />
       )
     } else if (num !== undefined) {
       nodes.push(
-        <FilterableValue key={`n${idx++}`} value={num} onFilter={onFilterValue} color={SYNTAX_COLOR_NUMBER} palette={palette} />
+        <FilterableValue key={`n${idx++}`} value={num} onFilter={onFilterValue} color={palette.syntaxNumber} palette={palette} />
       )
     } else if (bool !== undefined) {
       nodes.push(
-        <FilterableValue key={`b${idx++}`} value={bool} onFilter={onFilterValue} color={SYNTAX_COLOR_BOOLEAN} palette={palette} />
+        <FilterableValue key={`b${idx++}`} value={bool} onFilter={onFilterValue} color={palette.syntaxBoolean} palette={palette} />
       )
     } else if (nil !== undefined) {
-      nodes.push(<span key={`z${idx++}`} style={{ color: SYNTAX_COLOR_NULL }}>{nil}</span>)
+      nodes.push(<span key={`z${idx++}`} style={{ color: palette.syntaxNull }}>{nil}</span>)
     }
     lastIndex = tokenRe.lastIndex
   }
@@ -175,7 +170,7 @@ function JsonExpanded({ text, onFilterValue, palette }: { text: string; onFilter
   return <>{nodes}</>
 }
 
-function SummaryLine({ obj, palette, isDark }: { obj: Record<string, unknown>; palette: LogPalette; isDark: boolean }) {
+function SummaryLine({ obj, palette }: { obj: Record<string, unknown>; palette: LogPalette }) {
   const lvl = obj.level ?? obj.severity ?? obj.lvl ?? nestedField(obj, 'log', 'level')
   const msg = obj.msg ?? obj.message
   const rawErr = obj.error ?? obj.err
@@ -195,7 +190,7 @@ function SummaryLine({ obj, palette, isDark }: { obj: Record<string, unknown>; p
         <span className={palette.textPrimary}>{msg}</span>
       )}
       {typeof err === 'string' && (
-        <span className={`${isDark ? 'text-red-400' : 'text-red-700'} ml-2`}>error={err}</span>
+        <span className={`${palette.textError} ml-2`}>error={err}</span>
       )}
       {typeof caller === 'string' && (
         <span className={`${palette.textDisabled} ml-2`}>{caller}</span>
@@ -211,9 +206,9 @@ function ExpandedLogfmt({ obj, onFilterValue, palette }: { obj: Record<string, u
         const str = String(val)
         return (
           <div key={key}>
-            <span style={{ color: SYNTAX_COLOR_KEY }}>{key}</span>
+            <span style={{ color: palette.syntaxKey }}>{key}</span>
             <span className={palette.textTertiary}>=</span>
-            <FilterableValue value={str} onFilter={onFilterValue} color={SYNTAX_COLOR_STRING} palette={palette} />
+            <FilterableValue value={str} onFilter={onFilterValue} color={palette.syntaxString} palette={palette} />
           </div>
         )
       })}

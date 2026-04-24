@@ -30,6 +30,12 @@ export interface LogPalette {
   textSecondary: string
   textTertiary: string
   textDisabled: string
+  /** Standalone error text (inline "error=..." in structured lines, inline validation errors). */
+  textError: string
+  /** Accent/link text — blue-family. Used for toolbar toggles, "select all" etc. */
+  textAccent: string
+  /** Checkmark green on option-menu items. */
+  textCheckmark: string
 
   // Placeholder (plain class, applied via `placeholder-*` below)
   placeholder: string
@@ -54,6 +60,24 @@ export interface LogPalette {
   levelBadgeInfo: string
   levelBadgeDebug: string
   levelBadgeNeutral: string
+
+  /**
+   * Pod label colors for WorkloadLogsViewer (aggregated logs across pods).
+   * Pairs: one class for the name text, one for the filter-list dot.
+   * Pods are round-robined through this array.
+   */
+  podColors: Array<{ text: string; bg: string }>
+
+  /**
+   * Syntax-highlight colors for structured JSON/logfmt renderings.
+   * Applied as inline `style={{ color }}` (not classes) because the values
+   * come from log-format.ts and feed React's style prop.
+   */
+  syntaxKey: string
+  syntaxString: string
+  syntaxNumber: string
+  syntaxBoolean: string
+  syntaxNull: string
 }
 
 const DARK_PALETTE: LogPalette = {
@@ -70,6 +94,9 @@ const DARK_PALETTE: LogPalette = {
   textSecondary: 'text-slate-400',
   textTertiary: 'text-slate-500',
   textDisabled: 'text-slate-600',
+  textError: 'text-red-400',
+  textAccent: 'text-blue-400',
+  textCheckmark: 'text-emerald-400',
 
   placeholder: 'placeholder-slate-600',
 
@@ -89,6 +116,24 @@ const DARK_PALETTE: LogPalette = {
   levelBadgeInfo: 'bg-blue-500/20 text-blue-400 border border-blue-500/40',
   levelBadgeDebug: 'bg-slate-700 text-slate-300 border border-slate-600',
   levelBadgeNeutral: 'bg-slate-800 text-slate-400 border border-slate-700',
+
+  podColors: [
+    { text: 'text-blue-400', bg: 'bg-blue-400' },
+    { text: 'text-emerald-400', bg: 'bg-emerald-400' },
+    { text: 'text-amber-400', bg: 'bg-amber-400' },
+    { text: 'text-purple-400', bg: 'bg-purple-400' },
+    { text: 'text-pink-400', bg: 'bg-pink-400' },
+    { text: 'text-cyan-400', bg: 'bg-cyan-400' },
+    { text: 'text-orange-400', bg: 'bg-orange-400' },
+    { text: 'text-lime-400', bg: 'bg-lime-400' },
+  ],
+
+  // Hex values tuned for the `bg-slate-950` container.
+  syntaxKey: '#7cacf8',
+  syntaxString: '#73c991',
+  syntaxNumber: '#e5c07b',
+  syntaxBoolean: '#c678dd',
+  syntaxNull: '#808080',
 }
 
 const LIGHT_PALETTE: LogPalette = {
@@ -105,6 +150,9 @@ const LIGHT_PALETTE: LogPalette = {
   textSecondary: 'text-slate-600',
   textTertiary: 'text-slate-400',
   textDisabled: 'text-slate-300',
+  textError: 'text-red-700',
+  textAccent: 'text-blue-700',
+  textCheckmark: 'text-emerald-700',
 
   placeholder: 'placeholder-slate-400',
 
@@ -124,6 +172,25 @@ const LIGHT_PALETTE: LogPalette = {
   levelBadgeInfo: 'bg-blue-100 text-blue-700 border border-blue-400',
   levelBadgeDebug: 'bg-slate-200 text-slate-700 border border-slate-400',
   levelBadgeNeutral: 'bg-slate-100 text-slate-600 border border-slate-300',
+
+  podColors: [
+    { text: 'text-blue-700', bg: 'bg-blue-700' },
+    { text: 'text-emerald-700', bg: 'bg-emerald-700' },
+    { text: 'text-amber-700', bg: 'bg-amber-700' },
+    { text: 'text-purple-700', bg: 'bg-purple-700' },
+    { text: 'text-pink-700', bg: 'bg-pink-700' },
+    { text: 'text-cyan-700', bg: 'bg-cyan-700' },
+    { text: 'text-orange-700', bg: 'bg-orange-700' },
+    { text: 'text-lime-700', bg: 'bg-lime-700' },
+  ],
+
+  // Hex values tuned for the `bg-slate-50` container — darker so they read
+  // on a near-white background.
+  syntaxKey: '#0b63c0',
+  syntaxString: '#2b8a3e',
+  syntaxNumber: '#b95f00',
+  syntaxBoolean: '#7c3aed',
+  syntaxNull: '#6b7280',
 }
 
 /** Get the palette for the current dark/light mode. */

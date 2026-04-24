@@ -48,11 +48,6 @@ export interface WorkloadLogsViewerProps {
   forceDark?: boolean
 }
 
-const POD_COLORS = [
-  'text-blue-400', 'text-green-400', 'text-yellow-400', 'text-purple-400',
-  'text-pink-400', 'text-cyan-400', 'text-orange-400', 'text-lime-400',
-]
-
 export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark }: WorkloadLogsViewerProps) {
   const [selectedContainer, setSelectedContainer] = useState<string>('')
   const [pods, setPods] = useState<WorkloadPodInfo[]>([])
@@ -67,9 +62,12 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const { entries, append, set, clear } = useLogBuffer()
   const { isStreaming, startStreaming, stopStreaming } = useLogStream()
 
-  const podColors = useMemo(() => {
-    const m = new Map<string, string>()
-    pods.forEach((pod, i) => m.set(pod.name, POD_COLORS[i % POD_COLORS.length]))
+  // Map pod.name → index. Color classes are resolved at render time from the
+  // current palette (see LogCore / pod-filter dropdown below) so toggling
+  // isDark re-themes pod labels without re-fetching.
+  const podColorIndex = useMemo(() => {
+    const m = new Map<string, number>()
+    pods.forEach((pod, i) => m.set(pod.name, i))
     return m
   }, [pods])
 
@@ -88,15 +86,15 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         setSelectedPods(new Set(result.pods.map(p => p.name)))
       }
 
-      const colors = new Map<string, string>()
-      result.pods.forEach((pod, i) => colors.set(pod.name, POD_COLORS[i % POD_COLORS.length]))
+      const indexByPod = new Map<string, number>()
+      result.pods.forEach((pod, i) => indexByPod.set(pod.name, i))
 
       set(result.logs.map(log => ({
         timestamp: log.timestamp,
         content: log.content,
         container: log.container,
         pod: log.pod,
-        podColor: colors.get(log.pod),
+        podColorIndex: indexByPod.get(log.pod),
       })))
     } catch (err) {
       console.error('Failed to fetch workload logs:', err)
@@ -129,7 +127,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
               content: data.content || '',
               container: data.container || '',
               pod: data.pod || '',
-              podColor: podColors.get(data.pod || ''),
+              podColorIndex: podColorIndex.get(data.pod || ''),
             })
           }
         },
@@ -159,7 +157,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       },
       'Workload log stream error',
     )
-  }, [createStream, startStreaming, selectedContainer, sinceSeconds, append, podColors, selectedPods.size])
+  }, [createStream, startStreaming, selectedContainer, sinceSeconds, append, podColorIndex, selectedPods.size])
 
   const allContainers = useMemo(() => {
     const s = new Set<string>()
@@ -217,8 +215,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     }
   }, [filteredEntries, name, overrideDownload, showError, showSuccess])
 
-  // toolbarExtra as a render function so inline controls get the viewer's
-  // current palette (explicit dark/light classes, not theme-* tokens).
+  // Render-function form so inline controls receive the viewer's current
+  // palette — see log-palette.ts.
   const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: import('./log-palette').LogPalette }) => (
     <>
       {/* Pod filter */}
@@ -237,7 +235,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
         {showPodFilter && (
           <div className={`absolute top-full left-0 mt-1 w-64 ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50 max-h-64 overflow-y-auto`}>
             <div className={`p-2 border-b ${palette.border}`}>
-              <button onClick={toggleAllPods} className={`text-xs ${isDark ? 'text-blue-400 hover:text-blue-300' : 'text-blue-700 hover:text-blue-800'}`}>
+              <button onClick={toggleAllPods} className={`text-xs ${palette.textAccent} hover:underline`}>
                 {pods.every(p => selectedPods.has(p.name)) ? 'Deselect all' : 'Select all'}
               </button>
             </div>
@@ -249,9 +247,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
                   onChange={() => togglePod(pod.name)}
                   className={`w-3 h-3 rounded ${palette.borderLight} ${palette.elevatedBg} text-blue-500 focus:ring-blue-500 focus:ring-offset-0`}
                 />
-                <span className={`w-2 h-2 rounded-full ${podColors.get(pod.name)?.replace('text-', 'bg-')}`} />
+                <span className={`w-2 h-2 rounded-full ${palette.podColors[(podColorIndex.get(pod.name) ?? 0) % palette.podColors.length].bg}`} />
                 <span className={`text-xs ${palette.textPrimary} truncate flex-1`}>{pod.name}</span>
-                <span className={`text-xs ${pod.ready ? (isDark ? 'text-green-400' : 'text-green-700') : (isDark ? 'text-yellow-400' : 'text-yellow-700')}`}>
+                <span className={`text-xs ${pod.ready ? (isDark ? 'text-emerald-400' : 'text-emerald-700') : (isDark ? 'text-amber-400' : 'text-amber-700')}`}>
                   {pod.ready ? 'Ready' : 'Not Ready'}
                 </span>
               </label>

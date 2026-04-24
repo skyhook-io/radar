@@ -117,10 +117,8 @@ export function LogsViewer({
     }
   }, [entries, podName, selectedContainer, overrideDownload, showError, showSuccess])
 
-  // toolbarExtra is a render function so the inline controls can use the
-  // LogCore palette (dark/light driven by the viewer's own isDark state)
-  // instead of theme-* tokens, which don't resolve inside the forced
-  // color-scheme container.
+  // Render-function form so inline controls receive the viewer's current
+  // palette — see log-palette.ts.
   const renderToolbarExtra = ({ isDark, palette }: { isDark: boolean; palette: import('./log-palette').LogPalette }) => (
     <>
       <ContainerSelect containers={containers} value={selectedContainer} onChange={setSelectedContainer} isDark={isDark} />

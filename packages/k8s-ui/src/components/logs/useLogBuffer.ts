@@ -9,7 +9,12 @@ export interface LogEntry {
   content: string
   container: string
   pod?: string
-  podColor?: string
+  /**
+   * Index into the current palette's `podColors` array. Stored as an index
+   * (not a resolved class) so the pod-label color can re-theme when the
+   * viewer's isDark state toggles at runtime.
+   */
+  podColorIndex?: number
   level: LogLevel
   isJson: boolean
   isLogfmt: boolean

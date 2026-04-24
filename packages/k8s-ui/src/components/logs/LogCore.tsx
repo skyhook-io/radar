@@ -39,10 +39,15 @@ interface LogCoreProps {
   emptyMessage?: string
   errorMessage?: string | null
   /**
-   * Optional initial dark/light override. When provided, pins the starting
-   * value regardless of `localStorage['radar-logs-dark']`. Users can still
-   * flip the mode via the viewer's built-in Sun/Moon toggle.
-   * @default true
+   * Initial dark/light override for the viewer's self-contained isDark state.
+   * When set, seeds the starting value (and skips the localStorage fallback).
+   * Despite the name this does not *lock* the mode — users can still flip via
+   * the in-toolbar Sun/Moon toggle; the new value is persisted to
+   * `localStorage['radar-logs-dark']` and takes precedence on next mount
+   * unless `forceDark` is passed again.
+   *
+   * When undefined (default): falls through to localStorage, then defaults
+   * to `true` (dark) if nothing is stored.
    */
   forceDark?: boolean
 }
@@ -114,9 +119,9 @@ export function LogCore({
 }: LogCoreProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const [atBottom, setAtBottom] = useState(true)
-  // Dark/light for the log viewer is self-contained — the viewer's own Sun/Moon
-  // toggle flips this, persisted to localStorage. `forceDark` prop pins the
-  // initial value when explicitly provided.
+  // Seed isDark: forceDark prop wins; else localStorage['radar-logs-dark'];
+  // else default dark. See log-palette.ts for why the viewer is palette-driven
+  // instead of theme-token-driven.
   const [isDark, setIsDark] = useState<boolean>(() => {
     if (typeof forceDark === 'boolean') return forceDark
     try {
@@ -348,9 +353,9 @@ export function LogCore({
     ? toolbarExtra({ isDark, palette })
     : toolbarExtra
 
-  // Shared "inactive toolbar button" classes. All strings are literals so
-  // Tailwind's class scanner picks them up. Two variants differ only in the
-  // default text color (secondary vs tertiary).
+  // Composite "inactive toolbar button" classes — static literals so
+  // Tailwind's class scanner picks them up. Two variants for secondary
+  // vs tertiary default text color.
   const iconBtnInactive = isDark
     ? 'p-1.5 rounded transition-colors text-slate-400 hover:text-slate-100 hover:bg-slate-800'
     : 'p-1.5 rounded transition-colors text-slate-600 hover:text-slate-900 hover:bg-slate-200'
@@ -478,7 +483,7 @@ export function LogCore({
                     }`}
                   >
                     <span>{TIMESTAMP_FORMAT_LABELS[fmt]}</span>
-                    {tsFormat === fmt && <span className={`text-[10px] ${isDark ? 'text-blue-400' : 'text-blue-700'}`}>✓</span>}
+                    {tsFormat === fmt && <span className={`text-[10px] ${palette.textAccent}`}>✓</span>}
                   </button>
                 ))}
               </div>
@@ -645,7 +650,7 @@ export function LogCore({
 
           {search.query && (
             <>
-              <span className={`text-xs whitespace-nowrap ${search.regexError ? (isDark ? 'text-red-400' : 'text-red-700') : palette.textTertiary}`}>
+              <span className={`text-xs whitespace-nowrap ${search.regexError ? palette.textError : palette.textTertiary}`}>
                 {search.regexError
                   ? 'Invalid regex'
                   : search.matchCount > 0
@@ -693,7 +698,7 @@ export function LogCore({
           </div>
         </div>
       ) : errorMessage ? (
-        <div className={`flex-1 flex flex-col items-center justify-center gap-2 ${isDark ? 'text-red-400' : 'text-red-700'}`}>
+        <div className={`flex-1 flex flex-col items-center justify-center gap-2 ${palette.textError}`}>
           <Terminal className="w-8 h-8" />
           <span>{errorMessage}</span>
         </div>
@@ -861,7 +866,7 @@ function LogLine({
       )}
       {showPodName && entry.pod && (
         <span
-          className={`${entry.podColor || palette.textPrimary} select-none pr-2 whitespace-nowrap min-w-[80px] max-w-[120px] truncate`}
+          className={`${entry.podColorIndex !== undefined ? palette.podColors[entry.podColorIndex % palette.podColors.length].text : palette.textPrimary} select-none pr-2 whitespace-nowrap min-w-[80px] max-w-[120px] truncate`}
           title={entry.pod}
         >
           [{entry.pod.split('-').slice(-2).join('-')}]

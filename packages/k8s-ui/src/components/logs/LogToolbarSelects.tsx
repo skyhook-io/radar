@@ -2,9 +2,8 @@ import { ChevronDown } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
 import { getLogPalette } from './log-palette'
 
-// Explicit dark/light classes — do NOT use theme-* tokens here because the
-// log viewer forces its own color-scheme and `light-dark()` resolution
-// doesn't propagate reliably after the Tailwind v4 migration.
+// See log-palette.ts for why the viewer uses explicit palette classes
+// instead of theme-* tokens.
 function selectClass(isDark: boolean): string {
   const p = getLogPalette(isDark)
   return `appearance-none ${p.elevatedBg} ${p.textPrimary} text-xs rounded px-2 py-1.5 border ${p.borderLight} focus:outline-none focus:ring-1 focus:ring-blue-500`
