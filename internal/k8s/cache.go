@@ -661,7 +661,17 @@ func (c *ResourceCache) GetDynamicWithGroup(ctx context.Context, kind string, na
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
 	}
 
-	u, err := dynamicCache.Get(gvr, namespace, name)
+	// CRD detail views need spec.versions[].schema and spec.conversion, which
+	// the dynamic cache strips to save memory. Bypass the cache on single-CRD
+	// fetches so the YAML tab and MCP get_resource see the full object; list
+	// views (which don't render schemas) still go through the cache.
+	var u *unstructured.Unstructured
+	var err error
+	if gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions" {
+		u, err = dynamicCache.GetDirect(ctx, gvr, namespace, name)
+	} else {
+		u, err = dynamicCache.Get(gvr, namespace, name)
+	}
 	if err != nil {
 		return nil, err
 	}
