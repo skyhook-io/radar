@@ -3,6 +3,7 @@ import { fetchJSON, createLogStream } from '../../api/client'
 import { LogsViewer as SharedLogsViewer } from '@skyhook-io/k8s-ui'
 import type { LogsFetchParams } from '@skyhook-io/k8s-ui'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
+import { useTheme } from '../../context/ThemeContext'
 
 interface LogsViewerProps {
   namespace: string
@@ -13,6 +14,7 @@ interface LogsViewerProps {
 
 export function LogsViewer({ namespace, podName, containers, initialContainer }: LogsViewerProps) {
   const desktopDownload = useDesktopDownload()
+  const { theme } = useTheme()
 
   const fetchLogs = useCallback(async (params: LogsFetchParams) => {
     const query = new URLSearchParams()
@@ -39,6 +41,7 @@ export function LogsViewer({ namespace, podName, containers, initialContainer }:
       fetchLogs={fetchLogs}
       createStream={makeStream}
       overrideDownload={desktopDownload}
+      forceDark={theme === 'dark' ? true : undefined}
     />
   )
 }

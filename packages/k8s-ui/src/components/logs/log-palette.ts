@@ -42,6 +42,8 @@ export interface LogPalette {
   hoverBg: string
   hoverSurface: string
   hoverText: string
+  /** Active/selected toolbar controls inside the viewer. */
+  toolbarActive: string
 
   // Row highlight (current search match)
   currentMatchBg: string
@@ -100,6 +102,7 @@ const DARK_PALETTE: LogPalette = {
   hoverBg: 'hover:bg-slate-800',
   hoverSurface: 'hover:bg-slate-800/50',
   hoverText: 'hover:text-slate-100',
+  toolbarActive: 'bg-slate-700 text-slate-100 hover:bg-slate-600',
 
   currentMatchBg: 'bg-yellow-500/10',
 
@@ -155,6 +158,7 @@ const LIGHT_PALETTE: LogPalette = {
   hoverBg: 'hover:bg-slate-200',
   hoverSurface: 'hover:bg-slate-200/60',
   hoverText: 'hover:text-slate-900',
+  toolbarActive: 'bg-slate-200 text-slate-900 hover:bg-slate-300',
 
   currentMatchBg: 'bg-yellow-200/60',
 

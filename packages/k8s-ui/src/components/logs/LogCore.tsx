@@ -39,15 +39,9 @@ interface LogCoreProps {
   emptyMessage?: string
   errorMessage?: string | null
   /**
-   * Initial dark/light override for the viewer's self-contained isDark state.
-   * When set, seeds the starting value (and skips the localStorage fallback).
-   * Despite the name this does not *lock* the mode — users can still flip via
-   * the in-toolbar Sun/Moon toggle; the new value is persisted to
-   * `localStorage['radar-logs-dark']` and takes precedence on next mount
-   * unless `forceDark` is passed again.
-   *
-   * When undefined (default): falls through to localStorage, then defaults
-   * to `true` (dark) if nothing is stored.
+   * Hard override for the viewer palette. When set, the viewer stays pinned to
+   * that mode and hides the in-viewer dark/light toggle. When undefined,
+   * the viewer manages its own palette via localStorage and the Sun/Moon button.
    */
   forceDark?: boolean
 }
@@ -119,6 +113,7 @@ export function LogCore({
 }: LogCoreProps) {
   const virtuosoRef = useRef<VirtuosoHandle>(null)
   const [atBottom, setAtBottom] = useState(true)
+  const themeLocked = typeof forceDark === 'boolean'
   // Seed isDark: forceDark prop wins; else localStorage['radar-logs-dark'];
   // else default dark. See log-palette.ts for why the viewer is palette-driven
   // instead of theme-token-driven.
@@ -131,14 +126,20 @@ export function LogCore({
     } catch {}
     return true
   })
+  useEffect(() => {
+    if (typeof forceDark === 'boolean') {
+      setIsDark(forceDark)
+    }
+  }, [forceDark])
   const palette = useMemo(() => getLogPalette(isDark), [isDark])
   const toggleDark = useCallback(() => {
+    if (themeLocked) return
     setIsDark(prev => {
       const next = !prev
       try { localStorage.setItem('radar-logs-dark', String(next)) } catch {}
       return next
     })
-  }, [])
+  }, [themeLocked])
   const [wordWrap, setWordWrap] = useState(() => {
     try { return localStorage.getItem('radar-logs-wrap') !== 'false' } catch { return true }
   })
@@ -434,7 +435,7 @@ export function LogCore({
             <button
               onClick={() => setExpandAllStructured(prev => !prev)}
               className={`p-1.5 rounded transition-colors ${
-                expandAllStructured ? 'btn-brand-toggle' : iconBtnInactive
+                expandAllStructured ? palette.toolbarActive : iconBtnInactive
               }`}
             >
               <Braces className="w-4 h-4" />
@@ -448,7 +449,7 @@ export function LogCore({
             <button
               onClick={toggleTimestamps}
               className={`p-1.5 rounded-l transition-colors ${
-                showTimestamps ? 'btn-brand-toggle' : iconBtnInactive
+                showTimestamps ? palette.toolbarActive : iconBtnInactive
               }`}
             >
               <Clock className="w-4 h-4" />
@@ -459,7 +460,7 @@ export function LogCore({
               <button
                 onClick={() => setShowTsMenu(prev => !prev)}
                 className={`px-2 py-1.5 rounded-r text-[10px] font-medium transition-colors whitespace-nowrap ${
-                  showTimestamps ? 'btn-brand-toggle' : iconBtnInactiveTertiary
+                  showTimestamps ? palette.toolbarActive : iconBtnInactiveTertiary
                 }`}
                 aria-label="Pick timestamp format"
               >
@@ -496,7 +497,7 @@ export function LogCore({
           <button
             onClick={toggleCollapseStacks}
             className={`p-1.5 rounded transition-colors ${
-              collapseStacks ? 'btn-brand-toggle' : iconBtnInactive
+              collapseStacks ? palette.toolbarActive : iconBtnInactive
             }`}
           >
             <ListCollapse className="w-4 h-4" />
@@ -508,7 +509,7 @@ export function LogCore({
           <button
             onClick={toggleAnsi}
             className={`p-1.5 rounded transition-colors ${
-              ansiEnabled ? 'btn-brand-toggle' : iconBtnInactive
+              ansiEnabled ? palette.toolbarActive : iconBtnInactive
             }`}
           >
             <Palette className="w-4 h-4" />
@@ -520,7 +521,7 @@ export function LogCore({
           <button
             onClick={toggleWrap}
             className={`p-1.5 rounded transition-colors ${
-              wordWrap ? 'btn-brand-toggle' : iconBtnInactive
+              wordWrap ? palette.toolbarActive : iconBtnInactive
             }`}
           >
             <WrapText className="w-4 h-4" />
@@ -532,23 +533,24 @@ export function LogCore({
           <button
             onClick={() => search.isOpen ? search.close() : search.open()}
             className={`p-1.5 rounded transition-colors ${
-              search.isOpen ? 'btn-brand-toggle' : iconBtnInactive
+              search.isOpen ? palette.toolbarActive : iconBtnInactive
             }`}
           >
             <Search className="w-4 h-4" />
           </button>
         </Tooltip>
 
-        {/* Dark/light mode toggle — self-contained, doesn't depend on page theme */}
-        <Tooltip content={isDark ? 'Switch to light mode' : 'Switch to dark mode'} delay={TIP_DELAY} position="bottom">
-          <button
-            onClick={toggleDark}
-            className={iconBtnInactive}
-            aria-label={isDark ? 'Switch log viewer to light mode' : 'Switch log viewer to dark mode'}
-          >
-            {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-          </button>
-        </Tooltip>
+        {!themeLocked && (
+          <Tooltip content={isDark ? 'Switch to light mode' : 'Switch to dark mode'} delay={TIP_DELAY} position="bottom">
+            <button
+              onClick={toggleDark}
+              className={iconBtnInactive}
+              aria-label={isDark ? 'Switch log viewer to light mode' : 'Switch log viewer to dark mode'}
+            >
+              {isDark ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
+          </Tooltip>
+        )}
 
         {/* Download */}
         <div className="relative flex items-center" ref={downloadMenuRef}>
@@ -617,7 +619,7 @@ export function LogCore({
             <button
               onClick={search.toggleRegex}
               className={`p-1 rounded transition-colors ${
-                search.isRegex ? 'btn-brand-toggle' : `${palette.textTertiary} ${palette.hoverText}`
+                search.isRegex ? palette.toolbarActive : `${palette.textTertiary} ${palette.hoverText}`
               }`}
             >
               <Regex className="w-3.5 h-3.5" />
@@ -629,7 +631,7 @@ export function LogCore({
             <button
               onClick={search.toggleCaseSensitive}
               className={`p-1 rounded transition-colors ${
-                search.isCaseSensitive ? 'btn-brand-toggle' : `${palette.textTertiary} ${palette.hoverText}`
+                search.isCaseSensitive ? palette.toolbarActive : `${palette.textTertiary} ${palette.hoverText}`
               }`}
             >
               <CaseSensitive className="w-3.5 h-3.5" />
@@ -641,7 +643,7 @@ export function LogCore({
             <button
               onClick={search.toggleFilterMode}
               className={`p-1 rounded transition-colors ${
-                search.isFilterMode ? 'btn-brand-toggle' : `${palette.textTertiary} ${palette.hoverText}`
+                search.isFilterMode ? palette.toolbarActive : `${palette.textTertiary} ${palette.hoverText}`
               }`}
             >
               <Filter className="w-3.5 h-3.5" />
