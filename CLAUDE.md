@@ -290,6 +290,14 @@ source .playwright-mcp/visual-test-state.env # Load $RADAR_URL, $SCREENSHOT_DIR,
 ```
 Use `/visual-test` command for the full workflow (cluster check, Playwright MCP, screenshots, report). Screenshots go under `.playwright-mcp/visual-test/`.
 
+**Before calling a feature done — consider visual-test.** When you wrap up work that touches what the user actually sees (layout, copy, motion, color, theming, loading / empty / error states, modals, navigation, new pages, anything that changed how a screen reads), it's worth pausing to ask whether `/visual-test` would add value. `make tsc` + `make test` verify code correctness; `/visual-test` complements them by checking *feature* correctness — that the screen renders, behaves under interaction, and doesn't obviously regress neighboring surfaces. Not every UI change warrants one; this is a nudge to consider, not a hard rule.
+
+- **Run it yourself** when the change is self-contained and you can predict what the test should assert ("the new audit-finding card should show a severity badge and an expand affordance; clicking expands"). Cheap, catches obvious breakage.
+- **Ask the user** when the change is broad (touches many views), the right validation set is non-obvious, or you'd be picking which screens to capture — that judgment is theirs.
+- **Skip** for pure refactors with no visual diff, backend-only Go changes that don't surface in the UI, type-only changes, or doc edits.
+
+If a UI change feels worth checking, mention it when you wrap up — even just flagging "want me to run /visual-test on this?" is fine.
+
 ### Development Ports
 - **9280**: Backend API server (Go)
 - **9273**: Vite dev server (proxies /api to 9280)
