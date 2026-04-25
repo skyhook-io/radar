@@ -1,0 +1,309 @@
+package packages
+
+import (
+	"testing"
+)
+
+func TestSplitChart(t *testing.T) {
+	cases := []struct {
+		in              string
+		wantName, wantV string
+	}{
+		{"cert-manager-1.14.0", "cert-manager", "1.14.0"},
+		{"cert-manager-v1.14.0", "cert-manager", "v1.14.0"},
+		{"kube-prometheus-stack-45.27.2", "kube-prometheus-stack", "45.27.2"},
+		// scans backwards for first hyphen-followed-by-digit; finds 0.32.0-dev.
+		{"karpenter-0.32.0-dev", "karpenter", "0.32.0-dev"},
+		{"foo", "foo", ""},
+		{"", "", ""},
+		{"-1.0.0", "", "1.0.0"},
+	}
+	for _, c := range cases {
+		gotName, gotV := splitChart(c.in)
+		if gotName != c.wantName || gotV != c.wantV {
+			t.Errorf("splitChart(%q) = (%q, %q), want (%q, %q)", c.in, gotName, gotV, c.wantName, c.wantV)
+		}
+	}
+}
+
+func TestAggregate_HelmOnly(t *testing.T) {
+	rows := Aggregate(Sources{
+		Helm: []HelmRelease{{
+			Name:           "cert-manager",
+			Namespace:      "cert-manager",
+			Chart:          "cert-manager-1.14.0",
+			ResourceHealth: "healthy",
+		}},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d: %+v", len(rows), rows)
+	}
+	r := rows[0]
+	if r.Chart != "cert-manager" || r.Version != "1.14.0" || r.Namespace != "cert-manager" {
+		t.Errorf("bad row %+v", r)
+	}
+	if got := r.Sources; len(got) != 1 || got[0] != SourceHelm {
+		t.Errorf("want sources=[H], got %v", got)
+	}
+	if r.Health != "healthy" {
+		t.Errorf("want health=healthy, got %q", r.Health)
+	}
+}
+
+// HelmAPI + workload labels + CRDs all describing the same cert-manager
+// install must collapse into a single row with sources [H,L,C].
+func TestAggregate_CertManager_AllThreeSources(t *testing.T) {
+	rows := Aggregate(Sources{
+		Helm: []HelmRelease{{
+			Name:           "cert-manager",
+			Namespace:      "cert-manager",
+			Chart:          "cert-manager-1.14.0",
+			ResourceHealth: "healthy",
+		}},
+		Workloads: []Workload{{
+			Kind:      "Deployment",
+			Namespace: "cert-manager",
+			Name:      "cert-manager",
+			Labels:    map[string]string{"helm.sh/chart": "cert-manager-1.14.0"},
+			Annotations: map[string]string{
+				"meta.helm.sh/release-name":      "cert-manager",
+				"meta.helm.sh/release-namespace": "cert-manager",
+			},
+			Health: "healthy",
+		}},
+		CRDs: []CRD{{
+			Name:    "certificates.cert-manager.io",
+			Group:   "cert-manager.io",
+			Kind:    "Certificate",
+			Plural:  "certificates",
+			Versions: []string{"v1"},
+		}},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d: %+v", len(rows), rows)
+	}
+	r := rows[0]
+	if r.Chart != "cert-manager" {
+		t.Errorf("want chart=cert-manager, got %q", r.Chart)
+	}
+	want := []string{SourceHelm, SourceLabels, SourceCRDs}
+	if !equalStrings(r.Sources, want) {
+		t.Errorf("want sources=%v, got %v", want, r.Sources)
+	}
+}
+
+// Karpenter typical install: Helm secret access blocked → only labels +
+// CRDs contribute. Row should be [L,C] with the workload's namespace +
+// release-name annotation.
+func TestAggregate_Karpenter_NoHelmAccess(t *testing.T) {
+	rows := Aggregate(Sources{
+		Workloads: []Workload{{
+			Kind:      "Deployment",
+			Namespace: "karpenter",
+			Name:      "karpenter",
+			Labels: map[string]string{
+				"helm.sh/chart": "karpenter-0.32.0",
+			},
+			Annotations: map[string]string{
+				"meta.helm.sh/release-name":      "karpenter",
+				"meta.helm.sh/release-namespace": "karpenter",
+			},
+			Health: "healthy",
+		}},
+		CRDs: []CRD{
+			{Name: "nodepools.karpenter.sh", Group: "karpenter.sh", Kind: "NodePool", Plural: "nodepools", Versions: []string{"v1beta1"}},
+			{Name: "ec2nodeclasses.karpenter.k8s.aws", Group: "karpenter.k8s.aws", Kind: "EC2NodeClass", Plural: "ec2nodeclasses", Versions: []string{"v1beta1"}},
+		},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d: %+v", len(rows), rows)
+	}
+	r := rows[0]
+	if r.Chart != "karpenter" {
+		t.Errorf("want chart=karpenter, got %q", r.Chart)
+	}
+	want := []string{SourceLabels, SourceCRDs}
+	if !equalStrings(r.Sources, want) {
+		t.Errorf("want sources=%v, got %v", want, r.Sources)
+	}
+	// Both CRDs map to "karpenter" — should fold into the same row,
+	// not produce duplicates.
+}
+
+// Raw-YAML operator: only CRDs registered, no Helm release, no
+// workload labels → standalone CRD-only row keyed on the chart we
+// know the group corresponds to.
+func TestAggregate_RawOperator_KnownGroup(t *testing.T) {
+	rows := Aggregate(Sources{
+		CRDs: []CRD{{
+			Name:    "certificates.cert-manager.io",
+			Group:   "cert-manager.io",
+			Kind:    "Certificate",
+			Plural:  "certificates",
+			Versions: []string{"v1"},
+		}},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d", len(rows))
+	}
+	r := rows[0]
+	if r.Chart != "cert-manager" || r.Health != "unknown" || r.FromCRDGroup != "" {
+		t.Errorf("bad CRD-only row: %+v", r)
+	}
+	if !equalStrings(r.Sources, []string{SourceCRDs}) {
+		t.Errorf("want sources=[C], got %v", r.Sources)
+	}
+}
+
+// Unknown CRD group should produce a standalone row keyed on the group
+// itself (FromCRDGroup set).
+func TestAggregate_RawOperator_UnknownGroup(t *testing.T) {
+	rows := Aggregate(Sources{
+		CRDs: []CRD{{
+			Name:    "widgets.example.com",
+			Group:   "example.com",
+			Kind:    "Widget",
+			Plural:  "widgets",
+			Versions: []string{"v1alpha1"},
+		}},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d", len(rows))
+	}
+	r := rows[0]
+	if r.Chart != "example.com" || r.FromCRDGroup != "example.com" {
+		t.Errorf("bad unknown-group row: %+v", r)
+	}
+}
+
+// Argo Application that declares a Helm chart should merge with the
+// Helm release the app actually creates → sources [H, A].
+func TestAggregate_ArgoHelmApp_MergesWithHelmRelease(t *testing.T) {
+	rows := Aggregate(Sources{
+		Helm: []HelmRelease{{
+			Name:           "my-app",
+			Namespace:      "production",
+			Chart:          "my-app-2.0.0",
+			ResourceHealth: "healthy",
+		}},
+		GitOpsDeclarations: []Declaration{{
+			Source:          "argocd",
+			Namespace:       "argocd",
+			Name:            "my-app",
+			TargetNamespace: "production",
+			TargetName:      "my-app",
+			Chart:           "my-app",
+			ChartVersion:    "2.0.0",
+			Status:          "healthy",
+		}},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 merged row, got %d: %+v", len(rows), rows)
+	}
+	if got := rows[0].Sources; !equalStrings(got, []string{SourceHelm, SourceArgoCD}) {
+		t.Errorf("want sources=[H,A], got %v", got)
+	}
+}
+
+// Flux Kustomization with no chart info → standalone row keyed on the
+// declaration name. Source [F].
+func TestAggregate_FluxKustomization_NoChart(t *testing.T) {
+	rows := Aggregate(Sources{
+		GitOpsDeclarations: []Declaration{{
+			Source:          "flux",
+			Namespace:       "flux-system",
+			Name:            "infra-controllers",
+			TargetNamespace: "infra",
+			TargetName:      "",
+			// No chart field — Kustomization renders raw YAML.
+			Status: "healthy",
+		}},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d", len(rows))
+	}
+	r := rows[0]
+	if r.Chart != "infra-controllers" {
+		t.Errorf("want chart=infra-controllers, got %q", r.Chart)
+	}
+	if !equalStrings(r.Sources, []string{SourceFluxCD}) {
+		t.Errorf("want sources=[F], got %v", r.Sources)
+	}
+}
+
+// Health is the worst across contributors. A degraded workload + a
+// healthy Helm release → degraded.
+func TestAggregate_HealthIsWorstOf(t *testing.T) {
+	rows := Aggregate(Sources{
+		Helm: []HelmRelease{{
+			Name:           "cert-manager",
+			Namespace:      "cert-manager",
+			Chart:          "cert-manager-1.14.0",
+			ResourceHealth: "healthy",
+		}},
+		Workloads: []Workload{{
+			Kind:      "Deployment",
+			Namespace: "cert-manager",
+			Name:      "cert-manager-cainjector",
+			Labels:    map[string]string{"helm.sh/chart": "cert-manager-1.14.0"},
+			Annotations: map[string]string{
+				"meta.helm.sh/release-name":      "cert-manager",
+				"meta.helm.sh/release-namespace": "cert-manager",
+			},
+			Health: "degraded",
+		}},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d", len(rows))
+	}
+	if rows[0].Health != "degraded" {
+		t.Errorf("want health=degraded, got %q", rows[0].Health)
+	}
+}
+
+// Sources order must be canonical H, L, C, A, F regardless of input
+// declaration order.
+func TestAggregate_SourceOrderIsCanonical(t *testing.T) {
+	rows := Aggregate(Sources{
+		// Provide in reverse order to verify Aggregate normalizes.
+		GitOpsDeclarations: []Declaration{{
+			Source: "flux", Name: "x", TargetNamespace: "ns", TargetName: "x", Chart: "x", Status: "healthy",
+		}, {
+			Source: "argocd", Name: "x", TargetNamespace: "ns", TargetName: "x", Chart: "x", Status: "healthy",
+		}},
+		CRDs: []CRD{{Group: "x.example.com", Versions: []string{"v1"}}},
+		Workloads: []Workload{{
+			Kind: "Deployment", Namespace: "ns", Name: "x",
+			Labels:      map[string]string{"helm.sh/chart": "x-1.0"},
+			Annotations: map[string]string{"meta.helm.sh/release-name": "x", "meta.helm.sh/release-namespace": "ns"},
+			Health:      "healthy",
+		}},
+		Helm: []HelmRelease{{Name: "x", Namespace: "ns", Chart: "x-1.0", ResourceHealth: "healthy"}},
+	})
+	if len(rows) == 0 {
+		t.Fatal("expected at least one row")
+	}
+	// Find the chart=x row and verify source order.
+	for _, r := range rows {
+		if r.Chart == "x" {
+			want := []string{SourceHelm, SourceLabels, SourceArgoCD, SourceFluxCD}
+			if !equalStrings(r.Sources, want) {
+				t.Errorf("want canonical sources %v, got %v", want, r.Sources)
+			}
+			return
+		}
+	}
+	t.Errorf("no x chart row found in %+v", rows)
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}

@@ -140,6 +140,27 @@ func registerTools(server *mcp.Server) {
 		Annotations: readOnly,
 	}, logToolCall("get_helm_release", handleGetHelmRelease))
 
+	// --- Packages tool (read-only) ---
+	//
+	// Higher-level than list_helm_releases: collapses Helm releases,
+	// workload labels, CRD registrations, and GitOps declarations
+	// (Argo Applications + Flux HelmReleases/Kustomizations) into a
+	// unified "what's installed in this cluster" view with source
+	// provenance. Each row's `sources` field shows which detection
+	// channels voted "this is installed" — H, L, C, A, F.
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "list_packages",
+		Description: "List installed packages (Helm releases, label-managed workloads, CRDs, " +
+			"Argo Applications, Flux HelmReleases + Kustomizations) with their sources, " +
+			"versions, and health. Each row carries a `sources` array (H=Helm API, " +
+			"L=workload labels, C=CRD registrations, A=Argo declaration, F=Flux declaration) " +
+			"so the caller can see WHY this package is detected. Use to answer 'what's " +
+			"installed?' / 'what version of cert-manager is running?' / 'are there orphaned " +
+			"operators?' in a single call instead of combining list_helm_releases + " +
+			"list_resources + manual merge. Filter by namespace, source, or chart substring.",
+		Annotations: readOnly,
+	}, logToolCall("list_packages", handleListPackages))
+
 	// --- Workload logs tool (read-only) ---
 
 	mcp.AddTool(server, &mcp.Tool{
