@@ -43,10 +43,14 @@ func TestErrorCodeForHelm(t *testing.T) {
 		{"connection refused", `dial tcp 127.0.0.1:8080: connect: connection refused`, 0, ErrCodeUnreachable},
 		{"no such host", "dial tcp: lookup foo: no such host", 0, ErrCodeUnreachable},
 
-		// Ordering: auth precedes rbac (a 403 with "unauthorized" in
-		// body is auth-required, not rbac-denied — though that combo
-		// shouldn't happen in practice).
-		{"401 with rbac word in body", "rbac unavailable", 401, ErrCodeAuthRequired},
+		// Ordering pins. The classifier is a sequential switch; these
+		// cases lock down precedence so a future reorder doesn't
+		// silently re-bucket multi-keyword bodies.
+		{"401 status with rbac word in body", "rbac unavailable", 401, ErrCodeAuthRequired},
+		{"rbac word + context deadline", "context deadline exceeded querying rbac role", 0, ErrCodeRBACDenied},
+		{"forbidden + connection refused", "forbidden: dial tcp connection refused", 0, ErrCodeRBACDenied},
+		{"unconfigured + timeout phrase", "no resolved rest.Config available; timeout reached", 0, ErrCodeUnconfigured},
+		{"timeout + dial tcp (i/o timeout shape)", "i/o timeout dialing tcp 10.0.0.1:443", 0, ErrCodeTimedOut},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

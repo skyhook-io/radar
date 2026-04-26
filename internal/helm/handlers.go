@@ -678,7 +678,16 @@ func (h *Handlers) handleListRepositories(w http.ResponseWriter, r *http.Request
 	writeJSON(w, repos)
 }
 
-// handleUpdateRepository updates the index for a specific repository
+// handleUpdateRepository updates the index for a specific repository.
+//
+// Deliberately NOT gated by requireCloudRole: this fetches chart
+// metadata from external repos (artifacthub.io, oci://, etc.) and
+// caches it on the radar pod's local filesystem. It mutates pod-local
+// state, not cluster state — refresh-the-catalog rather than
+// modify-the-cluster. requireHelmWrite still gates it because a future
+// install/upgrade depends on a fresh repo cache, but a viewer
+// triggering a repo refresh has no security or product cost beyond a
+// few HTTP calls to public chart hosts.
 func (h *Handlers) handleUpdateRepository(w http.ResponseWriter, r *http.Request) {
 	if !requireHelmWrite(w, r) {
 		return
@@ -943,8 +952,6 @@ type installResult struct {
 	err     error
 }
 
-// Helper functions
-
 // requireHelmWrite checks if the service account has Helm write permissions.
 // Uses secrets/create as a sentinel check — if the service account can create
 // secrets, it likely has the broad RBAC granted by rbac.helm=true.
@@ -1013,7 +1020,7 @@ func requireCloudRole(w http.ResponseWriter, r *http.Request, min auth.CloudRole
 		return true
 	}
 	log.Printf("[helm] Cloud role %q denied %s (need at least %q): %s", role, opName, min, r.URL.Path)
-	writeErrorCode(w, http.StatusForbidden, "cloud_role_insufficient",
+	writeErrorCode(w, http.StatusForbidden, auth.ErrCodeCloudRoleInsufficient,
 		"Your Radar Cloud role ("+role.String()+") cannot "+opName+". Ask a "+string(min)+" or higher.")
 	return false
 }

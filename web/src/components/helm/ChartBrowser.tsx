@@ -162,6 +162,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
                       onUpdate={() => handleUpdateRepo(repo.name)}
                       isUpdating={updateRepoMutation.isPending}
                       canUpdate={canHelmWrite}
+                      cantUpdateReason={helmActReason}
                     />
                   ))
                 )}
@@ -356,9 +357,13 @@ interface RepoDropdownItemProps {
   onUpdate: () => void
   isUpdating: boolean
   canUpdate: boolean
+  /** Reason rendered in the disabled button's tooltip — comes from
+   *  useCanHelmAct so a viewer sees the role gate, not the rbac.helm
+   *  message that's only relevant for K8s-capability denials. */
+  cantUpdateReason?: string
 }
 
-function RepoDropdownItem({ repo, isSelected, onSelect, onUpdate, isUpdating, canUpdate }: RepoDropdownItemProps) {
+function RepoDropdownItem({ repo, isSelected, onSelect, onUpdate, isUpdating, canUpdate, cantUpdateReason }: RepoDropdownItemProps) {
   return (
     <div className="flex items-center justify-between px-3 py-2 hover:bg-theme-hover group">
       <button
@@ -379,7 +384,7 @@ function RepoDropdownItem({ repo, isSelected, onSelect, onUpdate, isUpdating, ca
         onClick={(e) => { e.stopPropagation(); onUpdate() }}
         disabled={isUpdating || !canUpdate}
         className="p-1 text-theme-text-tertiary hover:text-theme-text-primary opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
-        title={canUpdate ? "Update repository" : "Helm write permissions required (rbac.helm=true)"}
+        title={canUpdate ? "Update repository" : (cantUpdateReason ?? "Helm write permissions required")}
       >
         <RefreshCw className={clsx('w-3.5 h-3.5', isUpdating && 'animate-spin')} />
       </button>

@@ -690,22 +690,31 @@ const CLOUD_ROLE_RANK: Record<string, number> = { viewer: 1, member: 2, owner: 3
 
 /**
  * useCloudRole returns the caller's Cloud tier (`owner` / `member` /
- * `viewer`) and a `canAtLeast(min)` gate. When no Cloud role is
- * present (OSS, OIDC, no role group), `canAtLeast` returns true for
- * every tier — the gate is strictly additive for Cloud-attributed
+ * `viewer`) and a `canAtLeast(min)` gate. When auth/me has resolved
+ * AND no Cloud role is present (OSS, OIDC, no role group), the gate
+ * bypasses — the gate is strictly additive for Cloud-attributed
  * users, mirroring the backend's `requireCloudRole` semantics.
+ *
+ * While auth/me is still loading, `canAtLeast` returns false. The
+ * alternative (treat loading as "no role" → bypass) lets a viewer
+ * see action buttons momentarily enabled on first paint, which then
+ * flip to disabled when /api/auth/me resolves a few hundred ms
+ * later. Fail-closed during load matches what users expect — buttons
+ * start disabled and enable once we know who they are.
  *
  * Use to hide / disable UI affordances for ops the user can't
  * perform. The backend still enforces; this is purely UX.
  */
 export function useCloudRole() {
-  const { data } = useAuthMe()
+  const { data, isLoading } = useAuthMe()
   const role = data?.cloudRole
   return {
     role,
+    isLoading,
     isCloudUser: !!role,
     canAtLeast: (min: CloudRole) => {
-      if (!role) return true // not Cloud-attributed → no gate
+      if (isLoading) return false // fail-closed during /api/auth/me round-trip
+      if (!role) return true // resolved + no Cloud tier → OSS/OIDC, no gate
       return (CLOUD_ROLE_RANK[role] ?? 0) >= (CLOUD_ROLE_RANK[min] ?? 0)
     },
   }

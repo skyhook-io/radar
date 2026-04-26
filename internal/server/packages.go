@@ -51,7 +51,11 @@ type PackagesResponse struct {
 	SourcesErrored []SourceError         `json:"sourcesErrored,omitempty"`
 }
 
-// SourceError carries a per-source failure.
+// SourceError carries a per-source failure. Field names + JSON tags
+// are part of the /api/packages public response shape — wire-stable.
+// Code values are likewise stable (see ErrCode* below); add new codes,
+// never rename. Renaming any of these fields silently breaks the SPA
+// (radar-hub-web) and MCP fleet_list_packages clients.
 type SourceError struct {
 	Source     packages.SourceCode `json:"source"`
 	StatusCode int                 `json:"statusCode,omitempty"`
@@ -60,8 +64,9 @@ type SourceError struct {
 	// across phrasing changes in Error so consumers (the SPA's
 	// categorize fn, MCP clients) can branch without string-matching
 	// log messages. Populated for known failure shapes; empty for
-	// generic errors (consumer falls back to category="failed"). See
-	// errorCodeForHelm / categorizeSourceError.
+	// generic errors (consumer falls back to category="failed").
+	// Producer: errorCodeForHelm in this file. Consumer: the SPA's
+	// categorizeSourceError in radar-hub-web.
 	Code string `json:"code,omitempty"`
 	// AffectedNamespaces, when set, lists the namespaces this error
 	// applies to. Populated when the error is scoped (e.g., a
@@ -311,22 +316,12 @@ func computePackagesInternal(ctx context.Context, namespaces []string) ([]packag
 	src := packages.Sources{}
 	var errs []SourceError
 
-	// Helm releases (source H). For a single-namespace request we ask
-	// Helm directly; for nil (all namespaces) we ask cluster-wide. For a
-	// multi-namespace allow-list we iterate per-namespace.
-	//
-	// Inventory reads use the ServiceAccount (empty user/groups) rather
-	// than impersonating the calling user. Helm release secrets are
-	// stored as K8s Secrets, but the chart's default cloud:viewer →
-	// K8s `view` ClusterRoleBinding excludes secrets — so impersonating
-	// would 403 every viewer on a feature that's purely inventory
-	// metadata (chart, version, status), not credential data. SA
-	// inventory matches the chart's stated intent and gives every
-	// Cloud tier the same fleet visibility.
-	//
-	// Sensitive Helm reads (GetValues, GetManifest) and all Helm writes
-	// MUST keep impersonating — those carry data + state changes the
-	// view-role exclusion was actually designed to gate.
+	// Helm releases (source H). Inventory reads pass empty user/groups
+	// so the SA does the read — see deploy/helm/radar/templates/clusterrole.yaml
+	// for the secrets-rule rationale (cloud:viewer → K8s `view` excludes
+	// secrets, so impersonating would 403 viewers on inventory metadata
+	// that isn't credential data). Sensitive Helm reads (GetValues,
+	// GetManifest) and all writes still impersonate.
 	helmReleases, helmErrs := collectHelmReleases(namespaces, "", nil)
 	src.Helm = helmReleases
 	errs = append(errs, helmErrs...)

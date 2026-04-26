@@ -26,6 +26,10 @@ const (
 	RoleOwner  = pkgauth.RoleOwner
 )
 
+// ErrCodeCloudRoleInsufficient is re-exported from pkg/auth so handlers
+// don't have to import the package directly to write the wire value.
+const ErrCodeCloudRoleInsufficient = pkgauth.ErrCodeCloudRoleInsufficient
+
 // Re-export functions from pkg/auth
 var (
 	UserFromContext          = pkgauth.UserFromContext
