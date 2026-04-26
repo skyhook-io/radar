@@ -203,7 +203,16 @@ type DashboardTopFlow struct {
 type DashboardHelmSummary struct {
 	Total      int                    `json:"total"`
 	Releases   []DashboardHelmRelease `json:"releases"`
-	Restricted bool                   `json:"restricted,omitempty"` // True when user lacks permissions to list Helm releases
+	Restricted bool                   `json:"restricted,omitempty"` // True when user lacks permissions to list Helm releases (RBAC-denied)
+	// Error + ErrorCode are populated when the Helm read failed for a
+	// reason other than RBAC (Helm client not initialized, no resolved
+	// rest.Config, network error). Lets the dashboard widget render
+	// "Helm unavailable: not configured" instead of an empty list that
+	// looks like "this cluster has zero releases." ErrorCode uses the
+	// same vocabulary as packages.go ErrCode* (rbac_denied,
+	// unreachable, timed_out, unconfigured, auth_required).
+	Error     string `json:"error,omitempty"`
+	ErrorCode string `json:"errorCode,omitempty"`
 }
 
 type DashboardHelmRelease struct {
@@ -1129,7 +1138,11 @@ func (s *Server) getDashboardTrafficSummary(ctx context.Context, namespaces []st
 func (s *Server) getDashboardHelmSummary(r *http.Request, namespace string) DashboardHelmSummary {
 	helmClient := helm.GetClient()
 	if helmClient == nil {
-		return DashboardHelmSummary{Releases: []DashboardHelmRelease{}}
+		return DashboardHelmSummary{
+			Releases:  []DashboardHelmRelease{},
+			Error:     "Helm client not initialized",
+			ErrorCode: ErrCodeUnconfigured,
+		}
 	}
 
 	var username string
@@ -1144,7 +1157,11 @@ func (s *Server) getDashboardHelmSummary(r *http.Request, namespace string) Dash
 			return DashboardHelmSummary{Releases: []DashboardHelmRelease{}, Restricted: true}
 		}
 		log.Printf("[dashboard] Failed to list Helm releases: %v", err)
-		return DashboardHelmSummary{Releases: []DashboardHelmRelease{}}
+		return DashboardHelmSummary{
+			Releases:  []DashboardHelmRelease{},
+			Error:     err.Error(),
+			ErrorCode: errorCodeForHelm(err.Error(), 0),
+		}
 	}
 
 	result := DashboardHelmSummary{

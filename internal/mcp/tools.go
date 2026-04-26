@@ -995,6 +995,14 @@ type mcpWarning struct {
 type mcpHelmSummary struct {
 	Total    int              `json:"total"`
 	Releases []mcpHelmRelease `json:"releases,omitempty"`
+	// Unavailable + UnavailableReason are populated when the Helm read
+	// failed (Helm client not initialized, RBAC denied, network error,
+	// etc.) — distinguishes "this cluster has zero Helm releases" from
+	// "Helm is broken; results aren't an honest count." LLM consumers
+	// should surface UnavailableReason to the user instead of confidently
+	// reporting Total=0.
+	Unavailable       bool   `json:"unavailable,omitempty"`
+	UnavailableReason string `json:"unavailableReason,omitempty"`
 }
 
 type mcpHelmRelease struct {
@@ -1159,13 +1167,25 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	}
 
 	// Helm releases — sort failed-first before slicing
-	if helmClient := helm.GetClient(); helmClient != nil {
+	helmClient := helm.GetClient()
+	if helmClient == nil {
+		d.HelmReleases.Unavailable = true
+		d.HelmReleases.UnavailableReason = "Helm client not initialized."
+	} else {
 		username, groups := userFromContext(ctx)
 		releases, err := helmClient.ListReleasesAsUser(namespace, username, groups)
 		if err != nil {
 			// Not fatal for the dashboard — a viewer with no helm access
-			// still sees everything else. Log so the absence isn't silent.
+			// still sees everything else. Surface to LLM consumers via
+			// Unavailable so they don't confidently report "Total=0
+			// releases" when in fact the read failed.
 			log.Printf("[mcp] Dashboard helm list failed: %v", err)
+			d.HelmReleases.Unavailable = true
+			if helm.IsForbiddenError(err) {
+				d.HelmReleases.UnavailableReason = "RBAC denied: caller cannot list Helm release secrets in this scope."
+			} else {
+				d.HelmReleases.UnavailableReason = "Helm read failed: " + err.Error()
+			}
 		} else {
 			d.HelmReleases.Total = len(releases)
 

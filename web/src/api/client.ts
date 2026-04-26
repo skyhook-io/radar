@@ -212,7 +212,13 @@ export interface DashboardHelmRelease {
 export interface DashboardHelmSummary {
   total: number
   releases: DashboardHelmRelease[]
-  restricted?: boolean // True when user lacks permissions to list Helm releases
+  restricted?: boolean // True when user lacks permissions to list Helm releases (RBAC-denied)
+  // error + errorCode populated when the Helm read failed for a non-RBAC
+  // reason (client not initialized, unconfigured, network). Surfaced
+  // via the dashboard widget so empty results aren't mistaken for
+  // "this cluster has zero releases."
+  error?: string
+  errorCode?: string
 }
 
 export interface DashboardCRDCount {
@@ -264,6 +270,7 @@ export interface DashboardResponse {
   audit: DashboardAudit | null
   nodeVersionSkew: { versions: Record<string, string[]>; minVersion: string; maxVersion: string } | null
   deferredLoading?: boolean // True while deferred informers (secrets, events, etc.) are still syncing
+  partialData?: string[] // Resource kinds still loading after first paint (slow-cluster fallback)
   accessRestricted?: boolean // True when user has no namespace access (RBAC)
 }
 
