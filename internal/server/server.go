@@ -42,6 +42,7 @@ import (
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/updater"
 	"github.com/skyhook-io/radar/internal/version"
+	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -248,6 +249,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/cluster-info", s.handleClusterInfo)
 			r.Get("/capabilities", s.handleCapabilities)
 			r.Get("/topology", s.handleTopology)
+			r.Get("/gitops/tree/{kind}/{namespace}/{name}", s.handleGitOpsTree)
 			r.Get("/namespaces", s.handleNamespaces)
 			r.Get("/api-resources", s.handleAPIResources)
 			r.Get("/resource-counts", s.handleResourceCounts)
@@ -896,6 +898,68 @@ func (s *Server) handleTopology(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, topo)
+}
+
+func (s *Server) handleGitOpsTree(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+
+	kind := normalizeKind(chi.URLParam(r, "kind"))
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+	group := r.URL.Query().Get("group")
+	if namespace == "_" {
+		namespace = ""
+	}
+	if namespace != "" {
+		allowed := s.getUserNamespaces(r, []string{namespace})
+		if noNamespaceAccess(allowed) {
+			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", namespace))
+			return
+		}
+	}
+
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")
+		return
+	}
+
+	namespaces := s.parseNamespacesForUser(r)
+	if noNamespaceAccess(namespaces) {
+		s.writeJSON(w, map[string]any{"nodes": []any{}, "edges": []any{}, "warnings": []any{}})
+		return
+	}
+
+	opts := topology.DefaultBuildOptions()
+	opts.Namespaces = namespaces
+	opts.IncludeReplicaSets = true
+	opts.ForRelationshipCache = true
+
+	topoBuilder := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
+		WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
+	topo, err := topoBuilder.Build(opts)
+	if err != nil {
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	tree, err := gitopstree.NewBuilder(cache, topo).Build(r.Context(), kind, namespace, name, group)
+	if err != nil {
+		if strings.Contains(err.Error(), "unknown resource kind") {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		if apierrors.IsNotFound(err) || strings.Contains(strings.ToLower(err.Error()), "not found") {
+			s.writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+
+	s.writeJSON(w, tree)
 }
 
 func (s *Server) handleNamespaces(w http.ResponseWriter, r *http.Request) {

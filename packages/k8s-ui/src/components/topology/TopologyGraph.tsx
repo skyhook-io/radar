@@ -445,10 +445,11 @@ export function TopologyGraph({
   // Structure key for change detection — includes groupLevels so chip↔cardGrid triggers relayout
   const structureKey = useMemo(() => {
     const nodeIds = workingNodes.map(n => n.id).sort().join(',')
+    const edgeIds = workingEdges.map(e => `${e.source}->${e.target}:${e.type}`).sort().join(',')
     const levels = Array.from(groupLevels.entries()).sort().map(([k, v]) => `${k}:${v}`).join(',')
     const expanded = Array.from(expandedPodGroups).sort().join(',')
-    return `${viewMode}|${nodeIds}|${levels}|${expanded}|${groupingMode}|${layoutRetryCount}`
-  }, [viewMode, workingNodes, groupLevels, expandedPodGroups, groupingMode, layoutRetryCount])
+    return `${viewMode}|${nodeIds}|${edgeIds}|${levels}|${expanded}|${groupingMode}|${layoutRetryCount}`
+  }, [viewMode, workingNodes, workingEdges, groupLevels, expandedPodGroups, groupingMode, layoutRetryCount])
 
   // Layout when structure changes - use hierarchical ELK layout
   useEffect(() => {

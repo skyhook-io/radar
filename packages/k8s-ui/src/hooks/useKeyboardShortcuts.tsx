@@ -13,7 +13,7 @@ const SCOPE_PRIORITY: Record<ShortcutScope, number> = {
   drawer: 2,
 }
 
-export type ShortcutCategory = 'Navigation' | 'Search' | 'Resource Actions' | 'Table' | 'General' | 'Topology' | 'Timeline' | 'Helm' | 'Drawer' | 'Dock'
+export type ShortcutCategory = 'Navigation' | 'Search' | 'Resource Actions' | 'Table' | 'General' | 'Topology' | 'Timeline' | 'Helm' | 'GitOps' | 'Drawer' | 'Dock'
 
 export interface KeyboardShortcut {
   /** Unique ID for this shortcut */

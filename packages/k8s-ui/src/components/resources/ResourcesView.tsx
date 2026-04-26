@@ -1655,6 +1655,8 @@ interface ResourcesViewProps {
   hideSidebar?: boolean
   /** Callback when the [+] create button is clicked. Receives the currently selected kind info. */
   onCreateResource?: (kind: { name: string; kind: string; group: string } | null) => void
+  /** Default kind when the URL does not include one. */
+  defaultKind?: SelectedKindInfo
   /** Columns prepended to KNOWN_COLUMNS for every kind. For example, a
    *  multi-cluster host can inject a leading Cluster column. Each extra
    *  column is self-contained (own render/sort/filter), so the host
@@ -1692,6 +1694,7 @@ const DEFAULT_KIND_INFO: SelectedKindInfo = { name: 'pods', kind: 'Pod', group: 
 // fall through to DEFAULT_KIND.
 function getInitialKindFromURL(
   basePath: string = '/resources',
+  defaultKind: SelectedKindInfo = DEFAULT_KIND_INFO,
   locationPathname?: string,
   locationSearch?: string,
 ): SelectedKindInfo {
@@ -1726,7 +1729,7 @@ function getInitialKindFromURL(
     }
     return { name: kind, kind: kind, group }
   }
-  return DEFAULT_KIND_INFO
+  return defaultKind
 }
 
 // Get initial filters from URL
@@ -1772,18 +1775,19 @@ export function ResourcesView({
   onSelectedKindChange,
   hideSidebar = false,
   onCreateResource,
+  defaultKind = DEFAULT_KIND_INFO,
   extraLeadingColumns,
   onRowSelect,
 }: ResourcesViewProps) {
   const initialFilters = getInitialFiltersFromURL()
-  const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath, locationPathname, locationSearch))
+  const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath, defaultKind, locationPathname, locationSearch))
   // Sync selectedKind from URL when locationPathname changes (e.g., browser back, external sidebar navigation)
   useEffect(() => {
-    const kindFromURL = getInitialKindFromURL(basePath, locationPathname, locationSearch)
+    const kindFromURL = getInitialKindFromURL(basePath, defaultKind, locationPathname, locationSearch)
     if (kindFromURL.name !== selectedKind.name || kindFromURL.group !== selectedKind.group) {
       setSelectedKind(kindFromURL)
     }
-  }, [locationPathname, locationSearch]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [basePath, defaultKind, locationPathname, locationSearch, selectedKind.name, selectedKind.group])
   // Notify parent of selected kind changes (including initial mount)
   useEffect(() => {
     onSelectedKindChange?.(selectedKind)
@@ -2339,7 +2343,7 @@ export function ResourcesView({
     isSyncingFromURL.current = true
 
     // Re-read URL params and update state
-    const newKind = getInitialKindFromURL(basePath, locationPathname, locationSearch)
+    const newKind = getInitialKindFromURL(basePath, defaultKind, locationPathname, locationSearch)
     const newFilters = getInitialFiltersFromURL()
 
     // Update kind if it changed
@@ -5764,6 +5768,3 @@ function EventCell({ resource, column }: { resource: any; column: string }) {
       return <span className="text-sm text-theme-text-tertiary">-</span>
   }
 }
-
-
-

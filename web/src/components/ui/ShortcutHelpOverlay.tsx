@@ -19,7 +19,7 @@ const CONTEXT_CATEGORIES: ShortcutCategory[] = ['Drawer', 'Dock']
 
 // Preferred ordering within the view section
 const VIEW_CATEGORY_ORDER: ShortcutCategory[] = [
-  'Search', 'Table', 'Resource Actions', 'Topology', 'Timeline', 'Helm',
+  'Search', 'Table', 'Resource Actions', 'Topology', 'Timeline', 'Helm', 'GitOps',
 ]
 
 const VIEW_LABELS: Record<string, string> = {
@@ -28,6 +28,7 @@ const VIEW_LABELS: Record<string, string> = {
   resources: 'Resources',
   timeline: 'Timeline',
   helm: 'Helm',
+  gitops: 'GitOps',
   traffic: 'Traffic',
 }
 

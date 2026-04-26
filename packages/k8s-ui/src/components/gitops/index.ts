@@ -2,3 +2,5 @@ export { GitOpsStatusBadge, SyncStatusBadge, HealthStatusBadge } from './GitOpsS
 export { SyncCountdown, IntervalDisplay } from './SyncCountdown'
 export { ManagedResourcesList, InventoryCount } from './ManagedResourcesList'
 export { GitOpsActions, SyncButton, SuspendToggle } from './GitOpsActions'
+export { GitOpsTreeGraph } from './tree'
+export type { GitOpsTreeFilters, GitOpsTreePreset } from './tree'

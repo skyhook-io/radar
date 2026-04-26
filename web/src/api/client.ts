@@ -23,6 +23,7 @@ import type {
   InstallChartRequest,
   ArtifactHubSearchResult,
   ArtifactHubChartDetail,
+  GitOpsResourceTree,
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath } from './config'
@@ -780,6 +781,21 @@ export function useTopology(namespaces: string[], viewMode: string = 'resources'
     queryFn: () => fetchJSON(`/topology${queryString ? `?${queryString}` : ''}`),
     staleTime: 5000, // 5 seconds
     enabled: options?.enabled !== false,
+  })
+}
+
+export function useGitOpsTree(kind: string, namespace: string, name: string, group?: string, namespaces: string[] = []) {
+  const ns = namespace || '_'
+  const params = new URLSearchParams()
+  if (group) params.set('group', group)
+  if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
+  const queryString = params.toString()
+
+  return useQuery<GitOpsResourceTree>({
+    queryKey: ['gitops-tree', kind, namespace, name, group, namespaces],
+    queryFn: () => fetchJSON(`/gitops/tree/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
+    enabled: Boolean(kind && name),
+    staleTime: 5000,
   })
 }
 

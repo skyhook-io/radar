@@ -22,6 +22,9 @@ export * from './components/logs'
 // Timeline
 export * from './components/timeline'
 
+// GitOps
+export * from './components/gitops'
+
 // Shared components (ResourceRendererDispatch, EditableYamlView, ResourceActionsBar)
 export * from './components/shared'
 

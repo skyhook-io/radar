@@ -16,6 +16,7 @@ import { HelmView } from './components/helm/HelmView'
 import { TrafficView } from './components/traffic/TrafficView'
 import { CostView } from './components/cost/CostView'
 import { AuditView } from './components/audit/AuditView'
+import { GitOpsView } from './components/gitops/GitOpsView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardProvider, PortForwardIndicator, PortForwardPanel } from './components/portforward/PortForwardManager'
 import { DockProvider, BottomDock, useDock, useDockReservedHeight, useOpenLocalTerminal } from './components/dock'
@@ -39,7 +40,8 @@ import { routePath, apiUrl, getAuthHeaders, getCredentialsMode } from './api/con
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
 import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
-import { RefreshCw, Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, Settings, SquareTerminal, ShieldCheck } from 'lucide-react'
+import { Loader2 } from 'lucide-react'
+import { RefreshCw, Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, Settings, SquareTerminal, ShieldCheck, GitBranch } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
@@ -115,7 +117,7 @@ function apiResourceToNodeIdPrefix(apiResource: string): string {
 }
 
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'workload' | 'audit'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'workload' | 'audit' | 'gitops'
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -129,6 +131,7 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'cost') return 'cost'
   if (path === 'workload') return 'workload'
   if (path === 'audit') return 'audit'
+  if (path === 'gitops') return 'gitops'
   return 'home'
 }
 
@@ -395,7 +398,7 @@ function AppInner() {
   const contextSwitcherRef = useRef<ContextSwitcherHandle>(null)
 
   // View switching keyboard shortcuts
-  const views: ExtendedMainView[] = ['home', 'topology', 'resources', 'timeline', 'helm', 'traffic', 'cost', 'audit']
+  const views: ExtendedMainView[] = ['home', 'topology', 'resources', 'timeline', 'helm', 'gitops', 'traffic', 'cost', 'audit']
   useRegisterShortcuts([
     ...views.map((view, i) => ({
       id: `view-${view}`,
@@ -1022,6 +1025,7 @@ function AppInner() {
             { view: 'resources' as const, icon: List, label: 'Resources' },
             { view: 'timeline' as const, icon: Clock, label: 'Timeline' },
             { view: 'helm' as const, icon: Package, label: 'Helm' },
+            { view: 'gitops' as const, icon: GitBranch, label: 'GitOps' },
             { view: 'traffic' as const, icon: Activity, label: 'Traffic' },
             // Cost is intentionally hidden from the pill bar for now — the view still
             // exists and is reachable via /cost, the Home dashboard card, and the
@@ -1396,6 +1400,16 @@ function AppInner() {
                 params.delete('releaseStorage')
               }
               setSearchParams(params, { replace: true })
+            }}
+          />
+        )}
+
+        {/* GitOps view */}
+        {mainView === 'gitops' && (
+          <GitOpsView
+            namespaces={namespaces}
+            onOpenResource={(resource) => {
+              setSelectedResource(resource)
             }}
           />
         )}
