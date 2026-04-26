@@ -1,27 +1,14 @@
-// Package packages aggregates "what's installed" signals across multiple
-// detection sources into a unified package list. Designed for both:
+// Package packages aggregates "what's installed" signals into a unified
+// package list. Pure Go, no internal/ imports. Entry point is
+// Aggregate(Sources) []PackageRow.
 //
-//   - Radar OSS REST `/api/packages` — single-cluster view via the Helm
-//     API + workload labels + CRD registrations + GitOps declarations.
-//   - Radar Hub fleet `/api/fleet/packages` — multi-cluster aggregation
-//     by fanning out to per-cluster `/api/packages` and pivoting.
+// Source codes (single character — stable on-wire):
 //
-// Pure Go, no internal/ imports. The shape is `Aggregate(Sources) []PackageRow`
-// — feed in whatever you have, get back a deduplicated, source-attributed
-// merge.
-//
-// Source codes (single character so `[]string` cells in the SPA stay compact):
-//
-//	H — Helm API (release secret read; gives chart + version + health)
-//	L — Workload labels (helm.sh/chart label on Deployments/DaemonSets/
-//	    StatefulSets; works without secret access)
-//	C — CRD registration (CRD spec.group → chart name via crdGroupToChart)
-//	A — Argo Application declaration (declared, may not yet be running)
-//	F — Flux HelmRelease + Kustomization declarations (likewise)
-//
-// A row's `Sources` field carries the deduplicated set of contributors
-// that voted "this package is installed" — `[H,L,C]` is the typical case
-// for a fully-instrumented Helm chart whose CRDs land alongside.
+//	H — Helm API (release secret read)
+//	L — Workload labels (helm.sh/chart, meta.helm.sh/release-name)
+//	C — CRD registration (spec.group → chart via crdGroupToChart)
+//	A — Argo Application declaration
+//	F — Flux HelmRelease / Kustomization declaration
 package packages
 
 import "time"
@@ -80,11 +67,9 @@ type CRD struct {
 // declares should be installed. Argo Applications, Flux HelmReleases,
 // and Flux Kustomizations all collapse to this shape.
 //
-// Note the cross-cluster gotcha: when Argo CD runs in cluster A but
-// deploys to cluster B, the Application resources live in A. A
-// per-cluster `/api/packages` from cluster B won't include those Argo
-// declarations. This is an accepted v1 limitation; documented in
-// SESSION-HANDOFF.md.
+// Cross-cluster caveat: when Argo CD runs in cluster A but deploys to
+// cluster B, the Application resources live in A — a `/api/packages`
+// call against cluster B won't see those declarations.
 type Declaration struct {
 	Source    string `json:"source"`    // "argocd" | "flux"
 	Namespace string `json:"namespace"` // declaration's own namespace

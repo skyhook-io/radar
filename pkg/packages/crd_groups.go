@@ -17,11 +17,12 @@ var crdGroupToChart = map[string]string{
 	"cert-manager.io":   "cert-manager",
 	"acme.cert-manager.io": "cert-manager",
 
-	// Argo CD + Argo Workflows + Argo Rollouts
+	// Argo CD + Argo Workflows + Argo Rollouts.
+	// All three share the argoproj.io group; we map to "argo-cd" so
+	// argo-rollouts standalone installs get folded in. Acceptable
+	// because the chart-name match is an aggregation hint, not a strict
+	// install identity.
 	"argoproj.io": "argo-cd",
-	// Some Argo charts split groups; keep the single chart name for now.
-	// Customers running argo-rollouts standalone get rolled into argo-cd
-	// — acceptable v1; revisit when separation matters.
 
 	// Flux v2 (toolkit)
 	"source.toolkit.fluxcd.io":       "flux",

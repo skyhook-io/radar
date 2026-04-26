@@ -2,9 +2,9 @@ package server
 
 import (
 	"context"
-	"encoding/json"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,37 +18,27 @@ import (
 )
 
 // packagesCacheTTL bounds how often we recompute the merged package
-// list. Aggregate is cheap (~ms even on a 100-CRD cluster) but the
-// inputs cost: Helm secret reads, dynamic-cache walks, etc. The
-// dashboard endpoint uses the same 5s TTL pattern; align here.
+// list. Aggregate is cheap; the inputs (Helm secret reads, dynamic-cache
+// walks) are not.
 const packagesCacheTTL = 60 * time.Second
 
-// packagesCache holds the most recent /api/packages response, with a
-// per-namespace cache key. Single-value cache (not LRU) — only one
-// "all namespaces" + a few namespaced views in active use at once.
 var (
 	packagesCacheMu sync.Mutex
 	packagesCache   = map[string]packagesCacheEntry{}
 )
 
 type packagesCacheEntry struct {
-	at   time.Time
-	rows []packages.PackageRow
+	at     time.Time
+	rows   []packages.PackageRow
+	errors []SourceError
 }
 
 // PackagesResponse is the on-wire shape returned by /api/packages.
 type PackagesResponse struct {
-	Packages    []packages.PackageRow `json:"packages"`
-	GeneratedAt time.Time             `json:"generatedAt"`
-	// SourcesUsed is the set of source codes that contributed at least
-	// one row. Lets the SPA show "no Helm access — using labels + CRDs"
-	// callouts when the user's RBAC limits coverage.
-	SourcesUsed []string `json:"sourcesUsed"`
-	// SourcesErrored carries source-level failures (e.g. Helm 403). Each
-	// entry's `Source` matches the same single-character codes used in
-	// PackageRow.Sources. The fleet aggregator uses this to render
-	// per-cluster coverage callouts.
-	SourcesErrored []SourceError `json:"sourcesErrored,omitempty"`
+	Packages       []packages.PackageRow `json:"packages"`
+	GeneratedAt    time.Time             `json:"generatedAt"`
+	SourcesUsed    []string              `json:"sourcesUsed"`
+	SourcesErrored []SourceError         `json:"sourcesErrored,omitempty"`
 }
 
 // SourceError carries a per-source failure. Source is one of H/L/C/A/F.
@@ -61,9 +51,12 @@ type SourceError struct {
 // ListPackagesParams carries the filters the REST + MCP handlers both
 // support.
 type ListPackagesParams struct {
-	Namespace string // empty = all namespaces
-	Source    string // H/L/C/A/F or empty
-	Chart     string // case-insensitive substring or empty
+	// Namespaces filters returned rows by release-namespace.
+	// nil = all namespaces. Empty (non-nil) slice = "no access" → returns
+	// an empty response without consulting the cache.
+	Namespaces []string
+	Source     string // H/L/C/A/F or empty
+	Chart      string // case-insensitive substring or empty
 	// User identity for Helm release secret reads. Empty username means
 	// "use the SA identity" (helm.ListReleasesAsUser convention).
 	User   string
@@ -71,12 +64,19 @@ type ListPackagesParams struct {
 }
 
 // ListPackages is the public entry point shared by the REST handler
-// and the MCP tool. Free function (not a Server method) so MCP can
-// call without needing a Server reference — it relies on the same
-// k8s.GetResourceCache + helm.GetClient singletons the REST handler
-// reads through. Caches at the namespace level (60s TTL).
+// and the MCP tool.
 func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, error) {
-	cacheKey := p.Namespace
+	// Auth-restricted to no namespaces → empty response, skip cache.
+	if p.Namespaces != nil && len(p.Namespaces) == 0 {
+		return PackagesResponse{
+			Packages:       []packages.PackageRow{},
+			GeneratedAt:    time.Now(),
+			SourcesUsed:    []string{},
+			SourcesErrored: nil,
+		}, nil
+	}
+
+	cacheKey := packagesCacheKeyFor(p.User, p.Namespaces)
 	packagesCacheMu.Lock()
 	entry, hit := packagesCache[cacheKey]
 	packagesCacheMu.Unlock()
@@ -85,14 +85,15 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 	var sourceErrs []SourceError
 	if hit && time.Since(entry.at) < packagesCacheTTL {
 		rows = entry.rows
+		sourceErrs = entry.errors
 	} else {
 		var err error
-		rows, sourceErrs, err = computePackagesInternal(ctx, p.Namespace, p.User, p.Groups)
+		rows, sourceErrs, err = computePackagesInternal(ctx, p.Namespaces, p.User, p.Groups)
 		if err != nil {
 			return PackagesResponse{}, err
 		}
 		packagesCacheMu.Lock()
-		packagesCache[cacheKey] = packagesCacheEntry{at: time.Now(), rows: rows}
+		packagesCache[cacheKey] = packagesCacheEntry{at: time.Now(), rows: rows, errors: sourceErrs}
 		packagesCacheMu.Unlock()
 	}
 
@@ -103,50 +104,80 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 		rows = filterByChartSubstring(rows, strings.ToLower(p.Chart))
 	}
 
+	if rows == nil {
+		rows = []packages.PackageRow{}
+	}
+	used := sourcesUsed(rows)
+	if used == nil {
+		used = []string{}
+	}
 	return PackagesResponse{
 		Packages:       rows,
 		GeneratedAt:    time.Now(),
-		SourcesUsed:    sourcesUsed(rows),
+		SourcesUsed:    used,
 		SourcesErrored: sourceErrs,
 	}, nil
+}
+
+// packagesCacheKeyFor produces a stable cache key. Both the user
+// identity and the requested namespace set must be part of the key:
+// Helm reads are user-scoped (RBAC-impersonated), so two users hitting
+// the same namespace must not share an entry.
+func packagesCacheKeyFor(user string, namespaces []string) string {
+	var b strings.Builder
+	b.WriteString(user)
+	b.WriteByte('|')
+	if namespaces == nil {
+		b.WriteByte('*')
+	} else {
+		// Sort defensively; the handler already sorts, but MCP / direct
+		// callers might not.
+		ns := append([]string(nil), namespaces...)
+		sort.Strings(ns)
+		b.WriteString(strings.Join(ns, ","))
+	}
+	return b.String()
 }
 
 // handleListPackages serves GET /api/packages.
 //
 // Query params:
 //
-//	?namespace=<name> — limit to packages whose release-namespace
-//	                     equals this. Default: all namespaces.
-//	?source=H|L|C|A|F — limit to rows that had this source contribute.
-//	?chart=<substr>   — limit to rows whose chart name contains this.
+//	?namespaces=a,b,c | ?namespace=a — limit to release-namespace ∈ set.
+//	?source=H|L|C|A|F                — limit to rows where this source contributed.
+//	?chart=<substr>                  — case-insensitive substring on chart name.
 //
-// Returns: PackagesResponse with the merged row list plus per-source
-// error attribution. 200 even when some sources failed (we'd rather
-// ship the partial view than 5xx the whole call).
+// Returns 200 even when some sources failed (per-source failures are
+// attributed in `sourcesErrored`).
 func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
+	namespaces := s.parseNamespacesForUser(r)
 	user, groups := userCredsForPackages(r)
 	resp, err := ListPackages(r.Context(), ListPackagesParams{
-		Namespace: r.URL.Query().Get("namespace"),
-		Source:    r.URL.Query().Get("source"),
-		Chart:     r.URL.Query().Get("chart"),
-		User:      user,
-		Groups:    groups,
+		Namespaces: namespaces,
+		Source:     r.URL.Query().Get("source"),
+		Chart:      r.URL.Query().Get("chart"),
+		User:       user,
+		Groups:     groups,
 	})
 	if err != nil {
+		if err == errResourceCacheUnavailable {
+			s.writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		log.Printf("[packages] ListPackages failed: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
 	s.writeJSON(w, resp)
 }
 
-// computePackagesInternal reads from all four (potentially five) data sources,
-// builds a packages.Sources, and runs Aggregate. Per-source errors are
-// captured but not fatal: a 403 on Helm (secret access denied) just
-// means the row set comes from L/C/A/F.
-func computePackagesInternal(ctx context.Context, namespace, user string, groups []string) ([]packages.PackageRow, []SourceError, error) {
+// computePackagesInternal reads from all sources, merges via
+// packages.Aggregate, and post-filters by the requested namespace set.
+// Per-source errors are attributed but non-fatal.
+func computePackagesInternal(ctx context.Context, namespaces []string, user string, groups []string) ([]packages.PackageRow, []SourceError, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, nil, errResourceCacheUnavailable
@@ -155,9 +186,15 @@ func computePackagesInternal(ctx context.Context, namespace, user string, groups
 	src := packages.Sources{}
 	var errs []SourceError
 
-	// Helm releases (source H).
+	// Helm releases (source H). For multi-namespace queries we list
+	// cluster-wide and rely on the post-aggregate filter — Helm's RBAC
+	// impersonation already scopes results to what the user can see.
+	helmNamespace := ""
+	if len(namespaces) == 1 {
+		helmNamespace = namespaces[0]
+	}
 	if hClient := helm.GetClient(); hClient != nil {
-		releases, err := hClient.ListReleasesAsUser(namespace, user, groups)
+		releases, err := hClient.ListReleasesAsUser(helmNamespace, user, groups)
 		switch {
 		case err == nil:
 			src.Helm = make([]packages.HelmRelease, 0, len(releases))
@@ -173,19 +210,24 @@ func computePackagesInternal(ctx context.Context, namespace, user string, groups
 				})
 			}
 		case helm.IsForbiddenError(err):
-			errs = append(errs, SourceError{Source: packages.SourceHelm, StatusCode: http.StatusForbidden, Error: "RBAC denied (helm release secrets)"})
+			errs = append(errs, SourceError{
+				Source:     packages.SourceHelm,
+				StatusCode: http.StatusForbidden,
+				Error:      "RBAC denied (helm release secrets): " + err.Error(),
+			})
 		default:
 			errs = append(errs, SourceError{Source: packages.SourceHelm, Error: err.Error()})
 		}
 	}
 
 	// Workloads (source L) — Deployments + DaemonSets + StatefulSets.
-	src.Workloads = collectWorkloadInputs(cache, namespace)
+	workloads, listerErr := collectWorkloadInputs(cache, namespaces)
+	src.Workloads = workloads
+	if listerErr != nil {
+		errs = append(errs, SourceError{Source: packages.SourceLabels, Error: listerErr.Error()})
+	}
 
-	// CRDs (source C). Always cluster-scoped, so namespace filter
-	// doesn't apply here — but we'll filter rows by namespace at the
-	// end so a namespaced query doesn't surface unrelated CRD-only
-	// rows.
+	// CRDs (source C). Always cluster-scoped.
 	if crds, err := cache.ListDynamicWithGroup(ctx, "CustomResourceDefinition", "", "apiextensions.k8s.io"); err == nil {
 		src.CRDs = make([]packages.CRD, 0, len(crds))
 		for _, c := range crds {
@@ -205,10 +247,10 @@ func computePackagesInternal(ctx context.Context, namespace, user string, groups
 				}
 			}
 			src.CRDs = append(src.CRDs, packages.CRD{
-				Name:    c.GetName(),
-				Group:   group,
-				Kind:    kind,
-				Plural:  plural,
+				Name:     c.GetName(),
+				Group:    group,
+				Kind:     kind,
+				Plural:   plural,
 				Versions: versionNames,
 			})
 		}
@@ -216,23 +258,25 @@ func computePackagesInternal(ctx context.Context, namespace, user string, groups
 		errs = append(errs, SourceError{Source: packages.SourceCRDs, Error: err.Error()})
 	}
 
-	// GitOps declarations (sources A + F). All optional — controllers
-	// may not be installed. Each parser tries the canonical CRD shape;
-	// missing CRDs surface as ListDynamic errors, captured per-source.
-	src.GitOpsDeclarations = collectGitOpsDeclarations(ctx, cache, namespace, &errs)
+	// GitOps declarations (sources A + F). Listed cluster-wide regardless
+	// of the requested namespaces: Argo Apps live in `argocd` but target
+	// other namespaces (and Flux HRs use spec.targetNamespace), so the
+	// declaration's own namespace is the wrong filter — the post-aggregate
+	// step below scopes by target namespace via row.Namespace.
+	src.GitOpsDeclarations = collectGitOpsDeclarations(ctx, cache, &errs)
 
 	rows := packages.Aggregate(src)
 
-	// Apply namespace filter post-aggregate. CRD-only rows have empty
-	// Namespace; keep them if the caller asked for "all" (namespace == "").
-	if namespace != "" {
+	// Post-aggregate namespace filter. CRD-only rows (Namespace == "")
+	// are dropped from namespaced queries.
+	if namespaces != nil {
+		allowed := map[string]bool{}
+		for _, ns := range namespaces {
+			allowed[ns] = true
+		}
 		filtered := make([]packages.PackageRow, 0, len(rows))
 		for _, r := range rows {
-			// Always keep rows that match the requested namespace.
-			// Drop CRD-only rows in namespaced queries — the caller is
-			// asking "what's in this namespace?" and CRDs are
-			// cluster-scoped.
-			if r.Namespace == namespace {
+			if allowed[r.Namespace] {
 				filtered = append(filtered, r)
 			}
 		}
@@ -245,86 +289,102 @@ func computePackagesInternal(ctx context.Context, namespace, user string, groups
 // collectWorkloadInputs reads Deployments + DaemonSets + StatefulSets
 // from the cache and converts them to the packages.Workload shape used
 // by the merger. Only workloads with helm.sh/chart label OR
-// meta.helm.sh/release-name annotation contribute; the rest aren't
-// Helm-managed and the merger would skip them anyway, but filtering
-// here saves a million map allocs on big clusters.
-func collectWorkloadInputs(cache *k8s.ResourceCache, namespace string) []packages.Workload {
+// meta.helm.sh/release-name annotation contribute. Returns the first
+// lister error encountered (so the caller can attribute it to source L)
+// — informer listers fail rarely (indexer issues), but per the
+// CLAUDE.md backend convention we don't drop errors silently.
+func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]packages.Workload, error) {
 	var out []packages.Workload
+	var firstErr error
+	noteErr := func(err error) {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
 	add := func(kind, ns, name string, lbls, anns map[string]string, health string) {
-		// Cheap pre-filter: only Helm-suggesting rows make it to the merger.
 		if lbls["helm.sh/chart"] == "" && anns["meta.helm.sh/release-name"] == "" {
 			return
 		}
 		out = append(out, packages.Workload{
-			Kind:      kind,
-			Namespace: ns,
-			Name:      name,
-			Labels:    lbls,
+			Kind:        kind,
+			Namespace:   ns,
+			Name:        name,
+			Labels:      lbls,
 			Annotations: anns,
-			Health:    health,
+			Health:      health,
 		})
 	}
+
+	// listFor expands the namespace set into per-namespace calls (or one
+	// cluster-wide call when namespaces is nil).
+	forEachNamespace := func(fn func(ns string)) {
+		if namespaces == nil {
+			fn("")
+			return
+		}
+		for _, ns := range namespaces {
+			fn(ns)
+		}
+	}
+
 	if depLister := cache.Deployments(); depLister != nil {
-		var deps []*appsListResult
-		if namespace != "" {
-			items, _ := depLister.Deployments(namespace).List(labels.Everything())
-			for _, d := range items {
-				deps = append(deps, &appsListResult{
-					ns: d.Namespace, name: d.Name, labels: d.Labels, anns: d.Annotations,
-					health: deploymentHealth(int(d.Status.Replicas), int(d.Status.AvailableReplicas)),
-				})
+		forEachNamespace(func(ns string) {
+			if ns == "" {
+				items, err := depLister.List(labels.Everything())
+				noteErr(err)
+				for _, d := range items {
+					add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
+						deploymentHealth(int(d.Status.Replicas), int(d.Status.AvailableReplicas)))
+				}
+				return
 			}
-		} else {
-			items, _ := depLister.List(labels.Everything())
+			items, err := depLister.Deployments(ns).List(labels.Everything())
+			noteErr(err)
 			for _, d := range items {
-				deps = append(deps, &appsListResult{
-					ns: d.Namespace, name: d.Name, labels: d.Labels, anns: d.Annotations,
-					health: deploymentHealth(int(d.Status.Replicas), int(d.Status.AvailableReplicas)),
-				})
+				add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
+					deploymentHealth(int(d.Status.Replicas), int(d.Status.AvailableReplicas)))
 			}
-		}
-		for _, d := range deps {
-			add("Deployment", d.ns, d.name, d.labels, d.anns, d.health)
-		}
+		})
 	}
 	if dsLister := cache.DaemonSets(); dsLister != nil {
-		if namespace != "" {
-			items, _ := dsLister.DaemonSets(namespace).List(labels.Everything())
+		forEachNamespace(func(ns string) {
+			if ns == "" {
+				items, err := dsLister.List(labels.Everything())
+				noteErr(err)
+				for _, d := range items {
+					add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
+						daemonsetHealth(int(d.Status.DesiredNumberScheduled), int(d.Status.NumberReady)))
+				}
+				return
+			}
+			items, err := dsLister.DaemonSets(ns).List(labels.Everything())
+			noteErr(err)
 			for _, d := range items {
 				add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
 					daemonsetHealth(int(d.Status.DesiredNumberScheduled), int(d.Status.NumberReady)))
 			}
-		} else {
-			items, _ := dsLister.List(labels.Everything())
-			for _, d := range items {
-				add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
-					daemonsetHealth(int(d.Status.DesiredNumberScheduled), int(d.Status.NumberReady)))
-			}
-		}
+		})
 	}
 	if ssLister := cache.StatefulSets(); ssLister != nil {
-		if namespace != "" {
-			items, _ := ssLister.StatefulSets(namespace).List(labels.Everything())
+		forEachNamespace(func(ns string) {
+			if ns == "" {
+				items, err := ssLister.List(labels.Everything())
+				noteErr(err)
+				for _, ss := range items {
+					add("StatefulSet", ss.Namespace, ss.Name, ss.Labels, ss.Annotations,
+						statefulsetHealth(int(ss.Status.Replicas), int(ss.Status.ReadyReplicas)))
+				}
+				return
+			}
+			items, err := ssLister.StatefulSets(ns).List(labels.Everything())
+			noteErr(err)
 			for _, ss := range items {
 				add("StatefulSet", ss.Namespace, ss.Name, ss.Labels, ss.Annotations,
 					statefulsetHealth(int(ss.Status.Replicas), int(ss.Status.ReadyReplicas)))
 			}
-		} else {
-			items, _ := ssLister.List(labels.Everything())
-			for _, ss := range items {
-				add("StatefulSet", ss.Namespace, ss.Name, ss.Labels, ss.Annotations,
-					statefulsetHealth(int(ss.Status.Replicas), int(ss.Status.ReadyReplicas)))
-			}
-		}
+		})
 	}
-	return out
-}
-
-type appsListResult struct {
-	ns, name string
-	labels   map[string]string
-	anns     map[string]string
-	health   string
+	return out, firstErr
 }
 
 func deploymentHealth(desired, available int) string {
@@ -339,20 +399,17 @@ func deploymentHealth(desired, available int) string {
 	}
 	return "degraded"
 }
-func daemonsetHealth(desired, ready int) string  { return deploymentHealth(desired, ready) }
+func daemonsetHealth(desired, ready int) string   { return deploymentHealth(desired, ready) }
 func statefulsetHealth(desired, ready int) string { return deploymentHealth(desired, ready) }
 
 // collectGitOpsDeclarations reads Argo Applications + Flux HelmReleases
-// + Flux Kustomizations from the dynamic cache and converts each to a
-// packages.Declaration. Missing CRDs (controller not installed) just
-// produce no declarations; not an error. Real errors (informer
-// failures) surface in the errs slice.
-func collectGitOpsDeclarations(ctx context.Context, cache *k8s.ResourceCache, namespace string, errs *[]SourceError) []packages.Declaration {
+// + Flux Kustomizations cluster-wide. Missing CRDs (controller not
+// installed) are silently absent; real informer errors surface as
+// per-source errors with controller-distinguishing messages.
+func collectGitOpsDeclarations(ctx context.Context, cache *k8s.ResourceCache, errs *[]SourceError) []packages.Declaration {
 	var out []packages.Declaration
 
-	// Argo Applications (argoproj.io/Application). Argo apps are
-	// always namespaced — typically in argocd or argocd-system.
-	if items, err := cache.ListDynamicWithGroup(ctx, "Application", namespace, "argoproj.io"); err == nil {
+	if items, err := cache.ListDynamicWithGroup(ctx, "Application", "", "argoproj.io"); err == nil {
 		for _, item := range items {
 			if d, ok := packages.ParseArgoApplication(item.Object); ok {
 				out = append(out, d)
@@ -362,48 +419,40 @@ func collectGitOpsDeclarations(ctx context.Context, cache *k8s.ResourceCache, na
 		*errs = append(*errs, SourceError{Source: packages.SourceArgoCD, Error: err.Error()})
 	}
 
-	// Flux HelmReleases.
-	if items, err := cache.ListDynamicWithGroup(ctx, "HelmRelease", namespace, "helm.toolkit.fluxcd.io"); err == nil {
+	if items, err := cache.ListDynamicWithGroup(ctx, "HelmRelease", "", "helm.toolkit.fluxcd.io"); err == nil {
 		for _, item := range items {
 			if d, ok := packages.ParseFluxHelmRelease(item.Object); ok {
 				out = append(out, d)
 			}
 		}
 	} else if !isMissingCRDErr(err) {
-		*errs = append(*errs, SourceError{Source: packages.SourceFluxCD, Error: err.Error()})
+		*errs = append(*errs, SourceError{Source: packages.SourceFluxCD, Error: "HelmRelease: " + err.Error()})
 	}
 
-	// Flux Kustomizations.
-	if items, err := cache.ListDynamicWithGroup(ctx, "Kustomization", namespace, "kustomize.toolkit.fluxcd.io"); err == nil {
+	if items, err := cache.ListDynamicWithGroup(ctx, "Kustomization", "", "kustomize.toolkit.fluxcd.io"); err == nil {
 		for _, item := range items {
 			if d, ok := packages.ParseFluxKustomization(item.Object); ok {
 				out = append(out, d)
 			}
 		}
 	} else if !isMissingCRDErr(err) {
-		// Only emit a F-source error once even if both HR + Kust failed.
-		// For now keep simple: emit twice if both fail; SourcesErrored
-		// is informational, dedup downstream.
-		*errs = append(*errs, SourceError{Source: packages.SourceFluxCD, Error: err.Error()})
+		*errs = append(*errs, SourceError{Source: packages.SourceFluxCD, Error: "Kustomization: " + err.Error()})
 	}
 
 	return out
 }
 
 // isMissingCRDErr matches the "unknown resource kind" error
-// ListDynamicWithGroup returns when the requested CRD isn't installed.
-// Cleaner than wrapping the error type: the cache returns plain
-// errors.New strings.
+// k8score returns when the requested CRD isn't installed. Pinned by
+// `TestIsMissingCRDErr_PinsK8scoreErrorString` — change here breaks
+// graceful degradation for clusters without ArgoCD/FluxCD.
 func isMissingCRDErr(err error) bool {
 	if err == nil {
 		return false
 	}
-	msg := strings.ToLower(err.Error())
-	return strings.Contains(msg, "unknown resource kind")
+	return strings.Contains(strings.ToLower(err.Error()), "unknown resource kind")
 }
 
-// userCredsForPackages — same shape as helm.userCreds but kept local
-// since the helm package doesn't export it.
 func userCredsForPackages(r *http.Request) (string, []string) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		return user.Username, user.Groups
@@ -450,20 +499,8 @@ func sourcesUsed(rows []packages.PackageRow) []string {
 	return out
 }
 
-// errResourceCacheUnavailable mirrors the error other handlers return
-// when the cache singleton is nil. Defined here as a package var so a
-// future test can match on it.
 var errResourceCacheUnavailable = packagesError("resource cache unavailable")
 
 type packagesError string
 
 func (e packagesError) Error() string { return string(e) }
-
-// Prevent "imported and not used" if the encoding/json import is only
-// needed transitively via writeJSON.
-var _ = json.Marshal
-
-// Convenience: the top-level Server has a global k8s.GetCache() but
-// we'd rather a helper that's testable. Reserved for future use; for
-// now we go direct.
-var _ = log.Print

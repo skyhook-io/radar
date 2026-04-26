@@ -157,7 +157,11 @@ func registerTools(server *mcp.Server) {
 			"so the caller can see WHY this package is detected. Use to answer 'what's " +
 			"installed?' / 'what version of cert-manager is running?' / 'are there orphaned " +
 			"operators?' in a single call instead of combining list_helm_releases + " +
-			"list_resources + manual merge. Filter by namespace, source, or chart substring.",
+			"list_resources + manual merge. Filter by namespace, source, or chart substring. " +
+			"Response includes `sourcesErrored` listing any sources that failed (e.g. RBAC " +
+			"denied for Helm release secrets, missing GitOps controller informer). When this " +
+			"is non-empty, results are still returned but are partial — fewer rows than " +
+			"expected may indicate a dropped source rather than nothing installed.",
 		Annotations: readOnly,
 	}, logToolCall("list_packages", handleListPackages))
 
