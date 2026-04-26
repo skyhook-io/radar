@@ -122,7 +122,7 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 		generatedAt = entry.at
 	} else {
 		var err error
-		rows, sourceErrs, err = computePackagesInternal(ctx, p.Namespaces, p.User, p.Groups)
+		rows, sourceErrs, err = computePackagesInternal(ctx, p.Namespaces)
 		if err != nil {
 			return PackagesResponse{}, err
 		}
@@ -240,7 +240,13 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 // computePackagesInternal reads from all sources, merges via
 // packages.Aggregate, and post-filters by the requested namespace set.
 // Per-source errors are attributed but non-fatal.
-func computePackagesInternal(ctx context.Context, namespaces []string, user string, groups []string) ([]packages.PackageRow, []SourceError, error) {
+//
+// User identity is intentionally NOT a parameter: every read source
+// here is inventory metadata that uses the ServiceAccount under
+// cloud-mode (see the helm comment below for the rationale). User
+// identity does still flow through ListPackagesParams for cache
+// scoping and for sensitive Helm endpoints invoked elsewhere.
+func computePackagesInternal(ctx context.Context, namespaces []string) ([]packages.PackageRow, []SourceError, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil, nil, errResourceCacheUnavailable
@@ -251,10 +257,21 @@ func computePackagesInternal(ctx context.Context, namespaces []string, user stri
 
 	// Helm releases (source H). For a single-namespace request we ask
 	// Helm directly; for nil (all namespaces) we ask cluster-wide. For a
-	// multi-namespace allow-list we iterate per-namespace — asking
-	// cluster-wide would require the user to have list-secrets across
-	// the cluster, which limited-RBAC users typically lack.
-	helmReleases, helmErrs := collectHelmReleases(namespaces, user, groups)
+	// multi-namespace allow-list we iterate per-namespace.
+	//
+	// Inventory reads use the ServiceAccount (empty user/groups) rather
+	// than impersonating the calling user. Helm release secrets are
+	// stored as K8s Secrets, but the chart's default cloud:viewer →
+	// K8s `view` ClusterRoleBinding excludes secrets — so impersonating
+	// would 403 every viewer on a feature that's purely inventory
+	// metadata (chart, version, status), not credential data. SA
+	// inventory matches the chart's stated intent and gives every
+	// Cloud tier the same fleet visibility.
+	//
+	// Sensitive Helm reads (GetValues, GetManifest) and all Helm writes
+	// MUST keep impersonating — those carry data + state changes the
+	// view-role exclusion was actually designed to gate.
+	helmReleases, helmErrs := collectHelmReleases(namespaces, "", nil)
 	src.Helm = helmReleases
 	errs = append(errs, helmErrs...)
 
