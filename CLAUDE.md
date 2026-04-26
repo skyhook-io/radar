@@ -158,6 +158,7 @@ radar/
 │   │   └── context/           # AI context minification for LLM-friendly output
 │   ├── audit/                 # Shared cluster audit check engine (reusable by skyhook-connector)
 │   ├── gitops/                # GitOps operations abstraction
+│   │   └── tree/              # GitOps resource tree builder for ArgoCD/FluxCD detail graphs
 │   ├── k8score/               # Shared K8s caching layer (informers, listers, transforms)
 │   ├── portforward/           # Port forwarding logic
 │   ├── timeline/              # Timeline event storage (memory/SQLite)
@@ -174,7 +175,7 @@ radar/
 │           │   ├── audit/      # AuditCard, AuditAlerts, AuditFindingsTable (shared)
 │           │   ├── resources/  # ResourcesView, resource-utils, renderers
 │           │   ├── shared/     # ResourceRendererDispatch, ResourceActionsBar, EditableYamlView
-│           │   ├── gitops/     # ArgoCD/FluxCD panels
+│           │   ├── gitops/     # ArgoCD/FluxCD shared status, actions, and tree graph components
 │           │   ├── workload/   # WorkloadView
 │           │   ├── timeline/   # Timeline shared components
 │           │   ├── logs/       # Log viewer core
@@ -187,7 +188,7 @@ radar/
 │   │   ├── api/               # API client + SSE hooks
 │   │   ├── components/
 │   │   │   ├── dock/          # Bottom dock with terminal/logs tabs
-│   │   │   ├── gitops/        # ArgoCD/FluxCD management panels
+│   │   │   ├── gitops/        # GitOps workspace: table, filters, app detail graph/resources/activity
 │   │   │   ├── helm/          # Helm release management UI
 │   │   │   ├── home/          # Home/dashboard view
 │   │   │   ├── logs/          # Logs viewer component
@@ -405,6 +406,8 @@ If a UI change feels worth checking, mention it when you wrap up — even just f
 - GitOps nodes: Application (ArgoCD), Kustomization, HelmRelease, GitRepository (FluxCD)
   - Connected to managed resources via status.resources (ArgoCD) or status.inventory (FluxCD Kustomization)
   - HelmRelease connects to resources via FluxCD labels (`helm.toolkit.fluxcd.io/name`) or standard Helm label (`app.kubernetes.io/instance`). Matches Deployment, Service, StatefulSet, DaemonSet, Job, CronJob, Rollout.
+  - `/api/gitops/tree/{kind}/{namespace}/{name}` returns a GitOps resource tree used by the GitOps detail graph. It joins controller inventory with live topology edges, and must respect namespace filtering before enriching managed resources from the dynamic cache.
+  - GitOps detail pages expose Graph, Resources, and Activity views. Graph nodes for GitOps CRDs route to GitOps detail pages; ordinary Kubernetes resources open the standard resource drawer.
   - **Single-cluster limitation**: Radar only shows connections when GitOps controller and managed resources are in the same cluster. ArgoCD commonly deploys to remote clusters (hub-spoke model), so Application→resource edges won't appear when connected to the ArgoCD cluster. FluxCD typically deploys to its own cluster, so connections usually work.
 
 ### Timeline

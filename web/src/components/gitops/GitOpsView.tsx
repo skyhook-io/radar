@@ -242,7 +242,7 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
   }
 
   return (
-    <div className="flex h-full min-w-0 flex-1 overflow-hidden bg-theme-base">
+    <div className="flex h-full min-w-0 flex-1 overflow-hidden bg-theme-base max-lg:flex-col">
       <GitOpsFilterSidebar
         mode={mode}
         onModeChange={setMode}
@@ -274,7 +274,7 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <div className="shrink-0 border-b border-theme-border bg-theme-base px-4 py-3">
-          <div className="flex items-center justify-between gap-4">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
             <div className="min-w-0">
               <h1 className="text-lg font-semibold text-theme-text-primary">GitOps</h1>
               <p className="truncate text-sm text-theme-text-secondary">
@@ -293,7 +293,7 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
 
         <div className="shrink-0 border-b border-theme-border bg-theme-surface/70 px-4 py-3">
           <StatusDistribution rows={filteredRows} />
-          <div className="mt-3 flex items-center gap-2">
+          <div className="mt-3 flex flex-wrap items-center gap-2">
             <div className="relative w-full max-w-md">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-text-tertiary" />
               <input
@@ -411,7 +411,7 @@ function GitOpsFilterSidebar({
   onClear: () => void
 }) {
   return (
-    <aside className="flex w-72 shrink-0 flex-col overflow-hidden border-r border-theme-border bg-theme-surface/90">
+    <aside className="flex w-72 shrink-0 flex-col overflow-hidden border-r border-theme-border bg-theme-surface/90 max-lg:max-h-72 max-lg:w-full max-lg:border-b max-lg:border-r-0">
       <div className="flex items-center justify-between border-b border-theme-border px-3 py-2">
         <span className="text-sm font-medium text-theme-text-secondary">GitOps Filters</span>
         <button type="button" onClick={onClear} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">
@@ -696,7 +696,7 @@ function StatusDistribution({ rows }: { rows: GitOpsRow[] }) {
 
 function GitOpsTable({ rows, onOpen }: { rows: GitOpsRow[]; onOpen: (row: GitOpsRow) => void }) {
   return (
-    <table className="w-full table-fixed border-separate border-spacing-0 text-sm">
+    <table className="w-full min-w-[1040px] table-fixed border-separate border-spacing-0 text-sm">
       <thead className="sticky top-0 z-10 bg-theme-surface">
         <tr className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
           <TableHead className="w-[24%]">Application</TableHead>
@@ -969,7 +969,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
           {appView === 'activity' ? (
             <GitOpsActivityView resource={resourceQ.data} detail={detailRow} />
           ) : (
-            <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[280px_minmax(0,1fr)]">
+            <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[280px_minmax(0,1fr)] max-lg:grid-cols-1">
               <GitOpsGraphFilterRail
                 facets={graphFacets}
                 preset={graphPreset}
@@ -987,7 +987,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                 roles={graphRoles}
                 onToggleRole={(value) => toggleSet(graphRoles, setGraphRoles, value)}
               />
-              <div className="min-h-0 min-w-0 border-l border-theme-border">
+              <div className="min-h-0 min-w-0 border-l border-theme-border max-lg:border-l-0 max-lg:border-t">
                 {appView === 'graph' ? (
                   <GitOpsTreeGraph
                     tree={tree}
@@ -1083,7 +1083,7 @@ function GitOpsGraphFilterRail({
   onToggleRole: (value: string) => void
 }) {
   return (
-    <aside className="min-h-0 overflow-y-auto bg-theme-surface/90">
+    <aside className="min-h-0 overflow-y-auto bg-theme-surface/90 max-lg:h-48 max-lg:max-h-48">
       <div className="border-b border-theme-border px-3 py-3">
         <div className="relative">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-text-tertiary" />
