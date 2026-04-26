@@ -57,9 +57,11 @@ func (g *restConfigGetter) ToRESTConfig() (*rest.Config, error) {
 	}
 	cfg := rest.CopyConfig(g.config)
 	if g.impersonate != "" {
+		// Copy groups so a future Helm/middleware mutation can't bleed
+		// into a different user's request via the captured slice.
 		cfg.Impersonate = rest.ImpersonationConfig{
 			UserName: g.impersonate,
-			Groups:   g.impersonateGrp,
+			Groups:   append([]string(nil), g.impersonateGrp...),
 		}
 	}
 	return cfg, nil
@@ -75,7 +77,8 @@ func (g *restConfigGetter) ToDiscoveryClient() (discovery.CachedDiscoveryInterfa
 	if err != nil {
 		return nil, err
 	}
-	// Helm fans out discovery calls during chart rendering / list ops.
+	// Match kubectl's QPS/Burst defaults (50/100). The client-go default
+	// (5/10) is too low for Helm operations that walk many resources.
 	cfg.Burst = 100
 	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
@@ -86,14 +89,17 @@ func (g *restConfigGetter) ToDiscoveryClient() (discovery.CachedDiscoveryInterfa
 }
 
 func (g *restConfigGetter) ToRESTMapper() (meta.RESTMapper, error) {
+	// ToDiscoveryClient does its own locking; calling it under g.mu would
+	// deadlock since sync.Mutex is non-reentrant. Take the discovery
+	// client first (idempotent), then lock for the mapper cache.
+	dc, err := g.ToDiscoveryClient()
+	if err != nil {
+		return nil, err
+	}
 	g.mu.Lock()
 	defer g.mu.Unlock()
 	if g.mapper != nil {
 		return g.mapper, nil
-	}
-	dc, err := g.ToDiscoveryClient()
-	if err != nil {
-		return nil, err
 	}
 	deferred := restmapper.NewDeferredDiscoveryRESTMapper(dc)
 	g.mapper = restmapper.NewShortcutExpander(deferred, dc, func(string) {})
@@ -101,9 +107,10 @@ func (g *restConfigGetter) ToRESTMapper() (meta.RESTMapper, error) {
 }
 
 func (g *restConfigGetter) ToRawKubeConfigLoader() clientcmd.ClientConfig {
-	// Helm uses this primarily for namespace resolution. We have no real
-	// kubeconfig to surface; return an empty Config with the namespace
-	// override so action.Configuration.Init's fallback path picks it up.
+	// Helm calls Namespace() on this loader (in EnvSettings + the kube
+	// client) to resolve the default namespace. We have no real kubeconfig
+	// to surface, so return an empty Config with just the namespace
+	// override.
 	return clientcmd.NewDefaultClientConfig(
 		clientcmdapi.Config{},
 		&clientcmd.ConfigOverrides{
