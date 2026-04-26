@@ -3,7 +3,6 @@ package packages
 import (
 	"sort"
 	"strings"
-	"time"
 )
 
 // Aggregate is the merge function. Given a Sources struct, returns a
@@ -24,10 +23,9 @@ import (
 // release_name) so consumers (SPA tables, MCP tool output) get stable
 // ordering across calls.
 func Aggregate(s Sources) []PackageRow {
-	now := time.Now()
-	// We accumulate rows in a map keyed by (chart, namespace, releaseName).
 	// CRD-only rows that don't resolve to a chart get a synthetic key
-	// using FromCRDGroup.
+	// using the group string; non-CRD rows key on (chart, namespace,
+	// releaseName) so multiple sources for the same release merge.
 	type key struct {
 		chart       string
 		namespace   string
@@ -40,10 +38,9 @@ func Aggregate(s Sources) []PackageRow {
 			return r
 		}
 		r := &PackageRow{
-			Chart:        k.chart,
-			Namespace:    k.namespace,
-			ReleaseName:  k.releaseName,
-			AggregatedAt: now,
+			Chart:       k.chart,
+			Namespace:   k.namespace,
+			ReleaseName: k.releaseName,
 		}
 		rows[k] = r
 		return r
@@ -316,7 +313,9 @@ func splitChart(s string) (name, version string) {
 // worseHealth returns the worse of two health strings using the order:
 // unhealthy > degraded > unknown > healthy. (Unknown beats healthy
 // because we don't want a CRD-only "unknown" row to be promoted to
-// "healthy" just because no other source contributed.)
+// "healthy" just because no other source contributed.) Unknown vocab
+// (typo, future GitOps reason we don't recognize yet) maps to the
+// "unknown" rank — quieter than degraded, still beats healthy.
 //
 // Empty strings are treated as "no opinion" — the other side wins.
 func worseHealth(a, b string) string {
@@ -332,7 +331,7 @@ func worseHealth(a, b string) string {
 			return 4
 		case "degraded", "warning", "warn", "progressing", "reconciling":
 			return 3
-		case "unknown", "":
+		case "unknown":
 			return 2
 		case "healthy", "ok", "ready", "available":
 			return 1

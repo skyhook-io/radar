@@ -159,9 +159,11 @@ func registerTools(server *mcp.Server) {
 			"operators?' in a single call instead of combining list_helm_releases + " +
 			"list_resources + manual merge. Filter by namespace, source, or chart substring. " +
 			"Response includes `sourcesErrored` listing any sources that failed (e.g. RBAC " +
-			"denied for Helm release secrets, missing GitOps controller informer). When this " +
-			"is non-empty, results are still returned but are partial — fewer rows than " +
-			"expected may indicate a dropped source rather than nothing installed.",
+			"denied for Helm release secrets, Helm client not initialized, GitOps informer " +
+			"errors other than the controller's CRDs being absent). When this is non-empty, " +
+			"results are still returned but are partial — fewer rows than expected may " +
+			"indicate a dropped source rather than nothing installed. ArgoCD/FluxCD CRDs " +
+			"that are simply not installed in the cluster do NOT appear in sourcesErrored.",
 		Annotations: readOnly,
 	}, logToolCall("list_packages", handleListPackages))
 

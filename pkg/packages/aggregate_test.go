@@ -261,39 +261,94 @@ func TestAggregate_HealthIsWorstOf(t *testing.T) {
 	}
 }
 
+// Worst-of ranking: unhealthy > degraded > unknown > healthy. Plus
+// alias collapse (stalled → unhealthy rank, progressing → degraded
+// rank). Empty string is "no opinion" (the other side wins).
+func TestWorseHealth_Ranking(t *testing.T) {
+	cases := []struct {
+		a, b, want string
+	}{
+		{"unhealthy", "degraded", "unhealthy"},
+		{"degraded", "unhealthy", "unhealthy"},
+		{"unknown", "healthy", "unknown"},
+		{"healthy", "unknown", "unknown"},
+		{"degraded", "unknown", "degraded"},
+		{"healthy", "degraded", "degraded"},
+		{"stalled", "degraded", "stalled"},          // stalled ranks with unhealthy
+		{"progressing", "healthy", "progressing"},   // progressing ranks with degraded
+		{"", "healthy", "healthy"},                  // empty = no opinion
+		{"degraded", "", "degraded"},                // empty = no opinion
+		{"weirdo", "healthy", "weirdo"},             // unknown vocab → "unknown" rank, beats healthy
+	}
+	for _, c := range cases {
+		if got := worseHealth(c.a, c.b); got != c.want {
+			t.Errorf("worseHealth(%q, %q) = %q, want %q", c.a, c.b, got, c.want)
+		}
+	}
+}
+
+// Three-contributor merge: when Helm reports degraded, a workload
+// reports unhealthy, and an Argo declaration reports healthy, the row
+// must surface the worst (unhealthy).
+func TestAggregate_HealthWorstOf_ThreeContributors(t *testing.T) {
+	rows := Aggregate(Sources{
+		Helm: []HelmRelease{{
+			Name: "cert-manager", Namespace: "cm", Chart: "cert-manager-1.14.0",
+			ResourceHealth: "degraded",
+		}},
+		Workloads: []Workload{{
+			Kind: "Deployment", Namespace: "cm", Name: "cert-manager",
+			Labels:      map[string]string{"helm.sh/chart": "cert-manager-1.14.0"},
+			Annotations: map[string]string{"meta.helm.sh/release-name": "cert-manager", "meta.helm.sh/release-namespace": "cm"},
+			Health:      "unhealthy",
+		}},
+		GitOpsDeclarations: []Declaration{{
+			Source: "argocd", Namespace: "argocd", Name: "cert-manager",
+			TargetNamespace: "cm", TargetName: "cert-manager", Chart: "cert-manager", Status: "healthy",
+		}},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d: %+v", len(rows), rows)
+	}
+	if rows[0].Health != "unhealthy" {
+		t.Errorf("want health=unhealthy, got %q", rows[0].Health)
+	}
+}
+
 // Sources order must be canonical H, L, C, A, F regardless of input
-// declaration order.
+// declaration order. Uses cert-manager so the CRD group resolves to
+// the same chart as Helm/L/A/F — exercises all five source codes on
+// one row.
 func TestAggregate_SourceOrderIsCanonical(t *testing.T) {
 	rows := Aggregate(Sources{
 		// Provide in reverse order to verify Aggregate normalizes.
 		GitOpsDeclarations: []Declaration{{
-			Source: "flux", Name: "x", TargetNamespace: "ns", TargetName: "x", Chart: "x", Status: "healthy",
+			Source: "flux", Name: "cert-manager", TargetNamespace: "cm", TargetName: "cert-manager", Chart: "cert-manager", Status: "healthy",
 		}, {
-			Source: "argocd", Name: "x", TargetNamespace: "ns", TargetName: "x", Chart: "x", Status: "healthy",
+			Source: "argocd", Name: "cert-manager", TargetNamespace: "cm", TargetName: "cert-manager", Chart: "cert-manager", Status: "healthy",
 		}},
-		CRDs: []CRD{{Group: "x.example.com", Versions: []string{"v1"}}},
+		CRDs: []CRD{{Name: "certificates.cert-manager.io", Group: "cert-manager.io", Kind: "Certificate", Plural: "certificates", Versions: []string{"v1"}}},
 		Workloads: []Workload{{
-			Kind: "Deployment", Namespace: "ns", Name: "x",
-			Labels:      map[string]string{"helm.sh/chart": "x-1.0"},
-			Annotations: map[string]string{"meta.helm.sh/release-name": "x", "meta.helm.sh/release-namespace": "ns"},
+			Kind: "Deployment", Namespace: "cm", Name: "cert-manager",
+			Labels:      map[string]string{"helm.sh/chart": "cert-manager-1.14.0"},
+			Annotations: map[string]string{"meta.helm.sh/release-name": "cert-manager", "meta.helm.sh/release-namespace": "cm"},
 			Health:      "healthy",
 		}},
-		Helm: []HelmRelease{{Name: "x", Namespace: "ns", Chart: "x-1.0", ResourceHealth: "healthy"}},
+		Helm: []HelmRelease{{Name: "cert-manager", Namespace: "cm", Chart: "cert-manager-1.14.0", ResourceHealth: "healthy"}},
 	})
 	if len(rows) == 0 {
 		t.Fatal("expected at least one row")
 	}
-	// Find the chart=x row and verify source order.
 	for _, r := range rows {
-		if r.Chart == "x" {
-			want := []string{SourceHelm, SourceLabels, SourceArgoCD, SourceFluxCD}
+		if r.Chart == "cert-manager" {
+			want := []string{SourceHelm, SourceLabels, SourceCRDs, SourceArgoCD, SourceFluxCD}
 			if !equalStrings(r.Sources, want) {
 				t.Errorf("want canonical sources %v, got %v", want, r.Sources)
 			}
 			return
 		}
 	}
-	t.Errorf("no x chart row found in %+v", rows)
+	t.Errorf("no cert-manager row found in %+v", rows)
 }
 
 func equalStrings(a, b []string) bool {

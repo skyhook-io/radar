@@ -2,6 +2,8 @@ package server
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"log"
 	"net/http"
 	"sort"
@@ -19,8 +21,15 @@ import (
 
 // packagesCacheTTL bounds how often we recompute the merged package
 // list. Aggregate is cheap; the inputs (Helm secret reads, dynamic-cache
-// walks) are not.
+// walks) are not. Cache is not event-invalidated; new installs become
+// visible within TTL.
 const packagesCacheTTL = 60 * time.Second
+
+// packagesCacheMaxEntries caps cache map growth. Each (user, namespace
+// set) tuple gets an entry; under multi-user Hub-mode use the map would
+// otherwise grow unbounded. When the cap is exceeded we evict the
+// oldest entry.
+const packagesCacheMaxEntries = 256
 
 var (
 	packagesCacheMu sync.Mutex
@@ -83,17 +92,26 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 
 	var rows []packages.PackageRow
 	var sourceErrs []SourceError
+	var generatedAt time.Time
 	if hit && time.Since(entry.at) < packagesCacheTTL {
 		rows = entry.rows
 		sourceErrs = entry.errors
+		generatedAt = entry.at
 	} else {
 		var err error
 		rows, sourceErrs, err = computePackagesInternal(ctx, p.Namespaces, p.User, p.Groups)
 		if err != nil {
 			return PackagesResponse{}, err
 		}
+		generatedAt = time.Now()
+		if len(sourceErrs) > 0 {
+			log.Printf("[packages] computed with %d source errors: %+v", len(sourceErrs), sourceErrs)
+		}
 		packagesCacheMu.Lock()
-		packagesCache[cacheKey] = packagesCacheEntry{at: time.Now(), rows: rows, errors: sourceErrs}
+		if len(packagesCache) >= packagesCacheMaxEntries {
+			evictOldestPackagesCacheEntry()
+		}
+		packagesCache[cacheKey] = packagesCacheEntry{at: generatedAt, rows: rows, errors: sourceErrs}
 		packagesCacheMu.Unlock()
 	}
 
@@ -113,10 +131,28 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 	}
 	return PackagesResponse{
 		Packages:       rows,
-		GeneratedAt:    time.Now(),
+		GeneratedAt:    generatedAt,
 		SourcesUsed:    used,
 		SourcesErrored: sourceErrs,
 	}, nil
+}
+
+// evictOldestPackagesCacheEntry drops the entry with the earliest `at`.
+// Caller must hold packagesCacheMu.
+func evictOldestPackagesCacheEntry() {
+	var oldestKey string
+	var oldestAt time.Time
+	first := true
+	for k, e := range packagesCache {
+		if first || e.at.Before(oldestAt) {
+			oldestKey = k
+			oldestAt = e.at
+			first = false
+		}
+	}
+	if !first {
+		delete(packagesCache, oldestKey)
+	}
 }
 
 // packagesCacheKeyFor produces a stable cache key. Both the user
@@ -163,7 +199,7 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 		Groups:     groups,
 	})
 	if err != nil {
-		if err == errResourceCacheUnavailable {
+		if errors.Is(err, errResourceCacheUnavailable) {
 			s.writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}
@@ -186,39 +222,14 @@ func computePackagesInternal(ctx context.Context, namespaces []string, user stri
 	src := packages.Sources{}
 	var errs []SourceError
 
-	// Helm releases (source H). For multi-namespace queries we list
-	// cluster-wide and rely on the post-aggregate filter — Helm's RBAC
-	// impersonation already scopes results to what the user can see.
-	helmNamespace := ""
-	if len(namespaces) == 1 {
-		helmNamespace = namespaces[0]
-	}
-	if hClient := helm.GetClient(); hClient != nil {
-		releases, err := hClient.ListReleasesAsUser(helmNamespace, user, groups)
-		switch {
-		case err == nil:
-			src.Helm = make([]packages.HelmRelease, 0, len(releases))
-			for _, h := range releases {
-				src.Helm = append(src.Helm, packages.HelmRelease{
-					Name:           h.Name,
-					Namespace:      h.Namespace,
-					Chart:          h.Chart,
-					ChartVersion:   h.ChartVersion,
-					AppVersion:     h.AppVersion,
-					Status:         h.Status,
-					ResourceHealth: h.ResourceHealth,
-				})
-			}
-		case helm.IsForbiddenError(err):
-			errs = append(errs, SourceError{
-				Source:     packages.SourceHelm,
-				StatusCode: http.StatusForbidden,
-				Error:      "RBAC denied (helm release secrets): " + err.Error(),
-			})
-		default:
-			errs = append(errs, SourceError{Source: packages.SourceHelm, Error: err.Error()})
-		}
-	}
+	// Helm releases (source H). For a single-namespace request we ask
+	// Helm directly; for nil (all namespaces) we ask cluster-wide. For a
+	// multi-namespace allow-list we iterate per-namespace — asking
+	// cluster-wide would require the user to have list-secrets across
+	// the cluster, which limited-RBAC users typically lack.
+	helmReleases, helmErrs := collectHelmReleases(namespaces, user, groups)
+	src.Helm = helmReleases
+	errs = append(errs, helmErrs...)
 
 	// Workloads (source L) — Deployments + DaemonSets + StatefulSets.
 	workloads, listerErr := collectWorkloadInputs(cache, namespaces)
@@ -286,20 +297,92 @@ func computePackagesInternal(ctx context.Context, namespaces []string, user stri
 	return rows, errs, nil
 }
 
+// collectHelmReleases reads Helm releases for the requested namespace
+// scope, attributing per-source errors. RBAC denials are non-fatal —
+// they surface as a SourceError with StatusCode 403 so the caller can
+// distinguish "cluster has no Helm" from "user can't read Helm secrets."
+//
+// nil namespaces → cluster-wide (one call)
+// single namespace → that namespace (one call)
+// multi-namespace → one call per namespace; per-namespace forbidden
+// errors are coalesced into one SourceError so a user with access to
+// ns-a but not ns-b still sees ns-a's releases.
+func collectHelmReleases(namespaces []string, user string, groups []string) ([]packages.HelmRelease, []SourceError) {
+	hClient := helm.GetClient()
+	if hClient == nil {
+		return nil, []SourceError{{
+			Source: packages.SourceHelm,
+			Error:  "helm client not initialized (cluster connect in progress or failed)",
+		}}
+	}
+	scopes := []string{""}
+	switch {
+	case len(namespaces) == 1:
+		scopes = []string{namespaces[0]}
+	case len(namespaces) > 1:
+		scopes = namespaces
+	}
+	var out []packages.HelmRelease
+	var forbidden []string
+	var otherErrs []error
+	for _, ns := range scopes {
+		releases, err := hClient.ListReleasesAsUser(ns, user, groups)
+		if err == nil {
+			for _, h := range releases {
+				out = append(out, packages.HelmRelease{
+					Name:           h.Name,
+					Namespace:      h.Namespace,
+					Chart:          h.Chart,
+					ChartVersion:   h.ChartVersion,
+					AppVersion:     h.AppVersion,
+					Status:         h.Status,
+					ResourceHealth: h.ResourceHealth,
+				})
+			}
+			continue
+		}
+		if helm.IsForbiddenError(err) {
+			label := ns
+			if label == "" {
+				label = "cluster-wide"
+			}
+			forbidden = append(forbidden, label)
+			continue
+		}
+		otherErrs = append(otherErrs, fmt.Errorf("ns=%q: %w", ns, err))
+	}
+	var errs []SourceError
+	if len(forbidden) > 0 {
+		errs = append(errs, SourceError{
+			Source:     packages.SourceHelm,
+			StatusCode: http.StatusForbidden,
+			Error:      "RBAC denied (helm release secrets): " + strings.Join(forbidden, ", "),
+		})
+	}
+	if len(otherErrs) > 0 {
+		errs = append(errs, SourceError{Source: packages.SourceHelm, Error: errors.Join(otherErrs...).Error()})
+	}
+	return out, errs
+}
+
 // collectWorkloadInputs reads Deployments + DaemonSets + StatefulSets
 // from the cache and converts them to the packages.Workload shape used
 // by the merger. Only workloads with helm.sh/chart label OR
-// meta.helm.sh/release-name annotation contribute. Returns the first
-// lister error encountered (so the caller can attribute it to source L)
-// — informer listers fail rarely (indexer issues), but per the
-// CLAUDE.md backend convention we don't drop errors silently.
+// meta.helm.sh/release-name annotation contribute. Errors from any
+// lister/namespace combination are joined (with kind+ns context) so
+// the caller can attribute them to source L without dropping any.
 func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]packages.Workload, error) {
 	var out []packages.Workload
-	var firstErr error
-	noteErr := func(err error) {
-		if err != nil && firstErr == nil {
-			firstErr = err
+	var listerErrs []error
+	noteErr := func(kind, ns string, err error) {
+		if err == nil {
+			return
 		}
+		nsLabel := ns
+		if nsLabel == "" {
+			nsLabel = "*"
+		}
+		listerErrs = append(listerErrs, fmt.Errorf("%s ns=%s: %w", kind, nsLabel, err))
 	}
 	add := func(kind, ns, name string, lbls, anns map[string]string, health string) {
 		if lbls["helm.sh/chart"] == "" && anns["meta.helm.sh/release-name"] == "" {
@@ -331,7 +414,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 		forEachNamespace(func(ns string) {
 			if ns == "" {
 				items, err := depLister.List(labels.Everything())
-				noteErr(err)
+				noteErr("Deployment", ns, err)
 				for _, d := range items {
 					add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
 						deploymentHealth(int(d.Status.Replicas), int(d.Status.AvailableReplicas)))
@@ -339,7 +422,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 				return
 			}
 			items, err := depLister.Deployments(ns).List(labels.Everything())
-			noteErr(err)
+			noteErr("Deployment", ns, err)
 			for _, d := range items {
 				add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
 					deploymentHealth(int(d.Status.Replicas), int(d.Status.AvailableReplicas)))
@@ -350,7 +433,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 		forEachNamespace(func(ns string) {
 			if ns == "" {
 				items, err := dsLister.List(labels.Everything())
-				noteErr(err)
+				noteErr("DaemonSet", ns, err)
 				for _, d := range items {
 					add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
 						daemonsetHealth(int(d.Status.DesiredNumberScheduled), int(d.Status.NumberReady)))
@@ -358,7 +441,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 				return
 			}
 			items, err := dsLister.DaemonSets(ns).List(labels.Everything())
-			noteErr(err)
+			noteErr("DaemonSet", ns, err)
 			for _, d := range items {
 				add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
 					daemonsetHealth(int(d.Status.DesiredNumberScheduled), int(d.Status.NumberReady)))
@@ -369,7 +452,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 		forEachNamespace(func(ns string) {
 			if ns == "" {
 				items, err := ssLister.List(labels.Everything())
-				noteErr(err)
+				noteErr("StatefulSet", ns, err)
 				for _, ss := range items {
 					add("StatefulSet", ss.Namespace, ss.Name, ss.Labels, ss.Annotations,
 						statefulsetHealth(int(ss.Status.Replicas), int(ss.Status.ReadyReplicas)))
@@ -377,14 +460,14 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 				return
 			}
 			items, err := ssLister.StatefulSets(ns).List(labels.Everything())
-			noteErr(err)
+			noteErr("StatefulSet", ns, err)
 			for _, ss := range items {
 				add("StatefulSet", ss.Namespace, ss.Name, ss.Labels, ss.Annotations,
 					statefulsetHealth(int(ss.Status.Replicas), int(ss.Status.ReadyReplicas)))
 			}
 		})
 	}
-	return out, firstErr
+	return out, errors.Join(listerErrs...)
 }
 
 func deploymentHealth(desired, available int) string {
@@ -413,6 +496,8 @@ func collectGitOpsDeclarations(ctx context.Context, cache *k8s.ResourceCache, er
 		for _, item := range items {
 			if d, ok := packages.ParseArgoApplication(item.Object); ok {
 				out = append(out, d)
+			} else {
+				log.Printf("[packages] failed to parse Argo Application %s/%s — skipping", item.GetNamespace(), item.GetName())
 			}
 		}
 	} else if !isMissingCRDErr(err) {
@@ -423,6 +508,8 @@ func collectGitOpsDeclarations(ctx context.Context, cache *k8s.ResourceCache, er
 		for _, item := range items {
 			if d, ok := packages.ParseFluxHelmRelease(item.Object); ok {
 				out = append(out, d)
+			} else {
+				log.Printf("[packages] failed to parse Flux HelmRelease %s/%s — skipping", item.GetNamespace(), item.GetName())
 			}
 		}
 	} else if !isMissingCRDErr(err) {
@@ -433,6 +520,8 @@ func collectGitOpsDeclarations(ctx context.Context, cache *k8s.ResourceCache, er
 		for _, item := range items {
 			if d, ok := packages.ParseFluxKustomization(item.Object); ok {
 				out = append(out, d)
+			} else {
+				log.Printf("[packages] failed to parse Flux Kustomization %s/%s — skipping", item.GetNamespace(), item.GetName())
 			}
 		}
 	} else if !isMissingCRDErr(err) {

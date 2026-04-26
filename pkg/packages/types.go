@@ -11,8 +11,6 @@
 //	F — Flux HelmRelease / Kustomization declaration
 package packages
 
-import "time"
-
 // Source codes returned in PackageRow.Sources. Stable on-wire — agents,
 // SPAs, and other consumers rely on these single characters.
 const (
@@ -86,8 +84,10 @@ type Declaration struct {
 	ChartVersion string `json:"chartVersion,omitempty"`
 	// Status as the GitOps controller sees it. One of:
 	// healthy|degraded|unhealthy|unknown — caller maps from their
-	// vocabulary (Argo: Healthy/Progressing/Degraded/Suspended/Missing/Unknown;
-	// Flux: Ready/Stalled/Reconciling/Suspended).
+	// vocabulary. Argo: Healthy/Progressing/Degraded/Suspended/Missing/
+	// Unknown. Flux: derived from Ready and Stalled conditions; transient
+	// reasons collapse to degraded. Suspended (spec.suspend) is not yet
+	// surfaced separately.
 	Status string `json:"status"`
 }
 
@@ -129,7 +129,4 @@ type PackageRow struct {
 	// itself in that case. Lets the SPA render with appropriate framing
 	// ("cert-manager.io CRDs detected") vs a real chart row.
 	FromCRDGroup string `json:"fromCRDGroup,omitempty"`
-	// AggregatedAt is the time Aggregate ran. Useful for cache freshness
-	// debugging in distributed traces.
-	AggregatedAt time.Time `json:"aggregatedAt"`
 }

@@ -19,8 +19,9 @@ import (
 //   - Multi-source apps (spec.sources[]) — first Helm source wins for
 //     chart info; we don't model multiple charts per app.
 //
-// Status mapping: spec.health.status → our health vocab. Argo's:
-// Healthy, Progressing, Degraded, Suspended, Missing, Unknown.
+// Status mapping: status.health.status → our health vocab via
+// mapArgoHealth (which falls back to "unknown" for any unrecognized
+// state, including future additions to Argo's HealthStatus enum).
 func ParseArgoApplication(obj map[string]any) (Declaration, bool) {
 	meta := mapAt(obj, "metadata")
 	if meta == nil {
@@ -125,8 +126,11 @@ func ParseFluxHelmRelease(obj map[string]any) (Declaration, bool) {
 	if spec == nil {
 		return d, true
 	}
-	// Chart info — spec.chart.spec.{chart,version} on v2; spec.chart.* on
-	// v2beta2; spec.chartRef on the newer OCI-source variant.
+	// Chart info — primary path is spec.chart.spec.{chart,version} (the
+	// HelmChartTemplate shape used by stable Flux v2 APIs). Fallback
+	// handles defensive flat-shape variants seen in the wild.
+	// NOTE: spec.chartRef (OCI HelmChart reference) is NOT yet parsed —
+	// OCI-sourced HelmReleases will report empty Chart/ChartVersion.
 	if chart := mapAt(spec, "chart"); chart != nil {
 		if cspec := mapAt(chart, "spec"); cspec != nil {
 			d.Chart = stringAt(cspec, "chart")
@@ -134,7 +138,6 @@ func ParseFluxHelmRelease(obj map[string]any) (Declaration, bool) {
 		}
 	}
 	if d.Chart == "" {
-		// Some HelmRelease variants put chart at spec.chart.chart directly.
 		if chart := mapAt(spec, "chart"); chart != nil {
 			d.Chart = stringAt(chart, "chart")
 			d.ChartVersion = stringAt(chart, "version")
@@ -220,9 +223,10 @@ func fluxConditionStatus(obj map[string]any) string {
 	case "True":
 		return "healthy"
 	case "False":
-		// Reconciling vs failed. Flux uses reasons like "Progressing",
-		// "DependencyNotReady" for transient; "InstallFailed",
-		// "UpgradeFailed" for hard failures.
+		// Whitelist transient reasons; everything else (including any
+		// unrecognized future reason) classifies as unhealthy. Errs
+		// loud — false-positive unhealthy is preferable to silently
+		// masking a hard failure we don't yet recognize.
 		reason := stringAt(ready, "reason")
 		if isTransientFluxReason(reason) {
 			return "degraded"
