@@ -40,7 +40,7 @@ export function ResourceBar({ used, total, percent, colorScheme = 'utilization',
         </span>
       </div>
       <div className="relative">
-        <div className="h-1.5 rounded-full border border-theme-border bg-theme-bg-elevated overflow-hidden">
+        <div className="h-1.5 rounded-full border border-theme-border bg-theme-elevated overflow-hidden">
           <div
             className={clsx('h-full rounded-full transition-[width] duration-300 ease-out', getBarColor(percent, colorScheme))}
             style={{ width: `${Math.min(percent, 100)}%` }}
