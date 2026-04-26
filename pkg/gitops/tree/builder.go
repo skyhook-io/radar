@@ -19,12 +19,20 @@ type DynamicGetter interface {
 
 // Builder constructs GitOps ownership trees from GitOps inventory and live topology ownership edges.
 type Builder struct {
-	dynamic DynamicGetter
-	topo    *topology.Topology
+	dynamic           DynamicGetter
+	topo              *topology.Topology
+	allowedNamespaces []string
 }
 
 func NewBuilder(dynamic DynamicGetter, topo *topology.Topology) *Builder {
 	return &Builder{dynamic: dynamic, topo: topo}
+}
+
+// WithAllowedNamespaces limits live object enrichment to namespaces the caller
+// is allowed to inspect. nil means all namespaces; an empty slice means none.
+func (b *Builder) WithAllowedNamespaces(namespaces []string) *Builder {
+	b.allowedNamespaces = namespaces
+	return b
 }
 
 func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string) (*ResourceTree, error) {
@@ -84,10 +92,7 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	for _, res := range managed {
 		id := nodeID(res.Ref)
 		declaredIDs[id] = true
-		var obj *unstructured.Unstructured
-		if res.Ref.Name != "" {
-			obj, _ = b.dynamic.GetDynamicWithGroup(ctx, res.Ref.Kind, res.Ref.Namespace, res.Ref.Name, res.Ref.Group)
-		}
+		obj := b.getAllowedObject(ctx, res.Ref)
 		if live, ok := findTopoNode(topoByRef, res.Ref); ok {
 			nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, res.Sync, res.Health), obj), res.Data)
 			topoIDByTreeID[id] = live.ID
@@ -103,10 +108,7 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 			if id == rootNode.ID {
 				continue
 			}
-			var obj *unstructured.Unstructured
-			if res.Ref.Name != "" {
-				obj, _ = b.dynamic.GetDynamicWithGroup(ctx, res.Ref.Kind, res.Ref.Namespace, res.Ref.Name, res.Ref.Group)
-			}
+			obj := b.getAllowedObject(ctx, res.Ref)
 			if live, ok := findTopoNode(topoByRef, res.Ref); ok {
 				nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, "", ""), obj), res.Data)
 				topoIDByTreeID[id] = live.ID
@@ -189,6 +191,29 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		Warnings: b.topoWarnings(),
 		Summary:  summary,
 	}, nil
+}
+
+func (b *Builder) getAllowedObject(ctx context.Context, ref ResourceRef) *unstructured.Unstructured {
+	if ref.Name == "" || !b.canEnrich(ref) {
+		return nil
+	}
+	obj, _ := b.dynamic.GetDynamicWithGroup(ctx, ref.Kind, ref.Namespace, ref.Name, ref.Group)
+	return obj
+}
+
+func (b *Builder) canEnrich(ref ResourceRef) bool {
+	if b.allowedNamespaces == nil {
+		return true
+	}
+	if ref.Namespace == "" {
+		return false
+	}
+	for _, namespace := range b.allowedNamespaces {
+		if namespace == ref.Namespace {
+			return true
+		}
+	}
+	return false
 }
 
 func detectTool(root *unstructured.Unstructured, group, kind string) Tool {

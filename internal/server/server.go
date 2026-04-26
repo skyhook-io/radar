@@ -928,7 +928,10 @@ func (s *Server) handleGitOpsTree(w http.ResponseWriter, r *http.Request) {
 
 	namespaces := s.parseNamespacesForUser(r)
 	if noNamespaceAccess(namespaces) {
-		s.writeJSON(w, map[string]any{"nodes": []any{}, "edges": []any{}, "warnings": []any{}})
+		s.writeJSON(w, &gitopstree.ResourceTree{
+			Nodes: []gitopstree.Node{},
+			Edges: []gitopstree.Edge{},
+		})
 		return
 	}
 
@@ -945,7 +948,7 @@ func (s *Server) handleGitOpsTree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tree, err := gitopstree.NewBuilder(cache, topo).Build(r.Context(), kind, namespace, name, group)
+	tree, err := gitopstree.NewBuilder(cache, topo).WithAllowedNamespaces(namespaces).Build(r.Context(), kind, namespace, name, group)
 	if err != nil {
 		if strings.Contains(err.Error(), "unknown resource kind") {
 			s.writeError(w, http.StatusBadRequest, err.Error())
