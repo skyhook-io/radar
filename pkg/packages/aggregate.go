@@ -167,15 +167,19 @@ func Aggregate(s Sources) []PackageRow {
 		if len(c.Versions) > 0 {
 			version = c.Versions[0]
 		}
-		crdContribution := SourceContribution{
-			Source:  SourceCRDs,
-			Version: version,
+		// Build a fresh contribution per row to avoid future fragility
+		// — SourceContribution is a value struct today (safe by Go
+		// semantics) but adding a slice or map field later would
+		// silently expose mutation across rows if the literal were
+		// shared.
+		newContribution := func() SourceContribution {
+			return SourceContribution{Source: SourceCRDs, Version: version}
 		}
 		if known {
 			matched := false
 			for k, r := range rows {
 				if k.chart == chartName {
-					r.AddContribution(crdContribution)
+					r.AddContribution(newContribution())
 					matched = true
 				}
 			}
@@ -186,7 +190,7 @@ func Aggregate(s Sources) []PackageRow {
 			// CRD-only row so the install is visible.
 			k := key{chart: chartName, namespace: "", releaseName: ""}
 			r := get(k)
-			r.AddContribution(crdContribution)
+			r.AddContribution(newContribution())
 			if r.Health == "" {
 				r.Health = HealthUnknown
 			}
@@ -197,7 +201,7 @@ func Aggregate(s Sources) []PackageRow {
 		// single row.
 		k := key{chart: c.Group, namespace: "", releaseName: ""}
 		r := get(k)
-		r.AddContribution(crdContribution)
+		r.AddContribution(newContribution())
 		r.FromCRDGroup = c.Group
 		if r.Health == "" {
 			r.Health = HealthUnknown

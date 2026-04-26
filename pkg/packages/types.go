@@ -134,6 +134,10 @@ type Sources struct {
 // "Helm: healthy · Argo: degraded" tooltip, "managed by Argo →" deep
 // link, same-cluster version-disagreement detection) read Contributors;
 // simple consumers read the aggregated fields on PackageRow directly.
+//
+// Contributor merge identity is `Source` alone — at most one
+// contribution per SourceCode per row. For cross-cluster fan-in (Hub),
+// see `Cluster` below.
 type SourceContribution struct {
 	Source           SourceCode `json:"source"`
 	Health           Health     `json:"health,omitempty"`
@@ -144,8 +148,16 @@ type SourceContribution struct {
 	// For GitOps sources (A/F): the controller resource's own identity
 	// (e.g. the Argo Application's namespace/name, the Flux HelmRelease's
 	// namespace/name). Lets consumers deep-link to the controller view.
+	// Always empty for non-GitOps sources (H/L/C).
 	DeclarationName      string `json:"declarationName,omitempty"`
 	DeclarationNamespace string `json:"declarationNamespace,omitempty"`
+	// Cluster identifies the cluster this contribution came from.
+	// Always empty in single-cluster output (Radar standalone). Hub
+	// populates this when fanning rows in across clusters so the
+	// merge key effectively becomes (Source, Cluster) — preserving
+	// per-cluster Argo identity in the "same chart, different Apps,
+	// different clusters" hub-and-spoke pattern.
+	Cluster string `json:"cluster,omitempty"`
 }
 
 // PackageRow is the output shape — one row per detected package.
@@ -153,9 +165,11 @@ type SourceContribution struct {
 // `Sources` field carries the deduplicated voters and `Contributors`
 // carries each source's pre-merge view.
 //
-// Hub fan-in note: when merging rows from multiple clusters, use
-// AddContribution on the destination row to preserve the canonical-
-// order + worst-of-health invariants and to keep per-source provenance.
+// Hub fan-in note: AddContribution dedupes on (Source, Cluster). When
+// Hub merges rows from N clusters, it stamps each contribution with the
+// originating cluster so Argo App identity from cluster A and from
+// cluster B both survive on the merged row. Single-cluster Radar
+// leaves Cluster empty, so dedupe collapses to Source alone.
 type PackageRow struct {
 	// Chart name. Always populated. Derived from (in priority order):
 	// Helm release ChartName, helm.sh/chart label parse, crdGroupToChart
@@ -214,9 +228,10 @@ func (r *PackageRow) MergeHealth(h Health) {
 
 // AddContribution merges a per-source contribution into r. Updates:
 //  1. r.Sources (idempotent, canonical order — via AddSource)
-//  2. r.Contributors (idempotent on Source: subsequent contributions
-//     from the same Source merge — Health worst-of, other fields
-//     keep first-seen non-empty values)
+//  2. r.Contributors (idempotent on (Source, Cluster): subsequent
+//     contributions with the same key merge — Health worst-of, other
+//     fields keep first-seen non-empty values; contributions with
+//     different Cluster keys land as separate entries)
 //  3. Aggregated fields (r.Health worst-of, r.Version/AppVersion
 //     first-seen wins) — preserves the existing on-wire semantics
 //     for simple consumers that ignore Contributors.
@@ -230,7 +245,7 @@ func (r *PackageRow) AddContribution(c SourceContribution) {
 		r.AppVersion = c.AppVersion
 	}
 	for i := range r.Contributors {
-		if r.Contributors[i].Source != c.Source {
+		if r.Contributors[i].Source != c.Source || r.Contributors[i].Cluster != c.Cluster {
 			continue
 		}
 		existing := &r.Contributors[i]
@@ -257,4 +272,18 @@ func (r *PackageRow) AddContribution(c SourceContribution) {
 	}
 	r.Contributors = append(r.Contributors, c)
 	sortContributors(r.Contributors)
+}
+
+// Contributor returns the first contribution from the given source
+// (canonical order). Returns nil if no contribution from that source
+// exists. Hub fan-in iterates Contributors directly (since it may have
+// per-cluster entries for the same Source); this helper is for
+// single-cluster consumers asking "what did Helm say?"
+func (r *PackageRow) Contributor(s SourceCode) *SourceContribution {
+	for i := range r.Contributors {
+		if r.Contributors[i].Source == s {
+			return &r.Contributors[i]
+		}
+	}
+	return nil
 }

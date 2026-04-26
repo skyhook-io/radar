@@ -28,8 +28,9 @@ const packagesCacheTTL = 60 * time.Second
 // packagesCacheMaxEntries caps cache map growth. Each (user, namespace
 // set) tuple gets an entry; under multi-user Hub-mode use the map would
 // otherwise grow unbounded. When the cap is exceeded we evict the
-// oldest entry.
-const packagesCacheMaxEntries = 256
+// oldest entry. Var (not const) so tests can lower the cap to drive
+// the eviction-at-insert path with a small fixture.
+var packagesCacheMaxEntries = 256
 
 var (
 	packagesCacheMu sync.Mutex
@@ -55,6 +56,12 @@ type SourceError struct {
 	Source     packages.SourceCode `json:"source"`
 	StatusCode int                 `json:"statusCode,omitempty"`
 	Error      string              `json:"error"`
+	// AffectedNamespaces, when set, lists the namespaces this error
+	// applies to. Populated when the error is scoped (e.g., a
+	// per-namespace Helm RBAC denial); empty when cluster-wide.
+	// Lets consumers reason about partial-result scope without
+	// reverse-parsing the Error string.
+	AffectedNamespaces []string `json:"affectedNamespaces,omitempty"`
 }
 
 // ListPackagesParams carries the filters the REST + MCP handlers both
@@ -72,9 +79,25 @@ type ListPackagesParams struct {
 	Groups []string
 }
 
+// ErrInvalidSourceCode is returned when ListPackagesParams.Source is set
+// but doesn't match one of the five known source codes (H/L/C/A/F).
+// REST handlers map this to 400; MCP returns it as a tool error so the
+// agent doesn't get a silent empty list and conclude "nothing installed."
+var ErrInvalidSourceCode = packagesError("invalid source code (want one of H, L, C, A, F)")
+
 // ListPackages is the public entry point shared by the REST handler
 // and the MCP tool.
 func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, error) {
+	// Validate source filter at the boundary — without this, an invalid
+	// or typo'd `?source=helm` would silently return an empty list
+	// (HTTP 200) and a downstream consumer would conclude "nothing
+	// installed via Helm."
+	if p.Source != "" {
+		if !packages.SourceCode(strings.ToUpper(p.Source)).Valid() {
+			return PackagesResponse{}, ErrInvalidSourceCode
+		}
+	}
+
 	// Auth-restricted to no namespaces → empty response, skip cache.
 	if p.Namespaces != nil && len(p.Namespaces) == 0 {
 		return PackagesResponse{
@@ -203,6 +226,10 @@ func (s *Server) handleListPackages(w http.ResponseWriter, r *http.Request) {
 			s.writeError(w, http.StatusServiceUnavailable, err.Error())
 			return
 		}
+		if errors.Is(err, ErrInvalidSourceCode) {
+			s.writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
 		log.Printf("[packages] ListPackages failed: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
@@ -308,6 +335,13 @@ func computePackagesInternal(ctx context.Context, namespaces []string, user stri
 // errors are coalesced into one SourceError so a user with access to
 // ns-a but not ns-b still sees ns-a's releases.
 func collectHelmReleases(namespaces []string, user string, groups []string) ([]packages.HelmRelease, []SourceError) {
+	// Defensive: empty (non-nil) slice means "no namespaces authorized";
+	// callers should short-circuit before reaching here, but guard
+	// against a future caller that forgets and would otherwise fall
+	// through to a cluster-wide read.
+	if namespaces != nil && len(namespaces) == 0 {
+		return nil, nil
+	}
 	hClient := helm.GetClient()
 	if hClient == nil {
 		return nil, []SourceError{{
@@ -323,7 +357,8 @@ func collectHelmReleases(namespaces []string, user string, groups []string) ([]p
 		scopes = namespaces
 	}
 	var out []packages.HelmRelease
-	var forbidden []string
+	var forbiddenNamespaces []string
+	var otherErrNamespaces []string
 	var otherErrs []error
 	for _, ns := range scopes {
 		releases, err := hClient.ListReleasesAsUser(ns, user, groups)
@@ -342,27 +377,59 @@ func collectHelmReleases(namespaces []string, user string, groups []string) ([]p
 			continue
 		}
 		if helm.IsForbiddenError(err) {
-			label := ns
-			if label == "" {
-				label = "cluster-wide"
-			}
-			forbidden = append(forbidden, label)
+			forbiddenNamespaces = append(forbiddenNamespaces, ns)
 			continue
 		}
+		otherErrNamespaces = append(otherErrNamespaces, ns)
 		otherErrs = append(otherErrs, fmt.Errorf("ns=%q: %w", ns, err))
 	}
 	var errs []SourceError
-	if len(forbidden) > 0 {
+	if len(forbiddenNamespaces) > 0 {
 		errs = append(errs, SourceError{
-			Source:     packages.SourceHelm,
-			StatusCode: http.StatusForbidden,
-			Error:      "RBAC denied (helm release secrets): " + strings.Join(forbidden, ", "),
+			Source:             packages.SourceHelm,
+			StatusCode:         http.StatusForbidden,
+			Error:              "RBAC denied (helm release secrets): " + describeNamespaces(forbiddenNamespaces),
+			AffectedNamespaces: namespaceList(forbiddenNamespaces),
 		})
 	}
 	if len(otherErrs) > 0 {
-		errs = append(errs, SourceError{Source: packages.SourceHelm, Error: errors.Join(otherErrs...).Error()})
+		errs = append(errs, SourceError{
+			Source:             packages.SourceHelm,
+			Error:              errors.Join(otherErrs...).Error(),
+			AffectedNamespaces: namespaceList(otherErrNamespaces),
+		})
 	}
 	return out, errs
+}
+
+// describeNamespaces produces a human-readable label for a slice of
+// namespace scopes. Empty string means "cluster-wide" — callers should
+// continue to read AffectedNamespaces for structured access.
+func describeNamespaces(scopes []string) string {
+	labels := make([]string, 0, len(scopes))
+	for _, ns := range scopes {
+		if ns == "" {
+			labels = append(labels, "cluster-wide")
+			continue
+		}
+		labels = append(labels, ns)
+	}
+	return strings.Join(labels, ", ")
+}
+
+// namespaceList drops the "" sentinel (cluster-wide) — empty slice means
+// the error applied cluster-wide; non-empty lists explicit namespaces.
+func namespaceList(scopes []string) []string {
+	out := make([]string, 0, len(scopes))
+	for _, ns := range scopes {
+		if ns != "" {
+			out = append(out, ns)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // collectWorkloadInputs reads Deployments + DaemonSets + StatefulSets

@@ -100,7 +100,12 @@ func mapArgoHealth(s string) Health {
 		return HealthUnhealthy
 	case "suspended":
 		return HealthDegraded
-	case "missing", "unknown":
+	case "missing":
+		// Argo "Missing" = "should exist but doesn't" — a real signal
+		// (controller hasn't been able to apply); not the same as
+		// Unknown ("haven't observed yet"). Surface as Degraded.
+		return HealthDegraded
+	case "unknown":
 		return HealthUnknown
 	}
 	return HealthUnknown

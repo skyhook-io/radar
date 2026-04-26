@@ -82,10 +82,12 @@ func TestMapArgoHealth(t *testing.T) {
 		"Progressing": HealthDegraded,
 		"Degraded":    HealthUnhealthy,
 		"Suspended":   HealthDegraded,
-		"Missing":     HealthUnknown,
-		"Unknown":     HealthUnknown,
-		"":            HealthUnknown,
-		"Bogus":       HealthUnknown,
+		// Missing means "should exist but doesn't" — surface as a
+		// real signal (degraded), not as the same bucket as Unknown.
+		"Missing": HealthDegraded,
+		"Unknown": HealthUnknown,
+		"":       HealthUnknown,
+		"Bogus":  HealthUnknown,
 	}
 	for in, want := range cases {
 		if got := mapArgoHealth(in); got != want {

@@ -467,6 +467,103 @@ func TestAggregate_Contributors_LabelsCollapseAcrossWorkloads(t *testing.T) {
 	}
 }
 
+// CRD-only rows produce a C contribution with no release identity (CRDs
+// are cluster-scoped registrations). Hub's "managed by Argo →" deep-link
+// logic relies on `Contributors[i].DeclarationName != ""` as the GitOps
+// signal — if a C contribution accidentally got a release-name from
+// somewhere, the contract breaks for downstream consumers.
+func TestAggregate_CRDOnlyContributionShape(t *testing.T) {
+	rows := Aggregate(Sources{
+		CRDs: []CRD{{
+			Name: "certificates.cert-manager.io", Group: "cert-manager.io",
+			Kind: "Certificate", Plural: "certificates", Versions: []string{"v1"},
+		}},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d", len(rows))
+	}
+	r := rows[0]
+	if len(r.Contributors) != 1 {
+		t.Fatalf("want 1 contributor, got %d: %+v", len(r.Contributors), r.Contributors)
+	}
+	c := r.Contributors[0]
+	if c.Source != SourceCRDs {
+		t.Errorf("Source = %q, want C", c.Source)
+	}
+	if c.Version != "v1" {
+		t.Errorf("Version = %q, want v1", c.Version)
+	}
+	if c.ReleaseName != "" || c.ReleaseNamespace != "" {
+		t.Errorf("CRD contribution should have no release identity, got name=%q ns=%q",
+			c.ReleaseName, c.ReleaseNamespace)
+	}
+	if c.DeclarationName != "" || c.DeclarationNamespace != "" {
+		t.Errorf("CRD contribution should have no GitOps declaration identity, got name=%q ns=%q",
+			c.DeclarationName, c.DeclarationNamespace)
+	}
+	if c.Cluster != "" {
+		t.Errorf("single-cluster mode should leave Cluster empty, got %q", c.Cluster)
+	}
+}
+
+// Hub fan-in: contributions from different clusters with the same
+// SourceCode must coexist (not collapse). This is what lets Hub deep-
+// link to per-cluster Argo App identity in the "same chart, two
+// clusters, two Apps" hub-and-spoke pattern.
+func TestPackageRow_AddContribution_ClusterDisambiguates(t *testing.T) {
+	r := &PackageRow{Chart: "cert-manager"}
+	r.AddContribution(SourceContribution{
+		Source: SourceArgoCD, Health: HealthHealthy, Version: "1.14.0",
+		DeclarationName: "cert-manager-app", DeclarationNamespace: "argocd",
+		Cluster: "cluster-a",
+	})
+	r.AddContribution(SourceContribution{
+		Source: SourceArgoCD, Health: HealthDegraded, Version: "1.13.5",
+		DeclarationName: "cert-manager-app", DeclarationNamespace: "argocd",
+		Cluster: "cluster-b",
+	})
+	if len(r.Contributors) != 2 {
+		t.Fatalf("want 2 A contributions (per cluster), got %d: %+v", len(r.Contributors), r.Contributors)
+	}
+	gotClusters := map[string]bool{r.Contributors[0].Cluster: true, r.Contributors[1].Cluster: true}
+	if !gotClusters["cluster-a"] || !gotClusters["cluster-b"] {
+		t.Errorf("expected both cluster contributions, got %v", gotClusters)
+	}
+	// Aggregated row health is worst-of across all clusters.
+	if r.Health != HealthDegraded {
+		t.Errorf("Health = %q, want degraded (worst-of across clusters)", r.Health)
+	}
+	// Helper picks the first contribution by canonical source order.
+	if c := r.Contributor(SourceArgoCD); c == nil {
+		t.Errorf("Contributor(A) returned nil")
+	}
+	if c := r.Contributor(SourceHelm); c != nil {
+		t.Errorf("Contributor(H) want nil, got %+v", c)
+	}
+}
+
+// Same-cluster repeated contribution from the same Source still merges
+// in place (the merge key (Source, Cluster) collapses to Source when
+// Cluster is empty in single-cluster mode).
+func TestPackageRow_AddContribution_SingleClusterMerges(t *testing.T) {
+	r := &PackageRow{Chart: "cert-manager"}
+	r.AddContribution(SourceContribution{Source: SourceArgoCD, Health: HealthHealthy, Version: "1.14.0", DeclarationName: "first-app"})
+	r.AddContribution(SourceContribution{Source: SourceArgoCD, Health: HealthDegraded, Version: "1.14.1", DeclarationName: "second-app"})
+	if len(r.Contributors) != 1 {
+		t.Fatalf("single-cluster: want 1 merged A contribution, got %d", len(r.Contributors))
+	}
+	c := r.Contributors[0]
+	if c.Health != HealthDegraded {
+		t.Errorf("merged Health = %q, want degraded (worst-of)", c.Health)
+	}
+	if c.Version != "1.14.0" {
+		t.Errorf("merged Version = %q, want 1.14.0 (first-wins)", c.Version)
+	}
+	if c.DeclarationName != "first-app" {
+		t.Errorf("merged DeclarationName = %q, want first-app (first-wins)", c.DeclarationName)
+	}
+}
+
 func findContrib(r PackageRow, src SourceCode) SourceContribution {
 	for _, c := range r.Contributors {
 		if c.Source == src {
