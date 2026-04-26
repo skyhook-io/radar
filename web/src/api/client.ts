@@ -690,20 +690,20 @@ const CLOUD_ROLE_RANK: Record<string, number> = { viewer: 1, member: 2, owner: 3
 
 /**
  * useCloudRole returns the caller's Cloud tier (`owner` / `member` /
- * `viewer`) and a `canAtLeast(min)` gate. When auth/me has resolved
- * AND no Cloud role is present (OSS, OIDC, no role group), the gate
- * bypasses — the gate is strictly additive for Cloud-attributed
- * users, mirroring the backend's `requireCloudRole` semantics.
+ * `viewer`) and a `canAtLeast(min)` gate. When no Cloud role is
+ * present (OSS, OIDC, no role group, OR auth/me is still loading),
+ * `canAtLeast` returns true — the gate is strictly additive for
+ * Cloud-attributed users, mirroring the backend's `requireCloudRole`
+ * semantics. Use for passive content gating (panels, sections); use
+ * `useCanHelmAct` (or similar) for *click-prone* surfaces where you
+ * need fail-closed behavior during the auth/me round-trip to prevent
+ * a viewer from clicking through during the loading window.
  *
- * While auth/me is still loading, `canAtLeast` returns false. The
- * alternative (treat loading as "no role" → bypass) lets a viewer
- * see action buttons momentarily enabled on first paint, which then
- * flip to disabled when /api/auth/me resolves a few hundred ms
- * later. Fail-closed during load matches what users expect — buttons
- * start disabled and enable once we know who they are.
- *
- * Use to hide / disable UI affordances for ops the user can't
- * perform. The backend still enforces; this is purely UX.
+ * Why optimistic during load: the gated empty state ("Your role can't
+ * view…") rendered briefly to OSS / kubectl-plugin users before
+ * auth/me resolves is a worse regression than a Cloud viewer seeing
+ * a content tab populate for a tick before being gated out. Click-
+ * prevention belongs in the action-button hook, not here.
  */
 export function useCloudRole() {
   const { data, isLoading } = useAuthMe()
@@ -713,8 +713,7 @@ export function useCloudRole() {
     isLoading,
     isCloudUser: !!role,
     canAtLeast: (min: CloudRole) => {
-      if (isLoading) return false // fail-closed during /api/auth/me round-trip
-      if (!role) return true // resolved + no Cloud tier → OSS/OIDC, no gate
+      if (!role) return true // not Cloud-attributed (incl. still-loading) → no gate
       return (CLOUD_ROLE_RANK[role] ?? 0) >= (CLOUD_ROLE_RANK[min] ?? 0)
     },
   }
@@ -732,7 +731,17 @@ export function useCloudRole() {
  */
 export function useCanHelmAct(): { allowed: boolean; reason?: string } {
   const helmWrite = useCanHelmWrite()
-  const { role, canAtLeast } = useCloudRole()
+  const { role, canAtLeast, isLoading } = useCloudRole()
+  // Fail-closed for action buttons during the auth/me round-trip:
+  // a Cloud viewer who clicks during loading would otherwise fire a
+  // real request that gets 403'd. For OSS / kubectl-plugin the
+  // round-trip is sub-ms so this is imperceptible; for Cloud it
+  // prevents the click-through window. Distinct from useCloudRole's
+  // canAtLeast (which is optimistic during loading) because passive
+  // content gates don't have a click-handler to misfire.
+  if (isLoading) {
+    return { allowed: false, reason: 'Loading permissions…' }
+  }
   if (!canAtLeast('member')) {
     return {
       allowed: false,
