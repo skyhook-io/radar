@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { Search, RefreshCw, Package, Database, AlertCircle, ExternalLink, ChevronDown, Star, Shield, BadgeCheck, Building2, Globe, ArrowUpDown, FileJson, PenTool } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useHelmRepositories, useSearchCharts, useUpdateRepository, useArtifactHubSearch, type ArtifactHubSortOption } from '../../api/client'
-import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
+import { useCanHelmAct } from '../../api/client'
 import type { ChartInfo, HelmRepository, ArtifactHubChart, ChartSource } from '../../types'
 import { formatAge } from './helm-utils'
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
@@ -23,7 +23,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
   const [showVerifiedOnly, setShowVerifiedOnly] = useState(false)
   const [artifactHubSort, setArtifactHubSort] = useState<ArtifactHubSortOption>('relevance')
 
-  const canHelmWrite = useCanHelmWrite()
+  const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
 
   // Local repo hooks
   const { data: repositories, isLoading: reposLoading } = useHelmRepositories()
@@ -235,7 +235,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
             </label>
 
             {/* Refresh button */}
-            <Tooltip content={canHelmWrite ? "Update all repositories" : "Helm write permissions required (rbac.helm=true)"}>
+            <Tooltip content={canHelmWrite ? "Update all repositories" : (helmActReason ?? '')}>
               <button
                 onClick={handleUpdateAllRepos}
                 disabled={updateRepoMutation.isPending || !canHelmWrite}

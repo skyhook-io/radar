@@ -6,7 +6,7 @@ import type { HelmValues, ValuesPreviewResponse } from '../../types'
 import { CodeViewer } from '../ui/CodeViewer'
 import { YamlEditor } from '../ui/YamlEditor'
 import { useHelmPreviewValues, useHelmApplyValues } from '../../api/client'
-import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
+import { useCanHelmAct } from '../../api/client'
 import { ValuesDiffPreview } from './ValuesDiffPreview'
 
 interface ValuesViewerProps {
@@ -41,7 +41,7 @@ export function ValuesViewer({
 
   const previewMutation = useHelmPreviewValues()
   const applyMutation = useHelmApplyValues()
-  const canHelmWrite = useCanHelmWrite()
+  const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
 
   const canEdit = Boolean(namespace && name) && canHelmWrite
 
@@ -234,7 +234,7 @@ export function ValuesViewer({
                 onClick={handleApply}
                 disabled={!!yamlError || applyMutation.isPending || !canHelmWrite}
                 className="flex items-center gap-1 px-2.5 py-1 text-xs btn-brand rounded disabled:cursor-not-allowed"
-                title={!canHelmWrite ? 'Helm write permissions required (rbac.helm=true)' : undefined}
+                title={!canHelmWrite ? helmActReason : undefined}
               >
                 {applyMutation.isPending ? (
                   <Loader2 className="w-3.5 h-3.5 animate-spin" />

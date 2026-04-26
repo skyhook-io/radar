@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
+import { useCanHelmWrite } from '../contexts/CapabilitiesContext'
 import type {
   Topology,
   ClusterInfo,
@@ -661,11 +662,16 @@ export function useNamespaceCapabilities(namespace: string | undefined, globalCa
 }
 
 // Auth
+export type CloudRole = 'owner' | 'member' | 'viewer'
+
 export interface AuthMe {
   authEnabled: boolean
   authMode?: string
   username?: string
   groups?: string[]
+  /** Pre-computed Cloud tier from `cloud:<tier>` group prefix.
+   *  Absent when not running under Cloud (OSS, OIDC, no role group). */
+  cloudRole?: CloudRole
 }
 
 export function useAuthMe() {
@@ -674,6 +680,63 @@ export function useAuthMe() {
     queryFn: () => fetchJSON('/auth/me'),
     staleTime: 300000, // 5 minutes
   })
+}
+
+// Tier ordering for Cloud-role gates. Mirrors radar OSS pkg/auth
+// CloudRole.AtLeast — the SPA must agree with the backend on what
+// "member-or-higher" means; otherwise we'd hide a button the
+// backend would happily honor (or vice versa).
+const CLOUD_ROLE_RANK: Record<string, number> = { viewer: 1, member: 2, owner: 3 }
+
+/**
+ * useCloudRole returns the caller's Cloud tier (`owner` / `member` /
+ * `viewer`) and a `canAtLeast(min)` gate. When no Cloud role is
+ * present (OSS, OIDC, no role group), `canAtLeast` returns true for
+ * every tier — the gate is strictly additive for Cloud-attributed
+ * users, mirroring the backend's `requireCloudRole` semantics.
+ *
+ * Use to hide / disable UI affordances for ops the user can't
+ * perform. The backend still enforces; this is purely UX.
+ */
+export function useCloudRole() {
+  const { data } = useAuthMe()
+  const role = data?.cloudRole
+  return {
+    role,
+    isCloudUser: !!role,
+    canAtLeast: (min: CloudRole) => {
+      if (!role) return true // not Cloud-attributed → no gate
+      return (CLOUD_ROLE_RANK[role] ?? 0) >= (CLOUD_ROLE_RANK[min] ?? 0)
+    },
+  }
+}
+
+/**
+ * useCanHelmAct combines the K8s capability gate (rbac.helm=true) and
+ * the Cloud role gate (member+) into a single answer for any Helm
+ * write or sensitive-read button. Returns { allowed, reason } so the
+ * tooltip can explain which gate failed.
+ *
+ * Cloud role check runs FIRST so the message is actionable for Cloud
+ * users — telling them "Helm write permissions required" is wrong if
+ * the chart is fine and the actual gate is their viewer role.
+ */
+export function useCanHelmAct(): { allowed: boolean; reason?: string } {
+  const helmWrite = useCanHelmWrite()
+  const { role, canAtLeast } = useCloudRole()
+  if (!canAtLeast('member')) {
+    return {
+      allowed: false,
+      reason: `Your Radar Cloud role (${role ?? 'unknown'}) cannot run Helm operations. Ask a member or owner.`,
+    }
+  }
+  if (!helmWrite) {
+    return {
+      allowed: false,
+      reason: 'Helm write permissions required. Set rbac.helm=true in the Radar Helm chart values.',
+    }
+  }
+  return { allowed: true }
 }
 
 // Namespaces

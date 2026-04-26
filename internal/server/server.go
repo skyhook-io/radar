@@ -2602,6 +2602,12 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		resp["username"] = user.Username
 		resp["groups"] = user.Groups
+		// Pre-compute the Cloud role so the SPA doesn't have to
+		// re-parse `cloud:<tier>` group prefixes. Empty string means
+		// "not running under Cloud" (OSS deploy or no role group).
+		if role := auth.CloudRoleFromGroups(user.Groups); role != auth.RoleNone {
+			resp["cloudRole"] = string(role)
+		}
 	}
 	s.writeJSON(w, resp)
 }

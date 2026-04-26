@@ -12,7 +12,7 @@ import type { SelectedHelmRelease, HelmHook, ChartDependency } from '../../types
 import type { NavigateToResource } from '../../utils/navigation'
 import { formatDate } from './helm-utils'
 import { getHelmStatusColor, SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
-import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
+import { useCanHelmAct } from '../../api/client'
 import { RevisionHistory } from './RevisionHistory'
 import { ManifestViewer } from './ManifestViewer'
 import { ValuesViewer } from './ValuesViewer'
@@ -46,7 +46,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const [showUpgradeConfirm, setShowUpgradeConfirm] = useState(false)
   const resizeStartX = useRef(0)
   const resizeStartWidth = useRef(DEFAULT_WIDTH)
-  const canHelmWrite = useCanHelmWrite()
+  const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
 
   const { data: releaseDetail, isLoading, refetch: refetchRelease } = useHelmRelease(
     release.namespace,
@@ -325,7 +325,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                   'badge transition-colors', SEVERITY_BADGE.warning,
                   canHelmWrite ? 'hover:bg-amber-500/30 cursor-pointer' : 'opacity-50 cursor-not-allowed'
                 )}
-                title={canHelmWrite ? `Click to upgrade: ${upgradeInfo.currentVersion} → ${upgradeInfo.latestVersion}${upgradeInfo.repositoryName ? ` (${upgradeInfo.repositoryName})` : ''}` : 'Helm write permissions required (rbac.helm=true)'}
+                title={canHelmWrite ? `Click to upgrade: ${upgradeInfo.currentVersion} → ${upgradeInfo.latestVersion}${upgradeInfo.repositoryName ? ` (${upgradeInfo.repositoryName})` : ''}` : helmActReason}
               >
                 <ArrowUpCircle className="w-3 h-3" />
                 {upgradeInfo.latestVersion}
@@ -354,7 +354,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
                   ? 'text-theme-text-secondary hover:text-red-400 hover:bg-red-500/10'
                   : 'text-theme-text-disabled cursor-not-allowed'
               )}
-              title={canHelmWrite ? 'Uninstall release' : 'Helm write permissions required (rbac.helm=true)'}
+              title={canHelmWrite ? 'Uninstall release' : helmActReason}
             >
               <Trash2 className="w-4 h-4" />
             </button>

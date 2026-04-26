@@ -86,6 +86,28 @@ func TestHandleAuthMe_AuthEnabled_WithUser(t *testing.T) {
 	if len(groups) != 2 {
 		t.Errorf("groups = %v, want 2 groups", groups)
 	}
+	// Non-Cloud user — cloudRole must be absent so the SPA's
+	// useCloudRole hook treats them as "not under Cloud."
+	if _, has := body["cloudRole"]; has {
+		t.Errorf("cloudRole should not be present for non-Cloud user (groups=%v)", groups)
+	}
+}
+
+func TestHandleAuthMe_CloudUser_ExposesCloudRole(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	w := httptest.NewRecorder()
+	r := requestWithUser("GET", "/api/auth/me", &auth.User{
+		Username: "bob",
+		Groups:   []string{"cloud:viewer", "cloud:org:abc"},
+	})
+	s.handleAuthMe(w, r)
+
+	var body map[string]any
+	json.NewDecoder(w.Body).Decode(&body)
+
+	if body["cloudRole"] != "viewer" {
+		t.Errorf("cloudRole = %v, want viewer", body["cloudRole"])
+	}
 }
 
 // --- parseNamespaces ---
