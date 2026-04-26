@@ -12,7 +12,8 @@ import type { SelectedHelmRelease, HelmHook, ChartDependency } from '../../types
 import type { NavigateToResource } from '../../utils/navigation'
 import { formatDate } from './helm-utils'
 import { getHelmStatusColor, SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
-import { useCanHelmAct } from '../../api/client'
+import { useCanHelmAct, useCloudRole } from '../../api/client'
+import { RoleGatedPanel } from './RoleGatedPanel'
 import { RevisionHistory } from './RevisionHistory'
 import { ManifestViewer } from './ManifestViewer'
 import { ValuesViewer } from './ValuesViewer'
@@ -47,6 +48,12 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const resizeStartX = useRef(0)
   const resizeStartWidth = useRef(DEFAULT_WIDTH)
   const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
+  // Cloud viewers can't view release manifests / values / diffs
+  // (backend gate at requireCloudRole('member')). Skip the queries
+  // when the role would 403 — saves a round-trip and avoids a
+  // transient error state under the role-gated panel.
+  const { canAtLeast } = useCloudRole()
+  const canViewSensitive = canAtLeast('member')
 
   const { data: releaseDetail, isLoading, refetch: refetchRelease } = useHelmRelease(
     release.namespace,
@@ -58,14 +65,16 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const { data: manifest, isLoading: manifestLoading } = useHelmManifest(
     release.namespace,
     release.name,
-    selectedRevision
+    selectedRevision,
+    canViewSensitive,
   )
 
   // Fetch values
   const { data: values, isLoading: valuesLoading } = useHelmValues(
     release.namespace,
     release.name,
-    showAllValues
+    showAllValues,
+    canViewSensitive,
   )
 
   // Fetch diff if comparing revisions
@@ -73,7 +82,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
     release.namespace,
     release.name,
     diffRevisions?.rev1 || 0,
-    diffRevisions?.rev2 || 0
+    diffRevisions?.rev2 || 0,
+    canViewSensitive,
   )
 
   // Lazy check for upgrade availability
@@ -421,26 +431,30 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               />
             )}
             {activeTab === 'manifest' && (
-              <ManifestViewer
-                manifest={manifest || ''}
-                isLoading={manifestLoading}
-                revision={selectedRevision}
-                onCopy={(text) => copyToClipboard(text, 'manifest')}
-                copied={copied === 'manifest'}
-              />
+              <RoleGatedPanel min="member" feature="release manifests">
+                <ManifestViewer
+                  manifest={manifest || ''}
+                  isLoading={manifestLoading}
+                  revision={selectedRevision}
+                  onCopy={(text) => copyToClipboard(text, 'manifest')}
+                  copied={copied === 'manifest'}
+                />
+              </RoleGatedPanel>
             )}
             {activeTab === 'values' && (
-              <ValuesViewer
-                values={values}
-                isLoading={valuesLoading}
-                showAllValues={showAllValues}
-                onToggleAllValues={setShowAllValues}
-                onCopy={(text) => copyToClipboard(text, 'values')}
-                copied={copied === 'values'}
-                namespace={release.namespace}
-                name={release.name}
-                onApplySuccess={() => refetch()}
-              />
+              <RoleGatedPanel min="member" feature="release values">
+                <ValuesViewer
+                  values={values}
+                  isLoading={valuesLoading}
+                  showAllValues={showAllValues}
+                  onToggleAllValues={setShowAllValues}
+                  onCopy={(text) => copyToClipboard(text, 'values')}
+                  copied={copied === 'values'}
+                  namespace={release.namespace}
+                  name={release.name}
+                  onApplySuccess={() => refetch()}
+                />
+              </RoleGatedPanel>
             )}
             {activeTab === 'resources' && (
               <OwnedResources
@@ -452,16 +466,18 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
               <HooksTab hooks={releaseDetail.hooks || []} />
             )}
             {activeTab === 'diff' && diffRevisions && (
-              <ManifestDiffViewer
-                diff={diffData?.diff || ''}
-                isLoading={diffLoading}
-                revision1={diffRevisions.rev1}
-                revision2={diffRevisions.rev2}
-                onClose={() => {
-                  setDiffRevisions(null)
-                  setActiveTab('history')
-                }}
-              />
+              <RoleGatedPanel min="member" feature="release manifest diffs">
+                <ManifestDiffViewer
+                  diff={diffData?.diff || ''}
+                  isLoading={diffLoading}
+                  revision1={diffRevisions.rev1}
+                  revision2={diffRevisions.rev2}
+                  onClose={() => {
+                    setDiffRevisions(null)
+                    setActiveTab('history')
+                  }}
+                />
+              </RoleGatedPanel>
             )}
           </>
         )}

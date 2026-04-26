@@ -1731,8 +1731,11 @@ export function useHelmRelease(namespace: string, name: string) {
   })
 }
 
-// Get manifest for a Helm release (optionally at a specific revision)
-export function useHelmManifest(namespace: string, name: string, revision?: number) {
+// Get manifest for a Helm release (optionally at a specific revision).
+// `enabled` lets callers skip the query when the user's Cloud role
+// would 403 the read — saves a round-trip and avoids a transient
+// "error" state that the role-gated empty panel doesn't need.
+export function useHelmManifest(namespace: string, name: string, revision?: number, enabled = true) {
   const params = revision ? `?revision=${revision}` : ''
   return useQuery<string>({
     queryKey: ['helm-manifest', namespace, name, revision],
@@ -1744,34 +1747,35 @@ export function useHelmManifest(namespace: string, name: string, revision?: numb
       }
       return response.text()
     },
-    enabled: Boolean(namespace && name),
+    enabled: Boolean(namespace && name && enabled),
     staleTime: 60000, // 1 minute
   })
 }
 
-// Get values for a Helm release
-export function useHelmValues(namespace: string, name: string, allValues?: boolean) {
+// Get values for a Helm release. `enabled` see useHelmManifest.
+export function useHelmValues(namespace: string, name: string, allValues?: boolean, enabled = true) {
   const params = allValues ? '?all=true' : ''
   return useQuery<HelmValues>({
     queryKey: ['helm-values', namespace, name, allValues],
     queryFn: () => fetchJSON(`/helm/releases/${namespace}/${name}/values${params}`),
-    enabled: Boolean(namespace && name),
+    enabled: Boolean(namespace && name && enabled),
     staleTime: 60000,
   })
 }
 
-// Get diff between two revisions
+// Get diff between two revisions. `enabled` see useHelmManifest.
 export function useHelmManifestDiff(
   namespace: string,
   name: string,
   revision1: number,
-  revision2: number
+  revision2: number,
+  enabled = true,
 ) {
   return useQuery<ManifestDiff>({
     queryKey: ['helm-diff', namespace, name, revision1, revision2],
     queryFn: () =>
       fetchJSON(`/helm/releases/${namespace}/${name}/diff?revision1=${revision1}&revision2=${revision2}`),
-    enabled: Boolean(namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2),
+    enabled: Boolean(namespace && name && revision1 > 0 && revision2 > 0 && revision1 !== revision2 && enabled),
     staleTime: 60000,
   })
 }
