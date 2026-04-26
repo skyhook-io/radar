@@ -10,6 +10,54 @@ import (
 	"github.com/skyhook-io/radar/pkg/packages"
 )
 
+func TestErrorCodeForHelm(t *testing.T) {
+	cases := []struct {
+		name       string
+		err        string
+		statusCode int
+		want       string
+	}{
+		{"empty", "", 0, ""},
+		{"unknown shape", "something weird happened", 0, ""},
+
+		// auth — 401 status OR auth-keyword in body.
+		{"401 status", "x", 401, ErrCodeAuthRequired},
+		{"unauthorized in body", "Unauthorized: token expired", 0, ErrCodeAuthRequired},
+
+		// rbac — 403 status OR rbac/forbidden-keyword.
+		{"403 status", "denied", 403, ErrCodeRBACDenied},
+		{"rbac in body", "rbac denied (helm release secrets)", 0, ErrCodeRBACDenied},
+		{"forbidden in body", "secrets is forbidden: User cannot list", 0, ErrCodeRBACDenied},
+		{"cannot list", "cannot list resource secrets", 0, ErrCodeRBACDenied},
+
+		// unconfigured — covers both legacy + new-from-restConfigGetter strings.
+		{"new restConfigGetter error", `helm: no kubeconfig path and no resolved rest.Config available`, 0, ErrCodeUnconfigured},
+		{"in-cluster fallback error", "no in-cluster rest config available", 0, ErrCodeUnconfigured},
+		{"client not initialized", "helm client not initialized (cluster connect in progress or failed)", 0, ErrCodeUnconfigured},
+
+		// timeout
+		{"context deadline", "context deadline exceeded", 0, ErrCodeTimedOut},
+		{"timeout in body", "operation timeout", 0, ErrCodeTimedOut},
+
+		// unreachable
+		{"connection refused", `dial tcp 127.0.0.1:8080: connect: connection refused`, 0, ErrCodeUnreachable},
+		{"no such host", "dial tcp: lookup foo: no such host", 0, ErrCodeUnreachable},
+
+		// Ordering: auth precedes rbac (a 403 with "unauthorized" in
+		// body is auth-required, not rbac-denied — though that combo
+		// shouldn't happen in practice).
+		{"401 with rbac word in body", "rbac unavailable", 401, ErrCodeAuthRequired},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := errorCodeForHelm(tc.err, tc.statusCode)
+			if got != tc.want {
+				t.Errorf("errorCodeForHelm(%q, %d) = %q, want %q", tc.err, tc.statusCode, got, tc.want)
+			}
+		})
+	}
+}
+
 // Pins the error wording produced by k8s.ResourceCache.ListDynamicWithGroup
 // when the requested CRD isn't installed. If that wording changes,
 // graceful degradation breaks for clusters without ArgoCD/FluxCD —

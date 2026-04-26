@@ -56,12 +56,68 @@ type SourceError struct {
 	Source     packages.SourceCode `json:"source"`
 	StatusCode int                 `json:"statusCode,omitempty"`
 	Error      string              `json:"error"`
+	// Code is a machine-readable category for this failure. Stable
+	// across phrasing changes in Error so consumers (the SPA's
+	// categorize fn, MCP clients) can branch without string-matching
+	// log messages. Populated for known failure shapes; empty for
+	// generic errors (consumer falls back to category="failed"). See
+	// errorCodeForHelm / categorizeSourceError.
+	Code string `json:"code,omitempty"`
 	// AffectedNamespaces, when set, lists the namespaces this error
 	// applies to. Populated when the error is scoped (e.g., a
 	// per-namespace Helm RBAC denial); empty when cluster-wide.
 	// Lets consumers reason about partial-result scope without
 	// reverse-parsing the Error string.
 	AffectedNamespaces []string `json:"affectedNamespaces,omitempty"`
+}
+
+// Error code constants. Stable wire values — the SPA categorize and
+// MCP clients branch on these. Add new codes here, never rename.
+const (
+	ErrCodeRBACDenied   = "rbac_denied"
+	ErrCodeUnreachable  = "unreachable"
+	ErrCodeTimedOut     = "timed_out"
+	ErrCodeUnconfigured = "unconfigured"
+	ErrCodeAuthRequired = "auth_required"
+)
+
+// errorCodeForHelm classifies a Helm error string + status into a
+// stable Code value. The SPA used to do this with regex on the user-
+// visible string; doing it backend-side means a phrasing change in
+// the SDK doesn't silently move errors into "failed" until someone
+// updates the regex too.
+func errorCodeForHelm(err string, statusCode int) string {
+	e := strings.ToLower(err)
+	switch {
+	case statusCode == http.StatusUnauthorized,
+		strings.Contains(e, "unauthorized"),
+		strings.Contains(e, "credentials expired"),
+		strings.Contains(e, "token expired"):
+		return ErrCodeAuthRequired
+	case statusCode == http.StatusForbidden,
+		strings.Contains(e, "rbac"),
+		strings.Contains(e, "forbidden"),
+		strings.Contains(e, "not authorized"),
+		strings.Contains(e, "cannot list"):
+		return ErrCodeRBACDenied
+	case strings.Contains(e, "no kubeconfig path"),
+		strings.Contains(e, "no resolved rest.config"),
+		strings.Contains(e, "no in-cluster rest config"),
+		strings.Contains(e, "client not initialized"),
+		strings.Contains(e, "connect in progress"):
+		return ErrCodeUnconfigured
+	case strings.Contains(e, "context deadline exceeded"),
+		strings.Contains(e, "timed out"),
+		strings.Contains(e, "timeout"):
+		return ErrCodeTimedOut
+	case strings.Contains(e, "connection refused"),
+		strings.Contains(e, "no such host"),
+		strings.Contains(e, "i/o timeout"),
+		strings.Contains(e, "dial tcp"),
+		strings.Contains(e, "cluster unreachable"):
+		return ErrCodeUnreachable
+	}
+	return ""
 }
 
 // ListPackagesParams carries the filters the REST + MCP handlers both
@@ -364,6 +420,7 @@ func collectHelmReleases(namespaces []string, user string, groups []string) ([]p
 		return nil, []SourceError{{
 			Source: packages.SourceHelm,
 			Error:  "helm client not initialized (cluster connect in progress or failed)",
+			Code:   ErrCodeUnconfigured,
 		}}
 	}
 	scopes := []string{""}
@@ -406,13 +463,16 @@ func collectHelmReleases(namespaces []string, user string, groups []string) ([]p
 			Source:             packages.SourceHelm,
 			StatusCode:         http.StatusForbidden,
 			Error:              "RBAC denied (helm release secrets): " + describeNamespaces(forbiddenNamespaces),
+			Code:               ErrCodeRBACDenied,
 			AffectedNamespaces: namespaceList(forbiddenNamespaces),
 		})
 	}
 	if len(otherErrs) > 0 {
+		joined := errors.Join(otherErrs...).Error()
 		errs = append(errs, SourceError{
 			Source:             packages.SourceHelm,
-			Error:              errors.Join(otherErrs...).Error(),
+			Error:              joined,
+			Code:               errorCodeForHelm(joined, 0),
 			AffectedNamespaces: namespaceList(otherErrNamespaces),
 		})
 	}

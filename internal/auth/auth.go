@@ -13,9 +13,18 @@ type Session = pkgauth.Session
 type SessionRevoker = pkgauth.SessionRevoker
 type UserPermissions = pkgauth.UserPermissions
 type PermissionCache = pkgauth.PermissionCache
+type CloudRole = pkgauth.CloudRole
 
 // Re-export constants from pkg/auth
 const DefaultCookieName = pkgauth.DefaultCookieName
+
+// Cloud role constants — re-exported from pkg/auth.
+const (
+	RoleNone   = pkgauth.RoleNone
+	RoleViewer = pkgauth.RoleViewer
+	RoleMember = pkgauth.RoleMember
+	RoleOwner  = pkgauth.RoleOwner
+)
 
 // Re-export functions from pkg/auth
 var (
@@ -29,4 +38,6 @@ var (
 	NewSessionID             = pkgauth.NewSessionID
 	ParseSessionCookie       = pkgauth.ParseSessionCookie
 	ClearSessionCookie       = pkgauth.ClearSessionCookie
+	CloudRoleFromGroups      = pkgauth.CloudRoleFromGroups
+	CloudRoleFromContext     = pkgauth.CloudRoleFromContext
 )
