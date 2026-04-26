@@ -90,20 +90,20 @@ func argoSourceChart(spec map[string]any) (string, string) {
 	return "", ""
 }
 
-func mapArgoHealth(s string) string {
+func mapArgoHealth(s string) Health {
 	switch strings.ToLower(s) {
 	case "healthy":
-		return "healthy"
+		return HealthHealthy
 	case "progressing":
-		return "degraded" // not yet ready
+		return HealthDegraded // not yet ready
 	case "degraded":
-		return "unhealthy"
+		return HealthUnhealthy
 	case "suspended":
-		return "degraded"
+		return HealthDegraded
 	case "missing", "unknown":
-		return "unknown"
+		return HealthUnknown
 	}
-	return "unknown"
+	return HealthUnknown
 }
 
 // ParseFluxHelmRelease parses a helm.toolkit.fluxcd.io/HelmRelease into
@@ -190,14 +190,14 @@ func ParseFluxKustomization(obj map[string]any) (Declaration, bool) {
 // our health vocabulary. Flux conditions are status: True/False with
 // a reason like "ReconciliationSucceeded", "InstallFailed",
 // "DependencyNotReady".
-func fluxConditionStatus(obj map[string]any) string {
+func fluxConditionStatus(obj map[string]any) Health {
 	status := mapAt(obj, "status")
 	if status == nil {
-		return "unknown"
+		return HealthUnknown
 	}
 	conds, ok := status["conditions"].([]any)
 	if !ok {
-		return "unknown"
+		return HealthUnknown
 	}
 	// Look for Ready first; fall back to Stalled if present.
 	var ready, stalled map[string]any
@@ -214,14 +214,14 @@ func fluxConditionStatus(obj map[string]any) string {
 		}
 	}
 	if stalled != nil && stringAt(stalled, "status") == "True" {
-		return "unhealthy"
+		return HealthUnhealthy
 	}
 	if ready == nil {
-		return "unknown"
+		return HealthUnknown
 	}
 	switch stringAt(ready, "status") {
 	case "True":
-		return "healthy"
+		return HealthHealthy
 	case "False":
 		// Whitelist transient reasons; everything else (including any
 		// unrecognized future reason) classifies as unhealthy. Errs
@@ -229,11 +229,11 @@ func fluxConditionStatus(obj map[string]any) string {
 		// masking a hard failure we don't yet recognize.
 		reason := stringAt(ready, "reason")
 		if isTransientFluxReason(reason) {
-			return "degraded"
+			return HealthDegraded
 		}
-		return "unhealthy"
+		return HealthUnhealthy
 	}
-	return "unknown"
+	return HealthUnknown
 }
 
 func isTransientFluxReason(r string) bool {

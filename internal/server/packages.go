@@ -46,15 +46,15 @@ type packagesCacheEntry struct {
 type PackagesResponse struct {
 	Packages       []packages.PackageRow `json:"packages"`
 	GeneratedAt    time.Time             `json:"generatedAt"`
-	SourcesUsed    []string              `json:"sourcesUsed"`
+	SourcesUsed    []packages.SourceCode `json:"sourcesUsed"`
 	SourcesErrored []SourceError         `json:"sourcesErrored,omitempty"`
 }
 
-// SourceError carries a per-source failure. Source is one of H/L/C/A/F.
+// SourceError carries a per-source failure.
 type SourceError struct {
-	Source     string `json:"source"`
-	StatusCode int    `json:"statusCode,omitempty"`
-	Error      string `json:"error"`
+	Source     packages.SourceCode `json:"source"`
+	StatusCode int                 `json:"statusCode,omitempty"`
+	Error      string              `json:"error"`
 }
 
 // ListPackagesParams carries the filters the REST + MCP handlers both
@@ -80,7 +80,7 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 		return PackagesResponse{
 			Packages:       []packages.PackageRow{},
 			GeneratedAt:    time.Now(),
-			SourcesUsed:    []string{},
+			SourcesUsed:    []packages.SourceCode{},
 			SourcesErrored: nil,
 		}, nil
 	}
@@ -116,7 +116,7 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 	}
 
 	if p.Source != "" {
-		rows = filterBySource(rows, strings.ToUpper(p.Source))
+		rows = filterBySource(rows, packages.SourceCode(strings.ToUpper(p.Source)))
 	}
 	if p.Chart != "" {
 		rows = filterByChartSubstring(rows, strings.ToLower(p.Chart))
@@ -127,7 +127,7 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 	}
 	used := sourcesUsed(rows)
 	if used == nil {
-		used = []string{}
+		used = []packages.SourceCode{}
 	}
 	return PackagesResponse{
 		Packages:       rows,
@@ -336,7 +336,7 @@ func collectHelmReleases(namespaces []string, user string, groups []string) ([]p
 					ChartVersion:   h.ChartVersion,
 					AppVersion:     h.AppVersion,
 					Status:         h.Status,
-					ResourceHealth: h.ResourceHealth,
+					ResourceHealth: packages.Health(h.ResourceHealth),
 				})
 			}
 			continue
@@ -384,7 +384,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 		}
 		listerErrs = append(listerErrs, fmt.Errorf("%s ns=%s: %w", kind, nsLabel, err))
 	}
-	add := func(kind, ns, name string, lbls, anns map[string]string, health string) {
+	add := func(kind, ns, name string, lbls, anns map[string]string, health packages.Health) {
 		if lbls["helm.sh/chart"] == "" && anns["meta.helm.sh/release-name"] == "" {
 			return
 		}
@@ -470,20 +470,20 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 	return out, errors.Join(listerErrs...)
 }
 
-func deploymentHealth(desired, available int) string {
+func deploymentHealth(desired, available int) packages.Health {
 	if desired == 0 {
-		return "unknown"
+		return packages.HealthUnknown
 	}
 	if available >= desired {
-		return "healthy"
+		return packages.HealthHealthy
 	}
 	if available == 0 {
-		return "unhealthy"
+		return packages.HealthUnhealthy
 	}
-	return "degraded"
+	return packages.HealthDegraded
 }
-func daemonsetHealth(desired, ready int) string   { return deploymentHealth(desired, ready) }
-func statefulsetHealth(desired, ready int) string { return deploymentHealth(desired, ready) }
+func daemonsetHealth(desired, ready int) packages.Health   { return deploymentHealth(desired, ready) }
+func statefulsetHealth(desired, ready int) packages.Health { return deploymentHealth(desired, ready) }
 
 // collectGitOpsDeclarations reads Argo Applications + Flux HelmReleases
 // + Flux Kustomizations cluster-wide. Missing CRDs (controller not
@@ -549,7 +549,7 @@ func userCredsForPackages(r *http.Request) (string, []string) {
 	return "", nil
 }
 
-func filterBySource(rows []packages.PackageRow, src string) []packages.PackageRow {
+func filterBySource(rows []packages.PackageRow, src packages.SourceCode) []packages.PackageRow {
 	out := make([]packages.PackageRow, 0, len(rows))
 	for _, r := range rows {
 		for _, s := range r.Sources {
@@ -572,15 +572,15 @@ func filterByChartSubstring(rows []packages.PackageRow, sub string) []packages.P
 	return out
 }
 
-func sourcesUsed(rows []packages.PackageRow) []string {
-	seen := map[string]bool{}
+func sourcesUsed(rows []packages.PackageRow) []packages.SourceCode {
+	seen := map[packages.SourceCode]bool{}
 	for _, r := range rows {
 		for _, s := range r.Sources {
 			seen[s] = true
 		}
 	}
-	out := make([]string, 0, len(seen))
-	for _, s := range []string{packages.SourceHelm, packages.SourceLabels, packages.SourceCRDs, packages.SourceArgoCD, packages.SourceFluxCD} {
+	out := make([]packages.SourceCode, 0, len(seen))
+	for _, s := range packages.AllSourceCodes {
 		if seen[s] {
 			out = append(out, s)
 		}

@@ -86,8 +86,8 @@ func TestAggregate_CertManager_AllThreeSources(t *testing.T) {
 	if r.Chart != "cert-manager" {
 		t.Errorf("want chart=cert-manager, got %q", r.Chart)
 	}
-	want := []string{SourceHelm, SourceLabels, SourceCRDs}
-	if !equalStrings(r.Sources, want) {
+	want := []SourceCode{SourceHelm, SourceLabels, SourceCRDs}
+	if !equalSources(r.Sources, want) {
 		t.Errorf("want sources=%v, got %v", want, r.Sources)
 	}
 }
@@ -122,8 +122,8 @@ func TestAggregate_Karpenter_NoHelmAccess(t *testing.T) {
 	if r.Chart != "karpenter" {
 		t.Errorf("want chart=karpenter, got %q", r.Chart)
 	}
-	want := []string{SourceLabels, SourceCRDs}
-	if !equalStrings(r.Sources, want) {
+	want := []SourceCode{SourceLabels, SourceCRDs}
+	if !equalSources(r.Sources, want) {
 		t.Errorf("want sources=%v, got %v", want, r.Sources)
 	}
 	// Both CRDs map to "karpenter" — should fold into the same row,
@@ -150,7 +150,7 @@ func TestAggregate_RawOperator_KnownGroup(t *testing.T) {
 	if r.Chart != "cert-manager" || r.Health != "unknown" || r.FromCRDGroup != "" {
 		t.Errorf("bad CRD-only row: %+v", r)
 	}
-	if !equalStrings(r.Sources, []string{SourceCRDs}) {
+	if !equalSources(r.Sources, []SourceCode{SourceCRDs}) {
 		t.Errorf("want sources=[C], got %v", r.Sources)
 	}
 }
@@ -200,7 +200,7 @@ func TestAggregate_ArgoHelmApp_MergesWithHelmRelease(t *testing.T) {
 	if len(rows) != 1 {
 		t.Fatalf("want 1 merged row, got %d: %+v", len(rows), rows)
 	}
-	if got := rows[0].Sources; !equalStrings(got, []string{SourceHelm, SourceArgoCD}) {
+	if got := rows[0].Sources; !equalSources(got, []SourceCode{SourceHelm, SourceArgoCD}) {
 		t.Errorf("want sources=[H,A], got %v", got)
 	}
 }
@@ -226,7 +226,7 @@ func TestAggregate_FluxKustomization_NoChart(t *testing.T) {
 	if r.Chart != "infra-controllers" {
 		t.Errorf("want chart=infra-controllers, got %q", r.Chart)
 	}
-	if !equalStrings(r.Sources, []string{SourceFluxCD}) {
+	if !equalSources(r.Sources, []SourceCode{SourceFluxCD}) {
 		t.Errorf("want sources=[F], got %v", r.Sources)
 	}
 }
@@ -266,19 +266,19 @@ func TestAggregate_HealthIsWorstOf(t *testing.T) {
 // rank). Empty string is "no opinion" (the other side wins).
 func TestWorseHealth_Ranking(t *testing.T) {
 	cases := []struct {
-		a, b, want string
+		a, b, want Health
 	}{
-		{"unhealthy", "degraded", "unhealthy"},
-		{"degraded", "unhealthy", "unhealthy"},
-		{"unknown", "healthy", "unknown"},
-		{"healthy", "unknown", "unknown"},
-		{"degraded", "unknown", "degraded"},
-		{"healthy", "degraded", "degraded"},
-		{"stalled", "degraded", "stalled"},          // stalled ranks with unhealthy
-		{"progressing", "healthy", "progressing"},   // progressing ranks with degraded
-		{"", "healthy", "healthy"},                  // empty = no opinion
-		{"degraded", "", "degraded"},                // empty = no opinion
-		{"weirdo", "healthy", "weirdo"},             // unknown vocab → "unknown" rank, beats healthy
+		{HealthUnhealthy, HealthDegraded, HealthUnhealthy},
+		{HealthDegraded, HealthUnhealthy, HealthUnhealthy},
+		{HealthUnknown, HealthHealthy, HealthUnknown},
+		{HealthHealthy, HealthUnknown, HealthUnknown},
+		{HealthDegraded, HealthUnknown, HealthDegraded},
+		{HealthHealthy, HealthDegraded, HealthDegraded},
+		{"stalled", HealthDegraded, "stalled"},          // stalled ranks with unhealthy
+		{"progressing", HealthHealthy, "progressing"},   // progressing ranks with degraded
+		{"", HealthHealthy, HealthHealthy},              // empty = no opinion
+		{HealthDegraded, "", HealthDegraded},            // empty = no opinion
+		{"weirdo", HealthHealthy, "weirdo"},             // unrecognized → "unknown" rank, beats healthy
 	}
 	for _, c := range cases {
 		if got := worseHealth(c.a, c.b); got != c.want {
@@ -341,8 +341,8 @@ func TestAggregate_SourceOrderIsCanonical(t *testing.T) {
 	}
 	for _, r := range rows {
 		if r.Chart == "cert-manager" {
-			want := []string{SourceHelm, SourceLabels, SourceCRDs, SourceArgoCD, SourceFluxCD}
-			if !equalStrings(r.Sources, want) {
+			want := []SourceCode{SourceHelm, SourceLabels, SourceCRDs, SourceArgoCD, SourceFluxCD}
+			if !equalSources(r.Sources, want) {
 				t.Errorf("want canonical sources %v, got %v", want, r.Sources)
 			}
 			return
@@ -351,7 +351,7 @@ func TestAggregate_SourceOrderIsCanonical(t *testing.T) {
 	t.Errorf("no cert-manager row found in %+v", rows)
 }
 
-func equalStrings(a, b []string) bool {
+func equalSources(a, b []SourceCode) bool {
 	if len(a) != len(b) {
 		return false
 	}

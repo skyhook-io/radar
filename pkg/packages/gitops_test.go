@@ -76,16 +76,16 @@ func TestParseArgoApplication_MissingNameRejected(t *testing.T) {
 }
 
 func TestMapArgoHealth(t *testing.T) {
-	cases := map[string]string{
-		"Healthy":     "healthy",
-		"healthy":     "healthy",
-		"Progressing": "degraded",
-		"Degraded":    "unhealthy",
-		"Suspended":   "degraded",
-		"Missing":     "unknown",
-		"Unknown":     "unknown",
-		"":            "unknown",
-		"Bogus":       "unknown",
+	cases := map[string]Health{
+		"Healthy":     HealthHealthy,
+		"healthy":     HealthHealthy,
+		"Progressing": HealthDegraded,
+		"Degraded":    HealthUnhealthy,
+		"Suspended":   HealthDegraded,
+		"Missing":     HealthUnknown,
+		"Unknown":     HealthUnknown,
+		"":            HealthUnknown,
+		"Bogus":       HealthUnknown,
 	}
 	for in, want := range cases {
 		if got := mapArgoHealth(in); got != want {

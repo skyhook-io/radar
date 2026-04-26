@@ -67,7 +67,7 @@ func Aggregate(s Sources) []PackageRow {
 		}
 		k := key{chart: chartName, namespace: h.Namespace, releaseName: h.Name}
 		r := get(k)
-		addSource(r, SourceHelm)
+		r.AddSource(SourceHelm)
 		// Helm fields win over later sources for these (highest signal).
 		if r.Version == "" {
 			r.Version = chartVersion
@@ -75,7 +75,7 @@ func Aggregate(s Sources) []PackageRow {
 		if r.AppVersion == "" {
 			r.AppVersion = h.AppVersion
 		}
-		r.Health = worseHealth(r.Health, h.ResourceHealth)
+		r.MergeHealth(h.ResourceHealth)
 	}
 
 	// 2. Workloads with Helm labels (source L).
@@ -86,14 +86,11 @@ func Aggregate(s Sources) []PackageRow {
 		if releaseName == "" && chartLabel == "" {
 			continue
 		}
-		// Derive chart name + version from the label first; fall back to
-		// release name + no version when the label's missing.
 		var chartName, chartVersion string
 		if chartLabel != "" {
 			chartName, chartVersion = splitChart(chartLabel)
 		}
 		if chartName == "" && releaseName != "" {
-			// Best-guess: release names often equal chart names ("cert-manager")
 			chartName = releaseName
 		}
 		if chartName == "" {
@@ -110,42 +107,34 @@ func Aggregate(s Sources) []PackageRow {
 		}
 		k := key{chart: chartName, namespace: releaseNs, releaseName: releaseName}
 		r := get(k)
-		addSource(r, SourceLabels)
-		// Label version is a secondary signal — only fill when Helm didn't.
+		r.AddSource(SourceLabels)
 		if r.Version == "" {
 			r.Version = chartVersion
 		}
-		// Worst-of health across all workloads for this release.
-		r.Health = worseHealth(r.Health, w.Health)
+		r.MergeHealth(w.Health)
 	}
 
 	// 3. GitOps declarations (sources A / F) — declared installs, may
 	//    or may not be running yet.
 	for _, d := range s.GitOpsDeclarations {
-		var src string
+		var src SourceCode
 		switch strings.ToLower(d.Source) {
 		case "argocd", "argo-cd", "argo":
 			src = SourceArgoCD
 		case "flux", "fluxcd":
 			src = SourceFluxCD
 		default:
-			// Unknown declaration source — skip rather than misattribute.
 			continue
 		}
 		chartName := d.Chart
 		// When the declaration omits the chart (e.g. raw-YAML Flux
-		// Kustomization), fall back to the declaration name itself —
-		// produces a usable row, just less rich.
+		// Kustomization), fall back to the declaration name itself.
 		if chartName == "" {
 			chartName = d.Name
 		}
 		if chartName == "" {
 			continue
 		}
-		// Use the declaration's target identity to merge with Helm/L
-		// rows when the GitOps controller manages a Helm release the
-		// Helm API also reports. Argo Helm-source apps + Flux
-		// HelmReleases land here.
 		ns := d.TargetNamespace
 		release := d.TargetName
 		if release == "" {
@@ -153,13 +142,11 @@ func Aggregate(s Sources) []PackageRow {
 		}
 		k := key{chart: chartName, namespace: ns, releaseName: release}
 		r := get(k)
-		addSource(r, src)
+		r.AddSource(src)
 		if r.Version == "" {
 			r.Version = d.ChartVersion
 		}
-		// Declarations contribute health when no runtime source did
-		// (typical for declared-but-not-yet-running installs).
-		r.Health = worseHealth(r.Health, d.Status)
+		r.MergeHealth(d.Status)
 	}
 
 	// 4. CRD registrations (source C). Two cases:
@@ -176,11 +163,10 @@ func Aggregate(s Sources) []PackageRow {
 			version = c.Versions[0]
 		}
 		if known {
-			// Find any rows for this chart and add C to them.
 			matched := false
 			for k, r := range rows {
 				if k.chart == chartName {
-					addSource(r, SourceCRDs)
+					r.AddSource(SourceCRDs)
 					if r.Version == "" {
 						r.Version = version
 					}
@@ -194,12 +180,12 @@ func Aggregate(s Sources) []PackageRow {
 			// CRD-only row so the install is visible.
 			k := key{chart: chartName, namespace: "", releaseName: ""}
 			r := get(k)
-			addSource(r, SourceCRDs)
+			r.AddSource(SourceCRDs)
 			if r.Version == "" {
 				r.Version = version
 			}
 			if r.Health == "" {
-				r.Health = "unknown"
+				r.Health = HealthUnknown
 			}
 			continue
 		}
@@ -208,21 +194,20 @@ func Aggregate(s Sources) []PackageRow {
 		// single row.
 		k := key{chart: c.Group, namespace: "", releaseName: ""}
 		r := get(k)
-		addSource(r, SourceCRDs)
+		r.AddSource(SourceCRDs)
 		r.FromCRDGroup = c.Group
 		if r.Version == "" {
 			r.Version = version
 		}
 		if r.Health == "" {
-			r.Health = "unknown"
+			r.Health = HealthUnknown
 		}
 	}
 
-	// Default health to unknown for any row that ended up with none
-	// (CRD-only rows; declarations without a status; etc.).
+	// Default health to unknown for any row that ended up with none.
 	for _, r := range rows {
 		if r.Health == "" {
-			r.Health = "unknown"
+			r.Health = HealthUnknown
 		}
 	}
 
@@ -243,22 +228,14 @@ func Aggregate(s Sources) []PackageRow {
 	return out
 }
 
-// addSource appends src to r.Sources if not already present. Maintains
-// canonical order H, L, C, A, F.
-func addSource(r *PackageRow, src string) {
-	for _, s := range r.Sources {
-		if s == src {
-			return
-		}
-	}
-	r.Sources = append(r.Sources, src)
-	// Re-sort into canonical order.
-	sort.Slice(r.Sources, func(i, j int) bool {
-		return sourceRank(r.Sources[i]) < sourceRank(r.Sources[j])
+// sortSources sorts in place into canonical order H, L, C, A, F.
+func sortSources(s []SourceCode) {
+	sort.Slice(s, func(i, j int) bool {
+		return sourceRank(s[i]) < sourceRank(s[j])
 	})
 }
 
-func sourceRank(s string) int {
+func sourceRank(s SourceCode) int {
 	switch s {
 	case SourceHelm:
 		return 0
@@ -295,7 +272,6 @@ func splitChart(s string) (name, version string) {
 		if rest == "" {
 			continue
 		}
-		// Version: starts with digit, or v followed by digit.
 		c := rest[0]
 		if c >= '0' && c <= '9' {
 			return s[:i-1], rest
@@ -310,36 +286,37 @@ func splitChart(s string) (name, version string) {
 	return s, ""
 }
 
-// worseHealth returns the worse of two health strings using the order:
-// unhealthy > degraded > unknown > healthy. (Unknown beats healthy
+// worseHealth returns the worse of two Health values using the order:
+// Unhealthy > Degraded > Unknown > Healthy. (Unknown beats Healthy
 // because we don't want a CRD-only "unknown" row to be promoted to
-// "healthy" just because no other source contributed.) Unknown vocab
-// (typo, future GitOps reason we don't recognize yet) maps to the
-// "unknown" rank — quieter than degraded, still beats healthy.
+// "healthy" just because no other source contributed.) Unrecognized
+// vocab (typo, future GitOps reason) maps to the "unknown" rank —
+// quieter than Degraded, still beats Healthy.
 //
-// Empty strings are treated as "no opinion" — the other side wins.
-func worseHealth(a, b string) string {
+// Empty strings are "no opinion" — the other side wins.
+func worseHealth(a, b Health) Health {
 	if a == "" {
 		return b
 	}
 	if b == "" {
 		return a
 	}
-	rank := func(h string) int {
-		switch strings.ToLower(h) {
-		case "unhealthy", "danger", "critical", "failed", "stalled":
-			return 4
-		case "degraded", "warning", "warn", "progressing", "reconciling":
-			return 3
-		case "unknown":
-			return 2
-		case "healthy", "ok", "ready", "available":
-			return 1
-		}
-		return 2
-	}
-	if rank(a) >= rank(b) {
+	if healthRank(a) >= healthRank(b) {
 		return a
 	}
 	return b
+}
+
+func healthRank(h Health) int {
+	switch Health(strings.ToLower(string(h))) {
+	case HealthUnhealthy, "danger", "critical", "failed", "stalled":
+		return 4
+	case HealthDegraded, "warning", "warn", "progressing", "reconciling":
+		return 3
+	case HealthUnknown:
+		return 2
+	case HealthHealthy, "ok", "ready", "available":
+		return 1
+	}
+	return 2
 }

@@ -11,14 +11,42 @@
 //	F — Flux HelmRelease / Kustomization declaration
 package packages
 
-// Source codes returned in PackageRow.Sources. Stable on-wire — agents,
-// SPAs, and other consumers rely on these single characters.
+// SourceCode is the single-character code identifying which signal
+// contributed to a PackageRow. Stable on-wire — agents, SPAs, Hub
+// fan-in, etc. depend on these exact strings. Defined as a named type
+// so call sites get compile-time checks against typos.
+type SourceCode string
+
 const (
-	SourceHelm        = "H"
-	SourceLabels      = "L"
-	SourceCRDs        = "C"
-	SourceArgoCD      = "A"
-	SourceFluxCD      = "F"
+	SourceHelm   SourceCode = "H"
+	SourceLabels SourceCode = "L"
+	SourceCRDs   SourceCode = "C"
+	SourceArgoCD SourceCode = "A"
+	SourceFluxCD SourceCode = "F"
+)
+
+// AllSourceCodes is the canonical-order enumeration. Used by sourcesUsed
+// to emit deterministic output and by Hub fan-in to iterate sources.
+var AllSourceCodes = []SourceCode{SourceHelm, SourceLabels, SourceCRDs, SourceArgoCD, SourceFluxCD}
+
+// Valid reports whether s is one of the five known source codes.
+func (s SourceCode) Valid() bool {
+	switch s {
+	case SourceHelm, SourceLabels, SourceCRDs, SourceArgoCD, SourceFluxCD:
+		return true
+	}
+	return false
+}
+
+// Health is the package-level health vocabulary. All four contributors
+// (Helm, Workloads, CRDs default, GitOps) normalize to one of these.
+type Health string
+
+const (
+	HealthHealthy   Health = "healthy"
+	HealthDegraded  Health = "degraded"
+	HealthUnhealthy Health = "unhealthy"
+	HealthUnknown   Health = "unknown"
 )
 
 // HelmRelease is the Helm-side input shape. Mirrors the on-wire shape
@@ -27,37 +55,36 @@ const (
 type HelmRelease struct {
 	Name           string `json:"name"`
 	Namespace      string `json:"namespace"`
-	Chart          string `json:"chart"`         // raw chart string from Helm release ("cert-manager-1.14.0")
-	ChartName      string `json:"chartName"`     // optional pre-parsed name; empty → derived from Chart
-	ChartVersion   string `json:"chartVersion"`  // optional pre-parsed version; empty → derived from Chart
+	Chart          string `json:"chart"`        // raw chart string from Helm release ("cert-manager-1.14.0")
+	ChartName      string `json:"chartName"`    // optional pre-parsed name; empty → derived from Chart
+	ChartVersion   string `json:"chartVersion"` // optional pre-parsed version; empty → derived from Chart
 	AppVersion     string `json:"appVersion"`
 	Status         string `json:"status"`
-	ResourceHealth string `json:"resourceHealth,omitempty"` // healthy|degraded|unhealthy|unknown
+	ResourceHealth Health `json:"resourceHealth,omitempty"`
 }
 
 // Workload is the labels-side input shape. We need just enough to look up
 // helm.sh/chart + meta.helm.sh/release-{name,namespace} annotations and
 // derive aggregated health. Callers translate from their concrete types
-// (corev1.Deployment, etc.) using the helpers in workloads.go.
+// (corev1.Deployment, etc.).
 type Workload struct {
-	Kind        string            `json:"kind"`        // Deployment | DaemonSet | StatefulSet | Job | CronJob
+	Kind        string            `json:"kind"` // Deployment | DaemonSet | StatefulSet | Job | CronJob
 	Namespace   string            `json:"namespace"`
 	Name        string            `json:"name"`
 	Labels      map[string]string `json:"labels"`
 	Annotations map[string]string `json:"annotations"`
 	// Health is the workload's aggregated runtime status. Caller decides
-	// the rule (e.g. ready/desired ratio for Deployments). One of:
-	// healthy|degraded|unhealthy|unknown.
-	Health string `json:"health"`
+	// the rule (e.g. ready/desired ratio for Deployments).
+	Health Health `json:"health"`
 }
 
 // CRD is the CRD-side input shape. We need just enough to map
 // spec.group → chart name and pick a version.
 type CRD struct {
-	Name    string   `json:"name"`              // metadata.name (e.g., "certificates.cert-manager.io")
-	Group   string   `json:"group"`             // spec.group (e.g., "cert-manager.io")
-	Kind    string   `json:"kind"`              // spec.names.kind
-	Plural  string   `json:"plural"`            // spec.names.plural
+	Name     string   `json:"name"`               // metadata.name (e.g., "certificates.cert-manager.io")
+	Group    string   `json:"group"`              // spec.group (e.g., "cert-manager.io")
+	Kind     string   `json:"kind"`               // spec.names.kind
+	Plural   string   `json:"plural"`             // spec.names.plural
 	Versions []string `json:"versions,omitempty"` // spec.versions[*].name (first one used)
 }
 
@@ -82,13 +109,12 @@ type Declaration struct {
 	// know it; Flux Kustomizations may not).
 	Chart        string `json:"chart,omitempty"`
 	ChartVersion string `json:"chartVersion,omitempty"`
-	// Status as the GitOps controller sees it. One of:
-	// healthy|degraded|unhealthy|unknown — caller maps from their
+	// Status as the GitOps controller sees it. Caller maps from their
 	// vocabulary. Argo: Healthy/Progressing/Degraded/Suspended/Missing/
 	// Unknown. Flux: derived from Ready and Stalled conditions; transient
 	// reasons collapse to degraded. Suspended (spec.suspend) is not yet
 	// surfaced separately.
-	Status string `json:"status"`
+	Status Health `json:"status"`
 }
 
 // Sources is the input struct fed to Aggregate. Every field is optional;
@@ -96,15 +122,20 @@ type Declaration struct {
 // whatever they have access to — Hub-mode might pass all five, a
 // minimal RBAC-restricted Radar might pass only Workloads + CRDs.
 type Sources struct {
-	Helm                []HelmRelease `json:"helm,omitempty"`
-	Workloads           []Workload    `json:"workloads,omitempty"`
-	CRDs                []CRD         `json:"crds,omitempty"`
-	GitOpsDeclarations  []Declaration `json:"gitopsDeclarations,omitempty"`
+	Helm               []HelmRelease `json:"helm,omitempty"`
+	Workloads          []Workload    `json:"workloads,omitempty"`
+	CRDs               []CRD         `json:"crds,omitempty"`
+	GitOpsDeclarations []Declaration `json:"gitopsDeclarations,omitempty"`
 }
 
 // PackageRow is the output shape — one row per detected package.
 // Multiple sources contribute to a single row when they agree; the
 // `Sources` field carries the deduplicated voters.
+//
+// Hub fan-in note: when merging rows from multiple clusters, use
+// AddSource and MergeHealth on the destination row to preserve the
+// canonical-order + worst-of-health invariants without re-implementing
+// them.
 type PackageRow struct {
 	// Chart name. Always populated. Derived from (in priority order):
 	// Helm release ChartName, helm.sh/chart label parse, crdGroupToChart
@@ -119,14 +150,34 @@ type PackageRow struct {
 	Version string `json:"version,omitempty"`
 	// AppVersion if Helm provided one. Optional.
 	AppVersion string `json:"appVersion,omitempty"`
-	// Health: healthy|degraded|unhealthy|unknown. Worst of contributors.
-	Health string `json:"health"`
+	// Health is the worst-of across contributors.
+	Health Health `json:"health"`
 	// Sources is the deduplicated set of source codes that contributed.
-	// At least one element. Order: H, L, C, A, F (declaration order).
-	Sources []string `json:"sources"`
+	// At least one element. Order: H, L, C, A, F (canonical). Treat as
+	// immutable after Aggregate returns; mutate via AddSource.
+	Sources []SourceCode `json:"sources"`
 	// FromCRDGroup, when set, indicates this row originated from a CRD
 	// whose group wasn't in crdGroupToChart — Chart is the group string
 	// itself in that case. Lets the SPA render with appropriate framing
 	// ("cert-manager.io CRDs detected") vs a real chart row.
 	FromCRDGroup string `json:"fromCRDGroup,omitempty"`
+}
+
+// AddSource appends src to r.Sources if not already present and
+// re-sorts into canonical order H, L, C, A, F. Idempotent.
+func (r *PackageRow) AddSource(src SourceCode) {
+	for _, s := range r.Sources {
+		if s == src {
+			return
+		}
+	}
+	r.Sources = append(r.Sources, src)
+	sortSources(r.Sources)
+}
+
+// MergeHealth replaces r.Health with the worse of (r.Health, h),
+// using the order Unhealthy > Degraded > Unknown > Healthy. Empty h
+// is "no opinion" — r.Health unchanged.
+func (r *PackageRow) MergeHealth(h Health) {
+	r.Health = worseHealth(r.Health, h)
 }
