@@ -84,6 +84,62 @@ func TestDefaultShellScript(t *testing.T) {
 	}
 }
 
+// TestIsShellNotFoundError pins the substring patterns used to classify
+// "shell missing" errors so the frontend renders the "Start debug container"
+// CTA instead of a generic "Failed to connect". Patterns must stay broad
+// enough to catch each container runtime's wording — see comments inline.
+func TestIsShellNotFoundError(t *testing.T) {
+	tests := []struct {
+		name   string
+		errMsg string
+		want   bool
+	}{
+		{
+			name:   "containerd: executable file not found",
+			errMsg: `OCI runtime exec failed: exec failed: unable to start container process: exec: "sh": executable file not found in $PATH: unknown`,
+			want:   true,
+		},
+		{
+			name:   "no such file or directory",
+			errMsg: `no such file or directory`,
+			want:   true,
+		},
+		{
+			name:   "exit code 127 from sh -c wrapper",
+			errMsg: `command terminated with exit code 127`,
+			want:   true,
+		},
+		{
+			name:   "case-insensitive OCI runtime",
+			errMsg: `oci runtime exec failed`,
+			want:   true,
+		},
+		{
+			name:   "non-127 exit codes are not classified as shell-missing",
+			errMsg: `command terminated with exit code 1`,
+			want:   false,
+		},
+		{
+			name:   "unrelated transport error",
+			errMsg: `unable to upgrade connection: timeout`,
+			want:   false,
+		},
+		{
+			name:   "permission denied is not shell-missing",
+			errMsg: `forbidden: pods "foo" is forbidden: User cannot exec`,
+			want:   false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := isShellNotFoundError(tc.errMsg); got != tc.want {
+				t.Errorf("isShellNotFoundError(%q) = %v, want %v", tc.errMsg, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestLooksLikeShellNotFound covers the drift canary. The function is a
 // broader heuristic than isShellNotFoundError and intentionally tolerates
 // some false positives — the goal is to log a breadcrumb when an error
