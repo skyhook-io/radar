@@ -7,10 +7,11 @@ import { TrafficWizard } from './TrafficWizard'
 import { TrafficGraph, type TrafficGraphSelection } from './TrafficGraph'
 import { TrafficFilterSidebar } from './TrafficFilterSidebar'
 import { TrafficFlowListProvider } from './TrafficFlowListContext'
-import { Loader2, RefreshCw, Filter, Plug, ChevronDown, List } from 'lucide-react'
+import { Loader2, RefreshCw, Filter, Plug, ChevronDown, List, Activity, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
+import { EmptyState } from '@skyhook-io/k8s-ui'
 
 // Addon types for filtering
 export type AddonMode = 'show' | 'group' | 'hide'
@@ -1168,42 +1169,52 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
               </div>
             </div>
           ) : (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="text-center space-y-2">
-                <Filter className="h-12 w-12 text-theme-text-tertiary mx-auto" />
-                {flowStats.total > 0 && flowStats.shown === 0 ? (
-                  <>
-                    <p className="text-theme-text-secondary">All traffic is filtered out</p>
-                    <p className="text-xs text-theme-text-tertiary">
-                      {flowStats.total} flows hidden by current filters.
-                      <button
-                        onClick={() => {
-                          setHideSystem(false)
-                          setHideExternal(false)
-                          setMinConnections(0)
-                        }}
-                        className="ml-1 text-blue-400 hover:underline"
-                      >
-                        Show all
-                      </button>
-                    </p>
-                  </>
-                ) : flowsData?.warning ? (
-                  <>
-                    <p className="text-theme-text-secondary">Unable to fetch traffic data</p>
-                    <p className="text-xs text-yellow-500 max-w-md">
-                      {flowsData.warning}
-                    </p>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-theme-text-secondary">No traffic observed</p>
-                    <p className="text-xs text-theme-text-tertiary">
-                      Traffic will appear here once connections are made between services
-                    </p>
-                  </>
-                )}
-              </div>
+            <div className="absolute inset-0 flex items-center justify-center px-4">
+              {flowStats.total > 0 && flowStats.shown === 0 ? (
+                <EmptyState
+                  tone="filtered"
+                  variant="card"
+                  icon={Filter}
+                  headline="All traffic is filtered out"
+                  body={`${flowStats.total} ${flowStats.total === 1 ? 'flow' : 'flows'} hidden by current filters.`}
+                  action={
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setHideSystem(false)
+                        setHideExternal(false)
+                        setMinConnections(0)
+                      }}
+                      className="badge badge-sm border border-theme-border bg-theme-elevated text-theme-text-primary hover:bg-theme-hover transition-colors"
+                    >
+                      Show all
+                    </button>
+                  }
+                  className="max-w-md"
+                />
+              ) : flowsData?.warning ? (
+                <EmptyState
+                  tone="neutral"
+                  variant="card"
+                  icon={AlertTriangle}
+                  headline="Unable to fetch traffic data"
+                  body={flowsData.warning}
+                  className="max-w-md"
+                />
+              ) : (
+                <EmptyState
+                  tone="neutral"
+                  variant="card"
+                  icon={Activity}
+                  headline={
+                    sourcesData?.active
+                      ? `Observing via ${sourcesData.active} — no traffic yet`
+                      : 'No traffic observed yet'
+                  }
+                  body="Traffic will appear here once services start communicating."
+                  className="max-w-md"
+                />
+              )}
             </div>
           )}
       </div>

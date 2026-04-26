@@ -390,7 +390,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Ready', width: 'w-24' },
-    { key: 'domains', label: 'Domains', width: 'w-48' },
+    { key: 'domains', label: 'Domains', width: 'w-56' },
     { key: 'issuer', label: 'Issuer', width: 'w-36', hideOnMobile: true },
     { key: 'expires', label: 'Expires', width: 'w-24', tooltip: 'Days until certificate expires' },
     { key: 'age', label: 'Age', width: 'w-24' },

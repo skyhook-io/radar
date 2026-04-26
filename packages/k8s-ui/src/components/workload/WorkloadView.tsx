@@ -39,7 +39,7 @@ import {
 import { ResourceActionsBar } from '../shared/ResourceActionsBar'
 import { EditableYamlView, SaveSuccessAnimation } from '../shared/EditableYamlView'
 import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from '../shared/ResourceRendererDispatch'
-import { getKindColor, formatKindName } from '../ui/drawer-components'
+import { getKindColorOutline, formatKindName } from '../ui/drawer-components'
 
 type TabType = 'overview' | 'timeline' | 'logs' | 'metrics' | 'yaml'
 
@@ -360,7 +360,7 @@ export function WorkloadView({
           {/* Top row: badges and controls */}
           <div className="flex items-center justify-between px-4 pt-3 pb-2">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className={clsx('badge', getKindColor(apiKind))}>
+              <span className={clsx('badge', getKindColorOutline(apiKind))}>
                 {formatKindName(apiKind)}
               </span>
               {status && (
@@ -497,7 +497,7 @@ export function WorkloadView({
               </button>
             </div>
             <div className="flex items-center gap-3 text-sm text-theme-text-secondary">
-              <span className={clsx('badge', getKindColor(apiKind))}>
+              <span className={clsx('badge', getKindColorOutline(apiKind))}>
                 {formatKindName(apiKind)}
               </span>
               {status && (

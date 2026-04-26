@@ -344,8 +344,8 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
                       <div className="border-t border-theme-border-light my-1" />
                     )}
                     {showHeader && (
-                      <div className="px-3 py-1.5 bg-theme-elevated/30">
-                        <span className="text-[10px] text-theme-text-tertiary font-medium">
+                      <div className="px-3 py-1 bg-theme-elevated/60 border-b border-theme-border/60">
+                        <span className="text-[11px] text-theme-text-secondary font-semibold">
                           {headerLabel}
                         </span>
                       </div>
@@ -383,19 +383,19 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
                               <span className={`text-sm font-medium truncate ${item.context.isCurrent ? 'text-blue-600 dark:text-blue-400' : 'text-theme-text-primary'}`}>
                                 {item.clusterName}
                               </span>
-                              {item.region && (
-                                <span className="shrink-0 text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 rounded">
-                                  {item.region}
-                                </span>
-                              )}
                               {item.context.isCurrent && (
                                 <span className="shrink-0 text-[9px] text-blue-600 dark:text-blue-400">
                                   ●
                                 </span>
                               )}
+                              {item.region && (
+                                <span className="shrink-0 ml-auto text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 rounded">
+                                  {item.region}
+                                </span>
+                              )}
                             </div>
                             {item.provider && (
-                              <div className="text-[10px] text-theme-text-tertiary truncate mt-0.5" title={item.raw}>
+                              <div className="text-[10px] text-theme-text-tertiary opacity-70 truncate mt-0.5" title={item.raw}>
                                 {item.raw}
                               </div>
                             )}

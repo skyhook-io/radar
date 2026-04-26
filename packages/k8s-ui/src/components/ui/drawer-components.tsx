@@ -642,6 +642,17 @@ export function getKindColor(kind: string): string {
   return getKindColorClass(kind)
 }
 
+// In drawer headers, kind sits next to a status pill ("Pod" / "Running"). Both
+// filled creates two pills competing for attention even though kind is just
+// metadata (the user already clicked the resource) and status is the signal.
+// Stripping the fills makes kind read as a label and status as a value.
+export function getKindColorOutline(kind: string): string {
+  return getKindColorClass(kind)
+    .replace(/\b(?:dark:)?bg-\S+/g, '')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 export function formatKindName(kind: string): string {
   const k = kind.toLowerCase()
   const names: Record<string, string> = {
