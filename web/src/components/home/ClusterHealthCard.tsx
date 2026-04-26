@@ -10,7 +10,7 @@ import { clsx } from 'clsx'
 import { formatCPUMillicores, formatMemoryMiB } from '../../utils/format'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { MCPSetupDialog } from './MCPSetupDialog'
-import { pluralize } from '@skyhook-io/k8s-ui'
+import { pluralize, parseContextName } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
 
 interface ClusterHealthCardProps {
@@ -158,6 +158,13 @@ export function ClusterHealthCard({
     { kind: 'cronjobs', label: 'CronJobs', icon: Clock, total: counts.cronJobs.total, subtitle: `${counts.cronJobs.active} active` },
   ]
   const platformInfo = getPlatformInfo(cluster.platform)
+  // The raw cluster.name is the kubeconfig context (e.g.
+  // `gke_koalabackend_us-east1-b_nonprod-cluster-us-east1`). That string
+  // is the user's primary orientation cue, but the bit they actually
+  // recognize is the short clusterName. We promote that, push the raw
+  // path into a tooltip, and surface project/region as muted metadata.
+  const parsedContext = parseContextName(cluster.name || '')
+  const headlineName = parsedContext.clusterName || cluster.name || 'Cluster'
 
   return (
     <div className="rounded-xl bg-theme-surface shadow-theme-sm overflow-hidden">
@@ -166,22 +173,38 @@ export function ClusterHealthCard({
         <div className="flex items-stretch gap-8">
           {/* Left: Cluster info */}
           <div className="flex flex-col justify-center w-[300px] shrink-0 pr-8 border-r border-theme-border/50">
-            <div className="flex items-center gap-2 mb-2">
+            <div className="flex items-center gap-2 mb-1.5">
               {platformInfo.icon ? (
                 <img src={platformInfo.icon} alt={platformInfo.name} className="w-5 h-5 object-contain" />
               ) : (
                 <Server className="w-4 h-4 text-theme-text-tertiary" />
               )}
-              <span className="text-xs text-theme-text-secondary">{platformInfo.name}</span>
+              <span className="text-xs text-theme-text-secondary truncate">{platformInfo.name}</span>
             </div>
-            <h2 className="text-sm font-semibold text-theme-text-primary break-all mb-1" title={cluster.name}>
-              {cluster.name || 'Cluster'}
+            <h2
+              className="text-xl font-semibold text-theme-text-primary truncate mb-1.5 leading-tight"
+              title={cluster.name}
+            >
+              {headlineName}
             </h2>
-            <div className="flex flex-col gap-1 text-xs text-theme-text-tertiary">
+            <div className="flex flex-col gap-0.5 text-xs text-theme-text-tertiary">
+              {(parsedContext.account || parsedContext.region) && (
+                <span className="truncate font-mono" title={[parsedContext.account, parsedContext.region].filter(Boolean).join(' · ')}>
+                  {[parsedContext.account, parsedContext.region].filter(Boolean).join(' · ')}
+                </span>
+              )}
               {cluster.version && (
                 <span>Kubernetes {cluster.version}</span>
               )}
               <span><span className="font-mono">{counts.namespaces}</span> namespaces</span>
+              {cluster.name && cluster.name !== headlineName && (
+                <span
+                  className="font-mono text-[10px] text-theme-text-disabled break-all leading-snug pt-0.5"
+                  title={cluster.name}
+                >
+                  {cluster.name}
+                </span>
+              )}
             </div>
             {nodeVersionSkew && (
               <Tooltip

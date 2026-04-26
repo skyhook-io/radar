@@ -243,20 +243,26 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
           )}
         </div>
 
-        {/* Row 2: Filter chips */}
-        <div className="flex flex-wrap items-center gap-1">
+        {/* Row 2: Filter chips — three groups separated by dividers (All | Categories | Severities | Frameworks). */}
+        <div className="flex flex-wrap items-center gap-1.5">
           <FilterPill label="All" active={!categoryFilter && !severityFilter && !frameworkFilter} onClick={() => { setCategoryFilter(null); setSeverityFilter(null); setFrameworkFilter(null) }} />
-          <span className="w-px h-4 bg-theme-text-tertiary/30 mx-3" />
+          <span className="w-px h-5 bg-theme-border mx-2" />
           {CATEGORIES.map(cat => (
             <FilterPill key={cat} label={cat} active={categoryFilter === cat} onClick={() => setCategoryFilter(categoryFilter === cat ? null : cat)} />
           ))}
-          <span className="w-px h-4 bg-theme-text-tertiary/30 mx-3" />
+          <span className="w-px h-5 bg-theme-border mx-2" />
           {SEVERITIES.map(sev => (
-            <FilterPill key={sev} label={sev === 'danger' ? 'Critical' : 'Warning'} active={severityFilter === sev} onClick={() => setSeverityFilter(severityFilter === sev ? null : sev)} />
+            <FilterPill
+              key={sev}
+              label={sev === 'danger' ? 'Critical' : 'Warning'}
+              active={severityFilter === sev}
+              tone={sev === 'danger' ? 'danger' : 'warn'}
+              onClick={() => setSeverityFilter(severityFilter === sev ? null : sev)}
+            />
           ))}
           {frameworks.length > 0 && (
             <>
-              <span className="w-px h-4 bg-theme-text-tertiary/30 mx-3" />
+              <span className="w-px h-5 bg-theme-border mx-2" />
               {frameworks.map(fw => (
                 <FilterPill key={fw} label={fw} active={frameworkFilter === fw} onClick={() => setFrameworkFilter(frameworkFilter === fw ? null : fw)} />
               ))}
@@ -283,6 +289,15 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
             variant="card"
             headline="No findings match the current filters"
             body="Try clearing one or more filters to see more results."
+            action={
+              <button
+                type="button"
+                onClick={() => { setCategoryFilter(null); setSeverityFilter(null); setFrameworkFilter(null); setSearchTerm('') }}
+                className="badge badge-sm border border-theme-border bg-theme-elevated text-theme-text-primary hover:bg-theme-hover transition-colors"
+              >
+                Clear all filters
+              </button>
+            }
           />
         )
       ) : namespacedGroups ? (

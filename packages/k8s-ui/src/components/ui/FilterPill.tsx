@@ -41,17 +41,19 @@ interface Props {
   className?: string
 }
 
+// Always-bordered chip: same border-width in both states keeps geometry stable
+// when toggling, and a visible inactive border is what makes pills read as
+// pressable chips instead of plain links. Active states fill the chip and
+// promote the border to a tone-matched ring.
 const TONE_ACTIVE: Record<FilterPillTone, string> = {
-  // Neutral matches Radar's pre-existing style (preserves back-compat with
-  // AuditFindingsTable's previous local toggle).
-  neutral: 'bg-theme-text-primary/10 text-theme-text-primary font-medium',
-  danger:  'bg-red-500/15 text-red-700 dark:text-red-300 font-medium',
-  warn:    'bg-amber-500/15 text-amber-800 dark:text-amber-300 font-medium',
-  ok:      'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-medium',
-  brand:   'bg-[var(--color-brand-50)] text-theme-text-primary ring-1 ring-inset ring-[var(--color-radar-accent)] dark:bg-[var(--color-brand-950)] font-medium',
+  neutral: 'bg-theme-text-primary/10 border-theme-text-primary/25 text-theme-text-primary',
+  danger:  'bg-red-500/15 border-red-500/40 text-red-700 dark:text-red-300',
+  warn:    'bg-amber-500/15 border-amber-500/40 text-amber-800 dark:text-amber-300',
+  ok:      'bg-emerald-500/15 border-emerald-500/40 text-emerald-700 dark:text-emerald-300',
+  brand:   'bg-[var(--color-brand-50)] border-[var(--color-radar-accent)] text-theme-text-primary dark:bg-[var(--color-brand-950)]',
 }
 
-const INACTIVE = 'text-theme-text-tertiary hover:text-theme-text-secondary hover:bg-theme-hover'
+const INACTIVE = 'border-theme-border-light text-theme-text-secondary hover:border-theme-border hover:text-theme-text-primary hover:bg-theme-hover/50'
 
 export function FilterPill({
   label,
@@ -73,7 +75,7 @@ export function FilterPill({
       aria-pressed={active}
       aria-label={ariaLabel}
       className={clsx(
-        'inline-flex items-center gap-1.5 rounded-md px-2 py-0.5 text-xs transition-colors',
+        'inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium transition-colors',
         'focus-visible:ring-2 focus-visible:ring-theme-text-primary/20 focus-visible:outline-none',
         active ? TONE_ACTIVE[tone] : INACTIVE,
         className,
