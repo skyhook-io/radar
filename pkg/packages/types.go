@@ -128,14 +128,34 @@ type Sources struct {
 	GitOpsDeclarations []Declaration `json:"gitopsDeclarations,omitempty"`
 }
 
+// SourceContribution is what one signal saw for this package, before
+// the worst-of-health / first-wins-version merge collapsed contributors
+// into a single PackageRow. Consumers needing per-source detail (Hub's
+// "Helm: healthy · Argo: degraded" tooltip, "managed by Argo →" deep
+// link, same-cluster version-disagreement detection) read Contributors;
+// simple consumers read the aggregated fields on PackageRow directly.
+type SourceContribution struct {
+	Source           SourceCode `json:"source"`
+	Health           Health     `json:"health,omitempty"`
+	Version          string     `json:"version,omitempty"`
+	AppVersion       string     `json:"appVersion,omitempty"`
+	ReleaseName      string     `json:"releaseName,omitempty"`
+	ReleaseNamespace string     `json:"releaseNamespace,omitempty"`
+	// For GitOps sources (A/F): the controller resource's own identity
+	// (e.g. the Argo Application's namespace/name, the Flux HelmRelease's
+	// namespace/name). Lets consumers deep-link to the controller view.
+	DeclarationName      string `json:"declarationName,omitempty"`
+	DeclarationNamespace string `json:"declarationNamespace,omitempty"`
+}
+
 // PackageRow is the output shape — one row per detected package.
 // Multiple sources contribute to a single row when they agree; the
-// `Sources` field carries the deduplicated voters.
+// `Sources` field carries the deduplicated voters and `Contributors`
+// carries each source's pre-merge view.
 //
 // Hub fan-in note: when merging rows from multiple clusters, use
-// AddSource and MergeHealth on the destination row to preserve the
-// canonical-order + worst-of-health invariants without re-implementing
-// them.
+// AddContribution on the destination row to preserve the canonical-
+// order + worst-of-health invariants and to keep per-source provenance.
 type PackageRow struct {
 	// Chart name. Always populated. Derived from (in priority order):
 	// Helm release ChartName, helm.sh/chart label parse, crdGroupToChart
@@ -146,7 +166,9 @@ type PackageRow struct {
 	Namespace   string `json:"namespace,omitempty"`
 	ReleaseName string `json:"releaseName,omitempty"`
 	// Version (Helm chart version > label version > CRD spec.versions[0].name
-	// > GitOps declared version). Empty if no source supplied one.
+	// > GitOps declared version). Empty if no source supplied one. For
+	// per-source values (and to detect same-cluster version disagreement),
+	// read Contributors.
 	Version string `json:"version,omitempty"`
 	// AppVersion if Helm provided one. Optional.
 	AppVersion string `json:"appVersion,omitempty"`
@@ -154,8 +176,13 @@ type PackageRow struct {
 	Health Health `json:"health"`
 	// Sources is the deduplicated set of source codes that contributed.
 	// At least one element. Order: H, L, C, A, F (canonical). Treat as
-	// immutable after Aggregate returns; mutate via AddSource.
+	// immutable after Aggregate returns; mutate via AddContribution.
 	Sources []SourceCode `json:"sources"`
+	// Contributors carries each source's pre-merge view (one entry per
+	// SourceCode). Same canonical order as Sources. Hub uses this for
+	// the "Helm says healthy, Argo says degraded" tooltip and to deep-
+	// link to the GitOps controller resource that manages a row.
+	Contributors []SourceContribution `json:"contributors,omitempty"`
 	// FromCRDGroup, when set, indicates this row originated from a CRD
 	// whose group wasn't in crdGroupToChart — Chart is the group string
 	// itself in that case. Lets the SPA render with appropriate framing
@@ -165,6 +192,9 @@ type PackageRow struct {
 
 // AddSource appends src to r.Sources if not already present and
 // re-sorts into canonical order H, L, C, A, F. Idempotent.
+//
+// Most callers should use AddContribution instead — it captures the
+// per-source detail and calls AddSource as a side-effect.
 func (r *PackageRow) AddSource(src SourceCode) {
 	for _, s := range r.Sources {
 		if s == src {
@@ -180,4 +210,51 @@ func (r *PackageRow) AddSource(src SourceCode) {
 // is "no opinion" — r.Health unchanged.
 func (r *PackageRow) MergeHealth(h Health) {
 	r.Health = worseHealth(r.Health, h)
+}
+
+// AddContribution merges a per-source contribution into r. Updates:
+//  1. r.Sources (idempotent, canonical order — via AddSource)
+//  2. r.Contributors (idempotent on Source: subsequent contributions
+//     from the same Source merge — Health worst-of, other fields
+//     keep first-seen non-empty values)
+//  3. Aggregated fields (r.Health worst-of, r.Version/AppVersion
+//     first-seen wins) — preserves the existing on-wire semantics
+//     for simple consumers that ignore Contributors.
+func (r *PackageRow) AddContribution(c SourceContribution) {
+	r.AddSource(c.Source)
+	r.MergeHealth(c.Health)
+	if r.Version == "" {
+		r.Version = c.Version
+	}
+	if r.AppVersion == "" {
+		r.AppVersion = c.AppVersion
+	}
+	for i := range r.Contributors {
+		if r.Contributors[i].Source != c.Source {
+			continue
+		}
+		existing := &r.Contributors[i]
+		existing.Health = worseHealth(existing.Health, c.Health)
+		if existing.Version == "" {
+			existing.Version = c.Version
+		}
+		if existing.AppVersion == "" {
+			existing.AppVersion = c.AppVersion
+		}
+		if existing.ReleaseName == "" {
+			existing.ReleaseName = c.ReleaseName
+		}
+		if existing.ReleaseNamespace == "" {
+			existing.ReleaseNamespace = c.ReleaseNamespace
+		}
+		if existing.DeclarationName == "" {
+			existing.DeclarationName = c.DeclarationName
+		}
+		if existing.DeclarationNamespace == "" {
+			existing.DeclarationNamespace = c.DeclarationNamespace
+		}
+		return
+	}
+	r.Contributors = append(r.Contributors, c)
+	sortContributors(r.Contributors)
 }

@@ -67,15 +67,14 @@ func Aggregate(s Sources) []PackageRow {
 		}
 		k := key{chart: chartName, namespace: h.Namespace, releaseName: h.Name}
 		r := get(k)
-		r.AddSource(SourceHelm)
-		// Helm fields win over later sources for these (highest signal).
-		if r.Version == "" {
-			r.Version = chartVersion
-		}
-		if r.AppVersion == "" {
-			r.AppVersion = h.AppVersion
-		}
-		r.MergeHealth(h.ResourceHealth)
+		r.AddContribution(SourceContribution{
+			Source:           SourceHelm,
+			Health:           h.ResourceHealth,
+			Version:          chartVersion,
+			AppVersion:       h.AppVersion,
+			ReleaseName:      h.Name,
+			ReleaseNamespace: h.Namespace,
+		})
 	}
 
 	// 2. Workloads with Helm labels (source L).
@@ -107,11 +106,13 @@ func Aggregate(s Sources) []PackageRow {
 		}
 		k := key{chart: chartName, namespace: releaseNs, releaseName: releaseName}
 		r := get(k)
-		r.AddSource(SourceLabels)
-		if r.Version == "" {
-			r.Version = chartVersion
-		}
-		r.MergeHealth(w.Health)
+		r.AddContribution(SourceContribution{
+			Source:           SourceLabels,
+			Health:           w.Health,
+			Version:          chartVersion,
+			ReleaseName:      releaseName,
+			ReleaseNamespace: releaseNs,
+		})
 	}
 
 	// 3. GitOps declarations (sources A / F) — declared installs, may
@@ -142,11 +143,15 @@ func Aggregate(s Sources) []PackageRow {
 		}
 		k := key{chart: chartName, namespace: ns, releaseName: release}
 		r := get(k)
-		r.AddSource(src)
-		if r.Version == "" {
-			r.Version = d.ChartVersion
-		}
-		r.MergeHealth(d.Status)
+		r.AddContribution(SourceContribution{
+			Source:               src,
+			Health:               d.Status,
+			Version:              d.ChartVersion,
+			ReleaseName:          release,
+			ReleaseNamespace:     ns,
+			DeclarationName:      d.Name,
+			DeclarationNamespace: d.Namespace,
+		})
 	}
 
 	// 4. CRD registrations (source C). Two cases:
@@ -162,14 +167,15 @@ func Aggregate(s Sources) []PackageRow {
 		if len(c.Versions) > 0 {
 			version = c.Versions[0]
 		}
+		crdContribution := SourceContribution{
+			Source:  SourceCRDs,
+			Version: version,
+		}
 		if known {
 			matched := false
 			for k, r := range rows {
 				if k.chart == chartName {
-					r.AddSource(SourceCRDs)
-					if r.Version == "" {
-						r.Version = version
-					}
+					r.AddContribution(crdContribution)
 					matched = true
 				}
 			}
@@ -180,10 +186,7 @@ func Aggregate(s Sources) []PackageRow {
 			// CRD-only row so the install is visible.
 			k := key{chart: chartName, namespace: "", releaseName: ""}
 			r := get(k)
-			r.AddSource(SourceCRDs)
-			if r.Version == "" {
-				r.Version = version
-			}
+			r.AddContribution(crdContribution)
 			if r.Health == "" {
 				r.Health = HealthUnknown
 			}
@@ -194,11 +197,8 @@ func Aggregate(s Sources) []PackageRow {
 		// single row.
 		k := key{chart: c.Group, namespace: "", releaseName: ""}
 		r := get(k)
-		r.AddSource(SourceCRDs)
+		r.AddContribution(crdContribution)
 		r.FromCRDGroup = c.Group
-		if r.Version == "" {
-			r.Version = version
-		}
 		if r.Health == "" {
 			r.Health = HealthUnknown
 		}
@@ -232,6 +232,13 @@ func Aggregate(s Sources) []PackageRow {
 func sortSources(s []SourceCode) {
 	sort.Slice(s, func(i, j int) bool {
 		return sourceRank(s[i]) < sourceRank(s[j])
+	})
+}
+
+// sortContributors sorts contributions in place by canonical Source order.
+func sortContributors(cs []SourceContribution) {
+	sort.Slice(cs, func(i, j int) bool {
+		return sourceRank(cs[i].Source) < sourceRank(cs[j].Source)
 	})
 }
 

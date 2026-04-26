@@ -154,16 +154,21 @@ func registerTools(server *mcp.Server) {
 			"Argo Applications, Flux HelmReleases + Kustomizations) with their sources, " +
 			"versions, and health. Each row carries a `sources` array (H=Helm API, " +
 			"L=workload labels, C=CRD registrations, A=Argo declaration, F=Flux declaration) " +
-			"so the caller can see WHY this package is detected. Use to answer 'what's " +
-			"installed?' / 'what version of cert-manager is running?' / 'are there orphaned " +
-			"operators?' in a single call instead of combining list_helm_releases + " +
-			"list_resources + manual merge. Filter by namespace, source, or chart substring. " +
-			"Response includes `sourcesErrored` listing any sources that failed (e.g. RBAC " +
-			"denied for Helm release secrets, Helm client not initialized, GitOps informer " +
-			"errors other than the controller's CRDs being absent). When this is non-empty, " +
-			"results are still returned but are partial — fewer rows than expected may " +
-			"indicate a dropped source rather than nothing installed. ArgoCD/FluxCD CRDs " +
-			"that are simply not installed in the cluster do NOT appear in sourcesErrored.",
+			"so the caller can see WHY this package is detected, plus a `contributors` " +
+			"array with per-source detail (each source's view of health/version, plus the " +
+			"GitOps controller resource identity in declarationName/declarationNamespace " +
+			"for sources A and F). Aggregated row-level health is worst-of contributors; " +
+			"row-level version is first-source-priority — read `contributors` to detect " +
+			"same-cluster disagreement. Use to answer 'what's installed?' / 'what version " +
+			"of cert-manager is running?' / 'are there orphaned operators?' in a single " +
+			"call instead of combining list_helm_releases + list_resources + manual merge. " +
+			"Filter by namespace, source, or chart substring. Response includes " +
+			"`sourcesErrored` listing any sources that failed (e.g. RBAC denied for Helm " +
+			"release secrets, Helm client not initialized, GitOps informer errors other " +
+			"than the controller's CRDs being absent). When this is non-empty, results " +
+			"are still returned but are partial — fewer rows than expected may indicate a " +
+			"dropped source rather than nothing installed. ArgoCD/FluxCD CRDs that are " +
+			"simply not installed in the cluster do NOT appear in sourcesErrored.",
 		Annotations: readOnly,
 	}, logToolCall("list_packages", handleListPackages))
 

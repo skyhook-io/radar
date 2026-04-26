@@ -351,6 +351,131 @@ func TestAggregate_SourceOrderIsCanonical(t *testing.T) {
 	t.Errorf("no cert-manager row found in %+v", rows)
 }
 
+// Contributors should carry per-source detail that survives the
+// worst-of-health and first-wins-version merges. This is what Hub uses
+// for the "Helm: healthy · Argo: degraded" tooltip and for deep-linking
+// to the controlling Argo Application.
+func TestAggregate_ContributorsCarryPerSourceDetail(t *testing.T) {
+	rows := Aggregate(Sources{
+		Helm: []HelmRelease{{
+			Name:           "cert-manager",
+			Namespace:      "cm",
+			Chart:          "cert-manager-1.14.0",
+			AppVersion:     "v1.14.0",
+			ResourceHealth: HealthHealthy,
+		}},
+		Workloads: []Workload{{
+			Kind:        "Deployment",
+			Namespace:   "cm",
+			Name:        "cert-manager",
+			Labels:      map[string]string{"helm.sh/chart": "cert-manager-1.14.0"},
+			Annotations: map[string]string{"meta.helm.sh/release-name": "cert-manager", "meta.helm.sh/release-namespace": "cm"},
+			Health:      HealthDegraded,
+		}},
+		GitOpsDeclarations: []Declaration{{
+			Source:          "argocd",
+			Namespace:       "argocd",
+			Name:            "cert-manager-app",
+			TargetNamespace: "cm",
+			TargetName:      "cert-manager",
+			Chart:           "cert-manager",
+			ChartVersion:    "1.14.1", // disagrees with Helm's 1.14.0
+			Status:          HealthHealthy,
+		}},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d: %+v", len(rows), rows)
+	}
+	r := rows[0]
+
+	// Aggregated fields keep existing semantics: worst-of-health, first-
+	// wins-version (Helm wins because it runs first).
+	if r.Health != HealthDegraded {
+		t.Errorf("aggregated Health = %q, want degraded (worst-of)", r.Health)
+	}
+	if r.Version != "1.14.0" {
+		t.Errorf("aggregated Version = %q, want 1.14.0 (Helm first-wins)", r.Version)
+	}
+
+	// Contributors carry per-source detail and are in canonical order.
+	if len(r.Contributors) != 3 {
+		t.Fatalf("want 3 contributors (H, L, A), got %d: %+v", len(r.Contributors), r.Contributors)
+	}
+	wantOrder := []SourceCode{SourceHelm, SourceLabels, SourceArgoCD}
+	for i, c := range r.Contributors {
+		if c.Source != wantOrder[i] {
+			t.Errorf("contributor[%d].Source = %q, want %q (canonical order)", i, c.Source, wantOrder[i])
+		}
+	}
+
+	helm := findContrib(r, SourceHelm)
+	if helm.Health != HealthHealthy || helm.Version != "1.14.0" || helm.AppVersion != "v1.14.0" || helm.ReleaseName != "cert-manager" || helm.ReleaseNamespace != "cm" {
+		t.Errorf("Helm contribution wrong: %+v", helm)
+	}
+
+	labels := findContrib(r, SourceLabels)
+	if labels.Health != HealthDegraded {
+		t.Errorf("Labels contribution health = %q, want degraded (per-source preserved)", labels.Health)
+	}
+
+	argo := findContrib(r, SourceArgoCD)
+	// The Argo Application's identity is exposed for deep-linking.
+	if argo.DeclarationName != "cert-manager-app" || argo.DeclarationNamespace != "argocd" {
+		t.Errorf("Argo declaration identity wrong: name=%q ns=%q", argo.DeclarationName, argo.DeclarationNamespace)
+	}
+	// Argo's version disagreement is preserved per-source even though
+	// the aggregated row.Version takes Helm's value.
+	if argo.Version != "1.14.1" {
+		t.Errorf("Argo contribution Version = %q, want 1.14.1 (per-source disagreement preserved)", argo.Version)
+	}
+	if argo.Health != HealthHealthy {
+		t.Errorf("Argo contribution Health = %q, want healthy (per-source preserved)", argo.Health)
+	}
+}
+
+// Multiple workloads under the same release: their Health worst-ofs
+// within the single L contribution, not into separate entries.
+func TestAggregate_Contributors_LabelsCollapseAcrossWorkloads(t *testing.T) {
+	rows := Aggregate(Sources{
+		Workloads: []Workload{
+			{
+				Kind: "Deployment", Namespace: "cm", Name: "cert-manager",
+				Labels:      map[string]string{"helm.sh/chart": "cert-manager-1.14.0"},
+				Annotations: map[string]string{"meta.helm.sh/release-name": "cert-manager", "meta.helm.sh/release-namespace": "cm"},
+				Health:      HealthHealthy,
+			},
+			{
+				Kind: "Deployment", Namespace: "cm", Name: "cert-manager-cainjector",
+				Labels:      map[string]string{"helm.sh/chart": "cert-manager-1.14.0"},
+				Annotations: map[string]string{"meta.helm.sh/release-name": "cert-manager", "meta.helm.sh/release-namespace": "cm"},
+				Health:      HealthDegraded,
+			},
+		},
+	})
+	if len(rows) != 1 {
+		t.Fatalf("want 1 row, got %d", len(rows))
+	}
+	r := rows[0]
+	if len(r.Contributors) != 1 {
+		t.Fatalf("want 1 contributor (collapsed L), got %d: %+v", len(r.Contributors), r.Contributors)
+	}
+	if r.Contributors[0].Source != SourceLabels {
+		t.Fatalf("contributor source = %q, want L", r.Contributors[0].Source)
+	}
+	if r.Contributors[0].Health != HealthDegraded {
+		t.Errorf("L contribution Health = %q, want degraded (worst-of across workloads)", r.Contributors[0].Health)
+	}
+}
+
+func findContrib(r PackageRow, src SourceCode) SourceContribution {
+	for _, c := range r.Contributors {
+		if c.Source == src {
+			return c
+		}
+	}
+	return SourceContribution{}
+}
+
 func equalSources(a, b []SourceCode) bool {
 	if len(a) != len(b) {
 		return false
