@@ -28,6 +28,13 @@ var (
 func main() {
 	startupStart := time.Now()
 
+	// Propagate the build-time version to the cloud dialer so the agent
+	// advertises the real version (e.g. "1.5.5") on the tunnel handshake
+	// instead of the "dev" default. Dockerfile + Makefile inject
+	// `-X main.version=...`; mirror it here rather than adding a second
+	// ldflags target so there's a single source of truth.
+	cloud.Version = version
+
 	// Load persistent config (~/.radar/config.json) for flag defaults.
 	// CLI flags override config file values.
 	fileCfg := config.Load()
