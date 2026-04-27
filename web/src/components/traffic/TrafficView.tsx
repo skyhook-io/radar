@@ -11,7 +11,7 @@ import { Loader2, RefreshCw, Filter, Plug, ChevronDown, List, Activity, AlertTri
 import { clsx } from 'clsx'
 import { useQueryClient } from '@tanstack/react-query'
 import { useDock } from '../dock'
-import { EmptyState } from '@skyhook-io/k8s-ui'
+import { EmptyState, PaneLoader } from '@skyhook-io/k8s-ui'
 
 // Addon types for filtering
 export type AddonMode = 'show' | 'group' | 'hide'
@@ -1136,12 +1136,10 @@ export function TrafficView({ namespaces }: TrafficViewProps) {
           })()}
 
           {isConnecting || (flowsFetching && finalFlows.length === 0) ? (
-            <div className="absolute inset-0 flex items-center justify-center">
-              <div className="flex items-center gap-2 text-theme-text-secondary">
-                <Loader2 className="h-5 w-5 animate-spin" />
-                <span>{isConnecting ? 'Connecting to traffic source...' : 'Loading traffic data...'}</span>
-              </div>
-            </div>
+            <PaneLoader
+              label={isConnecting ? 'Connecting to traffic source…' : 'Loading traffic data…'}
+              className="absolute inset-0"
+            />
           ) : finalFlows.length > 0 ? (
             <TrafficGraph
               flows={finalFlows}

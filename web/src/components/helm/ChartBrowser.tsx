@@ -1,5 +1,6 @@
 import { useState, useMemo } from 'react'
 import { Search, RefreshCw, Package, Database, AlertCircle, ExternalLink, ChevronDown, Star, Shield, BadgeCheck, Building2, Globe, ArrowUpDown, FileJson, PenTool } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import { useHelmRepositories, useSearchCharts, useUpdateRepository, useArtifactHubSearch, type ArtifactHubSortOption } from '../../api/client'
 import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
@@ -258,9 +259,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
       {/* Chart grid */}
       <div className="flex-1 overflow-auto p-4">
         {isLoading ? (
-          <div className="flex items-center justify-center h-32 text-theme-text-tertiary">
-            Loading charts...
-          </div>
+          <PaneLoader label="Loading charts…" className="h-32" />
         ) : chartSource === 'local' ? (
           // Local charts view
           filteredLocalCharts.length === 0 ? (

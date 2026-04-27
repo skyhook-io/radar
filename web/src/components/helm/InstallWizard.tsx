@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useMemo, useRef } from 'react'
 import { X, Package, ChevronRight, ChevronLeft, Play, Loader2, AlertTriangle, CheckCircle, User, BookOpen, Link as LinkIcon, Star, BadgeCheck, Shield, Globe, Building2, Plus, Minus, Terminal } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import yaml from 'yaml'
 import { createPatch } from 'diff'
@@ -277,10 +278,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
         {/* Content */}
         <div className="flex-1 overflow-auto p-4">
           {chartLoading ? (
-            <div className="flex items-center justify-center h-32 text-theme-text-tertiary">
-              <Loader2 className="w-5 h-5 animate-spin mr-2" />
-              Loading chart details...
-            </div>
+            <PaneLoader label="Loading chart details…" className="h-32" />
           ) : (
             <>
               {step === 'info' && (

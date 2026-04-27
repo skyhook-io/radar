@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { X, Copy, Check, RefreshCw, Package, Code, History, FileText, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2 } from 'lucide-react'
@@ -413,7 +414,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
       {/* Content */}
       <div className="flex-1 overflow-y-auto" style={{ viewTransitionName: 'helm-drawer-content' }}>
         {isLoading ? (
-          <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Loading...</div>
+          <PaneLoader className="h-32" />
         ) : !releaseDetail ? (
           <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Release not found</div>
         ) : (

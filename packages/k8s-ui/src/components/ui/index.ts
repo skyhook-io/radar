@@ -1,4 +1,5 @@
 export { Tooltip } from './Tooltip'
+export { PaneLoader } from './PaneLoader'
 export { ClusterName } from './ClusterName'
 export { EmptyState } from './EmptyState'
 export type { EmptyStateTone, EmptyStateVariant } from './EmptyState'

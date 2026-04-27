@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useOpenCostSummary, useOpenCostWorkloads, useOpenCostNodes } from '../../api/client'
 import type { OpenCostNamespaceCost, OpenCostWorkloadCost, OpenCostNodeCost } from '../../api/client'
 import { ArrowLeft, ChevronDown, ChevronRight, DollarSign, HelpCircle, Loader2, Server, X } from 'lucide-react'
-import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { CostTrendChart } from './CostTrendChart'
 
 interface CostViewProps {
@@ -15,14 +15,7 @@ export function CostView({ onBack }: CostViewProps) {
   const [showHelp, setShowHelp] = useState(false)
 
   if (isLoading) {
-    return (
-      <div className="flex-1 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
-          <span className="text-sm text-theme-text-tertiary">Loading cost data...</span>
-        </div>
-      </div>
-    )
+    return <PaneLoader label="Loading cost data…" className="flex-1" />
   }
 
   if (!data || !data.available) {

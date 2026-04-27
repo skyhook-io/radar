@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import type { TrafficSourcesResponse, TrafficWizardState } from '../../types'
 import { CheckCircle2, XCircle, AlertTriangle, Copy, ExternalLink, ArrowRight, ArrowLeft, Package } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
 import { InstallWizard } from '../helm/InstallWizard'
 
@@ -89,14 +90,7 @@ export function TrafficWizard({
 
   // Detecting state
   if (state === 'detecting' || sourcesLoading) {
-    return (
-      <div className="flex items-center justify-center h-full w-full">
-        <div className="text-center space-y-4">
-          <img src={radarLoadingIcon} alt="" aria-hidden className="h-11 w-11 mx-auto" />
-          <p className="text-theme-text-secondary">Detecting traffic sources...</p>
-        </div>
-      </div>
-    )
+    return <PaneLoader label="Detecting traffic sources…" className="h-full w-full" />
   }
 
   // Checking state (polling for newly enabled source)
@@ -105,9 +99,9 @@ export function TrafficWizard({
       <>
         <div className="flex items-center justify-center h-full w-full">
           <div className="max-w-md w-full p-6 space-y-6">
-            <div className="text-center space-y-2">
-              <img src={radarLoadingIcon} alt="" aria-hidden className="h-11 w-11 mx-auto" />
-              <h2 className="text-lg font-medium text-theme-text-primary">Waiting for traffic source...</h2>
+            <div className="flex flex-col items-center gap-3">
+              <img src={radarLoadingIcon} alt="" aria-hidden className="h-11 w-11" />
+              <h2 className="text-lg font-medium text-theme-text-primary">Waiting for traffic source…</h2>
               <p className="text-sm text-theme-text-secondary">
                 Checking for availability
               </p>

@@ -1,4 +1,5 @@
 import { X, GitCompare } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 
 interface ManifestDiffViewerProps {
@@ -11,11 +12,7 @@ interface ManifestDiffViewerProps {
 
 export function ManifestDiffViewer({ diff, isLoading, revision1, revision2, onClose }: ManifestDiffViewerProps) {
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-32 text-theme-text-tertiary">
-        Computing diff...
-      </div>
-    )
+    return <PaneLoader label="Computing diff…" className="h-32" />
   }
 
   if (!diff) {

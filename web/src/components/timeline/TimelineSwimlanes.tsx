@@ -27,7 +27,7 @@ import { useHasLimitedAccess } from '../../contexts/CapabilitiesContext'
 import type { TimelineEvent, Topology } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 import { kindToPlural } from '../../utils/navigation'
-import { pluralize } from '@skyhook-io/k8s-ui'
+import { PaneLoader, pluralize } from '@skyhook-io/k8s-ui'
 import { isChangeEvent, isHistoricalEvent, isOperation, displayKind } from '../../types'
 import { DiffViewer } from './DiffViewer'
 import { getOperationColor, getHealthBadgeColor, getEventTypeColor } from '../../utils/badge-colors'
@@ -436,12 +436,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
   }, [])
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-full w-full text-theme-text-tertiary">
-        <RefreshCw className="w-5 h-5 animate-spin mr-2" />
-        Loading timeline...
-      </div>
-    )
+    return <PaneLoader label="Loading timeline…" className="h-full w-full" />
   }
 
   // Compute empty state info (but don't early return - we need the toolbar visible)

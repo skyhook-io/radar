@@ -1,6 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { flushSync } from 'react-dom'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
+import { PaneLoader } from '../ui/PaneLoader'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { clsx } from 'clsx'
 import {
@@ -426,7 +427,7 @@ export function WorkloadView({
         {/* Content — viewTransitionName scopes View Transitions API cross-fade to this element */}
         <div className="flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
           {resourceLoading ? (
-            <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Loading...</div>
+            <PaneLoader className="h-32" />
           ) : !resource ? (
             <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Resource not found</div>
           ) : showYaml ? (
@@ -640,7 +641,7 @@ export function WorkloadView({
         {activeTab === 'yaml' && (
           <div className="h-full overflow-auto">
             {resourceLoading ? (
-              <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Loading...</div>
+              <PaneLoader className="h-32" />
             ) : !resource ? (
               <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Resource not found</div>
             ) : (
@@ -1105,12 +1106,7 @@ function InfoTab({
   extraContent?: ReactNode
 }) {
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-full text-theme-text-tertiary">
-        <RefreshCw className="w-5 h-5 animate-spin mr-2" />
-        Loading...
-      </div>
-    )
+    return <PaneLoader className="h-full" />
   }
 
   if (!resource) {

@@ -2,6 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'r
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { Package, Search, RefreshCw, ArrowUpCircle, LayoutGrid, List, Shield } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
 import type { HelmRelease, SelectedHelmRelease, UpgradeInfo, ChartSource } from '../../types'
@@ -232,9 +233,7 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
             {/* Releases Table */}
             <div className="flex-1 overflow-auto">
               {isLoading ? (
-                <div className="flex items-center justify-center h-full text-theme-text-tertiary">
-                  Loading...
-                </div>
+                <PaneLoader className="h-full" />
               ) : isForbidden ? (
                 <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
                   <Shield className="w-8 h-8 text-amber-400 mb-2" />

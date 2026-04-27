@@ -1,5 +1,6 @@
 import { useState, useMemo, useRef, useEffect } from 'react'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
+import { PaneLoader } from '../ui/PaneLoader'
 import {
   AlertCircle,
   CheckCircle,
@@ -403,10 +404,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       {/* Timeline content */}
       <div className="flex-1 overflow-auto">
         {isLoading ? (
-          <div className="flex items-center justify-center h-full text-theme-text-tertiary">
-            <RefreshCw className="w-5 h-5 animate-spin mr-2" />
-            Loading timeline...
-          </div>
+          <PaneLoader label="Loading timeline…" className="h-full" />
         ) : filteredActivity.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
             <Clock className="w-12 h-12 mb-4 opacity-50" />

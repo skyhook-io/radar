@@ -1,5 +1,6 @@
 import { useState, useCallback } from 'react'
 import { Copy, Check, Settings, Pencil, X, Eye, Play, Loader2 } from 'lucide-react'
+import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import yaml from 'yaml'
 import type { HelmValues, ValuesPreviewResponse } from '../../types'
@@ -138,11 +139,7 @@ export function ValuesViewer({
   }, [previewData, namespace, name, applyMutation, handleCancelEdit, onApplySuccess])
 
   if (isLoading) {
-    return (
-      <div className="flex items-center justify-center h-32 text-theme-text-tertiary">
-        Loading values...
-      </div>
-    )
+    return <PaneLoader label="Loading values…" className="h-32" />
   }
 
   if (isEmpty && !isEditing) {

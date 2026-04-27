@@ -1,7 +1,7 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef, useContext } from 'react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
-import radarLoadingIcon from '../../assets/radar/radar-icon-loading.svg'
+import { PaneLoader } from '../ui/PaneLoader'
 import type { TopPodMetrics, TopNodeMetrics } from '../../types'
 import {
   Search,
@@ -3548,10 +3548,7 @@ export function ResourcesView({
           }}
         >
           {isLoading ? (
-            <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 text-theme-text-tertiary">
-              <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
-              <span className="text-sm">Loading…</span>
-            </div>
+            <PaneLoader className="absolute inset-0" />
           ) : isSelectedForbidden ? (
             <div className="absolute inset-0 flex flex-col items-center justify-center text-theme-text-tertiary">
               <Shield className="w-8 h-8 text-amber-400 mb-2" />

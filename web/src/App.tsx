@@ -142,7 +142,7 @@ function AuthBarrier({ authMode }: { authMode: string }) {
       <div className="flex-1 flex items-center justify-center bg-theme-base">
         <div className="flex flex-col items-center gap-4">
           <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
-          <p className="text-sm text-theme-text-secondary">Redirecting to login...</p>
+          <p className="text-sm text-theme-text-secondary">Redirecting to login…</p>
         </div>
       </div>
     )
@@ -945,7 +945,7 @@ function AppInner() {
             <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
             <div className="text-center">
               <p className="font-medium text-theme-text-primary">Connecting to cluster</p>
-              <p className="text-sm text-theme-text-secondary mt-1">{connection.context || 'Loading...'}</p>
+              <p className="text-sm text-theme-text-secondary mt-1">{connection.context || 'Loading…'}</p>
               {connection.progressMessage && (
                 <p className="text-xs text-theme-text-tertiary animate-pulse mt-3">
                   {connection.progressMessage}

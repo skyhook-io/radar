@@ -21,6 +21,7 @@ import '@xyflow/react/dist/style.css'
 import { toCanvas } from 'html-to-image'
 
 import { AlertTriangle, Download, LayoutGrid, Loader2, Maximize, Minus, Pause, Play, Plus, RotateCw, Shield, Workflow } from 'lucide-react'
+import { PaneLoader } from '../ui/PaneLoader'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
@@ -653,14 +654,7 @@ export function TopologyGraph({
   }, [selectedNodeId, setNodes])
 
   if (!topology) {
-    return (
-      <div className="flex-1 flex items-center justify-center text-theme-text-secondary">
-        <div className="text-center">
-          <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 opacity-50" />
-          <p className="text-sm">Loading topology...</p>
-        </div>
-      </div>
-    )
+    return <PaneLoader label="Loading topology…" className="flex-1" />
   }
 
   if (topology.nodes.length === 0) {
