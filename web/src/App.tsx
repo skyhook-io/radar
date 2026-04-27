@@ -945,7 +945,9 @@ function AppInner() {
             <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
             <div className="text-center">
               <p className="font-medium text-theme-text-primary">Connecting to cluster</p>
-              <p className="text-sm text-theme-text-secondary mt-1">{connection.context || 'Loading…'}</p>
+              {connection.context && (
+                <p className="text-sm text-theme-text-secondary mt-1">{connection.context}</p>
+              )}
               {connection.progressMessage && (
                 <p className="text-xs text-theme-text-tertiary animate-pulse mt-3">
                   {connection.progressMessage}
