@@ -92,13 +92,25 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 
 	includes := parseIncludes(input.Include)
 
+	// Mirror the SPA gate on sensitive Helm reads: viewers cannot pull
+	// values/manifest/diff. Without this the user would still be blocked
+	// by K8s RBAC (view ClusterRole excludes secrets), but the error would
+	// be a confusing K8s "secrets is forbidden" rather than the structured
+	// cloud_role_insufficient code the SPA emits.
+	cloudRole := pkgauth.CloudRoleFromContext(ctx)
+	gatedSensitive := !cloudRole.AtLeast(pkgauth.RoleMember)
+
 	if includes["values"] {
-		values, err := helmClient.GetValuesAsUser(input.Namespace, input.Name, false, username, groups)
-		if err != nil {
-			log.Printf("[mcp] Failed to get values for %s/%s: %v", input.Namespace, input.Name, err)
-			result["valuesError"] = err.Error()
+		if gatedSensitive {
+			result["valuesError"] = fmt.Sprintf("Radar Cloud role %q cannot view Helm release values (requires member or higher)", cloudRole.String())
 		} else {
-			result["values"] = values.UserSupplied
+			values, err := helmClient.GetValuesAsUser(input.Namespace, input.Name, false, username, groups)
+			if err != nil {
+				log.Printf("[mcp] Failed to get values for %s/%s: %v", input.Namespace, input.Name, err)
+				result["valuesError"] = err.Error()
+			} else {
+				result["values"] = values.UserSupplied
+			}
 		}
 	}
 
@@ -107,16 +119,20 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 	}
 
 	if includes["diff"] && input.DiffRev1 > 0 {
-		rev2 := input.DiffRev2
-		if rev2 == 0 {
-			rev2 = detail.Revision // default to current revision
-		}
-		diff, err := helmClient.GetManifestDiffAsUser(input.Namespace, input.Name, input.DiffRev1, rev2, username, groups)
-		if err != nil {
-			log.Printf("[mcp] Failed to get manifest diff for %s/%s: %v", input.Namespace, input.Name, err)
-			result["diffError"] = err.Error()
+		if gatedSensitive {
+			result["diffError"] = fmt.Sprintf("Radar Cloud role %q cannot view Helm release diffs (requires member or higher)", cloudRole.String())
 		} else {
-			result["diff"] = diff
+			rev2 := input.DiffRev2
+			if rev2 == 0 {
+				rev2 = detail.Revision // default to current revision
+			}
+			diff, err := helmClient.GetManifestDiffAsUser(input.Namespace, input.Name, input.DiffRev1, rev2, username, groups)
+			if err != nil {
+				log.Printf("[mcp] Failed to get manifest diff for %s/%s: %v", input.Namespace, input.Name, err)
+				result["diffError"] = err.Error()
+			} else {
+				result["diff"] = diff
+			}
 		}
 	}
 

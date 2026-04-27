@@ -1019,9 +1019,13 @@ func requireCloudRole(w http.ResponseWriter, r *http.Request, min auth.CloudRole
 	if role.AtLeast(min) {
 		return true
 	}
-	log.Printf("[helm] Cloud role %q denied %s (need at least %q): %s", role, opName, min, r.URL.Path)
+	username := "unknown"
+	if u := auth.UserFromContext(r.Context()); u != nil {
+		username = u.Username
+	}
+	log.Printf("[helm] Cloud role %q denied %s for user %q (need at least %q): %s", role, opName, username, min, r.URL.Path)
 	writeErrorCode(w, http.StatusForbidden, auth.ErrCodeCloudRoleInsufficient,
-		"Your Radar Cloud role ("+role.String()+") cannot "+opName+". Ask a "+string(min)+" or higher.")
+		"Your Radar Cloud role ("+role.String()+") cannot "+opName+". Requires "+string(min)+" or higher.")
 	return false
 }
 

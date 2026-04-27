@@ -79,6 +79,7 @@ func (g *restConfigGetter) ToDiscoveryClient() (discovery.CachedDiscoveryInterfa
 	}
 	// Match kubectl's QPS/Burst defaults (50/100). The client-go default
 	// (5/10) is too low for Helm operations that walk many resources.
+	cfg.QPS = 50
 	cfg.Burst = 100
 	dc, err := discovery.NewDiscoveryClientForConfig(cfg)
 	if err != nil {
