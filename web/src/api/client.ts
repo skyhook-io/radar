@@ -2317,10 +2317,14 @@ type ArgoAppVars = {
 const fluxInvalidateKeys = (v: FluxResourceVars) => [
   ['resources', v.kind],
   ['resource', v.kind, v.namespace, v.name],
+  ['gitops-tree', v.kind, v.namespace, v.name],
+  ['gitops-insights', v.kind, v.namespace, v.name],
 ]
 const argoInvalidateKeys = (v: ArgoAppVars) => [
   ['resources', 'applications'],
   ['resource', 'applications', v.namespace, v.name],
+  ['gitops-tree', 'applications', v.namespace, v.name],
+  ['gitops-insights', 'applications', v.namespace, v.name],
 ]
 
 // ============================================================================

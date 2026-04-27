@@ -10,8 +10,6 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
-const groupThreshold = 6
-
 // DynamicGetter is the small dynamic-cache surface needed by the tree builder.
 type DynamicGetter interface {
 	GetDynamicWithGroup(ctx context.Context, kind string, namespace string, name string, group string) (*unstructured.Unstructured, error)

@@ -1781,13 +1781,17 @@ export function ResourcesView({
 }: ResourcesViewProps) {
   const initialFilters = getInitialFiltersFromURL()
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath, defaultKind, locationPathname, locationSearch))
-  // Sync selectedKind from URL when locationPathname changes (e.g., browser back, external sidebar navigation)
+  // Sync selectedKind from URL when the URL changes (browser back, external sidebar navigation).
+  // Deps are URL-derived only — including selectedKind.name/group would race against pending
+  // navigation: a sidebar click flips state before navigate() lands, this effect re-reads the
+  // stale URL, and reverts the kind. The window into a stale URL between state change and URL
+  // update is what produced the "blink and fail to navigate" bug.
   useEffect(() => {
     const kindFromURL = getInitialKindFromURL(basePath, defaultKind, locationPathname, locationSearch)
-    if (kindFromURL.name !== selectedKind.name || kindFromURL.group !== selectedKind.group) {
-      setSelectedKind(kindFromURL)
-    }
-  }, [basePath, defaultKind, locationPathname, locationSearch, selectedKind.name, selectedKind.group])
+    setSelectedKind((prev) =>
+      kindFromURL.name !== prev.name || kindFromURL.group !== prev.group ? kindFromURL : prev,
+    )
+  }, [basePath, defaultKind, locationPathname, locationSearch])
   // Notify parent of selected kind changes (including initial mount)
   useEffect(() => {
     onSelectedKindChange?.(selectedKind)

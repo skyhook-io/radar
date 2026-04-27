@@ -3,7 +3,6 @@ package tree
 import (
 	"fmt"
 	"net/url"
-	"sort"
 	"strings"
 	"time"
 
@@ -261,77 +260,3 @@ func summarize(nodes []Node) Summary {
 	return s
 }
 
-func groupLeafSiblings(rootID string, nodes []Node, edges []Edge) ([]Node, []Edge) {
-	children := map[string][]string{}
-	parent := map[string]string{}
-	for _, e := range edges {
-		children[e.Source] = append(children[e.Source], e.Target)
-		parent[e.Target] = e.Source
-	}
-	leavesByParentKind := map[string][]Node{}
-	nodeByID := map[string]Node{}
-	for _, n := range nodes {
-		nodeByID[n.ID] = n
-	}
-	for _, n := range nodes {
-		if n.ID == rootID || len(children[n.ID]) > 0 {
-			continue
-		}
-		p := parent[n.ID]
-		if p == "" {
-			continue
-		}
-		key := p + "|" + n.Ref.Kind
-		leavesByParentKind[key] = append(leavesByParentKind[key], n)
-	}
-
-	remove := map[string]bool{}
-	var additions []Node
-	var edgeAdditions []Edge
-	for key, group := range leavesByParentKind {
-		if len(group) < groupThreshold {
-			continue
-		}
-		parts := strings.SplitN(key, "|", 2)
-		p := parts[0]
-		kind := parts[1]
-		sort.Slice(group, func(i, j int) bool { return refKey(group[i].Ref) < refKey(group[j].Ref) })
-		groupID := p + "/group/" + kind
-		var ids []string
-		for _, n := range group {
-			remove[n.ID] = true
-			ids = append(ids, n.ID)
-		}
-		ref := ResourceRef{Kind: kind, Name: fmt.Sprintf("%d %ss", len(group), kind)}
-		additions = append(additions, Node{
-			ID:             groupID,
-			Ref:            ref,
-			Role:           RoleGroup,
-			Tool:           group[0].Tool,
-			TopologyStatus: "unknown",
-			GroupedNodeIDs: ids,
-			Count:          len(group),
-			Data:           map[string]any{"groupedKind": kind},
-		})
-		edgeAdditions = append(edgeAdditions, Edge{Source: p, Target: groupID, Type: "owns"})
-	}
-	if len(remove) == 0 {
-		return nodes, edges
-	}
-	filteredNodes := make([]Node, 0, len(nodes)-len(remove)+len(additions))
-	for _, n := range nodes {
-		if !remove[n.ID] {
-			filteredNodes = append(filteredNodes, n)
-		}
-	}
-	filteredNodes = append(filteredNodes, additions...)
-
-	filteredEdges := make([]Edge, 0, len(edges)-len(remove)+len(edgeAdditions))
-	for _, e := range edges {
-		if !remove[e.Source] && !remove[e.Target] {
-			filteredEdges = append(filteredEdges, e)
-		}
-	}
-	filteredEdges = append(filteredEdges, edgeAdditions...)
-	return filteredNodes, filteredEdges
-}
