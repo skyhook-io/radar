@@ -47,7 +47,8 @@
     "./theme/tailwind-theme.css": "./src/theme/tailwind-theme.css",
     "./theme/components.css": "./src/theme/components.css",
     "./theme": "./src/theme/index.ts",
-    "./topology.css": "./src/components/topology/topology.css"
+    "./topology.css": "./src/components/topology/topology.css",
+    "./assets/radar/radar-icon-loading.svg": "./src/assets/radar/radar-icon-loading.svg"
   },
   "scripts": {
     "tsc": "tsc --noEmit",

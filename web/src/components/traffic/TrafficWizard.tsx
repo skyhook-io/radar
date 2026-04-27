@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import type { TrafficSourcesResponse, TrafficWizardState } from '../../types'
-import { Loader2, CheckCircle2, XCircle, AlertTriangle, Copy, ExternalLink, ArrowRight, ArrowLeft, Package } from 'lucide-react'
+import { CheckCircle2, XCircle, AlertTriangle, Copy, ExternalLink, ArrowRight, ArrowLeft, Package } from 'lucide-react'
+import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
 import { InstallWizard } from '../helm/InstallWizard'
 
 interface TrafficWizardProps {
@@ -91,7 +92,7 @@ export function TrafficWizard({
     return (
       <div className="flex items-center justify-center h-full w-full">
         <div className="text-center space-y-4">
-          <Loader2 className="h-8 w-8 animate-spin text-blue-400 mx-auto" />
+          <img src={radarLoadingIcon} alt="" aria-hidden className="h-11 w-11 mx-auto" />
           <p className="text-theme-text-secondary">Detecting traffic sources...</p>
         </div>
       </div>
@@ -105,7 +106,7 @@ export function TrafficWizard({
         <div className="flex items-center justify-center h-full w-full">
           <div className="max-w-md w-full p-6 space-y-6">
             <div className="text-center space-y-2">
-              <Loader2 className="h-8 w-8 animate-spin text-blue-400 mx-auto" />
+              <img src={radarLoadingIcon} alt="" aria-hidden className="h-11 w-11 mx-auto" />
               <h2 className="text-lg font-medium text-theme-text-primary">Waiting for traffic source...</h2>
               <p className="text-sm text-theme-text-secondary">
                 Checking for availability

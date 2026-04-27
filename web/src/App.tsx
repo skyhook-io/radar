@@ -37,7 +37,7 @@ import { useNamespaces, useSwitchContext, useAuthMe } from './api/client'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
-import { Loader2 } from 'lucide-react'
+import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
 import { RefreshCw, Network, List, Clock, Package, Sun, Moon, Activity, Home, Star, Search, Bug, Settings, SquareTerminal, ShieldCheck } from 'lucide-react'
 import { useTheme } from './context/ThemeContext'
 import { Tooltip } from './components/ui/Tooltip'
@@ -141,7 +141,7 @@ function AuthBarrier({ authMode }: { authMode: string }) {
     return (
       <div className="flex-1 flex items-center justify-center bg-theme-base">
         <div className="flex flex-col items-center gap-4">
-          <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
+          <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
           <p className="text-sm text-theme-text-secondary">Redirecting to login...</p>
         </div>
       </div>
@@ -942,7 +942,7 @@ function AppInner() {
       {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connecting' && (
         <div className="flex-1 flex items-center justify-center bg-theme-base">
           <div className="flex flex-col items-center gap-4 text-theme-text-secondary">
-            <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
+            <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
             <div className="text-center">
               <p className="font-medium text-theme-text-primary">Connecting to cluster</p>
               <p className="text-sm text-theme-text-secondary mt-1">{connection.context || 'Loading...'}</p>
@@ -960,7 +960,7 @@ function AppInner() {
       {isSwitching && (
         <div className="flex-1 flex items-center justify-center bg-theme-base">
           <div className="flex flex-col items-center gap-4 text-theme-text-secondary">
-            <Loader2 className="w-8 h-8 animate-spin text-blue-400" />
+            <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
             <div className="text-center">
               <div className="text-sm font-medium text-theme-text-primary">Switching context</div>
               {targetContext && (

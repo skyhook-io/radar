@@ -11,7 +11,8 @@ import { NetworkPolicyCoverageCard } from './NetworkPolicyCoverageCard'
 import { CostCard } from './CostCard'
 import { AuditCard, StatusDot, mapHealthToTone } from '@skyhook-io/k8s-ui'
 import { ClusterHealthCard } from './ClusterHealthCard'
-import { AlertTriangle, Loader2, Shield } from 'lucide-react'
+import { AlertTriangle, Shield } from 'lucide-react'
+import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
 import { clsx } from 'clsx'
 
 interface HomeViewProps {
@@ -32,7 +33,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
-          <Loader2 className="w-6 h-6 animate-spin text-theme-text-tertiary" />
+          <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
           <span className="text-sm text-theme-text-tertiary">Loading dashboard...</span>
         </div>
       </div>

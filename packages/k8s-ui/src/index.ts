@@ -36,3 +36,6 @@ export * from './components/topology'
 
 // Cluster audit (AuditCard, AuditAlerts, AuditFindingsTable)
 export * from './components/audit'
+
+// Cluster switcher (shared trigger+dropdown for OSS Radar and Radar Hub)
+export * from './components/cluster-switcher'

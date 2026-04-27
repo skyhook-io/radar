@@ -1,12 +1,16 @@
-import { useState, useRef, useEffect, useMemo } from 'react'
-import { ChevronDown, Check, Loader2, Server, AlertTriangle, Search, X } from 'lucide-react'
+import { useMemo, useState } from 'react'
+import { Server, AlertTriangle } from 'lucide-react'
+import {
+  ClusterSwitcher,
+  type ClusterSwitcherItem,
+  pluralize,
+} from '@skyhook-io/k8s-ui'
 import { useContexts, useSwitchContext, useClusterInfo, fetchSessionCounts, type SessionCounts } from '../api/client'
 import { useContextSwitch } from '../context/ContextSwitchContext'
 import { useToast } from '../components/ui/Toast'
 import { useDock } from '../components/dock'
 import type { ContextInfo } from '../types'
 import { parseContextName, type ParsedContextName } from '../utils/context-name'
-import { pluralize } from '@skyhook-io/k8s-ui'
 
 interface ContextSwitcherProps {
   className?: string
@@ -16,22 +20,10 @@ interface ParsedContext extends ParsedContextName {
   context: ContextInfo
 }
 
-// Group contexts by provider, then by account
-interface ContextGroup {
-  provider: string | null
-  account: string | null
-  items: ParsedContext[]
-}
-
 export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
-  const [isOpen, setIsOpen] = useState(false)
-  const [search, setSearch] = useState('')
-  const [highlightedIndex, setHighlightedIndex] = useState(-1)
   const [showConfirm, setShowConfirm] = useState(false)
   const [pendingSwitch, setPendingSwitch] = useState<ParsedContext | null>(null)
   const [sessionCounts, setSessionCounts] = useState<SessionCounts | null>(null)
-  const dropdownRef = useRef<HTMLDivElement>(null)
-  const searchInputRef = useRef<HTMLInputElement>(null)
 
   const { data: contexts, isLoading: contextsLoading } = useContexts()
   const { data: clusterInfo } = useClusterInfo()
@@ -40,178 +32,45 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
   const { showError } = useToast()
   const { tabs } = useDock()
 
-  // Parse, group, and sort contexts
-  const { groups, hasMultipleAccounts } = useMemo(() => {
-    if (!contexts) return { groups: [], hasMultipleProviders: false, hasMultipleAccounts: false }
-
-    // Parse all contexts
-    const parsed: ParsedContext[] = contexts.map(ctx => ({
-      context: ctx,
-      ...parseContextName(ctx.name),
-    }))
-
-    // Check if we have multiple accounts (to decide whether to show group headers)
+  // Parse contexts and decide whether to render group headers (multi-account only).
+  const { parsedById, hasMultipleAccounts } = useMemo(() => {
+    if (!contexts) return { parsedById: new Map<string, ParsedContext>(), hasMultipleAccounts: false }
+    const parsed: ParsedContext[] = contexts.map(ctx => ({ context: ctx, ...parseContextName(ctx.name) }))
     const accounts = new Set(parsed.map(p => `${p.provider}:${p.account}`))
-    const hasMultipleAccounts = accounts.size > 1
-
-    // Group by provider + account
-    const groupMap = new Map<string, ContextGroup>()
-    for (const p of parsed) {
-      const key = `${p.provider || 'other'}:${p.account || 'default'}`
-      if (!groupMap.has(key)) {
-        groupMap.set(key, { provider: p.provider, account: p.account, items: [] })
-      }
-      groupMap.get(key)!.items.push(p)
-    }
-
-    // Sort groups: GKE first, then EKS, then AKS, then Other
-    // Within provider, sort by account name
-    const providerOrder: Record<string, number> = { 'GKE': 0, 'EKS': 1, 'AKS': 2 }
-    const groups = Array.from(groupMap.values()).sort((a, b) => {
-      const orderA = providerOrder[a.provider || ''] ?? 3
-      const orderB = providerOrder[b.provider || ''] ?? 3
-      if (orderA !== orderB) return orderA - orderB
-      return (a.account || '').localeCompare(b.account || '')
-    })
-
-    // Sort items within each group by cluster name
-    for (const group of groups) {
-      group.items.sort((a, b) => a.clusterName.localeCompare(b.clusterName))
-    }
-
-    return { groups, hasMultipleAccounts }
+    const byId = new Map<string, ParsedContext>()
+    for (const p of parsed) byId.set(p.context.name, p)
+    return { parsedById: byId, hasMultipleAccounts: accounts.size > 1 }
   }, [contexts])
 
-  // Filter groups by search query
-  const { filteredGroups, flatItems, itemIndexMap } = useMemo(() => {
-    const filteredGroups = search.trim()
-      ? groups
-          .map(group => ({
-            ...group,
-            items: group.items.filter(item => {
-              const searchLower = search.toLowerCase()
-              return (
-                item.clusterName.toLowerCase().includes(searchLower) ||
-                item.raw.toLowerCase().includes(searchLower) ||
-                (item.region && item.region.toLowerCase().includes(searchLower)) ||
-                (item.account && item.account.toLowerCase().includes(searchLower))
-              )
-            }),
-          }))
-          .filter(group => group.items.length > 0)
-      : groups
-
-    const flatItems = filteredGroups.flatMap(g => g.items)
-    const itemIndexMap = new Map<string, number>()
-    flatItems.forEach((item, i) => itemIndexMap.set(item.context.name, i))
-
-    return { filteredGroups, flatItems, itemIndexMap }
-  }, [groups, search])
-
-  // Reset search and highlight when dropdown opens/closes
-  useEffect(() => {
-    if (isOpen) {
-      setSearch('')
-      setHighlightedIndex(-1)
-      requestAnimationFrame(() => {
-        searchInputRef.current?.focus()
-      })
-    }
-  }, [isOpen])
-
-  // Reset highlighted index when filtered results change
-  useEffect(() => {
-    setHighlightedIndex(-1)
-  }, [search])
-
-  // Keyboard navigation for search
-  const handleSearchKeyDown = (e: React.KeyboardEvent) => {
-    switch (e.key) {
-      case 'ArrowDown':
-        e.preventDefault()
-        setHighlightedIndex(prev => (prev < flatItems.length - 1 ? prev + 1 : prev))
-        break
-      case 'ArrowUp':
-        e.preventDefault()
-        setHighlightedIndex(prev => (prev > 0 ? prev - 1 : 0))
-        break
-      case 'Enter':
-        e.preventDefault()
-        if (highlightedIndex >= 0 && flatItems[highlightedIndex]) {
-          handleContextSwitch(flatItems[highlightedIndex])
-        } else if (flatItems.length > 0) {
-          setHighlightedIndex(0)
-        }
-        break
-      case 'Escape':
-        e.preventDefault()
-        setIsOpen(false)
-        break
-    }
-  }
-
-  // Scroll highlighted item into view
-  useEffect(() => {
-    if (!isOpen || highlightedIndex < 0 || !dropdownRef.current) return
-    const highlighted = dropdownRef.current.querySelector('[data-highlighted="true"]')
-    if (highlighted) {
-      highlighted.scrollIntoView({ block: 'nearest' })
-    }
-  }, [highlightedIndex, isOpen])
-
-  // Close dropdown when clicking outside
-  useEffect(() => {
-    function handleClickOutside(event: MouseEvent) {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
-        setIsOpen(false)
+  // Map parsed contexts → generic ClusterSwitcher items, sorted GKE/EKS/AKS/Other → account → name.
+  const items = useMemo<ClusterSwitcherItem[]>(() => {
+    const order: Record<string, number> = { GKE: 0, EKS: 1, AKS: 2 }
+    const arr = Array.from(parsedById.values())
+    arr.sort((a, b) => {
+      const oa = order[a.provider || ''] ?? 3
+      const ob = order[b.provider || ''] ?? 3
+      if (oa !== ob) return oa - ob
+      const acc = (a.account || '').localeCompare(b.account || '')
+      if (acc !== 0) return acc
+      return a.clusterName.localeCompare(b.clusterName)
+    })
+    return arr.map(p => {
+      const groupKey = `${p.provider || 'other'}:${p.account || 'default'}`
+      const groupLabel = hasMultipleAccounts && p.provider
+        ? `${p.provider}${p.account ? ` · ${p.account}` : ''}`
+        : hasMultipleAccounts
+          ? 'Other'
+          : undefined
+      return {
+        id: p.context.name,
+        name: p.clusterName,
+        secondary: p.provider ? p.raw : undefined,
+        badge: p.region || undefined,
+        group: { key: groupKey, label: groupLabel },
       }
-    }
+    })
+  }, [parsedById, hasMultipleAccounts])
 
-    document.addEventListener('mousedown', handleClickOutside)
-    return () => document.removeEventListener('mousedown', handleClickOutside)
-  }, [])
-
-  // Close dropdown on escape
-  useEffect(() => {
-    function handleEscape(event: KeyboardEvent) {
-      if (event.key === 'Escape') {
-        setIsOpen(false)
-      }
-    }
-
-    document.addEventListener('keydown', handleEscape)
-    return () => document.removeEventListener('keydown', handleEscape)
-  }, [])
-
-  // Check for active sessions and show confirmation if needed
-  const handleContextSwitch = async (parsed: ParsedContext) => {
-    if (parsed.context.isCurrent || switchContext.isPending) return
-
-    setIsOpen(false)
-
-    // Check for active sessions (port forwards from API + terminal tabs from dock)
-    try {
-      const counts = await fetchSessionCounts()
-      const terminalTabs = tabs.filter(t => t.type === 'terminal').length
-      const totalSessions = counts.portForwards + terminalTabs
-
-      if (totalSessions > 0) {
-        // Show confirmation dialog
-        setSessionCounts({ ...counts, execSessions: terminalTabs, total: totalSessions })
-        setPendingSwitch(parsed)
-        setShowConfirm(true)
-        return
-      }
-    } catch (error) {
-      console.error('Failed to check sessions:', error)
-      // Continue with switch even if check fails
-    }
-
-    // No active sessions, proceed with switch
-    performSwitch(parsed)
-  }
-
-  // Actually perform the context switch
   const performSwitch = async (parsed: ParsedContext) => {
     startSwitch({
       raw: parsed.raw,
@@ -222,21 +81,45 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
     })
     try {
       await switchContext.mutateAsync({ name: parsed.context.name })
-      // Success - endSwitch is called by the overlay when it detects success
     } catch (error) {
       console.error('Failed to switch context:', error)
       endSwitch()
-      // Show toast as fallback — if the backend set StateDisconnected,
-      // ConnectionErrorView will render with provider-specific hints.
-      // But if the request never reached the backend (network error,
-      // client timeout), connection.state stays 'connected' and the
-      // toast is the only error feedback the user gets.
+      // Backend may not transition to StateDisconnected on client-side errors
+      // (network, timeout) — without this toast the user gets no feedback.
       const message = error instanceof Error ? error.message : 'Unknown error'
       showError('Failed to switch context', message)
     }
   }
 
-  // Handle confirmation dialog actions
+  const handleSelect = async (item: ClusterSwitcherItem) => {
+    const parsed = parsedById.get(item.id)
+    if (!parsed || parsed.context.isCurrent || switchContext.isPending) return
+
+    // Active sessions (port forwards from API + terminal tabs from dock) get
+    // a confirmation prompt — switching contexts kills both.
+    try {
+      const counts = await fetchSessionCounts()
+      const terminalTabs = tabs.filter(t => t.type === 'terminal').length
+      const total = counts.portForwards + terminalTabs
+      if (total > 0) {
+        setSessionCounts({ ...counts, execSessions: terminalTabs, total })
+        setPendingSwitch(parsed)
+        setShowConfirm(true)
+        return
+      }
+    } catch (error) {
+      // Session-counts is best-effort; failing it shouldn't block the user.
+      // But warn — if there ARE active sessions we couldn't see, the switch
+      // will silently kill them.
+      console.error('Failed to check sessions:', error)
+      showError(
+        'Could not check active sessions',
+        'Switching anyway. Any open port-forwards or terminals will be terminated.',
+      )
+    }
+    performSwitch(parsed)
+  }
+
   const handleConfirmSwitch = () => {
     setShowConfirm(false)
     if (pendingSwitch) {
@@ -251,15 +134,9 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
     setSessionCounts(null)
   }
 
-  // Get current context info - parse it to extract cluster name
-  const currentContextRaw = clusterInfo?.context || contexts?.find(c => c.isCurrent)?.name || 'Unknown'
-  const currentParsed = useMemo(() => parseContextName(currentContextRaw), [currentContextRaw])
-  const currentDisplayName = currentParsed.clusterName
-
-  // Check if in-cluster mode (only one context named "in-cluster")
+  // In-cluster mode renders a static badge instead of a switcher (only one
+  // synthetic context, no kubeconfig to choose from).
   const isInClusterMode = contexts?.length === 1 && contexts[0].name === 'in-cluster'
-
-  // If in-cluster mode, just show a static badge
   if (isInClusterMode) {
     return (
       <div className={`flex items-center gap-2 ${className}`}>
@@ -270,166 +147,31 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
     )
   }
 
+  const currentRaw = clusterInfo?.context || contexts?.find(c => c.isCurrent)?.name || 'Unknown'
+  const currentParsed = parseContextName(currentRaw)
+  const currentId = contexts?.find(c => c.isCurrent)?.name
+
   return (
-    <div className={`relative ${className}`} ref={dropdownRef}>
-      {/* Trigger button */}
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        disabled={switchContext.isPending || contextsLoading}
-        className={`
-          flex items-center gap-1.5 px-2.5 py-1.5
-          bg-theme-elevated border border-theme-border rounded text-sm font-medium
-          text-theme-text-primary hover:bg-theme-hover hover:border-theme-border-light
-          transition-colors cursor-pointer
-          disabled:opacity-50 disabled:cursor-not-allowed
-        `}
-        title={currentContextRaw}
-      >
-        {switchContext.isPending ? (
-          <Loader2 className="w-3.5 h-3.5 animate-spin" />
-        ) : (
-          <Server className="w-3.5 h-3.5 text-theme-text-secondary" />
-        )}
-        <span className="max-w-[120px] sm:max-w-[220px] truncate">
-          {switchContext.isPending ? 'Switching...' : currentDisplayName}
-        </span>
-        <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
-      </button>
+    <>
+      <ClusterSwitcher
+        className={className}
+        currentId={currentId}
+        currentName={currentParsed.clusterName}
+        currentTooltip={currentRaw}
+        triggerIcon={<Server className="w-3.5 h-3.5 text-theme-text-secondary" />}
+        items={items}
+        onSelect={handleSelect}
+        loading={switchContext.isPending}
+        disabled={contextsLoading}
+        searchable={items.length > 1}
+        showGroupHeaders={hasMultipleAccounts}
+        errorSlot={
+          switchContext.isError ? (
+            <span className="text-xs text-red-400">{switchContext.error?.message}</span>
+          ) : undefined
+        }
+      />
 
-      {/* Dropdown menu */}
-      {isOpen && !contextsLoading && contexts && (
-        <div className="absolute top-full left-0 mt-1 z-50 min-w-[280px] max-w-[420px] bg-theme-surface border border-theme-border-light rounded-lg shadow-xl overflow-hidden">
-          {/* Search input */}
-          {contexts.length > 1 && (
-            <div className="p-2 border-b border-theme-border">
-              <div className="relative">
-                <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-tertiary" />
-                <input
-                  ref={searchInputRef}
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  onKeyDown={handleSearchKeyDown}
-                  placeholder="Search clusters..."
-                  className="w-full bg-theme-base text-theme-text-primary text-xs rounded px-2 py-1.5 pl-7 pr-7 border border-theme-border-light focus:outline-none focus:ring-1 focus:ring-blue-500 placeholder:text-theme-text-tertiary"
-                />
-                {search && (
-                  <button
-                    type="button"
-                    onClick={() => setSearch('')}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-theme-text-tertiary hover:text-theme-text-secondary"
-                  >
-                    <X className="w-3.5 h-3.5" />
-                  </button>
-                )}
-              </div>
-            </div>
-          )}
-
-          <div className="max-h-[400px] overflow-y-auto">
-            {flatItems.length === 0 ? (
-              <div className="px-3 py-6 text-center text-xs text-theme-text-tertiary">
-                No clusters match "{search}"
-              </div>
-            ) : (
-              filteredGroups.map((group, groupIndex) => {
-                const showHeader = hasMultipleAccounts
-                const headerLabel = group.provider
-                  ? `${group.provider}${group.account ? ` · ${group.account}` : ''}`
-                  : 'Other'
-
-                return (
-                  <div key={`${group.provider}:${group.account}`}>
-                    {groupIndex > 0 && (
-                      <div className="border-t border-theme-border-light my-1" />
-                    )}
-                    {showHeader && (
-                      <div className="px-3 py-1 bg-theme-elevated/60 border-b border-theme-border/60">
-                        <span className="text-[11px] text-theme-text-secondary font-semibold">
-                          {headerLabel}
-                        </span>
-                      </div>
-                    )}
-                    {group.items.map((item) => {
-                      const itemIndex = itemIndexMap.get(item.context.name) ?? -1
-                      return (
-                        <button
-                          key={item.context.name}
-                          data-highlighted={itemIndex === highlightedIndex}
-                          onClick={() => handleContextSwitch(item)}
-                          onMouseEnter={() => setHighlightedIndex(itemIndex)}
-                          disabled={item.context.isCurrent || switchContext.isPending}
-                          className={`
-                            w-full flex items-center gap-2 px-3 py-2 text-left
-                            transition-colors
-                            ${item.context.isCurrent
-                              ? 'bg-blue-500/10'
-                              : itemIndex === highlightedIndex
-                                ? 'bg-theme-hover cursor-pointer'
-                                : 'hover:bg-theme-hover cursor-pointer'
-                            }
-                            disabled:opacity-50
-                          `}
-                        >
-                          <div className="shrink-0 w-4 h-4 flex items-center justify-center">
-                            {item.context.isCurrent ? (
-                              <Check className="w-3.5 h-3.5 text-blue-600 dark:text-blue-400" />
-                            ) : (
-                              <div className="w-1.5 h-1.5 rounded-full bg-theme-text-tertiary/30" />
-                            )}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <div className="flex items-center gap-1.5">
-                              <span className={`text-sm font-medium truncate ${item.context.isCurrent ? 'text-blue-600 dark:text-blue-400' : 'text-theme-text-primary'}`}>
-                                {item.clusterName}
-                              </span>
-                              {item.context.isCurrent && (
-                                <span className="shrink-0 text-[9px] text-blue-600 dark:text-blue-400">
-                                  ●
-                                </span>
-                              )}
-                              {item.region && (
-                                <span className="shrink-0 ml-auto text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 rounded">
-                                  {item.region}
-                                </span>
-                              )}
-                            </div>
-                            {item.provider && (
-                              <div className="text-[10px] text-theme-text-tertiary opacity-70 truncate mt-0.5" title={item.raw}>
-                                {item.raw}
-                              </div>
-                            )}
-                          </div>
-                        </button>
-                      )
-                    })}
-                  </div>
-                )
-              })
-            )}
-          </div>
-
-          {/* Footer with count */}
-          {contexts.length > 1 && search && flatItems.length > 0 && (
-            <div className="px-3 py-1.5 text-[10px] text-theme-text-tertiary border-t border-theme-border bg-theme-base">
-              {flatItems.length === contexts.length
-                ? `${contexts.length} clusters`
-                : `${flatItems.length} of ${contexts.length} clusters`}
-            </div>
-          )}
-
-          {/* Error message if switch failed */}
-          {switchContext.isError && (
-            <div className="px-3 py-2 bg-red-500/10 border-t border-red-500/20">
-              <span className="text-xs text-red-400">
-                {switchContext.error?.message}
-              </span>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Confirmation modal */}
       {showConfirm && sessionCounts && pendingSwitch && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50">
           <div className="bg-theme-surface border border-theme-border rounded-lg shadow-xl max-w-md mx-4 overflow-hidden">
@@ -476,7 +218,6 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
           </div>
         </div>
       )}
-
-    </div>
+    </>
   )
 }

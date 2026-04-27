@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { X, File, Link2, ChevronRight, AlertTriangle, Loader2, Search, Download, FolderOpen } from 'lucide-react'
+import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
 import { clsx } from 'clsx'
 import type { FileNode } from '../../types'
 import { formatBytes } from '../../utils/format'
@@ -206,7 +207,7 @@ export function PodFilesystemModal({
           {/* Loading */}
           {isLoading && (
             <div className="flex flex-col items-center justify-center h-64">
-              <Loader2 className="w-8 h-8 text-blue-400 animate-spin" />
+              <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
               <span className="mt-3 text-theme-text-secondary">Loading files...</span>
             </div>
           )}

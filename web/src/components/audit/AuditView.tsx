@@ -2,7 +2,8 @@ import { useState, useCallback } from 'react'
 import { useAudit, useAuditSettings, useUpdateAuditSettings } from '../../api/client'
 import type { SelectedResource } from '../../types'
 import { AuditFindingsTable } from '@skyhook-io/k8s-ui'
-import { ArrowLeft, ClipboardCheck, Loader2, Settings } from 'lucide-react'
+import { ArrowLeft, ClipboardCheck, Settings } from 'lucide-react'
+import radarLoadingIcon from '@skyhook-io/k8s-ui/assets/radar/radar-icon-loading.svg'
 import { AuditSettingsDialog } from './AuditSettingsDialog'
 
 interface AuditViewProps {
@@ -50,7 +51,7 @@ export function AuditView({ namespaces, onBack, onNavigateToResource }: AuditVie
     return (
       <div className="flex-1 flex items-center justify-center">
         <div className="flex flex-col items-center gap-3">
-          <Loader2 className="w-6 h-6 animate-spin text-theme-text-tertiary" />
+          <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
           <span className="text-sm text-theme-text-tertiary">Loading audit data...</span>
         </div>
       </div>
