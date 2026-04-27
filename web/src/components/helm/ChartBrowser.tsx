@@ -2,7 +2,7 @@ import { useState, useMemo } from 'react'
 import { Search, RefreshCw, Package, Database, AlertCircle, ExternalLink, ChevronDown, Star, Shield, BadgeCheck, Building2, Globe, ArrowUpDown, FileJson, PenTool } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useHelmRepositories, useSearchCharts, useUpdateRepository, useArtifactHubSearch, type ArtifactHubSortOption } from '../../api/client'
-import { useCanHelmAct } from '../../api/client'
+import { useCanHelmWrite } from '../../contexts/CapabilitiesContext'
 import type { ChartInfo, HelmRepository, ArtifactHubChart, ChartSource } from '../../types'
 import { formatAge } from './helm-utils'
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
@@ -23,7 +23,13 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
   const [showVerifiedOnly, setShowVerifiedOnly] = useState(false)
   const [artifactHubSort, setArtifactHubSort] = useState<ArtifactHubSortOption>('relevance')
 
-  const { allowed: canHelmWrite, reason: helmActReason } = useCanHelmAct()
+  // Repo refresh is gated only by `requireHelmWrite` on the backend
+  // (handleUpdateRepository deliberately skips requireCloudRole — it
+  // mutates pod-local chart cache, not cluster state). So the SPA gate
+  // here must NOT include the Cloud role check, or Cloud viewers with
+  // rbac.helm=true would be blocked from a refresh the backend allows.
+  const canHelmWrite = useCanHelmWrite()
+  const helmWriteReason = canHelmWrite ? '' : 'Helm write permissions required. Set rbac.helm=true in the Radar Helm chart values.'
 
   // Local repo hooks
   const { data: repositories, isLoading: reposLoading } = useHelmRepositories()
@@ -162,7 +168,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
                       onUpdate={() => handleUpdateRepo(repo.name)}
                       isUpdating={updateRepoMutation.isPending}
                       canUpdate={canHelmWrite}
-                      cantUpdateReason={helmActReason}
+                      cantUpdateReason={helmWriteReason}
                     />
                   ))
                 )}
@@ -236,7 +242,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
             </label>
 
             {/* Refresh button */}
-            <Tooltip content={canHelmWrite ? "Update all repositories" : (helmActReason ?? '')}>
+            <Tooltip content={canHelmWrite ? "Update all repositories" : helmWriteReason}>
               <button
                 onClick={handleUpdateAllRepos}
                 disabled={updateRepoMutation.isPending || !canHelmWrite}
@@ -357,9 +363,9 @@ interface RepoDropdownItemProps {
   onUpdate: () => void
   isUpdating: boolean
   canUpdate: boolean
-  /** Reason rendered in the disabled button's tooltip — comes from
-   *  useCanHelmAct so a viewer sees the role gate, not the rbac.helm
-   *  message that's only relevant for K8s-capability denials. */
+  /** Reason rendered in the disabled button's tooltip when canUpdate
+   *  is false — only the rbac.helm capability is relevant here, since
+   *  repo refresh is not Cloud-role-gated on the backend. */
   cantUpdateReason?: string
 }
 
