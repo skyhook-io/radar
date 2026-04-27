@@ -117,9 +117,11 @@ func errorCodeForHelm(err string, statusCode int) string {
 		return ErrCodeTimedOut
 	case strings.Contains(e, "connection refused"),
 		strings.Contains(e, "no such host"),
-		strings.Contains(e, "i/o timeout"),
 		strings.Contains(e, "dial tcp"),
 		strings.Contains(e, "cluster unreachable"):
+		// Note: "i/o timeout" is dead here — the timed_out case above
+		// matches "timeout" which subsumes it. The TimedOut classification
+		// is the right one for that shape (see test "timeout + dial tcp").
 		return ErrCodeUnreachable
 	}
 	return ""
@@ -169,7 +171,7 @@ func ListPackages(ctx context.Context, p ListPackagesParams) (PackagesResponse, 
 		}, nil
 	}
 
-	cacheKey := packagesCacheKeyFor(p.User, p.Namespaces)
+	cacheKey := packagesCacheKeyFor(p.Namespaces)
 	packagesCacheMu.Lock()
 	entry, hit := packagesCache[cacheKey]
 	packagesCacheMu.Unlock()
@@ -239,14 +241,14 @@ func evictOldestPackagesCacheEntry() {
 	}
 }
 
-// packagesCacheKeyFor produces a stable cache key. Both the user
-// identity and the requested namespace set must be part of the key:
-// Helm reads are user-scoped (RBAC-impersonated), so two users hitting
-// the same namespace must not share an entry.
-func packagesCacheKeyFor(user string, namespaces []string) string {
+// packagesCacheKeyFor produces a stable cache key from the requested
+// namespace set. User identity is intentionally NOT part of the key:
+// inventory reads run via the ServiceAccount (see computePackagesInternal),
+// so the result is identical for any caller with the same namespace
+// scope. Sharing entries across users avoids N-way duplication and
+// premature LRU eviction in multi-user Cloud deployments.
+func packagesCacheKeyFor(namespaces []string) string {
 	var b strings.Builder
-	b.WriteString(user)
-	b.WriteByte('|')
 	if namespaces == nil {
 		b.WriteByte('*')
 	} else {
