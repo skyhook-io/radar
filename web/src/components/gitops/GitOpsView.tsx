@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { CheckCircle2, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Table2, Tag, XCircle } from 'lucide-react'
@@ -40,6 +40,7 @@ import {
 } from '../../api/client'
 import { useAPIResources } from '../../api/apiResources'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 import { Tooltip } from '../ui/Tooltip'
 
 const GITOPS_KINDS: APIResource[] = [
@@ -106,11 +107,9 @@ export function GitOpsView({ namespaces, onOpenResource }: GitOpsViewProps) {
 
 function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
   const navigate = useNavigate()
+  const searchInputRef = useRef<HTMLInputElement>(null)
   const namespacesParam = namespaces.join(',')
-  const { data: apiResources } = useAPIResources()
-  const discoveredGitOpsResources = useMemo(() => {
-    return new Set((apiResources ?? []).map((resource) => `${resource.group}/${resource.kind}`))
-  }, [apiResources])
+  const { data: apiResources, isLoading: apiResourcesLoading } = useAPIResources()
 
   useEffect(() => {
     initNavigationMap([...(apiResources ?? []), ...GITOPS_KINDS])
@@ -129,7 +128,20 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
   const [automationFilter, setAutomationFilter] = useState<'all' | 'auto' | 'manual' | 'suspended'>('all')
   const [sortKey, setSortKey] = useState<SortKey>('health')
 
-  const { data: countsData } = useQuery({
+  useRegisterShortcut({
+    id: 'gitops-focus-search',
+    keys: '/',
+    category: 'GitOps',
+    description: 'Focus GitOps search',
+    scope: 'gitops',
+    handler: (event) => {
+      event.preventDefault()
+      searchInputRef.current?.focus()
+    },
+    allowInInputs: false,
+  })
+
+  const countsQuery = useQuery({
     queryKey: ['gitops-resource-counts', namespacesParam],
     queryFn: async () => {
       const params = new URLSearchParams()
@@ -141,12 +153,12 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
   })
 
   const applicationQuery = useQuery({
-    queryKey: ['gitops-applications-main', namespaces, [...discoveredGitOpsResources].sort().join(',')],
+    queryKey: ['gitops-applications-main', namespaces],
     queryFn: async () => {
       const [applications, kustomizations, helmReleases] = await Promise.all([
-        discoveredGitOpsResources.has('argoproj.io/Application') ? fetchResourceList('applications', 'argoproj.io', namespacesParam) : Promise.resolve([]),
-        discoveredGitOpsResources.has('kustomize.toolkit.fluxcd.io/Kustomization') ? fetchResourceList('kustomizations', 'kustomize.toolkit.fluxcd.io', namespacesParam) : Promise.resolve([]),
-        discoveredGitOpsResources.has('helm.toolkit.fluxcd.io/HelmRelease') ? fetchResourceList('helmreleases', 'helm.toolkit.fluxcd.io', namespacesParam) : Promise.resolve([]),
+        fetchResourceList('applications', 'argoproj.io', namespacesParam),
+        fetchResourceList('kustomizations', 'kustomize.toolkit.fluxcd.io', namespacesParam),
+        fetchResourceList('helmreleases', 'helm.toolkit.fluxcd.io', namespacesParam),
       ])
       return [
         ...applications.map((r) => normalizeArgoApplication(r)),
@@ -154,19 +166,18 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
         ...helmReleases.map((r) => normalizeFluxHelmRelease(r)),
       ]
     },
-    enabled: Boolean(apiResources),
     staleTime: 30_000,
     refetchInterval: 120_000,
   })
 
   const gitopsCounts = useMemo(() => {
-    const counts = countsData?.counts ?? {}
+    const counts = countsQuery.data?.counts ?? {}
     const out: Record<string, number> = {}
     for (const k of GITOPS_KINDS) {
       out[k.group ? `${k.group}/${k.kind}` : k.name] = counts[`${k.group}/${k.kind}`] ?? counts[k.name] ?? 0
     }
     return out
-  }, [countsData])
+  }, [countsQuery.data])
 
   const totalGitOps = Object.values(gitopsCounts).reduce((sum, n) => sum + n, 0)
   const allRows = applicationQuery.data ?? []
@@ -227,9 +238,11 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
     applicationQuery.refetch()
   }
 
-  if (totalGitOps === 0 && !applicationQuery.isLoading) {
+  const isInitialLoading = apiResourcesLoading || countsQuery.isLoading || applicationQuery.isLoading
+
+  if (totalGitOps === 0 && applicationQuery.isFetched && countsQuery.isFetched && !isInitialLoading) {
     return (
-      <div className="p-4">
+      <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-theme-base p-4">
         <div className="rounded-lg border border-theme-border bg-theme-surface p-8 text-center">
           <GitBranch className="mx-auto h-8 w-8 text-theme-text-tertiary" />
           <h2 className="mt-3 text-base font-semibold text-theme-text-primary">No GitOps resources detected</h2>
@@ -297,6 +310,7 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
             <div className="relative w-full max-w-md">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-theme-text-tertiary" />
               <input
+                ref={searchInputRef}
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
                 placeholder="Search applications, repos, paths..."
