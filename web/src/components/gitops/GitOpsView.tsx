@@ -4,13 +4,18 @@ import { useQuery } from '@tanstack/react-query'
 import { CheckCircle2, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Table2, Tag, XCircle } from 'lucide-react'
 import {
   GitOpsActions,
+  GitOpsActivityInsightView,
+  GitOpsChangesView,
+  GitOpsIssuesBand,
   GitOpsTreeGraph,
+  GitOpsStatusStrip,
   HealthStatusBadge,
   SyncStatusBadge,
   initNavigationMap,
   kindToPlural,
   type APIResource,
   type GitOpsResourceTree,
+  type GitOpsInsightRef,
   type GitOpsTreeFilters,
   type GitOpsTreeRef,
   type GitOpsTreeNode,
@@ -35,6 +40,7 @@ import {
   useFluxResume,
   useFluxSuspend,
   useFluxSyncWithSource,
+  useGitOpsInsights,
   useGitOpsTree,
   useResource,
 } from '../../api/client'
@@ -153,12 +159,15 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
   })
 
   const applicationQuery = useQuery({
-    queryKey: ['gitops-applications-main', namespaces],
+    queryKey: ['gitops-applications-main', namespaces, apiResources?.length ?? 0],
     queryFn: async () => {
+      const hasApplications = hasAPIResource(apiResources, 'applications', 'argoproj.io')
+      const hasKustomizations = hasAPIResource(apiResources, 'kustomizations', 'kustomize.toolkit.fluxcd.io')
+      const hasHelmReleases = hasAPIResource(apiResources, 'helmreleases', 'helm.toolkit.fluxcd.io')
       const [applications, kustomizations, helmReleases] = await Promise.all([
-        fetchResourceList('applications', 'argoproj.io', namespacesParam),
-        fetchResourceList('kustomizations', 'kustomize.toolkit.fluxcd.io', namespacesParam),
-        fetchResourceList('helmreleases', 'helm.toolkit.fluxcd.io', namespacesParam),
+        hasApplications ? fetchResourceList('applications', 'argoproj.io', namespacesParam) : Promise.resolve([]),
+        hasKustomizations ? fetchResourceList('kustomizations', 'kustomize.toolkit.fluxcd.io', namespacesParam) : Promise.resolve([]),
+        hasHelmReleases ? fetchResourceList('helmreleases', 'helm.toolkit.fluxcd.io', namespacesParam) : Promise.resolve([]),
       ])
       return [
         ...applications.map((r) => normalizeArgoApplication(r)),
@@ -166,6 +175,7 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
         ...helmReleases.map((r) => normalizeFluxHelmRelease(r)),
       ]
     },
+    enabled: !apiResourcesLoading,
     staleTime: 30_000,
     refetchInterval: 120_000,
   })
@@ -799,7 +809,7 @@ function TableCell({ children }: { children: ReactNode }) {
   return <td className="border-b border-theme-border px-3 py-2 align-middle text-theme-text-secondary">{children}</td>
 }
 
-type GitOpsAppView = 'graph' | 'resources' | 'activity'
+type GitOpsAppView = 'graph' | 'resources' | 'changes' | 'activity'
 
 function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const location = useLocation()
@@ -813,6 +823,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
 
   const resourceQ = useResource<any>(kind, namespace, name, group)
   const treeQ = useGitOpsTree(kind, namespace, name, group, namespaces)
+  const insightsQ = useGitOpsInsights(kind, namespace, name, group, namespaces)
   const status = resourceQ.data ? getGitOpsStatus(kind, resourceQ.data) : null
   const tool = getTool(kind, group)
   const [appView, setAppView] = useState<GitOpsAppView>('graph')
@@ -847,7 +858,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const resourceNodes = useMemo(() => filterTreeNodes(tree, graphSearch, graphFilters), [tree, graphFilters, graphSearch])
   const graphFacets = useMemo(() => buildTreeFacets(tree), [tree])
 
-  function openResourceFromTree(ref: GitOpsTreeRef) {
+  function openResourceFromTree(ref: GitOpsTreeRef | GitOpsInsightRef) {
     if (isGitOpsDetailRef(ref) && isValidKubernetesName(ref.name)) {
       const detailKind = kindToPlural(ref.kind)
       const params = new URLSearchParams()
@@ -855,7 +866,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
       navigate({ pathname: gitOpsDetailPath(detailKind, ref.namespace || '_', ref.name), search: params.toString() })
       return
     }
-    onOpenResource({ kind: kindToPlural(ref.kind), namespace: ref.namespace, name: ref.name, group: ref.group })
+    onOpenResource({ kind: kindToPlural(ref.kind), namespace: ref.namespace || '', name: ref.name, group: ref.group })
   }
 
   const isRunning = resourceQ.data?.status?.operationState?.phase === 'Running'
@@ -931,6 +942,12 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
           </div>
         </div>
       </div>}
+      {!graphFullscreen && (
+        <>
+          <GitOpsStatusStrip insight={insightsQ.data} loading={insightsQ.isLoading} />
+          <GitOpsIssuesBand issues={insightsQ.data?.issues} />
+        </>
+      )}
 
       {resourceQ.isLoading ? (
         <div className="flex flex-1 items-center justify-center text-theme-text-secondary">
@@ -944,6 +961,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             <div className="flex items-center gap-1 rounded-md border border-theme-border bg-theme-surface p-1">
               <ViewButton active={appView === 'graph'} icon={GitBranch} label="Graph" onClick={() => setAppView('graph')} />
               <ViewButton active={appView === 'resources'} icon={Table2} label="Resources" onClick={() => setAppView('resources')} />
+              <ViewButton active={appView === 'changes'} icon={GitCommit} label="Changes" onClick={() => setAppView('changes')} />
               <ViewButton active={appView === 'activity'} icon={Clock3} label="Activity" onClick={() => setAppView('activity')} />
             </div>
             {graphFullscreen && (
@@ -981,7 +999,9 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
           </div>
 
           {appView === 'activity' ? (
-            <GitOpsActivityView resource={resourceQ.data} detail={detailRow} />
+            <GitOpsActivityInsightView insight={insightsQ.data} />
+          ) : appView === 'changes' ? (
+            <GitOpsChangesView insight={insightsQ.data} onOpenResource={openResourceFromTree} />
           ) : (
             <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[280px_minmax(0,1fr)] max-lg:grid-cols-1">
               <GitOpsGraphFilterRail
@@ -1016,7 +1036,13 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                     showToolbar={false}
                   />
                 ) : (
-                  <GitOpsResourceTable nodes={resourceNodes} onOpen={openResourceFromTree} />
+                  <GitOpsResourceTable
+                    nodes={resourceNodes}
+                    capabilities={insightsQ.data?.capabilities}
+                    selectiveLoading={argoSync.isPending}
+                    onSelectiveSync={(refs) => argoSync.mutate({ namespace, name, resources: refs })}
+                    onOpen={openResourceFromTree}
+                  />
                 )}
               </div>
             </div>
@@ -1029,9 +1055,9 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
 
 function AppFact({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-0">
-      <span className="mr-1 text-theme-text-tertiary">{label}:</span>
-      <span className="truncate text-theme-text-primary">{value}</span>
+    <div className="flex min-w-0 items-baseline gap-1">
+      <span className="shrink-0 text-theme-text-tertiary">{label}:</span>
+      <span className="min-w-0 truncate text-theme-text-primary" title={value}>{value}</span>
     </div>
   )
 }
@@ -1156,16 +1182,76 @@ function GitOpsGraphFilterRail({
   )
 }
 
-function GitOpsResourceTable({ nodes, onOpen }: { nodes: GitOpsTreeNode[]; onOpen: (ref: GitOpsTreeRef, node: GitOpsTreeNode) => void }) {
+function GitOpsResourceTable({
+  nodes,
+  capabilities,
+  selectiveLoading,
+  onSelectiveSync,
+  onOpen,
+}: {
+  nodes: GitOpsTreeNode[]
+  capabilities?: { selectiveSync?: boolean; unsupportedReason?: string; warnings?: string[] }
+  selectiveLoading?: boolean
+  onSelectiveSync?: (refs: Array<{ group?: string; kind: string; namespace?: string; name: string }>) => void
+  onOpen: (ref: GitOpsTreeRef, node: GitOpsTreeNode) => void
+}) {
+  const [selected, setSelected] = useState<Set<string>>(new Set())
   const rows = nodes.filter((node) => node.role !== 'root' && node.role !== 'group')
+  const visibleIDs = useMemo(() => new Set(rows.map((node) => node.id)), [rows])
+  const selectedRows = rows.filter((node) => selected.has(node.id))
+  useEffect(() => {
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((id) => visibleIDs.has(id)))
+      return next.size === prev.size ? prev : next
+    })
+  }, [visibleIDs])
   if (rows.length === 0) {
     return <div className="flex h-full items-center justify-center text-sm text-theme-text-secondary">No resources match the current filters.</div>
   }
   return (
-    <div className="h-full overflow-auto bg-theme-base">
+    <div className="flex h-full min-h-0 flex-col bg-theme-base">
+      {selectedRows.length > 0 && (
+        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-theme-border bg-theme-surface px-3 py-2 text-xs">
+          <span className="font-medium text-theme-text-primary">{selectedRows.length} selected</span>
+          <button
+            type="button"
+            onClick={() => setSelected(new Set())}
+            className="rounded px-2 py-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+          >
+            Clear
+          </button>
+          <button
+            type="button"
+            disabled={!capabilities?.selectiveSync || selectiveLoading}
+            onClick={() => onSelectiveSync?.(selectedRows.map((node) => ({
+              group: node.ref.group,
+              kind: node.ref.kind,
+              namespace: node.ref.namespace,
+              name: node.ref.name,
+            })))}
+            className="ml-auto rounded-md border border-theme-border bg-theme-base px-2 py-1 font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+            title={capabilities?.selectiveSync ? 'Sync selected resources' : capabilities?.unsupportedReason || 'Selective sync is not supported for this GitOps tool'}
+          >
+            {selectiveLoading ? 'Syncing...' : 'Sync selected'}
+          </button>
+          {capabilities?.warnings?.[0] && <span className="basis-full text-[11px] text-theme-text-tertiary">{capabilities.warnings[0]}</span>}
+        </div>
+      )}
+      <div className="min-h-0 flex-1 overflow-auto">
       <table className="w-full table-fixed border-separate border-spacing-0 text-sm">
         <thead className="sticky top-0 z-10 bg-theme-surface">
           <tr className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
+            <TableHead className="w-[44px]">
+              <input
+                type="checkbox"
+                checked={rows.length > 0 && selectedRows.length === rows.length}
+                ref={(input) => {
+                  if (input) input.indeterminate = selectedRows.length > 0 && selectedRows.length < rows.length
+                }}
+                onChange={(event) => setSelected(event.target.checked ? new Set(rows.map((node) => node.id)) : new Set())}
+                className="h-3.5 w-3.5"
+              />
+            </TableHead>
             <TableHead className="w-[18%]">Kind</TableHead>
             <TableHead className="w-[28%]">Name</TableHead>
             <TableHead className="w-[16%]">Namespace</TableHead>
@@ -1181,6 +1267,22 @@ function GitOpsResourceTable({ nodes, onOpen }: { nodes: GitOpsTreeNode[]; onOpe
               onClick={() => onOpen(node.ref, node)}
               className="cursor-pointer bg-theme-base hover:bg-theme-hover"
             >
+              <TableCell>
+                <input
+                  type="checkbox"
+                  checked={selected.has(node.id)}
+                  onClick={(event) => event.stopPropagation()}
+                  onChange={(event) => {
+                    setSelected((prev) => {
+                      const next = new Set(prev)
+                      if (event.target.checked) next.add(node.id)
+                      else next.delete(node.id)
+                      return next
+                    })
+                  }}
+                  className="h-3.5 w-3.5"
+                />
+              </TableCell>
               <TableCell>{node.ref.kind}</TableCell>
               <TableCell><span className="font-medium text-theme-text-primary">{node.ref.name}</span></TableCell>
               <TableCell>{node.ref.namespace || '-'}</TableCell>
@@ -1194,82 +1296,7 @@ function GitOpsResourceTable({ nodes, onOpen }: { nodes: GitOpsTreeNode[]; onOpe
           ))}
         </tbody>
       </table>
-    </div>
-  )
-}
-
-function GitOpsActivityView({ resource, detail }: { resource: any; detail: GitOpsRow | null }) {
-  const conditions = resource?.status?.conditions ?? []
-  const history = resource?.status?.history ?? []
-  const operation = resource?.status?.operationState
-  return (
-    <div className="h-full overflow-auto bg-theme-base p-4">
-      <div className="grid gap-4 lg:grid-cols-2">
-        <section className="rounded-md border border-theme-border bg-theme-surface p-4">
-          <h2 className="text-sm font-semibold text-theme-text-primary">Current Operation</h2>
-          {operation ? (
-            <div className="mt-3 space-y-2 text-sm text-theme-text-secondary">
-              <InfoRow label="Phase" value={operation.phase || '-'} />
-              <InfoRow label="Started" value={formatRelative(operation.startedAt)} />
-              <InfoRow label="Finished" value={formatRelative(operation.finishedAt)} />
-              <InfoRow label="Message" value={operation.message || '-'} />
-              <InfoRow label="Revision" value={operation.syncResult?.revision || detail?.targetRevision || '-'} mono />
-            </div>
-          ) : (
-            <p className="mt-2 text-sm text-theme-text-secondary">No running operation.</p>
-          )}
-        </section>
-        <section className="rounded-md border border-theme-border bg-theme-surface p-4">
-          <h2 className="text-sm font-semibold text-theme-text-primary">Last Reconcile</h2>
-          <div className="mt-3 space-y-2 text-sm text-theme-text-secondary">
-            <InfoRow label="Last sync" value={formatRelative(detail?.lastSync || '')} />
-            <InfoRow label="Target revision" value={detail?.targetRevision || '-'} mono />
-            <InfoRow label="Source" value={detail?.repository || detail?.chart || '-'} />
-            <InfoRow label="Destination" value={[detail?.destination, detail?.destinationNamespace].filter(Boolean).join(' / ') || '-'} />
-          </div>
-        </section>
       </div>
-      <section className="mt-4 rounded-md border border-theme-border bg-theme-surface p-4">
-        <h2 className="text-sm font-semibold text-theme-text-primary">Conditions</h2>
-        <div className="mt-3 divide-y divide-theme-border">
-          {conditions.length === 0 ? (
-            <p className="text-sm text-theme-text-secondary">No conditions reported.</p>
-          ) : conditions.map((condition: any, index: number) => (
-            <div key={`${condition.type}-${index}`} className="py-3 text-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-medium text-theme-text-primary">{condition.type}</span>
-                <span className="badge status-neutral">{condition.status}</span>
-                {condition.reason && <span className="text-theme-text-tertiary">{condition.reason}</span>}
-                {condition.lastTransitionTime && <span className="ml-auto text-xs text-theme-text-tertiary">{formatRelative(condition.lastTransitionTime)}</span>}
-              </div>
-              {condition.message && <p className="mt-1 text-theme-text-secondary">{condition.message}</p>}
-            </div>
-          ))}
-        </div>
-      </section>
-      {history.length > 0 && (
-        <section className="mt-4 rounded-md border border-theme-border bg-theme-surface p-4">
-          <h2 className="text-sm font-semibold text-theme-text-primary">History</h2>
-          <div className="mt-3 divide-y divide-theme-border">
-            {history.slice().reverse().map((entry: any, index: number) => (
-              <div key={`${entry.id}-${index}`} className="grid grid-cols-[96px_minmax(0,1fr)_160px] gap-3 py-2 text-sm">
-                <span className="text-theme-text-tertiary">#{entry.id ?? index + 1}</span>
-                <span className="truncate font-mono text-theme-text-primary">{entry.revision || '-'}</span>
-                <span className="text-right text-theme-text-secondary">{formatRelative(entry.deployedAt)}</span>
-              </div>
-            ))}
-          </div>
-        </section>
-      )}
-    </div>
-  )
-}
-
-function InfoRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-3">
-      <span className="text-theme-text-tertiary">{label}</span>
-      <span className={`min-w-0 truncate text-theme-text-primary ${mono ? 'font-mono text-xs' : ''}`}>{value}</span>
     </div>
   )
 }
@@ -1384,7 +1411,7 @@ function decodePathPart(value: string): string {
   }
 }
 
-function isGitOpsDetailRef(ref: GitOpsTreeRef): boolean {
+function isGitOpsDetailRef(ref: GitOpsTreeRef | GitOpsInsightRef): boolean {
   const kind = ref.kind.toLowerCase()
   if (ref.group === 'argoproj.io') {
     return kind === 'application' || kind === 'applicationset' || kind === 'appproject'
@@ -1399,6 +1426,10 @@ function isGitOpsDetailRef(ref: GitOpsTreeRef): boolean {
 
 function isValidKubernetesName(name: string): boolean {
   return /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(name)
+}
+
+function hasAPIResource(resources: APIResource[] | undefined, name: string, group: string): boolean {
+  return (resources ?? []).some((resource) => resource.name === name && resource.group === group)
 }
 
 async function fetchResourceList(kind: string, group: string, namespacesParam: string): Promise<any[]> {

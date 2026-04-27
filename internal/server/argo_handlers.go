@@ -1,6 +1,7 @@
 package server
 
 import (
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -25,7 +26,14 @@ func (s *Server) handleArgoSync(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
-	result, err := gitops.SyncArgoApp(r.Context(), client, namespace, name)
+	var opts gitops.ArgoSyncOptions
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid sync request: %v", err))
+			return
+		}
+	}
+	result, err := gitops.SyncArgoApp(r.Context(), client, namespace, name, opts)
 	if err != nil {
 		s.writeGitOpsError(w, err, "argo", "sync", namespace, name)
 		return

@@ -99,10 +99,25 @@ type SourceRef struct {
 	Name      string
 }
 
+// ArgoSyncResource identifies a resource selected for an ArgoCD selective sync.
+type ArgoSyncResource struct {
+	Group     string `json:"group,omitempty"`
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
+}
+
+// ArgoSyncOptions controls an ArgoCD sync operation.
+type ArgoSyncOptions struct {
+	Resources []ArgoSyncResource `json:"resources,omitempty"`
+	Revision  string             `json:"revision,omitempty"`
+	Prune     *bool              `json:"prune,omitempty"`
+}
+
 // --- ArgoCD operations ---
 
 // SyncArgoApp triggers a sync operation on an ArgoCD Application.
-func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name string) (OperationResult, error) {
+func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name string, opts ArgoSyncOptions) (OperationResult, error) {
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
@@ -117,6 +132,31 @@ func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 	}
 
 	timestamp := time.Now().Format(time.RFC3339Nano)
+	prune := true
+	if opts.Prune != nil {
+		prune = *opts.Prune
+	}
+	sync := map[string]any{
+		"revision": opts.Revision,
+		"prune":    prune,
+	}
+	if len(opts.Resources) > 0 {
+		resources := make([]map[string]any, 0, len(opts.Resources))
+		for _, res := range opts.Resources {
+			if res.Kind == "" || res.Name == "" {
+				continue
+			}
+			resources = append(resources, map[string]any{
+				"group":     res.Group,
+				"kind":      res.Kind,
+				"namespace": res.Namespace,
+				"name":      res.Name,
+			})
+		}
+		if len(resources) > 0 {
+			sync["resources"] = resources
+		}
+	}
 	patch := map[string]any{
 		"metadata": map[string]any{
 			"annotations": map[string]string{
@@ -127,10 +167,7 @@ func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 			"initiatedBy": map[string]any{
 				"username": "radar",
 			},
-			"sync": map[string]any{
-				"revision": "",
-				"prune":    true,
-			},
+			"sync": sync,
 		},
 	}
 
