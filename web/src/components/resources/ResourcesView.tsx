@@ -120,10 +120,24 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const openLogs = useOpenLogs()
   const openWorkloadLogs = useOpenWorkloadLogs()
 
-  // Navigation adapter
+  // Navigation adapter. k8s-ui constructs paths from `basePath` (which
+  // includes the router basename so they line up with window.location.pathname
+  // for path-equality checks) and from `window.location.pathname` directly.
+  // React Router's navigate() applies the basename itself, so handing it a
+  // path that already contains the basename double-prefixes it
+  // (e.g. /c/abc/c/abc/resources/pods). Under that URL, getViewFromPath()
+  // sees 'c' as the first segment and falls through to 'home' — which
+  // manifests as "click a resource → bounced to the home dashboard" in
+  // any host that mounts RadarApp under a non-empty basename (Radar Cloud).
+  // Strip the basename here so react-router can re-apply it cleanly.
   const handleNavigate = useMemo(() => {
+    const base = getBasename()
     return (path: string, options?: { replace?: boolean }) => {
-      navigate(path, { replace: options?.replace })
+      let p = path
+      if (base && (p === base || p.startsWith(base + '/') || p.startsWith(base + '?'))) {
+        p = p.slice(base.length) || '/'
+      }
+      navigate(p, { replace: options?.replace })
     }
   }, [navigate])
 
