@@ -1,3 +1,5 @@
+import { type ReactNode, useCallback, useState } from 'react'
+import { MiddleEllipsis } from './MiddleEllipsis'
 import { Tooltip } from './Tooltip'
 import { parseContextName } from '../../utils/context-name'
 import type { ParsedContextName } from '../../utils/context-name'
@@ -10,8 +12,14 @@ import azureLogo from './provider-logos/azure.svg'
 // cluster identity surfaced as primary text and provider/region pushed
 // into supporting metadata. Wraps parseContextName from utils/context-name
 // so all surfaces (cluster cards, table cells, column headers, switcher
-// dropdowns, breadcrumb, error views) share identical cluster-identity
-// rendering.
+// trigger + dropdowns, breadcrumb, error views) share identical
+// cluster-identity rendering.
+//
+// Width-aware: the name middle-truncates to fit its container so long
+// strings (`gke_proj_us-east1-b_prod-cluster-us-east1`, custom user names)
+// keep both ends readable. Tooltip surfaces the raw whenever EITHER the
+// parse collapsed something (`gke_…` → `prod-cluster-us-east1`) OR the
+// rendered name is being middle-truncated to fit.
 //
 // Variants:
 //   inline   — name + small provider logo, fits in a table cell or
@@ -20,7 +28,9 @@ import azureLogo from './provider-logos/azure.svg'
 //              for card-sized surfaces
 //
 // User-named clusters that don't match a known shape pass through
-// unchanged — no provider badge, no tooltip needed.
+// unchanged. A `fallbackBadge` prop lets surfaces that always want a
+// leading visual (e.g. the cluster-switcher trigger) supply one for the
+// no-provider case.
 
 type Provider = NonNullable<ParsedContextName['provider']>
 
@@ -40,6 +50,11 @@ interface Props {
   variant?: 'inline' | 'stacked'
   /** Suppress the provider badge — use when context already conveys provider. */
   noBadge?: boolean
+  /** Rendered in the badge slot when no provider is detected and `noBadge`
+   *  is not set. Lets the cluster switcher trigger keep a Server-icon
+   *  fallback for custom kubeconfig names without forcing every consumer
+   *  to ship one. */
+  fallbackBadge?: ReactNode
   /** Optional className on the outer span. */
   className?: string
 }
@@ -60,19 +75,27 @@ function ProviderBadge({ provider }: { provider: Provider }) {
   )
 }
 
-export function ClusterName({ name, variant = 'inline', noBadge, className }: Props) {
+export function ClusterName({ name, variant = 'inline', noBadge, fallbackBadge, className }: Props) {
   const parsed = parseContextName(name)
+  const [truncated, setTruncated] = useState(false)
+  const onTruncatedChange = useCallback((t: boolean) => setTruncated(t), [])
 
-  const showBadge = !noBadge && parsed.provider !== null
+  const hasProvider = parsed.provider !== null
+  const showProviderBadge = !noBadge && hasProvider
+  const showFallback = !noBadge && !hasProvider && fallbackBadge != null
   const showRegion = parsed.region !== null && variant === 'stacked'
-  const needsTooltip = parsed.raw !== parsed.clusterName
+  const collapsed = parsed.raw !== parsed.clusterName
+  // Tooltip when there's something to disclose — either we collapsed the
+  // raw, or the displayed name is being middle-truncated to fit.
+  const needsTooltip = collapsed || truncated
 
   const body = (
     <span className={['inline-flex items-center gap-1.5 min-w-0', className ?? ''].join(' ')}>
-      {showBadge && <ProviderBadge provider={parsed.provider!} />}
+      {showProviderBadge && <ProviderBadge provider={parsed.provider!} />}
+      {showFallback && fallbackBadge}
       {variant === 'stacked' ? (
-        <span className="flex flex-col min-w-0">
-          <span className="truncate">{parsed.clusterName}</span>
+        <span className="flex flex-col min-w-0 flex-1">
+          <MiddleEllipsis text={parsed.clusterName} onTruncatedChange={onTruncatedChange} />
           {showRegion && (
             <span className="text-[10px] text-theme-text-tertiary truncate">
               {parsed.provider} · {parsed.region}
@@ -80,7 +103,7 @@ export function ClusterName({ name, variant = 'inline', noBadge, className }: Pr
           )}
         </span>
       ) : (
-        <span className="truncate">{parsed.clusterName}</span>
+        <MiddleEllipsis text={parsed.clusterName} onTruncatedChange={onTruncatedChange} />
       )}
     </span>
   )

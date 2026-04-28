@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Server, AlertTriangle } from 'lucide-react'
+import { AlertTriangle } from 'lucide-react'
 import {
   ClusterSwitcher,
   type ClusterSwitcherItem,
@@ -61,10 +61,12 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
         : hasMultipleAccounts
           ? 'Other'
           : undefined
+      // Pass the raw context as `name`; ClusterSwitcher renders through
+      // ClusterName which parses + collapses + tooltips on hover. We keep
+      // the parse locally only for grouping/sorting and the region badge.
       return {
         id: p.context.name,
-        name: p.clusterName,
-        secondary: p.provider ? p.raw : undefined,
+        name: p.context.name,
         badge: p.region || undefined,
         group: { key: groupKey, label: groupLabel },
       }
@@ -148,7 +150,6 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
   }
 
   const currentRaw = clusterInfo?.context || contexts?.find(c => c.isCurrent)?.name || 'Unknown'
-  const currentParsed = parseContextName(currentRaw)
   const currentId = contexts?.find(c => c.isCurrent)?.name
 
   return (
@@ -156,9 +157,7 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
       <ClusterSwitcher
         className={className}
         currentId={currentId}
-        currentName={currentParsed.clusterName}
-        currentTooltip={currentRaw}
-        triggerIcon={<Server className="w-3.5 h-3.5 text-theme-text-secondary" />}
+        currentName={currentRaw}
         items={items}
         onSelect={handleSelect}
         loading={switchContext.isPending}

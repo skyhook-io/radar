@@ -1,6 +1,8 @@
 export { Tooltip } from './Tooltip'
 export { PaneLoader } from './PaneLoader'
 export { ClusterName } from './ClusterName'
+export { MiddleEllipsis } from './MiddleEllipsis'
+export type { MiddleEllipsisProps } from './MiddleEllipsis'
 export { EmptyState } from './EmptyState'
 export type { EmptyStateTone, EmptyStateVariant } from './EmptyState'
 export { FilterPill } from './FilterPill'

@@ -5,11 +5,14 @@ import {
   useRef,
   useState,
 } from 'react'
-import { ChevronDown, Check, Loader2, Search, X } from 'lucide-react'
+import { ChevronDown, Check, Loader2, Search, Server, X } from 'lucide-react'
+import { ClusterName } from '../ui/ClusterName'
 import { StatusDot, type StatusTone } from '../ui/status-tone'
 
 export interface ClusterSwitcherItem {
   id: string
+  /** Raw context / display string. ClusterName collapses GKE/EKS/AKS
+   *  shapes; user-named clusters pass through unchanged. */
   name: string
   secondary?: string
   badge?: string
@@ -18,17 +21,17 @@ export interface ClusterSwitcherItem {
   status?: StatusTone
   /** Hard navigation target. Takes precedence over the parent's `onSelect`. */
   href?: string
-  /** Tooltip — useful on disabled rows to explain why the row is inert. */
+  /** Native tooltip — useful on disabled rows to explain why the row is inert.
+   *  ClusterName supplies its own tooltip for the cluster name itself; this
+   *  is for row-level affordances (e.g. "Cluster offline — reconnect…"). */
   title?: string
 }
 
 export interface ClusterSwitcherProps {
   currentId?: string
+  /** Raw context / display string. Pass it as-is — the trigger renders
+   *  through ClusterName, which handles parse + provider badge + tooltip. */
   currentName: string
-  currentTooltip?: string
-  triggerIcon?: ReactNode
-  triggerPrefix?: ReactNode
-  triggerMaxWidthClass?: string
   items: ClusterSwitcherItem[]
   onSelect?: (item: ClusterSwitcherItem) => void
   searchable?: boolean
@@ -43,15 +46,15 @@ export interface ClusterSwitcherProps {
   align?: 'left' | 'right'
 }
 
-const DEFAULT_TRIGGER_MAX_WIDTH = 'max-w-[120px] sm:max-w-[220px]'
+// Trigger width cap. With middle-truncation kicking in, this is mostly a
+// horizontal-real-estate guard rather than a readability one — names get
+// to use up to ~260px on desktop before they need to truncate, comfortably
+// fitting most parsed cluster names (`prod-cluster-us-east1` etc.) in full.
+const TRIGGER_NAME_MAX_WIDTH = 'max-w-[160px] sm:max-w-[260px]'
 
 export function ClusterSwitcher({
   currentId,
   currentName,
-  currentTooltip,
-  triggerIcon,
-  triggerPrefix,
-  triggerMaxWidthClass = DEFAULT_TRIGGER_MAX_WIDTH,
   items,
   onSelect,
   searchable = true,
@@ -169,7 +172,6 @@ export function ClusterSwitcher({
         type="button"
         onClick={() => setIsOpen(v => !v)}
         disabled={disabled || loading}
-        title={currentTooltip ?? currentName}
         className={`
           flex items-center gap-1.5 px-2.5 py-1.5
           bg-theme-elevated border border-theme-border rounded text-sm font-medium
@@ -179,16 +181,21 @@ export function ClusterSwitcher({
         `}
       >
         {loading ? (
-          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          <>
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            <span className={`${TRIGGER_NAME_MAX_WIDTH} block truncate`}>Switching…</span>
+          </>
         ) : (
-          triggerIcon
+          // ClusterName parses the context (provider badge for GKE/EKS/AKS,
+          // raw name for custom kubeconfig) and middle-truncates to the cap.
+          // Server icon is the fallback badge for the no-provider case so
+          // the trigger always has a leading visual.
+          <ClusterName
+            name={currentName}
+            fallbackBadge={<Server className="w-3.5 h-3.5 text-theme-text-secondary" />}
+            className={TRIGGER_NAME_MAX_WIDTH}
+          />
         )}
-        {triggerPrefix && (
-          <span className="text-theme-text-tertiary">{triggerPrefix}</span>
-        )}
-        <span className={`${triggerMaxWidthClass} truncate`}>
-          {loading ? 'Switching...' : currentName}
-        </span>
         <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
@@ -274,19 +281,18 @@ export function ClusterSwitcher({
                         )}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5">
-                            <span
-                              className={`text-sm font-medium truncate ${
+                            <ClusterName
+                              name={item.name}
+                              className={`text-sm font-medium flex-1 ${
                                 isCurrent
                                   ? 'selection-text'
                                   : item.disabled
                                     ? 'text-theme-text-tertiary'
                                     : 'text-theme-text-primary'
                               }`}
-                            >
-                              {item.name}
-                            </span>
+                            />
                             {item.badge && (
-                              <span className="shrink-0 ml-auto text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 rounded">
+                              <span className="shrink-0 text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 rounded">
                                 {item.badge}
                               </span>
                             )}
