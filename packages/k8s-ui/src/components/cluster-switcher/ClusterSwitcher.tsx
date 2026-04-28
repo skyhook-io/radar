@@ -191,11 +191,15 @@ export function ClusterSwitcher({
           // ClusterName parses the context (provider badge for GKE/EKS/AKS,
           // raw name for custom kubeconfig) and middle-truncates to the cap.
           // Server icon is the fallback badge for the no-provider case so
-          // the trigger always has a leading visual.
+          // the trigger always has a leading visual. Tooltip is suppressed
+          // while the dropdown is open — the popover already shows the raw
+          // context inline (per-row secondary line), and an extra hover
+          // tooltip would just overlap the search input.
           <ClusterName
             name={currentName}
             fallbackBadge={<Server className="w-3.5 h-3.5 text-theme-text-secondary" />}
             className={TRIGGER_NAME_MAX_WIDTH}
+            noTooltip={isOpen}
           />
         )}
         <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
@@ -283,8 +287,13 @@ export function ClusterSwitcher({
                         )}
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-1.5">
+                            {/* No tooltip on row names — each row already
+                                renders the raw context inline below the
+                                name (item.secondary), so the hover tooltip
+                                would just repeat what's already visible. */}
                             <ClusterName
                               name={item.name}
+                              noTooltip
                               className={`text-sm font-medium flex-1 ${
                                 isCurrent
                                   ? 'selection-text'

@@ -58,6 +58,11 @@ interface Props {
   fallbackBadge?: ReactNode
   /** Optional className on the outer span. */
   className?: string
+  /** Suppress the hover tooltip even when the parsed name was collapsed
+   *  or middle-truncated. Use when the surrounding chrome already
+   *  discloses the raw context (e.g. inside an open switcher dropdown
+   *  where the tooltip would overlap the popover content). */
+  noTooltip?: boolean
 }
 
 function ProviderBadge({ provider }: { provider: Provider }) {
@@ -76,7 +81,7 @@ function ProviderBadge({ provider }: { provider: Provider }) {
   )
 }
 
-export function ClusterName({ name, variant = 'inline', noBadge, fallbackBadge, className }: Props) {
+export function ClusterName({ name, variant = 'inline', noBadge, fallbackBadge, className, noTooltip }: Props) {
   const parsed = parseContextName(name)
   const [truncated, setTruncated] = useState(false)
   const onTruncatedChange = useCallback((t: boolean) => setTruncated(t), [])
@@ -87,8 +92,9 @@ export function ClusterName({ name, variant = 'inline', noBadge, fallbackBadge, 
   const showRegion = parsed.region !== null && variant === 'stacked'
   const collapsed = parsed.raw !== parsed.clusterName
   // Tooltip when there's something to disclose — either we collapsed the
-  // raw, or the displayed name is being middle-truncated to fit.
-  const needsTooltip = collapsed || truncated
+  // raw, or the displayed name is being middle-truncated to fit. Callers
+  // can opt out via `noTooltip` when the raw is already visible elsewhere.
+  const needsTooltip = !noTooltip && (collapsed || truncated)
 
   const body = (
     <span className={['inline-flex items-center gap-1.5 min-w-0', className ?? ''].join(' ')}>
