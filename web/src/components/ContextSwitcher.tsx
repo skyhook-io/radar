@@ -61,12 +61,15 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
         : hasMultipleAccounts
           ? 'Other'
           : undefined
-      // Pass the raw context as `name`; ClusterSwitcher renders through
-      // ClusterName which parses + collapses + tooltips on hover. We keep
-      // the parse locally only for grouping/sorting and the region badge.
+      // `name` is the raw context — ClusterSwitcher renders it through
+      // ClusterName, which collapses GKE/EKS/AKS shapes to the meaningful
+      // tail. `secondary` shows the original raw when we collapsed it,
+      // so users always see the full context at a glance (rather than
+      // having to hover to reveal it).
       return {
         id: p.context.name,
         name: p.context.name,
+        secondary: p.provider ? p.raw : undefined,
         badge: p.region || undefined,
         group: { key: groupKey, label: groupLabel },
       }
