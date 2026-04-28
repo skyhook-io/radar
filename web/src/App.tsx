@@ -782,13 +782,17 @@ function AppInner() {
                   }`}
                 />
               </Tooltip>
-              <span className="text-xs text-theme-text-tertiary hidden xl:inline">
-                {!connected
-                  ? 'Disconnected'
-                  : crdDiscoveryStatus === 'discovering'
-                    ? 'Discovering Custom Resources...'
-                    : 'Connected'}
-              </span>
+              {/* Inline label only for non-steady states where the user
+                  might need to act or wait. The healthy "Connected" case
+                  is the dot alone; the dot's tooltip discloses it. Keeping
+                  "Connected" text here would expand the left section and
+                  collide with the absolute-centered nav block at xl, which
+                  is the same breakpoint where nav labels appear. */}
+              {(!connected || crdDiscoveryStatus === 'discovering') && (
+                <span className="text-xs text-theme-text-tertiary hidden xl:inline">
+                  {!connected ? 'Disconnected' : 'Discovering Custom Resources...'}
+                </span>
+              )}
               {!connected && (
                 <button
                   onClick={reconnect}
@@ -829,12 +833,14 @@ function AppInner() {
                 }`}
               >
                 <Icon className="w-4 h-4" />
-                {/* Labels show at 1500+ — that's just under default 14" MBP
-                    (1512px logical) so most desktop users keep them, while
-                    narrower viewports collapse to icon-only and avoid Audit
-                    getting pushed off. Tooltip on each button discloses the
-                    label on hover when collapsed. */}
-                <span className="hidden min-[1500px]:inline">{label}</span>
+                {/* Off-system breakpoint: the absolute-centered nav block
+                    (~650px wide with labels) collides with the left section
+                    (logo + cluster switcher) below ~1415px. We add a small
+                    breathing-room buffer and land at 1440. xl (1536) — where
+                    Connected text + star count appear and add right-side
+                    pressure — sits a step above. Per-button Tooltip discloses
+                    labels on hover for the icon-only zone. */}
+                <span className="hidden min-[1440px]:inline">{label}</span>
               </button>
             </Tooltip>
           ))}
