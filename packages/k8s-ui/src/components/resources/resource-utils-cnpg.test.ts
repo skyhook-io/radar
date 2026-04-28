@@ -30,6 +30,22 @@ describe('getCNPGClusterCertificateExpirations', () => {
     }
   })
 
+  it('floors fractional days down so threshold banners do not misfire', () => {
+    // Pinned now: 2026-04-28T12:00:00Z; expiry 2026-07-27T00:00:00Z is 89.5
+    // days away. Math.floor pins this to 89, not 90 — locks day-boundary
+    // semantics so a future Math.ceil/round refactor doesn't shift the
+    // <30d / <7d alert thresholds.
+    const resource = {
+      status: {
+        certificates: {
+          expirations: { 'mycluster-ca': '2026-07-27 00:00:00 +0000 UTC' },
+        },
+      },
+    }
+    const [cert] = getCNPGClusterCertificateExpirations(resource)
+    expect(cert.daysUntilExpiry).toBe(89)
+  })
+
   it('flags genuinely expired certificates as negative', () => {
     const resource = {
       status: {
