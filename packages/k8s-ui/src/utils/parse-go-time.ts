@@ -13,7 +13,10 @@ export function parseGoTimeString(s: string): Date {
   const m = s.match(GO_TIME_PATTERN)
   if (m) {
     const [, date, time, frac, tzHour, tzMin] = m
-    const ms = frac ? frac.slice(0, 4) : ''
+    // Go's ".999999999" format strips trailing zeros, so nanos=100_000_000
+    // emits ".1". The ISO 8601 simplified profile requires exactly ".sss";
+    // pad to 3 digits before truncating so Safari accepts the result.
+    const ms = frac ? '.' + (frac.slice(1) + '000').slice(0, 3) : ''
     return new Date(`${date}T${time}${ms}${tzHour}:${tzMin}`)
   }
   return new Date(s)

@@ -14,7 +14,17 @@ describe('parseGoTimeString', () => {
     ).toBe('2026-07-27T08:27:41.123Z')
   })
 
-  it('accepts millisecond fractional seconds', () => {
+  it('pads fractional seconds to 3 digits (Go strips trailing zeros)', () => {
+    // Go emits ".1" / ".12" when nanoseconds end in zeros; without padding
+    // the constructed ISO string violates the .sss profile and Safari rejects
+    // it, re-introducing the bug for certs that happen to expire on these
+    // round nanoseconds.
+    expect(parseGoTimeString('2026-07-27 08:27:41.1 +0000 UTC').toISOString()).toBe(
+      '2026-07-27T08:27:41.100Z',
+    )
+    expect(parseGoTimeString('2026-07-27 08:27:41.12 +0000 UTC').toISOString()).toBe(
+      '2026-07-27T08:27:41.120Z',
+    )
     expect(parseGoTimeString('2026-07-27 08:27:41.5 +0000 UTC').toISOString()).toBe(
       '2026-07-27T08:27:41.500Z',
     )
