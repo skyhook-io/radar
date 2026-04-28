@@ -190,12 +190,28 @@ export interface CNPGCertificateExpiry {
   daysUntilExpiry: number
 }
 
+// CNPG serializes expiry dates with Go's default time.Time.String() format,
+// e.g. "2026-07-27 08:27:41.123456789 +0000 UTC". Safari (and the ECMAScript
+// spec) don't require Date(...) to parse non-ISO strings, so we normalize to
+// ISO 8601 first.
+export function parseCNPGExpiryDate(s: string): Date {
+  const direct = new Date(s)
+  if (!isNaN(direct.getTime())) return direct
+  const m = s.match(/^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}:\d{2})(\.\d+)?\s+([+-]\d{2})(\d{2})\b/)
+  if (m) {
+    const [, date, time, frac, tzHour, tzMin] = m
+    const ms = frac ? frac.slice(0, 4) : ''
+    return new Date(`${date}T${time}${ms}${tzHour}:${tzMin}`)
+  }
+  return new Date(NaN)
+}
+
 export function getCNPGClusterCertificateExpirations(resource: any): CNPGCertificateExpiry[] {
   const expirations = resource.status?.certificates?.expirations
   if (!expirations || typeof expirations !== 'object') return []
   const now = new Date()
   return Object.entries(expirations).map(([secretName, expiryDate]: [string, any]) => {
-    const expiry = new Date(expiryDate)
+    const expiry = parseCNPGExpiryDate(String(expiryDate))
     const daysUntilExpiry = isNaN(expiry.getTime())
       ? -1  // treat unparseable dates as expired/critical
       : Math.floor((expiry.getTime() - now.getTime()) / (1000 * 60 * 60 * 24))
