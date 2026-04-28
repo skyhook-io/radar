@@ -48,12 +48,13 @@ interface Props {
   name: string
   /** Visual shape. Default: inline. */
   variant?: 'inline' | 'stacked'
-  /** Suppress the provider badge — use when context already conveys provider. */
+  /** Suppress the provider badge — use when context already conveys provider.
+   *  Also suppresses `fallbackBadge`; `noBadge` wins when both are set. */
   noBadge?: boolean
   /** Rendered in the badge slot when no provider is detected and `noBadge`
    *  is not set. Lets the cluster switcher trigger keep a Server-icon
    *  fallback for custom kubeconfig names without forcing every consumer
-   *  to ship one. */
+   *  to ship one. Ignored when `noBadge` is set. */
   fallbackBadge?: ReactNode
   /** Optional className on the outer span. */
   className?: string

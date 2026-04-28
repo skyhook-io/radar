@@ -15,6 +15,11 @@ import { useEffect, useRef, useState } from 'react'
 // flex parent shrink-wraps to the truncated content, MiddleEllipsis sees
 // the shrunken width, keeps truncating; widening doesn't recover.
 //
+// Concretely, removing the ghost makes the trigger render full-width on
+// first paint, then collapse to the truncated width on the first
+// ResizeObserver tick, and stay collapsed forever even when the viewport
+// widens. The ghost is load-bearing — don't simplify it away.
+//
 // Place inside a width-constrained container (e.g. a button child with
 // `max-w-[…]`). The wrapper itself takes `width: 100%` of that container.
 
@@ -26,9 +31,15 @@ export interface MiddleEllipsisProps {
   /** Native browser tooltip. Opt-in: defaulting to the full text would
    *  duplicate any tooltip wrapper (e.g. `<Tooltip>`) higher up the tree. */
   title?: string
-  /** Fires whenever the rendered text changes between full and truncated.
-   *  Lets a parent gate behavior on actual truncation — e.g. show a custom
-   *  tooltip only when the visible text isn't already the full string. */
+  /** Fires whenever the rendered text changes between full and truncated
+   *  (edge-triggered, not level — won't fire on every render). Lets a parent
+   *  gate behavior on actual truncation, e.g. show a custom tooltip only
+   *  when the visible text isn't already the full string.
+   *
+   *  Do NOT use the value to alter the width of the measured container — a
+   *  truncated→untruncated swap that resizes the parent would oscillate
+   *  through the ResizeObserver. Tooltips, badges, and other overlays/sibling
+   *  affordances are fine; layout-affecting changes are not. */
   onTruncatedChange?: (truncated: boolean) => void
 }
 
@@ -50,7 +61,19 @@ export function MiddleEllipsis({ text, className, title, onTruncatedChange }: Mi
       const width = node.clientWidth
       if (width <= 0) return
       const cs = window.getComputedStyle(node)
-      ctx.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+      // Include fontStyle in the shorthand so italic faces measure correctly.
+      // If the assignment ever silently fails (malformed family quoting,
+      // exotic computed values), the browser leaves ctx.font at its previous
+      // value — on first call that's the default `10px sans-serif`, which
+      // under-measures and would cause over-truncation. Detect by reading
+      // back: if ctx.font normalised to the default but we didn't ask for
+      // it, bail to full-text render (clipped by overflow:hidden) rather
+      // than render a wrongly-truncated string.
+      ctx.font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`
+      if (ctx.font === '10px sans-serif' && cs.fontSize !== '10px') {
+        setDisplay(text)
+        return
+      }
       const next = fitMiddleTruncate(text, width, ctx)
       setDisplay(next)
       const truncated = next !== text
