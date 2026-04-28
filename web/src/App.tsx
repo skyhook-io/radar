@@ -834,7 +834,12 @@ function AppInner() {
                 }`}
               >
                 <Icon className="w-4 h-4" />
-                <span className="hidden lg:inline">{label}</span>
+                {/* Labels show at 1500+ — that's just under default 14" MBP
+                    (1512px logical) so most desktop users keep them, while
+                    narrower viewports collapse to icon-only and avoid Audit
+                    getting pushed off. Tooltip on each button discloses the
+                    label on hover when collapsed. */}
+                <span className="hidden min-[1500px]:inline">{label}</span>
               </button>
             </Tooltip>
           ))}
