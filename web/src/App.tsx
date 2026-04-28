@@ -755,12 +755,7 @@ function AppInner() {
       <header className="relative z-50 flex items-center justify-between px-4 py-2 bg-theme-base/90 backdrop-blur-sm border-b border-theme-border/50">
         {/* Left: Logo + Cluster info */}
         <div className="flex items-center gap-4 shrink-0">
-          {navCustomization.brandSlot ?? (
-            <div className="flex items-center gap-2.5">
-              <Logo />
-              <span className="text-xl text-theme-text-primary leading-none -translate-y-0.5" style={{ fontFamily: "'DM Sans', sans-serif", fontWeight: 520 }}>radar</span>
-            </div>
-          )}
+          {navCustomization.brandSlot ?? <Logo />}
 
           <div className="flex items-center gap-2">
             {navCustomization.contextSlot ?? <ContextSwitcher />}
@@ -1387,13 +1382,25 @@ function App() {
 }
 
 // Skyhook logo that switches based on theme
+// Header brand: emerald-square radar icon + "Radar" wordmark with a small
+// "by Skyhook" subtitle. Mirrors the RadarLogo component used in the
+// Skyhook Cloud (radar-hub-web) shell so the standalone OSS Radar and
+// the embedded Cloud experience read as the same product. More compact
+// horizontally than the prior Skyhook logotype + "radar" wordmark combo,
+// which buys a few dozen pixels of header real estate that other chrome
+// (cluster switcher, nav) gets to use.
 function Logo() {
-  const { theme } = useTheme()
-  const logoSrc = theme === 'dark'
-    ? '/assets/skyhook/logotype-white-color.svg'
-    : '/assets/skyhook/logotype-dark-color.svg'
-
-  return <img src={logoSrc} alt="Skyhook" className="h-5 w-auto" />
+  return (
+    <div className="flex items-center gap-2.5">
+      <div className="relative w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-emerald-500/10 border border-emerald-500/20">
+        <img src="/images/radar/radar-icon.svg" alt="" aria-hidden className="w-full h-full p-0.5" />
+      </div>
+      <div className="flex flex-col leading-none">
+        <span className="font-semibold text-[15px] tracking-tight text-theme-text-primary">Radar</span>
+        <span className="text-[9px] mt-0.5 tracking-wide uppercase text-theme-text-tertiary">by Skyhook</span>
+      </div>
+    </div>
+  )
 }
 
 // GitHub star button with live star count + programmatic starring via gh CLI
