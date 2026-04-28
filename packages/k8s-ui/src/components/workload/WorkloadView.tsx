@@ -85,15 +85,11 @@ interface WorkloadViewProps {
   eventsLoading?: boolean
   /** Topology data for hierarchy building */
   topology?: any
-  /** K8s events filtered to the focused resource — always returned in full (no
-   *  shared limit with updates) so the Recent Events section can never starve
-   *  out user-meaningful events when an informer flaps. */
   resourceFocusedK8sEvents?: TimelineEvent[]
-  /** Resource update events (informer/historical) for the focused resource —
-   *  hidden by default behind a toggle. */
   resourceFocusedUpdates?: TimelineEvent[]
-  /** Whether either of the focused-resource event queries is still loading */
   resourceFocusedEventsLoading?: boolean
+  resourceFocusedK8sError?: Error | null
+  resourceFocusedUpdatesError?: Error | null
 
   // ── Capabilities ─────────────────────────────────────────────────────────
   /** Whether secrets can be updated */
@@ -172,6 +168,8 @@ export function WorkloadView({
   resourceFocusedK8sEvents,
   resourceFocusedUpdates,
   resourceFocusedEventsLoading = false,
+  resourceFocusedK8sError = null,
+  resourceFocusedUpdatesError = null,
   // Capabilities
   canUpdateSecrets,
   // Mutations
@@ -472,6 +470,8 @@ export function WorkloadView({
                 events={resourceFocusedK8sEvents}
                 eventsLoading={resourceFocusedEventsLoading}
                 updates={resourceFocusedUpdates}
+                eventsError={resourceFocusedK8sError}
+                updatesError={resourceFocusedUpdatesError}
               />
               {renderOverviewExtra && (
                 <div className="px-4 pb-4">
@@ -621,6 +621,8 @@ export function WorkloadView({
               events={resourceFocusedK8sEvents}
               eventsLoading={resourceFocusedEventsLoading}
               updates={resourceFocusedUpdates}
+              eventsError={resourceFocusedK8sError}
+              updatesError={resourceFocusedUpdatesError}
               extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name })}
             />
         )}
@@ -1109,6 +1111,8 @@ function InfoTab({
   events,
   eventsLoading,
   updates,
+  eventsError,
+  updatesError,
   extraContent,
 }: {
   resource: any
@@ -1127,6 +1131,8 @@ function InfoTab({
   events?: TimelineEvent[]
   eventsLoading?: boolean
   updates?: TimelineEvent[]
+  eventsError?: Error | null
+  updatesError?: Error | null
   extraContent?: ReactNode
 }) {
   if (isLoading) {
@@ -1160,6 +1166,8 @@ function InfoTab({
         events={events}
         eventsLoading={eventsLoading}
         updates={updates}
+        eventsError={eventsError}
+        updatesError={updatesError}
         eventsHint={onSwitchToTimeline && (
           <button
             onClick={onSwitchToTimeline}

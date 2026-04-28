@@ -291,13 +291,14 @@ export function WorkloadView({
   // Fetch topology for hierarchy building (only when expanded)
   const { data: topology } = useTopology([namespace], 'resources', { enabled: expanded })
 
-  // Recent events for the focused resource — used by the Overview tab's Recent Events section.
-  // Always fetched (drawer or expanded) so the section populates immediately on drawer open;
-  // allEvents below is gated on expanded mode because it's namespace-wide and expensive.
+  // Always fetched so Recent Events populates on drawer open; allEvents below is
+  // gated on expanded because it's namespace-wide and expensive.
   const {
     k8sEvents: resourceFocusedK8sEvents,
     updates: resourceFocusedUpdates,
     isLoading: resourceFocusedEventsLoading,
+    k8sError: resourceFocusedK8sError,
+    updatesError: resourceFocusedUpdatesError,
   } = useResourceEvents(kindProp, namespace, name)
 
   // Fetch all events for this resource's namespace (only when expanded)
@@ -349,6 +350,8 @@ export function WorkloadView({
       resourceFocusedK8sEvents={resourceFocusedK8sEvents}
       resourceFocusedUpdates={resourceFocusedUpdates}
       resourceFocusedEventsLoading={resourceFocusedEventsLoading}
+      resourceFocusedK8sError={resourceFocusedK8sError}
+      resourceFocusedUpdatesError={resourceFocusedUpdatesError}
       // Capabilities
       canUpdateSecrets={canUpdateSecrets}
       // Mutations

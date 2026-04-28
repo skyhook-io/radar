@@ -200,7 +200,7 @@ import {
   AzureManagedMachinePoolRenderer,
   AzureMachineRenderer,
 } from '../resources/renderers'
-import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo, ResolvedEnvFrom } from '../../types'
+import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo, ResolvedEnvFrom, TimelineEvent } from '../../types'
 import type { CopyHandler } from '../ui/drawer-components'
 import { AlertBanner } from '../ui/drawer-components'
 
@@ -312,15 +312,19 @@ interface ResourceRendererDispatchProps {
   eventsHint?: React.ReactNode
   /** When provided, sidebar sections (related resources, events, labels, annotations, metadata) are passed to this render prop instead of being rendered inline */
   renderSidebar?: (sections: React.ReactNode) => React.ReactNode
-  /** K8s events for the focused resource — injected by the platform wrapper.
-   *  Always shown (no toggle hides them) so resource history can't go missing. */
-  events?: any[]
+  /** K8s events for the focused resource — always shown (no toggle hides them)
+   *  so resource history can't go missing. */
+  events?: TimelineEvent[]
   /** Whether events are still loading */
   eventsLoading?: boolean
   /** Resource update events (informer/historical diffs) — hidden behind a
    *  toggle in the Recent Events section because they can be very high-volume
    *  for a flapping resource. */
-  updates?: any[]
+  updates?: TimelineEvent[]
+  /** Errors from the events / updates queries — surfaced inline in the
+   *  Recent Events section so a partial failure doesn't render as empty. */
+  eventsError?: Error | null
+  updatesError?: Error | null
   /** Render prop for Prometheus metrics charts — injected by the platform wrapper */
   renderMetrics?: (props: { kind: string; namespace: string; name: string }) => React.ReactNode
 }
@@ -343,6 +347,8 @@ export function ResourceRendererDispatch({
   events,
   eventsLoading,
   updates,
+  eventsError,
+  updatesError,
   renderMetrics,
   resolvedEnvFrom,
   rendererOverrides,
@@ -359,7 +365,7 @@ export function ResourceRendererDispatch({
   const sidebarContent = showCommonSections && (
     <>
       <RelatedResourcesSection relationships={relationships} onNavigate={onNavigate} />
-      {kind !== 'events' && <EventsSection events={events || []} updates={updates || []} isLoading={eventsLoading ?? false} hint={eventsHint} />}
+      {kind !== 'events' && <EventsSection events={events || []} updates={updates || []} isLoading={eventsLoading ?? false} eventsError={eventsError ?? null} updatesError={updatesError ?? null} hint={eventsHint} />}
       <LabelsSection data={data} />
       <AnnotationsSection data={data} />
       <MetadataSection data={data} />

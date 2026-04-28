@@ -912,15 +912,19 @@ export interface ResourceEventsResult {
   k8sEvents: TimelineEvent[]
   updates: TimelineEvent[]
   isLoading: boolean
+  // Per-stream errors are surfaced separately so the UI can distinguish
+  // "this stream failed" from "no data" — silent fallback to [] would
+  // reproduce the exact failure mode #547 is about.
+  k8sError: Error | null
+  updatesError: Error | null
 }
 
-// Resource-specific events for a single resource. K8s events and resource updates
-// are fetched separately so a high-frequency informer update stream (e.g. a
-// CrashLoop status field flapping every few seconds) can never starve out
-// user-meaningful K8s events under a shared limit.
+// K8s events and resource updates are fetched separately so a high-frequency
+// informer update stream (e.g. a CrashLoop status field flapping every few
+// seconds) can never starve out user-meaningful K8s events under a shared limit.
 export function useResourceEvents(kind: string, namespace: string, name: string): ResourceEventsResult {
   // The timeline store keys events by their K8s Kind (singular PascalCase, e.g. "Pod"),
-  // but callers pass the URL-form kind ("pods"). Convert before filtering server-side.
+  // but callers pass the URL-form kind ("pods").
   const singularKind = pluralToKind(kind)
   const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
 
@@ -955,7 +959,7 @@ export function useResourceEvents(kind: string, namespace: string, name: string)
   })
 
   // Resource updates (informer diffs + historical): bounded so a flapping
-  // resource doesn't return an unbounded payload. User opts in via a toggle.
+  // resource doesn't return an unbounded payload.
   const updatesQuery = useQuery<TimelineEvent[]>({
     queryKey: ['resource-events', 'updates', singularKind, namespace, name],
     queryFn: async () => {
@@ -973,6 +977,8 @@ export function useResourceEvents(kind: string, namespace: string, name: string)
     k8sEvents: k8sQuery.data ?? [],
     updates: updatesQuery.data ?? [],
     isLoading: k8sQuery.isLoading || updatesQuery.isLoading,
+    k8sError: (k8sQuery.error as Error | null) ?? null,
+    updatesError: (updatesQuery.error as Error | null) ?? null,
   }
 }
 

@@ -919,11 +919,15 @@ interface EventsSectionProps {
    *  toggle to avoid drowning out K8s events when a resource flaps. */
   updates?: TimelineEvent[]
   isLoading?: boolean
+  /** Errors from the K8s events / updates queries. Rendered inline so a
+   *  failed fetch doesn't silently look like "no events." */
+  eventsError?: Error | null
+  updatesError?: Error | null
   /** Optional hint shown below the event list (e.g. "See Timeline tab for related resources") */
   hint?: React.ReactNode
 }
 
-export function EventsSection({ events, updates = [], isLoading, hint }: EventsSectionProps) {
+export function EventsSection({ events, updates = [], isLoading, eventsError, updatesError, hint }: EventsSectionProps) {
   const [showUpdates, setShowUpdates] = useState(false)
 
   if (isLoading) {
@@ -957,10 +961,22 @@ export function EventsSection({ events, updates = [], isLoading, hint }: EventsS
     </Tooltip>
   ) : null
 
+  const errors = (
+    <>
+      {eventsError && (
+        <div className="text-xs text-red-500 mt-2">Failed to load K8s events: {eventsError.message}</div>
+      )}
+      {updatesError && (
+        <div className="text-xs text-red-500 mt-2">Failed to load resource changes: {updatesError.message}</div>
+      )}
+    </>
+  )
+
   if (visible.length === 0) {
     return (
-      <Section title="Recent Events" defaultExpanded={false}>
+      <Section title="Recent Events" defaultExpanded={!!(eventsError || updatesError)}>
         <div className="text-sm text-theme-text-tertiary">No recent events</div>
+        {errors}
         {toggle && <div className="mt-2">{toggle}</div>}
         {hint && <div className="mt-2">{hint}</div>}
       </Section>
@@ -1003,6 +1019,7 @@ export function EventsSection({ events, updates = [], isLoading, hint }: EventsS
           </div>
         ))}
       </div>
+      {errors}
       {toggle && <div className="mt-2">{toggle}</div>}
       {hint && <div className="mt-2">{hint}</div>}
     </Section>

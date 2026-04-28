@@ -1703,11 +1703,21 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		opts.Kinds = []string{kind}
 	}
 	if sourcesParam != "" {
-		for s := range strings.SplitSeq(sourcesParam, ",") {
-			s = strings.TrimSpace(s)
-			if s != "" {
-				opts.Sources = append(opts.Sources, timeline.EventSource(s))
+		validSources := map[timeline.EventSource]bool{
+			timeline.SourceInformer:   true,
+			timeline.SourceK8sEvent:   true,
+			timeline.SourceHistorical: true,
+		}
+		for raw := range strings.SplitSeq(sourcesParam, ",") {
+			src := timeline.EventSource(strings.TrimSpace(raw))
+			if src == "" {
+				continue
 			}
+			if !validSources[src] {
+				s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid source %q (valid: informer, k8s_event, historical)", src))
+				return
+			}
+			opts.Sources = append(opts.Sources, src)
 		}
 	}
 
