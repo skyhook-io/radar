@@ -833,13 +833,16 @@ function AppInner() {
                 }`}
               >
                 <Icon className="w-4 h-4" />
-                {/* Off-system breakpoint: the absolute-centered nav block
-                    (~650px wide with labels) collides with the left section
-                    (logo + cluster switcher) below ~1415px. We add a small
-                    breathing-room buffer and land at 1440. xl (1536) — where
-                    Connected text + star count appear and add right-side
-                    pressure — sits a step above. Per-button Tooltip discloses
-                    labels on hover for the icon-only zone. */}
+                {/* Labels appear only when the absolute-centered nav has
+                    enough horizontal room past the left section. Right-side
+                    chrome that adds further pressure (Connected text, star
+                    count) is intentionally pushed to the next tier (xl) so
+                    label rendering and right-side expansion stay decoupled.
+                    Per-button Tooltip discloses labels on hover when the
+                    icon-only viewport is in effect. The 1440 anchor is an
+                    off-system breakpoint chosen by measurement at the time
+                    of this PR — recompute if the cluster switcher cap or
+                    other left-section chrome changes appreciably. */}
                 <span className="hidden min-[1440px]:inline">{label}</span>
               </button>
             </Tooltip>
@@ -1387,19 +1390,28 @@ function App() {
   )
 }
 
-// Skyhook logo that switches based on theme
-// Header brand: emerald-square radar icon + "Radar" wordmark with a small
-// "by Skyhook" subtitle. Mirrors the RadarLogo component used in the
-// Skyhook Cloud (radar-hub-web) shell so the standalone OSS Radar and
-// the embedded Cloud experience read as the same product. More compact
-// horizontally than the prior Skyhook logotype + "radar" wordmark combo,
-// which buys a few dozen pixels of header real estate that other chrome
-// (cluster switcher, nav) gets to use.
+// Header brand: emerald-square radar icon + stacked "Radar" / "by Skyhook"
+// wordmark. Shares its visual shape with the radar-hub-web shell so the
+// standalone OSS app and the embedded Cloud experience read as the same
+// product, and is narrow enough to leave room for the cluster switcher
+// and nav block on standard laptop viewports.
 function Logo() {
   return (
     <div className="flex items-center gap-2.5">
       <div className="relative w-7 h-7 rounded-lg overflow-hidden flex-shrink-0 bg-emerald-500/10 border border-emerald-500/20">
-        <img src="/images/radar/radar-icon.svg" alt="" aria-hidden className="w-full h-full p-0.5" />
+        <img
+          src="/images/radar/radar-icon.svg"
+          alt=""
+          aria-hidden
+          className="w-full h-full p-0.5"
+          // Fail loud on a missing/blocked asset rather than rendering an
+          // empty emerald square next to the wordmark — the latter reads
+          // as broken chrome with no diagnostics. Most likely cause is a
+          // build/deploy path mismatch.
+          onError={(e) =>
+            console.error('Radar logo asset failed to load:', (e.currentTarget as HTMLImageElement).src)
+          }
+        />
       </div>
       <div className="flex flex-col leading-none">
         <span className="font-semibold text-[15px] tracking-tight text-theme-text-primary">Radar</span>

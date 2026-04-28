@@ -106,6 +106,13 @@ export function MiddleEllipsis({ text, className, title, onTruncatedChange }: Mi
         overflow: 'hidden',
         whiteSpace: 'nowrap',
         minWidth: 0,
+        // width:100% so the wrapper claims the parent's full available
+        // width before measurement. Without it, a parent with extra room
+        // would let the wrapper shrink to the ghost's natural width — and
+        // the absolute-positioned visible overlay (inset:0) would clip to
+        // that shrunken box, making text middle-truncate even when the
+        // surrounding container had room to render it in full.
+        width: '100%',
       }}
     >
       {/* Ghost: claims the full text's natural width in flow so flex parents
