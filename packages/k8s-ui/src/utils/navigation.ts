@@ -51,7 +51,10 @@ export function initNavigationMap(resources: APIResource[]) {
   const k2p: Record<string, string> = {}
   for (const r of resources) {
     const plural = r.name.toLowerCase()
-    p2k[plural] = r.kind
+    // First-wins on plurals: BUILTIN_PLURAL_TO_KIND seeds canonical core mappings
+    // (e.g. "pods" → "Pod") so a colliding API resource (metrics.k8s.io exposes
+    // "pods" with kind "PodMetrics") cannot hijack the core mapping.
+    if (!(plural in p2k)) p2k[plural] = r.kind
     k2p[r.kind.toLowerCase()] = plural
   }
   discoveredPluralToKind = p2k

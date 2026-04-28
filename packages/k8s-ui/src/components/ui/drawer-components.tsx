@@ -913,13 +913,19 @@ function formatKindForRef(kind: string): string {
 // ============================================================================
 
 interface EventsSectionProps {
+  /** K8s events for the focused resource — always shown. */
   events: TimelineEvent[]
+  /** Resource update events (informer/historical diffs) — hidden behind a
+   *  toggle to avoid drowning out K8s events when a resource flaps. */
+  updates?: TimelineEvent[]
   isLoading?: boolean
   /** Optional hint shown below the event list (e.g. "See Timeline tab for related resources") */
   hint?: React.ReactNode
 }
 
-export function EventsSection({ events, isLoading, hint }: EventsSectionProps) {
+export function EventsSection({ events, updates = [], isLoading, hint }: EventsSectionProps) {
+  const [showUpdates, setShowUpdates] = useState(false)
+
   if (isLoading) {
     return (
       <Section title="Recent Events" defaultExpanded>
@@ -928,19 +934,43 @@ export function EventsSection({ events, isLoading, hint }: EventsSectionProps) {
     )
   }
 
-  if (!events || events.length === 0) {
+  const updateCount = updates.length
+  const visible = showUpdates
+    ? [...events, ...updates].sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+    : events
+
+  const toggle = updateCount > 0 ? (
+    <Tooltip
+      className="max-w-xs leading-snug"
+      content={
+        <span style={{ whiteSpace: 'normal', display: 'inline-block' }}>
+          Changes are field-level diffs to this resource&apos;s spec or status (e.g. status flips, replica counts). Distinct from K8s events, which are messages emitted by the kubelet and controllers.
+        </span>
+      }
+    >
+      <button
+        onClick={(e) => { e.stopPropagation(); setShowUpdates(v => !v) }}
+        className="text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
+      >
+        {showUpdates ? `Hide ${updateCount} changes` : `Show ${updateCount} changes`}
+      </button>
+    </Tooltip>
+  ) : null
+
+  if (visible.length === 0) {
     return (
       <Section title="Recent Events" defaultExpanded={false}>
         <div className="text-sm text-theme-text-tertiary">No recent events</div>
+        {toggle && <div className="mt-2">{toggle}</div>}
         {hint && <div className="mt-2">{hint}</div>}
       </Section>
     )
   }
 
   return (
-    <Section title={`Recent Events (${events.length})`} defaultExpanded>
+    <Section title={`Recent Events (${visible.length})`} defaultExpanded>
       <div className="space-y-2 max-h-64 overflow-y-auto">
-        {events.map((event, i) => (
+        {visible.map((event, i) => (
           <div
             key={`${event.id}-${i}`}
             className={clsx(
@@ -973,6 +1003,7 @@ export function EventsSection({ events, isLoading, hint }: EventsSectionProps) {
           </div>
         ))}
       </div>
+      {toggle && <div className="mt-2">{toggle}</div>}
       {hint && <div className="mt-2">{hint}</div>}
     </Section>
   )

@@ -26,6 +26,7 @@ import type {
 } from '../types'
 import type { GitOpsOperationResponse } from '../types/gitops'
 import { getApiBase, getAuthHeaders, getCredentialsMode, getBasename, routePath } from './config'
+import { pluralToKind } from '../utils/navigation'
 
 // Wrapper around fetch that always includes credentials (for session cookies)
 // and handles 401 responses globally. Merges caller-provided headers with
@@ -907,27 +908,72 @@ export function useResourceChildren(kind: string, namespace: string, name: strin
   })
 }
 
-// Resource-specific events (filtered by resource name)
-export function useResourceEvents(kind: string, namespace: string, name: string) {
-  const params = new URLSearchParams()
-  params.set('namespace', namespace)
-  params.set('kind', kind)
-  params.set('limit', '50')
+export interface ResourceEventsResult {
+  k8sEvents: TimelineEvent[]
+  updates: TimelineEvent[]
+  isLoading: boolean
+}
 
-  // Get events from last 24 hours
-  const since = new Date(Date.now() - 24 * 60 * 60 * 1000)
-  params.set('since', since.toISOString())
+// Resource-specific events for a single resource. K8s events and resource updates
+// are fetched separately so a high-frequency informer update stream (e.g. a
+// CrashLoop status field flapping every few seconds) can never starve out
+// user-meaningful K8s events under a shared limit.
+export function useResourceEvents(kind: string, namespace: string, name: string): ResourceEventsResult {
+  // The timeline store keys events by their K8s Kind (singular PascalCase, e.g. "Pod"),
+  // but callers pass the URL-form kind ("pods"). Convert before filtering server-side.
+  const singularKind = pluralToKind(kind)
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
 
-  return useQuery<TimelineEvent[]>({
-    queryKey: ['resource-events', kind, namespace, name],
+  // Include managed resources — when viewing a specific resource (e.g. a Pod owned
+  // by a ReplicaSet, or a K8s Event whose involvedObject is the Pod itself), the
+  // default preset's IsManaged() filter would otherwise drop everything.
+  const baseParams = () => {
+    const p = new URLSearchParams()
+    p.set('namespace', namespace)
+    p.set('kind', singularKind)
+    p.set('include_managed', 'true')
+    p.set('since', since)
+    return p
+  }
+
+  const enabled = Boolean(kind && namespace && name)
+
+  // K8s events: high limit so the full set is always returned. The number of
+  // distinct K8s events per resource is naturally bounded — kubelet/controllers
+  // dedupe via Reason+InvolvedObject and bump count.
+  const k8sQuery = useQuery<TimelineEvent[]>({
+    queryKey: ['resource-events', 'k8s', singularKind, namespace, name],
     queryFn: async () => {
+      const params = baseParams()
+      params.set('sources', 'k8s_event')
+      params.set('limit', '500')
       const events = await fetchJSON<TimelineEvent[]>(`/changes?${params.toString()}`)
-      // Filter to only events for this specific resource
       return events.filter(e => e.name === name)
     },
-    enabled: Boolean(kind && namespace && name),
-    refetchInterval: 15000, // Refresh every 15 seconds
+    enabled,
+    refetchInterval: 15000,
   })
+
+  // Resource updates (informer diffs + historical): bounded so a flapping
+  // resource doesn't return an unbounded payload. User opts in via a toggle.
+  const updatesQuery = useQuery<TimelineEvent[]>({
+    queryKey: ['resource-events', 'updates', singularKind, namespace, name],
+    queryFn: async () => {
+      const params = baseParams()
+      params.set('sources', 'informer,historical')
+      params.set('limit', '50')
+      const events = await fetchJSON<TimelineEvent[]>(`/changes?${params.toString()}`)
+      return events.filter(e => e.name === name)
+    },
+    enabled,
+    refetchInterval: 15000,
+  })
+
+  return {
+    k8sEvents: k8sQuery.data ?? [],
+    updates: updatesQuery.data ?? [],
+    isLoading: k8sQuery.isLoading || updatesQuery.isLoading,
+  }
 }
 
 // ============================================================================

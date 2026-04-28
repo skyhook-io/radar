@@ -85,6 +85,15 @@ interface WorkloadViewProps {
   eventsLoading?: boolean
   /** Topology data for hierarchy building */
   topology?: any
+  /** K8s events filtered to the focused resource — always returned in full (no
+   *  shared limit with updates) so the Recent Events section can never starve
+   *  out user-meaningful events when an informer flaps. */
+  resourceFocusedK8sEvents?: TimelineEvent[]
+  /** Resource update events (informer/historical) for the focused resource —
+   *  hidden by default behind a toggle. */
+  resourceFocusedUpdates?: TimelineEvent[]
+  /** Whether either of the focused-resource event queries is still loading */
+  resourceFocusedEventsLoading?: boolean
 
   // ── Capabilities ─────────────────────────────────────────────────────────
   /** Whether secrets can be updated */
@@ -160,6 +169,9 @@ export function WorkloadView({
   allEvents,
   eventsLoading = false,
   topology,
+  resourceFocusedK8sEvents,
+  resourceFocusedUpdates,
+  resourceFocusedEventsLoading = false,
   // Capabilities
   canUpdateSecrets,
   // Mutations
@@ -457,6 +469,9 @@ export function WorkloadView({
                 rendererOverrides={rendererOverrides}
                 resolvedEnvFrom={resolvedEnvFrom}
                 renderMetrics={renderMetricsTab}
+                events={resourceFocusedK8sEvents}
+                eventsLoading={resourceFocusedEventsLoading}
+                updates={resourceFocusedUpdates}
               />
               {renderOverviewExtra && (
                 <div className="px-4 pb-4">
@@ -603,6 +618,9 @@ export function WorkloadView({
               onSwitchToTimeline={() => handleSetTab('timeline')}
               rendererOverrides={rendererOverrides}
               resolvedEnvFrom={resolvedEnvFrom}
+              events={resourceFocusedK8sEvents}
+              eventsLoading={resourceFocusedEventsLoading}
+              updates={resourceFocusedUpdates}
               extraContent={renderOverviewExtra && renderOverviewExtra({ kind, namespace, name })}
             />
         )}
@@ -1088,6 +1106,9 @@ function InfoTab({
   onSwitchToTimeline,
   rendererOverrides,
   resolvedEnvFrom,
+  events,
+  eventsLoading,
+  updates,
   extraContent,
 }: {
   resource: any
@@ -1103,6 +1124,9 @@ function InfoTab({
   onSwitchToTimeline?: () => void
   rendererOverrides?: RendererOverrides
   resolvedEnvFrom?: ResolvedEnvFrom
+  events?: TimelineEvent[]
+  eventsLoading?: boolean
+  updates?: TimelineEvent[]
   extraContent?: ReactNode
 }) {
   if (isLoading) {
@@ -1133,6 +1157,9 @@ function InfoTab({
         onOpenLogs={onOpenLogs}
         rendererOverrides={rendererOverrides}
         resolvedEnvFrom={resolvedEnvFrom}
+        events={events}
+        eventsLoading={eventsLoading}
+        updates={updates}
         eventsHint={onSwitchToTimeline && (
           <button
             onClick={onSwitchToTimeline}

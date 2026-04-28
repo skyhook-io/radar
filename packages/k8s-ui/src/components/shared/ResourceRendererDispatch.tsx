@@ -312,10 +312,15 @@ interface ResourceRendererDispatchProps {
   eventsHint?: React.ReactNode
   /** When provided, sidebar sections (related resources, events, labels, annotations, metadata) are passed to this render prop instead of being rendered inline */
   renderSidebar?: (sections: React.ReactNode) => React.ReactNode
-  /** Resource events — injected by the platform wrapper */
+  /** K8s events for the focused resource — injected by the platform wrapper.
+   *  Always shown (no toggle hides them) so resource history can't go missing. */
   events?: any[]
   /** Whether events are still loading */
   eventsLoading?: boolean
+  /** Resource update events (informer/historical diffs) — hidden behind a
+   *  toggle in the Recent Events section because they can be very high-volume
+   *  for a flapping resource. */
+  updates?: any[]
   /** Render prop for Prometheus metrics charts — injected by the platform wrapper */
   renderMetrics?: (props: { kind: string; namespace: string; name: string }) => React.ReactNode
 }
@@ -337,6 +342,7 @@ export function ResourceRendererDispatch({
   renderSidebar,
   events,
   eventsLoading,
+  updates,
   renderMetrics,
   resolvedEnvFrom,
   rendererOverrides,
@@ -353,7 +359,7 @@ export function ResourceRendererDispatch({
   const sidebarContent = showCommonSections && (
     <>
       <RelatedResourcesSection relationships={relationships} onNavigate={onNavigate} />
-      {kind !== 'events' && <EventsSection events={events || []} isLoading={eventsLoading ?? false} hint={eventsHint} />}
+      {kind !== 'events' && <EventsSection events={events || []} updates={updates || []} isLoading={eventsLoading ?? false} hint={eventsHint} />}
       <LabelsSection data={data} />
       <AnnotationsSection data={data} />
       <MetadataSection data={data} />

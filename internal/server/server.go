@@ -1661,6 +1661,7 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	filterPreset := r.URL.Query().Get("filter")
 	includeK8sEvents := r.URL.Query().Get("include_k8s_events") != "false" // default true
 	includeManaged := r.URL.Query().Get("include_managed") == "true"       // default false
+	sourcesParam := r.URL.Query().Get("sources")                           // comma-separated, e.g. "k8s_event"
 
 	// Parse since timestamp
 	var since time.Time
@@ -1700,6 +1701,14 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 	}
 	if kind != "" {
 		opts.Kinds = []string{kind}
+	}
+	if sourcesParam != "" {
+		for s := range strings.SplitSeq(sourcesParam, ",") {
+			s = strings.TrimSpace(s)
+			if s != "" {
+				opts.Sources = append(opts.Sources, timeline.EventSource(s))
+			}
+		}
 	}
 
 	events, err := store.Query(r.Context(), opts)
