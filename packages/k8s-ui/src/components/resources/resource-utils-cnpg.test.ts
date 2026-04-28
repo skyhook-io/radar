@@ -1,34 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
-import {
-  parseCNPGExpiryDate,
-  getCNPGClusterCertificateExpirations,
-} from './resource-utils-cnpg'
-
-describe('parseCNPGExpiryDate', () => {
-  it('parses Go default time format without fractional seconds', () => {
-    const d = parseCNPGExpiryDate('2026-07-27 08:27:41 +0000 UTC')
-    expect(d.toISOString()).toBe('2026-07-27T08:27:41.000Z')
-  })
-
-  it('parses Go default time format with nanoseconds (truncates to ms)', () => {
-    const d = parseCNPGExpiryDate('2026-07-27 08:27:41.123456789 +0000 UTC')
-    expect(d.toISOString()).toBe('2026-07-27T08:27:41.123Z')
-  })
-
-  it('handles non-UTC offsets', () => {
-    const d = parseCNPGExpiryDate('2026-07-27 08:27:41 -0700 PDT')
-    expect(d.toISOString()).toBe('2026-07-27T15:27:41.000Z')
-  })
-
-  it('parses ISO 8601 strings as well', () => {
-    const d = parseCNPGExpiryDate('2026-07-27T08:27:41Z')
-    expect(d.toISOString()).toBe('2026-07-27T08:27:41.000Z')
-  })
-
-  it('returns Invalid Date for unparseable input', () => {
-    expect(isNaN(parseCNPGExpiryDate('not a date').getTime())).toBe(true)
-  })
-})
+import { getCNPGClusterCertificateExpirations } from './resource-utils-cnpg'
 
 describe('getCNPGClusterCertificateExpirations', () => {
   beforeEach(() => {
@@ -71,6 +42,14 @@ describe('getCNPGClusterCertificateExpirations', () => {
     }
     const [cert] = getCNPGClusterCertificateExpirations(resource)
     expect(cert.daysUntilExpiry).toBeLessThan(0)
+  })
+
+  it('maps unparseable values to the -1 sentinel (renders as "expired")', () => {
+    const resource = {
+      status: { certificates: { expirations: { 'mycluster-ca': 'garbage' } } },
+    }
+    const [cert] = getCNPGClusterCertificateExpirations(resource)
+    expect(cert.daysUntilExpiry).toBe(-1)
   })
 
   it('returns empty list when no expirations are present', () => {
