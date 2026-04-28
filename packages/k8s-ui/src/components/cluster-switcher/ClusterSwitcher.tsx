@@ -46,11 +46,14 @@ export interface ClusterSwitcherProps {
   align?: 'left' | 'right'
 }
 
-// Trigger width cap. With middle-truncation kicking in, this is mostly a
-// horizontal-real-estate guard rather than a readability one — names get
-// to use up to ~260px on desktop before they need to truncate, comfortably
-// fitting most parsed cluster names (`prod-cluster-us-east1` etc.) in full.
-const TRIGGER_NAME_MAX_WIDTH = 'max-w-[160px] sm:max-w-[260px]'
+// Trigger width cap. With middle-truncation kicking in, this is a
+// horizontal-real-estate guard rather than a readability one. The cap
+// grows with viewport so wide screens (where there's no real estate
+// pressure) show full cluster names rather than middle-truncating
+// pointlessly. `xl:max-w-[400px]` fits names up to ~30 chars in full,
+// which covers ~all real-world parsed names (`prod-cluster-us-east1`,
+// `nonprod-cluster-us-central1`, `koalabackend-us-east-1-mng`).
+const TRIGGER_NAME_MAX_WIDTH = 'max-w-[160px] sm:max-w-[260px] xl:max-w-[400px]'
 
 export function ClusterSwitcher({
   currentId,

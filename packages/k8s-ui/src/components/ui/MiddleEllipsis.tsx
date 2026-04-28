@@ -58,7 +58,13 @@ export function MiddleEllipsis({ text, className, title, onTruncatedChange }: Mi
     }
 
     const recompute = () => {
-      const width = node.clientWidth
+      // Use subpixel width (`getBoundingClientRect`) rather than the
+      // pixel-rounded `clientWidth`. measureText returns subpixel widths,
+      // and when the full text is JUST under the available space — say
+      // ctx.measureText says 173.4px and clientWidth rounds to 173 — the
+      // integer comparison decides we don't fit and middle-truncates a
+      // name that visually would have rendered fine.
+      const width = node.getBoundingClientRect().width
       if (width <= 0) return
       const cs = window.getComputedStyle(node)
       // Include fontStyle in the shorthand so italic faces measure correctly.
@@ -95,13 +101,11 @@ export function MiddleEllipsis({ text, className, title, onTruncatedChange }: Mi
       className={className}
       title={title}
       style={{
-        display: 'inline-block',
+        display: 'block',
         position: 'relative',
         overflow: 'hidden',
         whiteSpace: 'nowrap',
         minWidth: 0,
-        verticalAlign: 'bottom',
-        width: '100%',
       }}
     >
       {/* Ghost: claims the full text's natural width in flow so flex parents
