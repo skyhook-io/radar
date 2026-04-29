@@ -94,7 +94,9 @@ const CORE_RESOURCE_TYPES = [
 // Resource type button in sidebar
 interface ResourceTypeButtonProps {
   resource: APIResource
-  count: number
+  /** `null` means "count not loaded yet" — rendered as a placeholder so
+   *  the badge doesn't flicker to "0" while the API call is in flight. */
+  count: number | null
   isSelected: boolean
   /** Keyboard-highlight state (arrow nav in the filter input). */
   isHighlighted?: boolean
@@ -155,9 +157,11 @@ const ResourceTypeButton = forwardRef<HTMLButtonElement, ResourceTypeButtonProps
             <span className={clsx(
               'text-xs py-0.5 rounded text-center font-mono',
               isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated',
-              count < 1000 ? 'w-8' : 'w-9'
+              count === null
+                ? 'w-8 text-theme-text-disabled'
+                : count < 1000 ? 'w-8' : 'w-9',
             )}>
-              {count}
+              {count === null ? '–' : count}
             </span>
           )}
         </div>
@@ -253,12 +257,28 @@ export function ResourcesSidebar({
     }))
   }, [categories])
 
+  // null for a key means "not loaded yet" (rendered as a placeholder
+  // dash in the badge). 0 means "the API replied and confirmed there
+  // are zero of this kind". Don't conflate them — otherwise the
+  // sidebar shows a confident "0" for every kind while the count
+  // payload is still in flight.
   const counts = useMemo(() => {
-    if (!resourceCounts) return {} as Record<string, number>
-    const results: Record<string, number> = {}
+    const results: Record<string, number | null> = {}
+    if (!resourceCounts) {
+      for (const resource of resourcesToCount) {
+        const key = resource.group ? `${resource.group}/${resource.kind}` : resource.kind
+        results[key] = null
+      }
+      return results
+    }
     for (const resource of resourcesToCount) {
       const key = resource.group ? `${resource.group}/${resource.kind}` : resource.kind
-      results[key] = resourceCounts[key] ?? 0
+      const v = resourceCounts[key]
+      // Treat missing keys in a present resourceCounts payload as
+      // "the API replied and didn't include this kind" → 0. Treat the
+      // entire payload being absent as "not loaded" → null (handled
+      // above).
+      results[key] = v ?? 0
     }
     return results
   }, [resourcesToCount, resourceCounts])
@@ -276,16 +296,22 @@ export function ResourcesSidebar({
     let totalHiddenGroups = 0
 
     const withTotals = categories.map(category => {
+      // Coerce nulls (loading) to 0 for the category total — we still
+      // want to show *some* number on collapsed categories during
+      // load, just not "0" badges on every individual kind.
       const total = category.resources.reduce(
-        (sum, resource) => sum + (counts?.[(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)] ?? 0),
+        (sum, resource) => sum + (counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind] ?? 0),
         0
       )
 
-      // Filter resources: show if has instances, is core kind, or showEmptyKinds is true
+      // Filter resources: show if has instances, is core kind, has an
+      // unknown count (loading — don't pre-emptively hide), or
+      // showEmptyKinds is true.
       const visibleResources = category.resources.filter(resource => {
-        const count = counts?.[(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)] ?? 0
+        const count = counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind]
         const isCore = ALWAYS_SHOWN_KINDS.has(resource.kind)
-        const shouldShow = count > 0 || isCore || showEmptyKinds
+        const isLoading = count === null
+        const shouldShow = (count ?? 0) > 0 || isCore || isLoading || showEmptyKinds
         if (!shouldShow) totalHiddenKinds++
         return shouldShow
       })
@@ -500,7 +526,7 @@ export function ResourcesSidebar({
                         key={`${p.name}-${p.group}`}
                         ref={highlighted ? highlightedRef : (isResourceSelected ? selectedSidebarRef : null)}
                         resource={{ name: p.name, kind: p.kind, group: p.group, version: '', namespaced: true, isCrd: false, verbs: [] }}
-                        count={counts?.[(p.group ? `${p.group}/${p.kind}` : p.kind)] ?? 0}
+                        count={counts[p.group ? `${p.group}/${p.kind}` : p.kind] ?? null}
                         isSelected={isResourceSelected}
                         isHighlighted={highlighted}
                         isForbidden={forbiddenKinds.has(p.group ? `${p.group}/${p.kind}` : p.kind)}
@@ -556,7 +582,7 @@ export function ResourcesSidebar({
                           key={resource.name}
                           ref={highlighted ? highlightedRef : (isResourceSelected ? selectedSidebarRef : null)}
                           resource={resource}
-                          count={counts?.[(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)] ?? 0}
+                          count={counts[resource.group ? `${resource.group}/${resource.kind}` : resource.kind] ?? null}
                           isSelected={showSelected}
                           isHighlighted={highlighted}
                           isForbidden={forbiddenKinds.has(resource.group ? `${resource.group}/${resource.kind}` : resource.kind)}
@@ -581,7 +607,7 @@ export function ResourcesSidebar({
               ? type.label.slice(0, -1)
               : type.label
             const Icon = getResourceIcon(kindKey)
-            const count = counts?.[kindKey] ?? 0
+            const count = counts[kindKey] ?? null
             const isSelected = effectiveSelectedKind.name === type.kind && !effectiveSelectedKind.group
             return (
               <button
@@ -600,9 +626,10 @@ export function ResourcesSidebar({
                 <span className="flex-1 text-left">{type.label}</span>
                 <span className={clsx(
                   'badge font-mono',
-                  isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated'
+                  isSelected ? 'bg-skyhook-500/30 selection-text' : 'bg-theme-elevated',
+                  count === null && 'text-theme-text-disabled',
                 )}>
-                  {count}
+                  {count === null ? '–' : count}
                 </span>
               </button>
             )
