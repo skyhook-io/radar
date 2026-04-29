@@ -12,6 +12,7 @@ import { YamlEditor } from '../ui/YamlEditor'
 import { Tooltip } from '../ui/Tooltip'
 import { Markdown } from '../ui/Markdown'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../utils/badge-colors'
+import { validateHelmReleaseName, validateRFC1123Label } from '@skyhook-io/k8s-ui/utils/validators'
 
 // Deep merge two objects — values from `overrides` take priority
 function deepMerge(base: Record<string, unknown>, overrides: Record<string, unknown>): Record<string, unknown> {
@@ -183,7 +184,23 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
     }
   }, [releaseName, namespace, chartName, version, repo, valuesYaml, createNamespace, onSuccess, isLocal, artifactHubDetail, queryClient])
 
-  const canProceedFromInfo = releaseName.trim() !== '' && namespace.trim() !== ''
+  // Validate release name + namespace before letting the user advance.
+  // Without this, a name like "Invalid Name With Spaces!" was accepted
+  // through to step 2 and only failed server-side at install time —
+  // the server returned a 422 the user couldn't connect to anything
+  // they did. Kubernetes / Helm rules are pinned in
+  // packages/k8s-ui/src/utils/validators.ts. (SKY-821 bug 24)
+  const releaseNameValidation = useMemo(
+    () => validateHelmReleaseName(releaseName.trim()),
+    [releaseName],
+  )
+  const namespaceValidation = useMemo(
+    () => validateRFC1123Label(namespace.trim()),
+    [namespace],
+  )
+  const releaseNameError = releaseNameValidation.valid ? null : releaseNameValidation.error
+  const namespaceError = namespaceValidation.valid ? null : namespaceValidation.error
+  const canProceedFromInfo = releaseNameValidation.valid && namespaceValidation.valid
   const canInstall = canProceedFromInfo && !yamlError
 
   const steps: { id: WizardStep; label: string }[] = [
@@ -287,8 +304,10 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                   source={source}
                   releaseName={releaseName}
                   setReleaseName={setReleaseName}
+                  releaseNameError={releaseNameError}
                   namespace={namespace}
                   setNamespace={setNamespace}
+                  namespaceError={namespaceError}
                   namespaces={namespaces || []}
                   createNamespace={createNamespace}
                   setCreateNamespace={setCreateNamespace}
@@ -420,8 +439,10 @@ interface InfoStepProps {
   source: ChartSource
   releaseName: string
   setReleaseName: (name: string) => void
+  releaseNameError: string | null
   namespace: string
   setNamespace: (ns: string) => void
+  namespaceError: string | null
   namespaces: { name: string }[]
   createNamespace: boolean
   setCreateNamespace: (create: boolean) => void
@@ -434,8 +455,10 @@ function InfoStep({
   source,
   releaseName,
   setReleaseName,
+  releaseNameError,
   namespace,
   setNamespace,
+  namespaceError,
   namespaces,
   createNamespace,
   setCreateNamespace,
@@ -533,11 +556,24 @@ function InfoStep({
           value={releaseName}
           onChange={(e) => setReleaseName(e.target.value)}
           placeholder="my-release"
-          className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-accent"
+          aria-invalid={releaseNameError ? true : undefined}
+          aria-describedby="release-name-help"
+          className={clsx(
+            'w-full px-3 py-2 bg-theme-elevated border rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2',
+            releaseNameError
+              ? 'border-red-500/60 focus:ring-red-500'
+              : 'border-theme-border-light focus:ring-accent',
+          )}
         />
-        <p className="mt-1 text-xs text-theme-text-tertiary">
-          A unique name for this release in the namespace
-        </p>
+        {releaseNameError ? (
+          <p id="release-name-help" className="mt-1 text-xs text-red-400">
+            Release name {releaseNameError}.
+          </p>
+        ) : (
+          <p id="release-name-help" className="mt-1 text-xs text-theme-text-tertiary">
+            A unique name for this release in the namespace
+          </p>
+        )}
       </div>
 
       {/* Namespace selection */}
@@ -551,8 +587,20 @@ function InfoStep({
           value={namespace}
           onChange={(e) => setNamespace(e.target.value)}
           placeholder="Enter namespace name"
-          className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-accent"
+          aria-invalid={namespaceError ? true : undefined}
+          aria-describedby="namespace-help"
+          className={clsx(
+            'w-full px-3 py-2 bg-theme-elevated border rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2',
+            namespaceError
+              ? 'border-red-500/60 focus:ring-red-500'
+              : 'border-theme-border-light focus:ring-accent',
+          )}
         />
+        {namespaceError && (
+          <p id="namespace-help" className="mt-1 text-xs text-red-400">
+            Namespace {namespaceError}.
+          </p>
+        )}
         <datalist id="namespace-suggestions">
           {namespaces.map(ns => (
             <option key={ns.name} value={ns.name} />

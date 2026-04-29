@@ -3,6 +3,7 @@ import { Plug, ChevronDown, Loader2, Globe, Monitor, Copy, Check, X, Terminal } 
 import { clsx } from 'clsx'
 import { useAvailablePorts, useClusterInfo, AvailablePort } from '../../api/client'
 import { useStartPortForward } from './PortForwardManager'
+import { validatePort } from '@skyhook-io/k8s-ui/utils/validators'
 
 interface PortForwardButtonProps {
   type: 'pod' | 'service'
@@ -35,7 +36,16 @@ function KubectlCommandDialog({
 }) {
   const [copied, setCopied] = useState(false)
   const [copyFallback, setCopyFallback] = useState(false)
-  const [localPort, setLocalPort] = useState(info.port)
+  // We track the raw input separately from the validated port so the
+  // user always sees the characters they typed — the previous code
+  // silently swallowed values like '0', '-1', and '70000', which made
+  // the input feel broken (the typed value disappeared with no
+  // explanation). The validated port (used to build the command) only
+  // updates when the input parses cleanly. (SKY-821 bugs 26, 27)
+  const [portInput, setPortInput] = useState(String(info.port))
+  const portValidation = validatePort(portInput)
+  const localPort = portValidation.valid ? portValidation.value : info.port
+  const portError = portValidation.valid ? null : portValidation.error
   const commandRef = useRef<HTMLElement>(null)
   const dialogRef = useRef<HTMLDivElement>(null)
 
@@ -97,21 +107,35 @@ function KubectlCommandDialog({
           <p className="text-sm text-theme-text-secondary">
             Radar is running in-cluster, so port forwarding must be run from your local terminal.
           </p>
-          <div className="flex items-center gap-2 text-sm text-theme-text-secondary">
-            <label htmlFor="local-port">Local port:</label>
-            <input
-              id="local-port"
-              type="number"
-              min={1}
-              max={65535}
-              value={localPort}
-              onChange={(e) => {
-                const val = Number(e.target.value)
-                if (val >= 1 && val <= 65535) setLocalPort(val)
-                else if (e.target.value === '') setLocalPort(info.port)
-              }}
-              className="w-20 bg-theme-base border border-theme-border rounded px-2 py-1 text-sm text-theme-text-primary font-mono text-center"
-            />
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 text-sm text-theme-text-secondary">
+              <label htmlFor="local-port">Local port:</label>
+              <input
+                id="local-port"
+                type="text"
+                inputMode="numeric"
+                value={portInput}
+                onChange={(e) => setPortInput(e.target.value)}
+                aria-invalid={portError ? true : undefined}
+                aria-describedby="local-port-help"
+                className={clsx(
+                  'w-24 bg-theme-base border rounded px-2 py-1 text-sm text-theme-text-primary font-mono text-center',
+                  portError
+                    ? 'border-red-500/60 focus:outline-none focus:ring-2 focus:ring-red-500'
+                    : 'border-theme-border',
+                )}
+              />
+              {portError && (
+                <span className="text-xs text-red-400">
+                  using {info.port}
+                </span>
+              )}
+            </div>
+            {portError && (
+              <p id="local-port-help" className="text-xs text-red-400">
+                {portError.charAt(0).toUpperCase() + portError.slice(1)}.
+              </p>
+            )}
           </div>
           <div className="flex items-center gap-2">
             <code ref={commandRef} className="flex-1 text-sm bg-theme-base rounded px-3 py-2 text-blue-400 font-mono select-all">

@@ -1,7 +1,9 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useMemo } from 'react'
 import { X, Plus, Trash2 } from 'lucide-react'
+import { clsx } from 'clsx'
 import { useAuditSettings, useUpdateAuditSettings, useAudit } from '../../api/client'
 import type { CheckMeta } from '@skyhook-io/k8s-ui'
+import { validateRFC1123Label, type ValidationResult } from '@skyhook-io/k8s-ui/utils/validators'
 
 interface AuditSettingsDialogProps {
   namespaces: string[]
@@ -28,12 +30,26 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
     ? Object.values(auditData.checks).sort((a, b) => a.title.localeCompare(b.title))
     : []
 
+  // Validate the staged namespace input against RFC 1123 (the same rule
+  // K8s applies server-side). Without this the dialog accepted strings
+  // like "INVALID_NAME!@#" and saved them; the audit pipeline then
+  // silently never matched anything against the bogus entry, leaving
+  // the user with the impression that the ignore filter "didn't work".
+  // (SKY-821 bug 25)
+  const newNsTrimmed = newNs.trim()
+  const newNsValidation = useMemo<ValidationResult>(
+    () => (newNsTrimmed === '' ? { valid: true } : validateRFC1123Label(newNsTrimmed)),
+    [newNsTrimmed],
+  )
+  const newNsError = newNsValidation.valid ? null : newNsValidation.error
+  const newNsDuplicate = newNsTrimmed !== '' && ignoredNs.includes(newNsTrimmed)
+  const canAddNamespace =
+    newNsTrimmed !== '' && newNsValidation.valid && !newNsDuplicate
+
   const addNamespace = () => {
-    const ns = newNs.trim()
-    if (ns && !ignoredNs.includes(ns)) {
-      setIgnoredNs([...ignoredNs, ns])
-      setNewNs('')
-    }
+    if (!canAddNamespace) return
+    setIgnoredNs([...ignoredNs, newNsTrimmed])
+    setNewNs('')
   }
 
   const toggleCheck = (checkID: string) => {
@@ -95,16 +111,30 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
                 onChange={e => setNewNs(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') addNamespace() }}
                 placeholder="Add namespace..."
-                className="flex-1 px-3 py-1.5 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-skyhook-500"
+                aria-invalid={newNsError ? true : undefined}
+                aria-describedby="new-ns-help"
+                className={clsx(
+                  'flex-1 px-3 py-1.5 bg-theme-elevated border rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2',
+                  newNsError || newNsDuplicate
+                    ? 'border-red-500/60 focus:ring-red-500'
+                    : 'border-theme-border-light focus:ring-skyhook-500',
+                )}
               />
               <button
                 onClick={addNamespace}
-                disabled={!newNs.trim()}
+                disabled={!canAddNamespace}
                 className="px-3 py-1.5 text-sm btn-brand rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Plus className="w-4 h-4" />
               </button>
             </div>
+            {(newNsError || newNsDuplicate) && (
+              <p id="new-ns-help" className="mt-1.5 text-xs text-red-400">
+                {newNsDuplicate
+                  ? `"${newNsTrimmed}" is already in the list.`
+                  : `Namespace ${newNsError}.`}
+              </p>
+            )}
           </div>
 
           {/* Disabled Checks */}
@@ -150,8 +180,18 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
           </button>
           <button
             onClick={handleSave}
-            disabled={updateSettings.isPending}
-            className="px-4 py-1.5 text-sm btn-brand rounded-lg disabled:opacity-50"
+            // Block save when there's a partially-typed invalid namespace
+            // in the input — otherwise the user clicks Save expecting
+            // their pending entry to be included, and it's silently
+            // dropped (or worse, accepted unvalidated when it shouldn't).
+            // (SKY-821 bug 63)
+            disabled={updateSettings.isPending || newNsError !== null}
+            title={
+              newNsError
+                ? 'Fix or clear the pending namespace input before saving'
+                : undefined
+            }
+            className="px-4 py-1.5 text-sm btn-brand rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {updateSettings.isPending ? 'Saving...' : 'Save'}
           </button>
