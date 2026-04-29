@@ -96,7 +96,14 @@ function getPlatformInfo(platform: string): { name: string; icon: string | null 
   if (platformLower.includes('docker')) {
     return { name: 'Docker Desktop', icon: null }
   }
-  return { name: platform || 'Kubernetes', icon: null }
+  // The Go backend returns "generic" for unrecognized platforms — that
+  // literal string is no better than the empty case, so fall back to
+  // the friendlier "Kubernetes" label for both. Only pass the platform
+  // string through when it's actually a recognizable name.
+  if (!platform || platformLower === 'generic') {
+    return { name: 'Kubernetes', icon: null }
+  }
+  return { name: platform, icon: null }
 }
 
 export function ClusterHealthCard({
@@ -116,7 +123,13 @@ export function ClusterHealthCard({
   void _topCRDs // Reserved for future CRD display
 
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
-  const { mcpEnabled, deployment } = useCapabilitiesContext()
+  const caps = useCapabilitiesContext()
+  // Default to local mode when the backend doesn't ship a `deployment`
+  // field (older Radar binaries pre-0.2.2). Local rendering is the safe
+  // OSS-shape default — wrong-direction defaults would briefly suppress
+  // chrome OSS users expect to see.
+  const deployment = caps.deployment ?? { mode: 'local' as const }
+  const mcpEnabled = caps.mcpEnabled
   const isCloud = deployment.mode === 'cloud'
   const isInCluster = deployment.mode === 'in-cluster' || deployment.mode === 'cloud'
   const mcpUrl = `${window.location.origin}/mcp`
@@ -206,7 +219,13 @@ export function ClusterHealthCard({
             {!isCloud && (
               <h2
                 className="text-xl font-semibold text-theme-text-primary truncate mb-1.5 leading-tight"
-                title={cluster.name}
+                // In-cluster mode's cluster.name is the literal "in-cluster"
+                // sentinel, which would leak via the browser hover tooltip
+                // even though the visible text falls back to the platform
+                // label. Drop the title attribute entirely in that case;
+                // local mode keeps it so users can hover to see the full
+                // kubeconfig context path.
+                title={isInCluster ? undefined : cluster.name}
               >
                 {headlineName}
               </h2>

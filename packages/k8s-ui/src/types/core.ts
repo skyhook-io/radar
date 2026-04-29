@@ -33,7 +33,11 @@ export interface Capabilities {
   helmWrite: boolean      // Helm write operations (install, upgrade, rollback, uninstall, apply values)
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
   mcpEnabled: boolean     // MCP server is running
-  deployment: Deployment  // How / where this Radar binary is running (drives mode-aware UI chrome)
+  // How / where this Radar binary is running. Optional on the wire so a
+  // newer frontend (e.g. radar-hub-web bundling a fresher @skyhook-io/radar-app)
+  // doesn't crash against an older backend that hasn't shipped the field yet —
+  // consumers should default to { mode: 'local' } when absent.
+  deployment?: Deployment
   resources?: ResourcePermissions // Per-resource-type permissions
   authEnabled?: boolean   // Auth is enabled on the backend
   username?: string       // Authenticated user's username (when auth enabled)
