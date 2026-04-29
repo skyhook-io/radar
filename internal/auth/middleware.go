@@ -4,15 +4,18 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"os"
 	"strings"
 	"time"
+
+	"github.com/skyhook-io/radar/internal/cloud"
 )
 
-// cloudMode reports whether Radar is running under Radar Cloud. Mirrored in
-// the server package; duplicated here to avoid an import cycle and because
-// the auth tightening under cloud-mode is its own concern.
-func cloudMode() bool { return os.Getenv("RADAR_CLOUD_MODE") == "true" }
+// cloudMode reports whether Radar is running under Radar Cloud. Reads
+// the resolved deployment mode from internal/cloud (single source of
+// truth across server, auth, and main; normalizes RADAR_CLOUD_MODE
+// via strconv.ParseBool so a typo'd "True" / "1" doesn't silently
+// degrade to OSS mode).
+func cloudMode() bool { return cloud.Mode() }
 
 // Authenticate returns a chi middleware that extracts user identity from
 // proxy headers or session cookies. Returns 401 if unauthenticated.

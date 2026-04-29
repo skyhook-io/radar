@@ -165,16 +165,21 @@ export function ClusterHealthCard({
     { kind: 'cronjobs', label: 'CronJobs', icon: Clock, total: counts.cronJobs.total, subtitle: `${counts.cronJobs.active} active` },
   ]
   const platformInfo = getPlatformInfo(cluster.platform)
-  // The raw cluster.name is the kubeconfig context (e.g.
-  // `gke_koalabackend_us-east1-b_nonprod-cluster-us-east1`). That string
-  // is the user's primary orientation cue, but the bit they actually
-  // recognize is the short clusterName. We promote that, push the raw
-  // path into a tooltip, and surface project/region as muted metadata.
+  // Headline-name derivation has three branches, in priority order:
+  //  1. Kubeconfig context users get the parsed short clusterName from
+  //     a string like `gke_koalabackend_us-east1-b_nonprod-cluster-us-east1`
+  //     (the meaningful tail). Account/region are surfaced separately
+  //     below as muted metadata, and the raw path is exposed via tooltip
+  //     on the headline element when present.
+  //  2. In-cluster mode sets cluster.name to the literal "in-cluster"
+  //     bootstrap default (see internal/k8s/client.go) — meaningless to
+  //     a user, so fall back to the platform label ("Google Kubernetes
+  //     Engine") which IS recognizable.
+  //  3. Last resort: the literal cluster.name, or "Cluster".
+  // When the card is rendered embedded (cloudMode), the H2 itself is
+  // suppressed below — the hub shell already shows the cluster name in
+  // its top bar, so the tooltip-on-headline behavior doesn't apply.
   const parsedContext = parseContextName(cluster.name || '')
-  // When Radar runs in-cluster (cluster.name === 'in-cluster' from the
-  // bootstrap default), the kubeconfig context name is meaningless — fall
-  // back to the platform label so the headline reads as "Google Kubernetes
-  // Engine" instead of literally "in-cluster".
   const rawHeadline = parsedContext.clusterName || cluster.name || 'Cluster'
   const headlineName = rawHeadline === 'in-cluster' ? platformInfo.name : rawHeadline
 
@@ -193,9 +198,9 @@ export function ClusterHealthCard({
               )}
               <span className="text-xs text-theme-text-secondary truncate">{platformInfo.name}</span>
             </div>
-            {/* In Cloud, the HubClusterSwitcher in the top bar is the
-                canonical cluster identity — repeating it here just makes the
-                card feel introduced-rather-than-described. Suppress. */}
+            {/* In Cloud, the hub shell already shows the cluster name in
+                its top bar; rendering it again here is redundant and
+                makes the card feel like a label rather than content. */}
             {!cloudMode && (
               <h2
                 className="text-xl font-semibold text-theme-text-primary truncate mb-1.5 leading-tight"
@@ -214,6 +219,10 @@ export function ClusterHealthCard({
                 <span>Kubernetes {cluster.version}</span>
               )}
               <span><span className="font-mono">{counts.namespaces}</span> namespaces</span>
+              {/* Show raw kubeconfig context as muted metadata only when
+                  it differs from the headline AND isn't the in-cluster
+                  bootstrap sentinel AND we're not embedded (where the
+                  hub shell already shows the canonical name). */}
               {cluster.name && cluster.name !== headlineName && cluster.name !== 'in-cluster' && !cloudMode && (
                 <span
                   className="font-mono text-[10px] text-theme-text-disabled break-all leading-snug pt-0.5"
@@ -246,8 +255,10 @@ export function ClusterHealthCard({
                 </span>
               </Tooltip>
             )}
-            {/* MCP Server indicator (OSS only — Cloud surfaces MCP from
-                Home dashboard, see radar-hub-web HomePage.tsx) */}
+            {/* MCP Server indicator. OSS-only: in Cloud, MCP discovery
+                lives at the hub level (org-wide endpoint, PAT-authed)
+                rather than per-cluster, so this localhost/no-auth card
+                would mislead a Cloud user. */}
             {showLocalMcpCard && (
               <button
                 onClick={() => setMcpDialogOpen(true)}

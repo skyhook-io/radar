@@ -12,7 +12,6 @@ import (
 	"net/http"
 	"net/http/pprof"
 	"net/url"
-	"os"
 	"reflect"
 	"runtime"
 	"strings"
@@ -31,6 +30,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/images"
@@ -2753,14 +2753,16 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 
 // Settings handlers
 
-// cloudMode reports whether Radar is running under Radar Cloud. The Helm
-// chart sets RADAR_CLOUD_MODE=true when cloud.enabled. When true, user-
-// scoped fields (theme, pinnedKinds) are owned by Cloud's user_preferences
-// table — not settings.json — because a single in-cluster Radar is shared
-// across every Cloud user of the cluster and can't meaningfully store
-// per-user state.
+// cloudMode reports whether Radar is running under Radar Cloud. Reads
+// the resolved deployment mode from internal/cloud (which normalizes
+// the RADAR_CLOUD_MODE env var via strconv.ParseBool, so common typos
+// like "True" / "1" don't silently degrade to OSS mode). When true,
+// user-scoped settings fields (theme, pinnedKinds) are owned by
+// Cloud's user_preferences table — not settings.json — because a
+// single in-cluster Radar is shared across every Cloud user of the
+// cluster and can't meaningfully store per-user state.
 func cloudMode() bool {
-	return os.Getenv("RADAR_CLOUD_MODE") == "true"
+	return cloud.Mode()
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {

@@ -93,7 +93,12 @@ func main() {
 	// Force --auth-mode=proxy so Radar impersonates the Cloud user against
 	// the K8s API instead of falling back to the ServiceAccount (which would
 	// give every Cloud user full SA permissions).
-	cloudMode := os.Getenv("RADAR_CLOUD_MODE") == "true"
+	// Read once via the cloud package so we use the same normalized
+	// parser (strconv.ParseBool — accepts true/1/T/TRUE etc.) as every
+	// other site that reads RADAR_CLOUD_MODE. cloud.LogStartupMode
+	// emits the resolved value below regardless of true/false so the
+	// deployment topology is obvious in startup logs.
+	cloudMode := cloud.Mode()
 	if cloudMode {
 		if *authMode != "none" && *authMode != "proxy" {
 			log.Fatalf("RADAR_CLOUD_MODE=true incompatible with --auth-mode=%q: Cloud owns authn, only 'proxy' is supported", *authMode)
@@ -105,6 +110,10 @@ func main() {
 		*authGroupsHeader = "X-Forwarded-Groups"
 		log.Printf("[cloud] RADAR_CLOUD_MODE=true: auth-mode forced to proxy, trusting tunnel-supplied identity headers")
 	}
+	// Always log the resolved cloud mode (true OR false) so deployment
+	// topology is visible in chart-install logs even when an operator
+	// expected Cloud mode but typo'd the env var.
+	cloud.LogStartupMode()
 
 	if *showVersion {
 		fmt.Printf("radar %s\n", version)
