@@ -12,6 +12,9 @@ import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import { MCPSetupDialog } from './MCPSetupDialog'
 import { pluralize, parseContextName } from '@skyhook-io/k8s-ui'
 import { Tooltip } from '../ui/Tooltip'
+import gkeIcon from '../../assets/platform-icons/google_kubernetes_engine.png'
+import eksIcon from '../../assets/platform-icons/aws_eks.png'
+import aksIcon from '../../assets/platform-icons/azure-aks.svg'
 
 interface ClusterHealthCardProps {
   health: DashboardResponse['health']
@@ -67,13 +70,13 @@ function MetricsUnavailableHint({ platform, metricsServerAvailable }: { platform
 function getPlatformInfo(platform: string): { name: string; icon: string | null } {
   const platformLower = platform.toLowerCase()
   if (platformLower.includes('gke') || platformLower.includes('google')) {
-    return { name: 'Google Kubernetes Engine', icon: '/icons/google_kubernetes_engine.png' }
+    return { name: 'Google Kubernetes Engine', icon: gkeIcon }
   }
   if (platformLower.includes('eks') || platformLower.includes('amazon') || platformLower.includes('aws')) {
-    return { name: 'Amazon EKS', icon: '/icons/aws_eks.png' }
+    return { name: 'Amazon EKS', icon: eksIcon }
   }
   if (platformLower.includes('aks') || platformLower.includes('azure')) {
-    return { name: 'Azure Kubernetes Service', icon: '/icons/azure-aks.svg' }
+    return { name: 'Azure Kubernetes Service', icon: aksIcon }
   }
   if (platformLower.includes('openshift')) {
     return { name: 'OpenShift', icon: null }
@@ -113,8 +116,12 @@ export function ClusterHealthCard({
   void _topCRDs // Reserved for future CRD display
 
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
-  const { mcpEnabled } = useCapabilitiesContext()
+  const { mcpEnabled, cloudMode } = useCapabilitiesContext()
   const mcpUrl = `${window.location.origin}/mcp`
+  // In Cloud, MCP is org-wide and PAT-authed (api.radarhq.io/mcp). The OSS
+  // "this binary is your local MCP server" framing is wrong there — Cloud
+  // surfaces MCP from the hub Home dashboard instead.
+  const showLocalMcpCard = mcpEnabled && !cloudMode
 
   const restricted = counts.restricted ?? []
   const isRestricted = (kind: string) => restricted.includes(kind)
@@ -164,7 +171,12 @@ export function ClusterHealthCard({
   // recognize is the short clusterName. We promote that, push the raw
   // path into a tooltip, and surface project/region as muted metadata.
   const parsedContext = parseContextName(cluster.name || '')
-  const headlineName = parsedContext.clusterName || cluster.name || 'Cluster'
+  // When Radar runs in-cluster (cluster.name === 'in-cluster' from the
+  // bootstrap default), the kubeconfig context name is meaningless — fall
+  // back to the platform label so the headline reads as "Google Kubernetes
+  // Engine" instead of literally "in-cluster".
+  const rawHeadline = parsedContext.clusterName || cluster.name || 'Cluster'
+  const headlineName = rawHeadline === 'in-cluster' ? platformInfo.name : rawHeadline
 
   return (
     <div className="rounded-xl bg-theme-surface shadow-theme-sm overflow-hidden">
@@ -181,12 +193,17 @@ export function ClusterHealthCard({
               )}
               <span className="text-xs text-theme-text-secondary truncate">{platformInfo.name}</span>
             </div>
-            <h2
-              className="text-xl font-semibold text-theme-text-primary truncate mb-1.5 leading-tight"
-              title={cluster.name}
-            >
-              {headlineName}
-            </h2>
+            {/* In Cloud, the HubClusterSwitcher in the top bar is the
+                canonical cluster identity — repeating it here just makes the
+                card feel introduced-rather-than-described. Suppress. */}
+            {!cloudMode && (
+              <h2
+                className="text-xl font-semibold text-theme-text-primary truncate mb-1.5 leading-tight"
+                title={cluster.name}
+              >
+                {headlineName}
+              </h2>
+            )}
             <div className="flex flex-col gap-0.5 text-xs text-theme-text-tertiary">
               {(parsedContext.account || parsedContext.region) && (
                 <span className="truncate font-mono" title={[parsedContext.account, parsedContext.region].filter(Boolean).join(' · ')}>
@@ -197,7 +214,7 @@ export function ClusterHealthCard({
                 <span>Kubernetes {cluster.version}</span>
               )}
               <span><span className="font-mono">{counts.namespaces}</span> namespaces</span>
-              {cluster.name && cluster.name !== headlineName && (
+              {cluster.name && cluster.name !== headlineName && cluster.name !== 'in-cluster' && !cloudMode && (
                 <span
                   className="font-mono text-[10px] text-theme-text-disabled break-all leading-snug pt-0.5"
                   title={cluster.name}
@@ -229,8 +246,9 @@ export function ClusterHealthCard({
                 </span>
               </Tooltip>
             )}
-            {/* MCP Server indicator */}
-            {mcpEnabled && (
+            {/* MCP Server indicator (OSS only — Cloud surfaces MCP from
+                Home dashboard, see radar-hub-web HomePage.tsx) */}
+            {showLocalMcpCard && (
               <button
                 onClick={() => setMcpDialogOpen(true)}
                 className="flex items-center gap-2 mt-3 px-2.5 py-2 bg-purple-500/5 hover:bg-purple-500/10 border border-purple-500/20 rounded-md transition-colors w-full"

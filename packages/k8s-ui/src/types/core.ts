@@ -33,6 +33,7 @@ export interface Capabilities {
   helmWrite: boolean      // Helm write operations (install, upgrade, rollback, uninstall, apply values)
   nodeWrite: boolean      // Node write operations (cordon, uncordon, drain)
   mcpEnabled: boolean     // MCP server is running
+  cloudMode?: boolean     // Radar is running under Radar Cloud (RADAR_CLOUD_MODE=true)
   resources?: ResourcePermissions // Per-resource-type permissions
   authEnabled?: boolean   // Auth is enabled on the backend
   username?: string       // Authenticated user's username (when auth enabled)

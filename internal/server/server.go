@@ -584,6 +584,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	caps.MCPEnabled = s.mcpHandler != nil
+	caps.CloudMode = cloudMode()
 	caps.AuthEnabled = s.authConfig.Enabled()
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		caps.Username = user.Username

@@ -69,6 +69,7 @@ type Capabilities struct {
 	HelmWrite     bool                 `json:"helmWrite"`               // Helm write ops (detected via secrets/create as sentinel RBAC check)
 	NodeWrite     bool                 `json:"nodeWrite"`               // Can patch nodes (cordon/uncordon/drain)
 	MCPEnabled    bool                 `json:"mcpEnabled"`              // MCP server is running
+	CloudMode     bool                 `json:"cloudMode,omitempty"`     // Radar is running under Radar Cloud (RADAR_CLOUD_MODE=true)
 	AuthEnabled   bool                 `json:"authEnabled,omitempty"`   // Auth is enabled on the server
 	Username      string               `json:"username,omitempty"`      // Authenticated username (when auth enabled)
 	Resources     *ResourcePermissions `json:"resources,omitempty"`     // Per-resource-type permissions

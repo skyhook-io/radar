@@ -1,6 +1,6 @@
 {
   "name": "@skyhook-io/radar-app",
-  "version": "0.1.9",
+  "version": "0.2.2",
   "description": "Radar's full web UI as a reusable React component. Used by Radar's own binary and by external consumers like Radar Cloud.",
   "repository": {
     "type": "git",

@@ -13,6 +13,7 @@ const defaultCapabilities: Capabilities = {
   helmWrite: true,
   nodeWrite: true,
   mcpEnabled: true,
+  cloudMode: false,
 }
 
 // Restricted capabilities for error/failure cases (fail-closed)
@@ -26,6 +27,7 @@ const restrictedCapabilities: Capabilities = {
   helmWrite: false,
   nodeWrite: false,
   mcpEnabled: false,
+  cloudMode: false,
 }
 
 const CapabilitiesContext = createContext<Capabilities>(defaultCapabilities)
