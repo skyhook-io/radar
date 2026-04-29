@@ -64,7 +64,7 @@
     "clsx": "^2.1.1",
     "elkjs": "^0.11.1",
     "lucide-react": "^1.8.0",
-    "postcss": "^8.5.8",
+    "postcss": "^8.5.12",
     "prettier": "^3.8.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
