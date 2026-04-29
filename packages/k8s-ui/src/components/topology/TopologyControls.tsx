@@ -25,20 +25,46 @@ export function TopologyControls({
 }: TopologyControlsProps) {
   return (
     <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
-      {/* Policy effect toggle */}
+      {/* Policy effect toggle + legend */}
       {onShowPolicyEffectChange && (
-        <button
-          onClick={() => onShowPolicyEffectChange(!showPolicyEffect)}
-          className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${
-            showPolicyEffect
-              ? 'bg-indigo-600 text-white border-indigo-600'
-              : 'bg-theme-surface/90 backdrop-blur text-theme-text-secondary border-theme-border hover:text-theme-text-primary'
-          }`}
-          title="Show NetworkPolicy effects on edges"
-        >
-          <ShieldCheck className="w-3.5 h-3.5" />
-          Policies
-        </button>
+        <>
+          {showPolicyEffect && (
+            <div
+              className="flex items-center gap-2 px-2.5 py-1.5 text-[10px] uppercase tracking-wide rounded-lg border bg-theme-surface/90 backdrop-blur text-theme-text-secondary border-theme-border"
+              role="legend"
+              aria-label="NetworkPolicy effect legend"
+            >
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-3 h-[2px]" style={{ background: '#10b981' }} />
+                allowed
+              </span>
+              <span className="flex items-center gap-1">
+                <span
+                  className="inline-block w-3 h-[2.5px]"
+                  style={{ background: 'repeating-linear-gradient(90deg, #ef4444 0 4px, transparent 4px 6px)' }}
+                />
+                blocked
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block w-3 h-[2px]" style={{ background: '#f59e0b' }} />
+                unprotected
+              </span>
+            </div>
+          )}
+          <button
+            onClick={() => onShowPolicyEffectChange(!showPolicyEffect)}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg border transition-colors ${
+              showPolicyEffect
+                ? 'bg-indigo-600 text-white border-indigo-600'
+                : 'bg-theme-surface/90 backdrop-blur text-theme-text-secondary border-theme-border hover:text-theme-text-primary'
+            }`}
+            title="Show NetworkPolicy effects on edges (allowed / blocked / unprotected)"
+            aria-pressed={showPolicyEffect}
+          >
+            <ShieldCheck className="w-3.5 h-3.5" />
+            Policies
+          </button>
+        </>
       )}
 
       {/* Grouping selector */}

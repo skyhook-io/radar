@@ -41,7 +41,31 @@ const EDGE_COLORS = {
   'uses': '#ec4899',       // Pink for HPA
 } as const
 
-function getEdgeColor(type: string, isTrafficView: boolean): string {
+// Policy-effect overlay colors (SKY-832 bug 62). When the user toggles
+// the "Policies" button, the backend annotates each edge with one of
+// these effects. The toggle previously had no visible result on the
+// canvas because the edge renderer didn't consult the field at all.
+//   - allowed:     a NetworkPolicy explicitly allows this edge
+//   - blocked:     a NetworkPolicy denies this edge (this is the
+//                  signal the user most wants to see)
+//   - unprotected: no NetworkPolicy applies (default-allow)
+const POLICY_EFFECT_COLORS = {
+  allowed: '#10b981',     // emerald — explicitly permitted
+  blocked: '#ef4444',     // red     — denied by policy
+  unprotected: '#f59e0b', // amber   — no policy in effect
+} as const
+
+export function getEdgeColor(
+  type: string,
+  isTrafficView: boolean,
+  policyEffect?: 'allowed' | 'blocked' | 'unprotected',
+): string {
+  // Policy effect, when present, takes priority over both view-mode
+  // and per-type colors so the user can actually see the policy
+  // overlay they asked for.
+  if (policyEffect && POLICY_EFFECT_COLORS[policyEffect]) {
+    return POLICY_EFFECT_COLORS[policyEffect]
+  }
   if (isTrafficView) {
     // In traffic view, use green for all edges
     return '#22c55e'
@@ -52,15 +76,29 @@ function getEdgeColor(type: string, isTrafficView: boolean): string {
 // Memoized edge style cache to avoid creating new objects on every render
 const edgeStyleCache = new Map<string, React.CSSProperties>()
 
-function getEdgeStyle(type: string, isTrafficView: boolean, isTrafficEdge: boolean, animated: boolean): React.CSSProperties {
-  const cacheKey = `${type}-${isTrafficView}-${isTrafficEdge}-${animated}`
+export function getEdgeStyle(
+  type: string,
+  isTrafficView: boolean,
+  isTrafficEdge: boolean,
+  animated: boolean,
+  policyEffect?: 'allowed' | 'blocked' | 'unprotected',
+): React.CSSProperties {
+  const cacheKey = `${type}-${isTrafficView}-${isTrafficEdge}-${animated}-${policyEffect ?? 'none'}`
   let style = edgeStyleCache.get(cacheKey)
   if (!style) {
-    const edgeColor = getEdgeColor(type, isTrafficView)
+    const edgeColor = getEdgeColor(type, isTrafficView, policyEffect)
+    // 'blocked' edges get a wider, dashed stroke so they read as
+    // "this connection is being denied" even on dense graphs.
+    const baseWidth = isTrafficView ? 2 : 1.5
     style = {
       stroke: edgeColor,
-      strokeWidth: isTrafficView ? 2 : 1.5,
-      strokeDasharray: isTrafficView && isTrafficEdge && animated ? '5 5' : undefined,
+      strokeWidth: policyEffect === 'blocked' ? baseWidth + 0.5 : baseWidth,
+      strokeDasharray:
+        policyEffect === 'blocked'
+          ? '6 4'
+          : isTrafficView && isTrafficEdge && animated
+            ? '5 5'
+            : undefined,
     }
     edgeStyleCache.set(cacheKey, style)
   }
@@ -124,9 +162,16 @@ function buildEdges(
     if (seenEdgeIds.has(edgeId)) continue
     seenEdgeIds.add(edgeId)
 
-    const edgeColor = getEdgeColor(edge.type, isTrafficView)
+    const edgeColor = getEdgeColor(edge.type, isTrafficView, edge.policyEffect)
     const isTrafficEdge = edge.type === 'routes-to' || edge.type === 'exposes'
-    const animated = enableAnimations && isTrafficView && isTrafficEdge
+    // `blocked` edges should never animate — animation reads as
+    // "traffic is flowing", which is the opposite of what `blocked`
+    // means.
+    const animated =
+      enableAnimations &&
+      isTrafficView &&
+      isTrafficEdge &&
+      edge.policyEffect !== 'blocked'
 
     edges.push({
       id: edgeId,
@@ -140,7 +185,7 @@ function buildEdges(
         width: 12,
         height: 12,
       },
-      style: getEdgeStyle(edge.type, isTrafficView, isTrafficEdge, animated),
+      style: getEdgeStyle(edge.type, isTrafficView, isTrafficEdge, animated, edge.policyEffect),
     })
   }
 
