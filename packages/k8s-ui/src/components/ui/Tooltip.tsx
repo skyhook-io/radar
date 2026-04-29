@@ -1,6 +1,7 @@
 import { ReactNode, useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { clsx } from 'clsx'
+import { computeTooltipPosition } from './tooltip-position'
 
 // Module-level singleton coordinator: only one Tooltip can be visible
 // at a time across the whole app. Without this, two Tooltip instances
@@ -45,53 +46,47 @@ export function Tooltip({
   wrapperStyle,
 }: TooltipProps) {
   const [isVisible, setIsVisible] = useState(false)
-  const [coords, setCoords] = useState({ top: 0, left: 0 })
+  // null while the tooltip is mounting and hasn't been measured yet — the
+  // portal renders with `visibility: hidden` in that window so the user
+  // never sees a frame painted at the default (0,0) coordinates. Bug
+  // observed on app.radarhq.io: nav button tooltips ("Topology",
+  // "Timeline", ...) flashed at the viewport's top-left corner and
+  // overlapped the "Radar / By Skyhook" logo before snapping into place.
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(
+    null
+  )
   const triggerRef = useRef<HTMLSpanElement>(null)
   const tooltipRef = useRef<HTMLSpanElement>(null)
   const timeoutRef = useRef<number | null>(null)
+  const rafRef = useRef<number | null>(null)
 
   const updatePosition = useCallback(() => {
     if (!triggerRef.current) return
 
-    const rect = triggerRef.current.getBoundingClientRect()
+    const triggerRect = triggerRef.current.getBoundingClientRect()
     const tooltipRect = tooltipRef.current?.getBoundingClientRect()
-    const tooltipWidth = tooltipRect?.width || 0
-    const tooltipHeight = tooltipRect?.height || 0
 
-    let top = 0
-    let left = 0
+    const next = computeTooltipPosition({
+      triggerRect: {
+        top: triggerRect.top,
+        left: triggerRect.left,
+        width: triggerRect.width,
+        height: triggerRect.height,
+      },
+      tooltipSize: {
+        width: tooltipRect?.width ?? 0,
+        height: tooltipRect?.height ?? 0,
+      },
+      position,
+      viewport: {
+        width: window.innerWidth,
+        height: window.innerHeight,
+      },
+    })
 
-    switch (position) {
-      case 'top':
-        top = rect.top - tooltipHeight - 6
-        left = rect.left + rect.width / 2 - tooltipWidth / 2
-        break
-      case 'bottom':
-        top = rect.bottom + 6
-        left = rect.left + rect.width / 2 - tooltipWidth / 2
-        break
-      case 'left':
-        top = rect.top + rect.height / 2 - tooltipHeight / 2
-        left = rect.left - tooltipWidth - 6
-        break
-      case 'right':
-        top = rect.top + rect.height / 2 - tooltipHeight / 2
-        left = rect.right + 6
-        break
+    if (next) {
+      setCoords(next)
     }
-
-    // Keep tooltip within viewport
-    const padding = 8
-    if (left < padding) left = padding
-    if (left + tooltipWidth > window.innerWidth - padding) {
-      left = window.innerWidth - tooltipWidth - padding
-    }
-    if (top < padding) top = rect.bottom + 6 // flip to bottom
-    if (top + tooltipHeight > window.innerHeight - padding) {
-      top = rect.top - tooltipHeight - 6 // flip to top
-    }
-
-    setCoords({ top, left })
   }, [position])
 
   // Stable hide function for the singleton registry — useRef so the
@@ -104,6 +99,7 @@ export function Tooltip({
       timeoutRef.current = null
     }
     setIsVisible(false)
+    setCoords(null)
   }
 
   const showTooltip = () => {
@@ -128,12 +124,27 @@ export function Tooltip({
       activeHide = null
     }
     setIsVisible(false)
+    setCoords(null)
   }
 
   useEffect(() => {
     if (isVisible) {
-      // Small delay to let the tooltip render before measuring
-      requestAnimationFrame(updatePosition)
+      // Two-pass measurement. The portal is rendered with
+      // `visibility: hidden` while coords are null, so we get a real
+      // tooltip rect on the first rAF. A second rAF re-runs the
+      // computation with the now-known tooltip width/height so the
+      // anchor centering is exact. Without this second pass the
+      // tooltip would show with size-0 centering for one frame and
+      // then jump.
+      const id1 = requestAnimationFrame(() => {
+        updatePosition()
+        const id2 = requestAnimationFrame(updatePosition)
+        rafRef.current = id2
+      })
+      rafRef.current = id1
+      return () => {
+        if (rafRef.current !== null) cancelAnimationFrame(rafRef.current)
+      }
     }
   }, [isVisible, updatePosition])
 
@@ -141,6 +152,9 @@ export function Tooltip({
     return () => {
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current)
+      }
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
       }
       // Clear from singleton registry on unmount — otherwise a Tooltip
       // that unmounts while visible (e.g. row removed during hover)
@@ -165,8 +179,31 @@ export function Tooltip({
         timeoutRef.current = null
       }
       setIsVisible(false)
+      setCoords(null)
     }
   }, [disabled])
+
+  // Dismiss on browser back/forward (route changes) and on Escape.
+  // The mouseleave-based dismissal misses the case where a tooltip is
+  // anchored to a button that itself triggers navigation (nav buttons,
+  // tab pills): React keeps the button mounted across the route change
+  // so no unmount cleanup fires, and the cursor is still over the
+  // trigger so no mouseleave fires either. The user sees a stuck
+  // tooltip overlapping the new page's chrome. Hooking popstate +
+  // Escape gives a deterministic dismissal path for those cases.
+  useEffect(() => {
+    if (!isVisible) return
+    const onPop = () => hideRef.current()
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') hideRef.current()
+    }
+    window.addEventListener('popstate', onPop)
+    window.addEventListener('keydown', onKey)
+    return () => {
+      window.removeEventListener('popstate', onPop)
+      window.removeEventListener('keydown', onKey)
+    }
+  }, [isVisible])
 
   if (disabled || !content) {
     return <>{children}</>
@@ -182,6 +219,16 @@ export function Tooltip({
         onMouseLeave={hideTooltip}
         onFocus={showTooltip}
         onBlur={hideTooltip}
+        // pointerdown fires before click and before any onClick the
+        // child uses for navigation/state changes — guaranteeing the
+        // tooltip is gone before the trigger's action runs. Covers:
+        //   - nav button click navigates → tooltip would otherwise
+        //     stick (button stays mounted, cursor still over it)
+        //   - tab pill click → same shape, tooltip lingers under the
+        //     active tab
+        //   - clicking a table row to open a drawer → row's name
+        //     tooltip used to remain pinned above the table header
+        onPointerDown={hideTooltip}
       >
         {children}
       </span>
@@ -194,8 +241,17 @@ export function Tooltip({
               'whitespace-nowrap pointer-events-none',
               className
             )}
-            style={{ top: coords.top, left: coords.left }}
+            style={{
+              top: coords?.top ?? 0,
+              left: coords?.left ?? 0,
+              // Hidden until the first measurement pass writes real
+              // coords. Without this guard the portal paints at (0,0)
+              // for one frame, which on slower clients shows up as
+              // tooltip text overlapping the top-left logo.
+              visibility: coords ? 'visible' : 'hidden',
+            }}
             role="tooltip"
+            aria-hidden={coords ? undefined : true}
           >
             {content}
           </span>,
