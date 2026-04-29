@@ -135,11 +135,19 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
     setInstallError(null)
     setProgressLogs([])
 
+    // Send the trimmed values that we actually validated. Without
+    // this, a user who typed "my-release " (trailing space) would
+    // pass client-side validation (which runs on `.trim()`) but the
+    // server would receive the untrimmed string and reject it — the
+    // exact class of bug this PR aims to prevent. (Bugbot finding)
+    const trimmedReleaseName = releaseName.trim()
+    const trimmedNamespace = namespace.trim()
+
     try {
       const release = await installChartWithProgress(
         {
-          releaseName,
-          namespace,
+          releaseName: trimmedReleaseName,
+          namespace: trimmedNamespace,
           chartName,
           version,
           repository,
@@ -170,7 +178,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
 
       // Wait a moment to show success, then close
       setTimeout(() => {
-        onSuccess(namespace, releaseName)
+        onSuccess(trimmedNamespace, trimmedReleaseName)
       }, 1500)
     } catch (err) {
       setInstallError(err instanceof Error ? err.message : 'Install failed')
