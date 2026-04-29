@@ -79,6 +79,8 @@ rbac:
     awx: true               # awx.ansible.com
     certManager: true       # cert-manager.io
     cloudnativePg: true     # cloudnative-pg.io
+    clusterApi: true        # *.cluster.x-k8s.io (CAPI core + infrastructure / controlplane / bootstrap / addons)
+    contour: true           # projectcontour.io
     crossplane: true        # crossplane.io, pkg.crossplane.io
     descheduler: true       # descheduler.alpha.kubernetes.io
     envoyGateway: true      # gateway.envoyproxy.io
@@ -106,6 +108,7 @@ rbac:
     strimzi: true           # strimzi.io, kafka.strimzi.io
     tekton: true            # tekton.dev
     traefik: true           # traefik.io, traefik.containo.us
+    trivy: true             # aquasecurity.github.io
     velero: true            # velero.io
 
   # Additional CRD API groups for custom/unlisted CRDs
