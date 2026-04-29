@@ -13,7 +13,11 @@ const defaultCapabilities: Capabilities = {
   helmWrite: true,
   nodeWrite: true,
   mcpEnabled: true,
-  cloudMode: false,
+  // Default to 'local' for the loading window so the UI renders the
+  // OSS standalone shape until /api/capabilities resolves. Both
+  // alternatives ('in-cluster', 'cloud') would cause OSS users to
+  // briefly see suppressed chrome — wrong default direction.
+  deployment: { mode: 'local' },
 }
 
 // Restricted capabilities for error/failure cases (fail-closed)
@@ -27,7 +31,7 @@ const restrictedCapabilities: Capabilities = {
   helmWrite: false,
   nodeWrite: false,
   mcpEnabled: false,
-  cloudMode: false,
+  deployment: { mode: 'local' },
 }
 
 const CapabilitiesContext = createContext<Capabilities>(defaultCapabilities)

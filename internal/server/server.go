@@ -584,7 +584,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	caps.MCPEnabled = s.mcpHandler != nil
-	caps.CloudMode = cloudMode()
+	caps.Deployment = k8s.DeploymentInfo{Mode: deploymentMode()}
 	caps.AuthEnabled = s.authConfig.Enabled()
 	if user := auth.UserFromContext(r.Context()); user != nil {
 		caps.Username = user.Username
@@ -2763,6 +2763,21 @@ func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
 // cluster and can't meaningfully store per-user state.
 func cloudMode() bool {
 	return cloud.Mode()
+}
+
+// deploymentMode resolves the deployment topology that the frontend
+// branches on. Cloud beats in-cluster (Cloud is in-cluster + tunnel,
+// but the user-visible behavior is the cloud-tunnel half), and
+// in-cluster comes from kubeconfig bootstrap setting context name to
+// the literal "in-cluster" sentinel.
+func deploymentMode() k8s.DeploymentMode {
+	if cloudMode() {
+		return k8s.DeploymentModeCloud
+	}
+	if k8s.GetKubeconfigSummary().Mode == "in-cluster" {
+		return k8s.DeploymentModeInCluster
+	}
+	return k8s.DeploymentModeLocal
 }
 
 func (s *Server) handleGetSettings(w http.ResponseWriter, r *http.Request) {

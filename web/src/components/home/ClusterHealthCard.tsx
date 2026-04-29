@@ -116,12 +116,14 @@ export function ClusterHealthCard({
   void _topCRDs // Reserved for future CRD display
 
   const [mcpDialogOpen, setMcpDialogOpen] = useState(false)
-  const { mcpEnabled, cloudMode } = useCapabilitiesContext()
+  const { mcpEnabled, deployment } = useCapabilitiesContext()
+  const isCloud = deployment.mode === 'cloud'
+  const isInCluster = deployment.mode === 'in-cluster' || deployment.mode === 'cloud'
   const mcpUrl = `${window.location.origin}/mcp`
   // In Cloud, MCP is org-wide and PAT-authed (api.radarhq.io/mcp). The OSS
   // "this binary is your local MCP server" framing is wrong there — Cloud
   // surfaces MCP from the hub Home dashboard instead.
-  const showLocalMcpCard = mcpEnabled && !cloudMode
+  const showLocalMcpCard = mcpEnabled && !isCloud
 
   const restricted = counts.restricted ?? []
   const isRestricted = (kind: string) => restricted.includes(kind)
@@ -166,22 +168,22 @@ export function ClusterHealthCard({
   ]
   const platformInfo = getPlatformInfo(cluster.platform)
   // Headline-name derivation has three branches, in priority order:
-  //  1. Kubeconfig context users get the parsed short clusterName from
-  //     a string like `gke_koalabackend_us-east1-b_nonprod-cluster-us-east1`
+  //  1. Local-kubeconfig users get the parsed short clusterName from a
+  //     string like `gke_koalabackend_us-east1-b_nonprod-cluster-us-east1`
   //     (the meaningful tail). Account/region are surfaced separately
   //     below as muted metadata, and the raw path is exposed via tooltip
-  //     on the headline element when present.
-  //  2. In-cluster mode sets cluster.name to the literal "in-cluster"
-  //     bootstrap default (see internal/k8s/client.go) — meaningless to
-  //     a user, so fall back to the platform label ("Google Kubernetes
-  //     Engine") which IS recognizable.
+  //     on the headline element.
+  //  2. In-cluster mode (deployment.mode === 'in-cluster' OR 'cloud')
+  //     has no meaningful kubeconfig context — bootstrap sets it to
+  //     the literal "in-cluster" sentinel. Fall back to the platform
+  //     label ("Google Kubernetes Engine") which IS recognizable.
   //  3. Last resort: the literal cluster.name, or "Cluster".
-  // When the card is rendered embedded (cloudMode), the H2 itself is
+  // When the card is rendered embedded (cloud mode), the H2 itself is
   // suppressed below — the hub shell already shows the cluster name in
-  // its top bar, so the tooltip-on-headline behavior doesn't apply.
+  // its top bar.
   const parsedContext = parseContextName(cluster.name || '')
   const rawHeadline = parsedContext.clusterName || cluster.name || 'Cluster'
-  const headlineName = rawHeadline === 'in-cluster' ? platformInfo.name : rawHeadline
+  const headlineName = isInCluster ? platformInfo.name : rawHeadline
 
   return (
     <div className="rounded-xl bg-theme-surface shadow-theme-sm overflow-hidden">
@@ -201,7 +203,7 @@ export function ClusterHealthCard({
             {/* In Cloud, the hub shell already shows the cluster name in
                 its top bar; rendering it again here is redundant and
                 makes the card feel like a label rather than content. */}
-            {!cloudMode && (
+            {!isCloud && (
               <h2
                 className="text-xl font-semibold text-theme-text-primary truncate mb-1.5 leading-tight"
                 title={cluster.name}
@@ -220,10 +222,10 @@ export function ClusterHealthCard({
               )}
               <span><span className="font-mono">{counts.namespaces}</span> namespaces</span>
               {/* Show raw kubeconfig context as muted metadata only when
-                  it differs from the headline AND isn't the in-cluster
-                  bootstrap sentinel AND we're not embedded (where the
-                  hub shell already shows the canonical name). */}
-              {cluster.name && cluster.name !== headlineName && cluster.name !== 'in-cluster' && !cloudMode && (
+                  it differs from the headline AND we're in local mode
+                  (in-cluster has no meaningful context name, cloud
+                  shell already renders the canonical name). */}
+              {cluster.name && cluster.name !== headlineName && deployment.mode === 'local' && (
                 <span
                   className="font-mono text-[10px] text-theme-text-disabled break-all leading-snug pt-0.5"
                   title={cluster.name}

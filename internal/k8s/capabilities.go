@@ -69,7 +69,7 @@ type Capabilities struct {
 	HelmWrite     bool                 `json:"helmWrite"`               // Helm write ops (detected via secrets/create as sentinel RBAC check)
 	NodeWrite     bool                 `json:"nodeWrite"`               // Can patch nodes (cordon/uncordon/drain)
 	MCPEnabled    bool                 `json:"mcpEnabled"`              // MCP server is running
-	CloudMode     bool                 `json:"cloudMode,omitempty"`     // True when Radar runs embedded inside Radar Cloud's hub. Tells the UI to suppress chrome the hub already renders (cluster headline, local-MCP setup card). Currently set via RADAR_CLOUD_MODE=true.
+	Deployment    DeploymentInfo       `json:"deployment"`              // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
 	AuthEnabled   bool                 `json:"authEnabled,omitempty"`   // Auth is enabled on the server
 	Username      string               `json:"username,omitempty"`      // Authenticated username (when auth enabled)
 	Resources     *ResourcePermissions `json:"resources,omitempty"`     // Per-resource-type permissions
@@ -82,6 +82,44 @@ type NamespaceCapabilities struct {
 	Exec        bool `json:"exec"`
 	Logs        bool `json:"logs"`
 	PortForward bool `json:"portForward"`
+}
+
+// DeploymentInfo describes how / where this Radar binary is running.
+// The frontend uses Mode to gate chrome that only makes sense in some
+// topologies — e.g. cloud-connected mode hides the cluster headline
+// because Radar Cloud's hub renders it in the top bar; in-cluster mode
+// falls back to the platform label for the cluster name because the
+// kubeconfig context is the meaningless "in-cluster" sentinel.
+//
+// The set is closed; if a new topology ships (air-gapped, on-prem-SAML,
+// BYOC, ...), add a member here and update consumers — the bool
+// alternative would force every consumer to grow `mode-A || mode-B`
+// disjunctions ad hoc.
+type DeploymentMode string
+
+const (
+	// DeploymentModeLocal: Radar binary running on a developer's
+	// machine with a kubeconfig. The most common OSS path.
+	DeploymentModeLocal DeploymentMode = "local"
+	// DeploymentModeInCluster: Radar pod running inside the cluster
+	// it's observing, with no kubeconfig. The kubeconfig context name
+	// is set to the literal "in-cluster" sentinel during bootstrap.
+	// Frontend should fall back to the platform label for headlines.
+	DeploymentModeInCluster DeploymentMode = "in-cluster"
+	// DeploymentModeCloud: Radar pod running in-cluster AND tunneled
+	// to Radar Cloud's hub (RADAR_CLOUD_MODE=true; technically a
+	// superset of in-cluster mode plus the outbound tunnel). The hub
+	// shell renders cluster identity + MCP discovery surfaces, so the
+	// embedded UI suppresses both.
+	DeploymentModeCloud DeploymentMode = "cloud"
+)
+
+// DeploymentInfo is exposed in the Capabilities response. Currently
+// just Mode; reserved as a struct so future deployment-scoped facts
+// (region, cluster id surface, helm chart version) can be added
+// without another wire-shape change.
+type DeploymentInfo struct {
+	Mode DeploymentMode `json:"mode"`
 }
 
 var (
