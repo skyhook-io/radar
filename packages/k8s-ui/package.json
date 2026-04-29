@@ -58,7 +58,7 @@
   "dependencies": {
     "@monaco-editor/react": "^4.7.0",
     "html-to-image": "^1.11.0",
-    "react-virtuoso": "^4.18.5",
+    "react-virtuoso": "^4.18.6",
     "shiki": "^4.0.0"
   },
   "peerDependencies": {
