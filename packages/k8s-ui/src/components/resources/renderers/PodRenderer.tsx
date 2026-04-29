@@ -2,7 +2,7 @@ import { useState, type ReactNode, type JSX } from 'react'
 import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink } from '../../ui/drawer-components'
-import { formatResources, formatDuration, getPodProblems, SEVERITY_DOT_COLOR } from '../resource-utils'
+import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR } from '../resource-utils'
 import { getResourceStatusColor, SEVERITY_BADGE_BORDERED } from '../../../utils/badge-colors'
 import type { ResolvedEnvFrom } from '../../../types'
 import { Tooltip } from '../../ui/Tooltip'
@@ -333,7 +333,34 @@ export function PodRenderer({
       {/* Status section */}
       <Section title="Status" icon={Server}>
         <PropertyList>
-          <Property label="Phase" value={data.status?.phase} />
+          {(() => {
+            // The "Phase" row used to render `data.status.phase` verbatim,
+            // which on a Running-but-not-ready or Running-but-cycling pod
+            // read as a healthy "Running" — directly contradicting the
+            // panel header ("Running (0/1)") and the Issues Detected
+            // banner above. Use the derived display so the row reflects
+            // what the rest of the panel is saying.
+            const phaseDisplay = getPodPhaseDisplay(data)
+            const node = (
+              <span className={clsx(healthColors[phaseDisplay.level])}>
+                {phaseDisplay.text}
+              </span>
+            )
+            return (
+              <Property
+                label="Phase"
+                value={
+                  phaseDisplay.hint ? (
+                    <Tooltip content={phaseDisplay.hint} position="right">
+                      {node}
+                    </Tooltip>
+                  ) : (
+                    node
+                  )
+                }
+              />
+            )
+          })()}
           <Property label="Node" value={
             data.spec?.nodeName ? <ResourceLink name={data.spec.nodeName} kind="nodes" onNavigate={onNavigate} /> : undefined
           } copyable onCopy={onCopy} copied={copied} />
