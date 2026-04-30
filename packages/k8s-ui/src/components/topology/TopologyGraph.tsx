@@ -654,12 +654,12 @@ export function TopologyGraph({
   }, [selectedNodeId, setNodes])
 
   if (!topology) {
-    return <PaneLoader label="Loading topology…" className="flex-1" />
+    return <PaneLoader label="Loading topology…" className="absolute inset-0" />
   }
 
   if (topology.nodes.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-theme-text-secondary">
+      <div className="absolute inset-0 flex items-center justify-center text-theme-text-secondary">
         <div className="text-center">
           <p className="text-lg">No resources found</p>
           <p className="text-sm mt-2">
@@ -673,7 +673,7 @@ export function TopologyGraph({
   // Show layout error if we have topology data but layout failed
   if (layoutError && nodes.length === 0) {
     return (
-      <div className="flex-1 flex items-center justify-center text-theme-text-secondary">
+      <div className="absolute inset-0 flex items-center justify-center text-theme-text-secondary">
         <div className="text-center max-w-md">
           <p className="text-lg text-amber-400">Layout Error</p>
           <p className="text-sm mt-2">
