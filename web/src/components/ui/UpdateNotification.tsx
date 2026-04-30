@@ -111,9 +111,9 @@ export function UpdateNotification() {
   const effectiveState: DesktopUpdateState = updateStatus?.state ?? 'idle'
 
   return (
-    <div className="fixed bottom-4 right-4 z-50 max-w-sm bg-theme-surface border border-blue-500/50 rounded-lg shadow-xl p-4 animate-in slide-in-from-right">
+    <div className="fixed bottom-4 right-4 z-50 max-w-sm bg-theme-surface border border-accent/50 rounded-lg shadow-xl p-4 animate-in slide-in-from-right">
       <div className="flex items-start gap-3">
-        <div className="flex items-center justify-center w-8 h-8 bg-blue-500/20 rounded-full shrink-0">
+        <div className="flex items-center justify-center w-8 h-8 bg-accent-muted rounded-full shrink-0">
           <UpdateIcon state={effectiveState} />
         </div>
         <div className="flex-1 min-w-0">
@@ -154,7 +154,7 @@ export function UpdateNotification() {
                 href={versionInfo.releaseUrl}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 mt-2 text-xs font-medium text-blue-400 hover:text-blue-300"
+                className="inline-flex items-center gap-1 mt-2 text-xs font-medium text-accent-text hover:underline"
               >
                 Download from GitHub →
               </a>
@@ -186,11 +186,11 @@ function UpdateIcon({ state }: { state: DesktopUpdateState }) {
   switch (state) {
     case 'downloading':
     case 'applying':
-      return <Loader2 className="w-4 h-4 text-blue-400 animate-spin" />
+      return <Loader2 className="w-4 h-4 text-accent animate-spin" />
     case 'ready':
       return <ArrowDownToLine className="w-4 h-4 text-green-400" />
     default:
-      return <Download className="w-4 h-4 text-blue-400" />
+      return <Download className="w-4 h-4 text-accent" />
   }
 }
 
@@ -247,7 +247,7 @@ function DesktopUpdateControls({
         <div className="mt-2 space-y-1">
           <div className="w-full bg-theme-elevated rounded-full h-1.5 overflow-hidden">
             <div
-              className="bg-blue-500 h-full rounded-full transition-all duration-300"
+              className="bg-accent h-full rounded-full transition-all duration-300"
               style={{ width: `${Math.round((progress ?? 0) * 100)}%` }}
             />
           </div>
@@ -272,7 +272,7 @@ function DesktopUpdateControls({
     case 'applying':
       return (
         <div className="mt-2 flex items-center gap-2">
-          <Loader2 className="w-3.5 h-3.5 text-blue-400 animate-spin" />
+          <Loader2 className="w-3.5 h-3.5 text-accent animate-spin" />
           <p className="text-xs text-theme-text-secondary">Applying update...</p>
         </div>
       )
