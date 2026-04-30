@@ -1,6 +1,7 @@
 import { Globe, Radio, Lock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
 const protocolColors: Record<string, string> = {
   HTTP: 'bg-blue-500/20 text-blue-400',
@@ -73,7 +74,7 @@ export function GatewayRenderer({ data, onNavigate }: GatewayRendererProps) {
                   ? 'bg-green-500/20 text-green-400'
                   : isNotAccepted
                     ? 'bg-red-500/20 text-red-400'
-                    : 'bg-gray-500/20 text-gray-400'
+                    : BADGE_INACTIVE
               )}>
                 {isAccepted ? 'True' : isNotAccepted ? 'False' : 'Unknown'}
               </span>
@@ -88,7 +89,7 @@ export function GatewayRenderer({ data, onNavigate }: GatewayRendererProps) {
                   ? 'bg-green-500/20 text-green-400'
                   : isNotProgrammed
                     ? 'bg-red-500/20 text-red-400'
-                    : 'bg-gray-500/20 text-gray-400'
+                    : BADGE_INACTIVE
               )}>
                 {isProgrammed ? 'True' : isNotProgrammed ? 'False' : 'Unknown'}
               </span>
@@ -134,7 +135,7 @@ export function GatewayRenderer({ data, onNavigate }: GatewayRendererProps) {
                     <span className="text-sm font-medium text-theme-text-primary">{listener.name}</span>
                     <span className={clsx(
                       'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                      protocolColors[listener.protocol] || 'bg-gray-500/20 text-gray-400'
+                      protocolColors[listener.protocol] || BADGE_INACTIVE
                     )}>
                       {listener.protocol}:{listener.port}
                     </span>
@@ -157,7 +158,7 @@ export function GatewayRenderer({ data, onNavigate }: GatewayRendererProps) {
                           ? 'bg-green-500/20 text-green-400'
                           : isListenerNotAccepted
                             ? 'bg-red-500/20 text-red-400'
-                            : 'bg-gray-500/20 text-gray-400'
+                            : BADGE_INACTIVE
                       )}>
                         {isListenerAccepted ? '\u2713' : isListenerNotAccepted ? '\u2717' : '?'}
                       </span>

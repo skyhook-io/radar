@@ -1,6 +1,7 @@
 import { Shield, Users } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ResourceLink, AlertBanner } from '../../ui/drawer-components'
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
 interface RoleBindingRendererProps {
   data: any
@@ -16,7 +17,7 @@ function getSubjectKindBadgeClass(kind: string): string {
     case 'Group':
       return 'bg-purple-500/20 text-purple-400'
     default:
-      return 'bg-gray-500/20 text-gray-400'
+      return BADGE_INACTIVE
   }
 }
 
@@ -27,7 +28,7 @@ function getRoleRefKindBadgeClass(kind: string): string {
     case 'ClusterRole':
       return 'bg-purple-500/20 text-purple-400'
     default:
-      return 'bg-gray-500/20 text-gray-400'
+      return BADGE_INACTIVE
   }
 }
 

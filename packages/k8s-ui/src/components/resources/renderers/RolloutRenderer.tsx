@@ -2,6 +2,7 @@ import { Server, GitBranch, AlertTriangle, Network } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection } from '../../ui/drawer-components'
 import { formatAge } from '../resource-utils'
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
 interface RolloutRendererProps {
   data: any
@@ -292,7 +293,7 @@ export function RolloutRenderer({ data }: RolloutRendererProps) {
                       'w-5 h-5 rounded-full flex items-center justify-center text-xs shrink-0',
                       isCompleted && 'bg-green-500/20 text-green-400',
                       isCurrent && 'bg-blue-500/20 text-blue-400',
-                      isPending && 'bg-gray-500/20 text-gray-400'
+                      isPending && BADGE_INACTIVE
                     )}
                   >
                     {isCompleted ? '\u2713' : isCurrent ? '\u25CF' : '\u25CB'}

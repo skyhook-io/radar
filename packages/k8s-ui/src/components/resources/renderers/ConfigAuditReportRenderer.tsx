@@ -4,6 +4,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
 import { formatAge } from '../resource-utils'
 import { SEVERITY_BADGE_COLORS, SEVERITY_ORDER, TrivyAlertBanner } from './trivy-shared'
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
 interface ConfigAuditReportRendererProps {
   data: any
@@ -169,7 +170,7 @@ export function ConfigAuditReportRenderer({ data }: ConfigAuditReportRendererPro
                       ) : (
                         <XCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
                       )}
-                      <span className={clsx('px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0', SEVERITY_BADGE_COLORS[group.severity] || 'bg-gray-500/20 text-gray-400')}>
+                      <span className={clsx('px-1.5 py-0.5 rounded text-[10px] font-medium shrink-0', SEVERITY_BADGE_COLORS[group.severity] || BADGE_INACTIVE)}>
                         {group.severity}
                       </span>
                       <span className="text-xs text-theme-text-secondary truncate flex-1">{group.title}</span>

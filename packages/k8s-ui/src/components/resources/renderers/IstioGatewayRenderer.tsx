@@ -6,6 +6,7 @@ import {
   getIstioGatewayServers,
   getIstioGatewaySelector,
 } from '../resource-utils-istio'
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
 const protocolColors: Record<string, string> = {
   HTTP: 'bg-blue-500/20 text-blue-400',
@@ -73,7 +74,7 @@ export function IstioGatewayRenderer({ data }: IstioGatewayRendererProps) {
                       </span>
                       <span className={clsx(
                         'px-1.5 py-0.5 rounded text-[10px] font-medium',
-                        protocolColors[protocol] || 'bg-gray-500/20 text-gray-400'
+                        protocolColors[protocol] || BADGE_INACTIVE
                       )}>
                         {protocol}:{server.port.number}
                       </span>
@@ -98,7 +99,7 @@ export function IstioGatewayRenderer({ data }: IstioGatewayRendererProps) {
                               ? 'bg-green-500/20 text-green-400'
                               : server.tls.mode === 'PASSTHROUGH'
                                 ? 'bg-blue-500/20 text-blue-400'
-                                : 'bg-gray-500/20 text-gray-400'
+                                : BADGE_INACTIVE
                           )}>
                             {server.tls.mode || 'SIMPLE'}
                           </span>

@@ -457,7 +457,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Search... (press /)"
-                className="w-80 pl-9 pr-8 py-1.5 text-sm bg-theme-elevated border border-theme-border-light rounded-lg text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                className="w-80 pl-9 pr-8 py-1.5 text-sm bg-theme-elevated border border-theme-border-light rounded-lg text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent"
               />
               {searchTerm && (
                 <button
@@ -490,7 +490,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
               {panOffset > 0 && (
                 <button
                   onClick={() => setPanOffset(0)}
-                  className="px-2 py-1 text-xs text-blue-600 dark:text-blue-300 hover:text-blue-700 dark:hover:text-blue-200 hover:bg-theme-elevated rounded"
+                  className="px-2 py-1 text-xs text-accent-text hover:underline hover:bg-theme-elevated rounded"
                   title="Jump to current time"
                 >
                   → Now
@@ -519,7 +519,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                   type="checkbox"
                   checked={groupByApp}
                   onChange={(e) => setGroupByApp(e.target.checked)}
-                  className="w-3.5 h-3.5 rounded border-theme-border-light bg-theme-elevated text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                  className="w-3.5 h-3.5 rounded border-theme-border-light bg-theme-elevated text-accent focus:ring-accent focus:ring-offset-0"
                 />
                 <span className="border-b border-dotted border-theme-text-tertiary">Group by app</span>
               </label>
@@ -687,7 +687,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                           <div className="flex items-center gap-1">
                             <span className={clsx(
                               'text-xs px-1 py-0.5 rounded',
-                              lane.isWorkload ? 'bg-blue-500/15 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300' : 'bg-theme-elevated text-theme-text-secondary'
+                              lane.isWorkload ? 'bg-accent-muted text-accent-text' : 'bg-theme-elevated text-theme-text-secondary'
                             )}>
                               {displayKind(lane.kind)}
                             </span>
@@ -711,7 +711,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                               )
                             })()}
                           </div>
-                          <div className="text-sm text-theme-text-primary break-words group-hover:text-blue-600 dark:group-hover:text-blue-300 group-hover:underline cursor-pointer">
+                          <div className="text-sm text-theme-text-primary break-words group-hover:text-accent-text group-hover:underline cursor-pointer">
                             {lane.name}
                           </div>
                           <div className="text-xs text-theme-text-tertiary">{lane.namespace}</div>
@@ -751,7 +751,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                   {/* Child lanes (when expanded) - includes parent as first row */}
                   {isExpanded && hasChildren && (
                     <div
-                      className="border-l-2 border-blue-500/40 ml-3 bg-theme-surface/30"
+                      className="border-l-2 border-accent/40 ml-3 bg-theme-surface/30"
                       style={{ animation: 'swimlane-expand 250ms ease-out both' }}
                     >
                       {/* Parent's own events as first row (only if it has events) */}
@@ -764,11 +764,11 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                             >
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-1">
-                                  <span className="text-xs px-1 py-0.5 rounded bg-blue-500/15 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300">
+                                  <span className="text-xs px-1 py-0.5 rounded bg-accent-muted text-accent-text">
                                     {displayKind(lane.kind)}
                                   </span>
                                 </div>
-                                <div className="text-sm text-theme-text-secondary break-words group-hover:text-blue-600 dark:group-hover:text-blue-300 group-hover:underline cursor-pointer">
+                                <div className="text-sm text-theme-text-secondary break-words group-hover:text-accent-text group-hover:underline cursor-pointer">
                                   {lane.name}
                                 </div>
                               </div>
@@ -820,7 +820,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                                     {displayKind(child.kind)}
                                   </span>
                                 </div>
-                                <div className="text-sm text-theme-text-secondary break-words group-hover:text-blue-600 dark:group-hover:text-blue-300 group-hover:underline cursor-pointer">
+                                <div className="text-sm text-theme-text-secondary break-words group-hover:text-accent-text group-hover:underline cursor-pointer">
                                   {child.name}
                                 </div>
                               </div>
@@ -1235,7 +1235,7 @@ function EventDetailPanel({ event, onClose, onResourceClick }: EventDetailPanelP
             </span>
             <button
               onClick={() => onResourceClick?.({ kind: kindToPlural(event.kind), namespace: event.namespace, name: event.name })}
-              className="text-theme-text-primary font-medium hover:text-blue-600 dark:hover:text-blue-300"
+              className="text-theme-text-primary font-medium hover:text-accent-text"
             >
               {event.name}
             </button>

@@ -6,12 +6,13 @@ import {
   getPeerAuthenticationSelector,
   getPeerAuthenticationPortLevelMtls,
 } from '../resource-utils-istio'
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
 const modeColors: Record<string, string> = {
   STRICT: 'bg-green-500/20 text-green-400',
   PERMISSIVE: 'bg-yellow-500/20 text-yellow-400',
   DISABLE: 'bg-red-500/20 text-red-400',
-  UNSET: 'bg-gray-500/20 text-gray-400',
+  UNSET: BADGE_INACTIVE,
 }
 
 interface IstioPeerAuthenticationRendererProps {

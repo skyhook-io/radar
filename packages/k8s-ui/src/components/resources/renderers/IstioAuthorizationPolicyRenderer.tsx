@@ -6,6 +6,7 @@ import {
   getAuthorizationPolicyRules,
   getAuthorizationPolicySelector,
 } from '../resource-utils-istio'
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
 const actionColors: Record<string, string> = {
   ALLOW: 'bg-green-500/20 text-green-400',
@@ -52,7 +53,7 @@ export function IstioAuthorizationPolicyRenderer({ data }: IstioAuthorizationPol
           <Property label="Action" value={
             <span className={clsx(
               'badge',
-              actionColors[action] || 'bg-gray-500/20 text-gray-400'
+              actionColors[action] || BADGE_INACTIVE
             )}>
               {action}
             </span>

@@ -9,6 +9,7 @@ import {
   type ArgoAppStatus,
   type ArgoResource,
 } from '../../../types/gitops'
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
 interface ArgoApplicationRendererProps {
   data: any
@@ -192,7 +193,7 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
               <span
                 className={clsx(
                   'badge',
-                  syncPolicy.automated ? 'bg-green-500/20 text-green-400' : 'bg-gray-500/20 text-gray-400'
+                  syncPolicy.automated ? 'bg-green-500/20 text-green-400' : BADGE_INACTIVE
                 )}
               >
                 {syncPolicy.automated ? 'Enabled' : 'Disabled'}
@@ -241,7 +242,7 @@ export function ArgoApplicationRenderer({ data, onTerminate, isTerminating }: Ar
                       ? 'bg-blue-500/20 text-blue-400'
                       : operationState.phase === 'Failed' || operationState.phase === 'Error'
                       ? 'bg-red-500/20 text-red-400'
-                      : 'bg-gray-500/20 text-gray-400'
+                      : BADGE_INACTIVE
                   )}
                 >
                   {operationState.phase}

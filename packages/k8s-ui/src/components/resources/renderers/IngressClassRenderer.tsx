@@ -1,6 +1,7 @@
 import { Globe } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property } from '../../ui/drawer-components'
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
 interface IngressClassRendererProps {
   data: any
@@ -24,7 +25,7 @@ export function IngressClassRenderer({ data }: IngressClassRendererProps) {
                 'badge',
                 isDefault
                   ? 'bg-green-500/20 text-green-400'
-                  : 'bg-gray-500/20 text-gray-400'
+                  : BADGE_INACTIVE
               )}>
                 {isDefault ? 'Yes' : 'No'}
               </span>

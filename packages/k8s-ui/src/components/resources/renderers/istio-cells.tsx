@@ -1,6 +1,7 @@
 // Istio cell components for ResourcesView table
 
 import { clsx } from 'clsx'
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 import {
   getVirtualServiceStatus,
   getVirtualServiceHosts,
@@ -164,7 +165,7 @@ export function PeerAuthenticationCell({ resource, column }: { resource: any; co
       return (
         <span className={clsx(
           'badge',
-          modeColors[mode] || 'bg-gray-500/20 text-gray-400'
+          modeColors[mode] || BADGE_INACTIVE
         )}>
           {mode}
         </span>
@@ -194,7 +195,7 @@ export function AuthorizationPolicyCell({ resource, column }: { resource: any; c
       return (
         <span className={clsx(
           'badge',
-          actionColors[action] || 'bg-gray-500/20 text-gray-400'
+          actionColors[action] || BADGE_INACTIVE
         )}>
           {action}
         </span>

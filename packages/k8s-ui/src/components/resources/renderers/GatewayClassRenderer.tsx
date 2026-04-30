@@ -1,6 +1,7 @@
 import { Cpu } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
+import { BADGE_INACTIVE } from '../../../utils/badge-colors'
 
 interface GatewayClassRendererProps {
   data: any
@@ -40,7 +41,7 @@ export function GatewayClassRenderer({ data }: GatewayClassRendererProps) {
                   ? 'bg-green-500/20 text-green-400'
                   : isNotAccepted
                     ? 'bg-red-500/20 text-red-400'
-                    : 'bg-gray-500/20 text-gray-400'
+                    : BADGE_INACTIVE
               )}>
                 {isAccepted ? 'True' : isNotAccepted ? 'False' : 'Unknown'}
               </span>
