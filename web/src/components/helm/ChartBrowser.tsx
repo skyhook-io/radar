@@ -148,7 +148,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
                   onClick={() => { setSelectedRepo('all'); setRepoDropdownOpen(false) }}
                   className={clsx(
                     'w-full px-3 py-2 text-left text-sm hover:bg-theme-hover flex items-center justify-between',
-                    selectedRepo === 'all' ? 'text-blue-400' : 'text-theme-text-primary'
+                    selectedRepo === 'all' ? 'text-accent' : 'text-theme-text-primary'
                   )}
                 >
                   <span>All Repositories</span>
@@ -186,9 +186,9 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
                 type="checkbox"
                 checked={showOfficialOnly}
                 onChange={(e) => setShowOfficialOnly(e.target.checked)}
-                className="rounded border-theme-border text-blue-500 focus:ring-blue-500"
+                className="rounded border-theme-border text-accent focus:ring-accent"
               />
-              <BadgeCheck className="w-3.5 h-3.5 text-blue-400" />
+              <BadgeCheck className="w-3.5 h-3.5 text-accent" />
               Official
             </label>
             <label className="flex items-center gap-1.5 text-sm text-theme-text-secondary">
@@ -196,7 +196,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
                 type="checkbox"
                 checked={showVerifiedOnly}
                 onChange={(e) => setShowVerifiedOnly(e.target.checked)}
-                className="rounded border-theme-border text-blue-500 focus:ring-blue-500"
+                className="rounded border-theme-border text-accent focus:ring-accent"
               />
               <Shield className="w-3.5 h-3.5 text-green-400" />
               Verified
@@ -207,7 +207,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
               <select
                 value={artifactHubSort}
                 onChange={(e) => setArtifactHubSort(e.target.value as ArtifactHubSortOption)}
-                className="bg-theme-elevated border border-theme-border-light rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:ring-2 focus:ring-blue-500"
+                className="bg-theme-elevated border border-theme-border-light rounded px-2 py-1 text-sm text-theme-text-primary focus:outline-none focus:ring-2 focus:ring-accent"
               >
                 <option value="relevance">Relevance</option>
                 <option value="stars">Stars</option>
@@ -225,7 +225,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
             placeholder={chartSource === 'local' ? "Search charts..." : "Search ArtifactHub..."}
             value={searchTerm}
             onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
+            className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-accent"
           />
         </div>
 
@@ -237,7 +237,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
                 type="checkbox"
                 checked={showAllVersions}
                 onChange={(e) => setShowAllVersions(e.target.checked)}
-                className="rounded border-theme-border text-blue-500 focus:ring-blue-500"
+                className="rounded border-theme-border text-accent focus:ring-accent"
               />
               All versions
             </label>
@@ -276,7 +276,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
                       Add repositories using <code className="bg-theme-elevated px-1 rounded">helm repo add</code>
                     </p>
                     <p className="mt-2">
-                      Or try searching on <button onClick={() => setChartSource('artifacthub')} className="text-blue-400 hover:underline">ArtifactHub</button>
+                      Or try searching on <button onClick={() => setChartSource('artifacthub')} className="text-accent-text hover:underline">ArtifactHub</button>
                     </p>
                   </div>
                 ) : (
@@ -375,7 +375,7 @@ function RepoDropdownItem({ repo, isSelected, onSelect, onUpdate, isUpdating, ca
         onClick={onSelect}
         className={clsx(
           'flex-1 text-left text-sm truncate',
-          isSelected ? 'text-blue-400' : 'text-theme-text-primary'
+          isSelected ? 'text-accent' : 'text-theme-text-primary'
         )}
       >
         {repo.name}
@@ -413,7 +413,7 @@ function LocalChartCard({ chart, onSelect }: LocalChartCardProps) {
           <img
             src={chart.icon}
             alt=""
-            className="w-10 h-10 rounded object-contain bg-white/10 p-1"
+            className="w-10 h-10 rounded object-contain bg-theme-elevated p-1"
             onError={(e) => {
               (e.target as HTMLImageElement).style.display = 'none'
             }}
@@ -476,7 +476,7 @@ function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
           <img
             src={chart.logoUrl}
             alt=""
-            className="w-12 h-12 rounded object-contain bg-white/10 p-1 shrink-0"
+            className="w-12 h-12 rounded object-contain bg-theme-elevated p-1 shrink-0"
             onError={(e) => {
               (e.target as HTMLImageElement).style.display = 'none'
             }}

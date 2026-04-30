@@ -2,6 +2,7 @@
 
 import { Tooltip } from '../../ui/Tooltip'
 import { clsx } from 'clsx'
+import { CAPACITY_TYPE_BADGE, NODEPOOL_MODE_BADGE } from '../../../utils/badge-colors'
 import {
   getAzureMCPStatus, getAzureMCPLocation, getAzureMCPVersion, getAzureMCPResourceGroup,
   getAzureMMPStatus, getAzureMMPSKU, getAzureMMPMode, getAzureMMPReplicas, getAzureMMPScaleSetPriority,
@@ -40,20 +41,14 @@ export function AzureManagedMachinePoolCell({ resource, column }: { resource: an
     case 'mode': {
       const mode = getAzureMMPMode(resource)
       return (
-        <span className={clsx('badge badge-sm', mode === 'System'
-          ? 'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-950/50 dark:text-purple-400 dark:border-purple-700/40'
-          : 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40'
-        )}>{mode}</span>
+        <span className={clsx('badge badge-sm', NODEPOOL_MODE_BADGE[mode] || NODEPOOL_MODE_BADGE.User)}>{mode}</span>
       )
     }
     case 'replicas': return <TextCell value={getAzureMMPReplicas(resource)} />
     case 'priority': {
       const p = getAzureMMPScaleSetPriority(resource)
       return (
-        <span className={clsx('badge badge-sm', p === 'Spot'
-          ? 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-700/40'
-          : 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40'
-        )}>{p}</span>
+        <span className={clsx('badge badge-sm', p === 'Spot' ? CAPACITY_TYPE_BADGE.spot : CAPACITY_TYPE_BADGE.regular)}>{p}</span>
       )
     }
     default: return <span className="text-sm text-theme-text-tertiary">-</span>

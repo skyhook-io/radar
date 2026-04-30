@@ -3,6 +3,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
 import { getCAPIConditions } from '../resource-utils-capi'
 import { getAzureMMPStatus, getAzureMMPSKU, getAzureMMPMode, getAzureMMPOSDiskInfo, getAzureMMPScaling, getAzureMMPScaleSetPriority, getAzureMMPOSType } from '../resource-utils-azure-capi'
+import { CAPACITY_TYPE_BADGE, NODEPOOL_MODE_BADGE } from '../../../utils/badge-colors'
 
 interface Props {
   data: any
@@ -34,18 +35,12 @@ export function AzureManagedMachinePoolRenderer({ data }: Props) {
           {spec.name && <Property label="Pool Name" value={spec.name} />}
           <Property label="VM Size" value={getAzureMMPSKU(data)} />
           <Property label="Mode" value={
-            <span className={clsx('badge badge-sm', mode === 'System'
-              ? 'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-950/50 dark:text-purple-400 dark:border-purple-700/40'
-              : 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40'
-            )}>{mode}</span>
+            <span className={clsx('badge badge-sm', NODEPOOL_MODE_BADGE[mode] || NODEPOOL_MODE_BADGE.User)}>{mode}</span>
           } />
           <Property label="OS" value={getAzureMMPOSType(data)} />
           <Property label="OS Disk" value={getAzureMMPOSDiskInfo(data)} />
           <Property label="Priority" value={
-            <span className={clsx('badge badge-sm', priority === 'Spot'
-              ? 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-700/40'
-              : 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40'
-            )}>{priority}</span>
+            <span className={clsx('badge badge-sm', priority === 'Spot' ? CAPACITY_TYPE_BADGE.spot : CAPACITY_TYPE_BADGE.regular)}>{priority}</span>
           } />
           {spec.maxPods != null && <Property label="Max Pods" value={String(spec.maxPods)} />}
         </PropertyList>

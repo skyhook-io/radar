@@ -53,6 +53,21 @@ export const HELM_STATUS_COLORS: Record<string, string> = {
   uninstalled: BADGE_SEVERITY_COLORS.neutral,
 }
 
+// Cloud instance capacity/priority badges — used by Karpenter NodeClaim and CAPI cloud-provider renderers
+// Keyed by the value as it appears in the resource (spot, on-demand, regular, onDemand)
+export const CAPACITY_TYPE_BADGE: Record<string, string> = {
+  spot: 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/50 dark:text-amber-400 dark:border-amber-700/40',
+  'on-demand': 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40',
+  onDemand: 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40',
+  regular: 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40',
+}
+
+// AKS-style nodepool mode badges — System (control plane) vs User (workload)
+export const NODEPOOL_MODE_BADGE: Record<string, string> = {
+  System: 'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-950/50 dark:text-purple-400 dark:border-purple-700/40',
+  User: 'bg-sky-100 text-sky-700 border-sky-300 dark:bg-sky-950/50 dark:text-sky-400 dark:border-sky-700/40',
+}
+
 // Best practices category colors
 export const BP_CATEGORY_BADGE: Record<string, string> = {
   Security: 'bg-purple-50 text-purple-700 border-purple-200 dark:bg-purple-950/40 dark:text-purple-400 dark:border-purple-800/40',

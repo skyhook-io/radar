@@ -206,7 +206,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
               <img
                 src={isLocal ? (chartDetail as ChartDetail)?.icon : (chartDetail as ArtifactHubChartDetail)?.logoUrl}
                 alt=""
-                className="w-8 h-8 rounded object-contain bg-white/10 p-1"
+                className="w-8 h-8 rounded object-contain bg-theme-elevated p-1"
               />
             ) : (
               <Package className="w-8 h-8 text-purple-400" />
@@ -216,7 +216,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                 <h2 className="text-lg font-semibold text-theme-text-primary">Install {chartName}</h2>
                 {!isLocal && (
                   <Tooltip content="From ArtifactHub">
-                    <Globe className="w-4 h-4 text-blue-400" />
+                    <Globe className="w-4 h-4 text-accent" />
                   </Tooltip>
                 )}
               </div>
@@ -224,7 +224,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                 <span>{repo} / {version}</span>
                 {!isLocal && (chartDetail as ArtifactHubChartDetail)?.repository?.official && (
                   <Tooltip content="Official">
-                    <BadgeCheck className="w-3.5 h-3.5 text-blue-400" />
+                    <BadgeCheck className="w-3.5 h-3.5 text-accent" />
                   </Tooltip>
                 )}
                 {!isLocal && (chartDetail as ArtifactHubChartDetail)?.repository?.verifiedPublisher && (
@@ -264,7 +264,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                 >
                   <span className={clsx(
                     'w-5 h-5 rounded-full flex items-center justify-center text-xs font-medium',
-                    step === s.id ? 'bg-blue-500 text-white' : 'bg-theme-elevated text-theme-text-secondary'
+                    step === s.id ? 'bg-accent text-white' : 'bg-theme-elevated text-theme-text-secondary'
                   )}>
                     {i + 1}
                   </span>
@@ -506,7 +506,7 @@ function InfoStep({
                   href={home}
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300"
+                  className="flex items-center gap-1 text-xs text-accent-text hover:underline"
                 >
                   <LinkIcon className="w-3.5 h-3.5" />
                   Homepage
@@ -533,7 +533,7 @@ function InfoStep({
           value={releaseName}
           onChange={(e) => setReleaseName(e.target.value)}
           placeholder="my-release"
-          className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-accent"
         />
         <p className="mt-1 text-xs text-theme-text-tertiary">
           A unique name for this release in the namespace
@@ -551,7 +551,7 @@ function InfoStep({
           value={namespace}
           onChange={(e) => setNamespace(e.target.value)}
           placeholder="Enter namespace name"
-          className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
+          className="w-full px-3 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-accent"
         />
         <datalist id="namespace-suggestions">
           {namespaces.map(ns => (
@@ -563,7 +563,7 @@ function InfoStep({
             type="checkbox"
             checked={createNamespace}
             onChange={(e) => setCreateNamespace(e.target.checked)}
-            className="rounded border-theme-border text-blue-500 focus:ring-blue-500"
+            className="rounded border-theme-border text-accent focus:ring-accent"
           />
           Create namespace if it doesn't exist
         </label>
@@ -574,7 +574,7 @@ function InfoStep({
         <div>
           <button
             onClick={() => setShowReadme(!showReadme)}
-            className="flex items-center gap-2 text-sm text-blue-400 hover:text-blue-300"
+            className="flex items-center gap-2 text-sm text-accent-text hover:underline"
           >
             <BookOpen className="w-4 h-4" />
             {showReadme ? 'Hide' : 'Show'} Chart README
@@ -619,8 +619,8 @@ function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartD
   return (
     <div className="space-y-4">
       {/* Info banner */}
-      <div className="flex items-start gap-3 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-        <CheckCircle className="w-5 h-5 text-blue-400 shrink-0 mt-0.5" />
+      <div className="flex items-start gap-3 p-4 bg-accent-muted border border-accent/30 rounded-lg">
+        <CheckCircle className="w-5 h-5 text-accent shrink-0 mt-0.5" />
         <div>
           <p className="text-sm font-medium text-theme-text-primary">Ready to install with defaults</p>
           <p className="text-xs text-theme-text-secondary mt-1">
@@ -633,7 +633,7 @@ function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartD
               href={homeUrl}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-blue-400 hover:text-blue-300 mt-2"
+              className="inline-flex items-center gap-1 text-xs text-accent-text hover:underline mt-2"
             >
               <LinkIcon className="w-3 h-3" />
               View chart documentation
@@ -819,8 +819,8 @@ function ReviewStep({
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center gap-3 p-4 bg-blue-500/10 border border-blue-500/30 rounded-lg">
-        <CheckCircle className="w-6 h-6 text-blue-400 shrink-0" />
+      <div className="flex items-center gap-3 p-4 bg-accent-muted border border-accent/30 rounded-lg">
+        <CheckCircle className="w-6 h-6 text-accent shrink-0" />
         <div>
           <p className="text-sm font-medium text-theme-text-primary">Ready to install</p>
           <p className="text-xs text-theme-text-secondary mt-0.5">
@@ -873,7 +873,7 @@ function ReviewStep({
                 <>Local: {repo}</>
               ) : (
                 <>
-                  <Globe className="w-3.5 h-3.5 text-blue-400" />
+                  <Globe className="w-3.5 h-3.5 text-accent" />
                   ArtifactHub: {repo}
                 </>
               )}

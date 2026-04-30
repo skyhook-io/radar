@@ -2,8 +2,8 @@ import { Server, Cpu, Settings } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { kindToPlural } from '../../../utils/navigation'
+import { CAPACITY_TYPE_BADGE } from '../../../utils/badge-colors'
 import {
-  CAPACITY_TYPE_BADGE,
   getNodeClaimStatus,
   getNodeClaimInstanceType,
   getNodeClaimNodeName,

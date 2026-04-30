@@ -1093,23 +1093,22 @@ function EventMarker({ event, x, selected, onClick, dimmed, small }: EventMarker
       return 'bg-red-500'
     }
 
-    // Solid fill for real-time events
-    const opacity = dimmed ? '/50' : ''
-    // Problematic events (warnings, BackOff, etc.) are always amber/orange
+    // Solid fill for real-time events.
+    // Problematic events (warnings, BackOff, etc.) are always amber/orange.
     if (isProblematic) {
-      return `bg-amber-500${opacity}`
+      return dimmed ? 'bg-amber-500/50' : 'bg-amber-500'
     }
     if (isChange) {
       switch (event.eventType) {
         case 'add':
-          return `bg-green-500${opacity}`
+          return dimmed ? 'bg-green-500/50' : 'bg-green-500'
         case 'delete':
-          return `bg-red-500${opacity}`
+          return dimmed ? 'bg-red-500/50' : 'bg-red-500'
         case 'update':
-          return `bg-blue-500${opacity}`
+          return dimmed ? 'bg-blue-500/50' : 'bg-blue-500'
       }
     }
-    return `bg-theme-text-tertiary${opacity}`
+    return dimmed ? 'bg-theme-text-tertiary/50' : 'bg-theme-text-tertiary'
   }
 
   const markerClasses = getMarkerStyle()
