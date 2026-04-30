@@ -1,8 +1,8 @@
 # Radar
 
 > [!IMPORTANT]
-> 📣 **Radar is launching on Product Hunt this Sunday, May 3.**
-> [**Follow** ↗](https://www.producthunt.com/products/radar-7?launch=radar-42edb7b0-e388-4fa8-9ba5-4876c2c0d638) (get notified at launch) · [We have a new Discord ↗](https://radarhq.io/community/chat)
+> 📣 **Radar is launching on Product Hunt this Sunday!**
+> [**Follow Radar on PH** ↗](https://www.producthunt.com/products/radar-7?launch=radar-42edb7b0-e388-4fa8-9ba5-4876c2c0d638) · [We have a new Discord ↗](https://radarhq.io/community/chat)
 
 **Modern Kubernetes visibility.**
 <br>Local-first. No account. No cloud dependency. Blazing Fast.
