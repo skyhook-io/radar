@@ -3,6 +3,8 @@
 **Modern Kubernetes visibility.**
 <br>Local-first. No account. No cloud dependency. Blazing Fast.
 
+🌐 **[radarhq.io](https://radarhq.io)** · [Docs](https://radarhq.io/docs) · [Releases](https://github.com/skyhook-io/radar/releases)
+
 Topology, event timeline, and service traffic — plus resource browsing, Helm management, and GitOps support for FluxCD and ArgoCD.
 
 [![CI](https://github.com/skyhook-io/radar/actions/workflows/ci.yml/badge.svg)](https://github.com/skyhook-io/radar/actions/workflows/ci.yml)
