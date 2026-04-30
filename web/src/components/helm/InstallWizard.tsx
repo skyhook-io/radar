@@ -135,11 +135,12 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
     setInstallError(null)
     setProgressLogs([])
 
-    // Send the trimmed values that we actually validated. Without
-    // this, a user who typed "my-release " (trailing space) would
-    // pass client-side validation (which runs on `.trim()`) but the
-    // server would receive the untrimmed string and reject it — the
-    // exact class of bug this PR aims to prevent. (Bugbot finding)
+    // Send the same trimmed values the validators ran on, not the
+    // raw input. Without this, a release name with trailing
+    // whitespace passes the client-side validator (which calls
+    // `.trim()`) but the server receives the untrimmed string and
+    // rejects it — exactly the surprise this validation layer
+    // exists to prevent.
     const trimmedReleaseName = releaseName.trim()
     const trimmedNamespace = namespace.trim()
 
@@ -192,12 +193,12 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
     }
   }, [releaseName, namespace, chartName, version, repo, valuesYaml, createNamespace, onSuccess, isLocal, artifactHubDetail, queryClient])
 
-  // Validate release name + namespace before letting the user advance.
-  // Without this, a name like "Invalid Name With Spaces!" was accepted
-  // through to step 2 and only failed server-side at install time —
-  // the server returned a 422 the user couldn't connect to anything
-  // they did. Kubernetes / Helm rules are pinned in
-  // packages/k8s-ui/src/utils/validators.ts. (SKY-821 bug 24)
+  // Validate release name + namespace before letting the user
+  // advance. Without this, a name like "Invalid Name With Spaces!"
+  // was accepted through to step 2 and only failed server-side at
+  // install time — the server returned a 422 the user couldn't
+  // connect back to anything they typed. K8s / Helm rules are
+  // pinned in packages/k8s-ui/src/utils/validators.ts.
   const releaseNameValidation = useMemo(
     () => validateHelmReleaseName(releaseName.trim()),
     [releaseName],
