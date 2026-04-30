@@ -305,7 +305,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	resp.TopologySummary = s.getDashboardTopologySummary(namespaces)
 	k8s.LogTiming("  [dashboard] topology: %v", time.Since(t))
 
-	resp.CertificateHealth = s.getDashboardCertificateHealth(namespace)
+	resp.CertificateHealth = s.getDashboardCertificateHealth(namespaces)
 	resp.NetworkPolicyCoverage = s.getDashboardNetworkPolicyCoverage(cache, namespaces)
 	resp.Audit = getDashboardAudit(cache, namespaces)
 

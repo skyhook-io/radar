@@ -58,18 +58,31 @@ type DashboardCertificateHealth struct {
 	Expired  int `json:"expired"`
 }
 
-// getDashboardCertificateHealth scans all TLS secrets and counts by expiry bucket.
-func (s *Server) getDashboardCertificateHealth(namespace string) *DashboardCertificateHealth {
+// getDashboardCertificateHealth scans TLS secrets in the given
+// namespaces and counts by expiry bucket. Empty `namespaces` means
+// "every namespace the cache exposes" (matches the convention used
+// throughout this package).
+//
+// SKY-834 bug 54: previously this took a single `namespace string`,
+// and the caller only forwarded it when the user had selected
+// EXACTLY one namespace — for any other count (0 = all, 2+ = some
+// subset) the call collapsed to the empty-string "all namespaces"
+// path. Result: the Home Cert Health card and the Secrets list page
+// counted from different namespace scopes. With a 2-namespace
+// selection the Home card would show "0 Expired" while the Secrets
+// page (which always respects the full selection) showed multiple
+// expired TLS bundles.
+//
+// Now takes the full slice and forwards it untouched, matching the
+// shape of `getDashboardAudit`, `getDashboardNetworkPolicyCoverage`,
+// etc.
+func (s *Server) getDashboardCertificateHealth(namespaces []string) *DashboardCertificateHealth {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil
 	}
 
 	provider := k8s.NewTopologyResourceProvider(cache)
-	var namespaces []string
-	if namespace != "" {
-		namespaces = []string{namespace}
-	}
 
 	expiry, err := topology.GetCertificateExpiry(provider, namespaces)
 	if err != nil {
