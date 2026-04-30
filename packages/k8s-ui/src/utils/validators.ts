@@ -90,6 +90,18 @@ export function validateRFC1123Subdomain(input: string): ValidationResult {
       error: 'must contain only lowercase letters, numbers, hyphens, and dots, and each segment must start/end with a letter or number',
     }
   }
+  // Per-label cap: K8s' IsDNS1123Subdomain enforces ≤ 63 chars
+  // PER dot-separated label on top of the 253-char total. The
+  // regex above doesn't catch that; without this check a single
+  // 200-char label passes here and only fails server-side.
+  for (const label of input.split('.')) {
+    if (label.length > RFC1123_LABEL_MAX) {
+      return {
+        valid: false,
+        error: `each dot-separated label must be at most ${RFC1123_LABEL_MAX} characters (got ${label.length} for "${label}")`,
+      }
+    }
+  }
   return { valid: true }
 }
 
@@ -105,7 +117,10 @@ export function validateHelmReleaseName(input: string): ValidationResult {
   if (input.length > HELM_RELEASE_NAME_MAX) {
     return {
       valid: false,
-      error: `must be at most ${HELM_RELEASE_NAME_MAX} characters (got ${input.length}). Helm caps release names so derived resource names fit under K8s' 63-char limit.`,
+      // No trailing period — call sites compose this into a
+      // sentence and append their own. Bugbot caught the
+      // double-period UI in InstallWizard.
+      error: `must be at most ${HELM_RELEASE_NAME_MAX} characters (got ${input.length}); Helm caps release names so derived resource names fit under K8s' 63-char limit`,
     }
   }
   return validateRFC1123Subdomain(input)
