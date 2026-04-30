@@ -6,6 +6,7 @@ import { Section, PropertyList, Property, AlertBanner } from '../../ui/drawer-co
 import { ConfirmDialog } from '../../ui/ConfirmDialog'
 import type { SecretCertificateInfo, CertificateInfo } from '../../../types'
 import { pluralize } from '../../../utils/pluralize'
+import { decideReveal } from './secret-reveal'
 
 interface SecretRendererProps {
   data: any
@@ -27,16 +28,50 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
   const [editingKey, setEditingKey] = useState<string | null>(null)
   const [editValue, setEditValue] = useState('')
   const [showSaveConfirm, setShowSaveConfirm] = useState(false)
+  // Gate the first reveal in this panel mount behind an explicit
+  // confirmation. Without this, the "Reveal" button revealed sensitive
+  // material (TLS keys, tokens, certs) immediately and the
+  // "be careful" banner only appeared AFTER the value was on screen
+  // — too late for a user who shoulder-surfs or screen-shares
+  // accidentally. (SKY-830 bug 37)
+  const [hasConfirmedReveal, setHasConfirmedReveal] = useState(false)
+  const [pendingRevealKey, setPendingRevealKey] = useState<string | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
   const dataKeys = Object.keys(data.data || {})
   const isImmutable = data.immutable === true
 
   function toggleReveal(key: string) {
+    const decision = decideReveal({ revealed, hasConfirmedReveal }, key)
+    if (decision === 'hide') {
+      setRevealed(prev => {
+        const next = new Set(prev)
+        next.delete(key)
+        return next
+      })
+      return
+    }
+    if (decision === 'prompt') {
+      setPendingRevealKey(key)
+      return
+    }
+    // 'reveal'
     setRevealed(prev => {
       const next = new Set(prev)
-      next.has(key) ? next.delete(key) : next.add(key)
+      next.add(key)
       return next
     })
+  }
+
+  function confirmFirstReveal() {
+    if (pendingRevealKey) {
+      setRevealed(prev => {
+        const next = new Set(prev)
+        next.add(pendingRevealKey)
+        return next
+      })
+    }
+    setHasConfirmedReveal(true)
+    setPendingRevealKey(null)
   }
 
   function decodeBase64(value: string): string {
@@ -153,6 +188,23 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
         </>
       )}
 
+      {/*
+        Surface the "be careful when revealing" warning ABOVE the data
+        section, not at the very bottom. Putting it after the data
+        section meant the user typically saw it only after they'd
+        already revealed (and copied / screen-shared) a secret value.
+        (SKY-830 bug 37)
+      */}
+      {dataKeys.length > 0 && (
+        <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-sm">
+          <AlertTriangle className="w-4 h-4 flex-shrink-0" />
+          <span>
+            Secret values are sensitive. Reveal carefully — anyone who can see your
+            screen will see the plaintext.
+          </span>
+        </div>
+      )}
+
       <Section title="Data" defaultExpanded>
         <div className="space-y-2">
           {dataKeys.map((key) => {
@@ -250,11 +302,6 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
         </div>
       </Section>
 
-      <div className="flex items-center gap-2 p-3 bg-red-500/10 border border-red-500/30 rounded text-red-400 text-sm">
-        <AlertTriangle className="w-4 h-4" />
-        Secret values are sensitive. Be careful when revealing.
-      </div>
-
       {editingKey && (
         <ConfirmDialog
           open={showSaveConfirm}
@@ -268,6 +315,23 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
           isLoading={isSaving}
         />
       )}
+
+      {/*
+        First-reveal confirmation. Once the user confirms once for this
+        Secret panel, subsequent reveals in the same mount don't re-prompt
+        — re-prompting per-key would be hostile when inspecting a secret
+        with many keys.
+      */}
+      <ConfirmDialog
+        open={pendingRevealKey !== null}
+        onClose={() => setPendingRevealKey(null)}
+        onConfirm={confirmFirstReveal}
+        title="Reveal Secret value?"
+        message={`You're about to display the value of "${pendingRevealKey}" from secret "${data.metadata?.name || 'unknown'}".`}
+        details="Make sure no one is looking over your shoulder and you're not screen-sharing. Anyone who can see your screen will see the secret in plaintext."
+        confirmLabel="Reveal"
+        variant="warning"
+      />
     </>
   )
 }
