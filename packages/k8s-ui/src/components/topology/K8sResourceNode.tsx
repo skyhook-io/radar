@@ -374,71 +374,58 @@ export const K8sResourceNode = memo(function K8sResourceNode({
           'pl-3 pr-3',
           isSmallNode ? 'py-2' : 'py-2.5'
         )}>
-          {/* Header row: icon + kind label + expand/collapse + status dot */}
+          {/* Header row: icon + kind label + (right-aligned) policy badge + expand/collapse + status dot */}
           <div className="flex items-center gap-1.5 mb-0.5">
             <span className={iconClass} />
             <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary font-medium">
               {isPodGroup ? 'Pod Group' : displayKind(kind)}
             </span>
-            {/* Expand/Collapse button for PodGroup */}
-            {canExpand && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onExpand(id)
-                }}
-                className="ml-auto p-0.5 hover:bg-theme-elevated rounded transition-colors"
-                title="Expand to show individual pods"
-              >
-                <ChevronDown className="w-3.5 h-3.5 text-theme-text-secondary" />
-              </button>
-            )}
-            {canCollapse && (
-              <button
-                onClick={(e) => {
-                  e.stopPropagation()
-                  onCollapse(id)
-                }}
-                className="ml-auto p-0.5 hover:bg-theme-elevated rounded transition-colors"
-                title="Collapse back to group"
-              >
-                <ChevronUp className="w-3.5 h-3.5 text-theme-text-secondary" />
-              </button>
-            )}
-            {issueTooltip ? (
-              <Tooltip content={issueTooltip} position="right">
-                <span
-                  className={clsx(
-                    canExpand || canCollapse ? '' : 'ml-auto',
-                    'w-1.5 h-1.5 rounded-full cursor-help',
-                    getStatusDotColor(status)
-                  )}
-                />
-              </Tooltip>
-            ) : (
-              <span
-                className={clsx(
-                  canExpand || canCollapse ? '' : 'ml-auto',
-                  'w-1.5 h-1.5 rounded-full',
-                  getStatusDotColor(status)
-                )}
-              />
-            )}
+            <div className="ml-auto flex items-center gap-1.5">
+              {policyStatus && (
+                <Tooltip content={policyStatus === 'protected' ? 'Protected by NetworkPolicy' : 'No NetworkPolicy coverage'} position="right">
+                  <span className={clsx(
+                    'inline-flex items-center justify-center w-3 h-3 rounded-sm text-[8px] font-bold cursor-help leading-none',
+                    policyStatus === 'protected'
+                      ? 'bg-green-500/20 text-green-500 border border-green-500/30'
+                      : 'bg-yellow-500/20 text-yellow-500 border border-yellow-500/30',
+                  )}>
+                    {policyStatus === 'protected' ? '✓' : '!'}
+                  </span>
+                </Tooltip>
+              )}
+              {canExpand && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onExpand(id)
+                  }}
+                  className="p-0.5 hover:bg-theme-elevated rounded transition-colors"
+                  title="Expand to show individual pods"
+                >
+                  <ChevronDown className="w-3.5 h-3.5 text-theme-text-secondary" />
+                </button>
+              )}
+              {canCollapse && (
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation()
+                    onCollapse(id)
+                  }}
+                  className="p-0.5 hover:bg-theme-elevated rounded transition-colors"
+                  title="Collapse back to group"
+                >
+                  <ChevronUp className="w-3.5 h-3.5 text-theme-text-secondary" />
+                </button>
+              )}
+              {issueTooltip ? (
+                <Tooltip content={issueTooltip} position="right">
+                  <span className={clsx('w-1.5 h-1.5 rounded-full cursor-help', getStatusDotColor(status))} />
+                </Tooltip>
+              ) : (
+                <span className={clsx('w-1.5 h-1.5 rounded-full', getStatusDotColor(status))} />
+              )}
+            </div>
           </div>
-
-          {/* Network Policy coverage indicator */}
-          {policyStatus && (
-            <Tooltip content={policyStatus === 'protected' ? 'Protected by NetworkPolicy' : 'No NetworkPolicy coverage'} position="right">
-              <span className={clsx(
-                'inline-flex items-center justify-center w-3.5 h-3.5 rounded-sm text-[8px] font-bold cursor-help',
-                policyStatus === 'protected'
-                  ? 'bg-green-500/20 text-green-500 border border-green-500/30'
-                  : 'bg-yellow-500/20 text-yellow-500 border border-yellow-500/30',
-              )}>
-                {policyStatus === 'protected' ? '✓' : '!'}
-              </span>
-            </Tooltip>
-          )}
 
           {/* Name */}
           <div className="text-sm font-medium text-theme-text-primary truncate pr-1">
