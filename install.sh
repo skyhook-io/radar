@@ -1,6 +1,10 @@
 #!/bin/sh
 # Radar installer
-# Usage: curl -fsSL get.radarhq.io | sh
+# Usage: curl -fsSL https://get.radarhq.io | sh
+#
+# Always use the explicit https:// scheme — without it curl defaults to
+# port 80 and accepts a 308 redirect to https, which lets a network
+# attacker substitute the script before the redirect.
 #
 # Keep POSIX-clean: no [[ ]], no $((  )), no arrays, no <<<. The script is
 # piped to `sh` everywhere we publish it, so bash-isms will silently break

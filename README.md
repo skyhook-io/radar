@@ -26,7 +26,7 @@ Visualize your cluster topology, browse resources, stream logs, exec into pods, 
 
 **Install and run in 30 seconds:**
 ```bash
-curl -fsSL get.radarhq.io | sh && kubectl radar
+curl -fsSL https://get.radarhq.io | sh && kubectl radar
 ```
 [More installation options ↓](#installation)
 
@@ -47,7 +47,7 @@ curl -fsSL get.radarhq.io | sh && kubectl radar
 
 **Quick Install:**
 ```bash
-curl -fsSL get.radarhq.io | sh
+curl -fsSL https://get.radarhq.io | sh
 ```
 
 **Homebrew:**
@@ -75,7 +75,7 @@ scoop install radar
 
 **PowerShell (Windows):**
 ```powershell
-irm get.radarhq.io/install.ps1 | iex
+irm https://get.radarhq.io/install.ps1 | iex
 ```
 
 **Direct download** — [GitHub Releases](https://github.com/skyhook-io/radar/releases) for macOS, Linux, or Windows.
