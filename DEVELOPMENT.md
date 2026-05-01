@@ -213,7 +213,8 @@ make release-binaries-dry
 1. Ensure tests pass: `make test`
 2. Tag the release: `git tag v0.X.Y && git push origin v0.X.Y`
 3. Run release: `make release`
-4. Update Helm chart `appVersion` in `deploy/helm/radar/Chart.yaml`
+
+The `helm` job in `.github/workflows/release.yml` rewrites the chart's `version` / `appVersion` / image-tag annotation to match the release tag and pushes the chart to `skyhook-io/helm-charts`. No manual chart edit is needed; in fact, hand-edited values in `deploy/helm/radar/Chart.yaml` will be overwritten. The job fails fast if `radar-<version>` is already tagged in helm-charts — bump the release version higher in that case.
 
 ## Code Style
 

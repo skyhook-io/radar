@@ -155,6 +155,7 @@ jobs:
           VERSION="${{ needs.release.outputs.version }}"
           sed -i "s/^appVersion:.*/appVersion: \"$VERSION\"/" deploy/helm/radar/Chart.yaml
           sed -i "s/^version:.*/version: $VERSION/" deploy/helm/radar/Chart.yaml
+          sed -i "s|image: ghcr.io/skyhook-io/radar:[^[:space:]]*|image: ghcr.io/skyhook-io/radar:$VERSION|" deploy/helm/radar/Chart.yaml
 
       - name: Push to helm-charts repo
         env:
@@ -163,6 +164,14 @@ jobs:
           VERSION="${{ needs.release.outputs.version }}"
 
           git clone https://x-access-token:${HELM_CHARTS_TOKEN}@github.com/skyhook-io/helm-charts.git /tmp/helm-charts
+
+          # Fail loudly if helm-charts already has this chart version. chart-releaser
+          # would silently skip packaging on tag collision and users would never see
+          # the new chart contents despite a successful push.
+          if git -C /tmp/helm-charts tag -l "radar-$VERSION" | grep -q .; then
+            echo "::error::helm-charts already has tag radar-$VERSION — bump the radar release version higher so chart-releaser packages a new chart."
+            exit 1
+          fi
 
           rm -rf /tmp/helm-charts/charts/radar
           cp -r deploy/helm/radar /tmp/helm-charts/charts/
