@@ -1,6 +1,11 @@
-#!/bin/bash
+#!/bin/sh
 # Radar installer
-# Usage: curl -fsSL https://raw.githubusercontent.com/skyhook-io/radar/main/install.sh | bash
+# Usage: curl -fsSL get.radarhq.io | sh
+#
+# Keep POSIX-clean: no [[ ]], no $((  )), no arrays, no <<<. The script is
+# piped to `sh` everywhere we publish it, so bash-isms will silently break
+# the install on systems whose /bin/sh is not bash (Alpine, Debian dash,
+# BusyBox).
 
 set -e
 
