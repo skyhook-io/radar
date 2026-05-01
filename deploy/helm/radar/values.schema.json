@@ -1,0 +1,299 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Radar Helm chart values",
+  "description": "Configuration schema for the Radar Helm chart.",
+  "type": "object",
+  "additionalProperties": true,
+  "properties": {
+    "replicaCount": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Number of Radar pod replicas. Note: backchannel logout requires single replica."
+    },
+    "image": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "repository": { "type": "string" },
+        "pullPolicy": { "type": "string", "enum": ["Always", "IfNotPresent", "Never"] },
+        "tag": { "type": "string", "description": "Overrides Chart.appVersion when set." }
+      }
+    },
+    "imagePullSecrets": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": { "name": { "type": "string" } },
+        "required": ["name"]
+      }
+    },
+    "nameOverride": { "type": "string" },
+    "fullnameOverride": { "type": "string" },
+    "serviceAccount": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "create": { "type": "boolean" },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "name": { "type": "string" }
+      }
+    },
+    "rbac": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "create": { "type": "boolean" },
+        "additionalRules": { "type": "array", "items": { "type": "object" } },
+        "helm": { "type": "boolean", "description": "Allow Helm write operations. Grants broad permissions." },
+        "secrets": { "type": "boolean", "description": "Allow reading Secret contents." },
+        "podExec": { "type": "boolean", "description": "Allow pod exec (terminal feature)." },
+        "podLogs": { "type": "boolean" },
+        "portForward": { "type": "boolean" },
+        "selfUpgrade": { "type": "boolean", "description": "Allow Radar Cloud to trigger in-app upgrades." },
+        "traffic": { "type": "boolean", "description": "Read access to hubble-relay-client-certs for Hubble TLS." },
+        "metrics": { "type": "boolean", "description": "Read metrics.k8s.io for CPU/memory widgets." },
+        "crdGroups": {
+          "type": "object",
+          "additionalProperties": { "type": "boolean" },
+          "properties": {
+            "all": { "type": "boolean", "description": "Grant read access to ALL CRDs (overrides individual flags)." },
+            "argo": { "type": "boolean" },
+            "awx": { "type": "boolean" },
+            "certManager": { "type": "boolean" },
+            "cloudnativePg": { "type": "boolean" },
+            "clusterApi": { "type": "boolean" },
+            "contour": { "type": "boolean" },
+            "crossplane": { "type": "boolean" },
+            "descheduler": { "type": "boolean" },
+            "envoyGateway": { "type": "boolean" },
+            "externalDns": { "type": "boolean" },
+            "externalSecrets": { "type": "boolean" },
+            "flux": { "type": "boolean" },
+            "gatewayApi": { "type": "boolean" },
+            "gcpMonitoring": { "type": "boolean" },
+            "grafana": { "type": "boolean" },
+            "istio": { "type": "boolean" },
+            "karpenter": { "type": "boolean" },
+            "keda": { "type": "boolean" },
+            "knative": { "type": "boolean" },
+            "kubeshark": { "type": "boolean" },
+            "kured": { "type": "boolean" },
+            "kyverno": { "type": "boolean" },
+            "mariadb": { "type": "boolean" },
+            "nginx": { "type": "boolean" },
+            "openshift": { "type": "boolean" },
+            "opentelemetry": { "type": "boolean" },
+            "prometheus": { "type": "boolean" },
+            "reflector": { "type": "boolean" },
+            "reloader": { "type": "boolean" },
+            "sealedSecrets": { "type": "boolean" },
+            "strimzi": { "type": "boolean" },
+            "tekton": { "type": "boolean" },
+            "traefik": { "type": "boolean" },
+            "trivy": { "type": "boolean" },
+            "velero": { "type": "boolean" }
+          }
+        },
+        "additionalCrdGroups": {
+          "type": "array",
+          "items": { "type": "string" },
+          "description": "Custom/unlisted CRD API groups, e.g. [\"mycompany.io\"]."
+        }
+      }
+    },
+    "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
+    "podSecurityContext": { "type": "object" },
+    "securityContext": { "type": "object" },
+    "service": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "type": { "type": "string", "enum": ["ClusterIP", "NodePort", "LoadBalancer"] },
+        "port": { "type": "integer", "minimum": 1, "maximum": 65535 }
+      }
+    },
+    "ingress": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "className": { "type": "string" },
+        "annotations": { "type": "object", "additionalProperties": { "type": "string" } },
+        "hosts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "host": { "type": "string" },
+              "paths": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true,
+                  "properties": {
+                    "path": { "type": "string" },
+                    "pathType": { "type": "string", "enum": ["Exact", "Prefix", "ImplementationSpecific"] }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "tls": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": true,
+            "properties": {
+              "secretName": { "type": "string" },
+              "hosts": { "type": "array", "items": { "type": "string" } }
+            }
+          }
+        }
+      }
+    },
+    "resources": { "type": "object" },
+    "timeline": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "storage": { "type": "string", "enum": ["memory", "sqlite"] },
+        "dbPath": { "type": "string" },
+        "historyLimit": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": { "type": "string", "enum": ["none", "proxy", "oidc"] },
+        "secret": { "type": "string" },
+        "existingSecret": { "type": "string" },
+        "existingSecretKey": { "type": "string" },
+        "cookieTTL": { "type": "string", "description": "Go duration string, e.g. \"4h\"." },
+        "proxy": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "userHeader": { "type": "string" },
+            "groupsHeader": { "type": "string" }
+          }
+        },
+        "oidc": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "issuerURL": { "type": "string" },
+            "clientID": { "type": "string" },
+            "clientSecret": { "type": "string" },
+            "existingSecret": { "type": "string" },
+            "clientSecretKey": { "type": "string" },
+            "redirectURL": { "type": "string" },
+            "groupsClaim": { "type": "string" },
+            "postLogoutRedirectURL": { "type": "string" },
+            "usernamePrefix": { "type": "string" },
+            "groupsPrefix": { "type": "string" },
+            "caCert": { "type": "string" },
+            "insecureSkipVerify": { "type": "boolean" },
+            "backchannelLogout": { "type": "boolean", "description": "Single-replica only — revocations are in-memory." }
+          }
+        }
+      }
+    },
+    "cloud": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "url": {
+          "type": "string",
+          "pattern": "^(wss?://.*)?$",
+          "description": "Must start with ws:// or wss:// when set."
+        },
+        "clusterName": { "type": "string" },
+        "token": { "type": "string" },
+        "existingSecret": { "type": "string" },
+        "existingSecretKey": { "type": "string" },
+        "defaultRbac": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "create": { "type": "boolean" },
+            "owner": { "type": "boolean" },
+            "member": { "type": "boolean" },
+            "viewer": { "type": "boolean" },
+            "ownerClusterRole": { "type": "string" },
+            "memberClusterRole": { "type": "string" },
+            "viewerClusterRole": { "type": "string" }
+          }
+        }
+      }
+    },
+    "mcp": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" }
+      }
+    },
+    "traffic": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "prometheusUrl": { "type": "string" }
+      }
+    },
+    "persistence": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "storageClassName": { "type": "string" },
+        "accessMode": {
+          "type": "string",
+          "enum": ["ReadWriteOnce", "ReadOnlyMany", "ReadWriteMany", "ReadWriteOncePod"]
+        },
+        "size": { "type": "string" }
+      }
+    },
+    "nodeSelector": { "type": "object", "additionalProperties": { "type": "string" } },
+    "tolerations": { "type": "array", "items": { "type": "object" } },
+    "affinity": { "type": "object" },
+    "env": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": true,
+        "properties": {
+          "name": { "type": "string" },
+          "value": { "type": "string" },
+          "valueFrom": { "type": "object" }
+        },
+        "required": ["name"]
+      }
+    },
+    "probes": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "liveness": { "$ref": "#/$defs/probe" },
+        "readiness": { "$ref": "#/$defs/probe" }
+      }
+    }
+  },
+  "$defs": {
+    "probe": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "initialDelaySeconds": { "type": "integer", "minimum": 0 },
+        "periodSeconds": { "type": "integer", "minimum": 1 },
+        "timeoutSeconds": { "type": "integer", "minimum": 1 },
+        "failureThreshold": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

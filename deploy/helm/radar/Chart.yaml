@@ -1,18 +1,53 @@
 apiVersion: v2
 name: radar
-description: Modern Kubernetes visibility — topology, traffic, and Helm management
+description: Modern Kubernetes visibility - topology, traffic, Helm and GitOps management
 type: application
-version: 0.6.9
-appVersion: "0.6.9"
+version: 1.5.10
+appVersion: "1.5.7"
+icon: https://radarhq.io/radar/icon-512.png
 keywords:
   - kubernetes
+  - kubernetes-dashboard
+  - kubernetes-ui
+  - kubernetes-monitoring
   - visualization
-  - monitoring
-  - kubectl
-  - dashboard
-home: https://github.com/skyhook-io/radar
+  - topology
+  - helm
+  - gitops
+  - mcp
+home: https://radarhq.io
 sources:
   - https://github.com/skyhook-io/radar
 maintainers:
-  - name: Skyhook Team
+  - name: Skyhook
     email: support@skyhook.io
+    url: https://radarhq.io
+annotations:
+  category: monitoring-logging
+  artifacthub.io/license: Apache-2.0
+  artifacthub.io/links: |
+    - name: Website
+      url: https://radarhq.io
+    - name: Documentation
+      url: https://radarhq.io/docs
+    - name: Source
+      url: https://github.com/skyhook-io/radar
+    - name: Releases
+      url: https://github.com/skyhook-io/radar/releases
+    - name: Discord
+      url: https://radarhq.io/community/chat
+  artifacthub.io/images: |
+    - name: radar
+      image: ghcr.io/skyhook-io/radar:1.5.7
+  artifacthub.io/screenshots: |
+    - title: Multi-cluster topology
+      url: https://github.com/skyhook-io/radar/raw/main/docs/screenshots/topology-view.png
+    - title: Resource browser
+      url: https://github.com/skyhook-io/radar/raw/main/docs/screenshots/resources-view.png
+    - title: Event timeline
+      url: https://github.com/skyhook-io/radar/raw/main/docs/screenshots/timeline-view.png
+    - title: Service traffic map
+      url: https://github.com/skyhook-io/radar/raw/main/docs/screenshots/traffic-view.png
+  artifacthub.io/maintainers: |
+    - name: Skyhook
+      email: support@skyhook.io
