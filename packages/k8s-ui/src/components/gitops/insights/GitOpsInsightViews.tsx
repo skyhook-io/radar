@@ -1,4 +1,4 @@
-import { AlertTriangle, ChevronDown, ChevronRight, CircleAlert, Clock3, GitBranch, GitCommit, Info, ListChecks, RotateCw } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, CircleAlert, Clock3, GitBranch, GitCommit, Info, ListChecks } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useState, type ReactNode } from 'react'
 import type { GitOpsChange, GitOpsHistoryItem, GitOpsInsight, GitOpsIssue, GitOpsPlanItem } from '../../../types'
@@ -31,7 +31,15 @@ export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
         {operation && (
           <span
-            className={clsx('badge badge-sm font-medium uppercase tracking-wide', SEVERITY_BADGE[gitopsToSeverity(operation)])}
+            // Subtle pulse while a sync is actually in flight — paired with
+            // the bumped insights polling, this is the visual signal that the
+            // page is "watching" rather than stale. Doesn't fire for failure
+            // or terminal phases (those should look stable, not animated).
+            className={clsx(
+              'badge badge-sm font-medium uppercase tracking-wide',
+              SEVERITY_BADGE[gitopsToSeverity(operation)],
+              isInFlightPhase(operation) && 'animate-pulse',
+            )}
             title={summary.operationMessage ? `${operation}: ${summary.operationMessage}` : `Last sync operation: ${operation}`}
           >
             {operation}
@@ -53,6 +61,13 @@ export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) 
       </div>
     </div>
   )
+}
+
+// Whether to animate the operation chip — true for in-flight phases that
+// will progress without user action. Failure and terminal phases stay still.
+function isInFlightPhase(phase: string): boolean {
+  const p = phase.toLowerCase()
+  return p.includes('running') || p.includes('progress') || p.includes('reconcil')
 }
 
 // Show the operation chip only for phases the operator needs to *act on*.
@@ -319,29 +334,21 @@ interface GitOpsActivityInsightViewProps {
 export function GitOpsActivityInsightView({ insight, error, onRollback }: GitOpsActivityInsightViewProps) {
   if (error && !insight) return <InsightErrorState error={error} />
   if (!insight) return <CenteredText>Loading GitOps activity...</CenteredText>
-  const operation = insight.history?.find((item) => item.phase && item.message)
   const canRollback = !!insight.capabilities?.rollback && !!onRollback
   return (
     <div className="h-full overflow-auto bg-theme-base p-4">
-      <div className="grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
-        <section className="rounded-md border border-theme-border bg-theme-surface">
-          <SectionHeader icon={RotateCw} title="Current Operation" />
-          <div className="space-y-2 p-4 text-sm">
-            <InfoRow label="Phase" value={operation?.phase || insight.summary.operationPhase || 'Idle'} />
-            <InfoRow label="Revision" value={operation?.revision || insight.summary.lastRevision || insight.summary.targetRevision || '-'} mono />
-            <InfoRow label="Message" value={operation?.message || '-'} />
-            <InfoRow label="Last reconcile" value={formatRelative(insight.summary.lastReconcile)} />
-          </div>
-        </section>
-        <section className="rounded-md border border-theme-border bg-theme-surface">
-          <SectionHeader
-            icon={Clock3}
-            title="History"
-            hint={canRollback ? 'Each revision can be rolled back to.' : undefined}
-          />
-          <HistoryRows items={insight.history ?? []} canRollback={canRollback} onRollback={onRollback} />
-        </section>
-      </div>
+      {/* The current operation always lands as the top entry in History (its
+          phase + message + finishedAt come from operationState). A separate
+          "Current Operation" panel duplicated those fields in a key-value
+          table — collapsing it lets History claim the full width. */}
+      <section className="rounded-md border border-theme-border bg-theme-surface">
+        <SectionHeader
+          icon={Clock3}
+          title="History"
+          hint={canRollback ? 'Each revision can be rolled back to.' : undefined}
+        />
+        <HistoryRows items={insight.history ?? []} canRollback={canRollback} onRollback={onRollback} />
+      </section>
       {/* Issues are surfaced via GitOpsIssuesBand at the top of every tab — a
           duplicated Diagnosis section here would be a third place rendering
           the same data. The band's "+N more" expand carries the full list. */}
@@ -434,15 +441,6 @@ function SectionHeader({ icon: Icon, title, hint }: { icon: typeof GitBranch; ti
           <Info className="h-3.5 w-3.5" />
         </span>
       )}
-    </div>
-  )
-}
-
-function InfoRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  return (
-    <div className="grid grid-cols-[120px_minmax(0,1fr)] gap-3">
-      <span className="text-theme-text-tertiary">{label}</span>
-      <span className={clsx('min-w-0 truncate text-theme-text-primary', mono && 'font-mono text-xs')}>{value}</span>
     </div>
   )
 }

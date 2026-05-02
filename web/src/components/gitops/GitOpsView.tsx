@@ -897,6 +897,15 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
     ? 'fixed inset-0 z-[80] flex min-h-0 min-w-0 flex-col bg-theme-base'
     : 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'
 
+  // Set the browser tab title so users with multiple resource tabs open can
+  // tell which is which without focusing each tab. Restore on unmount so a
+  // stray "Radar — argocd/foo" doesn't outlive its page.
+  useEffect(() => {
+    const previous = document.title
+    document.title = `${name} — Radar`
+    return () => { document.title = previous }
+  }, [name])
+
   // Detail-page shortcuts. Skip when a modal is already open so a stray "s"
   // in an input field doesn't pop another sync dialog.
   const shortcutsEnabled = !syncDialogOpen && !rollbackTarget
@@ -1840,7 +1849,7 @@ function TopologyCounts({ tree }: { tree: GitOpsResourceTree }) {
   }).length
   const outOfSync = nodes.filter((n) => (n.sync || '').toLowerCase() === 'outofsync').length
   return (
-    <div className="hidden min-w-0 flex-1 items-center gap-3 truncate text-[11px] text-theme-text-tertiary md:flex">
+    <div className="hidden min-w-0 flex-1 items-center gap-3 truncate text-[11px] text-theme-text-tertiary sm:flex">
       <span><span className="text-theme-text-primary">{total}</span> resources</span>
       {healthy > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {healthy} healthy</span>}
       {/* Bad-news counts use status colors on the number itself so the worst
