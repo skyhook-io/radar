@@ -393,8 +393,9 @@ function formatElapsed(sec: number): string {
   const s = Math.max(0, sec)
   if (s < 1) return `${Math.round(s * 1000)}ms`
   if (s < 60) return `${s.toFixed(1)}s`
-  const m = Math.floor(s / 60)
-  const rem = Math.round(s - m * 60)
+  const total = Math.round(s)
+  const m = Math.floor(total / 60)
+  const rem = total - m * 60
   return `${m}m ${rem}s`
 }
 
