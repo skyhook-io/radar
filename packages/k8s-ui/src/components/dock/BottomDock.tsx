@@ -3,7 +3,7 @@ import { DURATION_DOCK } from '../../utils/animation'
 import { X, ChevronDown, ChevronUp, Terminal, FileText, Trash2, Layers, Maximize2, Minimize2, Activity } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useDock, DockTab } from './DockContext'
-import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
+import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 
 const MIN_HEIGHT = 200
 const DEFAULT_HEIGHT = 400
@@ -80,15 +80,26 @@ export function BottomDock({ renderTabContent, renderTabHeaderExtra, leftOffset:
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [isMaximized])
 
-  useRegisterShortcut({
-    id: 'dock-toggle',
-    keys: 'Ctrl+`',
-    description: 'Toggle dock',
-    category: 'Dock',
-    scope: 'global',
-    handler: () => toggleExpanded(),
-    enabled: tabs.length > 0,
-  })
+  useRegisterShortcuts([
+    {
+      id: 'dock-toggle-backtick',
+      keys: 'Ctrl+`',
+      description: 'Toggle dock',
+      category: 'Dock',
+      scope: 'global',
+      handler: () => toggleExpanded(),
+      enabled: tabs.length > 0,
+    },
+    {
+      id: 'dock-toggle-j',
+      keys: 'Cmd+J',
+      description: 'Toggle dock',
+      category: 'Dock',
+      scope: 'global',
+      handler: () => toggleExpanded(),
+      enabled: tabs.length > 0,
+    },
+  ])
 
   if (tabs.length === 0) {
     return null
