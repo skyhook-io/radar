@@ -106,9 +106,17 @@ export function validateRFC1123Subdomain(input: string): ValidationResult {
 }
 
 /**
- * Validates a Helm release name. Same shape as an RFC 1123 subdomain
- * but capped at 53 chars (Helm's hard limit; longer names produce
- * resources that exceed K8s' 63-char label limit).
+ * Validates a Helm release name. Same shape as an RFC 1123 label
+ * (no dots) capped at 53 chars (Helm's hard limit; longer names
+ * produce resources that exceed K8s' 63-char label limit).
+ *
+ * Why label and not subdomain: Helm itself permits dots in release
+ * names, but most charts compose resource names as
+ * `<release>-<chart>-<hash>` which must be valid DNS-1123 labels.
+ * A dotted release name like `my.app` produces resources whose
+ * names fail K8s label validation server-side. Reject the dot up
+ * front so the user sees a clear inline error instead of a server
+ * 422 after submit.
  */
 export function validateHelmReleaseName(input: string): ValidationResult {
   if (input.length === 0) {
@@ -123,7 +131,7 @@ export function validateHelmReleaseName(input: string): ValidationResult {
       error: `must be at most ${HELM_RELEASE_NAME_MAX} characters (got ${input.length}); Helm caps release names so derived resource names fit under K8s' 63-char limit`,
     }
   }
-  return validateRFC1123Subdomain(input)
+  return validateRFC1123Label(input)
 }
 
 /**

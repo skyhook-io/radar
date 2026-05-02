@@ -135,6 +135,14 @@ describe('validateHelmReleaseName', () => {
     if (r.valid) throw new Error('expected invalid')
     expect(r.error.endsWith('.')).toBe(false)
   })
+
+  it('rejects dotted names (generated resource names must be DNS-1123 labels)', () => {
+    // Helm itself permits dots, but generated resource names like
+    // `<release>-<chart>-<hash>` must be valid labels. Catch the dot
+    // up front instead of letting K8s reject the apply server-side.
+    expect(validateHelmReleaseName('my.app').valid).toBe(false)
+    expect(validateHelmReleaseName('foo.bar.baz').valid).toBe(false)
+  })
 })
 
 describe('validatePort', () => {
