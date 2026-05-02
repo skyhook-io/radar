@@ -49,8 +49,8 @@ describe('computeTooltipPosition', () => {
   })
 
   it('flips a top-placed tooltip to bottom when the trigger is too close to the top edge (nav button case)', () => {
-    // This is bug 1: a nav button at the top of the viewport. With "top"
-    // placement the computed top is negative; the helper must flip below.
+    // Trigger near the top edge: "top" placement computes a negative top,
+    // so the helper must flip below.
     const result = computeTooltipPosition({
       triggerRect: { top: 12, left: 200, width: 80, height: 28 },
       tooltipSize: { width: 80, height: 24 },

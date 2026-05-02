@@ -46,12 +46,8 @@ export function Tooltip({
   wrapperStyle,
 }: TooltipProps) {
   const [isVisible, setIsVisible] = useState(false)
-  // null while the tooltip is mounting and hasn't been measured yet — the
-  // portal renders with `visibility: hidden` in that window so the user
-  // never sees a frame painted at the default (0,0) coordinates. Bug
-  // observed on app.radarhq.io: nav button tooltips ("Topology",
-  // "Timeline", ...) flashed at the viewport's top-left corner and
-  // overlapped the "Radar / By Skyhook" logo before snapping into place.
+  // null until measured. Portal renders with visibility:hidden until coords
+  // resolve so the user never sees a frame painted at default (0,0).
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(
     null
   )
@@ -129,13 +125,8 @@ export function Tooltip({
 
   useEffect(() => {
     if (isVisible) {
-      // Two-pass measurement. The portal is rendered with
-      // `visibility: hidden` while coords are null, so we get a real
-      // tooltip rect on the first rAF. A second rAF re-runs the
-      // computation with the now-known tooltip width/height so the
-      // anchor centering is exact. Without this second pass the
-      // tooltip would show with size-0 centering for one frame and
-      // then jump.
+      // Second rAF re-centers using the measured tooltip size; without
+      // it the first frame centers against size 0 and visibly jumps.
       const id1 = requestAnimationFrame(() => {
         updatePosition()
         const id2 = requestAnimationFrame(updatePosition)
@@ -183,14 +174,9 @@ export function Tooltip({
     }
   }, [disabled])
 
-  // Dismiss on browser back/forward (route changes) and on Escape.
-  // The mouseleave-based dismissal misses the case where a tooltip is
-  // anchored to a button that itself triggers navigation (nav buttons,
-  // tab pills): React keeps the button mounted across the route change
-  // so no unmount cleanup fires, and the cursor is still over the
-  // trigger so no mouseleave fires either. The user sees a stuck
-  // tooltip overlapping the new page's chrome. Hooking popstate +
-  // Escape gives a deterministic dismissal path for those cases.
+  // Mouseleave doesn't fire when the trigger stays mounted across a
+  // navigation and the cursor is still over it; popstate + Escape give
+  // a deterministic dismissal path for those cases.
   useEffect(() => {
     if (!isVisible) return
     const onPop = () => hideRef.current()
@@ -219,15 +205,9 @@ export function Tooltip({
         onMouseLeave={hideTooltip}
         onFocus={showTooltip}
         onBlur={hideTooltip}
-        // pointerdown fires before click and before any onClick the
-        // child uses for navigation/state changes — guaranteeing the
-        // tooltip is gone before the trigger's action runs. Covers:
-        //   - nav button click navigates → tooltip would otherwise
-        //     stick (button stays mounted, cursor still over it)
-        //   - tab pill click → same shape, tooltip lingers under the
-        //     active tab
-        //   - clicking a table row to open a drawer → row's name
-        //     tooltip used to remain pinned above the table header
+        // pointerdown fires before click, so the tooltip is gone before
+        // the trigger's action runs. Required when the child handles
+        // navigation/state changes that don't unmount the trigger.
         onPointerDown={hideTooltip}
       >
         {children}
@@ -244,10 +224,7 @@ export function Tooltip({
             style={{
               top: coords?.top ?? 0,
               left: coords?.left ?? 0,
-              // Hidden until the first measurement pass writes real
-              // coords. Without this guard the portal paints at (0,0)
-              // for one frame, which on slower clients shows up as
-              // tooltip text overlapping the top-left logo.
+              // Hide until first measurement so we never paint at (0,0).
               visibility: coords ? 'visible' : 'hidden',
             }}
             role="tooltip"

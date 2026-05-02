@@ -1,8 +1,3 @@
-// Pure helpers for Tooltip positioning + dismissal logic.
-//
-// Extracted from Tooltip.tsx so the geometry can be unit-tested without a
-// DOM. The component itself stays a thin glue layer that calls these.
-
 export type TooltipPlacement = 'top' | 'bottom' | 'left' | 'right'
 
 export interface Rect {
@@ -31,17 +26,9 @@ export interface ComputeTooltipPositionInput {
 }
 
 /**
- * Computes the absolute (top, left) for a tooltip portal given the trigger
- * rect, the tooltip's measured size, the desired placement, and the
- * viewport. Pure, deterministic — same input produces the same output, no
- * DOM or window access. Includes viewport-clamping with a single-flip
- * fallback when the preferred placement would clip.
- *
- * Returns null when the trigger has zero area AND zero offset — that means
- * the trigger isn't laid out yet (initial paint). The caller should skip
- * showing the tooltip until a real measurement is available, instead of
- * defaulting to (0, 0) which causes the documented "tooltip text appears
- * at viewport top-left, overlapping the logo" bug.
+ * Returns null when the trigger has no layout (zero rect at origin) so the
+ * caller can render hidden until a real measurement is available, instead
+ * of painting at (0, 0).
  */
 export function computeTooltipPosition({
   triggerRect,
