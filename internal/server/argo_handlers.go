@@ -80,7 +80,7 @@ func (s *Server) handleArgoRollback(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[argo] Dynamic client unavailable for rollback Application %s/%s", namespace, name)
+		log.Printf("[argo] Dynamic client unavailable for rollback Application %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
@@ -213,6 +213,6 @@ func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, acti
 	default:
 		status = http.StatusInternalServerError
 	}
-	log.Printf("[%s] %s %s/%s -> %d: %v", module, action, namespace, name, status, err)
+	log.Printf("[%s] %s %s/%s -> %d: %v", module, action, sanitizeForLog(namespace), sanitizeForLog(name), status, err)
 	s.writeError(w, status, msg)
 }

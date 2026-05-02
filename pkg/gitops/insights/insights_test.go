@@ -504,3 +504,61 @@ func TestArgoApplicationConditions_MapsTypesToSeverity(t *testing.T) {
 		t.Errorf("unrecognized condition should default to info; got %q", bySev["SomeUnrelatedInfo"])
 	}
 }
+
+// Argo's initiatedBy.automated is a *bool* (true when the auto-sync
+// controller fires), not a string. The previous code did
+// gitops.StringValue(ib["automated"]) which always yielded "" — automated
+// history rows showed an empty initiator. Verify the bool is now coerced
+// to "automated".
+func TestBuildHistoryArgo_AutomatedBoolBecomesInitiator(t *testing.T) {
+	root := argoApp(map[string]any{
+		"history": []any{
+			map[string]any{
+				"id":         int64(7),
+				"revision":   "abcdef0",
+				"deployedAt": "2026-05-03T12:00:00Z",
+				"initiatedBy": map[string]any{
+					"automated": true,
+				},
+			},
+		},
+	})
+	hist := buildHistory(root, "argocd")
+	// First entry should be the only history row (no operationState set).
+	if len(hist) != 1 {
+		t.Fatalf("expected 1 history entry, got %d", len(hist))
+	}
+	if hist[0].InitiatedBy != "automated" {
+		t.Errorf("InitiatedBy = %q, want %q", hist[0].InitiatedBy, "automated")
+	}
+}
+
+// A running operation has finishedAt="" and used to fall to the bottom of
+// history due to the descending DeployedAt sort. Falling back to startedAt
+// keeps it at the top where it belongs.
+func TestBuildHistoryArgo_RunningOpStaysOnTop(t *testing.T) {
+	root := argoApp(map[string]any{
+		"operationState": map[string]any{
+			"phase":     "Running",
+			"message":   "syncing",
+			"startedAt": "2026-05-03T13:00:00Z",
+			// finishedAt intentionally absent
+		},
+		"history": []any{
+			map[string]any{
+				"id":         int64(1),
+				"revision":   "old",
+				"deployedAt": "2026-05-03T11:00:00Z",
+			},
+			map[string]any{
+				"id":         int64(2),
+				"revision":   "newer",
+				"deployedAt": "2026-05-03T12:00:00Z",
+			},
+		},
+	})
+	hist := buildHistory(root, "argocd")
+	if len(hist) < 1 || hist[0].Phase != "Running" {
+		t.Fatalf("expected the running operation to sort to the top; got hist=%+v", hist)
+	}
+}

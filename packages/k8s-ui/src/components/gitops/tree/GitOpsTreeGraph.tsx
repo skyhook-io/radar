@@ -484,8 +484,18 @@ function assignRanks(
 ): Map<number, string[]> {
   const rankByID = new Map<string, number>()
   const queue = [{ id: rootID, rank: 0 }]
+  // Cycle/explosion guard: GitOps trees are owner-ref DAGs in practice, but
+  // the EdgeManages set we feed in could pathologically include a cycle
+  // (e.g. a CRD whose owner ref points back at one of its own children, or
+  // a malformed inventory). Without this cap, the "previous >= rank" skip
+  // never fires for cyclic edges and the loop runs forever, freezing the
+  // UI thread. Cap at a large multiple of node count so legitimate trees
+  // never hit it; cycles bail with the partial layout we have so far.
+  let iterations = 0
+  const maxIterations = nodes.size * 8 + 64
 
   while (queue.length > 0) {
+    if (++iterations > maxIterations) break
     const current = queue.shift()!
     const previous = rankByID.get(current.id)
     if (previous !== undefined && previous >= current.rank) continue

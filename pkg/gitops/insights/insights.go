@@ -584,13 +584,18 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 			if sm, ok := m["source"].(map[string]any); ok {
 				source = joinNonEmpty(gitops.StringValue(sm["repoURL"]), gitops.StringValue(sm["path"]), gitops.StringValue(sm["chart"]))
 			}
-			// initiatedBy carries who triggered the sync (controller, user@email,
-			// "radar" for our own actions). Useful for incident postmortems.
+			// initiatedBy carries who triggered the sync. Username is set for
+			// human/api triggers; automated is a *bool*, not a string — Argo
+			// flips it true when the controller's auto-sync fires. We coerce
+			// to "automated" so the UI doesn't show empty initiator on
+			// controller-triggered history rows (the common case).
 			initiatedBy := ""
 			if ib, ok := m["initiatedBy"].(map[string]any); ok {
 				initiatedBy = gitops.StringValue(ib["username"])
 				if initiatedBy == "" {
-					initiatedBy = gitops.StringValue(ib["automated"])
+					if auto, ok := ib["automated"].(bool); ok && auto {
+						initiatedBy = "automated"
+					}
 				}
 			}
 			out = append(out, HistoryItem{ID: id, Revision: gitops.StringValue(m["revision"]), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: source, InitiatedBy: initiatedBy})
@@ -600,12 +605,26 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 			if opMap, ok := op["operation"].(map[string]any); ok {
 				if ib, ok := opMap["initiatedBy"].(map[string]any); ok {
 					initiatedBy = gitops.StringValue(ib["username"])
+					if initiatedBy == "" {
+						if auto, ok := ib["automated"].(bool); ok && auto {
+							initiatedBy = "automated"
+						}
+					}
 				}
+			}
+			// finishedAt is empty while a sync is in flight. Fall back to
+			// startedAt so the running entry still has a timestamp; without
+			// this, the descending sort below pushed the in-flight row to
+			// the *bottom* of history, hiding the most operationally
+			// relevant entry from the user.
+			deployedAt := gitops.StringValue(op["finishedAt"])
+			if deployedAt == "" {
+				deployedAt = gitops.StringValue(op["startedAt"])
 			}
 			out = append(out, HistoryItem{
 				Phase:       gitops.StringValue(op["phase"]),
 				Message:     gitops.StringValue(op["message"]),
-				DeployedAt:  gitops.StringValue(op["finishedAt"]),
+				DeployedAt:  deployedAt,
 				Revision:    nestedString(op, "syncResult", "revision"),
 				InitiatedBy: initiatedBy,
 			})

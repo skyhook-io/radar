@@ -111,7 +111,7 @@ func (s *Server) writeGitOpsBuildError(w http.ResponseWriter, req *gitopsRequest
 	case apierrors.IsNotFound(err):
 		s.writeError(w, http.StatusNotFound, err.Error())
 	default:
-		log.Printf("[gitops] Failed to build tree for %s %s/%s (group=%q): %v", req.Kind, req.Namespace, req.Name, req.Group, err)
+		log.Printf("[gitops] Failed to build tree for %s %s/%s (group=%q): %v", sanitizeForLog(req.Kind), sanitizeForLog(req.Namespace), sanitizeForLog(req.Name), sanitizeForLog(req.Group), err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 	}
 }

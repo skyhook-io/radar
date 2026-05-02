@@ -186,33 +186,3 @@ func jsonString(v any) string {
 	return string(b)
 }
 
-// looksLikeFieldRename detects the schema-migration pattern where the same
-// value disappears from one path and appears at another. Returns the pairs
-// of (old, new) paths that look like renames; the UI can present these as
-// "field moved" instead of as separate add/remove entries. Currently only
-// matches exact-value pairs (string/number scalars); structural renames
-// would need fuzzy matching.
-func looksLikeFieldRename(entries []DriftEntry) [][2]string {
-	removedByValue := map[string]string{}
-	for _, e := range entries {
-		if e.Op == "removed" {
-			removedByValue[e.Desired] = e.Path
-		}
-	}
-	var out [][2]string
-	for _, e := range entries {
-		if e.Op != "added" {
-			continue
-		}
-		if oldPath, ok := removedByValue[e.Live]; ok && oldPath != e.Path {
-			out = append(out, [2]string{oldPath, e.Path})
-		}
-	}
-	return out
-}
-
-// looksLikeFieldRename is exposed for test coverage; the production
-// renderer shows the raw add/remove pairs today and the user can spot
-// the moved value themselves. UI-side heuristics can layer on later
-// without changing the wire format.
-var _ = looksLikeFieldRename

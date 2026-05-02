@@ -115,17 +115,3 @@ func TestComputeDrift_TreatsEmptyAsNil(t *testing.T) {
 	}
 }
 
-func TestLooksLikeFieldRename_DetectsValueMovedAcrossPaths(t *testing.T) {
-	entries := []DriftEntry{
-		{Path: "spec.disruption.expireAfter", Op: "removed", Desired: `"720h"`},
-		{Path: "spec.template.spec.expireAfter", Op: "added", Live: `"720h"`},
-		{Path: "spec.disruption.budgets", Op: "added", Live: `[{"nodes":"10%"}]`},
-	}
-	pairs := looksLikeFieldRename(entries)
-	if len(pairs) != 1 {
-		t.Fatalf("expected 1 rename pair, got %d: %v", len(pairs), pairs)
-	}
-	if pairs[0][0] != "spec.disruption.expireAfter" || pairs[0][1] != "spec.template.spec.expireAfter" {
-		t.Errorf("rename pair = %v, want [spec.disruption.expireAfter spec.template.spec.expireAfter]", pairs[0])
-	}
-}

@@ -185,8 +185,18 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 	nodeList, edgeList := materialize(nodes, edges)
 
 	summary := summarize(nodeList)
+	// Use the merged-in-the-nodes-map version of root so callers reading
+	// tree.Root see the same enriched data (live status, topology metadata)
+	// that any consumer iterating tree.Nodes would see. Without this, the
+	// initial rootNode struct goes back unchanged while nodes[rootNode.ID]
+	// has been mergeData'd with topology — two different views of the same
+	// node, divergent silently.
+	mergedRoot := rootNode
+	if r, ok := nodes[rootNode.ID]; ok {
+		mergedRoot = r
+	}
 	return &ResourceTree{
-		Root:     rootNode,
+		Root:     mergedRoot,
 		Nodes:    nodeList,
 		Edges:    edgeList,
 		Warnings: b.topoWarnings(),
