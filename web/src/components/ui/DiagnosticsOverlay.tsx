@@ -321,7 +321,7 @@ function InformersSection({ data }: { data: DiagnosticsSnapshot }) {
   const promoted = sync?.promotedKinds ?? []
   const pendingCritical = sync?.pendingCritical ?? []
   const pendingDeferred = sync?.pendingDeferred ?? []
-  const sectionWarn = phaseWarn || promoted.length > 0
+  const sectionWarn = phaseWarn || criticalWarn || promoted.length > 0
   return (
     <Section title="Informers" warn={sectionWarn}>
       <Row label="Typed" value={inf.typedCount} />
@@ -390,11 +390,12 @@ function formatSyncPhase(phase: DiagSyncPhase): string {
 }
 
 function formatElapsed(sec: number): string {
-  if (sec < 1) return `${Math.round(sec * 1000)}ms`
-  if (sec < 60) return `${sec.toFixed(1)}s`
-  const m = Math.floor(sec / 60)
-  const s = Math.round(sec - m * 60)
-  return `${m}m ${s}s`
+  const s = Math.max(0, sec)
+  if (s < 1) return `${Math.round(s * 1000)}ms`
+  if (s < 60) return `${s.toFixed(1)}s`
+  const m = Math.floor(s / 60)
+  const rem = Math.round(s - m * 60)
+  return `${m}m ${rem}s`
 }
 
 function PrometheusSection({ data }: { data: DiagnosticsSnapshot }) {
