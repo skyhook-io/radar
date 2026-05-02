@@ -334,12 +334,6 @@ export function PodRenderer({
       <Section title="Status" icon={Server}>
         <PropertyList>
           {(() => {
-            // The "Phase" row used to render `data.status.phase` verbatim,
-            // which on a Running-but-not-ready or Running-but-cycling pod
-            // read as a healthy "Running" — directly contradicting the
-            // panel header ("Running (0/1)") and the Issues Detected
-            // banner above. Use the derived display so the row reflects
-            // what the rest of the panel is saying.
             const phaseDisplay = getPodPhaseDisplay(data)
             const node = (
               <span className={clsx(healthColors[phaseDisplay.level])}>

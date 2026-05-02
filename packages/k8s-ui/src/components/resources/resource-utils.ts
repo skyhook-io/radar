@@ -131,25 +131,8 @@ export function getPodStatus(pod: any): StatusBadge {
 }
 
 /**
- * Display data for the "Phase" row of the pod detail/side panel.
- *
- * The raw `pod.status.phase` field is misleading on its own: a pod with
- * `phase: Running` but `0/1` containers ready, or with thousands of
- * restarts, would show a bare "Running" string in the Phase row even
- * though the panel header (driven by getPodStatus) and the Issues
- * Detected banner clearly say otherwise. Users read the property list
- * top-down and walk away thinking the pod is healthy.
- *
- * This helper combines:
- *   - the raw phase string (kept verbatim so the underlying API field is
- *     still visible — important for users debugging against kubectl),
- *   - the readiness ratio when below total,
- *   - a derived qualifier ("Not Ready", "CrashLooping", "Restarting") for
- *     pods that are clearly not in a healthy steady state, and
- *   - the appropriate HealthLevel so the row can be tinted consistently
- *     with the panel header.
- *
- * Pure (no React, no DOM) so it can be unit-tested directly.
+ * Pod phase enriched with readiness/restart/crash signals so the Phase
+ * row doesn't show a bare "Running" on a 0/1 or crash-looping pod.
  */
 export interface PodPhaseDisplay {
   /** Verbatim `pod.status.phase` (or "Unknown") — never lost. */
@@ -183,30 +166,33 @@ export function getPodPhaseDisplay(pod: any): PodPhaseDisplay {
     }
   }
 
-  // Container-state derived states take precedence — these are unambiguous
-  // failures that the raw phase would still call "Running" until the pod
-  // crash-loops out of the Running state entirely.
-  for (const cs of containerStatuses) {
-    const waitingReason = cs?.state?.waiting?.reason
-    if (
-      waitingReason === 'CrashLoopBackOff' ||
-      waitingReason === 'ImagePullBackOff' ||
-      waitingReason === 'ErrImagePull' ||
-      waitingReason === 'CreateContainerConfigError'
-    ) {
-      return {
-        phase,
-        text: `${phase} — ${waitingReason}`,
-        level: 'unhealthy',
-        hint: `Container "${cs.name}" is stuck in ${waitingReason}.`,
+  // Container-state failures take precedence over phase: a CrashLoopBackOff
+  // pod can still report phase: Running. Skip for Succeeded — a Job pod whose
+  // sidecar was OOMKilled before the main container completed should not be
+  // shown as unhealthy after the pod has reached terminal success.
+  if (phase !== 'Succeeded') {
+    for (const cs of containerStatuses) {
+      const waitingReason = cs?.state?.waiting?.reason
+      if (
+        waitingReason === 'CrashLoopBackOff' ||
+        waitingReason === 'ImagePullBackOff' ||
+        waitingReason === 'ErrImagePull' ||
+        waitingReason === 'CreateContainerConfigError'
+      ) {
+        return {
+          phase,
+          text: `${phase} — ${waitingReason}`,
+          level: 'unhealthy',
+          hint: `Container "${cs.name}" is stuck in ${waitingReason}.`,
+        }
       }
-    }
-    if (cs?.state?.terminated?.reason === 'OOMKilled') {
-      return {
-        phase,
-        text: `${phase} — OOMKilled`,
-        level: 'unhealthy',
-        hint: `Container "${cs.name}" was OOMKilled.`,
+      if (cs?.state?.terminated?.reason === 'OOMKilled') {
+        return {
+          phase,
+          text: `${phase} — OOMKilled`,
+          level: 'unhealthy',
+          hint: `Container "${cs.name}" was OOMKilled.`,
+        }
       }
     }
   }

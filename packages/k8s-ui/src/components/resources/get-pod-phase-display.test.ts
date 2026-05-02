@@ -1,15 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { getPodPhaseDisplay } from './resource-utils'
 
-// Fixtures inspired by real pods reported in SKY-819:
-// - "argocd-redis-...-4dgd4" with high restart count and currently ready
-// - the "Running (0/1) / Issues Detected / Not Ready" detail panel pod
-// - kourier-gateway with thousands of restarts but still flagged Running
-//
-// The bug is that getPodPhaseDisplay's caller used to render the raw
-// `pod.status.phase` field as "Running" with no qualifier. These tests
-// pin the new behavior so a regression there fails loudly.
-
 const podRunningHealthy = {
   status: {
     phase: 'Running',
@@ -88,6 +79,65 @@ const podTerminating = {
   },
 }
 
+const podErrImagePull = {
+  status: {
+    phase: 'Pending',
+    containerStatuses: [
+      {
+        name: 'app',
+        ready: false,
+        restartCount: 0,
+        state: { waiting: { reason: 'ErrImagePull' } },
+      },
+    ],
+  },
+}
+
+const podCreateContainerConfigError = {
+  status: {
+    phase: 'Pending',
+    containerStatuses: [
+      {
+        name: 'app',
+        ready: false,
+        restartCount: 0,
+        state: { waiting: { reason: 'CreateContainerConfigError' } },
+      },
+    ],
+  },
+}
+
+const podMultiContainerPartiallyReady = {
+  status: {
+    phase: 'Running',
+    containerStatuses: [
+      { name: 'app', ready: true, restartCount: 0 },
+      { name: 'sidecar', ready: false, restartCount: 0 },
+      { name: 'proxy', ready: true, restartCount: 0 },
+    ],
+  },
+}
+
+const podMultiContainerCyclingAcrossContainers = {
+  status: {
+    phase: 'Running',
+    containerStatuses: [
+      { name: 'app', ready: true, restartCount: 3 },
+      { name: 'sidecar', ready: true, restartCount: 4 },
+    ],
+  },
+}
+
+const podSucceededWithOOMKilledSidecar = {
+  status: {
+    phase: 'Succeeded',
+    containerStatuses: [
+      { name: 'main', ready: false, restartCount: 0, state: { terminated: { reason: 'Completed', exitCode: 0 } } },
+      { name: 'sidecar', ready: false, restartCount: 1, state: { terminated: { reason: 'OOMKilled', exitCode: 137 } } },
+    ],
+  },
+}
+
 describe('getPodPhaseDisplay', () => {
   it('returns Running, healthy for a fully-ready pod with no restarts', () => {
     const r = getPodPhaseDisplay(podRunningHealthy)
@@ -158,6 +208,37 @@ describe('getPodPhaseDisplay', () => {
     expect(getPodPhaseDisplay({ status: { phase: 'Succeeded' } }).level).toBe('neutral')
     expect(getPodPhaseDisplay({ status: { phase: 'Pending' } }).level).toBe('degraded')
     expect(getPodPhaseDisplay({ status: { phase: 'Failed' } }).level).toBe('unhealthy')
+  })
+
+  it('flags ErrImagePull as unhealthy', () => {
+    const r = getPodPhaseDisplay(podErrImagePull)
+    expect(r.text).toBe('Pending — ErrImagePull')
+    expect(r.level).toBe('unhealthy')
+  })
+
+  it('flags CreateContainerConfigError as unhealthy', () => {
+    const r = getPodPhaseDisplay(podCreateContainerConfigError)
+    expect(r.text).toBe('Pending — CreateContainerConfigError')
+    expect(r.level).toBe('unhealthy')
+  })
+
+  it('reports the correct readiness ratio for multi-container pods', () => {
+    const r = getPodPhaseDisplay(podMultiContainerPartiallyReady)
+    expect(r.text).toBe('Running — Not Ready (2/3)')
+    expect(r.level).toBe('degraded')
+  })
+
+  it('sums restartCount across containers when deciding cycling', () => {
+    const r = getPodPhaseDisplay(podMultiContainerCyclingAcrossContainers)
+    expect(r.text).toBe('Running — Restarting (7 restarts)')
+    expect(r.level).toBe('degraded')
+  })
+
+  it('does not flag a Succeeded Job pod as unhealthy when a sidecar OOMed', () => {
+    const r = getPodPhaseDisplay(podSucceededWithOOMKilledSidecar)
+    expect(r.phase).toBe('Succeeded')
+    expect(r.text).toBe('Completed')
+    expect(r.level).toBe('neutral')
   })
 
   it('does not mistake exactly-RESTART_CYCLING_THRESHOLD restarts for cycling (boundary)', () => {
