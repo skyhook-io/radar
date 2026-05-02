@@ -30,12 +30,9 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
     ? Object.values(auditData.checks).sort((a, b) => a.title.localeCompare(b.title))
     : []
 
-  // Validate the staged namespace input against RFC 1123 (the same rule
-  // K8s applies server-side). Without this the dialog accepted strings
-  // like "INVALID_NAME!@#" and saved them; the audit pipeline then
-  // silently never matched anything against the bogus entry, leaving
-  // the user with the impression that the ignore filter "didn't work".
-  // (SKY-821 bug 25)
+  // Validate the staged namespace input against RFC 1123. Saving a bogus
+  // entry would silently never match anything in the audit pipeline,
+  // leaving the user thinking the ignore filter doesn't work.
   const newNsTrimmed = newNs.trim()
   const newNsValidation = useMemo<ValidationResult>(
     () => (newNsTrimmed === '' ? { valid: true } : validateRFC1123Label(newNsTrimmed)),
@@ -180,16 +177,18 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
           </button>
           <button
             onClick={handleSave}
-            // Block save when there's a partially-typed invalid namespace
-            // in the input — otherwise the user clicks Save expecting
-            // their pending entry to be included, and it's silently
-            // dropped (or worse, accepted unvalidated when it shouldn't).
-            // (SKY-821 bug 63)
-            disabled={updateSettings.isPending || newNsError !== null}
+            // Block save while the namespace input has unfixed pending
+            // text — otherwise the user clicks Save expecting their
+            // entry to be included and it's silently dropped.
+            disabled={
+              updateSettings.isPending || newNsError !== null || newNsDuplicate
+            }
             title={
               newNsError
                 ? 'Fix or clear the pending namespace input before saving'
-                : undefined
+                : newNsDuplicate
+                  ? 'Clear the duplicate pending input before saving'
+                  : undefined
             }
             className="px-4 py-1.5 text-sm btn-brand rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
           >

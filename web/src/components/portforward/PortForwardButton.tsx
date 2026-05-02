@@ -36,12 +36,9 @@ function KubectlCommandDialog({
 }) {
   const [copied, setCopied] = useState(false)
   const [copyFallback, setCopyFallback] = useState(false)
-  // We track the raw input separately from the validated port so the
-  // user always sees the characters they typed — the previous code
-  // silently swallowed values like '0', '-1', and '70000', which made
-  // the input feel broken (the typed value disappeared with no
-  // explanation). The validated port (used to build the command) only
-  // updates when the input parses cleanly. (SKY-821 bugs 26, 27)
+  // Track raw input separately from the validated port so the user
+  // always sees the characters they typed; the validated port (used to
+  // build the command) only updates when the input parses cleanly.
   const [portInput, setPortInput] = useState(String(info.port))
   const portValidation = validatePort(portInput)
   const localPort = portValidation.valid ? portValidation.value : info.port

@@ -125,9 +125,8 @@ export function validateHelmReleaseName(input: string): ValidationResult {
   if (input.length > HELM_RELEASE_NAME_MAX) {
     return {
       valid: false,
-      // No trailing period — call sites compose this into a
-      // sentence and append their own. Bugbot caught the
-      // double-period UI in InstallWizard.
+      // No trailing period — call sites compose this into a sentence
+      // and append their own.
       error: `must be at most ${HELM_RELEASE_NAME_MAX} characters (got ${input.length}); Helm caps release names so derived resource names fit under K8s' 63-char limit`,
     }
   }

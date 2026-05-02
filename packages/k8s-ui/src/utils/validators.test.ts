@@ -28,7 +28,7 @@ describe('validateRFC1123Label', () => {
     if (!r.valid) expect(r.error).toMatch(/empty/)
   })
 
-  it('rejects uppercase characters (the SKY-821 bug 25 fixture)', () => {
+  it('rejects uppercase characters and special chars', () => {
     const r = validateRFC1123Label('INVALID_NAME!@#')
     expect(r.valid).toBe(false)
     if (!r.valid) expect(r.error).toMatch(/lowercase/)
@@ -105,7 +105,7 @@ describe('validateRFC1123Subdomain', () => {
 })
 
 describe('validateHelmReleaseName', () => {
-  it('rejects the SKY-821 bug 24 fixture verbatim', () => {
+  it('rejects names with spaces and special characters', () => {
     const r = validateHelmReleaseName('Invalid Name With Spaces!')
     expect(r.valid).toBe(false)
   })
@@ -160,18 +160,18 @@ describe('validatePort', () => {
     if (r.valid) expect(r.value).toBe(8080)
   })
 
-  it('rejects 0 (the SKY-821 bug 26 silently-rejected case)', () => {
+  it('rejects 0', () => {
     const r = validatePort('0')
     expect(r.valid).toBe(false)
     if (!r.valid) expect(r.error).toMatch(/0 is reserved|between 1/)
   })
 
-  it('rejects negative numbers (the bug 26 "-1 reverts to default" case)', () => {
+  it('rejects negative numbers', () => {
     const r = validatePort('-1')
     expect(r.valid).toBe(false)
   })
 
-  it('rejects ports above 65535 (the bug 26 "70000" case)', () => {
+  it('rejects ports above 65535', () => {
     const r = validatePort('70000')
     expect(r.valid).toBe(false)
     if (!r.valid) expect(r.error).toMatch(/65535|between/)
