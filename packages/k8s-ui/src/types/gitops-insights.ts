@@ -16,11 +16,18 @@ export interface GitOpsInsightSummary {
   sync?: string
   health?: string
   operationPhase?: string
+  // Latest operation status message — surfaced inline in the status strip
+  // when an operation is in flight or just failed.
+  operationMessage?: string
   source?: string
   targetRevision?: string
   lastRevision?: string
   lastReconcile?: string
   partialReason?: string
+  // Human-readable sync mode for the chip in the status strip.
+  // Argo: "Manual" | "Auto" | "Auto · prune" | "Auto · self-heal" | "Auto · prune · self-heal"
+  // Flux: "Auto" | "Suspended"
+  autoSyncMode?: string
 }
 
 export interface GitOpsInsightRef {
@@ -45,6 +52,12 @@ export interface GitOpsChange {
   sync?: string
   health?: string
   message?: string
+  // Per-resource sync failure message (Argo's status.resources[].syncResult).
+  // Distinct from `message` (live health). Empty when sync succeeded.
+  syncError?: string
+  // Sync hook phase: PreSync / PostSync / SyncFail / PostDelete. Empty
+  // for non-hook resources.
+  hookPhase?: string
   hasDesired: boolean
   hasLive: boolean
   diff?: string

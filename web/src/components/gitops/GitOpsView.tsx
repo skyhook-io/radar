@@ -898,6 +898,60 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
     ? 'fixed inset-0 z-[80] flex min-h-0 min-w-0 flex-col bg-theme-base'
     : 'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden'
 
+  // Detail-page shortcuts. Skip when a modal is already open so a stray "s"
+  // in an input field doesn't pop another sync dialog.
+  const shortcutsEnabled = !syncDialogOpen && !rollbackTarget
+  useRegisterShortcut({
+    id: 'gitops-detail-sync',
+    keys: 's',
+    description: isArgoApp ? 'Open sync options' : 'Reconcile',
+    category: 'GitOps',
+    scope: 'gitops',
+    handler: () => {
+      if (status?.suspended) return
+      if (isArgoApp) setSyncDialogOpen(true)
+      else if (isFlux) fluxReconcile.mutate({ kind, namespace, name })
+    },
+    enabled: shortcutsEnabled && (isArgoApp || isFlux),
+  })
+  useRegisterShortcut({
+    id: 'gitops-detail-refresh',
+    keys: 'r',
+    description: 'Refresh application',
+    category: 'GitOps',
+    scope: 'gitops',
+    handler: () => {
+      if (!isArgoApp) return
+      setRefreshKind('normal')
+      argoRefresh.mutate({ namespace, name, hard: false })
+    },
+    enabled: shortcutsEnabled && isArgoApp,
+  })
+  useRegisterShortcut({
+    id: 'gitops-detail-hard-refresh',
+    keys: 'Shift+R',
+    description: 'Hard refresh (re-resolve source from Git)',
+    category: 'GitOps',
+    scope: 'gitops',
+    handler: () => {
+      if (!isArgoApp) return
+      setRefreshKind('hard')
+      argoRefresh.mutate({ namespace, name, hard: true })
+    },
+    enabled: shortcutsEnabled && isArgoApp,
+  })
+  useRegisterShortcut({
+    id: 'gitops-detail-terminate',
+    keys: 't',
+    description: 'Terminate running sync',
+    category: 'GitOps',
+    scope: 'gitops',
+    handler: () => {
+      if (isArgoApp && isRunning) argoTerminate.mutate({ namespace, name })
+    },
+    enabled: shortcutsEnabled && isArgoApp && isRunning,
+  })
+
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-theme-base">
       {!graphFullscreen && <div className="shrink-0 border-b border-theme-border bg-theme-base px-4 py-3">
@@ -948,8 +1002,8 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                 />
                 {isRunning && <ActionButton label="Terminate" icon={XCircle} loading={argoTerminate.isPending} onClick={() => argoTerminate.mutate({ namespace, name })} danger />}
                 {status?.suspended
-                  ? <ActionButton label="Resume" icon={Play} loading={argoResume.isPending} onClick={() => argoResume.mutate({ namespace, name })} />
-                  : <ActionButton label="Suspend" icon={Pause} loading={argoSuspend.isPending} onClick={() => argoSuspend.mutate({ namespace, name })} />}
+                  ? <ActionButton label="Enable auto-sync" icon={Play} loading={argoResume.isPending} onClick={() => argoResume.mutate({ namespace, name })} />
+                  : <ActionButton label="Disable auto-sync" icon={Pause} loading={argoSuspend.isPending} onClick={() => argoSuspend.mutate({ namespace, name })} />}
               </>
             )}
             {isFlux && (
@@ -992,10 +1046,12 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
               <ViewButton active={appView === 'changes'} icon={GitCommit} label="Changes" onClick={() => setAppView('changes')} />
               <ViewButton active={appView === 'activity'} icon={Clock3} label="Activity" onClick={() => setAppView('activity')} />
             </div>
-            {graphFullscreen && (
+            {graphFullscreen ? (
               <div className="min-w-0 flex-1 truncate text-sm font-medium text-theme-text-primary">
                 {namespace ? `${namespace}/` : ''}{name}
               </div>
+            ) : (
+              appView === 'topology' && tree && <TopologyCounts tree={tree} />
             )}
             <div className="flex items-center gap-2">
               {appView === 'topology' && (
@@ -1828,6 +1884,29 @@ function RefreshSplitButton({
           </button>
         </div>
       )}
+    </div>
+  )
+}
+
+// Inline counts for the topology toolbar — answers "how many resources, how
+// many of them are healthy / drifted" at a glance, without making the user
+// count facets in the filter rail.
+function TopologyCounts({ tree }: { tree: GitOpsResourceTree }) {
+  const nodes = (tree.nodes ?? []).filter((n) => n.role !== 'group' && n.role !== 'root')
+  const total = nodes.length
+  if (total === 0) return null
+  const healthy = nodes.filter((n) => (n.health || '').toLowerCase() === 'healthy').length
+  const degraded = nodes.filter((n) => {
+    const h = (n.health || '').toLowerCase()
+    return h === 'degraded' || h === 'missing' || h === 'unhealthy'
+  }).length
+  const outOfSync = nodes.filter((n) => (n.sync || '').toLowerCase() === 'outofsync').length
+  return (
+    <div className="hidden min-w-0 flex-1 items-center gap-3 truncate text-[11px] text-theme-text-tertiary md:flex">
+      <span><span className="text-theme-text-primary">{total}</span> resources</span>
+      {healthy > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {healthy} healthy</span>}
+      {degraded > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-red-500" /> {degraded} degraded</span>}
+      {outOfSync > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> {outOfSync} out of sync</span>}
     </div>
   )
 }

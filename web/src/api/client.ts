@@ -800,6 +800,12 @@ export function useGitOpsTree(kind: string, namespace: string, name: string, gro
   })
 }
 
+// Poll fast (2s) while a sync/rollback is in flight so the user sees the
+// outcome quickly; otherwise rely on staleTime + manual refetch. Argo flips
+// operationState.phase from "Running" -> Succeeded/Failed when done, so this
+// auto-quiesces on completion.
+const INSIGHTS_RUNNING_POLL_MS = 2000
+
 export function useGitOpsInsights(kind: string, namespace: string, name: string, group?: string, namespaces: string[] = []) {
   const ns = namespace || '_'
   const params = new URLSearchParams()
@@ -812,6 +818,10 @@ export function useGitOpsInsights(kind: string, namespace: string, name: string,
     queryFn: () => fetchJSON(`/gitops/insights/${kind}/${ns}/${name}${queryString ? `?${queryString}` : ''}`),
     enabled: Boolean(kind && name),
     staleTime: 5000,
+    refetchInterval: (query) => {
+      const phase = query.state.data?.summary?.operationPhase
+      return phase === 'Running' ? INSIGHTS_RUNNING_POLL_MS : false
+    },
   })
 }
 

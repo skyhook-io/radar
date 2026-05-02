@@ -35,11 +35,21 @@ type Summary struct {
 	Sync           string `json:"sync,omitempty"`
 	Health         string `json:"health,omitempty"`
 	OperationPhase string `json:"operationPhase,omitempty"`
-	Source         string `json:"source,omitempty"`
-	TargetRevision string `json:"targetRevision,omitempty"`
-	LastRevision   string `json:"lastRevision,omitempty"`
-	LastReconcile  string `json:"lastReconcile,omitempty"`
-	PartialReason  string `json:"partialReason,omitempty"`
+	// OperationMessage is the latest operation status message from
+	// status.operationState.message. Surfaced in the status strip so the
+	// "what's happening right now" answer doesn't require switching to
+	// the Activity tab.
+	OperationMessage string `json:"operationMessage,omitempty"`
+	Source           string `json:"source,omitempty"`
+	TargetRevision   string `json:"targetRevision,omitempty"`
+	LastRevision     string `json:"lastRevision,omitempty"`
+	LastReconcile    string `json:"lastReconcile,omitempty"`
+	PartialReason    string `json:"partialReason,omitempty"`
+	// AutoSyncMode describes the current syncPolicy.automated configuration
+	// in human-readable form. One of: "Manual", "Auto", "Auto · prune",
+	// "Auto · self-heal", "Auto · prune · self-heal", or "" if not derivable.
+	// Frontend renders as a small chip in the status strip.
+	AutoSyncMode string `json:"autoSyncMode,omitempty"`
 }
 
 type Ref struct {
@@ -59,11 +69,22 @@ type Issue struct {
 }
 
 type Change struct {
-	Ref         Ref    `json:"ref"`
-	Category    string `json:"category"`
-	Sync        string `json:"sync,omitempty"`
-	Health      string `json:"health,omitempty"`
-	Message     string `json:"message,omitempty"`
+	Ref     Ref    `json:"ref"`
+	Category string `json:"category"`
+	Sync    string `json:"sync,omitempty"`
+	Health  string `json:"health,omitempty"`
+	Message string `json:"message,omitempty"`
+	// SyncError carries the per-resource sync failure message from
+	// status.resources[].syncResult when the last sync attempt for this
+	// resource failed. Distinct from Message (which is the live health
+	// message) — surfacing both lets the user tell "this resource is
+	// degraded right now" from "the last sync attempt for this resource
+	// errored". Empty when sync succeeded.
+	SyncError string `json:"syncError,omitempty"`
+	// HookPhase identifies sync hook resources (PreSync / PostSync /
+	// SyncFail / PostDelete) so the UI can mark them visually distinct
+	// from regular resources. Empty for non-hook resources.
+	HookPhase   string `json:"hookPhase,omitempty"`
 	HasDesired  bool   `json:"hasDesired"`
 	HasLive     bool   `json:"hasLive"`
 	Diff        string `json:"diff,omitempty"`
@@ -143,6 +164,7 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 		s.Sync, _, _ = unstructured.NestedString(root.Object, "status", "sync", "status")
 		s.Health, _, _ = unstructured.NestedString(root.Object, "status", "health", "status")
 		s.OperationPhase, _, _ = unstructured.NestedString(root.Object, "status", "operationState", "phase")
+		s.OperationMessage, _, _ = unstructured.NestedString(root.Object, "status", "operationState", "message")
 		s.TargetRevision, _, _ = unstructured.NestedString(root.Object, "status", "sync", "revision")
 		s.LastRevision, _, _ = unstructured.NestedString(root.Object, "status", "operationState", "syncResult", "revision")
 		s.LastReconcile, _, _ = unstructured.NestedString(root.Object, "status", "reconciledAt")
@@ -154,6 +176,7 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 			}
 		}
 		s.Source = joinNonEmpty(gitops.StringValue(source["repoURL"]), gitops.StringValue(source["path"]), gitops.StringValue(source["chart"]))
+		s.AutoSyncMode = describeArgoAutoSync(root)
 		return s
 	}
 	status := fluxStatus(root)
@@ -170,7 +193,29 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 	} else if ref, ok := nestedRef(root, "spec", "chart", "spec", "sourceRef"); ok {
 		s.Source = ref.Kind + "/" + ref.Name
 	}
+	if suspended, _, _ := unstructured.NestedBool(root.Object, "spec", "suspend"); suspended {
+		s.AutoSyncMode = "Suspended"
+	} else {
+		s.AutoSyncMode = "Auto"
+	}
 	return s
+}
+
+// describeArgoAutoSync formats spec.syncPolicy.automated into a chip label.
+// Empty when the field can't be read; "Manual" when automated is absent.
+func describeArgoAutoSync(root *unstructured.Unstructured) string {
+	automated, found, _ := unstructured.NestedMap(root.Object, "spec", "syncPolicy", "automated")
+	if !found {
+		return "Manual"
+	}
+	parts := []string{"Auto"}
+	if v, ok := automated["prune"].(bool); ok && v {
+		parts = append(parts, "prune")
+	}
+	if v, ok := automated["selfHeal"].(bool); ok && v {
+		parts = append(parts, "self-heal")
+	}
+	return strings.Join(parts, " · ")
 }
 
 func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTree, tool string) []Issue {
@@ -272,12 +317,28 @@ func argoResourceChanges(root *unstructured.Unstructured) []Change {
 		} else if sync == "Synced" && (health == "" || health == "Healthy") {
 			category = "Synced"
 		}
+		// Argo records per-resource sync failures under a syncResult sibling
+		// (set during/after a failed sync attempt). Pull the message + hook
+		// phase if present so the UI can show actionable failure context.
+		syncError := ""
+		hookPhase := ""
+		if sr, ok := m["syncResult"].(map[string]any); ok {
+			// Only treat the message as an "error" when it isn't paired with
+			// a happy status; Argo also writes the message field on success.
+			status := gitops.StringValue(sr["status"])
+			if status != "" && status != "Synced" && status != "Pruned" {
+				syncError = gitops.StringValue(sr["message"])
+			}
+			hookPhase = gitops.StringValue(sr["hookPhase"])
+		}
 		out = append(out, Change{
 			Ref:         ref,
 			Category:    category,
 			Sync:        sync,
 			Health:      health,
 			Message:     nestedMessage(m["health"]),
+			SyncError:   syncError,
+			HookPhase:   hookPhase,
 			HasDesired:  false,
 			HasLive:     true,
 			Partial:     true,

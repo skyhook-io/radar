@@ -32,15 +32,23 @@ export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) 
         {operation && (
           <span
             className={clsx('badge badge-sm font-medium uppercase tracking-wide', SEVERITY_BADGE[gitopsToSeverity(operation)])}
-            title={`Last sync operation: ${operation}`}
+            title={summary.operationMessage ? `${operation}: ${summary.operationMessage}` : `Last sync operation: ${operation}`}
           >
             {operation}
+          </span>
+        )}
+        {/* When an operation is in flight or just failed, surface the message
+            inline so the user doesn't have to switch to Activity to see why. */}
+        {operation && summary.operationMessage && (
+          <span className="min-w-0 max-w-[60ch] truncate text-[11px] text-theme-text-secondary" title={summary.operationMessage}>
+            {summary.operationMessage}
           </span>
         )}
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-theme-text-tertiary">
           <MetaFact label="Source" value={summary.source || '-'} />
           <MetaFact label="Revision" value={summary.lastRevision || summary.targetRevision || '-'} mono />
           <MetaFact label="Last reconcile" value={formatRelative(summary.lastReconcile)} />
+          {summary.autoSyncMode && <MetaFact label="Sync mode" value={summary.autoSyncMode} />}
         </div>
       </div>
     </div>
@@ -184,6 +192,14 @@ export function GitOpsChangesView({ insight, error, onOpenResource }: GitOpsChan
                     <div className="min-w-0">
                       <div className="flex items-baseline gap-2">
                         <div className="min-w-0 truncate font-medium text-theme-text-primary">{change.ref.kind} / {change.ref.name}</div>
+                        {change.hookPhase && (
+                          <span
+                            className="shrink-0 rounded border border-violet-400/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-700 dark:text-violet-400"
+                            title={`Sync hook: ${change.hookPhase}`}
+                          >
+                            {change.hookPhase}
+                          </span>
+                        )}
                         {step !== undefined && (
                           <span
                             className="shrink-0 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 font-mono text-[10px] text-theme-text-tertiary"
@@ -194,7 +210,13 @@ export function GitOpsChangesView({ insight, error, onOpenResource }: GitOpsChan
                         )}
                       </div>
                       <div className="truncate text-xs text-theme-text-tertiary">{change.ref.namespace || '(cluster)'} {change.ref.group ? `· ${change.ref.group}` : ''}</div>
-                      {change.message && <div className="mt-1 line-clamp-2 text-xs text-theme-text-secondary">{change.message}</div>}
+                      {/* Per-resource sync error gets emphasis (red text) over the
+                          live health message — operators chasing a broken sync
+                          want the failure reason on the same row, not in a drawer. */}
+                      {change.syncError && (
+                        <div className="mt-1 line-clamp-3 text-xs text-red-600 dark:text-red-400" title={change.syncError}>{change.syncError}</div>
+                      )}
+                      {change.message && !change.syncError && <div className="mt-1 line-clamp-2 text-xs text-theme-text-secondary">{change.message}</div>}
                       {change.partial && <div className="mt-1 text-[11px] text-theme-text-tertiary">{change.partialNote}</div>}
                     </div>
                     <div><SyncStatusBadge sync={(change.sync || change.category || 'Unknown') as any} /></div>
@@ -220,6 +242,11 @@ function refKey(ref: { kind: string; namespace?: string; name: string }): string
 
 function GitOpsPlanPanel({ plan, tool }: { plan?: GitOpsPlanItem[] | null; tool?: string }) {
   const items = plan ?? []
+  // Group consecutive items by wave when at least one item declares a wave —
+  // makes "what runs in what order" visually obvious for multi-wave apps.
+  // When no items have waves (the common case for single-app syncs), fall
+  // through to a flat list to avoid an awkward "Wave (none)" header.
+  const hasAnyWave = items.some((i) => i.waveSet)
   return (
     <section className="rounded-md border border-theme-border bg-theme-surface">
       <SectionHeader icon={ListChecks} title="Sync Plan" hint={tool === 'argocd' ? 'Argo order: phase, wave, kind, then name.' : 'Flux order follows source and dependency relationships.'} />
@@ -228,21 +255,40 @@ function GitOpsPlanPanel({ plan, tool }: { plan?: GitOpsPlanItem[] | null; tool?
           <div className="p-4 text-sm text-theme-text-secondary">No plan data available.</div>
         ) : (
           <div className="divide-y divide-theme-border">
-            {items.map((item) => (
-              <div key={`${item.order}-${item.ref.kind}-${item.ref.name}`} className="grid grid-cols-[60px_minmax(0,1fr)] gap-2 px-4 py-3 text-sm">
-                <div className="text-right font-mono text-[11px] text-theme-text-tertiary">step {item.order}</div>
-                <div className="min-w-0">
-                  <div className="truncate font-medium text-theme-text-primary">{item.ref.kind} / {item.ref.name}</div>
-                  <div className="mt-1 flex flex-wrap gap-1">
-                    {item.phase && <Chip label="phase" value={item.phase} />}
-                    {item.waveSet && <Chip label="wave" value={String(item.wave)} />}
-                    {item.hook && <Chip label="hook" value={item.hook} />}
-                    {item.relationship && <Chip value={item.relationship} />}
-                    {item.status && <Chip value={item.status} />}
+            {items.map((item, index) => {
+              const prev = items[index - 1]
+              const showWaveHeader = hasAnyWave && (index === 0 || (prev?.wave ?? null) !== (item.wave ?? null) || prev?.waveSet !== item.waveSet)
+              return (
+                <div key={`${item.order}-${item.ref.kind}-${item.ref.name}`}>
+                  {showWaveHeader && (
+                    <div className="bg-theme-base/50 px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+                      {item.waveSet ? `Wave ${item.wave}` : 'Default wave'}
+                    </div>
+                  )}
+                  <div className="grid grid-cols-[60px_minmax(0,1fr)] gap-2 px-4 py-3 text-sm">
+                    <div className="text-right font-mono text-[11px] text-theme-text-tertiary">step {item.order}</div>
+                    <div className="min-w-0">
+                      <div className="flex items-baseline gap-2">
+                        <span className="min-w-0 truncate font-medium text-theme-text-primary">{item.ref.kind} / {item.ref.name}</span>
+                        {item.hook && (
+                          <span
+                            className="shrink-0 rounded border border-violet-400/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-700 dark:text-violet-400"
+                            title={`Sync hook: ${item.hook}`}
+                          >
+                            {item.hook}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-1 flex flex-wrap gap-1">
+                        {item.phase && <Chip label="phase" value={item.phase} />}
+                        {item.relationship && <Chip value={item.relationship} />}
+                        {item.status && <Chip value={item.status} />}
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>
