@@ -157,11 +157,6 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
         </>
       )}
 
-      {/*
-        Warning sits ABOVE the data section, not below it — putting
-        it after meant the user usually saw it only after revealing
-        (and copying / screen-sharing) a value.
-      */}
       {dataKeys.length > 0 && (
         <div className="flex items-center gap-2 p-3 bg-amber-500/10 border border-amber-500/30 rounded text-amber-400 text-sm">
           <AlertTriangle className="w-4 h-4 flex-shrink-0" />
