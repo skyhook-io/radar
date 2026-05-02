@@ -3,7 +3,6 @@ import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { CheckCircle2, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Table2, Tag, XCircle } from 'lucide-react'
 import {
-  GitOpsActions,
   GitOpsActivityInsightView,
   GitOpsChangesView,
   GitOpsIssuesBand,
@@ -809,7 +808,13 @@ function TableCell({ children }: { children: ReactNode }) {
   return <td className="border-b border-theme-border px-3 py-2 align-middle text-theme-text-secondary">{children}</td>
 }
 
-type GitOpsAppView = 'graph' | 'resources' | 'changes' | 'activity'
+// Three top-level views per detail page:
+//   topology — the resource tree, with an internal graph/table toggle since
+//              both views share the same filter rail and dataset
+//   changes  — drift between desired and live state
+//   activity — current operation, history, diagnosis
+type GitOpsAppView = 'topology' | 'changes' | 'activity'
+type TopologyMode = 'graph' | 'table'
 
 function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const location = useLocation()
@@ -826,7 +831,8 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const insightsQ = useGitOpsInsights(kind, namespace, name, group, namespaces)
   const status = resourceQ.data ? getGitOpsStatus(kind, resourceQ.data) : null
   const tool = getTool(kind, group)
-  const [appView, setAppView] = useState<GitOpsAppView>('graph')
+  const [appView, setAppView] = useState<GitOpsAppView>('topology')
+  const [topologyMode, setTopologyMode] = useState<TopologyMode>('graph')
   const [graphPreset, setGraphPreset] = useState<GitOpsTreePreset>('compact')
   const [graphSearch, setGraphSearch] = useState('')
   const [graphKinds, setGraphKinds] = useState<Set<string>>(new Set())
@@ -879,37 +885,48 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
 
   return (
     <div className="flex h-full min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-theme-base">
-      {!graphFullscreen && <div className="shrink-0 border-b border-theme-border bg-theme-surface px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-3">
+      {!graphFullscreen && <div className="shrink-0 border-b border-theme-border bg-theme-base px-4 py-3">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="mb-1 flex items-center gap-2 text-xs">
+            <div className="mb-1.5 flex items-center gap-1.5 text-xs">
               <button type="button" onClick={() => navigate('/gitops')} className="text-sky-500 hover:text-sky-400">
                 GitOps
               </button>
               <span className="text-theme-text-tertiary">/</span>
-              <span className="badge status-neutral">{tool === 'argo' ? 'ArgoCD' : 'FluxCD'}</span>
-              <span className="text-xs text-theme-text-tertiary">{apiKind?.kind ?? kind}</span>
+              <span className="text-theme-text-secondary">{tool === 'argo' ? 'ArgoCD' : 'FluxCD'}</span>
+              <span className="text-theme-text-tertiary">/</span>
+              <span className="text-theme-text-secondary">{apiKind?.kind ?? kind}</span>
             </div>
-            <h1 className="mt-1 truncate text-lg font-semibold text-theme-text-primary">
-              {namespace ? `${namespace}/` : ''}{name}
-            </h1>
-            <div className="mt-2 grid max-w-5xl grid-cols-2 gap-x-6 gap-y-1 text-xs text-theme-text-secondary md:grid-cols-4">
+            {/* Title row: identity + status badges sit together so an oncall scan
+                gets "what is it" and "is it OK?" in a single glance. Actions are
+                separated to the right so they don't blur into the badges. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <h1 className="min-w-0 truncate text-lg font-semibold text-theme-text-primary">
+                {namespace ? `${namespace}/` : ''}{name}
+              </h1>
+              {status && (
+                <>
+                  <SyncStatusBadge sync={status.sync} suspended={status.suspended} />
+                  <HealthStatusBadge health={status.health} />
+                </>
+              )}
+            </div>
+            {/* Metadata row: deliberately small + tertiary so it doesn't fight the
+                title for attention. Source/Revision/Destination are reference
+                facts, not signals — they should be available, not commanding. */}
+            <div className="mt-2 flex max-w-5xl flex-wrap gap-x-5 gap-y-0.5 text-[11px] text-theme-text-tertiary">
               <AppFact label="Project" value={detailRow?.project || '-'} />
               <AppFact label="Source" value={detailRow?.repository || detailRow?.chart || '-'} />
               <AppFact label="Revision" value={detailRow?.targetRevision || resourceQ.data?.status?.sync?.revision || resourceQ.data?.status?.lastAppliedRevision || '-'} />
               <AppFact label="Destination" value={[detailRow?.destination, detailRow?.destinationNamespace].filter(Boolean).join(' / ') || '-'} />
             </div>
           </div>
+          {/* Action group: one filled primary action (Sync/Reconcile), rest are
+              ghost-styled secondary actions. Terminate uses the danger variant. */}
           <div className="flex flex-wrap items-center gap-2">
-            {status && (
-              <>
-                <SyncStatusBadge sync={status.sync} suspended={status.suspended} />
-                <HealthStatusBadge health={status.health} />
-              </>
-            )}
             {isArgoApp && (
               <>
-                <ActionButton label="Sync" icon={RefreshCw} loading={argoSync.isPending} onClick={() => argoSync.mutate({ namespace, name })} disabled={status?.suspended} />
+                <ActionButton label="Sync" icon={RefreshCw} loading={argoSync.isPending} onClick={() => argoSync.mutate({ namespace, name })} disabled={status?.suspended} primary />
                 <ActionButton label="Refresh" icon={RotateCw} loading={argoRefresh.isPending} onClick={() => argoRefresh.mutate({ namespace, name })} />
                 {isRunning && <ActionButton label="Terminate" icon={XCircle} loading={argoTerminate.isPending} onClick={() => argoTerminate.mutate({ namespace, name })} danger />}
                 {status?.suspended
@@ -919,16 +936,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             )}
             {isFlux && (
               <>
-                <GitOpsActions
-                  tool="flux"
-                  suspended={status?.suspended ?? false}
-                  onSync={() => fluxReconcile.mutate({ kind, namespace, name })}
-                  onSuspend={() => fluxSuspend.mutate({ kind, namespace, name })}
-                  onResume={() => fluxResume.mutate({ kind, namespace, name })}
-                  isSyncing={fluxReconcile.isPending}
-                  isSuspending={fluxSuspend.isPending || fluxResume.isPending}
-                  size="sm"
-                />
+                <ActionButton label="Reconcile" icon={RefreshCw} loading={fluxReconcile.isPending} onClick={() => fluxReconcile.mutate({ kind, namespace, name })} disabled={status?.suspended} primary />
                 {isFluxWorkload && (
                   <ActionButton
                     label="Sync with source"
@@ -937,6 +945,9 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                     onClick={() => fluxSyncWithSource.mutate({ kind, namespace, name })}
                   />
                 )}
+                {status?.suspended
+                  ? <ActionButton label="Resume" icon={Play} loading={fluxResume.isPending} onClick={() => fluxResume.mutate({ kind, namespace, name })} />
+                  : <ActionButton label="Suspend" icon={Pause} loading={fluxSuspend.isPending} onClick={() => fluxSuspend.mutate({ kind, namespace, name })} />}
               </>
             )}
           </div>
@@ -959,8 +970,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
         <div className={graphShellClass}>
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-theme-border bg-theme-base px-4 py-2">
             <div className="flex items-center gap-1 rounded-md border border-theme-border bg-theme-surface p-1">
-              <ViewButton active={appView === 'graph'} icon={GitBranch} label="Graph" onClick={() => setAppView('graph')} />
-              <ViewButton active={appView === 'resources'} icon={Table2} label="Resources" onClick={() => setAppView('resources')} />
+              <ViewButton active={appView === 'topology'} icon={GitBranch} label="Topology" onClick={() => setAppView('topology')} />
               <ViewButton active={appView === 'changes'} icon={GitCommit} label="Changes" onClick={() => setAppView('changes')} />
               <ViewButton active={appView === 'activity'} icon={Clock3} label="Activity" onClick={() => setAppView('activity')} />
             </div>
@@ -970,30 +980,39 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
               </div>
             )}
             <div className="flex items-center gap-2">
-              {(appView === 'graph' || appView === 'resources') && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setGraphSearch('')
-                    setGraphKinds(new Set())
-                    setGraphSync(new Set())
-                    setGraphHealth(new Set())
-                    setGraphNamespaces(new Set())
-                    setGraphRoles(new Set())
-                  }}
-                  className="rounded px-2 py-1 text-xs text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-                >
-                  Clear filters
-                </button>
-              )}
-              {appView === 'graph' && (
-                <button
-                  type="button"
-                  onClick={() => setGraphFullscreen(!graphFullscreen)}
-                  className="rounded-md border border-theme-border bg-theme-surface px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
-                >
-                  {graphFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-                </button>
+              {appView === 'topology' && (
+                <>
+                  {/* Internal toggle between graph and table renderings of the same
+                      filtered resource set. Kept in the tab toolbar so it reads as
+                      "view mode for the current tab" rather than a peer tab. */}
+                  <div className="flex items-center gap-1 rounded-md border border-theme-border bg-theme-surface p-0.5">
+                    <ViewButton active={topologyMode === 'graph'} icon={GitBranch} label="Graph" onClick={() => setTopologyMode('graph')} />
+                    <ViewButton active={topologyMode === 'table'} icon={Table2} label="Table" onClick={() => setTopologyMode('table')} />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setGraphSearch('')
+                      setGraphKinds(new Set())
+                      setGraphSync(new Set())
+                      setGraphHealth(new Set())
+                      setGraphNamespaces(new Set())
+                      setGraphRoles(new Set())
+                    }}
+                    className="rounded px-2 py-1 text-xs text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
+                  >
+                    Clear filters
+                  </button>
+                  {topologyMode === 'graph' && (
+                    <button
+                      type="button"
+                      onClick={() => setGraphFullscreen(!graphFullscreen)}
+                      className="rounded-md border border-theme-border bg-theme-surface px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                    >
+                      {graphFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                    </button>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -1022,7 +1041,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                 onToggleRole={(value) => toggleSet(graphRoles, setGraphRoles, value)}
               />
               <div className="min-h-0 min-w-0 border-l border-theme-border max-lg:border-l-0 max-lg:border-t">
-                {appView === 'graph' ? (
+                {topologyMode === 'graph' ? (
                   <GitOpsTreeGraph
                     tree={tree}
                     loading={treeQ.isLoading}
@@ -1657,6 +1676,7 @@ function ActionButton({
   loading,
   disabled,
   danger,
+  primary,
   onClick,
 }: {
   label: string
@@ -1664,19 +1684,27 @@ function ActionButton({
   loading?: boolean
   disabled?: boolean
   danger?: boolean
+  primary?: boolean
   onClick: () => void
 }) {
+  // Three intentional variants:
+  //   primary  → filled brand fill; the dominant action on the page
+  //   danger   → red; destructive (Terminate)
+  //   default  → ghost button on theme surface; secondary actions (Refresh, Suspend)
+  // The default rests on theme-surface (not theme-elevated) so it reads as a
+  // button against an elevated header card, not as another badge tile.
+  const variantClass = primary
+    ? 'btn-brand'
+    : danger
+      ? 'border border-red-500/40 bg-red-500/10 text-red-500 hover:bg-red-500/20'
+      : 'border border-theme-border bg-theme-surface text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
   return (
     <Tooltip content={label}>
       <button
         type="button"
         onClick={onClick}
         disabled={loading || disabled}
-        className={`inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
-          danger
-            ? 'bg-red-500/15 text-red-500 hover:bg-red-500/25'
-            : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
-        }`}
+        className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${variantClass}`}
       >
         {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Icon className="h-3.5 w-3.5" />}
         {label}
