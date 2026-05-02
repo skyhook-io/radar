@@ -2305,9 +2305,13 @@ function createGitOpsMutation<TVariables>(config: GitOpsMutationConfig<TVariable
 
 // Common variable types
 type FluxResourceVars = { kind: string; namespace: string; name: string }
-type ArgoAppVars = {
-  namespace: string
-  name: string
+// ArgoAppVars identifies the target Application. Used by mutations that don't
+// take a body (terminate, suspend, resume, refresh).
+type ArgoAppVars = { namespace: string; name: string }
+// ArgoSyncVars extends ArgoAppVars with the sync request body fields. Only
+// useArgoSync sends these — splitting the type prevents callers from passing
+// resources/revision/prune to mutations that would silently drop them.
+type ArgoSyncVars = ArgoAppVars & {
   resources?: Array<{ group?: string; kind: string; namespace?: string; name: string }>
   revision?: string
   prune?: boolean
@@ -2369,7 +2373,7 @@ export const useFluxSyncWithSource = createGitOpsMutation<FluxResourceVars>({
 // ArgoCD API hooks
 // ============================================================================
 
-export const useArgoSync = createGitOpsMutation<ArgoAppVars>({
+export const useArgoSync = createGitOpsMutation<ArgoSyncVars>({
   getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/sync`,
   getBody: (v) => ({
     resources: v.resources,

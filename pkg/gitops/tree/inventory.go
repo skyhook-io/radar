@@ -4,6 +4,8 @@ import (
 	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/skyhook-io/radar/pkg/gitops"
 )
 
 type gitOpsStatus struct {
@@ -22,29 +24,29 @@ func parseArgoManagedResources(root *unstructured.Unstructured) []managedResourc
 		if !ok {
 			continue
 		}
-		kind := stringValue(m["kind"])
-		name := stringValue(m["name"])
+		kind := gitops.StringValue(m["kind"])
+		name := gitops.StringValue(m["name"])
 		if kind == "" || name == "" {
 			continue
 		}
 		ref := ResourceRef{
-			Group:     stringValue(m["group"]),
+			Group:     gitops.StringValue(m["group"]),
 			Kind:      kind,
-			Namespace: stringValue(m["namespace"]),
+			Namespace: gitops.StringValue(m["namespace"]),
 			Name:      name,
 		}
 		health := ""
 		if hm, ok := m["health"].(map[string]any); ok {
-			health = stringValue(hm["status"])
+			health = gitops.StringValue(hm["status"])
 		}
 		out = append(out, managedResource{
 			Ref:    ref,
-			Sync:   normalizeSync(stringValue(m["status"])),
+			Sync:   normalizeSync(gitops.StringValue(m["status"])),
 			Health: normalizeHealth(health),
 			Data: map[string]any{
-				"hook":      stringValue(m["hook"]),
-				"syncWave":  stringValue(m["syncWave"]),
-				"syncPhase": stringValue(m["syncPhase"]),
+				"hook":      gitops.StringValue(m["hook"]),
+				"syncWave":  gitops.StringValue(m["syncWave"]),
+				"syncPhase": gitops.StringValue(m["syncPhase"]),
 			},
 		})
 	}
@@ -62,9 +64,9 @@ func parseFluxManagedResources(root *unstructured.Unstructured) []managedResourc
 		if !ok {
 			continue
 		}
-		ref, ok := parseFluxInventoryID(stringValue(m["id"]))
+		ref, ok := parseFluxInventoryID(gitops.StringValue(m["id"]))
 		if ok {
-			out = append(out, managedResource{Ref: ref, Data: map[string]any{"version": stringValue(m["v"])}})
+			out = append(out, managedResource{Ref: ref, Data: map[string]any{"version": gitops.StringValue(m["v"])}})
 		}
 	}
 	return out
@@ -103,8 +105,8 @@ func rootStatus(root *unstructured.Unstructured, tool Tool) gitOpsStatus {
 		if !ok {
 			continue
 		}
-		t := stringValue(m["type"])
-		s := stringValue(m["status"])
+		t := gitops.StringValue(m["type"])
+		s := gitops.StringValue(m["status"])
 		if t == "Ready" {
 			ready = s
 		}
@@ -157,9 +159,3 @@ func normalizeHealth(status string) string {
 	}
 }
 
-func stringValue(v any) string {
-	if s, ok := v.(string); ok {
-		return s
-	}
-	return ""
-}

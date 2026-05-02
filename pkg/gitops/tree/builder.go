@@ -183,11 +183,12 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 
 	summary := summarize(nodeList)
 	return &ResourceTree{
-		Root:     rootNode,
-		Nodes:    nodeList,
-		Edges:    edgeList,
-		Warnings: b.topoWarnings(),
-		Summary:  summary,
+		Root:       rootNode,
+		Nodes:      nodeList,
+		Edges:      edgeList,
+		Warnings:   b.topoWarnings(),
+		Summary:    summary,
+		RootObject: root,
 	}, nil
 }
 

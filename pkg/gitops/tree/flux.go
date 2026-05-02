@@ -1,9 +1,9 @@
 package tree
 
 import (
-	"strings"
-
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/skyhook-io/radar/pkg/gitops"
 )
 
 const fluxSourceGroup = "source.toolkit.fluxcd.io"
@@ -38,11 +38,11 @@ func fluxRelatedResources(root *unstructured.Unstructured) []relatedResource {
 		if !ok {
 			continue
 		}
-		name := stringValue(m["name"])
+		name := gitops.StringValue(m["name"])
 		if name == "" {
 			continue
 		}
-		namespace := stringValue(m["namespace"])
+		namespace := gitops.StringValue(m["namespace"])
 		if namespace == "" {
 			namespace = root.GetNamespace()
 		}
@@ -67,16 +67,16 @@ func fluxSourceRef(root *unstructured.Unstructured, defaultNamespace string, fie
 	if !ok {
 		return ResourceRef{}, false
 	}
-	kind := stringValue(source["kind"])
-	name := stringValue(source["name"])
+	kind := gitops.StringValue(source["kind"])
+	name := gitops.StringValue(source["name"])
 	if kind == "" || name == "" {
 		return ResourceRef{}, false
 	}
-	namespace := stringValue(source["namespace"])
+	namespace := gitops.StringValue(source["namespace"])
 	if namespace == "" {
 		namespace = defaultNamespace
 	}
-	group := groupFromAPIVersion(stringValue(source["apiVersion"]))
+	group := gitops.GroupFromAPIVersion(gitops.StringValue(source["apiVersion"]))
 	if group == "" {
 		group = fluxSourceGroup
 	}
@@ -88,12 +88,3 @@ func fluxSourceRef(root *unstructured.Unstructured, defaultNamespace string, fie
 	}, true
 }
 
-func groupFromAPIVersion(apiVersion string) string {
-	if apiVersion == "" || apiVersion == "v1" {
-		return ""
-	}
-	if before, _, ok := strings.Cut(apiVersion, "/"); ok {
-		return before
-	}
-	return apiVersion
-}

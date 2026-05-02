@@ -6,8 +6,10 @@ import (
 	"strconv"
 	"strings"
 
-	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+
+	"github.com/skyhook-io/radar/pkg/gitops"
+	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 )
 
 type Insight struct {
@@ -145,7 +147,7 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 				source, _ = sources[0].(map[string]any)
 			}
 		}
-		s.Source = joinNonEmpty(stringValue(source["repoURL"]), stringValue(source["path"]), stringValue(source["chart"]))
+		s.Source = joinNonEmpty(gitops.StringValue(source["repoURL"]), gitops.StringValue(source["path"]), gitops.StringValue(source["chart"]))
 		return s
 	}
 	status := fluxStatus(root)
@@ -245,19 +247,19 @@ func argoResourceChanges(root *unstructured.Unstructured) []Change {
 			continue
 		}
 		ref := Ref{
-			Group:     stringValue(m["group"]),
-			Kind:      stringValue(m["kind"]),
-			Namespace: stringValue(m["namespace"]),
-			Name:      stringValue(m["name"]),
+			Group:     gitops.StringValue(m["group"]),
+			Kind:      gitops.StringValue(m["kind"]),
+			Namespace: gitops.StringValue(m["namespace"]),
+			Name:      gitops.StringValue(m["name"]),
 		}
 		if ref.Kind == "" || ref.Name == "" {
 			continue
 		}
 		health := ""
 		if hm, ok := m["health"].(map[string]any); ok {
-			health = stringValue(hm["status"])
+			health = gitops.StringValue(hm["status"])
 		}
-		sync := stringValue(m["status"])
+		sync := gitops.StringValue(m["status"])
 		category := firstNonEmpty(sync, health, "Unknown")
 		if health == "Degraded" || health == "Missing" {
 			category = health
@@ -347,15 +349,15 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 			}
 			source := ""
 			if sm, ok := m["source"].(map[string]any); ok {
-				source = joinNonEmpty(stringValue(sm["repoURL"]), stringValue(sm["path"]), stringValue(sm["chart"]))
+				source = joinNonEmpty(gitops.StringValue(sm["repoURL"]), gitops.StringValue(sm["path"]), gitops.StringValue(sm["chart"]))
 			}
-			out = append(out, HistoryItem{ID: id, Revision: stringValue(m["revision"]), DeployedAt: stringValue(m["deployedAt"]), Source: source})
+			out = append(out, HistoryItem{ID: id, Revision: gitops.StringValue(m["revision"]), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: source})
 		}
 		if op, ok, _ := unstructured.NestedMap(root.Object, "status", "operationState"); ok {
 			out = append(out, HistoryItem{
-				Phase:      stringValue(op["phase"]),
-				Message:    stringValue(op["message"]),
-				DeployedAt: stringValue(op["finishedAt"]),
+				Phase:      gitops.StringValue(op["phase"]),
+				Message:    gitops.StringValue(op["message"]),
+				DeployedAt: gitops.StringValue(op["finishedAt"]),
 				Revision:   nestedString(op, "syncResult", "revision"),
 			})
 		}
@@ -381,7 +383,7 @@ func buildCapabilities(root *unstructured.Unstructured, tool string) Capabilitie
 		hasHistory := false
 		raw, _, _ := unstructured.NestedSlice(root.Object, "status", "history")
 		for _, item := range raw {
-			if m, ok := item.(map[string]any); ok && stringValue(m["revision"]) != "" {
+			if m, ok := item.(map[string]any); ok && gitops.StringValue(m["revision"]) != "" {
 				hasHistory = true
 				break
 			}
@@ -409,11 +411,11 @@ func conditions(root *unstructured.Unstructured) []condition {
 			continue
 		}
 		out = append(out, condition{
-			typ:                stringValue(m["type"]),
-			status:             stringValue(m["status"]),
-			reason:             stringValue(m["reason"]),
-			message:            stringValue(m["message"]),
-			lastTransitionTime: stringValue(m["lastTransitionTime"]),
+			typ:                gitops.StringValue(m["type"]),
+			status:             gitops.StringValue(m["status"]),
+			reason:             gitops.StringValue(m["reason"]),
+			message:            gitops.StringValue(m["message"]),
+			lastTransitionTime: gitops.StringValue(m["lastTransitionTime"]),
 		})
 	}
 	return out
@@ -462,12 +464,12 @@ func nestedRef(root *unstructured.Unstructured, fields ...string) (Ref, bool) {
 	if !ok {
 		return Ref{}, false
 	}
-	name := stringValue(m["name"])
-	kind := stringValue(m["kind"])
+	name := gitops.StringValue(m["name"])
+	kind := gitops.StringValue(m["kind"])
 	if name == "" || kind == "" {
 		return Ref{}, false
 	}
-	return Ref{Group: groupFromAPIVersion(stringValue(m["apiVersion"])), Kind: kind, Namespace: firstNonEmpty(stringValue(m["namespace"]), root.GetNamespace()), Name: name}, true
+	return Ref{Group: gitops.GroupFromAPIVersion(gitops.StringValue(m["apiVersion"])), Kind: kind, Namespace: firstNonEmpty(gitops.StringValue(m["namespace"]), root.GetNamespace()), Name: name}, true
 }
 
 func refFromTree(ref gitopstree.ResourceRef) Ref {
@@ -592,7 +594,7 @@ func stringData(data map[string]any, key string) string {
 	if data == nil {
 		return ""
 	}
-	return stringValue(data[key])
+	return gitops.StringValue(data[key])
 }
 
 func nestedString(v any, fields ...string) string {
@@ -602,7 +604,7 @@ func nestedString(v any, fields ...string) string {
 	}
 	for i, field := range fields {
 		if i == len(fields)-1 {
-			return stringValue(m[field])
+			return gitops.StringValue(m[field])
 		}
 		m, ok = m[field].(map[string]any)
 		if !ok {
@@ -614,14 +616,7 @@ func nestedString(v any, fields ...string) string {
 
 func nestedMessage(v any) string {
 	if m, ok := v.(map[string]any); ok {
-		return stringValue(m["message"])
-	}
-	return ""
-}
-
-func stringValue(v any) string {
-	if s, ok := v.(string); ok {
-		return s
+		return gitops.StringValue(m["message"])
 	}
 	return ""
 }
@@ -652,12 +647,3 @@ func joinNonEmpty(values ...string) string {
 	return strings.Join(parts, " · ")
 }
 
-func groupFromAPIVersion(apiVersion string) string {
-	if apiVersion == "" || apiVersion == "v1" {
-		return ""
-	}
-	if before, _, ok := strings.Cut(apiVersion, "/"); ok {
-		return before
-	}
-	return apiVersion
-}
