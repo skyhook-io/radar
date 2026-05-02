@@ -68,12 +68,23 @@ function liveOperationPhase(phase?: string): string | null {
 }
 
 function MetaFact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
+  // Label stays tertiary (whisper-quiet) so the value reads as the answer to
+  // the label's question. Without the contrast bump, the row was a wall of
+  // identical-weight `Label: value` pairs.
   return (
     <span className="inline-flex min-w-0 max-w-[40ch] items-baseline gap-1">
       <span className="shrink-0">{label}:</span>
-      <span className={clsx('min-w-0 truncate text-theme-text-secondary', mono && 'font-mono')} title={value}>{value}</span>
+      <span className={clsx('min-w-0 truncate font-medium text-theme-text-primary', mono && 'font-mono')} title={value}>{value}</span>
     </span>
   )
+}
+
+// Plan items often surface 'Unknown' as a placeholder when status info isn't
+// available — a row of `OutOfSync · Unknown · unknown` chips reads as broken.
+// Skip the chip when the value carries no signal.
+function isUnknownChipValue(v: string): boolean {
+  const lower = v.toLowerCase()
+  return lower === 'unknown' || lower === ''
 }
 
 // Single severity-tinted row with a "+N more" expand affordance. The
@@ -217,7 +228,6 @@ export function GitOpsChangesView({ insight, error, onOpenResource }: GitOpsChan
                         <div className="mt-1 line-clamp-3 text-xs text-red-600 dark:text-red-400" title={change.syncError}>{change.syncError}</div>
                       )}
                       {change.message && !change.syncError && <div className="mt-1 line-clamp-2 text-xs text-theme-text-secondary">{change.message}</div>}
-                      {change.partial && <div className="mt-1 text-[11px] text-theme-text-tertiary">{change.partialNote}</div>}
                     </div>
                     <div><SyncStatusBadge sync={(change.sync || change.category || 'Unknown') as any} /></div>
                     <div><HealthStatusBadge health={(change.health || 'Unknown') as any} /></div>
@@ -281,8 +291,8 @@ function GitOpsPlanPanel({ plan, tool }: { plan?: GitOpsPlanItem[] | null; tool?
                       </div>
                       <div className="mt-1 flex flex-wrap gap-1">
                         {item.phase && <Chip label="phase" value={item.phase} />}
-                        {item.relationship && <Chip value={item.relationship} />}
-                        {item.status && <Chip value={item.status} />}
+                        {item.relationship && !isUnknownChipValue(item.relationship) && <Chip value={item.relationship} />}
+                        {item.status && !isUnknownChipValue(item.status) && <Chip value={item.status} />}
                       </div>
                     </div>
                   </div>
@@ -332,26 +342,9 @@ export function GitOpsActivityInsightView({ insight, error, onRollback }: GitOps
           <HistoryRows items={insight.history ?? []} canRollback={canRollback} onRollback={onRollback} />
         </section>
       </div>
-      <section className="mt-4 rounded-md border border-theme-border bg-theme-surface">
-        <SectionHeader icon={AlertTriangle} title="Diagnosis" />
-        {(insight.issues ?? []).length === 0 ? (
-          <div className="p-4 text-sm text-theme-text-secondary">No active GitOps issues detected.</div>
-        ) : (
-          <div className="divide-y divide-theme-border">
-            {(insight.issues ?? []).map((issue, index) => (
-              <div key={`${issue.reason}-${index}`} className="px-4 py-3 text-sm">
-                <div className="flex flex-wrap items-center gap-2">
-                  <span className={clsx('h-2 w-2 rounded-full', issue.severity === 'critical' ? 'bg-red-500' : issue.severity === 'warning' ? 'bg-amber-500' : 'bg-sky-500')} />
-                  <span className="font-medium text-theme-text-primary">{issue.reason}</span>
-                  <span className="badge status-neutral">{issue.scope}</span>
-                </div>
-                <p className="mt-1 text-theme-text-secondary">{issue.message}</p>
-                {issue.action && <p className="mt-1 text-xs text-theme-text-tertiary">{issue.action}</p>}
-              </div>
-            ))}
-          </div>
-        )}
-      </section>
+      {/* Issues are surfaced via GitOpsIssuesBand at the top of every tab — a
+          duplicated Diagnosis section here would be a third place rendering
+          the same data. The band's "+N more" expand carries the full list. */}
     </div>
   )
 }
@@ -385,9 +378,14 @@ function HistoryRows({
         // to it is meaningless.
         const showRollback = canRollback && !!item.id && !!onRollback
         return (
-          <li key={`${item.id}-${item.revision}-${index}`} className="relative grid grid-cols-[16px_minmax(0,1fr)] gap-3 pb-4 last:pb-0">
+          // `group` lets the row hover-reveal the Rollback button below;
+          // visible-but-faded baseline keeps it discoverable on touch devices
+          // while staying out of the visual rhythm at rest.
+          <li key={`${item.id}-${item.revision}-${index}`} className="group relative grid grid-cols-[16px_minmax(0,1fr)] gap-3 pb-4 last:pb-0">
             <div className="relative flex justify-center">
-              {!isLast && <span className="absolute left-1/2 top-3 h-full w-px -translate-x-1/2 bg-theme-border" />}
+              {/* 2px line + tertiary tone (vs 1px theme-border) makes the
+                  timeline metaphor legible without shouting. */}
+              {!isLast && <span className="absolute left-1/2 top-3 h-full w-[2px] -translate-x-1/2 bg-theme-text-tertiary/30" />}
               <span
                 className={clsx('relative mt-1 h-2.5 w-2.5 rounded-full ring-2 ring-theme-surface', tone.dot)}
                 title={item.phase || tone.inferredFrom || 'unknown'}
@@ -404,7 +402,7 @@ function HistoryRows({
                   <button
                     type="button"
                     onClick={() => onRollback?.(item)}
-                    className="ml-auto rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[10px] text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                    className="ml-auto rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[10px] text-theme-text-secondary opacity-40 transition-opacity hover:bg-theme-hover hover:text-theme-text-primary hover:opacity-100 focus-visible:opacity-100 group-hover:opacity-100"
                     title={`Roll back to revision ${item.revision || `#${item.id}`}`}
                   >
                     Rollback

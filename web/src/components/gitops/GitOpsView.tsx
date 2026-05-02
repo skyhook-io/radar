@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { CheckCircle2, ChevronDown, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Table2, Tag, XCircle } from 'lucide-react'
+import { CheckCircle2, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Table2, Tag, XCircle } from 'lucide-react'
 import {
   GitOpsActivityInsightView,
   GitOpsChangesView,
@@ -865,7 +865,6 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   // Track the last refresh kind so the in-flight spinner moves with the
   // button the user actually clicked (Refresh vs Hard Refresh).
   const [refreshKind, setRefreshKind] = useState<'normal' | 'hard'>('normal')
-  const [refreshMenuOpen, setRefreshMenuOpen] = useState(false)
 
   const detailRow = resourceQ.data ? normalizeDetailResource(kind, group, resourceQ.data) : null
   const tree = treeQ.data ?? null
@@ -962,9 +961,9 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                 GitOps
               </button>
               <span className="text-theme-text-tertiary">/</span>
-              <span className="text-theme-text-secondary">{tool === 'argo' ? 'ArgoCD' : 'FluxCD'}</span>
+              <span className="font-medium text-theme-text-primary">{tool === 'argo' ? 'ArgoCD' : 'FluxCD'}</span>
               <span className="text-theme-text-tertiary">/</span>
-              <span className="text-theme-text-secondary">{apiKind?.kind ?? kind}</span>
+              <span className="font-medium text-theme-text-primary">{apiKind?.kind ?? kind}</span>
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="min-w-0 truncate text-lg font-semibold text-theme-text-primary">
@@ -977,10 +976,13 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                 </>
               )}
             </div>
+            {/* Header carries the *spec/identity* facts — Project + Destination
+                are who-and-where, not status. Source + Revision live in the
+                status strip below where they show *live* values; surfacing
+                them here too created visual duplication between target spec
+                and observed state. */}
             <div className="mt-2 flex max-w-5xl flex-wrap gap-x-5 gap-y-0.5 text-[11px] text-theme-text-tertiary">
               <AppFact label="Project" value={detailRow?.project || '-'} />
-              <AppFact label="Source" value={detailRow?.repository || detailRow?.chart || '-'} />
-              <AppFact label="Revision" value={detailRow?.targetRevision || resourceQ.data?.status?.sync?.revision || resourceQ.data?.status?.lastAppliedRevision || '-'} />
               <AppFact label="Destination" value={[detailRow?.destination, detailRow?.destinationNamespace].filter(Boolean).join(' / ') || '-'} />
             </div>
           </div>
@@ -988,16 +990,22 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             {isArgoApp && (
               <>
                 <ActionButton label="Sync…" icon={RefreshCw} loading={argoSync.isPending} onClick={() => setSyncDialogOpen(true)} disabled={status?.suspended} primary />
-                <RefreshSplitButton
-                  loading={argoRefresh.isPending}
-                  refreshKind={refreshKind}
-                  open={refreshMenuOpen}
-                  onToggle={() => setRefreshMenuOpen((v) => !v)}
-                  onClose={() => setRefreshMenuOpen(false)}
-                  onRefresh={(hard) => {
-                    setRefreshKind(hard ? 'hard' : 'normal')
-                    setRefreshMenuOpen(false)
-                    argoRefresh.mutate({ namespace, name, hard })
+                <ActionButton
+                  label="Refresh"
+                  icon={RotateCw}
+                  loading={argoRefresh.isPending && refreshKind === 'normal'}
+                  onClick={() => {
+                    setRefreshKind('normal')
+                    argoRefresh.mutate({ namespace, name, hard: false })
+                  }}
+                />
+                <ActionButton
+                  label="Hard refresh"
+                  icon={RotateCw}
+                  loading={argoRefresh.isPending && refreshKind === 'hard'}
+                  onClick={() => {
+                    setRefreshKind('hard')
+                    argoRefresh.mutate({ namespace, name, hard: true })
                   }}
                 />
                 {isRunning && <ActionButton label="Terminate" icon={XCircle} loading={argoTerminate.isPending} onClick={() => argoTerminate.mutate({ namespace, name })} danger />}
@@ -1817,76 +1825,6 @@ function ActionButton({
   )
 }
 
-// Refresh button + chevron for "Hard refresh". Hard refresh re-resolves the
-// Application's source from Git (clears Argo's cached repo state). Operators
-// reach for this when Argo seems stuck on stale state.
-function RefreshSplitButton({
-  loading,
-  refreshKind,
-  open,
-  onToggle,
-  onClose,
-  onRefresh,
-}: {
-  loading?: boolean
-  refreshKind: 'normal' | 'hard'
-  open: boolean
-  onToggle: () => void
-  onClose: () => void
-  onRefresh: (hard: boolean) => void
-}) {
-  // Close on outside click (the menu is small and not a modal — escape via
-  // backdrop is more natural here than a focus trap).
-  const wrapperRef = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return
-    function onDocClick(e: MouseEvent) {
-      if (!wrapperRef.current?.contains(e.target as Node)) onClose()
-    }
-    document.addEventListener('mousedown', onDocClick)
-    return () => document.removeEventListener('mousedown', onDocClick)
-  }, [open, onClose])
-
-  return (
-    <div ref={wrapperRef} className="relative inline-flex">
-      <button
-        type="button"
-        onClick={() => onRefresh(false)}
-        disabled={loading}
-        className="inline-flex items-center gap-1.5 rounded-l-md border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs font-medium text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-        title="Refresh — re-evaluate sync state against current source revision"
-      >
-        {loading && refreshKind === 'normal' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCw className="h-3.5 w-3.5" />}
-        Refresh
-      </button>
-      <button
-        type="button"
-        onClick={onToggle}
-        disabled={loading}
-        aria-label="Refresh options"
-        aria-expanded={open}
-        className="-ml-px inline-flex items-center rounded-r-md border border-theme-border bg-theme-surface px-1.5 py-1.5 text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-      >
-        <ChevronDown className="h-3.5 w-3.5" />
-      </button>
-      {open && (
-        <div className="absolute right-0 top-full z-30 mt-1 w-48 overflow-hidden rounded-md border border-theme-border bg-theme-surface shadow-lg">
-          <button
-            type="button"
-            onClick={() => onRefresh(true)}
-            className="flex w-full items-start gap-2 px-3 py-2 text-left text-xs text-theme-text-primary hover:bg-theme-hover"
-          >
-            {loading && refreshKind === 'hard' ? <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" /> : <RotateCw className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
-            <span className="min-w-0">
-              <span className="block font-medium">Hard refresh</span>
-              <span className="block text-[11px] text-theme-text-tertiary">Re-resolve the source from Git, clearing Argo's repo cache.</span>
-            </span>
-          </button>
-        </div>
-      )}
-    </div>
-  )
-}
 
 // Inline counts for the topology toolbar — answers "how many resources, how
 // many of them are healthy / drifted" at a glance, without making the user
@@ -1905,8 +1843,10 @@ function TopologyCounts({ tree }: { tree: GitOpsResourceTree }) {
     <div className="hidden min-w-0 flex-1 items-center gap-3 truncate text-[11px] text-theme-text-tertiary md:flex">
       <span><span className="text-theme-text-primary">{total}</span> resources</span>
       {healthy > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> {healthy} healthy</span>}
-      {degraded > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-red-500" /> {degraded} degraded</span>}
-      {outOfSync > 0 && <span className="flex items-center gap-1"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> {outOfSync} out of sync</span>}
+      {/* Bad-news counts use status colors on the number itself so the worst
+          fact in the row visually pops, not just the dot next to it. */}
+      {degraded > 0 && <span className="flex items-center gap-1 font-medium text-red-600 dark:text-red-400"><span className="h-1.5 w-1.5 rounded-full bg-red-500" /> {degraded} degraded</span>}
+      {outOfSync > 0 && <span className="flex items-center gap-1 font-medium text-amber-700 dark:text-amber-400"><span className="h-1.5 w-1.5 rounded-full bg-amber-500" /> {outOfSync} out of sync</span>}
     </div>
   )
 }

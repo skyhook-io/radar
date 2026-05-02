@@ -362,8 +362,12 @@ func buildPlan(root *unstructured.Unstructured, resourceTree *gitopstree.Resourc
 			Ref:          refFromTree(n.Ref),
 			Order:        len(items) + 1,
 			Hook:         stringData(n.Data, "hook"),
-			Relationship: stringData(n.Data, "relationship"),
-			Status:       joinNonEmpty(n.Sync, n.Health, n.TopologyStatus),
+			Relationship: stripUnknown(stringData(n.Data, "relationship")),
+			// Strip "Unknown" tokens before joining — Sync/Health/TopologyStatus
+			// each default to "Unknown" when the controller hasn't reported,
+			// so a raw join produces noise like "OutOfSync · Unknown · unknown"
+			// that reads as broken in the UI chip.
+			Status: joinNonEmpty(stripUnknown(n.Sync), stripUnknown(n.Health), stripUnknown(n.TopologyStatus)),
 		}
 		if wave, ok := parseWave(stringData(n.Data, "syncWave")); ok {
 			item.Wave = wave
@@ -718,6 +722,16 @@ func fallback(value, fallback string) string {
 		return value
 	}
 	return fallback
+}
+
+// stripUnknown returns "" for strings that carry no signal (empty or
+// case-insensitive "unknown"), so callers can use joinNonEmpty without
+// dragging "Unknown" placeholders into compound display strings.
+func stripUnknown(value string) string {
+	if strings.EqualFold(value, "unknown") {
+		return ""
+	}
+	return value
 }
 
 func joinNonEmpty(values ...string) string {

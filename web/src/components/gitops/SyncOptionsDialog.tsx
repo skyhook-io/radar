@@ -80,10 +80,16 @@ export function SyncOptionsDialog({ open, appLabel, pending, onCancel, onConfirm
           </span>
         </label>
 
+        {/* Common (Prune / Dry run) sit above a divider; Advanced toggles
+            stay accessible but visually subordinate so the common-case user
+            can scan past them without parsing every helper line. */}
         <fieldset className="space-y-2">
           <legend className="mb-1 text-xs font-medium text-theme-text-secondary">Sync options</legend>
           <Toggle label="Prune" checked={prune} onChange={setPrune} disabled={pending} hint="Delete resources that are no longer in Git." />
           <Toggle label="Dry run" checked={dryRun} onChange={setDryRun} disabled={pending} hint="Preview only — Argo computes the diff but applies nothing." />
+        </fieldset>
+        <fieldset className="space-y-2 border-t border-theme-border pt-3">
+          <legend className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Advanced</legend>
           <Toggle label="Apply only" checked={applyOnly} onChange={setApplyOnly} disabled={pending} hint="Skip PreSync / PostSync / SyncFail hooks." />
           <Toggle label="Force" checked={force} onChange={setForce} disabled={pending} hint="Use kubectl --force; required for some immutable-field changes." />
           <Toggle label="Replace" checked={replace} onChange={setReplace} disabled={pending} hint="kubectl replace instead of apply (drops fields not in source)." />
