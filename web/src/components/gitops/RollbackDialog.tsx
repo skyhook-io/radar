@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { DialogPortal } from '@skyhook-io/k8s-ui'
 import { History, Loader2 } from 'lucide-react'
+import { Tooltip } from '../ui/Tooltip'
 
 interface RollbackDialogProps {
   open: boolean
@@ -41,7 +42,11 @@ export function RollbackDialog({ open, appLabel, revision, historyId, pending, o
         </div>
         <dl className="grid grid-cols-[80px_minmax(0,1fr)] gap-x-3 gap-y-1 text-xs">
           <dt className="text-theme-text-tertiary">Revision</dt>
-          <dd className="truncate font-mono text-theme-text-primary" title={revision}>{revision || '-'}</dd>
+          <dd className="min-w-0">
+            <Tooltip content={revision} delay={400} disabled={!revision} wrapperClassName="block max-w-full">
+              <span className="block truncate font-mono text-theme-text-primary">{revision || '-'}</span>
+            </Tooltip>
+          </dd>
           {historyId && (
             <>
               <dt className="text-theme-text-tertiary">History ID</dt>

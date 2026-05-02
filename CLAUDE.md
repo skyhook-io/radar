@@ -143,8 +143,9 @@ radar/
 │   │   ├── portforward.go     # Port forwarding sessions
 │   │   ├── resource_counts.go # Resource counting
 │   │   ├── dashboard.go       # Dashboard summary endpoint
-│   │   ├── argo_handlers.go   # ArgoCD sync/refresh/suspend handlers
-│   │   ├── flux_handlers.go   # FluxCD reconcile/suspend handlers
+│   │   ├── argo_handlers.go   # ArgoCD sync/refresh/terminate/suspend/resume/rollback/selective-sync handlers
+│   │   ├── flux_handlers.go   # FluxCD reconcile/suspend/resume/sync-with-source handlers
+│   │   ├── gitops_handlers.go # /api/gitops/tree + /api/gitops/insights handlers, insightsResolver wiring
 │   │   ├── gitops_types.go    # Shared GitOps request/response types
 │   │   ├── ai_handlers.go     # AI resource preview endpoints
 │   │   └── traffic_handlers.go # Service mesh traffic flow handlers
@@ -158,6 +159,7 @@ radar/
 │   │   └── context/           # AI context minification for LLM-friendly output
 │   ├── audit/                 # Shared cluster audit check engine (reusable by skyhook-connector)
 │   ├── gitops/                # GitOps operations abstraction
+│   │   ├── insights/          # Per-app diagnosis pipeline: issues + drift diff + recent events + plan + history
 │   │   └── tree/              # GitOps resource tree builder for ArgoCD/FluxCD detail graphs
 │   ├── k8score/               # Shared K8s caching layer (informers, listers, transforms)
 │   ├── portforward/           # Port forwarding logic
@@ -165,6 +167,7 @@ radar/
 │   └── topology/
 │       ├── builder.go         # Topology graph construction
 │       ├── certificates.go    # Certificate relationship detection
+│       ├── memo.go            # 5s-TTL Memoizer wrapping deterministic Topology builds (used by GitOps handlers)
 │       ├── pod_grouping.go    # Pod grouping/collapsing logic
 │       ├── relationships.go   # Resource relationship detection
 │       └── types.go           # Node, edge, topology definitions
@@ -175,7 +178,7 @@ radar/
 │           │   ├── audit/      # AuditCard, AuditAlerts, AuditFindingsTable (shared)
 │           │   ├── resources/  # ResourcesView, resource-utils, renderers
 │           │   ├── shared/     # ResourceRendererDispatch, ResourceActionsBar, EditableYamlView
-│           │   ├── gitops/     # ArgoCD/FluxCD shared status, actions, and tree graph components
+│           │   ├── gitops/     # ArgoCD/FluxCD shared status badges, action buttons, tree graph (GitOpsTreeGraph), insights views (GitOpsStatusStrip, GitOpsIssuesBand, GitOpsFailureCard, GitOpsChangesView with inline drift+events expand, GitOpsActivityInsightView)
 │           │   ├── workload/   # WorkloadView
 │           │   ├── timeline/   # Timeline shared components
 │           │   ├── logs/       # Log viewer core
@@ -188,7 +191,7 @@ radar/
 │   │   ├── api/               # API client + SSE hooks
 │   │   ├── components/
 │   │   │   ├── dock/          # Bottom dock with terminal/logs tabs
-│   │   │   ├── gitops/        # GitOps workspace: table, filters, app detail graph/resources/activity
+│   │   │   ├── gitops/        # GitOps workspace: table+tile views, filters, app detail (Topology/Changes/Activity tabs), SyncOptionsDialog, RollbackDialog
 │   │   │   ├── helm/          # Helm release management UI
 │   │   │   ├── home/          # Home/dashboard view
 │   │   │   ├── logs/          # Logs viewer component
@@ -319,7 +322,8 @@ If a UI change feels worth checking, mention it when you wrap up — even just f
 - MCP: `/mcp` (Streamable HTTP — POST for JSON-RPC, GET for SSE)
 - Helm: `/api/helm/releases/...`
 - Workloads: `/api/workloads/{kind}/{ns}/{name}/...` (logs, restart, scale, rollback)
-- GitOps: `/api/argo/applications/...`, `/api/flux/{kind}/...`
+- GitOps controller actions: `/api/argo/applications/...` (sync, refresh, terminate, suspend, resume, rollback, selective-sync), `/api/flux/{kind}/...` (reconcile, suspend, resume, sync-with-source)
+- GitOps detail data: `/api/gitops/tree/{kind}/{ns}/{name}` (resource tree + ownership edges), `/api/gitops/insights/{kind}/{ns}/{name}` (curated diagnosis: summary + issues + drift + events + plan + history + capabilities)
 - Nodes: `/api/nodes/{name}/...` (cordon, uncordon, drain, debug)
 - Audit: `/api/audit`, `/api/audit/resource/{kind}/{ns}/{name}`, `/api/settings/audit` (GET/PUT)
 - CAPI: `/api/capi/clusters/{ns}/{name}/kubeconfig` (GET), `/api/capi/clusters/{ns}/{name}/connect` (POST)
@@ -406,9 +410,13 @@ If a UI change feels worth checking, mention it when you wrap up — even just f
 - GitOps nodes: Application (ArgoCD), Kustomization, HelmRelease, GitRepository (FluxCD)
   - Connected to managed resources via status.resources (ArgoCD) or status.inventory (FluxCD Kustomization)
   - HelmRelease connects to resources via FluxCD labels (`helm.toolkit.fluxcd.io/name`) or standard Helm label (`app.kubernetes.io/instance`). Matches Deployment, Service, StatefulSet, DaemonSet, Job, CronJob, Rollout.
-  - `/api/gitops/tree/{kind}/{namespace}/{name}` returns a GitOps resource tree used by the GitOps detail graph. It joins controller inventory with live topology edges, and must respect namespace filtering before enriching managed resources from the dynamic cache.
-  - GitOps detail pages expose Graph, Resources, and Activity views. Graph nodes for GitOps CRDs route to GitOps detail pages; ordinary Kubernetes resources open the standard resource drawer.
+  - `/api/gitops/tree/{kind}/{namespace}/{name}` returns the GitOps resource tree (managed resources + ownership edges) used by the detail graph. Joins controller inventory with live topology edges; must respect namespace filtering before enriching managed resources from the dynamic cache.
+  - `/api/gitops/insights/{kind}/{namespace}/{name}` returns a curated `Insight` for the detail page: summary (sync/health/op phase/source/revision/auto-sync mode), issues (operation failures + per-resource problems + Argo conditions + stuck/manual drift detectors), changes (per-resource sync/health + drift diff + recent events), plan (sync waves + hooks), history (deploy entries + initiator), capabilities (which actions the controller supports). Driven by `pkg/gitops/insights/Build`; resolver injection at the handler enables drift/events lookups.
+  - **GitOps detail pages have three top-level tabs**: **Topology** (Graph + Table sub-toggle, both share filter rail and dataset), **Changes** (per-resource drift inline-expand: field diff + recent events, with `Open` to drawer), **Activity** (operation history + per-revision rollback for Argo). Graph nodes for GitOps CRDs route to nested GitOps detail pages; ordinary Kubernetes resources open the standard resource drawer.
+  - **GitOps workflow operations**: Argo apps support Sync (with full options dialog — prune, dry-run, apply-only, force, replace, server-side apply, sync-options), Refresh, Hard refresh (`syncOptions: ["RefreshType=hard"]`), Terminate (running operations), Suspend/Resume auto-sync, Rollback by `status.history[].id`, Selective sync of subset of resources. Flux Kustomizations/HelmReleases support Reconcile, Suspend/Resume, Reconcile-with-source. Operations live in `pkg/gitops/operations.go` with sentinel errors (`ErrOperationInProgress`, `ErrNoOperationInProgress`, `ErrHistoryEntryNotFound`); HTTP layer routes via `errors.Is`, never substring matching. Rollback options accept `Force`/`ApplyOnly` as `*bool` so omission ≠ false on the wire — important because Argo's `syncStrategy.apply.force=true` silently skips PreSync/PostSync hooks; Force-only routes via `syncStrategy.hook.force` to preserve hooks, ApplyOnly reserves `syncStrategy.apply`.
+  - **Insights diagnosis pipeline** (`pkg/gitops/insights/`): `Build` composes Summary + Issues + Changes + Plan + History + Capabilities. Issues come from a chain of detectors: operation-failure parser (10 recognized patterns: annotation-too-long, admission-webhook, RBAC, conflict, immutable-field, schema-migration, hook-failure, connectivity, etc.) → `detectStuckDriftLoop` (sync=OutOfSync + opPhase=Succeeded + auto-sync on + reconciledAt<30min → "controller mutating after each apply") → `detectManualDriftWithoutAutoSync` (drift exists, no auto-sync → "click Sync") → `argoApplicationConditions` (extracts status.conditions[] with type-aware severity) → per-resource degraded/missing/OutOfSync issues (suppressed when ref matches the operation failure's affected resource — no triplicate rendering). Per-resource drift comes from `computeDriftFromLastApplied` which parses the `kubectl.kubernetes.io/last-applied-configuration` annotation and recursively diffs against live spec; works for any Argo client-side-applied resource. Recent events come from the Resolver interface wiring the cache's event lister with namespace-RBAC filtering and a 5-event cap. Insight refetches at 2s polling cadence while operationPhase is Running, otherwise on-demand.
   - **Single-cluster limitation**: Radar only shows connections when GitOps controller and managed resources are in the same cluster. ArgoCD commonly deploys to remote clusters (hub-spoke model), so Application→resource edges won't appear when connected to the ArgoCD cluster. FluxCD typically deploys to its own cluster, so connections usually work.
+  - **Per-resource diff coverage**: `last-applied-configuration` is reliably present on Argo client-side-apply resources. SSA-applied (`ServerSideApply=true`) and Helm-installed resources don't carry it; for those, the Drift field is nil and the UI falls back to the textual explainer. SSA fallback via `metadata.managedFields` and Argo API integration for canonical Git-rendered diffs are tracked in [issue #601](https://github.com/skyhook-io/radar/issues/601).
 
 ### Timeline
 - In-memory or SQLite storage for event tracking (`--timeline-storage`)

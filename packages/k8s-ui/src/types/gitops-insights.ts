@@ -44,6 +44,14 @@ export interface GitOpsIssue {
   message: string
   refs?: GitOpsInsightRef[]
   action?: string
+  // Plain-English root cause when the message matched a recognized error
+  // pattern. Empty for unrecognized messages — UI falls back to the raw message.
+  cause?: string
+  // Argo retry count parsed from "(retried N times)". 0 = no retry info.
+  retryCount?: number
+  // True when retry count crossed the "no longer transient" threshold.
+  // Drives a stronger visual treatment.
+  stuck?: boolean
 }
 
 export interface GitOpsChange {
@@ -60,9 +68,41 @@ export interface GitOpsChange {
   hookPhase?: string
   hasDesired: boolean
   hasLive: boolean
-  diff?: string
+  // Structured per-field diff between the desired state (parsed from
+  // kubectl.kubernetes.io/last-applied-configuration) and the live spec.
+  // Undefined when the diff couldn't be computed (no annotation, SSA-applied
+  // resource, Helm-managed). Renderer falls back to the textual explainer
+  // when undefined.
+  drift?: GitOpsDrift
+  // Up to ~5 most recent events involving this resource, newest first.
+  // Surfaces the underlying "why is this stuck" cause (ImagePullBackOff,
+  // FailedScheduling, FailedMount, webhook denial) inline so the operator
+  // doesn't have to drill into the standard resource drawer.
+  recentEvents?: GitOpsEventSummary[]
   partial: boolean
   partialNote?: string
+}
+
+export interface GitOpsDrift {
+  entries: GitOpsDriftEntry[]
+  source: string // currently always "lastAppliedAnnotation"
+  truncated?: boolean
+}
+
+export interface GitOpsDriftEntry {
+  path: string // e.g. "spec.disruption.expireAfter"
+  op: 'added' | 'removed' | 'changed'
+  desired?: string // JSON-encoded
+  live?: string // JSON-encoded
+}
+
+export interface GitOpsEventSummary {
+  type: 'Normal' | 'Warning' | string
+  reason: string
+  message: string
+  count?: number
+  lastTimestamp: string // RFC3339
+  reportingComponent?: string
 }
 
 export interface GitOpsPlanItem {

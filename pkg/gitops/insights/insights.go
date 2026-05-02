@@ -2,9 +2,11 @@ package insights
 
 import (
 	"fmt"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -66,6 +68,19 @@ type Issue struct {
 	Message  string `json:"message"`
 	Refs     []Ref  `json:"refs,omitempty"`
 	Action   string `json:"action,omitempty"`
+	// Cause is a plain-English explanation of the root cause when the issue
+	// matches a recognized error pattern (annotation too large, webhook
+	// rejection, RBAC denial, etc.). Empty when the message wasn't
+	// recognized — UI falls back to showing Message only.
+	Cause string `json:"cause,omitempty"`
+	// RetryCount is the number of times Argo retried this operation before
+	// surfacing the failure. Parsed from "(retried N times)" suffix. 0
+	// means either no retry info was available or this was the first
+	// attempt; UI should not render a "stuck" indicator at 0.
+	RetryCount int `json:"retryCount,omitempty"`
+	// Stuck is true when retry count crossed a threshold where transient
+	// recovery is no longer plausible. Drives a stronger visual treatment.
+	Stuck bool `json:"stuck,omitempty"`
 }
 
 type Change struct {
@@ -87,9 +102,53 @@ type Change struct {
 	HookPhase   string `json:"hookPhase,omitempty"`
 	HasDesired  bool   `json:"hasDesired"`
 	HasLive     bool   `json:"hasLive"`
-	Diff        string `json:"diff,omitempty"`
-	Partial     bool   `json:"partial"`
-	PartialNote string `json:"partialNote,omitempty"`
+	// Drift carries a structured per-field diff between the desired state
+	// (parsed from kubectl.kubernetes.io/last-applied-configuration) and
+	// the live spec. Nil when we couldn't compute a diff (no last-applied
+	// annotation, no live object available, parse failure). The annotation
+	// is reliably present on Argo client-side-applied resources; SSA and
+	// Helm-applied resources don't carry it.
+	Drift *Drift `json:"drift,omitempty"`
+	// RecentEvents are the most recent (newest first) events involving this
+	// resource. Surfaced inline in the Changes view so operators can see
+	// "ImagePullBackOff", "FailedScheduling", "FailedMount" etc. without
+	// drilling into the standard resource drawer. Empty when no events
+	// exist or no resolver was provided.
+	RecentEvents []EventSummary `json:"recentEvents,omitempty"`
+	Partial      bool           `json:"partial"`
+	PartialNote  string         `json:"partialNote,omitempty"`
+}
+
+// Drift describes the per-field difference between desired and live spec.
+// Only entries that meaningfully differ are included; unchanged fields are
+// elided. The UI renders this inline so the user can see exactly what's
+// drifted without having to call the Argo API or run `argocd app diff`.
+type Drift struct {
+	Entries []DriftEntry `json:"entries"`
+	// Source identifies how the desired state was derived. Currently only
+	// "lastAppliedAnnotation"; future SSA support may add others.
+	Source string `json:"source"`
+	// Truncated is set when the diff exceeded our entry cap; UI uses this
+	// to show "and N more differences — open in Argo for full diff".
+	Truncated bool `json:"truncated,omitempty"`
+}
+
+// DriftEntry is a single field-level difference. Path uses dot-notation
+// rooted at the top-level (e.g. "spec.disruption.expireAfter"). Array
+// indices appear as ".[0]". Op is one of:
+//
+//	"removed" — present in desired, absent (or different) in live
+//	"added"   — present in live, not in desired (controller default,
+//	            mutating webhook, server-side defaulting)
+//	"changed" — both present with different scalar values
+//
+// Desired/Live are JSON-encoded so structured values (maps, arrays) survive
+// the wire round-trip; the UI pretty-prints them.
+type DriftEntry struct {
+	Path    string `json:"path"`
+	Op      string `json:"op"`
+	Desired string `json:"desired,omitempty"`
+	Live    string `json:"live,omitempty"`
 }
 
 type PlanItem struct {
@@ -128,18 +187,50 @@ type Capabilities struct {
 	Warnings          []string `json:"warnings,omitempty"`
 }
 
-func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTree) Insight {
+// Resolver supplies the cluster-state lookups insights needs beyond what's
+// already on the GitOps root CR. Both methods return zero values on miss
+// (nil object, nil events) — callers must tolerate misses since RBAC,
+// kind-not-cached, and namespace filtering can all suppress results.
+//
+// A nil Resolver is valid and means "skip the enrichment that would need
+// these lookups": no per-resource drift diff, no recent events. Tests and
+// preview callers use nil; the production handler wires the dynamic cache.
+type Resolver interface {
+	// GetLive returns the live unstructured object, used to read the
+	// kubectl.kubernetes.io/last-applied-configuration annotation and
+	// diff it against the live spec.
+	GetLive(group, kind, namespace, name string) *unstructured.Unstructured
+	// RecentEvents returns up to a small handful of recent events for the
+	// referenced resource, newest first. Used to surface "why is this
+	// stuck" causes (image pull failure, PVC pending, webhook denial)
+	// inline next to the change row instead of forcing a drill-in.
+	RecentEvents(group, kind, namespace, name string) []EventSummary
+}
+
+// EventSummary is a compact projection of a corev1.Event for UI display.
+// We strip everything that's not useful at a glance — count + type + reason
+// + message + age is what an operator scans first.
+type EventSummary struct {
+	Type           string `json:"type"`              // Normal | Warning
+	Reason         string `json:"reason"`            // FailedScheduling, ImagePullBackOff, etc.
+	Message        string `json:"message"`           // human-readable detail
+	Count          int32  `json:"count,omitempty"`   // event aggregation count (>1 indicates repetition)
+	LastTimestamp  string `json:"lastTimestamp"`     // RFC3339 of most recent occurrence
+	ReportingComponent string `json:"reportingComponent,omitempty"`
+}
+
+func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTree, resolver Resolver) Insight {
 	tool := detectTool(root)
 	out := Insight{
 		Summary:      buildSummary(root, tool),
 		Issues:       buildIssues(root, resourceTree, tool),
-		Changes:      buildChanges(root, resourceTree, tool),
+		Changes:      buildChanges(root, resourceTree, tool, resolver),
 		Plan:         buildPlan(root, resourceTree, tool),
 		History:      buildHistory(root, tool),
 		Capabilities: buildCapabilities(root, tool),
 		Partial:      true,
 	}
-	out.Summary.PartialReason = "Radar can inspect controller status and live resources; desired manifest diff is not available from this endpoint yet."
+	out.Summary.PartialReason = "Radar shows the controller's drift assessment plus a per-resource field diff and recent events (when available). For the canonical line-by-line diff against Git, use the Argo CD UI or `argocd app diff`."
 	return out
 }
 
@@ -220,14 +311,69 @@ func describeArgoAutoSync(root *unstructured.Unstructured) string {
 
 func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTree, tool string) []Issue {
 	var out []Issue
+	// suppressedRefs tracks resources whose own Issue is causally derivative of
+	// a parent operation failure (e.g. an OutOfSync resource issue is just
+	// the per-resource view of an apply that already failed at the operation
+	// level). Hiding these prevents the user from seeing the same root cause
+	// rendered in three different forms.
+	suppressedRefs := map[string]bool{}
 	if tool == "argocd" {
 		if phase, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "phase"); phase == "Failed" || phase == "Error" {
 			msg, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "message")
-			out = append(out, Issue{Severity: "critical", Scope: "operation", Reason: phase, Message: fallback(msg, "Last sync operation failed"), Action: "Open Activity for operation details."})
+			parsed := parseArgoOperationError(msg)
+			issue := Issue{
+				Severity:   "critical",
+				Scope:      "operation",
+				Reason:     phase,
+				Message:    fallback(msg, "Last sync operation failed"),
+				Action:     "Open Activity for operation details.",
+				Cause:      parsed.Cause,
+				RetryCount: parsed.RetryCount,
+				Stuck:      parsed.Stuck,
+			}
+			if parsed.AffectedKind != "" && parsed.AffectedName != "" {
+				ref := Ref{Kind: parsed.AffectedKind, Name: parsed.AffectedName}
+				issue.Refs = []Ref{ref}
+				suppressedRefs[refKey(ref)] = true
+			}
+			out = append(out, issue)
 		} else if phase == "Running" {
 			out = append(out, Issue{Severity: "info", Scope: "operation", Reason: "Running", Message: "A sync operation is currently running.", Action: "Wait for completion or terminate if it is stuck."})
+		} else if stuck := detectStuckDriftLoop(root); stuck != nil {
+			// Stuck-drift-loop detector: the user's "this is stuck forever and
+			// nothing tells me why" case. Argo reports the last sync as
+			// Succeeded but the app is still OutOfSync, auto-sync is on, and
+			// reconciledAt is recent. Something is mutating the resource
+			// after each apply (controller defaults, conversion webhook,
+			// another operator). Without this issue, the only signal is the
+			// OutOfSync badge — which the user has been staring at for hours.
+			out = append(out, *stuck)
+		} else if drift := detectManualDriftWithoutAutoSync(root); drift != nil {
+			// Manual drift without auto-sync: app is OutOfSync but auto-sync
+			// is off, so nothing will reconcile until a human clicks Sync.
+			// Common operator confusion: "I see drift, why isn't anything
+			// happening?" Answer: nothing is *supposed* to happen
+			// automatically.
+			out = append(out, *drift)
 		}
-		for _, change := range argoResourceChanges(root) {
+		// Argo Application status.conditions surface controller-level problems
+		// (ComparisonError = repo unreachable / revision missing,
+		// InvalidSpecError = bad app spec, OrphanedResourceWarning, etc.).
+		// We previously parsed conditions only for Flux; symmetric coverage
+		// for Argo catches a class of "why is this app broken" questions
+		// where the answer is the controller couldn't even compute drift.
+		out = append(out, argoApplicationConditions(root)...)
+		// buildIssues uses change data only for resource-level issue
+		// detection — the per-resource diff/events live on the Change
+		// objects emitted by buildChanges. Pass nil resolver here to skip
+		// the (unused) drift computation in this code path.
+		for _, change := range argoResourceChanges(root, nil) {
+			// Suppress a resource issue when its kind/name match a resource
+			// already named in the operation failure — same root cause, no
+			// value in showing it twice.
+			if suppressedRefs[refKey(change.Ref)] {
+				continue
+			}
 			if change.Health == "Degraded" || change.Health == "Missing" {
 				out = append(out, Issue{Severity: "critical", Scope: "resource", Reason: change.Health, Message: fmt.Sprintf("%s %s is %s", change.Ref.Kind, change.Ref.Name, change.Health), Refs: []Ref{change.Ref}, Action: "Open the resource drawer for events, logs, and YAML."})
 			} else if change.Sync == "OutOfSync" {
@@ -254,9 +400,9 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 	return out
 }
 
-func buildChanges(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTree, tool string) []Change {
+func buildChanges(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTree, tool string, live Resolver) []Change {
 	if tool == "argocd" {
-		return argoResourceChanges(root)
+		return argoResourceChanges(root, live)
 	}
 	if resourceTree == nil {
 		return nil
@@ -289,7 +435,7 @@ func buildChanges(root *unstructured.Unstructured, resourceTree *gitopstree.Reso
 	return out
 }
 
-func argoResourceChanges(root *unstructured.Unstructured) []Change {
+func argoResourceChanges(root *unstructured.Unstructured, resolver Resolver) []Change {
 	raw, _, _ := unstructured.NestedSlice(root.Object, "status", "resources")
 	out := make([]Change, 0, len(raw))
 	for _, item := range raw {
@@ -331,7 +477,7 @@ func argoResourceChanges(root *unstructured.Unstructured) []Change {
 			}
 			hookPhase = gitops.StringValue(sr["hookPhase"])
 		}
-		out = append(out, Change{
+		change := Change{
 			Ref:         ref,
 			Category:    category,
 			Sync:        sync,
@@ -343,7 +489,23 @@ func argoResourceChanges(root *unstructured.Unstructured) []Change {
 			HasLive:     true,
 			Partial:     true,
 			PartialNote: "Argo reports resource status here; desired manifest content is not available in Radar yet.",
-		})
+		}
+		// Enrich from live cluster state when a resolver is wired. The
+		// drift diff turns the bare "OutOfSync" badge into a concrete
+		// list of differing fields; recent events surface the underlying
+		// "why is this stuck" cause for things like ImagePullBackOff or
+		// FailedScheduling that the GitOps CR never sees.
+		if resolver != nil {
+			if live := resolver.GetLive(ref.Group, ref.Kind, ref.Namespace, ref.Name); live != nil {
+				if drift := computeDriftFromLastApplied(live); drift != nil {
+					change.Drift = drift
+				}
+			}
+			if events := resolver.RecentEvents(ref.Group, ref.Kind, ref.Namespace, ref.Name); len(events) > 0 {
+				change.RecentEvents = events
+			}
+		}
+		out = append(out, change)
 	}
 	sortChanges(out)
 	return out
@@ -742,5 +904,233 @@ func joinNonEmpty(values ...string) string {
 		}
 	}
 	return strings.Join(parts, " · ")
+}
+
+// refKey is the key used to dedup issue refs across the operation+resource
+// pass. Group is intentionally omitted — the operation message rarely
+// includes it, and kind+name+namespace is enough disambiguation in practice.
+func refKey(r Ref) string {
+	return r.Kind + "/" + r.Namespace + "/" + r.Name
+}
+
+// parsedFailure carries fields extracted from an Argo operationState.message.
+// Unparsed parts of the original message remain available to the UI as the
+// raw error — the parser only adds structure, never replaces or hides text.
+type parsedFailure struct {
+	Cause        string // plain-English root cause; empty if unrecognized
+	AffectedKind string
+	AffectedName string
+	RetryCount   int
+	Stuck        bool
+}
+
+// stuckRetryThreshold is the retry count at which we stop calling a failure
+// "transient" and start calling it stuck. Argo retries with backoff up to 5
+// times by default; reaching that ceiling means the controller has given up
+// hoping for self-recovery, which is exactly when the user needs the
+// stronger visual.
+const stuckRetryThreshold = 5
+
+// Capture group: <Kind>(.<group>...)? "<name>". Examples this matches:
+//   CustomResourceDefinition.apiextensions.k8s.io "scaledjobs.keda.sh"
+//   Deployment.apps "billing"
+//   Service "billing"
+// We don't need the group; the leading kind + quoted name is what users read.
+var argoAffectedRefRE = regexp.MustCompile(`([A-Z][A-Za-z0-9]+)(?:\.[A-Za-z0-9.\-]+)?\s+"([^"]+)"`)
+
+// "(retried N times)" suffix Argo appends when its retry policy has fired.
+var argoRetryRE = regexp.MustCompile(`\(retried (\d+) times?\)`)
+
+// Pattern table: ordered list of (matcher, plain-English cause). First match
+// wins. Keep patterns specific — generic catch-alls would mask more useful
+// matches. Cases below cover the failure modes operators see most: validation
+// limits, admission rejection, RBAC, conflicts, registration, connectivity.
+var argoErrorPatterns = []struct {
+	match *regexp.Regexp
+	cause string
+}{
+	{regexp.MustCompile(`metadata\.annotations:\s*Too long`), "Annotations exceed Kubernetes' 256 KB metadata limit. Reduce or split the annotations on this resource."},
+	{regexp.MustCompile(`metadata\.labels:\s*Too long`), "Labels exceed Kubernetes' 64-character-per-key limit. Shorten label keys or values."},
+	// Hook patterns come BEFORE webhook patterns: Argo's hook failure
+	// messages can include the substring "webhook" coincidentally (e.g.
+	// "validating-webhook-hook"), and the more-specific hook framing is
+	// what the operator needs first.
+	{regexp.MustCompile(`(?i)\b(presync|postsync|sync(?:fail)?|postdelete|skipdryrun)\b.*?(?:hook|phase).*?(?:failed|error)`), "A sync hook failed. Inspect the hook resource (Job/Pod) for events and logs to see why it errored."},
+	{regexp.MustCompile(`(?i)hook .*? failed`), "A sync hook failed. Open Activity for the hook's exit reason; the failed hook resource itself usually has events that explain it."},
+	{regexp.MustCompile(`admission webhook ".*?" denied the request`), "An admission webhook rejected the apply. Check the webhook's policy or its target server."},
+	{regexp.MustCompile(`is forbidden:\s*User`), "RBAC denied this operation. The Argo controller's ServiceAccount lacks the required permissions."},
+	{regexp.MustCompile(`already exists`), "A resource with this name already exists in the cluster. It may have been created outside of GitOps or owned by a different application."},
+	{regexp.MustCompile(`no matches for kind`), "The CustomResourceDefinition for this kind isn't registered in the cluster. Install or wait for the operator that owns this CRD."},
+	{regexp.MustCompile(`(?i)dial tcp.*(?:i/o timeout|connection refused|no route to host)`), "Cluster unreachable from the Argo controller. Check API server connectivity and network policies."},
+	{regexp.MustCompile(`field is immutable`), "Tried to change a field Kubernetes treats as immutable. Recreate the resource (delete + reapply) or revert the change."},
+	{regexp.MustCompile(`unable to recognize`), "The manifest references an API version the cluster doesn't recognize. Check apiVersion against the installed CRDs."},
+	{regexp.MustCompile(`Operation cannot be fulfilled.*the object has been modified`), "The resource was modified concurrently between Argo's read and write. The next sync attempt should resolve it; investigate if it persists."},
+}
+
+func parseArgoOperationError(msg string) parsedFailure {
+	if msg == "" {
+		return parsedFailure{}
+	}
+	out := parsedFailure{}
+	for _, p := range argoErrorPatterns {
+		if p.match.MatchString(msg) {
+			out.Cause = p.cause
+			break
+		}
+	}
+	if m := argoAffectedRefRE.FindStringSubmatch(msg); len(m) == 3 {
+		out.AffectedKind = m[1]
+		out.AffectedName = m[2]
+	}
+	if m := argoRetryRE.FindStringSubmatch(msg); len(m) == 2 {
+		if n, err := strconv.Atoi(m[1]); err == nil {
+			out.RetryCount = n
+			out.Stuck = n >= stuckRetryThreshold
+		}
+	}
+	return out
+}
+
+// detectStuckDriftLoop emits a critical issue when an Argo Application is
+// in the "applied successfully but still drifted" state — the case where
+// the user stares at the OutOfSync badge for hours wondering why nothing
+// happens. All four conditions must hold:
+//
+//   - sync status is OutOfSync (drift exists)
+//   - last operation phase is Succeeded (the apply itself didn't error)
+//   - auto-sync is enabled (so Argo *would* fix it if it could)
+//   - reconciledAt is recent (controller is actively trying)
+//
+// Together these mean: Argo is doing exactly what it's configured to do,
+// the apply call returns success, and yet the live state immediately
+// reverts to differing from desired. The cause is almost always a
+// controller or admission webhook mutating the resource after each apply
+// — the "perpetual drift loop" pattern.
+//
+// Returns nil when conditions don't match — callers append only on hit.
+func detectStuckDriftLoop(root *unstructured.Unstructured) *Issue {
+	sync, _, _ := unstructured.NestedString(root.Object, "status", "sync", "status")
+	if sync != "OutOfSync" {
+		return nil
+	}
+	phase, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "phase")
+	if phase != "Succeeded" {
+		return nil
+	}
+	if describeArgoAutoSync(root) == "Manual" {
+		return nil
+	}
+	reconciledAt, _, _ := unstructured.NestedString(root.Object, "status", "reconciledAt")
+	if reconciledAt == "" {
+		return nil
+	}
+	t, err := time.Parse(time.RFC3339, reconciledAt)
+	if err != nil {
+		return nil
+	}
+	// 30-minute window: long enough to allow a legitimate slow-converging
+	// resource (think CRDs that take many seconds per reconcile) to settle,
+	// short enough that "haven't reconciled in an hour" doesn't trigger the
+	// stuck banner — that case is a different problem (controller down).
+	if time.Since(t) > 30*time.Minute {
+		return nil
+	}
+	return &Issue{
+		Severity: "critical",
+		Scope:    "operation",
+		Reason:   "StuckDriftLoop",
+		Message:  "Sync succeeded but the application is still OutOfSync. A controller or admission webhook is likely mutating resources after each apply.",
+		Cause:    "Auto-sync ran successfully and the controller's last reconcile is recent, but live state keeps diverging from Git. Common causes: a mutating admission webhook adds defaults Argo isn't told to ignore; a sibling controller (e.g. Karpenter, Istio, cert-manager) writes back into spec; the Git manifest uses a deprecated API schema that the conversion webhook rewrites.",
+		Action:   "Open Changes to see the per-resource drift. Match the diff against your Git manifest, the resource's controller, and any mutating webhooks.",
+		Stuck:    true,
+	}
+}
+
+// detectManualDriftWithoutAutoSync emits a warning when an Argo Application
+// is OutOfSync but auto-sync is disabled. The user otherwise has no signal
+// that the drift won't resolve on its own — they wait, nothing happens,
+// and they file the bug. This issue puts a clear "Click Sync" prompt at
+// the top of the page so the next-step is obvious.
+//
+// Returns nil when conditions don't match — caller appends only on hit.
+func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured) *Issue {
+	sync, _, _ := unstructured.NestedString(root.Object, "status", "sync", "status")
+	if sync != "OutOfSync" {
+		return nil
+	}
+	// Only fire when auto-sync is genuinely off. "Auto" with selfHeal off
+	// is a separate (more nuanced) case — Argo would still apply on a
+	// new Git revision, just not on manual drift; we leave that for a
+	// future refinement rather than risk a false-positive banner here.
+	if describeArgoAutoSync(root) != "Manual" {
+		return nil
+	}
+	return &Issue{
+		Severity: "warning",
+		Scope:    "operation",
+		Reason:   "ManualDrift",
+		Message:  "Application is OutOfSync and auto-sync is disabled — nothing will reconcile until you click Sync.",
+		Action:   "Open Changes to review the per-resource diff, then click Sync to apply. Enable auto-sync if you want this to fix itself going forward.",
+	}
+}
+
+// argoApplicationConditions extracts Argo Application status.conditions[]
+// into Issues. Argo conditions are how the controller signals app-level
+// problems that aren't tied to a specific operation: ComparisonError when
+// the source can't be loaded (bad repo, missing revision), InvalidSpecError
+// when the Application spec itself is broken, OrphanedResourceWarning when
+// children outside the inventory exist, etc.
+//
+// Severity mapping follows the convention in the Argo source: types ending
+// in "Error" are critical; "Warning" types are warning; everything else is
+// info. We elide condition types we don't recognize when the message is
+// also empty — they're often controller-internal noise.
+func argoApplicationConditions(root *unstructured.Unstructured) []Issue {
+	raw, _, _ := unstructured.NestedSlice(root.Object, "status", "conditions")
+	if len(raw) == 0 {
+		return nil
+	}
+	out := make([]Issue, 0, len(raw))
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		typ := gitops.StringValue(m["type"])
+		msg := gitops.StringValue(m["message"])
+		if typ == "" && msg == "" {
+			continue
+		}
+		severity := "info"
+		switch {
+		case strings.HasSuffix(typ, "Error"):
+			severity = "critical"
+		case strings.HasSuffix(typ, "Warning"):
+			severity = "warning"
+		}
+		action := ""
+		switch typ {
+		case "ComparisonError":
+			action = "Verify the repo URL, branch/tag, and credentials. Check argocd-repo-server logs for fetch errors."
+		case "InvalidSpecError":
+			action = "Fix the Application spec — check destination, source, and project references."
+		case "OrphanedResourceWarning":
+			action = "Resources exist in the destination namespace that aren't part of any application. Add to an app or label them as ignored."
+		case "RepeatedResourceWarning":
+			action = "The same resource is declared by multiple Argo Applications. Remove the duplicate declaration."
+		case "ExcludedResourceWarning":
+			action = "A managed resource is excluded by the Argo controller's resource.exclusions. Adjust controller config or remove the resource."
+		case "SharedResourceWarning":
+			action = "This resource is also tracked by another Application. Move it to a single owner."
+		}
+		out = append(out, Issue{
+			Severity: severity,
+			Scope:    "condition",
+			Reason:   fallback(typ, "Condition"),
+			Message:  fallback(msg, typ),
+			Action:   action,
+		})
+	}
+	return out
 }
 

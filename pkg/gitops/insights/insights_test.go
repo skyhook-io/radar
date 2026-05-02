@@ -1,7 +1,9 @@
 package insights
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
@@ -196,7 +198,7 @@ func TestArgoResourceChangesSyncResultGating(t *testing.T) {
 					"syncResult": tc.syncResult,
 				}},
 			})
-			out := argoResourceChanges(root)
+			out := argoResourceChanges(root, nil)
 			if len(out) != 1 {
 				t.Fatalf("expected 1 change, got %d", len(out))
 			}
@@ -207,5 +209,298 @@ func TestArgoResourceChangesSyncResultGating(t *testing.T) {
 				t.Fatalf("HookPhase = %q, want %q", out[0].HookPhase, tc.wantHook)
 			}
 		})
+	}
+}
+
+func TestParseArgoOperationError(t *testing.T) {
+	cases := []struct {
+		name      string
+		msg       string
+		wantCause string // substring match — full text is brittle to copy edits
+		wantKind  string
+		wantName  string
+		wantRetry int
+		wantStuck bool
+	}{
+		{
+			name:      "annotation too long with affected CRD and retry suffix",
+			msg:       `one or more objects failed to apply, reason: error when patching "/dev/shm/foo": CustomResourceDefinition.apiextensions.k8s.io "scaledjobs.keda.sh" is invalid: metadata.annotations: Too long: may not be more than 262144 bytes (retried 5 times)`,
+			wantCause: "256 KB metadata limit",
+			wantKind:  "CustomResourceDefinition",
+			wantName:  "scaledjobs.keda.sh",
+			wantRetry: 5,
+			wantStuck: true,
+		},
+		{
+			name:      "admission webhook rejection",
+			msg:       `admission webhook "validation.gatekeeper.sh" denied the request: missing required label "owner"`,
+			wantCause: "admission webhook rejected",
+			wantRetry: 0,
+			wantStuck: false,
+		},
+		{
+			name:      "rbac forbidden with resource extracted",
+			msg:       `Deployment.apps "billing" is forbidden: User "system:serviceaccount:argocd:argocd-controller" cannot patch resource`,
+			wantCause: "RBAC denied",
+			wantKind:  "Deployment",
+			wantName:  "billing",
+		},
+		{
+			name:      "unrecognized message → no cause but raw still preserved by caller",
+			msg:       "something completely novel went wrong",
+			wantCause: "",
+		},
+		{
+			name:      "single retry → not stuck",
+			msg:       `whatever (retried 1 times)`,
+			wantRetry: 1,
+			wantStuck: false,
+		},
+		{
+			name: "empty input → all zero values",
+			msg:  "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseArgoOperationError(tc.msg)
+			if tc.wantCause != "" && !strings.Contains(got.Cause, tc.wantCause) {
+				t.Errorf("Cause = %q, want substring %q", got.Cause, tc.wantCause)
+			}
+			if tc.wantCause == "" && got.Cause != "" {
+				t.Errorf("Cause = %q, want empty (unrecognized pattern)", got.Cause)
+			}
+			if got.AffectedKind != tc.wantKind {
+				t.Errorf("AffectedKind = %q, want %q", got.AffectedKind, tc.wantKind)
+			}
+			if got.AffectedName != tc.wantName {
+				t.Errorf("AffectedName = %q, want %q", got.AffectedName, tc.wantName)
+			}
+			if got.RetryCount != tc.wantRetry {
+				t.Errorf("RetryCount = %d, want %d", got.RetryCount, tc.wantRetry)
+			}
+			if got.Stuck != tc.wantStuck {
+				t.Errorf("Stuck = %v, want %v", got.Stuck, tc.wantStuck)
+			}
+		})
+	}
+}
+
+func TestBuildIssuesSuppressesResourceIssueDuplicatedByOperationFailure(t *testing.T) {
+	// When the operation message names CRD scaledjobs.keda.sh AND the
+	// resources[] list also flags the same CRD as OutOfSync, we want only
+	// the operation issue. The resource issue is the same root cause from
+	// a different angle and adds noise.
+	root := argoApp(map[string]any{
+		"operationState": map[string]any{
+			"phase":   "Failed",
+			"message": `error when patching "/dev/shm/foo": CustomResourceDefinition.apiextensions.k8s.io "scaledjobs.keda.sh" is invalid: metadata.annotations: Too long`,
+		},
+		"resources": []any{map[string]any{
+			"kind":   "CustomResourceDefinition",
+			"name":   "scaledjobs.keda.sh",
+			"status": "OutOfSync",
+		}},
+	})
+	issues := buildIssues(root, nil, "argocd")
+	for _, iss := range issues {
+		if iss.Scope == "resource" && iss.Reason == "OutOfSync" {
+			for _, ref := range iss.Refs {
+				if ref.Kind == "CustomResourceDefinition" && ref.Name == "scaledjobs.keda.sh" {
+					t.Fatalf("expected the resource OutOfSync issue for the same CRD to be suppressed when the operation failure already names it; issues=%v", issues)
+				}
+			}
+		}
+	}
+}
+
+// stuckLoopApp builds an Argo Application in the stuck-drift state used
+// across detector tests. Defaults match the user's actual cluster state
+// (sync=OutOfSync, last operation Succeeded, recent reconcile, auto-sync
+// with prune+selfHeal).
+func stuckLoopApp(t *testing.T, opts ...func(*unstructured.Unstructured)) *unstructured.Unstructured {
+	t.Helper()
+	app := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Application",
+		"metadata":   map[string]any{"namespace": "argocd", "name": "x"},
+		"spec": map[string]any{
+			"syncPolicy": map[string]any{
+				"automated": map[string]any{"prune": true, "selfHeal": true},
+			},
+		},
+		"status": map[string]any{
+			"sync":   map[string]any{"status": "OutOfSync"},
+			"health": map[string]any{"status": "Progressing"},
+			"operationState": map[string]any{
+				"phase":   "Succeeded",
+				"message": "successfully synced (all tasks run)",
+			},
+			"reconciledAt": time.Now().UTC().Format(time.RFC3339),
+		},
+	}}
+	for _, opt := range opts {
+		opt(app)
+	}
+	return app
+}
+
+func TestDetectStuckDriftLoop_FiresOnTextbookCase(t *testing.T) {
+	got := detectStuckDriftLoop(stuckLoopApp(t))
+	if got == nil {
+		t.Fatal("expected stuck-loop issue, got nil")
+	}
+	if got.Reason != "StuckDriftLoop" || got.Severity != "critical" {
+		t.Errorf("unexpected issue: %+v", got)
+	}
+	if !got.Stuck {
+		t.Error("expected Stuck flag to be true")
+	}
+}
+
+func TestDetectStuckDriftLoop_DoesNotFireForVariousReasons(t *testing.T) {
+	cases := []struct {
+		name string
+		mut  func(*unstructured.Unstructured)
+	}{
+		{
+			name: "synced",
+			mut: func(u *unstructured.Unstructured) {
+				_ = unstructured.SetNestedField(u.Object, "Synced", "status", "sync", "status")
+			},
+		},
+		{
+			name: "operation still running",
+			mut: func(u *unstructured.Unstructured) {
+				_ = unstructured.SetNestedField(u.Object, "Running", "status", "operationState", "phase")
+			},
+		},
+		{
+			name: "operation failed (not stuck loop — it's a real failure)",
+			mut: func(u *unstructured.Unstructured) {
+				_ = unstructured.SetNestedField(u.Object, "Failed", "status", "operationState", "phase")
+			},
+		},
+		{
+			name: "auto-sync disabled",
+			mut: func(u *unstructured.Unstructured) {
+				unstructured.RemoveNestedField(u.Object, "spec", "syncPolicy", "automated")
+			},
+		},
+		{
+			name: "stale reconcile (>30min)",
+			mut: func(u *unstructured.Unstructured) {
+				_ = unstructured.SetNestedField(u.Object, time.Now().Add(-2*time.Hour).UTC().Format(time.RFC3339), "status", "reconciledAt")
+			},
+		},
+		{
+			name: "no reconcile timestamp at all",
+			mut: func(u *unstructured.Unstructured) {
+				unstructured.RemoveNestedField(u.Object, "status", "reconciledAt")
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := detectStuckDriftLoop(stuckLoopApp(t, tc.mut))
+			if got != nil {
+				t.Errorf("expected no issue, got %+v", got)
+			}
+		})
+	}
+}
+
+func TestDetectManualDriftWithoutAutoSync(t *testing.T) {
+	cases := []struct {
+		name     string
+		mut      func(*unstructured.Unstructured)
+		wantFire bool
+	}{
+		{
+			name: "OutOfSync + manual sync → fires",
+			mut: func(u *unstructured.Unstructured) {
+				unstructured.RemoveNestedField(u.Object, "spec", "syncPolicy", "automated")
+			},
+			wantFire: true,
+		},
+		{
+			name:     "OutOfSync + auto-sync → no fire (StuckDriftLoop owns this case)",
+			mut:      func(u *unstructured.Unstructured) {},
+			wantFire: false,
+		},
+		{
+			name: "Synced + manual → no fire",
+			mut: func(u *unstructured.Unstructured) {
+				unstructured.RemoveNestedField(u.Object, "spec", "syncPolicy", "automated")
+				_ = unstructured.SetNestedField(u.Object, "Synced", "status", "sync", "status")
+			},
+			wantFire: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := detectManualDriftWithoutAutoSync(stuckLoopApp(t, tc.mut))
+			if (got != nil) != tc.wantFire {
+				t.Errorf("fire = %v, want %v; issue=%+v", got != nil, tc.wantFire, got)
+			}
+			if got != nil && got.Reason != "ManualDrift" {
+				t.Errorf("Reason = %q, want ManualDrift", got.Reason)
+			}
+		})
+	}
+}
+
+func TestParseArgoOperationError_HookFailures(t *testing.T) {
+	cases := []struct {
+		name      string
+		msg       string
+		wantCause string
+	}{
+		{
+			name:      "PreSync hook failed",
+			msg:       `PreSync phase failed: hook "db-migration" exited with status 1`,
+			wantCause: "sync hook failed",
+		},
+		{
+			name:      "generic hook failed wording",
+			msg:       `hook "drain-cache" failed: timed out after 5m`,
+			wantCause: "sync hook failed",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := parseArgoOperationError(tc.msg)
+			if !strings.Contains(strings.ToLower(got.Cause), tc.wantCause) {
+				t.Errorf("Cause = %q, want substring %q", got.Cause, tc.wantCause)
+			}
+		})
+	}
+}
+
+func TestArgoApplicationConditions_MapsTypesToSeverity(t *testing.T) {
+	root := argoApp(map[string]any{
+		"conditions": []any{
+			map[string]any{"type": "ComparisonError", "message": "rpc error: revision not found"},
+			map[string]any{"type": "OrphanedResourceWarning", "message": "ConfigMap foo has no owner"},
+			map[string]any{"type": "SomeUnrelatedInfo", "message": "noise"},
+			map[string]any{"type": "", "message": ""}, // skipped
+		},
+	})
+	got := argoApplicationConditions(root)
+	if len(got) != 3 {
+		t.Fatalf("expected 3 conditions (one filtered), got %d: %+v", len(got), got)
+	}
+	bySev := map[string]string{}
+	for _, iss := range got {
+		bySev[iss.Reason] = iss.Severity
+	}
+	if bySev["ComparisonError"] != "critical" {
+		t.Errorf("ComparisonError severity = %q, want critical", bySev["ComparisonError"])
+	}
+	if bySev["OrphanedResourceWarning"] != "warning" {
+		t.Errorf("OrphanedResourceWarning severity = %q, want warning", bySev["OrphanedResourceWarning"])
+	}
+	if bySev["SomeUnrelatedInfo"] != "info" {
+		t.Errorf("unrecognized condition should default to info; got %q", bySev["SomeUnrelatedInfo"])
 	}
 }

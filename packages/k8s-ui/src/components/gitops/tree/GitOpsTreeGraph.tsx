@@ -15,12 +15,13 @@ import {
   type NodeTypes,
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { AlertTriangle, Loader2, Maximize, Search, X } from 'lucide-react'
+import { AlertTriangle, ChevronRight, Loader2, Maximize, Search, X } from 'lucide-react'
 import { clsx } from 'clsx'
 
 import type { GitOpsResourceTree, GitOpsTreeNode, GitOpsTreeRef, HealthStatus } from '../../../types'
 import { displayKind } from '../../../types'
 import { healthToSeverity, SEVERITY_DOT } from '../../../utils/badge-colors'
+import { Tooltip } from '../../ui/Tooltip'
 
 export type GitOpsTreePreset = 'full' | 'compact' | 'workloads' | 'app'
 
@@ -95,7 +96,18 @@ function GitOpsTreeGraphInner({
   const setPreset = onPresetChange ?? setInternalPreset
   const setQuery = onQueryChange ?? setInternalQuery
   const reactFlow = useReactFlow()
-  const { nodes, edges } = useMemo(() => buildFlowGraph(tree, preset, query, filters), [tree, preset, query, filters])
+  // Per-group expand state (keyed by group node ID, e.g. "<parent>/compact/<kind>").
+  // When a group ID is in this set, compactInfra leaves the children visible
+  // instead of collapsing them into a single "N <kind>s" node. Collapses
+  // back to the default when the user toggles off or switches preset.
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(new Set())
+  // Reset expansion when leaving compact preset — there are no groups to
+  // expand in 'full', and stale state would surprise the user when they
+  // toggle back.
+  useEffect(() => {
+    if (preset !== 'compact') setExpandedGroups(new Set())
+  }, [preset])
+  const { nodes, edges } = useMemo(() => buildFlowGraph(tree, preset, query, filters, expandedGroups), [tree, preset, query, filters, expandedGroups])
 
   useEffect(() => {
     if (nodes.length === 0) return
@@ -105,7 +117,18 @@ function GitOpsTreeGraphInner({
 
   const handleNodeClick = useCallback((_event: React.MouseEvent, node: Node) => {
     const gitOpsNode = node.data.node as GitOpsTreeNode | undefined
-    if (!gitOpsNode || gitOpsNode.role === 'group') return
+    if (!gitOpsNode) return
+    if (gitOpsNode.role === 'group') {
+      // Toggle expand/collapse for this group. Re-render replaces the
+      // synthetic group node with the original children (or vice versa).
+      setExpandedGroups((prev) => {
+        const next = new Set(prev)
+        if (next.has(gitOpsNode.id)) next.delete(gitOpsNode.id)
+        else next.add(gitOpsNode.id)
+        return next
+      })
+      return
+    }
     onNodeClick?.(gitOpsNode.ref, gitOpsNode)
   }, [onNodeClick])
 
@@ -222,15 +245,16 @@ function GitOpsTreeToolbar({
           </button>
         )}
       </div>
-      <button
-        type="button"
-        onClick={onFit}
-        className="flex items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface/90 px-2.5 py-1.5 text-xs text-theme-text-secondary backdrop-blur transition-colors hover:text-theme-text-primary"
-        title="Fit tree"
-      >
-        <Maximize className="h-3.5 w-3.5" />
-        Fit
-      </button>
+      <Tooltip content="Fit tree" delay={120}>
+        <button
+          type="button"
+          onClick={onFit}
+          className="flex items-center gap-1.5 rounded-lg border border-theme-border bg-theme-surface/90 px-2.5 py-1.5 text-xs text-theme-text-secondary backdrop-blur transition-colors hover:text-theme-text-primary"
+        >
+          <Maximize className="h-3.5 w-3.5" />
+          Fit
+        </button>
+      </Tooltip>
     </div>
   )
 }
@@ -252,9 +276,9 @@ function getEdgeColor(type: string): string {
   }
 }
 
-function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePreset, query: string, filters?: GitOpsTreeFilters): { nodes: Node[]; edges: Edge[] } {
+function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePreset, query: string, filters?: GitOpsTreeFilters, expandedGroups?: Set<string>): { nodes: Node[]; edges: Edge[] } {
   if (!tree) return { nodes: [], edges: [] }
-  const visibleTree = applyGraphFilters(applyPreset(tree, preset), filters)
+  const visibleTree = applyGraphFilters(applyPreset(tree, preset, expandedGroups), filters)
   const byID = new Map(visibleTree.nodes.map(node => [node.id, node]))
   const children = new Map<string, string[]>()
   const incoming = new Map<string, number>()
@@ -302,9 +326,9 @@ function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePrese
   return { nodes, edges }
 }
 
-function applyPreset(tree: GitOpsResourceTree, preset: GitOpsTreePreset): GitOpsResourceTree {
+function applyPreset(tree: GitOpsResourceTree, preset: GitOpsTreePreset, expandedGroups?: Set<string>): GitOpsResourceTree {
   if (preset === 'full') return tree
-  if (preset === 'compact') return compactInfra(tree)
+  if (preset === 'compact') return compactInfra(tree, expandedGroups)
 
   const byID = new Map(tree.nodes.map(node => [node.id, node]))
   const children = new Map<string, string[]>()
@@ -398,7 +422,7 @@ function toSet(values?: Set<string> | string[]): Set<string> | undefined {
   return set.size > 0 ? set : undefined
 }
 
-function compactInfra(tree: GitOpsResourceTree): GitOpsResourceTree {
+function compactInfra(tree: GitOpsResourceTree, expandedGroups?: Set<string>): GitOpsResourceTree {
   const children = new Map<string, string[]>()
   const parent = new Map<string, string>()
   for (const edge of tree.edges) {
@@ -422,8 +446,12 @@ function compactInfra(tree: GitOpsResourceTree): GitOpsResourceTree {
   for (const [key, nodes] of groups) {
     if (nodes.length < 2) continue
     const [p, kind] = key.split('|')
-    for (const node of nodes) remove.add(node.id)
     const id = `${p}/compact/${kind}`
+    // Per-group expand: when the user has clicked this group's bubble,
+    // skip the collapse step for that group only — leave the children
+    // visible alongside any other still-collapsed groups in the tree.
+    if (expandedGroups?.has(id)) continue
+    for (const node of nodes) remove.add(node.id)
     additions.push({
       id,
       ref: { kind, namespace: '', name: `${nodes.length} ${pluralize(kind)}` },
@@ -525,7 +553,12 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
           status === 'healthy' && 'border-l-green-500',
           status === 'degraded' && 'border-l-yellow-500',
           status === 'unhealthy' && 'border-l-red-500',
-          status === 'unknown' && 'border-l-slate-500'
+          status === 'unknown' && 'border-l-slate-500',
+          // Group nodes are interactive (click toggles expand) but the
+          // default ReactFlow handler doesn't add a hover state. A subtle
+          // border lift telegraphs "this responds to clicks" without
+          // looking like a primary action.
+          node.role === 'group' && 'cursor-pointer hover:border-theme-text-tertiary/50 hover:bg-theme-hover',
         )}
         style={{ width: dim.width, minHeight: dim.height, borderLeftWidth: 4 }}
       >
@@ -538,7 +571,14 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
             <span className={clsx('ml-auto h-1.5 w-1.5 rounded-full', getStatusDotColor(status))} />
           </div>
           <div className="truncate pr-1 text-sm font-medium text-theme-text-primary">{node.ref.name}</div>
-          <div className="mt-0.5 truncate text-xs text-theme-text-secondary">{getSubtitle(node)}</div>
+          {/* Group nodes get a chevron at the bottom-right to advertise the
+              click-to-expand affordance. The subtitle text alone wasn't
+              enough — users were treating the count as an immutable fact
+              rather than a button. */}
+          <div className="mt-0.5 flex items-center gap-1 text-xs text-theme-text-secondary">
+            <span className="truncate">{getSubtitle(node)}</span>
+            {node.role === 'group' && <ChevronRight className="ml-auto h-3 w-3 shrink-0 text-theme-text-tertiary" />}
+          </div>
           {chips.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1">
               {chips.slice(0, 4).map(chip => (
@@ -590,8 +630,9 @@ function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string
 
 function getSubtitle(node: GitOpsTreeNode): string {
   if (node.role === 'group') {
-    const kind = (node.data?.groupedKind as string) || node.ref.kind
-    return `${node.count ?? 0} ${pluralize(kind).toLowerCase()} collapsed`
+    // Action-oriented copy invites the click; "collapsed" alone reads as
+    // a state description, not an affordance.
+    return 'Click to expand'
   }
   if (node.sync || node.health) {
     return [node.sync, node.health].filter(Boolean).join(' • ')

@@ -480,7 +480,7 @@ Radar has first-class renderers for **AWS (CAPA)**, **GCP (CAPG)**, and **Azure 
 
 ## GitOps
 
-See the main [README](../README.md#gitops) for GitOps integration details.
+See the main [README](../README.md#gitops) for the user-facing overview. This section covers integration coverage and capabilities.
 
 ### FluxCD
 
@@ -493,6 +493,10 @@ See the main [README](../README.md#gitops) for GitOps integration details.
 | HelmRelease | `helm.toolkit.fluxcd.io/v2` | Yes | Yes | Yes |
 | Alert | `notification.toolkit.fluxcd.io/v1beta3` | — | Yes | — |
 
+**Workflow operations**: Reconcile, Reconcile-with-source (Kustomization/HelmRelease), Suspend/Resume.
+
+**Diagnosis**: Conditions extracted to issues (Ready=False, Stalled=True, Reconciling=True). Per-resource diff and recent events not yet available for Flux (HelmRelease-installed resources don't carry `last-applied-configuration`; tracked in [#601](https://github.com/skyhook-io/radar/issues/601)).
+
 ### ArgoCD
 
 | CRD | Group | Topology | Detail View | AI Summary |
@@ -500,6 +504,20 @@ See the main [README](../README.md#gitops) for GitOps integration details.
 | Application | `argoproj.io/v1alpha1` | Yes | Yes | Yes |
 | ApplicationSet | `argoproj.io/v1alpha1` | — | Generic | — |
 | AppProject | `argoproj.io/v1alpha1` | — | Generic | — |
+
+**Workflow operations**: Sync (with options dialog: prune, dry-run, apply-only, force, replace, server-side apply, sync-options), Refresh, Hard refresh, Terminate, Suspend/Resume auto-sync, Rollback to historical revision, Selective sync of marked resources.
+
+**Diagnosis**:
+- **Per-resource field diff** computed from each resource's `kubectl.kubernetes.io/last-applied-configuration` annotation vs live spec — works for any Argo client-side-applied resource without calling the Argo API
+- **Recent events** surfaced inline per managed resource (5 most recent, namespace-RBAC-filtered)
+- **Stuck-drift-loop detector** — flags `sync=OutOfSync ∧ opPhase=Succeeded ∧ auto-sync on ∧ reconciledAt<30min` with the likely cause (mutating webhook, sibling controller, schema migration)
+- **Manual-drift detector** — calls out OutOfSync apps with auto-sync disabled
+- **Argo Application conditions** extracted to issues (ComparisonError, OrphanedResourceWarning, etc.) with type-aware severity and per-condition action text
+- **Operation-failure parser** recognizes 11 patterns: annotation-too-large, label-too-long, hook failure, admission webhook denial, RBAC, conflict, immutable field, schema migration, connectivity, etc.
+
+**Limitations**:
+- SSA-applied resources (`ServerSideApply=true` sync-option) lack the `last-applied-configuration` annotation; per-resource diff is unavailable for those rows. SSA fallback via `metadata.managedFields` and Argo API integration for canonical Git-rendered diffs are tracked in [#601](https://github.com/skyhook-io/radar/issues/601).
+- Single-cluster only: Application↔resource edges only render when Radar is connected to the cluster where the managed resources live (not necessarily the cluster running the Argo controller).
 
 ---
 

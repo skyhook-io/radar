@@ -71,6 +71,13 @@ type Server struct {
 	// time. Picking does NOT narrow the shared informer cache (would corrupt
 	// other users' views).
 	nsPreferences sync.Map
+
+	// Short-TTL cache for topology builds. The Topology graph is a
+	// deterministic projection of the informer cache; rebuilding it walks
+	// every resource of every kind. A 5s TTL absorbs the typical bursts
+	// (page-load tree+insights, in-flight 2s polling, dashboard widgets)
+	// without user-visible staleness — controllers reconcile far slower.
+	topoMemo *topology.Memoizer
 }
 
 // Config holds server configuration
@@ -99,6 +106,7 @@ func New(cfg Config) *Server {
 		diagConfig:      cfg.DiagConfig,
 		effectiveConfig: cfg.EffectiveConfig,
 		authConfig:      cfg.AuthConfig,
+		topoMemo:        topology.NewMemoizer(5 * time.Second),
 	}
 
 	// Register a single context-switch callback so every PerformContextSwitch
