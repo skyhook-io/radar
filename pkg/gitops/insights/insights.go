@@ -85,12 +85,13 @@ type PlanItem struct {
 }
 
 type HistoryItem struct {
-	ID         string `json:"id,omitempty"`
-	Revision   string `json:"revision,omitempty"`
-	DeployedAt string `json:"deployedAt,omitempty"`
-	Phase      string `json:"phase,omitempty"`
-	Message    string `json:"message,omitempty"`
-	Source     string `json:"source,omitempty"`
+	ID          string `json:"id,omitempty"`
+	Revision    string `json:"revision,omitempty"`
+	DeployedAt  string `json:"deployedAt,omitempty"`
+	Phase       string `json:"phase,omitempty"`
+	Message     string `json:"message,omitempty"`
+	Source      string `json:"source,omitempty"`
+	InitiatedBy string `json:"initiatedBy,omitempty"`
 }
 
 type Capabilities struct {
@@ -356,14 +357,30 @@ func buildHistory(root *unstructured.Unstructured, tool string) []HistoryItem {
 			if sm, ok := m["source"].(map[string]any); ok {
 				source = joinNonEmpty(gitops.StringValue(sm["repoURL"]), gitops.StringValue(sm["path"]), gitops.StringValue(sm["chart"]))
 			}
-			out = append(out, HistoryItem{ID: id, Revision: gitops.StringValue(m["revision"]), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: source})
+			// initiatedBy carries who triggered the sync (controller, user@email,
+			// "radar" for our own actions). Useful for incident postmortems.
+			initiatedBy := ""
+			if ib, ok := m["initiatedBy"].(map[string]any); ok {
+				initiatedBy = gitops.StringValue(ib["username"])
+				if initiatedBy == "" {
+					initiatedBy = gitops.StringValue(ib["automated"])
+				}
+			}
+			out = append(out, HistoryItem{ID: id, Revision: gitops.StringValue(m["revision"]), DeployedAt: gitops.StringValue(m["deployedAt"]), Source: source, InitiatedBy: initiatedBy})
 		}
 		if op, ok, _ := unstructured.NestedMap(root.Object, "status", "operationState"); ok {
+			initiatedBy := ""
+			if opMap, ok := op["operation"].(map[string]any); ok {
+				if ib, ok := opMap["initiatedBy"].(map[string]any); ok {
+					initiatedBy = gitops.StringValue(ib["username"])
+				}
+			}
 			out = append(out, HistoryItem{
-				Phase:      gitops.StringValue(op["phase"]),
-				Message:    gitops.StringValue(op["message"]),
-				DeployedAt: gitops.StringValue(op["finishedAt"]),
-				Revision:   nestedString(op, "syncResult", "revision"),
+				Phase:       gitops.StringValue(op["phase"]),
+				Message:     gitops.StringValue(op["message"]),
+				DeployedAt:  gitops.StringValue(op["finishedAt"]),
+				Revision:    nestedString(op, "syncResult", "revision"),
+				InitiatedBy: initiatedBy,
 			})
 		}
 		sort.SliceStable(out, func(i, j int) bool { return out[i].DeployedAt > out[j].DeployedAt })

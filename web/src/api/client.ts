@@ -2315,6 +2315,22 @@ type ArgoSyncVars = ArgoAppVars & {
   resources?: Array<{ group?: string; kind: string; namespace?: string; name: string }>
   revision?: string
   prune?: boolean
+  dryRun?: boolean
+  force?: boolean
+  applyOnly?: boolean
+  // Free-form Argo SyncOption strings, e.g. "Replace=true",
+  // "ServerSideApply=true", "PruneLast=true". Caller is responsible for
+  // spelling.
+  syncOptions?: string[]
+}
+
+// ArgoRollbackVars targets a specific Argo history entry by ID. Prune and
+// DryRun mirror the sync flags so the rollback dialog can offer the same
+// safety net.
+type ArgoRollbackVars = ArgoAppVars & {
+  id: number
+  prune?: boolean
+  dryRun?: boolean
 }
 
 // Standard invalidation patterns
@@ -2379,9 +2395,21 @@ export const useArgoSync = createGitOpsMutation<ArgoSyncVars>({
     resources: v.resources,
     revision: v.revision,
     prune: v.prune,
+    dryRun: v.dryRun,
+    force: v.force,
+    applyOnly: v.applyOnly,
+    syncOptions: v.syncOptions,
   }),
   errorMessage: 'Failed to trigger sync',
   successMessage: 'Sync initiated',
+  getInvalidateKeys: argoInvalidateKeys,
+})
+
+export const useArgoRollback = createGitOpsMutation<ArgoRollbackVars>({
+  getPath: (v) => `/argo/applications/${v.namespace}/${v.name}/rollback`,
+  getBody: (v) => ({ id: v.id, prune: v.prune, dryRun: v.dryRun }),
+  errorMessage: 'Failed to roll back application',
+  successMessage: 'Rollback initiated',
   getInvalidateKeys: argoInvalidateKeys,
 })
 

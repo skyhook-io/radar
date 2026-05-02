@@ -250,10 +250,21 @@ function GitOpsPlanPanel({ plan, tool }: { plan?: GitOpsPlanItem[] | null; tool?
   )
 }
 
-export function GitOpsActivityInsightView({ insight, error }: { insight?: GitOpsInsight | null; error?: Error | null }) {
+interface GitOpsActivityInsightViewProps {
+  insight?: GitOpsInsight | null
+  error?: Error | null
+  // Optional rollback callback. When provided AND insight.capabilities.rollback
+  // is true, history rows with an ID expose a Rollback button that fires this
+  // with the target entry. The consumer is responsible for the confirmation
+  // dialog + the actual mutation.
+  onRollback?: (item: GitOpsHistoryItem) => void
+}
+
+export function GitOpsActivityInsightView({ insight, error, onRollback }: GitOpsActivityInsightViewProps) {
   if (error && !insight) return <InsightErrorState error={error} />
   if (!insight) return <CenteredText>Loading GitOps activity...</CenteredText>
   const operation = insight.history?.find((item) => item.phase && item.message)
+  const canRollback = !!insight.capabilities?.rollback && !!onRollback
   return (
     <div className="h-full overflow-auto bg-theme-base p-4">
       <div className="grid gap-4 xl:grid-cols-[420px_minmax(0,1fr)]">
@@ -267,14 +278,12 @@ export function GitOpsActivityInsightView({ insight, error }: { insight?: GitOps
           </div>
         </section>
         <section className="rounded-md border border-theme-border bg-theme-surface">
-          {/* Rollback note lives in the section header so it appears once, not
-              once per row. The capability is per-resource, not per-revision. */}
           <SectionHeader
             icon={Clock3}
             title="History"
-            hint={insight.capabilities?.rollback ? 'Each revision can be rolled back to.' : undefined}
+            hint={canRollback ? 'Each revision can be rolled back to.' : undefined}
           />
-          <HistoryRows items={insight.history ?? []} />
+          <HistoryRows items={insight.history ?? []} canRollback={canRollback} onRollback={onRollback} />
         </section>
       </div>
       <section className="mt-4 rounded-md border border-theme-border bg-theme-surface">
@@ -302,7 +311,15 @@ export function GitOpsActivityInsightView({ insight, error }: { insight?: GitOps
 }
 
 // Vertical timeline; left-gutter dot color encodes outcome at a glance.
-function HistoryRows({ items }: { items: GitOpsHistoryItem[] }) {
+function HistoryRows({
+  items,
+  canRollback = false,
+  onRollback,
+}: {
+  items: GitOpsHistoryItem[]
+  canRollback?: boolean
+  onRollback?: (item: GitOpsHistoryItem) => void
+}) {
   if (items.length === 0) {
     return (
       <div className="flex items-center gap-3 px-4 py-6 text-sm text-theme-text-tertiary">
@@ -317,6 +334,10 @@ function HistoryRows({ items }: { items: GitOpsHistoryItem[] }) {
         const tone = entryTone(item)
         const isLast = index === items.length - 1
         const sourceDisplay = compactSource(item.source)
+        // Only history entries with a numeric ID can be rolled back to —
+        // the in-flight current operation row has no ID and rolling "back"
+        // to it is meaningless.
+        const showRollback = canRollback && !!item.id && !!onRollback
         return (
           <li key={`${item.id}-${item.revision}-${index}`} className="relative grid grid-cols-[16px_minmax(0,1fr)] gap-3 pb-4 last:pb-0">
             <div className="relative flex justify-center">
@@ -330,6 +351,19 @@ function HistoryRows({ items }: { items: GitOpsHistoryItem[] }) {
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <span className="font-mono text-xs text-theme-text-primary">{item.revision || item.phase || '-'}</span>
                 <span className="text-[11px] text-theme-text-tertiary">{formatRelative(item.deployedAt)}</span>
+                {item.initiatedBy && (
+                  <span className="text-[11px] text-theme-text-tertiary">by {item.initiatedBy}</span>
+                )}
+                {showRollback && (
+                  <button
+                    type="button"
+                    onClick={() => onRollback?.(item)}
+                    className="ml-auto rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[10px] text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                    title={`Roll back to revision ${item.revision || `#${item.id}`}`}
+                  >
+                    Rollback
+                  </button>
+                )}
               </div>
               {sourceDisplay && (
                 <div className="mt-0.5 truncate text-xs text-theme-text-secondary" title={item.source}>{sourceDisplay}</div>

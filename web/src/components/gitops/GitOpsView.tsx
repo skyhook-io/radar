@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { CheckCircle2, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Table2, Tag, XCircle } from 'lucide-react'
+import { CheckCircle2, ChevronDown, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Table2, Tag, XCircle } from 'lucide-react'
 import {
   GitOpsActivityInsightView,
   GitOpsChangesView,
@@ -32,6 +32,7 @@ import {
   fetchJSON,
   useArgoRefresh,
   useArgoResume,
+  useArgoRollback,
   useArgoSuspend,
   useArgoSync,
   useArgoTerminate,
@@ -47,6 +48,9 @@ import { useAPIResources } from '../../api/apiResources'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 import { Tooltip } from '../ui/Tooltip'
+import { SyncOptionsDialog } from './SyncOptionsDialog'
+import { RollbackDialog } from './RollbackDialog'
+import type { GitOpsHistoryItem } from '@skyhook-io/k8s-ui'
 
 const GITOPS_KINDS: APIResource[] = [
   { name: 'applications', kind: 'Application', group: 'argoproj.io', version: 'v1alpha1', namespaced: true, verbs: ['list', 'get'], isCrd: true },
@@ -847,10 +851,21 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const argoTerminate = useArgoTerminate()
   const argoSuspend = useArgoSuspend()
   const argoResume = useArgoResume()
+  const argoRollback = useArgoRollback()
   const fluxReconcile = useFluxReconcile()
   const fluxSyncWithSource = useFluxSyncWithSource()
   const fluxSuspend = useFluxSuspend()
   const fluxResume = useFluxResume()
+
+  // Modal state for write actions that take options. Both default closed
+  // and open in response to user intent (Sync button click, Rollback button
+  // on a history row); the dialogs themselves render via DialogPortal.
+  const [syncDialogOpen, setSyncDialogOpen] = useState(false)
+  const [rollbackTarget, setRollbackTarget] = useState<GitOpsHistoryItem | null>(null)
+  // Track the last refresh kind so the in-flight spinner moves with the
+  // button the user actually clicked (Refresh vs Hard Refresh).
+  const [refreshKind, setRefreshKind] = useState<'normal' | 'hard'>('normal')
+  const [refreshMenuOpen, setRefreshMenuOpen] = useState(false)
 
   const detailRow = resourceQ.data ? normalizeDetailResource(kind, group, resourceQ.data) : null
   const tree = treeQ.data ?? null
@@ -918,8 +933,19 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
           <div className="flex flex-wrap items-center gap-2">
             {isArgoApp && (
               <>
-                <ActionButton label="Sync" icon={RefreshCw} loading={argoSync.isPending} onClick={() => argoSync.mutate({ namespace, name })} disabled={status?.suspended} primary />
-                <ActionButton label="Refresh" icon={RotateCw} loading={argoRefresh.isPending} onClick={() => argoRefresh.mutate({ namespace, name })} />
+                <ActionButton label="Sync…" icon={RefreshCw} loading={argoSync.isPending} onClick={() => setSyncDialogOpen(true)} disabled={status?.suspended} primary />
+                <RefreshSplitButton
+                  loading={argoRefresh.isPending}
+                  refreshKind={refreshKind}
+                  open={refreshMenuOpen}
+                  onToggle={() => setRefreshMenuOpen((v) => !v)}
+                  onClose={() => setRefreshMenuOpen(false)}
+                  onRefresh={(hard) => {
+                    setRefreshKind(hard ? 'hard' : 'normal')
+                    setRefreshMenuOpen(false)
+                    argoRefresh.mutate({ namespace, name, hard })
+                  }}
+                />
                 {isRunning && <ActionButton label="Terminate" icon={XCircle} loading={argoTerminate.isPending} onClick={() => argoTerminate.mutate({ namespace, name })} danger />}
                 {status?.suspended
                   ? <ActionButton label="Resume" icon={Play} loading={argoResume.isPending} onClick={() => argoResume.mutate({ namespace, name })} />
@@ -1008,7 +1034,11 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
           </div>
 
           {appView === 'activity' ? (
-            <GitOpsActivityInsightView insight={insightsQ.data} error={insightsQ.error as Error | null} />
+            <GitOpsActivityInsightView
+              insight={insightsQ.data}
+              error={insightsQ.error as Error | null}
+              onRollback={isArgoApp ? (item) => setRollbackTarget(item) : undefined}
+            />
           ) : appView === 'changes' ? (
             <GitOpsChangesView insight={insightsQ.data} error={insightsQ.error as Error | null} onOpenResource={openResourceFromTree} />
           ) : (
@@ -1057,6 +1087,38 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             </div>
           )}
         </div>
+      )}
+      {/* Modals — portaled to body, only render the ones for the current tool. */}
+      {isArgoApp && (
+        <>
+          <SyncOptionsDialog
+            open={syncDialogOpen}
+            appLabel={`${namespace}/${name}`}
+            pending={argoSync.isPending}
+            onCancel={() => setSyncDialogOpen(false)}
+            onConfirm={(opts) => {
+              argoSync.mutate({ namespace, name, ...opts }, {
+                onSettled: () => setSyncDialogOpen(false),
+              })
+            }}
+          />
+          <RollbackDialog
+            open={!!rollbackTarget}
+            appLabel={`${namespace}/${name}`}
+            revision={rollbackTarget?.revision || ''}
+            historyId={rollbackTarget?.id}
+            pending={argoRollback.isPending}
+            onCancel={() => setRollbackTarget(null)}
+            onConfirm={(opts) => {
+              if (!rollbackTarget?.id) return
+              const id = Number(rollbackTarget.id)
+              if (!Number.isFinite(id)) return
+              argoRollback.mutate({ namespace, name, id, ...opts }, {
+                onSettled: () => setRollbackTarget(null),
+              })
+            }}
+          />
+        </>
       )}
     </div>
   )
@@ -1696,6 +1758,77 @@ function ActionButton({
         {label}
       </button>
     </Tooltip>
+  )
+}
+
+// Refresh button + chevron for "Hard refresh". Hard refresh re-resolves the
+// Application's source from Git (clears Argo's cached repo state). Operators
+// reach for this when Argo seems stuck on stale state.
+function RefreshSplitButton({
+  loading,
+  refreshKind,
+  open,
+  onToggle,
+  onClose,
+  onRefresh,
+}: {
+  loading?: boolean
+  refreshKind: 'normal' | 'hard'
+  open: boolean
+  onToggle: () => void
+  onClose: () => void
+  onRefresh: (hard: boolean) => void
+}) {
+  // Close on outside click (the menu is small and not a modal — escape via
+  // backdrop is more natural here than a focus trap).
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    function onDocClick(e: MouseEvent) {
+      if (!wrapperRef.current?.contains(e.target as Node)) onClose()
+    }
+    document.addEventListener('mousedown', onDocClick)
+    return () => document.removeEventListener('mousedown', onDocClick)
+  }, [open, onClose])
+
+  return (
+    <div ref={wrapperRef} className="relative inline-flex">
+      <button
+        type="button"
+        onClick={() => onRefresh(false)}
+        disabled={loading}
+        className="inline-flex items-center gap-1.5 rounded-l-md border border-theme-border bg-theme-surface px-2.5 py-1.5 text-xs font-medium text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+        title="Refresh — re-evaluate sync state against current source revision"
+      >
+        {loading && refreshKind === 'normal' ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RotateCw className="h-3.5 w-3.5" />}
+        Refresh
+      </button>
+      <button
+        type="button"
+        onClick={onToggle}
+        disabled={loading}
+        aria-label="Refresh options"
+        aria-expanded={open}
+        className="-ml-px inline-flex items-center rounded-r-md border border-theme-border bg-theme-surface px-1.5 py-1.5 text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
+      >
+        <ChevronDown className="h-3.5 w-3.5" />
+      </button>
+      {open && (
+        <div className="absolute right-0 top-full z-30 mt-1 w-48 overflow-hidden rounded-md border border-theme-border bg-theme-surface shadow-lg">
+          <button
+            type="button"
+            onClick={() => onRefresh(true)}
+            className="flex w-full items-start gap-2 px-3 py-2 text-left text-xs text-theme-text-primary hover:bg-theme-hover"
+          >
+            {loading && refreshKind === 'hard' ? <Loader2 className="mt-0.5 h-3.5 w-3.5 shrink-0 animate-spin" /> : <RotateCw className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+            <span className="min-w-0">
+              <span className="block font-medium">Hard refresh</span>
+              <span className="block text-[11px] text-theme-text-tertiary">Re-resolve the source from Git, clearing Argo's repo cache.</span>
+            </span>
+          </button>
+        </div>
+      )}
+    </div>
   )
 }
 

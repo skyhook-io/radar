@@ -72,6 +72,40 @@ func (s *Server) handleArgoRefresh(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, toGitOpsResponse(result))
 }
 
+// handleArgoRollback rolls an Application back to a prior history entry by ID.
+func (s *Server) handleArgoRollback(w http.ResponseWriter, r *http.Request) {
+	namespace := chi.URLParam(r, "namespace")
+	name := chi.URLParam(r, "name")
+
+	auth.AuditLog(r, namespace, name)
+	client := s.getDynamicClientForRequest(r)
+	if client == nil {
+		log.Printf("[argo] Dynamic client unavailable for rollback Application %s/%s", namespace, name)
+		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
+		return
+	}
+
+	var opts gitops.ArgoRollbackOptions
+	if r.Body != nil && r.ContentLength != 0 {
+		if err := json.NewDecoder(r.Body).Decode(&opts); err != nil {
+			s.writeError(w, http.StatusBadRequest, fmt.Sprintf("invalid rollback request: %v", err))
+			return
+		}
+	}
+	if opts.ID == 0 {
+		s.writeError(w, http.StatusBadRequest, "rollback request requires id")
+		return
+	}
+
+	result, err := gitops.RollbackArgoApp(r.Context(), client, namespace, name, opts)
+	if err != nil {
+		s.writeGitOpsError(w, err, "argo", "rollback", namespace, name)
+		return
+	}
+
+	s.writeJSON(w, toGitOpsResponse(result))
+}
+
 // handleArgoTerminate terminates an ongoing sync operation
 func (s *Server) handleArgoTerminate(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")

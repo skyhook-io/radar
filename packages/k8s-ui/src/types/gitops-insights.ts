@@ -72,6 +72,7 @@ export interface GitOpsHistoryItem {
   phase?: string
   message?: string
   source?: string
+  initiatedBy?: string
 }
 
 export interface GitOpsCapabilities {

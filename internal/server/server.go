@@ -358,6 +358,7 @@ func (s *Server) setupRoutes() {
 			// ArgoCD routes
 			r.Post("/argo/applications/{namespace}/{name}/sync", s.handleArgoSync)
 			r.Post("/argo/applications/{namespace}/{name}/refresh", s.handleArgoRefresh)
+			r.Post("/argo/applications/{namespace}/{name}/rollback", s.handleArgoRollback)
 			r.Post("/argo/applications/{namespace}/{name}/terminate", s.handleArgoTerminate)
 			r.Post("/argo/applications/{namespace}/{name}/suspend", s.handleArgoSuspend)
 			r.Post("/argo/applications/{namespace}/{name}/resume", s.handleArgoResume)

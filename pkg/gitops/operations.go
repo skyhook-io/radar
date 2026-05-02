@@ -109,11 +109,29 @@ type ArgoSyncResource struct {
 	Name      string `json:"name"`
 }
 
-// ArgoSyncOptions controls an ArgoCD sync operation.
+// ArgoSyncOptions controls an ArgoCD sync operation. Pointer-bool fields
+// distinguish "not set, leave default" from "explicit false". The Argo
+// operation.sync schema treats absent fields as "use server default" and
+// presence of false as "explicit off"; we mirror that here so a user who
+// unticks Prune in the modal actually disables prune for that sync.
 type ArgoSyncOptions struct {
-	Resources []ArgoSyncResource `json:"resources,omitempty"`
-	Revision  string             `json:"revision,omitempty"`
-	Prune     *bool              `json:"prune,omitempty"`
+	Resources   []ArgoSyncResource `json:"resources,omitempty"`
+	Revision    string             `json:"revision,omitempty"`
+	Prune       *bool              `json:"prune,omitempty"`
+	DryRun      *bool              `json:"dryRun,omitempty"`
+	Force       *bool              `json:"force,omitempty"`
+	ApplyOnly   *bool              `json:"applyOnly,omitempty"`
+	SyncOptions []string           `json:"syncOptions,omitempty"`
+}
+
+// ArgoRollbackOptions controls an ArgoCD rollback operation. ID is the
+// history entry to roll back to (matches HistoryItem.ID surfaced by the
+// insights builder). Argo's rollback uses the same operation slot as sync
+// — only one is in flight at a time.
+type ArgoRollbackOptions struct {
+	ID     int64 `json:"id"`
+	Prune  *bool `json:"prune,omitempty"`
+	DryRun *bool `json:"dryRun,omitempty"`
 }
 
 // --- ArgoCD operations ---
@@ -141,6 +159,32 @@ func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 	sync := map[string]any{
 		"revision": opts.Revision,
 		"prune":    prune,
+	}
+	if opts.DryRun != nil {
+		sync["dryRun"] = *opts.DryRun
+	}
+	// Argo's sync schema only carries Force on the Apply strategy block, not
+	// at the top level — set strategy.apply.force when the user requested it.
+	if opts.Force != nil && *opts.Force {
+		sync["syncStrategy"] = map[string]any{
+			"apply": map[string]any{"force": true},
+		}
+	}
+	if opts.ApplyOnly != nil && *opts.ApplyOnly {
+		// Apply-only short-circuits the hook lifecycle (PreSync/PostSync).
+		// Encoded as syncStrategy.apply (without force unless also set).
+		strategy, _ := sync["syncStrategy"].(map[string]any)
+		if strategy == nil {
+			strategy = map[string]any{"apply": map[string]any{}}
+			sync["syncStrategy"] = strategy
+		}
+		// presence of apply (even empty) means "apply only".
+	}
+	if len(opts.SyncOptions) > 0 {
+		// Argo accepts free-form key=value entries here (Replace=true,
+		// ServerSideApply=true, PruneLast=true, ApplyOutOfSyncOnly=true,
+		// etc). Caller is responsible for spelling them right.
+		sync["syncOptions"] = opts.SyncOptions
 	}
 	if len(opts.Resources) > 0 {
 		resources := make([]map[string]any, 0, len(opts.Resources))
@@ -354,6 +398,82 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 		Kind:      "Application",
 		Namespace: namespace,
 		Name:      name,
+	}, nil
+}
+
+// RollbackArgoApp rolls an ArgoCD Application back to a prior revision
+// by ID (matches HistoryItem.ID surfaced by the insights builder). Like
+// sync, rollback uses the operation slot — fails if a sync is in flight.
+func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, name string, opts ArgoRollbackOptions) (OperationResult, error) {
+	if opts.ID <= 0 {
+		return OperationResult{}, fmt.Errorf("rollback requires a positive history id")
+	}
+	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
+		}
+		return OperationResult{}, fmt.Errorf("failed to get Application: %w", err)
+	}
+
+	phase, found, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
+	if found && phase == "Running" {
+		return OperationResult{}, fmt.Errorf("cannot rollback while another operation is in progress for %s/%s", namespace, name)
+	}
+
+	// Verify the requested history ID actually exists, otherwise Argo silently
+	// accepts the operation and never executes — confusing failure mode.
+	history, _, _ := unstructured.NestedSlice(app.Object, "status", "history")
+	matched := false
+	for _, item := range history {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		switch v := m["id"].(type) {
+		case int64:
+			if v == opts.ID {
+				matched = true
+			}
+		case float64:
+			if int64(v) == opts.ID {
+				matched = true
+			}
+		}
+	}
+	if !matched {
+		return OperationResult{}, fmt.Errorf("history entry id=%d not found on Application %s/%s", opts.ID, namespace, name)
+	}
+
+	timestamp := time.Now().Format(time.RFC3339Nano)
+	rollback := map[string]any{
+		"id": opts.ID,
+	}
+	if opts.Prune != nil {
+		rollback["prune"] = *opts.Prune
+	}
+	if opts.DryRun != nil {
+		rollback["dryRun"] = *opts.DryRun
+	}
+	patch := map[string]any{
+		"operation": map[string]any{
+			"initiatedBy": map[string]any{"username": "radar"},
+			"rollback":    rollback,
+		},
+	}
+
+	if err := mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch); err != nil {
+		return OperationResult{}, fmt.Errorf("failed to rollback Application %s/%s: %w", namespace, name, err)
+	}
+
+	return OperationResult{
+		Message:     fmt.Sprintf("Rollback to history #%d initiated for ArgoCD Application %s/%s", opts.ID, namespace, name),
+		Operation:   "rollback",
+		Tool:        "argocd",
+		Kind:        "Application",
+		Namespace:   namespace,
+		Name:        name,
+		RequestedAt: timestamp,
 	}, nil
 }
 
