@@ -4,7 +4,7 @@ import { clsx } from 'clsx'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { openExternal } from '../../utils/navigation'
 import { useDiagnostics } from '../../api/client'
-import type { DiagnosticsSnapshot, DiagMetricsSourceHealth, DiagDropRecord, DiagErrorEntry } from '../../api/client'
+import type { DiagnosticsSnapshot, DiagMetricsSourceHealth, DiagDropRecord, DiagErrorEntry, DiagCacheSyncStatus, DiagInformerSyncStatus, DiagSyncPhase } from '../../api/client'
 
 interface DiagnosticsOverlayProps {
   onClose: () => void
@@ -315,15 +315,86 @@ function EventPipelineSection({ data }: { data: DiagnosticsSnapshot }) {
 function InformersSection({ data }: { data: DiagnosticsSnapshot }) {
   if (!data.informers) return null
   const inf = data.informers
+  const sync = inf.syncStatus
+  const phaseWarn = sync ? sync.phase !== 'complete' : false
+  const criticalWarn = sync ? sync.criticalSynced < sync.criticalTotal : false
+  const promoted = sync?.promotedKinds ?? []
+  const pendingCritical = sync?.pendingCritical ?? []
+  const pendingDeferred = sync?.pendingDeferred ?? []
+  const sectionWarn = phaseWarn || promoted.length > 0
   return (
-    <Section title="Informers">
+    <Section title="Informers" warn={sectionWarn}>
       <Row label="Typed" value={inf.typedCount} />
       <Row label="Dynamic (CRDs)" value={inf.dynamicCount} />
+      {sync && (
+        <>
+          <Row
+            label="Sync Phase"
+            value={`${formatSyncPhase(sync.phase)} (${formatElapsed(sync.elapsedSec)})`}
+            warn={phaseWarn}
+          />
+          <Row
+            label="Critical Synced"
+            value={`${sync.criticalSynced} / ${sync.criticalTotal}`}
+            warn={criticalWarn}
+          />
+          <Row
+            label="Deferred Synced"
+            value={`${sync.deferredSynced} / ${sync.deferredTotal}`}
+          />
+          {promoted.length > 0 && (
+            <Row label="Promoted to Deferred" value={promoted.join(', ')} warn />
+          )}
+          {(pendingCritical.length > 0 || pendingDeferred.length > 0) && (
+            <PendingInformers sync={sync} />
+          )}
+        </>
+      )}
       {inf.watchedCRDs && inf.watchedCRDs.length > 0 && (
         <Row label="Watched CRDs" value={inf.watchedCRDs.join(', ')} />
       )}
     </Section>
   )
+}
+
+function PendingInformers({ sync }: { sync: DiagCacheSyncStatus }) {
+  const pendingNames = new Set([
+    ...(sync.pendingCritical ?? []),
+    ...(sync.pendingDeferred ?? []),
+  ])
+  const pending = sync.informers.filter((i) => pendingNames.has(i.kind))
+  if (pending.length === 0) return null
+  pending.sort((a, b) => Number(a.deferred) - Number(b.deferred) || a.kind.localeCompare(b.kind))
+  return (
+    <div className="mt-1.5 pt-1.5 border-t border-theme-border-light">
+      <span className="text-[10px] text-theme-text-tertiary uppercase">Pending Informers ({pending.length})</span>
+      {pending.map((i: DiagInformerSyncStatus) => (
+        <Row
+          key={i.kind}
+          label={`${i.kind} (${i.deferred ? 'deferred' : 'critical'})`}
+          value={`${i.items.toLocaleString()} items so far`}
+          warn={!i.deferred}
+        />
+      ))}
+    </div>
+  )
+}
+
+function formatSyncPhase(phase: DiagSyncPhase): string {
+  switch (phase) {
+    case 'not_started': return 'not started'
+    case 'syncing_critical': return 'syncing critical'
+    case 'syncing_deferred': return 'syncing deferred'
+    case 'complete': return 'complete'
+  }
+}
+
+function formatElapsed(sec: number): string {
+  if (sec < 1) return `${Math.round(sec * 1000)}ms`
+  if (sec < 60) return `${sec.toFixed(1)}s`
+  const m = Math.floor(sec / 60)
+  const s = Math.round(sec - m * 60)
+  return `${m}m ${s}s`
 }
 
 function PrometheusSection({ data }: { data: DiagnosticsSnapshot }) {
@@ -512,6 +583,24 @@ function formatForGitHub(data: DiagnosticsSnapshot, includeRawJson = true): stri
     const inf = data.informers
     lines.push(`### Informers`)
     lines.push(`- Typed: ${inf.typedCount} | Dynamic: ${inf.dynamicCount}`)
+    if (inf.syncStatus) {
+      const sync = inf.syncStatus
+      lines.push(`- Sync Phase: \`${sync.phase}\` (${formatElapsed(sync.elapsedSec)})`)
+      lines.push(`- Critical: ${sync.criticalSynced}/${sync.criticalTotal} synced | Deferred: ${sync.deferredSynced}/${sync.deferredTotal} synced`)
+      if (sync.promotedKinds && sync.promotedKinds.length > 0) {
+        lines.push(`- **Promoted to Deferred:** ${sync.promotedKinds.join(', ')}`)
+      }
+      const pendingNames = new Set([
+        ...(sync.pendingCritical ?? []),
+        ...(sync.pendingDeferred ?? []),
+      ])
+      const pending = sync.informers.filter((i) => pendingNames.has(i.kind))
+      if (pending.length > 0) {
+        pending.sort((a, b) => Number(a.deferred) - Number(b.deferred) || a.kind.localeCompare(b.kind))
+        const parts = pending.map((i) => `${i.kind}(${i.deferred ? 'deferred' : 'critical'},${i.items.toLocaleString()} items)`)
+        lines.push(`- **Pending:** ${parts.join(', ')}`)
+      }
+    }
     if (inf.watchedCRDs && inf.watchedCRDs.length > 0) {
       lines.push(`- CRDs: ${inf.watchedCRDs.join(', ')}`)
     }
