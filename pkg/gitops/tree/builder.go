@@ -33,13 +33,16 @@ func (b *Builder) WithAllowedNamespaces(namespaces []string) *Builder {
 	return b
 }
 
-func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string) (*ResourceTree, error) {
+// Build constructs the GitOps resource tree for the named root. Returns the
+// live root object alongside the tree so callers (e.g. the insights handler)
+// can derive additional views without re-fetching from the cache.
+func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string) (*ResourceTree, *unstructured.Unstructured, error) {
 	if b.dynamic == nil {
-		return nil, fmt.Errorf("dynamic resource cache not available")
+		return nil, nil, fmt.Errorf("dynamic resource cache not available")
 	}
 	root, err := b.dynamic.GetDynamicWithGroup(ctx, kind, namespace, name, group)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if root.GetKind() == "" {
 		root.SetKind(kind)
@@ -183,13 +186,12 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 
 	summary := summarize(nodeList)
 	return &ResourceTree{
-		Root:       rootNode,
-		Nodes:      nodeList,
-		Edges:      edgeList,
-		Warnings:   b.topoWarnings(),
-		Summary:    summary,
-		RootObject: root,
-	}, nil
+		Root:     rootNode,
+		Nodes:    nodeList,
+		Edges:    edgeList,
+		Warnings: b.topoWarnings(),
+		Summary:  summary,
+	}, root, nil
 }
 
 func (b *Builder) getAllowedObject(ctx context.Context, ref ResourceRef) *unstructured.Unstructured {

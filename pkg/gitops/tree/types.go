@@ -1,7 +1,5 @@
 package tree
 
-import "k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
 // ResourceRef identifies a Kubernetes resource in a GitOps tree.
 type ResourceRef struct {
 	Group     string `json:"group"`
@@ -40,7 +38,7 @@ type Node struct {
 	TopologyStatus string         `json:"topologyStatus,omitempty"`
 	Info           []InfoItem     `json:"info,omitempty"`
 	Resource       any            `json:"resource,omitempty"`
-	GroupedNodeIDs []string       `json:"groupedNodeIds,omitempty"`
+	GroupedNodeIDs []string       `json:"groupedNodeIDs,omitempty"`
 	Count          int            `json:"count,omitempty"`
 	Data           map[string]any `json:"data,omitempty"`
 }
@@ -68,18 +66,12 @@ type Summary struct {
 }
 
 // ResourceTree is the API response for a GitOps resource tree.
-//
-// RootObject is the live unstructured root that the tree was built from.
-// It is populated by Builder.Build so callers (e.g. the insights handler)
-// can avoid a second cache lookup. Skipped from JSON to keep the API
-// response shape unchanged.
 type ResourceTree struct {
-	Root       Node                       `json:"root"`
-	Nodes      []Node                     `json:"nodes"`
-	Edges      []Edge                     `json:"edges"`
-	Warnings   []string                   `json:"warnings,omitempty"`
-	Summary    Summary                    `json:"summary"`
-	RootObject *unstructured.Unstructured `json:"-"`
+	Root     Node     `json:"root"`
+	Nodes    []Node   `json:"nodes"`
+	Edges    []Edge   `json:"edges"`
+	Warnings []string `json:"warnings,omitempty"`
+	Summary  Summary  `json:"summary"`
 }
 
 type managedResource struct {

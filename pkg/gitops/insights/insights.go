@@ -19,7 +19,12 @@ type Insight struct {
 	Plan         []PlanItem    `json:"plan"`
 	History      []HistoryItem `json:"history"`
 	Capabilities Capabilities  `json:"capabilities"`
-	Partial      bool          `json:"partial"`
+	// Partial signals that the response reflects only what the controller
+	// reports — desired-manifest diffs (the gap between Git and live state)
+	// are not computed here. Always true today; reserved for when desired
+	// rendering lands. Frontend uses this to decide whether to show a
+	// "partial view" hint via Summary.PartialReason.
+	Partial bool `json:"partial"`
 }
 
 type Summary struct {

@@ -67,6 +67,11 @@ func enrichNodeFromObject(node Node, obj *unstructured.Unstructured) Node {
 	if hook := obj.GetAnnotations()["argocd.argoproj.io/hook"]; hook != "" {
 		node.Data["hook"] = hook
 	}
+	// "revision" is set by tool with the most authoritative source winning:
+	// Argo (status.sync.revision) → Flux Kustomization (status.lastAppliedRevision)
+	// → HelmRelease release number (status.lastReleaseRevision). The fields
+	// don't co-occur in practice (each kind sets one), so the later overwrites
+	// are no-ops; the order encodes intent if a future kind exposes multiple.
 	if rev, ok, _ := unstructured.NestedString(obj.Object, "status", "sync", "revision"); ok && rev != "" {
 		node.Data["revision"] = truncateRevision(rev)
 	}

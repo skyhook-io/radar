@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -77,6 +78,7 @@ func ResolveFluxKind(kind string) (FluxKindEntry, error) {
 	for k := range fluxKinds {
 		supported = append(supported, k)
 	}
+	sort.Strings(supported)
 	return FluxKindEntry{}, fmt.Errorf("unknown FluxCD kind %q: supported kinds are %s", kind, strings.Join(supported, ", "))
 }
 

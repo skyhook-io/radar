@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"log"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
@@ -66,9 +68,9 @@ func (s *Server) parseGitOpsRequest(w http.ResponseWriter, r *http.Request) (*gi
 }
 
 // buildGitOpsTree constructs the topology + GitOps resource tree for a
-// parsed request. The returned tree's RootObject is the live root, so
-// downstream consumers (insights) don't need a second cache lookup.
-func (s *Server) buildGitOpsTree(ctx context.Context, req *gitopsRequest) (*gitopstree.ResourceTree, error) {
+// parsed request. The live root unstructured is returned alongside the tree
+// so downstream consumers (insights) can derive views without re-fetching.
+func (s *Server) buildGitOpsTree(ctx context.Context, req *gitopsRequest) (*gitopstree.ResourceTree, *unstructured.Unstructured, error) {
 	opts := topology.DefaultBuildOptions()
 	opts.Namespaces = req.AllowedNamespaces
 	opts.IncludeReplicaSets = true
@@ -78,7 +80,7 @@ func (s *Server) buildGitOpsTree(ctx context.Context, req *gitopsRequest) (*gito
 		WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 	topo, err := topoBuilder.Build(opts)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	return gitopstree.NewBuilder(req.Cache, topo).
@@ -87,16 +89,18 @@ func (s *Server) buildGitOpsTree(ctx context.Context, req *gitopsRequest) (*gito
 }
 
 // writeGitOpsBuildError maps tree-build errors to HTTP status codes.
-func (s *Server) writeGitOpsBuildError(w http.ResponseWriter, err error) {
-	if strings.Contains(err.Error(), "unknown resource kind") {
+// Uses errors.Is on typed sentinels rather than string matching so the HTTP
+// status doesn't drift if an upstream error message gets reworded.
+func (s *Server) writeGitOpsBuildError(w http.ResponseWriter, req *gitopsRequest, err error) {
+	switch {
+	case errors.Is(err, k8s.ErrUnknownDynamicKind):
 		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	if apierrors.IsNotFound(err) || strings.Contains(strings.ToLower(err.Error()), "not found") {
+	case apierrors.IsNotFound(err):
 		s.writeError(w, http.StatusNotFound, err.Error())
-		return
+	default:
+		log.Printf("[gitops] Failed to build tree for %s %s/%s (group=%q): %v", req.Kind, req.Namespace, req.Name, req.Group, err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
 	}
-	s.writeError(w, http.StatusInternalServerError, err.Error())
 }
 
 func (s *Server) handleGitOpsTree(w http.ResponseWriter, r *http.Request) {
@@ -114,9 +118,9 @@ func (s *Server) handleGitOpsTree(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 	}
-	tree, err := s.buildGitOpsTree(r.Context(), req)
+	tree, _, err := s.buildGitOpsTree(r.Context(), req)
 	if err != nil {
-		s.writeGitOpsBuildError(w, err)
+		s.writeGitOpsBuildError(w, req, err)
 		return
 	}
 	s.writeJSON(w, tree)
@@ -134,10 +138,10 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, gitopsinsights.Insight{})
 		return
 	}
-	tree, err := s.buildGitOpsTree(r.Context(), req)
+	tree, root, err := s.buildGitOpsTree(r.Context(), req)
 	if err != nil {
-		s.writeGitOpsBuildError(w, err)
+		s.writeGitOpsBuildError(w, req, err)
 		return
 	}
-	s.writeJSON(w, gitopsinsights.Build(tree.RootObject, tree))
+	s.writeJSON(w, gitopsinsights.Build(root, tree))
 }

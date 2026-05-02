@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"strings"
@@ -715,9 +716,9 @@ func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, n
 
 	if !ok {
 		if group != "" {
-			return nil, fmt.Errorf("unknown resource kind: %s (group: %s)", kind, group)
+			return nil, fmt.Errorf("%w: %s (group: %s)", ErrUnknownDynamicKind, kind, group)
 		}
-		return nil, fmt.Errorf("unknown resource kind: %s", kind)
+		return nil, fmt.Errorf("%w: %s", ErrUnknownDynamicKind, kind)
 	}
 
 	dynamicCache := GetDynamicResourceCache()
@@ -727,6 +728,12 @@ func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, n
 
 	return dynamicCache.List(gvr, namespace)
 }
+
+// ErrUnknownDynamicKind is returned by ListDynamic / GetDynamicWithGroup when
+// the requested kind has no registered GVR in API discovery. Wrapped with
+// fmt.Errorf("%w: ..."), so callers should match with errors.Is. The HTTP
+// layer translates this to 400 Bad Request.
+var ErrUnknownDynamicKind = errors.New("unknown resource kind")
 
 // GetDynamic returns a single resource of any type using the dynamic cache
 func (c *ResourceCache) GetDynamic(ctx context.Context, kind string, namespace string, name string) (*unstructured.Unstructured, error) {
@@ -751,9 +758,9 @@ func (c *ResourceCache) GetDynamicWithGroup(ctx context.Context, kind string, na
 
 	if !ok {
 		if group != "" {
-			return nil, fmt.Errorf("unknown resource kind: %s (group: %s)", kind, group)
+			return nil, fmt.Errorf("%w: %s (group: %s)", ErrUnknownDynamicKind, kind, group)
 		}
-		return nil, fmt.Errorf("unknown resource kind: %s", kind)
+		return nil, fmt.Errorf("%w: %s", ErrUnknownDynamicKind, kind)
 	}
 
 	dynamicCache := GetDynamicResourceCache()

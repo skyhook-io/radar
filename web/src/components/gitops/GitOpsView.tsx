@@ -897,9 +897,6 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
               <span className="text-theme-text-tertiary">/</span>
               <span className="text-theme-text-secondary">{apiKind?.kind ?? kind}</span>
             </div>
-            {/* Title row: identity + status badges sit together so an oncall scan
-                gets "what is it" and "is it OK?" in a single glance. Actions are
-                separated to the right so they don't blur into the badges. */}
             <div className="flex flex-wrap items-center gap-2">
               <h1 className="min-w-0 truncate text-lg font-semibold text-theme-text-primary">
                 {namespace ? `${namespace}/` : ''}{name}
@@ -911,9 +908,6 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                 </>
               )}
             </div>
-            {/* Metadata row: deliberately small + tertiary so it doesn't fight the
-                title for attention. Source/Revision/Destination are reference
-                facts, not signals — they should be available, not commanding. */}
             <div className="mt-2 flex max-w-5xl flex-wrap gap-x-5 gap-y-0.5 text-[11px] text-theme-text-tertiary">
               <AppFact label="Project" value={detailRow?.project || '-'} />
               <AppFact label="Source" value={detailRow?.repository || detailRow?.chart || '-'} />
@@ -921,8 +915,6 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
               <AppFact label="Destination" value={[detailRow?.destination, detailRow?.destinationNamespace].filter(Boolean).join(' / ') || '-'} />
             </div>
           </div>
-          {/* Action group: one filled primary action (Sync/Reconcile), rest are
-              ghost-styled secondary actions. Terminate uses the danger variant. */}
           <div className="flex flex-wrap items-center gap-2">
             {isArgoApp && (
               <>
@@ -982,9 +974,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             <div className="flex items-center gap-2">
               {appView === 'topology' && (
                 <>
-                  {/* Internal toggle between graph and table renderings of the same
-                      filtered resource set. Kept in the tab toolbar so it reads as
-                      "view mode for the current tab" rather than a peer tab. */}
+                  {/* Same filter rail; toggle picks the rendering. */}
                   <div className="flex items-center gap-1 rounded-md border border-theme-border bg-theme-surface p-0.5">
                     <ViewButton active={topologyMode === 'graph'} icon={GitBranch} label="Graph" onClick={() => setTopologyMode('graph')} />
                     <ViewButton active={topologyMode === 'table'} icon={Table2} label="Table" onClick={() => setTopologyMode('table')} />
@@ -1018,9 +1008,9 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
           </div>
 
           {appView === 'activity' ? (
-            <GitOpsActivityInsightView insight={insightsQ.data} />
+            <GitOpsActivityInsightView insight={insightsQ.data} error={insightsQ.error as Error | null} />
           ) : appView === 'changes' ? (
-            <GitOpsChangesView insight={insightsQ.data} onOpenResource={openResourceFromTree} />
+            <GitOpsChangesView insight={insightsQ.data} error={insightsQ.error as Error | null} onOpenResource={openResourceFromTree} />
           ) : (
             <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[280px_minmax(0,1fr)] max-lg:grid-cols-1">
               <GitOpsGraphFilterRail
@@ -1687,12 +1677,8 @@ function ActionButton({
   primary?: boolean
   onClick: () => void
 }) {
-  // Three intentional variants:
-  //   primary  → filled brand fill; the dominant action on the page
-  //   danger   → red; destructive (Terminate)
-  //   default  → ghost button on theme surface; secondary actions (Refresh, Suspend)
-  // The default rests on theme-surface (not theme-elevated) so it reads as a
-  // button against an elevated header card, not as another badge tile.
+  // primary → brand fill (one per page); danger → red (destructive);
+  // default → bordered ghost on theme surface (secondary actions).
   const variantClass = primary
     ? 'btn-brand'
     : danger

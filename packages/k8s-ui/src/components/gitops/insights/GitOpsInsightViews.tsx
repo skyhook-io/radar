@@ -3,6 +3,8 @@ import { clsx } from 'clsx'
 import { useState, type ReactNode } from 'react'
 import type { GitOpsChange, GitOpsHistoryItem, GitOpsInsight, GitOpsIssue, GitOpsPlanItem } from '../../../types'
 import { HealthStatusBadge, SyncStatusBadge } from '../GitOpsStatusBadge'
+import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../../utils/badge-colors'
+import { compactSource, entryTone, gitopsToSeverity } from './insights-helpers'
 
 interface GitOpsStatusStripProps {
   insight?: GitOpsInsight | null
@@ -29,10 +31,7 @@ export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
         {operation && (
           <span
-            className={clsx(
-              'rounded border px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide',
-              operationTone(operation)
-            )}
+            className={clsx('badge badge-sm font-medium uppercase tracking-wide', SEVERITY_BADGE[gitopsToSeverity(operation)])}
             title={`Last sync operation: ${operation}`}
           >
             {operation}
@@ -60,14 +59,6 @@ function liveOperationPhase(phase?: string): string | null {
   return phase
 }
 
-function operationTone(phase: string): string {
-  const p = phase.toLowerCase()
-  if (p.includes('fail') || p.includes('error')) return 'border-red-500/40 bg-red-500/10 text-red-500'
-  if (p.includes('terminat')) return 'border-amber-500/40 bg-amber-500/10 text-amber-500'
-  // Running, Reconciling, Progressing, anything else in-flight.
-  return 'border-sky-500/40 bg-sky-500/10 text-sky-500'
-}
-
 function MetaFact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
     <span className="inline-flex min-w-0 max-w-[40ch] items-baseline gap-1">
@@ -77,11 +68,9 @@ function MetaFact({ label, value, mono = false }: { label: string; value: string
   )
 }
 
-// Issues collapse to a single condensed alert row. The previous "up to 3
-// full cards across" pattern stacked another colored stripe right below the
-// status strip, fighting it for attention. One alert, severity-tinted, with
-// a (+N more) counter and click-to-expand keeps the headline visible without
-// the constant visual noise. Click expands to a flat list of all issues.
+// Single severity-tinted row with a "+N more" expand affordance. The
+// alternative — three issue cards across — stacked another colored stripe
+// directly under the status strip and split attention.
 export function GitOpsIssuesBand({ issues }: { issues?: GitOpsIssue[] | null }) {
   const list = issues ?? []
   const [expanded, setExpanded] = useState(false)
@@ -134,36 +123,34 @@ export function GitOpsIssuesBand({ issues }: { issues?: GitOpsIssue[] | null }) 
   )
 }
 
+// Map an Issue severity to its visual elements via the canonical Severity
+// tokens. The full SEVERITY_BADGE classes are used for the band (theme-aware
+// background + text + border) instead of hand-rolled `bg-red-500/10` literals
+// so dark-mode + the `alert` (orange) intermediate tier work consistently.
 function severityTone(severity: string): { band: string; icon: ReactNode; text: string } {
-  if (severity === 'critical') {
-    return {
-      band: 'bg-red-500/10',
-      icon: <CircleAlert className="h-3.5 w-3.5 shrink-0 text-red-500" />,
-      text: 'text-red-500',
-    }
-  }
-  if (severity === 'warning') {
-    return {
-      band: 'bg-amber-500/10',
-      icon: <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />,
-      text: 'text-amber-500',
-    }
-  }
+  const sev = gitopsToSeverity(severity)
+  const Icon = sev === 'error' ? CircleAlert : sev === 'warning' ? AlertTriangle : Info
   return {
-    band: 'bg-sky-500/10',
-    icon: <Info className="h-3.5 w-3.5 shrink-0 text-sky-500" />,
-    text: 'text-sky-500',
+    band: SEVERITY_BADGE[sev],
+    icon: <Icon className={clsx('h-3.5 w-3.5 shrink-0', SEVERITY_TEXT[sev])} />,
+    text: SEVERITY_TEXT[sev],
   }
 }
 
 interface GitOpsChangesViewProps {
   insight?: GitOpsInsight | null
+  error?: Error | null
   onOpenResource?: (ref: GitOpsChange['ref']) => void
 }
 
-export function GitOpsChangesView({ insight, onOpenResource }: GitOpsChangesViewProps) {
+export function GitOpsChangesView({ insight, error, onOpenResource }: GitOpsChangesViewProps) {
   const changes = insight?.changes ?? []
   const plan = insight?.plan ?? []
+  // Distinguish "still loading" from "fetch failed"; previously both fell
+  // through to a permanent "Loading…" message that hid backend 5xxs.
+  if (error && !insight) {
+    return <InsightErrorState error={error} />
+  }
   if (!insight) {
     return <CenteredText>Loading GitOps changes...</CenteredText>
   }
@@ -263,7 +250,8 @@ function GitOpsPlanPanel({ plan, tool }: { plan?: GitOpsPlanItem[] | null; tool?
   )
 }
 
-export function GitOpsActivityInsightView({ insight }: { insight?: GitOpsInsight | null }) {
+export function GitOpsActivityInsightView({ insight, error }: { insight?: GitOpsInsight | null; error?: Error | null }) {
+  if (error && !insight) return <InsightErrorState error={error} />
   if (!insight) return <CenteredText>Loading GitOps activity...</CenteredText>
   const operation = insight.history?.find((item) => item.phase && item.message)
   return (
@@ -313,10 +301,7 @@ export function GitOpsActivityInsightView({ insight }: { insight?: GitOpsInsight
   )
 }
 
-// History as a vertical timeline. Left gutter holds a phase-colored dot
-// connected by a vertical line; right column is the entry content. Reads
-// "what happened, in what order" much faster than a uniform 2-column list,
-// especially because the dot color encodes outcome at a glance.
+// Vertical timeline; left-gutter dot color encodes outcome at a glance.
 function HistoryRows({ items }: { items: GitOpsHistoryItem[] }) {
   if (items.length === 0) {
     return (
@@ -334,8 +319,6 @@ function HistoryRows({ items }: { items: GitOpsHistoryItem[] }) {
         const sourceDisplay = compactSource(item.source)
         return (
           <li key={`${item.id}-${item.revision}-${index}`} className="relative grid grid-cols-[16px_minmax(0,1fr)] gap-3 pb-4 last:pb-0">
-            {/* Left gutter: connecting line + status dot. The line stops just
-                before the last item so the timeline doesn't dangle. */}
             <div className="relative flex justify-center">
               {!isLast && <span className="absolute left-1/2 top-3 h-full w-px -translate-x-1/2 bg-theme-border" />}
               <span
@@ -362,55 +345,6 @@ function HistoryRows({ items }: { items: GitOpsHistoryItem[] }) {
   )
 }
 
-// Pick a dot color. Use the explicit phase first; if missing, infer from the
-// message text (Argo only populates phase on the most recent revision, so
-// without inference 11/12 dots end up neutral and the timeline loses its
-// strongest visual signal).
-function entryTone(item: GitOpsHistoryItem): { dot: string; inferredFrom?: string } {
-  const explicit = phaseToTone(item.phase)
-  if (explicit) return { dot: explicit }
-  const inferred = phaseToTone(messageToPhase(item.message))
-  if (inferred) return { dot: inferred, inferredFrom: 'inferred from message' }
-  // Older revisions without phase data — assume they completed cleanly. If
-  // they hadn't, a newer revision would have superseded them.
-  return { dot: 'bg-emerald-500/60', inferredFrom: 'assumed succeeded' }
-}
-
-function phaseToTone(phase?: string): string | null {
-  const p = (phase || '').toLowerCase()
-  if (!p) return null
-  if (p.includes('succeed') || p === 'healthy') return 'bg-emerald-500'
-  if (p.includes('fail') || p.includes('error')) return 'bg-red-500'
-  if (p.includes('progress') || p.includes('running') || p.includes('reconcil')) return 'bg-sky-500'
-  if (p.includes('pending') || p.includes('wait')) return 'bg-amber-500'
-  return null
-}
-
-function messageToPhase(message?: string): string | undefined {
-  if (!message) return undefined
-  const m = message.toLowerCase()
-  if (m.includes('successfully') || m.includes('succeeded')) return 'succeeded'
-  if (m.includes('failed') || m.includes('error')) return 'failed'
-  if (m.includes('progressing') || m.includes('reconciling')) return 'progressing'
-  return undefined
-}
-
-// Compact a source string for inline display. Argo emits the full GitHub URL
-// followed by " · path/within/repo", which dominates the timeline row when
-// rendered raw. Strip the protocol+host (full string still shown on hover via
-// title), and shorten deep paths to "head … leaf" form.
-function compactSource(source?: string): string {
-  if (!source) return ''
-  const [repoPart, ...pathParts] = source.split(' · ')
-  const repo = repoPart.replace(/^https?:\/\/(www\.)?github\.com\//, '').replace(/^https?:\/\//, '').replace(/\/$/, '')
-  const path = pathParts.join(' · ').trim()
-  if (!path) return repo
-  const segments = path.split('/').filter(Boolean)
-  const shortPath = segments.length > 3
-    ? `${segments[0]}/…/${segments[segments.length - 1]}`
-    : path
-  return `${repo} · ${shortPath}`
-}
 
 function SectionHeader({ icon: Icon, title, hint }: { icon: typeof GitBranch; title: string; hint?: string }) {
   return (
@@ -441,6 +375,25 @@ function Chip({ label, value }: { label?: string; value: string }) {
 
 function CenteredText({ children }: { children: ReactNode }) {
   return <div className="flex h-full items-center justify-center text-sm text-theme-text-secondary">{children}</div>
+}
+
+// Surfaced when the insights endpoint errors. Without this the subviews
+// would render their "Loading…" placeholder forever, hiding the failure
+// from the user and from the operator looking at logs.
+function InsightErrorState({ error }: { error: Error }) {
+  return (
+    <div className="flex h-full items-start justify-center bg-theme-base p-6">
+      <div className={clsx('max-w-2xl rounded-md p-4 text-sm', SEVERITY_BADGE.error)}>
+        <div className="flex items-start gap-2">
+          <CircleAlert className="mt-0.5 h-4 w-4 shrink-0" />
+          <div className="min-w-0">
+            <div className="font-semibold">Failed to load GitOps insights</div>
+            <p className="mt-1 break-words opacity-90">{error.message || 'Unknown error'}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  )
 }
 
 function formatRelative(value?: string) {

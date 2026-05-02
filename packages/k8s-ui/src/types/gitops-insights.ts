@@ -31,7 +31,7 @@ export interface GitOpsInsightRef {
 }
 
 export interface GitOpsIssue {
-  severity: 'critical' | 'warning' | 'info' | string
+  severity: 'critical' | 'warning' | 'info'
   scope: string
   reason: string
   message: string

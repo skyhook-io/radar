@@ -59,7 +59,7 @@ func TestBuildArgoTreeUsesManagedInventoryAndOwnershipEdges(t *testing.T) {
 	}}
 	builder := NewBuilder(dynamic, topo)
 
-	tree, err := builder.Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
+	tree, _, err := builder.Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
 		t.Fatalf("Build returned error: %v", err)
 	}
@@ -102,7 +102,7 @@ func TestBuildDoesNotEnrichManagedResourcesOutsideAllowedNamespaces(t *testing.T
 		refKey(ResourceRef{Group: "apps", Kind: "Deployment", Namespace: "prod", Name: "billing"}):           deployment,
 	}}
 
-	tree, err := NewBuilder(dynamic, nil).
+	tree, _, err := NewBuilder(dynamic, nil).
 		WithAllowedNamespaces([]string{"argocd"}).
 		Build(context.Background(), "applications", "argocd", "billing", "argoproj.io")
 	if err != nil {
