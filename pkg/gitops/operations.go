@@ -3,6 +3,7 @@ package gitops
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -33,6 +34,20 @@ const (
 
 	legacyArgoSuspendedPruneAnnotation    = "skyhook.io/suspended-prune"
 	legacyArgoSuspendedSelfHealAnnotation = "skyhook.io/suspended-selfheal"
+)
+
+// Sentinel errors so HTTP handlers can map operation outcomes to status
+// codes via errors.Is rather than fragile substring matching.
+var (
+	// ErrOperationInProgress: a sync/rollback couldn't start because the
+	// Application already has an in-flight operation. HTTP 409.
+	ErrOperationInProgress = errors.New("operation already in progress")
+	// ErrNoOperationInProgress: a terminate couldn't fire because there
+	// was no operation to remove. HTTP 400.
+	ErrNoOperationInProgress = errors.New("no operation in progress")
+	// ErrHistoryEntryNotFound: the requested rollback target id isn't in
+	// status.history. HTTP 404.
+	ErrHistoryEntryNotFound = errors.New("history entry not found")
 )
 
 // argoAppGVR is the GVR for ArgoCD Application resources.
@@ -110,10 +125,13 @@ type ArgoSyncResource struct {
 }
 
 // ArgoSyncOptions controls an ArgoCD sync operation. Pointer-bool fields
-// distinguish "not set, leave default" from "explicit false". The Argo
-// operation.sync schema treats absent fields as "use server default" and
-// presence of false as "explicit off"; we mirror that here so a user who
-// unticks Prune in the modal actually disables prune for that sync.
+// allow the caller to express "not set" via nil; for DryRun, Force, ApplyOnly
+// the patch encoding only emits the field when non-nil so Argo's server
+// default applies. Prune is the exception: SyncArgoApp always writes prune
+// (defaulting to true when nil) because Argo's default is true and the
+// previous behavior matches that — explicit nil-omission was never wired.
+// If a future caller needs the "leave server default" path for Prune, fix
+// SyncArgoApp to skip the field when opts.Prune == nil.
 type ArgoSyncOptions struct {
 	Resources   []ArgoSyncResource `json:"resources,omitempty"`
 	Revision    string             `json:"revision,omitempty"`
@@ -148,7 +166,7 @@ func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 
 	phase, found, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
 	if found && phase == "Running" {
-		return OperationResult{}, fmt.Errorf("sync operation already in progress for %s/%s", namespace, name)
+		return OperationResult{}, fmt.Errorf("sync operation already in progress for %s/%s: %w", namespace, name, ErrOperationInProgress)
 	}
 
 	timestamp := time.Now().Format(time.RFC3339Nano)
@@ -163,22 +181,25 @@ func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 	if opts.DryRun != nil {
 		sync["dryRun"] = *opts.DryRun
 	}
-	// Argo's sync schema only carries Force on the Apply strategy block, not
-	// at the top level — set strategy.apply.force when the user requested it.
-	if opts.Force != nil && *opts.Force {
-		sync["syncStrategy"] = map[string]any{
-			"apply": map[string]any{"force": true},
+	// Argo's syncStrategy is a oneof — `apply` skips PreSync/PostSync/SyncFail
+	// hooks entirely, while `hook` runs the full hook lifecycle. Force lives
+	// inside whichever strategy is in use. Three cases:
+	//   ApplyOnly: pick `apply` (hooks skipped, with optional force).
+	//   Force only: pick `hook` (default lifecycle, with force) — using
+	//     `apply` here would silently drop the user's hooks, which is the
+	//     opposite of what most operators want when force-syncing.
+	//   Neither: omit syncStrategy and let Argo use its default (hook).
+	applyOnly := opts.ApplyOnly != nil && *opts.ApplyOnly
+	force := opts.Force != nil && *opts.Force
+	switch {
+	case applyOnly:
+		applyMap := map[string]any{}
+		if force {
+			applyMap["force"] = true
 		}
-	}
-	if opts.ApplyOnly != nil && *opts.ApplyOnly {
-		// Apply-only short-circuits the hook lifecycle (PreSync/PostSync).
-		// Encoded as syncStrategy.apply (without force unless also set).
-		strategy, _ := sync["syncStrategy"].(map[string]any)
-		if strategy == nil {
-			strategy = map[string]any{"apply": map[string]any{}}
-			sync["syncStrategy"] = strategy
-		}
-		// presence of apply (even empty) means "apply only".
+		sync["syncStrategy"] = map[string]any{"apply": applyMap}
+	case force:
+		sync["syncStrategy"] = map[string]any{"hook": map[string]any{"force": true}}
 	}
 	if len(opts.SyncOptions) > 0 {
 		// Argo accepts free-form key=value entries here (Replace=true,
@@ -370,7 +391,7 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 
 	phase, found, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
 	if !found || phase != "Running" {
-		return OperationResult{}, fmt.Errorf("no sync operation in progress for %s/%s", namespace, name)
+		return OperationResult{}, fmt.Errorf("no sync operation in progress for %s/%s: %w", namespace, name, ErrNoOperationInProgress)
 	}
 
 	patchBytes := []byte(`[{"op": "remove", "path": "/operation"}]`)
@@ -378,15 +399,13 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 		ctx, name, types.JSONPatchType, patchBytes, metav1.PatchOptions{},
 	)
 	if err != nil {
+		// Race: the operation completed (and was removed) between the GET
+		// above and this PATCH. JSON-Patch fails because the path is gone.
+		// Return the same sentinel as the pre-flight check so the handler
+		// surfaces "nothing to terminate" honestly instead of toasting
+		// a fake "Sync terminated".
 		if strings.Contains(err.Error(), "nonexistent") {
-			return OperationResult{
-				Message:   fmt.Sprintf("No operation to terminate for ArgoCD Application %s/%s (may have already completed)", namespace, name),
-				Operation: "terminate",
-				Tool:      "argocd",
-				Kind:      "Application",
-				Namespace: namespace,
-				Name:      name,
-			}, nil
+			return OperationResult{}, fmt.Errorf("no sync operation in progress for %s/%s (completed before terminate could fire): %w", namespace, name, ErrNoOperationInProgress)
 		}
 		return OperationResult{}, fmt.Errorf("failed to terminate sync for Application %s/%s: %w", namespace, name, err)
 	}
@@ -418,7 +437,7 @@ func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace
 
 	phase, found, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
 	if found && phase == "Running" {
-		return OperationResult{}, fmt.Errorf("cannot rollback while another operation is in progress for %s/%s", namespace, name)
+		return OperationResult{}, fmt.Errorf("cannot rollback while another operation is in progress for %s/%s: %w", namespace, name, ErrOperationInProgress)
 	}
 
 	// Verify the requested history ID actually exists, otherwise Argo silently
@@ -442,7 +461,7 @@ func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace
 		}
 	}
 	if !matched {
-		return OperationResult{}, fmt.Errorf("history entry id=%d not found on Application %s/%s", opts.ID, namespace, name)
+		return OperationResult{}, fmt.Errorf("history entry id=%d not found on Application %s/%s: %w", opts.ID, namespace, name, ErrHistoryEntryNotFound)
 	}
 
 	timestamp := time.Now().Format(time.RFC3339Nano)

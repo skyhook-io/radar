@@ -43,6 +43,13 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 	tool := strings.ToLower(input.Tool)
 	action := strings.ToLower(input.Action)
 
+	// Loud-fail when an LLM caller attaches fields that don't apply to the
+	// chosen action — silently dropping (e.g.) `force: true` from a suspend
+	// call would let the model believe a safety-relevant flag took effect.
+	if err := validateGitOpsActionInput(action, input); err != nil {
+		return nil, nil, err
+	}
+
 	var result gitops.OperationResult
 	var err error
 
@@ -111,4 +118,53 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 		resp["requestedAt"] = result.RequestedAt
 	}
 	return toJSONResult(resp)
+}
+
+// validateGitOpsActionInput rejects field combinations that would silently
+// be ignored — e.g. an LLM passing `force: true` to a suspend call. Each
+// action declares which option fields it actually consumes; everything else
+// is rejected up-front so the AI sees an explicit error rather than a
+// confusing 200 OK.
+func validateGitOpsActionInput(action string, in manageGitOpsInput) error {
+	type used struct {
+		revision, prune, dryRun, force, applyOnly, syncOptions, historyID bool
+	}
+	var u used
+	switch action {
+	case "sync":
+		u = used{revision: true, prune: true, dryRun: true, force: true, applyOnly: true, syncOptions: true}
+	case "rollback":
+		u = used{prune: true, dryRun: true, historyID: true}
+	case "reconcile", "suspend", "resume":
+		// none — all option fields are ignored
+	default:
+		// Unknown action — let the action switch below produce the canonical error.
+		return nil
+	}
+	var rejected []string
+	if !u.revision && in.Revision != "" {
+		rejected = append(rejected, "revision")
+	}
+	if !u.prune && in.Prune != nil {
+		rejected = append(rejected, "prune")
+	}
+	if !u.dryRun && in.DryRun != nil {
+		rejected = append(rejected, "dryRun")
+	}
+	if !u.force && in.Force != nil {
+		rejected = append(rejected, "force")
+	}
+	if !u.applyOnly && in.ApplyOnly != nil {
+		rejected = append(rejected, "applyOnly")
+	}
+	if !u.syncOptions && len(in.SyncOptions) > 0 {
+		rejected = append(rejected, "syncOptions")
+	}
+	if !u.historyID && in.HistoryID != 0 {
+		rejected = append(rejected, "historyId")
+	}
+	if len(rejected) > 0 {
+		return fmt.Errorf("action %q does not accept fields: %s", action, strings.Join(rejected, ", "))
+	}
+	return nil
 }

@@ -11,14 +11,10 @@ interface GitOpsStatusStripProps {
   loading?: boolean
 }
 
-// Status strip is a flat chrome bar (bg-theme-base, no surface card) that
-// lives between the page header and the tab content. Sync/Health badges are
-// intentionally NOT here — they live next to the title in the page header,
-// where they pair with identity. Showing them again here was duplication.
-//
-// Strip carries only what the header doesn't: the active operation chip
-// (when there's actually something running or failed) plus reference
-// metadata (Source / Revision / Last reconcile).
+// Status strip carries the operation chip (when a sync is in flight or
+// failed) plus reference metadata (Source / Revision / Last reconcile /
+// Sync mode). Health and Sync badges live next to the title in the page
+// header — pair them there with identity, not here.
 export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) {
   const summary = insight?.summary
   if (loading) {
@@ -31,10 +27,7 @@ export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) 
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
         {operation && (
           <span
-            // Subtle pulse while a sync is actually in flight — paired with
-            // the bumped insights polling, this is the visual signal that the
-            // page is "watching" rather than stale. Doesn't fire for failure
-            // or terminal phases (those should look stable, not animated).
+            // Pulse only while the operation is actively progressing.
             className={clsx(
               'badge badge-sm font-medium uppercase tracking-wide',
               SEVERITY_BADGE[gitopsToSeverity(operation)],
@@ -63,8 +56,6 @@ export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) 
   )
 }
 
-// Whether to animate the operation chip — true for in-flight phases that
-// will progress without user action. Failure and terminal phases stay still.
 function isInFlightPhase(phase: string): boolean {
   const p = phase.toLowerCase()
   return p.includes('running') || p.includes('progress') || p.includes('reconcil')
@@ -83,9 +74,6 @@ function liveOperationPhase(phase?: string): string | null {
 }
 
 function MetaFact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  // Label stays tertiary (whisper-quiet) so the value reads as the answer to
-  // the label's question. Without the contrast bump, the row was a wall of
-  // identical-weight `Label: value` pairs.
   return (
     <span className="inline-flex min-w-0 max-w-[40ch] items-baseline gap-1">
       <span className="shrink-0">{label}:</span>
@@ -102,9 +90,8 @@ function isUnknownChipValue(v: string): boolean {
   return lower === 'unknown' || lower === ''
 }
 
-// Single severity-tinted row with a "+N more" expand affordance. The
-// alternative — three issue cards across — stacked another colored stripe
-// directly under the status strip and split attention.
+// Single severity-tinted alert row with a "+N more" expand for additional
+// issues. Headline issue is always visible; the rest are one click away.
 export function GitOpsIssuesBand({ issues }: { issues?: GitOpsIssue[] | null }) {
   const list = issues ?? []
   const [expanded, setExpanded] = useState(false)
@@ -337,10 +324,9 @@ export function GitOpsActivityInsightView({ insight, error, onRollback }: GitOps
   const canRollback = !!insight.capabilities?.rollback && !!onRollback
   return (
     <div className="h-full overflow-auto bg-theme-base p-4">
-      {/* The current operation always lands as the top entry in History (its
-          phase + message + finishedAt come from operationState). A separate
-          "Current Operation" panel duplicated those fields in a key-value
-          table — collapsing it lets History claim the full width. */}
+      {/* History is the only section here. The current operation surfaces as
+          the top history row (phase + message + finishedAt come from
+          operationState). Issues live in GitOpsIssuesBand at page top. */}
       <section className="rounded-md border border-theme-border bg-theme-surface">
         <SectionHeader
           icon={Clock3}
@@ -349,9 +335,6 @@ export function GitOpsActivityInsightView({ insight, error, onRollback }: GitOps
         />
         <HistoryRows items={insight.history ?? []} canRollback={canRollback} onRollback={onRollback} />
       </section>
-      {/* Issues are surfaced via GitOpsIssuesBand at the top of every tab — a
-          duplicated Diagnosis section here would be a third place rendering
-          the same data. The band's "+N more" expand carries the full list. */}
     </div>
   )
 }
@@ -385,13 +368,10 @@ function HistoryRows({
         // to it is meaningless.
         const showRollback = canRollback && !!item.id && !!onRollback
         return (
-          // `group` lets the row hover-reveal the Rollback button below;
-          // visible-but-faded baseline keeps it discoverable on touch devices
-          // while staying out of the visual rhythm at rest.
+          // `group` enables the Rollback button's hover-reveal; baseline
+          // opacity-40 keeps it touch-discoverable.
           <li key={`${item.id}-${item.revision}-${index}`} className="group relative grid grid-cols-[16px_minmax(0,1fr)] gap-3 pb-4 last:pb-0">
             <div className="relative flex justify-center">
-              {/* 2px line + tertiary tone (vs 1px theme-border) makes the
-                  timeline metaphor legible without shouting. */}
               {!isLast && <span className="absolute left-1/2 top-3 h-full w-[2px] -translate-x-1/2 bg-theme-text-tertiary/30" />}
               <span
                 className={clsx('relative mt-1 h-2.5 w-2.5 rounded-full ring-2 ring-theme-surface', tone.dot)}

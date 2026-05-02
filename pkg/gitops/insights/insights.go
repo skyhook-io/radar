@@ -318,15 +318,15 @@ func argoResourceChanges(root *unstructured.Unstructured) []Change {
 			category = "Synced"
 		}
 		// Argo records per-resource sync failures under a syncResult sibling
-		// (set during/after a failed sync attempt). Pull the message + hook
-		// phase if present so the UI can show actionable failure context.
+		// (set during/after a failed sync attempt). Surface the message as
+		// an error unless status explicitly marks success ("Synced"/"Pruned").
+		// Empty status counts as "unknown — show the message" because Argo
+		// can write a pre-apply failure message before stamping a status.
 		syncError := ""
 		hookPhase := ""
 		if sr, ok := m["syncResult"].(map[string]any); ok {
-			// Only treat the message as an "error" when it isn't paired with
-			// a happy status; Argo also writes the message field on success.
 			status := gitops.StringValue(sr["status"])
-			if status != "" && status != "Synced" && status != "Pruned" {
+			if status != "Synced" && status != "Pruned" {
 				syncError = gitops.StringValue(sr["message"])
 			}
 			hookPhase = gitops.StringValue(sr["hookPhase"])

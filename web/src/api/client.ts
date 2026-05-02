@@ -2465,8 +2465,13 @@ export function useArgoRefresh() {
       successMessage: 'Application refreshed',
     },
     onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['resources', 'applications'] })
-      queryClient.invalidateQueries({ queryKey: ['resource', 'applications', variables.namespace, variables.name] })
+      // Match the standard Argo invalidation set so the GitOps detail page
+      // (insights strip, resource tree) refetches after Refresh / Hard
+      // Refresh — without these two extra keys the user clicks Refresh and
+      // sees stale insight/tree data until the next staleTime tick.
+      argoInvalidateKeys(variables).forEach((key) =>
+        queryClient.invalidateQueries({ queryKey: key })
+      )
     },
   })
 }

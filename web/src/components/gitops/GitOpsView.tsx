@@ -857,13 +857,11 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const fluxSuspend = useFluxSuspend()
   const fluxResume = useFluxResume()
 
-  // Modal state for write actions that take options. Both default closed
-  // and open in response to user intent (Sync button click, Rollback button
-  // on a history row); the dialogs themselves render via DialogPortal.
   const [syncDialogOpen, setSyncDialogOpen] = useState(false)
+  // Doubles as the "open" flag (truthy = dialog open) and the data carrier
+  // for which history entry to roll back to.
   const [rollbackTarget, setRollbackTarget] = useState<GitOpsHistoryItem | null>(null)
-  // Track the last refresh kind so the in-flight spinner moves with the
-  // button the user actually clicked (Refresh vs Hard Refresh).
+  // Disambiguates which refresh button is in flight (both share argoRefresh).
   const [refreshKind, setRefreshKind] = useState<'normal' | 'hard'>('normal')
 
   const detailRow = resourceQ.data ? normalizeDetailResource(kind, group, resourceQ.data) : null
@@ -1110,7 +1108,14 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             <GitOpsActivityInsightView
               insight={insightsQ.data}
               error={insightsQ.error as Error | null}
-              onRollback={isArgoApp ? (item) => setRollbackTarget(item) : undefined}
+              // Only Argo apps support rollback. Skip the callback entirely
+              // for entries with non-numeric IDs (Flux conditions reuse the
+              // ID slot for condition.type) so the button doesn't render and
+              // then silently fail when clicked.
+              onRollback={isArgoApp ? (item) => {
+                if (parseRollbackID(item.id) == null) return
+                setRollbackTarget(item)
+              } : undefined}
             />
           ) : appView === 'changes' ? (
             <GitOpsChangesView insight={insightsQ.data} error={insightsQ.error as Error | null} onOpenResource={openResourceFromTree} />
@@ -1170,8 +1175,11 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             pending={argoSync.isPending}
             onCancel={() => setSyncDialogOpen(false)}
             onConfirm={(opts) => {
+              // Close on success only — on failure keep the dialog open so
+              // the user doesn't lose their form context (revision, advanced
+              // toggles). The error toast fires globally via mutation meta.
               argoSync.mutate({ namespace, name, ...opts }, {
-                onSettled: () => setSyncDialogOpen(false),
+                onSuccess: () => setSyncDialogOpen(false),
               })
             }}
           />
@@ -1183,11 +1191,14 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             pending={argoRollback.isPending}
             onCancel={() => setRollbackTarget(null)}
             onConfirm={(opts) => {
-              if (!rollbackTarget?.id) return
-              const id = Number(rollbackTarget.id)
-              if (!Number.isFinite(id)) return
+              // The Rollback button is gated on parseRollbackID returning a
+              // value, so by the time we get here `rollbackTarget?.id` is a
+              // positive integer. Defensive parse anyway in case the row data
+              // refreshed mid-modal.
+              const id = parseRollbackID(rollbackTarget?.id)
+              if (id == null) return
               argoRollback.mutate({ namespace, name, id, ...opts }, {
-                onSettled: () => setRollbackTarget(null),
+                onSuccess: () => setRollbackTarget(null),
               })
             }}
           />
@@ -1834,6 +1845,17 @@ function ActionButton({
   )
 }
 
+
+// Parse an Argo HistoryItem.id into the int64 the rollback API needs.
+// Returns null when the id is missing, non-numeric (Flux condition rows
+// reuse the slot for condition.type), or non-positive. Number("") is 0
+// which passes Number.isFinite — guard with > 0 explicitly.
+function parseRollbackID(id: string | undefined): number | null {
+  if (!id) return null
+  const n = Number(id)
+  if (!Number.isFinite(n) || n <= 0) return null
+  return n
+}
 
 // Inline counts for the topology toolbar — answers "how many resources, how
 // many of them are healthy / drifted" at a glance, without making the user

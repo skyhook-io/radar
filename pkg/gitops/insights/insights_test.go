@@ -136,3 +136,76 @@ func TestBuildIssuesDegradedTreeSuppressedWhenIssuesPresent(t *testing.T) {
 		t.Fatalf("expected operation issue to win, got %q", issues[0].Scope)
 	}
 }
+
+// describeArgoAutoSync produces user-visible chip labels — pin every state
+// the function should emit so a rename of "Manual" / "Auto · prune" etc.
+// requires intentional test updates rather than silently changing UX.
+func TestDescribeArgoAutoSync(t *testing.T) {
+	cases := []struct {
+		name string
+		spec map[string]any
+		want string
+	}{
+		{name: "no automated → Manual", spec: map[string]any{"syncPolicy": map[string]any{}}, want: "Manual"},
+		{name: "no syncPolicy at all → Manual", spec: map[string]any{}, want: "Manual"},
+		{name: "automated empty → Auto", spec: map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{}}}, want: "Auto"},
+		{name: "automated prune only → Auto · prune", spec: map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"prune": true}}}, want: "Auto · prune"},
+		{name: "automated selfHeal only → Auto · self-heal", spec: map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"selfHeal": true}}}, want: "Auto · self-heal"},
+		{name: "automated prune + selfHeal → Auto · prune · self-heal", spec: map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"prune": true, "selfHeal": true}}}, want: "Auto · prune · self-heal"},
+		// Bool-typed-as-string defensiveness: Argo's CRD schema enforces bool,
+		// but unstructured paths can deliver string "true" if a webhook or
+		// admission controller mangles values. Without the type assertion
+		// failing safely, we'd report "Auto · prune" for "prune": "true".
+		{name: "string 'true' for prune treated as not-set → Auto", spec: map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"prune": "true"}}}, want: "Auto"},
+		{name: "false flags → Auto", spec: map[string]any{"syncPolicy": map[string]any{"automated": map[string]any{"prune": false, "selfHeal": false}}}, want: "Auto"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := &unstructured.Unstructured{Object: map[string]any{"spec": tc.spec}}
+			if got := describeArgoAutoSync(root); got != tc.want {
+				t.Fatalf("describeArgoAutoSync = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// argoResourceChanges' syncResult-status gating decides whether a per-resource
+// failure message surfaces in the UI as a red SyncError. Pin the contract so
+// a future refactor that simplifies the status check (e.g. `if status != ""`)
+// doesn't accidentally hide pre-apply failures or leak success messages.
+func TestArgoResourceChangesSyncResultGating(t *testing.T) {
+	cases := []struct {
+		name        string
+		syncResult  map[string]any
+		wantSyncErr string
+		wantHook    string
+	}{
+		{name: "SyncFailed status → message surfaced", syncResult: map[string]any{"status": "SyncFailed", "message": "boom"}, wantSyncErr: "boom"},
+		{name: "Synced status → message suppressed", syncResult: map[string]any{"status": "Synced", "message": "ok"}, wantSyncErr: ""},
+		{name: "Pruned status → message suppressed", syncResult: map[string]any{"status": "Pruned", "message": "removed"}, wantSyncErr: ""},
+		{name: "empty status → message surfaced (pre-apply error case)", syncResult: map[string]any{"status": "", "message": "validation failed"}, wantSyncErr: "validation failed"},
+		{name: "no status field → message surfaced", syncResult: map[string]any{"message": "schema error"}, wantSyncErr: "schema error"},
+		{name: "hookPhase extracted regardless of status", syncResult: map[string]any{"status": "Synced", "hookPhase": "PostSync"}, wantSyncErr: "", wantHook: "PostSync"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := argoApp(map[string]any{
+				"resources": []any{map[string]any{
+					"kind":       "Deployment",
+					"name":       "auth",
+					"syncResult": tc.syncResult,
+				}},
+			})
+			out := argoResourceChanges(root)
+			if len(out) != 1 {
+				t.Fatalf("expected 1 change, got %d", len(out))
+			}
+			if out[0].SyncError != tc.wantSyncErr {
+				t.Fatalf("SyncError = %q, want %q", out[0].SyncError, tc.wantSyncErr)
+			}
+			if out[0].HookPhase != tc.wantHook {
+				t.Fatalf("HookPhase = %q, want %q", out[0].HookPhase, tc.wantHook)
+			}
+		})
+	}
+}

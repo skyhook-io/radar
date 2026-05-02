@@ -2,10 +2,10 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
-	"strings"
 
 	"github.com/go-chi/chi/v5"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -92,8 +92,11 @@ func (s *Server) handleArgoRollback(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if opts.ID == 0 {
-		s.writeError(w, http.StatusBadRequest, "rollback request requires id")
+	// Match the core function's contract (RollbackArgoApp rejects <= 0).
+	// Reject negatives at the HTTP boundary so they 400 instead of falling
+	// through to a generic 500 from the operation layer.
+	if opts.ID <= 0 {
+		s.writeError(w, http.StatusBadRequest, "rollback request requires positive id")
 		return
 	}
 
@@ -187,30 +190,29 @@ func toGitOpsResponse(r gitops.OperationResult) GitOpsOperationResponse {
 	return resp
 }
 
-// writeGitOpsError maps gitops operation errors to appropriate HTTP status codes.
+// writeGitOpsError maps gitops operation errors to appropriate HTTP status
+// codes. Uses errors.Is on typed sentinels (defined in pkg/gitops) instead of
+// substring matching so the mapping doesn't drift if message wording changes.
+// Every branch logs so an operator scraping the server log sees the failure
+// regardless of which HTTP status it surfaced as — the prior code only logged
+// the default 500 branch, hiding routed 4xx errors entirely.
 func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, action, namespace, name string) {
 	msg := err.Error()
-
-	// Check typed K8s API errors first (preserved through %w wrapping)
-	if apierrors.IsNotFound(err) {
-		s.writeError(w, http.StatusNotFound, msg)
-		return
-	}
-	if apierrors.IsForbidden(err) {
-		s.writeError(w, http.StatusForbidden, msg)
-		return
-	}
-
-	// Application-level errors from gitops operations
+	var status int
 	switch {
-	case strings.Contains(msg, "not found"):
-		s.writeError(w, http.StatusNotFound, msg)
-	case strings.Contains(msg, "already in progress"):
-		s.writeError(w, http.StatusConflict, msg)
-	case strings.Contains(msg, "no sync operation in progress"):
-		s.writeError(w, http.StatusBadRequest, msg)
+	case apierrors.IsNotFound(err):
+		status = http.StatusNotFound
+	case apierrors.IsForbidden(err):
+		status = http.StatusForbidden
+	case errors.Is(err, gitops.ErrHistoryEntryNotFound):
+		status = http.StatusNotFound
+	case errors.Is(err, gitops.ErrOperationInProgress):
+		status = http.StatusConflict
+	case errors.Is(err, gitops.ErrNoOperationInProgress):
+		status = http.StatusBadRequest
 	default:
-		log.Printf("[%s] Failed to %s %s/%s: %v", module, action, namespace, name, err)
-		s.writeError(w, http.StatusInternalServerError, msg)
+		status = http.StatusInternalServerError
 	}
+	log.Printf("[%s] %s %s/%s -> %d: %v", module, action, namespace, name, status, err)
+	s.writeError(w, status, msg)
 }
