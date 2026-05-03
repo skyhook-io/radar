@@ -1,9 +1,18 @@
 {{- /*
-Bind the Helm-capable add-on ClusterRole to cloud:owner and cloud:member.
-RBAC is additive, so these grants stack on top of the admin/edit role each
-tier already gets via cloud-rbac.yaml.
+Bind the Helm add-on ClusterRoles to cloud role tiers.
+
+Two distinct grants:
+  - radar-helm (member-safe): CRDs, storage, runtime classes, PDBs,
+    namespaces. Bound to both cloud:owner and cloud:member.
+  - radar-helm-admin (cluster-admin-equivalent): RBAC, webhooks,
+    APIServices. Bound to cloud:owner ONLY — granting these to member
+    would let any member self-promote to cluster-admin via a one-apply
+    ClusterRoleBinding write.
 
 Viewer is intentionally not bound — viewers never install Helm releases.
+
+RBAC is additive, so these grants stack on top of the admin/edit role each
+tier already gets via cloud-rbac.yaml.
 */}}
 {{- if and .Values.cloud.enabled .Values.cloud.defaultRbac.create .Values.rbac.create .Values.rbac.helm (ne .Values.auth.mode "none") -}}
 {{- if .Values.cloud.defaultRbac.owner }}
@@ -17,6 +26,21 @@ roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
   name: {{ include "radar.fullname" . }}-helm
+subjects:
+  - kind: Group
+    name: cloud:owner
+    apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-owner-helm-admin
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "radar.fullname" . }}-helm-admin
 subjects:
   - kind: Group
     name: cloud:owner

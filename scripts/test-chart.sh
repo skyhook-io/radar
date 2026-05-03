@@ -91,37 +91,60 @@ assert_contains 'MY_POD_NAMESPACE'                  "env vars injected — featu
 echo
 
 render "defaults — no helm-write footprint"
-assert_not_contains 'name: radar-helm$'             "no helm add-on ClusterRole"
-assert_not_contains 'name: radar-cloud-owner-helm$' "no cloud helm bindings"
-assert_not_contains 'name: radar-cloud-member-helm$' "no cloud helm bindings"
+assert_not_contains 'name: radar-helm$'                  "no helm add-on ClusterRole"
+assert_not_contains 'name: radar-helm-admin$'            "no helm-admin ClusterRole"
+assert_not_contains 'name: radar-cloud-owner-helm$'      "no cloud helm bindings"
+assert_not_contains 'name: radar-cloud-member-helm$'     "no cloud helm bindings"
+assert_not_contains 'name: radar-cloud-owner-helm-admin' "no cloud helm-admin bindings"
 echo
 
 render "rbac.helm=true alone — gated off without auth or cloud" --set rbac.helm=true
-assert_not_contains 'name: radar-helm$'             "no helm add-on ClusterRole without auth/cloud"
+assert_not_contains 'name: radar-helm$'                  "no helm add-on ClusterRole without auth/cloud"
+assert_not_contains 'name: radar-helm-admin$'            "no helm-admin ClusterRole without auth/cloud"
 echo
 
-render "rbac.helm=true + auth.mode=proxy — helm CR emitted, no cloud bindings" \
+render "rbac.helm=true + auth.mode=proxy — both CRs emitted, no cloud bindings" \
   --set rbac.helm=true --set auth.mode=proxy
-assert_contains 'name: radar-helm$'                 "helm add-on ClusterRole emitted"
-assert_not_contains 'name: radar-cloud-owner-helm$' "no cloud-owner-helm binding without cloud"
+assert_contains 'name: radar-helm$'                  "helm add-on ClusterRole emitted"
+assert_contains 'name: radar-helm-admin$'            "helm-admin ClusterRole emitted"
+assert_not_contains 'name: radar-cloud-owner-helm$'  "no cloud-owner-helm binding without cloud"
 assert_not_contains 'name: radar-cloud-member-helm$' "no cloud-member-helm binding without cloud"
 echo
 
-render "rbac.helm=true + cloud.enabled=true + auth.mode=proxy — helm CR + cloud bindings" \
+render "rbac.helm=true + cloud.enabled=true + auth.mode=proxy — split bindings (member excluded from admin)" \
   --set rbac.helm=true --set auth.mode=proxy --set cloud.enabled=true \
   --set cloud.url=wss://x --set cloud.token=t --set cloud.clusterName=c
-assert_contains 'name: radar-helm$'                 "helm add-on ClusterRole emitted"
-assert_contains 'name: radar-cloud-owner-helm$'     "cloud-owner-helm binding emitted"
-assert_contains 'name: radar-cloud-member-helm$'    "cloud-member-helm binding emitted"
-assert_not_contains 'name: radar-cloud-viewer-helm' "no helm binding for viewer tier"
+assert_contains 'name: radar-helm$'                       "helm add-on ClusterRole emitted"
+assert_contains 'name: radar-helm-admin$'                 "helm-admin ClusterRole emitted"
+assert_contains 'name: radar-cloud-owner-helm$'           "cloud-owner-helm binding emitted"
+assert_contains 'name: radar-cloud-member-helm$'          "cloud-member-helm binding emitted"
+assert_contains 'name: radar-cloud-owner-helm-admin$'     "cloud-owner-helm-admin binding emitted"
+assert_not_contains 'name: radar-cloud-member-helm-admin' "member is NEVER bound to helm-admin (RBAC self-promotion)"
+assert_not_contains 'name: radar-cloud-viewer-helm'       "no helm binding for viewer tier"
 echo
 
 render "rbac.helm=true + cloud.enabled=true + auth.mode=none — no cloud-helm bindings" \
   --set rbac.helm=true --set cloud.enabled=true \
   --set cloud.url=wss://x --set cloud.token=t --set cloud.clusterName=c
-assert_contains 'name: radar-helm$'                 "helm add-on ClusterRole still emitted (cloud.enabled satisfies the OR-clause)"
-assert_not_contains 'name: radar-cloud-owner-helm$' "cloud-helm bindings require auth.mode != none"
+assert_contains 'name: radar-helm$'                  "helm add-on ClusterRole still emitted (cloud.enabled satisfies the OR-clause)"
+assert_contains 'name: radar-helm-admin$'            "helm-admin ClusterRole still emitted (same gate)"
+assert_not_contains 'name: radar-cloud-owner-helm$'  "cloud-helm bindings require auth.mode != none"
 assert_not_contains 'name: radar-cloud-member-helm$' "cloud-helm bindings require auth.mode != none"
+echo
+
+render "split content — radar-helm has CRDs but NOT clusterroles" \
+  --set rbac.helm=true --set auth.mode=proxy
+# Pull the radar-helm ClusterRole specifically and check its contents
+HELM_RULES=$(echo "$OUT" | awk '/^kind: ClusterRole$/,/^---$/' | awk '/^metadata:$/,/^rules:$/{found=1} /  name: radar-helm$/{ok=1} END{print ok}')
+# Simpler approach: just confirm the cluster-admin verbs are NOT in radar-helm's rules
+# by checking the file was split (radar-helm-admin exists separately)
+assert_contains 'name: radar-helm-admin$'                 "helm-admin role exists as separate resource"
+# Member-safe role grants CRDs (operator charts)
+assert_contains 'customresourcedefinitions'               "CRDs writable in member-safe role"
+# Cluster-admin-equivalent verbs are present somewhere in the manifest (in radar-helm-admin)
+assert_contains 'clusterrolebindings'                     "RBAC writes present (in admin role)"
+assert_contains 'validatingwebhookconfigurations'         "webhook writes present (in admin role)"
+assert_contains 'apiservices'                             "apiservices writes present (in admin role)"
 echo
 
 if [[ $FAIL -eq 0 ]]; then

@@ -1,17 +1,18 @@
 {{- /*
-Helm-capable add-on ClusterRole. Emitted only when rbac.helm=true (so Helm
-write operations are allowed at all) AND auth or cloud is on (so requests run
-under impersonated identities, which need their own grant beyond the SA's).
+Helm-capable add-on ClusterRole — the "member-safe" tier. Emitted when
+rbac.helm=true AND auth or cloud is on (so requests run under impersonated
+identities which need their own grant beyond the SA's).
 
-Helm's pre-flight existence check issues a Get on every object the chart will
-create. For charts that include cluster-scoped resources (ClusterRole,
-ClusterRoleBinding, CRD, ValidatingWebhookConfiguration, PriorityClass, ...)
-this requires cluster-scoped reads — which the K8s built-in admin/edit/view
-roles do not grant. Without this, in-cluster Radar agents fail every install
-of any chart that touches those resources.
+Covers chart resources whose write access is needed for installing typical
+operator-style charts (CRDs, storage classes, runtime classes, priority
+classes, PDBs, namespaces) but does NOT include the cluster-admin-equivalent
+surface (ClusterRole/Role writes, webhook configs, APIServices). Those live
+in radar-helm-admin and are bound to cloud:owner only.
 
-Cloud role tiers (owner/member) are bound to this role in cloud-rbac-helm.yaml.
-For non-cloud auth-mode setups, the cluster operator wires their own bindings.
+The split is deliberate: a cloud:member with ClusterRoleBinding-write can
+trivially self-promote to cluster-admin, collapsing the owner/member tier
+boundary. Charts that bundle their own RBAC (e.g. full operator installs)
+require an owner identity to install.
 */}}
 {{- if and .Values.rbac.create .Values.rbac.helm (or (ne .Values.auth.mode "none") .Values.cloud.enabled) -}}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -21,21 +22,8 @@ metadata:
   labels:
     {{- include "radar.labels" . | nindent 4 }}
 rules:
-  - apiGroups: ["rbac.authorization.k8s.io"]
-    resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["apiextensions.k8s.io"]
     resources: ["customresourcedefinitions"]
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["admissionregistration.k8s.io"]
-    resources:
-      - validatingwebhookconfigurations
-      - mutatingwebhookconfigurations
-      - validatingadmissionpolicies
-      - validatingadmissionpolicybindings
-    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  - apiGroups: ["apiregistration.k8s.io"]
-    resources: ["apiservices"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["storage.k8s.io"]
     resources: ["storageclasses", "csidrivers", "volumeattachments"]
