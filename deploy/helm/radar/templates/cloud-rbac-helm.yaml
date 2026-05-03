@@ -1,0 +1,42 @@
+{{- /*
+Bind the Helm-capable add-on ClusterRole to cloud:owner and cloud:member.
+RBAC is additive, so these grants stack on top of the admin/edit role each
+tier already gets via cloud-rbac.yaml.
+
+Viewer is intentionally not bound — viewers never install Helm releases.
+*/}}
+{{- if and .Values.cloud.enabled .Values.cloud.defaultRbac.create .Values.rbac.create .Values.rbac.helm (ne .Values.auth.mode "none") -}}
+{{- if .Values.cloud.defaultRbac.owner }}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-owner-helm
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "radar.fullname" . }}-helm
+subjects:
+  - kind: Group
+    name: cloud:owner
+    apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- if .Values.cloud.defaultRbac.member }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "radar.fullname" . }}-cloud-member-helm
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "radar.fullname" . }}-helm
+subjects:
+  - kind: Group
+    name: cloud:member
+    apiGroup: rbac.authorization.k8s.io
+{{- end }}
+{{- end -}}

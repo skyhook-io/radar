@@ -76,6 +76,17 @@ rules:
       - selfsubjectaccessreviews
     verbs: ["create"]
 
+  # RBAC objects: read for the resource browser. Without this, ClusterRole/
+  # ClusterRoleBinding/Role/RoleBinding views cannot list anything even though
+  # the broad write rule above lets users create them when rbac.helm=true.
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources:
+      - roles
+      - rolebindings
+      - clusterroles
+      - clusterrolebindings
+    verbs: ["get", "list", "watch"]
+
   {{- if .Values.rbac.podLogs }}
   # Pod logs (opt-in - enables log viewer)
   - apiGroups: [""]

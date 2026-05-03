@@ -1,0 +1,55 @@
+{{- /*
+Helm-capable add-on ClusterRole. Emitted only when rbac.helm=true (so Helm
+write operations are allowed at all) AND auth or cloud is on (so requests run
+under impersonated identities, which need their own grant beyond the SA's).
+
+Helm's pre-flight existence check issues a Get on every object the chart will
+create. For charts that include cluster-scoped resources (ClusterRole,
+ClusterRoleBinding, CRD, ValidatingWebhookConfiguration, PriorityClass, ...)
+this requires cluster-scoped reads — which the K8s built-in admin/edit/view
+roles do not grant. Without this, in-cluster Radar agents fail every install
+of any chart that touches those resources.
+
+Cloud role tiers (owner/member) are bound to this role in cloud-rbac-helm.yaml.
+For non-cloud auth-mode setups, the cluster operator wires their own bindings.
+*/}}
+{{- if and .Values.rbac.create .Values.rbac.helm (or (ne .Values.auth.mode "none") .Values.cloud.enabled) -}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "radar.fullname" . }}-helm
+  labels:
+    {{- include "radar.labels" . | nindent 4 }}
+rules:
+  - apiGroups: ["rbac.authorization.k8s.io"]
+    resources: ["clusterroles", "clusterrolebindings", "roles", "rolebindings"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources:
+      - validatingwebhookconfigurations
+      - mutatingwebhookconfigurations
+      - validatingadmissionpolicies
+      - validatingadmissionpolicybindings
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apiregistration.k8s.io"]
+    resources: ["apiservices"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["storage.k8s.io"]
+    resources: ["storageclasses", "csidrivers", "volumeattachments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["scheduling.k8s.io"]
+    resources: ["priorityclasses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["node.k8s.io"]
+    resources: ["runtimeclasses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["policy"]
+    resources: ["poddisruptionbudgets"]
+    verbs: ["create", "update", "patch", "delete"]
+  - apiGroups: [""]
+    resources: ["namespaces"]
+    verbs: ["create", "update", "patch", "delete"]
+{{- end }}
