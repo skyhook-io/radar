@@ -144,13 +144,8 @@ func main() {
 	// Track opens and maybe prompt to star (non-blocking)
 	app.MaybePromptGitHubStar()
 
-	// Build window title
-	windowTitle := "Radar"
-	if ctx := k8s.GetContextName(); ctx != "" {
-		windowTitle = "Radar — " + ctx
-	}
+	windowTitle := formatWindowTitle(k8s.GetContextName())
 
-	// Create desktop app
 	desktopApp := NewDesktopApp(srv, timelineStoreCfg)
 
 	// Run Wails application
