@@ -112,6 +112,28 @@ func TestPreInstallCheck_FailedAllowsRecovery(t *testing.T) {
 	}
 }
 
+// TestPreInstallCheck_MultiRevisionUsesLatest guards against reading an older
+// revision when storage holds more than one. The recovery scenario this PR
+// targets — an install fails (v1) and the user retries — produces multi-
+// revision history; classifying off the wrong revision misroutes the request.
+func TestPreInstallCheck_MultiRevisionUsesLatest(t *testing.T) {
+	cfg := memoryActionConfig(t)
+	seedRelease(t, cfg, "caretta", release.StatusDeployed, 1)
+	seedRelease(t, cfg, "caretta", release.StatusFailed, 2)
+
+	fresh, err := preInstallCheck(cfg, "caretta", "default")
+	if err != nil {
+		t.Fatalf("preInstallCheck: %v", err)
+	}
+	if fresh {
+		t.Error("fresh=true — latest revision is v2/failed, expected fresh=false for upgrade --install recovery")
+	}
+	var exists *ReleaseExistsError
+	if errors.As(err, &exists) {
+		t.Errorf("got ReleaseExistsError — classifier read v1/deployed instead of v2/failed: %+v", exists)
+	}
+}
+
 func TestClassifyHelmRBACError(t *testing.T) {
 	// Real Helm pre-flight error string from caretta install in cloud-mode.
 	raw := errors.New(`install failed: Unable to continue with install: ` +

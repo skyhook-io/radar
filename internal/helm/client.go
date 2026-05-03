@@ -1904,7 +1904,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 	}
 
 	if !fresh {
-		log.Printf("[helm] install %s/%s: prior release record exists, recovering via upgrade --install", req.Namespace, req.ReleaseName)
+		log.Printf("[helm] install %q/%q: prior release record exists, recovering via upgrade --install", req.Namespace, req.ReleaseName)
 	}
 	rel, err := runInstallOrUpgrade(actionConfig, req, chart, fresh)
 	if err != nil {

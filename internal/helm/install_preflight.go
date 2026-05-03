@@ -51,20 +51,18 @@ func (e *ReleaseExistsError) Error() string {
 //     can safely overwrite it
 //   - (_, *ReleasePendingError): a prior attempt is stuck in pending-* state
 //   - (_, *ReleaseExistsError): the release is currently deployed
+//
+// Reads the latest revision via Releases.Last. action.History.Run returns the
+// storage driver's raw Query output without sorting and ignores Max, so
+// hist[0] would silently pick whatever ordering the driver happens to use.
 func preInstallCheck(actionConfig *action.Configuration, name, namespace string) (fresh bool, err error) {
-	historian := action.NewHistory(actionConfig)
-	historian.Max = 1
-	hist, hErr := historian.Run(name)
-	if errors.Is(hErr, driver.ErrReleaseNotFound) {
+	last, lErr := actionConfig.Releases.Last(name)
+	if errors.Is(lErr, driver.ErrReleaseNotFound) {
 		return true, nil
 	}
-	if hErr != nil {
-		return false, fmt.Errorf("failed to inspect existing release: %w", hErr)
+	if lErr != nil {
+		return false, fmt.Errorf("failed to inspect existing release: %w", lErr)
 	}
-	if len(hist) == 0 {
-		return true, nil
-	}
-	last := hist[0]
 	switch last.Info.Status {
 	case release.StatusPendingInstall, release.StatusPendingUpgrade, release.StatusPendingRollback, release.StatusUninstalling:
 		return false, &ReleasePendingError{
@@ -78,7 +76,7 @@ func preInstallCheck(actionConfig *action.Configuration, name, namespace string)
 	case release.StatusFailed, release.StatusSuperseded, release.StatusUninstalled, release.StatusUnknown:
 		return false, nil
 	default:
-		log.Printf("[helm] preInstallCheck: unrecognized release status %q for %s/%s, treating as recoverable", last.Info.Status, namespace, name)
+		log.Printf("[helm] preInstallCheck: unrecognized release status %q for %q/%q, treating as recoverable", last.Info.Status, namespace, name)
 		return false, nil
 	}
 }

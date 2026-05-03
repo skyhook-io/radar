@@ -822,7 +822,7 @@ func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
 		release, installErr = client.Install(&req)
 	}
 	if err := installErr; err != nil {
-		log.Printf("[helm] install %s/%s (chart=%s repo=%s) failed: %v", req.Namespace, req.ReleaseName, req.ChartName, req.Repository, err)
+		log.Printf("[helm] install %q/%q (chart=%q repo=%q) failed: %v", req.Namespace, req.ReleaseName, req.ChartName, req.Repository, err)
 		writeInstallError(w, err)
 		return
 	}
@@ -921,7 +921,7 @@ func (h *Handlers) handleInstallStream(w http.ResponseWriter, r *http.Request) {
 
 		case result := <-resultCh:
 			if result.err != nil {
-				log.Printf("[helm] install %s/%s (chart=%s repo=%s) failed: %v", req.Namespace, req.ReleaseName, req.ChartName, req.Repository, result.err)
+				log.Printf("[helm] install %q/%q (chart=%q repo=%q) failed: %v", req.Namespace, req.ReleaseName, req.ChartName, req.Repository, result.err)
 				event := map[string]any{
 					"type":    "error",
 					"message": result.err.Error(),
