@@ -104,8 +104,11 @@ func TestUpdateResource_UsesServerSideApply(t *testing.T) {
 			t.Errorf("patch body still contains metadata.%s; SSA expects these stripped", banned)
 		}
 	}
-	if _, present := body["status"]; present {
-		t.Error("patch body still contains status; SSA edits should not declare ownership of status")
+	// status must NOT be stripped: CRDs without a status subresource treat it
+	// as a user-writable field, and stripping silently discards user edits.
+	// For subresourced kinds, the apiserver ignores status on /apply anyway.
+	if _, present := body["status"]; !present {
+		t.Error("status was stripped from the patch body; CRDs without status subresource need it preserved")
 	}
 }
 

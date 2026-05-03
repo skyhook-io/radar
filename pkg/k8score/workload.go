@@ -126,7 +126,9 @@ func (m *WorkloadManager) UpdateResource(ctx context.Context, opts UpdateResourc
 
 // stripServerManagedFields removes metadata fields the apiserver owns. SSA
 // rejects ownership claims on these, and editor round-trips often round-trip
-// them back unchanged.
+// them back unchanged. status is intentionally NOT stripped: for resources
+// with a status subresource the apiserver ignores it on /apply anyway, and
+// for CRDs without a status subresource the user's edit IS the way to set it.
 func stripServerManagedFields(obj *unstructured.Unstructured) {
 	for _, f := range [][]string{
 		{"metadata", "resourceVersion"},
@@ -135,7 +137,6 @@ func stripServerManagedFields(obj *unstructured.Unstructured) {
 		{"metadata", "generation"},
 		{"metadata", "creationTimestamp"},
 		{"metadata", "selfLink"},
-		{"status"},
 	} {
 		unstructured.RemoveNestedField(obj.Object, f...)
 	}
