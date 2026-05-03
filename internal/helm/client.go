@@ -1885,7 +1885,7 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		}
 	}
 
-	fresh, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
+	mode, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
 	if err != nil {
 		return nil, err
 	}
@@ -1902,10 +1902,10 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		return nil, fmt.Errorf("failed to load chart: %w", err)
 	}
 
-	if !fresh {
-		log.Printf("[helm] install %q/%q: prior release record exists, recovering via upgrade --install", req.Namespace, req.ReleaseName)
+	if mode != installFresh {
+		log.Printf("[helm] install %q/%q: prior release record exists, recovering via %s", req.Namespace, req.ReleaseName, recoveryMode(mode))
 	}
-	rel, err := runInstallOrUpgrade(actionConfig, req, chart, fresh)
+	rel, err := runInstallOrUpgrade(actionConfig, req, chart, mode)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
 	}
@@ -2105,21 +2105,24 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		return nil, fmt.Errorf("failed to load chart: %w", err)
 	}
 
-	fresh, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
+	mode, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
 	if err != nil {
 		return nil, err
 	}
 
-	if fresh {
+	switch mode {
+	case installFresh:
 		sendProgress("installing", fmt.Sprintf("Installing %s to namespace %s...", req.ReleaseName, req.Namespace), "")
 		if req.CreateNamespace {
 			sendProgress("installing", fmt.Sprintf("Creating namespace %s if needed...", req.Namespace), "")
 		}
-	} else {
-		sendProgress("installing", fmt.Sprintf("Replacing prior failed release %s in %s...", req.ReleaseName, req.Namespace), "")
+	case installReplace:
+		sendProgress("installing", fmt.Sprintf("Replacing prior uninstalled release %s in %s...", req.ReleaseName, req.Namespace), "")
+	case installUpgrade:
+		sendProgress("installing", fmt.Sprintf("Recovering prior failed release %s in %s...", req.ReleaseName, req.Namespace), "")
 	}
 
-	rel, err := runInstallOrUpgrade(actionConfig, req, chart, fresh)
+	rel, err := runInstallOrUpgrade(actionConfig, req, chart, mode)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
 	}

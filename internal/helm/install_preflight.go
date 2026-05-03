@@ -44,72 +44,95 @@ func (e *ReleaseExistsError) Error() string {
 		e.Name, e.Namespace, e.Revision)
 }
 
+// installMode is what preInstallCheck tells the caller about how to dispatch
+// the install. Three modes because Helm's SDK splits recovery semantics by
+// prior release status: only Failed/Superseded recover via action.Upgrade
+// (which has the deployed-base fallback at upgrade.go:231-233), Uninstalled
+// requires action.Install with Replace=true (upgrade rejects it with
+// ErrNoDeployedReleases), and a fresh install uses action.Install with no
+// replace.
+type installMode int
+
+const (
+	installFresh   installMode = iota // no prior record
+	installReplace                    // prior record is Uninstalled
+	installUpgrade                    // prior record is Failed or Superseded
+)
+
 // preInstallCheck inspects existing Helm storage for the release name and
 // returns:
-//   - (true, nil): no record, fresh install path
-//   - (false, nil): a prior failed/uninstalled record exists; upgrade --install
-//     can safely overwrite it
-//   - (_, *ReleasePendingError): a prior attempt is stuck in pending-* state,
-//     uninstalling, or in an unrecognized status (fail-closed)
+//   - (installFresh, nil): no record
+//   - (installReplace, nil): a prior Uninstalled record (use Install.Replace)
+//   - (installUpgrade, nil): a prior Failed/Superseded record (use Upgrade)
+//   - (_, *ReleasePendingError): a prior attempt is stuck in pending-* /
+//     uninstalling / unrecognized status (fail-closed)
 //   - (_, *ReleaseExistsError): the release is currently deployed
 //
 // Uses Releases.Last because action.History.Run returns the storage driver's
 // raw Query output (unsorted, ignores Max), so its hist[0] is non-deterministic.
-func preInstallCheck(actionConfig *action.Configuration, name, namespace string) (fresh bool, err error) {
+func preInstallCheck(actionConfig *action.Configuration, name, namespace string) (installMode, error) {
 	last, lErr := actionConfig.Releases.Last(name)
 	if errors.Is(lErr, driver.ErrReleaseNotFound) {
-		return true, nil
+		return installFresh, nil
 	}
 	if lErr != nil {
-		return false, fmt.Errorf("failed to inspect existing release: %w", lErr)
+		return installFresh, fmt.Errorf("failed to inspect existing release: %w", lErr)
 	}
 	switch last.Info.Status {
 	case release.StatusPendingInstall, release.StatusPendingUpgrade, release.StatusPendingRollback, release.StatusUninstalling:
-		return false, &ReleasePendingError{
+		return installFresh, &ReleasePendingError{
 			Name: name, Namespace: namespace,
 			Status: last.Info.Status.String(), Revision: last.Version,
 		}
 	case release.StatusDeployed:
-		return false, &ReleaseExistsError{
+		return installFresh, &ReleaseExistsError{
 			Name: name, Namespace: namespace, Revision: last.Version,
 		}
-	case release.StatusFailed, release.StatusSuperseded, release.StatusUninstalled, release.StatusUnknown:
-		return false, nil
+	case release.StatusFailed, release.StatusSuperseded:
+		return installUpgrade, nil
+	case release.StatusUninstalled:
+		return installReplace, nil
 	default:
-		// Future helm versions may add new in-flight statuses. Fail-closed
-		// (treat as pending) so we never fire upgrade against a status
-		// helm itself would refuse, instead of silently writing.
+		// StatusUnknown or any future helm tier: fail-closed. Neither
+		// action.Upgrade nor Install.Replace accepts arbitrary statuses
+		// (install.go:549 only allows Uninstalled+Failed for Replace;
+		// upgrade.go:232 only allows Failed+Superseded for fallback), so
+		// silently routing here would yield a confusing helm error.
 		log.Printf("[helm] preInstallCheck: unrecognized release status %q for %q/%q, refusing to overwrite", last.Info.Status, namespace, name)
-		return false, &ReleasePendingError{
+		return installFresh, &ReleasePendingError{
 			Name: name, Namespace: namespace,
 			Status: last.Info.Status.String(), Revision: last.Version,
 		}
 	}
 }
 
-// runInstallOrUpgrade dispatches to action.Install for a fresh install and
-// action.Upgrade with Install=true ("upgrade --install") for the recovery
-// path over a failed/uninstalled record.
-func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest, ch *chart.Chart, fresh bool) (*release.Release, error) {
-	if fresh {
-		install := action.NewInstall(actionConfig)
-		install.ReleaseName = req.ReleaseName
-		install.Namespace = req.Namespace
-		install.CreateNamespace = req.CreateNamespace
-		install.Timeout = 120 * time.Second
-		install.Version = req.Version
-		return install.Run(ch, req.Values)
+// runInstallOrUpgrade dispatches to the right Helm action for the install
+// mode. Failed/Superseded go through action.Upgrade (with its
+// deployed-base fallback); Uninstalled goes through action.Install with
+// Replace=true (helm SDK exposes no equivalent fallback on Upgrade — the
+// CLI's `helm upgrade --install` is implemented at the CLI layer, not in
+// the action; see upgrade.go:49-58).
+func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest, ch *chart.Chart, mode installMode) (*release.Release, error) {
+	if mode == installUpgrade {
+		upgrade := action.NewUpgrade(actionConfig)
+		upgrade.Install = true
+		upgrade.Namespace = req.Namespace
+		upgrade.Timeout = 120 * time.Second
+		upgrade.MaxHistory = 10
+		upgrade.Version = req.Version
+		// action.Upgrade has no CreateNamespace; reaching this branch implies a
+		// prior release record exists, so the namespace was created earlier. If
+		// it has been deleted manually since, the user must recreate it.
+		return upgrade.Run(req.ReleaseName, ch, req.Values)
 	}
-	upgrade := action.NewUpgrade(actionConfig)
-	upgrade.Install = true
-	upgrade.Namespace = req.Namespace
-	upgrade.Timeout = 120 * time.Second
-	upgrade.MaxHistory = 10
-	upgrade.Version = req.Version
-	// action.Upgrade has no CreateNamespace; reaching this branch implies a
-	// prior release record exists, so the namespace was created earlier. If
-	// it has been deleted manually since, the user must recreate it.
-	return upgrade.Run(req.ReleaseName, ch, req.Values)
+	install := action.NewInstall(actionConfig)
+	install.ReleaseName = req.ReleaseName
+	install.Namespace = req.Namespace
+	install.CreateNamespace = req.CreateNamespace
+	install.Timeout = 120 * time.Second
+	install.Version = req.Version
+	install.Replace = mode == installReplace
+	return install.Run(ch, req.Values)
 }
 
 // rbacPreflightRe matches Helm's wrapped pre-flight RBAC error. Helm formats
@@ -210,6 +233,18 @@ func writeInstallError(w http.ResponseWriter, err error) {
 		return
 	}
 	writeError(w, cls.Status, cls.Message)
+}
+
+// recoveryMode returns a short human-readable label for the non-fresh modes,
+// used in operational logs.
+func recoveryMode(m installMode) string {
+	switch m {
+	case installReplace:
+		return "install --replace"
+	case installUpgrade:
+		return "upgrade --install"
+	}
+	return "fresh"
 }
 
 // installStreamErrorEvent builds the SSE error envelope from a Helm install

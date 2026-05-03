@@ -46,12 +46,12 @@ func seedRelease(t *testing.T, cfg *action.Configuration, name string, status re
 
 func TestPreInstallCheck_NoPriorRelease(t *testing.T) {
 	cfg := memoryActionConfig(t)
-	fresh, err := preInstallCheck(cfg, "caretta", "default")
+	mode, err := preInstallCheck(cfg, "caretta", "default")
 	if err != nil {
 		t.Fatalf("preInstallCheck: %v", err)
 	}
-	if !fresh {
-		t.Error("expected fresh=true when no record exists")
+	if mode != installFresh {
+		t.Errorf("mode = %v, want installFresh", mode)
 	}
 }
 
@@ -59,10 +59,7 @@ func TestPreInstallCheck_PendingInstallSurfacesTypedError(t *testing.T) {
 	cfg := memoryActionConfig(t)
 	seedRelease(t, cfg, "caretta", release.StatusPendingInstall, 1)
 
-	fresh, err := preInstallCheck(cfg, "caretta", "default")
-	if fresh {
-		t.Error("expected fresh=false")
-	}
+	_, err := preInstallCheck(cfg, "caretta", "default")
 	var pending *ReleasePendingError
 	if !errors.As(err, &pending) {
 		t.Fatalf("expected *ReleasePendingError, got %T: %v", err, err)
@@ -100,16 +97,34 @@ func TestPreInstallCheck_UninstallingSurfacesPendingError(t *testing.T) {
 	}
 }
 
-func TestPreInstallCheck_FailedAllowsRecovery(t *testing.T) {
+func TestPreInstallCheck_FailedRoutesToUpgrade(t *testing.T) {
 	cfg := memoryActionConfig(t)
 	seedRelease(t, cfg, "caretta", release.StatusFailed, 1)
 
-	fresh, err := preInstallCheck(cfg, "caretta", "default")
+	mode, err := preInstallCheck(cfg, "caretta", "default")
 	if err != nil {
 		t.Fatalf("preInstallCheck: %v", err)
 	}
-	if fresh {
-		t.Error("expected fresh=false (an entry exists), so caller uses upgrade --install")
+	if mode != installUpgrade {
+		t.Errorf("mode = %v, want installUpgrade (action.Upgrade fallback handles Failed)", mode)
+	}
+}
+
+// TestPreInstallCheck_UninstalledRoutesToReplace pins routing for the
+// helm-uninstall-with-keep-history scenario. action.Upgrade rejects
+// Uninstalled with ErrNoDeployedReleases (upgrade.go:231-233 only falls back
+// for Failed/Superseded), so the recovery must use action.Install with
+// Replace=true (install.go:549 accepts Uninstalled+Failed for Replace).
+func TestPreInstallCheck_UninstalledRoutesToReplace(t *testing.T) {
+	cfg := memoryActionConfig(t)
+	seedRelease(t, cfg, "caretta", release.StatusUninstalled, 1)
+
+	mode, err := preInstallCheck(cfg, "caretta", "default")
+	if err != nil {
+		t.Fatalf("preInstallCheck: %v", err)
+	}
+	if mode != installReplace {
+		t.Errorf("mode = %v, want installReplace — Upgrade rejects Uninstalled, only Install.Replace handles it", mode)
 	}
 }
 
@@ -122,12 +137,12 @@ func TestPreInstallCheck_MultiRevisionUsesLatest(t *testing.T) {
 	seedRelease(t, cfg, "caretta", release.StatusDeployed, 1)
 	seedRelease(t, cfg, "caretta", release.StatusFailed, 2)
 
-	fresh, err := preInstallCheck(cfg, "caretta", "default")
+	mode, err := preInstallCheck(cfg, "caretta", "default")
 	if err != nil {
 		t.Fatalf("preInstallCheck: %v", err)
 	}
-	if fresh {
-		t.Error("fresh=true — latest revision is v2/failed, expected fresh=false for upgrade --install recovery")
+	if mode != installUpgrade {
+		t.Errorf("mode = %v — latest revision is v2/failed, expected installUpgrade", mode)
 	}
 	var exists *ReleaseExistsError
 	if errors.As(err, &exists) {
