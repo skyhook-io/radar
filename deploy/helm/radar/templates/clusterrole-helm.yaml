@@ -1,18 +1,8 @@
 {{- /*
-Helm-capable add-on ClusterRole — the "member-safe" tier. Emitted when
-rbac.helm=true AND auth or cloud is on (so requests run under impersonated
-identities which need their own grant beyond the SA's).
-
-Covers chart resources whose write access is needed for installing typical
-operator-style charts (CRDs, storage classes, runtime classes, priority
-classes, PDBs, namespaces) but does NOT include the cluster-admin-equivalent
-surface (ClusterRole/Role writes, webhook configs, APIServices). Those live
-in radar-helm-admin and are bound to cloud:owner only.
-
-The split is deliberate: a cloud:member with ClusterRoleBinding-write can
-trivially self-promote to cluster-admin, collapsing the owner/member tier
-boundary. Charts that bundle their own RBAC (e.g. full operator installs)
-require an owner identity to install.
+Helm add-on ClusterRole — member-safe tier. Covers CRDs, storage classes,
+runtime/priority classes, PDBs, namespaces. Cluster-admin-equivalent verbs
+(RBAC writes, webhooks, APIServices) live in radar-helm-admin; see that
+template for the owner-only rationale.
 */}}
 {{- if and .Values.rbac.create .Values.rbac.helm (or (ne .Values.auth.mode "none") .Values.cloud.enabled) -}}
 apiVersion: rbac.authorization.k8s.io/v1
@@ -36,8 +26,8 @@ rules:
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: ["policy"]
     resources: ["poddisruptionbudgets"]
-    verbs: ["create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   - apiGroups: [""]
     resources: ["namespaces"]
-    verbs: ["create", "update", "patch", "delete"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 {{- end }}

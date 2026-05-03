@@ -51,9 +51,10 @@ func stubDiscovery(t *testing.T, kind string, gvr schema.GroupVersionResource) *
 	return rd
 }
 
-// TestUpdateResource_UsesServerSideApply locks in the fix for the resourceVersion bug.
-// Lens-style edits don't carry a resourceVersion; UpdateResource must PATCH via SSA
-// rather than PUT (which requires resourceVersion).
+// TestUpdateResource_UsesServerSideApply pins the SSA wire shape: PATCH with
+// ApplyPatchType, FieldManager=radar, Force=true, and server-managed metadata
+// stripped from the body. Editor flows submit YAML without a resourceVersion,
+// which PUT rejects — SSA is the contract.
 func TestUpdateResource_UsesServerSideApply(t *testing.T) {
 	dyn, gvr := newFakeDynamicWithClusterPolicy(t)
 	disc := stubDiscovery(t, "ClusterPolicy", gvr)

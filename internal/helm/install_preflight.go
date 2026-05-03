@@ -49,12 +49,12 @@ func (e *ReleaseExistsError) Error() string {
 //   - (true, nil): no record, fresh install path
 //   - (false, nil): a prior failed/uninstalled record exists; upgrade --install
 //     can safely overwrite it
-//   - (_, *ReleasePendingError): a prior attempt is stuck in pending-* state
+//   - (_, *ReleasePendingError): a prior attempt is stuck in pending-* state,
+//     uninstalling, or in an unrecognized status (fail-closed)
 //   - (_, *ReleaseExistsError): the release is currently deployed
 //
-// Reads the latest revision via Releases.Last. action.History.Run returns the
-// storage driver's raw Query output without sorting and ignores Max, so
-// hist[0] would silently pick whatever ordering the driver happens to use.
+// Uses Releases.Last because action.History.Run returns the storage driver's
+// raw Query output (unsorted, ignores Max), so its hist[0] is non-deterministic.
 func preInstallCheck(actionConfig *action.Configuration, name, namespace string) (fresh bool, err error) {
 	last, lErr := actionConfig.Releases.Last(name)
 	if errors.Is(lErr, driver.ErrReleaseNotFound) {
@@ -76,16 +76,20 @@ func preInstallCheck(actionConfig *action.Configuration, name, namespace string)
 	case release.StatusFailed, release.StatusSuperseded, release.StatusUninstalled, release.StatusUnknown:
 		return false, nil
 	default:
-		log.Printf("[helm] preInstallCheck: unrecognized release status %q for %q/%q, treating as recoverable", last.Info.Status, namespace, name)
-		return false, nil
+		// Future helm versions may add new in-flight statuses. Fail-closed
+		// (treat as pending) so we never fire upgrade against a status
+		// helm itself would refuse, instead of silently writing.
+		log.Printf("[helm] preInstallCheck: unrecognized release status %q for %q/%q, refusing to overwrite", last.Info.Status, namespace, name)
+		return false, &ReleasePendingError{
+			Name: name, Namespace: namespace,
+			Status: last.Info.Status.String(), Revision: last.Version,
+		}
 	}
 }
 
-// runInstallOrUpgrade performs an idempotent install. When `fresh` is true it
-// uses action.Install (the existing path). Otherwise it uses action.Upgrade
-// with Install=true, which is the canonical Helm "upgrade --install" semantic
-// and overwrites a prior failed/uninstalled record without tripping the
-// name-in-use guard.
+// runInstallOrUpgrade dispatches to action.Install for a fresh install and
+// action.Upgrade with Install=true ("upgrade --install") for the recovery
+// path over a failed/uninstalled record.
 func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest, ch *chart.Chart, fresh bool) (*release.Release, error) {
 	if fresh {
 		install := action.NewInstall(actionConfig)
@@ -102,10 +106,9 @@ func runInstallOrUpgrade(actionConfig *action.Configuration, req *InstallRequest
 	upgrade.Timeout = 120 * time.Second
 	upgrade.MaxHistory = 10
 	upgrade.Version = req.Version
-	// action.Upgrade has no CreateNamespace; the recovery path is only reached
-	// when a prior release record exists, which means a previous attempt already
-	// got past namespace creation. If the namespace was deleted manually after
-	// that, the user must recreate it (Helm install would have done the same).
+	// action.Upgrade has no CreateNamespace; reaching this branch implies a
+	// prior release record exists, so the namespace was created earlier. If
+	// it has been deleted manually since, the user must recreate it.
 	return upgrade.Run(req.ReleaseName, ch, req.Values)
 }
 
@@ -139,54 +142,88 @@ func classifyHelmRBACError(err error) (*RBACPreflightDetail, bool) {
 	return &RBACPreflightDetail{User: m[1], Verb: m[2], Resource: m[3], Group: m[4]}, true
 }
 
-// classifyInstallErrorCode returns a stable machine-readable code for typed
-// install failures. Empty string means "no special code; use generic 500".
-func classifyInstallErrorCode(err error) string {
-	var pending *ReleasePendingError
-	if errors.As(err, &pending) {
-		return "release_pending"
-	}
-	var exists *ReleaseExistsError
-	if errors.As(err, &exists) {
-		return "release_exists"
-	}
-	if _, ok := classifyHelmRBACError(err); ok {
-		return "rbac_preflight"
-	}
-	return ""
+// InstallErrorClass is the unified mapping of a Helm install error onto a
+// user-facing response — same shape used by the JSON HTTP path
+// (writeInstallError) and the SSE streaming path (handleInstallStream).
+// Code is empty for unclassified errors; callers fall back to a generic 500.
+type InstallErrorClass struct {
+	Status  int
+	Code    string
+	Message string
 }
 
-// writeInstallError maps a Helm install error onto an HTTP response. It
-// surfaces typed errors (pending release, RBAC pre-flight denial, generic
-// forbidden) with stable error_code values the SPA can branch on.
-func writeInstallError(w http.ResponseWriter, err error) {
+// classifyInstallError builds the response shape (status, error_code, message)
+// from a Helm install error. Single source of truth so streaming and
+// non-streaming endpoints agree on the user-visible message and status.
+func classifyInstallError(err error) InstallErrorClass {
+	if err == nil {
+		return InstallErrorClass{}
+	}
 	var pending *ReleasePendingError
 	if errors.As(err, &pending) {
-		writeErrorCode(w, http.StatusConflict, "release_pending",
-			fmt.Sprintf("a previous install of %q in namespace %q ended in %s — uninstall and retry, or wait for it to finish",
-				pending.Name, pending.Namespace, pending.Status))
-		return
+		return InstallErrorClass{
+			Status: http.StatusConflict,
+			Code:   "release_pending",
+			Message: fmt.Sprintf("a previous install of %q in namespace %q ended in %s — uninstall and retry, or wait for it to finish",
+				pending.Name, pending.Namespace, pending.Status),
+		}
 	}
 	var exists *ReleaseExistsError
 	if errors.As(err, &exists) {
-		writeErrorCode(w, http.StatusConflict, "release_exists",
-			fmt.Sprintf("release %q already exists in namespace %q (revision %d) — use upgrade",
-				exists.Name, exists.Namespace, exists.Revision))
-		return
+		return InstallErrorClass{
+			Status: http.StatusConflict,
+			Code:   "release_exists",
+			Message: fmt.Sprintf("release %q already exists in namespace %q (revision %d) — use upgrade",
+				exists.Name, exists.Namespace, exists.Revision),
+		}
 	}
 	if rbac, ok := classifyHelmRBACError(err); ok {
 		group := rbac.Group
 		if group == "" {
 			group = "core"
 		}
-		writeErrorCode(w, http.StatusForbidden, "rbac_preflight",
-			fmt.Sprintf("Radar identity %q is missing %s on %s.%s — see the in-cluster RBAC docs to expand permissions",
-				rbac.User, rbac.Verb, rbac.Resource, group))
-		return
+		return InstallErrorClass{
+			Status: http.StatusForbidden,
+			Code:   "rbac_preflight",
+			Message: fmt.Sprintf("Radar identity %q is missing %s on %s.%s — see the in-cluster RBAC docs to expand permissions",
+				rbac.User, rbac.Verb, rbac.Resource, group),
+		}
 	}
 	if IsForbiddenError(err) {
-		writeError(w, http.StatusForbidden, "insufficient permissions to install Helm release")
+		return InstallErrorClass{
+			Status:  http.StatusForbidden,
+			Message: "insufficient permissions to install Helm release",
+		}
+	}
+	return InstallErrorClass{
+		Status:  http.StatusInternalServerError,
+		Message: err.Error(),
+	}
+}
+
+// writeInstallError maps a Helm install error onto an HTTP response with a
+// stable error_code the SPA can branch on.
+func writeInstallError(w http.ResponseWriter, err error) {
+	cls := classifyInstallError(err)
+	if cls.Code != "" {
+		writeErrorCode(w, cls.Status, cls.Code, cls.Message)
 		return
 	}
-	writeError(w, http.StatusInternalServerError, err.Error())
+	writeError(w, cls.Status, cls.Message)
+}
+
+// installStreamErrorEvent builds the SSE error envelope from a Helm install
+// error, using the same classifier as writeInstallError so the streaming
+// install endpoint surfaces the same friendly messages and error codes the
+// JSON endpoint does.
+func installStreamErrorEvent(err error) map[string]any {
+	cls := classifyInstallError(err)
+	event := map[string]any{
+		"type":    "error",
+		"message": cls.Message,
+	}
+	if cls.Code != "" {
+		event["error_code"] = cls.Code
+	}
+	return event
 }

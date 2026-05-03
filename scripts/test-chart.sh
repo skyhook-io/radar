@@ -123,6 +123,25 @@ assert_not_contains 'name: radar-cloud-member-helm-admin' "member is NEVER bound
 assert_not_contains 'name: radar-cloud-viewer-helm'       "no helm binding for viewer tier"
 echo
 
+render "cloud.defaultRbac.owner=false — owner bindings absent, member-helm still emits, no admin binding" \
+  --set rbac.helm=true --set auth.mode=proxy --set cloud.enabled=true \
+  --set cloud.url=wss://x --set cloud.token=t --set cloud.clusterName=c \
+  --set cloud.defaultRbac.owner=false
+assert_not_contains 'name: radar-cloud-owner-helm$'       "no owner-helm binding"
+assert_not_contains 'name: radar-cloud-owner-helm-admin$' "no owner-helm-admin binding"
+assert_contains 'name: radar-cloud-member-helm$'          "member-helm binding still emits"
+assert_not_contains 'name: radar-cloud-member-helm-admin' "member is NEVER bound to admin even when owner is disabled"
+echo
+
+render "cloud.defaultRbac.member=false — member binding absent, owner gets both" \
+  --set rbac.helm=true --set auth.mode=proxy --set cloud.enabled=true \
+  --set cloud.url=wss://x --set cloud.token=t --set cloud.clusterName=c \
+  --set cloud.defaultRbac.member=false
+assert_contains 'name: radar-cloud-owner-helm$'           "owner-helm binding emits"
+assert_contains 'name: radar-cloud-owner-helm-admin$'     "owner-helm-admin binding emits"
+assert_not_contains 'name: radar-cloud-member-helm$'      "no member-helm binding when member disabled"
+echo
+
 render "rbac.helm=true + cloud.enabled=true + auth.mode=none — no cloud-helm bindings" \
   --set rbac.helm=true --set cloud.enabled=true \
   --set cloud.url=wss://x --set cloud.token=t --set cloud.clusterName=c

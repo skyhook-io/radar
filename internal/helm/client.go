@@ -1885,13 +1885,12 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		}
 	}
 
-	// Pre-check: surface stuck pending releases before Helm's own guard.
 	fresh, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
 	if err != nil {
 		return nil, err
 	}
 
-	// ChartPathOptions lives on Install — reuse it just to locate/download.
+	// action.Install carries ChartPathOptions; instantiated here as a locator only.
 	locator := action.NewInstall(actionConfig)
 	locator.Version = req.Version
 	cp, err := locator.ChartPathOptions.LocateChart(chartURL, c.settings)

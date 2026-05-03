@@ -922,14 +922,7 @@ func (h *Handlers) handleInstallStream(w http.ResponseWriter, r *http.Request) {
 		case result := <-resultCh:
 			if result.err != nil {
 				log.Printf("[helm] install %q/%q (chart=%q repo=%q) failed: %v", req.Namespace, req.ReleaseName, req.ChartName, req.Repository, result.err)
-				event := map[string]any{
-					"type":    "error",
-					"message": result.err.Error(),
-				}
-				if code := classifyInstallErrorCode(result.err); code != "" {
-					event["error_code"] = code
-				}
-				data, _ := json.Marshal(event)
+				data, _ := json.Marshal(installStreamErrorEvent(result.err))
 				w.Write([]byte("data: " + string(data) + "\n\n"))
 			} else {
 				event := map[string]any{

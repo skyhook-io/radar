@@ -1,18 +1,7 @@
 {{- /*
-Bind the Helm add-on ClusterRoles to cloud role tiers.
-
-Two distinct grants:
-  - radar-helm (member-safe): CRDs, storage, runtime classes, PDBs,
-    namespaces. Bound to both cloud:owner and cloud:member.
-  - radar-helm-admin (cluster-admin-equivalent): RBAC, webhooks,
-    APIServices. Bound to cloud:owner ONLY — granting these to member
-    would let any member self-promote to cluster-admin via a one-apply
-    ClusterRoleBinding write.
-
-Viewer is intentionally not bound — viewers never install Helm releases.
-
-RBAC is additive, so these grants stack on top of the admin/edit role each
-tier already gets via cloud-rbac.yaml.
+Bind Helm add-on ClusterRoles to cloud tiers. radar-helm goes to owner +
+member; radar-helm-admin goes to owner only — see clusterrole-helm-admin.yaml
+for the rationale. Viewer is intentionally not bound; viewers never install.
 */}}
 {{- if and .Values.cloud.enabled .Values.cloud.defaultRbac.create .Values.rbac.create .Values.rbac.helm (ne .Values.auth.mode "none") -}}
 {{- if .Values.cloud.defaultRbac.owner }}
