@@ -128,4 +128,3 @@ func TestUpdateResource_RejectsMismatchedName(t *testing.T) {
 		t.Fatalf("expected name mismatch error, got: %v", err)
 	}
 }
-
