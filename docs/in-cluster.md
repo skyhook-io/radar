@@ -135,7 +135,8 @@ Some features require additional permissions. Most are disabled by default for s
 | Terminal | `rbac.podExec: true` | `false` | Shell access to pods |
 | Port Forward | `rbac.portForward: true` | `false` | Port forwarding to pods/services |
 | Logs | `rbac.podLogs: true` | `true` | View pod logs |
-| Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets) |
+| Helm Write | `rbac.helm: true` | `false` | Install/upgrade/rollback/uninstall Helm releases (grants broad write access; auto-enables secrets). When auth or cloud is on, also emits a split helm add-on: `radar-helm` (CRDs/storage/PDBs/namespaces, bound to owner+member) and `radar-helm-admin` (RBAC/webhooks/APIServices, owner-only) — see [authentication.md](authentication.md#cloud-mode-helm-bindings) |
+| RBAC view | `rbac.viewRBAC: true` | `false` | Show ClusterRoles, ClusterRoleBindings, Roles, RoleBindings in the resource browser. Off by default: cache-served reads bypass per-user RBAC, so granting this exposes the cluster's authorization graph to every authenticated Radar user |
 | Traffic TLS | `rbac.traffic: true` | `true` | Read Hubble relay TLS certs for Cilium traffic observation |
 
 > **Node management** (cordon, uncordon, drain) is available via the MCP server and API. These operations require `patch` on nodes, `list` on pods, and `create` on `pods/eviction`, which are not included in the default ClusterRole. Add them via `rbac.additionalRules` or use [per-user authentication](authentication.md) so each user's own RBAC governs node operations.
@@ -283,6 +284,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `rbac.portForward` | Enable port forwarding | `false` |
 | `rbac.secrets` | Show secrets in resource list | `false` |
 | `rbac.helm` | Enable Helm write operations | `false` |
+| `rbac.viewRBAC` | Show RBAC objects in resource browser | `false` |
 | `rbac.traffic` | Read Hubble TLS certs | `true` |
 | `rbac.crdGroups.all` | Wildcard CRD read access | `false` |
 

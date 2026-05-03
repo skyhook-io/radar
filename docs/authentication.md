@@ -11,7 +11,7 @@ User → [Auth Layer] → Radar Backend → K8s API (as user, via impersonation)
 ```
 
 1. **Authentication** identifies the user (proxy headers or OIDC login)
-2. **Reads** are filtered — Radar discovers which namespaces the user can access via `SubjectAccessReview` and only returns resources from those namespaces
+2. **Reads** are filtered by namespace — Radar discovers which namespaces the user can access via `SubjectAccessReview` and only returns resources from those namespaces. Cluster-scoped resources (Nodes, ClusterRoles when `rbac.viewRBAC` is on, StorageClasses, etc.) are served from the ServiceAccount-populated informer cache without per-user RBAC re-checks, so anyone reaching Radar's API sees them regardless of their own K8s permissions on those kinds.
 3. **Writes** use K8s impersonation — Radar makes the K8s API call as the authenticated user, so K8s RBAC decides whether it's allowed
 4. **UI adapts** — capability checks run per-user, so buttons (exec, restart, scale, Helm) only appear if the user has permission
 
@@ -164,6 +164,14 @@ Under cloud-mode (`RADAR_CLOUD_MODE=true`, set automatically by the chart when `
 - Forces `--auth-mode=proxy` with pinned `X-Forwarded-User` / `X-Forwarded-Groups` headers — the Cloud tunnel is the trust boundary.
 - Ships three default ClusterRoleBindings mapping Cloud's `cloud:owner` / `cloud:member` / `cloud:viewer` groups to the standard K8s `admin` / `edit` / `view` ClusterRoles. Configurable via `cloud.defaultRbac.*` in `values.yaml`.
 - Hardens the listener (no `/debug/pprof/*`, narrower exempt paths).
+
+<a id="cloud-mode-helm-bindings"></a>
+**Helm-specific bindings (when `rbac.helm=true`).** Helm's pre-flight existence check needs cluster-scoped reads/writes that the K8s built-in `admin`/`edit`/`view` ClusterRoles don't grant. The chart emits two add-on ClusterRoles, split by trust tier:
+
+- `radar-helm` — CRDs, StorageClasses, RuntimeClasses, PriorityClasses, PodDisruptionBudgets, Namespaces. Bound to `cloud:owner` AND `cloud:member`.
+- `radar-helm-admin` — RBAC objects (Roles/Bindings, Cluster variants), validating/mutating webhooks, ApiServices. Bound to `cloud:owner` ONLY. Granting these to a tier weaker than owner would let a member self-promote to cluster-admin in one `ClusterRoleBinding` write, collapsing the owner/member distinction.
+
+A `cloud:member` attempting to install a chart that bundles its own RBAC will get a typed `rbac_preflight` 403 with an actionable "ask an owner" message. Day-to-day app charts and operator-CRD installs still work for members.
 
 Customer-facing documentation for Radar Cloud lives on [radarhq.io](https://radarhq.io). The authoritative reference for the Cloud-mode chart values is the comment block in [`deploy/helm/radar/values.yaml`](../deploy/helm/radar/values.yaml) under `cloud:`.
 
