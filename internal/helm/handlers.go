@@ -822,11 +822,7 @@ func (h *Handlers) handleInstall(w http.ResponseWriter, r *http.Request) {
 		release, installErr = client.Install(&req)
 	}
 	if err := installErr; err != nil {
-		if IsForbiddenError(err) {
-			writeError(w, http.StatusForbidden, "insufficient permissions to install Helm release")
-			return
-		}
-		writeError(w, http.StatusInternalServerError, err.Error())
+		writeInstallError(w, err)
 		return
 	}
 
@@ -927,6 +923,9 @@ func (h *Handlers) handleInstallStream(w http.ResponseWriter, r *http.Request) {
 				event := map[string]any{
 					"type":    "error",
 					"message": result.err.Error(),
+				}
+				if code := classifyInstallErrorCode(result.err); code != "" {
+					event["error_code"] = code
 				}
 				data, _ := json.Marshal(event)
 				w.Write([]byte("data: " + string(data) + "\n\n"))

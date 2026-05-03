@@ -1885,28 +1885,25 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		}
 	}
 
-	// Create install action
-	installAction := action.NewInstall(actionConfig)
-	installAction.ReleaseName = req.ReleaseName
-	installAction.Namespace = req.Namespace
-	installAction.CreateNamespace = req.CreateNamespace
-	installAction.Timeout = 120 * time.Second
-	installAction.Version = req.Version
+	// Pre-check: surface stuck pending releases before Helm's own guard.
+	fresh, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
+	if err != nil {
+		return nil, err
+	}
 
-	// Locate/download chart
-	cp, err := installAction.ChartPathOptions.LocateChart(chartURL, c.settings)
+	// ChartPathOptions lives on Install — reuse it just to locate/download.
+	locator := action.NewInstall(actionConfig)
+	locator.Version = req.Version
+	cp, err := locator.ChartPathOptions.LocateChart(chartURL, c.settings)
 	if err != nil {
 		return nil, fmt.Errorf("failed to locate chart: %w", err)
 	}
-
-	// Load chart
 	chart, err := loader.Load(cp)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chart: %w", err)
 	}
 
-	// Run install
-	rel, err := installAction.Run(chart, req.Values)
+	rel, err := runInstallOrUpgrade(actionConfig, req, chart, fresh)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
 	}
@@ -2106,19 +2103,21 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		return nil, fmt.Errorf("failed to load chart: %w", err)
 	}
 
-	installAction := action.NewInstall(actionConfig)
-	installAction.ReleaseName = req.ReleaseName
-	installAction.Namespace = req.Namespace
-	installAction.CreateNamespace = req.CreateNamespace
-	installAction.Timeout = 120 * time.Second
-
-	sendProgress("installing", fmt.Sprintf("Installing %s to namespace %s...", req.ReleaseName, req.Namespace), "")
-
-	if req.CreateNamespace {
-		sendProgress("installing", fmt.Sprintf("Creating namespace %s if needed...", req.Namespace), "")
+	fresh, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
+	if err != nil {
+		return nil, err
 	}
 
-	rel, err := installAction.Run(chart, req.Values)
+	if fresh {
+		sendProgress("installing", fmt.Sprintf("Installing %s to namespace %s...", req.ReleaseName, req.Namespace), "")
+		if req.CreateNamespace {
+			sendProgress("installing", fmt.Sprintf("Creating namespace %s if needed...", req.Namespace), "")
+		}
+	} else {
+		sendProgress("installing", fmt.Sprintf("Replacing prior failed release %s in %s...", req.ReleaseName, req.Namespace), "")
+	}
+
+	rel, err := runInstallOrUpgrade(actionConfig, req, chart, fresh)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
 	}
