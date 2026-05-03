@@ -3,6 +3,7 @@ package helm
 import (
 	"errors"
 	"fmt"
+	"log"
 	"net/http"
 	"regexp"
 	"time"
@@ -65,7 +66,7 @@ func preInstallCheck(actionConfig *action.Configuration, name, namespace string)
 	}
 	last := hist[0]
 	switch last.Info.Status {
-	case release.StatusPendingInstall, release.StatusPendingUpgrade, release.StatusPendingRollback:
+	case release.StatusPendingInstall, release.StatusPendingUpgrade, release.StatusPendingRollback, release.StatusUninstalling:
 		return false, &ReleasePendingError{
 			Name: name, Namespace: namespace,
 			Status: last.Info.Status.String(), Revision: last.Version,
@@ -74,9 +75,12 @@ func preInstallCheck(actionConfig *action.Configuration, name, namespace string)
 		return false, &ReleaseExistsError{
 			Name: name, Namespace: namespace, Revision: last.Version,
 		}
+	case release.StatusFailed, release.StatusSuperseded, release.StatusUninstalled, release.StatusUnknown:
+		return false, nil
+	default:
+		log.Printf("[helm] preInstallCheck: unrecognized release status %q for %s/%s, treating as recoverable", last.Info.Status, namespace, name)
+		return false, nil
 	}
-	// failed, superseded, uninstalled, uninstalling, unknown — upgrade --install handles these.
-	return false, nil
 }
 
 // runInstallOrUpgrade performs an idempotent install. When `fresh` is true it

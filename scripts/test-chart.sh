@@ -90,6 +90,40 @@ assert_not_contains '^kind: ClusterRole$'           "no ClusterRole when rbac.cr
 assert_contains 'MY_POD_NAMESPACE'                  "env vars injected — feature is fully wired"
 echo
 
+render "defaults — no helm-write footprint"
+assert_not_contains 'name: radar-helm$'             "no helm add-on ClusterRole"
+assert_not_contains 'name: radar-cloud-owner-helm$' "no cloud helm bindings"
+assert_not_contains 'name: radar-cloud-member-helm$' "no cloud helm bindings"
+echo
+
+render "rbac.helm=true alone — gated off without auth or cloud" --set rbac.helm=true
+assert_not_contains 'name: radar-helm$'             "no helm add-on ClusterRole without auth/cloud"
+echo
+
+render "rbac.helm=true + auth.mode=proxy — helm CR emitted, no cloud bindings" \
+  --set rbac.helm=true --set auth.mode=proxy
+assert_contains 'name: radar-helm$'                 "helm add-on ClusterRole emitted"
+assert_not_contains 'name: radar-cloud-owner-helm$' "no cloud-owner-helm binding without cloud"
+assert_not_contains 'name: radar-cloud-member-helm$' "no cloud-member-helm binding without cloud"
+echo
+
+render "rbac.helm=true + cloud.enabled=true + auth.mode=proxy — helm CR + cloud bindings" \
+  --set rbac.helm=true --set auth.mode=proxy --set cloud.enabled=true \
+  --set cloud.url=wss://x --set cloud.token=t --set cloud.clusterName=c
+assert_contains 'name: radar-helm$'                 "helm add-on ClusterRole emitted"
+assert_contains 'name: radar-cloud-owner-helm$'     "cloud-owner-helm binding emitted"
+assert_contains 'name: radar-cloud-member-helm$'    "cloud-member-helm binding emitted"
+assert_not_contains 'name: radar-cloud-viewer-helm' "no helm binding for viewer tier"
+echo
+
+render "rbac.helm=true + cloud.enabled=true + auth.mode=none — no cloud-helm bindings" \
+  --set rbac.helm=true --set cloud.enabled=true \
+  --set cloud.url=wss://x --set cloud.token=t --set cloud.clusterName=c
+assert_contains 'name: radar-helm$'                 "helm add-on ClusterRole still emitted (cloud.enabled satisfies the OR-clause)"
+assert_not_contains 'name: radar-cloud-owner-helm$' "cloud-helm bindings require auth.mode != none"
+assert_not_contains 'name: radar-cloud-member-helm$' "cloud-helm bindings require auth.mode != none"
+echo
+
 if [[ $FAIL -eq 0 ]]; then
   echo "All chart template tests passed."
   exit 0

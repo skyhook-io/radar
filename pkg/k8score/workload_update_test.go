@@ -82,6 +82,17 @@ func TestUpdateResource_UsesServerSideApply(t *testing.T) {
 		t.Errorf("patch type = %v, want %v (server-side apply)", got, types.ApplyPatchType)
 	}
 
+	impl, ok := captured.(clienttesting.PatchActionImpl)
+	if !ok {
+		t.Fatalf("captured action is %T, want clienttesting.PatchActionImpl", captured)
+	}
+	if impl.PatchOptions.FieldManager != "radar" {
+		t.Errorf("FieldManager = %q, want %q", impl.PatchOptions.FieldManager, "radar")
+	}
+	if impl.PatchOptions.Force == nil || !*impl.PatchOptions.Force {
+		t.Errorf("Force = %v, want *true", impl.PatchOptions.Force)
+	}
+
 	var body map[string]any
 	if err := json.Unmarshal(captured.GetPatch(), &body); err != nil {
 		t.Fatalf("patch body is not JSON: %v", err)

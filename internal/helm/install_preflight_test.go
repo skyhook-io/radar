@@ -85,6 +85,20 @@ func TestPreInstallCheck_DeployedSurfacesExistsError(t *testing.T) {
 	}
 }
 
+func TestPreInstallCheck_UninstallingSurfacesPendingError(t *testing.T) {
+	cfg := memoryActionConfig(t)
+	seedRelease(t, cfg, "caretta", release.StatusUninstalling, 2)
+
+	_, err := preInstallCheck(cfg, "caretta", "default")
+	var pending *ReleasePendingError
+	if !errors.As(err, &pending) {
+		t.Fatalf("expected *ReleasePendingError for an in-flight uninstall, got %T: %v", err, err)
+	}
+	if pending.Status != "uninstalling" {
+		t.Errorf("status = %q, want uninstalling", pending.Status)
+	}
+}
+
 func TestPreInstallCheck_FailedAllowsRecovery(t *testing.T) {
 	cfg := memoryActionConfig(t)
 	seedRelease(t, cfg, "caretta", release.StatusFailed, 1)

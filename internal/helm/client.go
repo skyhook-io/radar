@@ -1903,6 +1903,9 @@ func (c *Client) installWith(actionConfig *action.Configuration, req *InstallReq
 		return nil, fmt.Errorf("failed to load chart: %w", err)
 	}
 
+	if !fresh {
+		log.Printf("[helm] install %s/%s: prior release record exists, recovering via upgrade --install", req.Namespace, req.ReleaseName)
+	}
 	rel, err := runInstallOrUpgrade(actionConfig, req, chart, fresh)
 	if err != nil {
 		return nil, fmt.Errorf("install failed: %w", err)
