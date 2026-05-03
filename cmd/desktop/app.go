@@ -42,12 +42,14 @@ func NewDesktopApp(srv *server.Server, timelineStoreCfg timeline.StoreConfig) *D
 
 // formatWindowTitle returns the Wails window title for a given kubeconfig
 // context name. Empty context (e.g. before the cluster is initialized) yields
-// the bare product name.
+// the bare product name. Otherwise the context is run through clusterShortName
+// so the OS title matches the label the in-page cluster selector shows for the
+// same cluster (e.g. "packagear-prod-eks", not the full EKS ARN).
 func formatWindowTitle(contextName string) string {
 	if contextName == "" {
 		return "Radar"
 	}
-	return "Radar — " + contextName
+	return "Radar — " + clusterShortName(contextName)
 }
 
 func (a *DesktopApp) updateWindowTitle(contextName string) {

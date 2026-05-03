@@ -13,11 +13,16 @@ func TestFormatWindowTitle(t *testing.T) {
 		want        string
 	}{
 		{"empty falls back to bare product name", "", "Radar"},
-		{"short context", "packagear-dev-eks", "Radar — packagear-dev-eks"},
+		{"user-named context passes through", "packagear-dev-eks", "Radar — packagear-dev-eks"},
 		{
-			"full EKS ARN",
+			"full EKS ARN collapses to short cluster name (matches in-page selector)",
 			"arn:aws:eks:us-east-1:171782501968:cluster/packagear-prod-eks",
-			"Radar — arn:aws:eks:us-east-1:171782501968:cluster/packagear-prod-eks",
+			"Radar — packagear-prod-eks",
+		},
+		{
+			"GKE context collapses to cluster name",
+			"gke_my-project_us-east1-b_prod-cluster",
+			"Radar — prod-cluster",
 		},
 	}
 	for _, tc := range cases {
