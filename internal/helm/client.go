@@ -2070,6 +2070,14 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 		}
 	}
 
+	// Pre-flight before downloading: a deployed/pending release is knowable
+	// from local Helm storage and we shouldn't waste bandwidth + show
+	// "Downloading..." progress to a user who'll get a 409 anyway.
+	mode, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
 	sendProgress("downloading", fmt.Sprintf("Downloading chart %s-%s...", req.ChartName, req.Version), chartURL)
 
 	// Download the chart archive directly via HTTP, bypassing the Helm SDK's
@@ -2103,11 +2111,6 @@ func (c *Client) installWithProgressUsing(actionConfig *action.Configuration, re
 	chart, err := loader.Load(tmpChart.Name())
 	if err != nil {
 		return nil, fmt.Errorf("failed to load chart: %w", err)
-	}
-
-	mode, err := preInstallCheck(actionConfig, req.ReleaseName, req.Namespace)
-	if err != nil {
-		return nil, err
 	}
 
 	switch mode {
