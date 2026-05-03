@@ -72,7 +72,10 @@ func NewWorkloadManager(dynClient dynamic.Interface, discovery *ResourceDiscover
 	return &WorkloadManager{dynClient: dynClient, discovery: discovery}
 }
 
-// UpdateResource updates a Kubernetes resource from YAML.
+// UpdateResource updates a Kubernetes resource from YAML using server-side apply.
+// SSA avoids the resourceVersion round-trip that PUT requires and matches
+// kubectl apply --server-side / Lens semantics. Force=true takes ownership of
+// fields the user is editing even if another field manager last wrote them.
 func (m *WorkloadManager) UpdateResource(ctx context.Context, opts UpdateResourceOptions) (*unstructured.Unstructured, error) {
 	if m.discovery == nil {
 		return nil, fmt.Errorf("resource discovery not initialized")
@@ -98,18 +101,44 @@ func (m *WorkloadManager) UpdateResource(ctx context.Context, opts UpdateResourc
 		return nil, fmt.Errorf("resource namespace mismatch: expected %s, got %s", opts.Namespace, obj.GetNamespace())
 	}
 
-	var result *unstructured.Unstructured
-	var err error
-	if opts.Namespace != "" {
-		result, err = m.dynClient.Resource(gvr).Namespace(opts.Namespace).Update(ctx, obj, metav1.UpdateOptions{})
-	} else {
-		result, err = m.dynClient.Resource(gvr).Update(ctx, obj, metav1.UpdateOptions{})
+	stripServerManagedFields(obj)
+
+	body, err := json.Marshal(obj.Object)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal resource: %w", err)
 	}
+
+	var ri dynamic.ResourceInterface
+	if opts.Namespace != "" {
+		ri = m.dynClient.Resource(gvr).Namespace(opts.Namespace)
+	} else {
+		ri = m.dynClient.Resource(gvr)
+	}
+	result, err := ri.Patch(ctx, opts.Name, types.ApplyPatchType, body, metav1.PatchOptions{
+		FieldManager: "radar",
+		Force:        boolPtr(true),
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update resource: %w", err)
 	}
-
 	return result, nil
+}
+
+// stripServerManagedFields removes metadata fields the apiserver owns. SSA
+// rejects ownership claims on these, and editor round-trips often round-trip
+// them back unchanged.
+func stripServerManagedFields(obj *unstructured.Unstructured) {
+	for _, f := range [][]string{
+		{"metadata", "resourceVersion"},
+		{"metadata", "managedFields"},
+		{"metadata", "uid"},
+		{"metadata", "generation"},
+		{"metadata", "creationTimestamp"},
+		{"metadata", "selfLink"},
+		{"status"},
+	} {
+		unstructured.RemoveNestedField(obj.Object, f...)
+	}
 }
 
 // ApplyResource creates or updates a Kubernetes resource from YAML.
