@@ -132,6 +132,22 @@ assert_not_contains 'name: radar-cloud-owner-helm$'  "cloud-helm bindings requir
 assert_not_contains 'name: radar-cloud-member-helm$' "cloud-helm bindings require auth.mode != none"
 echo
 
+render "defaults — no RBAC reads (viewRBAC=false)"
+# The base radar ClusterRole should NOT include rbac.authorization.k8s.io reads
+# at default settings. This is the single test that pins the secure default.
+HELM_BASE=$(echo "$OUT" | awk '/^kind: ClusterRole$/,/^---$/{ if ($0 ~ /^---$/) exit; print }' | awk '/^  name: radar$/,EOF')
+if echo "$OUT" | awk '/  name: radar$/,/^---$/' | grep -Eq 'apiGroups: \["rbac.authorization.k8s.io"\]'; then
+  fail "default ClusterRole still grants rbac.authorization.k8s.io reads — viewRBAC should gate this"
+else
+  pass "no rbac.authorization.k8s.io reads in default ClusterRole"
+fi
+echo
+
+render "rbac.viewRBAC=true — RBAC reads granted" --set rbac.viewRBAC=true
+assert_contains 'apiGroups: \["rbac.authorization.k8s.io"\]' "RBAC reads granted when viewRBAC=true"
+assert_contains 'clusterrolebindings'                        "clusterrolebindings present"
+echo
+
 render "split content — radar-helm has CRDs but NOT clusterroles" \
   --set rbac.helm=true --set auth.mode=proxy
 # Pull the radar-helm ClusterRole specifically and check its contents

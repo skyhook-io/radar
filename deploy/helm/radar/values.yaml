@@ -40,6 +40,13 @@ rbac:
   # Allow reading secrets (shows secrets in resource list)
   secrets: false
 
+  # Allow reading RBAC objects (Roles, RoleBindings, ClusterRoles, ClusterRoleBindings)
+  # so the resource browser can list them. Off by default: anyone reaching Radar's
+  # API sees the full RBAC graph through the shared informer cache regardless of
+  # their own K8s permissions, which is reconnaissance value for a low-trust user.
+  # Enable for clusters where Radar's audience is trusted with cluster RBAC visibility.
+  viewRBAC: false
+
   # Allow pod exec (enables terminal feature)
   podExec: false
 

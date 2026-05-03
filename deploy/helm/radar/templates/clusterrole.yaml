@@ -76,9 +76,11 @@ rules:
       - selfsubjectaccessreviews
     verbs: ["create"]
 
-  # RBAC objects: read for the resource browser. Without this, ClusterRole/
-  # ClusterRoleBinding/Role/RoleBinding views cannot list anything even though
-  # the broad write rule above lets users create them when rbac.helm=true.
+  {{- if .Values.rbac.viewRBAC }}
+  # RBAC objects: opt-in read for the resource browser. Off by default —
+  # cache-served reads are not gated by per-user RBAC, so granting this
+  # exposes the cluster's authorization graph to anyone who can reach
+  # Radar's API regardless of their own permissions.
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources:
       - roles
@@ -86,6 +88,7 @@ rules:
       - clusterroles
       - clusterrolebindings
     verbs: ["get", "list", "watch"]
+  {{- end }}
 
   {{- if .Values.rbac.podLogs }}
   # Pod logs (opt-in - enables log viewer)
