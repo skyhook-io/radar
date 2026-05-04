@@ -1,8 +1,6 @@
 # Radar
 
-> [!IMPORTANT]
-> 📣 **Radar is launching on Product Hunt this Sunday!**
-> [**Follow Radar on PH** ↗](https://www.producthunt.com/products/radar-7?launch=radar-42edb7b0-e388-4fa8-9ba5-4876c2c0d638) · [We have a new Discord ↗](https://radarhq.io/community/chat)
+<a href="https://www.producthunt.com/products/radar-7?embed=true&utm_source=badge-top-post-badge&utm_medium=badge&utm_campaign=badge-radar-42edb7b0-e388-4fa8-9ba5-4876c2c0d638" target="_blank"><img src="https://api.producthunt.com/widgets/embed-image/v1/top-post-badge.svg?post_id=1130618&theme=neutral&period=daily" alt="Radar - The missing open-source Kubernetes UI | Product Hunt" width="250" height="54" /></a>
 
 **Modern Kubernetes visibility.**
 <br>Local-first. No account. No cloud dependency. Blazing Fast.
