@@ -59,6 +59,19 @@ func enrichNodeFromObject(node Node, obj *unstructured.Unstructured) Node {
 	if !createdAt.IsZero() {
 		node.Data["createdAt"] = createdAt.Format(time.RFC3339)
 	}
+	// Lifecycle: surface deletionTimestamp + finalizers on every node so the
+	// frontend graph renderer can paint a Terminating treatment on managed
+	// resources whose own controllers are mid-cleanup. Without these fields,
+	// a graph showing five nodes "OutOfSync · Degraded" would obscure that
+	// they're all being torn down — same false-signal class we removed from
+	// the title row badges. Both fields are emitted only when set so the
+	// payload doesn't grow for healthy resources.
+	if dt := obj.GetDeletionTimestamp(); dt != nil && !dt.IsZero() {
+		node.Data["deletionTimestamp"] = dt.UTC().Format(time.RFC3339)
+		if fin := obj.GetFinalizers(); len(fin) > 0 {
+			node.Data["finalizers"] = fin
+		}
+	}
 	node.Data["labels"] = obj.GetLabels()
 	node.Data["annotations"] = obj.GetAnnotations()
 	if wave := obj.GetAnnotations()["argocd.argoproj.io/sync-wave"]; wave != "" {

@@ -218,7 +218,16 @@ export function Tooltip({
             ref={tooltipRef}
             className={clsx(
               'fixed z-[9999] px-2 py-1 text-xs text-theme-text-primary bg-theme-base rounded shadow-lg border border-theme-border',
-              'whitespace-nowrap pointer-events-none',
+              // Cap width + allow wrapping. Long tooltips (multi-sentence
+              // disabled-reason explanations) used to render with
+              // whitespace-nowrap, producing 700+ px wide single-line
+              // tooltips that the viewport collision logic then pushed
+              // away from their trigger to fit on screen — visually
+              // detached from the element they were describing. With
+              // max-w-xs (320px) + whitespace-normal, short tooltips
+              // still fit on one line (content shorter than max-width)
+              // and long ones wrap naturally near the trigger.
+              'max-w-xs whitespace-normal break-words pointer-events-none',
               className
             )}
             style={{

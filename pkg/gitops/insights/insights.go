@@ -440,7 +440,48 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 	if resourceTree != nil && resourceTree.Summary.Degraded > 0 && len(out) == 0 {
 		out = append(out, Issue{Severity: "warning", Scope: "tree", Reason: "DegradedResources", Message: fmt.Sprintf("%d managed resources are degraded", resourceTree.Summary.Degraded), Action: "Use the graph or Resources tab to inspect affected resources."})
 	}
+	// Dedup by (scope, reason, message) — Flux carries the same failure
+	// reason in multiple status.conditions slots (Released=False *and*
+	// Reconciling=False both report "UpgradeFailed" with the identical
+	// message), which produced visible duplicate rows in the UI panel.
+	// Argo similarly can repeat a condition across reconcile attempts.
+	// Keep the first occurrence (which preserves whatever ordering the
+	// detector chain already chose).
+	out = dedupeIssues(out)
 	sort.SliceStable(out, func(i, j int) bool { return severityRank(out[i].Severity) < severityRank(out[j].Severity) })
+	return out
+}
+
+// dedupeIssues removes Issues that share the same (scope, reason, message)
+// triple as an earlier entry. This is intentionally a minimal dedup: we
+// keep the first occurrence and discard later duplicates, preserving the
+// detector-chain ordering. Refs are not part of the key — two issues
+// pointing at different resources with the same scope+reason+message are
+// still distinct (e.g., two pods both ImagePullBackOff with the same
+// message but different Ref).
+func dedupeIssues(in []Issue) []Issue {
+	if len(in) < 2 {
+		return in
+	}
+	seen := make(map[string]struct{}, len(in))
+	out := make([]Issue, 0, len(in))
+	for _, i := range in {
+		// Refs differentiate per-resource issues; include the first ref's
+		// kind+name in the dedup key so a class of resource-level issues
+		// isn't silently collapsed into one. Empty refs (operation/
+		// condition/lifecycle scopes) collapse correctly because their
+		// ref-suffix is "" identically.
+		var refKey string
+		if len(i.Refs) > 0 {
+			refKey = i.Refs[0].Kind + "/" + i.Refs[0].Name
+		}
+		k := i.Scope + "|" + i.Reason + "|" + i.Message + "|" + refKey
+		if _, ok := seen[k]; ok {
+			continue
+		}
+		seen[k] = struct{}{}
+		out = append(out, i)
+	}
 	return out
 }
 

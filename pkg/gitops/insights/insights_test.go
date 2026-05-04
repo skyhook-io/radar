@@ -766,6 +766,40 @@ func TestDetectPendingDeletion_EnrichesWithControllerHealth(t *testing.T) {
 	})
 }
 
+// TestDedupeIssues_CollapsesIdenticalConditions pins the dedup contract
+// for the Flux case where Released=False *and* Reconciling=False both
+// carry the same UpgradeFailed reason+message. Visible bug from PR #543's
+// visual review: the user saw two identical "Helm upgrade failed" rows.
+func TestDedupeIssues_CollapsesIdenticalConditions(t *testing.T) {
+	in := []Issue{
+		{Scope: "condition", Severity: "critical", Reason: "UpgradeFailed", Message: "Helm upgrade failed for release demo/auth"},
+		{Scope: "condition", Severity: "critical", Reason: "UpgradeFailed", Message: "Helm upgrade failed for release demo/auth"},
+		{Scope: "condition", Severity: "critical", Reason: "Stalled", Message: "Different message"},
+	}
+	got := dedupeIssues(in)
+	if len(got) != 2 {
+		t.Fatalf("expected 2 issues after dedup, got %d: %+v", len(got), got)
+	}
+	if got[0].Reason != "UpgradeFailed" || got[1].Reason != "Stalled" {
+		t.Fatalf("expected first occurrence preserved; got %+v", got)
+	}
+}
+
+// TestDedupeIssues_PerResourceIssuesAreDistinct ensures resource-scoped
+// issues with different Refs but the same reason+message stay separate.
+// Two pods both ImagePullBackOff with the same message are different
+// problems — collapsing them would hide pod #2.
+func TestDedupeIssues_PerResourceIssuesAreDistinct(t *testing.T) {
+	in := []Issue{
+		{Scope: "resource", Severity: "critical", Reason: "Degraded", Message: "Pod is Degraded", Refs: []Ref{{Kind: "Pod", Name: "p1"}}},
+		{Scope: "resource", Severity: "critical", Reason: "Degraded", Message: "Pod is Degraded", Refs: []Ref{{Kind: "Pod", Name: "p2"}}},
+	}
+	got := dedupeIssues(in)
+	if len(got) != 2 {
+		t.Fatalf("expected both per-resource issues kept, got %d: %+v", len(got), got)
+	}
+}
+
 // TestResolveFinalizerOwner pins the static finalizer→controller mapping.
 // New Flux/Argo versions may introduce new keys; this test catches
 // regressions when entries get accidentally renamed.

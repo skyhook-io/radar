@@ -550,6 +550,7 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
   const node = data.node
   const kind = normalizeDisplayKind(node)
   const status = normalizeHealth(node.topologyStatus)
+  const terminating = isNodeTerminating(node)
   const chips = buildChips(node)
   const dim = getNodeDimensions(node)
 
@@ -560,10 +561,16 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
         className={clsx(
           'relative overflow-hidden rounded-lg border bg-theme-surface shadow-md transition-colors',
           data.highlighted ? 'border-skyhook-400 ring-2 ring-skyhook-400/40' : 'border-theme-border',
-          status === 'healthy' && 'border-l-green-500',
-          status === 'degraded' && 'border-l-yellow-500',
-          status === 'unhealthy' && 'border-l-red-500',
-          status === 'unknown' && 'border-l-slate-500',
+          // Lifecycle dominates the left-stripe color: a Terminating node
+          // paints orange regardless of its frozen sync/health state. Same
+          // logic as the fleet-row statusStripe — sync/health shouldn't
+          // signal "fix me" when the resource is being deleted.
+          terminating
+            ? 'border-l-orange-500'
+            : status === 'healthy' && 'border-l-green-500',
+          !terminating && status === 'degraded' && 'border-l-yellow-500',
+          !terminating && status === 'unhealthy' && 'border-l-red-500',
+          !terminating && status === 'unknown' && 'border-l-slate-500',
           // Group nodes are interactive (click toggles expand) but the
           // default ReactFlow handler doesn't add a hover state. A subtle
           // border lift telegraphs "this responds to clicks" without
@@ -619,9 +626,27 @@ const nodeTypes: NodeTypes = {
   gitopsResource: GitOpsResourceNode,
 }
 
+// isNodeTerminating returns true when the backend tagged the node with
+// metadata.deletionTimestamp (see enrichNodeFromObject in pkg/gitops/tree).
+// The check tolerates older payloads that don't carry the field — they
+// simply read as not-terminating, which is the safe default.
+function isNodeTerminating(node: GitOpsTreeNode): boolean {
+  return Boolean(node.data?.deletionTimestamp)
+}
+
 function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string; tone?: 'neutral' | 'warning' | 'danger' }> {
   const data = node.data ?? {}
   const chips: Array<{ label?: string; value: string; tone?: 'neutral' | 'warning' | 'danger' }> = []
+  // Terminating dominates: surface a single Terminating chip and skip the
+  // sync/health chips entirely. Showing "OutOfSync" or "Degraded" alongside
+  // a deletion-in-progress tag makes a stuck zombie look like a routine
+  // sync problem — same misleading-state pattern we removed from the
+  // detail title row and fleet rows.
+  if (isNodeTerminating(node)) {
+    chips.push({ value: 'Terminating', tone: 'warning' })
+    if (typeof data.createdAt === 'string') chips.push({ label: 'age', value: formatAge(data.createdAt) })
+    return chips
+  }
   if (typeof data.createdAt === 'string') chips.push({ label: 'age', value: formatAge(data.createdAt) })
   const revision = stringData(data.revision) || stringData(data.lastSyncRevision)
   if (revision) chips.push({ label: 'rev', value: revision })
@@ -643,6 +668,9 @@ function getSubtitle(node: GitOpsTreeNode): string {
     // Action-oriented copy invites the click; "collapsed" alone reads as
     // a state description, not an affordance.
     return 'Click to expand'
+  }
+  if (isNodeTerminating(node)) {
+    return 'Pending deletion'
   }
   if (node.sync || node.health) {
     return [node.sync, node.health].filter(Boolean).join(' • ')

@@ -1,4 +1,4 @@
-import { AlertTriangle, ChevronDown, ChevronRight, CircleAlert, Clock3, GitBranch, GitCommit, Info, ListChecks } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, CircleAlert, Clock3, GitBranch, GitCommit, Info, ListChecks, Trash2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { GitOpsChange, GitOpsHistoryItem, GitOpsInsight, GitOpsIssue, GitOpsPlanItem } from '../../../types'
@@ -13,15 +13,33 @@ interface GitOpsStatusStripProps {
 }
 
 // Status strip carries the operation chip (when a sync is in flight or
-// failed) plus reference metadata (Source / Revision / Last reconcile /
-// Sync mode). Health and Sync badges live next to the title in the page
-// header — pair them there with identity, not here.
+// failed) plus reference metadata. The exact field set depends on the
+// resource's lifecycle phase:
+//
+//   - Healthy / steady states: Source / Revision / Last reconcile / Sync mode
+//     answer "what is this app pointing at and when did it last reconcile".
+//   - Terminating: those fields become operationally meaningless (the
+//     controller has stopped reconciling and "Sync mode: Auto" is a lie
+//     during cleanup). Replace with deletion-relevant facts: pending
+//     duration, finalizers, and a hint about which controller owns
+//     cleanup. Source/Revision still exist on the resource if the user
+//     wants to dig — they're available in the YAML view of the standard
+//     resource drawer; promoting them here when they don't apply just
+//     creates contradictory state on the page.
+//
+// Health and Sync badges live next to the title in the page header —
+// pair them there with identity, not here.
 export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) {
   const summary = insight?.summary
   if (loading) {
     return <div className="h-8 animate-pulse border-b border-theme-border bg-theme-base" />
   }
   if (!summary) return null
+
+  if (summary.terminating) {
+    return <TerminatingStatusStrip summary={summary} />
+  }
+
   const operation = liveOperationPhase(summary.operationPhase)
   return (
     <div className="border-b border-theme-border bg-theme-base px-4 py-2">
@@ -63,6 +81,46 @@ export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) 
           {summary.autoSyncMode && <MetaFact label="Sync mode" value={summary.autoSyncMode} />}
         </div>
       </div>
+    </div>
+  )
+}
+
+// TerminatingStatusStrip renders the deletion-relevant facts in place of
+// the regular metadata strip. We expose pending-duration, finalizers,
+// and (when the operator wants them) the Source/Revision facts behind
+// a small "Show original metadata" disclosure — the data is still there
+// for forensic queries but not in the user's face during deletion.
+function TerminatingStatusStrip({ summary }: { summary: NonNullable<GitOpsInsight['summary']> }) {
+  const [showHistorical, setShowHistorical] = useState(false)
+  const pending = formatRelative(summary.terminationStartedAt) || 'recently'
+  const finalizers = summary.finalizers ?? []
+  return (
+    <div className="border-b border-orange-500/20 bg-orange-500/[0.04] px-4 py-2">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+        <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-theme-text-tertiary">
+          <MetaFact label="Pending deletion" value={pending} />
+          {finalizers.length > 0 && (
+            <MetaFact label="Finalizers" value={finalizers.join(', ')} mono />
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => setShowHistorical((v) => !v)}
+          className="shrink-0 text-[11px] text-theme-text-tertiary transition-colors hover:text-theme-text-secondary"
+        >
+          {showHistorical ? '− Hide pre-deletion metadata' : '+ Show pre-deletion metadata'}
+        </button>
+      </div>
+      {showHistorical && (
+        <div className="mt-2 flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1 border-t border-theme-border/40 pt-2 text-[11px] text-theme-text-tertiary">
+          {summary.source && <MetaFact label="Source" value={summary.source} />}
+          {(summary.lastRevision || summary.targetRevision) && (
+            <MetaFact label="Revision" value={summary.lastRevision || summary.targetRevision || '-'} mono />
+          )}
+          {summary.lastReconcile && <MetaFact label="Last reconcile" value={formatRelative(summary.lastReconcile)} />}
+          {summary.autoSyncMode && <MetaFact label="Sync mode" value={summary.autoSyncMode} />}
+        </div>
+      )}
     </div>
   )
 }
@@ -109,28 +167,111 @@ function isUnknownChipValue(v: string): boolean {
   return lower === 'unknown' || lower === ''
 }
 
-// GitOpsIssuesBand renders the issue list at the top of the page. Two paths:
+// GitOpsIssuesBand renders the issue list at the top of the page. Three paths:
 //
-//   1. A critical operation failure (Argo's "the sync attempt itself broke")
+//   1. Lifecycle issues (resource is being deleted) become a banner at the
+//      very top — they dominate the user's mental model and demote
+//      everything else to historical context.
+//   2. A critical operation failure (Argo's "the sync attempt itself broke")
 //      gets the rich GitOpsFailureCard treatment — structured cause/retry/
 //      affected-resource fields, raw error collapsed by default. This is the
 //      common operator question of "what's broken and is it stuck?".
-//   2. Anything else (warnings, info, per-resource issues without a parent
+//   3. Anything else (warnings, info, per-resource issues without a parent
 //      operation failure) renders as a compact stacked alert row with the
 //      same expand-for-more behavior as before.
 //
-// The split exists because operation failures are causally *upstream* of
-// the resource issues that follow — treating them as peers in the same
-// alert stack made one root cause look like three problems.
-export function GitOpsIssuesBand({ issues, onSelectIssue }: { issues?: GitOpsIssue[] | null; onSelectIssue?: (issue: GitOpsIssue) => void }) {
+// When `terminating` is true, paths 2+3 are wrapped in a "Pre-deletion
+// issues (N)" disclosure, default collapsed. Pre-deletion ops failures
+// (UpgradeFailed before the user kicked off deletion) are useful for
+// forensics but aren't actionable — they happened *before* the resource
+// was marked for deletion and the controller has stopped reconciling.
+export function GitOpsIssuesBand({ issues, onSelectIssue, terminating }: { issues?: GitOpsIssue[] | null; onSelectIssue?: (issue: GitOpsIssue) => void; terminating?: boolean }) {
   const list = issues ?? []
   if (list.length === 0) return null
-  const operationFailure = list.find((i) => i.severity === 'critical' && i.scope === 'operation')
-  const others = operationFailure ? list.filter((i) => i !== operationFailure) : list
+  const lifecycle = list.find((i) => i.scope === 'lifecycle')
+  const nonLifecycle = lifecycle ? list.filter((i) => i !== lifecycle) : list
+  const operationFailure = nonLifecycle.find((i) => i.severity === 'critical' && i.scope === 'operation')
+  const others = operationFailure ? nonLifecycle.filter((i) => i !== operationFailure) : nonLifecycle
+  const showHistoricalCollapsed = terminating && (operationFailure || others.length > 0)
   return (
     <div className="border-b border-theme-border">
-      {operationFailure && <GitOpsFailureCard issue={operationFailure} onSelect={onSelectIssue} />}
-      {others.length > 0 && <GitOpsCompactIssueStack issues={others} onSelectIssue={onSelectIssue} />}
+      {lifecycle && <GitOpsLifecycleBanner issue={lifecycle} />}
+      {showHistoricalCollapsed ? (
+        <GitOpsHistoricalIssuesDisclosure operationFailure={operationFailure} others={others} onSelectIssue={onSelectIssue} />
+      ) : (
+        <>
+          {operationFailure && <GitOpsFailureCard issue={operationFailure} onSelect={onSelectIssue} />}
+          {others.length > 0 && <GitOpsCompactIssueStack issues={others} onSelectIssue={onSelectIssue} />}
+        </>
+      )}
+    </div>
+  )
+}
+
+// GitOpsLifecycleBanner promotes the lifecycle Issue (resource pending
+// deletion) above all other issues with a distinct orange treatment that
+// matches the [Terminating] chip in the title row. Nothing else on the
+// page should dominate when the resource is being deleted.
+function GitOpsLifecycleBanner({ issue }: { issue: GitOpsIssue }) {
+  return (
+    <div className="border-b border-orange-500/30 bg-orange-500/[0.08] px-4 py-3">
+      <div className="flex items-start gap-3">
+        <Trash2 className="mt-0.5 h-4 w-4 shrink-0 text-orange-400" />
+        <div className="min-w-0 flex-1">
+          <div className="flex items-baseline gap-2">
+            <h3 className="text-sm font-semibold text-orange-300">{issue.reason}</h3>
+            <span className="text-[10px] uppercase tracking-wide text-orange-400/70">Lifecycle</span>
+          </div>
+          <p className="mt-1 text-[13px] text-theme-text-secondary">{issue.message}</p>
+          {issue.cause && <p className="mt-1 text-[12px] text-orange-300/90">{issue.cause}</p>}
+          {issue.action && <p className="mt-1 text-[11px] text-theme-text-tertiary">{issue.action}</p>}
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// GitOpsHistoricalIssuesDisclosure wraps the regular issue rendering in a
+// collapsible disclosure when the resource is Terminating. Default
+// collapsed because pre-deletion failures are forensic context, not
+// actionable. Counts the issues so the operator can see at a glance how
+// many were active before deletion was initiated.
+function GitOpsHistoricalIssuesDisclosure({
+  operationFailure,
+  others,
+  onSelectIssue,
+}: {
+  operationFailure?: GitOpsIssue
+  others: GitOpsIssue[]
+  onSelectIssue?: (issue: GitOpsIssue) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const total = (operationFailure ? 1 : 0) + others.length
+  if (total === 0) return null
+  return (
+    <div className="border-b border-theme-border bg-theme-surface/40">
+      <button
+        type="button"
+        onClick={() => setExpanded((v) => !v)}
+        className="flex w-full items-center justify-between px-4 py-2 text-left transition-colors hover:bg-theme-hover/40"
+        aria-expanded={expanded}
+      >
+        <div className="flex items-center gap-2">
+          {expanded ? <ChevronDown className="h-3.5 w-3.5 text-theme-text-tertiary" /> : <ChevronRight className="h-3.5 w-3.5 text-theme-text-tertiary" />}
+          <span className="text-[12px] font-medium text-theme-text-secondary">
+            Pre-deletion issues ({total})
+          </span>
+          <span className="text-[11px] text-theme-text-tertiary">
+            captured before deletion was initiated — forensic context, not actionable
+          </span>
+        </div>
+      </button>
+      {expanded && (
+        <div className="border-t border-theme-border">
+          {operationFailure && <GitOpsFailureCard issue={operationFailure} onSelect={onSelectIssue} />}
+          {others.length > 0 && <GitOpsCompactIssueStack issues={others} onSelectIssue={onSelectIssue} />}
+        </div>
+      )}
     </div>
   )
 }
