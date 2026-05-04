@@ -29,7 +29,7 @@ func TestBuildIssuesArgoFailedOperationProducesCritical(t *testing.T) {
 			"message": "context deadline exceeded",
 		},
 	})
-	issues := buildIssues(root, nil, "argocd")
+	issues := buildIssues(root, nil, "argocd", nil)
 	if len(issues) != 1 {
 		t.Fatalf("expected 1 issue, got %d", len(issues))
 	}
@@ -46,7 +46,7 @@ func TestBuildIssuesArgoRunningOperationProducesInfo(t *testing.T) {
 	root := argoApp(map[string]any{
 		"operationState": map[string]any{"phase": "Running"},
 	})
-	issues := buildIssues(root, nil, "argocd")
+	issues := buildIssues(root, nil, "argocd", nil)
 	if len(issues) != 1 {
 		t.Fatalf("expected 1 issue, got %d", len(issues))
 	}
@@ -75,7 +75,7 @@ func TestBuildIssuesArgoSortsCriticalBeforeWarning(t *testing.T) {
 			},
 		},
 	})
-	issues := buildIssues(root, nil, "argocd")
+	issues := buildIssues(root, nil, "argocd", nil)
 	if len(issues) != 2 {
 		t.Fatalf("expected 2 issues, got %d", len(issues))
 	}
@@ -98,7 +98,7 @@ func TestBuildIssuesFluxStalledConditionProducesCritical(t *testing.T) {
 			},
 		},
 	}}
-	issues := buildIssues(root, nil, "fluxcd")
+	issues := buildIssues(root, nil, "fluxcd", nil)
 	if len(issues) != 1 {
 		t.Fatalf("expected 1 issue, got %d", len(issues))
 	}
@@ -115,7 +115,7 @@ func TestBuildIssuesDegradedTreeFallsThroughOnQuietRoot(t *testing.T) {
 	// degraded counts → the fallback "DegradedResources" warning fires.
 	root := argoApp(map[string]any{})
 	tree := &gitopstree.ResourceTree{Summary: gitopstree.Summary{Degraded: 3}}
-	issues := buildIssues(root, tree, "argocd")
+	issues := buildIssues(root, tree, "argocd", nil)
 	if len(issues) != 1 {
 		t.Fatalf("expected fallback warning, got %d issues", len(issues))
 	}
@@ -130,7 +130,7 @@ func TestBuildIssuesDegradedTreeSuppressedWhenIssuesPresent(t *testing.T) {
 		"operationState": map[string]any{"phase": "Failed"},
 	})
 	tree := &gitopstree.ResourceTree{Summary: gitopstree.Summary{Degraded: 3}}
-	issues := buildIssues(root, tree, "argocd")
+	issues := buildIssues(root, tree, "argocd", nil)
 	if len(issues) != 1 {
 		t.Fatalf("expected only the operation issue, got %d", len(issues))
 	}
@@ -302,7 +302,7 @@ func TestBuildIssuesSuppressesResourceIssueDuplicatedByOperationFailure(t *testi
 			"status": "OutOfSync",
 		}},
 	})
-	issues := buildIssues(root, nil, "argocd")
+	issues := buildIssues(root, nil, "argocd", nil)
 	for _, iss := range issues {
 		if iss.Scope == "resource" && iss.Reason == "OutOfSync" {
 			for _, ref := range iss.Refs {
@@ -560,5 +560,277 @@ func TestBuildHistoryArgo_RunningOpStaysOnTop(t *testing.T) {
 	hist := buildHistory(root, "argocd")
 	if len(hist) < 1 || hist[0].Phase != "Running" {
 		t.Fatalf("expected the running operation to sort to the top; got hist=%+v", hist)
+	}
+}
+
+// TestDetectPendingDeletion_SeverityRamp pins the age-based severity
+// thresholds: <5min=info, 5-30min=warning, >30min=alert. Without explicit
+// boundaries, a refactor that "tidies up" the cutoffs would silently
+// downgrade the user-visible severity for a stuck-deletion case.
+func TestDetectPendingDeletion_SeverityRamp(t *testing.T) {
+	withDeletion := func(ago time.Duration, finalizers []string) *unstructured.Unstructured {
+		obj := argoApp(map[string]any{})
+		md, _ := obj.Object["metadata"].(map[string]any)
+		md["deletionTimestamp"] = time.Now().Add(-ago).UTC().Format(time.RFC3339)
+		if len(finalizers) > 0 {
+			anyFinalizers := make([]any, len(finalizers))
+			for i, f := range finalizers {
+				anyFinalizers[i] = f
+			}
+			md["finalizers"] = anyFinalizers
+		}
+		return obj
+	}
+
+	tests := []struct {
+		name      string
+		age       time.Duration
+		want      string
+		wantStuck bool
+	}{
+		{"just deleted is info", 30 * time.Second, "info", false},
+		{"under 5min is info", 4 * time.Minute, "info", false},
+		// Inclusive boundary: at 5min exactly we escalate to warning.
+		// Test uses 4m59s to keep the "still info" case observable
+		// without relying on sub-second clock precision.
+		{"4m59s stays info", 4*time.Minute + 59*time.Second, "info", false},
+		{"5min escalates to warning", 5 * time.Minute, "warning", false},
+		{"29min is warning", 29 * time.Minute, "warning", false},
+		// Same inclusive semantics for the 30min cutoff.
+		{"29m59s stays warning", 29*time.Minute + 59*time.Second, "warning", false},
+		{"30min escalates to alert", 30 * time.Minute, "alert", true},
+		{"21d is alert and stuck", 21 * 24 * time.Hour, "alert", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := detectPendingDeletion(withDeletion(tt.age, []string{"finalizers.fluxcd.io"}), nil)
+			if got == nil {
+				t.Fatalf("expected an issue, got nil")
+			}
+			if got.Severity != tt.want {
+				t.Fatalf("severity = %q, want %q", got.Severity, tt.want)
+			}
+			if got.Stuck != tt.wantStuck {
+				t.Fatalf("stuck = %v, want %v", got.Stuck, tt.wantStuck)
+			}
+			if got.Scope != "lifecycle" {
+				t.Fatalf("scope = %q, want %q", got.Scope, "lifecycle")
+			}
+			if got.Reason != "Terminating" {
+				t.Fatalf("reason = %q, want Terminating", got.Reason)
+			}
+			// Finalizer is mentioned in the message — the most actionable
+			// piece for the operator. Without this they have to drill
+			// into YAML to find what's blocking cleanup.
+			if !strings.Contains(got.Message, "finalizers.fluxcd.io") {
+				t.Fatalf("expected message to mention finalizer; got %q", got.Message)
+			}
+		})
+	}
+}
+
+// TestDetectPendingDeletion_SkipsHealthyResource ensures we don't fire
+// the issue on resources that aren't being deleted. Cheap regression
+// guard against accidentally returning a non-nil zero-value Issue.
+func TestDetectPendingDeletion_SkipsHealthyResource(t *testing.T) {
+	if got := detectPendingDeletion(argoApp(map[string]any{}), nil); got != nil {
+		t.Fatalf("expected nil for healthy resource, got %+v", got)
+	}
+}
+
+// TestBuildIssues_TerminatingFiresFirst pins the ordering: when a
+// resource is Terminating AND has degraded children, the lifecycle
+// issue surfaces first. This is the user-experience contract — knowing
+// the resource is being deleted dominates everything else.
+func TestBuildIssues_TerminatingFiresFirst(t *testing.T) {
+	root := argoApp(map[string]any{
+		"sync":   map[string]any{"status": "OutOfSync"},
+		"health": map[string]any{"status": "Degraded"},
+	})
+	md, _ := root.Object["metadata"].(map[string]any)
+	md["deletionTimestamp"] = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	md["finalizers"] = []any{"resources-finalizer.argocd.argoproj.io"}
+
+	issues := buildIssues(root, &gitopstree.ResourceTree{Summary: gitopstree.Summary{Degraded: 2}}, "argocd", nil)
+	if len(issues) == 0 {
+		t.Fatalf("expected at least one issue")
+	}
+	// Lifecycle scope must be the first issue regardless of severity sort
+	// — we append it before the others, and severity-stable-sort preserves
+	// position when severity ties.
+	if issues[0].Scope != "lifecycle" {
+		t.Fatalf("expected lifecycle issue first; got scope=%q", issues[0].Scope)
+	}
+}
+
+// fakeResolver lets us assert the detector wires the finalizer key + root
+// through to FinalizerOwnerStatus and surfaces the returned text in
+// Issue.Cause.
+type fakeResolver struct {
+	statuses map[string]string // finalizer → status string
+	calls    []string          // finalizers passed (in order)
+}
+
+func (f *fakeResolver) GetLive(string, string, string, string) *unstructured.Unstructured {
+	return nil
+}
+func (f *fakeResolver) RecentEvents(string, string, string, string) []EventSummary {
+	return nil
+}
+func (f *fakeResolver) FinalizerOwnerStatus(finalizer string, _ *unstructured.Unstructured) string {
+	f.calls = append(f.calls, finalizer)
+	return f.statuses[finalizer]
+}
+
+// TestDetectPendingDeletion_EnrichesWithControllerHealth pins the contract
+// that the lifecycle detector consults the resolver for finalizer-owner
+// status and embeds the result in Issue.Cause. Without this contract,
+// stuck deletions remain "investigate the controller" instead of
+// "argocd-application-controller is CrashLoopBackOff — start there".
+func TestDetectPendingDeletion_EnrichesWithControllerHealth(t *testing.T) {
+	t.Run("warning tier surfaces controller status", func(t *testing.T) {
+		obj := argoApp(map[string]any{})
+		md, _ := obj.Object["metadata"].(map[string]any)
+		md["deletionTimestamp"] = time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
+		md["finalizers"] = []any{"resources-finalizer.argocd.argoproj.io"}
+		r := &fakeResolver{statuses: map[string]string{
+			"resources-finalizer.argocd.argoproj.io": "argocd-application-controller is CrashLoopBackOff (2/2 pods)",
+		}}
+		got := detectPendingDeletion(obj, r)
+		if got == nil {
+			t.Fatal("expected issue, got nil")
+		}
+		if got.Cause != "argocd-application-controller is CrashLoopBackOff (2/2 pods)" {
+			t.Fatalf("expected controller status in Cause, got %q", got.Cause)
+		}
+	})
+
+	t.Run("info tier (recent deletion) skips controller probe", func(t *testing.T) {
+		// Recent deletions are presumably fine — adding a controller-health
+		// line on a healthy controller would overstate urgency. The detector
+		// must skip the resolver entirely below the warning threshold.
+		obj := argoApp(map[string]any{})
+		md, _ := obj.Object["metadata"].(map[string]any)
+		md["deletionTimestamp"] = time.Now().Add(-30 * time.Second).UTC().Format(time.RFC3339)
+		md["finalizers"] = []any{"resources-finalizer.argocd.argoproj.io"}
+		r := &fakeResolver{statuses: map[string]string{
+			"resources-finalizer.argocd.argoproj.io": "should never be returned",
+		}}
+		got := detectPendingDeletion(obj, r)
+		if got == nil {
+			t.Fatal("expected issue, got nil")
+		}
+		if len(r.calls) != 0 {
+			t.Fatalf("expected no resolver calls at info tier, got %v", r.calls)
+		}
+		if got.Cause != "" {
+			t.Fatalf("expected empty Cause at info tier, got %q", got.Cause)
+		}
+	})
+
+	t.Run("first informative finalizer wins", func(t *testing.T) {
+		// Resources can carry multiple finalizers (Argo + foreground-cascade
+		// is common); only the first one we can identify should drive the
+		// controller-health enrichment. Concatenating all of them would
+		// produce noisy Cause text.
+		obj := argoApp(map[string]any{})
+		md, _ := obj.Object["metadata"].(map[string]any)
+		md["deletionTimestamp"] = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+		md["finalizers"] = []any{"unknown.example.com/cleanup", "resources-finalizer.argocd.argoproj.io"}
+		r := &fakeResolver{statuses: map[string]string{
+			"resources-finalizer.argocd.argoproj.io": "argocd-application-controller is healthy (1 pod ready)",
+		}}
+		got := detectPendingDeletion(obj, r)
+		if got == nil {
+			t.Fatal("expected issue, got nil")
+		}
+		if got.Cause != "argocd-application-controller is healthy (1 pod ready)" {
+			t.Fatalf("expected the recognized finalizer to win; got %q", got.Cause)
+		}
+	})
+
+	t.Run("nil resolver leaves Cause empty", func(t *testing.T) {
+		// Production handler may pass a nil resolver in some paths
+		// (preview, tests) — must not panic.
+		obj := argoApp(map[string]any{})
+		md, _ := obj.Object["metadata"].(map[string]any)
+		md["deletionTimestamp"] = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+		md["finalizers"] = []any{"resources-finalizer.argocd.argoproj.io"}
+		got := detectPendingDeletion(obj, nil)
+		if got == nil {
+			t.Fatal("expected issue, got nil")
+		}
+		if got.Cause != "" {
+			t.Fatalf("expected empty Cause with nil resolver, got %q", got.Cause)
+		}
+	})
+}
+
+// TestResolveFinalizerOwner pins the static finalizer→controller mapping.
+// New Flux/Argo versions may introduce new keys; this test catches
+// regressions when entries get accidentally renamed.
+func TestResolveFinalizerOwner(t *testing.T) {
+	mkObj := func(api string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": api,
+			"kind":       "Whatever",
+		}}
+	}
+	tests := []struct {
+		name      string
+		finalizer string
+		obj       *unstructured.Unstructured
+		want      string // expected Controller name; "" means nil owner
+	}{
+		{"argo standard", "resources-finalizer.argocd.argoproj.io", mkObj(""), "argocd-application-controller"},
+		{"argo legacy cascade", "foreground-cascade.argocd.argoproj.io", mkObj(""), "argocd-application-controller"},
+		{"flux generic on Kustomization", "finalizers.fluxcd.io", mkObj("kustomize.toolkit.fluxcd.io/v1"), "kustomize-controller"},
+		{"flux generic on HelmRelease", "finalizers.fluxcd.io", mkObj("helm.toolkit.fluxcd.io/v2"), "helm-controller"},
+		{"flux generic on GitRepository", "finalizers.fluxcd.io", mkObj("source.toolkit.fluxcd.io/v1"), "source-controller"},
+		{"flux specific kustomize", "finalizers.kustomize.toolkit.fluxcd.io", mkObj(""), "kustomize-controller"},
+		{"flux specific helm", "finalizers.helm.toolkit.fluxcd.io", mkObj(""), "helm-controller"},
+		{"flux specific source", "finalizers.source.toolkit.fluxcd.io", mkObj(""), "source-controller"},
+		{"unknown finalizer returns nil", "example.com/cleanup", mkObj(""), ""},
+		{"unknown apiVersion for generic flux returns nil", "finalizers.fluxcd.io", mkObj("custom.example.com/v1"), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := ResolveFinalizerOwner(tt.finalizer, tt.obj)
+			if tt.want == "" {
+				if got != nil {
+					t.Fatalf("expected nil owner, got %+v", got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("expected owner with controller %q, got nil", tt.want)
+			}
+			if got.Controller != tt.want {
+				t.Fatalf("Controller = %q, want %q", got.Controller, tt.want)
+			}
+		})
+	}
+}
+
+// TestBuildSummary_TerminatingFields pins the Summary fields that drive
+// the UI's [Terminating] chip. Renaming or omitting these silently
+// regresses the chip to "Healthy"-looking which is the entire bug
+// this work fixes.
+func TestBuildSummary_TerminatingFields(t *testing.T) {
+	root := argoApp(map[string]any{})
+	md, _ := root.Object["metadata"].(map[string]any)
+	stamp := "2026-04-13T13:14:42Z"
+	md["deletionTimestamp"] = stamp
+	md["finalizers"] = []any{"resources-finalizer.argocd.argoproj.io"}
+
+	s := buildSummary(root, "argocd")
+	if !s.Terminating {
+		t.Fatal("expected Terminating=true")
+	}
+	if s.TerminationStartedAt != stamp {
+		t.Fatalf("TerminationStartedAt = %q, want %q", s.TerminationStartedAt, stamp)
+	}
+	if len(s.Finalizers) != 1 || s.Finalizers[0] != "resources-finalizer.argocd.argoproj.io" {
+		t.Fatalf("Finalizers = %v, want [resources-finalizer.argocd.argoproj.io]", s.Finalizers)
 	}
 }

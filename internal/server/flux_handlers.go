@@ -25,7 +25,7 @@ func (s *Server) handleFluxReconcile(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[flux] Dynamic client unavailable for %s %s/%s", kind, namespace, name)
+		log.Printf("[flux] Dynamic client unavailable for %s %s/%s", sanitizeForLog(kind), sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
@@ -69,7 +69,7 @@ func (s *Server) fluxSetSuspend(w http.ResponseWriter, r *http.Request, suspend 
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[flux] Dynamic client unavailable for %s %s/%s", kind, namespace, name)
+		log.Printf("[flux] Dynamic client unavailable for %s %s/%s", sanitizeForLog(kind), sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
@@ -98,7 +98,7 @@ func (s *Server) handleFluxSyncWithSource(w http.ResponseWriter, r *http.Request
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[flux] Dynamic client unavailable for %s %s/%s", kind, namespace, name)
+		log.Printf("[flux] Dynamic client unavailable for %s %s/%s", sanitizeForLog(kind), sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}

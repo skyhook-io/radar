@@ -3,6 +3,7 @@ package audit
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -52,6 +53,14 @@ func RunChecks(input *CheckInput) *ScanResults {
 
 	// --- Deprecated API checks ---
 	findings = append(findings, checkDeprecatedAPIs(input.ServedAPIs, input.ClusterVersion)...)
+
+	// --- Lifecycle: stuck terminating resources ---
+	// Catches the "zombie awaiting finalizer cleanup" pattern across every
+	// typed kind we already scan. Pairs with the GitOps view's per-app
+	// Terminating chip + insight; the audit surface broadens coverage to
+	// non-GitOps resources (stuck Pods on failed nodes, Deployments
+	// blocked by webhook finalizers, etc.).
+	findings = append(findings, checkStuckTerminating(input)...)
 
 	return buildResults(findings)
 }
@@ -991,4 +1000,125 @@ func tagDisplay(tag string) string {
 		return "<none>"
 	}
 	return tag
+}
+
+// stuckTerminatingThresholdWarning is when "Terminating" stops looking
+// like normal cleanup and starts looking like a stuck finalizer.
+// Most controllers complete cleanup within a couple of minutes; 5min
+// matches the equivalent threshold in pkg/gitops/insights so the GitOps
+// per-resource Issue and the Audit cluster-wide finding fire on the
+// same boundary.
+const (
+	stuckTerminatingThresholdWarning = 5 * time.Minute
+	stuckTerminatingThresholdDanger  = 30 * time.Minute
+)
+
+// checkStuckTerminating finds resources stuck in the Terminating state
+// past the warning/danger thresholds. Scans every typed kind in the
+// CheckInput and applies the same age-based severity ramp the insights
+// detector uses, so an operator looking at the cluster Audit and the
+// GitOps detail page sees the same severity for the same resource.
+//
+// Why this lives at the audit layer in addition to per-resource
+// insights: an operator may not know which resources are stuck.
+// Audit surfaces the *list* up-front; a per-resource insight only
+// helps once they've drilled into a specific app. The two surfaces
+// are complementary, not redundant.
+func checkStuckTerminating(input *CheckInput) []Finding {
+	if input == nil {
+		return nil
+	}
+	var findings []Finding
+	now := time.Now()
+	emit := func(kind string, obj metav1.Object) {
+		dt := obj.GetDeletionTimestamp()
+		if dt == nil || dt.IsZero() {
+			return
+		}
+		age := now.Sub(dt.Time)
+		if age < stuckTerminatingThresholdWarning {
+			return
+		}
+		severity := SeverityWarning
+		if age >= stuckTerminatingThresholdDanger {
+			severity = SeverityDanger
+		}
+		// Naming the finalizers is the most actionable hint we can
+		// surface — the user otherwise has to drill into YAML to find
+		// what's blocking cleanup. Some controllers add multiple keys
+		// (Argo's `resources-finalizer.argocd.argoproj.io` plus the
+		// legacy cascade); listing them all costs a few extra bytes
+		// and is genuinely useful.
+		finalizers := obj.GetFinalizers()
+		var note string
+		if len(finalizers) > 0 {
+			note = " — finalizers: " + strings.Join(finalizers, ", ")
+		}
+		findings = append(findings, Finding{
+			Kind:      kind,
+			Namespace: obj.GetNamespace(),
+			Name:      obj.GetName(),
+			CheckID:   "stuckTerminating",
+			Category:  CategoryReliability,
+			Severity:  severity,
+			Message:   fmt.Sprintf("Has been pending deletion for %s%s", formatDurationShort(age), note),
+		})
+	}
+	// Scan every typed slice we have. Adding a new type to CheckInput
+	// later means adding one line here — trade-off accepted for
+	// explicitness over reflection.
+	for _, p := range input.Pods {
+		emit("Pod", p)
+	}
+	for _, d := range input.Deployments {
+		emit("Deployment", d)
+	}
+	for _, s := range input.StatefulSets {
+		emit("StatefulSet", s)
+	}
+	for _, d := range input.DaemonSets {
+		emit("DaemonSet", d)
+	}
+	for _, s := range input.Services {
+		emit("Service", s)
+	}
+	for _, i := range input.Ingresses {
+		emit("Ingress", i)
+	}
+	for _, h := range input.HorizontalPodAutoscalers {
+		emit("HorizontalPodAutoscaler", h)
+	}
+	for _, p := range input.PodDisruptionBudgets {
+		emit("PodDisruptionBudget", p)
+	}
+	for _, c := range input.ConfigMaps {
+		emit("ConfigMap", c)
+	}
+	for _, s := range input.Secrets {
+		emit("Secret", s)
+	}
+	for _, sa := range input.ServiceAccounts {
+		emit("ServiceAccount", sa)
+	}
+	return findings
+}
+
+// formatDurationShort renders a duration as the same compact form used
+// by the gitops insights detector ("3s", "12m", "4h", "21d") so audit
+// findings and per-resource Issues read consistently to operators
+// glancing across both surfaces.
+func formatDurationShort(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }

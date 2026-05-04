@@ -1,7 +1,9 @@
 package audit
 
 import (
+	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -1451,5 +1453,76 @@ func TestSecretInConfigMap(t *testing.T) {
 	}
 	if found["app-config"] {
 		t.Error("app-config should not be flagged (no sensitive keys)")
+	}
+}
+
+// TestCheckStuckTerminating pins the lifecycle check's age-tier mapping.
+// Cluster Audit + per-resource GitOps Issue must agree on what counts
+// as "stuck" so an operator looking at both surfaces sees consistent
+// severity for the same resource.
+func TestCheckStuckTerminating(t *testing.T) {
+	now := time.Now()
+	mkPod := func(name string, ago time.Duration, finalizers []string) *corev1.Pod {
+		dt := metav1.NewTime(now.Add(-ago))
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              name,
+				Namespace:         "default",
+				DeletionTimestamp: &dt,
+				Finalizers:        finalizers,
+			},
+		}
+	}
+
+	input := &CheckInput{
+		Pods: []*corev1.Pod{
+			// Healthy pod (no deletionTimestamp) — must not be flagged.
+			{ObjectMeta: metav1.ObjectMeta{Name: "healthy", Namespace: "default"}},
+			// Just deleted, within window — must not be flagged.
+			mkPod("recently-deleted", 30*time.Second, nil),
+			// 4m59s — under threshold, must not be flagged.
+			mkPod("under-threshold", 4*time.Minute+59*time.Second, nil),
+			// 6 minutes — warning tier.
+			mkPod("warning", 6*time.Minute, []string{"example.io/cleanup"}),
+			// 45 minutes — danger tier.
+			mkPod("danger", 45*time.Minute, []string{"finalizers.fluxcd.io"}),
+		},
+	}
+
+	results := RunChecks(input)
+
+	bySeverity := map[string]map[string]string{} // severity → name → message
+	for _, f := range results.Findings {
+		if f.CheckID != "stuckTerminating" {
+			continue
+		}
+		if bySeverity[f.Severity] == nil {
+			bySeverity[f.Severity] = map[string]string{}
+		}
+		bySeverity[f.Severity][f.Name] = f.Message
+	}
+
+	if _, found := bySeverity["warning"]["healthy"]; found {
+		t.Error("healthy pod should not be flagged")
+	}
+	if _, found := bySeverity["warning"]["recently-deleted"]; found {
+		t.Error("pod within cleanup window should not be flagged")
+	}
+	if _, found := bySeverity["warning"]["under-threshold"]; found {
+		t.Error("pod under 5min threshold should not be flagged")
+	}
+	msg, ok := bySeverity["warning"]["warning"]
+	if !ok {
+		t.Fatal("expected warning-tier finding for 6min-old terminating pod")
+	}
+	if !strings.Contains(msg, "example.io/cleanup") {
+		t.Errorf("expected warning message to name finalizer; got %q", msg)
+	}
+	dangerMsg, ok := bySeverity["danger"]["danger"]
+	if !ok {
+		t.Fatal("expected danger-tier finding for 45min-old terminating pod")
+	}
+	if !strings.Contains(dangerMsg, "finalizers.fluxcd.io") {
+		t.Errorf("expected danger message to name finalizer; got %q", dangerMsg)
 	}
 }

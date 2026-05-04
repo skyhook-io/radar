@@ -222,4 +222,12 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "The ingress backend references a service that does not exist, so incoming traffic will get 503 errors.",
 		Remediation: "Check the ingress spec and correct the service name, or create the missing service.",
 	},
+
+	// ── Lifecycle ─────────────────────────────────────────────────────
+	"stuckTerminating": {
+		ID:          "stuckTerminating",
+		Title:       "Stuck terminating resource",
+		Description: "This resource has metadata.deletionTimestamp set but is still alive past the cleanup window. Most controllers finish cleanup within seconds; minutes-long delays usually mean a finalizer's owning controller is unhealthy or unable to reach a dependent service. Common causes: the controller pod is CrashLoopBackOff, DNS resolution is broken, the finalizer logic depends on a webhook or external API that's unavailable.",
+		Remediation: "Check the controller responsible for each finalizer key (kubectl describe will show finalizers under metadata). For Argo CD, look at argocd-application-controller in the argocd namespace. For Flux, look at the matching controller (kustomize-controller, helm-controller, source-controller) in flux-system. Once the controller is healthy, deletion will resume automatically. If you must remove a stuck resource and accept the orphaned cleanup, manually clear the finalizers field — but only as a last resort.",
+	},
 }

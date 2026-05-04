@@ -270,6 +270,129 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 	return out
 }
 
+// FinalizerOwnerStatus implements gitopsinsights.Resolver.
+//
+// Looks up the controller responsible for a finalizer (via the static
+// catalog in pkg/gitops/insights/finalizers.go) and reports the
+// aggregate health of its pods in the install namespace. Returns ""
+// when the finalizer isn't recognized, the install namespace is empty
+// (e.g. operator deployed Flux into a non-default namespace), or no
+// matching pods exist — caller treats empty as "no signal".
+//
+// The format intentionally embeds both the controller name and a
+// short status verb so the calling Issue's Cause text reads naturally
+// when concatenated:
+//
+//	"argocd-application-controller is CrashLoopBackOff (2/2 pods unhealthy)"
+//	"kustomize-controller is healthy (1 pod ready)"
+//	"source-controller has no running pods (deployment likely scaled to 0)"
+func (r *insightsResolver) FinalizerOwnerStatus(finalizer string, root *unstructured.Unstructured) string {
+	owner := gitopsinsights.ResolveFinalizerOwner(finalizer, root)
+	if owner == nil {
+		return ""
+	}
+	if r.cache == nil || r.cache.Pods() == nil {
+		return ""
+	}
+	pods, err := r.cache.Pods().Pods(owner.Namespace).List(labels.Everything())
+	if err != nil {
+		return ""
+	}
+	var matched []*corev1.Pod
+	for _, p := range pods {
+		if p.Labels[owner.SelectorKey] == owner.SelectorValue {
+			matched = append(matched, p)
+		}
+	}
+	if len(matched) == 0 {
+		// Could be: operator changed the namespace, or the controller
+		// isn't installed (broken finalizer-only state). Either way,
+		// the user needs to know "the controller isn't where I expect"
+		// to start debugging.
+		return owner.Controller + " is not running in namespace " + owner.Namespace + " (controller may not be installed, or runs under a different namespace)"
+	}
+	return summarizeControllerHealth(owner.Controller, matched)
+}
+
+// summarizeControllerHealth distills a slice of controller pods into a
+// short, operator-readable status verb. Aggregates over multiple
+// replicas (Argo's controller is typically deployed as a 2-replica
+// StatefulSet for HA): if any pod is in CrashLoopBackOff or Error, that
+// fact dominates the status. If all pods are Ready, "healthy". Anything
+// in between is "degraded" with a count.
+func summarizeControllerHealth(controller string, pods []*corev1.Pod) string {
+	ready := 0
+	crashing := 0
+	pending := 0
+	var crashReason string
+	for _, p := range pods {
+		// CrashLoopBackOff is the highest-signal failure: the pod is
+		// trying to start but immediately failing. Surface its reason
+		// when present so the operator knows what kind of crash to
+		// debug (config, RBAC, image pull, etc).
+		for _, cs := range p.Status.ContainerStatuses {
+			if cs.State.Waiting != nil && (cs.State.Waiting.Reason == "CrashLoopBackOff" || cs.State.Waiting.Reason == "Error") {
+				crashing++
+				if crashReason == "" {
+					crashReason = cs.State.Waiting.Reason
+				}
+				break
+			}
+		}
+		if isPodReady(p) {
+			ready++
+		}
+		if p.Status.Phase == corev1.PodPending {
+			pending++
+		}
+	}
+	switch {
+	case crashing > 0:
+		return controller + " is " + crashReason + " (" + intToString(crashing) + "/" + intToString(len(pods)) + " pods)"
+	case ready == len(pods) && len(pods) > 0:
+		// All pods Ready — if the resource is *still* stuck deleting
+		// despite a healthy controller, it's a different problem (RBAC,
+		// network, broken finalizer logic). Surface the healthy state
+		// so the operator knows to dig into the controller's logs
+		// rather than its lifecycle.
+		return controller + " is healthy (" + intToString(ready) + " pod" + plural(ready) + " ready)"
+	case pending > 0:
+		return controller + " is pending start (" + intToString(pending) + "/" + intToString(len(pods)) + " pods Pending)"
+	default:
+		return controller + " is degraded (" + intToString(ready) + "/" + intToString(len(pods)) + " pods ready)"
+	}
+}
+
+// intToString avoids the strconv import for one-off small-int cases
+// inside this file. Keeping it inline matches the indexByte helper
+// at the bottom — a deliberate "this file imports nothing for tiny
+// utilities" pattern that the surrounding code follows.
+func intToString(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	digits := make([]byte, 0, 4)
+	negative := n < 0
+	if negative {
+		n = -n
+	}
+	for n > 0 {
+		digits = append([]byte{byte('0' + n%10)}, digits...)
+		n /= 10
+	}
+	if negative {
+		return "-" + string(digits)
+	}
+	return string(digits)
+}
+
+func plural(n int) string {
+	if n == 1 {
+		return ""
+	}
+	return "s"
+}
+
 func (r *insightsResolver) namespaceAllowed(namespace string) bool {
 	if r.allowedNamespaces == nil {
 		return true

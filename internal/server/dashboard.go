@@ -42,6 +42,11 @@ type DashboardResponse struct {
 	NetworkPolicyCoverage  *DashboardNetworkPolicyCoverage `json:"networkPolicyCoverage,omitempty"`
 	NodeVersionSkew        *k8s.VersionSkew                `json:"nodeVersionSkew,omitempty"`
 	Audit                  *DashboardAudit                 `json:"audit,omitempty"`
+	// GitOpsControllers summarizes Argo CD / Flux controller pod health.
+	// Omitted when no controllers are detected — the Home dashboard
+	// hides the card entirely on non-GitOps clusters rather than
+	// rendering an empty state.
+	GitOpsControllers      *DashboardGitOpsControllers     `json:"gitopsControllers,omitempty"`
 	DeferredLoading        bool                            `json:"deferredLoading,omitempty"`  // True while deferred informers (secrets, events, etc.) are still syncing
 	PartialData            []string                        `json:"partialData,omitempty"`      // Resource kinds that timed out during critical sync (e.g. ["Pod", "Deployment"])
 	AccessRestricted       bool                            `json:"accessRestricted,omitempty"` // True when user has no namespace access (RBAC)
@@ -416,6 +421,7 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	resp.CertificateHealth = s.getDashboardCertificateHealth(namespaces)
 	resp.NetworkPolicyCoverage = s.getDashboardNetworkPolicyCoverage(cache, namespaces)
 	resp.Audit = getDashboardAudit(cache, namespaces)
+	resp.GitOpsControllers = s.getDashboardGitOpsControllers(cache, namespaces)
 
 	if canReadNodes {
 		if nodeLister := cache.Nodes(); nodeLister != nil {

@@ -996,7 +996,7 @@ function AppInner() {
                   collide with the absolute-centered nav block at xl, which
                   is the same breakpoint where nav labels appear. */}
               {(!connected || crdDiscoveryStatus === 'discovering') && (
-                <span className="text-xs text-theme-text-tertiary hidden xl:inline">
+                <span className="text-[11px] text-theme-text-tertiary hidden xl:inline">
                   {!connected ? 'Disconnected' : 'Discovering Custom Resources...'}
                 </span>
               )}
@@ -1017,7 +1017,7 @@ function AppInner() {
         </div>
 
         {/* Center: View tabs — absolute centered on wide, flows after left section on narrow */}
-        <div className="md:absolute md:left-1/2 md:-translate-x-1/2 flex items-center gap-1 bg-theme-elevated/50 rounded-full p-1 ml-2 md:ml-0">
+        <div className="md:absolute md:left-1/2 md:-translate-x-1/2 flex items-center gap-0.5 bg-theme-elevated/50 rounded-full p-1 ml-2 md:ml-0">
           {([
             { view: 'home' as const, icon: Home, label: 'Home' },
             { view: 'topology' as const, icon: Network, label: 'Topology' },
@@ -1034,7 +1034,7 @@ function AppInner() {
             <Tooltip key={view} content={label} delay={100} position="bottom">
               <button
                 onClick={() => setMainView(view)}
-                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-sm rounded-full transition-colors ${
+                className={`flex items-center gap-1 px-2 py-1 text-[13px] rounded-full transition-colors ${
                   mainView === view
                     ? 'bg-skyhook-600 dark:bg-skyhook-500 text-white shadow-glow-brand-sm'
                     : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover'

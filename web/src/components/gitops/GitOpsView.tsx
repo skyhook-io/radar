@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNod
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { clsx } from 'clsx'
-import { CheckCircle2, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Table2, Tag, XCircle } from 'lucide-react'
+import { CheckCircle2, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Table2, Tag, Trash2, XCircle } from 'lucide-react'
 import {
   GitOpsActivityInsightView,
   GitOpsChangesView,
@@ -101,6 +101,10 @@ interface GitOpsRow {
   createdAt: string
   lastSync: string
   autoSync: boolean
+  // True when metadata.deletionTimestamp is set. Drives the small
+  // [Terminating] indicator on the row + on the detail page header,
+  // so users can spot zombie resources without having to drill in.
+  terminating: boolean
   raw: any
 }
 
@@ -138,6 +142,12 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
   const [showLabelsDropdown, setShowLabelsDropdown] = useState(false)
   const [labelSearch, setLabelSearch] = useState('')
   const [automationFilter, setAutomationFilter] = useState<'all' | 'auto' | 'manual' | 'suspended'>('all')
+  // Lifecycle filter: surface zombies (terminating but stuck) and let the
+  // user filter them in/out. Default is 'all' so the fleet doesn't hide
+  // problem resources by accident; 'terminating' focuses to investigate
+  // stuck cleanups; 'active' hides them when the user wants to ignore
+  // resources that are on their way out.
+  const [lifecycleFilter, setLifecycleFilter] = useState<'all' | 'terminating' | 'active'>('all')
   const [sortKey, setSortKey] = useState<SortKey>('health')
 
   useRegisterShortcut({
@@ -238,10 +248,14 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
       if (automationFilter === 'auto' && !row.autoSync) return false
       if (automationFilter === 'manual' && row.autoSync) return false
       if (automationFilter === 'suspended' && !row.suspended) return false
+      if (lifecycleFilter === 'terminating' && !row.terminating) return false
+      if (lifecycleFilter === 'active' && row.terminating) return false
       return true
     })
     return [...rows].sort((a, b) => compareRows(a, b, sortKey))
-  }, [allRows, automationFilter, healthFilters, labelFilters, mode, namespaceFilters, projectFilters, search, sortKey, syncFilters])
+  }, [allRows, automationFilter, healthFilters, labelFilters, lifecycleFilter, mode, namespaceFilters, projectFilters, search, sortKey, syncFilters])
+
+  const terminatingCount = useMemo(() => allRows.filter((row) => row.terminating).length, [allRows])
 
   function openRow(row: GitOpsRow) {
     const ns = row.namespace || '_'
@@ -284,6 +298,9 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
         onToggleHealth={(value) => toggleSet(healthFilters, setHealthFilters, value)}
         automationFilter={automationFilter}
         onAutomationFilterChange={setAutomationFilter}
+        lifecycleFilter={lifecycleFilter}
+        onLifecycleFilterChange={setLifecycleFilter}
+        terminatingCount={terminatingCount}
         projects={projects}
         projectFilters={projectFilters}
         onToggleProject={(value) => toggleSet(projectFilters, setProjectFilters, value)}
@@ -298,6 +315,7 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
           setNamespaceFilters(new Set())
           setLabelFilters(new Set())
           setAutomationFilter('all')
+          setLifecycleFilter('all')
         }}
       />
 
@@ -413,6 +431,9 @@ function GitOpsFilterSidebar({
   onToggleHealth,
   automationFilter,
   onAutomationFilterChange,
+  lifecycleFilter,
+  onLifecycleFilterChange,
+  terminatingCount,
   projects,
   projectFilters,
   onToggleProject,
@@ -432,6 +453,9 @@ function GitOpsFilterSidebar({
   onToggleHealth: (value: string) => void
   automationFilter: 'all' | 'auto' | 'manual' | 'suspended'
   onAutomationFilterChange: (value: 'all' | 'auto' | 'manual' | 'suspended') => void
+  lifecycleFilter: 'all' | 'terminating' | 'active'
+  onLifecycleFilterChange: (value: 'all' | 'terminating' | 'active') => void
+  terminatingCount: number
   projects: Array<{ name: string; count: number }>
   projectFilters: Set<string>
   onToggleProject: (value: string) => void
@@ -507,6 +531,36 @@ function GitOpsFilterSidebar({
             ))}
           </div>
         </FilterSection>
+
+        {terminatingCount > 0 && (
+          <FilterSection icon={Trash2} title="Lifecycle">
+            <div className="grid grid-cols-3 gap-1">
+              {([
+                ['all', 'All'],
+                ['active', 'Active'],
+                ['terminating', `Terminating (${terminatingCount})`],
+              ] as const).map(([value, label]) => (
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => onLifecycleFilterChange(value)}
+                  className={`rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors ${
+                    lifecycleFilter === value
+                      ? value === 'terminating'
+                        // Distinct tone for the Terminating mode — orange
+                        // mirrors the [Term] chip + insight Issue color, so
+                        // the active state visually links to its consequence.
+                        ? 'bg-orange-500 text-white'
+                        : 'bg-skyhook-500 text-white'
+                      : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </FilterSection>
+        )}
 
         <FilterSection icon={CircleAlert} title="Projects">
           {projects.slice(0, 10).map((project) => (
@@ -751,7 +805,17 @@ function GitOpsTable({ rows, onOpen }: { rows: GitOpsRow[]; onOpen: (row: GitOps
               <div className="flex min-w-0 items-center gap-2">
                 <span className={`h-8 w-1 shrink-0 rounded-full ${statusStripe(row)}`} />
                 <div className="min-w-0">
-                  <div className="truncate font-medium text-theme-text-primary">{row.name}</div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="truncate font-medium text-theme-text-primary">{row.name}</span>
+                    {row.terminating && (
+                      <Tooltip content="Pending deletion — finalizers still running">
+                        <span className="inline-flex shrink-0 items-center gap-0.5 rounded-sm border border-orange-500/40 bg-orange-500/10 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-orange-400">
+                          <Trash2 className="h-2.5 w-2.5" />
+                          Term
+                        </span>
+                      </Tooltip>
+                    )}
+                  </div>
                   <div className="truncate text-xs text-theme-text-tertiary">{row.tool === 'argo' ? 'ArgoCD' : 'FluxCD'} {row.kind}</div>
                 </div>
               </div>
@@ -813,6 +877,12 @@ function GitOpsTile({ row, onOpen }: { row: GitOpsRow; onOpen: (row: GitOpsRow) 
         <div className="flex flex-wrap gap-1.5">
           <SyncStatusBadge sync={row.sync as any} suspended={row.suspended} />
           <HealthStatusBadge health={row.health as any} />
+          {row.terminating && (
+            <span className="badge border border-orange-500/40 bg-orange-500/10 text-orange-400" title="Pending deletion — finalizers still running">
+              <Trash2 className="h-3 w-3" />
+              Terminating
+            </span>
+          )}
         </div>
         {/* Tier 3 — source / revision / recency. The operational answers. */}
         <div className="flex flex-col gap-1 text-[12px]">
@@ -918,6 +988,14 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const insightsQ = useGitOpsInsights(kind, namespace, name, group, namespaces)
   const status = resourceQ.data ? getGitOpsStatus(kind, resourceQ.data) : null
   const tool = getTool(kind, group)
+  // Lifecycle gate: when the resource is pending deletion, mutating
+  // actions are futile (the controller is processing finalizers and
+  // ignores reconcile/sync triggers). Surface it visually + disable
+  // the affected buttons. Read-style verbs (Refresh, Hard refresh,
+  // Terminate) intentionally remain enabled — see the corresponding
+  // carve-out in pkg/gitops/operations.go.
+  const terminating = !!insightsQ.data?.summary?.terminating
+  const terminatingReason = describeTerminating(insightsQ.data?.summary)
   const [appView, setAppView] = useState<GitOpsAppView>('topology')
   // When the user clicks an actionable issue alert ("OutOfSync — NodePool
   // default is out of sync · View →"), we navigate to Changes and focus
@@ -1052,25 +1130,51 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
       {!graphFullscreen && <div className="shrink-0 border-b border-theme-border bg-theme-base px-4 py-3">
         <div className="flex flex-wrap items-start justify-between gap-3">
           <div className="min-w-0">
-            <div className="mb-1.5 flex items-center gap-1.5 text-xs">
-              <button type="button" onClick={() => navigate('/gitops')} className="text-sky-500 hover:text-sky-400">
+            {/* Breadcrumb collapses into the title row: parent ("GitOps") +
+                resource name on one line. Tool + Kind are *properties* of
+                this resource, not navigation, so they live as a neutral
+                chip alongside the status badges instead of as breadcrumb
+                segments. Future nested cases (app-of-apps) can extend the
+                breadcrumb with intermediate parent links here. */}
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={() => navigate('/gitops')}
+                className="shrink-0 text-xs font-medium text-sky-500 transition-colors hover:text-sky-400"
+              >
                 GitOps
               </button>
-              <span className="text-theme-text-tertiary">/</span>
-              <span className="font-medium text-theme-text-primary">{tool === 'argo' ? 'ArgoCD' : 'FluxCD'}</span>
-              <span className="text-theme-text-tertiary">/</span>
-              <span className="font-medium text-theme-text-primary">{apiKind?.kind ?? kind}</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
+              <span className="shrink-0 text-xs text-theme-text-tertiary">/</span>
               <h1 className="min-w-0 truncate text-lg font-semibold text-theme-text-primary">
                 {namespace ? `${namespace}/` : ''}{name}
               </h1>
-              {status && (
+              {/* When Terminating, suppress Sync/Health badges entirely.
+                  They reflect the last observed reconcile state and become
+                  factually stale the moment deletion is initiated — Flux
+                  is processing finalizers, not syncing, and the resource
+                  isn't "Progressing" toward a healthy state, it's being
+                  torn down. Showing "Syncing · Progressing · Terminating"
+                  side-by-side is contradictory and actively misleading;
+                  Argo CD's own UI suppresses these badges for the same
+                  reason. The Terminating chip becomes the sole status
+                  indicator. */}
+              {status && !terminating && (
                 <>
                   <SyncStatusBadge sync={status.sync} suspended={status.suspended} />
                   <HealthStatusBadge health={status.health} />
                 </>
               )}
+              {terminating && (
+                <Tooltip content={terminatingReason}>
+                  <span className="badge border border-orange-500/40 bg-orange-500/10 text-orange-400">
+                    <Trash2 className="h-3 w-3" />
+                    Terminating
+                  </span>
+                </Tooltip>
+              )}
+              <span className="inline-flex shrink-0 items-center rounded border border-theme-border bg-theme-hover/50 px-1.5 py-0.5 text-[11px] font-medium text-theme-text-secondary">
+                {tool === 'argo' ? 'ArgoCD' : 'FluxCD'} · {apiKind?.kind ?? kind}
+              </span>
             </div>
             {/* Header carries the *spec/identity* facts — Project + Destination
                 are who-and-where, not status. Source + Revision live in the
@@ -1088,7 +1192,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
           <div className="flex flex-wrap items-center gap-2">
             {isArgoApp && (
               <>
-                <ActionButton label="Sync…" icon={RefreshCw} loading={argoSync.isPending} onClick={() => setSyncDialogOpen(true)} disabled={status?.suspended} primary />
+                <ActionButton label="Sync…" icon={RefreshCw} loading={argoSync.isPending} onClick={() => setSyncDialogOpen(true)} disabled={status?.suspended || terminating} disabledReason={terminating ? terminatingReason : undefined} primary />
                 <ActionButton
                   label="Refresh"
                   icon={RotateCw}
@@ -1109,24 +1213,26 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                 />
                 {isRunning && <ActionButton label="Terminate" icon={XCircle} loading={argoTerminate.isPending} onClick={() => argoTerminate.mutate({ namespace, name })} danger />}
                 {status?.suspended
-                  ? <ActionButton label="Enable auto-sync" icon={Play} loading={argoResume.isPending} onClick={() => argoResume.mutate({ namespace, name })} />
-                  : <ActionButton label="Disable auto-sync" icon={Pause} loading={argoSuspend.isPending} onClick={() => argoSuspend.mutate({ namespace, name })} />}
+                  ? <ActionButton label="Enable auto-sync" icon={Play} loading={argoResume.isPending} onClick={() => argoResume.mutate({ namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingReason : undefined} />
+                  : <ActionButton label="Disable auto-sync" icon={Pause} loading={argoSuspend.isPending} onClick={() => argoSuspend.mutate({ namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingReason : undefined} />}
               </>
             )}
             {isFlux && (
               <>
-                <ActionButton label="Reconcile" icon={RefreshCw} loading={fluxReconcile.isPending} onClick={() => fluxReconcile.mutate({ kind, namespace, name })} disabled={status?.suspended} primary />
+                <ActionButton label="Reconcile" icon={RefreshCw} loading={fluxReconcile.isPending} onClick={() => fluxReconcile.mutate({ kind, namespace, name })} disabled={status?.suspended || terminating} disabledReason={terminating ? terminatingReason : undefined} primary />
                 {isFluxWorkload && (
                   <ActionButton
                     label="Sync with source"
                     icon={GitCommit}
                     loading={fluxSyncWithSource.isPending}
                     onClick={() => fluxSyncWithSource.mutate({ kind, namespace, name })}
+                    disabled={terminating}
+                    disabledReason={terminating ? terminatingReason : undefined}
                   />
                 )}
                 {status?.suspended
-                  ? <ActionButton label="Resume" icon={Play} loading={fluxResume.isPending} onClick={() => fluxResume.mutate({ kind, namespace, name })} />
-                  : <ActionButton label="Suspend" icon={Pause} loading={fluxSuspend.isPending} onClick={() => fluxSuspend.mutate({ kind, namespace, name })} />}
+                  ? <ActionButton label="Resume" icon={Play} loading={fluxResume.isPending} onClick={() => fluxResume.mutate({ kind, namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingReason : undefined} />
+                  : <ActionButton label="Suspend" icon={Pause} loading={fluxSuspend.isPending} onClick={() => fluxSuspend.mutate({ kind, namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingReason : undefined} />}
               </>
             )}
           </div>
@@ -1941,6 +2047,7 @@ function normalizeDetailResource(kind: string, group: string, resource: any): Gi
     createdAt: resource.metadata?.creationTimestamp ?? '',
     lastSync: newestConditionTime(resource),
     autoSync: !resource.spec?.suspend,
+    terminating: isTerminating(resource),
     raw: resource,
   }
 }
@@ -2042,6 +2149,7 @@ function normalizeArgoApplication(resource: any): GitOpsRow {
     createdAt: resource.metadata?.creationTimestamp ?? '',
     lastSync: resource.status?.operationState?.finishedAt ?? resource.status?.reconciledAt ?? '',
     autoSync: Boolean(resource.spec?.syncPolicy?.automated),
+    terminating: isTerminating(resource),
     raw: resource,
   }
 }
@@ -2072,6 +2180,7 @@ function normalizeFluxKustomization(resource: any): GitOpsRow {
     createdAt: resource.metadata?.creationTimestamp ?? '',
     lastSync: newestConditionTime(resource),
     autoSync: !resource.spec?.suspend,
+    terminating: isTerminating(resource),
     raw: resource,
   }
 }
@@ -2103,8 +2212,19 @@ function normalizeFluxHelmRelease(resource: any): GitOpsRow {
     createdAt: resource.metadata?.creationTimestamp ?? '',
     lastSync: newestConditionTime(resource),
     autoSync: !resource.spec?.suspend,
+    terminating: isTerminating(resource),
     raw: resource,
   }
+}
+
+// isTerminating reads metadata.deletionTimestamp from a raw K8s object.
+// Truthy when the resource has been marked for deletion (the controller
+// is processing finalizers, or finalizers are stuck and the resource is
+// a zombie). The fleet view paints a small Terminating indicator on
+// these rows; the detail view drives the [Terminating] chip + action
+// disabling off the same signal via the insights summary.
+function isTerminating(resource: any): boolean {
+  return Boolean(resource?.metadata?.deletionTimestamp)
 }
 
 function newestConditionTime(resource: any): string {
@@ -2235,6 +2355,7 @@ function ActionButton({
   icon: Icon,
   loading,
   disabled,
+  disabledReason,
   danger,
   primary,
   onClick,
@@ -2243,6 +2364,11 @@ function ActionButton({
   icon: ComponentType<{ className?: string }>
   loading?: boolean
   disabled?: boolean
+  // Replaces the tooltip when the button is disabled. The user otherwise
+  // hits a greyed-out button with no explanation — "Suspend (action label)"
+  // tells them nothing about *why* it's disabled. With this set the tooltip
+  // becomes "Cannot reconcile a resource pending deletion" or similar.
+  disabledReason?: string
   danger?: boolean
   primary?: boolean
   onClick: () => void
@@ -2254,8 +2380,9 @@ function ActionButton({
     : danger
       ? 'border border-red-500/40 bg-red-500/10 text-red-500 hover:bg-red-500/20'
       : 'border border-theme-border bg-theme-surface text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
+  const tooltip = disabled && disabledReason ? disabledReason : label
   return (
-    <Tooltip content={label}>
+    <Tooltip content={tooltip}>
       <button
         type="button"
         onClick={onClick}
@@ -2269,6 +2396,43 @@ function ActionButton({
   )
 }
 
+
+// describeTerminating renders the Terminating chip's tooltip and the
+// "why is this disabled" message for action buttons. Centralized so the
+// chip and every disabled button surface the same explanation.
+//
+// Examples (depending on summary contents):
+//
+//	"Resource is being deleted (started 21d ago). Finalizers: finalizers.fluxcd.io.
+//	 Mutating actions are disabled until cleanup completes."
+//	"Resource is being deleted (started 30s ago). Mutating actions are disabled
+//	 until cleanup completes."
+function describeTerminating(summary?: { terminationStartedAt?: string; finalizers?: string[] }): string {
+  const base = 'Resource is being deleted'
+  const ageText = formatRelativeAge(summary?.terminationStartedAt)
+  const ageSuffix = ageText ? ` (started ${ageText} ago)` : ''
+  const finalizers = summary?.finalizers ?? []
+  const finSuffix = finalizers.length > 0 ? ` Finalizers: ${finalizers.join(', ')}.` : ''
+  return `${base}${ageSuffix}.${finSuffix} Mutating actions are disabled until cleanup completes.`
+}
+
+// formatRelativeAge — small inline relative-time formatter. Mirrors the
+// Go backend's formatAgeShort so the UI and Issue messages agree on units.
+// Returns "" when the input can't be parsed; callers should treat empty
+// as "no timestamp" and skip the age suffix gracefully.
+function formatRelativeAge(rfc3339?: string): string {
+  if (!rfc3339) return ''
+  const t = Date.parse(rfc3339)
+  if (Number.isNaN(t)) return ''
+  const ms = Math.max(0, Date.now() - t)
+  const sec = Math.floor(ms / 1000)
+  if (sec < 60) return `${sec}s`
+  const min = Math.floor(sec / 60)
+  if (min < 60) return `${min}m`
+  const hr = Math.floor(min / 60)
+  if (hr < 24) return `${hr}h`
+  return `${Math.floor(hr / 24)}d`
+}
 
 // Parse an Argo HistoryItem.id into the int64 the rollback API needs.
 // Returns null when the id is missing, non-numeric (Flux condition rows

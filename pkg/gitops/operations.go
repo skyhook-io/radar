@@ -48,7 +48,43 @@ var (
 	// ErrHistoryEntryNotFound: the requested rollback target id isn't in
 	// status.history. HTTP 404.
 	ErrHistoryEntryNotFound = errors.New("history entry not found")
+	// ErrResourceTerminating: the target resource has metadata.deletionTimestamp
+	// set, so any mutating operation against it is futile — the resource is
+	// being torn down and reconcile/sync/rollback will either no-op or be
+	// undone immediately. The HTTP layer maps this to 409 Conflict so the
+	// frontend can show a tailored "resource is pending deletion" toast
+	// instead of bubbling up a generic K8s error message. Read-only verbs
+	// (Argo Refresh) and op-cancel (Argo Terminate) are *not* gated by this
+	// check — refresh just re-reads from Git, terminate just clears an
+	// in-flight op record; both are harmless on a Terminating resource.
+	ErrResourceTerminating = errors.New("resource is pending deletion")
 )
+
+// assertNotTerminating returns ErrResourceTerminating wrapped with a
+// caller-friendly message when the object has metadata.deletionTimestamp
+// set. The returned error includes the kind+ns/name and finalizers so
+// the user sees, in one line, both *what* is terminating and *what's
+// blocking cleanup*. Returns nil for healthy (non-Terminating) objects.
+//
+// The deletionTimestamp check is the single source of truth K8s uses to
+// signal "this resource is being deleted, do not start new work on it".
+// API server still serves the object (so GETs succeed), but kubelet/the
+// owning controller stop accepting new operations against it.
+func assertNotTerminating(obj *unstructured.Unstructured, kind, namespace, name string) error {
+	if obj == nil {
+		return nil
+	}
+	dt := obj.GetDeletionTimestamp()
+	if dt == nil || dt.IsZero() {
+		return nil
+	}
+	finalizers := obj.GetFinalizers()
+	suffix := ""
+	if len(finalizers) > 0 {
+		suffix = fmt.Sprintf(" (finalizers: %s)", strings.Join(finalizers, ", "))
+	}
+	return fmt.Errorf("%s %s/%s is being deleted%s: %w", kind, namespace, name, suffix, ErrResourceTerminating)
+}
 
 // argoAppGVR is the GVR for ArgoCD Application resources.
 var argoAppGVR = schema.GroupVersionResource{
@@ -159,9 +195,13 @@ func SyncArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace, na
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
+			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to get Application: %w", err)
+	}
+
+	if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
+		return OperationResult{}, err
 	}
 
 	phase, found, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
@@ -258,9 +298,13 @@ func SetArgoAutoSync(ctx context.Context, dynClient dynamic.Interface, namespace
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
+			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to get Application: %w", err)
+	}
+
+	if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
+		return OperationResult{}, err
 	}
 
 	var patch map[string]any
@@ -363,7 +407,7 @@ func RefreshArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace,
 
 	if err := mergePatch(ctx, dynClient, argoAppGVR, namespace, name, patch); err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
+			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to refresh Application %s/%s: %w", namespace, name, err)
 	}
@@ -384,7 +428,7 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
+			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to get Application: %w", err)
 	}
@@ -430,9 +474,13 @@ func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace
 	app, err := dynClient.Resource(argoAppGVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found", namespace, name)
+			return OperationResult{}, fmt.Errorf("ArgoCD Application %s/%s not found: %w", namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to get Application: %w", err)
+	}
+
+	if err := assertNotTerminating(app, "ArgoCD Application", namespace, name); err != nil {
+		return OperationResult{}, err
 	}
 
 	phase, found, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
@@ -500,6 +548,23 @@ func RollbackArgoApp(ctx context.Context, dynClient dynamic.Interface, namespace
 
 // ReconcileFlux triggers a reconciliation on a FluxCD resource.
 func ReconcileFlux(ctx context.Context, dynClient dynamic.Interface, entry FluxKindEntry, namespace, name string) (OperationResult, error) {
+	// Pre-flight GET so we can return ErrResourceTerminating cleanly.
+	// Without this we patch a Terminating resource — the patch may even
+	// "succeed" (annotation lands), but the controller will skip the
+	// reconcile because it's processing finalizers, and the user gets a
+	// false-positive "Reconciliation triggered" toast. Costs one extra
+	// round-trip on the happy path; trade is correctness.
+	obj, err := dynClient.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
+		}
+		return OperationResult{}, fmt.Errorf("failed to get %s %s/%s: %w", entry.Kind, namespace, name, err)
+	}
+	if err := assertNotTerminating(obj, "FluxCD "+entry.Kind, namespace, name); err != nil {
+		return OperationResult{}, err
+	}
+
 	timestamp := time.Now().Format(time.RFC3339Nano)
 	patch := map[string]any{
 		"metadata": map[string]any{
@@ -511,7 +576,7 @@ func ReconcileFlux(ctx context.Context, dynClient dynamic.Interface, entry FluxK
 
 	if err := mergePatch(ctx, dynClient, entry.GVR, namespace, name, patch); err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found", entry.Kind, namespace, name)
+			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to reconcile %s %s/%s: %w", entry.Kind, namespace, name, err)
 	}
@@ -529,6 +594,17 @@ func ReconcileFlux(ctx context.Context, dynClient dynamic.Interface, entry FluxK
 
 // SetFluxSuspend sets the suspend field on a FluxCD resource.
 func SetFluxSuspend(ctx context.Context, dynClient dynamic.Interface, entry FluxKindEntry, namespace, name string, suspend bool) (OperationResult, error) {
+	obj, err := dynClient.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
+	if err != nil {
+		if apierrors.IsNotFound(err) {
+			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
+		}
+		return OperationResult{}, fmt.Errorf("failed to get %s %s/%s: %w", entry.Kind, namespace, name, err)
+	}
+	if err := assertNotTerminating(obj, "FluxCD "+entry.Kind, namespace, name); err != nil {
+		return OperationResult{}, err
+	}
+
 	patch := map[string]any{
 		"spec": map[string]any{
 			"suspend": suspend,
@@ -537,7 +613,7 @@ func SetFluxSuspend(ctx context.Context, dynClient dynamic.Interface, entry Flux
 
 	if err := mergePatch(ctx, dynClient, entry.GVR, namespace, name, patch); err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found", entry.Kind, namespace, name)
+			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to update %s %s/%s: %w", entry.Kind, namespace, name, err)
 	}
@@ -570,9 +646,12 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 	resource, err := dynClient.Resource(entry.GVR).Namespace(namespace).Get(ctx, name, metav1.GetOptions{})
 	if err != nil {
 		if apierrors.IsNotFound(err) {
-			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found", entry.Kind, namespace, name)
+			return OperationResult{}, fmt.Errorf("FluxCD %s %s/%s not found: %w", entry.Kind, namespace, name, err)
 		}
 		return OperationResult{}, fmt.Errorf("failed to get %s %s/%s: %w", entry.Kind, namespace, name, err)
+	}
+	if err := assertNotTerminating(resource, "FluxCD "+entry.Kind, namespace, name); err != nil {
+		return OperationResult{}, err
 	}
 
 	// Extract sourceRef based on kind
@@ -625,8 +704,20 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 		},
 	}
 
-	// First, reconcile the source
+	// First, reconcile the source. Translate the K8s "namespaces X not found"
+	// case specifically: it comes up when the sourceRef points to a namespace
+	// that's been deleted but the resource itself is a finalizer-stuck zombie
+	// (real customer hit). The default error in that path is "namespaces
+	// 'flux-test' not found", which is technically true but confusing — the
+	// page just rendered the resource. Surface a message that ties the
+	// missing namespace back to the sourceRef explicitly.
 	if err := mergePatch(ctx, dynClient, sourceEntry.GVR, sourceNamespace, sourceName, reconcilePatch); err != nil {
+		if apierrors.IsNotFound(err) {
+			return OperationResult{}, fmt.Errorf(
+				"source %s %s/%s could not be patched: %w (the source's namespace may no longer exist; the source resource itself may be a zombie awaiting finalizer cleanup)",
+				sourceEntry.Kind, sourceNamespace, sourceName, err,
+			)
+		}
 		return OperationResult{}, fmt.Errorf("failed to reconcile source %s %s/%s: %w", sourceEntry.Kind, sourceNamespace, sourceName, err)
 	}
 

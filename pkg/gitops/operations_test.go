@@ -4,9 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -290,6 +292,163 @@ func TestSentinelErrorsAreDistinct(t *testing.T) {
 		errors.Is(ErrNoOperationInProgress, ErrHistoryEntryNotFound) ||
 		errors.Is(ErrOperationInProgress, ErrHistoryEntryNotFound) {
 		t.Fatal("sentinel errors should not match each other under errors.Is")
+	}
+}
+
+// TestOperationsRefuseTerminatingResource pins the contract that mutating
+// operations refuse a resource with metadata.deletionTimestamp set, returning
+// the typed sentinel ErrResourceTerminating. The HTTP and MCP layers map
+// this sentinel to a tailored 409 / structured error so users see "this
+// resource is being deleted" instead of either (a) a misleading success
+// toast (the patch may technically land but the controller skips it) or
+// (b) a confusing K8s downstream error like "namespaces X not found".
+//
+// Argo Refresh / Argo Terminate are intentionally NOT covered here:
+//   - Refresh is read-only-from-cluster (just re-reads from Git)
+//   - Terminate clears an in-flight op record, harmless on a Terminating
+//     resource — and useful when the op is what's blocking deletion.
+func TestOperationsRefuseTerminatingResource(t *testing.T) {
+	ctx := context.Background()
+	terminatingApp := func() *unstructured.Unstructured {
+		return argoAppForTest("argocd", "demo", func(obj map[string]any) {
+			md, _ := obj["metadata"].(map[string]any)
+			md["deletionTimestamp"] = "2026-04-13T13:14:42Z"
+			md["finalizers"] = []any{"resources-finalizer.argocd.argoproj.io"}
+			// Add some history so RollbackArgoApp's history-id check
+			// would otherwise pass — we want to confirm the terminating
+			// guard fires *before* the history check.
+			status, _ := obj["status"].(map[string]any)
+			status["history"] = []any{map[string]any{"id": int64(1), "revision": "abc"}}
+		})
+	}
+	cases := []struct {
+		name string
+		fn   func(client *fake.FakeDynamicClient) error
+	}{
+		{"SyncArgoApp", func(c *fake.FakeDynamicClient) error {
+			_, err := SyncArgoApp(ctx, c, "argocd", "demo", ArgoSyncOptions{})
+			return err
+		}},
+		{"SetArgoAutoSync(suspend)", func(c *fake.FakeDynamicClient) error {
+			_, err := SetArgoAutoSync(ctx, c, "argocd", "demo", false)
+			return err
+		}},
+		{"SetArgoAutoSync(resume)", func(c *fake.FakeDynamicClient) error {
+			_, err := SetArgoAutoSync(ctx, c, "argocd", "demo", true)
+			return err
+		}},
+		{"RollbackArgoApp", func(c *fake.FakeDynamicClient) error {
+			_, err := RollbackArgoApp(ctx, c, "argocd", "demo", ArgoRollbackOptions{ID: 1})
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newFakeArgo(terminatingApp())
+			err := tc.fn(client)
+			if err == nil {
+				t.Fatalf("expected error, got nil")
+			}
+			if !errors.Is(err, ErrResourceTerminating) {
+				t.Fatalf("expected ErrResourceTerminating, got %v", err)
+			}
+			// The error message must name the finalizer — otherwise the
+			// user sees "resource is pending deletion" with no path
+			// forward. Naming the finalizer points them at the owning
+			// controller to investigate.
+			if !strings.Contains(err.Error(), "resources-finalizer.argocd.argoproj.io") {
+				t.Fatalf("expected error to name finalizer; got: %v", err)
+			}
+			// Verify no patch was issued — the entire point of this
+			// guard is that we don't touch a resource being torn down.
+			for _, action := range client.Actions() {
+				if _, ok := action.(clienttesting.PatchAction); ok {
+					t.Fatalf("operation issued a patch despite Terminating; actions=%v", client.Actions())
+				}
+			}
+		})
+	}
+}
+
+// TestOperationsAllowReadVerbsOnTerminatingResource asserts the carve-out
+// for Refresh and Terminate. These verbs are useful on a Terminating
+// resource (refresh re-reads Git; terminate clears a stuck op record)
+// so they intentionally don't fire the assertNotTerminating guard.
+func TestOperationsAllowReadVerbsOnTerminatingResource(t *testing.T) {
+	ctx := context.Background()
+	terminatingApp := argoAppForTest("argocd", "demo", func(obj map[string]any) {
+		md, _ := obj["metadata"].(map[string]any)
+		md["deletionTimestamp"] = "2026-04-13T13:14:42Z"
+		md["finalizers"] = []any{"resources-finalizer.argocd.argoproj.io"}
+		status, _ := obj["status"].(map[string]any)
+		status["operationState"] = map[string]any{"phase": "Running"}
+	})
+
+	// Each subtest asserts the *guard* doesn't fire — the operation may
+	// still error for unrelated reasons (the fake dynamic client's
+	// JSON-Patch support is incomplete) but it must not be
+	// ErrResourceTerminating. That's the contract: read-style verbs
+	// don't gate on Terminating.
+	t.Run("Refresh does not gate on Terminating", func(t *testing.T) {
+		client := newFakeArgo(terminatingApp)
+		_, err := RefreshArgoApp(ctx, client, "argocd", "demo", "normal")
+		if errors.Is(err, ErrResourceTerminating) {
+			t.Fatalf("Refresh should not return ErrResourceTerminating; got %v", err)
+		}
+	})
+	t.Run("Terminate does not gate on Terminating", func(t *testing.T) {
+		client := newFakeArgo(terminatingApp)
+		_, err := TerminateArgoSync(ctx, client, "argocd", "demo")
+		if errors.Is(err, ErrResourceTerminating) {
+			t.Fatalf("Terminate should not return ErrResourceTerminating; got %v", err)
+		}
+	})
+}
+
+// TestOperationsPreserveNotFoundChain pins the error-wrapping contract that
+// the HTTP layer relies on. Argo/Flux operation funcs wrap K8s NotFound
+// errors with %w so writeGitOpsError's apierrors.IsNotFound check matches
+// via errors.Is, mapping to 404. Stripping the wrap (returning a plain
+// fmt.Errorf("...not found", ...)) silently downgrades 404 to 500 because
+// the K8s status reason is gone — a real bug we shipped and reverted.
+func TestOperationsPreserveNotFoundChain(t *testing.T) {
+	ctx := context.Background()
+	cases := []struct {
+		name string
+		fn   func(client *fake.FakeDynamicClient) error
+	}{
+		{"SyncArgoApp", func(c *fake.FakeDynamicClient) error {
+			_, err := SyncArgoApp(ctx, c, "argocd", "missing", ArgoSyncOptions{})
+			return err
+		}},
+		{"SetArgoAutoSync(suspend)", func(c *fake.FakeDynamicClient) error {
+			_, err := SetArgoAutoSync(ctx, c, "argocd", "missing", false)
+			return err
+		}},
+		{"RefreshArgoApp", func(c *fake.FakeDynamicClient) error {
+			_, err := RefreshArgoApp(ctx, c, "argocd", "missing", "normal")
+			return err
+		}},
+		{"TerminateArgoSync", func(c *fake.FakeDynamicClient) error {
+			_, err := TerminateArgoSync(ctx, c, "argocd", "missing")
+			return err
+		}},
+		{"RollbackArgoApp", func(c *fake.FakeDynamicClient) error {
+			_, err := RollbackArgoApp(ctx, c, "argocd", "missing", ArgoRollbackOptions{ID: 1})
+			return err
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			client := newFakeArgo()
+			err := tc.fn(client)
+			if err == nil {
+				t.Fatalf("expected error from missing Application, got nil")
+			}
+			if !apierrors.IsNotFound(err) {
+				t.Fatalf("expected apierrors.IsNotFound to match, got %v", err)
+			}
+		})
 	}
 }
 

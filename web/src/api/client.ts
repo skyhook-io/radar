@@ -258,6 +258,25 @@ export interface DashboardNetworkPolicyCoverage {
   totalWorkloads: number
 }
 
+export interface DashboardGitOpsControllers {
+  // Aggregate roll-up across all detected controllers.
+  status: 'healthy' | 'degraded' | 'crashing'
+  controllers: DashboardGitOpsController[]
+}
+
+export interface DashboardGitOpsController {
+  name: string
+  tool: 'argocd' | 'flux'
+  namespace: string
+  ready: number
+  total: number
+  // Per-controller status; the aggregate is in the parent.
+  status: 'healthy' | 'degraded' | 'crashing' | 'pending'
+  // Reason for the crash when status === 'crashing'. Common values:
+  // "CrashLoopBackOff", "Error". Empty for non-crashing states.
+  crashReason?: string
+}
+
 export interface DashboardResponse {
   cluster: DashboardCluster
   health: DashboardHealth
@@ -272,6 +291,7 @@ export interface DashboardResponse {
   certificateHealth: DashboardCertificateHealth | null
   networkPolicyCoverage: DashboardNetworkPolicyCoverage | null
   audit: DashboardAudit | null
+  gitopsControllers: DashboardGitOpsControllers | null
   nodeVersionSkew: { versions: Record<string, string[]>; minVersion: string; maxVersion: string } | null
   deferredLoading?: boolean // True while deferred informers (secrets, events, etc.) are still syncing
   partialData?: string[] // Critical kinds promoted at first paint that haven't yet finished syncing (live-filtered)

@@ -663,5 +663,38 @@ func TestSummary_CronJobIssue(t *testing.T) {
 	}
 }
 
+// TestSummary_TerminatingFields pins the lifecycle fields on the AI
+// summary output. AI assistants (and the MCP list_resources tool)
+// rely on these to spot zombie/finalizer-stuck resources at a glance
+// — without them, an LLM advising on "why is this not converging"
+// has no way to detect a Terminating resource short of fetching the
+// Detail-level YAML.
+func TestSummary_TerminatingFields(t *testing.T) {
+	dt := metav1.NewTime(time.Now().Add(-2 * time.Hour))
+	pod := makePod("terminating-pod", withPhase(corev1.PodRunning))
+	pod.DeletionTimestamp = &dt
+	pod.Finalizers = []string{"example.io/cleanup", "kubernetes"}
+
+	raw, err := Minify(pod, LevelSummary)
+	if err != nil {
+		t.Fatalf("Minify failed: %v", err)
+	}
+	s := raw.(*ResourceSummary)
+	if !s.Terminating {
+		t.Fatal("expected Terminating=true on a pod with deletionTimestamp set")
+	}
+	if len(s.Finalizers) != 2 || s.Finalizers[0] != "example.io/cleanup" {
+		t.Fatalf("Finalizers = %v, want [example.io/cleanup kubernetes]", s.Finalizers)
+	}
+
+	// Healthy pod (no deletionTimestamp) must report Terminating=false
+	// so prune-on-zero keeps the field out of the AI context entirely.
+	healthy := makePod("healthy-pod", withPhase(corev1.PodRunning))
+	rawH, _ := Minify(healthy, LevelSummary)
+	if rawH.(*ResourceSummary).Terminating {
+		t.Fatal("expected Terminating=false on a pod without deletionTimestamp")
+	}
+}
+
 //go:fix inline
 func int32Ptr(i int32) *int32 { return &i }

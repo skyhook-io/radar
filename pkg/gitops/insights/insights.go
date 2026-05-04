@@ -52,6 +52,23 @@ type Summary struct {
 	// "Auto · self-heal", "Auto · prune · self-heal", or "" if not derivable.
 	// Frontend renders as a small chip in the status strip.
 	AutoSyncMode string `json:"autoSyncMode,omitempty"`
+	// Terminating is true when metadata.deletionTimestamp is set on the
+	// root resource. The UI uses this to render a [Terminating] chip and
+	// disable mutating actions. When true, Reconcile/Sync/SyncWithSource/
+	// Rollback/SetAutoSync will return ErrResourceTerminating from the
+	// operations layer — surface that clearly so users don't fight a
+	// resource that the cluster is trying to delete.
+	Terminating bool `json:"terminating,omitempty"`
+	// TerminationStartedAt is the RFC3339 timestamp from
+	// metadata.deletionTimestamp. The UI computes "21d ago" relative
+	// formatting from this.
+	TerminationStartedAt string `json:"terminationStartedAt,omitempty"`
+	// Finalizers is the list of metadata.finalizers entries — typically
+	// 0 or 1 keys. When the resource is Terminating, this names the
+	// controller(s) that must run cleanup before deletion completes;
+	// stuck deletion almost always means one of these keys' owning
+	// controller is unhealthy.
+	Finalizers []string `json:"finalizers,omitempty"`
 }
 
 type Ref struct {
@@ -205,6 +222,19 @@ type Resolver interface {
 	// stuck" causes (image pull failure, PVC pending, webhook denial)
 	// inline next to the change row instead of forcing a drill-in.
 	RecentEvents(group, kind, namespace, name string) []EventSummary
+	// FinalizerOwnerStatus returns a short health summary of the
+	// controller responsible for clearing the given finalizer key on
+	// `root`. Returns an empty string when the finalizer key isn't
+	// recognized, the install namespace doesn't have matching pods, or
+	// the lookup fails — callers must tolerate empty as "no signal".
+	//
+	// Used by detectPendingDeletion to bridge the gap between "this is
+	// stuck on a finalizer" (controller-side responsibility) and *which*
+	// controller and *what state it's in*. Without this signal, a stuck
+	// deletion just says "investigate the controller"; with it, the
+	// Issue can say "argocd-application-controller is CrashLoopBackOff
+	// — start there".
+	FinalizerOwnerStatus(finalizer string, root *unstructured.Unstructured) string
 }
 
 // EventSummary is a compact projection of a corev1.Event for UI display.
@@ -223,7 +253,7 @@ func Build(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTre
 	tool := detectTool(root)
 	out := Insight{
 		Summary:      buildSummary(root, tool),
-		Issues:       buildIssues(root, resourceTree, tool),
+		Issues:       buildIssues(root, resourceTree, tool, resolver),
 		Changes:      buildChanges(root, resourceTree, tool, resolver),
 		Plan:         buildPlan(root, resourceTree, tool),
 		History:      buildHistory(root, tool),
@@ -250,6 +280,14 @@ func buildSummary(root *unstructured.Unstructured, tool string) Summary {
 		Kind:      root.GetKind(),
 		Namespace: root.GetNamespace(),
 		Name:      root.GetName(),
+	}
+	// Lifecycle: zero-cost to surface even on healthy resources, removes
+	// a class of "the page lies — clicking buttons does nothing" bugs
+	// where the resource is actually pending deletion.
+	if dt := root.GetDeletionTimestamp(); dt != nil && !dt.IsZero() {
+		s.Terminating = true
+		s.TerminationStartedAt = dt.UTC().Format(time.RFC3339)
+		s.Finalizers = root.GetFinalizers()
 	}
 	if tool == "argocd" {
 		s.Sync, _, _ = unstructured.NestedString(root.Object, "status", "sync", "status")
@@ -309,8 +347,14 @@ func describeArgoAutoSync(root *unstructured.Unstructured) string {
 	return strings.Join(parts, " · ")
 }
 
-func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTree, tool string) []Issue {
+func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTree, tool string, resolver Resolver) []Issue {
 	var out []Issue
+	// Pending deletion runs first because it dominates the user's mental
+	// model: nothing else matters if the resource is being deleted. Listed
+	// at the top of Issues regardless of severity ramp.
+	if pd := detectPendingDeletion(root, resolver); pd != nil {
+		out = append(out, *pd)
+	}
 	// suppressedRefs tracks resources whose own Issue is causally derivative of
 	// a parent operation failure (e.g. an OutOfSync resource issue is just
 	// the per-resource view of an apply that already failed at the operation
@@ -771,14 +815,25 @@ func changeRank(category string) int {
 	}
 }
 
+// severityRank orders Issues for the buildIssues output sort.
+// Order: critical → alert → warning → info → unknown. Matches the
+// project-wide severity vocabulary documented in CLAUDE.md
+// (alert = intermediate between degraded/amber and unhealthy/red).
+// Without the explicit alert case, alert-tier issues fell through to
+// the unknown default and sorted *after* warning, which silently
+// demoted "stuck deletion" type issues.
 func severityRank(severity string) int {
 	switch severity {
 	case "critical":
 		return 0
-	case "warning":
+	case "alert":
 		return 1
-	default:
+	case "warning":
 		return 2
+	case "info":
+		return 3
+	default:
+		return 4
 	}
 }
 
@@ -1008,6 +1063,120 @@ func parseArgoOperationError(msg string) parsedFailure {
 		}
 	}
 	return out
+}
+
+// detectPendingDeletion returns an Issue when the GitOps root resource has
+// metadata.deletionTimestamp set. Tool-agnostic — applies to both Argo
+// Applications and Flux Kustomizations/HelmReleases.
+//
+// Severity ramps with how long deletion has been pending:
+//
+//	<5min  → info     ("Deletion in progress, finalizers running")
+//	5-30m  → warning  ("Deletion pending — finalizers blocking")
+//	>30m   → alert    ("Deletion stuck — controller likely unhealthy")
+//
+// The 5min threshold gives healthy controllers time to run their finalizers.
+// The 30min threshold is the boundary past which any reasonable cleanup
+// would have completed; beyond it the finalizer's owning controller is
+// almost certainly the problem (CrashLoopBackOff, network partition, etc).
+//
+// Why this matters: a resource with deletionTimestamp is queryable but
+// any mutating action on it is futile (Sync/Reconcile/Rollback all fail
+// or no-op because the resource is being torn down). Without this issue,
+// the user sees Sync/Health badges that look "live" and clicks buttons
+// that produce confusing K8s errors. Returns nil on a healthy resource —
+// caller appends only on hit.
+func detectPendingDeletion(root *unstructured.Unstructured, resolver Resolver) *Issue {
+	dt := root.GetDeletionTimestamp()
+	if dt == nil || dt.IsZero() {
+		return nil
+	}
+	finalizers := root.GetFinalizers()
+	age := time.Since(dt.Time)
+	rel := formatAgeShort(age)
+
+	severity := "info"
+	reason := "Terminating"
+	msg := fmt.Sprintf("This resource is being deleted (started %s ago).", rel)
+	action := "Wait for finalizers to complete cleanup."
+	// Inclusive thresholds (>=) — at exactly the boundary, escalate.
+	// Two reasons: matches user intuition ("by 30 minutes this is stuck"),
+	// and avoids flaky tests where time.Since drifts micro-seconds past
+	// the cutoff between Now() and the comparison.
+	switch {
+	case age >= 30*time.Minute:
+		severity = "alert"
+		msg = fmt.Sprintf("Deletion has been pending for %s — finalizers are blocking cleanup.", rel)
+		action = "The owning controller of the finalizer is likely unhealthy. Check its pod logs and DNS / network reachability."
+	case age >= 5*time.Minute:
+		severity = "warning"
+		msg = fmt.Sprintf("Deletion has been pending for %s.", rel)
+		action = "Wait a few more minutes; if it remains stuck, investigate the finalizer's owning controller."
+	}
+	if len(finalizers) > 0 {
+		msg += " Finalizers: " + strings.Join(finalizers, ", ") + "."
+	}
+
+	// Enrich with controller health when we can identify the finalizer
+	// owner. The resolver may return "" — typical when the finalizer
+	// isn't in our catalog or the controller's pods aren't in the
+	// expected namespace — in which case we fall through to the
+	// finalizer-list-only message above.
+	//
+	// We probe each finalizer in order and surface the *first* signal
+	// that's actually informative. Stopping at the first hit (rather
+	// than concatenating all) keeps the Cause text scannable; finalizers
+	// after the first are usually controller-specific cleanup keys that
+	// follow the lead controller's lifecycle.
+	if resolver != nil && severity != "info" {
+		// Only enrich at warning+ — the "<5min" case isn't actionable
+		// (controller is presumably still running cleanup) and adding
+		// a controller-health line on a healthy controller would
+		// overstate the urgency.
+		for _, f := range finalizers {
+			if status := resolver.FinalizerOwnerStatus(f, root); status != "" {
+				return &Issue{
+					Severity: severity,
+					Scope:    "lifecycle",
+					Reason:   reason,
+					Message:  msg,
+					Action:   action,
+					Cause:    status,
+					Stuck:    severity == "alert",
+				}
+			}
+		}
+	}
+
+	return &Issue{
+		Severity: severity,
+		Scope:    "lifecycle",
+		Reason:   reason,
+		Message:  msg,
+		Action:   action,
+		// Stuck wires the UI's existing "this is bad and not getting better
+		// on its own" affordance for the alert tier without a new flag.
+		Stuck: severity == "alert",
+	}
+}
+
+// formatAgeShort renders a duration as a compact relative string used in
+// Issue messages: "3s", "12m", "4h", "21d". Mirrors the convention used by
+// the frontend's formatRelative so backend and frontend agree on units.
+func formatAgeShort(d time.Duration) string {
+	if d < 0 {
+		d = 0
+	}
+	switch {
+	case d < time.Minute:
+		return fmt.Sprintf("%ds", int(d.Seconds()))
+	case d < time.Hour:
+		return fmt.Sprintf("%dm", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd", int(d.Hours()/24))
+	}
 }
 
 // detectStuckDriftLoop emits a critical issue when an Argo Application is

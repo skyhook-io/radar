@@ -10,6 +10,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -23,6 +24,18 @@ type ResourceSummary struct {
 	Ready     string `json:"ready,omitempty"`
 	Issue     string `json:"issue,omitempty"`
 	Age       string `json:"age,omitempty"`
+	// Terminating signals that metadata.deletionTimestamp is set on the
+	// resource. AI assistants need this signal to avoid suggesting
+	// mutating actions that will fail (e.g. "run kubectl rollout restart"
+	// on a Pod that's being torn down) and to correctly diagnose "why is
+	// this stuck" scenarios where the resource is a finalizer-blocked
+	// zombie. Pruned when false.
+	Terminating bool `json:"terminating,omitempty"`
+	// Finalizers names the keys blocking deletion when Terminating is
+	// true. The owning controller is responsible for clearing each key
+	// during cleanup; if it doesn't, the resource lingers as a zombie.
+	// Pruned when empty.
+	Finalizers []string `json:"finalizers,omitempty"`
 
 	// Type-specific fields (only populated when relevant)
 	Image       string   `json:"image,omitempty"`
@@ -55,41 +68,69 @@ type ResourceSummary struct {
 	Owner       string   `json:"owner,omitempty"`
 }
 
-// summarize dispatches to the appropriate per-type extractor.
+// summarize dispatches to the appropriate per-type extractor and then
+// fills in lifecycle fields (Terminating, Finalizers) shared across all
+// kinds. Filling these once at the dispatch boundary avoids touching
+// every per-type summarizer; all K8s resource types implement
+// metav1.Object, so the cast is universal.
 func summarize(obj runtime.Object) (*ResourceSummary, error) {
+	var s *ResourceSummary
 	switch o := obj.(type) {
 	case *corev1.Pod:
-		return summarizePod(o), nil
+		s = summarizePod(o)
 	case *appsv1.Deployment:
-		return summarizeDeployment(o), nil
+		s = summarizeDeployment(o)
 	case *appsv1.StatefulSet:
-		return summarizeStatefulSet(o), nil
+		s = summarizeStatefulSet(o)
 	case *appsv1.DaemonSet:
-		return summarizeDaemonSet(o), nil
+		s = summarizeDaemonSet(o)
 	case *corev1.Service:
-		return summarizeService(o), nil
+		s = summarizeService(o)
 	case *networkingv1.Ingress:
-		return summarizeIngress(o), nil
+		s = summarizeIngress(o)
 	case *batchv1.Job:
-		return summarizeJob(o), nil
+		s = summarizeJob(o)
 	case *batchv1.CronJob:
-		return summarizeCronJob(o), nil
+		s = summarizeCronJob(o)
 	case *autoscalingv2.HorizontalPodAutoscaler:
-		return summarizeHPA(o), nil
+		s = summarizeHPA(o)
 	case *corev1.Node:
-		return summarizeNode(o), nil
+		s = summarizeNode(o)
 	case *corev1.ConfigMap:
-		return summarizeConfigMap(o), nil
+		s = summarizeConfigMap(o)
 	case *corev1.Secret:
-		return summarizeSecret(o), nil
+		s = summarizeSecret(o)
 	case *corev1.PersistentVolumeClaim:
-		return summarizePVC(o), nil
+		s = summarizePVC(o)
 	case *appsv1.ReplicaSet:
-		return summarizeReplicaSet(o), nil
+		s = summarizeReplicaSet(o)
 	case *corev1.Namespace:
-		return summarizeNamespace(o), nil
+		s = summarizeNamespace(o)
 	default:
 		return nil, fmt.Errorf("unsupported type for summary: %T", obj)
+	}
+	applyLifecycleFields(s, obj)
+	return s, nil
+}
+
+// applyLifecycleFields populates Terminating + Finalizers on a
+// ResourceSummary by reading metadata via the metav1.Object interface
+// that every K8s typed object implements. No-ops on a nil summary or
+// a non-metav1 object so it's safe to call from any caller.
+func applyLifecycleFields(s *ResourceSummary, obj runtime.Object) {
+	if s == nil {
+		return
+	}
+	mo, ok := obj.(interface {
+		GetDeletionTimestamp() *metav1.Time
+		GetFinalizers() []string
+	})
+	if !ok {
+		return
+	}
+	if dt := mo.GetDeletionTimestamp(); dt != nil && !dt.IsZero() {
+		s.Terminating = true
+		s.Finalizers = mo.GetFinalizers()
 	}
 }
 

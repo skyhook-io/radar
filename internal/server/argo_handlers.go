@@ -22,7 +22,7 @@ func (s *Server) handleArgoSync(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[argo] Dynamic client unavailable for sync Application %s/%s", namespace, name)
+		log.Printf("[argo] Dynamic client unavailable for sync Application %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
@@ -58,7 +58,7 @@ func (s *Server) handleArgoRefresh(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[argo] Dynamic client unavailable for refresh Application %s/%s", namespace, name)
+		log.Printf("[argo] Dynamic client unavailable for refresh Application %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
@@ -117,7 +117,7 @@ func (s *Server) handleArgoTerminate(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[argo] Dynamic client unavailable for terminate Application %s/%s", namespace, name)
+		log.Printf("[argo] Dynamic client unavailable for terminate Application %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
@@ -139,7 +139,7 @@ func (s *Server) handleArgoSuspend(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[argo] Dynamic client unavailable for suspend Application %s/%s", namespace, name)
+		log.Printf("[argo] Dynamic client unavailable for suspend Application %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
@@ -161,7 +161,7 @@ func (s *Server) handleArgoResume(w http.ResponseWriter, r *http.Request) {
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
-		log.Printf("[argo] Dynamic client unavailable for resume Application %s/%s", namespace, name)
+		log.Printf("[argo] Dynamic client unavailable for resume Application %s/%s", sanitizeForLog(namespace), sanitizeForLog(name))
 		s.writeError(w, http.StatusServiceUnavailable, "dynamic client not available")
 		return
 	}
@@ -207,6 +207,12 @@ func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, acti
 	case errors.Is(err, gitops.ErrHistoryEntryNotFound):
 		status = http.StatusNotFound
 	case errors.Is(err, gitops.ErrOperationInProgress):
+		status = http.StatusConflict
+	case errors.Is(err, gitops.ErrResourceTerminating):
+		// 409 Conflict: the resource state ("being deleted") conflicts
+		// with the request. Same status family as ErrOperationInProgress
+		// — both signal "request is well-formed but the resource isn't
+		// in a state where this verb can run".
 		status = http.StatusConflict
 	case errors.Is(err, gitops.ErrNoOperationInProgress):
 		status = http.StatusBadRequest

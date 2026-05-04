@@ -28,6 +28,17 @@ export interface GitOpsInsightSummary {
   // Argo: "Manual" | "Auto" | "Auto · prune" | "Auto · self-heal" | "Auto · prune · self-heal"
   // Flux: "Auto" | "Suspended"
   autoSyncMode?: string
+  // True when the resource has metadata.deletionTimestamp set. Drives the
+  // [Terminating] chip in the title row + disables mutating action buttons.
+  // Backend mirrors this guard in pkg/gitops/operations.go so direct API
+  // hits also fail with ErrResourceTerminating.
+  terminating?: boolean
+  // RFC3339 deletion timestamp; used to compute "21d ago" text in the chip
+  // tooltip.
+  terminationStartedAt?: string
+  // Finalizers blocking deletion. When stuck, naming the finalizer points
+  // the user at the controller they need to investigate.
+  finalizers?: string[]
 }
 
 export interface GitOpsInsightRef {
@@ -38,7 +49,7 @@ export interface GitOpsInsightRef {
 }
 
 export interface GitOpsIssue {
-  severity: 'critical' | 'warning' | 'info'
+  severity: 'critical' | 'alert' | 'warning' | 'info'
   scope: string
   reason: string
   message: string
