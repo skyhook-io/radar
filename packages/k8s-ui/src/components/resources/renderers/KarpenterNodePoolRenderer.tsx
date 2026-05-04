@@ -9,13 +9,13 @@ import {
   getNodePoolWeight,
 } from '../resource-utils-karpenter'
 
-function formatCpuCores(value: string): string {
-  // Karpenter status.resources CPU is typically in millicores (e.g. "12000m") or cores (e.g. "12")
-  if (value.endsWith('m')) {
-    const millis = parseInt(value, 10)
+function formatCpuCores(value: unknown): string {
+  const quantity = String(value)
+  if (quantity.endsWith('m')) {
+    const millis = parseInt(quantity, 10)
     if (!isNaN(millis)) return String(millis / 1000)
   }
-  return value
+  return quantity
 }
 
 
