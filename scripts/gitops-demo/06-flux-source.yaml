@@ -1,0 +1,30 @@
+# Flux source resources. GitRepository for the Kustomization scenarios
+# below; HelmRepository for the HelmRelease scenario. Both use public
+# repos with no auth — kind clusters can reach them via the host's
+# internet, which keeps the demo offline-only-when-host-is-offline.
+#
+# stefanprodan/podinfo is the canonical Flux demo target — small chart
+# with no external secrets, well-maintained, predictable behavior.
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: GitRepository
+metadata:
+  name: podinfo
+  namespace: flux-system
+spec:
+  interval: 5m
+  url: https://github.com/stefanprodan/podinfo
+  ref:
+    branch: master
+  ignore: |
+    /*
+    !/kustomize
+---
+apiVersion: source.toolkit.fluxcd.io/v1
+kind: HelmRepository
+metadata:
+  name: podinfo
+  namespace: flux-system
+spec:
+  interval: 10m
+  url: https://stefanprodan.github.io/podinfo

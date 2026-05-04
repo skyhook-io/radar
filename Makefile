@@ -141,6 +141,22 @@ test-e2e:
 test-chart:
 	./scripts/test-chart.sh
 
+# Bootstrap a kind cluster pre-loaded with curated GitOps scenarios
+# (Argo CD + Flux + healthy/suspended/app-of-apps/ApplicationSet/etc).
+# Useful for visual-testing GitOps UI changes against realistic state.
+# See scripts/gitops-demo/README.md for the full coverage matrix.
+gitops-demo:
+	./scripts/gitops-demo.sh up
+
+gitops-demo-down:
+	./scripts/gitops-demo.sh down
+
+gitops-demo-status:
+	./scripts/gitops-demo.sh status
+
+gitops-demo-drift:
+	./scripts/gitops-demo.sh drift
+
 # Run linter
 lint:
 	go vet ./...

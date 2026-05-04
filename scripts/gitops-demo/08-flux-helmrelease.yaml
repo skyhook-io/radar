@@ -1,0 +1,28 @@
+# Flux HelmRelease pointing at the public podinfo Helm chart. Exercises
+# a different reconciler (helm-controller) than the Kustomization paths
+# above (kustomize-controller), so the finalizer-owner mapping +
+# Sync-with-source verb need separate coverage from this scenario.
+apiVersion: helm.toolkit.fluxcd.io/v2
+kind: HelmRelease
+metadata:
+  name: podinfo
+  namespace: flux-system
+spec:
+  interval: 5m
+  releaseName: podinfo
+  targetNamespace: demo-flux-helm
+  chart:
+    spec:
+      chart: podinfo
+      version: '>=6.0.0'
+      sourceRef:
+        kind: HelmRepository
+        name: podinfo
+        namespace: flux-system
+      interval: 10m
+  install:
+    createNamespace: false  # demo-flux-helm pre-exists
+  values:
+    replicaCount: 1
+    ui:
+      message: "radar gitops demo"

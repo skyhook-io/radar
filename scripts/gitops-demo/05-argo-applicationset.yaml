@@ -1,0 +1,41 @@
+# ApplicationSet with a list generator → 3 child Applications, each
+# pointing at a different path in argocd-example-apps. Exercises the
+# fleet view's ApplicationSet kind support and the ApplicationSet
+# detail page (separate from individual Applications).
+#
+# Generated Applications take the name pattern "set-{{name}}" and land
+# in the demo-set namespace, sharing the radar-demo AppProject for
+# scoping consistency.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: radar-demo-set
+  namespace: argocd
+spec:
+  generators:
+    - list:
+        elements:
+          - name: vanilla
+            path: guestbook
+          - name: kustomize
+            path: kustomize-guestbook
+          - name: helm
+            path: helm-guestbook
+  template:
+    metadata:
+      name: 'set-{{name}}'
+      finalizers:
+        - resources-finalizer.argocd.argoproj.io
+    spec:
+      project: radar-demo
+      source:
+        repoURL: https://github.com/argoproj/argocd-example-apps
+        targetRevision: HEAD
+        path: '{{path}}'
+      destination:
+        server: https://kubernetes.default.svc
+        namespace: demo-set
+      syncPolicy:
+        automated:
+          prune: true
+          selfHeal: true

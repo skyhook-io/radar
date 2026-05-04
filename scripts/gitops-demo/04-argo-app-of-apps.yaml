@@ -1,0 +1,40 @@
+# App-of-apps: a parent Argo Application whose source is a Git path
+# containing more Application manifests. This is the canonical Argo
+# nesting pattern, and it's what the new portal-node treatment + lineage
+# breadcrumb on the GitOps detail page were built for.
+#
+# argocd-example-apps' apps/ directory contains a Helm chart of
+# Application manifests targeting the same repo's other paths
+# (guestbook, helm-guestbook, kustomize-guestbook). After sync, three
+# child Applications appear in the argocd namespace, each with its own
+# detail page that the parent's tree should link to.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: app-of-apps-parent
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: radar-demo
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    targetRevision: HEAD
+    path: apps
+    # The apps/ chart parameterizes the destination namespace and Argo
+    # project. Override here so generated children inherit our project.
+    helm:
+      parameters:
+        - name: spec.destination.server
+          value: https://kubernetes.default.svc
+        - name: spec.destination.namespace
+          value: demo-app-of-apps
+        - name: spec.project
+          value: radar-demo
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: argocd
+  syncPolicy:
+    automated:
+      prune: false  # children are also Applications; let them control prune
+      selfHeal: true

@@ -1,0 +1,64 @@
+# Flux Kustomization scenarios — healthy + suspended + dependsOn chain.
+#
+# Coverage:
+#   podinfo-base       → Kustomization, healthy, applied first
+#   podinfo-overlay    → Kustomization, healthy, dependsOn: podinfo-base
+#                        (exercises the dependency chain rendering)
+#   podinfo-suspended  → suspend: true (drives Suspended chip + Resume button)
+---
+# Healthy base. Source is the GitRepository declared in 06-flux-source.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: podinfo-base
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./kustomize
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: podinfo
+  targetNamespace: demo-flux
+  timeout: 1m
+  wait: true
+---
+# Overlay that depends on base. The frontend Topology graph should
+# show the parent→child relationship; the dependsOn semantics are
+# distinct from owner-ref so this exercises both code paths.
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: podinfo-overlay
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./kustomize
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: podinfo
+  targetNamespace: demo-flux
+  timeout: 1m
+  dependsOn:
+    - name: podinfo-base
+      namespace: flux-system
+---
+# Suspended Kustomization. Same shape as the others but spec.suspend=true,
+# so Flux's controllers leave it alone. The detail page should show the
+# Suspended chip + a Resume button; auto-sync description in the strip
+# should read "Suspended" instead of "Auto".
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: podinfo-suspended
+  namespace: flux-system
+spec:
+  interval: 5m
+  path: ./kustomize
+  prune: true
+  suspend: true
+  sourceRef:
+    kind: GitRepository
+    name: podinfo
+  targetNamespace: demo-flux

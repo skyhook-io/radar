@@ -1,0 +1,44 @@
+# Demo namespaces — created up-front so the GitOps controllers can
+# deploy into them without racing namespace creation. Each demo app
+# below targets one of these so resources stay scoped.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-healthy
+  labels:
+    radar-demo: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-suspended
+  labels:
+    radar-demo: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-app-of-apps
+  labels:
+    radar-demo: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-set
+  labels:
+    radar-demo: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-flux
+  labels:
+    radar-demo: "true"
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-flux-helm
+  labels:
+    radar-demo: "true"
