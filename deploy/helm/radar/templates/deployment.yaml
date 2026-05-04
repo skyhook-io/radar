@@ -6,6 +6,10 @@ metadata:
     {{- include "radar.labels" . | nindent 4 }}
 spec:
   replicas: {{ .Values.replicaCount }}
+  {{- if and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite") }}
+  strategy:
+    type: Recreate
+  {{- end }}
   selector:
     matchLabels:
       {{- include "radar.selectorLabels" . | nindent 6 }}
