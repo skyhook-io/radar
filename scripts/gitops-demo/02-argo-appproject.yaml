@@ -15,6 +15,11 @@ spec:
   destinations:
     - server: https://kubernetes.default.svc
       namespace: 'demo-*'
+    # The app-of-apps parent deploys child Application CRs (which live
+    # in the argocd namespace by Argo convention). Without this entry,
+    # the parent fails with InvalidSpecError and never creates children.
+    - server: https://kubernetes.default.svc
+      namespace: argocd
   clusterResourceWhitelist:
     - group: ''
       kind: Namespace
