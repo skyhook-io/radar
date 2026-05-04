@@ -20,6 +20,11 @@ rules:
       - endpoints
       - limitranges
     verbs: ["get", "list", "watch"]
+  - apiGroups:
+      - policy
+    resources:
+      - poddisruptionbudgets
+    verbs: ["get", "list", "watch"]
 
   {{- if .Values.rbac.helm }}
   # Helm write operations require broad permissions because charts can create
