@@ -1,7 +1,10 @@
 package server
 
 import (
+	"log"
+
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -13,18 +16,22 @@ import (
 // drilling into individual GitOps applications and seeing the
 // downstream symptoms.
 //
-// Status is the aggregate roll-up across all detected controllers:
-// "healthy" when all controllers have all expected pods Ready;
-// "degraded" when any controller has fewer Ready pods than total;
-// "missing" when no controllers are detected at all (rare — caller
-// suppresses the entire payload in that case so the card disappears).
+// The aggregate Status field collapses per-controller statuses to one
+// of three tones; the whole struct is nil (not "missing") when no
+// controllers were detected at all, so the home dashboard can suppress
+// the card entirely on non-GitOps clusters.
 type DashboardGitOpsControllers struct {
-	// Status is the worst-case aggregate across all controllers:
-	// "healthy" | "degraded" | "missing". Drives the card's overall tone.
+	// Status is the worst-case aggregate across all controllers,
+	// normalized for the card's overall tone:
+	//   ctrlStatusHealthy  — all controllers have all expected pods Ready
+	//   ctrlStatusDegraded — any controller has fewer Ready pods than total,
+	//                        or any pod is Pending
+	//   ctrlStatusCrashing — any controller pod is CrashLoopBackOff/Error
+	// Per-controller "pending" rolls up to "degraded" at this level so the
+	// frontend only branches on three tones.
 	Status string `json:"status"`
-	// Controllers lists each discovered controller. Empty slice means
-	// nothing was detected — caller should set GitOpsControllers to nil
-	// instead of emitting an empty card.
+	// Controllers lists each discovered controller. When empty, the parent
+	// payload is set to nil rather than emitted as an empty card.
 	Controllers []DashboardGitOpsController `json:"controllers"`
 }
 
@@ -34,24 +41,42 @@ type DashboardGitOpsController struct {
 	// identifier. Examples: "argocd-application-controller",
 	// "kustomize-controller", "source-controller".
 	Name string `json:"name"`
-	// Tool identifies the GitOps system: "argocd" or "flux".
+	// Tool identifies the GitOps system: ctrlToolArgoCD or ctrlToolFluxCD.
+	// Frontend branches on this to label the section ("Argo CD" vs "Flux CD").
 	Tool string `json:"tool"`
 	// Namespace where the controller's pods were found.
 	Namespace string `json:"namespace"`
-	// Ready is the count of pods that are running and Ready.
+	// Ready is the count of pods that are running and Ready. Invariant:
+	// 0 <= Ready <= Total. Caller (summarizeControllerForDashboard) is the
+	// sole producer; callers should not set these fields directly.
 	Ready int `json:"ready"`
 	// Total is the total pod count for this controller. Argo controllers
 	// often have 2 (HA), Flux controllers typically 1.
 	Total int `json:"total"`
-	// Status is "healthy" (all Ready), "degraded" (some Ready, some not),
-	// "crashing" (any pod in CrashLoopBackOff), or "pending" (pods exist
-	// but none Ready and none crashing).
+	// Status is one of: ctrlStatusHealthy, ctrlStatusDegraded,
+	// ctrlStatusCrashing, ctrlStatusPending. Aggregate Status normalizes
+	// pending → degraded (see DashboardGitOpsControllers.Status); per-row
+	// it stays distinct for finer-grained UI.
 	Status string `json:"status"`
 	// CrashReason is set when at least one pod is in CrashLoopBackOff or
 	// Error; identifies the kind of crash so the operator knows where to
 	// start digging.
 	CrashReason string `json:"crashReason,omitempty"`
 }
+
+// Status + tool string constants. Keeping these as named values rather
+// than free strings catches typo-class regressions at compile time and
+// gives a single place to grep when wiring the matching TS union literal
+// in packages/k8s-ui/src/api/client.ts.
+const (
+	ctrlStatusHealthy  = "healthy"
+	ctrlStatusDegraded = "degraded"
+	ctrlStatusCrashing = "crashing"
+	ctrlStatusPending  = "pending"
+
+	ctrlToolArgoCD = "argocd"
+	ctrlToolFluxCD = "fluxcd"
+)
 
 // gitopsControllerProbe describes what to look for: a label selector
 // (key=value) in a typical install namespace. Mirrors the catalog in
@@ -71,28 +96,29 @@ var gitopsControllerProbes = []gitopsControllerProbe{
 	// Argo CD: single application-controller (often deployed as a
 	// 2-replica StatefulSet for HA in larger installs).
 	{
-		Name: "argocd-application-controller", Tool: "argocd", Namespace: "argocd",
+		Name: "argocd-application-controller", Tool: ctrlToolArgoCD, Namespace: "argocd",
 		LabelKey: "app.kubernetes.io/name", LabelVal: "argocd-application-controller",
 	},
-	// Argo CD: server (the API/UI). Optional but useful — without it,
-	// kubectl-only operations work but the UI/CLI commands fail.
+	// Argo CD: server (API + UI). Without it, controller still reconciles
+	// but the Argo CLI/UI is unreachable — non-fatal but worth surfacing.
 	{
-		Name: "argocd-server", Tool: "argocd", Namespace: "argocd",
+		Name: "argocd-server", Tool: ctrlToolArgoCD, Namespace: "argocd",
 		LabelKey: "app.kubernetes.io/name", LabelVal: "argocd-server",
 	},
-	// Argo CD: repo-server (does the manifest rendering).
+	// Argo CD: repo-server (manifest rendering / git-clone). Load-bearing —
+	// without it, no sync attempts succeed because manifests can't be rendered.
 	{
-		Name: "argocd-repo-server", Tool: "argocd", Namespace: "argocd",
+		Name: "argocd-repo-server", Tool: ctrlToolArgoCD, Namespace: "argocd",
 		LabelKey: "app.kubernetes.io/name", LabelVal: "argocd-repo-server",
 	},
 	// Flux: per-controller catalog. The operator's actual install may
 	// not include all of them (e.g. notification-controller is optional);
 	// missing controllers are simply omitted from the summary.
-	{Name: "source-controller", Tool: "flux", Namespace: "flux-system", LabelKey: "app", LabelVal: "source-controller"},
-	{Name: "kustomize-controller", Tool: "flux", Namespace: "flux-system", LabelKey: "app", LabelVal: "kustomize-controller"},
-	{Name: "helm-controller", Tool: "flux", Namespace: "flux-system", LabelKey: "app", LabelVal: "helm-controller"},
-	{Name: "notification-controller", Tool: "flux", Namespace: "flux-system", LabelKey: "app", LabelVal: "notification-controller"},
-	{Name: "image-reflector-controller", Tool: "flux", Namespace: "flux-system", LabelKey: "app", LabelVal: "image-reflector-controller"},
+	{Name: "source-controller", Tool: ctrlToolFluxCD, Namespace: "flux-system", LabelKey: "app", LabelVal: "source-controller"},
+	{Name: "kustomize-controller", Tool: ctrlToolFluxCD, Namespace: "flux-system", LabelKey: "app", LabelVal: "kustomize-controller"},
+	{Name: "helm-controller", Tool: ctrlToolFluxCD, Namespace: "flux-system", LabelKey: "app", LabelVal: "helm-controller"},
+	{Name: "notification-controller", Tool: ctrlToolFluxCD, Namespace: "flux-system", LabelKey: "app", LabelVal: "notification-controller"},
+	{Name: "image-reflector-controller", Tool: ctrlToolFluxCD, Namespace: "flux-system", LabelKey: "app", LabelVal: "image-reflector-controller"},
 }
 
 // getDashboardGitOpsControllers walks the static probe catalog, queries
@@ -122,6 +148,17 @@ func (s *Server) getDashboardGitOpsControllers(cache *k8s.ResourceCache, allowed
 		}
 		pods, err := cache.Pods().Pods(probe.Namespace).List(labels.Everything())
 		if err != nil {
+			// Distinguish RBAC denial from other lookup failures. Both
+			// paths skip the probe (the card silently misses controllers
+			// the operator can't see), but logging the RBAC case gives
+			// ops a way to discover that GitOps controllers exist but
+			// the user's token can't reach their namespace — otherwise
+			// "card hidden" reads identically to "no GitOps installed".
+			if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+				log.Printf("[dashboard/gitops] RBAC denied listing pods in %s for controller probe %s — controller may be running but user lacks namespace access", probe.Namespace, probe.Name)
+			} else {
+				log.Printf("[dashboard/gitops] Failed to list pods in %s for controller probe %s: %v", probe.Namespace, probe.Name, err)
+			}
 			continue
 		}
 		var matched []*corev1.Pod
@@ -170,16 +207,24 @@ func summarizeControllerForDashboard(probe gitopsControllerProbe, pods []*corev1
 			pending++
 		}
 	}
-	status := "healthy"
+	status := ctrlStatusHealthy
 	switch {
 	case crashing > 0:
-		status = "crashing"
+		status = ctrlStatusCrashing
 	case ready < len(pods):
 		if pending > 0 && ready == 0 {
-			status = "pending"
+			status = ctrlStatusPending
 		} else {
-			status = "degraded"
+			status = ctrlStatusDegraded
 		}
+	}
+	// Defensive cap: Ready should never exceed total pod count, but a
+	// future double-count bug in the loop above (e.g. counting a pod
+	// once for being Running and again for being Ready) would silently
+	// emit Ready > Total. The frontend renders "ready/total" verbatim,
+	// so 4/2 would ship straight to users. Trivial guard.
+	if ready > len(pods) {
+		ready = len(pods)
 	}
 	return DashboardGitOpsController{
 		Name:        probe.Name,
@@ -201,14 +246,14 @@ func summarizeControllerForDashboard(probe gitopsControllerProbe, pods []*corev1
 // the home card's tone (red vs amber) matches the severity an operator
 // expects when scanning the dashboard at a glance.
 func aggregateControllerStatus(ctrls []DashboardGitOpsController) string {
-	worst := "healthy"
+	worst := ctrlStatusHealthy
 	rank := func(s string) int {
 		switch s {
-		case "crashing":
+		case ctrlStatusCrashing:
 			return 3
-		case "degraded", "pending":
+		case ctrlStatusDegraded, ctrlStatusPending:
 			return 2
-		case "healthy":
+		case ctrlStatusHealthy:
 			return 1
 		default:
 			return 0
@@ -221,8 +266,8 @@ func aggregateControllerStatus(ctrls []DashboardGitOpsController) string {
 			// operationally the same triage path (look at the pod) and
 			// keeping the aggregate vocabulary tight prevents the
 			// frontend from needing four separate tone branches.
-			if worst == "pending" {
-				worst = "degraded"
+			if worst == ctrlStatusPending {
+				worst = ctrlStatusDegraded
 			}
 		}
 	}

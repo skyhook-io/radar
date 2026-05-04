@@ -36,7 +36,7 @@ func pod(name string, phase corev1.PodPhase, statuses ...corev1.ContainerStatus)
 // rules. These mappings drive the home dashboard tone (green/amber/red),
 // so silently changing them changes user-perceived severity.
 func TestSummarizeControllerForDashboard(t *testing.T) {
-	probe := gitopsControllerProbe{Name: "argocd-application-controller", Tool: "argocd", Namespace: "argocd"}
+	probe := gitopsControllerProbe{Name: "argocd-application-controller", Tool: ctrlToolArgoCD, Namespace: "argocd"}
 
 	tests := []struct {
 		name        string
@@ -120,11 +120,11 @@ func TestAggregateControllerStatus(t *testing.T) {
 		in   []DashboardGitOpsController
 		want string
 	}{
-		{"all healthy", []DashboardGitOpsController{{Status: "healthy"}, {Status: "healthy"}}, "healthy"},
-		{"one degraded → degraded", []DashboardGitOpsController{{Status: "healthy"}, {Status: "degraded"}}, "degraded"},
-		{"pending normalizes to degraded at aggregate", []DashboardGitOpsController{{Status: "healthy"}, {Status: "pending"}}, "degraded"},
-		{"one crashing → crashing", []DashboardGitOpsController{{Status: "healthy"}, {Status: "crashing"}}, "crashing"},
-		{"crashing wins over degraded", []DashboardGitOpsController{{Status: "degraded"}, {Status: "crashing"}}, "crashing"},
+		{"all healthy", []DashboardGitOpsController{{Status: ctrlStatusHealthy}, {Status: ctrlStatusHealthy}}, ctrlStatusHealthy},
+		{"one degraded → degraded", []DashboardGitOpsController{{Status: ctrlStatusHealthy}, {Status: ctrlStatusDegraded}}, ctrlStatusDegraded},
+		{"pending normalizes to degraded at aggregate", []DashboardGitOpsController{{Status: ctrlStatusHealthy}, {Status: ctrlStatusPending}}, ctrlStatusDegraded},
+		{"one crashing → crashing", []DashboardGitOpsController{{Status: ctrlStatusHealthy}, {Status: ctrlStatusCrashing}}, ctrlStatusCrashing},
+		{"crashing wins over degraded", []DashboardGitOpsController{{Status: ctrlStatusDegraded}, {Status: ctrlStatusCrashing}}, ctrlStatusCrashing},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

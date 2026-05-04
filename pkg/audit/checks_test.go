@@ -1526,3 +1526,76 @@ func TestCheckStuckTerminating(t *testing.T) {
 		t.Errorf("expected danger message to name finalizer; got %q", dangerMsg)
 	}
 }
+
+// TestCheckStuckTerminating_AllKinds asserts the check fires for *every*
+// typed slice in CheckInput, not just Pods. The implementation has 11
+// near-identical for-loops that each call emit() with a hardcoded kind
+// string. A copy-paste bug (omitting one slice during a refactor, or
+// passing the wrong kind label to emit()) would silently regress
+// coverage for that kind without any other test catching it. One
+// terminating fixture per kind, all set 45min old → all should report
+// danger-tier with their correct Kind field.
+func TestCheckStuckTerminating_AllKinds(t *testing.T) {
+	now := time.Now()
+	dt := metav1.NewTime(now.Add(-45 * time.Minute))
+	meta := func(name string) metav1.ObjectMeta {
+		return metav1.ObjectMeta{
+			Name:              name,
+			Namespace:         "default",
+			DeletionTimestamp: &dt,
+			Finalizers:        []string{"example.io/cleanup"},
+		}
+	}
+
+	input := &CheckInput{
+		Pods:                     []*corev1.Pod{{ObjectMeta: meta("pod-x")}},
+		Deployments:              []*appsv1.Deployment{{ObjectMeta: meta("deploy-x")}},
+		StatefulSets:             []*appsv1.StatefulSet{{ObjectMeta: meta("sts-x")}},
+		DaemonSets:               []*appsv1.DaemonSet{{ObjectMeta: meta("ds-x")}},
+		Services:                 []*corev1.Service{{ObjectMeta: meta("svc-x")}},
+		Ingresses:                []*networkingv1.Ingress{{ObjectMeta: meta("ing-x")}},
+		HorizontalPodAutoscalers: []*autoscalingv2.HorizontalPodAutoscaler{{ObjectMeta: meta("hpa-x")}},
+		PodDisruptionBudgets:     []*policyv1.PodDisruptionBudget{{ObjectMeta: meta("pdb-x")}},
+		ConfigMaps:               []*corev1.ConfigMap{{ObjectMeta: meta("cm-x")}},
+		Secrets:                  []*corev1.Secret{{ObjectMeta: meta("secret-x")}},
+		ServiceAccounts:          []*corev1.ServiceAccount{{ObjectMeta: meta("sa-x")}},
+	}
+
+	// Call the check directly. RunChecks would run the full chain
+	// (pod-spec checks, PDB matcher, etc.) which expect richer fixtures
+	// (Selector, container specs) than this test cares about. The audit
+	// dispatch is itself covered by RunChecks tests; this one targets
+	// only the stuckTerminating loop completeness.
+	findings := checkStuckTerminating(input)
+	byKindAndName := map[string]string{} // "Kind/name" → severity
+	for _, f := range findings {
+		if f.CheckID != "stuckTerminating" {
+			continue
+		}
+		byKindAndName[f.Kind+"/"+f.Name] = f.Severity
+	}
+
+	wantPairs := map[string]string{
+		"Pod/pod-x":                         SeverityDanger,
+		"Deployment/deploy-x":               SeverityDanger,
+		"StatefulSet/sts-x":                 SeverityDanger,
+		"DaemonSet/ds-x":                    SeverityDanger,
+		"Service/svc-x":                     SeverityDanger,
+		"Ingress/ing-x":                     SeverityDanger,
+		"HorizontalPodAutoscaler/hpa-x":     SeverityDanger,
+		"PodDisruptionBudget/pdb-x":         SeverityDanger,
+		"ConfigMap/cm-x":                    SeverityDanger,
+		"Secret/secret-x":                   SeverityDanger,
+		"ServiceAccount/sa-x":               SeverityDanger,
+	}
+	for k, want := range wantPairs {
+		got, ok := byKindAndName[k]
+		if !ok {
+			t.Errorf("missing finding for %s — kind not flagged when terminating", k)
+			continue
+		}
+		if got != want {
+			t.Errorf("%s: severity = %q, want %q", k, got, want)
+		}
+	}
+}

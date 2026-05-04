@@ -349,9 +349,14 @@ func describeArgoAutoSync(root *unstructured.Unstructured) string {
 
 func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTree, tool string, resolver Resolver) []Issue {
 	var out []Issue
-	// Pending deletion runs first because it dominates the user's mental
-	// model: nothing else matters if the resource is being deleted. Listed
-	// at the top of Issues regardless of severity ramp.
+	// Pending deletion is appended first; the severity-stable sort below
+	// may reorder by severity-rank (e.g. a critical operation failure can
+	// land above an alert-tier lifecycle issue). The user-facing
+	// "lifecycle dominates" contract is enforced by the *frontend*
+	// (GitOpsIssuesBand extracts scope=lifecycle to render as a banner
+	// above all other issues), so the array order here is incidental.
+	// If a future caller renders Issues in raw order without the banner
+	// extraction, that caller must hoist the lifecycle Issue itself.
 	if pd := detectPendingDeletion(root, resolver); pd != nil {
 		out = append(out, *pd)
 	}
@@ -452,13 +457,15 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 	return out
 }
 
-// dedupeIssues removes Issues that share the same (scope, reason, message)
-// triple as an earlier entry. This is intentionally a minimal dedup: we
-// keep the first occurrence and discard later duplicates, preserving the
-// detector-chain ordering. Refs are not part of the key — two issues
-// pointing at different resources with the same scope+reason+message are
-// still distinct (e.g., two pods both ImagePullBackOff with the same
-// message but different Ref).
+// dedupeIssues removes Issues that share the same (scope, reason, message,
+// firstRef) tuple as an earlier entry. Keeps the first occurrence and
+// discards later duplicates, preserving detector-chain ordering.
+//
+// Including the first Ref's Kind+Name in the key keeps per-resource
+// issues distinct (two pods both ImagePullBackOff with the same message
+// but different refs stay as two issues). Issues without refs
+// (operation/condition/lifecycle scopes) collapse correctly because
+// their ref-suffix is "" identically.
 func dedupeIssues(in []Issue) []Issue {
 	if len(in) < 2 {
 		return in
@@ -1134,6 +1141,26 @@ func detectPendingDeletion(root *unstructured.Unstructured, resolver Resolver) *
 	}
 	finalizers := root.GetFinalizers()
 	age := time.Since(dt.Time)
+	// Clock-skew guard: a deletionTimestamp meaningfully in the future
+	// usually means Radar's local clock is behind the cluster API server
+	// (or vice versa). Without this, the severity ramp would treat the
+	// resource as "started 0s ago, info severity" and skip the controller-
+	// health enrichment that gates on warning+. A 6h-stuck zombie with
+	// even moderate clock skew would silently demote. Surface the skew
+	// explicitly so the operator can investigate NTP rather than chase a
+	// phantom info-tier issue.
+	if age < -1*time.Minute {
+		return &Issue{
+			Severity: "info",
+			Scope:    "lifecycle",
+			Reason:   "Terminating",
+			Message:  fmt.Sprintf("This resource is being deleted, but its deletionTimestamp (%s) is in the future relative to Radar — likely clock skew between Radar and the cluster API server.", dt.UTC().Format(time.RFC3339)),
+			Action:   "Verify NTP / time sync. Once clocks agree, the lifecycle severity will reflect the true deletion age.",
+		}
+	}
+	if age < 0 {
+		age = 0
+	}
 	rel := formatAgeShort(age)
 
 	severity := "info"
@@ -1144,6 +1171,11 @@ func detectPendingDeletion(root *unstructured.Unstructured, resolver Resolver) *
 	// Two reasons: matches user intuition ("by 30 minutes this is stuck"),
 	// and avoids flaky tests where time.Since drifts micro-seconds past
 	// the cutoff between Now() and the comparison.
+	//
+	// keep in sync: pkg/audit/checks.go::stuckTerminatingThresholdWarning
+	// (5min) and stuckTerminatingThresholdDanger (30min). The audit and
+	// the per-resource Issue must agree on what counts as "stuck" so an
+	// operator scanning both surfaces sees consistent severity.
 	switch {
 	case age >= 30*time.Minute:
 		severity = "alert"
@@ -1202,8 +1234,14 @@ func detectPendingDeletion(root *unstructured.Unstructured, resolver Resolver) *
 }
 
 // formatAgeShort renders a duration as a compact relative string used in
-// Issue messages: "3s", "12m", "4h", "21d". Mirrors the convention used by
-// the frontend's formatRelative so backend and frontend agree on units.
+// Issue messages: "3s", "12m", "4h", "21d".
+//
+// keep in sync: pkg/audit/checks.go::formatDurationShort (byte-identical)
+// and web/src/components/gitops/GitOpsView.tsx::formatRelativeAge
+// (TypeScript). Adding a new tier (e.g. "weeks") in one and not the
+// others would let the lifecycle banner, the chip tooltip, the audit
+// finding, and the fleet "Pending Nago" cell disagree on the same
+// duration. Worth consolidating into a shared package eventually.
 func formatAgeShort(d time.Duration) string {
 	if d < 0 {
 		d = 0

@@ -106,7 +106,7 @@ interface GitOpsRow {
   // so users can spot zombie resources without having to drill in.
   terminating: boolean
   // RFC3339 timestamp from metadata.deletionTimestamp. Used in the
-  // fleet's Last Sync column to render "Pending Nago" instead of the
+  // fleet's Last Sync column to render "Pending {N}{unit} ago" instead of the
   // stale last-reconcile time when the row is Terminating.
   terminationStartedAt?: string
   raw: any
@@ -2545,10 +2545,14 @@ function describeTerminating(summary?: { terminationStartedAt?: string; finalize
   }
 }
 
-// formatRelativeAge — small inline relative-time formatter. Mirrors the
-// Go backend's formatAgeShort so the UI and Issue messages agree on units.
-// Returns "" when the input can't be parsed; callers should treat empty
-// as "no timestamp" and skip the age suffix gracefully.
+// formatRelativeAge — small inline relative-time formatter. Tier
+// breakpoints kept in sync with pkg/gitops/insights/insights.go::formatAgeShort
+// and pkg/audit/checks.go::formatDurationShort so UI, lifecycle Issue
+// messages, and audit findings agree on units. Adding a new tier (e.g.
+// "weeks") in one and not the others would let the same duration render
+// differently across surfaces. Returns "" when the input can't be parsed;
+// callers should treat empty as "no timestamp" and skip the age suffix
+// gracefully.
 function formatRelativeAge(rfc3339?: string): string {
   if (!rfc3339) return ''
   const t = Date.parse(rfc3339)

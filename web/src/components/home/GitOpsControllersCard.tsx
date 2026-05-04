@@ -35,7 +35,7 @@ export function GitOpsControllersCard({ data, onNavigate }: GitOpsControllersCar
   // Flux) when both are installed. Operators with only one tool see a
   // single-section card without empty placeholders.
   const argo = data.controllers.filter((c) => c.tool === 'argocd')
-  const flux = data.controllers.filter((c) => c.tool === 'flux')
+  const flux = data.controllers.filter((c) => c.tool === 'fluxcd')
 
   return (
     <button

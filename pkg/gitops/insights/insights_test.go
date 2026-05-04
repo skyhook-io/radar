@@ -768,8 +768,8 @@ func TestDetectPendingDeletion_EnrichesWithControllerHealth(t *testing.T) {
 
 // TestDedupeIssues_CollapsesIdenticalConditions pins the dedup contract
 // for the Flux case where Released=False *and* Reconciling=False both
-// carry the same UpgradeFailed reason+message. Visible bug from PR #543's
-// visual review: the user saw two identical "Helm upgrade failed" rows.
+// carry the same UpgradeFailed reason+message — without dedup, the
+// Issues panel renders two identical "Helm upgrade failed" rows.
 func TestDedupeIssues_CollapsesIdenticalConditions(t *testing.T) {
 	in := []Issue{
 		{Scope: "condition", Severity: "critical", Reason: "UpgradeFailed", Message: "Helm upgrade failed for release demo/auth"},
@@ -843,6 +843,73 @@ func TestResolveFinalizerOwner(t *testing.T) {
 				t.Fatalf("Controller = %q, want %q", got.Controller, tt.want)
 			}
 		})
+	}
+}
+
+// TestBuildIssues_LifecycleVsCriticalOperation pins what happens when a
+// Terminating resource also has a critical operation failure. The
+// backend severity-stable sort puts critical (rank 0) above alert (rank
+// 1), so the lifecycle Issue is *not* at index 0 in the array — the
+// frontend's GitOpsIssuesBand extracts scope=lifecycle to render as a
+// banner, which is what makes the user-facing "lifecycle dominates"
+// promise true. This test pins the *current backend ordering* so a
+// future refactor that hoists lifecycle pre-sort doesn't silently break
+// the frontend banner extraction (or vice versa). If the contract
+// changes, both this test and the GitOpsIssuesBand renderer must change
+// together.
+func TestBuildIssues_LifecycleVsCriticalOperation(t *testing.T) {
+	root := argoApp(map[string]any{
+		"operationState": map[string]any{
+			"phase":   "Failed",
+			"message": "context deadline exceeded",
+		},
+	})
+	md, _ := root.Object["metadata"].(map[string]any)
+	md["deletionTimestamp"] = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	md["finalizers"] = []any{"resources-finalizer.argocd.argoproj.io"}
+
+	issues := buildIssues(root, nil, "argocd", nil)
+	if len(issues) < 2 {
+		t.Fatalf("expected both lifecycle + operation issues, got %d", len(issues))
+	}
+	// Critical operation failure (severity rank 0) wins the array sort
+	// over alert-tier lifecycle (rank 1). The user-facing banner pattern
+	// is enforced by the frontend extracting scope=lifecycle separately.
+	if issues[0].Severity != "critical" || issues[0].Scope != "operation" {
+		t.Fatalf("expected critical operation issue at index 0, got severity=%q scope=%q", issues[0].Severity, issues[0].Scope)
+	}
+	// Lifecycle still appears in the slice — it just sorts after the
+	// critical operation. Verify it survived the sort and dedup.
+	foundLifecycle := false
+	for _, iss := range issues {
+		if iss.Scope == "lifecycle" && iss.Reason == "Terminating" {
+			foundLifecycle = true
+			break
+		}
+	}
+	if !foundLifecycle {
+		t.Fatal("expected lifecycle Terminating issue in the slice")
+	}
+}
+
+// TestBuildIssues_LifecycleBeatsRunningOperation: an alert-tier
+// lifecycle issue (1h pending deletion) must sort above an info-tier
+// running operation. This is the inverse of the critical case above
+// and confirms the severity-rank ordering works in both directions.
+func TestBuildIssues_LifecycleBeatsRunningOperation(t *testing.T) {
+	root := argoApp(map[string]any{
+		"operationState": map[string]any{"phase": "Running"},
+	})
+	md, _ := root.Object["metadata"].(map[string]any)
+	md["deletionTimestamp"] = time.Now().Add(-1 * time.Hour).UTC().Format(time.RFC3339)
+	md["finalizers"] = []any{"resources-finalizer.argocd.argoproj.io"}
+
+	issues := buildIssues(root, nil, "argocd", nil)
+	if len(issues) < 2 {
+		t.Fatalf("expected both issues, got %d", len(issues))
+	}
+	if issues[0].Scope != "lifecycle" || issues[0].Severity != "alert" {
+		t.Fatalf("expected alert-tier lifecycle at index 0; got scope=%q severity=%q", issues[0].Scope, issues[0].Severity)
 	}
 }
 

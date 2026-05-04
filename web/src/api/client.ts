@@ -266,11 +266,17 @@ export interface DashboardGitOpsControllers {
 
 export interface DashboardGitOpsController {
   name: string
-  tool: 'argocd' | 'flux'
+  // Tool vocabulary aligns with the backend `ctrlTool*` constants in
+  // internal/server/dashboard_gitops.go and the GitOps tree-builder
+  // tags in pkg/gitops/tree/graph.go (`gitopsTool`). Keep these three
+  // surfaces in sync — diverging vocabulary across surfaces was a real
+  // source of confusion until consolidated.
+  tool: 'argocd' | 'fluxcd'
   namespace: string
   ready: number
   total: number
-  // Per-controller status; the aggregate is in the parent.
+  // Per-controller status (aggregate is in the parent and excludes
+  // 'pending' — it normalizes into 'degraded' there).
   status: 'healthy' | 'degraded' | 'crashing' | 'pending'
   // Reason for the crash when status === 'crashing'. Common values:
   // "CrashLoopBackOff", "Error". Empty for non-crashing states.

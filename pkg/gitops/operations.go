@@ -704,17 +704,18 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 		},
 	}
 
-	// First, reconcile the source. Translate the K8s "namespaces X not found"
-	// case specifically: it comes up when the sourceRef points to a namespace
-	// that's been deleted but the resource itself is a finalizer-stuck zombie
-	// (real customer hit). The default error in that path is "namespaces
-	// 'flux-test' not found", which is technically true but confusing — the
-	// page just rendered the resource. Surface a message that ties the
-	// missing namespace back to the sourceRef explicitly.
+	// Source patch: K8s returns 404 for either a missing source resource
+	// (typo'd sourceRef.name, source already deleted) OR a missing source
+	// namespace (sourceRef points to a namespace that no longer exists, common
+	// when the source is a finalizer-stuck zombie). The error message is
+	// intentionally neutral about cause — leading the operator to one of
+	// the two possibilities by guessing wastes their time when it was the
+	// other case. The wrapped err preserves the apierrors chain so handlers
+	// still map this to 404.
 	if err := mergePatch(ctx, dynClient, sourceEntry.GVR, sourceNamespace, sourceName, reconcilePatch); err != nil {
 		if apierrors.IsNotFound(err) {
 			return OperationResult{}, fmt.Errorf(
-				"source %s %s/%s could not be patched: %w (the source's namespace may no longer exist; the source resource itself may be a zombie awaiting finalizer cleanup)",
+				"source %s %s/%s could not be patched (verify the resource and its namespace still exist; if the namespace was deleted, this resource may be a finalizer-stuck zombie): %w",
 				sourceEntry.Kind, sourceNamespace, sourceName, err,
 			)
 		}

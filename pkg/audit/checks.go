@@ -1004,10 +1004,12 @@ func tagDisplay(tag string) string {
 
 // stuckTerminatingThresholdWarning is when "Terminating" stops looking
 // like normal cleanup and starts looking like a stuck finalizer.
-// Most controllers complete cleanup within a couple of minutes; 5min
-// matches the equivalent threshold in pkg/gitops/insights so the GitOps
-// per-resource Issue and the Audit cluster-wide finding fire on the
-// same boundary.
+// Most controllers complete cleanup within a couple of minutes.
+//
+// keep in sync: pkg/gitops/insights/insights.go::detectPendingDeletion
+// uses the same 5min/30min boundaries to ramp Issue severity. If you
+// retune one, retune the other so the cluster Audit and the per-resource
+// GitOps Issue agree on what counts as "stuck".
 const (
 	stuckTerminatingThresholdWarning = 5 * time.Minute
 	stuckTerminatingThresholdDanger  = 30 * time.Minute
@@ -1107,6 +1109,10 @@ func checkStuckTerminating(input *CheckInput) []Finding {
 // by the gitops insights detector ("3s", "12m", "4h", "21d") so audit
 // findings and per-resource Issues read consistently to operators
 // glancing across both surfaces.
+//
+// keep in sync: pkg/gitops/insights/insights.go::formatAgeShort (Go)
+// and web/src/components/gitops/GitOpsView.tsx::formatRelativeAge
+// (TypeScript) carry the same tier breakpoints.
 func formatDurationShort(d time.Duration) string {
 	if d < 0 {
 		d = 0

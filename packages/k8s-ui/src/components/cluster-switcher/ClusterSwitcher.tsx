@@ -64,8 +64,7 @@ export interface ClusterSwitcherProps {
 // horizontal-real-estate guard rather than a readability one. The cap
 // grows with viewport so wide screens (where there's no real estate
 // pressure) show full cluster names rather than middle-truncating
-// pointlessly. The xl tier (~400px) fits names up to ~30 chars in
-// full — comfortably covering parsed cluster names from any provider.
+// pointlessly.
 const TRIGGER_NAME_MAX_WIDTH = 'max-w-[140px] sm:max-w-[220px] xl:max-w-[340px]'
 
 export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcherProps>(({

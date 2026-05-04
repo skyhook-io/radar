@@ -276,16 +276,17 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 // catalog in pkg/gitops/insights/finalizers.go) and reports the
 // aggregate health of its pods in the install namespace. Returns ""
 // when the finalizer isn't recognized, the install namespace is empty
-// (e.g. operator deployed Flux into a non-default namespace), or no
-// matching pods exist — caller treats empty as "no signal".
+// (e.g. operator deployed Flux into a non-default namespace), or the
+// pod-list lookup itself fails — caller treats empty as "no signal".
 //
-// The format intentionally embeds both the controller name and a
-// short status verb so the calling Issue's Cause text reads naturally
-// when concatenated:
+// The format embeds both the controller name and a short status verb
+// so the calling Issue's Cause text reads naturally when surfaced.
+// Actual outputs (kept in sync with summarizeControllerHealth):
 //
-//	"argocd-application-controller is CrashLoopBackOff (2/2 pods unhealthy)"
+//	"argocd-application-controller is CrashLoopBackOff (2/2 pods)"
 //	"kustomize-controller is healthy (1 pod ready)"
-//	"source-controller has no running pods (deployment likely scaled to 0)"
+//	"source-controller is degraded (1/2 pods ready)"
+//	"helm-controller is not running in namespace flux-system (controller may not be installed, or runs under a different namespace)"
 func (r *insightsResolver) FinalizerOwnerStatus(finalizer string, root *unstructured.Unstructured) string {
 	owner := gitopsinsights.ResolveFinalizerOwner(finalizer, root)
 	if owner == nil {
@@ -348,49 +349,23 @@ func summarizeControllerHealth(controller string, pods []*corev1.Pod) string {
 	}
 	switch {
 	case crashing > 0:
-		return controller + " is " + crashReason + " (" + intToString(crashing) + "/" + intToString(len(pods)) + " pods)"
+		return fmt.Sprintf("%s is %s (%d/%d pods)", controller, crashReason, crashing, len(pods))
 	case ready == len(pods) && len(pods) > 0:
 		// All pods Ready — if the resource is *still* stuck deleting
 		// despite a healthy controller, it's a different problem (RBAC,
 		// network, broken finalizer logic). Surface the healthy state
 		// so the operator knows to dig into the controller's logs
 		// rather than its lifecycle.
-		return controller + " is healthy (" + intToString(ready) + " pod" + plural(ready) + " ready)"
+		suffix := "s"
+		if ready == 1 {
+			suffix = ""
+		}
+		return fmt.Sprintf("%s is healthy (%d pod%s ready)", controller, ready, suffix)
 	case pending > 0:
-		return controller + " is pending start (" + intToString(pending) + "/" + intToString(len(pods)) + " pods Pending)"
+		return fmt.Sprintf("%s is pending start (%d/%d pods Pending)", controller, pending, len(pods))
 	default:
-		return controller + " is degraded (" + intToString(ready) + "/" + intToString(len(pods)) + " pods ready)"
+		return fmt.Sprintf("%s is degraded (%d/%d pods ready)", controller, ready, len(pods))
 	}
-}
-
-// intToString avoids the strconv import for one-off small-int cases
-// inside this file. Keeping it inline matches the indexByte helper
-// at the bottom — a deliberate "this file imports nothing for tiny
-// utilities" pattern that the surrounding code follows.
-func intToString(n int) string {
-	if n == 0 {
-		return "0"
-	}
-	digits := make([]byte, 0, 4)
-	negative := n < 0
-	if negative {
-		n = -n
-	}
-	for n > 0 {
-		digits = append([]byte{byte('0' + n%10)}, digits...)
-		n /= 10
-	}
-	if negative {
-		return "-" + string(digits)
-	}
-	return string(digits)
-}
-
-func plural(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
 }
 
 func (r *insightsResolver) namespaceAllowed(namespace string) bool {
