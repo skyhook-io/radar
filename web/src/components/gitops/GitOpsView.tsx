@@ -1025,6 +1025,23 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const name = decodePathPart(parts[4] || '')
   const group = new URLSearchParams(location.search).get('apiGroup') || (KIND_BY_NAME.get(kind)?.group ?? '')
   const apiKind = KIND_BY_NAME.get(kind)
+  // Parent lineage from the ?from=kind|namespace|name query param. Set by
+  // openResourceFromTree when the user clicks a child GitOps node from a
+  // parent's graph. Renders an extra breadcrumb segment + "↑ Open parent"
+  // button so the user always knows where they came from. Falls back to
+  // null (no breadcrumb) for direct/deep links.
+  const parent = useMemo<{ kind: string; namespace: string; name: string; group: string } | null>(() => {
+    const raw = new URLSearchParams(location.search).get('from')
+    if (!raw) return null
+    const [pKind = '', pNs = '', pName = ''] = raw.split('|')
+    if (!pKind || !pName) return null
+    return {
+      kind: pKind,
+      namespace: pNs,
+      name: pName,
+      group: KIND_BY_NAME.get(pKind)?.group ?? '',
+    }
+  }, [location.search])
 
   const resourceQ = useResource<any>(kind, namespace, name, group)
   const treeQ = useGitOpsTree(kind, namespace, name, group, namespaces)
@@ -1093,6 +1110,18 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
       const detailKind = kindToPlural(ref.kind)
       const params = new URLSearchParams()
       if (ref.group) params.set('apiGroup', ref.group)
+      // Lineage breadcrumb support: when the user opens a child GitOps CR
+      // from inside a parent's tree, encode the parent into the URL so
+      // the child page can render "GitOps / parent / child" + "↑ Open
+      // parent" affordance. Encoded as kind|namespace|name (a single
+      // "from" param keeps the URL short; multi-level lineage isn't
+      // supported here yet — the deepest valid breadcrumb is parent →
+      // child. Going further would need either a chain encoding or
+      // history-state walking, both deferred until the use case shows up).
+      const fromKind = apiKind?.name ?? kind
+      if (fromKind && name) {
+        params.set('from', `${fromKind}|${namespace || ''}|${name}`)
+      }
       navigate({ pathname: gitOpsDetailPath(detailKind, ref.namespace || '_', ref.name), search: params.toString() })
       return
     }
@@ -1190,6 +1219,33 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                 GitOps
               </button>
               <span className="shrink-0 text-xs text-theme-text-tertiary">/</span>
+              {/* Parent breadcrumb segment when the user opened this CR
+                  from inside another CR's tree (app-of-apps, Flux
+                  Kustomization-applies-Kustomization, etc). Without this,
+                  navigation between nested GitOps surfaces feels like
+                  unrelated jumps; with it, the lineage is always visible
+                  and clickable. The segment renders smaller than the
+                  current title to avoid competing for visual weight. */}
+              {parent && (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      const params = new URLSearchParams()
+                      if (parent.group) params.set('apiGroup', parent.group)
+                      navigate({
+                        pathname: gitOpsDetailPath(parent.kind, parent.namespace || '_', parent.name),
+                        search: params.toString(),
+                      })
+                    }}
+                    className="shrink-0 truncate max-w-[200px] text-xs font-medium text-sky-500 transition-colors hover:text-sky-400"
+                    title={`Open parent: ${parent.namespace ? `${parent.namespace}/` : ''}${parent.name}`}
+                  >
+                    {parent.namespace ? `${parent.namespace}/` : ''}{parent.name}
+                  </button>
+                  <span className="shrink-0 text-xs text-theme-text-tertiary">/</span>
+                </>
+              )}
               <h1 className="min-w-0 truncate text-lg font-semibold text-theme-text-primary">
                 {namespace ? `${namespace}/` : ''}{name}
               </h1>

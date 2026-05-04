@@ -72,6 +72,17 @@ func enrichNodeFromObject(node Node, obj *unstructured.Unstructured) Node {
 			node.Data["finalizers"] = fin
 		}
 	}
+	// Tag nodes that are themselves GitOps detail-page CRs (Argo
+	// Application/ApplicationSet/AppProject, Flux Kustomization/HelmRelease/
+	// GitRepository/etc). The frontend uses these tags to render the node
+	// with a "this is a portal" treatment and route a click to its own
+	// GitOps detail page rather than the standard resource drawer. Doing
+	// the classification here (one place, sees the live object) avoids
+	// duplicating the kind list across the package + the frontend.
+	if tool, kind := classifyGitOpsKind(obj); tool != "" {
+		node.Data["gitopsTool"] = tool
+		node.Data["gitopsKind"] = kind
+	}
 	node.Data["labels"] = obj.GetLabels()
 	node.Data["annotations"] = obj.GetAnnotations()
 	if wave := obj.GetAnnotations()["argocd.argoproj.io/sync-wave"]; wave != "" {
@@ -276,5 +287,45 @@ func summarize(nodes []Node) Summary {
 		}
 	}
 	return s
+}
+
+// classifyGitOpsKind returns (tool, kind) when the object is itself a
+// GitOps detail-page CR, or ("", "") otherwise. The kind list is the
+// authoritative source for "this node is a portal to its own GitOps
+// detail view" — keeping it here means the frontend doesn't need to
+// know which CRDs to special-case.
+//
+// The check uses the object's apiVersion (group prefix) rather than
+// kind alone because some kinds collide across groups (e.g. core Service
+// vs Knative Service). For nested cases — Argo app-of-apps Applications,
+// Flux Kustomizations applying further Kustomizations — these tags
+// drive the "→ Open" affordance + lineage breadcrumb on the child page.
+func classifyGitOpsKind(obj *unstructured.Unstructured) (tool, kind string) {
+	if obj == nil {
+		return "", ""
+	}
+	api := obj.GetAPIVersion()
+	k := obj.GetKind()
+	switch {
+	case strings.HasPrefix(api, "argoproj.io/"):
+		switch k {
+		case "Application", "ApplicationSet", "AppProject":
+			return "argocd", k
+		}
+	case strings.HasPrefix(api, "kustomize.toolkit.fluxcd.io/"):
+		if k == "Kustomization" {
+			return "fluxcd", k
+		}
+	case strings.HasPrefix(api, "helm.toolkit.fluxcd.io/"):
+		if k == "HelmRelease" {
+			return "fluxcd", k
+		}
+	case strings.HasPrefix(api, "source.toolkit.fluxcd.io/"):
+		switch k {
+		case "GitRepository", "OCIRepository", "HelmRepository", "Bucket", "HelmChart":
+			return "fluxcd", k
+		}
+	}
+	return "", ""
 }
 

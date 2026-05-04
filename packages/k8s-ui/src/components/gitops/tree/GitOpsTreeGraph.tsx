@@ -551,6 +551,7 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
   const kind = normalizeDisplayKind(node)
   const status = normalizeHealth(node.topologyStatus)
   const terminating = isNodeTerminating(node)
+  const gitopsTool = gitopsToolForNode(node)
   const chips = buildChips(node)
   const dim = getNodeDimensions(node)
 
@@ -571,6 +572,13 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
           !terminating && status === 'degraded' && 'border-l-yellow-500',
           !terminating && status === 'unhealthy' && 'border-l-red-500',
           !terminating && status === 'unknown' && 'border-l-slate-500',
+          // GitOps portal nodes get a slightly stronger ring so the user's
+          // eye picks them out from generic K8s leaves. Combined with the
+          // tool-icon overlay + "→ Open" affordance below, this signals
+          // "click me to dive into this CR's own GitOps view" without
+          // making the node look broken or alarming.
+          gitopsTool && !data.highlighted && 'ring-1 ring-skyhook-500/30 hover:ring-skyhook-500/60',
+          gitopsTool && 'cursor-pointer',
           // Group nodes are interactive (click toggles expand) but the
           // default ReactFlow handler doesn't add a hover state. A subtle
           // border lift telegraphs "this responds to clicks" without
@@ -585,16 +593,26 @@ const GitOpsResourceNode = memo(function GitOpsResourceNode({ data }: NodeProps<
             <span className="truncate text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary">
               {node.role === 'group' ? displayKind((node.data?.groupedKind as string) || kind) : displayKind(kind)}
             </span>
+            {/* Tool badge for GitOps portal nodes — sits between the kind
+                label and the status dot, signaling "this is a managed-
+                GitOps-app, not a leaf K8s resource". Keeps the dot's
+                position so non-portal nodes look unchanged. */}
+            {gitopsTool && (
+              <span className="rounded-sm border border-skyhook-500/30 bg-skyhook-500/10 px-1 py-px text-[9px] font-semibold uppercase tracking-wide text-skyhook-300">
+                {gitopsTool === 'argocd' ? 'Argo' : 'Flux'}
+              </span>
+            )}
             <span className={clsx('ml-auto h-1.5 w-1.5 rounded-full', getStatusDotColor(status))} />
           </div>
           <div className="truncate pr-1 text-sm font-medium text-theme-text-primary">{node.ref.name}</div>
           {/* Group nodes get a chevron at the bottom-right to advertise the
-              click-to-expand affordance. The subtitle text alone wasn't
-              enough — users were treating the count as an immutable fact
-              rather than a button. */}
+              click-to-expand affordance. GitOps portal nodes get a similar
+              chevron at the right of the subtitle to signal "→ opens its
+              own page". The subtitle text alone wasn't enough — users were
+              treating the count as an immutable fact rather than a button. */}
           <div className="mt-0.5 flex items-center gap-1 text-xs text-theme-text-secondary">
             <span className="truncate">{getSubtitle(node)}</span>
-            {node.role === 'group' && <ChevronRight className="ml-auto h-3 w-3 shrink-0 text-theme-text-tertiary" />}
+            {(node.role === 'group' || gitopsTool) && <ChevronRight className="ml-auto h-3 w-3 shrink-0 text-theme-text-tertiary" />}
           </div>
           {chips.length > 0 && (
             <div className="mt-2 flex flex-wrap gap-1">
@@ -632,6 +650,19 @@ const nodeTypes: NodeTypes = {
 // simply read as not-terminating, which is the safe default.
 function isNodeTerminating(node: GitOpsTreeNode): boolean {
   return Boolean(node.data?.deletionTimestamp)
+}
+
+// gitopsToolForNode returns 'argocd' | 'fluxcd' | undefined depending on
+// whether the backend classified this node as itself a GitOps detail-page
+// CR (Argo Application/Set/Project, Flux Kustomization/HelmRelease/source).
+// These nodes are *portals* — clicking them opens that CR's own GitOps
+// detail page rather than the standard resource drawer. The visual
+// treatment around them (tool icon overlay, "→" affordance, stronger
+// border) advertises that they're not just leaves.
+function gitopsToolForNode(node: GitOpsTreeNode): 'argocd' | 'fluxcd' | undefined {
+  const t = node.data?.gitopsTool
+  if (t === 'argocd' || t === 'fluxcd') return t
+  return undefined
 }
 
 function buildChips(node: GitOpsTreeNode): Array<{ label?: string; value: string; tone?: 'neutral' | 'warning' | 'danger' }> {
