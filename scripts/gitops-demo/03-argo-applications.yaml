@@ -5,6 +5,7 @@
 #
 # Coverage:
 #   guestbook-healthy   → Synced + Healthy (auto-sync on)
+#   guestbook-drift     → stable OutOfSync (auto-sync on, selfHeal: false — stays drifted)
 #   guestbook-manual    → manual sync (auto-sync off, drives ManualDriftWithoutAutoSync detector)
 #   guestbook-suspended → suspended via Radar's annotation pattern (drives Suspended chip)
 ---
@@ -32,6 +33,34 @@ spec:
       selfHeal: true
     syncOptions:
       - CreateNamespace=false  # namespace pre-created in 01-namespaces.yaml
+---
+# Drift fixture — auto-sync on but selfHeal disabled. After the cluster
+# bootstraps, `make gitops-demo-drift` scales guestbook-ui to 3 replicas
+# while Git declares 1. With selfHeal: false, Argo detects OutOfSync but
+# won't revert it, giving a stable drifted state for visual-testing the
+# Changes tab, drift diff, and OutOfSync badges.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: guestbook-drift
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: radar-demo
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    targetRevision: HEAD
+    path: guestbook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-drift
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: false   # drift persists — Argo detects but won't revert
+    syncOptions:
+      - CreateNamespace=false
 ---
 # Manual-sync app — auto-sync deliberately disabled. After the first
 # sync, edit a managed resource and the GitOps detail will report

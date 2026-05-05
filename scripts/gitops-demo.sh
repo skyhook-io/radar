@@ -153,25 +153,25 @@ apply_fixtures() {
 
 cmd_drift() {
   require_cmd kubectl "https://kubernetes.io/docs/tasks/tools/"
-  step "Inducing drift on demo-healthy/guestbook"
+  step "Inducing drift on demo-drift/guestbook"
 
   # Wait for the Deployment to exist (Argo may still be syncing on a
   # fresh `up` run).
   for i in $(seq 1 30); do
-    if kubectl --context "${KUBECTL_CTX}" -n demo-healthy get deployment guestbook-ui >/dev/null 2>&1; then
+    if kubectl --context "${KUBECTL_CTX}" -n demo-drift get deployment guestbook-ui >/dev/null 2>&1; then
       break
     fi
     if [ "$i" -eq 30 ]; then
-      fail "guestbook-ui deployment not found in demo-healthy namespace after 30s — has the cluster fully synced?"
+      fail "guestbook-ui deployment not found in demo-drift namespace after 30s — has the cluster fully synced?"
     fi
     sleep 1
   done
 
-  # Scale from the Git-declared 1 replica to 3. Argo will report
-  # OutOfSync; this is exactly the live-drift case the GitOps view
-  # needs to render correctly.
-  kubectl --context "${KUBECTL_CTX}" -n demo-healthy scale deployment guestbook-ui --replicas=3 >/dev/null
-  ok "Scaled guestbook-ui to 3 replicas (Git declares 1) — Argo should now report OutOfSync"
+  # Scale from the Git-declared 1 replica to 3. Argo detects OutOfSync
+  # but won't revert (selfHeal: false), giving a stable drifted state for
+  # visual-testing the Changes tab, drift diff, and OutOfSync badges.
+  kubectl --context "${KUBECTL_CTX}" -n demo-drift scale deployment guestbook-ui --replicas=3 >/dev/null
+  ok "Scaled guestbook-ui to 3 replicas (Git declares 1) — guestbook-drift should now report stable OutOfSync"
 }
 
 # --- Status ----------------------------------------------------------------

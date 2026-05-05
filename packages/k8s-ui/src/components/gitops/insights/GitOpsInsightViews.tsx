@@ -483,7 +483,7 @@ function remainderAfterFirstSentence(s: string): string {
 // so dark-mode + the `alert` (orange) intermediate tier work consistently.
 function severityTone(severity: string): { band: string; icon: ReactNode; text: string } {
   const sev = gitopsToSeverity(severity)
-  const Icon = sev === 'error' ? CircleAlert : sev === 'warning' ? AlertTriangle : Info
+  const Icon = sev === 'error' ? CircleAlert : (sev === 'warning' || sev === 'alert') ? AlertTriangle : Info
   return {
     band: SEVERITY_BADGE[sev],
     icon: <Icon className={clsx('h-3.5 w-3.5 shrink-0', SEVERITY_TEXT[sev])} />,

@@ -13,6 +13,7 @@ export function gitopsToSeverity(value: string | undefined): Severity {
   const v = (value || '').toLowerCase()
   if (!v) return 'neutral'
   if (v === 'critical' || v.includes('fail') || v.includes('error')) return 'error'
+  if (v === 'alert') return 'alert'
   if (v === 'warning' || v.includes('terminat') || v.includes('pending') || v.includes('wait')) return 'warning'
   if (v === 'info' || v.includes('progress') || v.includes('running') || v.includes('reconcil')) return 'info'
   if (v.includes('succeed') || v === 'healthy' || v === 'ok') return 'success'

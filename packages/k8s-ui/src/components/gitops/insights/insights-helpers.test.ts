@@ -7,6 +7,7 @@ describe('gitopsToSeverity', () => {
     ['critical', 'error'],
     ['Failed', 'error'],
     ['UpgradeFailed', 'error'],
+    ['alert', 'alert'],
     ['warning', 'warning'],
     ['Terminating', 'warning'],
     ['Pending', 'warning'],

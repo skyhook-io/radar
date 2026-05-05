@@ -28,6 +28,7 @@ kubectl config use-context kind-radar-gitops-demo
 | Resource | Kind | What it exercises |
 |---|---|---|
 | `argocd/guestbook-healthy` | Application | Synced + Healthy, auto-sync on, default success path |
+| `argocd/guestbook-drift` | Application | Stable OutOfSync: auto-sync on but `selfHeal: false` — run `make gitops-demo-drift` to induce and it stays |
 | `argocd/guestbook-manual` | Application | Auto-sync off → exercises ManualDriftWithoutAutoSync detector once drifted |
 | `argocd/guestbook-suspended` | Application | Suspended via Radar's annotation pattern → Resume button + suspended chip |
 | `argocd/app-of-apps-parent` | Application | App-of-apps: parent that manages 3 child Applications → portal-node + lineage breadcrumb |
@@ -50,6 +51,7 @@ kubectl config use-context kind-radar-gitops-demo
 The fixtures collectively cover (after a successful first sync):
 
 - ✅ Synced + Healthy (default)
+- ✅ Stable OutOfSync / drift (Argo, `selfHeal: false` — run `make gitops-demo-drift`)
 - ✅ Suspended (both tools, both annotation styles)
 - ✅ Manual sync mode (Argo)
 - ✅ Auto-sync with prune + selfHeal (Argo)
