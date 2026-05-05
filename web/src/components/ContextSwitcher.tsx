@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useState, forwardRef } from 'react'
 import { AlertTriangle } from 'lucide-react'
 import {
   ClusterSwitcher,
@@ -16,11 +16,15 @@ interface ContextSwitcherProps {
   className?: string
 }
 
+export interface ContextSwitcherHandle {
+  open: () => void
+}
+
 interface ParsedContext extends ParsedContextName {
   context: ContextInfo
 }
 
-export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
+export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcherProps>(({ className = '' }, ref) => {
   const [showConfirm, setShowConfirm] = useState(false)
   const [pendingSwitch, setPendingSwitch] = useState<ParsedContext | null>(null)
   const [sessionCounts, setSessionCounts] = useState<SessionCounts | null>(null)
@@ -158,6 +162,7 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
   return (
     <>
       <ClusterSwitcher
+        ref={ref}
         className={className}
         currentId={currentId}
         currentName={currentRaw}
@@ -222,4 +227,4 @@ export function ContextSwitcher({ className = '' }: ContextSwitcherProps) {
       )}
     </>
   )
-}
+})

@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect, useCallback, useMemo } from 'react'
+import { useState, useRef, useEffect, useCallback, useMemo, forwardRef, useImperativeHandle } from 'react'
 import { createPortal } from 'react-dom'
 import { clsx } from 'clsx'
 import { ChevronDown, Search, X, Check, Shield } from 'lucide-react'
@@ -7,6 +7,10 @@ import { isForbiddenError } from '../../api/client'
 
 interface Namespace {
   name: string
+}
+
+export interface NamespaceSelectorHandle {
+  open: () => void
 }
 
 interface NamespaceSelectorProps {
@@ -19,7 +23,7 @@ interface NamespaceSelectorProps {
   disabledTooltip?: string
 }
 
-export function NamespaceSelector({
+export const NamespaceSelector = forwardRef<NamespaceSelectorHandle, NamespaceSelectorProps>(({
   value,
   onChange,
   namespaces,
@@ -27,7 +31,7 @@ export function NamespaceSelector({
   className,
   disabled,
   disabledTooltip,
-}: NamespaceSelectorProps) {
+}, ref) => {
   const [isOpen, setIsOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [manualInput, setManualInput] = useState('')
@@ -73,11 +77,17 @@ export function NamespaceSelector({
 
   // Open dropdown
   const openDropdown = useCallback(() => {
+    if (disabled) return
     setIsOpen(true)
     setSearch('')
     setHighlightedIndex(0)
     updatePosition()
-  }, [updatePosition])
+  }, [disabled, updatePosition])
+
+  // Expose open method via ref
+  useImperativeHandle(ref, () => ({
+    open: openDropdown
+  }), [openDropdown])
 
   // Close dropdown
   const closeDropdown = useCallback(() => {
@@ -433,4 +443,4 @@ export function NamespaceSelector({
         )}
     </>
   )
-}
+})

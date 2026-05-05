@@ -4,6 +4,8 @@ import {
   useMemo,
   useRef,
   useState,
+  forwardRef,
+  useImperativeHandle,
 } from 'react'
 import { ChevronDown, Check, Loader2, Search, Server, X } from 'lucide-react'
 import { ClusterName } from '../ui/ClusterName'
@@ -25,6 +27,10 @@ export interface ClusterSwitcherItem {
    *  ClusterName supplies its own tooltip for the cluster name itself; this
    *  is for row-level affordances (e.g. "Cluster offline — reconnect…"). */
   title?: string
+}
+
+export interface ClusterSwitcherHandle {
+  open: () => void
 }
 
 export interface ClusterSwitcherProps {
@@ -54,7 +60,7 @@ export interface ClusterSwitcherProps {
 // full — comfortably covering parsed cluster names from any provider.
 const TRIGGER_NAME_MAX_WIDTH = 'max-w-[160px] sm:max-w-[260px] xl:max-w-[400px]'
 
-export function ClusterSwitcher({
+export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcherProps>(({
   currentId,
   currentName,
   items,
@@ -69,12 +75,18 @@ export function ClusterSwitcher({
   errorSlot,
   className = '',
   align = 'left',
-}: ClusterSwitcherProps) {
+}, ref) => {
   const [isOpen, setIsOpen] = useState(false)
   const [search, setSearch] = useState('')
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
   const rootRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
+
+  useImperativeHandle(ref, () => ({
+    open: () => {
+      if (!disabled && !loading) setIsOpen(true)
+    }
+  }), [disabled, loading])
 
   const groups = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -344,4 +356,4 @@ export function ClusterSwitcher({
       )}
     </div>
   )
-}
+})

@@ -28,7 +28,7 @@ import { ConnectionErrorView } from './components/ConnectionErrorView'
 import { CapabilitiesProvider, useCapabilitiesContext } from './contexts/CapabilitiesContext'
 import { UserMenu } from './components/UserMenu'
 import { ErrorBoundary } from './components/ui/ErrorBoundary'
-import { NamespaceSelector } from './components/ui/NamespaceSelector'
+import { NamespaceSelector, type NamespaceSelectorHandle } from './components/ui/NamespaceSelector'
 import { UpdateNotification } from './components/ui/UpdateNotification'
 import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { CommandPalette } from './components/ui/CommandPalette'
@@ -45,6 +45,7 @@ import { Tooltip } from './components/ui/Tooltip'
 import { SettingsDialog } from './components/settings/SettingsDialog'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
 import { kindToPlural, openExternal } from './utils/navigation'
+import type { ContextSwitcherHandle } from './components/ContextSwitcher'
 
 // All possible node kinds (core + GitOps)
 const ALL_NODE_KINDS: NodeKind[] = [
@@ -370,6 +371,10 @@ function AppInner() {
   // Context switching for command palette
   const switchContext = useSwitchContext()
 
+  // Refs for dropdown components to trigger them via shortcuts
+  const namespaceSelectorRef = useRef<NamespaceSelectorHandle>(null)
+  const contextSwitcherRef = useRef<ContextSwitcherHandle>(null)
+
   // View switching keyboard shortcuts
   const views: ExtendedMainView[] = ['home', 'topology', 'resources', 'timeline', 'helm', 'traffic', 'cost', 'audit']
   useRegisterShortcuts([
@@ -381,6 +386,22 @@ function AppInner() {
       scope: 'global' as const,
       handler: () => setMainView(view),
     })),
+    {
+      id: 'switch-namespace',
+      keys: 'n',
+      description: 'Switch namespace',
+      category: 'Navigation' as const,
+      scope: 'global' as const,
+      handler: () => namespaceSelectorRef.current?.open(),
+    },
+    {
+      id: 'switch-context',
+      keys: 'c',
+      description: 'Switch context',
+      category: 'Navigation' as const,
+      scope: 'global' as const,
+      handler: () => contextSwitcherRef.current?.open(),
+    },
     {
       id: 'theme-toggle',
       keys: 't',
@@ -797,7 +818,7 @@ function AppInner() {
           {navCustomization.brandSlot ?? <Logo />}
 
           <div className="flex items-center gap-2">
-            {navCustomization.contextSlot ?? <ContextSwitcher />}
+            {navCustomization.contextSlot ?? <ContextSwitcher ref={contextSwitcherRef} />}
             {/* Connection status - next to cluster name */}
             <div className="flex items-center gap-1.5 ml-1">
               <Tooltip
@@ -892,6 +913,7 @@ function AppInner() {
         <div className="flex items-center gap-3 shrink-0">
           {/* Namespace selector with search */}
           <NamespaceSelector
+            ref={namespaceSelectorRef}
             value={namespaces}
             onChange={(next) => {
               setNamespaces(next)
