@@ -72,6 +72,22 @@ const TIMESTAMP_FORMAT_ORDER: TimestampFormat[] = [
   'time-local', 'time-utc', 'iso-local', 'iso-utc', 'relative', 'epoch',
 ]
 
+export type StructuredMode = 'compact' | 'expanded' | 'raw'
+
+const STRUCTURED_MODE_ORDER: StructuredMode[] = ['compact', 'expanded', 'raw']
+
+const STRUCTURED_MODE_LABELS: Record<StructuredMode, string> = {
+  compact: 'Compact',
+  expanded: 'Expanded',
+  raw: 'Raw',
+}
+
+const STRUCTURED_MODE_DESCRIPTIONS: Record<StructuredMode, string> = {
+  compact: 'Summary line with field count',
+  expanded: 'All fields shown as a tree',
+  raw: 'Original log line, unparsed',
+}
+
 const TIMESTAMP_FORMAT_SHORT_LABELS: Record<TimestampFormat, string> = {
   'time-local': 'Local time',
   'time-utc': 'UTC time',
@@ -163,7 +179,13 @@ export function LogCore({
   )
   const [showDownloadMenu, setShowDownloadMenu] = useState(false)
   const [showTsMenu, setShowTsMenu] = useState(false)
-  const [expandAllStructured, setExpandAllStructured] = useState(false)
+  const [showStructuredMenu, setShowStructuredMenu] = useState(false)
+  const [structuredMode, setStructuredMode] = useState<StructuredMode>(() => {
+    try {
+      const v = localStorage.getItem('radar-logs-structured-mode') as StructuredMode | null
+      return v && STRUCTURED_MODE_ORDER.includes(v) ? v : 'compact'
+    } catch { return 'compact' }
+  })
   const [expandedStacks, setExpandedStacks] = useState<Set<number>>(() => new Set())
 
   // Re-render every 15s so "relative" timestamps tick forward during idle viewing.
@@ -224,6 +246,33 @@ export function LogCore({
     window.addEventListener('click', handleClick)
     return () => window.removeEventListener('click', handleClick)
   }, [showTsMenu])
+
+  const structuredMenuRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!showStructuredMenu) return
+    const handleClick = (e: MouseEvent) => {
+      if (structuredMenuRef.current?.contains(e.target as Node)) return
+      setShowStructuredMenu(false)
+    }
+    window.addEventListener('click', handleClick)
+    return () => window.removeEventListener('click', handleClick)
+  }, [showStructuredMenu])
+
+  const pickStructuredMode = useCallback((mode: StructuredMode) => {
+    setStructuredMode(mode)
+    try { localStorage.setItem('radar-logs-structured-mode', mode) } catch {}
+    setShowStructuredMenu(false)
+  }, [])
+
+  // Icon click cycles through the three modes; chevron exposes the explicit picker.
+  const cycleStructuredMode = useCallback(() => {
+    setStructuredMode(prev => {
+      const idx = STRUCTURED_MODE_ORDER.indexOf(prev)
+      const next = STRUCTURED_MODE_ORDER[(idx + 1) % STRUCTURED_MODE_ORDER.length]
+      try { localStorage.setItem('radar-logs-structured-mode', next) } catch {}
+      return next
+    })
+  }, [])
 
   // Keyboard shortcut: Ctrl+F to open search
   useEffect(() => {
@@ -429,18 +478,59 @@ export function LogCore({
 
         <div className="flex-1" />
 
-        {/* Expand all structured logs toggle */}
+        {/* Structured-log display mode: icon cycles compact→expanded→raw, chevron picks explicitly. */}
         {hasStructuredEntries && (
-          <Tooltip content={expandAllStructured ? 'Collapse all structured' : 'Expand all structured'} delay={TIP_DELAY} position="bottom">
-            <button
-              onClick={() => setExpandAllStructured(prev => !prev)}
-              className={`p-1.5 rounded transition-colors ${
-                expandAllStructured ? palette.toolbarActive : iconBtnInactive
-              }`}
-            >
-              <Braces className="w-4 h-4" />
-            </button>
-          </Tooltip>
+          <div className="flex items-center">
+            <Tooltip content={`Structured: ${STRUCTURED_MODE_LABELS[structuredMode]} — click to cycle`} delay={TIP_DELAY} position="bottom">
+              <button
+                onClick={cycleStructuredMode}
+                className={`p-1.5 rounded-l transition-colors ${
+                  structuredMode === 'compact' ? iconBtnInactive : palette.toolbarActive
+                }`}
+                aria-label={`Structured log display mode: ${STRUCTURED_MODE_LABELS[structuredMode]}`}
+              >
+                <Braces className="w-4 h-4" />
+              </button>
+            </Tooltip>
+            <div className="relative" ref={structuredMenuRef}>
+              <Tooltip content="Pick structured display mode" delay={TIP_DELAY} position="bottom">
+                <button
+                  onClick={() => setShowStructuredMenu(prev => !prev)}
+                  className={`px-2 py-1.5 rounded-r text-[10px] font-medium transition-colors whitespace-nowrap ${
+                    structuredMode === 'compact' ? iconBtnInactiveTertiary : palette.toolbarActive
+                  }`}
+                  aria-label="Pick structured log display mode"
+                >
+                  <span className="inline-flex items-center gap-1">
+                    <span>{STRUCTURED_MODE_LABELS[structuredMode]}</span>
+                    <ChevronDown className="w-3 h-3" />
+                  </span>
+                </button>
+              </Tooltip>
+              {showStructuredMenu && (
+                <div className={`absolute top-full right-0 mt-1 w-56 ${palette.menuBg} border ${palette.border} rounded-lg shadow-lg z-50`}>
+                  <div className={`px-3 py-1.5 text-[10px] uppercase tracking-wide ${palette.textTertiary} border-b ${palette.border}`}>
+                    Structured display
+                  </div>
+                  {STRUCTURED_MODE_ORDER.map(mode => (
+                    <button
+                      key={mode}
+                      onClick={() => pickStructuredMode(mode)}
+                      className={`w-full text-left px-3 py-1.5 text-xs ${palette.hoverBg} flex items-start justify-between gap-2 ${
+                        structuredMode === mode ? palette.textPrimary : palette.textSecondary
+                      }`}
+                    >
+                      <span className="flex flex-col">
+                        <span>{STRUCTURED_MODE_LABELS[mode]}</span>
+                        <span className={`text-[10px] ${palette.textTertiary}`}>{STRUCTURED_MODE_DESCRIPTIONS[mode]}</span>
+                      </span>
+                      {structuredMode === mode && <span className={`text-[10px] ${palette.textAccent} mt-0.5`}>✓</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
         )}
 
         {/* Timestamp toggle + format picker */}
@@ -731,7 +821,8 @@ export function LogCore({
                 ansiEnabled={ansiEnabled}
                 isCurrentMatch={group.head.id === currentHighlightId}
                 wordWrap={wordWrap}
-                defaultExpanded={expandAllStructured}
+                defaultExpanded={structuredMode === 'expanded'}
+                rawStructured={structuredMode === 'raw'}
                 onFilterValue={handleFilterValue}
                 isStackExpanded={expandedStacks.has(group.head.id)}
                 onToggleStack={toggleStackExpanded}
@@ -785,6 +876,8 @@ interface LogLineProps {
   isCurrentMatch: boolean
   wordWrap: boolean
   defaultExpanded: boolean
+  /** When true, JSON/logfmt entries render as plain raw text instead of via StructuredLogLine. */
+  rawStructured: boolean
   onFilterValue?: (value: string) => void
   /** Optional lead element rendered at the start of the row (e.g. stack-trace toggle). */
   leadSlot?: ReactNode
@@ -804,6 +897,7 @@ function LogLine({
   isCurrentMatch,
   wordWrap,
   defaultExpanded,
+  rawStructured,
   onFilterValue,
   leadSlot,
   isDark,
@@ -825,7 +919,7 @@ function LogLine({
         dangerouslySetInnerHTML={{ __html: highlighted }}
       />
     )
-  } else if (entry.isJson || entry.isLogfmt) {
+  } else if ((entry.isJson || entry.isLogfmt) && !rawStructured) {
     contentElement = (
       <StructuredLogLine
         content={entry.content}
@@ -901,6 +995,7 @@ interface LogGroupItemProps {
   isCurrentMatch: boolean
   wordWrap: boolean
   defaultExpanded: boolean
+  rawStructured: boolean
   onFilterValue: (value: string) => void
   isStackExpanded: boolean
   onToggleStack: (id: number) => void
