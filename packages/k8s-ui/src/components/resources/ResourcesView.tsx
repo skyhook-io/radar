@@ -2377,7 +2377,7 @@ export function ResourcesView({
     requestAnimationFrame(() => {
       isSyncingFromURL.current = false
     })
-  }, [locationPathname, locationSearch]) // Re-run when injected URL path or search params change
+  }, [locationPathname, locationSearch, defaultKind, basePath]) // Re-run when injected URL path or search params change
 
   const navigate = useMemo(() => {
     if (!onNavigate) return (_pathOrObj: any, _opts?: any) => {}
