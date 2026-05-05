@@ -175,6 +175,34 @@ export function formatCPUMillicores(millicores: number): string {
   return formatCoresValue(cores)
 }
 
+// =============================================================================
+// Time Formatting
+// =============================================================================
+
+export function formatCompactAge(value?: string): string {
+  if (!value) return ''
+  const time = Date.parse(value)
+  if (!Number.isFinite(time)) return ''
+  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000))
+  if (seconds < 60) return `${seconds}s`
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
+export function formatRelativeAgeTime(value?: string, fallback = '-'): string {
+  if (!value) return fallback
+  const time = Date.parse(value)
+  if (!Number.isFinite(time)) return value
+  const diff = Date.now() - time
+  if (diff < 0) return new Date(time).toLocaleString()
+  const compact = formatCompactAge(value)
+  if (!compact) return fallback
+  return compact === '0s' ? 'just now' : `${compact} ago`
+}
+
 /**
  * Format memory MiB to human-readable string.
  * Used by dashboard API which returns memory in MiB.

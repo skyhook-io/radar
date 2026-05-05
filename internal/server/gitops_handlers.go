@@ -322,49 +322,25 @@ func (r *insightsResolver) FinalizerOwnerStatus(finalizer string, root *unstruct
 // fact dominates the status. If all pods are Ready, "healthy". Anything
 // in between is "degraded" with a count.
 func summarizeControllerHealth(controller string, pods []*corev1.Pod) string {
-	ready := 0
-	crashing := 0
-	pending := 0
-	var crashReason string
-	for _, p := range pods {
-		// CrashLoopBackOff is the highest-signal failure: the pod is
-		// trying to start but immediately failing. Surface its reason
-		// when present so the operator knows what kind of crash to
-		// debug (config, RBAC, image pull, etc).
-		for _, cs := range p.Status.ContainerStatuses {
-			if cs.State.Waiting != nil && (cs.State.Waiting.Reason == "CrashLoopBackOff" || cs.State.Waiting.Reason == "Error") {
-				crashing++
-				if crashReason == "" {
-					crashReason = cs.State.Waiting.Reason
-				}
-				break
-			}
-		}
-		if isPodReady(p) {
-			ready++
-		}
-		if p.Status.Phase == corev1.PodPending {
-			pending++
-		}
-	}
+	health := summarizeControllerPods(pods)
 	switch {
-	case crashing > 0:
-		return fmt.Sprintf("%s is %s (%d/%d pods)", controller, crashReason, crashing, len(pods))
-	case ready == len(pods) && len(pods) > 0:
+	case health.Crashing > 0:
+		return fmt.Sprintf("%s is %s (%d/%d pods)", controller, health.CrashReason, health.Crashing, health.Total)
+	case health.Ready == health.Total && health.Total > 0:
 		// All pods Ready — if the resource is *still* stuck deleting
 		// despite a healthy controller, it's a different problem (RBAC,
 		// network, broken finalizer logic). Surface the healthy state
 		// so the operator knows to dig into the controller's logs
 		// rather than its lifecycle.
 		suffix := "s"
-		if ready == 1 {
+		if health.Ready == 1 {
 			suffix = ""
 		}
-		return fmt.Sprintf("%s is healthy (%d pod%s ready)", controller, ready, suffix)
-	case pending > 0:
-		return fmt.Sprintf("%s is pending start (%d/%d pods Pending)", controller, pending, len(pods))
+		return fmt.Sprintf("%s is healthy (%d pod%s ready)", controller, health.Ready, suffix)
+	case health.Pending > 0:
+		return fmt.Sprintf("%s is pending start (%d/%d pods Pending)", controller, health.Pending, health.Total)
 	default:
-		return fmt.Sprintf("%s is degraded (%d/%d pods ready)", controller, ready, len(pods))
+		return fmt.Sprintf("%s is degraded (%d/%d pods ready)", controller, health.Ready, health.Total)
 	}
 }
 

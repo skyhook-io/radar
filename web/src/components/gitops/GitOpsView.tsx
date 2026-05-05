@@ -12,9 +12,12 @@ import {
   HealthStatusBadge,
   StatusDot,
   SyncStatusBadge,
+  formatCompactAge,
+  formatRelativeAgeTime,
   initNavigationMap,
   kindToPlural,
   mapHealthToTone,
+  matchesGitOpsTreeFilters,
   type APIResource,
   type GitOpsResourceTree,
   type GitOpsInsightRef,
@@ -2092,11 +2095,6 @@ function buildTreeFacets(tree: GitOpsResourceTree | null) {
 
 function filterTreeNodes(tree: GitOpsResourceTree | null, query: string, filters: GitOpsTreeFilters): GitOpsTreeNode[] {
   const q = query.trim().toLowerCase()
-  const kinds = setFromFilter(filters.kinds)
-  const sync = setFromFilter(filters.sync)
-  const health = setFromFilter(filters.health)
-  const namespaces = setFromFilter(filters.namespaces)
-  const roles = setFromFilter(filters.roles)
   return (tree?.nodes ?? []).filter((node) => {
     if (q && ![
       node.ref.kind,
@@ -2106,19 +2104,8 @@ function filterTreeNodes(tree: GitOpsResourceTree | null, query: string, filters
       node.sync,
       node.health,
     ].some((value) => String(value ?? '').toLowerCase().includes(q))) return false
-    if (kinds && !kinds.has(node.ref.kind)) return false
-    if (sync && !sync.has(node.sync || 'Unknown')) return false
-    if (health && !health.has(node.health || 'Unknown')) return false
-    if (namespaces && !namespaces.has(node.ref.namespace || '(cluster)')) return false
-    if (roles && !roles.has(node.role)) return false
-    return true
+    return matchesGitOpsTreeFilters(node, filters)
   })
-}
-
-function setFromFilter(values?: Set<string> | string[]): Set<string> | undefined {
-  if (!values) return undefined
-  const set = values instanceof Set ? values : new Set(values)
-  return set.size > 0 ? set : undefined
 }
 
 function normalizeDetailResource(kind: string, group: string, resource: any): GitOpsRow | null {
@@ -2439,19 +2426,7 @@ function insightChangeKey(ref: { kind: string; namespace?: string; name: string 
 }
 
 function formatRelative(value: string) {
-  if (!value) return '-'
-  const time = Date.parse(value)
-  if (!Number.isFinite(time)) return value
-  const diff = Date.now() - time
-  if (diff < 0) return new Date(time).toLocaleString()
-  const minutes = Math.floor(diff / 60_000)
-  if (minutes < 1) return 'just now'
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 48) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  if (days < 60) return `${days}d ago`
-  return new Date(time).toLocaleDateString()
+  return formatRelativeAgeTime(value)
 }
 
 function SummaryTile({ label, value, tone = 'neutral' }: { label: string; value: number; tone?: 'neutral' | 'warning' | 'error' | 'info' }) {
@@ -2554,17 +2529,7 @@ function describeTerminating(summary?: { terminationStartedAt?: string; finalize
 // callers should treat empty as "no timestamp" and skip the age suffix
 // gracefully.
 function formatRelativeAge(rfc3339?: string): string {
-  if (!rfc3339) return ''
-  const t = Date.parse(rfc3339)
-  if (Number.isNaN(t)) return ''
-  const ms = Math.max(0, Date.now() - t)
-  const sec = Math.floor(ms / 1000)
-  if (sec < 60) return `${sec}s`
-  const min = Math.floor(sec / 60)
-  if (min < 60) return `${min}m`
-  const hr = Math.floor(min / 60)
-  if (hr < 24) return `${hr}h`
-  return `${Math.floor(hr / 24)}d`
+  return formatCompactAge(rfc3339)
 }
 
 // Parse an Argo HistoryItem.id into the int64 the rollback API needs.

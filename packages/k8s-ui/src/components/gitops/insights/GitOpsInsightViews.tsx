@@ -4,6 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import type { GitOpsChange, GitOpsHistoryItem, GitOpsInsight, GitOpsIssue, GitOpsPlanItem } from '../../../types'
 import { HealthStatusBadge, SyncStatusBadge } from '../GitOpsStatusBadge'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../../utils/badge-colors'
+import { formatRelativeAgeTime } from '../../../utils/format'
 import { Tooltip } from '../../ui/Tooltip'
 import { compactSource, entryTone, gitopsToSeverity } from './insights-helpers'
 
@@ -861,16 +862,7 @@ function RecentEventsPanel({ events }: { events: NonNullable<GitOpsChange['recen
 }
 
 function formatRelativeTime(value: string): string {
-  if (!value) return ''
-  const t = Date.parse(value)
-  if (!Number.isFinite(t)) return value
-  const diff = Date.now() - t
-  if (diff < 60_000) return 'just now'
-  const m = Math.floor(diff / 60_000)
-  if (m < 60) return `${m}m ago`
-  const h = Math.floor(m / 60)
-  if (h < 24) return `${h}h ago`
-  return `${Math.floor(h / 24)}d ago`
+  return formatRelativeAgeTime(value, '')
 }
 
 function GitOpsPlanPanel({ plan, tool }: { plan?: GitOpsPlanItem[] | null; tool?: string }) {
@@ -1105,15 +1097,5 @@ function InsightErrorState({ error }: { error: Error }) {
 }
 
 function formatRelative(value?: string) {
-  if (!value) return '-'
-  const time = new Date(value).getTime()
-  if (!Number.isFinite(time)) return value
-  const seconds = Math.max(0, Math.floor((Date.now() - time) / 1000))
-  if (seconds < 60) return `${seconds}s ago`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m ago`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 48) return `${hours}h ago`
-  const days = Math.floor(hours / 24)
-  return `${days}d ago`
+  return formatRelativeAgeTime(value)
 }

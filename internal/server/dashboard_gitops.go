@@ -186,54 +186,26 @@ func (s *Server) getDashboardGitOpsControllers(cache *k8s.ResourceCache, allowed
 // gitops_handlers.go but emits structured fields rather than a string
 // (the dashboard card renders bespoke chrome around the data).
 func summarizeControllerForDashboard(probe gitopsControllerProbe, pods []*corev1.Pod) DashboardGitOpsController {
-	ready := 0
-	crashing := 0
-	pending := 0
-	var crashReason string
-	for _, p := range pods {
-		for _, cs := range p.Status.ContainerStatuses {
-			if cs.State.Waiting != nil && (cs.State.Waiting.Reason == "CrashLoopBackOff" || cs.State.Waiting.Reason == "Error") {
-				crashing++
-				if crashReason == "" {
-					crashReason = cs.State.Waiting.Reason
-				}
-				break
-			}
-		}
-		if isPodReady(p) {
-			ready++
-		}
-		if p.Status.Phase == corev1.PodPending {
-			pending++
-		}
-	}
+	health := summarizeControllerPods(pods)
 	status := ctrlStatusHealthy
 	switch {
-	case crashing > 0:
+	case health.Crashing > 0:
 		status = ctrlStatusCrashing
-	case ready < len(pods):
-		if pending > 0 && ready == 0 {
+	case health.Ready < health.Total:
+		if health.Pending > 0 && health.Ready == 0 {
 			status = ctrlStatusPending
 		} else {
 			status = ctrlStatusDegraded
 		}
 	}
-	// Defensive cap: Ready should never exceed total pod count, but a
-	// future double-count bug in the loop above (e.g. counting a pod
-	// once for being Running and again for being Ready) would silently
-	// emit Ready > Total. The frontend renders "ready/total" verbatim,
-	// so 4/2 would ship straight to users. Trivial guard.
-	if ready > len(pods) {
-		ready = len(pods)
-	}
 	return DashboardGitOpsController{
 		Name:        probe.Name,
 		Tool:        probe.Tool,
 		Namespace:   probe.Namespace,
-		Ready:       ready,
-		Total:       len(pods),
+		Ready:       health.Ready,
+		Total:       health.Total,
 		Status:      status,
-		CrashReason: crashReason,
+		CrashReason: health.CrashReason,
 	}
 }
 

@@ -21,17 +21,11 @@ import { clsx } from 'clsx'
 import type { GitOpsResourceTree, GitOpsTreeNode, GitOpsTreeRef, HealthStatus } from '../../../types'
 import { displayKind } from '../../../types'
 import { healthToSeverity, SEVERITY_DOT } from '../../../utils/badge-colors'
+import { formatCompactAge } from '../../../utils/format'
 import { Tooltip } from '../../ui/Tooltip'
+import { hasGitOpsTreeFilters, matchesGitOpsTreeFilters, type GitOpsTreeFilters } from './tree-helpers'
 
 export type GitOpsTreePreset = 'full' | 'compact' | 'workloads' | 'app'
-
-export interface GitOpsTreeFilters {
-  kinds?: Set<string> | string[]
-  namespaces?: Set<string> | string[]
-  sync?: Set<string> | string[]
-  health?: Set<string> | string[]
-  roles?: Set<string> | string[]
-}
 
 const RANK_GAP = 390
 const ROW_GAP = 118
@@ -368,13 +362,7 @@ function applyPreset(tree: GitOpsResourceTree, preset: GitOpsTreePreset, expande
 }
 
 function applyGraphFilters(tree: GitOpsResourceTree, filters?: GitOpsTreeFilters): GitOpsResourceTree {
-  if (!filters) return tree
-  const kindSet = toSet(filters.kinds)
-  const namespaceSet = toSet(filters.namespaces)
-  const syncSet = toSet(filters.sync)
-  const healthSet = toSet(filters.health)
-  const roleSet = toSet(filters.roles)
-  if (!kindSet && !namespaceSet && !syncSet && !healthSet && !roleSet) return tree
+  if (!hasGitOpsTreeFilters(filters)) return tree
 
   const parent = new Map<string, string>()
   for (const edge of tree.edges) {
@@ -384,7 +372,7 @@ function applyGraphFilters(tree: GitOpsResourceTree, filters?: GitOpsTreeFilters
   const keep = new Set<string>([tree.root.id])
   for (const node of tree.nodes) {
     if (node.id === tree.root.id) continue
-    if (matchesFilters(node, kindSet, namespaceSet, syncSet, healthSet, roleSet)) {
+    if (matchesGitOpsTreeFilters(node, filters)) {
       let current: string | undefined = node.id
       while (current) {
         keep.add(current)
@@ -398,28 +386,6 @@ function applyGraphFilters(tree: GitOpsResourceTree, filters?: GitOpsTreeFilters
     nodes: tree.nodes.filter(node => keep.has(node.id)),
     edges: tree.edges.filter(edge => keep.has(edge.source) && keep.has(edge.target)),
   }
-}
-
-function matchesFilters(
-  node: GitOpsTreeNode,
-  kinds?: Set<string>,
-  namespaces?: Set<string>,
-  sync?: Set<string>,
-  health?: Set<string>,
-  roles?: Set<string>
-): boolean {
-  if (kinds && !kinds.has(node.ref.kind)) return false
-  if (namespaces && !namespaces.has(node.ref.namespace || '(cluster)')) return false
-  if (sync && !sync.has(node.sync || 'Unknown')) return false
-  if (health && !health.has(node.health || 'Unknown')) return false
-  if (roles && !roles.has(node.role)) return false
-  return true
-}
-
-function toSet(values?: Set<string> | string[]): Set<string> | undefined {
-  if (!values) return undefined
-  const set = values instanceof Set ? values : new Set(values)
-  return set.size > 0 ? set : undefined
 }
 
 function compactInfra(tree: GitOpsResourceTree, expandedGroups?: Set<string>): GitOpsResourceTree {
@@ -796,17 +762,5 @@ function pluralize(kind: string): string {
 }
 
 function formatAge(timestamp: string): string {
-  const t = Date.parse(timestamp)
-  if (!Number.isFinite(t)) return ''
-  const seconds = Math.max(0, Math.floor((Date.now() - t) / 1000))
-  if (seconds < 60) return `${seconds}s`
-  const minutes = Math.floor(seconds / 60)
-  if (minutes < 60) return `${minutes}m`
-  const hours = Math.floor(minutes / 60)
-  if (hours < 48) return `${hours}h`
-  const days = Math.floor(hours / 24)
-  if (days < 90) return `${days}d`
-  const months = Math.floor(days / 30)
-  if (months < 24) return `${months}mo`
-  return `${Math.floor(days / 365)}y`
+  return formatCompactAge(timestamp)
 }
