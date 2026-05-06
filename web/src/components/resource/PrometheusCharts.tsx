@@ -1,9 +1,10 @@
 import { useState, useMemo, useRef, useCallback } from 'react'
 import { clsx } from 'clsx'
-import { BarChart3, Wifi, WifiOff, Loader2 } from 'lucide-react'
+import { BarChart3, Wifi, WifiOff, Loader2, Plug } from 'lucide-react'
 import {
   usePrometheusStatus,
   usePrometheusConnect,
+  usePrometheusPortForward,
   usePrometheusResourceMetrics,
   type PrometheusMetricCategory,
   type PrometheusTimeRange,
@@ -81,12 +82,15 @@ interface PrometheusChartsProps {
 export function PrometheusCharts({ kind, namespace, name, showEmptyState = false }: PrometheusChartsProps) {
   const { data: status, isLoading: statusLoading } = usePrometheusStatus()
   const connectMutation = usePrometheusConnect()
+  const portForward = usePrometheusPortForward()
 
   const categories = kind === 'Node' ? NODE_CATEGORIES : WORKLOAD_CATEGORIES
   const [activeCategory, setActiveCategory] = useState<PrometheusMetricCategory>('cpu')
   const [timeRange, setTimeRange] = useState<PrometheusTimeRange>('1h')
 
   const isConnected = status?.connected === true
+  const isPortForwardConnected = status?.portForward?.connected === true
+  const isPortForwardPending = portForward.start.isPending || portForward.stop.isPending
   const isSupported = SUPPORTED_KINDS.has(kind)
 
   // Fetch metrics when connected
@@ -137,6 +141,18 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
             )}
             Discover Prometheus
           </button>
+          <button
+            onClick={() => portForward.start.mutate()}
+            disabled={isPortForwardPending}
+            className="inline-flex items-center gap-2 px-4 py-2 mt-2 text-sm font-medium rounded-lg border border-theme-border text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated disabled:opacity-50"
+          >
+            {portForward.start.isPending ? (
+              <Loader2 className="w-4 h-4 animate-spin" />
+            ) : (
+              <Plug className="w-4 h-4" />
+            )}
+            Port-forward monitoring/prometheus-server
+          </button>
         </div>
       </div>
     )
@@ -167,16 +183,39 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
           ))}
         </div>
 
-        {/* Time range selector */}
-        <select
-          value={timeRange}
-          onChange={e => setTimeRange(e.target.value as PrometheusTimeRange)}
-          className="px-2 py-1 text-xs rounded-md bg-theme-elevated border border-theme-border text-theme-text-secondary focus:outline-none focus:ring-1 focus:ring-blue-500/50"
-        >
-          {TIME_RANGES.map(tr => (
-            <option key={tr.value} value={tr.value}>{tr.label}</option>
-          ))}
-        </select>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              if (isPortForwardConnected) {
+                portForward.stop.mutate()
+              } else {
+                portForward.start.mutate()
+              }
+            }}
+            disabled={isPortForwardPending}
+            className={clsx(
+              'inline-flex items-center gap-1.5 px-2 py-1 text-xs rounded-md border transition-colors disabled:opacity-50',
+              isPortForwardConnected
+                ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
+                : 'border-theme-border text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated'
+            )}
+            title="Port-forward monitoring/prometheus-server"
+          >
+            {isPortForwardPending ? <Loader2 className="w-3 h-3 animate-spin" /> : <Plug className="w-3 h-3" />}
+            {isPortForwardConnected ? 'Port-forward on' : 'Port-forward off'}
+          </button>
+
+          {/* Time range selector */}
+          <select
+            value={timeRange}
+            onChange={e => setTimeRange(e.target.value as PrometheusTimeRange)}
+            className="px-2 py-1 text-xs rounded-md bg-theme-elevated border border-theme-border text-theme-text-secondary focus:outline-none focus:ring-1 focus:ring-blue-500/50"
+          >
+            {TIME_RANGES.map(tr => (
+              <option key={tr.value} value={tr.value}>{tr.label}</option>
+            ))}
+          </select>
+        </div>
       </div>
 
       {/* Chart area — fixed min-height prevents layout shift while loading */}
