@@ -25,6 +25,26 @@ func logBootEnv() {
 	}
 }
 
+// applyWebKitDefaults sets WEBKIT_DISABLE_DMABUF_RENDERER=1 unless the user
+// has set it explicitly. WebKitGTK's DMABUF renderer produces blank windows
+// on a range of Wayland setups (NVIDIA, KDE KWin, some Mesa stacks) and
+// upstream considers this an application-level concern, not a WebKit fix.
+// The legacy renderer is stable everywhere.
+//
+// Must run before Wails initializes WebKit. LookupEnv (not an empty-string
+// check) lets users opt back in to DMABUF with WEBKIT_DISABLE_DMABUF_RENDERER=0.
+func applyWebKitDefaults() {
+	const key = "WEBKIT_DISABLE_DMABUF_RENDERER"
+	if _, set := os.LookupEnv(key); set {
+		return
+	}
+	if err := os.Setenv(key, "1"); err != nil {
+		log.Printf("[desktop] failed to set %s: %v", key, err)
+		return
+	}
+	log.Printf("[desktop] applied %s=1 (default; set %s=0 to opt out)", key, key)
+}
+
 // joinEnv formats env vars as "KEY=value" pairs. When includeUnset is true,
 // unset vars are rendered as "KEY=" so the reader can tell they were checked.
 // When false, unset vars are omitted (noise reduction for overrides).
