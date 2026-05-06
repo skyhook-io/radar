@@ -187,7 +187,7 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
         onClick={() => setIsOpen(v => !v)}
         disabled={disabled || loading}
         className={`
-          flex items-center gap-1.5 px-2.5 py-1.5
+          flex items-center gap-1.5 px-2.5 py-1.5 min-w-[140px]
           bg-theme-elevated border border-theme-border rounded text-sm font-medium
           text-theme-text-primary hover:bg-theme-hover hover:border-theme-border-light
           transition-colors cursor-pointer
@@ -214,7 +214,7 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
             noTooltip={isOpen}
           />
         )}
-        <ChevronDown className={`w-3 h-3 transition-transform ${isOpen ? 'rotate-180' : ''}`} />
+        <ChevronDown className={`w-3 h-3 ml-auto transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
 
       {isOpen && (
