@@ -35,7 +35,7 @@
     "react-virtuoso": "^4.18.6",
     "remark-gfm": "^4.0.1",
     "shiki": "^4.0.1",
-    "yaml": "^2.8.3"
+    "yaml": "^2.8.4"
   },
   "peerDependencies": {
     "@skyhook-io/k8s-ui": ">=1.5.0",
@@ -54,7 +54,7 @@
     "@skyhook-io/k8s-ui": "*",
     "@tailwindcss/typography": "^0.5.19",
     "@tailwindcss/vite": "^4.2.4",
-    "@tanstack/react-query": "^5.100.6",
+    "@tanstack/react-query": "^5.100.9",
     "@types/diff": "^8.0.0",
     "@types/node": "^25.5.0",
     "@types/react": "^19.2.14",
@@ -64,11 +64,11 @@
     "clsx": "^2.1.1",
     "elkjs": "^0.11.1",
     "lucide-react": "^1.12.0",
-    "postcss": "^8.5.12",
+    "postcss": "^8.5.14",
     "prettier": "^3.8.1",
     "react": "^19.2.5",
     "react-dom": "^19.2.5",
-    "react-router-dom": "^7.14.2",
+    "react-router-dom": "^7.15.0",
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.4",
     "typescript": "^6.0.2",
