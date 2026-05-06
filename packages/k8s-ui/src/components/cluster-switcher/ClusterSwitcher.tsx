@@ -7,8 +7,9 @@ import {
   forwardRef,
   useImperativeHandle,
 } from 'react'
-import { ChevronDown, Check, Loader2, Search, Server, X } from 'lucide-react'
+import { ChevronDown, Check, FolderOpen, Loader2, Search, Server, X } from 'lucide-react'
 import { ClusterName } from '../ui/ClusterName'
+import { MiddleEllipsis } from '../ui/MiddleEllipsis'
 import { StatusDot, type StatusTone } from '../ui/status-tone'
 
 export interface ClusterSwitcherItem {
@@ -18,6 +19,13 @@ export interface ClusterSwitcherItem {
   name: string
   secondary?: string
   badge?: string
+  /** Origin/source label, rendered as a small folder-icon chip after the
+   *  badge. Use for "where this cluster came from" when multiple sources
+   *  could otherwise produce visually-identical rows (e.g. kubeconfig
+   *  source folder when many files contain the same context name). The
+   *  caller is responsible for only setting this when 2+ distinct sources
+   *  exist — the chip surfaces unconditionally when present. */
+  sourceLabel?: string
   group?: { key: string; label?: string }
   disabled?: boolean
   status?: StatusTone
@@ -38,6 +46,12 @@ export interface ClusterSwitcherProps {
   /** Raw context / display string. Pass it as-is — the trigger renders
    *  through ClusterName, which handles parse + provider badge + tooltip. */
   currentName: string
+  /** When set, the trigger renders a small folder-icon chip next to the
+   *  current cluster name so the user can tell apart kubeconfig sources
+   *  at a glance — same visual language as the per-row sourceLabel. Only
+   *  pass when 2+ distinct sources are loaded; otherwise the chip is
+   *  noise. */
+  currentSourceLabel?: string
   items: ClusterSwitcherItem[]
   onSelect?: (item: ClusterSwitcherItem) => void
   searchable?: boolean
@@ -63,6 +77,7 @@ const TRIGGER_NAME_MAX_WIDTH = 'max-w-[160px] sm:max-w-[260px] xl:max-w-[400px]'
 export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcherProps>(({
   currentId,
   currentName,
+  currentSourceLabel,
   items,
   onSelect,
   searchable = true,
@@ -96,6 +111,7 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
         item.name.toLowerCase().includes(q) ||
         item.secondary?.toLowerCase().includes(q) ||
         item.badge?.toLowerCase().includes(q) ||
+        item.sourceLabel?.toLowerCase().includes(q) ||
         item.group?.label?.toLowerCase().includes(q)
       )
     }
@@ -207,12 +223,29 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
           // while the dropdown is open — the popover already shows the raw
           // context inline (per-row secondary line), and an extra hover
           // tooltip would just overlap the search input.
-          <ClusterName
-            name={currentName}
-            fallbackBadge={<Server className="w-3.5 h-3.5 text-theme-text-secondary" />}
-            className={TRIGGER_NAME_MAX_WIDTH}
-            noTooltip={isOpen}
-          />
+          <>
+            <ClusterName
+              name={currentName}
+              fallbackBadge={<Server className="w-3.5 h-3.5 text-theme-text-secondary" />}
+              className={TRIGGER_NAME_MAX_WIDTH}
+              noTooltip={isOpen}
+            />
+            {currentSourceLabel && (
+              // Icon-only on the trigger: long folder paths (the very case
+              // that motivates the chip) middle-truncate to something
+              // useless like "kube-cluster-pro…ion-eu" and steal width
+              // from the cluster name + nav. The folder icon signals
+              // "multi-source — disambiguation in dropdown"; hover or
+              // open the dropdown for the full label.
+              <span
+                className="shrink-0 inline-flex items-center text-theme-text-tertiary opacity-80"
+                title={`From kubeconfig: ${currentSourceLabel}`}
+                aria-label={`From kubeconfig: ${currentSourceLabel}`}
+              >
+                <FolderOpen className="w-3 h-3" />
+              </span>
+            )}
+          </>
         )}
         <ChevronDown className={`w-3 h-3 ml-auto transition-transform ${isOpen ? 'rotate-180' : ''}`} />
       </button>
@@ -320,6 +353,20 @@ export const ClusterSwitcher = forwardRef<ClusterSwitcherHandle, ClusterSwitcher
                               </span>
                             )}
                           </div>
+                          {item.sourceLabel && (
+                            // Source chip lives on its own line under the
+                            // name so long folder paths get the full row
+                            // width to render via MiddleEllipsis. Inline
+                            // would steal width from the name and force
+                            // both to truncate.
+                            <div
+                              className="flex items-center gap-0.5 text-[10px] text-theme-text-tertiary opacity-80 mt-0.5"
+                              title={`From kubeconfig: ${item.sourceLabel}`}
+                            >
+                              <FolderOpen className="w-2.5 h-2.5 shrink-0" />
+                              <MiddleEllipsis text={item.sourceLabel} className="font-mono" />
+                            </div>
+                          )}
                           {item.secondary && (
                             <div
                               className="text-[10px] text-theme-text-tertiary opacity-70 truncate mt-0.5"

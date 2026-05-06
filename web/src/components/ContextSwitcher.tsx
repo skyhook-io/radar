@@ -37,13 +37,37 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
   const { tabs } = useDock()
 
   // Parse contexts and decide whether to render group headers (multi-account only).
-  const { parsedById, hasMultipleAccounts } = useMemo(() => {
-    if (!contexts) return { parsedById: new Map<string, ParsedContext>(), hasMultipleAccounts: false }
-    const parsed: ParsedContext[] = contexts.map(ctx => ({ context: ctx, ...parseContextName(ctx.name) }))
+  // hasMultipleSources gates the kubeconfig-source chip — only useful when 2+
+  // distinct kubeconfig files are in play. Single-source setups (the common
+  // case) skip the chip entirely so the dropdown stays clean.
+  const { parsedById, hasMultipleAccounts, hasMultipleSources } = useMemo(() => {
+    if (!contexts) return {
+      parsedById: new Map<string, ParsedContext>(),
+      hasMultipleAccounts: false,
+      hasMultipleSources: false,
+    }
+    // Strip the disambiguation suffix (e.g. " (kube-cluster-paris)" or
+    // " (kube-cluster-paris #2)") from the name BEFORE parsing — qualified
+    // names won't match the GKE/EKS/AKS regexes otherwise, and the suffix
+    // is redundant with the source chip we'll render separately.
+    const stripSourceSuffix = (name: string, source?: string): string => {
+      if (!source) return name
+      const escaped = source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      return name.replace(new RegExp(`\\s+\\(${escaped}(?:\\s+#\\d+)?\\)$`), '')
+    }
+    const parsed: ParsedContext[] = contexts.map(ctx => ({
+      context: ctx,
+      ...parseContextName(stripSourceSuffix(ctx.name, ctx.source)),
+    }))
     const accounts = new Set(parsed.map(p => `${p.provider}:${p.account}`))
+    const sources = new Set(contexts.map(c => c.source).filter(Boolean))
     const byId = new Map<string, ParsedContext>()
     for (const p of parsed) byId.set(p.context.name, p)
-    return { parsedById: byId, hasMultipleAccounts: accounts.size > 1 }
+    return {
+      parsedById: byId,
+      hasMultipleAccounts: accounts.size > 1,
+      hasMultipleSources: sources.size > 1,
+    }
   }, [contexts])
 
   // Map parsed contexts → generic ClusterSwitcher items, sorted GKE/EKS/AKS/Other → account → name.
@@ -65,20 +89,24 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         : hasMultipleAccounts
           ? 'Other'
           : undefined
-      // `name` is the raw context — ClusterSwitcher renders it through
-      // ClusterName, which collapses GKE/EKS/AKS shapes to the meaningful
-      // tail. `secondary` shows the original raw when we collapsed it,
-      // so users always see the full context at a glance (rather than
-      // having to hover to reveal it).
+      // `id` is the canonical qualified name (e.g. "admin@cluster
+      // (kube-cluster-paris)") — used for selection and as the unique key.
+      // `name` is the source-stripped form ClusterName parses for display,
+      // since the qualified " (...)" suffix would otherwise prevent the
+      // cloud regexes from matching and clutter custom names. The dropped
+      // suffix is restored in the row via `sourceLabel`, which renders as
+      // a small folder-icon chip — but only when 2+ kubeconfig sources are
+      // in play, so single-kubeconfig setups stay clean.
       return {
         id: p.context.name,
-        name: p.context.name,
+        name: p.raw,
         secondary: p.provider ? p.raw : undefined,
         badge: p.region || undefined,
+        sourceLabel: hasMultipleSources ? p.context.source : undefined,
         group: { key: groupKey, label: groupLabel },
       }
     })
-  }, [parsedById, hasMultipleAccounts])
+  }, [parsedById, hasMultipleAccounts, hasMultipleSources])
 
   const performSwitch = async (parsed: ParsedContext) => {
     startSwitch({
@@ -156,8 +184,15 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
     )
   }
 
-  const currentRaw = clusterInfo?.context || contexts?.find(c => c.isCurrent)?.name || 'Unknown'
-  const currentId = contexts?.find(c => c.isCurrent)?.name
+  const currentCtx = contexts?.find(c => c.isCurrent)
+  const currentId = currentCtx?.name
+  // Use parsed.raw (the source-stripped form) for the trigger so the
+  // disambiguation suffix doesn't double up with the source chip.
+  // Fall back to clusterInfo.context for the very-early window before
+  // /api/contexts has resolved.
+  const currentParsed = currentId ? parsedById.get(currentId) : undefined
+  const currentRaw = currentParsed?.raw || clusterInfo?.context || currentCtx?.name || 'Unknown'
+  const currentSourceLabel = hasMultipleSources ? currentCtx?.source || undefined : undefined
 
   return (
     <>
@@ -166,6 +201,7 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         className={className}
         currentId={currentId}
         currentName={currentRaw}
+        currentSourceLabel={currentSourceLabel}
         items={items}
         onSelect={handleSelect}
         loading={switchContext.isPending}

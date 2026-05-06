@@ -104,19 +104,45 @@ func buildContextRegistry(paths []string) (map[string]contextEntry, map[string]*
 	return registry, fileConfigs
 }
 
+// kubeconfigSourceLabel returns a short, human-recognisable label for the
+// kubeconfig file at `path`. It's used both as the disambiguation suffix
+// in qualifyContextName and as the frontend-facing Source on ContextInfo.
+//
+// When the file's basename is generic (`config` / `kubeconfig`) the
+// parent directory carries the meaning — users typically organise as
+// ~/.kube-cluster-paris/config, ~/.kube-cluster-london/config etc., and
+// "config" alone disambiguates nothing. We fall back to the parent dir
+// name (with any leading dot stripped) in that case. Otherwise the file
+// basename without extension is the right label (e.g. "paris.yaml" -> "paris").
+//
+// See issue #651 — without this, three "admin@cluster" contexts each
+// sourced from a different ~/.kube-cluster-<city>/config produced the
+// useless dropdown labels admin@cluster, admin@cluster (config),
+// admin@cluster (config #2).
+func kubeconfigSourceLabel(path string) string {
+	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	if base == "config" || base == "kubeconfig" {
+		parent := filepath.Base(filepath.Dir(path))
+		if parent != "" && parent != "." && parent != string(filepath.Separator) {
+			return strings.TrimPrefix(parent, ".")
+		}
+	}
+	return base
+}
+
 // qualifyContextName returns a globally-unique context name for a context
 // called `name` coming from file `path`. When `name` isn't taken yet, it
 // returns `name` unchanged — most contexts across most files don't collide
 // (it's the users/clusters that typically share names, not the context
 // names themselves), and the user-visible dropdown should show the
 // original names wherever possible. On collision it falls back to
-// "<name> (<file-basename-without-ext>)", and then "<name> (<base> #N)"
-// for further collisions from a third+ file with the same basename.
+// "<name> (<source-label>)", and then "<name> (<source-label> #N)"
+// for further collisions from a third+ file with the same source label.
 func qualifyContextName(registry map[string]contextEntry, name, path string) string {
 	if _, taken := registry[name]; !taken {
 		return name
 	}
-	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+	base := kubeconfigSourceLabel(path)
 	qualified := fmt.Sprintf("%s (%s)", name, base)
 	if _, taken := registry[qualified]; !taken {
 		return qualified
@@ -367,7 +393,7 @@ func aggregateExecPluginCommands(
 			seenCmds[c] = struct{}{}
 			cmds = append(cmds, c)
 		}
-		base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
+		base := kubeconfigSourceLabel(path)
 		for _, ai := range fileEmpty {
 			// Scope by file so diagnostics aren't ambiguous when the same
 			// AuthInfo name appears in multiple files.

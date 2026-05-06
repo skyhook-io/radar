@@ -207,6 +207,82 @@ func TestBuildContextRegistry_ThreeWayCollision(t *testing.T) {
 	}
 }
 
+// Issue #651 scenario: each kubeconfig is named "config" inside a
+// distinctly-named directory (e.g. ~/.kube-cluster-paris/config). The
+// disambiguation label must come from the parent directory — the
+// filename "config" by itself disambiguates nothing. Without this, the
+// user sees three useless "admin@cluster", "admin@cluster (config)",
+// "admin@cluster (config #2)" rows.
+func TestBuildContextRegistry_GenericFilenameUsesParentDir(t *testing.T) {
+	dirParis := filepath.Join(t.TempDir(), ".kube-cluster-paris")
+	dirLondon := filepath.Join(t.TempDir(), ".kube-cluster-london")
+	dirRome := filepath.Join(t.TempDir(), ".kube-cluster-rome")
+	for _, d := range []string{dirParis, dirLondon, dirRome} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	f1 := writeKubeconfig(t, dirParis, "config", "admin@cluster", []kubeEntry{
+		{ctxName: "admin@cluster", userName: "admin", clusterName: "cluster"},
+	})
+	f2 := writeKubeconfig(t, dirLondon, "config", "admin@cluster", []kubeEntry{
+		{ctxName: "admin@cluster", userName: "admin", clusterName: "cluster"},
+	})
+	f3 := writeKubeconfig(t, dirRome, "config", "admin@cluster", []kubeEntry{
+		{ctxName: "admin@cluster", userName: "admin", clusterName: "cluster"},
+	})
+
+	registry, _ := buildContextRegistry([]string{f1, f2, f3})
+
+	if len(registry) != 3 {
+		t.Fatalf("registry size: got %d, want 3", len(registry))
+	}
+	// First file keeps the original name.
+	if e, ok := registry["admin@cluster"]; !ok || e.SourceFile != f1 {
+		t.Errorf("'admin@cluster' should resolve to f1")
+	}
+	// Subsequent collisions use the leading-dot-stripped parent dir name.
+	if e, ok := registry["admin@cluster (kube-cluster-london)"]; !ok || e.SourceFile != f2 {
+		names := []string{}
+		for n := range registry {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		t.Errorf("'admin@cluster (kube-cluster-london)' should resolve to f2; registry has: %v", names)
+	}
+	if e, ok := registry["admin@cluster (kube-cluster-rome)"]; !ok || e.SourceFile != f3 {
+		names := []string{}
+		for n := range registry {
+			names = append(names, n)
+		}
+		sort.Strings(names)
+		t.Errorf("'admin@cluster (kube-cluster-rome)' should resolve to f3; registry has: %v", names)
+	}
+}
+
+func TestKubeconfigSourceLabel(t *testing.T) {
+	cases := []struct {
+		path string
+		want string
+	}{
+		// Generic filenames -> parent dir, leading dot stripped.
+		{"/home/u/.kube-cluster-paris/config", "kube-cluster-paris"},
+		{"/home/u/.kube/config", "kube"},
+		{"/home/u/clusters/prod/kubeconfig", "prod"},
+		// Meaningful filenames -> filename without extension.
+		{"/home/u/.kube/configs/prod.yaml", "prod"},
+		{"/home/u/clusters/staging.yml", "staging"},
+		{"/tmp/eks-east.kubeconfig.yaml", "eks-east.kubeconfig"},
+		// Edge: file at root with generic name — parent is "/", fall through to base.
+		{"/config", "config"},
+	}
+	for _, c := range cases {
+		if got := kubeconfigSourceLabel(c.path); got != c.want {
+			t.Errorf("kubeconfigSourceLabel(%q) = %q, want %q", c.path, got, c.want)
+		}
+	}
+}
+
 func TestPickInitialContext_PrefersFirstFileCurrentContext(t *testing.T) {
 	dir := t.TempDir()
 	f1 := writeKubeconfig(t, dir, "first.yaml", "from-first", []kubeEntry{
