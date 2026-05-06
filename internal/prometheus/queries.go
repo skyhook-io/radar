@@ -151,7 +151,7 @@ func buildNamespaceQueryInner(namespace string, category MetricCategory, filterC
 	case CategoryCPU:
 		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{%snamespace='%s'}[5m]))`, cf, ns)
 	case CategoryMemory:
-		return fmt.Sprintf(`sum(container_memory_working_set_bytes{%snamespace='%s'})`, cf, ns)
+		return fmt.Sprintf(`sum(max by (namespace,pod,container) (container_memory_working_set_bytes{%snamespace='%s'}))`, cf, ns)
 	case CategoryNetworkRX:
 		return fmt.Sprintf(`sum(rate(container_network_receive_bytes_total{namespace='%s'}[5m]))`, ns)
 	case CategoryNetworkTX:
@@ -180,7 +180,7 @@ func buildClusterQueryInner(category MetricCategory, filterContainer bool) strin
 	case CategoryCPU:
 		return fmt.Sprintf(`sum(rate(container_cpu_usage_seconds_total{%s}[5m]))`, cf)
 	case CategoryMemory:
-		return fmt.Sprintf(`sum(container_memory_working_set_bytes{%s})`, cf)
+		return fmt.Sprintf(`sum(max by (namespace,pod,container) (container_memory_working_set_bytes{%s}))`, cf)
 	case CategoryNetworkRX:
 		return `sum(rate(container_network_receive_bytes_total[5m]))`
 	case CategoryNetworkTX:
@@ -211,7 +211,7 @@ func buildPodQuery(namespace, podName string, category MetricCategory, filterCon
 			cf, ns, pod)
 	case CategoryMemory:
 		return fmt.Sprintf(
-			`sum(container_memory_working_set_bytes{%snamespace='%s',pod='%s'}) by (pod,namespace)`,
+			`sum by (pod,namespace) (max by (pod,namespace,container) (container_memory_working_set_bytes{%snamespace='%s',pod='%s'}))`,
 			cf, ns, pod)
 	case CategoryNetworkRX:
 		return fmt.Sprintf(
@@ -246,7 +246,7 @@ func buildWorkloadQuery(namespace, workloadName string, category MetricCategory,
 			cf, ns, podPattern)
 	case CategoryMemory:
 		return fmt.Sprintf(
-			`sum(container_memory_working_set_bytes{%snamespace='%s',pod=~'%s'}) by (pod,namespace)`,
+			`sum by (pod,namespace) (max by (pod,namespace,container) (container_memory_working_set_bytes{%snamespace='%s',pod=~'%s'}))`,
 			cf, ns, podPattern)
 	case CategoryNetworkRX:
 		return fmt.Sprintf(
