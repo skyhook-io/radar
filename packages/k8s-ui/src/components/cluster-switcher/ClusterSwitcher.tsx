@@ -19,12 +19,9 @@ export interface ClusterSwitcherItem {
   name: string
   secondary?: string
   badge?: string
-  /** Origin/source label, rendered as a small folder-icon chip after the
-   *  badge. Use for "where this cluster came from" when multiple sources
-   *  could otherwise produce visually-identical rows (e.g. kubeconfig
-   *  source folder when many files contain the same context name). The
-   *  caller is responsible for only setting this when 2+ distinct sources
-   *  exist — the chip surfaces unconditionally when present. */
+  /** Origin label, rendered as a folder-icon line under the name.
+   *  Caller must only set this when 2+ distinct sources exist — the
+   *  chip surfaces unconditionally when present. */
   sourceLabel?: string
   group?: { key: string; label?: string }
   disabled?: boolean
@@ -46,11 +43,8 @@ export interface ClusterSwitcherProps {
   /** Raw context / display string. Pass it as-is — the trigger renders
    *  through ClusterName, which handles parse + provider badge + tooltip. */
   currentName: string
-  /** When set, the trigger renders a small folder-icon chip next to the
-   *  current cluster name so the user can tell apart kubeconfig sources
-   *  at a glance — same visual language as the per-row sourceLabel. Only
-   *  pass when 2+ distinct sources are loaded; otherwise the chip is
-   *  noise. */
+  /** Trigger-side counterpart to {@link ClusterSwitcherItem.sourceLabel}.
+   *  Only pass when 2+ kubeconfig sources are loaded. */
   currentSourceLabel?: string
   items: ClusterSwitcherItem[]
   onSelect?: (item: ClusterSwitcherItem) => void

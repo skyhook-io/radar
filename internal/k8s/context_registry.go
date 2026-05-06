@@ -105,20 +105,15 @@ func buildContextRegistry(paths []string) (map[string]contextEntry, map[string]*
 }
 
 // kubeconfigSourceLabel returns a short, human-recognisable label for the
-// kubeconfig file at `path`. It's used both as the disambiguation suffix
-// in qualifyContextName and as the frontend-facing Source on ContextInfo.
+// kubeconfig file at `path`. Used both as the disambiguation suffix in
+// qualifyContextName and as the frontend-facing Source on ContextInfo.
 //
-// When the file's basename is generic (`config` / `kubeconfig`) the
-// parent directory carries the meaning — users typically organise as
-// ~/.kube-cluster-paris/config, ~/.kube-cluster-london/config etc., and
-// "config" alone disambiguates nothing. We fall back to the parent dir
-// name (with any leading dot stripped) in that case. Otherwise the file
-// basename without extension is the right label (e.g. "paris.yaml" -> "paris").
-//
-// See issue #651 — without this, three "admin@cluster" contexts each
-// sourced from a different ~/.kube-cluster-<city>/config produced the
-// useless dropdown labels admin@cluster, admin@cluster (config),
-// admin@cluster (config #2).
+// When the basename is generic (`config` / `kubeconfig`) the parent
+// directory carries the meaning — users typically organise as
+// ~/.kube-cluster-paris/config, where "config" alone disambiguates
+// nothing. We fall back to the parent dir name (leading dot stripped)
+// in that case. Otherwise the file basename without extension is the
+// right label (e.g. "paris.yaml" -> "paris").
 func kubeconfigSourceLabel(path string) string {
 	base := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
 	if base == "config" || base == "kubeconfig" {

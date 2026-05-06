@@ -46,10 +46,10 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
       hasMultipleAccounts: false,
       hasMultipleSources: false,
     }
-    // Strip the disambiguation suffix (e.g. " (kube-cluster-paris)" or
-    // " (kube-cluster-paris #2)") from the name BEFORE parsing — qualified
-    // names won't match the GKE/EKS/AKS regexes otherwise, and the suffix
-    // is redundant with the source chip we'll render separately.
+    // Strip the disambiguation suffix (" (<source>)" or " (<source> #N)")
+    // before parsing — qualified names won't match the GKE/EKS/AKS regexes
+    // otherwise, and the suffix is redundant with the source chip we
+    // render separately.
     const stripSourceSuffix = (name: string, source?: string): string => {
       if (!source) return name
       const escaped = source.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
@@ -89,14 +89,6 @@ export const ContextSwitcher = forwardRef<ContextSwitcherHandle, ContextSwitcher
         : hasMultipleAccounts
           ? 'Other'
           : undefined
-      // `id` is the canonical qualified name (e.g. "admin@cluster
-      // (kube-cluster-paris)") — used for selection and as the unique key.
-      // `name` is the source-stripped form ClusterName parses for display,
-      // since the qualified " (...)" suffix would otherwise prevent the
-      // cloud regexes from matching and clutter custom names. The dropped
-      // suffix is restored in the row via `sourceLabel`, which renders as
-      // a small folder-icon chip — but only when 2+ kubeconfig sources are
-      // in play, so single-kubeconfig setups stay clean.
       return {
         id: p.context.name,
         name: p.raw,

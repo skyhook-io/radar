@@ -207,12 +207,11 @@ func TestBuildContextRegistry_ThreeWayCollision(t *testing.T) {
 	}
 }
 
-// Issue #651 scenario: each kubeconfig is named "config" inside a
-// distinctly-named directory (e.g. ~/.kube-cluster-paris/config). The
-// disambiguation label must come from the parent directory — the
-// filename "config" by itself disambiguates nothing. Without this, the
-// user sees three useless "admin@cluster", "admin@cluster (config)",
-// "admin@cluster (config #2)" rows.
+// Generic "config" basenames in distinctly-named parent dirs must
+// disambiguate via parent dir, not basename — three kubeconfigs at
+// ~/.kube-cluster-{paris,london,rome}/config sharing context name
+// "admin@cluster" should yield three distinct qualified names, not
+// "admin@cluster (config)" / "(config #2)".
 func TestBuildContextRegistry_GenericFilenameUsesParentDir(t *testing.T) {
 	dirParis := filepath.Join(t.TempDir(), ".kube-cluster-paris")
 	dirLondon := filepath.Join(t.TempDir(), ".kube-cluster-london")
@@ -275,11 +274,82 @@ func TestKubeconfigSourceLabel(t *testing.T) {
 		{"/tmp/eks-east.kubeconfig.yaml", "eks-east.kubeconfig"},
 		// Edge: file at root with generic name — parent is "/", fall through to base.
 		{"/config", "config"},
+		// Relative paths — SourceFile is normalised to absolute upstream,
+		// but pin the helper's behaviour so a future drift doesn't sneak
+		// silently past callers like aggregateExecPluginCommands.
+		{"config", "config"},                  // no parent
+		{"./config", "config"},                // current-dir parent rejected
+		{"kube-cluster-paris/config", "kube-cluster-paris"}, // relative parent honored
 	}
 	for _, c := range cases {
 		if got := kubeconfigSourceLabel(c.path); got != c.want {
 			t.Errorf("kubeconfigSourceLabel(%q) = %q, want %q", c.path, got, c.want)
 		}
+	}
+}
+
+// In multi-kubeconfig mode, every ContextInfo returned from
+// GetAvailableContexts must carry the source label of the file it came
+// from, even when context names don't collide. The frontend uses this
+// to render a "from kubeconfig X" affordance, and the contract is
+// invisible from the registry-level tests above.
+func TestGetAvailableContexts_PopulatesSourceInMultiFileMode(t *testing.T) {
+	parisDir := filepath.Join(t.TempDir(), ".kube-cluster-paris")
+	londonDir := filepath.Join(t.TempDir(), ".kube-cluster-london")
+	for _, d := range []string{parisDir, londonDir} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatalf("mkdir %s: %v", d, err)
+		}
+	}
+	f1 := writeKubeconfig(t, parisDir, "config", "ctx-paris", []kubeEntry{
+		{ctxName: "ctx-paris", userName: "u1", clusterName: "c1"},
+	})
+	f2 := writeKubeconfig(t, londonDir, "config", "ctx-london", []kubeEntry{
+		{ctxName: "ctx-london", userName: "u2", clusterName: "c2"},
+	})
+
+	clientMu.Lock()
+	prevRegistry := contextRegistry
+	prevConfigs := perFileConfigs
+	prevMtimes := perFileMtimes
+	prevPaths := kubeconfigPaths
+	prevName := contextName
+	registry, fileConfigs := buildContextRegistry([]string{f1, f2})
+	mtimes := make(map[string]time.Time, 2)
+	for _, p := range []string{f1, f2} {
+		if info, err := os.Stat(p); err == nil {
+			mtimes[p] = info.ModTime()
+		}
+	}
+	contextRegistry = registry
+	perFileConfigs = fileConfigs
+	perFileMtimes = mtimes
+	kubeconfigPaths = []string{f1, f2}
+	contextName = "ctx-paris"
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextRegistry = prevRegistry
+		perFileConfigs = prevConfigs
+		perFileMtimes = prevMtimes
+		kubeconfigPaths = prevPaths
+		contextName = prevName
+		clientMu.Unlock()
+	})
+
+	contexts, err := GetAvailableContexts()
+	if err != nil {
+		t.Fatalf("GetAvailableContexts: %v", err)
+	}
+	bySource := map[string]string{} // qName -> source
+	for _, c := range contexts {
+		bySource[c.Name] = c.Source
+	}
+	if got, want := bySource["ctx-paris"], "kube-cluster-paris"; got != want {
+		t.Errorf("ctx-paris Source: got %q, want %q (all: %v)", got, want, bySource)
+	}
+	if got, want := bySource["ctx-london"], "kube-cluster-london"; got != want {
+		t.Errorf("ctx-london Source: got %q, want %q (all: %v)", got, want, bySource)
 	}
 }
 

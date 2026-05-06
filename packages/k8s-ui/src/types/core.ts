@@ -329,10 +329,8 @@ export interface ContextInfo {
   user: string
   namespace: string
   isCurrent: boolean
-  /** Short, human-recognisable label for the kubeconfig file this context
-   *  came from (e.g. "kube-cluster-paris" for ~/.kube-cluster-paris/config).
-   *  Backend sets this only in multi-kubeconfig mode; empty for single-file
-   *  and in-cluster modes where there's no ambiguity to disambiguate. */
+  /** Source kubeconfig label (e.g. "kube-cluster-paris"). Set by backend
+   *  only when 2+ kubeconfig files are loaded; empty otherwise. */
   source?: string
 }
 

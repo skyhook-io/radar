@@ -683,13 +683,10 @@ type ContextInfo struct {
 	User      string `json:"user"`
 	Namespace string `json:"namespace"`
 	IsCurrent bool   `json:"isCurrent"`
-	// Source is a short, human-recognisable label for the kubeconfig file
-	// this context lives in (e.g. "kube-cluster-paris" for
-	// ~/.kube-cluster-paris/config, or "prod" for ~/.kube/prod.yaml).
-	// Only set in multi-kubeconfig mode; empty for single-file and
-	// in-cluster modes where there's no ambiguity to disambiguate.
-	// Populated even when context names don't collide so the dropdown
-	// can show users which kubeconfig each context came from.
+	// Source labels the kubeconfig file this context came from
+	// (e.g. "kube-cluster-paris" or "prod"). Set only in multi-file
+	// mode; populated for every context — not just colliding ones — so
+	// the dropdown can show provenance even without ambiguity.
 	Source string `json:"source,omitempty"`
 }
 
