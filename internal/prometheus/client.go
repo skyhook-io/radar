@@ -13,7 +13,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/skyhook-io/radar/internal/portforward"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 
@@ -51,13 +50,12 @@ type ServiceInfo struct {
 
 // Status represents the current Prometheus connection status.
 type Status struct {
-	Available   bool                        `json:"available"`
-	Connected   bool                        `json:"connected"`
-	Address     string                      `json:"address,omitempty"`
-	Service     *ServiceInfo                `json:"service,omitempty"`
-	PortForward *portforward.ConnectionInfo `json:"portForward,omitempty"`
-	ContextName string                      `json:"contextName,omitempty"`
-	Error       string                      `json:"error,omitempty"`
+	Available   bool         `json:"available"`
+	Connected   bool         `json:"connected"`
+	Address     string       `json:"address,omitempty"`
+	Service     *ServiceInfo `json:"service,omitempty"`
+	ContextName string       `json:"contextName,omitempty"`
+	Error       string       `json:"error,omitempty"`
 }
 
 // Global client instance
@@ -155,17 +153,11 @@ func (c *Client) GetStatus() Status {
 		svc = &cp
 	}
 
-	var pf *portforward.ConnectionInfo
-	if info := portforward.GetConnectionInfo(); info != nil && info.Connected && info.ContextName == c.contextName {
-		pf = info
-	}
-
 	return Status{
 		Available:   c.baseURL != "",
 		Connected:   c.baseURL != "",
 		Address:     c.baseURL,
 		Service:     svc,
-		PortForward: pf,
 		ContextName: c.contextName,
 	}
 }

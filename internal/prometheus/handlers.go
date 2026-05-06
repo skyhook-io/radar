@@ -13,20 +13,14 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/internal/portforward"
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/util/intstr"
-	"k8s.io/client-go/kubernetes"
 )
 
 // RegisterRoutes registers Prometheus metric routes on the given router.
 func RegisterRoutes(r chi.Router) {
 	r.Get("/prometheus/status", handleStatus)
 	r.Post("/prometheus/connect", handleConnect)
-	r.Post("/prometheus/portforward", handleStartPortForward)
-	r.Delete("/prometheus/portforward", handleStopPortForward)
 	r.Get("/prometheus/resources/{kind}/{namespace}/{name}", handleResourceMetrics)
 	r.Get("/prometheus/resources/{kind}/{name}", handleClusterScopedResourceMetrics)
 	r.Get("/prometheus/namespace/{namespace}", handleNamespaceMetrics)
@@ -84,155 +78,6 @@ func handleConnect(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, client.GetStatus())
-}
-
-// handleStartPortForward starts a local tunnel to the conventional in-cluster
-// Prometheus service and points the Prometheus client at it.
-func handleStartPortForward(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
-	if client == nil {
-		writeError(w, http.StatusServiceUnavailable, "Prometheus client not initialized")
-		return
-	}
-
-	const namespace = "monitoring"
-	const serviceName = "prometheus-server"
-
-	info, err := client.startFixedServicePortForward(r.Context(), namespace, serviceName)
-	if err != nil {
-		log.Printf("[prometheus] Port-forward to %s/%s failed: %v", namespace, serviceName, err)
-		errorlog.Record("prometheus", "error", "port-forward to %s/%s failed: %v", namespace, serviceName, err)
-		writeError(w, http.StatusBadGateway, "Prometheus port-forward failed: "+err.Error())
-		return
-	}
-
-	writeJSON(w, http.StatusOK, map[string]interface{}{
-		"status":      client.GetStatus(),
-		"portForward": info,
-	})
-}
-
-func handleStopPortForward(w http.ResponseWriter, r *http.Request) {
-	client := GetClient()
-	if client == nil {
-		writeError(w, http.StatusServiceUnavailable, "Prometheus client not initialized")
-		return
-	}
-
-	portforward.Stop()
-	client.SetURL("")
-	writeJSON(w, http.StatusOK, client.GetStatus())
-}
-
-func (c *Client) startFixedServicePortForward(ctx context.Context, namespace, serviceName string) (*portforward.ConnectionInfo, error) {
-	c.mu.RLock()
-	k8sClient := c.k8sClient
-	contextName := c.contextName
-	c.mu.RUnlock()
-
-	if k8sClient == nil {
-		return nil, fmt.Errorf("no Kubernetes client available")
-	}
-
-	svc, err := k8sClient.CoreV1().Services(namespace).Get(ctx, serviceName, metav1.GetOptions{})
-	if err != nil {
-		return nil, fmt.Errorf("failed to get service: %w", err)
-	}
-
-	servicePort := selectPrometheusServicePort(*svc)
-	targetPort, err := resolveServiceTargetPort(ctx, k8sClient, *svc, servicePort)
-	if err != nil {
-		return nil, err
-	}
-
-	c.setDiscoveryService(&serviceInfo{
-		namespace:  namespace,
-		name:       serviceName,
-		port:       servicePort,
-		targetPort: targetPort,
-		basePath:   "",
-	})
-
-	info, err := portforward.Start(ctx, namespace, serviceName, targetPort, contextName)
-	if err != nil {
-		return nil, err
-	}
-
-	c.SetURL(info.Address)
-	if _, _, err := c.EnsureConnected(ctx); err != nil {
-		portforward.Stop()
-		c.SetURL("")
-		return nil, err
-	}
-
-	return info, nil
-}
-
-func selectPrometheusServicePort(svc corev1.Service) int {
-	if len(svc.Spec.Ports) == 0 {
-		return 9090
-	}
-	for _, port := range svc.Spec.Ports {
-		if int(port.Port) == 9090 || port.Name == "http" || strings.Contains(port.Name, "prometheus") {
-			return int(port.Port)
-		}
-	}
-	return int(svc.Spec.Ports[0].Port)
-}
-
-func resolveServiceTargetPort(ctx context.Context, client kubernetes.Interface, svc corev1.Service, servicePort int) (int, error) {
-	for _, port := range svc.Spec.Ports {
-		if int(port.Port) != servicePort {
-			continue
-		}
-		switch port.TargetPort.Type {
-		case intstr.Int:
-			if port.TargetPort.IntVal > 0 {
-				return int(port.TargetPort.IntVal), nil
-			}
-			return servicePort, nil
-		case intstr.String:
-			resolved, err := resolveNamedServiceTargetPort(ctx, client, svc, port.TargetPort.StrVal)
-			if err != nil {
-				return 0, err
-			}
-			return resolved, nil
-		default:
-			return servicePort, nil
-		}
-	}
-	return 0, fmt.Errorf("service does not expose port %d", servicePort)
-}
-
-func resolveNamedServiceTargetPort(ctx context.Context, client kubernetes.Interface, svc corev1.Service, portName string) (int, error) {
-	if portName == "" {
-		return 0, fmt.Errorf("service targetPort name is empty")
-	}
-	if len(svc.Spec.Selector) == 0 {
-		return 0, fmt.Errorf("service has no selector to resolve targetPort %q", portName)
-	}
-
-	pods, err := client.CoreV1().Pods(svc.Namespace).List(ctx, metav1.ListOptions{
-		LabelSelector: labels.Set(svc.Spec.Selector).String(),
-	})
-	if err != nil {
-		return 0, fmt.Errorf("failed to list service pods: %w", err)
-	}
-
-	for _, pod := range pods.Items {
-		if pod.Status.Phase != corev1.PodRunning {
-			continue
-		}
-		for _, container := range pod.Spec.Containers {
-			for _, port := range container.Ports {
-				if port.Name == portName {
-					return int(port.ContainerPort), nil
-				}
-			}
-		}
-	}
-
-	return 0, fmt.Errorf("no running pod found with named port %q", portName)
 }
 
 // parseTimeRange parses the "range" query parameter into start/end/step.

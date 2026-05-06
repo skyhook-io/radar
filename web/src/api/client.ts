@@ -1147,13 +1147,6 @@ export interface PrometheusStatus {
     port: number
     basePath?: string
   }
-  portForward?: {
-    connected: boolean
-    localPort?: number
-    address?: string
-    namespace?: string
-    serviceName?: string
-  }
   contextName?: string
   error?: string
 }
@@ -1218,51 +1211,6 @@ export function usePrometheusConnect() {
       successMessage: 'Connected to Prometheus',
     },
   })
-}
-
-// Start/stop the built-in port-forward to monitoring/prometheus-server
-export function usePrometheusPortForward() {
-  const queryClient = useQueryClient()
-  const invalidatePrometheus = () => {
-    queryClient.invalidateQueries({ queryKey: ['prometheus-status'] })
-    queryClient.invalidateQueries({ queryKey: ['prometheus-resource-metrics'] })
-    queryClient.invalidateQueries({ queryKey: ['prometheus-namespace-metrics'] })
-    queryClient.invalidateQueries({ queryKey: ['prometheus-cluster-metrics'] })
-  }
-
-  const start = useMutation({
-    mutationFn: async () => {
-      const resp = await apiFetch(`${getApiBase()}/prometheus/portforward`, { method: 'POST' })
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({ error: 'Unknown error' }))
-        throw new Error(body.error || `HTTP ${resp.status}`)
-      }
-      return resp.json()
-    },
-    onSuccess: invalidatePrometheus,
-    meta: {
-      errorMessage: 'Failed to start Prometheus port-forward',
-      successMessage: 'Prometheus port-forward connected',
-    },
-  })
-
-  const stop = useMutation({
-    mutationFn: async () => {
-      const resp = await apiFetch(`${getApiBase()}/prometheus/portforward`, { method: 'DELETE' })
-      if (!resp.ok) {
-        const body = await resp.json().catch(() => ({ error: 'Unknown error' }))
-        throw new Error(body.error || `HTTP ${resp.status}`)
-      }
-      return resp.json() as Promise<PrometheusStatus>
-    },
-    onSuccess: invalidatePrometheus,
-    meta: {
-      errorMessage: 'Failed to stop Prometheus port-forward',
-      successMessage: 'Prometheus port-forward stopped',
-    },
-  })
-
-  return { start, stop }
 }
 
 // Fetch Prometheus metrics for a resource
