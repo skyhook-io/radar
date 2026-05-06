@@ -139,10 +139,25 @@ export function PortForwardProvider({ children }: { children: ReactNode }) {
   const measureAnchor = useCallback(() => {
     if (!indicatorRef.current) return
     const rect = indicatorRef.current.getBoundingClientRect()
+    // Align panel right edge with indicator right edge, but clamp so the
+    // panel's left edge never runs off the viewport's left edge — happens on
+    // narrow windows / split-screens where the indicator is closer to the
+    // left edge than the panel is wide. PANEL_WIDTH must match the panel's
+    // Tailwind w-80 (20rem = 320px).
+    const PANEL_WIDTH = 320
+    const MARGIN = 8
+    const desiredRight = Math.max(MARGIN, window.innerWidth - rect.right)
+    const maxRight = Math.max(MARGIN, window.innerWidth - PANEL_WIDTH - MARGIN)
+    const right = Math.min(desiredRight, maxRight)
+    // Keep the caret pointing at the indicator's horizontal center even after
+    // the panel has been clamped away from the indicator.
+    const panelRightX = window.innerWidth - right
+    const indicatorCenterX = rect.right - rect.width / 2
+    const caretRight = panelRightX - indicatorCenterX - 6
     setAnchor({
       top: rect.bottom + 10,
-      right: Math.max(16, window.innerWidth - rect.right),
-      caretRight: rect.width / 2 - 6,
+      right,
+      caretRight,
     })
   }, [])
 
