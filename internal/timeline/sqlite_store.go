@@ -77,10 +77,26 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 		return nil, fmt.Errorf("failed to initialize schema: %w", err)
 	}
 
-	// Clear seen_resources on startup so historical events get re-extracted
-	// The events table will handle deduplication via INSERT OR IGNORE
-	if _, err := db.Exec("DELETE FROM seen_resources"); err != nil {
-		log.Printf("Warning: failed to clear seen resources: %v", err)
+	// Hydrate the in-memory seenResources map from the persisted table so
+	// that on restart, informer Add events for previously-seen resources
+	// short-circuit in IsResourceSeen instead of re-running historical-event
+	// extraction for every resource. Best-effort: a query failure means we
+	// behave like a fresh store, not a fatal error.
+	if rows, err := db.Query("SELECT resource_key FROM seen_resources"); err != nil {
+		log.Printf("Warning: failed to load seen resources: %v", err)
+	} else {
+		var loaded int
+		for rows.Next() {
+			var key string
+			if err := rows.Scan(&key); err == nil {
+				store.seenResources[key] = true
+				loaded++
+			}
+		}
+		rows.Close()
+		if loaded > 0 {
+			log.Printf("[timeline] loaded %d seen resources from %s", loaded, dbPath)
+		}
 	}
 
 	return store, nil
@@ -518,8 +534,10 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, maxAge time.Duration) (int64,
 }
 
 // StartCleanupLoop spawns a goroutine that periodically deletes events older
-// than retention. Without this, the events table grows unbounded. The loop
-// exits when Close is called. retention <= 0 disables cleanup entirely.
+// than retention. Without this, the events table grows unbounded. Runs once
+// immediately so post-upgrade users with bloated DBs don't wait an hour for
+// the first cleanup. The loop exits when Close is called. retention <= 0
+// (or interval <= 0) disables cleanup entirely.
 func (s *SQLiteStore) StartCleanupLoop(retention, interval time.Duration) {
 	if retention <= 0 || interval <= 0 {
 		return
@@ -527,22 +545,32 @@ func (s *SQLiteStore) StartCleanupLoop(retention, interval time.Duration) {
 	s.wg.Go(func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
+		s.runCleanup(retention)
 		for {
 			select {
 			case <-s.quit:
 				return
 			case <-ticker.C:
-				n, err := s.Cleanup(context.Background(), retention)
-				if err != nil {
-					log.Printf("[timeline] cleanup failed for %s: %v", s.path, err)
-					continue
-				}
-				if n > 0 {
-					log.Printf("[timeline] cleanup: deleted %d events older than %s from %s", n, retention, s.path)
-				}
+				s.runCleanup(retention)
 			}
 		}
 	})
+}
+
+// runCleanup deletes events older than retention and truncates the WAL so the
+// sidecar file stays bounded. WAL truncation is best-effort.
+func (s *SQLiteStore) runCleanup(retention time.Duration) {
+	n, err := s.Cleanup(context.Background(), retention)
+	if err != nil {
+		log.Printf("[timeline] cleanup failed for %s: %v", s.path, err)
+		return
+	}
+	if n > 0 {
+		log.Printf("[timeline] cleanup: deleted %d events older than %s from %s", n, retention, s.path)
+	}
+	if _, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		log.Printf("[timeline] wal_checkpoint failed for %s: %v", s.path, err)
+	}
 }
 
 // scanEvent scans a row into a TimelineEvent

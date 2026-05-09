@@ -456,6 +456,39 @@ func TestSQLiteStore_LabelsStorage(t *testing.T) {
 	}
 }
 
+func TestSQLiteStore_SeenResources_PersistAcrossRestart(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "timeline-seen-persist-*")
+	if err != nil {
+		t.Fatalf("MkdirTemp: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	dbPath := filepath.Join(tmpDir, "seen.db")
+
+	store1, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("NewSQLiteStore: %v", err)
+	}
+	store1.MarkResourceSeen("Pod", "default", "p1")
+	store1.MarkResourceSeen("Deployment", "kube-system", "d1")
+	store1.Close()
+
+	store2, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer store2.Close()
+
+	if !store2.IsResourceSeen("Pod", "default", "p1") {
+		t.Error("expected Pod default/p1 to be seen after restart")
+	}
+	if !store2.IsResourceSeen("Deployment", "kube-system", "d1") {
+		t.Error("expected Deployment kube-system/d1 to be seen after restart")
+	}
+	if store2.IsResourceSeen("Pod", "default", "never-marked") {
+		t.Error("did not expect unmarked resource to be seen")
+	}
+}
+
 func TestSQLiteStore_StartCleanupLoop_RunsAndStopsOnClose(t *testing.T) {
 	store, cleanup := createTestSQLiteStore(t)
 	defer cleanup()
