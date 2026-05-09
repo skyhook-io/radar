@@ -143,9 +143,9 @@ export function UpdateNotification() {
             <>
               <button
                 onClick={handleCopyCommand}
-                className="flex items-center gap-2 mt-2 px-2 py-1.5 bg-theme-elevated rounded text-xs font-mono text-theme-text-primary hover:bg-theme-surface-hover transition-colors w-full"
+                className="flex items-start gap-2 mt-2 px-2 py-1.5 bg-theme-elevated rounded text-xs font-mono text-theme-text-primary hover:bg-theme-surface-hover transition-colors w-full"
               >
-                <code className="flex-1 text-left truncate">{versionInfo.updateCommand}</code>
+                <code className="flex-1 text-left break-all">{versionInfo.updateCommand}</code>
                 <CopyIcon copied={copied} failed={copyFailed} />
               </button>
               {/* Direct installs may have placed the binary somewhere the install
