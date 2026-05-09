@@ -141,7 +141,12 @@ func InitStore(cfg StoreConfig) error {
 				return
 			}
 			globalStore = store
-			log.Printf("Initialized SQLite event store at %s", cfg.Path)
+			if cfg.RetentionAge > 0 {
+				store.StartCleanupLoop(cfg.RetentionAge, time.Hour)
+				log.Printf("Initialized SQLite event store at %s (retention: %s)", cfg.Path, cfg.RetentionAge)
+			} else {
+				log.Printf("Initialized SQLite event store at %s (retention: disabled)", cfg.Path)
+			}
 
 		case StoreTypeMemory:
 			fallthrough

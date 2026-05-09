@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 )
 
 // Config holds startup configuration persisted across restarts.
@@ -17,9 +18,10 @@ type Config struct {
 	Namespace       string   `json:"namespace,omitempty"`
 	Port            int      `json:"port,omitempty"`
 	NoBrowser       bool     `json:"noBrowser,omitempty"`
-	TimelineStorage string   `json:"timelineStorage,omitempty"`
-	TimelineDBPath  string   `json:"timelineDbPath,omitempty"`
-	HistoryLimit    int      `json:"historyLimit,omitempty"`
+	TimelineStorage   string   `json:"timelineStorage,omitempty"`
+	TimelineDBPath    string   `json:"timelineDbPath,omitempty"`
+	TimelineRetention string   `json:"timelineRetention,omitempty"` // Go duration (e.g. "168h" for 7d); "0" disables
+	HistoryLimit      int      `json:"historyLimit,omitempty"`
 	PrometheusURL   string   `json:"prometheusUrl,omitempty"`
 	MCP             *bool    `json:"mcp,omitempty"` // nil = default (true), false = disabled
 }
@@ -123,6 +125,20 @@ func (c Config) TimelineStorageOr(def string) string {
 		return c.TimelineStorage
 	}
 	return def
+}
+
+// TimelineRetentionOr parses c.TimelineRetention as a Go duration. Returns the
+// provided default if unset or unparseable. A literal "0" disables cleanup.
+func (c Config) TimelineRetentionOr(def time.Duration) time.Duration {
+	if c.TimelineRetention == "" {
+		return def
+	}
+	d, err := time.ParseDuration(c.TimelineRetention)
+	if err != nil {
+		log.Printf("[config] Invalid timelineRetention %q (using default %s): %v", c.TimelineRetention, def, err)
+		return def
+	}
+	return d
 }
 
 // KubeconfigDirsFlag returns KubeconfigDirs joined as a comma-separated string

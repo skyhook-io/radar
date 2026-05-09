@@ -41,6 +41,7 @@ type AppConfig struct {
 	PodShellDefault      string
 	TimelineStorage      string
 	TimelineDBPath   string
+	TimelineRetention time.Duration
 	PrometheusURL    string
 	Version          string
 	MCPEnabled       bool
@@ -104,6 +105,7 @@ func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
 			dbPath = filepath.Join(homeDir, ".radar", "timeline.db")
 		}
 		storeCfg.Path = dbPath
+		storeCfg.RetentionAge = cfg.TimelineRetention
 	}
 	return storeCfg
 }

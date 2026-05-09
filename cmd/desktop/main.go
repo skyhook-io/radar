@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/app"
 	"github.com/skyhook-io/radar/internal/config"
@@ -42,6 +43,7 @@ func main() {
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory or sqlite")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
+	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables cleanup.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	flag.Parse()
 
@@ -95,8 +97,9 @@ func main() {
 		DisableHelmWrite: *disableHelmWrite,
 		DisableExec:      *disableExec,
 		PodShellDefault:  *podShellDefault,
-		TimelineStorage:  *timelineStorage,
-		TimelineDBPath:   *timelineDBPath,
+		TimelineStorage:   *timelineStorage,
+		TimelineDBPath:    *timelineDBPath,
+		TimelineRetention: *timelineRetention,
 		PrometheusURL:    *prometheusURL,
 		Version:          version,
 		MCPEnabled:       fileCfg.MCPEnabledOr(true),
