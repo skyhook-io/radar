@@ -28,6 +28,7 @@ type SQLiteStore struct {
 	path          string
 	quit          chan struct{}
 	wg            sync.WaitGroup
+	closeOnce     sync.Once
 }
 
 // NewSQLiteStore creates a new SQLite-backed event store.
@@ -497,10 +498,12 @@ func (s *SQLiteStore) Stats() StoreStats {
 	return stats
 }
 
-// Close releases any resources held by the store
+// Close releases any resources held by the store. Safe to call multiple times.
 func (s *SQLiteStore) Close() error {
-	close(s.quit)
-	s.wg.Wait()
+	s.closeOnce.Do(func() {
+		close(s.quit)
+		s.wg.Wait()
+	})
 	return s.db.Close()
 }
 
@@ -531,11 +534,11 @@ func (s *SQLiteStore) StartCleanupLoop(retention, interval time.Duration) {
 			case <-ticker.C:
 				n, err := s.Cleanup(context.Background(), retention)
 				if err != nil {
-					log.Printf("[timeline] cleanup failed: %v", err)
+					log.Printf("[timeline] cleanup failed for %s: %v", s.path, err)
 					continue
 				}
 				if n > 0 {
-					log.Printf("[timeline] cleanup: deleted %d events older than %s", n, retention)
+					log.Printf("[timeline] cleanup: deleted %d events older than %s from %s", n, retention, s.path)
 				}
 			}
 		}

@@ -455,3 +455,98 @@ func TestSQLiteStore_LabelsStorage(t *testing.T) {
 		t.Errorf("Expected GetAppLabel()='myapp', got '%s'", result.GetAppLabel())
 	}
 }
+
+func TestSQLiteStore_StartCleanupLoop_RunsAndStopsOnClose(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+
+	old := TimelineEvent{
+		ID:        "old",
+		Timestamp: time.Now().Add(-2 * time.Hour),
+		Source:    SourceInformer,
+		Kind:      "Pod",
+		Namespace: "default",
+		Name:      "old-pod",
+		EventType: EventTypeAdd,
+	}
+	fresh := TimelineEvent{
+		ID:        "fresh",
+		Timestamp: time.Now(),
+		Source:    SourceInformer,
+		Kind:      "Pod",
+		Namespace: "default",
+		Name:      "fresh-pod",
+		EventType: EventTypeAdd,
+	}
+	if err := store.AppendBatch(ctx, []TimelineEvent{old, fresh}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	store.StartCleanupLoop(time.Hour, 20*time.Millisecond)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		events, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		if len(events) == 1 && events[0].ID == "fresh" {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	events, _ := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if len(events) != 1 || events[0].ID != "fresh" {
+		t.Fatalf("expected only the fresh event after cleanup, got %d: %+v", len(events), events)
+	}
+
+	// Close must return promptly — proves the cleanup goroutine exited.
+	done := make(chan error, 1)
+	go func() { done <- store.Close() }()
+	select {
+	case <-done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Close did not return within 2s — cleanup goroutine leaked")
+	}
+
+	// And idempotent — the deferred cleanup() will Close again.
+}
+
+func TestSQLiteStore_StartCleanupLoop_ZeroIsNoop(t *testing.T) {
+	cases := []struct {
+		name      string
+		retention time.Duration
+		interval  time.Duration
+	}{
+		{"zero retention", 0, time.Hour},
+		{"zero interval", time.Hour, 0},
+		{"both zero", 0, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			tmpDir, err := os.MkdirTemp("", "timeline-noop-*")
+			if err != nil {
+				t.Fatalf("MkdirTemp: %v", err)
+			}
+			defer os.RemoveAll(tmpDir)
+
+			store, err := NewSQLiteStore(filepath.Join(tmpDir, "test.db"))
+			if err != nil {
+				t.Fatalf("NewSQLiteStore: %v", err)
+			}
+
+			store.StartCleanupLoop(tc.retention, tc.interval)
+
+			done := make(chan error, 1)
+			go func() { done <- store.Close() }()
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("Close blocked — goroutine started despite zero param")
+			}
+		})
+	}
+}

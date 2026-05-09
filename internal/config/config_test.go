@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestLoadMissing(t *testing.T) {
@@ -134,6 +135,32 @@ func TestHelpers(t *testing.T) {
 		}
 		if (Config{TimelineStorage: "sqlite"}).TimelineStorageOr("memory") != "sqlite" {
 			t.Error("set TimelineStorage should return value")
+		}
+	})
+
+	t.Run("TimelineRetentionOr", func(t *testing.T) {
+		def := 7 * 24 * time.Hour
+		cases := []struct {
+			name string
+			in   string
+			want time.Duration
+		}{
+			{"empty falls back to default", "", def},
+			{"valid duration", "168h", 168 * time.Hour},
+			{"explicit zero disables", "0", 0},
+			// Go's ParseDuration doesn't accept "d" — verify we fall back to
+			// def, not 0. A future "improvement" returning 0 on error would
+			// silently disable retention for everyone with this typo.
+			{"7d typo falls back to default", "7d", def},
+			{"garbage falls back to default", "garbage", def},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				got := (Config{TimelineRetention: tc.in}).TimelineRetentionOr(def)
+				if got != tc.want {
+					t.Errorf("TimelineRetentionOr(%q) = %s, want %s", tc.in, got, tc.want)
+				}
+			})
 		}
 	})
 

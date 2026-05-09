@@ -13,17 +13,17 @@ import (
 // Config holds startup configuration persisted across restarts.
 // Values are used as flag defaults; explicit CLI flags always take precedence.
 type Config struct {
-	Kubeconfig      string   `json:"kubeconfig,omitempty"`
-	KubeconfigDirs  []string `json:"kubeconfigDirs,omitempty"`
-	Namespace       string   `json:"namespace,omitempty"`
-	Port            int      `json:"port,omitempty"`
-	NoBrowser       bool     `json:"noBrowser,omitempty"`
+	Kubeconfig        string   `json:"kubeconfig,omitempty"`
+	KubeconfigDirs    []string `json:"kubeconfigDirs,omitempty"`
+	Namespace         string   `json:"namespace,omitempty"`
+	Port              int      `json:"port,omitempty"`
+	NoBrowser         bool     `json:"noBrowser,omitempty"`
 	TimelineStorage   string   `json:"timelineStorage,omitempty"`
 	TimelineDBPath    string   `json:"timelineDbPath,omitempty"`
 	TimelineRetention string   `json:"timelineRetention,omitempty"` // Go duration (e.g. "168h" for 7d); "0" disables
 	HistoryLimit      int      `json:"historyLimit,omitempty"`
-	PrometheusURL   string   `json:"prometheusUrl,omitempty"`
-	MCP             *bool    `json:"mcp,omitempty"` // nil = default (true), false = disabled
+	PrometheusURL     string   `json:"prometheusUrl,omitempty"`
+	MCP               *bool    `json:"mcp,omitempty"` // nil = default (true), false = disabled
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent writes

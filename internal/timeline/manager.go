@@ -44,8 +44,8 @@ type (
 // Re-export constants from pkg/timeline.
 const (
 	// EventSource constants
-	SourceInformer  = pkgtimeline.SourceInformer
-	SourceK8sEvent  = pkgtimeline.SourceK8sEvent
+	SourceInformer   = pkgtimeline.SourceInformer
+	SourceK8sEvent   = pkgtimeline.SourceK8sEvent
 	SourceHistorical = pkgtimeline.SourceHistorical
 
 	// EventType constants
@@ -94,16 +94,16 @@ func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEve
 func NewHistoricalEvent(kind, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
 	return pkgtimeline.NewHistoricalEvent(kind, namespace, name, ts, reason, message, healthState, owner, labels)
 }
-func ExtractOwner(obj any) *OwnerInfo       { return pkgtimeline.ExtractOwner(obj) }
+func ExtractOwner(obj any) *OwnerInfo         { return pkgtimeline.ExtractOwner(obj) }
 func ExtractLabels(obj any) map[string]string { return pkgtimeline.ExtractLabels(obj) }
 func DetermineHealthState(kind string, obj any) HealthState {
 	return pkgtimeline.DetermineHealthState(kind, obj)
 }
-func OperationToEventType(op string) EventType   { return pkgtimeline.OperationToEventType(op) }
-func EventTypeToOperation(et EventType) string   { return pkgtimeline.EventTypeToOperation(et) }
-func HealthStateToString(hs HealthState) string  { return pkgtimeline.HealthStateToString(hs) }
-func StringToHealthState(s string) HealthState   { return pkgtimeline.StringToHealthState(s) }
-func ToLegacyDiffInfo(d *DiffInfo) *DiffInfo     { return pkgtimeline.ToLegacyDiffInfo(d) }
+func OperationToEventType(op string) EventType  { return pkgtimeline.OperationToEventType(op) }
+func EventTypeToOperation(et EventType) string  { return pkgtimeline.EventTypeToOperation(et) }
+func HealthStateToString(hs HealthState) string { return pkgtimeline.HealthStateToString(hs) }
+func StringToHealthState(s string) HealthState  { return pkgtimeline.StringToHealthState(s) }
+func ToLegacyDiffInfo(d *DiffInfo) *DiffInfo    { return pkgtimeline.ToLegacyDiffInfo(d) }
 
 // Store constructors.
 func NewMemoryStore(maxSize int) *pkgtimeline.MemoryStore { return pkgtimeline.NewMemoryStore(maxSize) }
@@ -145,7 +145,7 @@ func InitStore(cfg StoreConfig) error {
 				store.StartCleanupLoop(cfg.RetentionAge, time.Hour)
 				log.Printf("Initialized SQLite event store at %s (retention: %s)", cfg.Path, cfg.RetentionAge)
 			} else {
-				log.Printf("Initialized SQLite event store at %s (retention: disabled)", cfg.Path)
+				log.Printf("Initialized SQLite event store at %s (retention: disabled — events table will grow unbounded)", cfg.Path)
 			}
 
 		case StoreTypeMemory:
