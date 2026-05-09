@@ -1580,7 +1580,7 @@ func (s *Server) collectNamespacedCRDCounts(_ context.Context, allowed []string)
 			// Cluster-wide list across all namespaces.
 			items, err := dynamicCache.List(gvr, "")
 			if err != nil {
-				log.Printf("WARNING [dashboard] Failed to count namespaced CRD %s.%s cluster-wide: %v", res.Name, res.Group, err)
+				log.Printf("WARNING [dashboard] Failed to count namespaced CRD %s.%s cluster-wide: %v", k8s.SanitizeForLog(res.Name), k8s.SanitizeForLog(res.Group), err)
 				continue
 			}
 			total = len(items)
@@ -1588,7 +1588,7 @@ func (s *Server) collectNamespacedCRDCounts(_ context.Context, allowed []string)
 			for _, ns := range allowed {
 				items, err := dynamicCache.List(gvr, ns)
 				if err != nil {
-					log.Printf("WARNING [dashboard] Failed to count namespaced CRD %s.%s in ns=%s: %v", res.Name, res.Group, ns, err)
+					log.Printf("WARNING [dashboard] Failed to count namespaced CRD %s.%s in ns=%s: %v", k8s.SanitizeForLog(res.Name), k8s.SanitizeForLog(res.Group), k8s.SanitizeForLog(ns), err)
 					continue
 				}
 				total += len(items)
