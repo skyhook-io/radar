@@ -67,16 +67,26 @@ else
   tar -xzf "$FILENAME"
 fi
 
-# Install. Also create a `radar` symlink so the binary can be invoked as
-# `kubectl radar` (plugin), `kubectl-radar`, or just `radar` — matches the
-# Homebrew formula's bin.install_symlink behavior.
+# Install
 if [ -w "$INSTALL_DIR" ]; then
   mv "$BINARY_NAME" "$INSTALL_DIR/"
-  [ "$OS" = "windows" ] || ln -sf "$BINARY_NAME" "$INSTALL_DIR/radar"
+  SUDO=""
 else
   echo "Installing to ${INSTALL_DIR} (requires sudo)..."
   sudo mv "$BINARY_NAME" "$INSTALL_DIR/"
-  [ "$OS" = "windows" ] || sudo ln -sf "$BINARY_NAME" "$INSTALL_DIR/radar"
+  SUDO="sudo"
+fi
+
+# Symlink so the binary can also be invoked as `radar`. Best-effort —
+# the primary install already succeeded, and `radar` is a common-enough
+# name that we refuse to clobber an unrelated regular file.
+if [ "$OS" != "windows" ]; then
+  if [ -e "$INSTALL_DIR/radar" ] && [ ! -L "$INSTALL_DIR/radar" ]; then
+    echo "Note: ${INSTALL_DIR}/radar already exists and is not a symlink — skipping shorthand. Use 'kubectl-radar' or 'kubectl radar'." >&2
+  else
+    $SUDO ln -sf "$BINARY_NAME" "$INSTALL_DIR/radar" || \
+      echo "Warning: could not create 'radar' symlink — use 'kubectl-radar' or 'kubectl radar'." >&2
+  fi
 fi
 
 # Cleanup
