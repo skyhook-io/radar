@@ -783,6 +783,7 @@ func TestSmokeCloudMode_SettingsGetStripsUserScoped(t *testing.T) {
 	// Seed real values into the persisted store so we can prove they're
 	// stripped at the HTTP boundary, not just missing from the file.
 	put(t, "/api/settings", `{"theme":"dark","pinnedKinds":[{"name":"pods","kind":"Pod","group":""}]}`)
+	put(t, "/api/settings", `{"defaultSort":{"column":"age","direction":"desc"}}`)
 
 	t.Setenv("RADAR_CLOUD_MODE", "true")
 
@@ -793,6 +794,9 @@ func TestSmokeCloudMode_SettingsGetStripsUserScoped(t *testing.T) {
 	}
 	if _, has := body["pinnedKinds"]; has && body["pinnedKinds"] != nil {
 		t.Errorf("pinnedKinds leaked under cloud mode: %v", body["pinnedKinds"])
+	}
+	if _, has := body["defaultSort"]; has && body["defaultSort"] != nil {
+		t.Errorf("defaultSort leaked under cloud mode: %v", body["defaultSort"])
 	}
 }
 
@@ -815,6 +819,67 @@ func TestSmokeCloudMode_SettingsPutRejectsUserScoped(t *testing.T) {
 	defer resp2.Body.Close()
 	if resp2.StatusCode != http.StatusBadRequest {
 		t.Errorf("PUT with pinnedKinds under cloud mode got %d, want 400", resp2.StatusCode)
+	}
+
+	resp3 := put(t, "/api/settings", `{"defaultSort":{"column":"age","direction":"desc"}}`)
+	defer resp3.Body.Close()
+	if resp3.StatusCode != http.StatusBadRequest {
+		t.Errorf("PUT with defaultSort under cloud mode got %d, want 400", resp3.StatusCode)
+	}
+}
+
+func TestSmokePutSettingsDefaultSort(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	payload := `{"defaultSort":{"column":"age","direction":"desc"}}`
+	resp := put(t, "/api/settings", payload)
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+
+	ds, ok := body["defaultSort"].(map[string]any)
+	if !ok {
+		t.Fatalf("defaultSort missing or wrong type: %v", body["defaultSort"])
+	}
+	if ds["column"] != "age" {
+		t.Errorf("defaultSort.column = %v, want age", ds["column"])
+	}
+	if ds["direction"] != "desc" {
+		t.Errorf("defaultSort.direction = %v, want desc", ds["direction"])
+	}
+
+	// Verify it persists
+	var loaded map[string]any
+	assertOK(t, get(t, "/api/settings"), &loaded)
+	lds, _ := loaded["defaultSort"].(map[string]any)
+	if lds["column"] != "age" {
+		t.Errorf("persisted defaultSort.column = %v, want age", lds["column"])
+	}
+}
+
+func TestSmokePutSettingsDefaultSortPreservesOther(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+
+	// Set theme first
+	put(t, "/api/settings", `{"theme":"dark"}`)
+
+	// Now set defaultSort — theme should be preserved
+	resp := put(t, "/api/settings", `{"defaultSort":{"column":"name","direction":"asc"}}`)
+	defer resp.Body.Close()
+
+	var body map[string]any
+	json.NewDecoder(resp.Body).Decode(&body)
+	if body["theme"] != "dark" {
+		t.Errorf("theme was overwritten: got %v", body["theme"])
+	}
+	ds, _ := body["defaultSort"].(map[string]any)
+	if ds["column"] != "name" {
+		t.Errorf("defaultSort.column = %v, want name", ds["column"])
 	}
 }
 

@@ -116,4 +116,34 @@ test.describe('Settings API', () => {
     // Clean up
     await request.put('/api/settings', { data: { theme: 'system' } })
   })
+
+  test('PUT /api/settings with defaultSort persists correctly', async ({ request }) => {
+    const putRes = await request.put('/api/settings', {
+      data: { defaultSort: { column: 'name', direction: 'asc' } },
+    })
+    expect(putRes.ok()).toBeTruthy()
+    const body = await putRes.json()
+    expect(body.defaultSort?.column).toBe('name')
+    expect(body.defaultSort?.direction).toBe('asc')
+
+    // Read back
+    const getRes = await request.get('/api/settings')
+    const getBody = await getRes.json()
+    expect(getBody.defaultSort?.column).toBe('name')
+    expect(getBody.defaultSort?.direction).toBe('asc')
+
+    // Clean up
+    await request.put('/api/settings', { data: { defaultSort: null } })
+  })
+})
+
+test.describe('Settings dialog — user preferences', () => {
+  test('default sort section is visible in settings dialog', async ({ page }) => {
+    await page.goto('/')
+    await page.waitForSelector('header', { timeout: 10000 })
+
+    await page.locator('button[title="Settings"]').click()
+    await expect(page.getByText('User Preferences')).toBeVisible()
+    await expect(page.getByText('Default Sort Column')).toBeVisible()
+  })
 })

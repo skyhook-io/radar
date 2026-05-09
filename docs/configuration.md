@@ -49,7 +49,11 @@ User preferences for the UI. Managed via the Settings dialog or `PUT /api/settin
   "theme": "system",
   "pinnedKinds": [
     { "name": "Deployments", "kind": "Deployment", "group": "" }
-  ]
+  ],
+  "defaultSort": {
+    "column": "age",
+    "direction": "desc"
+  }
 }
 ```
 
@@ -57,6 +61,7 @@ User preferences for the UI. Managed via the Settings dialog or `PUT /api/settin
 |-------|--------|-------------|
 | `theme` | `light`, `dark`, `system` | UI theme preference |
 | `pinnedKinds` | Array of `{name, kind, group}` | Resource kinds pinned to the sidebar |
+| `defaultSort` | `{column, direction}` | Default sort applied when switching resource kinds. `column` is any sortable column (`name`, `age`, `status`, `cpu`, `memory`, etc.). `direction` is `asc` or `desc`. Omit to use built-in defaults. |
 
 ## Cluster Connection Precedence
 

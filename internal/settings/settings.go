@@ -28,11 +28,19 @@ func DefaultAuditConfig() AuditConfig {
 	}
 }
 
+// DefaultSort describes the user's preferred sort column and direction for
+// the resource table.  An empty struct means "use the built-in default".
+type DefaultSort struct {
+	Column    string `json:"column"`    // e.g. "age", "name", "status"
+	Direction string `json:"direction"` // "asc" or "desc"
+}
+
 // Settings holds user preferences persisted across restarts.
 type Settings struct {
 	Theme       string       `json:"theme,omitempty"`
 	PinnedKinds []PinnedKind `json:"pinnedKinds,omitempty"`
 	Audit       *AuditConfig `json:"audit,omitempty"`
+	DefaultSort *DefaultSort `json:"defaultSort,omitempty"`
 	// ActiveNamespaces maps kubeconfig context name → user-chosen namespace
 	// override (the in-app namespace switcher's last selection per cluster).
 	// Empty value (or missing key) means no override → fall back to the

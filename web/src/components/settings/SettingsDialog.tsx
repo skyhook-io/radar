@@ -5,6 +5,7 @@ import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { useDefaultSort } from '../../hooks/useDefaultSort'
 
 interface Config {
   kubeconfig?: string
@@ -39,6 +40,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const [saveMessage, setSaveMessage] = useState<string | null>(null)
   const [configDirty, setConfigDirty] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const { defaultSort, setDefaultSort } = useDefaultSort()
 
   // Load config on open
   useEffect(() => {
@@ -173,6 +175,12 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
             isDesktop={isDesktop}
             onChange={updateConfigField}
           />
+
+          <div className="border-t border-theme-border pt-4 mt-4">
+            <h4 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-1">User Preferences</h4>
+            <p className="text-xs text-theme-text-tertiary mb-3">Saved instantly. Also updated automatically when you sort a resource table.</p>
+            <DefaultSortSection defaultSort={defaultSort} onDefaultSortChange={setDefaultSort} />
+          </div>
         </div>
 
         {/* Footer */}
@@ -208,6 +216,78 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
       </div>
     </div>,
     document.body
+  )
+}
+
+// -- Default Sort Section -----------------------------------------------------
+
+const SORT_COLUMNS = [
+  { value: '', label: 'None (table default)' },
+  { value: 'name', label: 'Name' },
+  { value: 'namespace', label: 'Namespace' },
+  { value: 'age', label: 'Age' },
+  { value: 'status', label: 'Status' },
+]
+
+function DefaultSortSection({
+  defaultSort,
+  onDefaultSortChange,
+}: {
+  defaultSort: { column: string; direction: 'asc' | 'desc' } | null
+  onDefaultSortChange: (sort: { column: string; direction: 'asc' | 'desc' } | null) => void
+}) {
+  const handleColumnChange = (column: string) => {
+    if (!column) {
+      onDefaultSortChange(null)
+    } else {
+      onDefaultSortChange({ column, direction: defaultSort?.direction ?? 'asc' })
+    }
+  }
+
+  const handleDirectionChange = (direction: 'asc' | 'desc') => {
+    if (defaultSort?.column) {
+      onDefaultSortChange({ column: defaultSort.column, direction })
+    }
+  }
+
+  return (
+    <div className="space-y-3">
+      <div>
+        <label className="block text-sm font-medium text-theme-text-primary mb-1">Default Sort Column</label>
+        <p className="text-xs text-theme-text-tertiary mb-1">Applies immediately and when switching between resource types</p>
+        <select
+          value={defaultSort?.column ?? ''}
+          onChange={(e) => handleColumnChange(e.target.value)}
+          className="w-full px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary focus:outline-none focus:border-blue-500"
+        >
+          {SORT_COLUMNS.map((col) => (
+            <option key={col.value} value={col.value}>{col.label}</option>
+          ))}
+        </select>
+      </div>
+
+      {defaultSort?.column && (
+        <div>
+          <label className="block text-sm font-medium text-theme-text-primary mb-1">Direction</label>
+          <div className="flex gap-2">
+            {(['asc', 'desc'] as const).map((dir) => (
+              <button
+                key={dir}
+                onClick={() => handleDirectionChange(dir)}
+                className={clsx(
+                  'flex-1 px-3 py-1.5 text-sm rounded-md border transition-colors',
+                  defaultSort.direction === dir
+                    ? 'btn-brand border-transparent'
+                    : 'bg-theme-elevated border-theme-border text-theme-text-secondary hover:text-theme-text-primary'
+                )}
+              >
+                {dir === 'asc' ? 'Ascending' : 'Descending'}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
   )
 }
 

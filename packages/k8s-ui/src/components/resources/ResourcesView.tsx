@@ -1655,6 +1655,10 @@ interface ResourcesViewProps {
   hideSidebar?: boolean
   /** Callback when the [+] create button is clicked. Receives the currently selected kind info. */
   onCreateResource?: (kind: { name: string; kind: string; group: string } | null) => void
+  /** User-preferred default sort column and direction. Applied when switching resource kinds instead of resetting to null. */
+  defaultSort?: { column: string; direction: 'asc' | 'desc' } | null
+  /** Called when the user manually changes the sort, so callers can persist it as the new default. */
+  onSortChange?: (sort: { column: string; direction: 'asc' | 'desc' } | null) => void
   /** Columns prepended to KNOWN_COLUMNS for every kind. For example, a
    *  multi-cluster host can inject a leading Cluster column. Each extra
    *  column is self-contained (own render/sort/filter), so the host
@@ -1772,6 +1776,8 @@ export function ResourcesView({
   onSelectedKindChange,
   hideSidebar = false,
   onCreateResource,
+  defaultSort = null,
+  onSortChange,
   extraLeadingColumns,
   onRowSelect,
 }: ResourcesViewProps) {
@@ -1789,8 +1795,8 @@ export function ResourcesView({
     onSelectedKindChange?.(selectedKind)
   }, [selectedKind.name, selectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
   const [searchTerm, setSearchTerm] = useState(initialFilters.search)
-  const [sortColumn, setSortColumn] = useState<string | null>(null)
-  const [sortDirection, setSortDirection] = useState<SortDirection>(null)
+  const [sortColumn, setSortColumn] = useState<string | null>(defaultSort?.column ?? null)
+  const [sortDirection, setSortDirection] = useState<SortDirection>(defaultSort?.direction ?? null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
   // Filter state
   const [columnFilters, setColumnFilters] = useState<Record<string, string[]>>(initialFilters.columnFilters)
@@ -2675,32 +2681,52 @@ export function ResourcesView({
       return
     }
     prevKindRef.current = selectedKind.name
-    setSortColumn(null)
-    setSortDirection(null)
+    setSortColumn(defaultSort?.column ?? null)
+    setSortDirection(defaultSort?.direction ?? null)
     setOpenColumnFilter(null)
     if (!isSyncingFromURL.current) {
       setColumnFilters({})
     }
     setProblemFilters([])
-  }, [selectedKind.name])
+  }, [selectedKind.name]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Apply defaultSort changes immediately when the user updates the preference in settings
+  const isDefaultSortMounted = useRef(false)
+  useEffect(() => {
+    if (!isDefaultSortMounted.current) {
+      isDefaultSortMounted.current = true
+      return
+    }
+    setSortColumn(defaultSort?.column ?? null)
+    setSortDirection(defaultSort?.direction ?? null)
+  }, [defaultSort])
 
   // Toggle sort for a column
   const handleSort = useCallback((column: string) => {
+    let newColumn: string | null
+    let newDirection: SortDirection
+
     if (sortColumn === column) {
       // Cycle: asc -> desc -> null
       if (sortDirection === 'asc') {
-        setSortDirection('desc')
+        newColumn = column
+        newDirection = 'desc'
       } else if (sortDirection === 'desc') {
-        setSortColumn(null)
-        setSortDirection(null)
+        newColumn = null
+        newDirection = null
       } else {
-        setSortDirection('asc')
+        newColumn = column
+        newDirection = 'asc'
       }
     } else {
-      setSortColumn(column)
-      setSortDirection('asc')
+      newColumn = column
+      newDirection = 'asc'
     }
-  }, [sortColumn, sortDirection])
+
+    setSortColumn(newColumn)
+    setSortDirection(newDirection)
+    onSortChange?.(newColumn && newDirection ? { column: newColumn, direction: newDirection } : null)
+  }, [sortColumn, sortDirection, onSortChange])
 
   // Get sortable value from a resource for a given column
   const getSortValue = useCallback((resource: any, column: string, kind?: string): string | number => {
