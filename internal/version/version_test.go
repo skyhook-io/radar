@@ -54,6 +54,8 @@ func TestGetUpdateCommand(t *testing.T) {
 		{"direct linux", InstallDirect, "linux", "curl -fsSL https://get.radarhq.io | sh"},
 		{"direct darwin", InstallDirect, "darwin", "curl -fsSL https://get.radarhq.io | sh"},
 		{"direct windows", InstallDirect, "windows", "irm https://get.radarhq.io/install.ps1 | iex"},
+		{"direct freebsd falls through", InstallDirect, "freebsd", ""},
+		{"direct empty goos falls through", InstallDirect, "", ""},
 		{"desktop", InstallDesktop, "darwin", ""},
 		{"unknown", InstallMethod("unknown"), "linux", ""},
 	}
