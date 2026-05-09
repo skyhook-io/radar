@@ -126,6 +126,7 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 						}
 					}()
 					wt := time.Now()
+					RegisterSupportedCRDFallbacks()
 					WarmupCommonCRDs()
 					logTiming("   CRD warmup: %v (background)", time.Since(wt))
 				}()
