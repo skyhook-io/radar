@@ -29,6 +29,12 @@ type SQLiteStore struct {
 	quit          chan struct{}
 	wg            sync.WaitGroup
 	closeOnce     sync.Once
+
+	cleanupMu     sync.RWMutex
+	retentionAge  time.Duration
+	lastCleanupAt time.Time
+	lastCleanupN  int64
+	lastCleanupEr string
 }
 
 // NewSQLiteStore creates a new SQLite-backed event store.
@@ -496,6 +502,13 @@ func (s *SQLiteStore) Stats() StoreStats {
 	stats.SeenResources = len(s.seenResources)
 	s.seenMu.RUnlock()
 
+	s.cleanupMu.RLock()
+	stats.RetentionAge = s.retentionAge
+	stats.LastCleanupAt = s.lastCleanupAt
+	stats.LastCleanupDeletedRows = s.lastCleanupN
+	stats.LastCleanupError = s.lastCleanupEr
+	s.cleanupMu.RUnlock()
+
 	return stats
 }
 
@@ -527,6 +540,9 @@ func (s *SQLiteStore) StartCleanupLoop(retention, interval time.Duration) {
 	if retention <= 0 || interval <= 0 {
 		return
 	}
+	s.cleanupMu.Lock()
+	s.retentionAge = retention
+	s.cleanupMu.Unlock()
 	s.wg.Go(func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
@@ -576,9 +592,23 @@ func (s *SQLiteStore) hydrateSeenResources() {
 }
 
 // runCleanup deletes events older than retention and truncates the WAL so the
-// sidecar file stays bounded. WAL truncation is best-effort.
+// sidecar file stays bounded. WAL truncation is best-effort. Records outcome
+// (timestamp, deleted count, last error) so it's surfaceable via Stats() and
+// /api/diagnostics — operators shouldn't need to tail logs to know retention
+// is working.
 func (s *SQLiteStore) runCleanup(retention time.Duration) {
 	n, err := s.Cleanup(context.Background(), retention)
+	now := time.Now()
+	s.cleanupMu.Lock()
+	s.lastCleanupAt = now
+	if err != nil {
+		s.lastCleanupEr = err.Error()
+	} else {
+		s.lastCleanupEr = ""
+		s.lastCleanupN = n
+	}
+	s.cleanupMu.Unlock()
+
 	if err != nil {
 		log.Printf("[timeline] cleanup failed for %s: %v", s.path, err)
 		return

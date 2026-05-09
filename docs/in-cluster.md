@@ -263,6 +263,17 @@ When deploying Radar in-cluster:
 
 4. **Network access**: Consider using NetworkPolicies to restrict which pods can reach Radar.
 
+## Timeline Storage: memory vs sqlite
+
+Radar's timeline records every cluster change. Two backends:
+
+- **`memory`** (default): events live in-process, lost on pod restart. Lowest footprint; pick this if you only need recent activity (last few hours).
+- **`sqlite`**: events persist to a PVC across restarts. Multi-day audit trail; pick this for long-running in-cluster deployments where you care about history surviving pod cycles.
+
+A busy cluster (~5k resources, active controllers) generates ~1.5 MB/min of events. With the default 7-day retention, expect ~15 GB at steady state. Tune `timeline.retention` (Go duration; `0` disables cleanup — not recommended) and `persistence.size` together.
+
+Cleanup runs hourly + once at startup. Confirm it's keeping up via `/api/diagnostics` — the `timeline.lastCleanupAt`, `timeline.lastCleanupDeletedRows`, `timeline.lastCleanupError`, and `timeline.storageBytes` fields surface the state without requiring `kubectl logs`.
+
 ## Configuration Reference
 
 See [Helm Chart README](../deploy/helm/radar/README.md) for all available values.
@@ -277,7 +288,8 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `mcp.enabled` | Enable MCP server for AI tools | `true` |
 | `timeline.storage` | Event storage (memory/sqlite) | `memory` |
 | `timeline.dbPath` | SQLite database path | `/data/timeline.db` |
-| `timeline.historyLimit` | Max events to retain | `10000` |
+| `timeline.historyLimit` | Max events to retain (memory only) | `10000` |
+| `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL | `""` (auto-discover) |
 | `persistence.enabled` | Enable PVC for SQLite storage | `false` |
 | `persistence.size` | PVC size | `1Gi` |

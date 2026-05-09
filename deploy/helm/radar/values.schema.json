@@ -161,7 +161,11 @@
       "properties": {
         "storage": { "type": "string", "enum": ["memory", "sqlite"] },
         "dbPath": { "type": "string" },
-        "historyLimit": { "type": "integer", "minimum": 1 }
+        "historyLimit": { "type": "integer", "minimum": 1 },
+        "retention": {
+          "type": "string",
+          "description": "SQLite retention as a Go duration (e.g. 168h). \"0\" disables cleanup."
+        }
       }
     },
     "auth": {

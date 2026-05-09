@@ -44,6 +44,9 @@ spec:
             - --timeline-storage={{ .Values.timeline.storage }}
             {{- if eq .Values.timeline.storage "sqlite" }}
             - --timeline-db={{ .Values.timeline.dbPath }}
+            {{- if .Values.timeline.retention }}
+            - --timeline-retention={{ .Values.timeline.retention }}
+            {{- end }}
             {{- end }}
             - --history-limit={{ .Values.timeline.historyLimit }}
             {{- if .Values.traffic.prometheusUrl }}

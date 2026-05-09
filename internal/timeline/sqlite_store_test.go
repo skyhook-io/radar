@@ -489,6 +489,50 @@ func TestSQLiteStore_SeenResources_PersistAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestSQLiteStore_Stats_RecordsCleanupState(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+
+	if got := store.Stats(); !got.LastCleanupAt.IsZero() || got.RetentionAge != 0 {
+		t.Errorf("expected zero cleanup state before StartCleanupLoop, got %+v", got)
+	}
+
+	ctx := context.Background()
+	old := TimelineEvent{
+		ID:        "old",
+		Timestamp: time.Now().Add(-2 * time.Hour),
+		Source:    SourceInformer,
+		Kind:      "Pod",
+		Namespace: "default",
+		Name:      "old-pod",
+		EventType: EventTypeAdd,
+	}
+	if err := store.Append(ctx, old); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	store.StartCleanupLoop(time.Hour, time.Hour)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		stats := store.Stats()
+		if !stats.LastCleanupAt.IsZero() {
+			if stats.RetentionAge != time.Hour {
+				t.Errorf("RetentionAge = %s, want 1h", stats.RetentionAge)
+			}
+			if stats.LastCleanupDeletedRows != 1 {
+				t.Errorf("LastCleanupDeletedRows = %d, want 1", stats.LastCleanupDeletedRows)
+			}
+			if stats.LastCleanupError != "" {
+				t.Errorf("LastCleanupError = %q, want empty", stats.LastCleanupError)
+			}
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("LastCleanupAt remained zero — cleanup state not recorded")
+}
+
 func TestSQLiteStore_StartCleanupLoop_RunsImmediately(t *testing.T) {
 	// Use an interval far longer than the test window so the only way
 	// the old event can be deleted within the deadline is the eager

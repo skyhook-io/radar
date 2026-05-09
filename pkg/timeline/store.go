@@ -84,6 +84,12 @@ type StoreStats struct {
 	NewestEvent   time.Time `json:"newestEvent"`
 	StorageBytes  int64     `json:"storageBytes,omitempty"`
 	SeenResources int       `json:"seenResources"`
+
+	// SQLite-only retention/cleanup state. Zero values for memory store.
+	RetentionAge           time.Duration `json:"retentionAge,omitempty"`
+	LastCleanupAt          time.Time     `json:"lastCleanupAt,omitempty"`
+	LastCleanupDeletedRows int64         `json:"lastCleanupDeletedRows,omitempty"`
+	LastCleanupError       string        `json:"lastCleanupError,omitempty"`
 }
 
 // CompiledFilter is a pre-compiled filter for efficient event filtering

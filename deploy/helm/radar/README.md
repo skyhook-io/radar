@@ -65,12 +65,24 @@ helm upgrade --install radar skyhook/radar \
 | `ingress.enabled` | Enable ingress | `false` |
 | `ingress.className` | Ingress class name | `""` |
 | `timeline.storage` | Timeline storage (memory/sqlite) | `memory` |
+| `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
 | `persistence.enabled` | Enable PVC for SQLite | `false` |
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) | `""` |
 | `resources.limits.memory` | Memory limit | `512Mi` |
 | `resources.requests.memory` | Memory request | `128Mi` |
 
 See `values.yaml` for all configuration options.
+
+### Timeline storage: memory vs sqlite
+
+Radar's timeline records every cluster change so you can scrub backwards through "what happened, when." Two backends:
+
+- **`memory`** (default): events live in-process. Lost on pod restart. Lower memory footprint per retention window than SQLite (no indexes, no WAL). Pick this if you only need recent activity (last few hours), don't care about losing history when a pod cycles, or want the simplest setup.
+- **`sqlite`**: events persist to a PVC across restarts. Pick this if you want a multi-day audit trail, need to inspect changes that happened while you weren't looking, or run Radar in-cluster long-term. Adds operational concerns: the PVC will fill if retention is unbounded; restarting on a multi-GB DB is slower (more rows to load).
+
+**Sizing**: a busy cluster (~5k resources, active controllers) generates ~1.5 MB/min of timeline events. With the default 7-day retention, expect ~15 GB at steady state. Tune `timeline.retention` and `persistence.size` together. Set `timeline.retention=0` to disable cleanup (events grow unbounded — not recommended).
+
+`/api/diagnostics` surfaces `timeline.retentionAge`, `timeline.lastCleanupAt`, `timeline.lastCleanupDeletedRows`, `timeline.lastCleanupError`, and `timeline.storageBytes` so you can confirm cleanup is keeping up without tailing logs.
 
 ## RBAC
 

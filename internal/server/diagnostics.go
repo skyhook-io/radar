@@ -104,12 +104,19 @@ type DiagCache struct {
 
 // DiagTimeline holds timeline store info.
 type DiagTimeline struct {
-	StorageType string `json:"storageType"`
-	TotalEvents int64  `json:"totalEvents"`
-	OldestEvent string `json:"oldestEvent,omitempty"`
-	NewestEvent string `json:"newestEvent,omitempty"`
-	StoreErrors int64  `json:"storeErrors"`
-	TotalDrops  int64  `json:"totalDrops"`
+	StorageType  string `json:"storageType"`
+	TotalEvents  int64  `json:"totalEvents"`
+	OldestEvent  string `json:"oldestEvent,omitempty"`
+	NewestEvent  string `json:"newestEvent,omitempty"`
+	StorageBytes int64  `json:"storageBytes,omitempty"`
+	StoreErrors  int64  `json:"storeErrors"`
+	TotalDrops   int64  `json:"totalDrops"`
+
+	// SQLite-only retention/cleanup state.
+	RetentionAge       string `json:"retentionAge,omitempty"`
+	LastCleanupAt      string `json:"lastCleanupAt,omitempty"`
+	LastCleanupDeleted int64  `json:"lastCleanupDeletedRows,omitempty"`
+	LastCleanupError   string `json:"lastCleanupError,omitempty"`
 }
 
 // DiagEventPipeline holds event pipeline metrics.
@@ -284,15 +291,24 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		}
 		stats := store.Stats()
 		diag := &DiagTimeline{
-			TotalEvents: stats.TotalEvents,
-			StoreErrors: timeline.GetStoreErrorCount(),
-			TotalDrops:  timeline.GetTotalDropCount(),
+			TotalEvents:        stats.TotalEvents,
+			StorageBytes:       stats.StorageBytes,
+			StoreErrors:        timeline.GetStoreErrorCount(),
+			TotalDrops:         timeline.GetTotalDropCount(),
+			LastCleanupDeleted: stats.LastCleanupDeletedRows,
+			LastCleanupError:   stats.LastCleanupError,
 		}
 		if !stats.OldestEvent.IsZero() {
 			diag.OldestEvent = stats.OldestEvent.Format(time.RFC3339)
 		}
 		if !stats.NewestEvent.IsZero() {
 			diag.NewestEvent = stats.NewestEvent.Format(time.RFC3339)
+		}
+		if !stats.LastCleanupAt.IsZero() {
+			diag.LastCleanupAt = stats.LastCleanupAt.Format(time.RFC3339)
+		}
+		if stats.RetentionAge > 0 {
+			diag.RetentionAge = stats.RetentionAge.String()
 		}
 		if s.diagConfig != nil {
 			diag.StorageType = s.diagConfig.TimelineStorage
