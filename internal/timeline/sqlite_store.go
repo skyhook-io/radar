@@ -82,22 +82,7 @@ func NewSQLiteStore(dbPath string) (*SQLiteStore, error) {
 	// short-circuit in IsResourceSeen instead of re-running historical-event
 	// extraction for every resource. Best-effort: a query failure means we
 	// behave like a fresh store, not a fatal error.
-	if rows, err := db.Query("SELECT resource_key FROM seen_resources"); err != nil {
-		log.Printf("Warning: failed to load seen resources: %v", err)
-	} else {
-		var loaded int
-		for rows.Next() {
-			var key string
-			if err := rows.Scan(&key); err == nil {
-				store.seenResources[key] = true
-				loaded++
-			}
-		}
-		rows.Close()
-		if loaded > 0 {
-			log.Printf("[timeline] loaded %d seen resources from %s", loaded, dbPath)
-		}
-	}
+	store.hydrateSeenResources()
 
 	return store, nil
 }
@@ -555,6 +540,39 @@ func (s *SQLiteStore) StartCleanupLoop(retention, interval time.Duration) {
 			}
 		}
 	})
+}
+
+// hydrateSeenResources populates the in-memory seenResources map from the
+// persisted table. Best-effort: any error leaves the map in whatever state it
+// reached, which is no worse than a fresh store. Safe to call only from the
+// constructor — no locking, since no other goroutine has the store yet.
+func (s *SQLiteStore) hydrateSeenResources() {
+	rows, err := s.db.Query("SELECT resource_key FROM seen_resources")
+	if err != nil {
+		log.Printf("[timeline] failed to load seen resources from %s: %v", s.path, err)
+		return
+	}
+	defer rows.Close()
+
+	var loaded, skipped int
+	for rows.Next() {
+		var key string
+		if err := rows.Scan(&key); err != nil {
+			skipped++
+			continue
+		}
+		s.seenResources[key] = true
+		loaded++
+	}
+	if err := rows.Err(); err != nil {
+		log.Printf("[timeline] seen_resources iteration ended with error after %d rows: %v", loaded, err)
+	}
+	if skipped > 0 {
+		log.Printf("[timeline] skipped %d unreadable seen_resources rows in %s (loaded %d)", skipped, s.path, loaded)
+	}
+	if loaded > 0 {
+		log.Printf("[timeline] loaded %d seen resources from %s", loaded, s.path)
+	}
 }
 
 // runCleanup deletes events older than retention and truncates the WAL so the

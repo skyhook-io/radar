@@ -489,6 +489,44 @@ func TestSQLiteStore_SeenResources_PersistAcrossRestart(t *testing.T) {
 	}
 }
 
+func TestSQLiteStore_StartCleanupLoop_RunsImmediately(t *testing.T) {
+	// Use an interval far longer than the test window so the only way
+	// the old event can be deleted within the deadline is the eager
+	// pre-ticker run. Catches a regression where someone moves the
+	// runCleanup call back inside the for-loop / below the case branch.
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	old := TimelineEvent{
+		ID:        "old",
+		Timestamp: time.Now().Add(-2 * time.Hour),
+		Source:    SourceInformer,
+		Kind:      "Pod",
+		Namespace: "default",
+		Name:      "old-pod",
+		EventType: EventTypeAdd,
+	}
+	if err := store.Append(ctx, old); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+
+	store.StartCleanupLoop(time.Hour, time.Hour)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		events, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+		if err != nil {
+			t.Fatalf("Query: %v", err)
+		}
+		if len(events) == 0 {
+			return // eager cleanup ran
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatal("eager cleanup did not run within 2s — old event still present")
+}
+
 func TestSQLiteStore_StartCleanupLoop_RunsAndStopsOnClose(t *testing.T) {
 	store, cleanup := createTestSQLiteStore(t)
 	defer cleanup()
