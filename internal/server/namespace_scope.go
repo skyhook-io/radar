@@ -219,6 +219,16 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	// to fall back to.
 	canClear := authoritative || k8s.HasNamespaceFallback()
 
+	// Force non-nil slices so the wire shape matches the TS contract
+	// (`string[]`, never `null`). A nil []string marshals to JSON null,
+	// which fails downstream on `scope.actives.slice()` etc.
+	if actives == nil {
+		actives = []string{}
+	}
+	if namespaces == nil {
+		namespaces = []string{}
+	}
+
 	s.writeJSON(w, NamespaceScopeResponse{
 		Actives:              actives,
 		KubeconfigNamespace:  kubeNs,

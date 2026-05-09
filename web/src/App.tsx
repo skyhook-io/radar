@@ -672,10 +672,11 @@ function AppInner() {
   // below propagates the mirrored state to `?namespaces=`.
   const setActiveNamespace = useSetActiveNamespace()
   const initialBookmarkReconciledRef = useRef(false)
-  const namespaceScopeKey = namespaceScope?.actives.slice().sort().join(',') ?? null
+  const scopeActives = useMemo(() => namespaceScope?.actives ?? [], [namespaceScope?.actives])
+  const namespaceScopeKey = useMemo(() => namespaceScope ? [...scopeActives].sort().join(',') : null, [namespaceScope, scopeActives])
   useEffect(() => {
     if (!namespaceScope) return
-    const sortedScope = [...namespaceScope.actives].sort()
+    const sortedScope = [...scopeActives].sort()
     const sortedState = [...namespaces].sort()
     const sameAsState = sortedScope.length === sortedState.length && sortedScope.every((ns, i) => ns === sortedState[i])
 
@@ -693,7 +694,7 @@ function AppInner() {
     }
 
     if (!sameAsState) {
-      setNamespaces(namespaceScope.actives)
+      setNamespaces(scopeActives)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- namespaces and setActiveNamespace are intentionally excluded; we only react to server-side changes.
   }, [namespaceScope, namespaceScopeKey])
@@ -749,7 +750,7 @@ function AppInner() {
       setNamespaces(urlNamespaces)
       if (namespaceScope) {
         const sortedURL = [...urlNamespaces].sort()
-        const sortedScope = [...namespaceScope.actives].sort()
+        const sortedScope = [...(namespaceScope.actives ?? [])].sort()
         const same = sortedURL.length === sortedScope.length && sortedURL.every((ns, i) => ns === sortedScope[i])
         if (!same) {
           setActiveNamespace.mutate({ namespaces: urlNamespaces })

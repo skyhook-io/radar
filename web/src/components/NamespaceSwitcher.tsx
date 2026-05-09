@@ -48,13 +48,14 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
   const triggerRef = useRef<HTMLButtonElement>(null)
   const dropdownRef = useRef<HTMLDivElement>(null)
 
-  const activesKey = scope?.actives.slice().sort().join(',') ?? ''
+  const scopeActives = useMemo(() => scope?.actives ?? [], [scope?.actives])
+  const activesKey = useMemo(() => [...scopeActives].sort().join(','), [scopeActives])
 
   // Sync the draft with the server's view whenever it changes (initial load,
   // post-mutation refetch, eviction after RBAC drift).
   useEffect(() => {
-    setDraft(new Set(scope?.actives ?? []))
-  }, [activesKey, scope?.actives])
+    setDraft(new Set(scopeActives))
+  }, [activesKey, scopeActives])
 
   const items = useMemo(() => {
     if (!scope) return [] as string[]
@@ -144,9 +145,9 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
     setDraft(next)
   }
 
-  const activeCount = scope.actives.length
+  const activeCount = scopeActives.length
   const triggerLabel =
-    activeCount === 0 ? 'All namespaces' : activeCount === 1 ? scope.actives[0] : `${activeCount} namespaces`
+    activeCount === 0 ? 'All namespaces' : activeCount === 1 ? scopeActives[0] : `${activeCount} namespaces`
   const isClusterWide = activeCount === 0
   const restrictedHint = scope.mode === 'restricted'
   const isDisabled = disabled || isLoading || setActive.isPending
@@ -158,7 +159,7 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
       : isClusterWide
         ? 'Currently viewing all namespaces. Click to narrow the view.'
         : activeCount === 1
-          ? `View is filtered to namespace ${scope.actives[0]}. Click to switch or reset.`
+          ? `View is filtered to namespace ${scopeActives[0]}. Click to switch or reset.`
           : `View is filtered to ${activeCount} namespaces. Click to adjust or reset.`
 
   // Counts used to label the bulk-action buttons; computed against the visible
