@@ -140,15 +140,28 @@ export function UpdateNotification() {
 
           {/* CLI: show update command with copy button for package managers */}
           {!isDesktop && versionInfo.updateCommand ? (
-            <button
-              onClick={handleCopyCommand}
-              className="flex items-center gap-2 mt-2 px-2 py-1.5 bg-theme-elevated rounded text-xs font-mono text-theme-text-primary hover:bg-theme-surface-hover transition-colors w-full"
-            >
-              <code className="flex-1 text-left truncate">{versionInfo.updateCommand}</code>
-              <CopyIcon copied={copied} failed={copyFailed} />
-            </button>
+            <>
+              <button
+                onClick={handleCopyCommand}
+                className="flex items-center gap-2 mt-2 px-2 py-1.5 bg-theme-elevated rounded text-xs font-mono text-theme-text-primary hover:bg-theme-surface-hover transition-colors w-full"
+              >
+                <code className="flex-1 text-left truncate">{versionInfo.updateCommand}</code>
+                <CopyIcon copied={copied} failed={copyFailed} />
+              </button>
+              {/* Direct installs may have placed the binary somewhere the install
+                  script won't touch — surface a download link as a fallback. */}
+              {versionInfo.installMethod === 'direct' && versionInfo.releaseUrl && (
+                <a
+                  href={versionInfo.releaseUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 mt-1.5 text-xs text-theme-text-tertiary hover:text-theme-text-secondary hover:underline"
+                >
+                  or download from GitHub →
+                </a>
+              )}
+            </>
           ) : (
-            /* Direct download - show release link */
             !isDesktop && versionInfo.releaseUrl && (
               <a
                 href={versionInfo.releaseUrl}

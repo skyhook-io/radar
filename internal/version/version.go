@@ -278,6 +278,13 @@ func detectInstallMethodFromPath(exe string) InstallMethod {
 // getUpdateCommand returns the command to update based on install method.
 // Desktop returns empty since updates are handled in-app.
 func getUpdateCommand(method InstallMethod) string {
+	return getUpdateCommandForOS(method, runtime.GOOS)
+}
+
+// getUpdateCommandForOS is the OS-parameterized variant for testability.
+// For InstallDirect it returns the public install one-liner — the same script
+// is idempotent and upgrades an existing binary at /usr/local/bin/kubectl-radar.
+func getUpdateCommandForOS(method InstallMethod, goos string) string {
 	switch method {
 	case InstallHomebrew:
 		return "brew upgrade skyhook-io/tap/radar"
@@ -285,6 +292,11 @@ func getUpdateCommand(method InstallMethod) string {
 		return "kubectl krew upgrade radar"
 	case InstallScoop:
 		return "scoop update radar"
+	case InstallDirect:
+		if goos == "windows" {
+			return "irm https://get.radarhq.io/install.ps1 | iex"
+		}
+		return "curl -fsSL https://get.radarhq.io | sh"
 	case InstallDesktop:
 		return "" // in-app update, no CLI command
 	default:
