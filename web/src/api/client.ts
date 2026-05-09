@@ -2483,6 +2483,14 @@ const NAMESPACE_SWITCH_TIMEOUT = 5000
 export function useSetActiveNamespace() {
   const queryClient = useQueryClient()
   return useMutation<NamespaceScope, Error, { namespaces: string[] }>({
+    meta: {
+      // Surface 403s (RBAC drift, denied bookmark) and network errors via the
+      // global toast. Without this, App.tsx call sites that mutate without
+      // their own onError (bookmark reconciliation, back-nav, topology
+      // maximize/clear, command palette) silently revert when the scope
+      // refetches and the mirror effect overwrites local state.
+      errorMessage: 'Failed to update namespace selection',
+    },
     mutationFn: async ({ namespaces }) => {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), NAMESPACE_SWITCH_TIMEOUT)

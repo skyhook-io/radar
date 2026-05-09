@@ -34,16 +34,16 @@ type Settings struct {
 	PinnedKinds []PinnedKind `json:"pinnedKinds,omitempty"`
 	Audit       *AuditConfig `json:"audit,omitempty"`
 	// ActiveNamespaces maps kubeconfig context name → the user's namespace
-	// picks (the in-app multi-select namespace switcher's last selection per
-	// cluster). Empty slice (or missing key) means no override → fall back to
-	// the kubeconfig context's namespace / cluster-wide.
+	// picks (the in-app multi-select switcher's last selection per cluster).
+	// Empty slice (or missing key) means no pick is active and reads default
+	// to the user's full RBAC ceiling (typically "All namespaces").
 	ActiveNamespaces ActiveNamespacesMap `json:"activeNamespaces,omitempty"`
 }
 
 // ActiveNamespacesMap is the persisted picker state, keyed by kubeconfig
-// context name. Pre-multi-select releases stored a single string value per
-// context; UnmarshalJSON accepts both shapes so old settings.json files
-// don't lose their pick on first read after upgrade.
+// context name. Some settings.json files written by older Radar versions
+// stored a single string per context instead of a slice; UnmarshalJSON
+// accepts both shapes for backwards compatibility.
 type ActiveNamespacesMap map[string][]string
 
 func (m *ActiveNamespacesMap) UnmarshalJSON(data []byte) error {
@@ -55,8 +55,14 @@ func (m *ActiveNamespacesMap) UnmarshalJSON(data []byte) error {
 	for k, v := range raw {
 		var arr []string
 		if err := json.Unmarshal(v, &arr); err == nil {
-			if len(arr) > 0 {
-				out[k] = arr
+			cleaned := make([]string, 0, len(arr))
+			for _, ns := range arr {
+				if ns != "" {
+					cleaned = append(cleaned, ns)
+				}
+			}
+			if len(cleaned) > 0 {
+				out[k] = cleaned
 			}
 			continue
 		}

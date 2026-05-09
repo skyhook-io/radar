@@ -2,7 +2,6 @@ import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRe
 import { createPortal } from 'react-dom'
 import { ChevronDown, Globe, Search, AlertTriangle, X } from 'lucide-react'
 import { useNamespaceScope, useSetActiveNamespace } from '../api/client'
-import { useToast } from './ui/Toast'
 import { Tooltip } from './ui/Tooltip'
 
 export interface NamespaceSwitcherHandle {
@@ -31,7 +30,8 @@ interface NamespaceSwitcherProps {
  *
  * Selection model: the dropdown keeps a draft Set<string>; toggling rows
  * mutates the draft locally; closing the dropdown applies the draft in a
- * single mutation. "All namespaces" / "Select all" apply immediately.
+ * single mutation. "Clear all" applies immediately and closes; "Select all
+ * visible" / "Clear visible" mutate the draft only and wait for close.
  */
 export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSwitcherProps>(function NamespaceSwitcher(
   { className = '', disabled = false, disabledTooltip },
@@ -39,7 +39,6 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
 ) {
   const { data: scope, isLoading } = useNamespaceScope()
   const setActive = useSetActiveNamespace()
-  const { showError } = useToast()
 
   const [isOpen, setIsOpen] = useState(false)
   const [search, setSearch] = useState('')
@@ -72,15 +71,8 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
     if (!scope) return
     const nextArr = Array.from(next).sort()
     if (nextArr.join(',') === activesKey) return
-    setActive.mutate(
-      { namespaces: nextArr },
-      {
-        onError: err => {
-          showError('Namespace switch failed', err.message)
-        },
-      },
-    )
-  }, [activesKey, scope, setActive, showError])
+    setActive.mutate({ namespaces: nextArr })
+  }, [activesKey, scope, setActive])
 
   const closeAndApply = useCallback(() => {
     setIsOpen(false)

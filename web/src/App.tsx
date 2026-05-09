@@ -679,11 +679,11 @@ function AppInner() {
     const sortedState = [...namespaces].sort()
     const sameAsState = sortedScope.length === sortedState.length && sortedScope.every((ns, i) => ns === sortedState[i])
 
-    // Initial bookmark reconciliation: if the URL gave us namespaces that
-    // differ from the server pick on first scope load, push the URL choice
-    // to the server. This keeps shared/bookmarked deep links working under
-    // the new server-canonical model. Only runs once per mount; subsequent
-    // changes mirror server → state.
+    // First-load bookmark reconciliation: if the URL had namespaces that
+    // differ from the server pick when the scope first arrives, push the
+    // URL choice to the server so shared/bookmarked deep links keep
+    // working. The ref flips on the first scope load regardless of whether
+    // the URL had namespaces — subsequent runs mirror server → state.
     if (!initialBookmarkReconciledRef.current) {
       initialBookmarkReconciledRef.current = true
       if (!sameAsState && sortedState.length > 0) {
