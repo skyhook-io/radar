@@ -42,6 +42,7 @@ interface PortForwardSession {
   localPort: number
   listenAddress: string
   serviceName?: string
+  servicePort?: number
   scheme?: 'http' | 'https'
   startedAt: string
   status: 'running' | 'stopped' | 'error'
@@ -50,6 +51,33 @@ interface PortForwardSession {
 
 function sessionUrl(session: PortForwardSession): string {
   return `${session.scheme || 'http'}://localhost:${session.localPort}`
+}
+
+function formatPortLabel(session: PortForwardSession): string {
+  if (session.servicePort && session.servicePort !== session.podPort) {
+    return `${session.servicePort} → ${session.podPort}`
+  }
+  return String(session.podPort)
+}
+
+// Build the recreate request body for toggle-listen / change-port flows.
+// When the original session was service-resolved, the recreate must also go
+// through the service path (servicePort + serviceName). Sending podName+podPort
+// would skip resolution and validate against the pod's declared containerPorts,
+// which can fail even though the original session worked: services can route to
+// any port the container actually listens on, regardless of containerPort
+// declarations. Going through service also re-resolves to a currently-running
+// pod if the original has since been replaced.
+function buildRecreateBody(session: PortForwardSession, overrides: { localPort: number; listenAddress: string }) {
+  const base = {
+    namespace: session.namespace,
+    localPort: overrides.localPort,
+    listenAddress: overrides.listenAddress,
+  }
+  if (session.serviceName && session.servicePort) {
+    return { ...base, serviceName: session.serviceName, podPort: session.servicePort }
+  }
+  return { ...base, podName: session.podName, podPort: session.podPort }
 }
 
 // --- Shared query ------------------------------------------------------------
@@ -435,14 +463,7 @@ export function PortForwardPanel() {
       const res = await fetch(apiUrl('/portforwards'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          namespace: session.namespace,
-          podName: session.podName || undefined,
-          serviceName: session.serviceName || undefined,
-          podPort: session.podPort,
-          localPort: session.localPort,
-          listenAddress: newAddress,
-        }),
+        body: JSON.stringify(buildRecreateBody(session, { localPort: session.localPort, listenAddress: newAddress })),
       })
       if (!res.ok) {
         const error = await res.json().catch(() => ({}))
@@ -489,14 +510,7 @@ export function PortForwardPanel() {
       const res = await fetch(apiUrl('/portforwards'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          namespace: session.namespace,
-          podName: session.podName || undefined,
-          serviceName: session.serviceName || undefined,
-          podPort: session.podPort,
-          localPort: newPort,
-          listenAddress: session.listenAddress,
-        }),
+        body: JSON.stringify(buildRecreateBody(session, { localPort: newPort, listenAddress: session.listenAddress })),
       })
       if (!res.ok) {
         const error = await res.json().catch(() => ({}))
@@ -631,7 +645,7 @@ export function PortForwardPanel() {
       </div>
 
       {/* Sessions list */}
-      <div className="max-h-64 overflow-y-auto">
+      <div className="max-h-[28rem] overflow-y-auto">
         {isQueryError ? (
           <div className="p-3 text-xs bg-red-500/10 border-b border-theme-border">
             <div className={clsx('badge-sm mb-1 inline-block', SEVERITY_BADGE.error)}>
@@ -656,37 +670,84 @@ export function PortForwardPanel() {
               <div
                 key={session.id}
                 className={clsx(
-                  'p-3',
+                  'p-3 space-y-1',
                   session.status === 'error' ? 'bg-red-500/10' : 'hover:bg-theme-elevated'
                 )}
               >
+                {/* Row 1: status dot + name | stop button */}
                 <div className="flex items-start justify-between gap-2">
-                  <div className="flex-1 min-w-0">
-                    <div className="flex items-center gap-2">
-                      <span
-                        className={clsx(
-                          'w-2 h-2 rounded-full shrink-0',
-                          session.status === 'running' ? 'bg-green-500' : 'bg-red-500'
-                        )}
-                      />
-                      <span className="text-sm text-theme-text-primary font-medium truncate">
-                        {session.serviceName || session.podName}
-                      </span>
-                      {session.status === 'error' && (
-                        <span className={clsx('badge-sm', SEVERITY_BADGE.error)}>Failed</span>
+                  <div className="flex items-start gap-2 min-w-0 flex-1">
+                    <span
+                      className={clsx(
+                        'w-2 h-2 rounded-full shrink-0 mt-[7px]',
+                        session.status === 'running' ? 'bg-green-500' : 'bg-red-500'
                       )}
-                    </div>
-                    <div className="mt-1 text-xs text-theme-text-disabled">
-                      {session.namespace} · Port {session.podPort}
-                    </div>
-                    {session.status === 'error' && session.error && (
-                      <div className="mt-1.5 text-xs text-red-400 bg-red-500/10 px-2 py-1 rounded">
-                        {session.error}
-                      </div>
+                    />
+                    <span className="text-sm text-theme-text-primary font-medium break-all line-clamp-2">
+                      {session.serviceName || session.podName}
+                    </span>
+                    {session.status === 'error' && (
+                      <span className={clsx('badge-sm shrink-0', SEVERITY_BADGE.error)}>Failed</span>
                     )}
+                  </div>
+                  <div className="flex items-center gap-0.5 shrink-0">
                     {session.status === 'running' && (
-                      <div className="mt-1.5 flex items-center gap-2">
-                        {editingPortId === session.id ? (
+                      <Tooltip
+                        content={session.listenAddress === '0.0.0.0' ? 'Switch to localhost only' : 'Allow access from other machines'}
+                        delay={300} position="bottom" disabled={!isPanelOpen}
+                      >
+                      <button
+                        onClick={() => toggleListenAddress(session)}
+                        disabled={togglingId === session.id || changingPortId === session.id}
+                        className={clsx(
+                          'flex items-center justify-center p-1.5 rounded transition-colors',
+                          session.listenAddress === '0.0.0.0'
+                            ? `${SEVERITY_BADGE.warning} hover:bg-amber-500/30`
+                            : 'text-theme-text-disabled hover:text-theme-text-primary hover:bg-theme-hover'
+                        )}
+                      >
+                        {togglingId === session.id ? (
+                          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                        ) : session.listenAddress === '0.0.0.0' ? (
+                          <Globe className="w-3.5 h-3.5" />
+                        ) : (
+                          <Monitor className="w-3.5 h-3.5" />
+                        )}
+                      </button>
+                      </Tooltip>
+                    )}
+                    <Tooltip content={session.status === 'error' ? 'Dismiss' : 'Stop'} delay={300} position="bottom" disabled={!isPanelOpen}>
+                    <button
+                      onClick={() => {
+                        commitInteraction()
+                        stopPortForward(session.id)
+                      }}
+                      disabled={stoppingIds.has(session.id)}
+                      className="p-1.5 text-theme-text-tertiary hover:text-red-400 hover:bg-theme-hover rounded disabled:opacity-50"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                    </Tooltip>
+                  </div>
+                </div>
+
+                {/* Row 2: namespace · port translation */}
+                <div className="text-xs text-theme-text-disabled">
+                  {session.namespace} · {formatPortLabel(session)}
+                </div>
+
+                {/* Row 2.5: error message */}
+                {session.status === 'error' && session.error && (
+                  <div className="text-xs text-red-400 bg-red-500/10 px-2 py-1 rounded">
+                    {session.error}
+                  </div>
+                )}
+
+                {/* Row 3: URL (+ optional toggle) | copy + open */}
+                {session.status === 'running' && (
+                  <div className="pt-0.5 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      {editingPortId === session.id ? (
                           <div className="flex items-center text-xs bg-theme-base rounded text-accent-text font-mono">
                             <span className="pl-2 py-1 text-theme-text-disabled select-none">
                               {session.listenAddress === '0.0.0.0' ? '0.0.0.0' : 'localhost'}:
@@ -729,6 +790,7 @@ export function PortForwardPanel() {
                             />
                           </div>
                         ) : (
+                          <>
                           <Tooltip content="Click to change local port" delay={300} position="bottom" disabled={!isPanelOpen}>
                           <code
                             className={clsx(
@@ -752,74 +814,33 @@ export function PortForwardPanel() {
                             <PenLine className="w-3 h-3 text-theme-text-disabled opacity-0 group-hover/port:opacity-100 transition-opacity" />
                           </code>
                           </Tooltip>
+                          </>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-0.5 shrink-0">
+                      <Tooltip content={copiedId === session.id ? 'Copied!' : 'Copy URL'} delay={300} position="bottom" disabled={!isPanelOpen}>
+                      <button
+                        onClick={() => handleCopyUrl(session)}
+                        className="p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
+                      >
+                        {copiedId === session.id ? (
+                          <Check className="w-3.5 h-3.5 text-green-400" />
+                        ) : (
+                          <Copy className="w-3.5 h-3.5" />
                         )}
-                        <Tooltip
-                          content={session.listenAddress === '0.0.0.0' ? 'Switch to localhost only' : 'Allow access from other machines'}
-                          delay={300} position="bottom" disabled={!isPanelOpen}
-                        >
-                        <button
-                          onClick={() => toggleListenAddress(session)}
-                          disabled={togglingId === session.id || changingPortId === session.id}
-                          className={clsx(
-                            'flex items-center gap-1 px-1.5 py-0.5 text-xs rounded transition-colors',
-                            session.listenAddress === '0.0.0.0'
-                              ? `${SEVERITY_BADGE.warning} hover:bg-amber-500/30`
-                              : 'bg-theme-elevated text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary'
-                          )}
-                        >
-                          {togglingId === session.id ? (
-                            <Loader2 className="w-3 h-3 animate-spin" />
-                          ) : session.listenAddress === '0.0.0.0' ? (
-                            <Globe className="w-3 h-3" />
-                          ) : (
-                            <Monitor className="w-3 h-3" />
-                          )}
-                          {session.listenAddress === '0.0.0.0' ? 'network' : 'local'}
-                        </button>
-                        </Tooltip>
-                      </div>
-                    )}
+                      </button>
+                      </Tooltip>
+                      <Tooltip content="Open in browser" delay={300} position="bottom" disabled={!isPanelOpen}>
+                      <button
+                        onClick={() => handleOpenUrl(session)}
+                        className="p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
+                      >
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </button>
+                      </Tooltip>
+                    </div>
                   </div>
-
-                  <div className="flex items-center gap-1 shrink-0">
-                    {session.status === 'running' && (
-                      <>
-                        <Tooltip content={copiedId === session.id ? 'Copied!' : 'Copy URL'} delay={300} position="bottom" disabled={!isPanelOpen}>
-                        <button
-                          onClick={() => handleCopyUrl(session)}
-                          className="p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
-                        >
-                          {copiedId === session.id ? (
-                            <Check className="w-3.5 h-3.5 text-green-400" />
-                          ) : (
-                            <Copy className="w-3.5 h-3.5" />
-                          )}
-                        </button>
-                        </Tooltip>
-                        <Tooltip content="Open in browser" delay={300} position="bottom" disabled={!isPanelOpen}>
-                        <button
-                          onClick={() => handleOpenUrl(session)}
-                          className="p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover rounded"
-                        >
-                          <ExternalLink className="w-3.5 h-3.5" />
-                        </button>
-                        </Tooltip>
-                      </>
-                    )}
-                    <Tooltip content={session.status === 'error' ? 'Dismiss' : 'Stop'} delay={300} position="bottom" disabled={!isPanelOpen}>
-                    <button
-                      onClick={() => {
-                        commitInteraction()
-                        stopPortForward(session.id)
-                      }}
-                      disabled={stoppingIds.has(session.id)}
-                      className="p-1.5 text-theme-text-tertiary hover:text-red-400 hover:bg-theme-hover rounded disabled:opacity-50"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
-                    </Tooltip>
-                  </div>
-                </div>
+                )}
               </div>
             ))}
           </div>

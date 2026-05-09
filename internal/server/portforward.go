@@ -37,6 +37,7 @@ type PortForwardSession struct {
 	LocalPort     int       `json:"localPort"`
 	ListenAddress string    `json:"listenAddress"` // "127.0.0.1" or "0.0.0.0"
 	ServiceName   string    `json:"serviceName,omitempty"` // If forwarding to a service
+	ServicePort   int       `json:"servicePort,omitempty"` // Original service port the user picked, when service-resolved (PodPort holds the resolved container port)
 	Scheme        string    `json:"scheme,omitempty"`      // "https", "http", or "" if unknown
 	StartedAt     time.Time `json:"startedAt"`
 	Status        string    `json:"status"` // "running", "stopped", "error"
@@ -136,6 +137,7 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 	podName := req.PodName
 	podPort := req.PodPort
 	scheme := ""
+	servicePort := 0
 	serviceResolved := false
 	if req.ServiceName != "" && podName == "" {
 		foundPod, containerPort, svcScheme, err := findPodForService(r.Context(), client, req.Namespace, req.ServiceName, req.PodPort)
@@ -143,6 +145,7 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 			s.writeError(w, http.StatusNotFound, fmt.Sprintf("No pod found for service %s: %v", req.ServiceName, err))
 			return
 		}
+		servicePort = req.PodPort
 		podName = foundPod
 		podPort = containerPort
 		scheme = svcScheme
@@ -201,6 +204,7 @@ func (s *Server) handleStartPortForward(w http.ResponseWriter, r *http.Request) 
 		LocalPort:     localPort,
 		ListenAddress: listenAddr,
 		ServiceName:   req.ServiceName,
+		ServicePort:   servicePort,
 		Scheme:        scheme,
 		StartedAt:     time.Now(),
 		Status:        "starting",
