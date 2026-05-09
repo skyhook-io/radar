@@ -254,6 +254,7 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&req); err != nil {
+		log.Printf("[namespace] invalid set-active-namespace body: %v", err)
 		s.writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}

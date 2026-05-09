@@ -59,7 +59,7 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
 
   const items = useMemo(() => {
     if (!scope) return [] as string[]
-    return [...scope.accessibleNamespaces].sort((a, b) => a.localeCompare(b))
+    return [...(scope.accessibleNamespaces ?? [])].sort((a, b) => a.localeCompare(b))
   }, [scope])
 
   const filteredItems = useMemo(() => {

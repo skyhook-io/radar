@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // newAuthServer creates a minimal Server with the given auth config for testing.
@@ -727,14 +728,21 @@ func TestHandleSetActiveNamespace_RejectsLegacyShape(t *testing.T) {
 	// {"namespaces":[…]}, the legacy shape must 400, not silently clear the
 	// user's saved pick — Go's default JSON decoder ignores unknown fields,
 	// so without DisallowUnknownFields the legacy body would leave
-	// Namespaces nil and run the "empty = clear" path. The 400 is the
-	// load-bearing assertion: the decoder error is returned before
-	// setActiveNamespaceForUser is called, so no in-memory or persisted
-	// mutation can happen on the rejected request.
+	// Namespaces nil and run the "empty = clear" path.
+	prev := k8s.SetTestContextName("test-ctx")
+	t.Cleanup(func() { k8s.SetTestContextName(prev) })
+
 	env := newAuthTestServer(t)
 	env.srv.permCache.Set("alice", &auth.UserPermissions{
 		AllowedNamespaces: []string{"alpha"},
 	})
+
+	// Pre-seed alice's in-memory pick so we can verify the rejected POST
+	// doesn't perturb it. Going through the handler would hit
+	// handleGetNamespaceScope's eviction in this fake (which has no real
+	// namespaces in the cache), so we set the pick directly.
+	aliceReq := requestWithUser("GET", "/api/cluster/namespace", &auth.User{Username: "alice"})
+	env.srv.setActiveNamespaceForUser(aliceReq, []string{"alpha"})
 
 	resp := env.authPost(t, "/api/cluster/namespace", "alice", "", `{"namespace":"alpha"}`)
 	defer resp.Body.Close()
@@ -745,6 +753,46 @@ func TestHandleSetActiveNamespace_RejectsLegacyShape(t *testing.T) {
 	body, _ := io.ReadAll(resp.Body)
 	if !strings.Contains(string(body), "unknown field") {
 		t.Errorf("expected error to mention unknown field, got: %s", body)
+	}
+
+	// The rejected request must not have touched the stored pick. Asserting
+	// directly on the in-memory map sidesteps the test fake's namespace
+	// eviction path that would shrink the pick on a round-trip GET.
+	got := env.srv.getActiveNamespaceForUser(aliceReq)
+	if len(got) != 1 || got[0] != "alpha" {
+		t.Errorf("rejected legacy POST mutated stored pick: got %v, want [alpha]", got)
+	}
+}
+
+func TestHandleGetNamespaceScope_NoPick_EmitsEmptySliceNotNull(t *testing.T) {
+	// Pin the wire contract: actives and accessibleNamespaces must serialize
+	// as [] (non-nil empty), not null. Without the nil-coercion in
+	// handleGetNamespaceScope the frontend crashed on `scope.actives.slice()`
+	// — caught by /visual-test. The defensive code is small and easy to
+	// regress in a refactor, so pin the byte-level wire shape here.
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("alice", &auth.UserPermissions{
+		AllowedNamespaces: []string{"alpha"},
+	})
+
+	resp := env.authGet(t, "/api/cluster/namespace-scope", "alice", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	body, _ := io.ReadAll(resp.Body)
+
+	if strings.Contains(string(body), `"actives":null`) {
+		t.Errorf("actives marshalled as null (frontend crashes on .slice()): %s", body)
+	}
+	if !strings.Contains(string(body), `"actives":[`) {
+		t.Errorf("expected actives:[…] in body, got: %s", body)
+	}
+	if strings.Contains(string(body), `"accessibleNamespaces":null`) {
+		t.Errorf("accessibleNamespaces marshalled as null: %s", body)
+	}
+	if !strings.Contains(string(body), `"accessibleNamespaces":[`) {
+		t.Errorf("expected accessibleNamespaces:[…] in body, got: %s", body)
 	}
 }
 
