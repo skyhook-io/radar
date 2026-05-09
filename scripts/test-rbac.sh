@@ -426,9 +426,9 @@ echo
 echo -e "${B}=== Picker is per-user, doesn't affect other users ===${N}"
 
 # alice picks her allowed namespace
-as_user alice POST /api/cluster/namespace "{\"namespace\":\"$NS_ALICE\"}" >/dev/null
-ALICE_AFTER=$(as_user alice GET /api/cluster/namespace-scope | jq -r '.active')
-BOB_AFTER=$(as_user bob   GET /api/cluster/namespace-scope | jq -r '.active')
+as_user alice POST /api/cluster/namespace "{\"namespaces\":[\"$NS_ALICE\"]}" >/dev/null
+ALICE_AFTER=$(as_user alice GET /api/cluster/namespace-scope | jq -r '.actives | join(",")')
+BOB_AFTER=$(as_user bob   GET /api/cluster/namespace-scope | jq -r '.actives | join(",")')
 
 if [[ "$ALICE_AFTER" == "$NS_ALICE" ]]; then
   ok "alice's pick set to $NS_ALICE"
@@ -455,12 +455,30 @@ echo -e "${B}=== Picking a denied namespace is rejected ===${N}"
 
 REJECT_HTTP=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
   -H "X-Forwarded-User: alice" -H 'Content-Type: application/json' \
-  -d "{\"namespace\":\"$NS_BOB\"}" \
+  -d "{\"namespaces\":[\"$NS_BOB\"]}" \
   "http://localhost:$PORT/api/cluster/namespace")
 if [[ "$REJECT_HTTP" == "403" ]]; then
   ok "alice rejected with 403 when picking $NS_BOB"
 else
   fail "expected 403 when alice picks $NS_BOB; got $REJECT_HTTP"
+fi
+
+# Mixed-allowed/denied: alice picking [her ns, bob's ns] must 403 atomically
+# (no partial pick). Verify the picker is all-or-nothing.
+MIXED_HTTP=$(curl -s -o /dev/null -w '%{http_code}' -X POST \
+  -H "X-Forwarded-User: alice" -H 'Content-Type: application/json' \
+  -d "{\"namespaces\":[\"$NS_ALICE\",\"$NS_BOB\"]}" \
+  "http://localhost:$PORT/api/cluster/namespace")
+if [[ "$MIXED_HTTP" == "403" ]]; then
+  ok "alice rejected with 403 on mixed allowed+denied pick (atomic)"
+else
+  fail "expected 403 on mixed pick; got $MIXED_HTTP"
+fi
+ALICE_MIXED_AFTER=$(as_user alice GET /api/cluster/namespace-scope | jq -r '.actives | join(",")')
+if [[ "$ALICE_MIXED_AFTER" == "$NS_ALICE" ]]; then
+  ok "alice's prior valid pick survived the rejected mixed update"
+else
+  fail "expected alice's pick to remain $NS_ALICE after rejected mixed update; got '$ALICE_MIXED_AFTER'"
 fi
 
 echo
@@ -523,6 +541,24 @@ if [[ "$DAVE_NS" == "${NS_ALICE},${NS_BOB}" ]]; then
 else
   fail "dave's accessibleNamespaces = [$DAVE_NS]; expected [${NS_ALICE},${NS_BOB}]"
 fi
+
+# Multi-namespace pick: dave selects both his allowed namespaces. Round-trip
+# the slice and verify dashboards/pods stay scoped to exactly that set.
+as_user dave POST /api/cluster/namespace "{\"namespaces\":[\"$NS_ALICE\",\"$NS_BOB\"]}" >/dev/null
+DAVE_PICKS=$(as_user dave GET /api/cluster/namespace-scope | jq -r '.actives | sort | join(",")')
+if [[ "$DAVE_PICKS" == "${NS_ALICE},${NS_BOB}" ]]; then
+  ok "dave's multi-pick round-tripped as [${NS_ALICE},${NS_BOB}]"
+else
+  fail "dave's multi-pick = [$DAVE_PICKS]; expected [${NS_ALICE},${NS_BOB}]"
+fi
+DAVE_DASH_MULTI_PODS=$(as_user dave GET /api/dashboard | jq -r '.resourceCounts.pods.total // 0')
+if [[ "$DAVE_DASH_MULTI_PODS" == "2" ]]; then
+  ok "dave's dashboard with multi-pick still shows both ns pods (2)"
+else
+  fail "dave's dashboard with multi-pick = $DAVE_DASH_MULTI_PODS pods; expected 2"
+fi
+# Reset dave's pick so subsequent assertions see his unpinned view.
+as_user dave POST /api/cluster/namespace '{"namespaces":[]}' >/dev/null
 
 echo
 echo -e "${B}=== Cluster-scoped CRDs not in the static map are gated via discovery (carol, dave) ===${N}"

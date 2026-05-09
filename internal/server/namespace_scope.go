@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
-	"slices"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -25,18 +24,20 @@ const (
 // NamespaceScopeResponse describes this user's namespace-pick state.
 //
 // The picker is a per-user view filter — it does NOT mutate the shared cache.
-// Picking a namespace narrows what THIS user sees on subsequent reads to
-// the intersection of (their pick) and (their RBAC-allowed namespaces).
+// Picking namespaces narrows what THIS user sees on subsequent reads to the
+// intersection of (their picks) and (their RBAC-allowed namespaces).
 //
-//   - Active is the user's current pick ("" = "All namespaces", no narrowing).
+//   - Actives is the user's current pick set (empty = "All namespaces", no
+//     narrowing).
 //   - Mode is "cluster-wide" when no pick is set and the user can list
-//     namespaces, "namespace" when a pick is in effect, or "restricted"
-//     when the user has no cluster-wide list access and hasn't picked one.
+//     namespaces, "namespace" when one or more picks are in effect, or
+//     "restricted" when the user has no cluster-wide list access and hasn't
+//     picked any.
 //   - AccessibleNamespaces is the picker source — what the user can choose
 //     from. Authoritative=false means it's a best-effort short list (the
 //     user lacks list-namespace RBAC; other namespaces may exist).
 type NamespaceScopeResponse struct {
-	Active               string             `json:"active"`
+	Actives              []string           `json:"actives"`
 	KubeconfigNamespace  string             `json:"kubeconfigNamespace"`
 	Mode                 NamespaceScopeMode `json:"mode"`
 	AccessibleNamespaces []string           `json:"accessibleNamespaces"`
@@ -51,27 +52,28 @@ func nsPreferenceKey(username, contextName string) string {
 	return username + "\x00" + contextName
 }
 
-// getActiveNamespaceForUser returns this user's namespace pick for the
-// current context. Empty string means "All namespaces."
-func (s *Server) getActiveNamespaceForUser(r *http.Request) string {
+// getActiveNamespaceForUser returns this user's namespace picks for the
+// current context. Empty/nil means "All namespaces."
+func (s *Server) getActiveNamespaceForUser(r *http.Request) []string {
 	username := ""
 	if u := auth.UserFromContext(r.Context()); u != nil {
 		username = u.Username
 	}
 	ctxName := k8s.GetContextName()
 	if ctxName == "" {
-		return ""
+		return nil
 	}
 	v, ok := s.nsPreferences.Load(nsPreferenceKey(username, ctxName))
 	if !ok {
-		return ""
+		return nil
 	}
-	return v.(string)
+	picks, _ := v.([]string)
+	return picks
 }
 
-// setActiveNamespaceForUser updates this user's pick for the current context.
-// Pass "" to clear (back to "All namespaces").
-func (s *Server) setActiveNamespaceForUser(r *http.Request, namespace string) {
+// setActiveNamespaceForUser updates this user's picks for the current context.
+// Pass nil/empty to clear (back to "All namespaces").
+func (s *Server) setActiveNamespaceForUser(r *http.Request, namespaces []string) {
 	username := ""
 	if u := auth.UserFromContext(r.Context()); u != nil {
 		username = u.Username
@@ -81,11 +83,13 @@ func (s *Server) setActiveNamespaceForUser(r *http.Request, namespace string) {
 		return
 	}
 	key := nsPreferenceKey(username, ctxName)
-	if namespace == "" {
+	if len(namespaces) == 0 {
 		s.nsPreferences.Delete(key)
 		return
 	}
-	s.nsPreferences.Store(key, namespace)
+	// Defensive copy so callers can mutate their input safely after the store.
+	stored := append([]string(nil), namespaces...)
+	s.nsPreferences.Store(key, stored)
 }
 
 // clearAllNamespacePreferences drops every saved pick. Called on context
@@ -130,9 +134,32 @@ func (s *Server) loadSavedNamespacePreference(r *http.Request) {
 	if saved.ActiveNamespaces == nil {
 		return
 	}
-	if ns := saved.ActiveNamespaces[ctxName]; ns != "" {
-		s.nsPreferences.Store(key, ns)
+	if picks := saved.ActiveNamespaces[ctxName]; len(picks) > 0 {
+		s.nsPreferences.Store(key, append([]string(nil), picks...))
 	}
+}
+
+// intersectPicksWithAllowed returns the picks that survive RBAC filtering.
+// allowed=nil means cluster-admin / auth-disabled — all picks pass through.
+// Returns nil when the input picks are empty (no narrowing in effect).
+func intersectPicksWithAllowed(picks, allowed []string) []string {
+	if len(picks) == 0 {
+		return nil
+	}
+	if allowed == nil {
+		return append([]string(nil), picks...)
+	}
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, ns := range allowed {
+		allowedSet[ns] = struct{}{}
+	}
+	out := make([]string, 0, len(picks))
+	for _, p := range picks {
+		if _, ok := allowedSet[p]; ok {
+			out = append(out, p)
+		}
+	}
+	return out
 }
 
 func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request) {
@@ -141,7 +168,7 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	}
 
 	s.loadSavedNamespacePreference(r)
-	active := s.getActiveNamespaceForUser(r)
+	actives := s.getActiveNamespaceForUser(r)
 	kubeNs := k8s.GetContextNamespace()
 
 	// What the SA / kubeconfig identity sees — used as the input set for
@@ -166,17 +193,21 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// If the user picked a namespace they no longer have access to (RBAC
-	// changed mid-session), drop the stale pick so the UI doesn't render
-	// a phantom selection.
-	if active != "" && !slices.Contains(namespaces, active) {
-		s.setActiveNamespaceForUser(r, "")
-		active = ""
+	// Drop picks that the user no longer has access to (RBAC changed mid-
+	// session). Partial revocation: keep the survivors, only clear the pick
+	// entirely when nothing survives. Persist the trimmed set so it doesn't
+	// re-trim on every read.
+	if len(actives) > 0 {
+		survivors := intersectPicksWithAllowed(actives, namespaces)
+		if len(survivors) != len(actives) {
+			s.setActiveNamespaceForUser(r, survivors)
+			actives = survivors
+		}
 	}
 
 	mode := NamespaceScopeClusterWide
 	switch {
-	case active != "":
+	case len(actives) > 0:
 		mode = NamespaceScopeNamespace
 	case !authoritative:
 		mode = NamespaceScopeRestricted
@@ -189,7 +220,7 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	canClear := authoritative || k8s.HasNamespaceFallback()
 
 	s.writeJSON(w, NamespaceScopeResponse{
-		Active:               active,
+		Actives:              actives,
 		KubeconfigNamespace:  kubeNs,
 		Mode:                 mode,
 		AccessibleNamespaces: namespaces,
@@ -199,9 +230,9 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 }
 
 type setActiveNamespaceRequest struct {
-	// Namespace to focus on. Empty string clears the pick (= "All namespaces"
-	// up to the user's RBAC ceiling).
-	Namespace string `json:"namespace"`
+	// Namespaces to focus on. Empty/missing slice clears the pick (= "All
+	// namespaces" up to the user's RBAC ceiling).
+	Namespaces []string `json:"namespaces"`
 }
 
 func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request) {
@@ -215,31 +246,59 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Verify the user actually has access to the namespace they're picking.
-	// For namespace-restricted users, picking a namespace they can't see
-	// would create a phantom selection that returns nothing — and would
-	// be a quiet info-leak (server-side acknowledgement of a namespace's
-	// existence). Use the per-user filtered set, not the SA's set.
-	if req.Namespace != "" {
-		filtered := s.getUserNamespaces(r, []string{req.Namespace})
-		// filtered semantics: nil = no filter (auth off / cluster-admin),
-		// empty = denied, populated = allowed.
-		if filtered != nil && len(filtered) == 0 {
-			s.writeError(w, http.StatusForbidden, "no access to namespace "+req.Namespace)
-			return
+	// Drop empty strings and de-dupe so callers can't smuggle "" into the
+	// stored slice (which would be ambiguous with "no pick").
+	cleaned := make([]string, 0, len(req.Namespaces))
+	seen := make(map[string]struct{}, len(req.Namespaces))
+	for _, ns := range req.Namespaces {
+		if ns == "" {
+			continue
 		}
-		// For cluster-admin (filtered == nil), still verify the namespace
-		// exists from the SA's view — picking a typo'd namespace should fail.
-		if filtered == nil {
+		if _, dup := seen[ns]; dup {
+			continue
+		}
+		seen[ns] = struct{}{}
+		cleaned = append(cleaned, ns)
+	}
+
+	// Verify the user actually has access to every requested namespace. For
+	// namespace-restricted users, picking a namespace they can't see would
+	// create a phantom selection that returns nothing — and would be a quiet
+	// info-leak (server-side acknowledgement of a namespace's existence).
+	// Use the per-user filtered set, not the SA's set.
+	if len(cleaned) > 0 {
+		filtered := s.getUserNamespaces(r, cleaned)
+		if filtered != nil {
+			// filtered semantics: nil = no filter (auth off / cluster-admin),
+			// empty = denied, populated = allowed.
+			allowedSet := make(map[string]struct{}, len(filtered))
+			for _, ns := range filtered {
+				allowedSet[ns] = struct{}{}
+			}
+			for _, ns := range cleaned {
+				if _, ok := allowedSet[ns]; !ok {
+					s.writeError(w, http.StatusForbidden, "no access to namespace "+ns)
+					return
+				}
+			}
+		} else {
+			// Cluster-admin / auth-disabled: still verify each namespace
+			// exists from the SA's view — picking a typo'd namespace should fail.
 			accessible, _ := k8s.GetAccessibleNamespaces(r.Context())
-			if !slices.Contains(accessible, req.Namespace) {
-				s.writeError(w, http.StatusForbidden, "no access to namespace "+req.Namespace)
-				return
+			accessibleSet := make(map[string]struct{}, len(accessible))
+			for _, ns := range accessible {
+				accessibleSet[ns] = struct{}{}
+			}
+			for _, ns := range cleaned {
+				if _, ok := accessibleSet[ns]; !ok {
+					s.writeError(w, http.StatusForbidden, "no access to namespace "+ns)
+					return
+				}
 			}
 		}
 	}
 
-	s.setActiveNamespaceForUser(r, req.Namespace)
+	s.setActiveNamespaceForUser(r, cleaned)
 
 	// Persist the no-auth (single-user) pick across restarts. Auth-enabled
 	// deploys skip persistence — it'd require user-keyed storage we don't
@@ -250,12 +309,12 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 		if ctxName != "" {
 			if _, err := settings.Update(func(st *settings.Settings) {
 				if st.ActiveNamespaces == nil {
-					st.ActiveNamespaces = map[string]string{}
+					st.ActiveNamespaces = settings.ActiveNamespacesMap{}
 				}
-				if req.Namespace == "" {
+				if len(cleaned) == 0 {
 					delete(st.ActiveNamespaces, ctxName)
 				} else {
-					st.ActiveNamespaces[ctxName] = req.Namespace
+					st.ActiveNamespaces[ctxName] = append([]string(nil), cleaned...)
 				}
 			}); err != nil {
 				log.Printf("[namespace] failed to persist namespace pick for context %q: %v", ctxName, err)

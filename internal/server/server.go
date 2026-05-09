@@ -678,20 +678,21 @@ func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 	namespaces := parseNamespaces(r.URL.Query())
 	pickFallback := false
 	if namespaces == nil {
-		// No explicit filter — use the user's saved pick if any.
+		// No explicit filter — use the user's saved picks if any.
 		s.loadSavedNamespacePreference(r)
-		if pick := s.getActiveNamespaceForUser(r); pick != "" {
-			namespaces = []string{pick}
+		if picks := s.getActiveNamespaceForUser(r); len(picks) > 0 {
+			namespaces = picks
 			pickFallback = true
 		}
 	}
 	filtered := s.getUserNamespaces(r, namespaces)
-	// If the pick lost RBAC mid-session, the filter shrinks it to empty and
-	// every read returns []. Drop the stale pick and recompute as if no
-	// filter were set, so the user sees their full RBAC ceiling instead of
-	// a silently-empty UI. Symmetric with handleGetNamespaceScope's eviction.
+	// If picks lost RBAC mid-session, the filter shrinks the set. When the
+	// intersection is empty every read returns []; recover by dropping the
+	// stale pick entirely and recomputing as if no filter were set, so the
+	// user sees their full RBAC ceiling instead of a silently-empty UI.
+	// Symmetric with handleGetNamespaceScope's partial-revocation eviction.
 	if pickFallback && noNamespaceAccess(filtered) {
-		s.setActiveNamespaceForUser(r, "")
+		s.setActiveNamespaceForUser(r, nil)
 		filtered = s.getUserNamespaces(r, nil)
 	}
 	return filtered

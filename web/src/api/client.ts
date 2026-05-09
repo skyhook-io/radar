@@ -2455,12 +2455,12 @@ export function useSwitchContext() {
 // ============================================================================
 
 export interface NamespaceScope {
-  active: string
+  actives: string[]
   kubeconfigNamespace: string
   /**
    * 'cluster-wide' — no per-user pick; user can list across namespaces.
-   * 'namespace'    — per-user view filter pinned to a single namespace.
-   * 'restricted'   — user can't list namespaces and isn't pinned to one.
+   * 'namespace'    — per-user view filter pinned to one or more namespaces.
+   * 'restricted'   — user can't list namespaces and isn't pinned to any.
    */
   mode: 'cluster-wide' | 'namespace' | 'restricted'
   accessibleNamespaces: string[]
@@ -2482,15 +2482,15 @@ const NAMESPACE_SWITCH_TIMEOUT = 5000
 
 export function useSetActiveNamespace() {
   const queryClient = useQueryClient()
-  return useMutation<NamespaceScope, Error, { namespace: string }>({
-    mutationFn: async ({ namespace }) => {
+  return useMutation<NamespaceScope, Error, { namespaces: string[] }>({
+    mutationFn: async ({ namespaces }) => {
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), NAMESPACE_SWITCH_TIMEOUT)
       try {
         const response = await apiFetch(`${getApiBase()}/cluster/namespace`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ namespace }),
+          body: JSON.stringify({ namespaces }),
           signal: controller.signal,
         })
         clearTimeout(timeoutId)

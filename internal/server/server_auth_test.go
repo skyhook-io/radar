@@ -703,7 +703,7 @@ func TestHandleSetActiveNamespace_RejectsDeniedNamespace(t *testing.T) {
 		AllowedNamespaces: []string{"alpha"},
 	})
 
-	resp := env.authPost(t, "/api/cluster/namespace", "alice", "", `{"namespace":"forbidden-ns"}`)
+	resp := env.authPost(t, "/api/cluster/namespace", "alice", "", `{"namespaces":["forbidden-ns"]}`)
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatalf("expected 403 for denied pick, got %d", resp.StatusCode)
@@ -716,8 +716,8 @@ func TestHandleSetActiveNamespace_RejectsDeniedNamespace(t *testing.T) {
 	if err := json.NewDecoder(scopeResp.Body).Decode(&scope); err != nil {
 		t.Fatalf("decode scope: %v", err)
 	}
-	if scope.Active != "" {
-		t.Errorf("denied pick was stored: Active=%q", scope.Active)
+	if len(scope.Actives) != 0 {
+		t.Errorf("denied pick was stored: Actives=%v", scope.Actives)
 	}
 }
 
