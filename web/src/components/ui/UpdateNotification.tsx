@@ -117,7 +117,7 @@ export function UpdateNotification() {
           <UpdateIcon state={effectiveState} />
         </div>
         <div className="flex-1 min-w-0">
-          <h4 className="text-sm font-medium text-theme-text-primary">
+          <h4 className="text-sm font-medium text-theme-text-primary pr-6">
             <UpdateTitle state={effectiveState} />
           </h4>
           <p className="text-xs text-theme-text-secondary mt-1">
@@ -175,17 +175,18 @@ export function UpdateNotification() {
             )
           )}
         </div>
-        {/* Don't show dismiss during active update */}
-        {effectiveState !== 'downloading' && effectiveState !== 'applying' && (
-          <button
-            onClick={handleDismiss}
-            className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
-            aria-label="Dismiss"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        )}
       </div>
+      {/* Dismiss is absolute so it doesn't compress the chip's width.
+          fixed on the parent already establishes the positioning context. */}
+      {effectiveState !== 'downloading' && effectiveState !== 'applying' && (
+        <button
+          onClick={handleDismiss}
+          className="absolute top-2 right-2 p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+          aria-label="Dismiss"
+        >
+          <X className="w-4 h-4" />
+        </button>
+      )}
     </div>
   )
 }
