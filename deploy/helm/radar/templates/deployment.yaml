@@ -1,3 +1,6 @@
+{{- if and .Values.persistence.enabled (eq .Values.timeline.storage "sqlite") (gt (int .Values.replicaCount) 1) }}
+{{- fail "replicaCount must be 1 when persistence.enabled=true and timeline.storage=sqlite: a single PVC cannot be safely shared across pods (RWO volumes won't attach to a second pod, RWX volumes risk SQLite corruption)" }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

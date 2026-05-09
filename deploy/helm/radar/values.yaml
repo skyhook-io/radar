@@ -1,5 +1,11 @@
 # Default values for radar.
 
+# Radar is designed to run as a single replica. Each pod holds its own
+# in-memory K8s informer cache, SSE streams, exec/port-forward sessions, and
+# (in memory mode) timeline buffer — none of which are shared across pods.
+# Setting replicaCount > 1 produces a confusing UX even when it doesn't fail
+# outright. The chart hard-fails replicaCount > 1 when persistence+sqlite are
+# enabled (single PVC + SQLite cannot be safely shared across pods).
 replicaCount: 1
 
 image:
