@@ -37,45 +37,7 @@ type Settings struct {
 	// picks (the in-app multi-select switcher's last selection per cluster).
 	// Empty slice (or missing key) means no pick is active and reads default
 	// to the user's full RBAC ceiling (typically "All namespaces").
-	ActiveNamespaces ActiveNamespacesMap `json:"activeNamespaces,omitempty"`
-}
-
-// ActiveNamespacesMap is the persisted picker state, keyed by kubeconfig
-// context name. Some settings.json files written by older Radar versions
-// stored a single string per context instead of a slice; UnmarshalJSON
-// accepts both shapes for backwards compatibility.
-type ActiveNamespacesMap map[string][]string
-
-func (m *ActiveNamespacesMap) UnmarshalJSON(data []byte) error {
-	var raw map[string]json.RawMessage
-	if err := json.Unmarshal(data, &raw); err != nil {
-		return err
-	}
-	out := make(ActiveNamespacesMap, len(raw))
-	for k, v := range raw {
-		var arr []string
-		if err := json.Unmarshal(v, &arr); err == nil {
-			cleaned := make([]string, 0, len(arr))
-			for _, ns := range arr {
-				if ns != "" {
-					cleaned = append(cleaned, ns)
-				}
-			}
-			if len(cleaned) > 0 {
-				out[k] = cleaned
-			}
-			continue
-		}
-		var single string
-		if err := json.Unmarshal(v, &single); err != nil {
-			return err
-		}
-		if single != "" {
-			out[k] = []string{single}
-		}
-	}
-	*m = out
-	return nil
+	ActiveNamespaces map[string][]string `json:"activeNamespaces,omitempty"`
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent PUTs from

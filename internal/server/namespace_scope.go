@@ -321,7 +321,7 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 		if ctxName != "" {
 			if _, err := settings.Update(func(st *settings.Settings) {
 				if st.ActiveNamespaces == nil {
-					st.ActiveNamespaces = settings.ActiveNamespacesMap{}
+					st.ActiveNamespaces = map[string][]string{}
 				}
 				if len(cleaned) == 0 {
 					delete(st.ActiveNamespaces, ctxName)
