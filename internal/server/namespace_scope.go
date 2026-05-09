@@ -251,7 +251,9 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 	}
 
 	var req setActiveNamespaceRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}

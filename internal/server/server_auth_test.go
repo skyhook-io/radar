@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -718,6 +719,32 @@ func TestHandleSetActiveNamespace_RejectsDeniedNamespace(t *testing.T) {
 	}
 	if len(scope.Actives) != 0 {
 		t.Errorf("denied pick was stored: Actives=%v", scope.Actives)
+	}
+}
+
+func TestHandleSetActiveNamespace_RejectsLegacyShape(t *testing.T) {
+	// Older clients used to POST {"namespace":"x"}. After the rename to
+	// {"namespaces":[…]}, the legacy shape must 400, not silently clear the
+	// user's saved pick — Go's default JSON decoder ignores unknown fields,
+	// so without DisallowUnknownFields the legacy body would leave
+	// Namespaces nil and run the "empty = clear" path. The 400 is the
+	// load-bearing assertion: the decoder error is returned before
+	// setActiveNamespaceForUser is called, so no in-memory or persisted
+	// mutation can happen on the rejected request.
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("alice", &auth.UserPermissions{
+		AllowedNamespaces: []string{"alpha"},
+	})
+
+	resp := env.authPost(t, "/api/cluster/namespace", "alice", "", `{"namespace":"alpha"}`)
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("expected 400 for legacy {namespace} body, got %d", resp.StatusCode)
+	}
+
+	body, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(body), "unknown field") {
+		t.Errorf("expected error to mention unknown field, got: %s", body)
 	}
 }
 
