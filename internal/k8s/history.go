@@ -3,7 +3,9 @@ package k8s
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"strings"
+	"sync"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
@@ -19,53 +21,51 @@ type OwnerInfo = k8score.OwnerInfo
 type DiffInfo = k8score.DiffInfo
 type FieldChange = k8score.FieldChange
 
-// ComputeDiff computes the diff between old and new objects based on kind
-// Returns nil if no meaningful changes detected or kind not supported
-func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
-	var changes []FieldChange
-	var summaryParts []string
+// kindDiffFunc is the per-kind diff dispatcher signature used by diffFunctions.
+type kindDiffFunc func(oldObj, newObj any) ([]FieldChange, []string)
 
-	switch kind {
-	case "Deployment":
-		changes, summaryParts = diffDeployment(oldObj, newObj)
-	case "Pod":
-		changes, summaryParts = diffPod(oldObj, newObj)
-	case "Service":
-		changes, summaryParts = diffService(oldObj, newObj)
-	case "ConfigMap":
-		changes, summaryParts = diffConfigMap(oldObj, newObj)
-	case "Ingress":
-		changes, summaryParts = diffIngress(oldObj, newObj)
-	case "ReplicaSet":
-		changes, summaryParts = diffReplicaSet(oldObj, newObj)
-	case "DaemonSet":
-		changes, summaryParts = diffDaemonSet(oldObj, newObj)
-	case "StatefulSet":
-		changes, summaryParts = diffStatefulSet(oldObj, newObj)
-	case "HorizontalPodAutoscaler":
-		changes, summaryParts = diffHPA(oldObj, newObj)
-	case "Job":
-		changes, summaryParts = diffJob(oldObj, newObj)
-	case "Node":
-		changes, summaryParts = diffNode(oldObj, newObj)
-	case "PersistentVolumeClaim":
-		changes, summaryParts = diffPVC(oldObj, newObj)
-	case "Application":
-		changes, summaryParts = diffApplication(oldObj, newObj)
-	case "Kustomization":
-		changes, summaryParts = diffKustomization(oldObj, newObj)
-	case "HelmRelease":
-		changes, summaryParts = diffFluxHelmRelease(oldObj, newObj)
-	case "GitRepository", "OCIRepository", "HelmRepository":
-		changes, summaryParts = diffFluxSource(oldObj, newObj, kind)
-	case "Gateway":
-		changes, summaryParts = diffGateway(oldObj, newObj)
-	case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
-		changes, summaryParts = diffGatewayRoute(oldObj, newObj)
-	default:
+// diffFunctions is the single source of truth for kinds with audited diff
+// coverage. ComputeDiff dispatches via this map, KindHasDiffer reads its
+// keys — no separate "kinds we know about" list to drift out of sync.
+//
+// Adding a kind here is a CONTRACT: the diff function MUST surface every
+// status field a user would care about, because for kinds in this map,
+// recordToTimelineStore drops update events when the diff is empty.
+var diffFunctions = map[string]kindDiffFunc{
+	"Deployment":              diffDeployment,
+	"Pod":                     diffPod,
+	"Service":                 diffService,
+	"ConfigMap":               diffConfigMap,
+	"Ingress":                 diffIngress,
+	"ReplicaSet":              diffReplicaSet,
+	"DaemonSet":               diffDaemonSet,
+	"StatefulSet":             diffStatefulSet,
+	"HorizontalPodAutoscaler": diffHPA,
+	"Job":                     diffJob,
+	"Node":                    diffNode,
+	"PersistentVolumeClaim":   diffPVC,
+	"Application":             diffApplication,
+	"Kustomization":           diffKustomization,
+	"HelmRelease":             diffFluxHelmRelease,
+	"GitRepository":           func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "GitRepository") },
+	"OCIRepository":           func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "OCIRepository") },
+	"HelmRepository":          func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "HelmRepository") },
+	"Gateway":                 diffGateway,
+	"HTTPRoute":               diffGatewayRoute,
+	"GRPCRoute":               diffGatewayRoute,
+	"TCPRoute":                diffGatewayRoute,
+	"TLSRoute":                diffGatewayRoute,
+}
+
+// ComputeDiff computes the diff between old and new objects based on kind.
+// Returns nil if the kind has no audited diff function or if no meaningful
+// changes were detected.
+func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
+	fn, ok := diffFunctions[kind]
+	if !ok {
 		return nil
 	}
-
+	changes, summaryParts := fn(oldObj, newObj)
 	if len(changes) == 0 {
 		return nil
 	}
@@ -86,23 +86,27 @@ func ComputeDiff(kind string, oldObj, newObj any) *DiffInfo {
 	}
 }
 
-// KindHasDiffer returns true for kinds where ComputeDiff has audited coverage —
-// i.e. an update producing a nil diff means there was no observable state
-// change. Callers use this to filter out the heartbeat / managedFields-only /
-// reconcile-counter updates that would otherwise become content-free timeline
-// rows. Adding a kind here is a contract: the diff function must cover every
-// status field a user would care about.
-func KindHasDiffer(kind string) bool {
-	switch kind {
-	case "Deployment", "Pod", "Service", "ConfigMap", "Ingress",
-		"ReplicaSet", "DaemonSet", "StatefulSet",
-		"HorizontalPodAutoscaler", "Job", "Node", "PersistentVolumeClaim",
-		"Application", "Kustomization", "HelmRelease",
-		"GitRepository", "OCIRepository", "HelmRepository",
-		"Gateway", "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
-		return true
+// typeAssertWarnedKinds dedups one-time warnings about type-assertion failures
+// inside the per-kind diff helpers. A failure means an informer for a kind in
+// KindHasDiffer is wired with the wrong factory — every update for that kind
+// would silently drop as "no diff." Logging once per kind keeps it diagnosable
+// without spamming.
+var typeAssertWarnedKinds sync.Map
+
+// warnUnstructuredAssertFailed logs once per kind when an unstructured diff
+// helper receives a non-unstructured object.
+func warnUnstructuredAssertFailed(kind string, got any) {
+	if _, loaded := typeAssertWarnedKinds.LoadOrStore(kind, true); loaded {
+		return
 	}
-	return false
+	log.Printf("[history] WARN: %s diff received non-unstructured object (%T) — every %s update will silently drop. Likely informer wired to wrong factory.", kind, got, kind)
+}
+
+// KindHasDiffer reports whether the given kind has audited ComputeDiff
+// coverage. The no-diff drop only fires for kinds in this set.
+func KindHasDiffer(kind string) bool {
+	_, ok := diffFunctions[kind]
+	return ok
 }
 
 // diffDeployment computes diff for Deployment resources
@@ -313,7 +317,43 @@ func diffPod(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("IP: %s", newPod.Status.PodIP))
 	}
 
+	// Ephemeral containers (kubectl debug attach). Status surfaces them as a
+	// new EphemeralContainerStatuses entry — invisible to phase/restart/state.
+	if len(newPod.Status.EphemeralContainerStatuses) > len(oldPod.Status.EphemeralContainerStatuses) {
+		changes = append(changes, FieldChange{
+			Path:     "status.ephemeralContainerStatuses",
+			OldValue: len(oldPod.Status.EphemeralContainerStatuses),
+			NewValue: len(newPod.Status.EphemeralContainerStatuses),
+		})
+		summary = append(summary, fmt.Sprintf("debug container attached (%d total)", len(newPod.Status.EphemeralContainerStatuses)))
+	}
+
+	// PodReady and ContainersReady transitions. Probe failures on a Running
+	// container flip these without changing container state, so we'd otherwise
+	// miss them entirely.
+	for _, condType := range []corev1.PodConditionType{corev1.PodReady, corev1.ContainersReady} {
+		oldStatus := getPodConditionStatus(oldPod, condType)
+		newStatus := getPodConditionStatus(newPod, condType)
+		if oldStatus != newStatus && (oldStatus != "" || newStatus != "") {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.conditions[%s]", condType),
+				OldValue: oldStatus,
+				NewValue: newStatus,
+			})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
+		}
+	}
+
 	return changes, summary
+}
+
+func getPodConditionStatus(p *corev1.Pod, condType corev1.PodConditionType) string {
+	for _, c := range p.Status.Conditions {
+		if c.Type == condType {
+			return string(c.Status)
+		}
+	}
+	return ""
 }
 
 // getContainerState returns a string describing the container's current state
@@ -977,6 +1017,12 @@ func diffJob(oldObj, newObj any) ([]FieldChange, []string) {
 
 	// Check terminal conditions. CompletionTime alone misses Failed jobs
 	// (which never set CompletionTime) and the FailureTarget signal.
+	jobCondSummary := map[batchv1.JobConditionType]string{
+		batchv1.JobComplete:       "completed",
+		batchv1.JobFailed:         "failed",
+		batchv1.JobFailureTarget:  "failure target",
+		batchv1.JobSuspended:      "suspended",
+	}
 	for _, condType := range []batchv1.JobConditionType{batchv1.JobComplete, batchv1.JobFailed, batchv1.JobSuspended, batchv1.JobFailureTarget} {
 		oldStatus := getJobConditionStatus(oldJob, condType)
 		newStatus := getJobConditionStatus(newJob, condType)
@@ -986,9 +1032,17 @@ func diffJob(oldObj, newObj any) ([]FieldChange, []string) {
 				OldValue: oldStatus,
 				NewValue: newStatus,
 			})
-			if newStatus == "True" {
-				summary = append(summary, strings.ToLower(string(condType)))
-			} else {
+			label := jobCondSummary[condType]
+			switch newStatus {
+			case "True":
+				summary = append(summary, label)
+			case "False":
+				if oldStatus == "True" {
+					summary = append(summary, "no longer "+label)
+				} else {
+					summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
+				}
+			default:
 				summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
 			}
 		}
@@ -1104,6 +1158,23 @@ func diffNode(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, "kernel upgraded")
 	}
 
+	// Allocatable capacity (cpu / memory / pods). Reduction during draining or
+	// kubelet --reserved tuning is operator-relevant; expansion during hot-add
+	// likewise. Capacity is the underlying physical; Allocatable is what the
+	// scheduler sees and what changes more often, so we diff that one.
+	for _, res := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory, corev1.ResourcePods} {
+		oldVal := oldNode.Status.Allocatable[res]
+		newVal := newNode.Status.Allocatable[res]
+		if oldVal.Cmp(newVal) != 0 {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.allocatable.%s", res),
+				OldValue: oldVal.String(),
+				NewValue: newVal.String(),
+			})
+			summary = append(summary, fmt.Sprintf("allocatable %s: %s→%s", res, oldVal.String(), newVal.String()))
+		}
+	}
+
 	return changes, summary
 }
 
@@ -1176,6 +1247,7 @@ func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
 	oldApp, ok1 := oldObj.(*unstructured.Unstructured)
 	newApp, ok2 := newObj.(*unstructured.Unstructured)
 	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("Application", oldObj)
 		return nil, nil
 	}
 
@@ -1333,6 +1405,29 @@ func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("destination ns: %s→%s", oldDestNS, newDestNS))
 	}
 
+	// Image rolls — an already-Synced+Healthy app can roll new images via auto-sync
+	// without flipping sync.status or health.status. Without this, those updates
+	// drop as no-diff and the timeline misses the actual deploy event.
+	oldImages, _, _ := unstructured.NestedStringSlice(oldStatus, "summary", "images")
+	newImages, _, _ := unstructured.NestedStringSlice(newStatus, "summary", "images")
+	if !equalStringSlices(oldImages, newImages) {
+		added := diffStringSlices(newImages, oldImages)
+		removed := diffStringSlices(oldImages, newImages)
+		changes = append(changes, FieldChange{
+			Path:     "status.summary.images",
+			OldValue: oldImages,
+			NewValue: newImages,
+		})
+		switch {
+		case len(added) > 0 && len(removed) == 0:
+			summary = append(summary, fmt.Sprintf("images +%d", len(added)))
+		case len(removed) > 0 && len(added) == 0:
+			summary = append(summary, fmt.Sprintf("images -%d", len(removed)))
+		default:
+			summary = append(summary, "images changed")
+		}
+	}
+
 	return changes, summary
 }
 
@@ -1357,6 +1452,7 @@ func diffKustomization(oldObj, newObj any) ([]FieldChange, []string) {
 	oldKs, ok1 := oldObj.(*unstructured.Unstructured)
 	newKs, ok2 := newObj.(*unstructured.Unstructured)
 	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("Kustomization", oldObj)
 		return nil, nil
 	}
 
@@ -1474,6 +1570,7 @@ func diffFluxHelmRelease(oldObj, newObj any) ([]FieldChange, []string) {
 	oldHR, ok1 := oldObj.(*unstructured.Unstructured)
 	newHR, ok2 := newObj.(*unstructured.Unstructured)
 	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("HelmRelease", oldObj)
 		return nil, nil
 	}
 
@@ -1499,11 +1596,11 @@ func diffFluxHelmRelease(oldObj, newObj any) ([]FieldChange, []string) {
 	// Released / Stalled conditions — Released=False is the canonical Helm install
 	// failure signal; Stalled=True is the give-up state that Ready alone obscures.
 	for _, condType := range []string{"Released", "Stalled"} {
-		oldStatus := getFluxConditionStatus(oldStatus, condType)
-		newStatus := getFluxConditionStatus(newStatus, condType)
-		if oldStatus != newStatus && (oldStatus != "" || newStatus != "") {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("status.conditions[%s]", condType), OldValue: oldStatus, NewValue: newStatus})
-			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
+		oldCond := getFluxConditionStatus(oldStatus, condType)
+		newCond := getFluxConditionStatus(newStatus, condType)
+		if oldCond != newCond && (oldCond != "" || newCond != "") {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("status.conditions[%s]", condType), OldValue: oldCond, NewValue: newCond})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldCond, newCond))
 		}
 	}
 
@@ -1592,6 +1689,7 @@ func diffFluxSource(oldObj, newObj any, kind string) ([]FieldChange, []string) {
 	oldSrc, ok1 := oldObj.(*unstructured.Unstructured)
 	newSrc, ok2 := newObj.(*unstructured.Unstructured)
 	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed(kind, oldObj)
 		return nil, nil
 	}
 
@@ -1617,11 +1715,11 @@ func diffFluxSource(oldObj, newObj any, kind string) ([]FieldChange, []string) {
 	// Stalled / FetchFailed — fetch errors flip these without flipping Ready
 	// the same way (Stalled implies give-up; FetchFailed is the upstream signal).
 	for _, condType := range []string{"Stalled", "FetchFailed"} {
-		oldStatus := getFluxConditionStatus(oldStatus, condType)
-		newStatus := getFluxConditionStatus(newStatus, condType)
-		if oldStatus != newStatus && (oldStatus != "" || newStatus != "") {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("status.conditions[%s]", condType), OldValue: oldStatus, NewValue: newStatus})
-			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
+		oldCond := getFluxConditionStatus(oldStatus, condType)
+		newCond := getFluxConditionStatus(newStatus, condType)
+		if oldCond != newCond && (oldCond != "" || newCond != "") {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("status.conditions[%s]", condType), OldValue: oldCond, NewValue: newCond})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldCond, newCond))
 		}
 	}
 
@@ -1988,6 +2086,7 @@ func diffGateway(oldObj, newObj any) ([]FieldChange, []string) {
 	oldGW, ok1 := oldObj.(*unstructured.Unstructured)
 	newGW, ok2 := newObj.(*unstructured.Unstructured)
 	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("Gateway", oldObj)
 		return nil, nil
 	}
 
@@ -2042,6 +2141,7 @@ func diffGatewayRoute(oldObj, newObj any) ([]FieldChange, []string) {
 	oldRoute, ok1 := oldObj.(*unstructured.Unstructured)
 	newRoute, ok2 := newObj.(*unstructured.Unstructured)
 	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("GatewayRoute", oldObj)
 		return nil, nil
 	}
 
@@ -2088,8 +2188,20 @@ func diffGatewayRoute(oldObj, newObj any) ([]FieldChange, []string) {
 	}
 	oldByParent := indexParentConditions(oldParents)
 	newByParent := indexParentConditions(newParents)
-	for parentKey, newConds := range newByParent {
+
+	// Walk the union of parent keys so we catch parents that disappeared from
+	// the new snapshot too — a parent vanishing is a real signal even when
+	// total parent count is unchanged (one removed + one added).
+	parentKeys := make(map[string]struct{}, len(oldByParent)+len(newByParent))
+	for k := range oldByParent {
+		parentKeys[k] = struct{}{}
+	}
+	for k := range newByParent {
+		parentKeys[k] = struct{}{}
+	}
+	for parentKey := range parentKeys {
 		oldConds := oldByParent[parentKey]
+		newConds := newByParent[parentKey]
 		for _, condType := range []string{"Accepted", "ResolvedRefs", "Programmed"} {
 			oldStatus, oldHas := oldConds[condType]
 			newStatus, newHas := newConds[condType]
@@ -2111,9 +2223,12 @@ func diffGatewayRoute(oldObj, newObj any) ([]FieldChange, []string) {
 }
 
 // indexParentConditions extracts {parentKey -> {conditionType -> status}} from
-// a Gateway-API route's status.parents. parentKey is "<group>/<kind>/<ns>/<name>"
-// (group/ns may be empty), enough to disambiguate per-parent without parsing
-// every field.
+// a Gateway-API route's status.parents. The parent key is
+// "<group>/<kind>/<ns>/<name>/<sectionName>/<port>" — Gateway API permits a
+// route to attach to the same Gateway twice via different listeners
+// disambiguated by sectionName / port, so omitting them collapses distinct
+// per-listener conditions into one bucket and silently loses flips on the
+// second listener.
 func indexParentConditions(parents []any) map[string]map[string]string {
 	out := make(map[string]map[string]string, len(parents))
 	for _, p := range parents {
@@ -2125,7 +2240,9 @@ func indexParentConditions(parents []any) map[string]map[string]string {
 		kind, _, _ := unstructured.NestedString(pMap, "parentRef", "kind")
 		ns, _, _ := unstructured.NestedString(pMap, "parentRef", "namespace")
 		name, _, _ := unstructured.NestedString(pMap, "parentRef", "name")
-		key := fmt.Sprintf("%s/%s/%s/%s", group, kind, ns, name)
+		sectionName, _, _ := unstructured.NestedString(pMap, "parentRef", "sectionName")
+		port, _, _ := unstructured.NestedInt64(pMap, "parentRef", "port")
+		key := fmt.Sprintf("%s/%s/%s/%s/%s/%d", group, kind, ns, name, sectionName, port)
 		conds := make(map[string]string)
 		conditions, _, _ := unstructured.NestedSlice(pMap, "conditions")
 		for _, c := range conditions {

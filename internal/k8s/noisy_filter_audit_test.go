@@ -17,6 +17,7 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -204,25 +205,182 @@ func TestComputeDiff_HTTPRouteProgrammedFlip_PerParent(t *testing.T) {
 	}
 }
 
-func TestKindHasDiffer_ContractMatchesComputeDiff(t *testing.T) {
-	// Drift guard: if a kind is in KindHasDiffer but ComputeDiff doesn't recognize
-	// it, the no-diff drop fires for a kind that always returns nil — silently
-	// dropping every update. Verify each KindHasDiffer kind actually reaches a
-	// non-default case in ComputeDiff (proxy: a no-op old/new of the right type
-	// returns nil only when ComputeDiff dispatched).
-	kinds := []string{
-		"Deployment", "Pod", "Service", "ConfigMap", "Ingress",
-		"ReplicaSet", "DaemonSet", "StatefulSet",
-		"HorizontalPodAutoscaler", "Job", "Node", "PersistentVolumeClaim",
-		"Application", "Kustomization", "HelmRelease",
-		"GitRepository", "OCIRepository", "HelmRepository",
-		"Gateway", "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute",
+// Note: contract drift between KindHasDiffer and ComputeDiff dispatch is
+// structurally impossible — both read the same diffFunctions map. No test
+// needed for that anymore.
+
+func TestComputeDiff_ReplicaSetReplicaFailure_Detected(t *testing.T) {
+	base := &appsv1.ReplicaSet{
+		Status: appsv1.ReplicaSetStatus{
+			Conditions: []appsv1.ReplicaSetCondition{
+				{Type: appsv1.ReplicaSetReplicaFailure, Status: corev1.ConditionFalse},
+			},
+		},
 	}
-	for _, k := range kinds {
-		if !KindHasDiffer(k) {
-			t.Errorf("%s: KindHasDiffer should return true for kinds in ComputeDiff", k)
+	updated := base.DeepCopy()
+	updated.Status.Conditions[0].Status = corev1.ConditionTrue
+
+	diff := ComputeDiff("ReplicaSet", base, updated)
+	if diff == nil || !containsPath(diff, "status.conditions[ReplicaFailure]") {
+		t.Fatalf("expected ReplicaFailure flip detected, got %+v", diff)
+	}
+}
+
+func TestComputeDiff_DaemonSetMisscheduled_Detected(t *testing.T) {
+	base := &appsv1.DaemonSet{Status: appsv1.DaemonSetStatus{NumberMisscheduled: 0}}
+	updated := base.DeepCopy()
+	updated.Status.NumberMisscheduled = 3
+	diff := ComputeDiff("DaemonSet", base, updated)
+	if diff == nil || !containsPath(diff, "status.numberMisscheduled") {
+		t.Fatalf("expected NumberMisscheduled change detected, got %+v", diff)
+	}
+}
+
+func TestComputeDiff_FluxKustomizationStalled_Detected(t *testing.T) {
+	mk := func(stalledStatus string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"status": map[string]any{
+				"conditions": []any{
+					map[string]any{"type": "Stalled", "status": stalledStatus},
+				},
+			},
+		}}
+	}
+	diff := ComputeDiff("Kustomization", mk("False"), mk("True"))
+	if diff == nil || !containsPath(diff, "status.conditions[Stalled]") {
+		t.Fatalf("expected Kustomization Stalled flip detected, got %+v", diff)
+	}
+}
+
+func TestComputeDiff_HTTPRouteMultiParent_PerListener(t *testing.T) {
+	// Two parents on the same Gateway via different sectionNames. Parent A
+	// stays Accepted=True; parent B flips Programmed False→True. Without
+	// per-listener keying, the second parent overwrites the first in the
+	// per-parent map and the Programmed flip is invisible.
+	parent := func(section, programmed string) map[string]any {
+		return map[string]any{
+			"parentRef": map[string]any{
+				"group": "gateway.networking.k8s.io", "kind": "Gateway",
+				"namespace": "infra", "name": "g", "sectionName": section,
+			},
+			"conditions": []any{
+				map[string]any{"type": "Accepted", "status": "True"},
+				map[string]any{"type": "Programmed", "status": programmed},
+			},
 		}
 	}
+	old := &unstructured.Unstructured{Object: map[string]any{
+		"status": map[string]any{"parents": []any{parent("http", "True"), parent("https", "False")}},
+	}}
+	upd := &unstructured.Unstructured{Object: map[string]any{
+		"status": map[string]any{"parents": []any{parent("http", "True"), parent("https", "True")}},
+	}}
+	diff := ComputeDiff("HTTPRoute", old, upd)
+	if diff == nil {
+		t.Fatal("expected non-nil diff when one of two listener parents flips Programmed")
+	}
+	// We should see the https listener flip but not the http listener.
+	httpsHit, httpHit := false, false
+	for _, f := range diff.Fields {
+		if stringContains(f.Path, "https") && stringContains(f.Path, "Programmed") {
+			httpsHit = true
+		}
+		if stringContains(f.Path, "/http/") && stringContains(f.Path, "Programmed") {
+			httpHit = true
+		}
+	}
+	if !httpsHit {
+		t.Errorf("expected https listener Programmed flip in diff, got %+v", diff.Fields)
+	}
+	if httpHit {
+		t.Errorf("did not expect http listener flip in diff (was unchanged), got %+v", diff.Fields)
+	}
+}
+
+func TestComputeDiff_HTTPRouteRemovedParent_Detected(t *testing.T) {
+	// One parent in old, zero parents in new — both per-parent walk and the
+	// length check should fire. Worst case: one parent removed + one added so
+	// the count stays the same; the union-walk catches the disappearance.
+	mk := func(parents []any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"status": map[string]any{"parents": parents},
+		}}
+	}
+	parentA := map[string]any{
+		"parentRef":  map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "namespace": "infra", "name": "a"},
+		"conditions": []any{map[string]any{"type": "Accepted", "status": "True"}},
+	}
+	parentB := map[string]any{
+		"parentRef":  map[string]any{"group": "gateway.networking.k8s.io", "kind": "Gateway", "namespace": "infra", "name": "b"},
+		"conditions": []any{map[string]any{"type": "Accepted", "status": "True"}},
+	}
+	diff := ComputeDiff("HTTPRoute", mk([]any{parentA}), mk([]any{parentB}))
+	if diff == nil {
+		t.Fatal("expected non-nil diff when one parent disappears and another appears")
+	}
+}
+
+func TestComputeDiff_PodReadinessGateFlip_Detected(t *testing.T) {
+	base := &corev1.Pod{Status: corev1.PodStatus{
+		Conditions: []corev1.PodCondition{
+			{Type: corev1.PodReady, Status: corev1.ConditionTrue},
+		},
+	}}
+	updated := base.DeepCopy()
+	updated.Status.Conditions[0].Status = corev1.ConditionFalse
+	diff := ComputeDiff("Pod", base, updated)
+	if diff == nil || !containsPath(diff, "status.conditions[Ready]") {
+		t.Fatalf("expected PodReady flip detected, got %+v", diff)
+	}
+}
+
+func TestComputeDiff_PodEphemeralContainerAttached_Detected(t *testing.T) {
+	base := &corev1.Pod{}
+	updated := base.DeepCopy()
+	updated.Status.EphemeralContainerStatuses = []corev1.ContainerStatus{{Name: "debugger"}}
+	diff := ComputeDiff("Pod", base, updated)
+	if diff == nil || !containsPath(diff, "status.ephemeralContainerStatuses") {
+		t.Fatalf("expected ephemeral container attach detected, got %+v", diff)
+	}
+}
+
+func TestComputeDiff_NodeAllocatableChanged_Detected(t *testing.T) {
+	base := &corev1.Node{Status: corev1.NodeStatus{
+		Allocatable: corev1.ResourceList{
+			corev1.ResourceCPU:    resourceQty("4"),
+			corev1.ResourceMemory: resourceQty("8Gi"),
+		},
+	}}
+	updated := base.DeepCopy()
+	updated.Status.Allocatable[corev1.ResourceMemory] = resourceQty("4Gi")
+	diff := ComputeDiff("Node", base, updated)
+	if diff == nil || !containsPath(diff, "status.allocatable.memory") {
+		t.Fatalf("expected allocatable memory change detected, got %+v", diff)
+	}
+}
+
+func TestComputeDiff_ApplicationImageRoll_Detected(t *testing.T) {
+	mk := func(images []string) *unstructured.Unstructured {
+		imgs := make([]any, len(images))
+		for i, s := range images {
+			imgs[i] = s
+		}
+		return &unstructured.Unstructured{Object: map[string]any{
+			"status": map[string]any{
+				"sync":    map[string]any{"status": "Synced"},
+				"health":  map[string]any{"status": "Healthy"},
+				"summary": map[string]any{"images": imgs},
+			},
+		}}
+	}
+	diff := ComputeDiff("Application", mk([]string{"app:v1"}), mk([]string{"app:v2"}))
+	if diff == nil || !containsPath(diff, "status.summary.images") {
+		t.Fatalf("expected Application image roll detected (Synced+Healthy app rolling images), got %+v", diff)
+	}
+}
+
+func resourceQty(s string) resource.Quantity {
+	return resource.MustParse(s)
 }
 
 // ---------------------------------------------------------------------------
