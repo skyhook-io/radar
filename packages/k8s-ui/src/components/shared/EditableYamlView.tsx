@@ -9,11 +9,14 @@ import {
   XCircle,
   AlertTriangle,
 } from 'lucide-react'
+import { Download } from 'lucide-react'
 import { stringify as yamlStringify } from 'yaml'
 import { CodeViewer } from '../ui/CodeViewer'
 import { YamlEditor } from '../ui/YamlEditor'
 import { Tooltip } from '../ui/Tooltip'
 import type { SelectedResource } from '../../types'
+import { resourceToYaml } from '../../utils/yaml'
+import { triggerDownload } from '../../utils/download'
 
 // ============================================================================
 // SUCCESS ANIMATION
@@ -118,9 +121,14 @@ interface EditableYamlViewProps {
   saveError?: string | null
   /** Duplicate handler — opens create dialog with this resource's YAML */
   onDuplicate?: (params: { kind: string; namespace: string; name: string; yaml: string }) => void
+  /**
+   * Optional override for the download trigger — desktop builds inject a native save dialog here.
+   * Falls back to a browser blob download when omitted.
+   */
+  onDownload?: (content: string, mime: string, filename: string) => void
 }
 
-export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSave, isSaving, saveError, onDuplicate }: EditableYamlViewProps) {
+export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSave, isSaving, saveError, onDuplicate, onDownload }: EditableYamlViewProps) {
   const draftKey = `radar_yaml_draft:${resource.kind}/${resource.namespace}/${resource.name}`
 
   // Restore draft from sessionStorage (e.g., after session-expiry redirect).
@@ -149,20 +157,17 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
     }
   }, [isEditing, editedYaml, draftKey])
 
-  // Convert resource to YAML for editing
-  const convertToYaml = useCallback((d: any) => {
-    if (!d) return ''
-    const cleaned = { ...d }
-    delete cleaned.status
-    if (cleaned.metadata) {
-      delete cleaned.metadata.managedFields
-      delete cleaned.metadata.resourceVersion
-      delete cleaned.metadata.uid
-      delete cleaned.metadata.creationTimestamp
-      delete cleaned.metadata.generation
-    }
-    return yamlStringify(cleaned, { lineWidth: 0, indent: 2 })
-  }, [])
+  // Convert resource to YAML for editing — strips server-generated metadata (status, managedFields, etc.)
+  const convertToYaml = useCallback((d: any) => resourceToYaml(d), [])
+
+  const handleDownload = useCallback(() => {
+    const yaml = convertToYaml(data)
+    if (!yaml) return
+    // Prefer the canonical singular Kind from the manifest (e.g. "Pod") over the URL plural ("pods").
+    const kindForFile = (data?.kind || resource.kind || 'resource').toLowerCase()
+    const slug = `${kindForFile}-${resource.name}`.replace(/[^a-z0-9._-]+/g, '-')
+    triggerDownload(yaml, 'application/yaml', `${slug}.yaml`, onDownload)
+  }, [data, resource.kind, resource.name, convertToYaml, onDownload])
 
   const handleStartEdit = useCallback(() => {
     setEditedYaml(convertToYaml(data))
@@ -328,6 +333,15 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
             {copied ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
             Copy
           </button>
+          <Tooltip content="Download manifest as YAML (server-generated fields stripped)">
+            <button
+              onClick={handleDownload}
+              className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
+            >
+              <Download className="w-3.5 h-3.5" />
+              Download
+            </button>
+          </Tooltip>
           {onDuplicate && (
             <Tooltip content="Duplicate as new resource">
               <button

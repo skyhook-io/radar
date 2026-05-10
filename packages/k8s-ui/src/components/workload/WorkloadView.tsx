@@ -135,6 +135,13 @@ interface WorkloadViewProps {
   /** Duplicate handler — opens create dialog with this resource's YAML */
   onDuplicate?: (params: { kind: string; namespace: string; name: string; yaml: string }) => void
 
+  // ── Download ─────────────────────────────────────────────────────────────
+  /**
+   * Optional override for the YAML download trigger — desktop builds inject a native save dialog here.
+   * Falls back to a browser blob download when omitted.
+   */
+  onDownload?: (content: string, mime: string, filename: string) => void
+
   // ── ResourceActionsBar props (passed through) ────────────────────────────
   /** All props for the actions bar (forwarded as-is) */
   actionsBarProps?: Record<string, any>
@@ -186,6 +193,7 @@ export function WorkloadView({
   isMetricsAvailable,
   // Duplicate
   onDuplicate,
+  onDownload,
   renderOverviewExtra,
   // Actions bar
   actionsBarProps,
@@ -451,6 +459,7 @@ export function WorkloadView({
               isSaving={isUpdatingResource}
               saveError={updateResourceError}
               onDuplicate={onDuplicate}
+              onDownload={onDownload}
             />
           ) : (
             <>
@@ -675,6 +684,7 @@ export function WorkloadView({
                 isSaving={isUpdatingResource}
                 saveError={updateResourceError}
                 onDuplicate={onDuplicate}
+                onDownload={onDownload}
               />
             )}
           </div>

@@ -6,6 +6,7 @@ import { Section, PropertyList, Property, AlertBanner } from '../../ui/drawer-co
 import { ConfirmDialog } from '../../ui/ConfirmDialog'
 import type { SecretCertificateInfo, CertificateInfo } from '../../../types'
 import { pluralize } from '../../../utils/pluralize'
+import { cleanResourceForYaml } from '../../../utils/yaml'
 
 interface SecretRendererProps {
   data: any
@@ -74,16 +75,9 @@ export function SecretRenderer({ data, certificateInfo, resourceData, onSaveSecr
 
   const handleSave = useCallback(async (key: string, newValue: string) => {
     if (!onSaveSecretValue || !resourceData) return
-    const cleaned = structuredClone(resourceData)
-    delete cleaned.status
-    if (cleaned.metadata) {
-      delete cleaned.metadata.managedFields
-      delete cleaned.metadata.resourceVersion
-      delete cleaned.metadata.uid
-      delete cleaned.metadata.creationTimestamp
-      delete cleaned.metadata.generation
-    }
-    // Encode with UTF-8 support
+    const cleaned = cleanResourceForYaml(resourceData)
+    if (!cleaned.data) cleaned.data = {}
+    // btoa is byte-only; round-trip through encodeURIComponent/unescape so non-ASCII secret values survive base64 encoding.
     cleaned.data[key] = btoa(unescape(encodeURIComponent(newValue)))
     const yaml = yamlStringify(cleaned, { lineWidth: 0, indent: 2 })
     try {
