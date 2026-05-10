@@ -157,23 +157,20 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
     }
   }, [isEditing, editedYaml, draftKey])
 
-  // Convert resource to YAML for editing — strips server-generated metadata (status, managedFields, etc.)
-  const convertToYaml = useCallback((d: any) => resourceToYaml(d), [])
-
   const handleDownload = useCallback(() => {
-    const yaml = convertToYaml(data)
+    const yaml = resourceToYaml(data)
     if (!yaml) return
     // Prefer the canonical singular Kind from the manifest (e.g. "Pod") over the URL plural ("pods").
     const kindForFile = (data?.kind || resource.kind || 'resource').toLowerCase()
     const slug = `${kindForFile}-${resource.name}`.replace(/[^a-z0-9._-]+/g, '-')
     triggerDownload(yaml, 'application/yaml', `${slug}.yaml`, onDownload)
-  }, [data, resource.kind, resource.name, convertToYaml, onDownload])
+  }, [data, resource.kind, resource.name, onDownload])
 
   const handleStartEdit = useCallback(() => {
-    setEditedYaml(convertToYaml(data))
+    setEditedYaml(resourceToYaml(data))
     setYamlErrors([])
     setIsEditing(true)
-  }, [data, convertToYaml])
+  }, [data])
 
   const handleCancelEdit = useCallback(() => {
     setIsEditing(false)

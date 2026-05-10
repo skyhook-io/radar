@@ -136,10 +136,7 @@ interface WorkloadViewProps {
   onDuplicate?: (params: { kind: string; namespace: string; name: string; yaml: string }) => void
 
   // ── Download ─────────────────────────────────────────────────────────────
-  /**
-   * Optional override for the YAML download trigger — desktop builds inject a native save dialog here.
-   * Falls back to a browser blob download when omitted.
-   */
+  /** Forwarded to EditableYamlView; see there. */
   onDownload?: (content: string, mime: string, filename: string) => void
 
   // ── ResourceActionsBar props (passed through) ────────────────────────────
