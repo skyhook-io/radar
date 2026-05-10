@@ -6,6 +6,7 @@ import { Terminal } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
   type RendererOverrides,
+  type GitOpsOwnerRef,
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource, ResourceRef, ResolvedEnvFrom } from '../../types'
 import { kindToPlural, buildWorkloadPath, type NavigateToResource } from '../../utils/navigation'
@@ -328,6 +329,23 @@ export function WorkloadView({
     await updateResource.mutateAsync(params)
   }, [updateResource])
 
+  const navigateRouter = useNavigate()
+  const handleOpenGitOpsResource = useCallback(
+    (ref: GitOpsOwnerRef) => {
+      // For Argo apps detected via bare instance label, the namespace is
+      // unknown — route into the GitOps list page so the user can locate the
+      // app rather than landing on a 404'd detail URL.
+      if (ref.tool === 'argo' && !ref.namespace) {
+        navigateRouter('/gitops')
+        return
+      }
+      navigateRouter(
+        `/gitops/detail/${encodeURIComponent(ref.kind)}/${encodeURIComponent(ref.namespace || '_')}/${encodeURIComponent(ref.name)}`,
+      )
+    },
+    [navigateRouter],
+  )
+
   // Duplicate dialog
   const [duplicateDialogOpen, setDuplicateDialogOpen] = useState(false)
   const [duplicateYaml, setDuplicateYaml] = useState('')
@@ -385,6 +403,7 @@ export function WorkloadView({
       renderOverviewExtra={({ kind: k, namespace: ns, name: n }) => (
         <AuditSection kind={k} namespace={ns} name={n} />
       )}
+      onOpenGitOpsResource={handleOpenGitOpsResource}
     />
     <CreateResourceDialog
       open={duplicateDialogOpen}

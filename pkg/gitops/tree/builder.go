@@ -3,10 +3,12 @@ package tree
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 
 	"github.com/skyhook-io/radar/pkg/topology"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -50,6 +52,11 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 
 	tool := detectTool(root, group, kind)
 	managed := managedResources(root, tool)
+	// HelmRelease has no status.inventory; recover its managed set from live
+	// topology by Helm's recommended labels so the resource tree isn't empty.
+	if tool == ToolFluxCD && strings.EqualFold(root.GetKind(), "HelmRelease") && len(managed) == 0 {
+		managed = fluxHelmReleaseManaged(root, b.topoNodes())
+	}
 	status := rootStatus(root, tool)
 	rootRef := ResourceRef{
 		Group:     apiGroup(root),
@@ -166,7 +173,7 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 			if _, exists := nodes[targetID]; !exists {
 				nodes[targetID] = nodeFromTopology(targetTopo, targetRef, RoleGenerated, tool, "", "")
 			}
-			edges[edgeKey(id, targetID)] = Edge{Source: id, Target: targetID, Type: "owns"}
+			edges[edgeKey(id, targetID)] = Edge{Source: id, Target: targetID, Type: EdgeOwns}
 			queue = append(queue, targetID)
 		}
 	}
@@ -179,7 +186,7 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 		if id == rootNode.ID || hasParent[id] {
 			continue
 		}
-		edges[edgeKey(rootNode.ID, id)] = Edge{Source: rootNode.ID, Target: id, Type: "owns"}
+		edges[edgeKey(rootNode.ID, id)] = Edge{Source: rootNode.ID, Target: id, Type: EdgeOwns}
 	}
 
 	nodeList, edgeList := materialize(nodes, edges)
@@ -208,7 +215,13 @@ func (b *Builder) getAllowedObject(ctx context.Context, ref ResourceRef) *unstru
 	if ref.Name == "" || !b.canEnrich(ref) {
 		return nil
 	}
-	obj, _ := b.dynamic.GetDynamicWithGroup(ctx, ref.Kind, ref.Namespace, ref.Name, ref.Group)
+	obj, err := b.dynamic.GetDynamicWithGroup(ctx, ref.Kind, ref.Namespace, ref.Name, ref.Group)
+	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.Printf("[gitops/tree] enrich %s/%s %s/%s failed: %v", ref.Group, ref.Kind, ref.Namespace, ref.Name, err)
+		}
+		return nil
+	}
 	return obj
 }
 

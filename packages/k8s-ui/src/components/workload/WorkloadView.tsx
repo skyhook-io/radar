@@ -18,10 +18,12 @@ import {
   Maximize2,
   X,
   BarChart3,
+  GitBranch,
 } from 'lucide-react'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource, pluralToKind } from '../../utils/navigation'
+import { detectGitOpsOwner, type GitOpsOwnerRef } from '../../utils/gitops-owner'
 import { isChangeEvent, isHistoricalEvent } from '../../types'
 import { getKindBadgeColor, getHealthBadgeColor } from '../../utils/badge-colors'
 import { buildResourceHierarchy, getAllEventsFromHierarchy, isProblematicEvent, type ResourceLane } from '../../utils/resource-hierarchy'
@@ -109,6 +111,16 @@ interface WorkloadViewProps {
   activeTab?: TabType
   /** Called when tab changes (for URL sync etc.) */
   onTabChange?: (tab: TabType) => void
+
+  // ── GitOps navigation ─────────────────────────────────────────────────────
+  /**
+   * Open the GitOps detail page for a controller (Argo Application,
+   * Flux Kustomization, Flux HelmRelease). The drawer's "Managed by" chip
+   * invokes this when the user clicks through; if not provided, the chip
+   * is rendered as a non-interactive label so the relationship is still
+   * visible (useful for hosts that haven't routed the GitOps tab yet).
+   */
+  onOpenGitOpsResource?: (ref: GitOpsOwnerRef) => void
 
   // ── Render props for platform-specific content ───────────────────────────
   /** Render the logs tab content */
@@ -198,6 +210,8 @@ export function WorkloadView({
   rendererOverrides,
   // Pod env expansion
   resolvedEnvFrom,
+  // GitOps
+  onOpenGitOpsResource,
 }: WorkloadViewProps) {
   // Normalize kind: URL has plural lowercase, internal logic uses singular PascalCase
   const kind = pluralToKind(kindProp)
@@ -286,6 +300,7 @@ export function WorkloadView({
 
   // Metadata
   const metadata = useMemo(() => extractMetadata(kind, resource), [kind, resource])
+  const gitopsOwner = useMemo(() => detectGitOpsOwner(resource), [resource])
 
   // Copy to clipboard
   const copyToClipboard = useCallback((text: string, key: string) => {
@@ -430,6 +445,9 @@ export function WorkloadView({
               </button>
             </div>
             <p className="text-sm text-theme-text-tertiary">{namespace}</p>
+            {gitopsOwner && (
+              <ManagedByChip owner={gitopsOwner} onOpen={onOpenGitOpsResource} />
+            )}
           </div>
 
           {/* Actions bar */}
@@ -532,6 +550,9 @@ export function WorkloadView({
               )}
               {metadata.find(m => m.label === 'Image') && (
                 <span className="truncate max-w-md font-mono text-xs">{metadata.find(m => m.label === 'Image')?.value}</span>
+              )}
+              {gitopsOwner && (
+                <ManagedByChip owner={gitopsOwner} onOpen={onOpenGitOpsResource} />
               )}
               {relationships?.owner && (
                 <span>Owner: <button onClick={() => onNavigateToResource?.(refToSelectedResource(relationships.owner!))} className="text-blue-500 hover:underline">{relationships.owner.name}</button></span>
@@ -731,6 +752,33 @@ function extractMetadata(kind: string, resource: any): { label: string; value: s
 // ============================================================================
 // SUB-COMPONENTS
 // ============================================================================
+
+function ManagedByChip({ owner, onOpen }: { owner: GitOpsOwnerRef; onOpen?: (ref: GitOpsOwnerRef) => void }) {
+  const toolLabel = owner.tool === 'argo' ? 'ArgoCD' : 'FluxCD'
+  const label = owner.namespace ? `${owner.namespace}/${owner.name}` : owner.name
+  const title = `Managed by ${toolLabel} · ${label}`
+  // When the host hasn't wired the GitOps route, fall back to a non-interactive
+  // badge so the relationship is still visible. Without this, integrators who
+  // don't surface a GitOps tab would see the chip silently fail to navigate.
+  const interactive = !!onOpen
+  const Wrapper = interactive ? 'button' : 'span'
+  return (
+    <Wrapper
+      {...(interactive
+        ? { type: 'button' as const, onClick: () => onOpen?.(owner) }
+        : {})}
+      title={title}
+      className={clsx(
+        'mt-1 inline-flex items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[11px] text-theme-text-secondary',
+        interactive && 'hover:border-skyhook-500/60 hover:text-skyhook-500 transition-colors',
+      )}
+    >
+      <GitBranch className="h-3 w-3 shrink-0" />
+      <span className="shrink-0 text-theme-text-tertiary">Managed by</span>
+      <span className="truncate max-w-[180px]">{label}</span>
+    </Wrapper>
+  )
+}
 
 function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
   return (
