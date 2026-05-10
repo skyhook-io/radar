@@ -101,14 +101,10 @@ func resolveFluxOwnerByKind(root *unstructured.Unstructured) *FinalizerOwner {
 	return nil
 }
 
-// Standard Flux controller catalog — values match the official Helm
-// chart defaults for `flux-system`. Operators that install into a
-// custom namespace will get nil from the lookup; that's intentional —
-// we'd rather omit the controller health line than guess the wrong pod.
-//
-// TODO(2026-Q3): consider auto-discovering the install namespace from
-// each controller's CustomResourceDefinition annotations, the way the
-// Flux CLI does. Out of scope for the first cut.
+// Standard Flux controller catalog. Values match the official Helm chart
+// defaults for `flux-system`; custom-namespace installs return nil from
+// the lookup intentionally — omitting the controller-health line beats
+// pointing the operator at the wrong pod.
 var (
 	fluxKustomizeController = FinalizerOwner{
 		Controller:    "kustomize-controller",

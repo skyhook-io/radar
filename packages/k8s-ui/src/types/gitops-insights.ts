@@ -5,6 +5,10 @@ export interface GitOpsInsight {
   plan?: GitOpsPlanItem[]
   history?: GitOpsHistoryItem[]
   capabilities?: GitOpsCapabilities
+  // Non-fatal reasons the response is incomplete (RBAC short-circuit,
+  // controller unreachable, etc.). UI surfaces these so users can tell
+  // "no data" from "we couldn't fetch it".
+  warnings?: string[]
   partial?: boolean
 }
 
@@ -63,6 +67,18 @@ export interface GitOpsIssue {
   // True when retry count crossed the "no longer transient" threshold.
   // Drives a stronger visual treatment.
   stuck?: boolean
+  // Structured one-click remediation. When present, the failure card renders
+  // a contextual action button. Nil when no automated remedy applies — the
+  // `action` string still describes the manual path in that case.
+  remediation?: GitOpsRemediation
+}
+
+export type GitOpsRemediationKind = 'create-namespace'
+
+export interface GitOpsRemediation {
+  kind: GitOpsRemediationKind
+  target?: string
+  hint?: string
 }
 
 export interface GitOpsChange {
@@ -108,13 +124,15 @@ export interface GitOpsDriftEntry {
 }
 
 export interface GitOpsEventSummary {
-  type: 'Normal' | 'Warning' | string
+  type: GitOpsEventType
   reason: string
   message: string
   count?: number
   lastTimestamp: string // RFC3339
   reportingComponent?: string
 }
+
+export type GitOpsEventType = 'Normal' | 'Warning'
 
 export interface GitOpsPlanItem {
   ref: GitOpsInsightRef

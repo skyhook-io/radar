@@ -22,9 +22,9 @@ export interface GitOpsTreeNode {
   ref: GitOpsTreeRef
   role: GitOpsTreeNodeRole
   tool: GitOpsTreeTool
-  sync?: SyncStatus | string
-  health?: GitOpsHealthStatus | string
-  topologyStatus?: HealthStatus | string
+  sync?: SyncStatus
+  health?: GitOpsHealthStatus
+  topologyStatus?: HealthStatus
   info?: GitOpsTreeInfoItem[]
   resource?: unknown
   groupedNodeIDs?: string[]
@@ -32,10 +32,12 @@ export interface GitOpsTreeNode {
   data?: Record<string, unknown>
 }
 
+export type GitOpsTreeEdgeType = 'owns' | 'source' | 'dependsOn'
+
 export interface GitOpsTreeEdge {
   source: string
   target: string
-  type: string
+  type: GitOpsTreeEdgeType
 }
 
 export interface GitOpsTreeSummary {

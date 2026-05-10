@@ -17,9 +17,9 @@ interface SyncOptionsDialogProps {
   }) => void
 }
 
-// Modeled on ArgoCD's Sync drawer. Single Synchronize button at the
-// bottom; defaults are "what most users want" (prune true, no dry-run, no
-// force) so the common path is two clicks. Revision is optional and falls
+// Modeled on ArgoCD's Sync drawer. Single Sync-now button at the bottom;
+// defaults are "what most users want" (prune true, no dry-run, no force)
+// so the common path is two clicks. Revision is optional and falls
 // through to whatever Argo had targeted before.
 export function SyncOptionsDialog({ open, appLabel, pending, onCancel, onConfirm }: SyncOptionsDialogProps) {
   const [revision, setRevision] = useState('')
@@ -105,7 +105,7 @@ export function SyncOptionsDialog({ open, appLabel, pending, onCancel, onConfirm
         >
           Cancel
         </button>
-        <PrimaryButton onClick={submit} disabled={pending} icon={pending ? Loader2 : RefreshCw} loading={pending} label={dryRun ? 'Run dry-run' : 'Synchronize'} />
+        <PrimaryButton onClick={submit} disabled={pending} icon={pending ? Loader2 : RefreshCw} loading={pending} label={dryRun ? 'Run dry-run' : 'Sync now'} />
       </div>
     </DialogPortal>
   )

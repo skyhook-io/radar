@@ -7,6 +7,8 @@
 #   up        Create cluster (if missing), install Argo CD + Flux, apply fixtures.
 #   down      Delete the kind cluster.
 #   drift     Induce drift on a healthy app (kubectl edit a managed Deployment).
+#   rebreak   Re-break guestbook-broken-sync after remediation (deletes
+#             demo-broken-sync namespace so the sync fails again).
 #   reset     down + up.
 #   status    Show what's installed and inventory the GitOps resources.
 #   help      Show this message.
@@ -141,19 +143,135 @@ apply_fixtures() {
 
   # Apply in number order so later resources can reference earlier ones
   # (e.g. AppProject before Application that uses it; GitRepository
-  # before Kustomization that references it).
+  # before Kustomization that references it). Skip empty / comment-only
+  # files so a placeholder YAML doesn't trip set -e on
+  # "no objects passed to apply".
   for f in $(ls "${FIXTURES_DIR}"/*.yaml 2>/dev/null | sort); do
+    if ! grep -q '^[[:space:]]*[^#[:space:]]' "$f"; then
+      note "skipping $(basename "$f") (placeholder / comments only)"
+      continue
+    fi
     note "applying $(basename "$f")"
     kubectl --context "${KUBECTL_CTX}" apply -f "$f" >/dev/null
   done
   ok "Fixtures applied"
+
+  setup_rollback_history
+  setup_zombie
+}
+
+# wait_for_app_synced polls until an Argo Application reports Synced+Healthy.
+# Used by setup_rollback_history to sequence the two syncs that produce
+# the multi-entry history. Returns 1 on timeout so callers fail loudly
+# rather than continue against a not-yet-converged state.
+wait_for_app_synced() {
+  local app="$1" deadline=$((SECONDS + 180))
+  while [ $SECONDS -lt $deadline ]; do
+    local sync health
+    sync=$(kubectl --context "${KUBECTL_CTX}" -n argocd get application "$app" \
+      -o jsonpath='{.status.sync.status}' 2>/dev/null || echo "")
+    health=$(kubectl --context "${KUBECTL_CTX}" -n argocd get application "$app" \
+      -o jsonpath='{.status.health.status}' 2>/dev/null || echo "")
+    if [ "$sync" = "Synced" ] && [ "$health" = "Healthy" ]; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+# setup_rollback_history orchestrates the rollback fixture so it has at
+# least two distinct successful syncs in status.history before the script
+# returns control. The Application starts in auto-sync mode (so the first
+# sync happens without manual intervention); we then change the path to
+# trigger a second sync, wait for it to converge, and finally flip the
+# app to Manual mode (rollback is gated on auto-sync being off — the
+# controller would otherwise re-sync forward to HEAD immediately after
+# any rollback attempt).
+setup_rollback_history() {
+  step "Orchestrating guestbook-rollback history"
+
+  if ! wait_for_app_synced guestbook-rollback; then
+    warn "guestbook-rollback didn't converge after first sync; skipping rollback orchestration"
+    return
+  fi
+
+  # If we've already done this orchestration on a prior `up` run the path
+  # is already kustomize-guestbook and the app is already Manual — skip
+  # to keep the script idempotent.
+  local current_path
+  current_path=$(kubectl --context "${KUBECTL_CTX}" -n argocd get application guestbook-rollback \
+    -o jsonpath='{.spec.source.path}' 2>/dev/null || echo "")
+  if [ "$current_path" = "kustomize-guestbook" ]; then
+    note "guestbook-rollback already at kustomize-guestbook (history orchestration done previously)"
+  else
+    note "patching path → kustomize-guestbook to trigger second sync"
+    kubectl --context "${KUBECTL_CTX}" -n argocd patch application guestbook-rollback \
+      --type merge -p '{"spec":{"source":{"path":"kustomize-guestbook"}}}' >/dev/null
+    if ! wait_for_app_synced guestbook-rollback; then
+      warn "guestbook-rollback didn't converge after path change; rollback button may stay disabled"
+      return
+    fi
+  fi
+
+  # Flip to Manual mode so the rollback button isn't auto-suppressed.
+  # JSON patch to remove the `automated` block in place.
+  kubectl --context "${KUBECTL_CTX}" -n argocd patch application guestbook-rollback \
+    --type json -p '[{"op":"remove","path":"/spec/syncPolicy/automated"}]' >/dev/null 2>&1 || true
+
+  local history_count
+  history_count=$(kubectl --context "${KUBECTL_CTX}" -n argocd get application guestbook-rollback \
+    -o jsonpath='{.status.history}' 2>/dev/null | python3 -c 'import sys,json; print(len(json.loads(sys.stdin.read() or "[]")))' 2>/dev/null || echo "?")
+  ok "guestbook-rollback now Manual mode with ${history_count} history entries"
+}
+
+# setup_zombie applies the fake-finalizer trick: wait for the
+# Kustomization to be Ready, patch in a fake finalizer that no controller
+# owns, then delete the resource. Flux removes its own finalizer
+# normally; the fake one blocks deletion forever, leaving the resource
+# in a stable Terminating state for visual-testing the lifecycle UI.
+# Other Flux apps are unaffected — none of the standard Flux controllers
+# are stopped or interfered with.
+setup_zombie() {
+  step "Setting up zombie Kustomization"
+
+  # If a zombie already exists from a prior run, skip — re-creating it
+  # would require deleting the existing one first (which we can't do
+  # because the fake finalizer holds it). The existing one is fine.
+  if kubectl --context "${KUBECTL_CTX}" -n flux-system get kustomization zombie-kustomization \
+       -o jsonpath='{.metadata.deletionTimestamp}' 2>/dev/null | grep -q .; then
+    ok "zombie-kustomization already in Terminating state (from previous run)"
+    return
+  fi
+
+  # Wait for the Kustomization to reconcile at least once so it's a
+  # realistic resource (not just a CR shell) before we kill it.
+  local deadline=$((SECONDS + 90))
+  while [ $SECONDS -lt $deadline ]; do
+    if kubectl --context "${KUBECTL_CTX}" -n flux-system get kustomization zombie-kustomization \
+         -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}' 2>/dev/null | grep -qE 'True|False'; then
+      break
+    fi
+    sleep 2
+  done
+
+  note "patching in fake finalizer (radar-demo.io/intentional-zombie)"
+  kubectl --context "${KUBECTL_CTX}" -n flux-system patch kustomization zombie-kustomization \
+    --type json -p '[{"op":"add","path":"/metadata/finalizers/-","value":"radar-demo.io/intentional-zombie"}]' \
+    >/dev/null 2>&1 || true
+
+  note "deleting zombie-kustomization (will block on fake finalizer)"
+  # --wait=false because we *want* the deletion to hang.
+  kubectl --context "${KUBECTL_CTX}" -n flux-system delete kustomization zombie-kustomization --wait=false >/dev/null 2>&1 || true
+
+  ok "zombie-kustomization now stuck Terminating (severity will ramp: info → warning @5min → alert @30min)"
 }
 
 # --- Drift inducer ---------------------------------------------------------
 
 cmd_drift() {
   require_cmd kubectl "https://kubernetes.io/docs/tasks/tools/"
-  step "Inducing drift on demo-drift/guestbook"
+  step "Inducing multi-field drift on demo-drift/guestbook"
 
   # Wait for the Deployment to exist (Argo may still be syncing on a
   # fresh `up` run).
@@ -167,11 +285,44 @@ cmd_drift() {
     sleep 1
   done
 
-  # Scale from the Git-declared 1 replica to 3. Argo detects OutOfSync
-  # but won't revert (selfHeal: false), giving a stable drifted state for
-  # visual-testing the Changes tab, drift diff, and OutOfSync badges.
+  # Multi-field drift. Each mutation exercises a different branch of
+  # computeDriftFromLastApplied so the Changes tab renders a realistic
+  # mix of scalar/nested/added/changed entries instead of a single line.
+  #
+  # 1. spec.replicas: scalar change (1 → 3)
+  # 2. annotations: added entry on a nested map (operator-style label)
+  # 3. resources.limits: added entry on a deeply nested map
+  # The annotations + limits also produce drift entries that exercise
+  # the nested-map recursion path, where the spec.replicas only hits
+  # the top-level scalar branch.
   kubectl --context "${KUBECTL_CTX}" -n demo-drift scale deployment guestbook-ui --replicas=3 >/dev/null
-  ok "Scaled guestbook-ui to 3 replicas (Git declares 1) — guestbook-drift should now report stable OutOfSync"
+  kubectl --context "${KUBECTL_CTX}" -n demo-drift annotate deployment guestbook-ui \
+    radar-demo.io/induced-drift="multi-field" --overwrite >/dev/null
+  # Add a CPU limit (Argo's last-applied won't have one) → "added" drift
+  # entry on a nested path. Use a JSON patch so we replace just the
+  # resources block without disturbing the rest of the container spec.
+  kubectl --context "${KUBECTL_CTX}" -n demo-drift patch deployment guestbook-ui --type json -p '[
+    {"op":"replace","path":"/spec/template/spec/containers/0/resources","value":{"limits":{"cpu":"500m","memory":"128Mi"}}}
+  ]' >/dev/null 2>&1 || warn "couldn't add resources block (may already drift differently)"
+
+  ok "Multi-field drift induced — Changes tab should show replicas, annotations, and resources entries"
+}
+
+# cmd_rebreak resets guestbook-broken-sync to its broken state after a user
+# has remediated it (clicked "Create namespace" in Radar's failure card).
+# Deletes the demo-broken-sync namespace so Argo's next sync attempt fails
+# again with "namespaces \"demo-broken-sync\" not found", which is what the
+# fixture is meant to exercise. Argo's retry counter climbs back to 5
+# within ~30s of the retry backoff.
+cmd_rebreak() {
+  require_cmd kubectl "https://kubernetes.io/docs/tasks/tools/"
+  step "Re-breaking guestbook-broken-sync"
+  if kubectl --context "${KUBECTL_CTX}" get namespace demo-broken-sync >/dev/null 2>&1; then
+    kubectl --context "${KUBECTL_CTX}" delete namespace demo-broken-sync >/dev/null
+    ok "Deleted namespace demo-broken-sync — Argo will retry-fail over the next ~30s"
+  else
+    note "namespace demo-broken-sync already absent — fixture is already broken"
+  fi
 }
 
 # --- Status ----------------------------------------------------------------
@@ -223,13 +374,19 @@ print_summary() {
   Argo CD:    kubectl --context ${KUBECTL_CTX} -n argocd port-forward svc/argocd-server 8080:443
   Argo admin: kubectl --context ${KUBECTL_CTX} -n argocd get secret argocd-initial-admin-secret -o jsonpath='{.data.password}' | base64 -d
 
+  Scenarios baked in:
+    Argo  — guestbook-{healthy,drift,manual,suspended,broken-path,broken-sync,rollback}
+            app-of-apps + ApplicationSet → 3 children, AppProject filter
+    Flux  — podinfo-{base,overlay (dependsOn),suspended}, podinfo HelmRelease,
+            zombie-kustomization (stuck Terminating, severity ramps with age)
+
   Run Radar against this cluster:
     kubectl config use-context ${KUBECTL_CTX}
     ./scripts/visual-test-start.sh
 
   Other commands:
     $0 status           # inventory the cluster
-    $0 drift            # introduce live OutOfSync drift on guestbook
+    $0 drift            # induce multi-field drift on guestbook-drift
     $0 reset            # nuke + recreate
     $0 down             # delete cluster
 
@@ -243,11 +400,12 @@ cmd_help() {
 }
 
 case "${1:-help}" in
-  up)     cmd_up     ;;
-  down)   cmd_down   ;;
-  reset)  cmd_reset  ;;
-  drift)  cmd_drift  ;;
-  status) cmd_status ;;
+  up)      cmd_up      ;;
+  down)    cmd_down    ;;
+  reset)   cmd_reset   ;;
+  drift)   cmd_drift   ;;
+  rebreak) cmd_rebreak ;;
+  status)  cmd_status  ;;
   help|-h|--help) cmd_help ;;
   *)
     printf "${C_RED}Unknown subcommand: %s${C_RESET}\n\n" "$1"

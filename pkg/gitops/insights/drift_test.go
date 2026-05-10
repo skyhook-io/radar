@@ -71,10 +71,10 @@ func TestComputeDrift_KarpenterStyleSchemaMigration(t *testing.T) {
 	if got == nil {
 		t.Fatal("expected drift, got nil")
 	}
-	wantPaths := map[string]string{
-		"spec.disruption.expireAfter":     "removed",
-		"spec.disruption.budgets":         "added",
-		"spec.template.spec.expireAfter":  "added",
+	wantPaths := map[string]DriftOp{
+		"spec.disruption.expireAfter":    DriftOpRemoved,
+		"spec.disruption.budgets":        DriftOpAdded,
+		"spec.template.spec.expireAfter": DriftOpAdded,
 	}
 	for _, e := range got.Entries {
 		want, ok := wantPaths[e.Path]
@@ -98,7 +98,7 @@ func TestComputeDrift_ScalarChange(t *testing.T) {
 		t.Fatalf("expected 1 entry, got %v", got)
 	}
 	e := got.Entries[0]
-	if e.Path != "spec.replicas" || e.Op != "changed" {
+	if e.Path != "spec.replicas" || e.Op != DriftOpChanged {
 		t.Errorf("entry = %+v, want path=spec.replicas op=changed", e)
 	}
 	if !strings.Contains(e.Desired, "3") || !strings.Contains(e.Live, "5") {
@@ -112,6 +112,71 @@ func TestComputeDrift_TreatsEmptyAsNil(t *testing.T) {
 	got := computeDriftFromLastApplied(liveWith(desired, map[string]any{"a": map[string]any{}}))
 	if got != nil {
 		t.Errorf("empty map vs empty map should not produce drift, got %v", got.Entries)
+	}
+}
+
+// TestComputeDrift_NilishCrossSide pins the cross-side behavior: "nil/empty
+// on one side, real value on the other" emits a single entry at the parent
+// path rather than recursing into the other side. This keeps the diff
+// readable when an entire subtree was added or removed.
+func TestComputeDrift_NilishCrossSide(t *testing.T) {
+	cases := []struct {
+		name        string
+		desired     string
+		live        map[string]any
+		wantOp      DriftOp
+		wantPath    string
+		wantInValue string // substring expected in the populated side's JSON
+	}{
+		{
+			name:        "empty desired map vs non-empty live map → added at parent path",
+			desired:     `{"spec":{"a":{}}}`,
+			live:        map[string]any{"a": map[string]any{"x": "1"}},
+			wantOp:      DriftOpAdded,
+			wantPath:    "spec.a",
+			wantInValue: `"x"`,
+		},
+		{
+			name:        "non-empty desired map vs empty live map → removed at parent path",
+			desired:     `{"spec":{"a":{"x":"1"}}}`,
+			live:        map[string]any{"a": map[string]any{}},
+			wantOp:      DriftOpRemoved,
+			wantPath:    "spec.a",
+			wantInValue: `"x"`,
+		},
+		{
+			name:        "missing-on-desired vs present-on-live → added at the closest containing path",
+			desired:     `{"spec":{}}`,
+			live:        map[string]any{"replicas": int64(3)},
+			wantOp:      DriftOpAdded,
+			wantPath:    "spec",
+			wantInValue: `"replicas"`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := computeDriftFromLastApplied(liveWith(tc.desired, tc.live))
+			if got == nil {
+				t.Fatalf("expected drift, got nil")
+			}
+			var entry *DriftEntry
+			for i := range got.Entries {
+				if got.Entries[i].Path == tc.wantPath {
+					entry = &got.Entries[i]
+					break
+				}
+			}
+			if entry == nil {
+				t.Fatalf("expected entry at %s; got entries=%+v", tc.wantPath, got.Entries)
+			}
+			if entry.Op != tc.wantOp {
+				t.Errorf("path %s: op = %q, want %q", tc.wantPath, entry.Op, tc.wantOp)
+			}
+			payload := entry.Live + entry.Desired
+			if !strings.Contains(payload, tc.wantInValue) {
+				t.Errorf("path %s: payload should contain %q; live=%q desired=%q", tc.wantPath, tc.wantInValue, entry.Live, entry.Desired)
+			}
+		})
 	}
 }
 

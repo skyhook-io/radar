@@ -6,23 +6,24 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // Memoizer is a short-TTL cache for Topology builds. The Topology graph is a
-// deterministic projection of the Kubernetes informer cache: same provider
-// state + same options → identical output. Building it requires walking every
-// resource of every kind, so a TTL of even a few seconds is enough to absorb
-// the typical request bursts (page load fetching tree+insights, the in-flight
-// polling tick, dashboard widgets refreshing) without any user-visible
-// staleness — controllers reconcile much more slowly than the TTL.
+// deterministic projection of the Kubernetes informer cache, so a few-second
+// TTL absorbs typical request bursts (page load fetching tree+insights,
+// in-flight polls, dashboard widgets) without user-visible staleness.
+// Concurrent cold reads for the same key are deduped via singleflight so
+// the underlying walk runs once per burst.
 //
 // The Memoizer does NOT own the underlying Builder. Callers pass a build
-// closure each Get(); on a hit the closure is never invoked. This keeps the
-// cache decoupled from how callers construct providers/builders.
+// closure each Get(); on a hit the closure is never invoked.
 type Memoizer struct {
 	ttl     time.Duration
 	mu      sync.Mutex
 	entries map[string]*memoEntry
+	group   singleflight.Group
 }
 
 type memoEntry struct {
@@ -38,38 +39,57 @@ func NewMemoizer(ttl time.Duration) *Memoizer {
 
 // Get returns a cached Topology if a fresh entry exists for opts, otherwise
 // invokes build, stores the result, and returns it. Errors from build are
-// not cached.
+// not cached. Concurrent callers with the same key share a single build call.
 func (m *Memoizer) Get(opts BuildOptions, build func() (*Topology, error)) (*Topology, error) {
 	if m == nil || m.ttl <= 0 {
 		return build()
 	}
 	key := memoKey(opts)
-	m.mu.Lock()
-	if e, ok := m.entries[key]; ok && time.Since(e.builtAt) < m.ttl {
-		topo := e.topo
-		m.mu.Unlock()
+	if topo, ok := m.lookup(key); ok {
 		return topo, nil
 	}
-	m.mu.Unlock()
 
-	topo, err := build()
+	v, err, _ := m.group.Do(key, func() (any, error) {
+		// Re-check inside the singleflight critical section: a previous
+		// caller may have populated the entry while we were waiting.
+		if topo, ok := m.lookup(key); ok {
+			return topo, nil
+		}
+		topo, err := build()
+		if err != nil {
+			return nil, err
+		}
+		m.store(key, topo)
+		return topo, nil
+	})
 	if err != nil {
 		return nil, err
 	}
+	return v.(*Topology), nil
+}
+
+func (m *Memoizer) lookup(key string) (*Topology, bool) {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if e, ok := m.entries[key]; ok && time.Since(e.builtAt) < m.ttl {
+		return e.topo, true
+	}
+	return nil, false
+}
+
+func (m *Memoizer) store(key string, topo *Topology) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.entries[key] = &memoEntry{topo: topo, builtAt: time.Now()}
 	// Bound the map: drop entries older than 2× the TTL on every write.
-	// A naive sweep is fine here — entry count is dominated by the number
-	// of distinct (namespace-set, view-mode, flags) tuples in flight at
-	// once, which is small (handful of namespace filters per active session).
+	// Entry count is dominated by the number of distinct (namespace-set,
+	// view-mode, flags) tuples in flight at once — small in practice.
 	cutoff := 2 * m.ttl
 	for k, e := range m.entries {
 		if time.Since(e.builtAt) > cutoff {
 			delete(m.entries, k)
 		}
 	}
-	m.mu.Unlock()
-	return topo, nil
 }
 
 // memoKey is the cache key. Includes every BuildOptions field that changes

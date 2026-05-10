@@ -3,6 +3,7 @@ package insights
 import (
 	"encoding/json"
 	"fmt"
+	"log"
 	"sort"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -46,6 +47,7 @@ func computeDriftFromLastApplied(live *unstructured.Unstructured) *Drift {
 	}
 	var desiredObj map[string]any
 	if err := json.Unmarshal([]byte(raw), &desiredObj); err != nil {
+		log.Printf("[gitops/drift] last-applied annotation unparseable for %s/%s/%s: %v", live.GetKind(), live.GetNamespace(), live.GetName(), err)
 		return nil
 	}
 	desiredSpec, _ := desiredObj["spec"].(map[string]any)
@@ -70,7 +72,7 @@ func computeDriftFromLastApplied(live *unstructured.Unstructured) *Drift {
 	}
 	return &Drift{
 		Entries:   entries,
-		Source:    "lastAppliedAnnotation",
+		Source:    DriftSourceLastApplied,
 		Truncated: truncated,
 	}
 }
@@ -87,10 +89,10 @@ func diffValues(path string, desired, live any, out []DriftEntry) []DriftEntry {
 		return out
 	}
 	if isNilish(desired) {
-		return append(out, DriftEntry{Path: path, Op: "added", Live: jsonString(live)})
+		return append(out, DriftEntry{Path: path, Op: DriftOpAdded, Live: jsonString(live)})
 	}
 	if isNilish(live) {
-		return append(out, DriftEntry{Path: path, Op: "removed", Desired: jsonString(desired)})
+		return append(out, DriftEntry{Path: path, Op: DriftOpRemoved, Desired: jsonString(desired)})
 	}
 	dMap, dIsMap := desired.(map[string]any)
 	lMap, lIsMap := live.(map[string]any)
@@ -115,7 +117,7 @@ func diffValues(path string, desired, live any, out []DriftEntry) []DriftEntry {
 	if desiredStr == liveStr {
 		return out
 	}
-	return append(out, DriftEntry{Path: path, Op: "changed", Desired: desiredStr, Live: liveStr})
+	return append(out, DriftEntry{Path: path, Op: DriftOpChanged, Desired: desiredStr, Live: liveStr})
 }
 
 // joinPath produces dot-notation paths. If the segment looks like an array

@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -126,8 +127,9 @@ func (s *Server) handleGitOpsTree(w http.ResponseWriter, r *http.Request) {
 	}
 	if !req.HasNamespaceAccess() {
 		s.writeJSON(w, &gitopstree.ResourceTree{
-			Nodes: []gitopstree.Node{},
-			Edges: []gitopstree.Edge{},
+			Nodes:    []gitopstree.Node{},
+			Edges:    []gitopstree.Edge{},
+			Warnings: []string{"You do not have access to any namespace; managed resources are filtered out."},
 		})
 		return
 	}
@@ -148,7 +150,9 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if !req.HasNamespaceAccess() {
-		s.writeJSON(w, gitopsinsights.Insight{})
+		s.writeJSON(w, gitopsinsights.Insight{
+			Warnings: []string{"You do not have access to any namespace; insights are filtered out."},
+		})
 		return
 	}
 	tree, root, err := s.buildGitOpsTree(r.Context(), req)
@@ -188,6 +192,9 @@ func (r *insightsResolver) GetLive(group, kind, namespace, name string) *unstruc
 	}
 	obj, err := r.cache.GetDynamicWithGroup(r.ctx, kind, namespace, name, group)
 	if err != nil {
+		if !apierrors.IsNotFound(err) {
+			log.Printf("[gitops] insights GetLive %s/%s %s/%s failed: %v", group, kind, namespace, name, err)
+		}
 		return nil
 	}
 	return obj
@@ -207,6 +214,7 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 	if namespace != "" {
 		items, err := r.cache.Events().Events(namespace).List(labels.Everything())
 		if err != nil {
+			log.Printf("[gitops] insights RecentEvents list ns=%s %s/%s/%s failed: %v", namespace, group, kind, name, err)
 			return nil
 		}
 		events = make([]runtime.Object, 0, len(items))
@@ -216,6 +224,7 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 	} else {
 		items, err := r.cache.Events().List(labels.Everything())
 		if err != nil {
+			log.Printf("[gitops] insights RecentEvents cluster-list %s/%s/%s failed: %v", group, kind, name, err)
 			return nil
 		}
 		events = make([]runtime.Object, 0, len(items))
@@ -232,18 +241,8 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 		if e.InvolvedObject.Kind != kind || e.InvolvedObject.Name != name {
 			continue
 		}
-		// involvedObject.apiVersion is "group/version" for grouped kinds
-		// or just "version" for core. Match group when both sides
-		// provide it; permit empty-on-either side to handle informers
-		// that strip apiVersion or events that don't set it.
-		if group != "" && e.InvolvedObject.APIVersion != "" {
-			ig := e.InvolvedObject.APIVersion
-			if i := indexByte(ig, '/'); i > 0 {
-				ig = ig[:i]
-			}
-			if ig != "" && ig != group {
-				continue
-			}
+		if !eventMatchesGroup(group, e.InvolvedObject.APIVersion) {
+			continue
 		}
 		matched = append(matched, e)
 	}
@@ -297,6 +296,7 @@ func (r *insightsResolver) FinalizerOwnerStatus(finalizer string, root *unstruct
 	}
 	pods, err := r.cache.Pods().Pods(owner.Namespace).List(labels.Everything())
 	if err != nil {
+		log.Printf("[gitops] insights FinalizerOwnerStatus pods list ns=%s controller=%s failed: %v", owner.Namespace, owner.Controller, err)
 		return ""
 	}
 	var matched []*corev1.Pod
@@ -362,6 +362,25 @@ func (r *insightsResolver) namespaceAllowed(namespace string) bool {
 	return false
 }
 
+// eventMatchesGroup decides whether an event's involvedObject.apiVersion
+// matches the requested group. apiVersion is "group/version" for grouped
+// kinds or just "version" for core resources; either side being empty is
+// treated as a match so informers that strip apiVersion still surface
+// events alongside the resource they belong to.
+func eventMatchesGroup(group, apiVersion string) bool {
+	if group == "" || apiVersion == "" {
+		return true
+	}
+	ig := apiVersion
+	if i := strings.IndexByte(ig, '/'); i > 0 {
+		ig = ig[:i]
+	}
+	if ig == "" {
+		return true
+	}
+	return ig == group
+}
+
 // eventTime returns the most useful timestamp from an Event. Modern events
 // (eventTime non-zero) prefer that; legacy events fall back to
 // lastTimestamp then firstTimestamp.
@@ -375,13 +394,3 @@ func eventTime(e *corev1.Event) time.Time {
 	return e.FirstTimestamp.Time
 }
 
-// indexByte is a tiny stdlib substitute kept inline so this file doesn't
-// pull in strings just for one IndexByte.
-func indexByte(s string, b byte) int {
-	for i := 0; i < len(s); i++ {
-		if s[i] == b {
-			return i
-		}
-	}
-	return -1
-}

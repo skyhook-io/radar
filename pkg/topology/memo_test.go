@@ -2,6 +2,7 @@ package topology
 
 import (
 	"errors"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -97,6 +98,43 @@ func TestMemoizer_ZeroTTLDisables(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&calls); got != 3 {
 		t.Errorf("expected 3 builds with TTL=0, got %d", got)
+	}
+}
+
+func TestMemoizer_ConcurrentColdReadsBuildOnce(t *testing.T) {
+	// The page-load case: /tree and /insights fire simultaneously on a cold
+	// cache. Without singleflight, both would walk the informers; with it,
+	// only one build runs and the rest receive the cached result.
+	m := NewMemoizer(1 * time.Second)
+	var calls int32
+	start := make(chan struct{})
+	build := func() (*Topology, error) {
+		atomic.AddInt32(&calls, 1)
+		// Hold the build open long enough that all goroutines pile up
+		// at the singleflight gate before the first one stores.
+		time.Sleep(20 * time.Millisecond)
+		return &Topology{}, nil
+	}
+	opts := DefaultBuildOptions()
+	opts.Namespaces = []string{"foo"}
+
+	const n = 50
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for range n {
+		go func() {
+			defer wg.Done()
+			<-start
+			if _, err := m.Get(opts, build); err != nil {
+				t.Errorf("Get: %v", err)
+			}
+		}()
+	}
+	close(start)
+	wg.Wait()
+
+	if got := atomic.LoadInt32(&calls); got != 1 {
+		t.Errorf("expected 1 build under %d concurrent cold reads, got %d", n, got)
 	}
 }
 

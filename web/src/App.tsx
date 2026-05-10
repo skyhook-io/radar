@@ -544,6 +544,16 @@ function AppInner() {
       if (pending.kinds.has('secrets')) {
         queryClient.invalidateQueries({ queryKey: ['secret-cert-expiry'] })
       }
+      // GitOps tree + insights are derived views over the same informer
+      // cache that produced this SSE event — when *anything* changes, the
+      // managed-resource tree and the insights pipeline can have stale
+      // changes/events/drift. Invalidating broadly here is cheap (only the
+      // currently-mounted GitOps view re-fetches; other views have no
+      // matching keys) and is what makes the detail page actually live.
+      // Without this the failure card + topology lag behind the title chips
+      // until window focus or a manual refresh.
+      queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
+      queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
       // Reset accumulator
       pending.kinds = new Set()
       pending.hasCountChange = false

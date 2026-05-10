@@ -71,28 +71,25 @@ func DropManagedFields(obj any) (any, error) {
 // those need StripUnstructuredFields which deep-copies.
 //
 // Always strips:
-//   - metadata.managedFields (like DropManagedFields does for typed kinds)
-//   - kubectl.kubernetes.io/last-applied-configuration annotation
+//   - metadata.managedFields
+//
+// Preserves kubectl.kubernetes.io/last-applied-configuration intentionally:
+// GitOps drift detection (pkg/gitops/insights/drift.go) reads it to compute
+// per-field diffs between Git-declared and live state. Stripping it broke
+// drift detection silently in the dynamic cache path.
 //
 // For CustomResourceDefinitions specifically, also strips:
 //   - spec.versions[].schema — the OpenAPI v3 schema. On operator-heavy
-//     clusters a single CRD's schema is 50-100KB (think ArgoCD, cert-manager,
-//     Istio) and a cluster with 100+ CRDs easily produces a multi-MB list
-//     response. Radar's UI doesn't render CRD schemas anywhere — the
-//     resource browser shows CRDs with generic name/age columns, and any
-//     future "inspect CRD schema" feature would fetch fresh from the API
-//     server rather than relying on cached list data.
-//   - spec.conversion — the conversion webhook config (caBundle + URL).
-//     Also not rendered. The K8s API server applies conversion webhooks
-//     itself; we only need to display metadata about them, not the
-//     runtime config.
+//     clusters a single CRD's schema is 50-100KB (ArgoCD, cert-manager,
+//     Istio) and 100+ CRDs easily produce a multi-MB list response.
+//     Radar doesn't render CRD schemas; a future "inspect CRD schema"
+//     feature should fetch fresh from the API server.
+//   - spec.conversion — webhook config. Not rendered.
 //
 // Explicitly preserves:
 //   - spec.versions[].name and served/storage/deprecated flags
-//   - spec.versions[].additionalPrinterColumns — these drive column hints
-//     in generic resource list views
-//   - spec.group, spec.names, spec.scope, status.* — all the fields that
-//     describe what the CRD is, as opposed to what shape instances take
+//   - spec.versions[].additionalPrinterColumns — drives column hints
+//   - spec.group, spec.names, spec.scope, status.*
 func DropUnstructuredManagedFields(obj any) (any, error) {
 	u, ok := obj.(*unstructured.Unstructured)
 	if !ok {
@@ -103,15 +100,6 @@ func DropUnstructuredManagedFields(obj any) (any, error) {
 	}
 
 	unstructured.RemoveNestedField(u.Object, "metadata", "managedFields")
-
-	if annotations := u.GetAnnotations(); annotations != nil {
-		delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
-		if len(annotations) == 0 {
-			u.SetAnnotations(nil)
-		} else {
-			u.SetAnnotations(annotations)
-		}
-	}
 
 	if u.GetKind() == "CustomResourceDefinition" {
 		// Strip .schema from each version entry. Preserve everything
@@ -138,27 +126,15 @@ func DropUnstructuredManagedFields(obj any) (any, error) {
 	return u, nil
 }
 
-// StripUnstructuredFields removes managedFields and the last-applied-configuration
-// annotation from an unstructured object. Returns a deep copy — the cached object
-// is never mutated. Safe for use by both Radar and skyhook-connector.
+// StripUnstructuredFields removes managedFields from a deep copy of an
+// unstructured object. Preserves kubectl.kubernetes.io/last-applied-configuration
+// because GitOps drift detection depends on it.
 func StripUnstructuredFields(u *unstructured.Unstructured) *unstructured.Unstructured {
 	if u == nil {
 		return nil
 	}
 
 	cp := u.DeepCopy()
-
 	unstructured.RemoveNestedField(cp.Object, "metadata", "managedFields")
-
-	annotations := cp.GetAnnotations()
-	if annotations != nil {
-		delete(annotations, "kubectl.kubernetes.io/last-applied-configuration")
-		if len(annotations) == 0 {
-			cp.SetAnnotations(nil)
-		} else {
-			cp.SetAnnotations(annotations)
-		}
-	}
-
 	return cp
 }

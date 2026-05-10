@@ -190,12 +190,10 @@ func toGitOpsResponse(r gitops.OperationResult) GitOpsOperationResponse {
 	return resp
 }
 
-// writeGitOpsError maps gitops operation errors to appropriate HTTP status
-// codes. Uses errors.Is on typed sentinels (defined in pkg/gitops) instead of
-// substring matching so the mapping doesn't drift if message wording changes.
-// Every branch logs so an operator scraping the server log sees the failure
-// regardless of which HTTP status it surfaced as — the prior code only logged
-// the default 500 branch, hiding routed 4xx errors entirely.
+// writeGitOpsError maps gitops operation errors to HTTP status codes via
+// errors.Is on typed sentinels (defined in pkg/gitops) so the mapping doesn't
+// drift if upstream wording changes. Every branch logs so 4xx outcomes
+// remain visible to operators scraping server logs.
 func (s *Server) writeGitOpsError(w http.ResponseWriter, err error, module, action, namespace, name string) {
 	msg := err.Error()
 	var status int

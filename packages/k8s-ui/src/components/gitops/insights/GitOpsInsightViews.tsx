@@ -1,12 +1,12 @@
-import { AlertTriangle, ChevronDown, ChevronRight, CircleAlert, Clock3, GitBranch, GitCommit, Info, ListChecks, Trash2 } from 'lucide-react'
+import { AlertTriangle, ChevronDown, ChevronRight, CircleAlert, Clock3, GitBranch, GitCommit, Info, Loader2, Plus, Trash2 } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type { GitOpsChange, GitOpsHistoryItem, GitOpsInsight, GitOpsIssue, GitOpsPlanItem } from '../../../types'
+import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
+import type { GitOpsChange, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation } from '../../../types'
 import { HealthStatusBadge, SyncStatusBadge } from '../GitOpsStatusBadge'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../../utils/badge-colors'
 import { formatRelativeAgeTime } from '../../../utils/format'
 import { Tooltip } from '../../ui/Tooltip'
-import { compactSource, entryTone, gitopsToSeverity } from './insights-helpers'
+import { compactSource, entryTone, gitopsToSeverity, messageToPhase } from './insights-helpers'
 
 interface GitOpsStatusStripProps {
   insight?: GitOpsInsight | null
@@ -42,14 +42,24 @@ export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) 
   }
 
   const operation = liveOperationPhase(summary.operationPhase)
+  const revision = summary.lastRevision || summary.targetRevision || ''
+  const shortRev = shortRevisionForCommit(revision)
+  const commitUrl = revision ? commitURLForRepo(summary.source, revision) : null
+  const reconcileAge = formatRelative(summary.lastReconcile)
+  const healthSummary = buildHealthSummary(insight.changes ?? [])
+  // STUCK belongs with the operation chip — it's a property of the same
+  // state ("failed AND won't self-recover"). Co-locating FAILED + STUCK ·
+  // RETRIED N× lets the operator scan the whole operational verdict in
+  // one glance instead of reading the failure card body to learn whether
+  // the controller has given up.
+  const operationFailure = (insight.issues ?? []).find(
+    (i) => i.severity === 'critical' && i.scope === 'operation' && i.stuck,
+  )
   return (
     <div className="border-b border-theme-border bg-theme-base px-4 py-2">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
         {operation && (
-          <Tooltip
-            content={`Last sync operation: ${operation}`}
-            delay={200}
-          >
+          <Tooltip content={`Last sync operation: ${operation}`} delay={200}>
             <span
               // Pulse only while the operation is actively progressing.
               className={clsx(
@@ -59,6 +69,13 @@ export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) 
               )}
             >
               {operation}
+            </span>
+          </Tooltip>
+        )}
+        {operationFailure && (
+          <Tooltip content="Argo's retry budget is exhausted — the operation won't self-recover, action is required." delay={200}>
+            <span className="rounded-sm bg-red-600/90 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
+              Stuck · retried {operationFailure.retryCount}×
             </span>
           </Tooltip>
         )}
@@ -76,21 +93,137 @@ export function GitOpsStatusStrip({ insight, loading }: GitOpsStatusStripProps) 
           </Tooltip>
         )}
         <div className="flex min-w-0 flex-1 flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-theme-text-tertiary">
-          <MetaFact label="Source" value={summary.source || '-'} />
-          <MetaFact label="Revision" value={summary.lastRevision || summary.targetRevision || '-'} mono />
-          <MetaFact label="Last reconcile" value={formatRelative(summary.lastReconcile)} />
-          {summary.autoSyncMode && <MetaFact label="Sync mode" value={summary.autoSyncMode} />}
+          {shortRev && (
+            <span className="inline-flex items-baseline gap-1">
+              <span className="shrink-0">Latest revision:</span>
+              {commitUrl ? (
+                <Tooltip content={`Open commit ${revision} on the remote`} delay={400}>
+                  <a
+                    href={commitUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-mono font-medium text-theme-text-primary underline-offset-2 hover:underline"
+                  >
+                    {shortRev}
+                  </a>
+                </Tooltip>
+              ) : (
+                <Tooltip content={revision} delay={400}>
+                  <span className="font-mono font-medium text-theme-text-primary">{shortRev}</span>
+                </Tooltip>
+              )}
+              {reconcileAge && <span className="text-theme-text-tertiary">· {reconcileAge}</span>}
+            </span>
+          )}
+          {!shortRev && reconcileAge && <MetaFact label="Last reconcile" value={reconcileAge} />}
+          {healthSummary && (
+            <span className={clsx('inline-flex items-baseline gap-1 font-medium', healthSummary.tone)}>
+              {healthSummary.text}
+            </span>
+          )}
         </div>
       </div>
     </div>
   )
 }
 
-// TerminatingStatusStrip renders the deletion-relevant facts in place of
-// the regular metadata strip. We expose pending-duration, finalizers,
-// and (when the operator wants them) the Source/Revision facts behind
-// a small "Show original metadata" disclosure — the data is still there
-// for forensic queries but not in the user's face during deletion.
+// shortRevisionForCommit normalizes a controller-reported revision to a
+// commit-ish short form. Git SHAs collapse to 7 chars; revisions that
+// already look short (tags, semver, "master@sha1:..." truncated) pass
+// through. Returns empty when the input is empty/whitespace.
+function shortRevisionForCommit(revision: string): string {
+  const trimmed = revision.trim()
+  if (!trimmed) return ''
+  // Flux records "master@sha1:9f4969..." — strip the prefix and shorten.
+  const sha1Match = trimmed.match(/sha1:([0-9a-f]{7,40})/i)
+  if (sha1Match) return sha1Match[1].slice(0, 7)
+  // Pure 40-char SHA → 7 chars.
+  if (/^[0-9a-f]{40}$/i.test(trimmed)) return trimmed.slice(0, 7)
+  return trimmed
+}
+
+// gitTreeURL derives a "browse the source directory" URL from a joined
+// summary.source ("repoURL · path · chart") plus a revision. Used when a
+// resource is Missing — we can't show its live state, but we CAN point at
+// where it's declared in Git so the operator can read the source. Returns
+// null when the host isn't recognized; caller hides the affordance then.
+function gitTreeURL(source: string | undefined, revision: string): string | null {
+  if (!source) return null
+  const parts = source.split(' · ').map((s) => s.trim()).filter(Boolean)
+  if (parts.length === 0) return null
+  const repoOnly = parts[0]!
+  const subPath = parts[1] || ''
+  const clean = repoOnly.replace(/\.git$/, '').replace(/\/$/, '')
+  let sha = revision || 'HEAD'
+  const m = (revision || '').match(/sha1:([0-9a-f]{7,40})/i)
+  if (m) sha = m[1]
+  const pathSegment = subPath ? `/${encodeURI(subPath)}` : ''
+  if (/^https?:\/\/github\.com\//.test(clean)) return `${clean}/tree/${sha}${pathSegment}`
+  if (/^https?:\/\/gitlab\.com\//.test(clean)) return `${clean}/-/tree/${sha}${pathSegment}`
+  if (/^https?:\/\/bitbucket\.org\//.test(clean)) return `${clean}/src/${sha}${pathSegment}`
+  return null
+}
+
+// commitURLForRepo derives the remote URL for a commit when we recognize
+// the source host. Returns null for unrecognized hosts (private gitea,
+// self-hosted, etc.) — the caller renders the SHA as plain text in that
+// case rather than a wrong-looking link.
+//
+// `source` arrives joined as "repoURL · path · chart" (see Summary.Source
+// builder server-side). The repo URL is always the first segment; the rest
+// are path/chart suffixes that would confuse the commit URL constructor.
+function commitURLForRepo(source: string | undefined, revision: string): string | null {
+  if (!source || !revision) return null
+  const repoOnly = source.split(' · ')[0].trim()
+  const clean = repoOnly.replace(/\.git$/, '').replace(/\/$/, '')
+  // Pull out a usable SHA: full or short SHA; or the sha1:... form Flux uses.
+  let sha = revision
+  const m = revision.match(/sha1:([0-9a-f]{7,40})/i)
+  if (m) sha = m[1]
+  if (!/^[0-9a-f]{7,40}$/i.test(sha)) return null
+  // Recognized hosts. Self-hosted GitLab/Gitea variants would need the
+  // server to surface a `commitUrlTemplate` annotation — out of scope here.
+  if (/^https?:\/\/github\.com\//.test(clean)) return `${clean}/commit/${sha}`
+  if (/^https?:\/\/gitlab\.com\//.test(clean)) return `${clean}/-/commit/${sha}`
+  if (/^https?:\/\/bitbucket\.org\//.test(clean)) return `${clean}/commits/${sha}`
+  return null
+}
+
+// buildHealthSummary turns the per-resource Changes list into a one-line
+// "did everything come up?" summary. All-healthy reads green and explicit
+// ("4/4 resources healthy"); mixed states list the unhealthy buckets so
+// the user sees at a glance what didn't make it.
+function buildHealthSummary(changes: GitOpsChange[]): { text: string; tone: string } | null {
+  if (changes.length === 0) return null
+  let healthy = 0
+  let degraded = 0
+  let missing = 0
+  let outOfSync = 0
+  let other = 0
+  for (const c of changes) {
+    const cat = c.category
+    if (cat === 'Synced' || c.health === 'Healthy') healthy++
+    else if (cat === 'Degraded') degraded++
+    else if (cat === 'Missing') missing++
+    else if (cat === 'OutOfSync') outOfSync++
+    else other++
+  }
+  const total = changes.length
+  if (healthy === total) {
+    return { text: `✓ ${total}/${total} resources healthy`, tone: 'text-emerald-500' }
+  }
+  const parts: string[] = []
+  if (degraded > 0) parts.push(`${degraded} Degraded`)
+  if (missing > 0) parts.push(`${missing} Missing`)
+  if (outOfSync > 0) parts.push(`${outOfSync} OutOfSync`)
+  if (healthy > 0) parts.push(`${healthy} healthy`)
+  if (other > 0) parts.push(`${other} other`)
+  return { text: parts.join(' · '), tone: 'text-amber-500' }
+}
+
+// TerminatingStatusStrip swaps the regular metadata for deletion-relevant
+// facts (pending duration, finalizers). Source/Revision move behind a
+// disclosure — still available for forensics but not noise during deletion.
 function TerminatingStatusStrip({ summary }: { summary: NonNullable<GitOpsInsight['summary']> }) {
   const [showHistorical, setShowHistorical] = useState(false)
   const pending = formatRelative(summary.terminationStartedAt) || 'recently'
@@ -144,12 +277,9 @@ function liveOperationPhase(phase?: string): string | null {
 }
 
 function MetaFact({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
-  // Each fact sizes to its content. The parent flex-wrap row breaks when
-  // facts don't all fit, so on wide screens long values like the full source
-  // URL or full revision SHA show in their entirety — no premature ellipsis
-  // when there's screen real estate to spare. max-w-full is a safety net for
-  // the pathological case of one value being wider than the viewport itself,
-  // in which case truncate + tooltip kick in.
+  // inline-flex so each fact sizes to content; flex-wrap on the parent
+  // handles row breaks. max-w-full guards the pathological "value wider
+  // than viewport" case where truncate + tooltip take over.
   return (
     <span className="inline-flex min-w-0 max-w-full items-baseline gap-1">
       <span className="shrink-0">{label}:</span>
@@ -160,33 +290,25 @@ function MetaFact({ label, value, mono = false }: { label: string; value: string
   )
 }
 
-// Plan items often surface 'Unknown' as a placeholder when status info isn't
-// available — a row of `OutOfSync · Unknown · unknown` chips reads as broken.
-// Skip the chip when the value carries no signal.
-function isUnknownChipValue(v: string): boolean {
-  const lower = v.toLowerCase()
-  return lower === 'unknown' || lower === ''
-}
-
-// GitOpsIssuesBand renders the issue list at the top of the page. Three paths:
-//
-//   1. Lifecycle issues (resource is being deleted) become a banner at the
-//      very top — they dominate the user's mental model and demote
-//      everything else to historical context.
-//   2. A critical operation failure (Argo's "the sync attempt itself broke")
-//      gets the rich GitOpsFailureCard treatment — structured cause/retry/
-//      affected-resource fields, raw error collapsed by default. This is the
-//      common operator question of "what's broken and is it stuck?".
-//   3. Anything else (warnings, info, per-resource issues without a parent
-//      operation failure) renders as a compact stacked alert row with the
-//      same expand-for-more behavior as before.
-//
-// When `terminating` is true, paths 2+3 are wrapped in a "Pre-deletion
-// issues (N)" disclosure, default collapsed. Pre-deletion ops failures
-// (UpgradeFailed before the user kicked off deletion) are useful for
-// forensics but aren't actionable — they happened *before* the resource
-// was marked for deletion and the controller has stopped reconciling.
-export function GitOpsIssuesBand({ issues, onSelectIssue, terminating }: { issues?: GitOpsIssue[] | null; onSelectIssue?: (issue: GitOpsIssue) => void; terminating?: boolean }) {
+// GitOpsIssuesBand renders top-of-page issues with three render paths:
+// lifecycle banner > critical operation failure (GitOpsFailureCard) >
+// stacked alert rows for everything else. When `terminating` is true,
+// the non-lifecycle paths fold into a default-collapsed disclosure since
+// pre-deletion operation failures are forensic-only — the controller
+// stopped reconciling once deletion started.
+export function GitOpsIssuesBand({
+  issues,
+  onSelectIssue,
+  onRemediate,
+  remediationPending,
+  terminating,
+}: {
+  issues?: GitOpsIssue[] | null
+  onSelectIssue?: (issue: GitOpsIssue) => void
+  onRemediate?: (remediation: GitOpsRemediation) => void
+  remediationPending?: boolean
+  terminating?: boolean
+}) {
   const list = issues ?? []
   if (list.length === 0) return null
   const lifecycle = list.find((i) => i.scope === 'lifecycle')
@@ -198,10 +320,10 @@ export function GitOpsIssuesBand({ issues, onSelectIssue, terminating }: { issue
     <div className="border-b border-theme-border">
       {lifecycle && <GitOpsLifecycleBanner issue={lifecycle} />}
       {showHistoricalCollapsed ? (
-        <GitOpsHistoricalIssuesDisclosure operationFailure={operationFailure} others={others} onSelectIssue={onSelectIssue} />
+        <GitOpsHistoricalIssuesDisclosure operationFailure={operationFailure} others={others} onSelectIssue={onSelectIssue} onRemediate={onRemediate} remediationPending={remediationPending} />
       ) : (
         <>
-          {operationFailure && <GitOpsFailureCard issue={operationFailure} onSelect={onSelectIssue} />}
+          {operationFailure && <GitOpsFailureCard issue={operationFailure} onSelect={onSelectIssue} onRemediate={onRemediate} remediationPending={remediationPending} />}
           {others.length > 0 && <GitOpsCompactIssueStack issues={others} onSelectIssue={onSelectIssue} />}
         </>
       )}
@@ -241,10 +363,14 @@ function GitOpsHistoricalIssuesDisclosure({
   operationFailure,
   others,
   onSelectIssue,
+  onRemediate,
+  remediationPending,
 }: {
   operationFailure?: GitOpsIssue
   others: GitOpsIssue[]
   onSelectIssue?: (issue: GitOpsIssue) => void
+  onRemediate?: (remediation: GitOpsRemediation) => void
+  remediationPending?: boolean
 }) {
   const [expanded, setExpanded] = useState(false)
   const total = (operationFailure ? 1 : 0) + others.length
@@ -269,7 +395,7 @@ function GitOpsHistoricalIssuesDisclosure({
       </button>
       {expanded && (
         <div className="border-t border-theme-border">
-          {operationFailure && <GitOpsFailureCard issue={operationFailure} onSelect={onSelectIssue} />}
+          {operationFailure && <GitOpsFailureCard issue={operationFailure} onSelect={onSelectIssue} onRemediate={onRemediate} remediationPending={remediationPending} />}
           {others.length > 0 && <GitOpsCompactIssueStack issues={others} onSelectIssue={onSelectIssue} />}
         </div>
       )}
@@ -280,7 +406,20 @@ function GitOpsHistoricalIssuesDisclosure({
 // Structured failure card. One unit, owns the failure narrative end-to-end:
 // title (parsed cause when recognized, falls back to raw reason), affected
 // resource, retry posture, raw controller error in a collapsed details.
-function GitOpsFailureCard({ issue, onSelect }: { issue: GitOpsIssue; onSelect?: (issue: GitOpsIssue) => void }) {
+function GitOpsFailureCard({
+  issue,
+  onSelect,
+  onRemediate,
+  remediationPending,
+}: {
+  issue: GitOpsIssue
+  onSelect?: (issue: GitOpsIssue) => void
+  // onRemediate fires when the contextual fix button is clicked. The host
+  // app (web/) dispatches on issue.remediation.kind to run the right
+  // mutation (create namespace, etc.). Undefined → button is hidden.
+  onRemediate?: (remediation: GitOpsRemediation) => void
+  remediationPending?: boolean
+}) {
   const [showRaw, setShowRaw] = useState(false)
   const stuck = !!issue.stuck
   const ref = issue.refs?.[0]
@@ -308,15 +447,11 @@ function GitOpsFailureCard({ issue, onSelect }: { issue: GitOpsIssue; onSelect?:
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <h3 className={clsx('text-sm font-semibold', stuck ? 'text-red-700 dark:text-red-200' : 'text-red-600 dark:text-red-300')}>{title}</h3>
-            {/* Persistence pip: distinguishes "first failure, may resolve" from
-                "stuck after retries, human action required". Argo's controller
-                won't auto-recover past the retry ceiling so this is the single
-                most operationally important signal on the card. */}
-            {stuck && (
-              <span className="rounded-sm bg-red-600/90 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-white">
-                Stuck · retried {issue.retryCount}×
-              </span>
-            )}
+            {/* "Stuck · retried N×" now lives on the status row alongside the
+                FAILED chip — they describe the same operational state. We
+                still surface a low-key retry count here for non-stuck
+                failures (still transient, may recover) so the operator
+                knows whether to wait or dig. */}
             {!stuck && issue.retryCount && issue.retryCount > 0 && (
               <span className="text-[11px] text-theme-text-tertiary">retried {issue.retryCount}×</span>
             )}
@@ -331,6 +466,12 @@ function GitOpsFailureCard({ issue, onSelect }: { issue: GitOpsIssue; onSelect?:
             </dl>
           )}
           <div className="mt-2 flex flex-wrap items-center gap-3">
+            {/* Remediation button — primary contextual action when the parser
+                recognized a fix pattern. Placed first so the operator's eye
+                lands on the action, not the diagnostic affordances below. */}
+            {issue.remediation && onRemediate && (
+              <RemediationButton remediation={issue.remediation} pending={!!remediationPending} onClick={() => onRemediate(issue.remediation!)} />
+            )}
             {onSelect && ref && (
               <button
                 type="button"
@@ -360,15 +501,59 @@ function GitOpsFailureCard({ issue, onSelect }: { issue: GitOpsIssue; onSelect?:
   )
 }
 
-// Compact stack for non-failure issues. Same expand-for-more behavior as the
-// pre-redesign band, just split out so the failure card can own the top slot
-// without inheriting the "+N more" mechanic that doesn't fit a rich card.
+// RemediationButton renders the right copy + icon for a known remediation
+// kind. New kinds added to vocab.RemediationKind must add a case here or
+// the button silently falls through to a generic "Apply suggested fix"
+// label that the operator can't trust — we want every contextual action
+// to read specifically.
+function RemediationButton({
+  remediation,
+  pending,
+  onClick,
+}: {
+  remediation: GitOpsRemediation
+  pending: boolean
+  onClick: () => void
+}) {
+  let label = 'Apply suggested fix'
+  let Icon: typeof Plus = Plus
+  if (remediation.kind === 'create-namespace' && remediation.target) {
+    label = `Create namespace ${remediation.target}`
+    Icon = Plus
+  }
+  const button = (
+    // Primary-blue, not red: the failure card itself is the "diagnosis red"
+    // surface; the action button is *constructive* (creating a namespace,
+    // applying a fix). Red on a button reads as destructive ("Terminate",
+    // "Delete") and would make operators hesitate before clicking a safe fix.
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={pending}
+      className="btn-brand inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[11px] font-semibold shadow-sm transition-colors disabled:cursor-not-allowed disabled:opacity-60"
+    >
+      {pending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Icon className="h-3 w-3" />}
+      {pending ? 'Applying…' : label}
+    </button>
+  )
+  return remediation.hint ? <Tooltip content={remediation.hint} delay={300}>{button}</Tooltip> : button
+}
+
+// Compact stack for non-failure issues. Split out from the failure-card
+// path so the rich card can own the top slot without inheriting the
+// "+N more" expand mechanic.
 //
-// Headline behavior is context-dependent: if the headline issue carries a
-// resource ref AND a select callback is wired, clicking the headline jumps
-// straight to that resource in Changes — the expand affordance is useful
-// only when there's metadata "behind" the headline, not when the headline
-// itself is the actionable thing.
+// If the headline issue has a resource ref and onSelectIssue is wired,
+// clicking jumps directly to the resource in Changes — the expand
+// affordance is only useful when there's metadata behind the headline.
+// Issue ref text: prefer the explicit kind/name from the issue's refs[];
+// fall back to a parsed kind out of `reason` (e.g. "Missing", "OutOfSync")
+// for hint-only display. Returns empty when neither produces a useful label.
+function refText(ref: GitOpsInsightRef | undefined): string {
+  if (!ref) return ''
+  return `${ref.kind} ${ref.name}`
+}
+
 function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssue[]; onSelectIssue?: (issue: GitOpsIssue) => void }) {
   const [expanded, setExpanded] = useState(false)
   if (issues.length === 0) return null
@@ -378,50 +563,52 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
   const headlineRef = headline.refs?.[0]
   const headlineActionable = !!(onSelectIssue && headlineRef)
   const canExpand = issues.length > 1
+  // Single click target per row. When there's only one issue and it has a
+  // ref, the row is the "open this resource" affordance. When there are
+  // more issues, the row toggles the stack open. Mixing both on one row
+  // was the source of the "View → / +2 →" double-affordance noise.
+  const headlineAction: 'expand' | 'open' | 'none' =
+    canExpand ? 'expand' : headlineActionable ? 'open' : 'none'
   return (
     <div className={tone.band}>
-      <div className="flex items-stretch">
-        <button
-          type="button"
-          onClick={() => {
-            if (headlineActionable) {
-              onSelectIssue?.(headline)
-            } else if (canExpand) {
-              setExpanded((v) => !v)
-            }
-          }}
-          className={clsx(
-            'flex flex-1 items-center gap-2 px-4 py-2 text-left text-xs transition-colors',
-            (headlineActionable || canExpand) ? 'hover:bg-theme-hover/50' : 'cursor-default',
-          )}
-          disabled={!headlineActionable && !canExpand}
-        >
-          {tone.icon}
-          <span className={clsx('font-semibold', tone.text)}>{headline.reason}</span>
-          <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{headline.message}</span>
-          {headlineActionable && (
-            <span className="shrink-0 text-[11px] font-medium text-theme-text-secondary">View →</span>
-          )}
-          {!headlineActionable && remaining > 0 && (
-            <span className="shrink-0 text-[11px] text-theme-text-tertiary">+{remaining} more</span>
-          )}
-          {!headlineActionable && canExpand && (expanded ? <ChevronDown className="h-3.5 w-3.5 text-theme-text-tertiary" /> : <ChevronRight className="h-3.5 w-3.5 text-theme-text-tertiary" />)}
-        </button>
-        {/* When the headline is actionable AND there are more issues behind
-            it, give the expand affordance its own button so neither action
-            steals from the other. */}
-        {headlineActionable && canExpand && (
-          <button
-            type="button"
-            onClick={() => setExpanded((v) => !v)}
-            aria-label={expanded ? 'Hide other issues' : `Show ${remaining} more issue${remaining === 1 ? '' : 's'}`}
-            className="flex shrink-0 items-center gap-1 border-l border-theme-border/60 px-3 text-[11px] text-theme-text-tertiary hover:bg-theme-hover/50"
-          >
-            +{remaining}
-            {expanded ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-          </button>
+      <button
+        type="button"
+        onClick={() => {
+          if (headlineAction === 'expand') setExpanded((v) => !v)
+          else if (headlineAction === 'open') onSelectIssue?.(headline)
+        }}
+        disabled={headlineAction === 'none'}
+        className={clsx(
+          'group flex w-full items-center gap-2 px-4 py-2 text-left text-xs transition-colors',
+          headlineAction !== 'none' ? 'hover:bg-theme-hover/50' : 'cursor-default',
         )}
-      </div>
+        aria-expanded={canExpand ? expanded : undefined}
+      >
+        {tone.icon}
+        <span className={clsx('shrink-0 font-semibold', tone.text)}>{headline.reason}</span>
+        <span className="min-w-0 flex-1 truncate text-theme-text-secondary">{headline.message}</span>
+        {/* Inline count when there are more issues behind the headline.
+            Lightweight text — pairs with the chevron as a single disclosure
+            unit instead of a separator-bordered count button. */}
+        {remaining > 0 && (
+          <span className="shrink-0 text-[11px] text-theme-text-tertiary">
+            +{remaining} more
+          </span>
+        )}
+        {/* Open-resource pill: only shown when the row's action IS to open
+            (single-issue case). When the row expands, the per-row Open
+            pills live inside the expanded section, scoped to each item. */}
+        {headlineAction === 'open' && headlineRef && (
+          <span className="shrink-0 text-[11px] font-medium text-theme-text-secondary opacity-70 transition-opacity group-hover:opacity-100">
+            Open {refText(headlineRef)} →
+          </span>
+        )}
+        {canExpand && (
+          expanded
+            ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
+            : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
+        )}
+      </button>
       {expanded && canExpand && (
         <div className="divide-y divide-theme-border border-t border-theme-border bg-theme-base/40">
           {issues.slice(1).map((issue: GitOpsIssue, index: number) => {
@@ -435,7 +622,7 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
                 onClick={() => actionable && onSelectIssue?.(issue)}
                 disabled={!actionable}
                 className={clsx(
-                  'flex w-full items-start gap-2 px-4 py-2 text-left text-xs transition-colors',
+                  'group flex w-full items-start gap-2 px-4 py-2 text-left text-xs transition-colors',
                   actionable ? 'hover:bg-theme-hover/50' : 'cursor-default',
                 )}
               >
@@ -448,8 +635,10 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
                   <p className="mt-0.5 text-theme-text-secondary">{issue.message}</p>
                   {issue.action && <p className="mt-0.5 text-[11px] text-theme-text-tertiary">{issue.action}</p>}
                 </div>
-                {actionable && (
-                  <span className="shrink-0 self-center text-[11px] font-medium text-theme-text-secondary">View →</span>
+                {actionable && ref && (
+                  <span className="shrink-0 self-center text-[11px] font-medium text-theme-text-secondary opacity-70 transition-opacity group-hover:opacity-100">
+                    Open {refText(ref)} →
+                  </span>
                 )}
               </button>
             )
@@ -508,8 +697,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey }: 
   const plan = insight?.plan ?? []
   // refs[focusKey] holds the DOM node of the row to scroll into view; the
   // map persists across renders so the effect can find the node even when
-  // changes re-render (e.g. polling). Cleared per-render is fine — the next
-  // map of row callbacks rebuilds on the same render that consumes focusKey.
+  // changes re-render (e.g. polling).
   const rowRefs = useRef<Map<string, HTMLDivElement>>(new Map())
   useEffect(() => {
     if (!focusKey) return
@@ -518,69 +706,102 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey }: 
       node.scrollIntoView({ behavior: 'smooth', block: 'center' })
     }
   }, [focusKey])
-  // Distinguish "still loading" from "fetch failed"; previously both fell
-  // through to a permanent "Loading…" message that hid backend 5xxs.
+  // Distinguish "still loading" from "fetch failed" so a backend 5xx
+  // doesn't render as a stuck "Loading…".
   if (error && !insight) {
     return <InsightErrorState error={error} />
   }
   if (!insight) {
-    return <CenteredText>Loading GitOps changes...</CenteredText>
+    return <CenteredText>Loading GitOps resources...</CenteredText>
   }
-  // Cross-reference: build a map from refKey → plan order so each Change row
-  // can advertise where it lands in the upcoming sync. Answers "if I sync
-  // now, in what order will my drifted resources be reconciled?" without
-  // forcing the user to scan both panels and mentally join them.
-  const planOrderByRef = new Map<string, number>()
+  // Build plan metadata maps keyed by ref so each Change row can advertise
+  // its sync step, hook phase, and wave assignment. The plan and changes
+  // lists are the same resources from different angles — we render one
+  // unified list ordered by plan step, with plan metadata folded onto each
+  // change row. Previously these were two parallel panels which forced the
+  // user to mentally bridge them.
+  const planByRef = new Map<string, GitOpsPlanItem>()
   for (const item of plan) {
     const key = refKey(item.ref)
-    if (!planOrderByRef.has(key)) planOrderByRef.set(key, item.order)
+    if (!planByRef.has(key)) planByRef.set(key, item)
   }
+  // Sort changes by plan order (step) so the list reads top-to-bottom in
+  // the order the controller will reconcile them. Changes without a plan
+  // entry land at the end in name order — they're managed resources the
+  // controller saw but didn't sequence (rare but possible for hook resources
+  // already completed, or status-only entries).
+  const sortedChanges = [...changes].sort((a, b) => {
+    const ap = planByRef.get(refKey(a.ref))?.order
+    const bp = planByRef.get(refKey(b.ref))?.order
+    if (ap == null && bp == null) return refKey(a.ref).localeCompare(refKey(b.ref))
+    if (ap == null) return 1
+    if (bp == null) return -1
+    return ap - bp
+  })
+  // Wave grouping: when at least one plan entry declares a wave, we render
+  // wave headers between rows so multi-wave apps read as the operator
+  // wrote them. Skip the headers entirely for single-wave / no-wave apps —
+  // an "always wave 0" label is noise.
+  const hasAnyWave = plan.some((i) => i.waveSet)
+  // Source URL for Missing rows. We can't show their live state (resource
+  // doesn't exist), but we CAN point at where they're declared in Git —
+  // which is the most useful thing to do when there's no drawer to open.
+  const sourceTreeURL = gitTreeURL(insight.summary.source, insight.summary.lastRevision || insight.summary.targetRevision || '')
   return (
     <div className="h-full overflow-auto bg-theme-base p-4">
-      <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_420px]">
-        <section className="rounded-md border border-theme-border bg-theme-surface">
-          <SectionHeader icon={GitCommit} title="Changes" hint={insight.summary.partialReason} />
-          {/* Honest disclaimer about diff scope. Argo's CRD doesn't expose
-              per-resource desired-vs-live diffs — those are computed on
-              demand by the Argo API server, which Radar doesn't call. The
-              user could otherwise stare at this list expecting to see what
-              changed; instead they get drift status + per-resource sync
-              messages + a clear pointer to the tools that can show the
-              line-by-line diff. */}
-          {changes.length > 0 && (
-            <div className="border-b border-theme-border bg-theme-base/40 px-4 py-2 text-[11px] text-theme-text-tertiary">
-              Radar reads each resource's drift status from the controller. For a line-by-line diff, use the Argo CD UI or run <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono text-[10px]">argocd app diff {insight.summary.name}</code>.
-            </div>
-          )}
-          {changes.length === 0 ? (
-            <div className="p-4 text-sm text-theme-text-secondary">No changed resources reported by the GitOps controller.</div>
-          ) : (
-            <div className="divide-y divide-theme-border">
-              {changes.map((change) => {
-                const step = planOrderByRef.get(refKey(change.ref))
-                const rowKey = refKey(change.ref)
-                const focused = focusKey === rowKey
-                const explanation = !change.syncError && !change.message
-                  ? explainChangeStatus(change.sync, change.health, insight.summary)
-                  : ''
-                const hasInlineDetail = !!(
-                  (change.drift && change.drift.entries.length > 0) ||
-                  (change.recentEvents && change.recentEvents.length > 0)
-                )
-                return (
+      <section className="rounded-md border border-theme-border bg-theme-surface">
+        <SectionHeader icon={GitCommit} title="Resources" hint={insight.summary.partialReason} />
+        {/* Honest disclaimer about diff scope. Argo's CRD doesn't expose
+            per-resource desired-vs-live diffs — those are computed on
+            demand by the Argo API server, which Radar doesn't call. */}
+        {sortedChanges.length > 0 && (
+          <div className="border-b border-theme-border bg-theme-base/40 px-4 py-2 text-[11px] text-theme-text-tertiary">
+            Radar reads each resource's drift status from the controller. For a line-by-line diff, use the Argo CD UI or run <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono text-[10px]">argocd app diff {insight.summary.name}</code>.
+          </div>
+        )}
+        {sortedChanges.length === 0 ? (
+          <div className="p-4 text-sm text-theme-text-secondary">No managed resources reported by the GitOps controller.</div>
+        ) : (
+          <div className="divide-y divide-theme-border">
+            {sortedChanges.map((change, idx) => {
+              const planItem = planByRef.get(refKey(change.ref))
+              const step = planItem?.order
+              const hook = planItem?.hook
+              const wave = planItem?.wave
+              const waveSet = !!planItem?.waveSet
+              const rowKey = refKey(change.ref)
+              const focused = focusKey === rowKey
+              const explanation = !change.syncError && !change.message
+                ? explainChangeStatus(change.sync, change.health, insight.summary)
+                : ''
+              const hasInlineDetail = !!(
+                (change.drift && change.drift.entries.length > 0) ||
+                (change.recentEvents && change.recentEvents.length > 0)
+              )
+              // Render a wave separator above this row when the wave value
+              // changed from the previous one. waveSet=false rows under a
+              // hasAnyWave plan get a "Default wave" header — matches
+              // how Argo's UI separates explicitly-waved from default.
+              const prevPlan = idx > 0 ? planByRef.get(refKey(sortedChanges[idx - 1]!.ref)) : undefined
+              const showWaveHeader = hasAnyWave && (idx === 0 || prevPlan?.wave !== wave || prevPlan?.waveSet !== waveSet)
+              return (
+                <Fragment key={`${change.ref.group}/${change.ref.kind}/${change.ref.namespace}/${change.ref.name}`}>
+                  {showWaveHeader && (
+                    <div className="bg-theme-base/50 px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
+                      {waveSet ? `Wave ${wave}` : 'Default wave'}
+                    </div>
+                  )}
                   <ChangeRow
-                    key={`${change.ref.group}/${change.ref.kind}/${change.ref.namespace}/${change.ref.name}`}
                     change={change}
                     step={step}
+                    hook={hook}
                     explanation={explanation}
                     focused={focused}
                     autoExpand={focused}
                     hasInlineDetail={hasInlineDetail}
                     onOpenResource={onOpenResource}
+                    sourceTreeURL={sourceTreeURL}
                     registerRef={(el) => {
-                      // Map registry: register on mount, clean up on unmount
-                      // so we don't hold references to detached nodes when
-                      // changes re-flow.
                       if (el) {
                         rowRefs.current.set(rowKey, el)
                       } else {
@@ -588,13 +809,12 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey }: 
                       }
                     }}
                   />
-                )
-              })}
-            </div>
-          )}
-        </section>
-        <GitOpsPlanPanel plan={plan} tool={insight.summary.tool} />
-      </div>
+                </Fragment>
+              )
+            })}
+          </div>
+        )}
+      </section>
     </div>
   )
 }
@@ -622,12 +842,20 @@ function explainChangeStatus(
   summary: GitOpsInsight['summary'],
 ): string {
   const isAuto = (summary.autoSyncMode ?? '').toLowerCase().startsWith('auto')
-  const inFlight = (summary.operationPhase ?? '').toLowerCase() === 'running'
+  const phase = (summary.operationPhase ?? '').toLowerCase()
+  const inFlight = phase === 'running'
+  // When the parent operation has Failed/Errored, "click Sync to force it"
+  // misleads — sync has already been tried (and likely retried). The top
+  // banner owns the cause; per-row copy should defer to it instead of
+  // suggesting an action that won't help.
+  const parentFailed = phase === 'failed' || phase === 'error'
   if (sync === 'OutOfSync') {
+    if (parentFailed) return 'Sync failed for this resource — see the operation error above for the cause.'
     if (inFlight) return 'Live state differs from Git. A sync is in progress — wait for it to finish.'
     if (isAuto) return 'Live state differs from Git. Auto-sync should reconcile this within a few minutes; click Sync to force it.'
     return 'Live state differs from Git. Click Sync to apply the desired state.'
   }
+  if (health === 'Missing' && parentFailed) return 'Resource was not created — see the operation error above for the cause.'
   if (health === 'Degraded') return 'Resource reports an unhealthy state. Open the resource for events and logs.'
   if (health === 'Missing') return 'Declared in Git but not present in the cluster. Sync to create it.'
   if (health === 'Progressing') return 'Resource is mid-rollout (e.g. pods coming up). Should converge shortly.'
@@ -649,47 +877,75 @@ function explainChangeStatus(
 function ChangeRow({
   change,
   step,
+  hook,
   explanation,
   focused,
   autoExpand,
   hasInlineDetail,
   onOpenResource,
+  sourceTreeURL,
   registerRef,
 }: {
   change: GitOpsChange
   step: number | undefined
+  // Hook phase from the plan item (the controller-declared annotation).
+  // Falls back to change.hookPhase (the executed phase) for visibility on
+  // resources that already ran their hook.
+  hook: string | undefined
   explanation: string
   focused: boolean
   autoExpand: boolean
   hasInlineDetail: boolean
   onOpenResource?: (ref: GitOpsChange['ref']) => void
+  // Constructed URL pointing at the source directory in the remote Git
+  // host (github / gitlab / bitbucket). Used as the "where this would be
+  // declared" affordance on Missing rows, since opening the drawer for a
+  // resource that doesn't exist just shows "Resource not found".
+  sourceTreeURL?: string | null
   registerRef: (el: HTMLDivElement | null) => void
 }) {
   const [expanded, setExpanded] = useState(autoExpand && hasInlineDetail)
   // Auto-expand when an issue alert deep-links to this row — the user just
-  // clicked "View →" on an issue, so they want to see the detail
-  // immediately, not have to expand again.
+  // clicked the issue, so they want to see the detail immediately.
   useEffect(() => {
     if (autoExpand && hasInlineDetail) setExpanded(true)
   }, [autoExpand, hasInlineDetail])
   const driftEntries = change.drift?.entries ?? []
   const events = change.recentEvents ?? []
+  // Missing resources have no live state to drill into — opening the drawer
+  // just shows "Resource not found", which is a wasted click. Treat them
+  // differently: hide the Open pill, suppress the drawer-open click path,
+  // and offer "View in Git →" instead so the operator can read the
+  // declared source instead of a non-existent live object.
+  const isAbsent = change.health === 'Missing' && !change.hasLive
+  const handleRowClick = () => {
+    if (hasInlineDetail) {
+      setExpanded((v) => !v)
+    } else if (!isAbsent && onOpenResource) {
+      onOpenResource(change.ref)
+    }
+  }
+  // Row stays click-affordant when there's inline detail to expand OR a
+  // live resource to drill into. Missing rows without inline detail are
+  // intentionally non-interactive — there's nowhere useful to go.
+  const rowInteractive = hasInlineDetail || (!isAbsent && !!onOpenResource)
+  const hookLabel = change.hookPhase || hook
   return (
     <div
       ref={registerRef}
       className={clsx(
-        'transition-colors',
+        'group transition-colors',
         focused && 'bg-amber-500/10 ring-2 ring-inset ring-amber-500/60',
       )}
     >
       <div className="grid w-full grid-cols-[minmax(0,1fr)_120px_120px_auto] gap-3 px-4 py-3 text-sm">
         <button
           type="button"
-          onClick={() => hasInlineDetail && setExpanded((v) => !v)}
-          disabled={!hasInlineDetail}
+          onClick={handleRowClick}
+          disabled={!rowInteractive}
           className={clsx(
             'min-w-0 text-left',
-            hasInlineDetail ? 'cursor-pointer hover:text-theme-text-primary' : 'cursor-default',
+            rowInteractive ? 'cursor-pointer hover:text-theme-text-primary' : 'cursor-default',
           )}
         >
           <div className="flex items-baseline gap-2">
@@ -698,18 +954,18 @@ function ChangeRow({
                 ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
                 : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
             )}
-            <div className="min-w-0 truncate font-medium text-theme-text-primary">{change.ref.kind} / {change.ref.name}</div>
-            {change.hookPhase && (
-              <Tooltip content={`Sync hook: ${change.hookPhase}`} delay={200} wrapperClassName="shrink-0">
-                <span className="rounded border border-violet-400/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-700 dark:text-violet-400">
-                  {change.hookPhase}
-                </span>
-              </Tooltip>
-            )}
             {step !== undefined && (
               <Tooltip content={`Sync plan step ${step}`} delay={200} wrapperClassName="shrink-0">
                 <span className="rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 font-mono text-[10px] text-theme-text-tertiary">
                   step {step}
+                </span>
+              </Tooltip>
+            )}
+            <div className="min-w-0 truncate font-medium text-theme-text-primary">{change.ref.kind} / {change.ref.name}</div>
+            {hookLabel && (
+              <Tooltip content={`Sync hook: ${hookLabel}`} delay={200} wrapperClassName="shrink-0">
+                <span className="rounded border border-violet-400/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-700 dark:text-violet-400">
+                  {hookLabel}
                 </span>
               </Tooltip>
             )}
@@ -753,14 +1009,40 @@ function ChangeRow({
         <div className="self-start"><SyncStatusBadge sync={(change.sync || change.category || 'Unknown') as any} /></div>
         <div className="self-start"><HealthStatusBadge health={(change.health || 'Unknown') as any} /></div>
         <div className="self-start">
-          {onOpenResource && (
+          {/* Three affordance states:
+              - Live resource (not Missing): "Open <kind> <name> →" opens the
+                K8s drawer.
+              - Missing resource WITH a recognized Git host: "View in Git →"
+                opens the source directory in a new tab.
+              - Missing resource without recognized host: nothing — the
+                row's own explanation copy is the surface; we don't fake
+                an action that wouldn't help. */}
+          {!isAbsent && onOpenResource && (
             <button
               type="button"
               onClick={() => onOpenResource(change.ref)}
-              className="rounded border border-theme-border bg-theme-base px-2 py-0.5 text-[11px] text-theme-text-secondary transition-colors hover:bg-theme-hover hover:text-theme-text-primary"
+              className="rounded border border-theme-border bg-theme-base px-2 py-0.5 text-[11px] text-theme-text-secondary opacity-70 transition-all hover:bg-theme-hover hover:text-theme-text-primary group-hover:opacity-100"
             >
-              Open
+              Open {change.ref.kind} {change.ref.name} →
             </button>
+          )}
+          {isAbsent && sourceTreeURL && (
+            <Tooltip content="Open the source directory in Git — the live resource doesn't exist yet" delay={300}>
+              <a
+                href={sourceTreeURL}
+                target="_blank"
+                rel="noopener noreferrer"
+                onClick={(e) => e.stopPropagation()}
+                className="inline-block rounded border border-theme-border bg-theme-base px-2 py-0.5 text-[11px] text-theme-text-secondary opacity-70 transition-all hover:bg-theme-hover hover:text-theme-text-primary group-hover:opacity-100"
+              >
+                View in Git →
+              </a>
+            </Tooltip>
+          )}
+          {isAbsent && !sourceTreeURL && (
+            <span className="block text-[11px] italic text-theme-text-tertiary">
+              No live resource
+            </span>
           )}
         </div>
       </div>
@@ -865,61 +1147,6 @@ function formatRelativeTime(value: string): string {
   return formatRelativeAgeTime(value, '')
 }
 
-function GitOpsPlanPanel({ plan, tool }: { plan?: GitOpsPlanItem[] | null; tool?: string }) {
-  const items = plan ?? []
-  // Group consecutive items by wave when at least one item declares a wave —
-  // makes "what runs in what order" visually obvious for multi-wave apps.
-  // When no items have waves (the common case for single-app syncs), fall
-  // through to a flat list to avoid an awkward "Wave (none)" header.
-  const hasAnyWave = items.some((i) => i.waveSet)
-  return (
-    <section className="rounded-md border border-theme-border bg-theme-surface">
-      <SectionHeader icon={ListChecks} title="Sync Plan" hint={tool === 'argocd' ? 'Argo order: phase, wave, kind, then name.' : 'Flux order follows source and dependency relationships.'} />
-      <div className="max-h-[640px] overflow-auto">
-        {items.length === 0 ? (
-          <div className="p-4 text-sm text-theme-text-secondary">No plan data available.</div>
-        ) : (
-          <div className="divide-y divide-theme-border">
-            {items.map((item, index) => {
-              const prev = items[index - 1]
-              const showWaveHeader = hasAnyWave && (index === 0 || (prev?.wave ?? null) !== (item.wave ?? null) || prev?.waveSet !== item.waveSet)
-              return (
-                <div key={`${item.order}-${item.ref.kind}-${item.ref.name}`}>
-                  {showWaveHeader && (
-                    <div className="bg-theme-base/50 px-4 py-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
-                      {item.waveSet ? `Wave ${item.wave}` : 'Default wave'}
-                    </div>
-                  )}
-                  <div className="grid grid-cols-[60px_minmax(0,1fr)] gap-2 px-4 py-3 text-sm">
-                    <div className="text-right font-mono text-[11px] text-theme-text-tertiary">step {item.order}</div>
-                    <div className="min-w-0">
-                      <div className="flex items-baseline gap-2">
-                        <span className="min-w-0 truncate font-medium text-theme-text-primary">{item.ref.kind} / {item.ref.name}</span>
-                        {item.hook && (
-                          <Tooltip content={`Sync hook: ${item.hook}`} delay={200} wrapperClassName="shrink-0">
-                            <span className="rounded border border-violet-400/40 bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-violet-700 dark:text-violet-400">
-                              {item.hook}
-                            </span>
-                          </Tooltip>
-                        )}
-                      </div>
-                      <div className="mt-1 flex flex-wrap gap-1">
-                        {item.phase && <Chip label="phase" value={item.phase} />}
-                        {item.relationship && !isUnknownChipValue(item.relationship) && <Chip value={item.relationship} />}
-                        {item.status && !isUnknownChipValue(item.status) && <Chip value={item.status} />}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
-      </div>
-    </section>
-  )
-}
-
 interface GitOpsActivityInsightViewProps {
   insight?: GitOpsInsight | null
   error?: Error | null
@@ -1005,6 +1232,7 @@ function HistoryRows({
             <div className="min-w-0 text-sm">
               <div className="flex flex-wrap items-baseline gap-x-2 gap-y-0.5">
                 <span className="font-mono text-xs text-theme-text-primary">{item.revision || item.phase || '-'}</span>
+                <PhaseChip phase={item.phase} message={item.message} />
                 <span className="text-[11px] text-theme-text-tertiary">{formatRelative(item.deployedAt)}</span>
                 {item.initiatedBy && (
                   <span className="text-[11px] text-theme-text-tertiary">by {item.initiatedBy}</span>
@@ -1053,6 +1281,23 @@ function HistoryRows({
 }
 
 
+// Outcome chip on each history row. The dot in the gutter encodes outcome by
+// color, but a textual chip makes the result legible at a glance for users who
+// don't immediately decode the color palette. Falls back to message-derived
+// phase when the controller didn't populate phase explicitly (Argo only fills
+// phase on the most recent revision; older entries lose it without inference).
+function PhaseChip({ phase, message }: { phase?: string; message?: string }) {
+  const effective = phase || messageToPhase(message)
+  if (!effective) return null
+  const severity = gitopsToSeverity(effective)
+  // Don't render a neutral chip — it adds visual noise without information.
+  if (severity === 'neutral') return null
+  const label = effective.charAt(0).toUpperCase() + effective.slice(1).toLowerCase()
+  return (
+    <span className={clsx('badge-sm', SEVERITY_BADGE[severity])}>{label}</span>
+  )
+}
+
 function SectionHeader({ icon: Icon, title, hint }: { icon: typeof GitBranch; title: string; hint?: string }) {
   return (
     <div className="flex items-center gap-2 border-b border-theme-border px-4 py-2.5">
@@ -1067,10 +1312,6 @@ function SectionHeader({ icon: Icon, title, hint }: { icon: typeof GitBranch; ti
       )}
     </div>
   )
-}
-
-function Chip({ label, value }: { label?: string; value: string }) {
-  return <span className="rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[10px] text-theme-text-secondary">{label ? `${label}: ` : ''}{value}</span>
 }
 
 function CenteredText({ children }: { children: ReactNode }) {

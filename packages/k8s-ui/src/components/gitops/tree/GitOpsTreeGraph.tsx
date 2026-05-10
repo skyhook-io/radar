@@ -189,6 +189,35 @@ function GitOpsTreeGraphInner({
           showInteractive={false}
         />
       </ReactFlow>
+      <EdgeLegend edges={edges} />
+    </div>
+  )
+}
+
+// EdgeLegend documents the color encoding on the GitOps tree graph. Only
+// renders rows for edge types actually present in the current view —
+// hides the legend entirely when the graph has only `owns` edges (the
+// default for Argo apps without dependencies).
+function EdgeLegend({ edges }: { edges: Edge[] }) {
+  const types = new Set(edges.map((e) => e.data?.type as string).filter(Boolean))
+  const rows: Array<{ key: string; color: string; label: string }> = []
+  if (types.has('source')) rows.push({ key: 'source', color: getEdgeColor('source'), label: 'Source repo' })
+  if (types.has('dependsOn')) rows.push({ key: 'dependsOn', color: getEdgeColor('dependsOn'), label: 'Depends on' })
+  // Always show the default ownership color when there are 2+ edge kinds —
+  // operators need to compare against it. Hide when "owns" is the only kind.
+  if (rows.length > 0) rows.unshift({ key: 'owns', color: getEdgeColor('owns'), label: 'Ownership' })
+  if (rows.length === 0) return null
+  return (
+    <div className="absolute bottom-4 left-4 z-10 rounded-md border border-theme-border bg-theme-surface/90 px-2.5 py-1.5 text-[10px] backdrop-blur">
+      <div className="mb-1 font-medium uppercase tracking-wide text-theme-text-tertiary">Edges</div>
+      <div className="flex flex-col gap-1">
+        {rows.map((row) => (
+          <div key={row.key} className="flex items-center gap-2 text-theme-text-secondary">
+            <span className="inline-block h-[2px] w-5 rounded" style={{ backgroundColor: row.color }} />
+            {row.label}
+          </div>
+        ))}
+      </div>
     </div>
   )
 }
@@ -305,6 +334,10 @@ function buildFlowGraph(tree: GitOpsResourceTree | null, preset: GitOpsTreePrese
       source: edge.source,
       target: edge.target,
       type: 'smoothstep',
+      // The legend reads back edge.data?.type to decide which rows to render —
+      // ReactFlow doesn't preserve our custom `type` field at the top level
+      // because it overloads `type` for the edge component identity ("smoothstep").
+      data: { type: edge.type },
       markerEnd: {
         type: MarkerType.ArrowClosed,
         width: 16,

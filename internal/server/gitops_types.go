@@ -2,16 +2,10 @@ package server
 
 import "strings"
 
-// sanitizeForLog strips characters that would let a caller forge log lines
-// by submitting names/namespaces containing CR/LF or other control bytes.
-// This addresses CodeQL log-injection findings on the GitOps handlers,
-// which take user-controlled URL params and write them into log.Printf
-// for diagnostics. Local Radar binaries are low-risk (single user, single
-// terminal); in-cluster deployments shipping logs to shared aggregators
-// are not, so we sanitize at the choke point rather than per-call.
-//
-// Replaces CR, LF, and tab with U+FFFD; leaves printable ASCII + UTF-8
-// alone so legitimate names with spaces or unicode still log readably.
+// sanitizeForLog replaces CR/LF/tab with U+FFFD so user-controlled URL
+// params (kind, namespace, name) can't forge log lines when shipped to
+// shared aggregators in in-cluster deployments. Other characters pass
+// through so legitimate names log readably.
 func sanitizeForLog(s string) string {
 	if s == "" {
 		return s

@@ -2,7 +2,8 @@ import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNod
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { clsx } from 'clsx'
-import { CheckCircle2, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Table2, Tag, Trash2, XCircle } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Settings, Table2, Tag, Trash2, XCircle } from 'lucide-react'
+import yaml from 'yaml'
 import {
   GitOpsActivityInsightView,
   GitOpsChangesView,
@@ -33,9 +34,11 @@ import {
   type FluxCondition,
   type GitOpsStatus,
 } from '@skyhook-io/k8s-ui/types/gitops'
+import { useToast } from '../ui/Toast'
 
 import {
   fetchJSON,
+  useApplyResource,
   useArgoRefresh,
   useArgoResume,
   useArgoRollback,
@@ -54,6 +57,7 @@ import { useAPIResources } from '../../api/apiResources'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 import { Tooltip } from '../ui/Tooltip'
+import { CodeViewer } from '../ui/CodeViewer'
 import { SyncOptionsDialog } from './SyncOptionsDialog'
 import { RollbackDialog } from './RollbackDialog'
 import type { GitOpsHistoryItem } from '@skyhook-io/k8s-ui'
@@ -358,6 +362,15 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
                 className="h-8 w-full rounded-md border border-theme-border bg-theme-base pl-8 pr-3 text-sm text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:ring-1 focus:ring-blue-500/50"
               />
             </div>
+            {/* Surface the filter denominator so users know whether they're
+                seeing all rows, a search-narrowed slice, or a sidebar-filtered
+                slice. The KPI tiles count the unfiltered universe; this caption
+                counts the visible result set. */}
+            {filteredRows.length !== allRows.length && (
+              <span className="text-[11px] text-theme-text-tertiary">
+                Showing {filteredRows.length} of {allRows.length}
+              </span>
+            )}
             <select
               value={sortKey}
               onChange={(e) => setSortKey(e.target.value as SortKey)}
@@ -1022,6 +1035,7 @@ type TopologyMode = 'graph' | 'table'
 function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const location = useLocation()
   const navigate = useNavigate()
+  const { showError, showSuccess } = useToast()
   const parts = location.pathname.split('/').filter(Boolean)
   const kind = parts[2] || 'applications'
   const namespace = parts[3] === '_' ? '' : decodePathPart(parts[3] || '')
@@ -1051,6 +1065,25 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const insightsQ = useGitOpsInsights(kind, namespace, name, group, namespaces)
   const status = resourceQ.data ? getGitOpsStatus(kind, resourceQ.data) : null
   const tool = getTool(kind, group)
+  // Argo "auto-sync ON" is determined by spec.syncPolicy.automated being set,
+  // not by health.status === Suspended (which is Argo's CronJob-style suspend).
+  // The toggle button reads from this so the label flips correctly when an
+  // app is in Manual mode or suspended via Radar's annotations.
+  const argoAutoSyncEnabled = kind === 'applications' && Boolean(resourceQ.data?.spec?.syncPolicy?.automated)
+  // Radar-driven Argo suspension is signaled by annotations that record the
+  // pre-suspend prune/selfHeal state for restoration on resume. When present,
+  // the app is in a deliberately-paused state (vs. Manual mode, which is a
+  // normal operational choice) and should surface a Suspended chip alongside
+  // the other status indicators.
+  const argoSuspendedByRadar =
+    kind === 'applications' &&
+    Boolean(
+      resourceQ.data?.metadata?.annotations?.['radarhq.io/suspended-prune'] ||
+        resourceQ.data?.metadata?.annotations?.['radarhq.io/suspended-selfheal'] ||
+        resourceQ.data?.metadata?.annotations?.['skyhook.io/suspended-prune'] ||
+        resourceQ.data?.metadata?.annotations?.['skyhook.io/suspended-selfheal'],
+    )
+  const effectiveSuspended = (status?.suspended ?? false) || argoSuspendedByRadar
   // Lifecycle gate: when the resource is pending deletion, mutating
   // actions are futile (the controller is processing finalizers and
   // ignores reconcile/sync triggers). Surface it visually + disable
@@ -1077,6 +1110,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const [graphNamespaces, setGraphNamespaces] = useState<Set<string>>(new Set())
   const [graphRoles, setGraphRoles] = useState<Set<string>>(new Set())
   const [graphFullscreen, setGraphFullscreen] = useState(false)
+  const [helmValuesOpen, setHelmValuesOpen] = useState(false)
 
   const argoSync = useArgoSync()
   const argoRefresh = useArgoRefresh()
@@ -1084,6 +1118,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const argoSuspend = useArgoSuspend()
   const argoResume = useArgoResume()
   const argoRollback = useArgoRollback()
+  const applyResource = useApplyResource()
   const fluxReconcile = useFluxReconcile()
   const fluxSyncWithSource = useFluxSyncWithSource()
   const fluxSuspend = useFluxSuspend()
@@ -1098,6 +1133,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
 
   const detailRow = resourceQ.data ? normalizeDetailResource(kind, group, resourceQ.data) : null
   const tree = treeQ.data ?? null
+  const helmValues = useMemo(() => extractHelmValues(kind, resourceQ.data), [kind, resourceQ.data])
   const graphFilters = useMemo<GitOpsTreeFilters>(() => ({
     kinds: graphKinds,
     sync: graphSync,
@@ -1264,8 +1300,8 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                   indicator. */}
               {status && !terminating && (
                 <>
-                  <SyncStatusBadge sync={status.sync} suspended={status.suspended} />
-                  <HealthStatusBadge health={status.health} />
+                  <SyncStatusBadge sync={status.sync} suspended={effectiveSuspended} />
+                  {!effectiveSuspended && <HealthStatusBadge health={status.health} />}
                 </>
               )}
               {terminating && (
@@ -1280,17 +1316,21 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                 {tool === 'argo' ? 'ArgoCD' : 'FluxCD'} · {apiKind?.kind ?? kind}
               </span>
             </div>
-            {/* Header carries the *spec/identity* facts — Project + Destination
-                are who-and-where, not status. Source + Revision live in the
-                status strip below where they show *live* values; surfacing
-                them here too created visual duplication between target spec
-                and observed state. */}
-            {/* No width cap: each fact sizes to its content and the row wraps
-                naturally at narrow viewports. Capping at max-w-5xl forced
-                truncation on full-width screens that had room to spare. */}
+            {/* Header carries the *spec/config* facts — where this app lives
+                and how it syncs. The deployment row (status strip below)
+                carries dynamic per-deploy facts (latest revision, age,
+                resource health). Splitting static config from live state
+                avoids the "I changed nothing but everything looks different"
+                effect of mixing them. */}
             <div className="mt-2 flex flex-wrap gap-x-5 gap-y-0.5 text-[11px] text-theme-text-tertiary">
               <AppFact label="Project" value={detailRow?.project || '-'} />
-              <AppFact label="Destination" value={[detailRow?.destination, detailRow?.destinationNamespace].filter(Boolean).join(' / ') || '-'} />
+              {detailRow?.repository && <AppFact label="Source" value={formatSourceRepo(detailRow.repository)} />}
+              {detailRow?.path && <AppFact label="Path" value={detailRow.path} />}
+              {detailRow?.chart && <AppFact label="Chart" value={detailRow.chart} />}
+              <AppFact label="Destination" value={formatDestination(detailRow?.destination, detailRow?.destinationNamespace)} />
+              {insightsQ.data?.summary?.autoSyncMode && (
+                <AppFact label="Sync mode" value={insightsQ.data.summary.autoSyncMode} />
+              )}
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1316,9 +1356,9 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                   }}
                 />
                 {isRunning && <ActionButton label="Terminate" icon={XCircle} loading={argoTerminate.isPending} onClick={() => argoTerminate.mutate({ namespace, name })} danger />}
-                {status?.suspended
-                  ? <ActionButton label="Enable auto-sync" icon={Play} loading={argoResume.isPending} onClick={() => argoResume.mutate({ namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />
-                  : <ActionButton label="Disable auto-sync" icon={Pause} loading={argoSuspend.isPending} onClick={() => argoSuspend.mutate({ namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />}
+                {argoAutoSyncEnabled
+                  ? <ActionButton label="Disable auto-sync" icon={Pause} loading={argoSuspend.isPending} onClick={() => argoSuspend.mutate({ namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />
+                  : <ActionButton label="Enable auto-sync" icon={Play} loading={argoResume.isPending} onClick={() => argoResume.mutate({ namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />}
               </>
             )}
             {isFlux && (
@@ -1358,7 +1398,71 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
               // navigates away and comes back.
               window.setTimeout(() => setChangesFocusKey(null), 4000)
             }}
+            remediationPending={applyResource.isPending || argoSync.isPending}
+            onRemediate={(remediation) => {
+              if (remediation.kind === 'create-namespace' && remediation.target) {
+                const nsName = remediation.target
+                const yaml = `apiVersion: v1\nkind: Namespace\nmetadata:\n  name: ${nsName}\n`
+                applyResource.mutate(
+                  { yaml, mode: 'apply' },
+                  {
+                    onSuccess: () => {
+                      showSuccess(
+                        `Created namespace ${nsName}`,
+                        'Triggering a sync to retry the apply.',
+                      )
+                      // Re-trigger sync so Argo retries against the now-existing
+                      // namespace instead of waiting for its retry backoff.
+                      // App-wide SSE invalidation (App.tsx) picks up the
+                      // controller's status updates and refreshes the gitops
+                      // tree + insights queries automatically.
+                      if (kind === 'applications') {
+                        argoSync.mutate({ namespace, name })
+                      }
+                    },
+                    onError: (err: unknown) => {
+                      const msg = err instanceof Error ? err.message : 'Unknown error'
+                      showError(
+                        `Couldn't create namespace ${nsName}`,
+                        msg.includes('forbidden')
+                          ? 'Radar lacks RBAC to create namespaces in this cluster. Create it manually or have a cluster-admin do it.'
+                          : msg,
+                      )
+                    },
+                  },
+                )
+              }
+            }}
           />
+          {helmValues && (
+            <div className="shrink-0 border-b border-theme-border bg-theme-base">
+              <button
+                type="button"
+                onClick={() => setHelmValuesOpen((v) => !v)}
+                className="flex w-full items-center gap-2 px-4 py-2 text-left text-xs text-theme-text-secondary hover:bg-theme-hover"
+                aria-expanded={helmValuesOpen}
+              >
+                {helmValuesOpen ? (
+                  <ChevronDown className="h-3.5 w-3.5 shrink-0" />
+                ) : (
+                  <ChevronRight className="h-3.5 w-3.5 shrink-0" />
+                )}
+                <Settings className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
+                <span className="font-medium text-theme-text-primary">Helm values</span>
+                <span className="tabular-nums text-theme-text-tertiary">
+                  {helmValues.keyCount} {helmValues.keyCount === 1 ? 'key' : 'keys'}
+                </span>
+                {helmValues.source === 'argo-parameters' && (
+                  <span className="text-[10px] uppercase tracking-wider text-theme-text-tertiary">parameters</span>
+                )}
+              </button>
+              {helmValuesOpen && (
+                <div className="border-t border-theme-border bg-theme-surface px-4 py-3">
+                  <CodeViewer code={helmValues.yaml} language="yaml" showLineNumbers maxHeight="320px" />
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
 
@@ -1373,7 +1477,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
           <div className="flex shrink-0 items-center justify-between gap-3 border-b border-theme-border bg-theme-base px-4 py-2">
             <div className="flex items-center gap-1 rounded-md border border-theme-border bg-theme-surface p-1">
               <ViewButton active={appView === 'topology'} icon={GitBranch} label="Topology" onClick={() => setAppView('topology')} />
-              <ViewButton active={appView === 'changes'} icon={GitCommit} label="Changes" onClick={() => setAppView('changes')} />
+              <ViewButton active={appView === 'changes'} icon={GitCommit} label="Resources" onClick={() => setAppView('changes')} />
               <ViewButton active={appView === 'activity'} icon={Clock3} label="Activity" onClick={() => setAppView('activity')} />
             </div>
             {graphFullscreen ? (
@@ -1511,12 +1615,14 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             pending={argoRollback.isPending}
             onCancel={() => setRollbackTarget(null)}
             onConfirm={(opts) => {
-              // The Rollback button is gated on parseRollbackID returning a
-              // value, so by the time we get here `rollbackTarget?.id` is a
-              // positive integer. Defensive parse anyway in case the row data
-              // refreshed mid-modal.
+              // Defensive: history may have refreshed between modal-open and
+              // confirm, leaving the captured id no longer parseable.
               const id = parseRollbackID(rollbackTarget?.id)
-              if (id == null) return
+              if (id == null) {
+                showError('Rollback target became invalid', 'The history entry changed while the dialog was open. Reselect a target and try again.')
+                setRollbackTarget(null)
+                return
+              }
               argoRollback.mutate({ namespace, name, id, ...opts }, {
                 onSuccess: () => setRollbackTarget(null),
               })
@@ -1526,6 +1632,97 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
       )}
     </div>
   )
+}
+
+// formatSourceRepo drops the protocol prefix from a Git source URL so the
+// row reads as "github.com/org/repo" instead of the redundant
+// "https://github.com/org/repo". Leaves non-https URLs alone so SSH-style
+// origins (`git@github.com:org/repo`) and HTTP-only on-prem mirrors still
+// render as the user wrote them.
+function formatSourceRepo(repo: string): string {
+  return repo.replace(/^https?:\/\//, '')
+}
+
+type HelmValuesSource = 'flux' | 'argo-object' | 'argo-string' | 'argo-parameters'
+interface HelmValuesData {
+  yaml: string
+  keyCount: number
+  source: HelmValuesSource
+}
+
+// Both Flux HelmRelease and Argo CD Application-with-Helm-source carry user
+// overrides for chart values, but spell them differently. We surface them via
+// a single disclosure on the GitOps detail page; this helper normalizes the
+// four flavors we may encounter into one renderable shape.
+function extractHelmValues(kind: string, resource: any): HelmValuesData | null {
+  if (!resource) return null
+  if (kind === 'helmreleases') {
+    const values = resource?.spec?.values
+    if (values && typeof values === 'object' && Object.keys(values).length > 0) {
+      return { yaml: safeStringifyYaml(values), keyCount: Object.keys(values).length, source: 'flux' }
+    }
+    return null
+  }
+  if (kind === 'applications') {
+    const helm = resource?.spec?.source?.helm
+    if (helm?.valuesObject && typeof helm.valuesObject === 'object' && Object.keys(helm.valuesObject).length > 0) {
+      return {
+        yaml: safeStringifyYaml(helm.valuesObject),
+        keyCount: Object.keys(helm.valuesObject).length,
+        source: 'argo-object',
+      }
+    }
+    if (typeof helm?.values === 'string' && helm.values.trim() !== '') {
+      const parsed = tryParseYaml(helm.values)
+      const keyCount = parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? Object.keys(parsed).length : 0
+      return { yaml: helm.values, keyCount, source: 'argo-string' }
+    }
+    if (Array.isArray(helm?.parameters) && helm.parameters.length > 0) {
+      const obj: Record<string, unknown> = {}
+      for (const param of helm.parameters) {
+        if (param?.name) obj[param.name] = param.value
+      }
+      if (Object.keys(obj).length === 0) return null
+      return {
+        yaml: safeStringifyYaml(obj),
+        keyCount: Object.keys(obj).length,
+        source: 'argo-parameters',
+      }
+    }
+  }
+  return null
+}
+
+function safeStringifyYaml(value: unknown): string {
+  try {
+    return yaml.stringify(value)
+  } catch {
+    return JSON.stringify(value, null, 2)
+  }
+}
+
+function tryParseYaml(value: string): unknown {
+  try {
+    return yaml.parse(value)
+  } catch {
+    return null
+  }
+}
+
+// formatDestination collapses the canonical in-cluster API server URL
+// ("https://kubernetes.default.svc" or the variant Argo writes when the
+// destination is the same cluster the controller runs in) to the friendlier
+// "in-cluster". Other server values pass through unchanged. The namespace
+// is appended with an explicit "Namespace:" qualifier so the relationship
+// reads unambiguously — bare `/ ns` could be mistaken for a sub-path.
+function formatDestination(server: string | undefined, namespace: string | undefined): string {
+  let host = (server || '').trim()
+  if (host === '' || host === 'https://kubernetes.default.svc' || host === 'in-cluster') {
+    host = 'in-cluster'
+  } else {
+    host = host.replace(/^https?:\/\//, '')
+  }
+  return namespace ? `${host}, Namespace: ${namespace}` : host
 }
 
 function AppFact({ label, value }: { label: string; value: string }) {
@@ -2379,15 +2576,36 @@ function countLabels(rows: GitOpsRow[]) {
 }
 
 function compareRows(a: GitOpsRow, b: GitOpsRow, sortKey: SortKey) {
-  if (sortKey === 'health') return healthRank(a.health) - healthRank(b.health) || a.name.localeCompare(b.name)
+  if (sortKey === 'health') return urgencyRank(a) - urgencyRank(b) || a.name.localeCompare(b.name)
   if (sortKey === 'sync') return syncRank(a.sync) - syncRank(b.sync) || a.name.localeCompare(b.name)
   if (sortKey === 'lastSync') return (Date.parse(b.lastSync || b.createdAt) || 0) - (Date.parse(a.lastSync || a.createdAt) || 0)
   if (sortKey === 'project') return a.project.localeCompare(b.project) || a.name.localeCompare(b.name)
   return a.name.localeCompare(b.name)
 }
 
-function healthRank(health: string) {
-  return { Degraded: 0, Missing: 1, Progressing: 2, Suspended: 3, Unknown: 4, Healthy: 5 }[health] ?? 4
+// urgencyRank groups rows by what the operator should do about them, not by
+// the raw sync/health labels. The key insight: an OutOfSync app with
+// auto-sync ON is healing itself — it sorts after an OutOfSync app with no
+// auto-sync (which won't heal). Suspended sorts near the bottom because it's
+// intentionally non-green, not a problem to fix.
+//
+// Tiers:
+//   0. Truly broken — Terminating, Degraded, Missing. Won't self-heal.
+//   1. OutOfSync with no auto-sync. Drifted and stuck waiting for a human.
+//   2. OutOfSync with auto-sync on. Healing in progress.
+//   3. Progressing / Reconciling. Mid-rollout.
+//   4. Unknown / other. Indeterminate state.
+//   5. Suspended. Intentional non-green; bottom of the urgent half.
+//   6. Synced + Healthy. Calm steady state.
+function urgencyRank(row: GitOpsRow): number {
+  if (row.terminating) return 0
+  if (row.health === 'Degraded' || row.health === 'Missing') return 0
+  if (row.sync === 'OutOfSync' && !row.autoSync) return 1
+  if (row.sync === 'OutOfSync') return 2
+  if (row.health === 'Progressing' || row.sync === 'Reconciling') return 3
+  if (row.suspended || row.health === 'Suspended') return 5
+  if (row.health === 'Healthy' && row.sync === 'Synced') return 6
+  return 4
 }
 
 function syncRank(sync: string) {

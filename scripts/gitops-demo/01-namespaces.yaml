@@ -49,3 +49,23 @@ metadata:
   name: demo-flux-helm
   labels:
     radar-demo: "true"
+---
+# Pre-created so guestbook-rollback can sync into a real namespace.
+# guestbook-broken-* deliberately do NOT have their target namespaces
+# pre-created — that's how we induce a stable Failed sync phase.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-rollback
+  labels:
+    radar-demo: "true"
+---
+# Pre-created for the zombie Kustomization. The Kustomization itself is
+# what lands in stuck-Terminating; the namespace stays so the zombie has
+# a stable owner to point at.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: demo-zombie
+  labels:
+    radar-demo: "true"

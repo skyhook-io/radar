@@ -17,17 +17,14 @@ import (
 	"k8s.io/client-go/dynamic"
 )
 
-// Annotation keys written by SetArgoAutoSync when suspending auto-sync, to remember
-// the original prune/selfHeal settings so they can be restored on resume.
-// Exported so consumers can identify or clean up these annotations independently.
+// Annotations written by SetArgoAutoSync when suspending auto-sync so that
+// the original prune/selfHeal settings can be restored on resume. Exported
+// so consumers can identify or clean these annotations up directly.
 //
-// Legacy* constants honor Applications suspended by older Radar builds so
-// resuming still restores their prune/selfHeal settings. Legacy keys are
-// cleared on resume and never re-written.
-//
-// TODO(2026-Q3): remove legacy constants once all installs have rolled
-// through at least one resume cycle past this release (paired with the
-// node-debug legacy-label cleanup in pkg/k8score/node_debug.go).
+// The legacy* keys are read on resume to honor Applications suspended by
+// older Radar builds; they're cleared on resume and never re-written. Safe
+// to drop once all installs have rolled through at least one resume cycle
+// past this release.
 const (
 	ArgoSuspendedPruneAnnotation    = "radarhq.io/suspended-prune"
 	ArgoSuspendedSelfHealAnnotation = "radarhq.io/suspended-selfheal"
@@ -161,13 +158,10 @@ type ArgoSyncResource struct {
 }
 
 // ArgoSyncOptions controls an ArgoCD sync operation. Pointer-bool fields
-// allow the caller to express "not set" via nil; for DryRun, Force, ApplyOnly
-// the patch encoding only emits the field when non-nil so Argo's server
-// default applies. Prune is the exception: SyncArgoApp always writes prune
-// (defaulting to true when nil) because Argo's default is true and the
-// previous behavior matches that — explicit nil-omission was never wired.
-// If a future caller needs the "leave server default" path for Prune, fix
-// SyncArgoApp to skip the field when opts.Prune == nil.
+// let callers say "not set" via nil; DryRun/Force/ApplyOnly are only
+// written when non-nil so Argo's server default applies otherwise. Prune
+// is the exception — always written, defaulting to true when nil, to
+// match Argo's server default.
 type ArgoSyncOptions struct {
 	Resources   []ArgoSyncResource `json:"resources,omitempty"`
 	Revision    string             `json:"revision,omitempty"`
@@ -444,11 +438,11 @@ func TerminateArgoSync(ctx context.Context, dynClient dynamic.Interface, namespa
 	)
 	if err != nil {
 		// Race: the operation completed (and was removed) between the GET
-		// above and this PATCH. JSON-Patch fails because the path is gone.
-		// Return the same sentinel as the pre-flight check so the handler
-		// surfaces "nothing to terminate" honestly instead of toasting
-		// a fake "Sync terminated".
-		if strings.Contains(err.Error(), "nonexistent") {
+		// above and this PATCH. K8s rejects the JSON-Patch with Invalid
+		// because the /operation path is gone — surface the same sentinel
+		// as the pre-flight check so the handler reports "nothing to
+		// terminate" honestly instead of a fake "Sync terminated".
+		if apierrors.IsInvalid(err) {
 			return OperationResult{}, fmt.Errorf("no sync operation in progress for %s/%s (completed before terminate could fire): %w", namespace, name, ErrNoOperationInProgress)
 		}
 		return OperationResult{}, fmt.Errorf("failed to terminate sync for Application %s/%s: %w", namespace, name, err)
@@ -725,7 +719,7 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 	// Then, reconcile the resource itself
 	if err := mergePatch(ctx, dynClient, entry.GVR, namespace, name, reconcilePatch); err != nil {
 		return OperationResult{}, fmt.Errorf("failed to reconcile %s %s/%s (note: source %s/%s was reconciled): %w",
-			entry.Kind, namespace, name, sourceName, sourceNamespace, err)
+			entry.Kind, namespace, name, sourceNamespace, sourceName, err)
 	}
 
 	return OperationResult{

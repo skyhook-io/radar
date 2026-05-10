@@ -168,6 +168,34 @@ func TestWriteGitOpsErrorStatusMapping(t *testing.T) {
 	}
 }
 
+// TestEventMatchesGroup pins the cross-group event filter used by the
+// insights resolver's RecentEvents path. Without correct group matching,
+// events from a CNPG Cluster could surface on a CAPI Cluster insights
+// view (kind+name collide across groups), or vice versa.
+func TestEventMatchesGroup(t *testing.T) {
+	cases := []struct {
+		name       string
+		group      string
+		apiVersion string
+		want       bool
+	}{
+		{name: "exact group match (grouped kind)", group: "argoproj.io", apiVersion: "argoproj.io/v1alpha1", want: true},
+		{name: "different group rejected", group: "argoproj.io", apiVersion: "fluxcd.io/v1", want: false},
+		{name: "core (no slash) accepted when caller asks for any group", group: "", apiVersion: "v1", want: true},
+		{name: "core apiVersion, requested group → rejected (event is on a core kind)", group: "argoproj.io", apiVersion: "v1", want: false},
+		{name: "empty apiVersion accepted (informer stripped it)", group: "argoproj.io", apiVersion: "", want: true},
+		{name: "empty group accepted (caller doesn't care)", group: "", apiVersion: "argoproj.io/v1alpha1", want: true},
+		{name: "subgroup not equal to parent group rejected", group: "fluxcd.io", apiVersion: "kustomize.toolkit.fluxcd.io/v1", want: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := eventMatchesGroup(tc.group, tc.apiVersion); got != tc.want {
+				t.Fatalf("eventMatchesGroup(%q, %q) = %v, want %v", tc.group, tc.apiVersion, got, tc.want)
+			}
+		})
+	}
+}
+
 // HasNamespaceAccess is the gitopsRequest method that handlers call before
 // running the (potentially expensive) topology+tree build. It mirrors the
 // noNamespaceAccess contract (tested in server_auth_test.go) but as a

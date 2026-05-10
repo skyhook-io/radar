@@ -1,0 +1,34 @@
+# Rollback-able Application. Bootstraps with auto-sync ON so it syncs
+# once. The script then patches `spec.source.path` to a different path,
+# triggering a second sync (separate history entry), then patches out
+# `spec.syncPolicy.automated` to flip the app to Manual mode — Manual
+# is required because the rollback gate disables the button when
+# auto-sync is on (controller would just re-sync forward to HEAD).
+#
+# After orchestration the app should land at:
+#   - Sync mode: Manual
+#   - Status: Synced + Healthy
+#   - History: 2 entries with different applied states
+#   - Rollback button: enabled on the older entry
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: guestbook-rollback
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: radar-demo
+  source:
+    repoURL: https://github.com/argoproj/argocd-example-apps
+    targetRevision: HEAD
+    path: guestbook
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: demo-rollback
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=false

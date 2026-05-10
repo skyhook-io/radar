@@ -120,11 +120,9 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 	return toJSONResult(resp)
 }
 
-// validateGitOpsActionInput rejects field combinations that would silently
-// be ignored — e.g. an LLM passing `force: true` to a suspend call. Each
-// action declares which option fields it actually consumes; everything else
-// is rejected up-front so the AI sees an explicit error rather than a
-// confusing 200 OK.
+// validateGitOpsActionInput rejects option fields not consumed by the chosen
+// action so an LLM caller doesn't silently pass `force: true` to a suspend
+// and believe it took effect.
 func validateGitOpsActionInput(action string, in manageGitOpsInput) error {
 	type used struct {
 		revision, prune, dryRun, force, applyOnly, syncOptions, historyID bool

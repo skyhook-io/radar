@@ -8,8 +8,9 @@ import (
 
 // DropUnstructuredManagedFields is the SharedInformer transform used by
 // the dynamic cache. The tests below pin its two invariants:
-//   1. For any unstructured object, managedFields and the
-//      last-applied-configuration annotation are gone.
+//   1. For any unstructured object, managedFields are gone but the
+//      last-applied-configuration annotation is preserved (GitOps drift
+//      detection depends on it — see pkg/gitops/insights/drift.go).
 //   2. For CustomResourceDefinitions, the heavy fields (versions[].schema,
 //      conversion) are gone while list-view fields (name, served/storage,
 //      additionalPrinterColumns, spec.group, spec.names) survive.
@@ -45,10 +46,10 @@ func TestDropUnstructuredManagedFields_NonCRD(t *testing.T) {
 		t.Error("managedFields should be stripped")
 	}
 
-	// last-applied-configuration gone, other annotations preserved
+	// last-applied-configuration is preserved (drift detection depends on it).
 	annotations := got.GetAnnotations()
-	if _, ok := annotations["kubectl.kubernetes.io/last-applied-configuration"]; ok {
-		t.Error("last-applied-configuration annotation should be stripped")
+	if annotations["kubectl.kubernetes.io/last-applied-configuration"] != "{big blob}" {
+		t.Errorf("last-applied-configuration must be preserved for drift detection; got %v", annotations)
 	}
 	if annotations["description"] != "allow DNS" {
 		t.Errorf("other annotations should be preserved, got %v", annotations)

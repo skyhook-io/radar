@@ -490,14 +490,14 @@ func TestArgoApplicationConditions_MapsTypesToSeverity(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("expected 3 conditions (one filtered), got %d: %+v", len(got), got)
 	}
-	bySev := map[string]string{}
+	bySev := map[string]Severity{}
 	for _, iss := range got {
 		bySev[iss.Reason] = iss.Severity
 	}
-	if bySev["ComparisonError"] != "critical" {
+	if bySev["ComparisonError"] != SeverityCritical {
 		t.Errorf("ComparisonError severity = %q, want critical", bySev["ComparisonError"])
 	}
-	if bySev["OrphanedResourceWarning"] != "warning" {
+	if bySev["OrphanedResourceWarning"] != SeverityWarning {
 		t.Errorf("OrphanedResourceWarning severity = %q, want warning", bySev["OrphanedResourceWarning"])
 	}
 	if bySev["SomeUnrelatedInfo"] != "info" {
@@ -585,21 +585,18 @@ func TestDetectPendingDeletion_SeverityRamp(t *testing.T) {
 	tests := []struct {
 		name      string
 		age       time.Duration
-		want      string
+		want      Severity
 		wantStuck bool
 	}{
-		{"just deleted is info", 30 * time.Second, "info", false},
-		{"under 5min is info", 4 * time.Minute, "info", false},
-		// Inclusive boundary: at 5min exactly we escalate to warning.
-		// Test uses 4m59s to keep the "still info" case observable
-		// without relying on sub-second clock precision.
-		{"4m59s stays info", 4*time.Minute + 59*time.Second, "info", false},
-		{"5min escalates to warning", 5 * time.Minute, "warning", false},
-		{"29min is warning", 29 * time.Minute, "warning", false},
-		// Same inclusive semantics for the 30min cutoff.
-		{"29m59s stays warning", 29*time.Minute + 59*time.Second, "warning", false},
-		{"30min escalates to alert", 30 * time.Minute, "alert", true},
-		{"21d is alert and stuck", 21 * 24 * time.Hour, "alert", true},
+		{"just deleted is info", 30 * time.Second, SeverityInfo, false},
+		{"under 5min is info", 4 * time.Minute, SeverityInfo, false},
+		// Inclusive boundary at 5min — 4m59s stays info, 5m exactly escalates.
+		{"4m59s stays info", 4*time.Minute + 59*time.Second, SeverityInfo, false},
+		{"5min escalates to warning", 5 * time.Minute, SeverityWarning, false},
+		{"29min is warning", 29 * time.Minute, SeverityWarning, false},
+		{"29m59s stays warning", 29*time.Minute + 59*time.Second, SeverityWarning, false},
+		{"30min escalates to alert", 30 * time.Minute, SeverityAlert, true},
+		{"21d is alert and stuck", 21 * 24 * time.Hour, SeverityAlert, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -613,8 +610,8 @@ func TestDetectPendingDeletion_SeverityRamp(t *testing.T) {
 			if got.Stuck != tt.wantStuck {
 				t.Fatalf("stuck = %v, want %v", got.Stuck, tt.wantStuck)
 			}
-			if got.Scope != "lifecycle" {
-				t.Fatalf("scope = %q, want %q", got.Scope, "lifecycle")
+			if got.Scope != ScopeLifecycle {
+				t.Fatalf("scope = %q, want %q", got.Scope, ScopeLifecycle)
 			}
 			if got.Reason != "Terminating" {
 				t.Fatalf("reason = %q, want Terminating", got.Reason)
@@ -933,5 +930,97 @@ func TestBuildSummary_TerminatingFields(t *testing.T) {
 	}
 	if len(s.Finalizers) != 1 || s.Finalizers[0] != "resources-finalizer.argocd.argoproj.io" {
 		t.Fatalf("Finalizers = %v, want [resources-finalizer.argocd.argoproj.io]", s.Finalizers)
+	}
+}
+
+// TestCategorizeArgoChange pins the closed mapping from Argo's per-resource
+// sync + health vocabularies onto the typed Category constants. A mapping
+// gap would silently drop a row into changeRank's default bucket and
+// misorder the Changes view (Progressing sorting alongside Synced).
+func TestCategorizeArgoChange(t *testing.T) {
+	cases := []struct {
+		name   string
+		sync   string
+		health string
+		want   Category
+	}{
+		{"healthy + Synced → Synced", "Synced", "Healthy", CategorySynced},
+		{"OutOfSync overrides Healthy", "OutOfSync", "Healthy", CategoryOutOfSync},
+		{"Degraded health wins over Synced", "Synced", "Degraded", CategoryDegraded},
+		{"Missing health wins over OutOfSync", "OutOfSync", "Missing", CategoryMissing},
+		{"Progressing health surfaced", "Synced", "Progressing", CategoryProgressing},
+		{"Suspended health surfaced", "Synced", "Suspended", CategorySuspended},
+		{"Pruned sync without health", "Pruned", "", CategoryPruned},
+		{"empty sync + empty health → Unknown", "", "", CategoryUnknown},
+		{"explicit Unknown sync", "Unknown", "Healthy", CategoryUnknown},
+		{"unrecognized values → Unknown (and log)", "Lol", "Wat", CategoryUnknown},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := categorizeArgoChange(tc.sync, tc.health); got != tc.want {
+				t.Errorf("categorizeArgoChange(%q, %q) = %q, want %q", tc.sync, tc.health, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestCategorizeFluxChange covers the Flux variant which reads from tree
+// nodes rather than Argo status. Flux's inventory check means "no degraded
+// health, no OutOfSync" → Synced (a known limitation: per-field drift
+// against the desired manifest isn't computed).
+func TestCategorizeFluxChange(t *testing.T) {
+	cases := []struct {
+		name   string
+		sync   string
+		health string
+		want   Category
+	}{
+		{"healthy → Synced", "Synced", "Healthy", CategorySynced},
+		{"empty → Synced (inventory pass)", "", "", CategorySynced},
+		{"Degraded health surfaces", "Synced", "Degraded", CategoryDegraded},
+		{"Missing health surfaces", "Synced", "Missing", CategoryMissing},
+		{"OutOfSync sync surfaces", "OutOfSync", "Healthy", CategoryOutOfSync},
+		{"Progressing health surfaces", "Synced", "Progressing", CategoryProgressing},
+		{"Suspended health surfaces", "Synced", "Suspended", CategorySuspended},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := categorizeFluxChange(tc.sync, tc.health); got != tc.want {
+				t.Errorf("categorizeFluxChange(%q, %q) = %q, want %q", tc.sync, tc.health, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestChangeRank pins the rank of every Category constant. Adding a new
+// Category to vocab.go without giving it an explicit rank here lands it
+// in the default bucket — making this test fail is the canary.
+func TestChangeRank(t *testing.T) {
+	cases := []struct {
+		category Category
+		want     int
+	}{
+		{CategoryDegraded, 0},
+		{CategoryMissing, 0},
+		{CategoryOutOfSync, 1},
+		{CategoryProgressing, 2},
+		{CategoryReconciling, 2},
+		{CategoryUnknown, 3},
+		{CategorySynced, 4},
+		{CategoryPruned, 4},
+		{CategoryHook, 4},
+		{CategorySuspended, 4},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.category), func(t *testing.T) {
+			if got := changeRank(tc.category); got != tc.want {
+				t.Errorf("changeRank(%q) = %d, want %d", tc.category, got, tc.want)
+			}
+		})
+	}
+	// The default branch lives below the named-constant ranks so unknown
+	// values don't silently mix with valid ones in the sorted output.
+	if got := changeRank(Category("Bogus")); got <= 4 {
+		t.Errorf("changeRank(Bogus) = %d, want > 4 (default branch must rank below all named constants)", got)
 	}
 }

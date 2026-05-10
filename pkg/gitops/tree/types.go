@@ -49,11 +49,23 @@ type InfoItem struct {
 	Value string `json:"value"`
 }
 
+// EdgeType labels the relationship represented by an Edge.
+type EdgeType string
+
+const (
+	// EdgeOwns: the source declared (owns) the target.
+	EdgeOwns EdgeType = "owns"
+	// EdgeSource: the target was rendered from this Flux source repository.
+	EdgeSource EdgeType = "source"
+	// EdgeDependsOn: Flux dependsOn ordering — target waits for source.
+	EdgeDependsOn EdgeType = "dependsOn"
+)
+
 // Edge is an ownership edge between tree nodes.
 type Edge struct {
-	Source string `json:"source"`
-	Target string `json:"target"`
-	Type   string `json:"type"`
+	Source string   `json:"source"`
+	Target string   `json:"target"`
+	Type   EdgeType `json:"type"`
 }
 
 // Summary contains high-level counts for the tree.
@@ -83,6 +95,6 @@ type managedResource struct {
 
 type relatedResource struct {
 	Ref  ResourceRef
-	Type string
+	Type EdgeType
 	Data map[string]any
 }

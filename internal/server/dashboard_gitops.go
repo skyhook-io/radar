@@ -10,64 +10,34 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
-// DashboardGitOpsControllers summarizes the health of GitOps controller
-// pods discovered in the cluster. Surfaced on the Home dashboard so an
-// operator can spot "source-controller is CrashLoopBackOff" before
-// drilling into individual GitOps applications and seeing the
-// downstream symptoms.
+// DashboardGitOpsControllers is the Home dashboard summary of in-cluster
+// GitOps controller pod health. Nil (not "empty Controllers") when no
+// controllers are discovered, so the card disappears on non-GitOps clusters.
 //
-// The aggregate Status field collapses per-controller statuses to one
-// of three tones; the whole struct is nil (not "missing") when no
-// controllers were detected at all, so the home dashboard can suppress
-// the card entirely on non-GitOps clusters.
+// Status collapses per-controller rows: per-row "pending" rolls up to
+// "degraded" so the card-level tone only branches on healthy/degraded/crashing.
 type DashboardGitOpsControllers struct {
-	// Status is the worst-case aggregate across all controllers,
-	// normalized for the card's overall tone:
-	//   ctrlStatusHealthy  — all controllers have all expected pods Ready
-	//   ctrlStatusDegraded — any controller has fewer Ready pods than total,
-	//                        or any pod is Pending
-	//   ctrlStatusCrashing — any controller pod is CrashLoopBackOff/Error
-	// Per-controller "pending" rolls up to "degraded" at this level so the
-	// frontend only branches on three tones.
-	Status string `json:"status"`
-	// Controllers lists each discovered controller. When empty, the parent
-	// payload is set to nil rather than emitted as an empty card.
+	Status      string                      `json:"status"`
 	Controllers []DashboardGitOpsController `json:"controllers"`
 }
 
 // DashboardGitOpsController is a single controller's pod health row.
+// summarizeControllerForDashboard is the sole producer; the Ready/Total
+// invariant (0 <= Ready <= Total) is established there.
 type DashboardGitOpsController struct {
-	// Name is the controller's pod label value, used as a stable
-	// identifier. Examples: "argocd-application-controller",
-	// "kustomize-controller", "source-controller".
-	Name string `json:"name"`
-	// Tool identifies the GitOps system: ctrlToolArgoCD or ctrlToolFluxCD.
-	// Frontend branches on this to label the section ("Argo CD" vs "Flux CD").
-	Tool string `json:"tool"`
-	// Namespace where the controller's pods were found.
+	Name      string `json:"name"`
+	Tool      string `json:"tool"`
 	Namespace string `json:"namespace"`
-	// Ready is the count of pods that are running and Ready. Invariant:
-	// 0 <= Ready <= Total. Caller (summarizeControllerForDashboard) is the
-	// sole producer; callers should not set these fields directly.
-	Ready int `json:"ready"`
-	// Total is the total pod count for this controller. Argo controllers
-	// often have 2 (HA), Flux controllers typically 1.
-	Total int `json:"total"`
-	// Status is one of: ctrlStatusHealthy, ctrlStatusDegraded,
-	// ctrlStatusCrashing, ctrlStatusPending. Aggregate Status normalizes
-	// pending → degraded (see DashboardGitOpsControllers.Status); per-row
-	// it stays distinct for finer-grained UI.
+	Ready     int    `json:"ready"`
+	Total     int    `json:"total"`
+	// Status: one of ctrlStatus*. The aggregate (parent) collapses pending
+	// into degraded; per-row keeps them distinct.
 	Status string `json:"status"`
-	// CrashReason is set when at least one pod is in CrashLoopBackOff or
-	// Error; identifies the kind of crash so the operator knows where to
-	// start digging.
+	// CrashReason is the pod-level reason (CrashLoopBackOff, Error) when at
+	// least one pod is crashing — points the operator at where to dig.
 	CrashReason string `json:"crashReason,omitempty"`
 }
 
-// Status + tool string constants. Keeping these as named values rather
-// than free strings catches typo-class regressions at compile time and
-// gives a single place to grep when wiring the matching TS union literal
-// in packages/k8s-ui/src/api/client.ts.
 const (
 	ctrlStatusHealthy  = "healthy"
 	ctrlStatusDegraded = "degraded"
@@ -78,12 +48,9 @@ const (
 	ctrlToolFluxCD = "fluxcd"
 )
 
-// gitopsControllerProbe describes what to look for: a label selector
-// (key=value) in a typical install namespace. Mirrors the catalog in
-// pkg/gitops/insights/finalizers.go but kept independent — that file
-// targets finalizer resolution while this one targets dashboard
-// discovery; the duplication is small and keeps the two surfaces
-// independently evolvable.
+// gitopsControllerProbe is a label selector + namespace pair to look up.
+// Independent of pkg/gitops/insights/finalizers.go's catalog: that one is
+// for finalizer resolution, this one for dashboard discovery.
 type gitopsControllerProbe struct {
 	Name      string
 	Tool      string
