@@ -314,6 +314,11 @@ func isNoisyResource(kind, name, op string) bool {
 	switch kind {
 	case "Lease", "Endpoints", "EndpointSlice", "Event":
 		return true
+	case "VerticalPodAutoscalerCheckpoint":
+		// VPA writes per-container resource recommendations here on every
+		// reconcile (~1m). The whole point of the resource is to be a live
+		// ticker — per-update is never user-meaningful.
+		return true
 	}
 
 	if kind == "ConfigMap" {

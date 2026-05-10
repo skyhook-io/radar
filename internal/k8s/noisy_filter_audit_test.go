@@ -383,6 +383,54 @@ func resourceQty(s string) resource.Quantity {
 	return resource.MustParse(s)
 }
 
+func TestComputeDiff_GatewayClassAcceptedFlip_Detected(t *testing.T) {
+	mk := func(accepted string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"spec":   map[string]any{"controllerName": "example.com/gateway-controller"},
+			"status": map[string]any{"conditions": []any{map[string]any{"type": "Accepted", "status": accepted}}},
+		}}
+	}
+	diff := ComputeDiff("GatewayClass", mk("True"), mk("False"))
+	if diff == nil || !containsPath(diff, "status.conditions.Accepted") {
+		t.Fatalf("expected GatewayClass Accepted flip detected, got %+v", diff)
+	}
+}
+
+func TestComputeDiff_ReferenceGrantSpecChange_Detected(t *testing.T) {
+	mk := func(toCount int) *unstructured.Unstructured {
+		toItems := make([]any, toCount)
+		for i := range toItems {
+			toItems[i] = map[string]any{"group": "", "kind": "Service"}
+		}
+		return &unstructured.Unstructured{Object: map[string]any{
+			"spec": map[string]any{"from": []any{}, "to": toItems},
+		}}
+	}
+	diff := ComputeDiff("ReferenceGrant", mk(1), mk(2))
+	if diff == nil || !containsPath(diff, "spec.to") {
+		t.Fatalf("expected ReferenceGrant spec.to change detected, got %+v", diff)
+	}
+}
+
+func TestComputeDiff_ApplicationConditionAdded_Detected(t *testing.T) {
+	mk := func(conds []any) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"status": map[string]any{
+				"sync":       map[string]any{"status": "Synced"},
+				"health":     map[string]any{"status": "Healthy"},
+				"conditions": conds,
+			},
+		}}
+	}
+	diff := ComputeDiff("Application",
+		mk([]any{}),
+		mk([]any{map[string]any{"type": "OrphanedResourceWarning", "status": "True"}}),
+	)
+	if diff == nil || !containsPath(diff, "status.conditions[OrphanedResourceWarning]") {
+		t.Fatalf("expected Application condition addition detected, got %+v", diff)
+	}
+}
+
 // ---------------------------------------------------------------------------
 // helpers
 // ---------------------------------------------------------------------------

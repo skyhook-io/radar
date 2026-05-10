@@ -51,10 +51,12 @@ var diffFunctions = map[string]kindDiffFunc{
 	"OCIRepository":           func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "OCIRepository") },
 	"HelmRepository":          func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "HelmRepository") },
 	"Gateway":                 diffGateway,
+	"GatewayClass":            diffGatewayClass,
 	"HTTPRoute":               diffGatewayRoute,
 	"GRPCRoute":               diffGatewayRoute,
 	"TCPRoute":                diffGatewayRoute,
 	"TLSRoute":                diffGatewayRoute,
+	"ReferenceGrant":          diffReferenceGrant,
 }
 
 // ComputeDiff computes the diff between old and new objects based on kind.
@@ -1405,6 +1407,33 @@ func diffApplication(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("destination ns: %s→%s", oldDestNS, newDestNS))
 	}
 
+	// status.conditions — Argo surfaces non-standard signals here:
+	// SyncError, ComparisonError, OrphanedResourceWarning, ExcludedResourceWarning,
+	// SharedResourceWarning, RepeatedResourceWarning. These flip on operator
+	// config issues that don't show in sync.status / health.status.
+	oldAppConds := getConditionMap(oldStatus, "conditions")
+	newAppConds := getConditionMap(newStatus, "conditions")
+	for condType, newCond := range newAppConds {
+		if oldAppConds[condType] != newCond {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.conditions[%s]", condType),
+				OldValue: oldAppConds[condType],
+				NewValue: newCond,
+			})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldAppConds[condType], newCond))
+		}
+	}
+	for condType, oldCond := range oldAppConds {
+		if _, present := newAppConds[condType]; !present {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("status.conditions[%s]", condType),
+				OldValue: oldCond,
+				NewValue: nil,
+			})
+			summary = append(summary, fmt.Sprintf("%s cleared", condType))
+		}
+	}
+
 	// Image rolls — an already-Synced+Healthy app can roll new images via auto-sync
 	// without flipping sync.status or health.status. Without this, those updates
 	// drop as no-diff and the timeline misses the actual deploy event.
@@ -2217,6 +2246,75 @@ func diffGatewayRoute(oldObj, newObj any) ([]FieldChange, []string) {
 				summary = append(summary, fmt.Sprintf("%s/%s: %s→%s", parentKey, condType, oldStatus, newStatus))
 			}
 		}
+	}
+
+	return changes, summary
+}
+
+// diffGatewayClass computes diff for Gateway-API GatewayClass resources.
+// GatewayClass is a cluster-scoped declaration that controllers reconcile;
+// status updates fire on every reconcile and are noise except when the
+// Accepted/SupportedVersion conditions flip or the controller name changes.
+func diffGatewayClass(oldObj, newObj any) ([]FieldChange, []string) {
+	oldGC, ok1 := oldObj.(*unstructured.Unstructured)
+	newGC, ok2 := newObj.(*unstructured.Unstructured)
+	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("GatewayClass", oldObj)
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	// Controller name change (rebinding to a different implementation).
+	oldCtrl, _, _ := unstructured.NestedString(oldGC.Object, "spec", "controllerName")
+	newCtrl, _, _ := unstructured.NestedString(newGC.Object, "spec", "controllerName")
+	if oldCtrl != newCtrl && (oldCtrl != "" || newCtrl != "") {
+		changes = append(changes, FieldChange{Path: "spec.controllerName", OldValue: oldCtrl, NewValue: newCtrl})
+		summary = append(summary, fmt.Sprintf("controller: %s→%s", oldCtrl, newCtrl))
+	}
+
+	// Accepted / SupportedVersion conditions.
+	oldConditions := getConditionMap(oldGC.Object, "status", "conditions")
+	newConditions := getConditionMap(newGC.Object, "status", "conditions")
+	for _, condType := range []string{"Accepted", "SupportedVersion"} {
+		oldStatus := oldConditions[condType]
+		newStatus := newConditions[condType]
+		if oldStatus != newStatus && (oldStatus != "" || newStatus != "") {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("status.conditions.%s", condType), OldValue: oldStatus, NewValue: newStatus})
+			summary = append(summary, fmt.Sprintf("%s: %s→%s", condType, oldStatus, newStatus))
+		}
+	}
+
+	return changes, summary
+}
+
+// diffReferenceGrant computes diff for Gateway-API ReferenceGrant resources.
+// ReferenceGrant is cross-namespace permission. The interesting state lives
+// entirely in spec.from / spec.to — everything else is reconcile noise.
+func diffReferenceGrant(oldObj, newObj any) ([]FieldChange, []string) {
+	oldRG, ok1 := oldObj.(*unstructured.Unstructured)
+	newRG, ok2 := newObj.(*unstructured.Unstructured)
+	if !ok1 || !ok2 {
+		warnUnstructuredAssertFailed("ReferenceGrant", oldObj)
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	oldFrom, _, _ := unstructured.NestedSlice(oldRG.Object, "spec", "from")
+	newFrom, _, _ := unstructured.NestedSlice(newRG.Object, "spec", "from")
+	if len(oldFrom) != len(newFrom) {
+		changes = append(changes, FieldChange{Path: "spec.from", OldValue: len(oldFrom), NewValue: len(newFrom)})
+		summary = append(summary, fmt.Sprintf("from: %d→%d", len(oldFrom), len(newFrom)))
+	}
+
+	oldTo, _, _ := unstructured.NestedSlice(oldRG.Object, "spec", "to")
+	newTo, _, _ := unstructured.NestedSlice(newRG.Object, "spec", "to")
+	if len(oldTo) != len(newTo) {
+		changes = append(changes, FieldChange{Path: "spec.to", OldValue: len(oldTo), NewValue: len(newTo)})
+		summary = append(summary, fmt.Sprintf("to: %d→%d", len(oldTo), len(newTo)))
 	}
 
 	return changes, summary
