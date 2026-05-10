@@ -396,6 +396,9 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 			// managedFields-only, reconcile counter. Recording these produces
 			// content-free timeline rows; drop instead.
 			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonNoDiff, op)
+			if DebugEvents {
+				log.Printf("[DEBUG] No-diff update, skipping: %s/%s/%s", kind, namespace, name)
+			}
 			return
 		}
 	}
