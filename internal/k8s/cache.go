@@ -344,6 +344,20 @@ func isNoisyResource(kind, name, op string) bool {
 	return false
 }
 
+// getGeneration returns the metadata.generation of an informer object, or 0
+// if the object is nil or doesn't expose metav1.Object. Both typed K8s
+// resources and *unstructured.Unstructured satisfy metav1.Object.
+func getGeneration(obj any) int64 {
+	if obj == nil {
+		return 0
+	}
+	m, ok := obj.(metav1.Object)
+	if !ok {
+		return 0
+	}
+	return m.GetGeneration()
+}
+
 // recordToTimelineStore records an event to the timeline store
 func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj any) {
 	store := timeline.GetStore()
@@ -397,14 +411,29 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 				}
 			}
 		} else if KindHasDiffer(kind) {
-			// Audited diff function found nothing observable — heartbeat,
-			// managedFields-only, reconcile counter. Recording these produces
-			// content-free timeline rows; drop instead.
-			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonNoDiff, op)
-			if DebugEvents {
-				log.Printf("[DEBUG] No-diff update, skipping: %s/%s/%s", kind, namespace, name)
+			// Audited diff function found nothing observable — usually a
+			// heartbeat, managedFields-only update, or reconcile counter.
+			// Before dropping, check metadata.generation: it bumps only on
+			// spec changes (status updates don't touch it), so a generation
+			// flip with a nil diff means our diff function missed a real spec
+			// field. Record those with a fallback summary instead of silently
+			// losing them — diff coverage gaps shouldn't become silent drops.
+			if oldGen, newGen := getGeneration(oldObj), getGeneration(newObj); oldGen != newGen && oldGen > 0 && newGen > 0 {
+				diff = &timeline.DiffInfo{
+					Fields: []timeline.FieldChange{{
+						Path:     "metadata.generation",
+						OldValue: oldGen,
+						NewValue: newGen,
+					}},
+					Summary: fmt.Sprintf("spec changed (gen %d→%d, fields not specifically tracked)", oldGen, newGen),
+				}
+			} else {
+				timeline.RecordDrop(kind, namespace, name, timeline.DropReasonNoDiff, op)
+				if DebugEvents {
+					log.Printf("[DEBUG] No-diff update, skipping: %s/%s/%s", kind, namespace, name)
+				}
+				return
 			}
-			return
 		}
 	}
 
