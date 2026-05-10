@@ -391,6 +391,12 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 					NewValue: f.NewValue,
 				}
 			}
+		} else if KindHasDiffer(kind) {
+			// Audited diff function found nothing observable — heartbeat,
+			// managedFields-only, reconcile counter. Recording these produces
+			// content-free timeline rows; drop instead.
+			timeline.RecordDrop(kind, namespace, name, timeline.DropReasonNoDiff, op)
+			return
 		}
 	}
 
