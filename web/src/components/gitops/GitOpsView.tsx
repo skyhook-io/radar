@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNod
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { clsx } from 'clsx'
-import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Settings, Table2, Tag, Trash2, XCircle } from 'lucide-react'
+import { CheckCircle2, ChevronDown, ChevronRight, CircleAlert, CircleDot, Clock3, GitBranch, GitCommit, HeartPulse, LayoutGrid, List, Loader2, Pause, Play, RefreshCw, RotateCw, Search, Settings, Tag, Trash2, XCircle } from 'lucide-react'
 import yaml from 'yaml'
 import {
   GitOpsActivityInsightView,
@@ -11,20 +11,16 @@ import {
   GitOpsTreeGraph,
   GitOpsStatusStrip,
   HealthStatusBadge,
-  StatusDot,
   SyncStatusBadge,
   formatCompactAge,
   formatRelativeAgeTime,
   initNavigationMap,
   kindToPlural,
-  mapHealthToTone,
-  matchesGitOpsTreeFilters,
   type APIResource,
   type GitOpsResourceTree,
   type GitOpsInsightRef,
   type GitOpsTreeFilters,
   type GitOpsTreeRef,
-  type GitOpsTreeNode,
   type GitOpsTreePreset,
   type SelectedResource,
 } from '@skyhook-io/k8s-ui'
@@ -1034,7 +1030,6 @@ function TableCell({ children }: { children: ReactNode }) {
 //   changes  — drift between desired and live state
 //   activity — current operation, history, diagnosis
 type GitOpsAppView = 'topology' | 'changes' | 'activity'
-type TopologyMode = 'graph' | 'table'
 
 function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   const location = useLocation()
@@ -1105,7 +1100,6 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   // can find and scroll it; cleared after a few seconds so the highlight
   // doesn't persist past its purpose.
   const [changesFocusKey, setChangesFocusKey] = useState<string | null>(null)
-  const [topologyMode, setTopologyMode] = useState<TopologyMode>('graph')
   const [graphPreset, setGraphPreset] = useState<GitOpsTreePreset>('compact')
   const [graphSearch, setGraphSearch] = useState('')
   const [graphKinds, setGraphKinds] = useState<Set<string>>(new Set())
@@ -1145,7 +1139,6 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
     namespaces: graphNamespaces,
     roles: graphRoles,
   }), [graphHealth, graphKinds, graphNamespaces, graphRoles, graphSync])
-  const resourceNodes = useMemo(() => filterTreeNodes(tree, graphSearch, graphFilters), [tree, graphFilters, graphSearch])
   const graphFacets = useMemo(() => buildTreeFacets(tree), [tree])
 
   function openResourceFromTree(ref: GitOpsTreeRef | GitOpsInsightRef) {
@@ -1515,11 +1508,6 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             <div className="flex items-center gap-2">
               {appView === 'topology' && (
                 <>
-                  {/* Same filter rail; toggle picks the rendering. */}
-                  <div className="flex items-center gap-1 rounded-md border border-theme-border bg-theme-surface p-0.5">
-                    <ViewButton active={topologyMode === 'graph'} icon={GitBranch} label="Graph" onClick={() => setTopologyMode('graph')} />
-                    <ViewButton active={topologyMode === 'table'} icon={Table2} label="Table" onClick={() => setTopologyMode('table')} />
-                  </div>
                   <button
                     type="button"
                     onClick={() => {
@@ -1534,15 +1522,13 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                   >
                     Clear filters
                   </button>
-                  {topologyMode === 'graph' && (
-                    <button
-                      type="button"
-                      onClick={() => setGraphFullscreen(!graphFullscreen)}
-                      className="rounded-md border border-theme-border bg-theme-surface px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
-                    >
-                      {graphFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
-                    </button>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => setGraphFullscreen(!graphFullscreen)}
+                    className="rounded-md border border-theme-border bg-theme-surface px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                  >
+                    {graphFullscreen ? 'Exit fullscreen' : 'Fullscreen'}
+                  </button>
                 </>
               )}
             </div>
@@ -1567,6 +1553,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
               error={insightsQ.error as Error | null}
               onOpenResource={openResourceFromTree}
               focusKey={changesFocusKey}
+              tree={tree}
             />
           ) : (
             <div className="grid min-h-0 min-w-0 flex-1 grid-cols-[280px_minmax(0,1fr)] max-lg:grid-cols-1">
@@ -1588,30 +1575,18 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                 onToggleRole={(value) => toggleSet(graphRoles, setGraphRoles, value)}
               />
               <div className="min-h-0 min-w-0 border-l border-theme-border max-lg:border-l-0 max-lg:border-t">
-                {topologyMode === 'graph' ? (
-                  <GitOpsTreeGraph
-                    tree={tree}
-                    loading={treeQ.isLoading}
-                    error={treeQ.error as Error | null}
-                    onNodeClick={openResourceFromTree}
-                    preset={graphPreset}
-                    onPresetChange={setGraphPreset}
-                    query={graphSearch}
-                    onQueryChange={setGraphSearch}
-                    filters={graphFilters}
-                    showToolbar={false}
-                  />
-                ) : (
-                  <GitOpsResourceTable
-                    nodes={resourceNodes}
-                    capabilities={insightsQ.data?.capabilities}
-                    selectiveLoading={argoSync.isPending}
-                    terminating={terminating}
-                    terminatingDisabledTooltip={terminatingActionTooltip}
-                    onSelectiveSync={(refs) => argoSync.mutate({ namespace, name, resources: refs })}
-                    onOpen={openResourceFromTree}
-                  />
-                )}
+                <GitOpsTreeGraph
+                  tree={tree}
+                  loading={treeQ.isLoading}
+                  error={treeQ.error as Error | null}
+                  onNodeClick={openResourceFromTree}
+                  preset={graphPreset}
+                  onPresetChange={setGraphPreset}
+                  query={graphSearch}
+                  onQueryChange={setGraphSearch}
+                  filters={graphFilters}
+                  showToolbar={false}
+                />
               </div>
             </div>
           )}
@@ -1888,437 +1863,6 @@ function GitOpsGraphFilterRail({
   )
 }
 
-// Kinds where Argo can't compute meaningful health — Health=Unknown for these
-// is *expected absence*, not a problem. Rendering them like a real Unknown
-// signal floods the table with apparent issues. We render them as a quieter
-// gray tone with a "no health computation available for this kind" tooltip.
-const HEALTHLESS_KINDS = new Set([
-  'ServiceAccount', 'ConfigMap', 'Secret',
-  'Role', 'ClusterRole', 'RoleBinding', 'ClusterRoleBinding',
-  'CustomResourceDefinition', 'Namespace',
-  'ResourceQuota', 'LimitRange',
-  'PriorityClass', 'RuntimeClass',
-  'StorageClass', 'PersistentVolume',
-  'NetworkPolicy', 'PodDisruptionBudget',
-  'IngressClass', 'GatewayClass',
-  'ValidatingWebhookConfiguration', 'MutatingWebhookConfiguration',
-  'Lease',
-])
-
-// Sort priority so problems land at the top by default. Lower = more severe.
-// OutOfSync (drift, requires action) ranks above any health state because it's
-// the GitOps-specific signal; within sync states, health-failure rises.
-const SYNC_PRIORITY: Record<string, number> = {
-  OutOfSync: 0,
-  Missing: 1,
-  Unknown: 2,
-  Synced: 3,
-  Pruned: 4,
-}
-const HEALTH_PRIORITY: Record<string, number> = {
-  Degraded: 0,
-  Missing: 1,
-  Unknown: 2,
-  Progressing: 3,
-  Suspended: 4,
-  Healthy: 5,
-}
-
-type SortColumn = 'status' | 'name' | 'namespace' | 'age'
-type SortDir = 'asc' | 'desc'
-
-function nodeSyncRank(s?: string): number {
-  return SYNC_PRIORITY[s ?? ''] ?? 2
-}
-function nodeHealthRank(h?: string, kind?: string): number {
-  // Health=Unknown on a kind that doesn't report health is not a problem;
-  // sink it below Healthy so it doesn't drag healthless rows to the top.
-  if ((!h || h === 'Unknown') && kind && HEALTHLESS_KINDS.has(kind)) return 6
-  return HEALTH_PRIORITY[h ?? ''] ?? 2
-}
-
-function compareNodes(a: GitOpsTreeNode, b: GitOpsTreeNode, col: SortColumn, dir: SortDir): number {
-  const mul = dir === 'asc' ? 1 : -1
-  let cmp = 0
-  switch (col) {
-    case 'status': {
-      // Composite: sync first, then health within same sync. "Problems first"
-      // is the asc direction (lower priority = more severe).
-      cmp = nodeSyncRank(a.sync) - nodeSyncRank(b.sync)
-      if (cmp === 0) cmp = nodeHealthRank(a.health, a.ref.kind) - nodeHealthRank(b.health, b.ref.kind)
-      if (cmp === 0) cmp = (a.ref.kind || '').localeCompare(b.ref.kind || '')
-      if (cmp === 0) cmp = (a.ref.name || '').localeCompare(b.ref.name || '')
-      return cmp * mul
-    }
-    case 'name':
-      return ((a.ref.kind || '') + a.ref.name).localeCompare((b.ref.kind || '') + b.ref.name) * mul
-    case 'namespace':
-      return ((a.ref.namespace || '') + a.ref.kind + a.ref.name).localeCompare((b.ref.namespace || '') + b.ref.kind + b.ref.name) * mul
-    case 'age': {
-      const at = typeof a.data?.createdAt === 'string' ? Date.parse(a.data.createdAt) : 0
-      const bt = typeof b.data?.createdAt === 'string' ? Date.parse(b.data.createdAt) : 0
-      // Newer first when desc — invert because larger timestamp = newer
-      return (bt - at) * mul
-    }
-  }
-}
-
-function GitOpsResourceTable({
-  nodes,
-  capabilities,
-  selectiveLoading,
-  terminating,
-  terminatingDisabledTooltip,
-  onSelectiveSync,
-  onOpen,
-}: {
-  nodes: GitOpsTreeNode[]
-  capabilities?: { selectiveSync?: boolean; unsupportedReason?: string; warnings?: string[] }
-  selectiveLoading?: boolean
-  // When the parent app is Terminating, selective sync would no-op on the
-  // backend (`assertNotTerminating` returns 409); disable the affordance and
-  // surface the same tooltip the top-level action buttons use.
-  terminating?: boolean
-  terminatingDisabledTooltip?: string
-  onSelectiveSync?: (refs: Array<{ group?: string; kind: string; namespace?: string; name: string }>) => void
-  onOpen: (ref: GitOpsTreeRef, node: GitOpsTreeNode) => void
-}) {
-  const [selected, setSelected] = useState<Set<string>>(new Set())
-  const [sortCol, setSortCol] = useState<SortColumn>('status')
-  const [sortDir, setSortDir] = useState<SortDir>('asc')
-  const [groupByKind, setGroupByKind] = useState(false)
-  const baseRows = nodes.filter((node) => node.role !== 'root' && node.role !== 'group')
-  const visibleIDs = useMemo(() => new Set(baseRows.map((node) => node.id)), [baseRows])
-  const selectedRows = baseRows.filter((node) => selected.has(node.id))
-  useEffect(() => {
-    setSelected((prev) => {
-      const next = new Set([...prev].filter((id) => visibleIDs.has(id)))
-      return next.size === prev.size ? prev : next
-    })
-  }, [visibleIDs])
-  // Drop the namespace column entirely when nothing in the current view is
-  // namespaced — most cluster-addon apps are 100% cluster-scoped and the
-  // empty column is dead weight.
-  const showNamespaceColumn = useMemo(() => baseRows.some((n) => !!n.ref.namespace), [baseRows])
-  // Sort once for the flat view. Grouped view sorts within each kind group
-  // so the same priority order applies.
-  const sortedRows = useMemo(() => [...baseRows].sort((a, b) => compareNodes(a, b, sortCol, sortDir)), [baseRows, sortCol, sortDir])
-  // Group by kind: stable iteration preserves the sort order within groups.
-  // Group order itself follows the most severe row in each group so groups
-  // with problems surface above all-Synced groups.
-  const grouped = useMemo(() => {
-    if (!groupByKind) return null
-    const map = new Map<string, GitOpsTreeNode[]>()
-    for (const row of sortedRows) {
-      const k = row.ref.kind || 'Unknown'
-      if (!map.has(k)) map.set(k, [])
-      map.get(k)!.push(row)
-    }
-    const groups = Array.from(map.entries()).map(([kind, rows]) => ({
-      kind,
-      rows,
-      worstRank: Math.min(...rows.map((r) => nodeSyncRank(r.sync) * 10 + nodeHealthRank(r.health, r.ref.kind))),
-    }))
-    groups.sort((a, b) => a.worstRank - b.worstRank)
-    return groups
-  }, [groupByKind, sortedRows])
-  if (baseRows.length === 0) {
-    return <div className="flex h-full items-center justify-center text-sm text-theme-text-secondary">No resources match the current filters.</div>
-  }
-  return (
-    <div className="flex h-full min-h-0 flex-col bg-theme-base">
-      {/* Toolbar: sort/group controls live above the table so the user can
-          retune what's visible without scrolling away to a side rail. */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-theme-border bg-theme-surface px-3 py-1.5 text-[11px] text-theme-text-tertiary">
-        <span>{baseRows.length} resources</span>
-        <span className="text-theme-text-tertiary/50">·</span>
-        <button
-          type="button"
-          onClick={() => setGroupByKind((v) => !v)}
-          className={clsx(
-            'rounded px-2 py-0.5 text-[11px] transition-colors',
-            groupByKind
-              ? 'bg-theme-elevated text-theme-text-primary'
-              : 'text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary',
-          )}
-        >
-          Group by kind {groupByKind ? '✓' : ''}
-        </button>
-        <span className="ml-auto text-theme-text-tertiary">Sort: {sortCol === 'status' ? 'problems first' : sortCol} ({sortDir === 'asc' ? 'asc' : 'desc'})</span>
-        {sortCol !== 'status' && (
-          <button
-            type="button"
-            onClick={() => { setSortCol('status'); setSortDir('asc') }}
-            className="rounded px-2 py-0.5 text-[11px] text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
-          >
-            Reset sort
-          </button>
-        )}
-      </div>
-      {selectedRows.length > 0 && (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 border-b border-theme-border bg-theme-surface px-3 py-2 text-xs">
-          <span className="font-medium text-theme-text-primary">{selectedRows.length} selected</span>
-          <button
-            type="button"
-            onClick={() => setSelected(new Set())}
-            className="rounded px-2 py-1 text-theme-text-tertiary hover:bg-theme-hover hover:text-theme-text-primary"
-          >
-            Clear
-          </button>
-          <Tooltip
-            content={
-              terminating
-                ? (terminatingDisabledTooltip ?? 'This application is being deleted; sync actions cannot run.')
-                : capabilities?.selectiveSync
-                  ? 'Sync selected resources'
-                  : capabilities?.unsupportedReason || 'Selective sync is not supported for this GitOps tool'
-            }
-            delay={120}
-            wrapperClassName="ml-auto"
-          >
-            <button
-              type="button"
-              disabled={!capabilities?.selectiveSync || selectiveLoading || terminating}
-              onClick={() => onSelectiveSync?.(selectedRows.map((node) => ({
-                group: node.ref.group,
-                kind: node.ref.kind,
-                namespace: node.ref.namespace,
-                name: node.ref.name,
-              })))}
-              className="rounded-md border border-theme-border bg-theme-base px-2 py-1 font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary disabled:cursor-not-allowed disabled:opacity-50"
-            >
-              {selectiveLoading ? 'Syncing...' : 'Sync selected'}
-            </button>
-          </Tooltip>
-          {capabilities?.warnings?.[0] && <span className="basis-full text-[11px] text-theme-text-tertiary">{capabilities.warnings[0]}</span>}
-        </div>
-      )}
-      <div className="min-h-0 flex-1 overflow-auto">
-        <table className="w-full table-fixed border-separate border-spacing-0 text-sm">
-          <thead className="sticky top-0 z-10 bg-theme-surface">
-            <tr className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
-              <TableHead className="w-[44px]">
-                <input
-                  type="checkbox"
-                  checked={baseRows.length > 0 && selectedRows.length === baseRows.length}
-                  ref={(input) => {
-                    if (input) input.indeterminate = selectedRows.length > 0 && selectedRows.length < baseRows.length
-                  }}
-                  onChange={(event) => setSelected(event.target.checked ? new Set(baseRows.map((node) => node.id)) : new Set())}
-                  className="h-3.5 w-3.5"
-                />
-              </TableHead>
-              <SortableHead label="Status" col="status" sortCol={sortCol} sortDir={sortDir} onSort={(c, d) => { setSortCol(c); setSortDir(d) }} className="w-[110px]" />
-              <SortableHead label="Resource" col="name" sortCol={sortCol} sortDir={sortDir} onSort={(c, d) => { setSortCol(c); setSortDir(d) }} className={showNamespaceColumn ? 'w-[50%]' : 'w-[65%]'} />
-              {showNamespaceColumn && (
-                <SortableHead label="Namespace" col="namespace" sortCol={sortCol} sortDir={sortDir} onSort={(c, d) => { setSortCol(c); setSortDir(d) }} className="w-[20%]" />
-              )}
-              <SortableHead label="Age" col="age" sortCol={sortCol} sortDir={sortDir} onSort={(c, d) => { setSortCol(c); setSortDir(d) }} className="w-[100px]" />
-            </tr>
-          </thead>
-          <tbody>
-            {grouped
-              ? grouped.flatMap((group) => [
-                  <tr key={`group-${group.kind}`} className="bg-theme-base/40">
-                    <td colSpan={4 + (showNamespaceColumn ? 1 : 0)} className="border-b border-theme-border px-3 py-1 text-[11px] font-semibold uppercase tracking-wider text-theme-text-secondary">
-                      {group.kind} <span className="ml-1 text-theme-text-tertiary">({group.rows.length})</span>
-                      {(() => {
-                        const issues = group.rows.filter((r) => nodeSyncRank(r.sync) < 3 || (nodeHealthRank(r.health, r.ref.kind) < 3))
-                        return issues.length > 0 ? (
-                          <span className="ml-2 text-amber-600 dark:text-amber-400">· {issues.length} need{issues.length === 1 ? 's' : ''} attention</span>
-                        ) : null
-                      })()}
-                    </td>
-                  </tr>,
-                  ...group.rows.map((node) => (
-                    <ResourceRow
-                      key={node.id}
-                      node={node}
-                      selected={selected}
-                      setSelected={setSelected}
-                      onOpen={onOpen}
-                      showNamespaceColumn={showNamespaceColumn}
-                    />
-                  )),
-                ])
-              : sortedRows.map((node) => (
-                  <ResourceRow
-                    key={node.id}
-                    node={node}
-                    selected={selected}
-                    setSelected={setSelected}
-                    onOpen={onOpen}
-                    showNamespaceColumn={showNamespaceColumn}
-                  />
-                ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  )
-}
-
-// SortableHead: clickable column header. Three-state cycle:
-//   asc → desc → reset to default sort (status/asc)
-// Reset doesn't return to a column-specific default; the user just gets the
-// same "problems first" view they started with, which is almost always what
-// they want when they decide they're done sorting by something else.
-function SortableHead({
-  label,
-  col,
-  sortCol,
-  sortDir,
-  onSort,
-  className,
-}: {
-  label: string
-  col: SortColumn
-  sortCol: SortColumn
-  sortDir: SortDir
-  onSort: (col: SortColumn, dir: SortDir) => void
-  className?: string
-}) {
-  const active = sortCol === col
-  return (
-    <TableHead className={className}>
-      <button
-        type="button"
-        onClick={() => {
-          if (!active) onSort(col, 'asc')
-          else if (sortDir === 'asc') onSort(col, 'desc')
-          else onSort('status', 'asc')
-        }}
-        className={clsx(
-          'inline-flex items-center gap-1 text-left text-[11px] uppercase tracking-wide transition-colors',
-          active ? 'text-theme-text-primary' : 'text-theme-text-tertiary hover:text-theme-text-secondary',
-        )}
-      >
-        {label}
-        <span className="text-[10px]">
-          {active ? (sortDir === 'asc' ? '▲' : '▼') : '⇅'}
-        </span>
-      </button>
-    </TableHead>
-  )
-}
-
-// ResourceRow renders a single resource. Key visual decisions:
-//   - Status column has both sync + health dots side by side. Tooltip on each
-//     dot carries the full text. This is the primary scan target.
-//   - Resource column merges Kind (small mono prefix) + Name (medium weight)
-//     so the user sees the kind context without burning a column on it.
-//   - Healthless kinds get a quieter Unknown treatment (slate dot, not amber)
-//     and a tooltip explaining why.
-function ResourceRow({
-  node,
-  selected,
-  setSelected,
-  onOpen,
-  showNamespaceColumn,
-}: {
-  node: GitOpsTreeNode
-  selected: Set<string>
-  setSelected: React.Dispatch<React.SetStateAction<Set<string>>>
-  onOpen: (ref: GitOpsTreeRef, node: GitOpsTreeNode) => void
-  showNamespaceColumn: boolean
-}) {
-  const sync = node.sync || 'Unknown'
-  const rawHealth = node.health || node.topologyStatus || 'Unknown'
-  const isHealthless = HEALTHLESS_KINDS.has(node.ref.kind)
-  const healthDisplay = isHealthless && rawHealth === 'Unknown' ? '—' : rawHealth
-  const healthTone = isHealthless && rawHealth === 'Unknown'
-    ? 'unknown'
-    : mapHealthToTone(rawHealth)
-  const syncTone = syncToneOf(sync)
-  const created = typeof node.data?.createdAt === 'string' ? node.data.createdAt : ''
-  return (
-    <tr
-      onClick={() => onOpen(node.ref, node)}
-      className="group cursor-pointer bg-theme-base hover:bg-theme-hover/60"
-    >
-      <TableCell>
-        <input
-          type="checkbox"
-          checked={selected.has(node.id)}
-          onClick={(event) => event.stopPropagation()}
-          onChange={(event) => {
-            setSelected((prev) => {
-              const next = new Set(prev)
-              if (event.target.checked) next.add(node.id)
-              else next.delete(node.id)
-              return next
-            })
-          }}
-          className="h-3.5 w-3.5"
-        />
-      </TableCell>
-      <TableCell>
-        <div className="flex items-center gap-2">
-          <Tooltip content={`Sync: ${sync}`} delay={200}>
-            <StatusDot tone={syncTone} size="md" />
-          </Tooltip>
-          <Tooltip
-            content={isHealthless && rawHealth === 'Unknown' ? 'No health computation for this kind' : `Health: ${rawHealth}`}
-            delay={200}
-          >
-            <StatusDot tone={healthTone} size="md" />
-          </Tooltip>
-          <span className={clsx(
-            'truncate text-[11px]',
-            syncTone === 'unhealthy' || syncTone === 'degraded' ? 'font-medium text-amber-700 dark:text-amber-400' : 'text-theme-text-tertiary',
-          )}>
-            {sync === 'Synced' && (healthDisplay === '—' || healthDisplay === 'Healthy') ? 'OK' : sync}
-          </span>
-        </div>
-      </TableCell>
-      <TableCell>
-        <div className="flex min-w-0 items-baseline gap-2">
-          <span className="shrink-0 font-mono text-[10px] uppercase tracking-wide text-theme-text-tertiary">{node.ref.kind}</span>
-          <span className="min-w-0 truncate font-medium text-theme-text-primary">{node.ref.name}</span>
-        </div>
-      </TableCell>
-      {showNamespaceColumn && (
-        <TableCell>
-          {node.ref.namespace ? (
-            <span className="text-theme-text-secondary">{node.ref.namespace}</span>
-          ) : (
-            <span className="text-theme-text-tertiary/60">cluster</span>
-          )}
-        </TableCell>
-      )}
-      <TableCell>
-        {created ? (
-          <Tooltip content={new Date(created).toLocaleString()} delay={400}>
-            <span className="text-theme-text-secondary">{formatRelative(created)}</span>
-          </Tooltip>
-        ) : (
-          <span className="text-theme-text-tertiary/60">—</span>
-        )}
-      </TableCell>
-    </tr>
-  )
-}
-
-// Sync states use the same tone palette as health states so the eye treats
-// sync and health dots as a single status indicator pair. OutOfSync rises
-// to "degraded" (amber) — it's the GitOps equivalent of "the world isn't
-// what you asked for"; not red because the live state itself isn't broken.
-function syncToneOf(sync: string): 'healthy' | 'degraded' | 'unhealthy' | 'neutral' | 'unknown' {
-  switch (sync) {
-    case 'Synced':
-    case 'Pruned':
-      return 'healthy'
-    case 'OutOfSync':
-      return 'degraded'
-    case 'Missing':
-      return 'unhealthy'
-    case 'Reconciling':
-      return 'neutral'
-    default:
-      return 'unknown'
-  }
-}
-
 function buildTreeFacets(tree: GitOpsResourceTree | null) {
   const nodes = tree?.nodes ?? []
   return {
@@ -2328,21 +1872,6 @@ function buildTreeFacets(tree: GitOpsResourceTree | null) {
     namespaces: countValues(nodes.map((node) => node.ref.namespace || '(cluster)')),
     roles: countValues(nodes.map((node) => node.role)),
   }
-}
-
-function filterTreeNodes(tree: GitOpsResourceTree | null, query: string, filters: GitOpsTreeFilters): GitOpsTreeNode[] {
-  const q = query.trim().toLowerCase()
-  return (tree?.nodes ?? []).filter((node) => {
-    if (q && ![
-      node.ref.kind,
-      node.ref.name,
-      node.ref.namespace,
-      node.ref.group,
-      node.sync,
-      node.health,
-    ].some((value) => String(value ?? '').toLowerCase().includes(q))) return false
-    return matchesGitOpsTreeFilters(node, filters)
-  })
 }
 
 function normalizeDetailResource(kind: string, group: string, resource: any): GitOpsRow | null {

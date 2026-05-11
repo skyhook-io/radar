@@ -1,7 +1,7 @@
 import { AlertTriangle, ChevronDown, ChevronRight, CircleAlert, Clock3, GitBranch, GitCommit, Info, Loader2, Plus, Trash2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Fragment, useEffect, useRef, useState, type ReactNode } from 'react'
-import type { GitOpsChange, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation } from '../../../types'
+import type { GitOpsChange, GitOpsHistoryItem, GitOpsInsight, GitOpsInsightRef, GitOpsIssue, GitOpsPlanItem, GitOpsRemediation, GitOpsResourceTree, GitOpsTreeNode } from '../../../types'
 import { HealthStatusBadge, SyncStatusBadge } from '../GitOpsStatusBadge'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../../utils/badge-colors'
 import { formatRelativeAgeTime } from '../../../utils/format'
@@ -683,11 +683,30 @@ interface GitOpsChangesViewProps {
   // the band above. Key shape: `${kind}/${namespace||''}/${name}` (group is
   // intentionally not part of the key — issue refs may not carry it).
   focusKey?: string | null
+  // Optional topology tree for the "All resources" toggle. When supplied,
+  // generated descendants (Pods, ReplicaSets, etc.) that aren't in the
+  // controller's declared inventory can be unioned into the list, matching
+  // Argo's default list-view behavior. Default mode still shows declared
+  // resources only — the diagnostic data (drift, events) lives there.
+  tree?: GitOpsResourceTree | null
 }
 
-export function GitOpsChangesView({ insight, error, onOpenResource, focusKey }: GitOpsChangesViewProps) {
+export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tree }: GitOpsChangesViewProps) {
+  // "All resources" toggle: when on, render generated descendants alongside
+  // the controller's declared inventory. Argo's UI defaults to "all" — we
+  // default to "declared" because the diagnostic data (drift, events) lives
+  // on declared resources only and the triage flow stays cleaner without
+  // 30+ Pod rows in the way. Operators who want the full picture flip it.
+  const [showAll, setShowAll] = useState(false)
   const changes = insight?.changes ?? []
   const plan = insight?.plan ?? []
+  // Synthesize Change rows for generated tree nodes that aren't already in
+  // the declared inventory. These rows carry less diagnostic data — no
+  // drift, no recent events, no syncResult — but enough to match Argo's
+  // "all resources" mental model: kind/name/namespace + live sync/health.
+  const extraFromTree: GitOpsChange[] = showAll && tree
+    ? buildTreeExtras(tree.nodes ?? [], changes)
+    : []
   // refs[focusKey] holds the DOM node of the row to scroll into view; the
   // map persists across renders so the effect can find the node even when
   // changes re-render (e.g. polling).
@@ -721,8 +740,9 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey }: 
   // the order the controller will reconcile them. Changes without a plan
   // entry land at the end in name order — they're managed resources the
   // controller saw but didn't sequence (rare but possible for hook resources
-  // already completed, or status-only entries).
-  const sortedChanges = [...changes].sort((a, b) => {
+  // already completed, or status-only entries). Extras-from-tree land
+  // after all declared rows.
+  const sortedChanges = [...changes, ...extraFromTree].sort((a, b) => {
     const ap = planByRef.get(refKey(a.ref))?.order
     const bp = planByRef.get(refKey(b.ref))?.order
     if (ap == null && bp == null) return refKey(a.ref).localeCompare(refKey(b.ref))
@@ -742,7 +762,57 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey }: 
   return (
     <div className="h-full overflow-auto bg-theme-base p-4">
       <section className="rounded-md border border-theme-border bg-theme-surface">
-        <SectionHeader icon={GitCommit} title="Resources" hint={insight.summary.partialReason} />
+        <div className="flex items-center justify-between border-b border-theme-border px-4 py-2.5">
+          <div className="flex items-center gap-2">
+            <GitCommit className="h-4 w-4 text-theme-text-tertiary" />
+            <h2 className="text-sm font-semibold text-theme-text-primary">Resources</h2>
+            {insight.summary.partialReason && (
+              <Tooltip content={insight.summary.partialReason} delay={120}>
+                <span className="cursor-help text-theme-text-tertiary hover:text-theme-text-secondary">
+                  <Info className="h-3.5 w-3.5" />
+                </span>
+              </Tooltip>
+            )}
+            <span className="text-[11px] tabular-nums text-theme-text-tertiary">
+              {sortedChanges.length} {sortedChanges.length === 1 ? 'resource' : 'resources'}
+            </span>
+          </div>
+          {tree && (
+            // Scope toggle — switches between the controller's declared
+            // inventory (default; drift + events live here) and the full
+            // topology including generated descendants like Pods/ReplicaSets.
+            <div className="flex items-center gap-0.5 rounded-md border border-theme-border bg-theme-base p-0.5 text-[11px]">
+              <Tooltip content="Resources the GitOps controller declares — drift and events are computed only for these." delay={300}>
+                <button
+                  type="button"
+                  onClick={() => setShowAll(false)}
+                  className={clsx(
+                    'rounded px-2 py-0.5 font-medium transition-colors',
+                    !showAll
+                      ? 'bg-theme-elevated text-theme-text-primary'
+                      : 'text-theme-text-secondary hover:text-theme-text-primary',
+                  )}
+                >
+                  Declared
+                </button>
+              </Tooltip>
+              <Tooltip content="Includes generated descendants like Pods and ReplicaSets (matches Argo's default list)." delay={300}>
+                <button
+                  type="button"
+                  onClick={() => setShowAll(true)}
+                  className={clsx(
+                    'rounded px-2 py-0.5 font-medium transition-colors',
+                    showAll
+                      ? 'bg-theme-elevated text-theme-text-primary'
+                      : 'text-theme-text-secondary hover:text-theme-text-primary',
+                  )}
+                >
+                  All
+                </button>
+              </Tooltip>
+            </div>
+          )}
+        </div>
         {/* Honest disclaimer about diff scope. Argo's CRD doesn't expose
             per-resource desired-vs-live diffs — those are computed on
             demand by the Argo API server, which Radar doesn't call. */}
@@ -814,6 +884,41 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey }: 
 // Keys must match between Plan items and Change items for the cross-ref to
 // work. Group can be omitted in either source, so we don't require it for
 // equality — kind+namespace+name is the practical identifier here.
+// buildTreeExtras turns generated tree nodes into synthetic GitOpsChange rows
+// so the unified Resources list can render them without a parallel row
+// component. The declared set is excluded (already rendered from
+// insight.changes); root + group nodes are skipped — root is the GitOps CR
+// itself (rendered as the page header) and groups are collapse-only fixtures.
+function buildTreeExtras(nodes: GitOpsTreeNode[], declared: GitOpsChange[]): GitOpsChange[] {
+  const declaredKeys = new Set(declared.map((c) => refKey(c.ref)))
+  const out: GitOpsChange[] = []
+  for (const n of nodes) {
+    if (n.role === 'root' || n.role === 'group') continue
+    const key = refKey(n.ref)
+    if (declaredKeys.has(key)) continue
+    out.push({
+      ref: {
+        group: n.ref.group,
+        kind: n.ref.kind,
+        namespace: n.ref.namespace,
+        name: n.ref.name,
+      },
+      // Synthetic category: tree nodes don't carry the controller's per-
+      // resource sync category. Default to Unknown — the row renders with
+      // the live sync/health badges from the topology, which is the same
+      // signal at a different vocabulary.
+      category: 'Unknown',
+      sync: n.sync,
+      health: n.health,
+      hasDesired: false,
+      hasLive: true,
+      partial: true,
+      partialNote: 'Generated resource — not directly tracked by the GitOps controller (no drift / event diagnostics).',
+    })
+  }
+  return out
+}
+
 function refKey(ref: { kind: string; namespace?: string; name: string }): string {
   return `${ref.kind}/${ref.namespace || ''}/${ref.name}`
 }
