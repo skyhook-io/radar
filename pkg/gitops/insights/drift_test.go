@@ -235,8 +235,6 @@ func TestComputeDrift_DeploymentDefaultsAreNotDrift(t *testing.T) {
 		},
 	}
 
-	live["template"].(map[string]any)["spec"].(map[string]any)["containers"] = live["template"].(map[string]any)["spec"].(map[string]any)["containers"]
-
 	obj := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apps/v1",
 		"kind":       "Deployment",
@@ -253,7 +251,7 @@ func TestComputeDrift_DeploymentDefaultsAreNotDrift(t *testing.T) {
 	got := computeDriftFromLastApplied(obj, nil)
 	if got != nil && len(got.Entries) > 0 {
 		// We expect no drift: every "live extra" field is an API server default
-		// and should cancel out via scheme.Default().
+		// and should cancel out via applySchemeDefaults.
 		t.Errorf("expected no drift on a partial Deployment manifest with only API server defaults filled in; got %d entries:\n%v", len(got.Entries), got.Entries)
 	}
 }
@@ -328,5 +326,287 @@ func TestParseArgoIgnoreDifferences_MatchesByGroupKindAndOptionalNameNs(t *testi
 	// Different kind = no matches
 	if got := ig.pointersFor(Ref{Group: "", Kind: "Service", Name: "x"}); got != nil {
 		t.Errorf("Service shouldn't match Deployment rules; got %v", got)
+	}
+}
+
+// TestComputeDrift_ServerAssignedFieldsNotDrift pins the kindServerAssignedPaths
+// filter: Service.clusterIP/clusterIPs/ipFamilies/internalTrafficPolicy,
+// Pod.nodeName, PVC.volumeName are all *runtime*-assigned and shouldn't
+// surface as drift even though they're added on live. A regression to the
+// filter (deleting a kind entry, or detaching it from the diff pipeline)
+// would silently re-introduce these as "added" entries.
+func TestComputeDrift_ServerAssignedFieldsNotDrift(t *testing.T) {
+	cases := []struct {
+		name     string
+		kind     string
+		desired  string
+		liveSpec map[string]any
+	}{
+		{
+			name:    "Service clusterIP, clusterIPs, ipFamilies, internalTrafficPolicy",
+			kind:    "Service",
+			desired: `{"apiVersion":"v1","kind":"Service","spec":{"type":"ClusterIP","ports":[{"port":80,"protocol":"TCP"}],"selector":{"app":"x"}}}`,
+			liveSpec: map[string]any{
+				"type":                  "ClusterIP",
+				"sessionAffinity":       "None",
+				"ipFamilyPolicy":        "SingleStack",
+				"clusterIP":             "10.0.0.5",
+				"clusterIPs":            []any{"10.0.0.5"},
+				"ipFamilies":            []any{"IPv4"},
+				"internalTrafficPolicy": "Cluster",
+				"ports":                 []any{map[string]any{"port": int64(80), "protocol": "TCP"}},
+				"selector":              map[string]any{"app": "x"},
+			},
+		},
+		{
+			name:    "Pod nodeName",
+			kind:    "Pod",
+			desired: `{"apiVersion":"v1","kind":"Pod","spec":{"containers":[{"name":"c","image":"nginx"}]}}`,
+			liveSpec: map[string]any{
+				"containers": []any{map[string]any{
+					"name":                     "c",
+					"image":                    "nginx",
+					"imagePullPolicy":          "IfNotPresent",
+					"terminationMessagePath":   "/dev/termination-log",
+					"terminationMessagePolicy": "File",
+					"resources":                map[string]any{},
+				}},
+				"dnsPolicy":                     "ClusterFirst",
+				"restartPolicy":                 "Always",
+				"schedulerName":                 "default-scheduler",
+				"securityContext":               map[string]any{},
+				"terminationGracePeriodSeconds": int64(30),
+				"nodeName":                      "worker-3",
+			},
+		},
+		{
+			name:    "PersistentVolumeClaim volumeName",
+			kind:    "PersistentVolumeClaim",
+			desired: `{"apiVersion":"v1","kind":"PersistentVolumeClaim","spec":{"accessModes":["ReadWriteOnce"],"resources":{"requests":{"storage":"1Gi"}}}}`,
+			liveSpec: map[string]any{
+				"accessModes": []any{"ReadWriteOnce"},
+				"resources":   map[string]any{"requests": map[string]any{"storage": "1Gi"}},
+				"volumeName":  "pvc-7a8b9c0d-1234",
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "v1",
+				"kind":       tc.kind,
+				"metadata": map[string]any{
+					"name":      "x",
+					"namespace": "ns",
+					"annotations": map[string]any{
+						kubectlLastAppliedAnnotation: tc.desired,
+					},
+				},
+				"spec": tc.liveSpec,
+			}}
+			got := computeDriftFromLastApplied(obj, nil)
+			if got != nil && len(got.Entries) > 0 {
+				t.Errorf("expected no drift on %s with only server-assigned fields differing; got %d entries:\n%v", tc.kind, len(got.Entries), got.Entries)
+			}
+		})
+	}
+}
+
+// TestComputeDrift_AllKindDefaults_NoNoise covers each registered
+// kindDefaulters entry. One happy-path test per kind, asserting "manifest
+// with the user-required fields only, live with all the API server's
+// defaults filled in" → no drift. A typo in any defaulter (e.g.,
+// "OrderedReady " with a trailing space) fails the matching kind's case.
+func TestComputeDrift_AllKindDefaults_NoNoise(t *testing.T) {
+	containerLive := func(name string) map[string]any {
+		return map[string]any{
+			"name":                     name,
+			"image":                    "nginx",
+			"imagePullPolicy":          "IfNotPresent",
+			"terminationMessagePath":   "/dev/termination-log",
+			"terminationMessagePolicy": "File",
+			"resources":                map[string]any{},
+		}
+	}
+	podSpecLive := func(restartPolicy string) map[string]any {
+		return map[string]any{
+			"containers":                    []any{containerLive("c")},
+			"dnsPolicy":                     "ClusterFirst",
+			"restartPolicy":                 restartPolicy,
+			"schedulerName":                 "default-scheduler",
+			"securityContext":               map[string]any{},
+			"terminationGracePeriodSeconds": int64(30),
+		}
+	}
+	// Pod template "metadata" gets dropped from comparison via isNilish
+	// when both sides have only an empty labels map. Set labels on both
+	// sides consistently for the workload kinds that ship them.
+	templateLiveBare := func(restartPolicy string) map[string]any {
+		return map[string]any{
+			"metadata": map[string]any{},
+			"spec":     podSpecLive(restartPolicy),
+		}
+	}
+	templateLiveLabeled := func(restartPolicy string) map[string]any {
+		return map[string]any{
+			"metadata": map[string]any{"labels": map[string]any{"app": "x"}},
+			"spec":     podSpecLive(restartPolicy),
+		}
+	}
+
+	cases := []struct {
+		kind     string
+		desired  string
+		liveSpec map[string]any
+	}{
+		{
+			kind:    "StatefulSet",
+			desired: `{"apiVersion":"apps/v1","kind":"StatefulSet","spec":{"selector":{"matchLabels":{"app":"x"}},"serviceName":"x","template":{"metadata":{"labels":{"app":"x"}},"spec":{"containers":[{"name":"c","image":"nginx"}]}}}}`,
+			liveSpec: map[string]any{
+				"replicas":             int64(1),
+				"revisionHistoryLimit": int64(10),
+				"podManagementPolicy":  "OrderedReady",
+				"updateStrategy":       map[string]any{"type": "RollingUpdate"},
+				"selector":             map[string]any{"matchLabels": map[string]any{"app": "x"}},
+				"serviceName":          "x",
+				"template":             templateLiveLabeled("Always"),
+			},
+		},
+		{
+			kind:    "DaemonSet",
+			desired: `{"apiVersion":"apps/v1","kind":"DaemonSet","spec":{"selector":{"matchLabels":{"app":"x"}},"template":{"metadata":{"labels":{"app":"x"}},"spec":{"containers":[{"name":"c","image":"nginx"}]}}}}`,
+			liveSpec: map[string]any{
+				"revisionHistoryLimit": int64(10),
+				"updateStrategy": map[string]any{
+					"type":          "RollingUpdate",
+					"rollingUpdate": map[string]any{"maxUnavailable": int64(1)},
+				},
+				"selector": map[string]any{"matchLabels": map[string]any{"app": "x"}},
+				"template": templateLiveLabeled("Always"),
+			},
+		},
+		{
+			kind:    "ReplicaSet",
+			desired: `{"apiVersion":"apps/v1","kind":"ReplicaSet","spec":{"selector":{"matchLabels":{"app":"x"}},"template":{"metadata":{"labels":{"app":"x"}},"spec":{"containers":[{"name":"c","image":"nginx"}]}}}}`,
+			liveSpec: map[string]any{
+				"replicas": int64(1),
+				"selector": map[string]any{"matchLabels": map[string]any{"app": "x"}},
+				"template": templateLiveLabeled("Always"),
+			},
+		},
+		{
+			kind:    "Job",
+			desired: `{"apiVersion":"batch/v1","kind":"Job","spec":{"template":{"metadata":{},"spec":{"containers":[{"name":"c","image":"nginx"}],"restartPolicy":"Never"}}}}`,
+			liveSpec: map[string]any{
+				"backoffLimit":   int64(6),
+				"completionMode": "NonIndexed",
+				"template":       templateLiveBare("Never"),
+			},
+		},
+		{
+			kind:    "CronJob",
+			desired: `{"apiVersion":"batch/v1","kind":"CronJob","spec":{"schedule":"* * * * *","jobTemplate":{"spec":{"template":{"metadata":{},"spec":{"containers":[{"name":"c","image":"nginx"}],"restartPolicy":"Never"}}}}}}`,
+			liveSpec: map[string]any{
+				"schedule":                   "* * * * *",
+				"concurrencyPolicy":          "Allow",
+				"failedJobsHistoryLimit":     int64(1),
+				"successfulJobsHistoryLimit": int64(3),
+				"suspend":                    false,
+				"jobTemplate": map[string]any{
+					"spec": map[string]any{
+						"backoffLimit":   int64(6),
+						"completionMode": "NonIndexed",
+						"template":       templateLiveBare("Never"),
+					},
+				},
+			},
+		},
+		{
+			kind:     "Pod",
+			desired:  `{"apiVersion":"v1","kind":"Pod","spec":{"containers":[{"name":"c","image":"nginx"}]}}`,
+			liveSpec: podSpecLive("Always"),
+		},
+		{
+			kind:    "Service",
+			desired: `{"apiVersion":"v1","kind":"Service","spec":{"ports":[{"port":80}],"selector":{"app":"x"}}}`,
+			liveSpec: map[string]any{
+				"type":            "ClusterIP",
+				"sessionAffinity": "None",
+				"ipFamilyPolicy":  "SingleStack",
+				"ports":           []any{map[string]any{"port": int64(80), "protocol": "TCP"}},
+				"selector":        map[string]any{"app": "x"},
+			},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.kind, func(t *testing.T) {
+			obj := &unstructured.Unstructured{Object: map[string]any{
+				"apiVersion": "test/v1",
+				"kind":       tc.kind,
+				"metadata": map[string]any{
+					"name":      "x",
+					"namespace": "ns",
+					"annotations": map[string]any{
+						kubectlLastAppliedAnnotation: tc.desired,
+					},
+				},
+				"spec": tc.liveSpec,
+			}}
+			got := computeDriftFromLastApplied(obj, nil)
+			if got != nil && len(got.Entries) > 0 {
+				t.Errorf("expected no drift on %s with only API server defaults filled in; got %d entries:\n%v", tc.kind, len(got.Entries), got.Entries)
+			}
+		})
+	}
+}
+
+// TestArgoIgnoreRule_MatchesWildcards pins the empty-string-as-wildcard
+// semantics on each scope field. The previous implementation required
+// non-empty group/kind and would skip every rule that omitted them,
+// breaking the Argo-compatible "ignore field X across all kinds" pattern.
+func TestArgoIgnoreRule_MatchesWildcards(t *testing.T) {
+	cases := []struct {
+		name string
+		rule argoIgnoreRule
+		ref  Ref
+		want bool
+	}{
+		{
+			name: "empty group wildcards group",
+			rule: argoIgnoreRule{kind: "Deployment"},
+			ref:  Ref{Group: "apps", Kind: "Deployment", Namespace: "x", Name: "y"},
+			want: true,
+		},
+		{
+			name: "empty kind wildcards kind",
+			rule: argoIgnoreRule{group: "apps"},
+			ref:  Ref{Group: "apps", Kind: "StatefulSet", Namespace: "x", Name: "y"},
+			want: true,
+		},
+		{
+			name: "all empty matches everything",
+			rule: argoIgnoreRule{},
+			ref:  Ref{Group: "", Kind: "Pod", Namespace: "x", Name: "y"},
+			want: true,
+		},
+		{
+			name: "non-matching kind is rejected",
+			rule: argoIgnoreRule{group: "apps", kind: "Deployment"},
+			ref:  Ref{Group: "apps", Kind: "StatefulSet"},
+			want: false,
+		},
+		{
+			name: "named rule narrows to one resource",
+			rule: argoIgnoreRule{kind: "Deployment", name: "specific"},
+			ref:  Ref{Kind: "Deployment", Name: "other"},
+			want: false,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.rule.matches(tc.ref); got != tc.want {
+				t.Errorf("matches(%+v) = %v, want %v", tc.ref, got, tc.want)
+			}
+		})
 	}
 }

@@ -778,9 +778,6 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
             </span>
           </div>
           {tree && (
-            // Scope toggle — switches between the controller's declared
-            // inventory (default; drift + events live here) and the full
-            // topology including generated descendants like Pods/ReplicaSets.
             <div className="flex items-center gap-0.5 rounded-md border border-theme-border bg-theme-base p-0.5 text-[11px]">
               <Tooltip content="Resources the GitOps controller declares — drift and events are computed only for these." delay={300}>
                 <button
@@ -894,6 +891,10 @@ function buildTreeExtras(nodes: GitOpsTreeNode[], declared: GitOpsChange[]): Git
   const out: GitOpsChange[] = []
   for (const n of nodes) {
     if (n.role === 'root' || n.role === 'group') continue
+    // Defensive guard: well-formed trees shouldn't produce empty
+    // kind/name nodes, but the TypeScript type allows ""; a row with empty
+    // identifiers renders as "Open  →" and routes to a broken URL on click.
+    if (!n.ref.kind || !n.ref.name) continue
     const key = refKey(n.ref)
     if (declaredKeys.has(key)) continue
     out.push({

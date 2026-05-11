@@ -113,11 +113,11 @@ func computeDriftFromLastApplied(live *unstructured.Unstructured, ignorePointers
 //
 // We don't use k8s.io/client-go/kubernetes/scheme.Default() because client-
 // go's scheme has the types but not the defaulter functions — those live
-// in k8s.io/kubernetes/pkg/apis/* which isn't a publicly importable
-// package. Argo CD's gitops-engine works around this by vendoring those
-// internals; we hardcode the small set of defaults for the kinds operators
-// most commonly hit drift noise on. The list is finite, public, and
-// changes ~once per major K8s release.
+// in k8s.io/kubernetes/pkg/apis/*/install which isn't intended as a public
+// dependency. Argo CD's gitops-engine takes that dependency directly
+// (a k8s.io/kubernetes import in their go.mod); we hardcode the small set
+// of defaults for the kinds operators most commonly hit drift noise on.
+// The list is finite, public, and changes ~once per major K8s release.
 //
 // Returns the input unchanged when the kind isn't in the defaults table —
 // CRDs and uncommon kinds keep the raw-diff behavior.
@@ -129,6 +129,13 @@ func applySchemeDefaults(obj map[string]any) map[string]any {
 	}
 	spec, ok := obj["spec"].(map[string]any)
 	if !ok {
+		// A registered kind with a non-map spec is structurally malformed —
+		// usually a corrupt last-applied annotation. Defaulter can't run,
+		// and the diff degrades to the noisy unfiltered output. Log so the
+		// "drift suddenly got noisy on Deployment X" question is greppable.
+		if _, present := obj["spec"]; present {
+			log.Printf("[gitops/drift] kind=%s has non-map spec in last-applied; defaulter skipped", kind)
+		}
 		return obj
 	}
 	defaulter(spec)
@@ -166,13 +173,20 @@ var kindServerAssignedPaths = map[string][]string{
 	},
 }
 
-// kindDefaulters maps a Kubernetes Kind to a function that mutates the
-// resource's spec to fill in the API server defaults that don't appear in
-// kubectl's last-applied annotation. The handlers compose: workload kinds
-// (Deployment/StatefulSet/DaemonSet/Job) all delegate to the Pod template
-// defaulter for spec.template.spec, which in turn delegates to the Container
-// defaulter for each container.
-var kindDefaulters = map[string]func(spec map[string]any){
+// specDefaulter mutates a resource's spec sub-map to fill in fields the
+// K8s API server defaults at admission. Convention: write only via
+// setIfMissing — never overwrite a user-set value.
+type specDefaulter func(spec map[string]any)
+
+// kindDefaulters maps a Kubernetes Kind to its specDefaulter. The handlers
+// compose: workload kinds (Deployment/StatefulSet/DaemonSet/Job) all delegate
+// to the Pod template defaulter for spec.template.spec, which in turn
+// delegates to the Container defaulter for each container.
+//
+// Keys are bare Kind strings. K8s built-in kinds only — adding a CRD that
+// collides with a core kind (e.g. Knative `Service`, CAPI `Cluster`) requires
+// disambiguating by group, not just adding here.
+var kindDefaulters = map[string]specDefaulter{
 	"Deployment":  applyDeploymentSpecDefaults,
 	"StatefulSet": applyStatefulSetSpecDefaults,
 	"DaemonSet":   applyDaemonSetSpecDefaults,
@@ -184,6 +198,7 @@ var kindDefaulters = map[string]func(spec map[string]any){
 }
 
 func applyDeploymentSpecDefaults(spec map[string]any) {
+	setIfMissing(spec, "replicas", int64(1))
 	setIfMissing(spec, "progressDeadlineSeconds", int64(600))
 	setIfMissing(spec, "revisionHistoryLimit", int64(10))
 	setIfMissing(spec, "strategy", map[string]any{
@@ -193,14 +208,15 @@ func applyDeploymentSpecDefaults(spec map[string]any) {
 			"maxUnavailable": "25%",
 		},
 	})
-	applyPodTemplateDefaults(spec)
+	applyPodTemplateDefaults(spec, "Always")
 }
 
 func applyStatefulSetSpecDefaults(spec map[string]any) {
+	setIfMissing(spec, "replicas", int64(1))
 	setIfMissing(spec, "revisionHistoryLimit", int64(10))
 	setIfMissing(spec, "podManagementPolicy", "OrderedReady")
 	setIfMissing(spec, "updateStrategy", map[string]any{"type": "RollingUpdate"})
-	applyPodTemplateDefaults(spec)
+	applyPodTemplateDefaults(spec, "Always")
 }
 
 func applyDaemonSetSpecDefaults(spec map[string]any) {
@@ -209,17 +225,22 @@ func applyDaemonSetSpecDefaults(spec map[string]any) {
 		"type":          "RollingUpdate",
 		"rollingUpdate": map[string]any{"maxUnavailable": int64(1)},
 	})
-	applyPodTemplateDefaults(spec)
+	applyPodTemplateDefaults(spec, "Always")
 }
 
 func applyReplicaSetSpecDefaults(spec map[string]any) {
-	applyPodTemplateDefaults(spec)
+	setIfMissing(spec, "replicas", int64(1))
+	applyPodTemplateDefaults(spec, "Always")
 }
 
 func applyJobSpecDefaults(spec map[string]any) {
 	setIfMissing(spec, "backoffLimit", int64(6))
 	setIfMissing(spec, "completionMode", "NonIndexed")
-	applyPodTemplateDefaults(spec)
+	// Job's Pod template can't use restartPolicy=Always (the K8s validator
+	// rejects it). The actual API server default for omitted restartPolicy
+	// on a Job is "Never". Pass it through so we don't fill in a value the
+	// API server would reject and the user obviously didn't choose.
+	applyPodTemplateDefaults(spec, "Never")
 }
 
 func applyCronJobSpecDefaults(spec map[string]any) {
@@ -227,12 +248,23 @@ func applyCronJobSpecDefaults(spec map[string]any) {
 	setIfMissing(spec, "failedJobsHistoryLimit", int64(1))
 	setIfMissing(spec, "successfulJobsHistoryLimit", int64(3))
 	setIfMissing(spec, "suspend", false)
+	// CronJob's Pod template lives at spec.jobTemplate.spec.template, not
+	// spec.template. Without this descent, every CronJob shows the full 7-10
+	// pod-template defaults as drift — the entire commit's value
+	// proposition would be broken for CronJobs specifically.
+	if jt, ok := spec["jobTemplate"].(map[string]any); ok {
+		if js, ok := jt["spec"].(map[string]any); ok {
+			applyJobSpecDefaults(js)
+		}
+	}
 }
 
 // applyPodTemplateDefaults walks spec.template.spec (the Pod template
 // inside a workload kind) and applies Pod-level + Container-level defaults.
 // Container defaults run per-element of spec.containers and spec.initContainers.
-func applyPodTemplateDefaults(spec map[string]any) {
+// defaultRestartPolicy is parameterized so Job pod templates can use "Never"
+// instead of the long-running-workload default of "Always".
+func applyPodTemplateDefaults(spec map[string]any, defaultRestartPolicy string) {
 	template, ok := spec["template"].(map[string]any)
 	if !ok {
 		return
@@ -241,12 +273,18 @@ func applyPodTemplateDefaults(spec map[string]any) {
 	if !ok {
 		return
 	}
-	applyPodSpecDefaults(podSpec)
+	applyPodSpecDefaultsWithRestart(podSpec, defaultRestartPolicy)
 }
 
+// applyPodSpecDefaults is the entry point for standalone Pods (no enclosing
+// workload kind). Standalone Pods default to restartPolicy=Always.
 func applyPodSpecDefaults(spec map[string]any) {
+	applyPodSpecDefaultsWithRestart(spec, "Always")
+}
+
+func applyPodSpecDefaultsWithRestart(spec map[string]any, defaultRestartPolicy string) {
 	setIfMissing(spec, "dnsPolicy", "ClusterFirst")
-	setIfMissing(spec, "restartPolicy", "Always")
+	setIfMissing(spec, "restartPolicy", defaultRestartPolicy)
 	setIfMissing(spec, "schedulerName", "default-scheduler")
 	setIfMissing(spec, "securityContext", map[string]any{})
 	setIfMissing(spec, "terminationGracePeriodSeconds", int64(30))
@@ -324,7 +362,11 @@ func filterIgnoredPaths(entries []DriftEntry, pointers []string) []DriftEntry {
 		p = strings.ReplaceAll(p, "/", ".")
 		prefixes = append(prefixes, p)
 	}
-	out := entries[:0]
+	// Fresh allocation rather than `entries[:0]` aliasing — the caller may
+	// still hold the original slice (e.g., for a pre-filter count or audit
+	// log), and silently mutating it would be a latent corruption footgun.
+	// driftEntryCap caps the size at 50, so the allocation cost is trivial.
+	out := make([]DriftEntry, 0, len(entries))
 	for _, e := range entries {
 		if pathMatchesAnyPrefix(e.Path, prefixes) {
 			continue
@@ -416,6 +458,14 @@ func isAllDigits(s string) bool {
 // equivalent. Without this, a field defaulted to {} or [] in one side
 // would always show as drift even though semantically there's nothing
 // there.
+//
+// Note for setIfMissing callers: the empty-string-as-nilish rule means
+// `imagePullPolicy: ""` in a user's manifest will be overwritten by the
+// defaulter to `IfNotPresent`. This matches kubectl's last-applied semantics
+// (an explicit empty for a scalar K8s field round-trips through the API
+// server's defaulting at admission), but a user trying to "explicitly clear"
+// a field would lose that intent here. Defensible for diff output; surprising
+// in isolation.
 func isNilish(v any) bool {
 	if v == nil {
 		return true

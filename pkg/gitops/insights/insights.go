@@ -613,6 +613,13 @@ func parseArgoIgnoreDifferences(root *unstructured.Unstructured) argoIgnoreDiffe
 		// requires a JQ engine to evaluate). Skip them here — JSONPointer
 		// covers the majority of "ignore this field" rules. Future work.
 		if len(ptrs) == 0 {
+			// Affected rules disappear silently otherwise; surface a one-
+			// shot warning so operators can correlate "Radar shows drift
+			// Argo's UI suppresses" with the gap.
+			jq, _, _ := unstructured.NestedStringSlice(m, "jqPathExpressions")
+			if len(jq) > 0 {
+				logJQIgnoreOnce(gitops.StringValue(m["group"]), gitops.StringValue(m["kind"]))
+			}
 			continue
 		}
 		out.rules = append(out.rules, argoIgnoreRule{
@@ -632,20 +639,33 @@ func (a argoIgnoreDifferences) pointersFor(ref Ref) []string {
 	}
 	var out []string
 	for _, r := range a.rules {
-		if r.group != ref.Group || r.kind != ref.Kind {
-			continue
+		if r.matches(ref) {
+			out = append(out, r.pointers...)
 		}
-		// Empty name/namespace in the rule = match all of that kind. Set
-		// values narrow the match. Argo follows the same semantics.
-		if r.name != "" && r.name != ref.Name {
-			continue
-		}
-		if r.namespace != "" && r.namespace != ref.Namespace {
-			continue
-		}
-		out = append(out, r.pointers...)
 	}
 	return out
+}
+
+// matches reports whether the rule applies to the given resource ref.
+// All four scope fields (group/kind/name/namespace) treat empty-string as
+// a wildcard — Argo's own scoping semantics. A rule that omits `group` and
+// `kind` matches every resource; a rule that names `name` narrows to that
+// single resource. Matching upstream behavior matters because operators
+// copy Argo Application manifests verbatim and expect the same effect.
+func (r argoIgnoreRule) matches(ref Ref) bool {
+	if r.group != "" && r.group != ref.Group {
+		return false
+	}
+	if r.kind != "" && r.kind != ref.Kind {
+		return false
+	}
+	if r.name != "" && r.name != ref.Name {
+		return false
+	}
+	if r.namespace != "" && r.namespace != ref.Namespace {
+		return false
+	}
+	return true
 }
 
 func argoResourceChanges(root *unstructured.Unstructured, resolver Resolver) []Change {
@@ -1406,6 +1426,20 @@ func parseArgoOperationError(msg string) parsedFailure {
 }
 
 var unrecognizedOpErrorLogged sync.Map
+
+// jqIgnoreLogged deduplicates the "jq-only ignoreDifferences" warning so it
+// fires once per (group, kind) over the process lifetime — Argo Application
+// reconciles emit insights every 2s, and operators don't need the same
+// warning a thousand times.
+var jqIgnoreLogged sync.Map
+
+func logJQIgnoreOnce(group, kind string) {
+	key := group + "/" + kind
+	if _, loaded := jqIgnoreLogged.LoadOrStore(key, struct{}{}); loaded {
+		return
+	}
+	log.Printf("[gitops/drift] ignoreDifferences rule for %s/%s uses jqPathExpressions which Radar doesn't evaluate; some drift entries Argo's UI suppresses may appear here", group, kind)
+}
 
 func logUnrecognizedOpError(msg string) {
 	// Truncate at 200 chars: typical Argo error messages are short; outlier
