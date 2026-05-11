@@ -1035,7 +1035,11 @@ function ChangeRow({
         focused && 'bg-amber-500/10 ring-2 ring-inset ring-amber-500/60',
       )}
     >
-      <div className="grid w-full grid-cols-[minmax(0,1fr)_120px_120px_auto] gap-3 px-4 py-3 text-sm">
+      {/* Fixed action-column width so the Sync/Health badges line up
+          across rows regardless of how long "Open <Kind> <name> →" is. With
+          an `auto` last column, each row's 1fr column got a different
+          residual width, pushing the badges to inconsistent offsets. */}
+      <div className="grid w-full grid-cols-[minmax(0,1fr)_120px_120px_220px] gap-3 px-4 py-3 text-sm">
         <button
           type="button"
           onClick={handleRowClick}
@@ -1118,7 +1122,8 @@ function ChangeRow({
             <button
               type="button"
               onClick={() => onOpenResource(change.ref)}
-              className="rounded border border-theme-border bg-theme-base px-2 py-0.5 text-[11px] text-theme-text-secondary opacity-70 transition-all hover:bg-theme-hover hover:text-theme-text-primary group-hover:opacity-100"
+              title={`Open ${change.ref.kind} ${change.ref.name}`}
+              className="block w-full truncate rounded border border-theme-border bg-theme-base px-2 py-0.5 text-left text-[11px] text-theme-text-secondary opacity-70 transition-all hover:bg-theme-hover hover:text-theme-text-primary group-hover:opacity-100"
             >
               Open {change.ref.kind} {change.ref.name} →
             </button>
