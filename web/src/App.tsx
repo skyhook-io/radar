@@ -34,7 +34,7 @@ import { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay'
 import { CommandPalette } from './components/ui/CommandPalette'
 import { DiagnosticsOverlay } from './components/ui/DiagnosticsOverlay'
 import { useEventSource } from './hooks/useEventSource'
-import { useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe } from './api/client'
+import { debugNamespaceLog, useNamespaces, useNamespaceScope, useSetActiveNamespace, useSwitchContext, useAuthMe } from './api/client'
 import { routePath, apiUrl, getAuthHeaders, getCredentialsMode } from './api/config'
 import { KeyboardShortcutProvider, useRegisterShortcut, useRegisterShortcuts } from './hooks/useKeyboardShortcuts'
 import { useAnimatedUnmount } from './hooks/useAnimatedUnmount'
@@ -680,6 +680,12 @@ function AppInner() {
     const sortedScope = [...scopeActives].sort()
     const sortedState = [...namespaces].sort()
     const sameAsState = sortedScope.length === sortedState.length && sortedScope.every((ns, i) => ns === sortedState[i])
+    debugNamespaceLog('app:scope-mirror', {
+      scopeActives,
+      stateNamespaces: namespaces,
+      sameAsState,
+      initialBookmarkReconciled: initialBookmarkReconciledRef.current,
+    })
 
     // First-load bookmark reconciliation: if the URL had namespaces that
     // differ from the server pick when the scope first arrives, push the
@@ -689,12 +695,17 @@ function AppInner() {
     if (!initialBookmarkReconciledRef.current) {
       initialBookmarkReconciledRef.current = true
       if (!sameAsState && sortedState.length > 0) {
+        debugNamespaceLog('app:scope-mirror-bookmark-to-server', {
+          stateNamespaces: sortedState,
+          scopeActives: sortedScope,
+        })
         setActiveNamespace.mutate({ namespaces: sortedState })
         return
       }
     }
 
     if (!sameAsState) {
+      debugNamespaceLog('app:scope-mirror-set-namespaces', { nextNamespaces: scopeActives })
       setNamespaces(scopeActives)
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- namespaces and setActiveNamespace are intentionally excluded; we only react to server-side changes.
@@ -735,31 +746,48 @@ function AppInner() {
 
     // Only update if params actually changed vs current URL
     if (params.toString() !== new URLSearchParams(currentSearch).toString()) {
+      debugNamespaceLog('app:url-write', {
+        namespaces,
+        currentSearch,
+        nextSearch: params.toString(),
+        mainView,
+      })
       setSearchParams(params, { replace: true })
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps -- reads window.location.search, not searchParams
   }, [namespacesKey, topologyMode, groupingMode, mainView, setSearchParams])
 
-  // Sync state from URL when navigating (back/forward). Push the URL choice
-  // to the server too so the canonical pick stays in lockstep — otherwise a
-  // back-nav would visually update but leave the next reload pulling the
-  // server's previous (forward-nav) pick.
+  // Sync namespace + helm picks from the query string only when the query
+  // string changes. If this also ran on pathname / mainView changes, a view
+  // whose URL omits ?namespaces= would clear App state and POST [] to the
+  // server while the per-user pick was still narrowed — the picker would
+  // show the server scope but lists/dashboard would stay on "all namespaces".
   useEffect(() => {
     const urlNamespaces = parseNamespacesFromURL(searchParams)
+    debugNamespaceLog('app:url-sync', {
+      search: searchParams.toString(),
+      urlNamespaces,
+      stateNamespaces: namespaces,
+      namespacesKey,
+    })
 
     if (urlNamespaces.join(',') !== namespacesKey) {
+      debugNamespaceLog('app:url-sync-set-namespaces', { nextNamespaces: urlNamespaces })
       setNamespaces(urlNamespaces)
       if (namespaceScope) {
         const sortedURL = [...urlNamespaces].sort()
         const sortedScope = [...(namespaceScope.actives ?? [])].sort()
         const same = sortedURL.length === sortedScope.length && sortedURL.every((ns, i) => ns === sortedScope[i])
         if (!same) {
+          debugNamespaceLog('app:url-sync-mutate-server', {
+            urlNamespaces,
+            scopeActives: namespaceScope.actives ?? [],
+          })
           setActiveNamespace.mutate({ namespaces: urlNamespaces })
         }
       }
     }
 
-    // Restore helm release from URL (back navigation)
     const releaseParam = searchParams.get('release')
     if (releaseParam) {
       const slashIdx = releaseParam.indexOf('/')
@@ -769,36 +797,33 @@ function AppInner() {
         setSelectedHelmRelease({ namespace: ns, name, storageNamespace: searchParams.get('releaseStorage') || undefined })
       }
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- run only when searchParams change; namespacesKey/namespaceScope are read for that transition
+  }, [searchParams])
 
-    // Restore resource drawer selection from URL on browser back/forward (POP) within
-    // /resources/{kind}. Cross-kind POP re-mounts ResourcesView via key={pathname} so its
-    // mount effect re-reads ?resource=; same-kind POP doesn't remount, so App must
-    // reconcile selectedResource here. Limited to POP to avoid clobbering deliberate
-    // setSelectedResource calls that race the URL writer (e.g. helm/audit -> resources).
-    if (navigationType === NavigationType.Pop && mainView === 'resources') {
-      const kindFromPath = location.pathname.match(/^\/resources\/([^/]+)/)?.[1] ?? ''
-      const resourceParam = searchParams.get('resource')
-      if (kindFromPath && resourceParam) {
-        const slashIdx = resourceParam.indexOf('/')
-        const ns = slashIdx > 0 ? resourceParam.slice(0, slashIdx) : ''
-        const name = slashIdx > 0 ? resourceParam.slice(slashIdx + 1) : resourceParam
-        const apiGroup = searchParams.get('apiGroup') ?? ''
-        const next: SelectedResource = { kind: kindFromPath, namespace: ns, name, group: apiGroup }
-        setSelectedResource(prev => {
-          if (
-            prev &&
-            prev.kind === next.kind &&
-            prev.namespace === next.namespace &&
-            prev.name === next.name &&
-            (prev.group ?? '') === (next.group ?? '')
-          ) return prev
-          return next
-        })
-      } else if (kindFromPath && !resourceParam) {
-        setSelectedResource(prev => (prev === null ? prev : null))
-      }
+  useEffect(() => {
+    if (navigationType !== NavigationType.Pop || mainView !== 'resources') return
+    const kindFromPath = location.pathname.match(/^\/resources\/([^/]+)/)?.[1] ?? ''
+    const resourceParam = searchParams.get('resource')
+    if (kindFromPath && resourceParam) {
+      const slashIdx = resourceParam.indexOf('/')
+      const ns = slashIdx > 0 ? resourceParam.slice(0, slashIdx) : ''
+      const name = slashIdx > 0 ? resourceParam.slice(slashIdx + 1) : resourceParam
+      const apiGroup = searchParams.get('apiGroup') ?? ''
+      const next: SelectedResource = { kind: kindFromPath, namespace: ns, name, group: apiGroup }
+      setSelectedResource(prev => {
+        if (
+          prev &&
+          prev.kind === next.kind &&
+          prev.namespace === next.namespace &&
+          prev.name === next.name &&
+          (prev.group ?? '') === (next.group ?? '')
+        ) return prev
+        return next
+      })
+    } else if (kindFromPath && !resourceParam) {
+      setSelectedResource(prev => (prev === null ? prev : null))
     }
-  }, [searchParams, location.pathname, mainView, navigationType])
+  }, [navigationType, mainView, location.pathname, searchParams])
 
   // Auto-adjust grouping when namespaces change
   useEffect(() => {

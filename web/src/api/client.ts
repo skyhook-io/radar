@@ -2481,6 +2481,17 @@ export function useNamespaceScope() {
 
 const NAMESPACE_SWITCH_TIMEOUT = 5000
 
+export function debugNamespaceLog(label: string, payload?: Record<string, unknown>) {
+  if (typeof window === 'undefined') return
+  const enabled = window.localStorage.getItem('radar:debug:namespaces')
+  if (enabled !== '1' && enabled !== 'true') return
+  console.log(`[namespace-debug] ${label}`, {
+    t: Math.round(performance.now()),
+    href: window.location.href,
+    ...payload,
+  })
+}
+
 export function useSetActiveNamespace() {
   const queryClient = useQueryClient()
   return useMutation<NamespaceScope, Error, { namespaces: string[] }>({
@@ -2493,8 +2504,10 @@ export function useSetActiveNamespace() {
       errorMessage: 'Failed to update namespace selection',
     },
     mutationFn: async ({ namespaces }) => {
+      debugNamespaceLog('mutation:start', { namespaces })
       const controller = new AbortController()
       const timeoutId = setTimeout(() => controller.abort(), NAMESPACE_SWITCH_TIMEOUT)
+      const startedAt = performance.now()
       try {
         const response = await apiFetch(`${getApiBase()}/cluster/namespace`, {
           method: 'POST',
@@ -2503,6 +2516,11 @@ export function useSetActiveNamespace() {
           signal: controller.signal,
         })
         clearTimeout(timeoutId)
+        debugNamespaceLog('mutation:response', {
+          namespaces,
+          status: response.status,
+          durationMs: Math.round(performance.now() - startedAt),
+        })
         if (!response.ok) {
           const error = await response.json().catch(() => ({ error: 'Unknown error' }))
           throw new Error(error.error || `HTTP ${response.status}`)
@@ -2510,23 +2528,32 @@ export function useSetActiveNamespace() {
         return response.json()
       } catch (error) {
         clearTimeout(timeoutId)
+        debugNamespaceLog('mutation:error', {
+          namespaces,
+          durationMs: Math.round(performance.now() - startedAt),
+          error: error instanceof Error ? error.message : String(error),
+        })
         if (error instanceof Error && error.name === 'AbortError') {
           throw new Error('Namespace switch timed out. The cluster may be unreachable.')
         }
         throw error
       }
     },
-    onSuccess: () => {
-      // The user's view filter changed; every cached query result was
-      // shaped by the previous filter, so drop and refetch.
-      queryClient.removeQueries()
-      queryClient.invalidateQueries()
+    onSuccess: (scope) => {
+      debugNamespaceLog('mutation:success-before-scope-cache-write', {
+        actives: scope.actives,
+        mode: scope.mode,
+        accessibleCount: scope.accessibleNamespaces.length,
+      })
+      queryClient.setQueryData<NamespaceScope>(['namespace-scope'], scope)
+      debugNamespaceLog('mutation:success-after-scope-cache-write')
     },
     onError: () => {
       // A failed switch can leave the server's stored pick out of sync
       // with the cached scope (network timeout after the server wrote;
       // partial mutation). Refetch so the displayed picker matches what
       // the server actually persisted instead of what we assumed.
+      debugNamespaceLog('mutation:on-error-invalidate-scope')
       queryClient.invalidateQueries({ queryKey: ['namespace-scope'] })
     },
   })

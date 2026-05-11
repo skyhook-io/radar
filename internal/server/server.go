@@ -3053,8 +3053,17 @@ func (s *Server) getUserNamespaces(r *http.Request, requested []string) []string
 
 // handleSSE wraps the SSEBroadcaster's HandleSSE with per-user namespace filtering.
 func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
-	// Apply user namespace filtering to SSE subscriptions
-	namespaces := s.parseNamespacesForUser(r)
+	// SSE is usually opened without an explicit namespace filter so the
+	// frontend can keep one all-namespace stream and filter topology/events
+	// locally. Do not fall back to the saved namespace picker here; only
+	// server-filter when the request explicitly asks for it (large-cluster
+	// mode), while still intersecting with RBAC for authenticated users.
+	namespaces := parseNamespaces(r.URL.Query())
+	if namespaces == nil {
+		namespaces = s.getUserNamespaces(r, nil)
+	} else {
+		namespaces = s.getUserNamespaces(r, namespaces)
+	}
 	// Re-encode filtered namespaces back into query params for the broadcaster
 	q := r.URL.Query()
 	q.Del("namespace")
