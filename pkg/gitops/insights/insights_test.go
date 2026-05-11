@@ -260,6 +260,66 @@ func TestParseArgoOperationError(t *testing.T) {
 			name: "empty input → all zero values",
 			msg:  "",
 		},
+		// Patterns below extend coverage to the rest of argoErrorPatterns —
+		// each table row pins a regex that was previously untested. A
+		// reorder of argoErrorPatterns or a regex regression would surface
+		// here as a substring miss.
+		{
+			name:      "namespace not found populates Remediation",
+			msg:       `failed to apply: namespaces "demo-broken-sync" not found`,
+			wantCause: "destination namespace does not exist",
+		},
+		{
+			name:      "labels too long",
+			msg:       `Service "foo" is invalid: metadata.labels: Too long: must have at most 63 chars per key`,
+			wantCause: "64-character-per-key limit",
+			// argoAffectedRefRE happens to also capture from this fixture —
+			// pin the values so a regex change is visible. Functionally these
+			// flow into Issue.Refs and add a same-row ref to the failure card.
+			wantKind: "Service",
+			wantName: "foo",
+		},
+		{
+			name:      "resource already exists outside GitOps",
+			msg:       `Job.batch "migrate" already exists`,
+			wantCause: "already exists",
+			wantKind:  "Job",
+			wantName:  "migrate",
+		},
+		{
+			name:      "CRD not registered",
+			msg:       `no matches for kind "Tenant" in version "capsule.clastix.io/v1beta1"`,
+			wantCause: "CustomResourceDefinition for this kind isn't registered",
+		},
+		{
+			name:      "cluster unreachable (i/o timeout)",
+			msg:       `dial tcp 10.0.0.1:443: i/o timeout`,
+			wantCause: "Cluster unreachable",
+		},
+		{
+			name:      "cluster unreachable (connection refused)",
+			msg:       `dial tcp 10.0.0.1:443: connect: connection refused`,
+			wantCause: "Cluster unreachable",
+		},
+		{
+			name:      "immutable field changed",
+			msg:       `Service.spec.clusterIP: field is immutable`,
+			wantCause: "Kubernetes treats as immutable",
+		},
+		{
+			name: "unknown apiVersion (no 'no matches' clause)",
+			// argoErrorPatterns intentionally matches 'no matches for kind'
+			// first because it's the more actionable diagnosis; pin a fixture
+			// that only triggers 'unable to recognize' so the more-generic
+			// pattern is exercised on its own.
+			msg:       `unable to recognize the resource: invalid manifest "foo.yaml"`,
+			wantCause: "API version the cluster doesn't recognize",
+		},
+		{
+			name:      "concurrent modification",
+			msg:       `Operation cannot be fulfilled on deployments.apps "x": the object has been modified; please apply your changes to the latest version`,
+			wantCause: "modified concurrently",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -283,6 +343,72 @@ func TestParseArgoOperationError(t *testing.T) {
 				t.Errorf("Stuck = %v, want %v", got.Stuck, tc.wantStuck)
 			}
 		})
+	}
+}
+
+// TestParseArgoOperationError_PopulatesNamespaceRemediation pins the
+// structured-Remediation path. The missing-namespace pattern is the only
+// pattern that drives a one-click fix; a regex regression that loses the
+// capture group would silently downgrade the failure-card UX to
+// diagnosis-only.
+func TestParseArgoOperationError_PopulatesNamespaceRemediation(t *testing.T) {
+	got := parseArgoOperationError(`failed to create resource: namespaces "demo-broken-sync" not found`)
+	if got.Remediation == nil {
+		t.Fatalf("expected Remediation, got nil")
+	}
+	if got.Remediation.Kind != RemediationCreateNamespace {
+		t.Errorf("Kind = %q, want %q", got.Remediation.Kind, RemediationCreateNamespace)
+	}
+	if got.Remediation.Target != "demo-broken-sync" {
+		t.Errorf("Target = %q, want %q", got.Remediation.Target, "demo-broken-sync")
+	}
+	if err := got.Remediation.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil", err)
+	}
+}
+
+// TestFluxPhaseLabel pins the (status, reason) → outcome mapping used by
+// Flux history rows. The substring matches are order-sensitive; a reorder
+// (e.g. "error" before "succeed") could shadow "PartialSucceededError"-type
+// reasons. The fallback paths ensure unknown reasons surface to the UI as
+// the raw reason rather than an empty chip.
+func TestFluxPhaseLabel(t *testing.T) {
+	cases := []struct {
+		status string
+		reason string
+		want   string
+	}{
+		{"True", "InstallSucceeded", "Succeeded"},
+		{"True", "UpgradeSucceeded", "Succeeded"},
+		{"False", "UpgradeFailed", "Failed"},
+		{"False", "ArtifactFetchError", "Failed"},
+		{"True", "Progressing", "Reconciling"},
+		{"True", "Reconciling", "Reconciling"},
+		{"True", "Suspended", "Suspended"},
+		{"True", "WeirdNovelReason", "WeirdNovelReason"}, // unknown → raw reason
+		{"True", "", "True"},                              // empty reason → status
+		{"", "", ""},                                      // both empty → empty
+	}
+	for _, tc := range cases {
+		if got := fluxPhaseLabel(tc.status, tc.reason); got != tc.want {
+			t.Errorf("fluxPhaseLabel(%q, %q) = %q, want %q", tc.status, tc.reason, got, tc.want)
+		}
+	}
+}
+
+func TestRemediationValidate_RejectsEmptyTarget(t *testing.T) {
+	r := &Remediation{Kind: RemediationCreateNamespace}
+	if err := r.Validate(); err == nil {
+		t.Errorf("Validate() on create-namespace with empty Target = nil, want error")
+	}
+}
+
+func TestNewCreateNamespaceRemediation_NilOnEmpty(t *testing.T) {
+	if r := NewCreateNamespaceRemediation("", "hint"); r != nil {
+		t.Errorf("NewCreateNamespaceRemediation(\"\", …) = %v, want nil", r)
+	}
+	if r := NewCreateNamespaceRemediation("demo", "hint"); r == nil || r.Target != "demo" {
+		t.Errorf("NewCreateNamespaceRemediation(\"demo\", …) = %v, want valid", r)
 	}
 }
 
@@ -311,6 +437,80 @@ func TestBuildIssuesSuppressesResourceIssueDuplicatedByOperationFailure(t *testi
 				}
 			}
 		}
+	}
+}
+
+// TestBuildIssuesSuppressesResourceIssueForNamespacedKind pins the namespace
+// projection used by the operation-message suppression. argoAffectedRefRE
+// captures Kind+Name only — never a namespace — so the suppression key must
+// be projected to the same shape on both sides. Earlier versions used refKey
+// (which includes namespace) and silently failed to match any namespaced
+// resource; only the CRD fixture in the test above passed.
+func TestBuildIssuesSuppressesResourceIssueForNamespacedKind(t *testing.T) {
+	root := argoApp(map[string]any{
+		"operationState": map[string]any{
+			"phase":   "Failed",
+			"message": `error when patching "/dev/shm/foo": Deployment.apps "guestbook-ui" is invalid: spec.replicas: Invalid value`,
+		},
+		"resources": []any{map[string]any{
+			"kind":      "Deployment",
+			"name":      "guestbook-ui",
+			"namespace": "demo-healthy",
+			"status":    "OutOfSync",
+		}},
+	})
+	issues := buildIssues(root, nil, "argocd", nil)
+	for _, iss := range issues {
+		if iss.Scope == ScopeResource && iss.Reason == "OutOfSync" {
+			for _, ref := range iss.Refs {
+				if ref.Kind == "Deployment" && ref.Name == "guestbook-ui" && ref.Namespace == "demo-healthy" {
+					t.Fatalf("expected namespaced Deployment OutOfSync issue to be suppressed by the operation failure that already names it; issues=%v", issues)
+				}
+			}
+		}
+	}
+}
+
+// TestBuildIssuesSuppressesEveryResourceInRemediatedNamespace pins the
+// "missing-namespace remediation collapses downstream symptoms" path.
+// When the parent op fails because namespace X doesn't exist, every Missing
+// resource targeting X is just a derivative symptom of the same root cause —
+// surfacing them turns one actionable issue into N+1 noisy rows.
+func TestBuildIssuesSuppressesEveryResourceInRemediatedNamespace(t *testing.T) {
+	root := argoApp(map[string]any{
+		"operationState": map[string]any{
+			"phase":   "Failed",
+			"message": `failed to create resource: namespaces "demo-broken-sync" not found`,
+		},
+		"resources": []any{
+			map[string]any{"kind": "Deployment", "name": "guestbook-ui", "namespace": "demo-broken-sync", "status": "OutOfSync", "health": map[string]any{"status": "Missing"}},
+			map[string]any{"kind": "Service", "name": "guestbook-ui", "namespace": "demo-broken-sync", "status": "OutOfSync", "health": map[string]any{"status": "Missing"}},
+			// Control: a resource in a *different* namespace must still surface
+			// — the suppression is namespace-scoped, not blanket.
+			map[string]any{"kind": "Deployment", "name": "bystander", "namespace": "other-ns", "status": "OutOfSync", "health": map[string]any{"status": "Missing"}},
+		},
+	})
+	issues := buildIssues(root, nil, "argocd", nil)
+	var brokenNsRefs []Ref
+	var otherNsSeen bool
+	for _, iss := range issues {
+		if iss.Scope != ScopeResource {
+			continue
+		}
+		for _, ref := range iss.Refs {
+			switch ref.Namespace {
+			case "demo-broken-sync":
+				brokenNsRefs = append(brokenNsRefs, ref)
+			case "other-ns":
+				otherNsSeen = true
+			}
+		}
+	}
+	if len(brokenNsRefs) > 0 {
+		t.Errorf("expected all resource issues in the remediated namespace to be suppressed; got: %v", brokenNsRefs)
+	}
+	if !otherNsSeen {
+		t.Errorf("expected the bystander Deployment in other-ns to still surface (suppression is per-namespace, not blanket)")
 	}
 }
 

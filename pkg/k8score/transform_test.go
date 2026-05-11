@@ -3,6 +3,9 @@ package k8score
 import (
 	"testing"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
@@ -211,5 +214,63 @@ func TestDropUnstructuredManagedFields_CRDWithoutVersions(t *testing.T) {
 	}
 	if out == nil {
 		t.Fatal("expected unchanged object, got nil")
+	}
+}
+
+// TestDropManagedFields_TypedAsymmetricAnnotationHandling pins the intentional
+// asymmetry between DropManagedFields (typed cache transform) and
+// DropUnstructuredManagedFields (dynamic cache transform). The dynamic path
+// preserves kubectl.kubernetes.io/last-applied-configuration for GitOps drift
+// detection; the typed path strips it because typed-cache objects are not
+// the path drift detection reads from.
+//
+// Both transforms remove managedFields. The mismatch is intentional. A
+// "consistency cleanup" PR that aligned them in either direction would
+// silently break one feature (drift) or regress memory (the strip exists
+// for a reason); this test documents the contract so the next maintainer
+// can see what's load-bearing.
+func TestDropManagedFields_TypedStripsLastAppliedConfig(t *testing.T) {
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "x",
+			Namespace: "default",
+			Annotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": "{blob}",
+				"description": "keep me",
+			},
+			ManagedFields: []metav1.ManagedFieldsEntry{{Manager: "kubectl"}},
+		},
+	}
+	out, err := DropManagedFields(dep)
+	if err != nil {
+		t.Fatalf("unexpected err: %v", err)
+	}
+	got := out.(*appsv1.Deployment)
+	if len(got.ManagedFields) != 0 {
+		t.Errorf("managedFields should be stripped, got %d entries", len(got.ManagedFields))
+	}
+	if _, present := got.Annotations["kubectl.kubernetes.io/last-applied-configuration"]; present {
+		t.Errorf("typed path must strip last-applied-configuration (asymmetric with unstructured path); got %v", got.Annotations)
+	}
+	if got.Annotations["description"] != "keep me" {
+		t.Errorf("other annotations should survive, got %v", got.Annotations)
+	}
+}
+
+// Sanity check the asymmetry rule extends to other typed kinds: corev1.Pod is
+// in DropManagedFields' explicit kind list. If the switch ever loses Pod,
+// this test breaks.
+func TestDropManagedFields_TypedStripsLastAppliedFromPod(t *testing.T) {
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "x", Namespace: "default",
+			Annotations: map[string]string{
+				"kubectl.kubernetes.io/last-applied-configuration": "{blob}",
+			},
+		},
+	}
+	out, _ := DropManagedFields(pod)
+	if _, present := out.(*corev1.Pod).Annotations["kubectl.kubernetes.io/last-applied-configuration"]; present {
+		t.Errorf("Pod should also have last-applied stripped")
 	}
 }

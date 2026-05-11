@@ -138,6 +138,44 @@ func TestMemoizer_ConcurrentColdReadsBuildOnce(t *testing.T) {
 	}
 }
 
+// TestMemoizer_EvictsStaleEntries pins the bounded-map invariant. store()
+// walks the map on every write and drops entries older than 2× the TTL.
+// Without this, a Radar process whose namespace filter rotates (or whose
+// users hit many distinct paths over its lifetime) would accumulate
+// Topology pointers indefinitely — invisible in short-lived dev binaries,
+// a memory leak in long-running in-cluster deployments.
+func TestMemoizer_EvictsStaleEntries(t *testing.T) {
+	ttl := 20 * time.Millisecond
+	m := NewMemoizer(ttl)
+	build := func() (*Topology, error) { return &Topology{}, nil }
+
+	// Seed 5 distinct keys.
+	for i := range 5 {
+		opts := DefaultBuildOptions()
+		opts.Namespaces = []string{"ns-" + string(rune('a'+i))}
+		if _, err := m.Get(opts, build); err != nil {
+			t.Fatalf("Get %d: %v", i, err)
+		}
+	}
+	// Wait past 2× TTL so existing entries are eligible for eviction.
+	time.Sleep(3 * ttl)
+	// One more write triggers the eviction walk.
+	final := DefaultBuildOptions()
+	final.Namespaces = []string{"keep"}
+	if _, err := m.Get(final, build); err != nil {
+		t.Fatalf("final Get: %v", err)
+	}
+
+	m.mu.Lock()
+	got := len(m.entries)
+	m.mu.Unlock()
+	// We expect only the one fresh entry — the 5 seed entries were past
+	// 2× TTL when the final write ran.
+	if got > 1 {
+		t.Errorf("expected ≤1 entry after eviction, got %d", got)
+	}
+}
+
 func TestMemoizer_DoesNotCacheErrors(t *testing.T) {
 	m := NewMemoizer(1 * time.Second)
 	var calls int32
