@@ -585,8 +585,75 @@ func buildChanges(root *unstructured.Unstructured, resourceTree *gitopstree.Reso
 	return out
 }
 
+// argoIgnoreDifferences holds a parsed view of the Application's
+// spec.ignoreDifferences[]. Each entry scopes a set of JSON pointers to a
+// (group, kind, optional name, optional namespace) — the same shape Argo's
+// own diff pipeline reads. pointersFor returns the pointer list applicable
+// to a given resource ref, with broader rules (no name/namespace) and
+// narrower rules (named resource) both contributing.
+type argoIgnoreDifferences struct {
+	rules []argoIgnoreRule
+}
+
+type argoIgnoreRule struct {
+	group, kind, name, namespace string
+	pointers                     []string
+}
+
+func parseArgoIgnoreDifferences(root *unstructured.Unstructured) argoIgnoreDifferences {
+	raw, _, _ := unstructured.NestedSlice(root.Object, "spec", "ignoreDifferences")
+	out := argoIgnoreDifferences{}
+	for _, item := range raw {
+		m, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		ptrs, _, _ := unstructured.NestedStringSlice(m, "jsonPointers")
+		// jqPathExpressions are a separate Argo feature (more powerful but
+		// requires a JQ engine to evaluate). Skip them here — JSONPointer
+		// covers the majority of "ignore this field" rules. Future work.
+		if len(ptrs) == 0 {
+			continue
+		}
+		out.rules = append(out.rules, argoIgnoreRule{
+			group:     gitops.StringValue(m["group"]),
+			kind:      gitops.StringValue(m["kind"]),
+			name:      gitops.StringValue(m["name"]),
+			namespace: gitops.StringValue(m["namespace"]),
+			pointers:  ptrs,
+		})
+	}
+	return out
+}
+
+func (a argoIgnoreDifferences) pointersFor(ref Ref) []string {
+	if len(a.rules) == 0 {
+		return nil
+	}
+	var out []string
+	for _, r := range a.rules {
+		if r.group != ref.Group || r.kind != ref.Kind {
+			continue
+		}
+		// Empty name/namespace in the rule = match all of that kind. Set
+		// values narrow the match. Argo follows the same semantics.
+		if r.name != "" && r.name != ref.Name {
+			continue
+		}
+		if r.namespace != "" && r.namespace != ref.Namespace {
+			continue
+		}
+		out = append(out, r.pointers...)
+	}
+	return out
+}
+
 func argoResourceChanges(root *unstructured.Unstructured, resolver Resolver) []Change {
 	raw, _, _ := unstructured.NestedSlice(root.Object, "status", "resources")
+	// Pre-parse the Application's spec.ignoreDifferences so each resource's
+	// drift computation can filter out operator-declared exemptions before
+	// they reach the UI.
+	ignoreRules := parseArgoIgnoreDifferences(root)
 	out := make([]Change, 0, len(raw))
 	for _, item := range raw {
 		m, ok := item.(map[string]any)
@@ -642,7 +709,7 @@ func argoResourceChanges(root *unstructured.Unstructured, resolver Resolver) []C
 		// FailedScheduling that the GitOps CR never sees.
 		if resolver != nil {
 			if live := resolver.GetLive(ref.Group, ref.Kind, ref.Namespace, ref.Name); live != nil {
-				if drift := computeDriftFromLastApplied(live); drift != nil {
+				if drift := computeDriftFromLastApplied(live, ignoreRules.pointersFor(ref)); drift != nil {
 					change.Drift = drift
 				}
 			}

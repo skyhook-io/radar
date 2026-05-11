@@ -30,19 +30,19 @@ func liveWith(lastApplied string, liveSpec map[string]any) *unstructured.Unstruc
 
 func TestComputeDrift_NoAnnotation_ReturnsNil(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]any{"spec": map[string]any{"a": 1}}}
-	if got := computeDriftFromLastApplied(obj); got != nil {
+	if got := computeDriftFromLastApplied(obj, nil); got != nil {
 		t.Fatalf("expected nil when annotation missing, got %#v", got)
 	}
 }
 func TestComputeDrift_InvalidJSON_ReturnsNil(t *testing.T) {
-	if got := computeDriftFromLastApplied(liveWith("not-json", map[string]any{"a": 1})); got != nil {
+	if got := computeDriftFromLastApplied(liveWith("not-json", map[string]any{"a": 1}), nil); got != nil {
 		t.Fatalf("expected nil on parse failure, got %#v", got)
 	}
 }
 
 func TestComputeDrift_NoDrift_ReturnsNil(t *testing.T) {
 	desired := `{"spec":{"a":1,"b":"two"}}`
-	got := computeDriftFromLastApplied(liveWith(desired, map[string]any{"a": int64(1), "b": "two"}))
+	got := computeDriftFromLastApplied(liveWith(desired, map[string]any{"a": int64(1), "b": "two"}), nil)
 	if got != nil {
 		t.Fatalf("expected nil when desired and live match, got %d entries", len(got.Entries))
 	}
@@ -66,7 +66,7 @@ func TestComputeDrift_KarpenterStyleSchemaMigration(t *testing.T) {
 			},
 		},
 	}
-	got := computeDriftFromLastApplied(liveWith(desired, live))
+	got := computeDriftFromLastApplied(liveWith(desired, live), nil)
 	if got == nil {
 		t.Fatal("expected drift, got nil")
 	}
@@ -92,7 +92,7 @@ func TestComputeDrift_KarpenterStyleSchemaMigration(t *testing.T) {
 
 func TestComputeDrift_ScalarChange(t *testing.T) {
 	desired := `{"spec":{"replicas":3}}`
-	got := computeDriftFromLastApplied(liveWith(desired, map[string]any{"replicas": int64(5)}))
+	got := computeDriftFromLastApplied(liveWith(desired, map[string]any{"replicas": int64(5)}), nil)
 	if got == nil || len(got.Entries) != 1 {
 		t.Fatalf("expected 1 entry, got %v", got)
 	}
@@ -108,7 +108,7 @@ func TestComputeDrift_ScalarChange(t *testing.T) {
 func TestComputeDrift_TreatsEmptyAsNil(t *testing.T) {
 	// Defaulted-in empty maps and arrays shouldn't show as drift.
 	desired := `{"spec":{"a":{}}}`
-	got := computeDriftFromLastApplied(liveWith(desired, map[string]any{"a": map[string]any{}}))
+	got := computeDriftFromLastApplied(liveWith(desired, map[string]any{"a": map[string]any{}}), nil)
 	if got != nil {
 		t.Errorf("empty map vs empty map should not produce drift, got %v", got.Entries)
 	}
@@ -154,7 +154,7 @@ func TestComputeDrift_NilishCrossSide(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			got := computeDriftFromLastApplied(liveWith(tc.desired, tc.live))
+			got := computeDriftFromLastApplied(liveWith(tc.desired, tc.live), nil)
 			if got == nil {
 				t.Fatalf("expected drift, got nil")
 			}
@@ -176,5 +176,157 @@ func TestComputeDrift_NilishCrossSide(t *testing.T) {
 				t.Errorf("path %s: payload should contain %q; live=%q desired=%q", tc.wantPath, tc.wantInValue, entry.Live, entry.Desired)
 			}
 		})
+	}
+}
+
+// TestComputeDrift_DeploymentDefaultsAreNotDrift pins the headline fix:
+// when last-applied is a partial Deployment manifest, the K8s API server
+// fills in defaults like progressDeadlineSeconds:600, strategy.RollingUpdate,
+// container imagePullPolicy:IfNotPresent, dnsPolicy:ClusterFirst,
+// restartPolicy:Always, schedulerName, terminationGracePeriodSeconds, etc.
+// Before this fix, every one of those defaults surfaced as drift. With the
+// scheme-defaulting pass applied to the desired side first, they cancel out.
+func TestComputeDrift_DeploymentDefaultsAreNotDrift(t *testing.T) {
+	// Minimal user-applied Deployment — exactly what kubectl/Argo would
+	// write to last-applied-configuration from a partial manifest.
+	desired := `{"apiVersion":"apps/v1","kind":"Deployment","metadata":{"name":"guestbook-ui","namespace":"demo"},"spec":{"replicas":1,"selector":{"matchLabels":{"app":"guestbook-ui"}},"template":{"metadata":{"labels":{"app":"guestbook-ui"}},"spec":{"containers":[{"name":"guestbook-ui","image":"gcr.io/google-samples/gb-frontend:v5","ports":[{"containerPort":80}]}]}}}}`
+
+	// Live Deployment as the API server stores it — same user spec plus
+	// all the defaulted fields the user never set.
+	live := map[string]any{
+		"replicas":                int64(1),
+		"progressDeadlineSeconds": int64(600),
+		"revisionHistoryLimit":    int64(10),
+		"strategy": map[string]any{
+			"type": "RollingUpdate",
+			"rollingUpdate": map[string]any{
+				"maxSurge":       "25%",
+				"maxUnavailable": "25%",
+			},
+		},
+		"selector": map[string]any{
+			"matchLabels": map[string]any{"app": "guestbook-ui"},
+		},
+		"template": map[string]any{
+			"metadata": map[string]any{"labels": map[string]any{"app": "guestbook-ui"}},
+			"spec": map[string]any{
+				"containers": []any{
+					map[string]any{
+						"name":                     "guestbook-ui",
+						"image":                    "gcr.io/google-samples/gb-frontend:v5",
+						"imagePullPolicy":          "IfNotPresent",
+						"terminationMessagePath":   "/dev/termination-log",
+						"terminationMessagePolicy": "File",
+						"resources":                map[string]any{},
+						"ports": []any{
+							map[string]any{
+								"containerPort": int64(80),
+								"protocol":      "TCP",
+							},
+						},
+					},
+				},
+				"dnsPolicy":                     "ClusterFirst",
+				"restartPolicy":                 "Always",
+				"schedulerName":                 "default-scheduler",
+				"securityContext":               map[string]any{},
+				"terminationGracePeriodSeconds": int64(30),
+			},
+		},
+	}
+
+	live["template"].(map[string]any)["spec"].(map[string]any)["containers"] = live["template"].(map[string]any)["spec"].(map[string]any)["containers"]
+
+	obj := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata": map[string]any{
+			"name":      "guestbook-ui",
+			"namespace": "demo",
+			"annotations": map[string]any{
+				kubectlLastAppliedAnnotation: desired,
+			},
+		},
+		"spec": live,
+	}}
+
+	got := computeDriftFromLastApplied(obj, nil)
+	if got != nil && len(got.Entries) > 0 {
+		// We expect no drift: every "live extra" field is an API server default
+		// and should cancel out via scheme.Default().
+		t.Errorf("expected no drift on a partial Deployment manifest with only API server defaults filled in; got %d entries:\n%v", len(got.Entries), got.Entries)
+	}
+}
+
+// TestFilterIgnoredPaths_PrefixMatch pins the ignoreDifferences filter
+// semantics: an ignore on "/spec/replicas" strips exactly the matching
+// entry; an ignore on a parent path strips everything underneath.
+func TestFilterIgnoredPaths_PrefixMatch(t *testing.T) {
+	entries := []DriftEntry{
+		{Path: "spec.replicas", Op: DriftOpChanged},
+		{Path: "spec.template.spec.containers", Op: DriftOpChanged},
+		{Path: "spec.template.spec.dnsPolicy", Op: DriftOpAdded},
+		{Path: "spec.strategy.type", Op: DriftOpChanged},
+	}
+	out := filterIgnoredPaths(entries, []string{
+		"/spec/replicas",          // exact path
+		"/spec/template/spec",     // parent prefix
+	})
+	if len(out) != 1 {
+		t.Fatalf("expected 1 entry after filter, got %d (%v)", len(out), out)
+	}
+	if out[0].Path != "spec.strategy.type" {
+		t.Errorf("kept entry = %q, want spec.strategy.type", out[0].Path)
+	}
+}
+
+// TestFilterIgnoredPaths_PrefixDoesNotMatchPartialSegment pins that
+// "/spec/replic" doesn't accidentally match "spec.replicas". Prefix
+// matching must respect path segment boundaries.
+func TestFilterIgnoredPaths_PrefixDoesNotMatchPartialSegment(t *testing.T) {
+	entries := []DriftEntry{
+		{Path: "spec.replicas", Op: DriftOpChanged},
+	}
+	out := filterIgnoredPaths(entries, []string{"/spec/replic"})
+	if len(out) != 1 {
+		t.Errorf("expected entry preserved (partial-segment ignore must not match); got %d (%v)", len(out), out)
+	}
+}
+
+// TestParseArgoIgnoreDifferences_MatchesByGroupKindAndOptionalNameNs pins
+// the scoping semantics: a rule with empty name/namespace matches every
+// resource of the given group/kind; named/namespaced rules narrow.
+func TestParseArgoIgnoreDifferences_MatchesByGroupKindAndOptionalNameNs(t *testing.T) {
+	app := &unstructured.Unstructured{Object: map[string]any{
+		"spec": map[string]any{
+			"ignoreDifferences": []any{
+				map[string]any{
+					"group":        "apps",
+					"kind":         "Deployment",
+					"jsonPointers": []any{"/spec/replicas"},
+				},
+				map[string]any{
+					"group":        "apps",
+					"kind":         "Deployment",
+					"name":         "specific-deploy",
+					"namespace":    "ns",
+					"jsonPointers": []any{"/spec/template/spec/dnsPolicy"},
+				},
+			},
+		},
+	}}
+	ig := parseArgoIgnoreDifferences(app)
+	// Broad rule matches any Deployment
+	if got := ig.pointersFor(Ref{Group: "apps", Kind: "Deployment", Namespace: "other", Name: "anything"}); len(got) != 1 || got[0] != "/spec/replicas" {
+		t.Errorf("broad rule should match any Deployment; got %v", got)
+	}
+	// Narrow rule applies only to the named resource — broad still applies too
+	got := ig.pointersFor(Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "specific-deploy"})
+	if len(got) != 2 {
+		t.Errorf("named match should pick up both rules; got %v", got)
+	}
+	// Different kind = no matches
+	if got := ig.pointersFor(Ref{Group: "", Kind: "Service", Name: "x"}); got != nil {
+		t.Errorf("Service shouldn't match Deployment rules; got %v", got)
 	}
 }

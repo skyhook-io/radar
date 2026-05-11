@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sort"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
@@ -36,7 +37,13 @@ const driftEntryCap = 50
 // captured in the last-applied-configuration annotation. Returns nil when
 // drift can't be computed (no annotation, parse failure, no spec on either
 // side) — callers should treat nil as "no diff available", not "no drift".
-func computeDriftFromLastApplied(live *unstructured.Unstructured) *Drift {
+//
+// ignorePointers is a list of RFC 6902 JSON pointer prefixes (e.g.,
+// "/spec/replicas") that should be filtered from the result. Sourced from
+// the Argo Application's `spec.ignoreDifferences` for the matching
+// (group, kind) — same mechanism the Argo UI uses to suppress operator-
+// declared "this field isn't managed by GitOps" rules.
+func computeDriftFromLastApplied(live *unstructured.Unstructured, ignorePointers []string) *Drift {
 	if live == nil {
 		return nil
 	}
@@ -50,12 +57,32 @@ func computeDriftFromLastApplied(live *unstructured.Unstructured) *Drift {
 		log.Printf("[gitops/drift] last-applied annotation unparseable for %s/%s/%s: %v", live.GetKind(), live.GetNamespace(), live.GetName(), err)
 		return nil
 	}
+	// Apply K8s API-server-style defaults to the desired side before diffing.
+	// Mirrors Argo's gitops-engine generateSchemeDefaultPatch: fields the
+	// API server fills in automatically (progressDeadlineSeconds: 600,
+	// imagePullPolicy: IfNotPresent, dnsPolicy: ClusterFirst, etc.) become
+	// the same on both sides instead of showing as drift. Without this,
+	// every Deployment applied with a partial manifest produces ~7-10 false
+	// drift entries that operators have to mentally filter out.
+	desiredObj = applySchemeDefaults(desiredObj)
 	desiredSpec, _ := desiredObj["spec"].(map[string]any)
 	liveSpec, _, _ := unstructured.NestedMap(live.Object, "spec")
 	if desiredSpec == nil && liveSpec == nil {
 		return nil
 	}
 	entries := diffValues("spec", desiredSpec, liveSpec, nil)
+	// Strip server-assigned fields (clusterIP, nodeName, etc.) from the
+	// diff output regardless of what the user set. These are *runtime*-
+	// assigned values; the user can never predict them, and showing them
+	// as drift just trains operators to ignore the chip.
+	if kind, _ := live.Object["kind"].(string); kind != "" {
+		if serverAssigned := kindServerAssignedPaths[kind]; len(serverAssigned) > 0 {
+			entries = filterIgnoredPaths(entries, serverAssigned)
+		}
+	}
+	if len(ignorePointers) > 0 {
+		entries = filterIgnoredPaths(entries, ignorePointers)
+	}
 	if len(entries) == 0 {
 		// last-applied parsed successfully but no field-level diff —
 		// returning an empty Drift would be misleading (UI would show
@@ -75,6 +102,245 @@ func computeDriftFromLastApplied(live *unstructured.Unstructured) *Drift {
 		Source:    DriftSourceLastApplied,
 		Truncated: truncated,
 	}
+}
+
+// applySchemeDefaults fills in K8s API server defaults on the desired side
+// of the diff before comparison. Otherwise a Deployment applied with a
+// partial manifest produces ~7-10 false drift entries — every API-server-
+// added default (progressDeadlineSeconds:600, dnsPolicy:ClusterFirst,
+// imagePullPolicy:IfNotPresent, etc.) shows up as "added" because the
+// last-applied annotation only contains the user-written fields.
+//
+// We don't use k8s.io/client-go/kubernetes/scheme.Default() because client-
+// go's scheme has the types but not the defaulter functions — those live
+// in k8s.io/kubernetes/pkg/apis/* which isn't a publicly importable
+// package. Argo CD's gitops-engine works around this by vendoring those
+// internals; we hardcode the small set of defaults for the kinds operators
+// most commonly hit drift noise on. The list is finite, public, and
+// changes ~once per major K8s release.
+//
+// Returns the input unchanged when the kind isn't in the defaults table —
+// CRDs and uncommon kinds keep the raw-diff behavior.
+func applySchemeDefaults(obj map[string]any) map[string]any {
+	kind, _ := obj["kind"].(string)
+	defaulter, ok := kindDefaulters[kind]
+	if !ok {
+		return obj
+	}
+	spec, ok := obj["spec"].(map[string]any)
+	if !ok {
+		return obj
+	}
+	defaulter(spec)
+	return obj
+}
+
+// kindServerAssignedPaths lists fields the API server fills in at create
+// time with values the user can't predict (cluster IPs, scheduler-assigned
+// node, controller-set ports, etc.). These are stripped from drift output
+// regardless of the user's manifest. RFC-6902 pointer format to match
+// filterIgnoredPaths' input shape.
+//
+// Distinct from kindDefaulters: defaulters have *known* default values we
+// can pre-fill; these have *runtime-assigned* values we can only ignore.
+var kindServerAssignedPaths = map[string][]string{
+	"Service": {
+		// API server allocates from the cluster IP pool. Single-stack
+		// clusters also auto-populate clusterIPs[] and ipFamilies[].
+		"/spec/clusterIP",
+		"/spec/clusterIPs",
+		"/spec/ipFamilies",
+		"/spec/ipFamilyPolicy",
+		// Defaults to "Cluster" when omitted, but the field is technically
+		// user-settable; we treat it as runtime-assigned because nobody
+		// actually overrides it in practice.
+		"/spec/internalTrafficPolicy",
+	},
+	"Pod": {
+		// Scheduler assigns this at admission. Drift makes no sense.
+		"/spec/nodeName",
+	},
+	"PersistentVolumeClaim": {
+		// volumeName is filled in by the PV provisioner.
+		"/spec/volumeName",
+	},
+}
+
+// kindDefaulters maps a Kubernetes Kind to a function that mutates the
+// resource's spec to fill in the API server defaults that don't appear in
+// kubectl's last-applied annotation. The handlers compose: workload kinds
+// (Deployment/StatefulSet/DaemonSet/Job) all delegate to the Pod template
+// defaulter for spec.template.spec, which in turn delegates to the Container
+// defaulter for each container.
+var kindDefaulters = map[string]func(spec map[string]any){
+	"Deployment":  applyDeploymentSpecDefaults,
+	"StatefulSet": applyStatefulSetSpecDefaults,
+	"DaemonSet":   applyDaemonSetSpecDefaults,
+	"ReplicaSet":  applyReplicaSetSpecDefaults,
+	"Job":         applyJobSpecDefaults,
+	"CronJob":     applyCronJobSpecDefaults,
+	"Pod":         applyPodSpecDefaults,
+	"Service":     applyServiceSpecDefaults,
+}
+
+func applyDeploymentSpecDefaults(spec map[string]any) {
+	setIfMissing(spec, "progressDeadlineSeconds", int64(600))
+	setIfMissing(spec, "revisionHistoryLimit", int64(10))
+	setIfMissing(spec, "strategy", map[string]any{
+		"type": "RollingUpdate",
+		"rollingUpdate": map[string]any{
+			"maxSurge":       "25%",
+			"maxUnavailable": "25%",
+		},
+	})
+	applyPodTemplateDefaults(spec)
+}
+
+func applyStatefulSetSpecDefaults(spec map[string]any) {
+	setIfMissing(spec, "revisionHistoryLimit", int64(10))
+	setIfMissing(spec, "podManagementPolicy", "OrderedReady")
+	setIfMissing(spec, "updateStrategy", map[string]any{"type": "RollingUpdate"})
+	applyPodTemplateDefaults(spec)
+}
+
+func applyDaemonSetSpecDefaults(spec map[string]any) {
+	setIfMissing(spec, "revisionHistoryLimit", int64(10))
+	setIfMissing(spec, "updateStrategy", map[string]any{
+		"type":          "RollingUpdate",
+		"rollingUpdate": map[string]any{"maxUnavailable": int64(1)},
+	})
+	applyPodTemplateDefaults(spec)
+}
+
+func applyReplicaSetSpecDefaults(spec map[string]any) {
+	applyPodTemplateDefaults(spec)
+}
+
+func applyJobSpecDefaults(spec map[string]any) {
+	setIfMissing(spec, "backoffLimit", int64(6))
+	setIfMissing(spec, "completionMode", "NonIndexed")
+	applyPodTemplateDefaults(spec)
+}
+
+func applyCronJobSpecDefaults(spec map[string]any) {
+	setIfMissing(spec, "concurrencyPolicy", "Allow")
+	setIfMissing(spec, "failedJobsHistoryLimit", int64(1))
+	setIfMissing(spec, "successfulJobsHistoryLimit", int64(3))
+	setIfMissing(spec, "suspend", false)
+}
+
+// applyPodTemplateDefaults walks spec.template.spec (the Pod template
+// inside a workload kind) and applies Pod-level + Container-level defaults.
+// Container defaults run per-element of spec.containers and spec.initContainers.
+func applyPodTemplateDefaults(spec map[string]any) {
+	template, ok := spec["template"].(map[string]any)
+	if !ok {
+		return
+	}
+	podSpec, ok := template["spec"].(map[string]any)
+	if !ok {
+		return
+	}
+	applyPodSpecDefaults(podSpec)
+}
+
+func applyPodSpecDefaults(spec map[string]any) {
+	setIfMissing(spec, "dnsPolicy", "ClusterFirst")
+	setIfMissing(spec, "restartPolicy", "Always")
+	setIfMissing(spec, "schedulerName", "default-scheduler")
+	setIfMissing(spec, "securityContext", map[string]any{})
+	setIfMissing(spec, "terminationGracePeriodSeconds", int64(30))
+	for _, key := range []string{"containers", "initContainers"} {
+		if list, ok := spec[key].([]any); ok {
+			for _, c := range list {
+				if cm, ok := c.(map[string]any); ok {
+					applyContainerDefaults(cm)
+				}
+			}
+		}
+	}
+}
+
+func applyContainerDefaults(c map[string]any) {
+	setIfMissing(c, "imagePullPolicy", "IfNotPresent")
+	setIfMissing(c, "terminationMessagePath", "/dev/termination-log")
+	setIfMissing(c, "terminationMessagePolicy", "File")
+	setIfMissing(c, "resources", map[string]any{})
+	if ports, ok := c["ports"].([]any); ok {
+		for _, p := range ports {
+			if pm, ok := p.(map[string]any); ok {
+				setIfMissing(pm, "protocol", "TCP")
+			}
+		}
+	}
+}
+
+func applyServiceSpecDefaults(spec map[string]any) {
+	setIfMissing(spec, "type", "ClusterIP")
+	setIfMissing(spec, "sessionAffinity", "None")
+	setIfMissing(spec, "ipFamilyPolicy", "SingleStack")
+	if ports, ok := spec["ports"].([]any); ok {
+		for _, p := range ports {
+			if pm, ok := p.(map[string]any); ok {
+				setIfMissing(pm, "protocol", "TCP")
+				// targetPort defaults to port when omitted — but we can't
+				// safely back-fill an integer here without the matching port
+				// value. Skip; the controller's resulting field shows as drift
+				// only if the user actually changed it.
+			}
+		}
+	}
+}
+
+// setIfMissing writes a default value when the key is absent or maps to a
+// nilish value (per isNilish). Matches the "API server fills in this default
+// if the user didn't set it" semantics: an explicit empty value in the
+// user's manifest still gets defaulted, which is what the API server does
+// for most fields.
+func setIfMissing(m map[string]any, key string, value any) {
+	existing, present := m[key]
+	if !present || isNilish(existing) {
+		m[key] = value
+	}
+}
+
+// filterIgnoredPaths strips drift entries whose path matches any of the
+// supplied RFC 6902 JSON pointer prefixes. Argo's `spec.ignoreDifferences`
+// uses pointers like "/spec/replicas" — we translate that to our dot-path
+// shape ("spec.replicas") and match by exact-or-prefix so an ignore on
+// "/spec/template" removes every entry under it.
+func filterIgnoredPaths(entries []DriftEntry, pointers []string) []DriftEntry {
+	if len(pointers) == 0 {
+		return entries
+	}
+	prefixes := make([]string, 0, len(pointers))
+	for _, p := range pointers {
+		p = strings.TrimSpace(p)
+		if p == "" {
+			continue
+		}
+		// "/spec/replicas" → "spec.replicas"
+		p = strings.TrimPrefix(p, "/")
+		p = strings.ReplaceAll(p, "/", ".")
+		prefixes = append(prefixes, p)
+	}
+	out := entries[:0]
+	for _, e := range entries {
+		if pathMatchesAnyPrefix(e.Path, prefixes) {
+			continue
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
+func pathMatchesAnyPrefix(path string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if path == prefix || strings.HasPrefix(path, prefix+".") || strings.HasPrefix(path, prefix+".[") {
+			return true
+		}
+	}
+	return false
 }
 
 // diffValues recursively walks desired vs live and emits entries where they
