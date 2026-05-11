@@ -75,8 +75,7 @@ func DropManagedFields(obj any) (any, error) {
 //
 // Preserves kubectl.kubernetes.io/last-applied-configuration intentionally:
 // GitOps drift detection (pkg/gitops/insights/drift.go) reads it to compute
-// per-field diffs between Git-declared and live state. Stripping it broke
-// drift detection silently in the dynamic cache path.
+// per-field diffs between Git-declared and live state.
 //
 // For CustomResourceDefinitions specifically, also strips:
 //   - spec.versions[].schema — the OpenAPI v3 schema. On operator-heavy

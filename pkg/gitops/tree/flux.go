@@ -160,4 +160,3 @@ func fluxSourceRef(root *unstructured.Unstructured, defaultNamespace string, fie
 		Name:      name,
 	}, true
 }
-

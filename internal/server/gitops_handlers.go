@@ -63,13 +63,20 @@ func (s *Server) parseGitOpsRequest(w http.ResponseWriter, r *http.Request) (*gi
 		return nil, false
 	}
 
+	// Detail endpoints intentionally use the user's full RBAC ceiling rather
+	// than the active UI namespace filter. The root resource (e.g. an Argo
+	// Application in `argocd`) commonly manages workloads in *other*
+	// namespaces; if we honored the UI filter, the tree would be empty
+	// whenever the user has narrowed Radar to a different namespace than the
+	// managed ones. The root namespace itself is still RBAC-checked above
+	// (s.getUserNamespaces with the namespace param).
 	return &gitopsRequest{
 		Kind:              kind,
 		Namespace:         namespace,
 		Name:              name,
 		Group:             group,
 		Cache:             cache,
-		AllowedNamespaces: s.parseNamespacesForUser(r),
+		AllowedNamespaces: s.getUserNamespaces(r, nil),
 	}, true
 }
 
@@ -393,4 +400,3 @@ func eventTime(e *corev1.Event) time.Time {
 	}
 	return e.FirstTimestamp.Time
 }
-

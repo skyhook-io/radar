@@ -328,4 +328,3 @@ func classifyGitOpsKind(obj *unstructured.Unstructured) (tool, kind string) {
 	}
 	return "", ""
 }
-

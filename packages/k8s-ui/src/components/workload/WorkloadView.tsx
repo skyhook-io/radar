@@ -754,7 +754,7 @@ function extractMetadata(kind: string, resource: any): { label: string; value: s
 // ============================================================================
 
 function ManagedByChip({ owner, onOpen }: { owner: GitOpsOwnerRef; onOpen?: (ref: GitOpsOwnerRef) => void }) {
-  const toolLabel = owner.tool === 'argo' ? 'ArgoCD' : 'FluxCD'
+  const toolLabel = owner.tool === 'argocd' ? 'ArgoCD' : 'FluxCD'
   const label = owner.namespace ? `${owner.namespace}/${owner.name}` : owner.name
   const title = `Managed by ${toolLabel} · ${label}`
   // When the host hasn't wired the GitOps route, fall back to a non-interactive

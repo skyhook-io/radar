@@ -147,7 +147,6 @@ func normalizeSync(status string) string {
 		return "Unknown"
 	}
 }
-
 func normalizeHealth(status string) string {
 	switch status {
 	case "Healthy", "Progressing", "Degraded", "Suspended", "Missing", "Unknown":
@@ -158,4 +157,3 @@ func normalizeHealth(status string) string {
 		return "Unknown"
 	}
 }
-

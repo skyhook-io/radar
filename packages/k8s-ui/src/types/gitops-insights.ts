@@ -12,8 +12,30 @@ export interface GitOpsInsight {
   partial?: boolean
 }
 
+import type { GitOpsTool } from './gitops'
+
+// Closed enums mirroring `pkg/gitops/insights/vocab.go`. Keeping the FE
+// vocabulary in lockstep with the Go side means switches over these fields
+// are exhaustive and wire-contract drift surfaces at compile time instead of
+// at runtime as a missing render branch.
+export type GitOpsScope = 'operation' | 'resource' | 'condition' | 'tree' | 'lifecycle'
+
+export type GitOpsCategory =
+  | 'Synced'
+  | 'OutOfSync'
+  | 'Degraded'
+  | 'Missing'
+  | 'Pruned'
+  | 'Hook'
+  | 'Progressing'
+  | 'Reconciling'
+  | 'Suspended'
+  | 'Unknown'
+
+export type GitOpsDriftSource = 'lastAppliedAnnotation'
+
 export interface GitOpsInsightSummary {
-  tool: string
+  tool: GitOpsTool
   kind: string
   namespace: string
   name: string
@@ -54,7 +76,7 @@ export interface GitOpsInsightRef {
 
 export interface GitOpsIssue {
   severity: 'critical' | 'alert' | 'warning' | 'info'
-  scope: string
+  scope: GitOpsScope
   reason: string
   message: string
   refs?: GitOpsInsightRef[]
@@ -83,7 +105,7 @@ export interface GitOpsRemediation {
 
 export interface GitOpsChange {
   ref: GitOpsInsightRef
-  category: string
+  category: GitOpsCategory
   sync?: string
   health?: string
   message?: string
@@ -112,7 +134,7 @@ export interface GitOpsChange {
 
 export interface GitOpsDrift {
   entries: GitOpsDriftEntry[]
-  source: string // currently always "lastAppliedAnnotation"
+  source: GitOpsDriftSource
   truncated?: boolean
 }
 

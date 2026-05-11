@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -71,6 +72,14 @@ type Ref struct {
 // pattern (RemediationCreateNamespace etc.); Target names the K8s resource
 // the remedy operates on (a namespace name, a resource ref, etc.). The
 // frontend dispatches on Kind to render the right button + onClick handler.
+//
+// Invariants (per Kind):
+//   RemediationCreateNamespace: Target MUST be a non-empty namespace name.
+//
+// Construct via NewCreateNamespaceRemediation rather than struct literal —
+// the constructor enforces the per-Kind invariants; literal construction
+// can produce a Remediation that ships to the frontend with a Kind it can't
+// act on. Validate() runs the same check for callers that hold a value.
 type Remediation struct {
 	Kind   RemediationKind `json:"kind"`
 	Target string          `json:"target,omitempty"`
@@ -78,6 +87,37 @@ type Remediation struct {
 	// Distinct from the Issue's own Action string, which describes the
 	// manual path; Hint describes what *this button* does.
 	Hint string `json:"hint,omitempty"`
+}
+
+// NewCreateNamespaceRemediation constructs a validated create-namespace
+// remediation. Returns nil when the namespace name is empty — every caller
+// that holds the namespace name already does so because a regex captured it,
+// so nil here means "the parser didn't actually capture a target" and the
+// Issue should ship without a Remediation rather than with a broken one.
+func NewCreateNamespaceRemediation(namespace, hint string) *Remediation {
+	if namespace == "" {
+		return nil
+	}
+	return &Remediation{Kind: RemediationCreateNamespace, Target: namespace, Hint: hint}
+}
+
+// Validate reports whether the Remediation is internally consistent for its
+// Kind. Returns nil for valid values, an error describing the violation
+// otherwise. Used by tests + future consumers that build remediations from
+// untrusted input.
+func (r *Remediation) Validate() error {
+	if r == nil {
+		return nil
+	}
+	switch r.Kind {
+	case RemediationCreateNamespace:
+		if r.Target == "" {
+			return fmt.Errorf("create-namespace remediation requires Target (namespace name)")
+		}
+		return nil
+	default:
+		return fmt.Errorf("unknown remediation kind %q", r.Kind)
+	}
 }
 
 type Issue struct {
@@ -231,11 +271,11 @@ type Resolver interface {
 // We strip everything that's not useful at a glance — count + type + reason
 // + message + age is what an operator scans first.
 type EventSummary struct {
-	Type           string `json:"type"`              // Normal | Warning
-	Reason         string `json:"reason"`            // FailedScheduling, ImagePullBackOff, etc.
-	Message        string `json:"message"`           // human-readable detail
-	Count          int32  `json:"count,omitempty"`   // event aggregation count (>1 indicates repetition)
-	LastTimestamp  string `json:"lastTimestamp"`     // RFC3339 of most recent occurrence
+	Type               string `json:"type"`            // Normal | Warning
+	Reason             string `json:"reason"`          // FailedScheduling, ImagePullBackOff, etc.
+	Message            string `json:"message"`         // human-readable detail
+	Count              int32  `json:"count,omitempty"` // event aggregation count (>1 indicates repetition)
+	LastTimestamp      string `json:"lastTimestamp"`   // RFC3339 of most recent occurrence
 	ReportingComponent string `json:"reportingComponent,omitempty"`
 }
 
@@ -386,7 +426,12 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			if parsed.AffectedKind != "" && parsed.AffectedName != "" {
 				ref := Ref{Kind: parsed.AffectedKind, Name: parsed.AffectedName}
 				issue.Refs = []Ref{ref}
-				suppressedRefs[refKey(ref)] = true
+				// argoAffectedRefRE captures Kind + Name only — Argo's operation
+				// message doesn't include the resource namespace. The per-resource
+				// pass below carries a populated namespace, so we key the
+				// suppression set by kind+name only; using refKey here would
+				// silently fail to match any namespaced resource.
+				suppressedRefs[suppressionKey(ref)] = true
 			}
 			// When the remediation pins the root cause to a single missing
 			// namespace, every resource targeting that namespace is just a
@@ -421,7 +466,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 		// When an operation HAS failed, SyncError is a parallel encoding of
 		// the same message we already render in the failure card; skip it.
 		for _, ci := range argoApplicationConditions(root) {
-			if operationFailed && ci.Reason == "SyncError" {
+			if operationFailed && ci.Reason == argoSyncErrorConditionType {
 				continue
 			}
 			out = append(out, ci)
@@ -436,7 +481,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			// value in showing it twice. Also suppress every resource in a
 			// namespace named by a structured remediation (the missing
 			// namespace IS the cause; per-resource Missing rows are noise).
-			if suppressedRefs[refKey(change.Ref)] {
+			if suppressedRefs[suppressionKey(change.Ref)] {
 				continue
 			}
 			if change.Ref.Namespace != "" && suppressedNamespaces[change.Ref.Namespace] {
@@ -510,7 +555,6 @@ func dedupeIssues(in []Issue) []Issue {
 	}
 	return out
 }
-
 func buildChanges(root *unstructured.Unstructured, resourceTree *gitopstree.ResourceTree, tool string, live Resolver) []Change {
 	if tool == "argocd" {
 		return argoResourceChanges(root, live)
@@ -884,10 +928,28 @@ func sortChanges(out []Change) {
 	})
 }
 
+// unknownPairLogged dedupes the "unknown vocabulary" warnings emitted by
+// categorizeArgoChange / categorizeFluxChange. The GitOps detail page polls
+// every 2s while an op runs, with one call per managed resource — without
+// dedup, a single non-canonical health value (e.g. a controller emitting
+// `OK` instead of `Healthy`) would flood the log at hundreds of lines/min.
+// The set grows monotonically, but the vocabulary is closed and small, so
+// memory use is bounded by the cluster's actual non-canonical value count.
+var unknownPairLogged sync.Map
+
+func logUnknownPairOnce(tool, sync, health string) {
+	key := tool + "|" + sync + "|" + health
+	if _, loaded := unknownPairLogged.LoadOrStore(key, struct{}{}); loaded {
+		return
+	}
+	log.Printf("[gitops/insights] unknown %s sync/health combination sync=%q health=%q — falling back to Unknown", tool, sync, health)
+}
+
 // categorizeArgoChange maps Argo's per-resource sync + health into a Category
 // constant. Inputs come from status.resources[].status (sync) and
 // status.resources[].health.status — both vocabularies are documented and
-// stable, so unknown values are a real bug and are logged once.
+// stable, so unknown values are a real bug and are logged once per
+// (sync, health) pair via logUnknownPairOnce.
 func categorizeArgoChange(sync, health string) Category {
 	// Health takes precedence for the failure tiers — a resource in Sync
 	// but degraded is more important to surface than its sync state.
@@ -911,7 +973,7 @@ func categorizeArgoChange(sync, health string) Category {
 	case "Unknown", "":
 		return CategoryUnknown
 	}
-	log.Printf("[gitops/insights] unknown Argo sync/health combination sync=%q health=%q — falling back to Unknown", sync, health)
+	logUnknownPairOnce("Argo", sync, health)
 	return CategoryUnknown
 }
 
@@ -1155,6 +1217,20 @@ func refKey(r Ref) string {
 	return r.Kind + "/" + r.Namespace + "/" + r.Name
 }
 
+// suppressionKey matches a resource by kind+name only — Argo's operation
+// failure message names the affected resource without a namespace, so a
+// suppression set built from operation messages must compare on the same
+// projection. Two same-named resources of the same kind in different
+// namespaces would dedup with each other under this key; in practice
+// operations only affect one of them at a time and the cost of over-dedup
+// (showing one too few rows briefly) is less than the cost of under-dedup
+// (every namespaced resource fails the namespace-aware refKey match and the
+// duplicate rows persist forever — the exact regression this exists to
+// prevent).
+func suppressionKey(r Ref) string {
+	return r.Kind + "/" + r.Name
+}
+
 // parsedFailure carries fields extracted from an Argo operationState.message.
 // Unparsed parts of the original message remain available to the UI as the
 // raw error — the parser only adds structure, never replaces or hides text.
@@ -1178,9 +1254,11 @@ type parsedFailure struct {
 const stuckRetryThreshold = 5
 
 // Capture group: <Kind>(.<group>...)? "<name>". Examples this matches:
-//   CustomResourceDefinition.apiextensions.k8s.io "scaledjobs.keda.sh"
-//   Deployment.apps "billing"
-//   Service "billing"
+//
+//	CustomResourceDefinition.apiextensions.k8s.io "scaledjobs.keda.sh"
+//	Deployment.apps "billing"
+//	Service "billing"
+//
 // We don't need the group; the leading kind + quoted name is what users read.
 var argoAffectedRefRE = regexp.MustCompile(`([A-Z][A-Za-z0-9]+)(?:\.[A-Za-z0-9.\-]+)?\s+"([^"]+)"`)
 
@@ -1247,13 +1325,32 @@ func parseArgoOperationError(msg string) parsedFailure {
 	// Structured remediation: only the missing-namespace pattern offers a
 	// one-click fix in v1. Other patterns surface diagnosis-only via Cause.
 	if m := argoMissingNamespaceRE.FindStringSubmatch(msg); len(m) == 2 {
-		out.Remediation = &Remediation{
-			Kind:   RemediationCreateNamespace,
-			Target: m[1],
-			Hint:   "Creates the missing namespace and re-triggers reconciliation.",
-		}
+		out.Remediation = NewCreateNamespaceRemediation(m[1], "Creates the missing namespace and re-triggers reconciliation.")
+	}
+	// Telemetry: when nothing matched (no Cause, no AffectedRef), log once
+	// so operators can grep server logs for "operation errors that escaped
+	// the recognizer" and tune the pattern table. The dedup is necessary
+	// because the GitOps detail page polls every 2s during a running op —
+	// a single unrecognized failure would otherwise spam the log.
+	if out.Cause == "" && out.AffectedKind == "" {
+		logUnrecognizedOpError(msg)
 	}
 	return out
+}
+
+var unrecognizedOpErrorLogged sync.Map
+
+func logUnrecognizedOpError(msg string) {
+	// Truncate at 200 chars: typical Argo error messages are short; outlier
+	// stack-trace dumps would otherwise flood the log line.
+	key := msg
+	if len(key) > 200 {
+		key = key[:200]
+	}
+	if _, loaded := unrecognizedOpErrorLogged.LoadOrStore(key, struct{}{}); loaded {
+		return
+	}
+	log.Printf("[gitops/insights] unrecognized argo operation error (no pattern matched): %q", key)
 }
 
 // detectPendingDeletion returns an Issue when the GitOps root resource has
@@ -1492,6 +1589,14 @@ func detectManualDriftWithoutAutoSync(root *unstructured.Unstructured) *Issue {
 // in "Error" are critical; "Warning" types are warning; everything else is
 // info. We elide condition types we don't recognize when the message is
 // also empty — they're often controller-internal noise.
+// argoSyncErrorConditionType is the literal Argo emits in its
+// Application.status.conditions[].type when the last sync produced an error
+// (equivalent to the failure already captured in operationState). buildIssues
+// uses it to dedup the parallel-encoded SyncError condition with the operation
+// failure issue. Pulled out as a constant so a future Argo rename (or our own
+// re-extraction of the Reason field from the underlying type) is visible.
+const argoSyncErrorConditionType = "SyncError"
+
 func argoApplicationConditions(root *unstructured.Unstructured) []Issue {
 	raw, _, _ := unstructured.NestedSlice(root.Object, "status", "conditions")
 	if len(raw) == 0 {
@@ -1540,4 +1645,3 @@ func argoApplicationConditions(root *unstructured.Unstructured) []Issue {
 	}
 	return out
 }
-

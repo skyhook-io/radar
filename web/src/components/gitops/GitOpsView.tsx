@@ -493,9 +493,13 @@ function GitOpsFilterSidebar({
         </button>
       </div>
       <div className="flex-1 overflow-y-auto">
+        {/* Sources/Projects/Alerts modes are placeholder surfaces that route to
+            a "queued behind the application list" pane — confusing to expose
+            in the primary nav while they're not built. Restore here once the
+            corresponding views ship. */}
         <FilterSection icon={GitBranch} title="Scope">
           <div className="grid grid-cols-2 gap-1">
-            {(['applications', 'sources', 'projects', 'alerts'] as GitOpsMode[]).map((item) => (
+            {(['applications'] as GitOpsMode[]).map((item) => (
               <button
                 key={item}
                 type="button"
@@ -1407,17 +1411,38 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                   { yaml, mode: 'apply' },
                   {
                     onSuccess: () => {
-                      showSuccess(
-                        `Created namespace ${nsName}`,
-                        'Triggering a sync to retry the apply.',
-                      )
-                      // Re-trigger sync so Argo retries against the now-existing
-                      // namespace instead of waiting for its retry backoff.
-                      // App-wide SSE invalidation (App.tsx) picks up the
-                      // controller's status updates and refreshes the gitops
-                      // tree + insights queries automatically.
+                      // Defer the success toast until we know whether the
+                      // follow-on sync was triggered, so a successful
+                      // create-namespace followed by a sync failure doesn't
+                      // produce a "Triggering a sync" toast that argoSync's
+                      // own error toast immediately contradicts.
                       if (kind === 'applications') {
-                        argoSync.mutate({ namespace, name })
+                        argoSync.mutate(
+                          { namespace, name },
+                          {
+                            onSuccess: () => {
+                              showSuccess(
+                                `Created namespace ${nsName}`,
+                                'Sync triggered to retry the apply.',
+                              )
+                            },
+                            onError: () => {
+                              // argoSync's mutation meta already raises its
+                              // own "Failed to trigger sync" toast; here we
+                              // tell the user explicitly that the *namespace*
+                              // landed even though the sync didn't, so they
+                              // know to click Sync manually.
+                              showSuccess(
+                                `Created namespace ${nsName}`,
+                                "Couldn't trigger sync automatically — click Sync to retry.",
+                              )
+                            },
+                          },
+                        )
+                      } else {
+                        // Non-Argo callers don't get the auto-sync chain; the
+                        // create-namespace landing is the only thing to report.
+                        showSuccess(`Created namespace ${nsName}`)
                       }
                     },
                     onError: (err: unknown) => {
@@ -1581,6 +1606,8 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                     nodes={resourceNodes}
                     capabilities={insightsQ.data?.capabilities}
                     selectiveLoading={argoSync.isPending}
+                    terminating={terminating}
+                    terminatingDisabledTooltip={terminatingActionTooltip}
                     onSelectiveSync={(refs) => argoSync.mutate({ namespace, name, resources: refs })}
                     onOpen={openResourceFromTree}
                   />
@@ -1940,12 +1967,19 @@ function GitOpsResourceTable({
   nodes,
   capabilities,
   selectiveLoading,
+  terminating,
+  terminatingDisabledTooltip,
   onSelectiveSync,
   onOpen,
 }: {
   nodes: GitOpsTreeNode[]
   capabilities?: { selectiveSync?: boolean; unsupportedReason?: string; warnings?: string[] }
   selectiveLoading?: boolean
+  // When the parent app is Terminating, selective sync would no-op on the
+  // backend (`assertNotTerminating` returns 409); disable the affordance and
+  // surface the same tooltip the top-level action buttons use.
+  terminating?: boolean
+  terminatingDisabledTooltip?: string
   onSelectiveSync?: (refs: Array<{ group?: string; kind: string; namespace?: string; name: string }>) => void
   onOpen: (ref: GitOpsTreeRef, node: GitOpsTreeNode) => void
 }) {
@@ -2032,13 +2066,19 @@ function GitOpsResourceTable({
             Clear
           </button>
           <Tooltip
-            content={capabilities?.selectiveSync ? 'Sync selected resources' : capabilities?.unsupportedReason || 'Selective sync is not supported for this GitOps tool'}
+            content={
+              terminating
+                ? (terminatingDisabledTooltip ?? 'This application is being deleted; sync actions cannot run.')
+                : capabilities?.selectiveSync
+                  ? 'Sync selected resources'
+                  : capabilities?.unsupportedReason || 'Selective sync is not supported for this GitOps tool'
+            }
             delay={120}
             wrapperClassName="ml-auto"
           >
             <button
               type="button"
-              disabled={!capabilities?.selectiveSync || selectiveLoading}
+              disabled={!capabilities?.selectiveSync || selectiveLoading || terminating}
               onClick={() => onSelectiveSync?.(selectedRows.map((node) => ({
                 group: node.ref.group,
                 kind: node.ref.kind,

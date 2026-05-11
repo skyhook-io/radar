@@ -34,7 +34,6 @@ func TestComputeDrift_NoAnnotation_ReturnsNil(t *testing.T) {
 		t.Fatalf("expected nil when annotation missing, got %#v", got)
 	}
 }
-
 func TestComputeDrift_InvalidJSON_ReturnsNil(t *testing.T) {
 	if got := computeDriftFromLastApplied(liveWith("not-json", map[string]any{"a": 1})); got != nil {
 		t.Fatalf("expected nil on parse failure, got %#v", got)
@@ -56,9 +55,9 @@ func TestComputeDrift_KarpenterStyleSchemaMigration(t *testing.T) {
 	desired := `{"spec":{"disruption":{"consolidateAfter":"30s","consolidationPolicy":"WhenEmptyOrUnderutilized","expireAfter":"720h"},"template":{"spec":{"requirements":[]}}}}`
 	live := map[string]any{
 		"disruption": map[string]any{
-			"budgets":              []any{map[string]any{"nodes": "10%"}},
-			"consolidateAfter":     "30s",
-			"consolidationPolicy":  "WhenEmptyOrUnderutilized",
+			"budgets":             []any{map[string]any{"nodes": "10%"}},
+			"consolidateAfter":    "30s",
+			"consolidationPolicy": "WhenEmptyOrUnderutilized",
 		},
 		"template": map[string]any{
 			"spec": map[string]any{
@@ -179,4 +178,3 @@ func TestComputeDrift_NilishCrossSide(t *testing.T) {
 		})
 	}
 }
-

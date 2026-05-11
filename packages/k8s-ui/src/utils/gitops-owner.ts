@@ -1,40 +1,35 @@
 // Detect whether a Kubernetes resource is managed by a GitOps controller
-// (ArgoCD or FluxCD) based on the standard labels/annotations each writes onto
-// the objects it owns. Returns a navigable ref to the owning GitOps CR so the
+// (ArgoCD or FluxCD) and return a navigable ref to its owning GitOps CR so the
 // drawer can render a "Managed by <app>" affordance.
 //
-// Detection precedence: Argo's tracking-id annotation is the most authoritative
-// when present (encodes both the app namespace and name), followed by Flux's
-// kind-specific labels, then Argo's bare instance label as a last resort.
+// Precedence (most-specific wins):
+//   1. Flux HelmRelease labels
+//   2. Flux Kustomize labels
+//   3. Argo tracking-id annotation
+//   4. Argo-specific instance label
+//   5. Standard k8s instance label (best-effort; false positives possible)
 
-export type GitOpsOwnerTool = 'argo' | 'flux'
+// GitOpsOwnerRef is a discriminated union — the tool determines which kind is
+// valid. Modeling it this way prevents callers (and consumers of the returned
+// type) from constructing `{ tool: 'argo', kind: 'helmreleases' }` which would
+// route to a non-existent page.
+export type GitOpsOwnerRef =
+  | { tool: 'argocd'; kind: 'applications'; namespace: string; name: string }
+  | { tool: 'fluxcd'; kind: 'kustomizations' | 'helmreleases'; namespace: string; name: string }
 
-export interface GitOpsOwnerRef {
-  tool: GitOpsOwnerTool
-  kind: 'applications' | 'kustomizations' | 'helmreleases'
-  namespace: string
-  name: string
-}
+// Vocabulary mirrors `pkg/gitops/tree.Tool` so the wire labels match end-to-end.
+export type GitOpsOwnerTool = GitOpsOwnerRef['tool']
 
-// ArgoCD uses different conventions in different versions. tracking-id is the
-// newer canonical form: "<appNamespace>_<appName>:<group>/<kind>:<resourceNs>/<resourceName>".
-// The older instance label is just "<appName>" with no namespace — we treat the
-// app namespace as unknown in that case and let the caller decide (usually
-// "argocd" is a safe default but emitting empty lets the caller fall back).
 const ARGO_TRACKING_ID_ANNOTATION = 'argocd.argoproj.io/tracking-id'
 const ARGO_INSTANCE_LABEL = 'argocd.argoproj.io/instance'
 // Argo's instance label is configurable via application.instanceLabelKey in
-// argocd-cmd-params-cm; many installs (including the default in pre-2.5 Argo
-// and several popular tutorials) leave it as the standard k8s recommended
-// label. We treat this as a lower-confidence fallback: it can be set by any
-// chart, so false positives are possible, but the cost of a false positive is
-// just a "not found" on the GitOps detail page — not destructive.
+// argocd-cmd-params-cm; the project default is the standard k8s recommended
+// label below. Falling back to it covers most installs (including upstream
+// argocd-example-apps) but produces false positives on Helm-installed charts
+// that aren't GitOps-managed — the click-through then routes to a "not found"
+// detail page rather than mis-attributing ownership.
 const HELM_INSTANCE_LABEL = 'app.kubernetes.io/instance'
 
-// Flux writes kind-specific labels on every object it reconciles. The Kustomize
-// controller and the Helm controller use different label prefixes; an object
-// can carry both (a HelmRelease deployed via a parent Kustomization), in which
-// case we prefer the most-direct owner — the HelmRelease.
 const FLUX_KUSTOMIZE_NAME = 'kustomize.toolkit.fluxcd.io/name'
 const FLUX_KUSTOMIZE_NS = 'kustomize.toolkit.fluxcd.io/namespace'
 const FLUX_HELM_NAME = 'helm.toolkit.fluxcd.io/name'
@@ -46,51 +41,47 @@ export function detectGitOpsOwner(resource: unknown): GitOpsOwnerRef | null {
   const labels = meta?.labels ?? {}
   const annotations = meta?.annotations ?? {}
 
-  // Prefer the most-direct Flux owner (HelmRelease beats parent Kustomization).
   const helmName = labels[FLUX_HELM_NAME]
   const helmNs = labels[FLUX_HELM_NS]
   if (helmName && helmNs) {
-    return { tool: 'flux', kind: 'helmreleases', namespace: helmNs, name: helmName }
+    return { tool: 'fluxcd', kind: 'helmreleases', namespace: helmNs, name: helmName }
   }
   const kustName = labels[FLUX_KUSTOMIZE_NAME]
   const kustNs = labels[FLUX_KUSTOMIZE_NS]
   if (kustName && kustNs) {
-    return { tool: 'flux', kind: 'kustomizations', namespace: kustNs, name: kustName }
+    return { tool: 'fluxcd', kind: 'kustomizations', namespace: kustNs, name: kustName }
   }
 
-  // Argo tracking-id encodes the app's namespace; parse it before falling back
-  // to the bare instance label.
   const trackingID = annotations[ARGO_TRACKING_ID_ANNOTATION]
   if (trackingID) {
     const parsed = parseArgoTrackingID(trackingID)
     if (parsed) {
-      return { tool: 'argo', kind: 'applications', namespace: parsed.namespace, name: parsed.name }
+      return { tool: 'argocd', kind: 'applications', namespace: parsed.namespace, name: parsed.name }
     }
   }
 
   const instance = labels[ARGO_INSTANCE_LABEL] || labels[HELM_INSTANCE_LABEL]
   if (instance) {
     // App namespace unknown without tracking-id; emit empty so the consumer can
-    // either skip the link or default to a well-known namespace. Most installs
-    // run Argo in "argocd", but newer multi-tenant setups deploy apps in any
-    // namespace — guessing would route to the wrong page.
-    return { tool: 'argo', kind: 'applications', namespace: '', name: instance }
+    // either skip the link or default to a well-known namespace.
+    return { tool: 'argocd', kind: 'applications', namespace: '', name: instance }
   }
 
   return null
 }
 
-// tracking-id format (Argo CD ≥ 2.5):
-//   "<appNamespace>_<appName>:<group>/<kind>:<resourceNs>/<resourceName>"
-// Legacy fallback (older Argo):
-//   "<appName>:<group>/<kind>:<resourceNs>/<resourceName>" — no app namespace
+// Argo CD writes its tracking-id in one of two forms depending on whether
+// installationID / namespaced-install is configured:
+//   "<appName>:<group>/<kind>:<resourceNs>/<resourceName>"                   default
+//   "<appNamespace>_<appName>:<group>/<kind>:<resourceNs>/<resourceName>"    namespaced install
+// We accept both. The legacy single-name form yields an empty namespace so the
+// caller can route to a "find this app" search instead of guessing.
 function parseArgoTrackingID(value: string): { namespace: string; name: string } | null {
   const firstColon = value.indexOf(':')
   if (firstColon < 0) return null
   const head = value.slice(0, firstColon)
   const sep = head.indexOf('_')
   if (sep < 0) {
-    // Legacy single-name form — no namespace component.
     return head ? { namespace: '', name: head } : null
   }
   const namespace = head.slice(0, sep)

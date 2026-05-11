@@ -698,6 +698,20 @@ func SyncFluxWithSource(ctx context.Context, dynClient dynamic.Interface, kind, 
 		},
 	}
 
+	// Preflight the source for Terminating: a finalizer-stuck source receives
+	// the reconcile annotation but its controller will never act on it. Without
+	// this check the operator would see a green "Sync triggered" toast and
+	// believe progress is being made when the source is in fact a zombie.
+	sourceObj, err := dynClient.Resource(sourceEntry.GVR).Namespace(sourceNamespace).Get(ctx, sourceName, metav1.GetOptions{})
+	if err == nil {
+		if err := assertNotTerminating(sourceObj, "FluxCD "+sourceEntry.Kind, sourceNamespace, sourceName); err != nil {
+			return OperationResult{}, err
+		}
+	}
+	// (If the source can't be fetched here, fall through to the patch — the
+	// patch will surface the same error with a clearer "could not be patched"
+	// message below.)
+
 	// Source patch: K8s returns 404 for either a missing source resource
 	// (typo'd sourceRef.name, source already deleted) OR a missing source
 	// namespace (sourceRef points to a namespace that no longer exists, common

@@ -335,7 +335,7 @@ export function WorkloadView({
       // For Argo apps detected via bare instance label, the namespace is
       // unknown — route into the GitOps list page so the user can locate the
       // app rather than landing on a 404'd detail URL.
-      if (ref.tool === 'argo' && !ref.namespace) {
+      if (ref.tool === 'argocd' && !ref.namespace) {
         navigateRouter('/gitops')
         return
       }

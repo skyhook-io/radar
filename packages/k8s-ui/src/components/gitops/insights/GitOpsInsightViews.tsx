@@ -6,7 +6,7 @@ import { HealthStatusBadge, SyncStatusBadge } from '../GitOpsStatusBadge'
 import { SEVERITY_BADGE, SEVERITY_TEXT } from '../../../utils/badge-colors'
 import { formatRelativeAgeTime } from '../../../utils/format'
 import { Tooltip } from '../../ui/Tooltip'
-import { compactSource, entryTone, gitopsToSeverity, messageToPhase } from './insights-helpers'
+import { compactSource, entryTone, gitopsToSeverity, messageToPhase, normalizeHealthStatus, normalizeSyncStatus } from './insights-helpers'
 
 interface GitOpsStatusStripProps {
   insight?: GitOpsInsight | null
@@ -447,11 +447,9 @@ function GitOpsFailureCard({
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
             <h3 className={clsx('text-sm font-semibold', stuck ? 'text-red-700 dark:text-red-200' : 'text-red-600 dark:text-red-300')}>{title}</h3>
-            {/* "Stuck · retried N×" now lives on the status row alongside the
-                FAILED chip — they describe the same operational state. We
-                still surface a low-key retry count here for non-stuck
-                failures (still transient, may recover) so the operator
-                knows whether to wait or dig. */}
+            {/* Low-key retry count for non-stuck failures so the operator
+                knows whether to wait or dig. Stuck failures get the
+                prominent FAILED · STUCK chip in the status strip instead. */}
             {!stuck && issue.retryCount && issue.retryCount > 0 && (
               <span className="text-[11px] text-theme-text-tertiary">retried {issue.retryCount}×</span>
             )}
@@ -546,9 +544,6 @@ function RemediationButton({
 // If the headline issue has a resource ref and onSelectIssue is wired,
 // clicking jumps directly to the resource in Changes — the expand
 // affordance is only useful when there's metadata behind the headline.
-// Issue ref text: prefer the explicit kind/name from the issue's refs[];
-// fall back to a parsed kind out of `reason` (e.g. "Missing", "OutOfSync")
-// for hint-only display. Returns empty when neither produces a useful label.
 function refText(ref: GitOpsInsightRef | undefined): string {
   if (!ref) return ''
   return `${ref.kind} ${ref.name}`
@@ -563,10 +558,8 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
   const headlineRef = headline.refs?.[0]
   const headlineActionable = !!(onSelectIssue && headlineRef)
   const canExpand = issues.length > 1
-  // Single click target per row. When there's only one issue and it has a
-  // ref, the row is the "open this resource" affordance. When there are
-  // more issues, the row toggles the stack open. Mixing both on one row
-  // was the source of the "View → / +2 →" double-affordance noise.
+  // Single click target per row: row toggles when there's a stack to expand,
+  // otherwise it opens the resource.
   const headlineAction: 'expand' | 'open' | 'none' =
     canExpand ? 'expand' : headlineActionable ? 'open' : 'none'
   return (
@@ -718,8 +711,7 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey }: 
   // its sync step, hook phase, and wave assignment. The plan and changes
   // lists are the same resources from different angles — we render one
   // unified list ordered by plan step, with plan metadata folded onto each
-  // change row. Previously these were two parallel panels which forced the
-  // user to mentally bridge them.
+  // change row.
   const planByRef = new Map<string, GitOpsPlanItem>()
   for (const item of plan) {
     const key = refKey(item.ref)
@@ -1006,8 +998,8 @@ function ChangeRow({
             <div className="ml-[18px] mt-1 text-xs text-theme-text-tertiary">{explanation}</div>
           )}
         </button>
-        <div className="self-start"><SyncStatusBadge sync={(change.sync || change.category || 'Unknown') as any} /></div>
-        <div className="self-start"><HealthStatusBadge health={(change.health || 'Unknown') as any} /></div>
+        <div className="self-start"><SyncStatusBadge sync={normalizeSyncStatus(change.sync ?? change.category)} /></div>
+        <div className="self-start"><HealthStatusBadge health={normalizeHealthStatus(change.health)} /></div>
         <div className="self-start">
           {/* Three affordance states:
               - Live resource (not Missing): "Open <kind> <name> →" opens the

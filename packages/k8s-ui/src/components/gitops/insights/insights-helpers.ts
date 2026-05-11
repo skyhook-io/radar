@@ -3,6 +3,25 @@
 
 import { SEVERITY_DOT, type Severity } from '../../../utils/badge-colors'
 import type { GitOpsHistoryItem } from '../../../types'
+import type { SyncStatus, GitOpsHealthStatus } from '../../../types/gitops'
+
+const SYNC_STATUS_SET = new Set<SyncStatus>(['Synced', 'OutOfSync', 'Reconciling', 'Unknown'])
+const HEALTH_STATUS_SET = new Set<GitOpsHealthStatus>(['Healthy', 'Progressing', 'Degraded', 'Suspended', 'Missing', 'Unknown'])
+
+// normalizeSyncStatus narrows an arbitrary string (e.g. a GitOpsChange.category
+// or .sync from the backend) onto the SyncStatusBadge's expected union. Unknown
+// values fall back to "Unknown" rather than rendering whatever the badge's
+// default-case branch happens to do — silently rendering wrong was the failure
+// mode of the `as any` casts this replaces.
+export function normalizeSyncStatus(value: string | undefined | null): SyncStatus {
+  if (value && (SYNC_STATUS_SET as Set<string>).has(value)) return value as SyncStatus
+  return 'Unknown'
+}
+
+export function normalizeHealthStatus(value: string | undefined | null): GitOpsHealthStatus {
+  if (value && (HEALTH_STATUS_SET as Set<string>).has(value)) return value as GitOpsHealthStatus
+  return 'Unknown'
+}
 
 // Map GitOps-flavored vocabulary (Argo/Flux phase strings, insight Issue
 // severities) onto the canonical Severity tokens used by SEVERITY_BADGE /
