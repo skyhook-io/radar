@@ -12,7 +12,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/pkg/gitops"
+	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 )
 
 // makePodWithStatus constructs a minimal Pod with the container statuses
@@ -218,5 +220,46 @@ func TestGitopsRequestHasNamespaceAccess(t *testing.T) {
 				t.Fatalf("HasNamespaceAccess() = %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestFilterGitOpsTreeForUserAppliesNamespaceAndClusterScope(t *testing.T) {
+	s := &Server{permCache: auth.NewPermissionCache()}
+	s.permCache.Set("gitops-tree-user", &auth.UserPermissions{AllowedNamespaces: []string{"team-a"}})
+	req := &gitopsRequest{AllowedNamespaces: []string{"team-a"}}
+	tree := &gitopstree.ResourceTree{
+		Root: gitopstree.Node{ID: "root", Role: gitopstree.RoleRoot, Ref: gitopstree.ResourceRef{Kind: "Application", Namespace: "argocd", Name: "app"}},
+		Nodes: []gitopstree.Node{
+			{ID: "root", Role: gitopstree.RoleRoot, Ref: gitopstree.ResourceRef{Kind: "Application", Namespace: "argocd", Name: "app"}},
+			{ID: "allowed", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "Deployment", Namespace: "team-a", Name: "api"}},
+			{ID: "other-ns", Role: gitopstree.RoleDeclared, Ref: gitopstree.ResourceRef{Kind: "Deployment", Namespace: "team-b", Name: "api"}},
+			{ID: "node", Role: gitopstree.RoleGenerated, Ref: gitopstree.ResourceRef{Kind: "Node", Name: "worker-1"}},
+		},
+		Edges: []gitopstree.Edge{
+			{Source: "root", Target: "allowed", Type: gitopstree.EdgeOwns},
+			{Source: "root", Target: "other-ns", Type: gitopstree.EdgeOwns},
+			{Source: "allowed", Target: "node", Type: gitopstree.EdgeOwns},
+		},
+	}
+	r := httptest.NewRequest(http.MethodGet, "/api/gitops/tree/applications/argocd/app", nil)
+	r = r.WithContext(auth.ContextWithUser(r.Context(), &auth.User{Username: "gitops-tree-user"}))
+
+	got := s.filterGitOpsTreeForUser(r, req, tree)
+	if len(got.Nodes) != 2 {
+		t.Fatalf("expected root + one allowed namespaced node, got %#v", got.Nodes)
+	}
+	for _, node := range got.Nodes {
+		if node.ID == "other-ns" || node.ID == "node" {
+			t.Fatalf("node %q should have been hidden by RBAC filter: %#v", node.ID, got.Nodes)
+		}
+	}
+	if len(got.Edges) != 1 || got.Edges[0].Target != "allowed" {
+		t.Fatalf("expected only edge to allowed node, got %#v", got.Edges)
+	}
+	if got.Summary.Declared != 1 || got.Summary.Generated != 0 {
+		t.Fatalf("summary not recomputed after filtering: %#v", got.Summary)
+	}
+	if len(got.Warnings) == 0 || !strings.Contains(got.Warnings[0], "hidden by RBAC") {
+		t.Fatalf("expected RBAC warning, got %#v", got.Warnings)
 	}
 }

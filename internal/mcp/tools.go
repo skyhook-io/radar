@@ -14,8 +14,8 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
-	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/filter"
+	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/search"
@@ -246,9 +246,9 @@ func registerTools(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "manage_gitops",
 		Description: "Perform operations on GitOps resources (ArgoCD or FluxCD). " +
-			"For ArgoCD: actions are 'sync' (trigger deployment), 'suspend' (disable auto-sync), " +
-			"'resume' (re-enable auto-sync). Resource kind is always Application. " +
-			"For FluxCD: actions are 'reconcile' (trigger sync), 'suspend', 'resume'. " +
+			"For ArgoCD: actions are 'sync' (trigger deployment), 'refresh', 'terminate', 'rollback', " +
+			"'suspend' (disable auto-sync), 'resume' (re-enable auto-sync). Resource kind is always Application. " +
+			"For FluxCD: actions are 'reconcile' (trigger sync), 'sync-with-source', 'suspend', 'resume'. " +
 			"Requires 'kind' parameter (kustomization, helmrelease, gitrepository, etc.).",
 		Annotations: &mcp.ToolAnnotations{
 			DestructiveHint: boolPtr(false),
@@ -1686,10 +1686,22 @@ func countResources(cache *k8s.ResourceCache, namespace string, d *mcpDashboard,
 	}
 }
 
-func handleIssuesTool(_ context.Context, _ *mcp.CallToolRequest, input issuesInput) (*mcp.CallToolResult, any, error) {
+func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesInput) (*mcp.CallToolResult, any, error) {
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil, nil, fmt.Errorf("not connected to cluster")
+	}
+	var allowedNamespaces []string
+	if input.Namespace != "" {
+		if !checkNamespaceAccess(ctx, input.Namespace) {
+			return toJSONResult(map[string]any{"issues": []issues.Issue{}, "total": 0, "total_matched": 0})
+		}
+		allowedNamespaces = []string{input.Namespace}
+	} else {
+		allowedNamespaces = filterNamespacesForUser(ctx, nil)
+		if allowedNamespaces != nil && len(allowedNamespaces) == 0 {
+			return toJSONResult(map[string]any{"issues": []issues.Issue{}, "total": 0, "total_matched": 0})
+		}
 	}
 	severities, err := parseSeverityList(input.Severity)
 	if err != nil {
@@ -1704,6 +1716,10 @@ func handleIssuesTool(_ context.Context, _ *mcp.CallToolRequest, input issuesInp
 		Sources:    sources,
 		Kinds:      splitCSVStr(input.Kind),
 		Limit:      input.Limit,
+		Namespaces: allowedNamespaces,
+		CanReadClusterScoped: func(kind, group string) bool {
+			return canReadClusterScopedKind(ctx, kind, group, "list")
+		},
 	}
 	if input.Filter != "" {
 		f, err := filter.CachedIssueFilter(input.Filter)
@@ -1711,9 +1727,6 @@ func handleIssuesTool(_ context.Context, _ *mcp.CallToolRequest, input issuesInp
 			return nil, nil, fmt.Errorf("filter: %w", err)
 		}
 		filters.Filter = f
-	}
-	if input.Namespace != "" {
-		filters.Namespaces = []string{input.Namespace}
 	}
 	if input.Since != "" {
 		d, err := time.ParseDuration(input.Since)
@@ -1816,11 +1829,92 @@ func splitCSVStr(v string) []string {
 	return out
 }
 
+func intersectAllowedNamespaces(allowed, requested []string) []string {
+	if allowed == nil {
+		return requested
+	}
+	if len(requested) == 0 {
+		return allowed
+	}
+	set := make(map[string]struct{}, len(allowed))
+	for _, ns := range allowed {
+		set[ns] = struct{}{}
+	}
+	out := make([]string, 0, len(requested))
+	for _, ns := range requested {
+		if _, ok := set[ns]; ok {
+			out = append(out, ns)
+		}
+	}
+	return out
+}
+
+var mcpSensitiveSearchKinds = []struct {
+	Kind     string
+	Resource string
+	Group    string
+}{
+	{"Secret", "secrets", ""},
+	{"Node", "nodes", ""},
+	{"PersistentVolume", "persistentvolumes", ""},
+	{"StorageClass", "storageclasses", "storage.k8s.io"},
+	{"Namespace", "namespaces", ""},
+}
+
+func mcpSearchSkipKinds(ctx context.Context) map[string]bool {
+	user, perms := resolveUserPerms(ctx)
+	if user == nil {
+		return nil
+	}
+	client := k8s.GetClient()
+	if client == nil {
+		out := make(map[string]bool, len(mcpSensitiveSearchKinds))
+		for _, k := range mcpSensitiveSearchKinds {
+			out[k.Kind] = true
+		}
+		return out
+	}
+	out := make(map[string]bool, len(mcpSensitiveSearchKinds))
+	for _, k := range mcpSensitiveSearchKinds {
+		if perms != nil {
+			if allowed, ok := perms.CanI("list", k.Group, k.Resource, ""); ok {
+				if !allowed {
+					out[k.Kind] = true
+				}
+				continue
+			}
+		}
+		allowed, err := subjectCanI(ctx, client, user.Username, user.Groups, "", k.Group, k.Resource, "list")
+		if err != nil {
+			log.Printf("[mcp] search SAR failed for %s on %s/%s: %v", user.Username, k.Group, k.Resource, err)
+			out[k.Kind] = true
+			continue
+		}
+		if perms != nil {
+			perms.SetCanI("list", k.Group, k.Resource, "", allowed)
+		}
+		if !allowed {
+			out[k.Kind] = true
+		}
+	}
+	return out
+}
+
 func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInput) (*mcp.CallToolResult, any, error) {
 	provider := search.NewCacheProvider()
 	if provider == nil {
 		return nil, nil, fmt.Errorf("not connected to cluster")
 	}
+	parsed := search.Parse(input.Q)
+	allowed := filterNamespacesForUser(ctx, nil)
+	if allowed != nil && len(allowed) == 0 {
+		return toJSONResult(search.Result{Hits: []search.Hit{}})
+	}
+	scanNamespaces := intersectAllowedNamespaces(allowed, parsed.NSFilter)
+	if allowed != nil && len(scanNamespaces) == 0 {
+		return toJSONResult(search.Result{Hits: []search.Hit{}})
+	}
+	parsed.NSFilter = scanNamespaces
 	var include search.IncludeMode
 	switch input.Include {
 	case "", "summary":
@@ -1833,8 +1927,13 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		return nil, nil, fmt.Errorf("unknown include=%q (want: summary, raw, none)", input.Include)
 	}
 	opts := search.Options{
-		Limit:   input.Limit,
-		Include: include,
+		Limit:      input.Limit,
+		Include:    include,
+		Namespaces: scanNamespaces,
+		SkipKinds:  mcpSearchSkipKinds(ctx),
+		CanReadClusterScoped: func(kind, group, resource string) bool {
+			return canReadClusterScopedKind(ctx, kind, group, "list")
+		},
 	}
 	if input.Filter != "" {
 		f, err := filter.CachedObjectFilter(input.Filter)
@@ -1843,7 +1942,7 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		}
 		opts.Filter = f
 	}
-	result, err := search.Search(ctx, provider, search.Parse(input.Q), opts)
+	result, err := search.Search(ctx, provider, parsed, opts)
 	if err != nil {
 		return nil, nil, err
 	}

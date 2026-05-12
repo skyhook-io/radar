@@ -20,8 +20,8 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/internal/k8s"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 )
 
 // Provider abstracts the cache so tests can inject a fake.
@@ -30,6 +30,10 @@ type Provider interface {
 	ListDynamic(ctx context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error)
 	WatchedDynamic() []schema.GroupVersionResource
 	KindForGVR(gvr schema.GroupVersionResource) string
+}
+
+type dynamicScopeProvider interface {
+	NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool)
 }
 
 // typedKinds is the set of typed kinds we walk for unfiltered queries.
@@ -73,10 +77,8 @@ type Options struct {
 	// namespaces. The handler computes this as the intersection of the
 	// caller's RBAC-allowed namespaces and any `ns:` modifier in the
 	// parsed query, so listers never read namespaces the user can't see.
-	// Cluster-scoped kinds (Node, Namespace, PersistentVolume, etc.) are
-	// returned regardless — namespace-restricted users still get them
-	// because they're orthogonal to namespace RBAC. SkipKinds below
-	// is the lever that excludes them for namespace-only-RBAC users.
+	// Cluster-scoped kinds ignore this namespace list; SkipKinds and
+	// CanReadClusterScoped below are the gates for those resources.
 	Namespaces []string
 	// SkipKinds names kinds the walker must NOT scan, regardless of
 	// query/filter content. The handler populates this from per-user
@@ -87,6 +89,11 @@ type Options struct {
 	// k8s `view` Cloud viewer would see Secret names, Node IPs, etc.
 	// because the cache reads happen as the SA, not the end user.
 	SkipKinds map[string]bool
+	// CanReadClusterScoped authorizes cluster-scoped resources before the
+	// cache walker scans them. Handlers provide a per-user SAR-backed
+	// predicate; nil preserves auth-mode=none behavior where the service
+	// account's cache permissions are the only gate.
+	CanReadClusterScoped func(kind, group, resource string) bool
 	// Filter is an optional compiled CEL predicate. When set, each
 	// candidate that passed the modifier+token match is also evaluated
 	// against the filter; non-truthy results (including eval errors)
@@ -137,6 +144,9 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		// orthogonal to namespace RBAC.
 		listNs := opts.Namespaces
 		if isClusterScopedKind(tk.Kind) {
+			if opts.CanReadClusterScoped != nil && !opts.CanReadClusterScoped(tk.Kind, tk.Group, tk.Plural) {
+				continue
+			}
 			listNs = nil
 		}
 		objs, err := p.ListTyped(tk.Plural, listNs)
@@ -193,12 +203,16 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		if !shouldScanCRD(kind, q) {
 			continue
 		}
-		// CRDs may be cluster-scoped or namespaced — we don't know without
-		// API discovery here, so when a namespace constraint is set we
-		// query each requested namespace and union the results. If no
-		// constraint, the empty-namespace lookup is cluster-wide.
+		clusterScoped, gvrGroup, gvrResource := classifyDynamicScope(p, gvr, kind)
+		if clusterScoped {
+			if opts.CanReadClusterScoped != nil && !opts.CanReadClusterScoped(kind, gvrGroup, gvrResource) {
+				continue
+			}
+		}
+		// Namespaced CRDs honor namespace constraints. Cluster-scoped CRDs
+		// always list at cluster scope after the SAR predicate above.
 		var items []*unstructured.Unstructured
-		if len(opts.Namespaces) == 0 {
+		if clusterScoped || len(opts.Namespaces) == 0 {
 			its, err := p.ListDynamic(ctx, gvr, "")
 			if err != nil {
 				continue
@@ -273,6 +287,15 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 	res.Hits = hits
 	res.Total = len(hits)
 	return res, nil
+}
+
+func classifyDynamicScope(p Provider, gvr schema.GroupVersionResource, kind string) (bool, string, string) {
+	if sp, ok := p.(dynamicScopeProvider); ok {
+		if namespaced, known := sp.NamespacedForGVR(gvr); known {
+			return !namespaced, gvr.Group, gvr.Resource
+		}
+	}
+	return k8s.ClassifyKindScope(kind, gvr.Group)
 }
 
 // shouldScanTyped also consults Options.SkipKinds via the closure below

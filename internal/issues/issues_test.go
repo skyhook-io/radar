@@ -24,11 +24,12 @@ type fakeProvider struct {
 	events       []*corev1.Event
 	dynamic      map[schema.GroupVersionResource][]*unstructured.Unstructured
 	kinds        map[schema.GroupVersionResource]string
+	namespaced   map[schema.GroupVersionResource]bool
 }
 
-func (f *fakeProvider) DetectProblems(_ []string) []k8s.Problem      { return f.problems }
-func (f *fakeProvider) DetectCAPIProblems(_ []string) []k8s.Problem  { return f.capiProblems }
-func (f *fakeProvider) AuditFindings(_ []string) []bp.Finding        { return f.audit }
+func (f *fakeProvider) DetectProblems(_ []string) []k8s.Problem     { return f.problems }
+func (f *fakeProvider) DetectCAPIProblems(_ []string) []k8s.Problem { return f.capiProblems }
+func (f *fakeProvider) AuditFindings(_ []string) []bp.Finding       { return f.audit }
 func (f *fakeProvider) WarningEvents(_ []string, _ time.Duration) []*corev1.Event {
 	return f.events
 }
@@ -44,6 +45,10 @@ func (f *fakeProvider) ListDynamic(gvr schema.GroupVersionResource, _ string) ([
 }
 func (f *fakeProvider) KindForGVR(gvr schema.GroupVersionResource) string {
 	return f.kinds[gvr]
+}
+func (f *fakeProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool) {
+	namespaced, ok := f.namespaced[gvr]
+	return namespaced, ok
 }
 
 func TestCompose_NormalizesProblemSeverity(t *testing.T) {
@@ -206,6 +211,57 @@ func TestCompose_CAPIGroupSkippedByGenericFallback(t *testing.T) {
 	out := Compose(p, Filters{Sources: []Source{SourceCondition}})
 	if len(out) != 0 {
 		t.Fatalf("CAPI should be skipped by generic fallback: %+v", out)
+	}
+}
+
+func TestCompose_DropsUnauthorizedClusterScopedIssues(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Problem{
+			{Kind: "Deployment", Namespace: "team-a", Name: "api", Severity: "critical", Reason: "down"},
+			{Kind: "Node", Name: "worker-1", Severity: "critical", Reason: "not ready"},
+		},
+	}
+	out := Compose(p, Filters{
+		CanReadClusterScoped: func(kind, group string) bool {
+			if kind != "Node" || group != "" {
+				t.Fatalf("unexpected cluster-scoped check: kind=%q group=%q", kind, group)
+			}
+			return false
+		},
+	})
+	if len(out) != 1 {
+		t.Fatalf("expected only namespaced issue, got %+v", out)
+	}
+	if out[0].Kind != "Deployment" || out[0].Namespace != "team-a" {
+		t.Fatalf("wrong issue retained: %+v", out)
+	}
+}
+
+func TestCompose_DropsUnauthorizedClusterScopedCRDConditions(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodepools"}
+	np := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "karpenter.sh/v1",
+		"kind":       "NodePool",
+		"metadata":   map[string]any{"name": "default"},
+		"status": map[string]any{
+			"conditions": []any{
+				map[string]any{"type": "Ready", "status": "False", "reason": "Drifted"},
+			},
+		},
+	}}
+	p := &fakeProvider{
+		dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {np}},
+		kinds:      map[schema.GroupVersionResource]string{gvr: "NodePool"},
+		namespaced: map[schema.GroupVersionResource]bool{gvr: false},
+	}
+	out := Compose(p, Filters{
+		Sources: []Source{SourceCondition},
+		CanReadClusterScoped: func(kind, group string) bool {
+			return kind == "NodePool" && group == "karpenter.sh" && false
+		},
+	})
+	if len(out) != 0 {
+		t.Fatalf("cluster-scoped CRD condition leaked despite denied access: %+v", out)
 	}
 }
 

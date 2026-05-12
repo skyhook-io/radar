@@ -196,6 +196,51 @@ func TestDropUnstructuredManagedFields_NonUnstructuredInput(t *testing.T) {
 	}
 }
 
+func TestStripUnstructuredFields_StripsLastAppliedForResponses(t *testing.T) {
+	u := &unstructured.Unstructured{
+		Object: map[string]any{
+			"metadata": map[string]any{
+				"managedFields": []any{map[string]any{"manager": "kubectl"}},
+				"annotations": map[string]any{
+					"kubectl.kubernetes.io/last-applied-configuration": "{desired manifest}",
+					"description": "keep me",
+				},
+			},
+		},
+	}
+	got := StripUnstructuredFields(u)
+	if _, found, _ := unstructured.NestedSlice(got.Object, "metadata", "managedFields"); found {
+		t.Fatal("managedFields should be stripped")
+	}
+	annotations := got.GetAnnotations()
+	if _, ok := annotations["kubectl.kubernetes.io/last-applied-configuration"]; ok {
+		t.Fatalf("last-applied should be stripped from outward responses, got %v", annotations)
+	}
+	if annotations["description"] != "keep me" {
+		t.Fatalf("other annotations should be preserved, got %v", annotations)
+	}
+}
+
+func TestStripUnstructuredFieldsPreserveLastApplied_ForDrift(t *testing.T) {
+	u := &unstructured.Unstructured{
+		Object: map[string]any{
+			"metadata": map[string]any{
+				"managedFields": []any{map[string]any{"manager": "kubectl"}},
+				"annotations": map[string]any{
+					"kubectl.kubernetes.io/last-applied-configuration": "{desired manifest}",
+				},
+			},
+		},
+	}
+	got := StripUnstructuredFieldsPreserveLastApplied(u)
+	if _, found, _ := unstructured.NestedSlice(got.Object, "metadata", "managedFields"); found {
+		t.Fatal("managedFields should be stripped")
+	}
+	if got.GetAnnotations()["kubectl.kubernetes.io/last-applied-configuration"] != "{desired manifest}" {
+		t.Fatalf("last-applied should be preserved for drift, got %v", got.GetAnnotations())
+	}
+}
+
 func TestDropUnstructuredManagedFields_CRDWithoutVersions(t *testing.T) {
 	// Edge: a minimal CRD object (e.g. mid-reconcile) might have no
 	// spec.versions yet. Transform must not panic.

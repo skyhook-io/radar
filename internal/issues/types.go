@@ -106,6 +106,11 @@ type Filters struct {
 	// each composed Issue's row bindings. Compile happens in the
 	// handler (and is cached); this layer just runs the program.
 	Filter *CELFilter
+	// CanReadClusterScoped authorizes cluster-scoped Issue rows before
+	// they are returned. Handlers provide a per-user SAR-backed predicate;
+	// nil preserves auth-mode=none and tests where the provider's own
+	// permissions are the only gate.
+	CanReadClusterScoped func(kind, group string) bool
 }
 
 const (

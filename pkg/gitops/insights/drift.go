@@ -300,7 +300,8 @@ func applyPodSpecDefaultsWithRestart(spec map[string]any, defaultRestartPolicy s
 }
 
 func applyContainerDefaults(c map[string]any) {
-	setIfMissing(c, "imagePullPolicy", "IfNotPresent")
+	image, _ := c["image"].(string)
+	setIfMissing(c, "imagePullPolicy", defaultImagePullPolicy(image))
 	setIfMissing(c, "terminationMessagePath", "/dev/termination-log")
 	setIfMissing(c, "terminationMessagePolicy", "File")
 	setIfMissing(c, "resources", map[string]any{})
@@ -311,6 +312,26 @@ func applyContainerDefaults(c map[string]any) {
 			}
 		}
 	}
+}
+
+func defaultImagePullPolicy(image string) string {
+	image = strings.TrimSpace(image)
+	if image == "" {
+		return "Always"
+	}
+	base := image
+	if i := strings.IndexByte(base, '@'); i >= 0 {
+		base = base[:i]
+	}
+	lastSlash := strings.LastIndexByte(base, '/')
+	lastColon := strings.LastIndexByte(base, ':')
+	if lastColon <= lastSlash {
+		return "Always"
+	}
+	if base[lastColon+1:] == "latest" {
+		return "Always"
+	}
+	return "IfNotPresent"
 }
 
 func applyServiceSpecDefaults(spec map[string]any) {

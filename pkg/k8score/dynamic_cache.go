@@ -595,6 +595,16 @@ func (d *DynamicResourceCache) ListBlocking(gvr schema.GroupVersionResource, nam
 
 // Get returns a single resource by namespace and name.
 func (d *DynamicResourceCache) Get(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
+	return d.get(gvr, namespace, name, false)
+}
+
+// GetPreserveLastApplied returns a single cached resource while preserving the
+// kubectl last-applied annotation for internal drift computation.
+func (d *DynamicResourceCache) GetPreserveLastApplied(gvr schema.GroupVersionResource, namespace, name string) (*unstructured.Unstructured, error) {
+	return d.get(gvr, namespace, name, true)
+}
+
+func (d *DynamicResourceCache) get(gvr schema.GroupVersionResource, namespace, name string, preserveLastApplied bool) (*unstructured.Unstructured, error) {
 	if d == nil {
 		return nil, fmt.Errorf("dynamic resource cache not initialized")
 	}
@@ -643,6 +653,9 @@ func (d *DynamicResourceCache) Get(gvr schema.GroupVersionResource, namespace, n
 		return nil, fmt.Errorf("unexpected type in cache")
 	}
 
+	if preserveLastApplied {
+		return StripUnstructuredFieldsPreserveLastApplied(u), nil
+	}
 	return StripUnstructuredFields(u), nil
 }
 

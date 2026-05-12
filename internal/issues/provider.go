@@ -160,3 +160,17 @@ func (p *CacheProvider) KindForGVR(gvr schema.GroupVersionResource) string {
 	return p.discovery.GetKindForGVR(gvr)
 }
 
+func (p *CacheProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool) {
+	if p.discovery == nil {
+		return false, false
+	}
+	kind := p.discovery.GetKindForGVR(gvr)
+	if kind == "" {
+		return false, false
+	}
+	ar, ok := p.discovery.GetResourceWithGroup(kind, gvr.Group)
+	if !ok {
+		return false, false
+	}
+	return ar.Namespaced, true
+}

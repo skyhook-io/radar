@@ -17,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
@@ -145,6 +146,7 @@ func (s *Server) handleGitOpsTree(w http.ResponseWriter, r *http.Request) {
 		s.writeGitOpsBuildError(w, req, err)
 		return
 	}
+	tree = s.filterGitOpsTreeForUser(r, req, tree)
 	s.writeJSON(w, tree)
 }
 
@@ -167,8 +169,204 @@ func (s *Server) handleGitOpsInsights(w http.ResponseWriter, r *http.Request) {
 		s.writeGitOpsBuildError(w, req, err)
 		return
 	}
-	resolver := newInsightsResolver(r.Context(), req.Cache, req.AllowedNamespaces)
-	s.writeJSON(w, gitopsinsights.Build(root, tree, resolver))
+	tree = s.filterGitOpsTreeForUser(r, req, tree)
+	canAccess := func(group, kind, namespace, name string) bool {
+		return s.canAccessGitOpsRef(r, req, group, kind, namespace, name, false)
+	}
+	resolver := newInsightsResolver(r.Context(), req.Cache, req.AllowedNamespaces, canAccess)
+	insight := gitopsinsights.Build(root, tree, resolver)
+	insight.Warnings = appendWarnings(insight.Warnings, tree.Warnings...)
+	insight = s.filterGitOpsInsightForUser(r, req, insight)
+	s.writeJSON(w, insight)
+}
+
+func (s *Server) filterGitOpsTreeForUser(r *http.Request, req *gitopsRequest, tree *gitopstree.ResourceTree) *gitopstree.ResourceTree {
+	if tree == nil || auth.UserFromContext(r.Context()) == nil {
+		return tree
+	}
+	keep := make(map[string]bool, len(tree.Nodes))
+	for _, node := range tree.Nodes {
+		allowed := node.Role == gitopstree.RoleRoot || s.canAccessGitOpsRef(r, req, node.Ref.Group, node.Ref.Kind, node.Ref.Namespace, node.Ref.Name, false)
+		keep[node.ID] = allowed
+	}
+	filteredNodes := make([]gitopstree.Node, 0, len(tree.Nodes))
+	for _, node := range tree.Nodes {
+		if !keep[node.ID] {
+			continue
+		}
+		if len(node.GroupedNodeIDs) > 0 {
+			grouped := node.GroupedNodeIDs[:0]
+			for _, id := range node.GroupedNodeIDs {
+				if keep[id] {
+					grouped = append(grouped, id)
+				}
+			}
+			node.GroupedNodeIDs = grouped
+			node.Count = len(grouped)
+		}
+		filteredNodes = append(filteredNodes, node)
+	}
+	if len(filteredNodes) == len(tree.Nodes) {
+		return tree
+	}
+
+	filteredEdges := make([]gitopstree.Edge, 0, len(tree.Edges))
+	for _, edge := range tree.Edges {
+		if keep[edge.Source] && keep[edge.Target] {
+			filteredEdges = append(filteredEdges, edge)
+		}
+	}
+	out := *tree
+	out.Nodes = filteredNodes
+	out.Edges = filteredEdges
+	if keep[tree.Root.ID] {
+		out.Root = tree.Root
+	}
+	out.Summary = summarizeGitOpsTree(filteredNodes)
+	out.Warnings = appendWarnings(append([]string{}, tree.Warnings...), "Some managed resources are hidden by RBAC.")
+	return &out
+}
+
+func (s *Server) filterGitOpsInsightForUser(r *http.Request, req *gitopsRequest, insight gitopsinsights.Insight) gitopsinsights.Insight {
+	if auth.UserFromContext(r.Context()) == nil {
+		return insight
+	}
+	changed := false
+
+	changes := insight.Changes[:0]
+	for _, change := range insight.Changes {
+		if s.canAccessGitOpsRef(r, req, change.Ref.Group, change.Ref.Kind, change.Ref.Namespace, change.Ref.Name, false) {
+			changes = append(changes, change)
+		} else {
+			changed = true
+		}
+	}
+	insight.Changes = changes
+
+	plan := insight.Plan[:0]
+	for _, item := range insight.Plan {
+		if !s.canAccessGitOpsRef(r, req, item.Ref.Group, item.Ref.Kind, item.Ref.Namespace, item.Ref.Name, false) {
+			changed = true
+			continue
+		}
+		blockedBy := item.BlockedBy[:0]
+		for _, ref := range item.BlockedBy {
+			if s.canAccessGitOpsRef(r, req, ref.Group, ref.Kind, ref.Namespace, ref.Name, false) {
+				blockedBy = append(blockedBy, ref)
+			} else {
+				changed = true
+			}
+		}
+		item.BlockedBy = blockedBy
+		plan = append(plan, item)
+	}
+	insight.Plan = plan
+
+	issues := insight.Issues[:0]
+	for _, issue := range insight.Issues {
+		if len(issue.Refs) == 0 {
+			issues = append(issues, issue)
+			continue
+		}
+		refs := issue.Refs[:0]
+		for _, ref := range issue.Refs {
+			if s.canAccessGitOpsRef(r, req, ref.Group, ref.Kind, ref.Namespace, ref.Name, false) {
+				refs = append(refs, ref)
+			} else {
+				changed = true
+			}
+		}
+		if len(refs) == 0 {
+			changed = true
+			continue
+		}
+		issue.Refs = refs
+		issues = append(issues, issue)
+	}
+	insight.Issues = issues
+
+	if changed {
+		insight.Warnings = appendWarnings(insight.Warnings, "Some managed resources are hidden by RBAC.")
+	}
+	return insight
+}
+
+func appendWarnings(existing []string, warnings ...string) []string {
+	for _, warning := range warnings {
+		if warning == "" {
+			continue
+		}
+		seen := false
+		for _, existingWarning := range existing {
+			if existingWarning == warning {
+				seen = true
+				break
+			}
+		}
+		if !seen {
+			existing = append(existing, warning)
+		}
+	}
+	return existing
+}
+
+func summarizeGitOpsTree(nodes []gitopstree.Node) gitopstree.Summary {
+	var s gitopstree.Summary
+	for _, n := range nodes {
+		switch n.Role {
+		case gitopstree.RoleDeclared:
+			s.Declared++
+		case gitopstree.RoleGenerated:
+			s.Generated++
+		case gitopstree.RoleGroup:
+			s.Grouped += n.Count
+		}
+		if n.Health == "Degraded" || n.Health == "Missing" {
+			s.Degraded++
+		}
+		if n.Sync == "OutOfSync" {
+			s.OutOfSync++
+		}
+	}
+	return s
+}
+
+func (s *Server) canAccessGitOpsRef(r *http.Request, req *gitopsRequest, group, kind, namespace, name string, root bool) bool {
+	if auth.UserFromContext(r.Context()) == nil {
+		return true
+	}
+	if root {
+		return true
+	}
+	if strings.EqualFold(kind, "Namespace") || strings.EqualFold(kind, "namespaces") {
+		if s.canRead(r, "", "namespaces", "", "list") {
+			return true
+		}
+		if name == "" {
+			return false
+		}
+		allowed := s.getUserNamespaces(r, []string{name})
+		return !noNamespaceAccess(allowed)
+	}
+	if namespace != "" {
+		return namespaceAllowedForGitOps(req.AllowedNamespaces, namespace)
+	}
+	if clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group); clusterScoped {
+		return s.canRead(r, gvrGroup, gvrResource, "", "list")
+	}
+	return false
+}
+
+func namespaceAllowedForGitOps(allowed []string, namespace string) bool {
+	if allowed == nil {
+		return true
+	}
+	for _, ns := range allowed {
+		if ns == namespace {
+			return true
+		}
+	}
+	return false
 }
 
 // insightsResolver wires the dynamic cache + event lister into the
@@ -179,10 +377,11 @@ type insightsResolver struct {
 	ctx               context.Context
 	cache             *k8s.ResourceCache
 	allowedNamespaces []string
+	canAccess         func(group, kind, namespace, name string) bool
 }
 
-func newInsightsResolver(ctx context.Context, cache *k8s.ResourceCache, allowed []string) *insightsResolver {
-	return &insightsResolver{ctx: ctx, cache: cache, allowedNamespaces: allowed}
+func newInsightsResolver(ctx context.Context, cache *k8s.ResourceCache, allowed []string, canAccess func(group, kind, namespace, name string) bool) *insightsResolver {
+	return &insightsResolver{ctx: ctx, cache: cache, allowedNamespaces: allowed, canAccess: canAccess}
 }
 
 // recentEventsCap bounds events returned per resource. Beyond ~5 the user
@@ -197,7 +396,10 @@ func (r *insightsResolver) GetLive(group, kind, namespace, name string) *unstruc
 	if !r.namespaceAllowed(namespace) {
 		return nil
 	}
-	obj, err := r.cache.GetDynamicWithGroup(r.ctx, kind, namespace, name, group)
+	if r.canAccess != nil && !r.canAccess(group, kind, namespace, name) {
+		return nil
+	}
+	obj, err := r.cache.GetDynamicWithGroupPreserveLastApplied(r.ctx, kind, namespace, name, group)
 	if err != nil {
 		if !apierrors.IsNotFound(err) {
 			log.Printf("[gitops] insights GetLive %s/%s %s/%s failed: %v", group, kind, namespace, name, err)
@@ -212,6 +414,9 @@ func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []g
 		return nil
 	}
 	if !r.namespaceAllowed(namespace) {
+		return nil
+	}
+	if r.canAccess != nil && !r.canAccess(group, kind, namespace, name) {
 		return nil
 	}
 	// Lister scope: namespace-scoped lookup is cheaper than cluster-wide
@@ -299,6 +504,12 @@ func (r *insightsResolver) FinalizerOwnerStatus(finalizer string, root *unstruct
 		return ""
 	}
 	if r.cache == nil || r.cache.Pods() == nil {
+		return ""
+	}
+	if !r.namespaceAllowed(owner.Namespace) {
+		return ""
+	}
+	if r.canAccess != nil && !r.canAccess("", "Pod", owner.Namespace, "") {
 		return ""
 	}
 	pods, err := r.cache.Pods().Pods(owner.Namespace).List(labels.Everything())

@@ -1191,11 +1191,11 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
     category: 'GitOps',
     scope: 'gitops',
     handler: () => {
-      if (status?.suspended) return
+      if (effectiveSuspended || terminating) return
       if (isArgoApp) setSyncDialogOpen(true)
       else if (isFlux) fluxReconcile.mutate({ kind, namespace, name })
     },
-    enabled: shortcutsEnabled && (isArgoApp || isFlux),
+    enabled: shortcutsEnabled && (isArgoApp || isFlux) && !effectiveSuspended && !terminating,
   })
   useRegisterShortcut({
     id: 'gitops-detail-refresh',
@@ -1333,7 +1333,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
           <div className="flex flex-wrap items-center gap-2">
             {isArgoApp && (
               <>
-                <ActionButton label="Sync…" icon={RefreshCw} loading={argoSync.isPending} onClick={() => setSyncDialogOpen(true)} disabled={status?.suspended || terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} primary />
+                <ActionButton label="Sync…" icon={RefreshCw} loading={argoSync.isPending} onClick={() => setSyncDialogOpen(true)} disabled={effectiveSuspended || terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} primary />
                 <ActionButton
                   label="Refresh"
                   icon={RotateCw}
@@ -1360,7 +1360,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             )}
             {isFlux && (
               <>
-                <ActionButton label="Reconcile" icon={RefreshCw} loading={fluxReconcile.isPending} onClick={() => fluxReconcile.mutate({ kind, namespace, name })} disabled={status?.suspended || terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} primary />
+                <ActionButton label="Reconcile" icon={RefreshCw} loading={fluxReconcile.isPending} onClick={() => fluxReconcile.mutate({ kind, namespace, name })} disabled={effectiveSuspended || terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} primary />
                 {isFluxWorkload && (
                   <ActionButton
                     label="Sync with source"

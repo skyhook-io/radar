@@ -742,6 +742,17 @@ func (c *ResourceCache) GetDynamic(ctx context.Context, kind string, namespace s
 
 // GetDynamicWithGroup returns a single resource, using the group to disambiguate
 func (c *ResourceCache) GetDynamicWithGroup(ctx context.Context, kind string, namespace string, name string, group string) (*unstructured.Unstructured, error) {
+	return c.getDynamicWithGroup(ctx, kind, namespace, name, group, false)
+}
+
+// GetDynamicWithGroupPreserveLastApplied returns a single resource while
+// preserving kubectl last-applied for internal drift computation. Do not use
+// for API/UI/MCP responses.
+func (c *ResourceCache) GetDynamicWithGroupPreserveLastApplied(ctx context.Context, kind string, namespace string, name string, group string) (*unstructured.Unstructured, error) {
+	return c.getDynamicWithGroup(ctx, kind, namespace, name, group, true)
+}
+
+func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, namespace string, name string, group string, preserveLastApplied bool) (*unstructured.Unstructured, error) {
 	discovery := GetResourceDiscovery()
 	if discovery == nil {
 		return nil, fmt.Errorf("resource discovery not initialized")
@@ -776,6 +787,8 @@ func (c *ResourceCache) GetDynamicWithGroup(ctx context.Context, kind string, na
 	var err error
 	if gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions" {
 		u, err = dynamicCache.GetDirect(ctx, gvr, namespace, name)
+	} else if preserveLastApplied {
+		u, err = dynamicCache.GetPreserveLastApplied(gvr, namespace, name)
 	} else {
 		u, err = dynamicCache.Get(gvr, namespace, name)
 	}

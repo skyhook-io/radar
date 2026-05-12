@@ -14,7 +14,7 @@ import (
 // GitOps tool input types
 
 type manageGitOpsInput struct {
-	Action    string `json:"action" jsonschema:"action: sync, rollback (ArgoCD only), reconcile (FluxCD), suspend, or resume"`
+	Action    string `json:"action" jsonschema:"action: sync, refresh, terminate, rollback (ArgoCD only), reconcile or sync-with-source (FluxCD), suspend, or resume"`
 	Tool      string `json:"tool" jsonschema:"gitops tool: argocd or fluxcd"`
 	Kind      string `json:"kind,omitempty" jsonschema:"resource kind (FluxCD only): kustomization, helmrelease, gitrepository, etc."`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
@@ -65,6 +65,10 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 				ApplyOnly:   input.ApplyOnly,
 				SyncOptions: input.SyncOptions,
 			})
+		case "refresh":
+			result, err = gitops.RefreshArgoApp(ctx, dynClient, input.Namespace, input.Name, "normal")
+		case "terminate":
+			result, err = gitops.TerminateArgoSync(ctx, dynClient, input.Namespace, input.Name)
 		case "rollback":
 			if input.HistoryID <= 0 {
 				return nil, nil, fmt.Errorf("rollback requires historyId (positive integer from Application status.history[].id)")
@@ -79,7 +83,7 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 		case "resume":
 			result, err = gitops.SetArgoAutoSync(ctx, dynClient, input.Namespace, input.Name, true)
 		default:
-			return nil, nil, fmt.Errorf("unknown ArgoCD action %q: must be sync, rollback, suspend, or resume", action)
+			return nil, nil, fmt.Errorf("unknown ArgoCD action %q: must be sync, refresh, terminate, rollback, suspend, or resume", action)
 		}
 
 	case "fluxcd":
@@ -94,12 +98,14 @@ func handleManageGitOps(ctx context.Context, req *mcp.CallToolRequest, input man
 		switch action {
 		case "reconcile":
 			result, err = gitops.ReconcileFlux(ctx, dynClient, entry, input.Namespace, input.Name)
+		case "sync-with-source":
+			result, err = gitops.SyncFluxWithSource(ctx, dynClient, input.Kind, input.Namespace, input.Name)
 		case "suspend":
 			result, err = gitops.SetFluxSuspend(ctx, dynClient, entry, input.Namespace, input.Name, true)
 		case "resume":
 			result, err = gitops.SetFluxSuspend(ctx, dynClient, entry, input.Namespace, input.Name, false)
 		default:
-			return nil, nil, fmt.Errorf("unknown FluxCD action %q: must be reconcile, suspend, or resume", action)
+			return nil, nil, fmt.Errorf("unknown FluxCD action %q: must be reconcile, sync-with-source, suspend, or resume", action)
 		}
 
 	default:
@@ -133,7 +139,7 @@ func validateGitOpsActionInput(action string, in manageGitOpsInput) error {
 		u = used{revision: true, prune: true, dryRun: true, force: true, applyOnly: true, syncOptions: true}
 	case "rollback":
 		u = used{prune: true, dryRun: true, historyID: true}
-	case "reconcile", "suspend", "resume":
+	case "refresh", "terminate", "reconcile", "sync-with-source", "suspend", "resume":
 		// none — all option fields are ignored
 	default:
 		// Unknown action — let the action switch below produce the canonical error.

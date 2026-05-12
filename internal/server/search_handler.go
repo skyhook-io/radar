@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strconv"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/search"
 )
@@ -68,6 +69,12 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		// In auth-mode=none, returns nil and the SA's own RBAC at
 		// the cache lister layer is the only filter.
 		SkipKinds: s.computeSearchSkipKinds(r),
+		CanReadClusterScoped: func(kind, group, resource string) bool {
+			if auth.UserFromContext(r.Context()) == nil {
+				return true
+			}
+			return s.canRead(r, group, resource, "", "list")
+		},
 	}
 	if expr := r.URL.Query().Get("filter"); expr != "" {
 		f, err := filter.CachedObjectFilter(expr)

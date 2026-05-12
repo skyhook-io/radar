@@ -6,8 +6,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/issues"
+	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // handleIssues serves GET /api/issues — the unified cluster-health
@@ -88,6 +90,16 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		Limit:         parseLimit(q.Get("limit")),
 		IncludeAudit:  q.Get("include_audit") == "true" || hasSource(q.Get("source"), "audit"),
 		IncludeEvents: includeEvents,
+		CanReadClusterScoped: func(kind, group string) bool {
+			if auth.UserFromContext(r.Context()) == nil {
+				return true
+			}
+			clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
+			if !clusterScoped {
+				return false
+			}
+			return s.canRead(r, gvrGroup, gvrResource, "", "list")
+		},
 	}
 	if expr := q.Get("filter"); expr != "" {
 		f, err := filter.CachedIssueFilter(expr)

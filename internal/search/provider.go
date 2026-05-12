@@ -15,9 +15,9 @@ import (
 // Use NewCacheProvider to construct one over the package-level singletons
 // the rest of radar already wires up — it has no fields beyond those handles.
 type CacheProvider struct {
-	cache       *k8s.ResourceCache
-	dynamic     *k8s.DynamicResourceCache
-	discovery   *k8s.ResourceDiscovery
+	cache     *k8s.ResourceCache
+	dynamic   *k8s.DynamicResourceCache
+	discovery *k8s.ResourceDiscovery
 }
 
 // NewCacheProvider returns a Provider over the live radar caches.
@@ -57,4 +57,19 @@ func (p *CacheProvider) KindForGVR(gvr schema.GroupVersionResource) string {
 		return ""
 	}
 	return p.discovery.GetKindForGVR(gvr)
+}
+
+func (p *CacheProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool) {
+	if p.discovery == nil {
+		return false, false
+	}
+	kind := p.discovery.GetKindForGVR(gvr)
+	if kind == "" {
+		return false, false
+	}
+	ar, ok := p.discovery.GetResourceWithGroup(kind, gvr.Group)
+	if !ok {
+		return false, false
+	}
+	return ar.Namespaced, true
 }

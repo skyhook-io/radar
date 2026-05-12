@@ -267,8 +267,8 @@ func TestFilterIgnoredPaths_PrefixMatch(t *testing.T) {
 		{Path: "spec.strategy.type", Op: DriftOpChanged},
 	}
 	out := filterIgnoredPaths(entries, []string{
-		"/spec/replicas",          // exact path
-		"/spec/template/spec",     // parent prefix
+		"/spec/replicas",      // exact path
+		"/spec/template/spec", // parent prefix
 	})
 	if len(out) != 1 {
 		t.Fatalf("expected 1 entry after filter, got %d (%v)", len(out), out)
@@ -366,7 +366,7 @@ func TestComputeDrift_ServerAssignedFieldsNotDrift(t *testing.T) {
 				"containers": []any{map[string]any{
 					"name":                     "c",
 					"image":                    "nginx",
-					"imagePullPolicy":          "IfNotPresent",
+					"imagePullPolicy":          "Always",
 					"terminationMessagePath":   "/dev/termination-log",
 					"terminationMessagePolicy": "File",
 					"resources":                map[string]any{},
@@ -422,7 +422,7 @@ func TestComputeDrift_AllKindDefaults_NoNoise(t *testing.T) {
 		return map[string]any{
 			"name":                     name,
 			"image":                    "nginx",
-			"imagePullPolicy":          "IfNotPresent",
+			"imagePullPolicy":          "Always",
 			"terminationMessagePath":   "/dev/termination-log",
 			"terminationMessagePolicy": "File",
 			"resources":                map[string]any{},
@@ -555,6 +555,27 @@ func TestComputeDrift_AllKindDefaults_NoNoise(t *testing.T) {
 			got := computeDriftFromLastApplied(obj, nil)
 			if got != nil && len(got.Entries) > 0 {
 				t.Errorf("expected no drift on %s with only API server defaults filled in; got %d entries:\n%v", tc.kind, len(got.Entries), got.Entries)
+			}
+		})
+	}
+}
+
+func TestDefaultImagePullPolicyMatchesKubernetesTagRules(t *testing.T) {
+	cases := []struct {
+		image string
+		want  string
+	}{
+		{image: "nginx", want: "Always"},
+		{image: "nginx:latest", want: "Always"},
+		{image: "nginx:1.27", want: "IfNotPresent"},
+		{image: "registry.example.com:5000/ns/app:1.0", want: "IfNotPresent"},
+		{image: "registry.example.com:5000/ns/app", want: "Always"},
+		{image: "nginx@sha256:abcdef", want: "Always"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.image, func(t *testing.T) {
+			if got := defaultImagePullPolicy(tc.image); got != tc.want {
+				t.Fatalf("defaultImagePullPolicy(%q) = %q, want %q", tc.image, got, tc.want)
 			}
 		})
 	}

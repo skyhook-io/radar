@@ -28,6 +28,10 @@ type Provider interface {
 	KindForGVR(gvr schema.GroupVersionResource) string
 }
 
+type dynamicScopeProvider interface {
+	NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool)
+}
+
 // ComposeStats reports anything the caller would want to surface
 // alongside the issue list — currently CEL-filter eval-error
 // counters so the caller can distinguish "filter excluded
@@ -79,7 +83,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 
 	// ---- Source: condition (generic CRD .status.conditions fallback) ----
 	if wantSource(f, SourceCondition) {
-		out = append(out, detectGenericCRDIssues(p, f.Namespaces)...)
+		out = append(out, detectGenericCRDIssues(p, f)...)
 	}
 
 	// ---- Source: audit (best-practice findings) --------------------
@@ -109,6 +113,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	// since each source has its own native filtering surface and
 	// pushing filters down individually would multiply branching.
 	out = applyFilters(out, f)
+	out = applyClusterScopedAccess(out, f)
 
 	// Optional CEL filter — evaluated last so it sees the normalized
 	// row shape. Eval errors count as non-match (matches "missing
@@ -174,7 +179,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 // warning Issue for each object that has a False Ready/Available/etc.
 // condition. Skips kinds owned by curated checkers (Cluster API today)
 // to avoid double-reporting.
-func detectGenericCRDIssues(p Provider, namespaces []string) []Issue {
+func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 	gvrs := p.WatchedDynamic()
 	if len(gvrs) == 0 {
 		return nil
@@ -188,11 +193,15 @@ func detectGenericCRDIssues(p Provider, namespaces []string) []Issue {
 		if kind == "" {
 			continue
 		}
+		clusterScoped, _, _ := classifyDynamicScope(p, gvr, kind)
+		if clusterScoped && f.CanReadClusterScoped != nil && !f.CanReadClusterScoped(kind, gvr.Group) {
+			continue
+		}
 		// Per-namespace iteration when scope is set; cluster-wide list
 		// otherwise. List with empty namespace returns all namespaces.
 		queryNs := []string{""}
-		if len(namespaces) > 0 {
-			queryNs = namespaces
+		if !clusterScoped && len(f.Namespaces) > 0 {
+			queryNs = f.Namespaces
 		}
 		for _, ns := range queryNs {
 			items, err := p.ListDynamic(gvr, ns)
@@ -222,6 +231,15 @@ func detectGenericCRDIssues(p Provider, namespaces []string) []Issue {
 		}
 	}
 	return out
+}
+
+func classifyDynamicScope(p Provider, gvr schema.GroupVersionResource, kind string) (bool, string, string) {
+	if sp, ok := p.(dynamicScopeProvider); ok {
+		if namespaced, known := sp.NamespacedForGVR(gvr); known {
+			return !namespaced, gvr.Group, gvr.Resource
+		}
+	}
+	return k8s.ClassifyKindScope(kind, gvr.Group)
 }
 
 // isCuratedCRDGroup returns true for groups that have their own
@@ -357,6 +375,29 @@ func applyFilters(in []Issue, f Filters) []Issue {
 			continue
 		}
 		out = append(out, i)
+	}
+	return out
+}
+
+func applyClusterScopedAccess(in []Issue, f Filters) []Issue {
+	if f.CanReadClusterScoped == nil {
+		return in
+	}
+	out := in[:0]
+	for _, i := range in {
+		if i.Namespace != "" {
+			out = append(out, i)
+			continue
+		}
+		if clusterScoped, _, _ := k8s.ClassifyKindScope(i.Kind, i.Group); clusterScoped {
+			if f.CanReadClusterScoped(i.Kind, i.Group) {
+				out = append(out, i)
+			}
+			continue
+		}
+		// Authenticated callers should not receive namespace-less rows we
+		// cannot map to a SAR-able resource. In practice these are cluster-
+		// scoped resources whose discovery entry is unavailable.
 	}
 	return out
 }

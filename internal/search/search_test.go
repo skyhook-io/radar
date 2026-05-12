@@ -13,16 +13,19 @@ import (
 )
 
 type fakeProvider struct {
-	typed   map[string][]runtime.Object
-	dynamic map[schema.GroupVersionResource][]*unstructured.Unstructured
-	kinds   map[schema.GroupVersionResource]string
+	typed                 map[string][]runtime.Object
+	dynamic               map[schema.GroupVersionResource][]*unstructured.Unstructured
+	kinds                 map[schema.GroupVersionResource]string
+	namespaced            map[schema.GroupVersionResource]bool
+	dynamicListNamespaces []string
 }
 
 func (f *fakeProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
 	return f.typed[kind], nil
 }
 
-func (f *fakeProvider) ListDynamic(_ context.Context, gvr schema.GroupVersionResource, _ string) ([]*unstructured.Unstructured, error) {
+func (f *fakeProvider) ListDynamic(_ context.Context, gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error) {
+	f.dynamicListNamespaces = append(f.dynamicListNamespaces, namespace)
 	return f.dynamic[gvr], nil
 }
 
@@ -36,6 +39,11 @@ func (f *fakeProvider) WatchedDynamic() []schema.GroupVersionResource {
 
 func (f *fakeProvider) KindForGVR(gvr schema.GroupVersionResource) string {
 	return f.kinds[gvr]
+}
+
+func (f *fakeProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool) {
+	namespaced, ok := f.namespaced[gvr]
+	return namespaced, ok
 }
 
 func newPod(ns, name, image string, labels map[string]string) *corev1.Pod {
@@ -163,6 +171,66 @@ func TestSearch_DynamicCRD(t *testing.T) {
 	}
 	if res.Hits[0].Group != "postgresql.cnpg.io" {
 		t.Fatalf("group not propagated: %+v", res.Hits[0])
+	}
+}
+
+func TestSearch_DynamicClusterScopedCRDRequiresAccess(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodepools"}
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "karpenter.sh/v1",
+		"kind":       "NodePool",
+		"metadata": map[string]any{
+			"name": "redis-workers",
+		},
+	}}
+	p := &fakeProvider{
+		dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}},
+		kinds:      map[schema.GroupVersionResource]string{gvr: "NodePool"},
+		namespaced: map[schema.GroupVersionResource]bool{gvr: false},
+	}
+	res, _ := Search(context.Background(), p, Parse("kind:NodePool redis"), Options{
+		Include: IncludeNone,
+		CanReadClusterScoped: func(kind, group, resource string) bool {
+			if kind != "NodePool" || group != "karpenter.sh" || resource != "nodepools" {
+				t.Fatalf("unexpected SAR tuple: kind=%q group=%q resource=%q", kind, group, resource)
+			}
+			return false
+		},
+	})
+	if len(res.Hits) != 0 {
+		t.Fatalf("cluster-scoped CRD leaked despite denied access: %+v", res.Hits)
+	}
+	if len(p.dynamicListNamespaces) != 0 {
+		t.Fatalf("denied cluster-scoped CRD should not be listed, got namespaces %v", p.dynamicListNamespaces)
+	}
+}
+
+func TestSearch_DynamicClusterScopedCRDListsAtClusterScopeWhenAllowed(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodepools"}
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "karpenter.sh/v1",
+		"kind":       "NodePool",
+		"metadata": map[string]any{
+			"name": "redis-workers",
+		},
+	}}
+	p := &fakeProvider{
+		dynamic:    map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}},
+		kinds:      map[schema.GroupVersionResource]string{gvr: "NodePool"},
+		namespaced: map[schema.GroupVersionResource]bool{gvr: false},
+	}
+	res, _ := Search(context.Background(), p, Parse("kind:NodePool redis"), Options{
+		Include:    IncludeNone,
+		Namespaces: []string{"team-a", "team-b"},
+		CanReadClusterScoped: func(kind, group, resource string) bool {
+			return kind == "NodePool" && group == "karpenter.sh" && resource == "nodepools"
+		},
+	})
+	if len(res.Hits) != 1 {
+		t.Fatalf("expected cluster-scoped CRD hit, got %+v", res.Hits)
+	}
+	if len(p.dynamicListNamespaces) != 1 || p.dynamicListNamespaces[0] != "" {
+		t.Fatalf("cluster-scoped CRD should list once at cluster scope, got namespaces %v", p.dynamicListNamespaces)
 	}
 }
 
