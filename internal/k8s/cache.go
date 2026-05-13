@@ -783,12 +783,19 @@ func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, na
 	// the dynamic cache strips to save memory. Bypass the cache on single-CRD
 	// fetches so the YAML tab and MCP get_resource see the full object; list
 	// views (which don't render schemas) still go through the cache.
+	//
+	// preserveLastApplied also goes via direct GET. The cached path would
+	// otherwise force-start a dynamic informer for the resource's GVR — fine
+	// for CRDs but a memory regression for core kinds (apps/Deployment,
+	// /v1/Service, etc.) that Argo's status.resources commonly references,
+	// since the informer would retain last-applied across every object
+	// cluster-wide just to power a per-page-load drift diff.
 	var u *unstructured.Unstructured
 	var err error
 	if gvr.Group == "apiextensions.k8s.io" && gvr.Resource == "customresourcedefinitions" {
 		u, err = dynamicCache.GetDirect(ctx, gvr, namespace, name)
 	} else if preserveLastApplied {
-		u, err = dynamicCache.GetPreserveLastApplied(gvr, namespace, name)
+		u, err = dynamicCache.GetDirectPreserveLastApplied(ctx, gvr, namespace, name)
 	} else {
 		u, err = dynamicCache.Get(gvr, namespace, name)
 	}

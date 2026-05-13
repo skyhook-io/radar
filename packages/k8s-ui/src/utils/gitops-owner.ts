@@ -22,13 +22,14 @@ export type GitOpsOwnerTool = GitOpsOwnerRef['tool']
 
 const ARGO_TRACKING_ID_ANNOTATION = 'argocd.argoproj.io/tracking-id'
 const ARGO_INSTANCE_LABEL = 'argocd.argoproj.io/instance'
-// Argo's instance label is configurable via application.instanceLabelKey in
-// argocd-cmd-params-cm; the project default is the standard k8s recommended
-// label below. Falling back to it covers most installs (including upstream
-// argocd-example-apps) but produces false positives on Helm-installed charts
-// that aren't GitOps-managed — the click-through then routes to a "not found"
-// detail page rather than mis-attributing ownership.
-const HELM_INSTANCE_LABEL = 'app.kubernetes.io/instance'
+// app.kubernetes.io/instance is intentionally NOT a fallback signal here.
+// It's the standard k8s recommended label and stamped by virtually every
+// Helm chart in existence, not just Argo. Treating it as an Argo ownership
+// hint produced false positives on plain Helm-installed resources, which
+// surfaced as a misleading "Managed by <release>" chip on ordinary workload
+// drawers. Argo installs that rely on this default can still be detected
+// via the tracking-id annotation; the `argocd.argoproj.io/instance` label
+// (above) covers Argo deployments that explicitly set their own label key.
 
 const FLUX_KUSTOMIZE_NAME = 'kustomize.toolkit.fluxcd.io/name'
 const FLUX_KUSTOMIZE_NS = 'kustomize.toolkit.fluxcd.io/namespace'
@@ -60,7 +61,7 @@ export function detectGitOpsOwner(resource: unknown): GitOpsOwnerRef | null {
     }
   }
 
-  const instance = labels[ARGO_INSTANCE_LABEL] || labels[HELM_INSTANCE_LABEL]
+  const instance = labels[ARGO_INSTANCE_LABEL]
   if (instance) {
     // App namespace unknown without tracking-id; emit empty so the consumer can
     // either skip the link or default to a well-known namespace.

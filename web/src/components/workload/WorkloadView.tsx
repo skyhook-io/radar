@@ -584,18 +584,26 @@ function AuditSection({ kind, namespace, name }: { kind: string; namespace: stri
 // makes the request cheap. If a cluster ever has thousands of HelmReleases,
 // a dedicated /api/gitops/consumers endpoint would be the right move; today
 // it'd be premature.
+// Outer component is cheap — it does only the kind check and decides whether
+// to mount the data-fetching child. Without this split, useResources would
+// fire two API calls on EVERY workload drawer open (Pod, Deployment, Service,
+// …), since the hook has no `enabled` flag and can't be conditionally called
+// (Rules of Hooks). The hooks only need to run when the focused resource is
+// actually a Flux source CR.
 function FluxSourceConsumersSection({ kind, namespace, name }: { kind: string; namespace: string; name: string }) {
-  const navigate = useNavigate()
   // The inner WorkloadView de-pluralizes the URL's plural form, which gives
   // "Gitrepository" (single-uppercase) rather than the wire-correct
   // "GitRepository" — so we match lowercase. spec.sourceRef.kind on consumers
   // is always wire-correct, so we look that up separately.
   const sourceKind = FLUX_SOURCE_KIND_BY_LOWER.get(kind.toLowerCase()) ?? null
-  // Only fetch the reconciler lists when the focused resource is actually a
-  // Flux source — otherwise we'd burn two API calls per drawer open.
-  const { data: kustomizations } = useResources<any>('kustomizations', undefined, sourceKind ? 'kustomize.toolkit.fluxcd.io' : undefined)
-  const { data: helmReleases } = useResources<any>('helmreleases', undefined, sourceKind ? 'helm.toolkit.fluxcd.io' : undefined)
   if (!sourceKind) return null
+  return <FluxSourceConsumersInner sourceKind={sourceKind} namespace={namespace} name={name} />
+}
+
+function FluxSourceConsumersInner({ sourceKind, namespace, name }: { sourceKind: string; namespace: string; name: string }) {
+  const navigate = useNavigate()
+  const { data: kustomizations } = useResources<any>('kustomizations', undefined, 'kustomize.toolkit.fluxcd.io')
+  const { data: helmReleases } = useResources<any>('helmreleases', undefined, 'helm.toolkit.fluxcd.io')
 
   const consumers: Array<{ kind: 'Kustomization' | 'HelmRelease'; namespace: string; name: string; plural: string }> = []
   for (const k of kustomizations ?? []) {

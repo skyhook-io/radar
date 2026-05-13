@@ -49,10 +49,14 @@ func TestDropUnstructuredManagedFields_NonCRD(t *testing.T) {
 		t.Error("managedFields should be stripped")
 	}
 
-	// last-applied-configuration is preserved (drift detection depends on it).
+	// last-applied-configuration is stripped from the cache. GitOps drift
+	// detection still works because the insights resolver pulls live objects
+	// via a dedicated direct-GET path that preserves the annotation — keeping
+	// it off the informer cache so we don't retain it cluster-wide for core
+	// kinds (apps/Deployment, /v1/Service, …) just to power a per-page diff.
 	annotations := got.GetAnnotations()
-	if annotations["kubectl.kubernetes.io/last-applied-configuration"] != "{big blob}" {
-		t.Errorf("last-applied-configuration must be preserved for drift detection; got %v", annotations)
+	if _, present := annotations["kubectl.kubernetes.io/last-applied-configuration"]; present {
+		t.Errorf("last-applied-configuration should be stripped from cache; got %v", annotations)
 	}
 	if annotations["description"] != "allow DNS" {
 		t.Errorf("other annotations should be preserved, got %v", annotations)

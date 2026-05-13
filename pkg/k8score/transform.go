@@ -74,10 +74,15 @@ func DropManagedFields(obj any) (any, error) {
 //
 // Always strips:
 //   - metadata.managedFields
-//
-// Preserves kubectl.kubernetes.io/last-applied-configuration intentionally:
-// GitOps drift detection (pkg/gitops/insights/drift.go) reads it to compute
-// per-field diffs between Git-declared and live state.
+//   - kubectl.kubernetes.io/last-applied-configuration. GitOps drift
+//     detection needs this annotation, but it pulls live objects via a
+//     dedicated direct-GET path (DynamicResourceCache.GetDirectPreserveLastApplied)
+//     so the informer cache never has to retain it — which matters
+//     because the dynamic cache can host core kinds (apps/Deployment,
+//     /v1/Service, etc.) referenced from an Argo Application's
+//     status.resources, where retaining last-applied across every object
+//     cluster-wide would be a meaningful memory regression to power a
+//     per-page diagnostic.
 //
 // For CustomResourceDefinitions specifically, also strips:
 //   - spec.versions[].schema — the OpenAPI v3 schema. On operator-heavy
@@ -101,6 +106,7 @@ func DropUnstructuredManagedFields(obj any) (any, error) {
 	}
 
 	unstructured.RemoveNestedField(u.Object, "metadata", "managedFields")
+	unstructured.RemoveNestedField(u.Object, "metadata", "annotations", lastAppliedAnnotation)
 
 	if u.GetKind() == "CustomResourceDefinition" {
 		// Strip .schema from each version entry. Preserve everything

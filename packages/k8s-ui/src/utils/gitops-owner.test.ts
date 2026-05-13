@@ -103,14 +103,15 @@ describe('detectGitOpsOwner', () => {
       expect(got).toEqual({ tool: 'argocd', kind: 'applications', namespace: '', name: 'guestbook' })
     })
 
-    it('falls back to standard k8s instance label', () => {
-      const got = detectGitOpsOwner(resource({ [HELM_INSTANCE]: 'guestbook-healthy' }))
-      // Empty namespace — this is the documented fallback path; navigation
-      // should route to a search page rather than guessing a namespace.
-      expect(got).toEqual({ tool: 'argocd', kind: 'applications', namespace: '', name: 'guestbook-healthy' })
+    it('does NOT fall back to standard k8s instance label', () => {
+      // app.kubernetes.io/instance is stamped by virtually every Helm chart.
+      // Treating it as an Argo signal produced a false "Managed by <release>"
+      // chip on plain Helm-installed resources, so detection now requires an
+      // Argo-specific signal (tracking-id annotation or argocd.argoproj.io/instance).
+      expect(detectGitOpsOwner(resource({ [HELM_INSTANCE]: 'guestbook-healthy' }))).toBeNull()
     })
 
-    it('argocd-specific label wins over standard label', () => {
+    it('argocd-specific label still wins when both labels present', () => {
       const got = detectGitOpsOwner(resource({
         [ARGO_INSTANCE]: 'argo-pick',
         [HELM_INSTANCE]: 'helm-pick',
