@@ -85,14 +85,14 @@ func ResourceKey(kind, namespace, name string) string {
 }
 
 // Converter functions.
-func NewInformerEvent(kind, namespace, name, uid string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
-	return pkgtimeline.NewInformerEvent(kind, namespace, name, uid, operation, healthState, diff, owner, labels, createdAt)
+func NewInformerEvent(kind, apiVersion, namespace, name, uid string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
+	return pkgtimeline.NewInformerEvent(kind, apiVersion, namespace, name, uid, operation, healthState, diff, owner, labels, createdAt)
 }
 func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEvent {
 	return pkgtimeline.NewK8sEventTimelineEvent(event, owner)
 }
-func NewHistoricalEvent(kind, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
-	return pkgtimeline.NewHistoricalEvent(kind, namespace, name, ts, reason, message, healthState, owner, labels)
+func NewHistoricalEvent(kind, apiVersion, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
+	return pkgtimeline.NewHistoricalEvent(kind, apiVersion, namespace, name, ts, reason, message, healthState, owner, labels)
 }
 func ExtractOwner(obj any) *OwnerInfo         { return pkgtimeline.ExtractOwner(obj) }
 func ExtractLabels(obj any) map[string]string { return pkgtimeline.ExtractLabels(obj) }

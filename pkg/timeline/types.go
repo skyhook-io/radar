@@ -76,10 +76,11 @@ type TimelineEvent struct {
 	Source    EventSource `json:"source"`
 
 	// Resource identity
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace"`
-	Name      string `json:"name"`
-	UID       string `json:"uid,omitempty"`
+	Kind       string `json:"kind"`
+	APIVersion string `json:"apiVersion,omitempty"` // e.g. "apps/v1", "cluster.x-k8s.io/v1beta1" — disambiguates CRD kind collisions on navigation
+	Namespace  string `json:"namespace"`
+	Name       string `json:"name"`
+	UID        string `json:"uid,omitempty"`
 
 	// Resource metadata - when the resource was actually created in K8s
 	// This is different from Timestamp which is when we observed the event

@@ -237,6 +237,7 @@ export interface TimelineEvent {
 
   // Resource identity
   kind: string
+  apiVersion?: string // e.g. "apps/v1", "cluster.x-k8s.io/v1beta1" — empty for older backends
   namespace: string
   name: string
   uid?: string
@@ -507,6 +508,7 @@ export interface ChartDependency {
 
 export interface HelmOwnedResource {
   kind: string
+  apiVersion?: string // e.g. "apps/v1", "cluster.x-k8s.io/v1beta1" — empty for older backends
   name: string
   namespace: string
   status?: string   // Running, Pending, Failed, Active, etc.

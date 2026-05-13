@@ -13,12 +13,15 @@ import (
 
 // NewInformerEvent creates a TimelineEvent from an informer callback
 // createdAt is the resource's metadata.creationTimestamp (when K8s actually created it)
-func NewInformerEvent(kind, namespace, name, uid string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
+// apiVersion (e.g. "apps/v1", "cluster.x-k8s.io/v1beta1") disambiguates CRD kind
+// collisions on navigation; pass "" if unknown (older callers).
+func NewInformerEvent(kind, apiVersion, namespace, name, uid string, operation EventType, healthState HealthState, diff *DiffInfo, owner *OwnerInfo, labels map[string]string, createdAt *time.Time) TimelineEvent {
 	return TimelineEvent{
 		ID:          uuid.New().String(),
 		Timestamp:   time.Now(),
 		Source:      SourceInformer,
 		Kind:        kind,
+		APIVersion:  apiVersion,
 		Namespace:   namespace,
 		Name:        name,
 		UID:         uid,
@@ -48,23 +51,26 @@ func NewK8sEventTimelineEvent(event *corev1.Event, owner *OwnerInfo) TimelineEve
 	}
 
 	return TimelineEvent{
-		ID:        string(event.UID),
-		Timestamp: ts,
-		Source:    SourceK8sEvent,
-		Kind:      event.InvolvedObject.Kind,
-		Namespace: event.Namespace,
-		Name:      event.InvolvedObject.Name,
-		EventType: evtType,
-		Reason:    event.Reason,
-		Message:   event.Message,
-		Owner:     owner,
-		Count:     event.Count,
+		ID:         string(event.UID),
+		Timestamp:  ts,
+		Source:     SourceK8sEvent,
+		Kind:       event.InvolvedObject.Kind,
+		APIVersion: event.InvolvedObject.APIVersion,
+		Namespace:  event.Namespace,
+		Name:       event.InvolvedObject.Name,
+		EventType:  evtType,
+		Reason:     event.Reason,
+		Message:    event.Message,
+		Owner:      owner,
+		Count:      event.Count,
 	}
 }
 
 // NewHistoricalEvent creates a historical TimelineEvent
 // The ID is deterministic based on the event content to avoid duplicates on restart
-func NewHistoricalEvent(kind, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
+// apiVersion (e.g. "apps/v1", "cluster.x-k8s.io/v1beta1") disambiguates CRD kind
+// collisions on navigation; pass "" if unknown.
+func NewHistoricalEvent(kind, apiVersion, namespace, name string, ts time.Time, reason, message string, healthState HealthState, owner *OwnerInfo, labels map[string]string) TimelineEvent {
 	// Create deterministic ID from event attributes to avoid duplicates
 	hashInput := fmt.Sprintf("historical:%s/%s/%s:%d:%s", kind, namespace, name, ts.UnixNano(), reason)
 	hash := sha256.Sum256([]byte(hashInput))
@@ -75,6 +81,7 @@ func NewHistoricalEvent(kind, namespace, name string, ts time.Time, reason, mess
 		Timestamp:   ts,
 		Source:      SourceHistorical,
 		Kind:        kind,
+		APIVersion:  apiVersion,
 		Namespace:   namespace,
 		Name:        name,
 		EventType:   EventTypeUpdate, // Historical events are shown as updates

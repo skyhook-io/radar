@@ -357,6 +357,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"totalReplicas": total,
 					"strategy":      strategy,
 					"labels":        rollout.GetLabels(),
+					"apiVersion":    rollout.GetAPIVersion(),
 				},
 			})
 
@@ -387,9 +388,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		applicationGVR, hasApplications = resourceDiscovery.GetGVRWithGroup("Application", "argoproj.io")
 	}
-	applicationIDs := make(map[string]string)                          // ns/name -> applicationID
-	var applicationResources []*unstructured.Unstructured              // Store for second pass
-	applicationDestNamespaces := make(map[string]string)               // appID -> destNamespace
+	applicationIDs := make(map[string]string)             // ns/name -> applicationID
+	var applicationResources []*unstructured.Unstructured // Store for second pass
+	applicationDestNamespaces := make(map[string]string)  // appID -> destNamespace
 	if hasApplications && dynamicCache != nil {
 		applications, err := dynamicCache.List(applicationGVR, opts.NamespaceFilter())
 		if err != nil {
@@ -461,12 +462,13 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: nodeStatus,
 				Data: map[string]any{
-					"namespace":         ns,
-					"syncStatus":        syncStatus,
-					"healthStatus":      healthStatus,
-					"destination":       destination,
-					"destNamespace":     destNamespace,
-					"labels":            app.GetLabels(),
+					"namespace":     ns,
+					"syncStatus":    syncStatus,
+					"healthStatus":  healthStatus,
+					"destination":   destination,
+					"destNamespace": destNamespace,
+					"labels":        app.GetLabels(),
+					"apiVersion":    app.GetAPIVersion(),
 				},
 			})
 
@@ -483,8 +485,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		kustomizationGVR, hasKustomizations = resourceDiscovery.GetGVR("Kustomization")
 	}
-	kustomizationIDs := make(map[string]string)               // ns/name -> kustomizationID
-	var kustomizationResources []*unstructured.Unstructured   // Store for second pass
+	kustomizationIDs := make(map[string]string)             // ns/name -> kustomizationID
+	var kustomizationResources []*unstructured.Unstructured // Store for second pass
 	if hasKustomizations && dynamicCache != nil {
 		kustomizations, err := dynamicCache.List(kustomizationGVR, opts.NamespaceFilter())
 		if err != nil {
@@ -539,6 +541,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"resourceCount": resourceCount,
 					"sourceRef":     sourceRef,
 					"labels":        ks.GetLabels(),
+					"apiVersion":    ks.GetAPIVersion(),
 				},
 			})
 
@@ -601,11 +604,12 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: nodeStatus,
 				Data: map[string]any{
-					"namespace": ns,
-					"ready":     readyStatus,
-					"branch":    branch,
-					"url":       url,
-					"labels":    repo.GetLabels(),
+					"namespace":  ns,
+					"ready":      readyStatus,
+					"branch":     branch,
+					"url":        url,
+					"labels":     repo.GetLabels(),
+					"apiVersion": repo.GetAPIVersion(),
 				},
 			})
 		}
@@ -677,6 +681,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"chartName":    chartName,
 					"chartVersion": chartVersion,
 					"labels":       hr.GetLabels(),
+					"apiVersion":   hr.GetAPIVersion(),
 				},
 			})
 		}
@@ -710,8 +715,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractCertificateStatus(*cert),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    cert.GetLabels(),
+					"namespace":  ns,
+					"labels":     cert.GetLabels(),
+					"apiVersion": cert.GetAPIVersion(),
 				},
 			})
 			certificateResources = append(certificateResources, *cert)
@@ -750,8 +756,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractKarpenterNodePoolStatus(*np),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    np.GetLabels(),
+					"namespace":  ns,
+					"labels":     np.GetLabels(),
+					"apiVersion": np.GetAPIVersion(),
 				},
 			})
 		}
@@ -782,8 +789,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractKarpenterNodeClaimStatus(*nc),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    nc.GetLabels(),
+					"namespace":  ns,
+					"labels":     nc.GetLabels(),
+					"apiVersion": nc.GetAPIVersion(),
 				},
 			})
 
@@ -888,8 +896,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractKarpenterNodePoolStatus(*nc), // Same Ready condition pattern
 				Data: map[string]any{
-					"namespace": "",
-					"labels":    nc.GetLabels(),
+					"namespace":  "",
+					"labels":     nc.GetLabels(),
+					"apiVersion": nc.GetAPIVersion(),
 				},
 			})
 		}
@@ -945,8 +954,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractKedaScaledObjectStatus(*so),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    so.GetLabels(),
+					"namespace":  ns,
+					"labels":     so.GetLabels(),
+					"apiVersion": so.GetAPIVersion(),
 				},
 			})
 
@@ -1004,8 +1014,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractKedaScaledJobStatus(*sj),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    sj.GetLabels(),
+					"namespace":  ns,
+					"labels":     sj.GetLabels(),
+					"apiVersion": sj.GetAPIVersion(),
 				},
 			})
 		}
@@ -1041,8 +1052,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractCAPIPhaseStatus(*cl),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    cl.GetLabels(),
+					"namespace":  ns,
+					"labels":     cl.GetLabels(),
+					"apiVersion": cl.GetAPIVersion(),
 				},
 			})
 		}
@@ -1075,8 +1087,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractCAPIReadyConditionStatus(*cc),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    cc.GetLabels(),
+					"namespace":  ns,
+					"labels":     cc.GetLabels(),
+					"apiVersion": cc.GetAPIVersion(),
 				},
 			})
 		}
@@ -1140,8 +1153,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractCAPIReadyConditionStatus(*kcp),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    kcp.GetLabels(),
+					"namespace":  ns,
+					"labels":     kcp.GetLabels(),
+					"apiVersion": kcp.GetAPIVersion(),
 				},
 			})
 
@@ -1188,8 +1202,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractCAPIPhaseStatus(*md),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    md.GetLabels(),
+					"namespace":  ns,
+					"labels":     md.GetLabels(),
+					"apiVersion": md.GetAPIVersion(),
 				},
 			})
 
@@ -1236,8 +1251,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractCAPIPhaseStatus(*mp),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    mp.GetLabels(),
+					"namespace":  ns,
+					"labels":     mp.GetLabels(),
+					"apiVersion": mp.GetAPIVersion(),
 				},
 			})
 
@@ -1284,8 +1300,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractCAPIPhaseStatus(*ms),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    ms.GetLabels(),
+					"namespace":  ns,
+					"labels":     ms.GetLabels(),
+					"apiVersion": ms.GetAPIVersion(),
 				},
 			})
 
@@ -1331,8 +1348,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractCAPIPhaseStatus(*m),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    m.GetLabels(),
+					"namespace":  ns,
+					"labels":     m.GetLabels(),
+					"apiVersion": m.GetAPIVersion(),
 				},
 			})
 
@@ -1425,8 +1443,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractCAPIReadyConditionStatus(*mhc),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    mhc.GetLabels(),
+					"namespace":  ns,
+					"labels":     mhc.GetLabels(),
+					"apiVersion": mhc.GetAPIVersion(),
 				},
 			})
 
@@ -1471,7 +1490,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractGatewayClassStatus(*gc),
 				Data: map[string]any{
-					"labels": gc.GetLabels(),
+					"labels":     gc.GetLabels(),
+					"apiVersion": gc.GetAPIVersion(),
 				},
 			})
 		}
@@ -1484,8 +1504,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		virtualServiceGVR, hasVirtualServices = resourceDiscovery.GetGVRWithGroup("VirtualService", "networking.istio.io")
 	}
-	virtualServiceIDs := make(map[string]string)                       // ns/name -> vsID
-	var virtualServiceResources []*unstructured.Unstructured           // Store for second pass
+	virtualServiceIDs := make(map[string]string)             // ns/name -> vsID
+	var virtualServiceResources []*unstructured.Unstructured // Store for second pass
 	if hasVirtualServices && dynamicCache != nil {
 		virtualServices, vsErr := dynamicCache.List(virtualServiceGVR, opts.NamespaceFilter())
 		if vsErr != nil {
@@ -1528,6 +1548,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"gateways":   gateways,
 					"routeCount": routeCount,
 					"labels":     vs.GetLabels(),
+					"apiVersion": vs.GetAPIVersion(),
 				},
 			})
 
@@ -1542,8 +1563,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		destinationRuleGVR, hasDestinationRules = resourceDiscovery.GetGVRWithGroup("DestinationRule", "networking.istio.io")
 	}
-	destinationRuleIDs := make(map[string]string)                      // ns/name -> drID
-	var destinationRuleResources []*unstructured.Unstructured          // Store for second pass
+	destinationRuleIDs := make(map[string]string)             // ns/name -> drID
+	var destinationRuleResources []*unstructured.Unstructured // Store for second pass
 	if hasDestinationRules && dynamicCache != nil {
 		destinationRules, drErr := dynamicCache.List(destinationRuleGVR, opts.NamespaceFilter())
 		if drErr != nil {
@@ -1578,6 +1599,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"host":        host,
 					"subsetCount": len(subsets),
 					"labels":      dr.GetLabels(),
+					"apiVersion":  dr.GetAPIVersion(),
 				},
 			})
 
@@ -1627,6 +1649,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"serverCount": len(servers),
 					"selector":    selector,
 					"labels":      igw.GetLabels(),
+					"apiVersion":  igw.GetAPIVersion(),
 				},
 			})
 		}
@@ -1642,8 +1665,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		knativeServiceGVR, hasKnativeServices = resourceDiscovery.GetGVRWithGroup("Service", "serving.knative.dev")
 	}
-	knativeServiceIDs := make(map[string]string)                          // ns/name -> ksvcID
-	var knativeServiceResources []*unstructured.Unstructured              // Store for second pass
+	knativeServiceIDs := make(map[string]string)             // ns/name -> ksvcID
+	var knativeServiceResources []*unstructured.Unstructured // Store for second pass
 	if hasKnativeServices && dynamicCache != nil {
 		knativeServices, ksvcErr := dynamicCache.List(knativeServiceGVR, opts.NamespaceFilter())
 		if ksvcErr != nil {
@@ -1666,8 +1689,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractGenericStatus(ksvc),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    ksvc.GetLabels(),
+					"namespace":  ns,
+					"labels":     ksvc.GetLabels(),
+					"apiVersion": ksvc.GetAPIVersion(),
 				},
 			})
 
@@ -1681,8 +1705,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		knativeConfigGVR, hasKnativeConfigs = resourceDiscovery.GetGVRWithGroup("Configuration", "serving.knative.dev")
 	}
-	knativeConfigIDs := make(map[string]string)                              // ns/name -> kcfgID
-	var knativeConfigResources []*unstructured.Unstructured                  // Store for edge creation
+	knativeConfigIDs := make(map[string]string)             // ns/name -> kcfgID
+	var knativeConfigResources []*unstructured.Unstructured // Store for edge creation
 	if hasKnativeConfigs && dynamicCache != nil {
 		knativeConfigs, kcfgErr := dynamicCache.List(knativeConfigGVR, opts.NamespaceFilter())
 		if kcfgErr != nil {
@@ -1706,8 +1730,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractGenericStatus(kcfg),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    kcfg.GetLabels(),
+					"namespace":  ns,
+					"labels":     kcfg.GetLabels(),
+					"apiVersion": kcfg.GetAPIVersion(),
 				},
 			})
 		}
@@ -1719,8 +1744,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		knativeRevisionGVR, hasKnativeRevisions = resourceDiscovery.GetGVR("Revision")
 	}
-	knativeRevisionIDs := make(map[string]string)                              // ns/name -> krevID
-	var knativeRevisionResources []*unstructured.Unstructured                  // Store for edge creation
+	knativeRevisionIDs := make(map[string]string)             // ns/name -> krevID
+	var knativeRevisionResources []*unstructured.Unstructured // Store for edge creation
 	if hasKnativeRevisions && dynamicCache != nil {
 		knativeRevisions, krevErr := dynamicCache.List(knativeRevisionGVR, opts.NamespaceFilter())
 		if krevErr != nil {
@@ -1744,8 +1769,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractGenericStatus(krev),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    krev.GetLabels(),
+					"namespace":  ns,
+					"labels":     krev.GetLabels(),
+					"apiVersion": krev.GetAPIVersion(),
 				},
 			})
 		}
@@ -1757,8 +1783,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		knativeRouteGVR, hasKnativeRoutes = resourceDiscovery.GetGVRWithGroup("Route", "serving.knative.dev")
 	}
-	knativeRouteIDs := make(map[string]string)                          // ns/name -> krouteID
-	var knativeRouteResources []*unstructured.Unstructured              // Store for second pass
+	knativeRouteIDs := make(map[string]string)             // ns/name -> krouteID
+	var knativeRouteResources []*unstructured.Unstructured // Store for second pass
 	if hasKnativeRoutes && dynamicCache != nil {
 		knativeRoutes, krouteErr := dynamicCache.List(knativeRouteGVR, opts.NamespaceFilter())
 		if krouteErr != nil {
@@ -1781,8 +1807,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractGenericStatus(kroute),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    kroute.GetLabels(),
+					"namespace":  ns,
+					"labels":     kroute.GetLabels(),
+					"apiVersion": kroute.GetAPIVersion(),
 				},
 			})
 
@@ -1822,8 +1849,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractGenericStatus(broker),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    broker.GetLabels(),
+					"namespace":  ns,
+					"labels":     broker.GetLabels(),
+					"apiVersion": broker.GetAPIVersion(),
 				},
 			})
 		}
@@ -1835,8 +1863,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		knativeTriggerGVR, hasKnativeTriggers = resourceDiscovery.GetGVRWithGroup("Trigger", "eventing.knative.dev")
 	}
-	knativeTriggerIDs := make(map[string]string)                        // ns/name -> triggerID
-	var knativeTriggerResources []*unstructured.Unstructured            // Store for second pass
+	knativeTriggerIDs := make(map[string]string)             // ns/name -> triggerID
+	var knativeTriggerResources []*unstructured.Unstructured // Store for second pass
 	if hasKnativeTriggers && dynamicCache != nil {
 		knativeTriggers, triggerErr := dynamicCache.List(knativeTriggerGVR, opts.NamespaceFilter())
 		if triggerErr != nil {
@@ -1859,8 +1887,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractGenericStatus(trigger),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    trigger.GetLabels(),
+					"namespace":  ns,
+					"labels":     trigger.GetLabels(),
+					"apiVersion": trigger.GetAPIVersion(),
 				},
 			})
 
@@ -1912,8 +1941,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractGenericStatus(src),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    src.GetLabels(),
+					"namespace":  ns,
+					"labels":     src.GetLabels(),
+					"apiVersion": src.GetAPIVersion(),
 				},
 			})
 
@@ -1951,8 +1981,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractGenericStatus(ch),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    ch.GetLabels(),
+					"namespace":  ns,
+					"labels":     ch.GetLabels(),
+					"apiVersion": ch.GetAPIVersion(),
 				},
 			})
 		}
@@ -1975,8 +2006,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// Maps for edge creation in second pass
-	traefikRouteIDs := make(map[string]string)                           // prefix:ns/name -> routeID
-	var traefikRouteResources []*unstructured.Unstructured               // Store for edge creation
+	traefikRouteIDs := make(map[string]string)                                // prefix:ns/name -> routeID
+	var traefikRouteResources []*unstructured.Unstructured                    // Store for edge creation
 	traefikRouteKinds := make(map[*unstructured.Unstructured]traefikRouteDef) // resource -> def
 
 	for _, def := range traefikRouteDefs {
@@ -2031,6 +2062,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"entryPoints": entryPoints,
 					"routeCount":  len(routes),
 					"labels":      res.GetLabels(),
+					"apiVersion":  res.GetAPIVersion(),
 				},
 			})
 
@@ -2049,8 +2081,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 		{"Middleware", KindMiddleware, "middleware"},
 		{"MiddlewareTCP", KindMiddlewareTCP, "middlewaretcp"},
 	}
-	middlewareIDs := make(map[string]string)                     // ns/name -> mwID
-	var middlewareResources []*unstructured.Unstructured         // Store for chain edge creation
+	middlewareIDs := make(map[string]string)             // ns/name -> mwID
+	var middlewareResources []*unstructured.Unstructured // Store for chain edge creation
 	for _, def := range traefikMiddlewareDefs {
 		var gvr schema.GroupVersionResource
 		hasKind := false
@@ -2082,8 +2114,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: extractGenericStatus(res),
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    res.GetLabels(),
+					"namespace":  ns,
+					"labels":     res.GetLabels(),
+					"apiVersion": res.GetAPIVersion(),
 				},
 			})
 
@@ -2099,8 +2132,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	if resourceDiscovery != nil {
 		traefikServiceGVR, hasTraefikServices = resourceDiscovery.GetGVR("TraefikService")
 	}
-	traefikServiceIDs := make(map[string]string)                 // ns/name -> tsID
-	var traefikServiceResources []*unstructured.Unstructured     // Store for edge creation
+	traefikServiceIDs := make(map[string]string)             // ns/name -> tsID
+	var traefikServiceResources []*unstructured.Unstructured // Store for edge creation
 	if hasTraefikServices && dynamicCache != nil {
 		tsvcs, tsErr := dynamicCache.List(traefikServiceGVR, opts.NamespaceFilter())
 		if tsErr != nil {
@@ -2160,6 +2193,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"type":         tsType,
 					"serviceCount": svcCount,
 					"labels":       ts.GetLabels(),
+					"apiVersion":   ts.GetAPIVersion(),
 				},
 			})
 
@@ -2213,8 +2247,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: StatusHealthy,
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    res.GetLabels(),
+					"namespace":  ns,
+					"labels":     res.GetLabels(),
+					"apiVersion": res.GetAPIVersion(),
 				},
 			})
 
@@ -2231,8 +2266,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 
 	// 1q. Add Contour HTTPProxy nodes (CRD - fetched via dynamic cache)
 	// Edges are created in a second pass after service IDs are populated.
-	httpProxyIDs := make(map[string]string)                   // ns/name → nodeID
-	var httpProxyResources []*unstructured.Unstructured       // Store for edge creation
+	httpProxyIDs := make(map[string]string)             // ns/name → nodeID
+	var httpProxyResources []*unstructured.Unstructured // Store for edge creation
 	{
 		var httpProxyGVR schema.GroupVersionResource
 		hasHTTPProxy := false
@@ -2285,6 +2320,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 						"includeCount": len(includes),
 						"hasTLS":       hasTLS,
 						"labels":       res.GetLabels(),
+						"apiVersion":   res.GetAPIVersion(),
 					},
 				})
 
@@ -2885,10 +2921,10 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	}
 
 	// 7b. Add Gateway API nodes (CRD - fetched via dynamic cache)
-	gatewayIDs := make(map[string]string)                             // ns/name -> gatewayID
-	routeIDs := make(map[string]string)                               // kind/ns/name -> routeID
-	var gatewayRouteResources []*unstructured.Unstructured             // all routes for second-pass edge creation
-	var gatewayRouteKinds []string                                     // kind for each entry in gatewayRouteResources
+	gatewayIDs := make(map[string]string)                  // ns/name -> gatewayID
+	routeIDs := make(map[string]string)                    // kind/ns/name -> routeID
+	var gatewayRouteResources []*unstructured.Unstructured // all routes for second-pass edge creation
+	var gatewayRouteKinds []string                         // kind for each entry in gatewayRouteResources
 
 	var gatewayGVR schema.GroupVersionResource
 	hasGateways := false
@@ -2933,6 +2969,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"listenerCount": len(listeners),
 					"addresses":     addrList,
 					"labels":        gw.GetLabels(),
+					"apiVersion":    gw.GetAPIVersion(),
 				},
 			})
 		}
@@ -3009,6 +3046,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 					"hostnames":  hostnames,
 					"rulesCount": len(rules),
 					"labels":     route.GetLabels(),
+					"apiVersion": route.GetAPIVersion(),
 				},
 			})
 
@@ -3433,8 +3471,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 			cnpID := fmt.Sprintf("ciliumnetworkpolicy/%s/%s", ns, name)
 
 			nodeData := map[string]any{
-				"namespace": ns,
-				"labels":    cnp.GetLabels(),
+				"namespace":  ns,
+				"labels":     cnp.GetLabels(),
+				"apiVersion": cnp.GetAPIVersion(),
 			}
 
 			nodes = append(nodes, Node{
@@ -3512,7 +3551,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: StatusHealthy,
 				Data: map[string]any{
-					"labels": ccnp.GetLabels(),
+					"labels":     ccnp.GetLabels(),
+					"apiVersion": ccnp.GetAPIVersion(),
 				},
 			})
 			// Cluster-wide policies use endpointSelector or nodeSelector across all namespaces.
@@ -3542,7 +3582,8 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: StatusHealthy,
 				Data: map[string]any{
-					"labels": cnp.GetLabels(),
+					"labels":     cnp.GetLabels(),
+					"apiVersion": cnp.GetAPIVersion(),
 				},
 			})
 			// ClusterNetworkPolicy uses spec.subject with namespace/pod selectors.
@@ -3576,8 +3617,9 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 				Name:   name,
 				Status: StatusHealthy,
 				Data: map[string]any{
-					"namespace": ns,
-					"labels":    vpa.GetLabels(),
+					"namespace":  ns,
+					"labels":     vpa.GetLabels(),
+					"apiVersion": vpa.GetAPIVersion(),
 				},
 			})
 
@@ -5371,7 +5413,6 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-
 	// Collect Traefik IngressRoute resources from dynamic cache
 	var trafficTraefikRoutes []*unstructured.Unstructured
 	var trafficTraefikRouteKinds []string
@@ -5421,7 +5462,6 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			}
 		}
 	}
-
 
 	// Step 1e: Find services referenced by Traefik IngressRoutes
 	servicesFromTraefik := make(map[string]bool)
@@ -5684,6 +5724,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				"listenerCount": len(listeners),
 				"addresses":     addrList,
 				"labels":        gw.GetLabels(),
+				"apiVersion":    gw.GetAPIVersion(),
 			},
 		})
 	}
@@ -5711,6 +5752,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				"hostnames":  hostnames,
 				"rulesCount": len(rules),
 				"labels":     route.GetLabels(),
+				"apiVersion": route.GetAPIVersion(),
 			},
 		})
 
@@ -5805,6 +5847,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				"serverCount": len(servers),
 				"selector":    selector,
 				"labels":      igw.GetLabels(),
+				"apiVersion":  igw.GetAPIVersion(),
 			},
 		})
 	}
@@ -5846,6 +5889,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				"gateways":   gateways,
 				"routeCount": routeCount,
 				"labels":     vs.GetLabels(),
+				"apiVersion": vs.GetAPIVersion(),
 			},
 		})
 
@@ -5952,11 +5996,12 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			Name:   name,
 			Status: extractGenericStatus(ksvc),
 			Data: map[string]any{
-				"namespace":       ns,
-				"url":             url,
-				"latestRevision":  latestRevision,
-				"trafficSummary":  trafficSummary,
-				"labels":          ksvc.GetLabels(),
+				"namespace":      ns,
+				"url":            url,
+				"latestRevision": latestRevision,
+				"trafficSummary": trafficSummary,
+				"labels":         ksvc.GetLabels(),
+				"apiVersion":     ksvc.GetAPIVersion(),
 			},
 		})
 
@@ -5998,13 +6043,12 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-
 	// Step 3e: Build Traefik IngressRoute nodes/edges for traffic view
 	// Traffic flow: Internet → IngressRoute → (TraefikService →) Service → Pods
 	trafficTraefikRouteIDs := make([]string, 0)
-	trafficTraefikRouteIDMap := make(map[string]string) // prefix:ns/name → ID
+	trafficTraefikRouteIDMap := make(map[string]string)   // prefix:ns/name → ID
 	trafficTraefikServiceIDMap := make(map[string]string) // ns/name → ID
-	trafficMiddlewareIDMap := make(map[string]string) // prefix:ns/name → ID
+	trafficMiddlewareIDMap := make(map[string]string)     // prefix:ns/name → ID
 	trafficTraefikEdgeSeen := make(map[string]bool)
 
 	// TraefikService nodes — Phase 1: create all nodes and populate ID map
@@ -6035,9 +6079,10 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			Name:   name,
 			Status: StatusHealthy,
 			Data: map[string]any{
-				"namespace":       ns,
-				"traefikSvcType":  tsType,
-				"labels":          ts.GetLabels(),
+				"namespace":      ns,
+				"traefikSvcType": tsType,
+				"labels":         ts.GetLabels(),
+				"apiVersion":     ts.GetAPIVersion(),
 			},
 		})
 	}
@@ -6188,8 +6233,9 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			Name:   name,
 			Status: extractGenericStatus(mw),
 			Data: map[string]any{
-				"namespace": ns,
-				"labels":    mw.GetLabels(),
+				"namespace":  ns,
+				"labels":     mw.GetLabels(),
+				"apiVersion": mw.GetAPIVersion(),
 			},
 		})
 	}
@@ -6208,12 +6254,12 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 			Name:   name,
 			Status: extractGenericStatus(mw),
 			Data: map[string]any{
-				"namespace": ns,
-				"labels":    mw.GetLabels(),
+				"namespace":  ns,
+				"labels":     mw.GetLabels(),
+				"apiVersion": mw.GetAPIVersion(),
 			},
 		})
 	}
-
 
 	// IngressRoute nodes and edges (after TraefikService/Middleware so maps are populated)
 	for i, rt := range trafficTraefikRoutes {
@@ -6256,6 +6302,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				"serviceCount": totalSvcCount,
 				"entryPoints":  entryPoints,
 				"labels":       rt.GetLabels(),
+				"apiVersion":   rt.GetAPIVersion(),
 			},
 		})
 
@@ -6350,7 +6397,6 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 		}
 	}
 
-
 	// Step 3f: Build Contour HTTPProxy nodes/edges for traffic view
 	// Traffic flow: Internet → HTTPProxy (root) → HTTPProxy (child) → Service → Pods
 	trafficHTTPProxyIDs := make([]string, 0)
@@ -6401,6 +6447,7 @@ func (b *Builder) buildTrafficTopology(opts BuildOptions) (*Topology, error) {
 				"includeCount": len(includes),
 				"hasTLS":       hasTLS,
 				"labels":       hp.GetLabels(),
+				"apiVersion":   hp.GetAPIVersion(),
 			},
 		})
 	}
@@ -7451,28 +7498,28 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		"rollout": true, "application": true, "kustomization": true,
 		"helmrelease": true, "gitrepository": true, "certificate": true,
 		"gateway": true, "httproute": true, "grpcroute": true, "tcproute": true, "tlsroute": true,
-		"nodepool": true, "nodeclaim": true,             // Karpenter
+		"nodepool": true, "nodeclaim": true, // Karpenter
 		"ec2nodeclass": true, "aksnodeclass": true, "gcpnodeclass": true, // Karpenter NodeClass
-		"scaledobject": true, "scaledjob": true,   // KEDA
-		"gatewayclass": true,                       // Gateway API
+		"scaledobject": true, "scaledjob": true, // KEDA
+		"gatewayclass":   true,                                                // Gateway API
 		"virtualservice": true, "destinationrule": true, "serviceentry": true, // Istio networking
-		"peerauthentication": true, "authorizationpolicy": true,               // Istio security
+		"peerauthentication": true, "authorizationpolicy": true, // Istio security
 		"knativeservice": true, "configuration": true, "revision": true, "route": true, // KNative Serving
-		"domainmapping": true, "serverlessservice": true,                                // KNative Serving (internal)
-		"broker": true, "trigger": true, "eventtype": true,                              // KNative Eventing
-		"channel": true, "inmemorychannel": true, "subscription": true,                  // KNative Messaging
+		"domainmapping": true, "serverlessservice": true, // KNative Serving (internal)
+		"broker": true, "trigger": true, "eventtype": true, // KNative Eventing
+		"channel": true, "inmemorychannel": true, "subscription": true, // KNative Messaging
 		"apiserversource": true, "containersource": true, "pingsource": true, "sinkbinding": true, // KNative Sources
-		"sequence": true, "parallel": true,                                              // KNative Flows
-		"ingressroute": true, "ingressroutetcp": true, "ingressrouteudp": true,          // Traefik routing
-		"middleware": true, "middlewaretcp": true,                                        // Traefik middleware
-		"traefikservice": true,                                                          // Traefik service
-		"serverstransport": true, "serverstransporttcp": true,                           // Traefik transport
-		"tlsoption": true, "tlsstore": true,                                             // Traefik TLS
-		"httpproxy": true,                                                               // Contour
-		"clusterclass": true,                                                            // Cluster API
-		"machine": true, "machineset": true, "machinedeployment": true,                  // Cluster API
-		"machinepool": true, "kubeadmcontrolplane": true, "machinehealthcheck": true,    // Cluster API
-		"machinedrainrule": true,                                                        // Cluster API
+		"sequence": true, "parallel": true, // KNative Flows
+		"ingressroute": true, "ingressroutetcp": true, "ingressrouteudp": true, // Traefik routing
+		"middleware": true, "middlewaretcp": true, // Traefik middleware
+		"traefikservice":   true,                              // Traefik service
+		"serverstransport": true, "serverstransporttcp": true, // Traefik transport
+		"tlsoption": true, "tlsstore": true, // Traefik TLS
+		"httpproxy":    true,                                                // Contour
+		"clusterclass": true,                                                // Cluster API
+		"machine":      true, "machineset": true, "machinedeployment": true, // Cluster API
+		"machinepool": true, "kubeadmcontrolplane": true, "machinehealthcheck": true, // Cluster API
+		"machinedrainrule": true, // Cluster API
 		// Trivy Operator reports - high cardinality, excluded from topology
 		"vulnerabilityreport": true, "configauditreport": true,
 		"exposedsecretreport": true, "sbomreport": true,
@@ -7557,8 +7604,9 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 					Name:   name,
 					Status: extractGenericStatus(resource),
 					Data: map[string]any{
-						"namespace": ns,
-						"labels":    resource.GetLabels(),
+						"namespace":  ns,
+						"labels":     resource.GetLabels(),
+						"apiVersion": resource.GetAPIVersion(),
 					},
 				},
 				ownerRefs: ownerNodeIDs,

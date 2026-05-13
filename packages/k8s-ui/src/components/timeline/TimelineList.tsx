@@ -22,7 +22,7 @@ import { isChangeEvent, isK8sEvent, isHistoricalEvent, isOperation } from '../..
 import { getOperationColor, getHealthBadgeColor, SEVERITY_BADGE } from '../../utils/badge-colors'
 import { ResourceRefBadge } from '../ui/drawer-components'
 import type { NavigateToResource } from '../../utils/navigation'
-import { kindToPlural, refToSelectedResource } from '../../utils/navigation'
+import { kindToPlural, refToSelectedResource, apiVersionToGroup } from '../../utils/navigation'
 import { pluralize } from '../../utils/pluralize'
 import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 
@@ -589,7 +589,7 @@ function ActivityCard({ item, expanded, onToggle, onResourceClick }: ActivityCar
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  onResourceClick?.({ kind: kindToPlural(item.kind), namespace: item.namespace, name: item.name })
+                  onResourceClick?.({ kind: kindToPlural(item.kind), namespace: item.namespace, name: item.name, group: apiVersionToGroup(item.apiVersion) })
                 }}
                 className="flex items-center gap-2 hover:bg-theme-elevated/50 rounded px-1 -ml-1 transition-colors group"
               >
@@ -732,7 +732,7 @@ function AggregatedActivityCard({ first, last, count, reason, expanded, onToggle
               <button
                 onClick={(e) => {
                   e.stopPropagation()
-                  onResourceClick?.({ kind: kindToPlural(first.kind), namespace: first.namespace, name: first.name })
+                  onResourceClick?.({ kind: kindToPlural(first.kind), namespace: first.namespace, name: first.name, group: apiVersionToGroup(first.apiVersion) })
                 }}
                 className="flex items-center gap-2 hover:bg-theme-elevated/50 rounded px-1 -ml-1 transition-colors group"
               >

@@ -8,7 +8,7 @@ import {
   type RendererOverrides,
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource, ResourceRef, ResolvedEnvFrom } from '../../types'
-import { kindToPlural, type NavigateToResource } from '../../utils/navigation'
+import { kindToPlural, buildWorkloadPath, type NavigateToResource } from '../../utils/navigation'
 import {
   useChanges, useResourceWithRelationships, usePodLogs, useTopology, useUpdateResource,
   useDeleteResource, useTriggerCronJob, useSuspendCronJob, useResumeCronJob,
@@ -55,6 +55,7 @@ interface WorkloadViewRouteProps {
 export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRouteProps) {
   const location = useLocation()
   const navigate = useNavigate()
+  const [searchParams] = useSearchParams()
 
   // Parse /workload/:kind/:ns/:name from pathname
   const parts = location.pathname.replace(/^\//, '').split('/')
@@ -62,6 +63,7 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   const kind = parts[1] || ''
   const namespace = parts[2] || ''
   const name = parts.slice(3).join('/') || ''
+  const group = searchParams.get('apiGroup') || ''
 
   if (!kind || !namespace || !name) {
     return (
@@ -80,8 +82,7 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   }, [navigate])
 
   const handleNavigate = useCallback((resource: SelectedResource) => {
-    // Navigate to another workload view
-    navigate(`/workload/${resource.kind}/${resource.namespace}/${resource.name}`)
+    navigate(buildWorkloadPath(resource))
   }, [navigate])
 
   return (
@@ -89,6 +90,7 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
       kind={kind}
       namespace={namespace}
       name={name}
+      group={group}
       onBack={handleBack}
       onNavigateToResource={onNavigateToResource || handleNavigate}
     />

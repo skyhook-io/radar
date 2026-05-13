@@ -131,8 +131,39 @@ func (s *SQLiteStore) initSchema() error {
 	);
 	`
 
-	_, err := s.db.Exec(schema)
-	return err
+	if _, err := s.db.Exec(schema); err != nil {
+		return err
+	}
+
+	// Additive migration: api_version column added to disambiguate CRD kind collisions
+	// on navigation. ALTER TABLE on an existing column errors with "duplicate column",
+	// so detect via PRAGMA before adding.
+	rows, err := s.db.Query("PRAGMA table_info(events)")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+	hasAPIVersion := false
+	for rows.Next() {
+		var cid int
+		var name, ctype string
+		var notnull, pk int
+		var dfltValue sql.NullString
+		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
+			return err
+		}
+		if name == "api_version" {
+			hasAPIVersion = true
+			break
+		}
+	}
+	if !hasAPIVersion {
+		if _, err := s.db.Exec("ALTER TABLE events ADD COLUMN api_version TEXT"); err != nil {
+			return err
+		}
+	}
+
+	return nil
 }
 
 // Append adds a single event to the store
@@ -154,10 +185,10 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 
 	stmt, err := tx.PrepareContext(ctx, `
 		INSERT OR IGNORE INTO events (
-			id, timestamp, source, kind, namespace, name, uid, event_type,
+			id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
 			reason, message, diff_json, health_state, owner_kind, owner_name,
 			labels_json, count, correlation_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
@@ -195,6 +226,7 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 			event.Timestamp.Format(time.RFC3339Nano),
 			string(event.Source),
 			event.Kind,
+			event.APIVersion,
 			event.Namespace,
 			event.Name,
 			event.UID,
@@ -221,7 +253,7 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineEvent, error) {
 	// Build query
 	query := strings.Builder{}
-	query.WriteString("SELECT id, timestamp, source, kind, namespace, name, uid, event_type, ")
+	query.WriteString("SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type, ")
 	query.WriteString("reason, message, diff_json, health_state, owner_kind, owner_name, ")
 	query.WriteString("labels_json, count, correlation_id FROM events WHERE 1=1")
 
@@ -390,7 +422,7 @@ func (s *SQLiteStore) QueryGrouped(ctx context.Context, opts QueryOptions) (*Tim
 
 // GetEvent retrieves a single event by ID
 func (s *SQLiteStore) GetEvent(ctx context.Context, id string) (*TimelineEvent, error) {
-	query := `SELECT id, timestamp, source, kind, namespace, name, uid, event_type,
+	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
 		reason, message, diff_json, health_state, owner_kind, owner_name,
 		labels_json, count, correlation_id FROM events WHERE id = ?`
 
@@ -411,7 +443,7 @@ func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 		limit = 100
 	}
 
-	query := `SELECT id, timestamp, source, kind, namespace, name, uid, event_type,
+	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
 		reason, message, diff_json, health_state, owner_kind, owner_name,
 		labels_json, count, correlation_id FROM events
 		WHERE owner_kind = ? AND owner_name = ? AND namespace = ?`
@@ -626,7 +658,7 @@ func (s *SQLiteStore) scanEvent(rows *sql.Rows) (TimelineEvent, error) {
 	var event TimelineEvent
 	var timestamp string
 	var source, eventType, healthState string
-	var uid, reason, message, diffJSON, labelsJSON sql.NullString
+	var apiVersion, uid, reason, message, diffJSON, labelsJSON sql.NullString
 	var ownerKind, ownerName, correlationID sql.NullString
 
 	err := rows.Scan(
@@ -634,6 +666,7 @@ func (s *SQLiteStore) scanEvent(rows *sql.Rows) (TimelineEvent, error) {
 		&timestamp,
 		&source,
 		&event.Kind,
+		&apiVersion,
 		&event.Namespace,
 		&event.Name,
 		&uid,
@@ -657,6 +690,9 @@ func (s *SQLiteStore) scanEvent(rows *sql.Rows) (TimelineEvent, error) {
 	event.EventType = EventType(eventType)
 	event.HealthState = HealthState(healthState)
 
+	if apiVersion.Valid {
+		event.APIVersion = apiVersion.String
+	}
 	if uid.Valid {
 		event.UID = uid.String
 	}
@@ -696,7 +732,7 @@ func (s *SQLiteStore) scanEventRow(row *sql.Row) (TimelineEvent, error) {
 	var event TimelineEvent
 	var timestamp string
 	var source, eventType, healthState string
-	var uid, reason, message, diffJSON, labelsJSON sql.NullString
+	var apiVersion, uid, reason, message, diffJSON, labelsJSON sql.NullString
 	var ownerKind, ownerName, correlationID sql.NullString
 
 	err := row.Scan(
@@ -704,6 +740,7 @@ func (s *SQLiteStore) scanEventRow(row *sql.Row) (TimelineEvent, error) {
 		&timestamp,
 		&source,
 		&event.Kind,
+		&apiVersion,
 		&event.Namespace,
 		&event.Name,
 		&uid,
@@ -727,6 +764,9 @@ func (s *SQLiteStore) scanEventRow(row *sql.Row) (TimelineEvent, error) {
 	event.EventType = EventType(eventType)
 	event.HealthState = HealthState(healthState)
 
+	if apiVersion.Valid {
+		event.APIVersion = apiVersion.String
+	}
 	if uid.Valid {
 		event.UID = uid.String
 	}

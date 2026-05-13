@@ -73,14 +73,15 @@ type ChartDependency struct {
 
 // OwnedResource represents a K8s resource created by a Helm release
 type OwnedResource struct {
-	Kind      string `json:"kind"`
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-	Status    string `json:"status,omitempty"`  // Running, Pending, Failed, etc.
-	Ready     string `json:"ready,omitempty"`   // e.g., "3/3" for deployments
-	Message   string `json:"message,omitempty"` // Status message or reason
-	Summary   string `json:"summary,omitempty"` // Brief status like "0/3 OOMKilled"
-	Issue     string `json:"issue,omitempty"`   // Primary issue if unhealthy
+	Kind       string `json:"kind"`
+	APIVersion string `json:"apiVersion,omitempty"` // e.g. "apps/v1", "cluster.x-k8s.io/v1beta1" — disambiguates CRD kind collisions on navigation
+	Name       string `json:"name"`
+	Namespace  string `json:"namespace"`
+	Status     string `json:"status,omitempty"`  // Running, Pending, Failed, etc.
+	Ready      string `json:"ready,omitempty"`   // e.g., "3/3" for deployments
+	Message    string `json:"message,omitempty"` // Status message or reason
+	Summary    string `json:"summary,omitempty"` // Brief status like "0/3 OOMKilled"
+	Issue      string `json:"issue,omitempty"`   // Primary issue if unhealthy
 }
 
 // HelmValues represents the values for a release

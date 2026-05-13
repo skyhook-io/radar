@@ -385,6 +385,7 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 	owner := timeline.ExtractOwner(obj)
 	labels := timeline.ExtractLabels(obj)
 	healthState := timeline.DetermineHealthState(kind, obj)
+	apiVersion := extractAPIVersion(obj)
 
 	var createdAt *time.Time
 	if obj != nil {
@@ -438,7 +439,7 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 	}
 
 	event := timeline.NewInformerEvent(
-		kind, namespace, name, uid,
+		kind, apiVersion, namespace, name, uid,
 		timeline.OperationToEventType(op),
 		healthState,
 		diff,
@@ -449,7 +450,7 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 
 	var events []timeline.TimelineEvent
 	if op == "add" && newObj != nil {
-		historicalEvents := extractTimelineHistoricalEvents(kind, namespace, name, newObj, owner, labels)
+		historicalEvents := extractTimelineHistoricalEvents(kind, apiVersion, namespace, name, newObj, owner, labels)
 		events = append(events, historicalEvents...)
 	}
 
@@ -503,19 +504,30 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 	}
 }
 
+// extractAPIVersion returns the resource's apiVersion (e.g. "cluster.x-k8s.io/v1beta1")
+// for unstructured/CRD objects. Typed informer objects strip kind/apiVersion, so they
+// fall through to "" — the navigation layer treats an empty group as "core/typed kind",
+// which is correct since core kinds don't collide.
+func extractAPIVersion(obj any) string {
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		return u.GetAPIVersion()
+	}
+	return ""
+}
+
 // extractTimelineHistoricalEvents extracts historical events from resource metadata/status
-func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owner *timeline.OwnerInfo, labels map[string]string) []timeline.TimelineEvent {
+func extractTimelineHistoricalEvents(kind, apiVersion, namespace, name string, obj any, owner *timeline.OwnerInfo, labels map[string]string) []timeline.TimelineEvent {
 	var events []timeline.TimelineEvent
 
 	switch kind {
 	case "Pod":
 		if pod, ok := obj.(*corev1.Pod); ok {
 			if !pod.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					pod.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 			if pod.Status.StartTime != nil && !pod.Status.StartTime.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					pod.Status.StartTime.Time, "started", "", timeline.HealthDegraded, owner, labels))
 			}
 			for _, cond := range pod.Status.Conditions {
@@ -528,7 +540,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 				} else if cond.Status == corev1.ConditionFalse {
 					health = timeline.HealthDegraded
 				}
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					cond.LastTransitionTime.Time, string(cond.Type), cond.Message, health, owner, labels))
 			}
 		}
@@ -536,7 +548,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 	case "Deployment":
 		if deploy, ok := obj.(*appsv1.Deployment); ok {
 			if !deploy.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					deploy.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 			for _, cond := range deploy.Status.Conditions {
@@ -549,7 +561,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 				} else if cond.Status == corev1.ConditionFalse {
 					health = timeline.HealthDegraded
 				}
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					cond.LastTransitionTime.Time, string(cond.Type), cond.Message, health, owner, labels))
 			}
 		}
@@ -561,7 +573,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 				if rs.Status.ReadyReplicas > 0 && rs.Status.ReadyReplicas == rs.Status.Replicas {
 					health = timeline.HealthHealthy
 				}
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					rs.CreationTimestamp.Time, "created", "", health, owner, labels))
 			}
 		}
@@ -569,7 +581,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 	case "StatefulSet":
 		if sts, ok := obj.(*appsv1.StatefulSet); ok {
 			if !sts.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					sts.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 		}
@@ -577,7 +589,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 	case "DaemonSet":
 		if ds, ok := obj.(*appsv1.DaemonSet); ok {
 			if !ds.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					ds.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 		}
@@ -585,7 +597,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 	case "Service":
 		if svc, ok := obj.(*corev1.Service); ok {
 			if !svc.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					svc.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner, labels))
 			}
 		}
@@ -593,7 +605,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 	case "Ingress":
 		if ing, ok := obj.(*networkingv1.Ingress); ok {
 			if !ing.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					ing.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner, labels))
 			}
 		}
@@ -601,7 +613,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 	case "CronJob":
 		if cj, ok := obj.(*batchv1.CronJob); ok {
 			if !cj.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					cj.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner, labels))
 			}
 		}
@@ -609,7 +621,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 	case "HorizontalPodAutoscaler":
 		if hpa, ok := obj.(*autoscalingv2.HorizontalPodAutoscaler); ok {
 			if !hpa.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					hpa.CreationTimestamp.Time, "created", "", timeline.HealthHealthy, owner, labels))
 			}
 		}
@@ -617,11 +629,11 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 	case "Job":
 		if job, ok := obj.(*batchv1.Job); ok {
 			if !job.CreationTimestamp.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					job.CreationTimestamp.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 			if job.Status.StartTime != nil && !job.Status.StartTime.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					job.Status.StartTime.Time, "started", "", timeline.HealthDegraded, owner, labels))
 			}
 			if job.Status.CompletionTime != nil && !job.Status.CompletionTime.IsZero() {
@@ -629,7 +641,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 				if job.Status.Failed > 0 {
 					health = timeline.HealthUnhealthy
 				}
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					job.Status.CompletionTime.Time, "completed", "", health, owner, labels))
 			}
 		}
@@ -638,7 +650,7 @@ func extractTimelineHistoricalEvents(kind, namespace, name string, obj any, owne
 		if u, ok := obj.(*unstructured.Unstructured); ok {
 			ct := u.GetCreationTimestamp()
 			if !ct.IsZero() {
-				events = append(events, timeline.NewHistoricalEvent(kind, namespace, name,
+				events = append(events, timeline.NewHistoricalEvent(kind, apiVersion, namespace, name,
 					ct.Time, "created", "", timeline.HealthUnknown, owner, labels))
 			}
 		}

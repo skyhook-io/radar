@@ -26,7 +26,7 @@ import {
 import { useHasLimitedAccess } from '../../contexts/CapabilitiesContext'
 import type { TimelineEvent, Topology } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
-import { kindToPlural } from '../../utils/navigation'
+import { kindToPlural, apiVersionToGroup } from '../../utils/navigation'
 import { PaneLoader, pluralize } from '@skyhook-io/k8s-ui'
 import { isChangeEvent, isHistoricalEvent, isOperation, displayKind } from '../../types'
 import { DiffViewer } from './DiffViewer'
@@ -682,7 +682,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                         )}
                         <div
                           className="flex-1 min-w-0 cursor-pointer hover:bg-theme-surface/30 rounded px-1 -mx-1 group"
-                          onClick={() => onResourceClick?.({ kind: kindToPlural(lane.kind), namespace: lane.namespace, name: lane.name })}
+                          onClick={() => onResourceClick?.({ kind: kindToPlural(lane.kind), namespace: lane.namespace, name: lane.name, group: lane.group })}
                         >
                           <div className="flex items-center gap-1">
                             <span className={clsx(
@@ -760,7 +760,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                           <div className="flex">
                             <div
                               className="w-[19.25rem] shrink-0 border-r border-theme-border/50 pl-4 pr-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-theme-elevated/30 group"
-                              onClick={() => onResourceClick?.({ kind: kindToPlural(lane.kind), namespace: lane.namespace, name: lane.name })}
+                              onClick={() => onResourceClick?.({ kind: kindToPlural(lane.kind), namespace: lane.namespace, name: lane.name, group: lane.group })}
                             >
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-1">
@@ -812,7 +812,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                             {/* Child lane label - indented */}
                             <div
                               className="w-[19.25rem] shrink-0 border-r border-theme-border/50 pl-4 pr-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-theme-elevated/30 group"
-                              onClick={() => onResourceClick?.({ kind: kindToPlural(child.kind), namespace: child.namespace, name: child.name })}
+                              onClick={() => onResourceClick?.({ kind: kindToPlural(child.kind), namespace: child.namespace, name: child.name, group: child.group })}
                             >
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-1">
@@ -1234,7 +1234,7 @@ function EventDetailPanel({ event, onClose, onResourceClick }: EventDetailPanelP
               {displayKind(event.kind)}
             </span>
             <button
-              onClick={() => onResourceClick?.({ kind: kindToPlural(event.kind), namespace: event.namespace, name: event.name })}
+              onClick={() => onResourceClick?.({ kind: kindToPlural(event.kind), namespace: event.namespace, name: event.name, group: apiVersionToGroup(event.apiVersion) })}
               className="text-theme-text-primary font-medium hover:text-accent-text"
             >
               {event.name}

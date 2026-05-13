@@ -1,8 +1,18 @@
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../api/config'
+import type { SelectedResource } from '@skyhook-io/k8s-ui/types/core'
 
 // Re-export shared navigation utilities from @skyhook-io/k8s-ui.
-export { kindToPlural, pluralToKind, refToSelectedResource } from '@skyhook-io/k8s-ui/utils/navigation'
+export { kindToPlural, pluralToKind, refToSelectedResource, apiVersionToGroup } from '@skyhook-io/k8s-ui/utils/navigation'
 export type { NavigateToResource } from '@skyhook-io/k8s-ui/utils/navigation'
+
+/**
+ * Build a /workload/:kind/:namespace/:name URL, preserving the API group as a
+ * query param so the WorkloadView can resolve CRDs with colliding kind names.
+ */
+export function buildWorkloadPath(resource: SelectedResource): string {
+  const base = `/workload/${resource.kind}/${resource.namespace}/${resource.name}`
+  return resource.group ? `${base}?apiGroup=${encodeURIComponent(resource.group)}` : base
+}
 
 // radar-specific: open URL in system browser (desktop app support)
 export function openExternal(url: string): void {

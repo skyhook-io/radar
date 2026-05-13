@@ -734,14 +734,16 @@ func parseManifestResources(manifest, defaultNamespace string) []OwnedResource {
 	manifests := releaseutil.SplitManifests(manifest)
 
 	for _, m := range manifests {
-		// Simple parsing - look for kind, name, and namespace
+		// Simple parsing - look for kind, apiVersion, name, and namespace
 		lines := strings.Split(m, "\n")
-		var kind, name, namespace string
+		var kind, apiVersion, name, namespace string
 
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
 			if after, ok := strings.CutPrefix(line, "kind:"); ok {
 				kind = strings.TrimSpace(after)
+			} else if after, ok := strings.CutPrefix(line, "apiVersion:"); ok {
+				apiVersion = strings.Trim(strings.TrimSpace(after), `"'`)
 			} else if strings.HasPrefix(line, "name:") && name == "" {
 				// Only take first name (metadata.name, not container names etc)
 				name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
@@ -758,9 +760,10 @@ func parseManifestResources(manifest, defaultNamespace string) []OwnedResource {
 				namespace = defaultNamespace
 			}
 			resources = append(resources, OwnedResource{
-				Kind:      kind,
-				Name:      name,
-				Namespace: namespace,
+				Kind:       kind,
+				APIVersion: apiVersion,
+				Name:       name,
+				Namespace:  namespace,
 			})
 		}
 	}

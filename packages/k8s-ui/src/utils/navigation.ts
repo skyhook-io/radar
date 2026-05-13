@@ -142,3 +142,17 @@ export function refToSelectedResource(ref: ResourceRef): SelectedResource {
     group: ref.group,
   }
 }
+
+/**
+ * Extract the API group from an apiVersion string.
+ * Returns '' for core resources (e.g. "v1") and for missing/empty input.
+ * Examples:
+ *   "v1"                          → ""
+ *   "apps/v1"                     → "apps"
+ *   "cluster.x-k8s.io/v1beta1"    → "cluster.x-k8s.io"
+ */
+export function apiVersionToGroup(apiVersion?: string | null): string {
+  if (!apiVersion) return ''
+  const i = apiVersion.indexOf('/')
+  return i === -1 ? '' : apiVersion.slice(0, i)
+}

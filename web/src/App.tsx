@@ -45,7 +45,7 @@ import { Tooltip } from './components/ui/Tooltip'
 import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNamespacePicker'
 import { SettingsDialog } from './components/settings/SettingsDialog'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
-import { kindToPlural, openExternal } from './utils/navigation'
+import { kindToPlural, openExternal, apiVersionToGroup, buildWorkloadPath } from './utils/navigation'
 import type { ContextSwitcherHandle } from './components/ContextSwitcher'
 
 // All possible node kinds (core + GitOps)
@@ -592,6 +592,34 @@ function AppInner() {
   }, forceNamespaceFilter, showPolicyEffect)
   const [reconnect, isReconnecting] = useRefreshAnimation(reconnectSSE)
 
+  // Engage SSE server-side filtering on large clusters and keep the filter
+  // in lockstep with the user's pick. Two failure modes this covers:
+  //   * Header switcher: SSE was already filtered (large-cluster picker
+  //     engaged forceNamespaceFilter once); switching namespaces only updated
+  //     `namespaces`, so SSE kept streaming the previous pick → blank graph
+  //     with stale sidebar counts.
+  //   * URL bookmark on a large cluster: forceNamespaceFilter starts
+  //     undefined, SSE opens with no filter, server replies
+  //     requiresNamespaceFilter=true. The LargeClusterPicker fallback only
+  //     renders when `namespaces` is empty, so a deep link with a namespace
+  //     showed "No resources found".
+  // Small clusters never see requiresNamespaceFilter and leave
+  // forceNamespaceFilter === undefined — frontend filtering is unaffected.
+  useEffect(() => {
+    const isLarge = forceNamespaceFilter !== undefined || topology?.requiresNamespaceFilter === true
+    if (!isLarge) return
+    if (namespaces.length === 0) {
+      setForceNamespaceFilter(prev => (prev === undefined ? prev : undefined))
+      return
+    }
+    setForceNamespaceFilter(prev => {
+      const cur = prev ? [...prev].sort() : []
+      const next = [...namespaces].sort()
+      if (cur.length === next.length && cur.every((ns, i) => ns === next[i])) return prev
+      return [...namespaces]
+    })
+  }, [namespaces, forceNamespaceFilter, topology?.requiresNamespaceFilter])
+
   // Apply live topology updates only when not paused. While paused, buffer the
   // latest snapshot so we can apply it instantly when the user resumes.
   useEffect(() => {
@@ -661,6 +689,7 @@ function AppInner() {
       kind: kindToPlural(node.kind),
       namespace: (node.data.namespace as string) || '',
       name: node.name,
+      group: apiVersionToGroup(node.data.apiVersion as string | undefined),
     })
   }, [])
 
@@ -1346,7 +1375,7 @@ function AppInner() {
           <TimelineView
             namespaces={namespaces}
             onResourceClick={(resource) => {
-              navigate(`/workload/${resource.kind}/${resource.namespace}/${resource.name}`)
+              navigate(buildWorkloadPath(resource))
             }}
             initialViewMode={(searchParams.get('view') as 'list' | 'swimlane') || undefined}
             initialFilter={(searchParams.get('filter') as 'all' | 'changes' | 'k8s_events' | 'warnings' | 'unhealthy') || undefined}
@@ -1416,7 +1445,7 @@ function AppInner() {
         {mainView === 'workload' && !drawerExpanded && (
           <WorkloadViewRoute
             onNavigateToResource={(resource) => {
-              navigate(`/workload/${resource.kind}/${resource.namespace}/${resource.name}`)
+              navigate(buildWorkloadPath(resource))
             }}
           />
         )}
@@ -1436,12 +1465,12 @@ function AppInner() {
           onExpand={(res) => {
             suppressViewClearRef.current = true
             setDrawerExpanded(true)
-            navigate(`/workload/${res.kind}/${res.namespace}/${res.name}`)
+            navigate(buildWorkloadPath(res))
           }}
           onCollapse={handleCollapseFromExpanded}
           onNavigateToResource={(resource) => {
             setSelectedResource(resource)
-            navigate(`/workload/${resource.kind}/${resource.namespace}/${resource.name}`, { replace: true })
+            navigate(buildWorkloadPath(resource), { replace: true })
           }}
         />
       )}
@@ -1459,11 +1488,11 @@ function AppInner() {
             setSearchParams(params, { replace: true })
           }}
           onNavigateToResource={(resource) => {
-            // Navigate to resources view with kind in path and open the resource detail drawer
             setSelectedHelmRelease(null)
             const newParams = new URLSearchParams()
             const globalNamespaces = searchParams.get('namespaces')
             if (globalNamespaces) newParams.set('namespaces', globalNamespaces)
+            if (resource.group) newParams.set('apiGroup', resource.group)
             navigate({ pathname: `/resources/${resource.kind}`, search: newParams.toString() })
             setSelectedResource(resource)
           }}
