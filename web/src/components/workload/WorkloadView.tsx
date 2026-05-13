@@ -61,11 +61,11 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   // buildWorkloadPath; names can also contain literal slashes (e.g. some CRD names),
   // which survive encoding as %2F and reassemble correctly here.
   const parts = location.pathname.replace(/^\//, '').split('/')
-  const decode = (s: string | undefined) => {
-    try { return s ? decodeURIComponent(s) : '' } catch { return s || '' }
+  const decode = (s: string): string => {
+    try { return decodeURIComponent(s) } catch { return s }
   }
-  const kind = decode(parts[1])
-  const namespace = decode(parts[2])
+  const kind = decode(parts[1] ?? '')
+  const namespace = decode(parts[2] ?? '')
   const name = parts.slice(3).map(decode).join('/')
   const group = searchParams.get('apiGroup') || ''
 
