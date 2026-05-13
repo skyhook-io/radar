@@ -1,0 +1,28 @@
+# Failed-Kustomization fixture — Flux equivalent of guestbook-broken-sync.
+# Mirrors that pattern: target a namespace that doesn't exist, so
+# kustomize-controller can't apply and parks the Kustomization in
+# Ready=False with reason=ReconciliationFailed. This is the primary
+# Flux failure-mode UI surface (Issues banner, FailureCard, OutOfSync +
+# Degraded badges), which had no demo coverage before.
+#
+# Why a missing namespace and not a YAML typo? A typo on a manifest in
+# the upstream repo would require maintaining a fork; "target a missing
+# namespace" is reproducible without external state and is what real
+# operators hit most often (renamed namespaces, fresh clusters without
+# bootstrap, RBAC stripping namespace).
+apiVersion: kustomize.toolkit.fluxcd.io/v1
+kind: Kustomization
+metadata:
+  name: podinfo-broken
+  namespace: flux-system
+spec:
+  interval: 1m
+  path: ./kustomize
+  prune: true
+  sourceRef:
+    kind: GitRepository
+    name: podinfo
+  # Namespace not created in 01-namespaces.yaml — apply fails.
+  targetNamespace: demo-flux-missing
+  timeout: 30s
+  wait: true

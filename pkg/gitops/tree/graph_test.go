@@ -30,9 +30,13 @@ func TestClassifyGitOpsKind(t *testing.T) {
 		{"argo AppProject", mk("argoproj.io/v1alpha1", "AppProject"), "argocd", "AppProject"},
 		{"flux Kustomization", mk("kustomize.toolkit.fluxcd.io/v1", "Kustomization"), "fluxcd", "Kustomization"},
 		{"flux HelmRelease", mk("helm.toolkit.fluxcd.io/v2", "HelmRelease"), "fluxcd", "HelmRelease"},
-		{"flux GitRepository", mk("source.toolkit.fluxcd.io/v1", "GitRepository"), "fluxcd", "GitRepository"},
-		{"flux OCIRepository", mk("source.toolkit.fluxcd.io/v1beta2", "OCIRepository"), "fluxcd", "OCIRepository"},
-		{"flux HelmRepository", mk("source.toolkit.fluxcd.io/v1", "HelmRepository"), "fluxcd", "HelmRepository"},
+		// Flux source CRs are NOT portals — they have no downstream tree and
+		// the standard resource drawer renders their spec/status cleanly.
+		// Routing them to a GitOps detail page yielded a degenerate one-node view.
+		{"flux GitRepository (not portal)", mk("source.toolkit.fluxcd.io/v1", "GitRepository"), "", ""},
+		{"flux OCIRepository (not portal)", mk("source.toolkit.fluxcd.io/v1beta2", "OCIRepository"), "", ""},
+		{"flux HelmRepository (not portal)", mk("source.toolkit.fluxcd.io/v1", "HelmRepository"), "", ""},
+		{"flux Bucket (not portal)", mk("source.toolkit.fluxcd.io/v1beta2", "Bucket"), "", ""},
 		// Negatives: same group but unfamiliar kind, and kinds that
 		// share a name with a GitOps CR but live elsewhere (e.g. core
 		// Service vs Knative Service). These must NOT classify.

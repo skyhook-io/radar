@@ -320,11 +320,13 @@ func classifyGitOpsKind(obj *unstructured.Unstructured) (tool, kind string) {
 		if k == "HelmRelease" {
 			return "fluxcd", k
 		}
-	case strings.HasPrefix(api, "source.toolkit.fluxcd.io/"):
-		switch k {
-		case "GitRepository", "OCIRepository", "HelmRepository", "Bucket", "HelmChart":
-			return "fluxcd", k
-		}
 	}
+	// Flux source CRs (GitRepository/HelmRepository/OCIRepository/Bucket/HelmChart)
+	// are deliberately NOT classified as portals. They have no managed-resource
+	// tree of their own — they're config objects (URL, ref, interval, auth)
+	// consumed by Kustomizations/HelmReleases. Routing clicks to a GitOps detail
+	// page yielded a degenerate single-node view with no navigation value. The
+	// standard resource drawer surfaces their spec/status (lastFetchedRevision,
+	// conditions) more usefully.
 	return "", ""
 }

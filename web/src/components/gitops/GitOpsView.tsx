@@ -1333,9 +1333,10 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
           <div className="flex flex-wrap items-center gap-2">
             {isArgoApp && (
               <>
-                <ActionButton label="Sync…" icon={RefreshCw} loading={argoSync.isPending} onClick={() => setSyncDialogOpen(true)} disabled={effectiveSuspended || terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} primary />
+                <ActionButton label="Sync…" description="Apply manifests from Git to the cluster. Opens an options dialog (prune, dry-run, revision)." icon={RefreshCw} loading={argoSync.isPending} onClick={() => setSyncDialogOpen(true)} disabled={effectiveSuspended || terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} primary />
                 <ActionButton
                   label="Refresh"
+                  description="Re-check Git for new commits and recompute sync status. Doesn't apply anything."
                   icon={RotateCw}
                   loading={argoRefresh.isPending && refreshKind === 'normal'}
                   onClick={() => {
@@ -1345,6 +1346,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                 />
                 <ActionButton
                   label="Hard refresh"
+                  description="Like Refresh, but also bypasses Argo's manifest cache (re-renders Helm/Kustomize)."
                   icon={RotateCw}
                   loading={argoRefresh.isPending && refreshKind === 'hard'}
                   onClick={() => {
@@ -1352,18 +1354,19 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                     argoRefresh.mutate({ namespace, name, hard: true })
                   }}
                 />
-                {isRunning && <ActionButton label="Terminate" icon={XCircle} loading={argoTerminate.isPending} onClick={() => argoTerminate.mutate({ namespace, name })} danger />}
+                {isRunning && <ActionButton label="Terminate" description="Cancel the in-progress sync operation." icon={XCircle} loading={argoTerminate.isPending} onClick={() => argoTerminate.mutate({ namespace, name })} danger />}
                 {argoAutoSyncEnabled
-                  ? <ActionButton label="Disable auto-sync" icon={Pause} loading={argoSuspend.isPending} onClick={() => argoSuspend.mutate({ namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />
-                  : <ActionButton label="Enable auto-sync" icon={Play} loading={argoResume.isPending} onClick={() => argoResume.mutate({ namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />}
+                  ? <ActionButton label="Disable auto-sync" description="Stop Argo from automatically syncing Git changes. Manual Sync still works." icon={Pause} loading={argoSuspend.isPending} onClick={() => argoSuspend.mutate({ namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />
+                  : <ActionButton label="Enable auto-sync" description="Re-enable automatic syncing of Git changes to the cluster." icon={Play} loading={argoResume.isPending} onClick={() => argoResume.mutate({ namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />}
               </>
             )}
             {isFlux && (
               <>
-                <ActionButton label="Reconcile" icon={RefreshCw} loading={fluxReconcile.isPending} onClick={() => fluxReconcile.mutate({ kind, namespace, name })} disabled={effectiveSuspended || terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} primary />
+                <ActionButton label="Reconcile" description="Tell Flux to reconcile this resource now: re-read its source, re-apply the manifests, update status. Skips waiting for the regular reconciliation interval." icon={RefreshCw} loading={fluxReconcile.isPending} onClick={() => fluxReconcile.mutate({ kind, namespace, name })} disabled={effectiveSuspended || terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} primary />
                 {isFluxWorkload && (
                   <ActionButton
                     label="Sync with source"
+                    description="Reconcile the upstream source CR (GitRepository/HelmRepository) first — re-fetching from Git or Helm — then reconcile this resource against the refreshed source. Useful right after pushing a commit when you don't want to wait for the source's poll interval."
                     icon={GitCommit}
                     loading={fluxSyncWithSource.isPending}
                     onClick={() => fluxSyncWithSource.mutate({ kind, namespace, name })}
@@ -1372,8 +1375,8 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                   />
                 )}
                 {status?.suspended
-                  ? <ActionButton label="Resume" icon={Play} loading={fluxResume.isPending} onClick={() => fluxResume.mutate({ kind, namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />
-                  : <ActionButton label="Suspend" icon={Pause} loading={fluxSuspend.isPending} onClick={() => fluxSuspend.mutate({ kind, namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />}
+                  ? <ActionButton label="Resume" description="Resume Flux reconciliation. Flux will start applying changes from the source again on its normal interval." icon={Play} loading={fluxResume.isPending} onClick={() => fluxResume.mutate({ kind, namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />
+                  : <ActionButton label="Suspend" description="Pause Flux reconciliation. The resource stays exactly as-is — new commits in the source won't be applied until you resume." icon={Pause} loading={fluxSuspend.isPending} onClick={() => fluxSuspend.mutate({ kind, namespace, name })} disabled={terminating} disabledReason={terminating ? terminatingActionTooltip : undefined} />}
               </>
             )}
           </div>
@@ -1951,9 +1954,10 @@ function isGitOpsDetailRef(ref: GitOpsTreeRef | GitOpsInsightRef): boolean {
   }
   if (ref.group === 'kustomize.toolkit.fluxcd.io') return kind === 'kustomization'
   if (ref.group === 'helm.toolkit.fluxcd.io') return kind === 'helmrelease'
-  if (ref.group === 'source.toolkit.fluxcd.io') {
-    return kind === 'gitrepository' || kind === 'helmrepository' || kind === 'helmchart' || kind === 'bucket' || kind === 'ocirepository'
-  }
+  // Flux source CRs (GitRepository/HelmRepository/OCIRepository/Bucket/HelmChart)
+  // are NOT GitOps detail-page CRs — they're config objects with spec/status
+  // but no managed-resource tree. The standard resource drawer renders them
+  // cleanly. Keep this in sync with pkg/gitops/tree/graph.go classifyGitOpsKind.
   return false
 }
 
@@ -2233,6 +2237,7 @@ function SummaryTile({ label, value, tone = 'neutral' }: { label: string; value:
 
 function ActionButton({
   label,
+  description,
   icon: Icon,
   loading,
   disabled,
@@ -2242,6 +2247,7 @@ function ActionButton({
   onClick,
 }: {
   label: string
+  description?: string
   icon: ComponentType<{ className?: string }>
   loading?: boolean
   disabled?: boolean
@@ -2261,7 +2267,7 @@ function ActionButton({
     : danger
       ? 'border border-red-500/40 bg-red-500/10 text-red-500 hover:bg-red-500/20'
       : 'border border-theme-border bg-theme-surface text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
-  const tooltip = disabled && disabledReason ? disabledReason : label
+  const tooltip = disabled && disabledReason ? disabledReason : (description || label)
   return (
     <Tooltip content={tooltip}>
       <button

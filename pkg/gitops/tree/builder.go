@@ -117,12 +117,24 @@ func (b *Builder) Build(ctx context.Context, kind, namespace, name, group string
 				continue
 			}
 			obj := b.getAllowedObject(ctx, res.Ref)
+			// Derive sync/health from the related CR's own Ready/Reconciling/
+			// Stalled conditions. Without this, source CRs render with empty
+			// Health and the frontend falls back to the generic topology
+			// builder — which derives Healthy for GitRepository but Unknown
+			// for HelmRepository, producing inconsistent badges. Computing
+			// from conditions here makes every Flux CR with Ready=True
+			// render Healthy uniformly.
+			sync, health := "", ""
+			if obj != nil {
+				s := rootStatus(obj, ToolFluxCD)
+				sync, health = s.Sync, s.Health
+			}
 			if live, ok := findTopoNode(topoByRef, res.Ref); ok {
-				nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, "", ""), obj), res.Data)
+				nodes[id] = mergeData(enrichNodeFromObject(nodeFromTopology(live, res.Ref, RoleDeclared, tool, sync, health), obj), res.Data)
 				topoIDByTreeID[id] = live.ID
 				treeIDByTopoID[live.ID] = id
 			} else if _, exists := nodes[id]; !exists {
-				nodes[id] = mergeData(enrichNodeFromObject(syntheticNode(res.Ref, RoleDeclared, tool, "", ""), obj), res.Data)
+				nodes[id] = mergeData(enrichNodeFromObject(syntheticNode(res.Ref, RoleDeclared, tool, sync, health), obj), res.Data)
 			} else {
 				nodes[id] = mergeData(nodes[id], res.Data)
 			}

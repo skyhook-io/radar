@@ -48,6 +48,8 @@ kubectl config use-context kind-radar-gitops-demo
 | `flux-system/podinfo-overlay` | Kustomization | Healthy Kustomization with `dependsOn: podinfo-base` (dependency chain) |
 | `flux-system/podinfo-suspended` | Kustomization | `spec.suspend: true` → Suspended chip + Resume button |
 | `flux-system/podinfo` | HelmRelease | Helm chart from HelmRepository → exercises helm-controller path + Sync-with-source verb |
+| `flux-system/podinfo-broken` | Kustomization | Stable Flux failure: `targetNamespace: demo-flux-missing` doesn't exist → kustomize-controller leaves it `Ready=False` (`ReconciliationFailed`). Flux equivalent of `guestbook-broken-sync`. |
+| `flux-system/podinfo-broken` | HelmRelease | Stable HelmRelease failure: `version: '>=99.0.0'` matches no chart → helm-controller leaves it `InstallFailed` with `spec.install.remediation.retries: 3`. Drives Helm-specific UI (`lastAttemptedRevision`, retry state). |
 | `flux-system/zombie-kustomization` | Kustomization | Stuck `Terminating` via fake finalizer (no controller scaled down). Drives lifecycle severity ramp + finalizer attribution + `[Terminating]` chip + Audit `stuckTerminating`. Severity tier ramps with cluster age: info → warning at 5min → alert at 30min. |
 
 ### State coverage matrix

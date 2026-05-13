@@ -810,12 +810,21 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
             </div>
           )}
         </div>
-        {/* Honest disclaimer about diff scope. Argo's CRD doesn't expose
-            per-resource desired-vs-live diffs — those are computed on
-            demand by the Argo API server, which Radar doesn't call. */}
+        {/* Honest disclaimer about diff scope. Neither Argo nor Flux exposes
+            per-resource desired-vs-live diffs on the CRD — they're computed
+            on demand by their respective servers/CLIs, which Radar doesn't
+            call. */}
         {sortedChanges.length > 0 && (
           <div className="border-b border-theme-border bg-theme-base/40 px-4 py-2 text-[11px] text-theme-text-tertiary">
-            Radar reads each resource's drift status from the controller. For a line-by-line diff, use the Argo CD UI or run <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono text-[10px]">argocd app diff {insight.summary.name}</code>.
+            Radar reads each resource's drift status from the controller. For a line-by-line diff, {insight.summary.tool === 'fluxcd' ? (
+              insight.summary.kind === 'HelmRelease' ? (
+                <>run <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono text-[10px]">helm diff upgrade {insight.summary.name} &lt;chart&gt;</code> (requires the helm-diff plugin).</>
+              ) : (
+                <>run <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono text-[10px]">flux diff kustomization {insight.summary.name} --path &lt;local-manifests&gt;</code>.</>
+              )
+            ) : (
+              <>use the Argo CD UI or run <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono text-[10px]">argocd app diff {insight.summary.name}</code>.</>
+            )}
           </div>
         )}
         {sortedChanges.length === 0 ? (
@@ -1051,10 +1060,12 @@ function ChangeRow({
           )}
         >
           <div className="flex items-baseline gap-2">
-            {hasInlineDetail && (
+            {hasInlineDetail ? (
               expanded
                 ? <ChevronDown className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
                 : <ChevronRight className="h-3.5 w-3.5 shrink-0 text-theme-text-tertiary" />
+            ) : (
+              <span aria-hidden="true" className="h-3.5 w-3.5 shrink-0" />
             )}
             {step !== undefined && (
               <Tooltip content={`Sync plan step ${step}`} delay={200} wrapperClassName="shrink-0">
