@@ -169,12 +169,20 @@ export function useDock() {
  * Reserved vertical space at the bottom of the viewport for the dock, in px.
  * Drawers and main-content spacers subtract this so they don't sit behind the dock.
  * Maximized returns 0 — the dock covers everything by design.
+ *
+ * Safe to call without a DockProvider ancestor (returns 0) — the shared
+ * @skyhook/k8s-ui package exports drawers that may be consumed without a dock.
  */
 export function useDockReservedHeight(): number {
-  const { tabs, isExpanded, isMaximized, height } = useDock()
+  const context = useContext(DockContext)
+  if (!context) return 0
+  const { tabs, isExpanded, isMaximized, height } = context
   if (tabs.length === 0) return 0
-  if (isMaximized) return 0
+  // Order matches BottomDock's effectiveHeight: collapsed tab bar wins over
+  // maximized so the (maximized=true, expanded=false) state — reachable by
+  // Cmd+J / Ctrl+` while maximized — still reserves the 36px tab bar height.
   if (!isExpanded) return DOCK_COLLAPSED_HEIGHT
+  if (isMaximized) return 0
   return height
 }
 
