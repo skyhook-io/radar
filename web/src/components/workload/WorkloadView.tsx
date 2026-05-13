@@ -23,7 +23,7 @@ import {
   fetchJSON,
 } from '../../api/client'
 import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
-import { useResourceAudit } from '../../api/client'
+import { useResourceAudit, useResources } from '../../api/client'
 import { AuditAlerts } from '@skyhook-io/k8s-ui'
 import { WorkloadLogsViewer } from '../logs/WorkloadLogsViewer'
 import { LogsViewer } from '../logs/LogsViewer'
@@ -395,7 +395,10 @@ export function WorkloadView({
       rendererOverrides={rendererOverrides}
       resolvedEnvFrom={resolvedEnvFrom}
       renderOverviewExtra={({ kind: k, namespace: ns, name: n }) => (
-        <AuditSection kind={k} namespace={ns} name={n} />
+        <>
+          <AuditSection kind={k} namespace={ns} name={n} />
+          <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
+        </>
       )}
       onOpenGitOpsResource={handleOpenGitOpsResource}
       onNavigateGitOpsPath={handleNavigateGitOpsPath}
@@ -569,3 +572,85 @@ function AuditSection({ kind, namespace, name }: { kind: string; namespace: stri
   if (!findings || findings.length === 0) return null
   return <AuditAlerts findings={findings} onViewAll={() => navigate('/audit')} />
 }
+
+// FluxSourceConsumersSection lists the reconcilers (Kustomization, HelmRelease)
+// that reference this Flux source CR — the inverse of `spec.sourceRef`. Renders
+// only when the focused resource is a Flux source kind; otherwise null. Sources
+// can have many consumers (one repo feeding multiple apps), so this answers
+// "if I edit this source, what gets affected on the next reconcile?".
+//
+// Filtering happens client-side off the namespaced reconciler lists — these
+// are typically small (tens, not thousands) and the dynamic informer cache
+// makes the request cheap. If a cluster ever has thousands of HelmReleases,
+// a dedicated /api/gitops/consumers endpoint would be the right move; today
+// it'd be premature.
+function FluxSourceConsumersSection({ kind, namespace, name }: { kind: string; namespace: string; name: string }) {
+  const navigate = useNavigate()
+  // The inner WorkloadView de-pluralizes the URL's plural form, which gives
+  // "Gitrepository" (single-uppercase) rather than the wire-correct
+  // "GitRepository" — so we match lowercase. spec.sourceRef.kind on consumers
+  // is always wire-correct, so we look that up separately.
+  const sourceKind = FLUX_SOURCE_KIND_BY_LOWER.get(kind.toLowerCase()) ?? null
+  // Only fetch the reconciler lists when the focused resource is actually a
+  // Flux source — otherwise we'd burn two API calls per drawer open.
+  const { data: kustomizations } = useResources<any>('kustomizations', undefined, sourceKind ? 'kustomize.toolkit.fluxcd.io' : undefined)
+  const { data: helmReleases } = useResources<any>('helmreleases', undefined, sourceKind ? 'helm.toolkit.fluxcd.io' : undefined)
+  if (!sourceKind) return null
+
+  const consumers: Array<{ kind: 'Kustomization' | 'HelmRelease'; namespace: string; name: string; plural: string }> = []
+  for (const k of kustomizations ?? []) {
+    const ref = k?.spec?.sourceRef ?? {}
+    const refNs = ref.namespace || k?.metadata?.namespace
+    if (ref.kind === sourceKind && ref.name === name && refNs === namespace) {
+      consumers.push({ kind: 'Kustomization', namespace: k.metadata.namespace, name: k.metadata.name, plural: 'kustomizations' })
+    }
+  }
+  for (const h of helmReleases ?? []) {
+    const ref = h?.spec?.chart?.spec?.sourceRef ?? {}
+    const refNs = ref.namespace || h?.metadata?.namespace
+    if (ref.kind === sourceKind && ref.name === name && refNs === namespace) {
+      consumers.push({ kind: 'HelmRelease', namespace: h.metadata.namespace, name: h.metadata.name, plural: 'helmreleases' })
+    }
+  }
+
+  if (consumers.length === 0) {
+    return (
+      <div className="rounded-lg border border-theme-border bg-theme-elevated/40 p-3 text-xs text-theme-text-tertiary">
+        Consumed by — no Kustomization or HelmRelease references this source.
+      </div>
+    )
+  }
+
+  return (
+    <div className="rounded-lg border border-theme-border bg-theme-elevated/40 p-3">
+      <h3 className="mb-2 text-xs font-medium text-theme-text-secondary">
+        Consumed by ({consumers.length})
+      </h3>
+      <div className="flex flex-wrap gap-1.5">
+        {consumers.map((c) => (
+          <button
+            key={`${c.kind}/${c.namespace}/${c.name}`}
+            onClick={() => navigate(`/gitops/detail/${c.plural}/${encodeURIComponent(c.namespace)}/${encodeURIComponent(c.name)}`)}
+            className="inline-flex items-center gap-1.5 rounded border border-theme-border bg-theme-surface px-1.5 py-0.5 text-[11px] text-theme-text-secondary hover:border-skyhook-500/60 hover:text-skyhook-500 transition-colors"
+            title={`${c.kind} ${c.namespace}/${c.name}`}
+          >
+            <span className="text-theme-text-tertiary">{c.kind === 'HelmRelease' ? 'HR' : 'K'}</span>
+            <span>{c.namespace}/{c.name}</span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// FLUX_SOURCE_KIND_BY_LOWER maps lowercase kind (what the inner WorkloadView
+// produces via its plural-to-singular fallback) to the wire-correct
+// PascalCase form that consumers carry in spec.sourceRef.kind. HelmChart is
+// intentionally absent — it's an auto-generated internal CR, not something
+// users create or point reconcilers at directly.
+const FLUX_SOURCE_KIND_BY_LOWER = new Map<string, string>([
+  ['gitrepository', 'GitRepository'],
+  ['helmrepository', 'HelmRepository'],
+  ['ocirepository', 'OCIRepository'],
+  ['bucket', 'Bucket'],
+])

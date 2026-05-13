@@ -187,15 +187,33 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
       const hasApplications = hasAPIResource(apiResources, 'applications', 'argoproj.io')
       const hasKustomizations = hasAPIResource(apiResources, 'kustomizations', 'kustomize.toolkit.fluxcd.io')
       const hasHelmReleases = hasAPIResource(apiResources, 'helmreleases', 'helm.toolkit.fluxcd.io')
-      const [applications, kustomizations, helmReleases] = await Promise.all([
+      // Flux source CRs carry the actual URL. Reconcilers (Kustomization,
+      // HelmRelease) only reference the source by name. We list sources
+      // alongside the reconcilers and build one lookup map so the fleet's
+      // Source column can render the URL (e.g. github.com/owner/repo)
+      // instead of the opaque CR name (e.g. "GitRepository podinfo").
+      // Listing the sources cluster-wide is cheap — they're cached by the
+      // dynamic informer and there are few per cluster — but skip the
+      // request entirely when no Flux CRDs are installed.
+      const hasFluxSources = hasKustomizations || hasHelmReleases
+      const hasGitRepos = hasFluxSources && hasAPIResource(apiResources, 'gitrepositories', 'source.toolkit.fluxcd.io')
+      const hasHelmRepos = hasFluxSources && hasAPIResource(apiResources, 'helmrepositories', 'source.toolkit.fluxcd.io')
+      const hasOCIRepos = hasFluxSources && hasAPIResource(apiResources, 'ocirepositories', 'source.toolkit.fluxcd.io')
+      const hasBuckets = hasFluxSources && hasAPIResource(apiResources, 'buckets', 'source.toolkit.fluxcd.io')
+      const [applications, kustomizations, helmReleases, gitRepos, helmRepos, ociRepos, buckets] = await Promise.all([
         hasApplications ? fetchResourceList('applications', 'argoproj.io', namespacesParam) : Promise.resolve([]),
         hasKustomizations ? fetchResourceList('kustomizations', 'kustomize.toolkit.fluxcd.io', namespacesParam) : Promise.resolve([]),
         hasHelmReleases ? fetchResourceList('helmreleases', 'helm.toolkit.fluxcd.io', namespacesParam) : Promise.resolve([]),
+        hasGitRepos ? fetchResourceList('gitrepositories', 'source.toolkit.fluxcd.io', '') : Promise.resolve([]),
+        hasHelmRepos ? fetchResourceList('helmrepositories', 'source.toolkit.fluxcd.io', '') : Promise.resolve([]),
+        hasOCIRepos ? fetchResourceList('ocirepositories', 'source.toolkit.fluxcd.io', '') : Promise.resolve([]),
+        hasBuckets ? fetchResourceList('buckets', 'source.toolkit.fluxcd.io', '') : Promise.resolve([]),
       ])
+      const fluxSourceUrls = buildFluxSourceUrlMap([...gitRepos, ...helmRepos, ...ociRepos, ...buckets])
       return [
         ...applications.map((r) => normalizeArgoApplication(r)),
-        ...kustomizations.map((r) => normalizeFluxKustomization(r)),
-        ...helmReleases.map((r) => normalizeFluxHelmRelease(r)),
+        ...kustomizations.map((r) => normalizeFluxKustomization(r, fluxSourceUrls)),
+        ...helmReleases.map((r) => normalizeFluxHelmRelease(r, fluxSourceUrls)),
       ]
     },
     enabled: !apiResourcesLoading,
@@ -2015,9 +2033,10 @@ function normalizeArgoApplication(resource: any): GitOpsRow {
   }
 }
 
-function normalizeFluxKustomization(resource: any): GitOpsRow {
+function normalizeFluxKustomization(resource: any, fluxSourceUrls?: Map<string, string>): GitOpsRow {
   const status = getGitOpsStatus('kustomizations', resource)
   const sourceRef = resource.spec?.sourceRef ?? {}
+  const resolvedRepo = resolveFluxSourceRepo(sourceRef, resource.metadata?.namespace, fluxSourceUrls)
   return {
     id: `kustomize.toolkit.fluxcd.io/kustomizations/${resource.metadata?.namespace ?? ''}/${resource.metadata?.name ?? ''}`,
     mode: 'applications',
@@ -2032,7 +2051,7 @@ function normalizeFluxKustomization(resource: any): GitOpsRow {
     sync: status?.sync ?? 'Unknown',
     health: resource.spec?.suspend ? 'Suspended' : (status?.health ?? 'Unknown'),
     suspended: resource.spec?.suspend === true,
-    repository: [sourceRef.kind, sourceRef.namespace ? `${sourceRef.namespace}/` : '', sourceRef.name].filter(Boolean).join(' '),
+    repository: resolvedRepo,
     targetRevision: resource.status?.lastAppliedRevision ?? resource.status?.lastAttemptedRevision ?? '',
     path: resource.spec?.path ?? '',
     chart: '',
@@ -2047,10 +2066,11 @@ function normalizeFluxKustomization(resource: any): GitOpsRow {
   }
 }
 
-function normalizeFluxHelmRelease(resource: any): GitOpsRow {
+function normalizeFluxHelmRelease(resource: any, fluxSourceUrls?: Map<string, string>): GitOpsRow {
   const status = getGitOpsStatus('helmreleases', resource)
   const chartSpec = resource.spec?.chart?.spec ?? {}
   const sourceRef = chartSpec.sourceRef ?? {}
+  const resolvedRepo = resolveFluxSourceRepo(sourceRef, resource.metadata?.namespace, fluxSourceUrls)
   return {
     id: `helm.toolkit.fluxcd.io/helmreleases/${resource.metadata?.namespace ?? ''}/${resource.metadata?.name ?? ''}`,
     mode: 'applications',
@@ -2065,7 +2085,7 @@ function normalizeFluxHelmRelease(resource: any): GitOpsRow {
     sync: status?.sync ?? 'Unknown',
     health: resource.spec?.suspend ? 'Suspended' : (status?.health ?? 'Unknown'),
     suspended: resource.spec?.suspend === true,
-    repository: [sourceRef.kind, sourceRef.namespace ? `${sourceRef.namespace}/` : '', sourceRef.name].filter(Boolean).join(' '),
+    repository: resolvedRepo,
     targetRevision: chartSpec.version ?? resource.status?.lastAttemptedRevision ?? '',
     path: '',
     chart: chartSpec.chart ?? '',
@@ -2078,6 +2098,40 @@ function normalizeFluxHelmRelease(resource: any): GitOpsRow {
     terminationStartedAt: terminationStartedAt(resource),
     raw: resource,
   }
+}
+
+// buildFluxSourceUrlMap indexes Flux source CRs (GitRepository, HelmRepository,
+// OCIRepository, Bucket) by "<kind>/<namespace>/<name>" so reconciler row
+// normalization can resolve `spec.sourceRef` to the source's actual URL.
+// Without this, the fleet "Source" column reads "GitRepository podinfo"
+// (the CR's name) — same name as could appear elsewhere; useless for the
+// "where does this app live?" scan. Argo Application rows already show the
+// URL directly because Argo bakes it into the Application spec.
+function buildFluxSourceUrlMap(sources: any[]): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const s of sources) {
+    const kind = s?.kind
+    const name = s?.metadata?.name
+    const namespace = s?.metadata?.namespace
+    const url = s?.spec?.url
+    if (!kind || !name || !namespace || !url) continue
+    out.set(`${kind}/${namespace}/${name}`, url)
+  }
+  return out
+}
+
+// resolveFluxSourceRepo returns the source's URL when the source is in cache
+// and we can resolve it. Falls back to the legacy "Kind name" string so we
+// never show worse information than before. defaultNamespace handles the
+// common case where sourceRef.namespace is omitted (defaults to the
+// reconciler's own namespace per Flux convention).
+function resolveFluxSourceRepo(sourceRef: any, defaultNamespace: string | undefined, urlMap: Map<string, string> | undefined): string {
+  const legacy = [sourceRef?.kind, sourceRef?.namespace ? `${sourceRef.namespace}/` : '', sourceRef?.name].filter(Boolean).join(' ')
+  if (!urlMap || !sourceRef?.kind || !sourceRef?.name) return legacy
+  const ns = sourceRef.namespace || defaultNamespace || ''
+  if (!ns) return legacy
+  const url = urlMap.get(`${sourceRef.kind}/${ns}/${sourceRef.name}`)
+  return url || legacy
 }
 
 // isTerminating reads metadata.deletionTimestamp from a raw K8s object.

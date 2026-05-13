@@ -1,9 +1,8 @@
 import { useState, useCallback } from 'react'
 import { useAudit, useAuditSettings, useUpdateAuditSettings } from '../../api/client'
 import type { SelectedResource } from '../../types'
-import { AuditFindingsTable, PaneLoader, gitOpsRouteForKind } from '@skyhook-io/k8s-ui'
+import { AuditFindingsTable, PaneLoader } from '@skyhook-io/k8s-ui'
 import { ArrowLeft, ClipboardCheck, Settings } from 'lucide-react'
-import { useNavigate } from 'react-router-dom'
 import { AuditSettingsDialog } from './AuditSettingsDialog'
 
 interface AuditViewProps {
@@ -13,7 +12,6 @@ interface AuditViewProps {
 }
 
 export function AuditView({ namespaces, onBack, onNavigateToResource }: AuditViewProps) {
-  const navigate = useNavigate()
   const { data, isLoading, error } = useAudit(namespaces)
   const { data: auditSettings } = useAuditSettings()
   const updateSettings = useUpdateAuditSettings()
@@ -104,18 +102,9 @@ export function AuditView({ namespaces, onBack, onNavigateToResource }: AuditVie
       <AuditFindingsTable
         groups={data.groups}
         checks={data.checks}
-        onResourceClick={(kind, namespace, name) => {
-          // GitOps CRs (Application/Kustomization/HelmRelease/etc.) have a
-          // dedicated detail page with tree + insights + ops that the resource
-          // drawer can't reproduce. Route there when the finding subjects one
-          // of those kinds; everything else falls back to the drawer.
-          const gitOpsPath = gitOpsRouteForKind(kind, namespace, name)
-          if (gitOpsPath) {
-            navigate(gitOpsPath)
-            return
-          }
+        onResourceClick={(kind, namespace, name) =>
           onNavigateToResource({ kind, namespace, name })
-        }}
+        }
         onHideCheck={hideCheck}
         onHideCategory={hideCategory}
         onHideNamespace={hideNamespace}
