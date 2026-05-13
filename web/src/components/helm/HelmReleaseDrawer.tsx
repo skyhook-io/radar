@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
-import { PaneLoader } from '@skyhook-io/k8s-ui'
+import { PaneLoader, useDockReservedHeight } from '@skyhook-io/k8s-ui'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
@@ -279,6 +279,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   }
 
   const headerHeight = 49
+  const dockInset = useDockReservedHeight()
 
   const tabs: { id: TabId; label: string; icon: typeof Package }[] = [
     { id: 'overview', label: 'Overview', icon: Package },
@@ -301,7 +302,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
         TRANSITION_DRAWER,
         isOpen ? 'translate-x-0 opacity-100' : 'translate-x-full opacity-0'
       )}
-      style={{ width: drawerWidth, top: headerHeight, height: `calc(100vh - ${headerHeight}px)` }}
+      style={{ width: drawerWidth, top: headerHeight, height: `calc(100vh - ${headerHeight}px - ${dockInset}px)` }}
     >
       {/* Resize handle */}
       <div

@@ -18,7 +18,7 @@ import { CostView } from './components/cost/CostView'
 import { AuditView } from './components/audit/AuditView'
 import { HelmReleaseDrawer } from './components/helm/HelmReleaseDrawer'
 import { PortForwardProvider, PortForwardIndicator, PortForwardPanel } from './components/portforward/PortForwardManager'
-import { DockProvider, BottomDock, useDock, useOpenLocalTerminal } from './components/dock'
+import { DockProvider, BottomDock, useDock, useDockReservedHeight, useOpenLocalTerminal } from './components/dock'
 import { DURATION_DOCK } from '@skyhook-io/k8s-ui/utils/animation'
 import { ContextSwitcher } from './components/ContextSwitcher'
 import { NamespaceSwitcher, type NamespaceSwitcherHandle } from './components/NamespaceSwitcher'
@@ -1539,11 +1539,20 @@ function AppInner() {
 
 // Spacer component that adds padding when dock is open
 function DockSpacer() {
-  const { tabs, isExpanded } = useDock()
+  const { tabs, isResizing } = useDock()
+  const dockInset = useDockReservedHeight()
   const location = useLocation()
   // Traffic view manages its own layout — spacer would break its flex sizing
   if (tabs.length === 0 || location.pathname === '/traffic') return null
-  return <div className="shrink-0" style={{ height: isExpanded ? 300 : 36, transition: `height ${DURATION_DOCK}ms cubic-bezier(0.4, 0, 0.2, 1)` }} />
+  return (
+    <div
+      className="shrink-0"
+      style={{
+        height: dockInset,
+        transition: isResizing ? 'none' : `height ${DURATION_DOCK}ms cubic-bezier(0.4, 0, 0.2, 1)`,
+      }}
+    />
+  )
 }
 
 // Floating action buttons that position themselves above the dock

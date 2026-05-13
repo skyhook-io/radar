@@ -1,4 +1,4 @@
-import { useState, useCallback, useRef, useEffect, ReactNode } from 'react'
+import { useCallback, useRef, useEffect, ReactNode } from 'react'
 import { DURATION_DOCK } from '../../utils/animation'
 import { X, ChevronDown, ChevronUp, Terminal, FileText, Trash2, Layers, Maximize2, Minimize2, Activity } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -6,7 +6,6 @@ import { useDock, DockTab } from './DockContext'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 
 const MIN_HEIGHT = 200
-const DEFAULT_HEIGHT = 400
 const MAX_HEIGHT_RATIO = 0.7
 const MAXIMIZED_TOP_OFFSET = 48
 
@@ -21,28 +20,27 @@ interface BottomDockProps {
 }
 
 export function BottomDock({ renderTabContent, renderTabHeaderExtra, leftOffset: leftOffsetProp, defaultHeight }: BottomDockProps) {
-  const { tabs, activeTabId, isExpanded, leftOffset: leftOffsetCtx, removeTab, setActiveTab, toggleExpanded, closeAll } = useDock()
+  const { tabs, activeTabId, isExpanded, leftOffset: leftOffsetCtx, height, isMaximized, isResizing, setHeight, setMaximized, setResizing, removeTab, setActiveTab, toggleExpanded, closeAll } = useDock()
   const leftOffset = leftOffsetProp ?? leftOffsetCtx
-  const [height, setHeight] = useState(defaultHeight ?? DEFAULT_HEIGHT)
   const prevDefaultHeight = useRef(defaultHeight)
   useEffect(() => {
     if (defaultHeight != null && defaultHeight !== prevDefaultHeight.current) {
       setHeight(defaultHeight)
     }
     prevDefaultHeight.current = defaultHeight
-  }, [defaultHeight])
-  const [isMaximized, setIsMaximized] = useState(false)
+  }, [defaultHeight, setHeight])
   const isDragging = useRef(false)
   const startY = useRef(0)
   const startHeight = useRef(0)
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     isDragging.current = true
+    setResizing(true)
     startY.current = e.clientY
     startHeight.current = height
     document.body.style.cursor = 'ns-resize'
     document.body.style.userSelect = 'none'
-  }, [height])
+  }, [height, setResizing])
 
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
@@ -53,7 +51,10 @@ export function BottomDock({ renderTabContent, renderTabHeaderExtra, leftOffset:
     }
 
     const handleMouseUp = () => {
-      isDragging.current = false
+      if (isDragging.current) {
+        isDragging.current = false
+        setResizing(false)
+      }
       document.body.style.cursor = ''
       document.body.style.userSelect = ''
     }
@@ -65,20 +66,20 @@ export function BottomDock({ renderTabContent, renderTabHeaderExtra, leftOffset:
       document.removeEventListener('mousemove', handleMouseMove)
       document.removeEventListener('mouseup', handleMouseUp)
     }
-  }, [])
+  }, [setHeight, setResizing])
 
   const toggleMaximized = useCallback(() => {
-    setIsMaximized(prev => !prev)
-  }, [])
+    setMaximized(!isMaximized)
+  }, [isMaximized, setMaximized])
 
   useEffect(() => {
     if (!isMaximized) return
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') setIsMaximized(false)
+      if (e.key === 'Escape') setMaximized(false)
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [isMaximized])
+  }, [isMaximized, setMaximized])
 
   useRegisterShortcuts([
     {
@@ -110,7 +111,13 @@ export function BottomDock({ renderTabContent, renderTabHeaderExtra, leftOffset:
   return (
     <div
       className="absolute bottom-0 right-0 bg-theme-base border-t border-theme-border flex flex-col z-40 overflow-hidden"
-      style={{ height: effectiveHeight, left: leftOffset, transition: `height ${DURATION_DOCK}ms cubic-bezier(0.4, 0, 0.2, 1), left ${DURATION_DOCK}ms ease-out` }}
+      style={{
+        height: effectiveHeight,
+        left: leftOffset,
+        transition: isResizing
+          ? `left ${DURATION_DOCK}ms ease-out`
+          : `height ${DURATION_DOCK}ms cubic-bezier(0.4, 0, 0.2, 1), left ${DURATION_DOCK}ms ease-out`,
+      }}
     >
       {isExpanded && !isMaximized && (
         <div
@@ -165,7 +172,7 @@ export function BottomDock({ renderTabContent, renderTabHeaderExtra, leftOffset:
             </button>
           )}
           <button
-            onClick={() => { if (isMaximized) setIsMaximized(false); toggleExpanded() }}
+            onClick={() => { if (isMaximized) setMaximized(false); toggleExpanded() }}
             className="p-1 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded"
             title={isExpanded ? 'Collapse' : 'Expand'}
           >

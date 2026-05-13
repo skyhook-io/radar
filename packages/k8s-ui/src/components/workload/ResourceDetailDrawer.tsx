@@ -2,6 +2,7 @@ import { useState, useCallback, useEffect, useRef, type ReactNode } from 'react'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { clsx } from 'clsx'
 import type { SelectedResource } from '../../types'
+import { useDockReservedHeight } from '../dock/DockContext'
 
 interface ResourceDetailDrawerProps {
   resource: SelectedResource
@@ -111,6 +112,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
   }, [expanded, onNavigateToResource, onNavigate])
 
   const headerHeight = headerHeightProp ?? 49
+  const dockInset = useDockReservedHeight()
 
   return (
     <div
@@ -125,7 +127,7 @@ export function ResourceDetailDrawer({ resource, onClose, onNavigate, initialTab
       style={{
         width: expanded ? `calc(100% - ${leftOffset}px)` : drawerWidth,
         top: headerHeight,
-        height: `calc(100% - ${headerHeight}px)`,
+        height: `calc(100% - ${headerHeight}px - ${dockInset}px)`,
         // Collapse is instant — no animation, content and width snap together.
         // Expand + slide-in/out animate via TRANSITION_DRAWER class.
         ...(isCollapsing && { transition: 'none' }),
