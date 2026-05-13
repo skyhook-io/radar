@@ -57,12 +57,16 @@ export function WorkloadViewRoute({ onNavigateToResource }: WorkloadViewRoutePro
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
-  // Parse /workload/:kind/:ns/:name from pathname
+  // Parse /workload/:kind/:ns/:name from pathname. Segments are URL-encoded by
+  // buildWorkloadPath; names can also contain literal slashes (e.g. some CRD names),
+  // which survive encoding as %2F and reassemble correctly here.
   const parts = location.pathname.replace(/^\//, '').split('/')
-  // parts[0] = 'workload', parts[1] = kind, parts[2] = ns, parts[3+] = name (may contain slashes)
-  const kind = parts[1] || ''
-  const namespace = parts[2] || ''
-  const name = parts.slice(3).join('/') || ''
+  const decode = (s: string | undefined) => {
+    try { return s ? decodeURIComponent(s) : '' } catch { return s || '' }
+  }
+  const kind = decode(parts[1])
+  const namespace = decode(parts[2])
+  const name = parts.slice(3).map(decode).join('/')
   const group = searchParams.get('apiGroup') || ''
 
   if (!kind || !namespace || !name) {
