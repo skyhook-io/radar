@@ -30,6 +30,7 @@ import (
 	"helm.sh/helm/v3/pkg/releaseutil"
 	"helm.sh/helm/v3/pkg/repo"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/cli-runtime/pkg/genericclioptions"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -300,9 +301,20 @@ func listReleasesWith(actionConfig *action.Configuration, namespace, username st
 			storageNamespaces[releaseStorageKey(rel)] = namespace
 		}
 	}
+	fluxMap := fluxHelmReleaseMap(context.Background())
 	result := make([]HelmRelease, 0, len(releases))
 	for _, rel := range releases {
-		result = append(result, toHelmRelease(rel, storageNamespaces[releaseStorageKey(rel)]))
+		storageNs := storageNamespaces[releaseStorageKey(rel)]
+		hr := toHelmRelease(rel, storageNs)
+		// Match against the release's *actual* storage namespace (the
+		// un-normalized value), since toHelmRelease zeroes StorageNamespace
+		// when it equals Namespace for compactness.
+		effectiveStorage := storageNs
+		if effectiveStorage == "" {
+			effectiveStorage = rel.Namespace
+		}
+		hr.ManagedByFluxHelmRelease = applyFluxOwnership(rel.Name, effectiveStorage, fluxMap)
+		result = append(result, hr)
 	}
 
 	// Sort by namespace, then name
@@ -401,9 +413,11 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 	if detail.StorageNamespace == detail.Namespace {
 		detail.StorageNamespace = ""
 	}
-	if name, ns := rel.Labels["helm.toolkit.fluxcd.io/name"], rel.Labels["helm.toolkit.fluxcd.io/namespace"]; name != "" && ns != "" {
-		detail.ManagedByFluxHelmRelease = ns + "/" + name
+	effectiveStorage := namespace
+	if effectiveStorage == "" {
+		effectiveStorage = rel.Namespace
 	}
+	detail.ManagedByFluxHelmRelease = applyFluxOwnership(rel.Name, effectiveStorage, fluxHelmReleaseMap(context.Background()))
 
 	return detail, nil
 }
@@ -563,16 +577,63 @@ func toHelmRelease(rel *release.Release, storageNamespace string) HelmRelease {
 	hr.HealthIssue = issue
 	hr.HealthSummary = summary
 
-	// Flux's helm-controller stamps every release Secret with these labels.
-	// When present, the release isn't actually under the user's direct
-	// control — helm upgrade/rollback here would get reverted at the next
-	// reconcile. Surface the owning HelmRelease CR so the UI can warn and
-	// link to the GitOps tab.
-	if name, ns := rel.Labels["helm.toolkit.fluxcd.io/name"], rel.Labels["helm.toolkit.fluxcd.io/namespace"]; name != "" && ns != "" {
-		hr.ManagedByFluxHelmRelease = ns + "/" + name
-	}
-
 	return hr
+}
+
+// fluxHelmReleaseMap returns a map keyed by "<storageNamespace>/<releaseName>"
+// to "<hrNamespace>/<hrName>" for every Flux HelmRelease CR in the cluster.
+// Helm releases that match a key were installed by Flux's helm-controller and
+// shouldn't be helm-upgraded directly — the next Flux reconcile would revert
+// the change. Built from the dynamic informer cache so this is a constant-time
+// lookup per release.
+//
+// Effective storageNamespace: defaults to spec.targetNamespace if set, else
+// the HelmRelease's own metadata.namespace. Effective releaseName: defaults
+// to the HelmRelease's metadata.name. Both match helm-controller's behavior.
+//
+// Returns an empty map (not an error) when the cluster has no Flux CRDs or
+// the cache lookup fails — the badge is best-effort, not load-bearing.
+func fluxHelmReleaseMap(ctx context.Context) map[string]string {
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return nil
+	}
+	hrs, err := cache.ListDynamicWithGroup(ctx, "HelmRelease", "", "helm.toolkit.fluxcd.io")
+	if err != nil || len(hrs) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(hrs))
+	for _, hr := range hrs {
+		spec, _, _ := unstructured.NestedMap(hr.Object, "spec")
+		releaseName, _ := spec["releaseName"].(string)
+		if releaseName == "" {
+			releaseName = hr.GetName()
+		}
+		// helm-controller defaults storageNamespace to the HelmRelease's
+		// own namespace, NOT spec.targetNamespace (the latter is where the
+		// chart's resources go; the former is where Helm's release Secret
+		// lives). The fixture's HelmRelease in flux-system targeting
+		// demo-flux-helm stores its release Secret in flux-system, confirming
+		// this default.
+		storageNs, _ := spec["storageNamespace"].(string)
+		if storageNs == "" {
+			storageNs = hr.GetNamespace()
+		}
+		out[storageNs+"/"+releaseName] = hr.GetNamespace() + "/" + hr.GetName()
+	}
+	return out
+}
+
+// applyFluxOwnership stamps ManagedByFluxHelmRelease on a HelmRelease (or
+// HelmReleaseDetail via the type-conversion call sites). storageNamespace is
+// the release's actual storage namespace (callers normalize when it equals
+// the release namespace — pass the un-normalized value here so the lookup
+// matches helm-controller's map).
+func applyFluxOwnership(name, storageNamespace string, fluxMap map[string]string) string {
+	if fluxMap == nil {
+		return ""
+	}
+	return fluxMap[storageNamespace+"/"+name]
 }
 
 func helmReleaseStorageNamespaces(username string, groups []string) (map[string]string, error) {
