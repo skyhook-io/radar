@@ -734,20 +734,19 @@ func parseManifestResources(manifest, defaultNamespace string) []OwnedResource {
 	manifests := releaseutil.SplitManifests(manifest)
 
 	for _, m := range manifests {
-		// Simple parsing - look for kind, apiVersion, name, and namespace
 		lines := strings.Split(m, "\n")
 		var kind, apiVersion, name, namespace string
 
+		// Take the first occurrence of each top-level field; nested specs
+		// (e.g. spec.template) can repeat the same keys with different values.
 		for _, line := range lines {
 			line = strings.TrimSpace(line)
-			if after, ok := strings.CutPrefix(line, "kind:"); ok {
-				kind = strings.TrimSpace(after)
-			} else if after, ok := strings.CutPrefix(line, "apiVersion:"); ok {
+			if after, ok := strings.CutPrefix(line, "kind:"); ok && kind == "" {
+				kind = strings.Trim(strings.TrimSpace(after), `"'`)
+			} else if after, ok := strings.CutPrefix(line, "apiVersion:"); ok && apiVersion == "" {
 				apiVersion = strings.Trim(strings.TrimSpace(after), `"'`)
 			} else if strings.HasPrefix(line, "name:") && name == "" {
-				// Only take first name (metadata.name, not container names etc)
 				name = strings.TrimSpace(strings.TrimPrefix(line, "name:"))
-				// Remove quotes if present
 				name = strings.Trim(name, `"'`)
 			} else if strings.HasPrefix(line, "namespace:") && namespace == "" {
 				namespace = strings.TrimSpace(strings.TrimPrefix(line, "namespace:"))

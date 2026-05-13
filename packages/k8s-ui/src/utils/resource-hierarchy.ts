@@ -232,8 +232,8 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
         childEventCount: 0,
       })
     } else {
-      // Older SQLite-stored events may lack apiVersion (column added by migration);
-      // pick up the group from any subsequent event that carries it.
+      // Stored events may lack apiVersion; upgrade the lane's group from any
+      // later event that carries it.
       if (!existing.group) {
         const fromEvent = apiVersionToGroup(event.apiVersion)
         if (fromEvent) existing.group = fromEvent

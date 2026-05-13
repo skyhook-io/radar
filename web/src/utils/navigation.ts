@@ -10,7 +10,10 @@ export type { NavigateToResource } from '@skyhook-io/k8s-ui/utils/navigation'
  * query param so the WorkloadView can resolve CRDs with colliding kind names.
  */
 export function buildWorkloadPath(resource: SelectedResource): string {
-  const base = `/workload/${resource.kind}/${resource.namespace}/${resource.name}`
+  const kind = encodeURIComponent(resource.kind)
+  const namespace = encodeURIComponent(resource.namespace)
+  const name = encodeURIComponent(resource.name)
+  const base = `/workload/${kind}/${namespace}/${name}`
   return resource.group ? `${base}?apiGroup=${encodeURIComponent(resource.group)}` : base
 }
 

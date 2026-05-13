@@ -592,19 +592,11 @@ function AppInner() {
   }, forceNamespaceFilter, showPolicyEffect)
   const [reconnect, isReconnecting] = useRefreshAnimation(reconnectSSE)
 
-  // Engage SSE server-side filtering on large clusters and keep the filter
-  // in lockstep with the user's pick. Two failure modes this covers:
-  //   * Header switcher: SSE was already filtered (large-cluster picker
-  //     engaged forceNamespaceFilter once); switching namespaces only updated
-  //     `namespaces`, so SSE kept streaming the previous pick → blank graph
-  //     with stale sidebar counts.
-  //   * URL bookmark on a large cluster: forceNamespaceFilter starts
-  //     undefined, SSE opens with no filter, server replies
-  //     requiresNamespaceFilter=true. The LargeClusterPicker fallback only
-  //     renders when `namespaces` is empty, so a deep link with a namespace
-  //     showed "No resources found".
-  // Small clusters never see requiresNamespaceFilter and leave
-  // forceNamespaceFilter === undefined — frontend filtering is unaffected.
+  // On large clusters (where the server requires namespace filtering), keep
+  // SSE's server-side filter in lockstep with the user's namespace pick.
+  // Without this, header switches and deep-link loads can leave SSE filtered
+  // to a stale namespace while sidebar/topology show a different one. Small
+  // clusters never set forceNamespaceFilter and skip this path entirely.
   useEffect(() => {
     const isLarge = forceNamespaceFilter !== undefined || topology?.requiresNamespaceFilter === true
     if (!isLarge) return

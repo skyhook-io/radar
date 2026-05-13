@@ -135,9 +135,8 @@ func (s *SQLiteStore) initSchema() error {
 		return err
 	}
 
-	// Additive migration: api_version column added to disambiguate CRD kind collisions
-	// on navigation. ALTER TABLE on an existing column errors with "duplicate column",
-	// so detect via PRAGMA before adding.
+	// SQLite's ALTER TABLE ADD COLUMN errors with "duplicate column" when the
+	// schema is already current; PRAGMA-detect before adding.
 	rows, err := s.db.Query("PRAGMA table_info(events)")
 	if err != nil {
 		return err
