@@ -383,21 +383,24 @@ func applyClusterScopedAccess(in []Issue, f Filters) []Issue {
 	if f.CanReadClusterScoped == nil {
 		return in
 	}
-	out := in[:0]
+	out := make([]Issue, 0, len(in))
 	for _, i := range in {
 		if i.Namespace != "" {
 			out = append(out, i)
 			continue
 		}
-		if clusterScoped, _, _ := k8s.ClassifyKindScope(i.Kind, i.Group); clusterScoped {
-			if f.CanReadClusterScoped(i.Kind, i.Group) {
-				out = append(out, i)
-			}
-			continue
+		// Namespace-less issue: must be cluster-scoped (a namespaced
+		// resource without a namespace would be invalid wire data). We
+		// previously gated on k8s.ClassifyKindScope (a hardcoded list of
+		// known cluster-scoped kinds) and silently dropped anything that
+		// didn't match — which meant CRDs like Karpenter NodePool, whose
+		// emitter already classified them as cluster-scoped via dynamic
+		// API discovery, vanished from the issues list for authenticated
+		// users. CanReadClusterScoped (SAR-backed) is authoritative on
+		// access; we don't need a pre-classification gate at this layer.
+		if f.CanReadClusterScoped(i.Kind, i.Group) {
+			out = append(out, i)
 		}
-		// Authenticated callers should not receive namespace-less rows we
-		// cannot map to a SAR-able resource. In practice these are cluster-
-		// scoped resources whose discovery entry is unavailable.
 	}
 	return out
 }

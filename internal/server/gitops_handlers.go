@@ -233,7 +233,13 @@ func (s *Server) filterGitOpsInsightForUser(r *http.Request, req *gitopsRequest,
 	}
 	changed := false
 
-	changes := insight.Changes[:0]
+	// Allocate fresh slices rather than the `[:0]` in-place pattern.
+	// `insight` is value-received, so its slice *headers* are local copies,
+	// but the backing arrays still alias the caller's data — if gitopsinsights.Build
+	// ever caches its return value (memoization, pooling) or shares it across
+	// requests, filtering in-place would corrupt other callers. The allocation
+	// cost is negligible compared to the JSON encode that follows.
+	changes := make([]gitopsinsights.Change, 0, len(insight.Changes))
 	for _, change := range insight.Changes {
 		if s.canAccessGitOpsRef(r, req, change.Ref.Group, change.Ref.Kind, change.Ref.Namespace, change.Ref.Name, false) {
 			changes = append(changes, change)
@@ -243,13 +249,13 @@ func (s *Server) filterGitOpsInsightForUser(r *http.Request, req *gitopsRequest,
 	}
 	insight.Changes = changes
 
-	plan := insight.Plan[:0]
+	plan := make([]gitopsinsights.PlanItem, 0, len(insight.Plan))
 	for _, item := range insight.Plan {
 		if !s.canAccessGitOpsRef(r, req, item.Ref.Group, item.Ref.Kind, item.Ref.Namespace, item.Ref.Name, false) {
 			changed = true
 			continue
 		}
-		blockedBy := item.BlockedBy[:0]
+		blockedBy := make([]gitopsinsights.Ref, 0, len(item.BlockedBy))
 		for _, ref := range item.BlockedBy {
 			if s.canAccessGitOpsRef(r, req, ref.Group, ref.Kind, ref.Namespace, ref.Name, false) {
 				blockedBy = append(blockedBy, ref)
@@ -262,13 +268,13 @@ func (s *Server) filterGitOpsInsightForUser(r *http.Request, req *gitopsRequest,
 	}
 	insight.Plan = plan
 
-	issues := insight.Issues[:0]
+	issues := make([]gitopsinsights.Issue, 0, len(insight.Issues))
 	for _, issue := range insight.Issues {
 		if len(issue.Refs) == 0 {
 			issues = append(issues, issue)
 			continue
 		}
-		refs := issue.Refs[:0]
+		refs := make([]gitopsinsights.Ref, 0, len(issue.Refs))
 		for _, ref := range issue.Refs {
 			if s.canAccessGitOpsRef(r, req, ref.Group, ref.Kind, ref.Namespace, ref.Name, false) {
 				refs = append(refs, ref)
