@@ -237,22 +237,18 @@ View TLS certificate details and expiry dates across all namespaces — catch ex
 
 Monitor, diagnose, and manage FluxCD and ArgoCD resources from a dedicated GitOps workspace.
 
-- **FluxCD**: GitRepository, OCIRepository, HelmRepository, Kustomization, HelmRelease, Alert
-- **ArgoCD**: Application, ApplicationSet, AppProject
-- Fleet-style table and tile views with sync, health, project, namespace, label, and automation filters
-- Per-application detail pages with **Topology** (graph + table sub-modes), **Changes**, and **Activity** tabs
-- App-of-apps navigation for ArgoCD ApplicationSet and Application resources
-- **Workflow**: Sync (with options dialog: prune, dry-run, apply-only, force, replace, server-side apply), Refresh / Hard refresh, Terminate in-flight sync, Suspend/Resume auto-sync, Rollback to historical revision (Argo only), Selective sync of marked resources
-- **Diagnosis** — answers "why is this OutOfSync and what do I do?":
-  - Per-resource field diff computed from `kubectl.kubernetes.io/last-applied-configuration` vs live spec — real "spec.X removed / spec.Y added" entries, no Argo API call needed
-  - Recent events surfaced inline per managed resource (`ImagePullBackOff`, `FailedScheduling`, webhook denials)
-  - Stuck-drift-loop detector — flags the "sync succeeded but app is still OutOfSync" pattern with the likely cause (mutating webhook, sibling controller, schema migration)
-  - Manual-drift detector — calls out OutOfSync apps with auto-sync disabled
-  - Argo Application conditions extracted to issues (ComparisonError, OrphanedResourceWarning, etc.)
-  - Operation-failure parser recognizes annotation-too-large, webhook-denied, RBAC, conflict, schema migration, hook failure, and connectivity errors with plain-English causes
-- Keyboard shortcuts: `s` Sync, `r` Refresh, `Shift+R` Hard refresh, `t` Terminate (when sync running)
-- **MCP integration**: `manage_gitops` tool exposes sync/suspend/resume/reconcile/rollback to AI assistants
-- **Note**: GitOps resource trees can only join live workload topology for resources visible in the connected cluster. FluxCD typically deploys to its own cluster. ArgoCD often manages remote clusters — connect Radar to the target cluster to see workloads, or to the ArgoCD cluster to see Application status and declared inventory.
+<p align="center">
+  <img src="docs/screenshots/gitops-view.png" alt="GitOps fleet view" width="800">
+  <br><em>GitOps fleet view — Argo + Flux applications side-by-side with sync, health, source, destination, and lifecycle state</em>
+</p>
+
+- Fleet view + per-app detail page (Topology / Changes / Activity tabs) for **ArgoCD** (`Application`, `ApplicationSet`, `AppProject`) and **FluxCD** (`GitRepository`, `OCIRepository`, `HelmRepository`, `Bucket`, `Kustomization`, `HelmRelease`, `Alert`)
+- **Diagnosis pipeline** — field-level drift, recent events per resource, stuck-drift-loop detection, parsed operation-failures, structured one-click remediation
+- **Lifecycle awareness** — `Terminating` chip replaces stale Sync/Health badges; severity ramps with deletion age; mutating ops refuse on zombies
+- **Cross-linked from the rest of Radar** — `Managed by` chip in resource drawers, GitOps routing from Topology + Timeline + Helm view, `Consumed by` panel on Flux source CRs
+- **MCP integration** — `manage_gitops` exposes sync / suspend / resume / reconcile / rollback with lifecycle-aware refusal
+
+See the [GitOps guide](docs/gitops.md) for the full feature matrix, RBAC requirements, demo cluster, and single-cluster scope notes.
 
 ### Traffic
 
