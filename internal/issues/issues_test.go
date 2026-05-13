@@ -257,7 +257,10 @@ func TestCompose_DropsUnauthorizedClusterScopedCRDConditions(t *testing.T) {
 	out := Compose(p, Filters{
 		Sources: []Source{SourceCondition},
 		CanReadClusterScoped: func(kind, group string) bool {
-			return kind == "NodePool" && group == "karpenter.sh" && false
+			if kind != "NodePool" || group != "karpenter.sh" {
+				t.Fatalf("unexpected cluster-scoped check: kind=%q group=%q", kind, group)
+			}
+			return false
 		},
 	})
 	if len(out) != 0 {

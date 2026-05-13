@@ -195,7 +195,7 @@ func (s *Server) filterGitOpsTreeForUser(r *http.Request, req *gitopsRequest, tr
 			continue
 		}
 		if len(node.GroupedNodeIDs) > 0 {
-			grouped := node.GroupedNodeIDs[:0]
+			grouped := make([]string, 0, len(node.GroupedNodeIDs))
 			for _, id := range node.GroupedNodeIDs {
 				if keep[id] {
 					grouped = append(grouped, id)
