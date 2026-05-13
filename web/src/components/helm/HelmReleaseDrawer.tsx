@@ -4,7 +4,8 @@ import { PaneLoader, useDockReservedHeight } from '@skyhook-io/k8s-ui'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
-import { X, Copy, Check, RefreshCw, Package, Code, History, FileText, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2 } from 'lucide-react'
+import { X, Copy, Check, RefreshCw, Package, Code, History, FileText, Settings, Link2, Anchor, GitFork, BookOpen, ArrowUpCircle, Trash2, GitBranch } from 'lucide-react'
+import { useNavigate } from 'react-router-dom'
 import { clsx } from 'clsx'
 import { useHelmRelease, useHelmManifest, useHelmValues, useHelmManifestDiff, useHelmUpgradeInfo, useHelmUninstall, upgradeWithProgress, rollbackWithProgress } from '../../api/client'
 import { useQueryClient } from '@tanstack/react-query'
@@ -37,6 +38,7 @@ const MAX_WIDTH_PERCENT = 0.8
 const DEFAULT_WIDTH = 1000
 
 export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOpen = true }: HelmReleaseDrawerProps) {
+  const navigate = useNavigate()
   const [activeTab, setActiveTab] = useState<TabId>('overview')
   const [copied, setCopied] = useState<string | null>(null)
   const [drawerWidth, setDrawerWidth] = useState(DEFAULT_WIDTH)
@@ -406,6 +408,20 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
             </button>
           </div>
           <p className="text-sm text-theme-text-tertiary">{release.namespace}</p>
+          {releaseDetail?.managedByFluxHelmRelease && (
+            <button
+              type="button"
+              onClick={() => {
+                const [ns, name] = releaseDetail.managedByFluxHelmRelease!.split('/')
+                navigate(`/gitops/detail/helmreleases/${encodeURIComponent(ns || '_')}/${encodeURIComponent(name)}`)
+              }}
+              className="mt-1 inline-flex items-center gap-1 rounded border border-amber-500/40 bg-amber-500/10 px-1.5 py-0.5 text-[11px] text-amber-700 dark:text-amber-400 hover:bg-amber-500/20 transition-colors"
+              title={`Installed by Flux helm-controller via HelmRelease ${releaseDetail.managedByFluxHelmRelease}. Changes here would be reverted at the next reconcile.`}
+            >
+              <GitBranch className="w-3 h-3" />
+              Managed by Flux · {releaseDetail.managedByFluxHelmRelease}
+            </button>
+          )}
         </div>
 
         {/* Tabs */}

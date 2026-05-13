@@ -401,6 +401,9 @@ func getReleaseWith(actionConfig *action.Configuration, namespace, name string) 
 	if detail.StorageNamespace == detail.Namespace {
 		detail.StorageNamespace = ""
 	}
+	if name, ns := rel.Labels["helm.toolkit.fluxcd.io/name"], rel.Labels["helm.toolkit.fluxcd.io/namespace"]; name != "" && ns != "" {
+		detail.ManagedByFluxHelmRelease = ns + "/" + name
+	}
 
 	return detail, nil
 }
@@ -559,6 +562,15 @@ func toHelmRelease(rel *release.Release, storageNamespace string) HelmRelease {
 	hr.ResourceHealth = health
 	hr.HealthIssue = issue
 	hr.HealthSummary = summary
+
+	// Flux's helm-controller stamps every release Secret with these labels.
+	// When present, the release isn't actually under the user's direct
+	// control — helm upgrade/rollback here would get reverted at the next
+	// reconcile. Surface the owning HelmRelease CR so the UI can warn and
+	// link to the GitOps tab.
+	if name, ns := rel.Labels["helm.toolkit.fluxcd.io/name"], rel.Labels["helm.toolkit.fluxcd.io/namespace"]; name != "" && ns != "" {
+		hr.ManagedByFluxHelmRelease = ns + "/" + name
+	}
 
 	return hr
 }

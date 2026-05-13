@@ -6,7 +6,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams, useNavigationType, NavigationType } from 'react-router-dom'
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
-import { TopologyGraph, TopologyFilterSidebar, TopologyControls } from '@skyhook-io/k8s-ui'
+import { TopologyGraph, TopologyFilterSidebar, TopologyControls, gitOpsRouteForKind } from '@skyhook-io/k8s-ui'
 import { TimelineView } from './components/timeline/TimelineView'
 import { ResourcesView } from './components/resources/ResourcesView'
 import { serializeColumnFilters } from './components/resources/resource-utils'
@@ -689,13 +689,24 @@ function AppInner() {
     // TODO: Could show a list of pods in the group
     if (node.kind === 'PodGroup') return
 
+    const namespace = (node.data.namespace as string) || ''
+    // GitOps CRs (Application/Kustomization/HelmRelease/etc.) have a dedicated
+    // detail page with tree + insights + ops that the drawer can't reproduce.
+    // Route there from the main topology when the node is one of those kinds;
+    // everything else falls back to the drawer.
+    const gitOpsPath = gitOpsRouteForKind(node.kind, namespace, node.name)
+    if (gitOpsPath) {
+      navigate(gitOpsPath)
+      return
+    }
+
     navigateToResource({
       kind: kindToPlural(node.kind),
-      namespace: (node.data.namespace as string) || '',
+      namespace,
       name: node.name,
       group: apiVersionToGroup(node.data.apiVersion as string | undefined),
     })
-  }, [])
+  }, [navigate])
 
   // Serialize namespaces for stable dependency tracking
   const namespacesKey = namespaces.join(',')

@@ -1,7 +1,7 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
-import { Package, Search, RefreshCw, ArrowUpCircle, LayoutGrid, List, Shield } from 'lucide-react'
+import { Package, Search, RefreshCw, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch } from 'lucide-react'
 import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
@@ -453,6 +453,14 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
           <Package className="w-4 h-4 text-theme-text-tertiary shrink-0" />
           <span className="text-sm text-theme-text-primary font-medium truncate">{release.name}</span>
           {getHealthBadge()}
+          {release.managedByFluxHelmRelease && (
+            <Tooltip content={`Installed by Flux helm-controller via HelmRelease ${release.managedByFluxHelmRelease}. Changes here will be reverted at the next reconcile — manage via the GitOps tab.`}>
+              <span className="badge-sm shrink-0 border border-theme-border bg-theme-elevated text-theme-text-secondary">
+                <GitBranch className="w-3 h-3" />
+                Flux
+              </span>
+            </Tooltip>
+          )}
           {upgradeInfo?.updateAvailable && (
             <Tooltip content={`Upgrade available: ${release.chartVersion} → ${upgradeInfo.latestVersion}`}>
               <span className={clsx('badge-sm shrink-0', SEVERITY_BADGE.warning)}>

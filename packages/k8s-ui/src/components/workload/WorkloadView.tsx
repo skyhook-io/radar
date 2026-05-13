@@ -7,6 +7,7 @@ import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { clsx } from 'clsx'
 import {
   ArrowLeft,
+  ArrowRight,
   RefreshCw,
   Activity,
   Terminal,
@@ -18,12 +19,12 @@ import {
   Maximize2,
   X,
   BarChart3,
-  GitBranch,
 } from 'lucide-react'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource, pluralToKind } from '../../utils/navigation'
 import { detectGitOpsOwner, type GitOpsOwnerRef } from '../../utils/gitops-owner'
+import { gitOpsRouteForResource } from '../../utils/gitops-route'
 import { isChangeEvent, isHistoricalEvent } from '../../types'
 import { getKindBadgeColor, getHealthBadgeColor } from '../../utils/badge-colors'
 import { buildResourceHierarchy, getAllEventsFromHierarchy, isProblematicEvent, type ResourceLane } from '../../utils/resource-hierarchy'
@@ -43,6 +44,7 @@ import {
 import { ResourceActionsBar } from '../shared/ResourceActionsBar'
 import { EditableYamlView, SaveSuccessAnimation } from '../shared/EditableYamlView'
 import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from '../shared/ResourceRendererDispatch'
+import { ManagedByChip } from '../shared/ManagedByChip'
 import { getKindColorOutline, formatKindName } from '../ui/drawer-components'
 
 type TabType = 'overview' | 'timeline' | 'logs' | 'metrics' | 'yaml'
@@ -121,6 +123,14 @@ interface WorkloadViewProps {
    * visible (useful for hosts that haven't routed the GitOps tab yet).
    */
   onOpenGitOpsResource?: (ref: GitOpsOwnerRef) => void
+  /**
+   * Open the GitOps detail page for the resource itself, when the resource
+   * is a portal-classified GitOps CR (Argo Application/ApplicationSet/
+   * AppProject, Flux Kustomization/HelmRelease). Wired in addition to
+   * `onOpenGitOpsResource` because the URL is derived here from the live
+   * resource rather than from owner labels on a managed object.
+   */
+  onNavigateGitOpsPath?: (path: string) => void
 
   // ── Render props for platform-specific content ───────────────────────────
   /** Render the logs tab content */
@@ -212,6 +222,7 @@ export function WorkloadView({
   resolvedEnvFrom,
   // GitOps
   onOpenGitOpsResource,
+  onNavigateGitOpsPath,
 }: WorkloadViewProps) {
   // Normalize kind: URL has plural lowercase, internal logic uses singular PascalCase
   const kind = pluralToKind(kindProp)
@@ -301,6 +312,11 @@ export function WorkloadView({
   // Metadata
   const metadata = useMemo(() => extractMetadata(kind, resource), [kind, resource])
   const gitopsOwner = useMemo(() => detectGitOpsOwner(resource), [resource])
+  // When the resource itself is a portal GitOps CR (Application, Kustomization,
+  // HelmRelease, etc.), surface a link to its dedicated GitOps detail page —
+  // the drawer's renderer is thorough but the tab has the tree + insights +
+  // operations the drawer can't reproduce inline.
+  const gitOpsResourcePath = useMemo(() => gitOpsRouteForResource(resource), [resource])
 
   // Copy to clipboard
   const copyToClipboard = useCallback((text: string, key: string) => {
@@ -445,8 +461,13 @@ export function WorkloadView({
               </button>
             </div>
             <p className="text-sm text-theme-text-tertiary">{namespace}</p>
-            {gitopsOwner && (
-              <ManagedByChip owner={gitopsOwner} onOpen={onOpenGitOpsResource} />
+            {(gitopsOwner || (gitOpsResourcePath && onNavigateGitOpsPath)) && (
+              <div className="mt-1 flex flex-wrap items-center gap-1.5">
+                {gitopsOwner && <ManagedByChip owner={gitopsOwner} onOpen={onOpenGitOpsResource} />}
+                {gitOpsResourcePath && onNavigateGitOpsPath && (
+                  <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
+                )}
+              </div>
             )}
           </div>
 
@@ -552,7 +573,10 @@ export function WorkloadView({
                 <span className="truncate max-w-md font-mono text-xs">{metadata.find(m => m.label === 'Image')?.value}</span>
               )}
               {gitopsOwner && (
-                <ManagedByChip owner={gitopsOwner} onOpen={onOpenGitOpsResource} />
+                <ManagedByChip owner={gitopsOwner} onOpen={onOpenGitOpsResource} variant="block" />
+              )}
+              {gitOpsResourcePath && onNavigateGitOpsPath && (
+                <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
               )}
               {relationships?.owner && (
                 <span>Owner: <button onClick={() => onNavigateToResource?.(refToSelectedResource(relationships.owner!))} className="text-blue-500 hover:underline">{relationships.owner.name}</button></span>
@@ -753,30 +777,17 @@ function extractMetadata(kind: string, resource: any): { label: string; value: s
 // SUB-COMPONENTS
 // ============================================================================
 
-function ManagedByChip({ owner, onOpen }: { owner: GitOpsOwnerRef; onOpen?: (ref: GitOpsOwnerRef) => void }) {
-  const toolLabel = owner.tool === 'argocd' ? 'ArgoCD' : 'FluxCD'
-  const label = owner.namespace ? `${owner.namespace}/${owner.name}` : owner.name
-  const title = `Managed by ${toolLabel} · ${label}`
-  // When the host hasn't wired the GitOps route, fall back to a non-interactive
-  // badge so the relationship is still visible. Without this, integrators who
-  // don't surface a GitOps tab would see the chip silently fail to navigate.
-  const interactive = !!onOpen
-  const Wrapper = interactive ? 'button' : 'span'
+function OpenInGitOpsChip({ onClick }: { onClick: () => void }) {
   return (
-    <Wrapper
-      {...(interactive
-        ? { type: 'button' as const, onClick: () => onOpen?.(owner) }
-        : {})}
-      title={title}
-      className={clsx(
-        'mt-1 inline-flex items-center gap-1 rounded border border-theme-border bg-theme-elevated px-1.5 py-0.5 text-[11px] text-theme-text-secondary',
-        interactive && 'hover:border-skyhook-500/60 hover:text-skyhook-500 transition-colors',
-      )}
+    <button
+      type="button"
+      onClick={onClick}
+      title="Open this resource in the GitOps tab (tree + insights + ops)"
+      className="inline-flex items-center gap-1 rounded border border-skyhook-500/40 bg-skyhook-500/10 px-1.5 py-0.5 text-[11px] font-medium text-skyhook-500 hover:bg-skyhook-500/20 transition-colors"
     >
-      <GitBranch className="h-3 w-3 shrink-0" />
-      <span className="shrink-0 text-theme-text-tertiary">Managed by</span>
-      <span className="truncate max-w-[180px]">{label}</span>
-    </Wrapper>
+      Open in GitOps
+      <ArrowRight className="h-3 w-3 shrink-0" />
+    </button>
   )
 }
 

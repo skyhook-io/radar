@@ -459,6 +459,11 @@ export interface HelmRelease {
   resourceHealth?: 'healthy' | 'degraded' | 'unhealthy' | 'unknown'
   healthIssue?: string    // Primary issue if unhealthy (e.g., "OOMKilled")
   healthSummary?: string  // Brief summary like "2/3 pods ready"
+  // When set, this release was installed by Flux's helm-controller — the
+  // user should manage it via the named HelmRelease CR (GitOps tab) rather
+  // than helm CLI / Radar's Helm view, since changes here would get
+  // reverted at the next reconcile. Format: "namespace/name".
+  managedByFluxHelmRelease?: string
 }
 
 export interface HelmRevision {
@@ -488,6 +493,9 @@ export interface HelmReleaseDetail {
   hooks?: HelmHook[]
   readme?: string
   dependencies?: ChartDependency[]
+  // When set, this release was installed by Flux's helm-controller — see
+  // HelmRelease.managedByFluxHelmRelease for context. Format: "namespace/name".
+  managedByFluxHelmRelease?: string
 }
 
 export interface HelmHook {

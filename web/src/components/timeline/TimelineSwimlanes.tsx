@@ -27,7 +27,8 @@ import { useHasLimitedAccess } from '../../contexts/CapabilitiesContext'
 import type { TimelineEvent, Topology } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 import { kindToPlural, apiVersionToGroup } from '../../utils/navigation'
-import { PaneLoader, pluralize } from '@skyhook-io/k8s-ui'
+import { PaneLoader, pluralize, gitOpsRouteForKind } from '@skyhook-io/k8s-ui'
+import { useNavigate } from 'react-router-dom'
 import { isChangeEvent, isHistoricalEvent, isOperation, displayKind } from '../../types'
 import { DiffViewer } from './DiffViewer'
 import { getOperationColor, getHealthBadgeColor, getEventTypeColor } from '../../utils/badge-colors'
@@ -174,7 +175,20 @@ function calculateInterestingnessWithBreakdown(lane: ResourceLane): ScoreBreakdo
 }
 
 export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode, onViewModeChange, topology, namespaces }: TimelineSwimlanesProps) {
+  const navigate = useNavigate()
   const hasLimitedAccess = useHasLimitedAccess()
+  // Timeline lane labels for GitOps CRs (Application/Kustomization/HelmRelease)
+  // deep-link to GitOps detail rather than the resource drawer — the lane is
+  // already telling the user "this controller had changes/events"; the GitOps
+  // tab is the right place to investigate further.
+  const handleLaneOpen = useCallback((kind: string, namespace: string, name: string, group?: string) => {
+    const gitOpsPath = gitOpsRouteForKind(kind, namespace, name)
+    if (gitOpsPath) {
+      navigate(gitOpsPath)
+      return
+    }
+    onResourceClick?.({ kind: kindToPlural(kind), namespace, name, group })
+  }, [navigate, onResourceClick])
   const containerRef = useRef<HTMLDivElement>(null)
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [zoom, setZoom] = useState(1)
@@ -682,7 +696,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                         )}
                         <div
                           className="flex-1 min-w-0 cursor-pointer hover:bg-theme-surface/30 rounded px-1 -mx-1 group"
-                          onClick={() => onResourceClick?.({ kind: kindToPlural(lane.kind), namespace: lane.namespace, name: lane.name, group: lane.group })}
+                          onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
                         >
                           <div className="flex items-center gap-1">
                             <span className={clsx(
@@ -760,7 +774,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                           <div className="flex">
                             <div
                               className="w-[19.25rem] shrink-0 border-r border-theme-border/50 pl-4 pr-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-theme-elevated/30 group"
-                              onClick={() => onResourceClick?.({ kind: kindToPlural(lane.kind), namespace: lane.namespace, name: lane.name, group: lane.group })}
+                              onClick={() => handleLaneOpen(lane.kind, lane.namespace, lane.name, lane.group)}
                             >
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-1">
@@ -812,7 +826,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
                             {/* Child lane label - indented */}
                             <div
                               className="w-[19.25rem] shrink-0 border-r border-theme-border/50 pl-4 pr-3 py-1.5 flex items-center gap-2 cursor-pointer hover:bg-theme-elevated/30 group"
-                              onClick={() => onResourceClick?.({ kind: kindToPlural(child.kind), namespace: child.namespace, name: child.name, group: child.group })}
+                              onClick={() => handleLaneOpen(child.kind, child.namespace, child.name, child.group)}
                             >
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-1">

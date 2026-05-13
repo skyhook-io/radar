@@ -20,6 +20,13 @@ type HelmRelease struct {
 	ResourceHealth string `json:"resourceHealth,omitempty"` // healthy, degraded, unhealthy, unknown
 	HealthIssue    string `json:"healthIssue,omitempty"`    // Primary issue if unhealthy (e.g., "OOMKilled")
 	HealthSummary  string `json:"healthSummary,omitempty"`  // Brief summary like "2/3 pods ready"
+	// ManagedByFluxHelmRelease names the Flux HelmRelease CR that owns this
+	// release when Flux's helm-controller installed it. Empty for releases
+	// installed via the helm CLI or other tools. Surfaces a "Managed by Flux"
+	// affordance in the UI so the user goes to GitOps to manage (changing
+	// values via `helm upgrade` here would get reverted on the next
+	// reconciliation). Format: "namespace/name".
+	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
 }
 
 // HelmRevision represents a single revision in the release history
@@ -51,6 +58,8 @@ type HelmReleaseDetail struct {
 	Hooks            []HelmHook        `json:"hooks,omitempty"`
 	Readme           string            `json:"readme,omitempty"`
 	Dependencies     []ChartDependency `json:"dependencies,omitempty"`
+	// See HelmRelease.ManagedByFluxHelmRelease.
+	ManagedByFluxHelmRelease string `json:"managedByFluxHelmRelease,omitempty"`
 }
 
 // HelmHook represents a Helm hook (pre/post install, upgrade, etc.)
