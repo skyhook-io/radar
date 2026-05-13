@@ -44,7 +44,7 @@ export function ManifestDiffViewer({ diff, isLoading, revision1, revision2, onCl
         </button>
       </div>
 
-      <div className="rounded-lg overflow-hidden max-h-[calc(100vh-300px)] overflow-auto bg-theme-base/50 font-mono text-xs">
+      <div className="rounded-lg max-h-[calc(100vh-300px)] overflow-auto bg-theme-base/50 font-mono text-xs">
         <div className="p-3">
           {diff.split('\n').map((line, index) => (
             <DiffLine key={index} line={line} />
