@@ -712,6 +712,24 @@ function dedupeRefs(refs: ResourceRef[]): ResourceRef[] {
 export function RelatedResourcesSection({ relationships, onNavigate }: RelatedResourcesSectionProps) {
   if (!relationships) return null
 
+  // Resolve PDBs and NetworkPolicies: prefer the split fields the backend emits
+  // after the T1/Phase 1a migration. Fall back to filtering `policies` by kind
+  // only when BOTH new fields are absent — that handles older radar instances
+  // (e.g. through a hub) that still emit just the legacy `policies` union.
+  const NETPOL_KINDS = new Set(['NetworkPolicy', 'CiliumNetworkPolicy', 'CiliumClusterwideNetworkPolicy', 'ClusterNetworkPolicy'])
+  const usingLegacyPolicies = relationships.pdbs === undefined && relationships.networkPolicies === undefined
+  const resolvedPDBs: ResourceRef[] = usingLegacyPolicies
+    ? (relationships.policies ?? []).filter(r => r.kind === 'PodDisruptionBudget')
+    : (relationships.pdbs ?? [])
+  const resolvedNetPols: ResourceRef[] = usingLegacyPolicies
+    ? (relationships.policies ?? []).filter(r => NETPOL_KINDS.has(r.kind))
+    : (relationships.networkPolicies ?? [])
+  // Any "Policies" entries that aren't PDB or NetworkPolicy variants — only
+  // surfaces on the legacy fallback path; the new split has no "other" bucket.
+  const resolvedOtherPolicies: ResourceRef[] = usingLegacyPolicies
+    ? (relationships.policies ?? []).filter(r => r.kind !== 'PodDisruptionBudget' && !NETPOL_KINDS.has(r.kind))
+    : []
+
   const hasRelationships =
     relationships.owner ||
     relationships.deployment ||
@@ -724,7 +742,9 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
     (relationships.configRefs && relationships.configRefs.length > 0) ||
     (relationships.consumers && relationships.consumers.length > 0) ||
     (relationships.scalers && relationships.scalers.length > 0) ||
-    (relationships.policies && relationships.policies.length > 0) ||
+    resolvedPDBs.length > 0 ||
+    resolvedNetPols.length > 0 ||
+    resolvedOtherPolicies.length > 0 ||
     relationships.scaleTarget
 
   if (!hasRelationships) return null
@@ -765,25 +785,15 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
         {relationships.scalers && relationships.scalers.length > 0 && (
           <RelationshipGroup label="Autoscaler" refs={dedupeRefs(relationships.scalers)} onNavigate={onNavigate} />
         )}
-        {relationships.policies && relationships.policies.length > 0 && (() => {
-          const policyKinds = new Set(['NetworkPolicy', 'CiliumNetworkPolicy', 'CiliumClusterwideNetworkPolicy', 'ClusterNetworkPolicy'])
-          const pdbs = relationships.policies.filter(r => r.kind === 'PodDisruptionBudget')
-          const netpols = relationships.policies.filter(r => policyKinds.has(r.kind))
-          const other = relationships.policies.filter(r => r.kind !== 'PodDisruptionBudget' && !policyKinds.has(r.kind))
-          return (
-            <>
-              {pdbs.length > 0 && (
-                <RelationshipGroup label="Disruption Budget" refs={dedupeRefs(pdbs)} onNavigate={onNavigate} />
-              )}
-              {netpols.length > 0 && (
-                <RelationshipGroup label="Network Policies" refs={dedupeRefs(netpols)} onNavigate={onNavigate} />
-              )}
-              {other.length > 0 && (
-                <RelationshipGroup label="Policies" refs={dedupeRefs(other)} onNavigate={onNavigate} />
-              )}
-            </>
-          )
-        })()}
+        {resolvedPDBs.length > 0 && (
+          <RelationshipGroup label="Disruption Budget" refs={dedupeRefs(resolvedPDBs)} onNavigate={onNavigate} />
+        )}
+        {resolvedNetPols.length > 0 && (
+          <RelationshipGroup label="Network Policies" refs={dedupeRefs(resolvedNetPols)} onNavigate={onNavigate} />
+        )}
+        {resolvedOtherPolicies.length > 0 && (
+          <RelationshipGroup label="Policies" refs={dedupeRefs(resolvedOtherPolicies)} onNavigate={onNavigate} />
+        )}
         {relationships.scaleTarget && (
           <RelationshipGroup label="Scale Target" refs={[relationships.scaleTarget]} onNavigate={onNavigate} />
         )}

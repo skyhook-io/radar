@@ -147,8 +147,13 @@ func GetRelationships(kind, namespace, name string, topo *Topology, provider Res
 				// HPA/ScaledObject/ScaledJob scales a workload
 				rel.ScaleTarget = ref
 			case EdgeProtects:
-				// PDB protects a workload (outgoing from PDB)
-				rel.ScaleTarget = ref
+				// Outgoing EdgeProtects: this resource protects the target workload.
+				// Per the plan, the queried source is a PDB here, so its outgoing
+				// "protects" target lands in rel.PDBs (and the deprecated union).
+				// Previously this overwrote rel.ScaleTarget, which is semantically
+				// reserved for HPA/ScaledObject scale targets (bug B1).
+				rel.PDBs = append(rel.PDBs, *ref)
+				rel.Policies = append(rel.Policies, *ref)
 			case EdgeConfigures:
 				// ConfigMap/Secret is used by a workload (outgoing from config)
 				rel.Consumers = append(rel.Consumers, *ref)
@@ -185,7 +190,15 @@ func GetRelationships(kind, namespace, name string, topo *Topology, provider Res
 				// An HPA/ScaledObject/ScaledJob scales this resource
 				rel.Scalers = append(rel.Scalers, *ref)
 			case EdgeProtects:
-				// A PDB protects this workload
+				// Incoming EdgeProtects: dispatch on source kind so PDBs and
+				// NetworkPolicies land in distinct fields. rel.Policies is
+				// still populated as the union for one release (deprecated alias).
+				switch ref.Kind {
+				case "PodDisruptionBudget":
+					rel.PDBs = append(rel.PDBs, *ref)
+				case "NetworkPolicy", "CiliumNetworkPolicy", "ClusterNetworkPolicy", "CiliumClusterwideNetworkPolicy":
+					rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
+				}
 				rel.Policies = append(rel.Policies, *ref)
 			case EdgeConfigures:
 				// A ConfigMap/Secret is used by this resource
@@ -288,7 +301,8 @@ func GetRelationships(kind, namespace, name string, topo *Topology, provider Res
 	if rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
 		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
-		len(rel.Policies) == 0 && rel.ScaleTarget == nil && len(rel.Pods) == 0 {
+		len(rel.Policies) == 0 && len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 &&
+		rel.ScaleTarget == nil && len(rel.Pods) == 0 {
 		return nil
 	}
 

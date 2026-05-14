@@ -291,8 +291,13 @@ type Relationships struct {
 	Consumers   []ResourceRef `json:"consumers,omitempty"`   // For ConfigMap/Secret: workloads that reference this
 	Scalers     []ResourceRef `json:"scalers,omitempty"`     // HPA/ScaledObject/ScaledJob scaling this
 	ScaleTarget *ResourceRef  `json:"scaleTarget,omitempty"` // For HPA/ScaledObject: what it scales
-	Policies    []ResourceRef `json:"policies,omitempty"`    // PDBs protecting this workload
-	Pods        []ResourceRef `json:"pods,omitempty"`        // For Service: pods it routes to
+	// Deprecated: use PDBs and NetworkPolicies instead. Populated as the union of both
+	// for one release to give old clients (and pre-split hub-fed responses) a fallback;
+	// will be removed in a future release.
+	Policies        []ResourceRef `json:"policies,omitempty"`
+	PDBs            []ResourceRef `json:"pdbs,omitempty"`            // PodDisruptionBudgets protecting this workload
+	NetworkPolicies []ResourceRef `json:"networkPolicies,omitempty"` // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy / CiliumClusterwideNetworkPolicy selecting this workload
+	Pods            []ResourceRef `json:"pods,omitempty"`            // For Service: pods it routes to
 }
 
 // CertificateInfo holds parsed X.509 certificate metadata for a single certificate.

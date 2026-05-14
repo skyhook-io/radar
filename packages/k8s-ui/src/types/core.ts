@@ -403,7 +403,15 @@ export interface Relationships {
   consumers?: ResourceRef[]
   scalers?: ResourceRef[]
   scaleTarget?: ResourceRef
+  /**
+   * @deprecated Use `pdbs` and `networkPolicies` instead. Backend populates this
+   * as the union of both for one release; renderers should prefer the split
+   * fields and only fall back to `policies` when both are absent (e.g. an older
+   * radar instance behind a hub).
+   */
   policies?: ResourceRef[]
+  pdbs?: ResourceRef[]              // PodDisruptionBudgets protecting this workload
+  networkPolicies?: ResourceRef[]   // NetworkPolicy / CiliumNetworkPolicy / ClusterNetworkPolicy variants selecting this workload
   pods?: ResourceRef[]
 }
 
