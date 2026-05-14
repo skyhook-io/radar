@@ -230,6 +230,17 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "aquasecurity.github.io", Versions: []string{"v1alpha1"}, Resource: "clustersbomreports", Kind: "ClusterSbomReport", Namespaced: false},
 	{Group: "aquasecurity.github.io", Versions: []string{"v1alpha1"}, Resource: "infraassessmentreports", Kind: "InfraAssessmentReport", Namespaced: true},
 	{Group: "aquasecurity.github.io", Versions: []string{"v1alpha1"}, Resource: "clusterinfraassessmentreports", Kind: "ClusterInfraAssessmentReport", Namespaced: false},
+	// Kyverno admission/policy CRDs. Watching Policy/ClusterPolicy directly
+	// is what flips the conditional PolicyReport warmup (see policy_reports.go) —
+	// presence of these in discovery is the signal that the cluster runs Kyverno.
+	{Group: "kyverno.io", Versions: []string{"v1", "v2", "v2beta1"}, Resource: "policies", Kind: "Policy", Namespaced: true},
+	{Group: "kyverno.io", Versions: []string{"v1", "v2", "v2beta1"}, Resource: "clusterpolicies", Kind: "ClusterPolicy", Namespaced: false},
+	// NOTE: the wgpolicyk8s.io PolicyReport CRDs are intentionally NOT in
+	// this list. They are warmed up conditionally — only when Kyverno is
+	// detected — via WarmupKyvernoPolicyReports in policy_reports.go. Adding
+	// them here would warm them up on every cluster that has the CRD
+	// installed (e.g. for Trivy reports), which we don't want until we have
+	// a generic per-engine policy index. See T5 in the plan.
 }
 
 func RegisterSupportedCRDFallbacks() {

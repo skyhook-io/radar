@@ -133,6 +133,13 @@ func InitAllSubsystems(ctx context.Context, progress func(string)) error {
 				dt := time.Now()
 				dc.DiscoverAllCRDs()
 				logTiming("   CRD full discovery: %v (background)", time.Since(dt))
+				// Conditional Kyverno warmup runs after discovery so the
+				// IsKyvernoInstalled() signal sees every CRD that landed
+				// during WarmupCommonCRDs or DiscoverAllCRDs (admin may
+				// have installed Kyverno after Radar started).
+				pt := time.Now()
+				WarmupKyvernoPolicyReports()
+				logTiming("   Kyverno PolicyReport warmup: %v (background)", time.Since(pt))
 				logTiming("   CRD total (warmup+discovery): %v (background)", time.Since(crdStart))
 			}()
 		}
@@ -232,7 +239,11 @@ func ResetAllSubsystems() {
 
 	safeReset("metrics history", ResetMetricsHistory)
 
-	// Step 3: dynamic cache
+	// Step 3: dynamic cache. Reset the PolicyReport index first because
+	// it holds references into the dynamic cache's informer indexers —
+	// clearing the index before tearing down the informers avoids using
+	// half-disposed informers on the next event-driven rebuild.
+	safeReset("policy report index", ResetPolicyReportIndex)
 	safeReset("dynamic resource cache", ResetDynamicResourceCache)
 
 	// Step 2: resource discovery + resource cache

@@ -490,6 +490,63 @@ func (d *ResourceDiscovery) SupportsWatchGVR(gvr schema.GroupVersionResource) bo
 	return false
 }
 
+// HasGroup reports whether at least one resource from the given API group
+// is present in discovery. Useful for cheap "is X installed" feature gates
+// (e.g. Kyverno → kyverno.io group) without having to enumerate the full
+// resources list at call sites.
+func (d *ResourceDiscovery) HasGroup(group string) bool {
+	if d == nil {
+		return false
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	for _, res := range d.resources {
+		if res.Group == group {
+			return true
+		}
+	}
+	return false
+}
+
+// HasKindInGroup reports whether a specific Kind exists within an API
+// group. Stricter than HasGroup — use this when you depend on a specific
+// CRD being registered, not just any resource from the operator's group.
+func (d *ResourceDiscovery) HasKindInGroup(kind, group string) bool {
+	if d == nil {
+		return false
+	}
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+
+	kindLower := strings.ToLower(kind)
+	for _, res := range d.resources {
+		if res.Group == group && strings.ToLower(res.Kind) == kindLower {
+			return true
+		}
+	}
+	return false
+}
+
+// IsKyvernoInstalled reports whether the Kyverno admission controller's
+// CRDs are present on the cluster. The check uses Kyverno's own Policy
+// and ClusterPolicy CRDs as the signal — these are unique to Kyverno
+// itself, whereas the PolicyReport CRDs (wgpolicyk8s.io) are emitted by
+// several engines (Kyverno, Trivy, etc.) and so do not by themselves
+// imply Kyverno is the source.
+//
+// The signal drives conditional eager warmup of PolicyReport informers:
+// clusters without Kyverno keep the reports in the deferred-fetch tier
+// and pay no extra memory or watch budget.
+func (d *ResourceDiscovery) IsKyvernoInstalled() bool {
+	if d == nil {
+		return false
+	}
+	return d.HasKindInGroup("Policy", "kyverno.io") || d.HasKindInGroup("ClusterPolicy", "kyverno.io")
+}
+
 // GetKindForGVR returns the Kind name for a given GVR
 // e.g., for GVR{Resource: "rollouts"}, returns "Rollout".
 func (d *ResourceDiscovery) GetKindForGVR(gvr schema.GroupVersionResource) string {
