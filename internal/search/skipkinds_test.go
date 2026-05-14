@@ -161,3 +161,26 @@ func TestSearch_NamespacesByKind_NilFallsThroughToNamespaces(t *testing.T) {
 		t.Errorf("secrets listed with %v, want [ns-a] (Options.Namespaces fallback)", got)
 	}
 }
+
+func TestSearch_NamespacesByKind_NilEntryDoesNotBypass(t *testing.T) {
+	// A nil entry in the per-kind map must fall back to Options.Namespaces,
+	// not become a cluster-wide list. Pin the doc/code agreement so a future
+	// caller passing map[string][]string{"Secret": nil} can't silently widen
+	// scope past the user's RBAC-allowed namespaces.
+	rec := &recordingProvider{
+		fakeProvider: &fakeProvider{
+			typed: map[string][]runtime.Object{
+				"secrets": {&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-a", Name: "redis-cred"}}},
+			},
+		},
+	}
+	_, _ = Search(context.Background(), rec, Parse("redis"), Options{
+		Include:          IncludeNone,
+		Namespaces:       []string{"ns-a"},
+		NamespacesByKind: map[string][]string{"Secret": nil},
+	})
+
+	if got := rec.listedWith["secrets"]; len(got) != 1 || got[0] != "ns-a" {
+		t.Errorf("secrets listed with %v, want [ns-a] (nil override should fall back, not go cluster-wide)", got)
+	}
+}

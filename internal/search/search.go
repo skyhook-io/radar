@@ -156,7 +156,11 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				continue
 			}
 			listNs = nil
-		} else if override, ok := opts.NamespacesByKind[tk.Kind]; ok {
+		} else if override, ok := opts.NamespacesByKind[tk.Kind]; ok && override != nil {
+			// nil overrides fall back to Options.Namespaces (per doc): without
+			// this guard a nil entry would set listNs=nil and trigger a
+			// cluster-wide list — silent bypass of the namespace constraint
+			// in security-sensitive code.
 			listNs = override
 		}
 		objs, err := p.ListTyped(tk.Plural, listNs)
