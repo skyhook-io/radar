@@ -38,6 +38,14 @@ func setupFakeCacheForFilterTests(t *testing.T) {
 
 		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-1"}},
 		&corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-2"}},
+
+		// Seeded for per-namespace Secret RBAC tests. The cache holds
+		// secrets across all three namespaces (mirrors the chart's optional
+		// cluster-wide secrets grant for the SA); per-user RBAC must narrow
+		// the view at read time.
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "alpha-secret", Namespace: "alpha"}, Type: corev1.SecretTypeOpaque},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "beta-secret", Namespace: "beta"}, Type: corev1.SecretTypeOpaque},
+		&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Name: "gamma-secret", Namespace: "gamma"}, Type: corev1.SecretTypeOpaque},
 	)
 
 	if err := k8s.InitTestResourceCache(fakeClient); err != nil {
@@ -390,5 +398,231 @@ func TestHandleGetEvents_RestrictedAggregatesAllowed(t *testing.T) {
 	body := extractText(t, result)
 	if !strings.Contains(body, "[]") {
 		t.Errorf("expected empty result for denied namespace, got: %s", body)
+	}
+}
+
+// --- Per-namespace Secret RBAC ---
+//
+// The chart grants the Radar SA cluster-wide secrets so Helm release
+// visibility works under auth modes. The cache therefore holds secrets
+// across all namespaces; the server must gate reads per-user, per-namespace.
+// These tests pin the gate at the MCP layer for list_resources / get_resource.
+
+// seedSecretListCanI seeds the per-namespace canI cache for `list` on
+// secrets only. Each list-handler test should call this (not both verbs)
+// so a regression where the handler accidentally checks the wrong verb
+// surfaces as a failed assertion.
+func seedSecretListCanI(t *testing.T, username string, allowedNamespaces []string, deniedNamespaces []string) {
+	t.Helper()
+	seedSecretCanIVerb(t, username, "list", allowedNamespaces, deniedNamespaces)
+}
+
+// seedSecretGetCanI is the `get`-verb counterpart. See seedSecretListCanI.
+func seedSecretGetCanI(t *testing.T, username string, allowedNamespaces []string, deniedNamespaces []string) {
+	t.Helper()
+	seedSecretCanIVerb(t, username, "get", allowedNamespaces, deniedNamespaces)
+}
+
+func seedSecretCanIVerb(t *testing.T, username, verb string, allowedNamespaces []string, deniedNamespaces []string) {
+	t.Helper()
+	perms := getPermCache().Get(username)
+	if perms == nil {
+		t.Fatalf("user %q not in perm cache", username)
+	}
+	for _, ns := range allowedNamespaces {
+		perms.SetCanI(verb, "", "secrets", ns, true)
+	}
+	for _, ns := range deniedNamespaces {
+		perms.SetCanI(verb, "", "secrets", ns, false)
+	}
+}
+
+func TestHandleListResources_Secrets_DeniedInAllNamespaces(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	// alice has namespace access to alpha but no per-namespace secret read.
+	ctx := withRestrictedUser(t, "alice", []string{"alpha"})
+	seedSecretListCanI(t, "alice", nil, []string{"alpha"})
+
+	result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "secrets"})
+	if err != nil {
+		t.Fatalf("handleListResources: %v", err)
+	}
+	body := extractText(t, result)
+	if containsName(body, "alpha-secret") {
+		t.Errorf("denied secret leaked through namespace-only gate: %s", body)
+	}
+}
+
+func TestHandleListResources_Secrets_PartialNamespaceAccess(t *testing.T) {
+	// alice has namespace access to alpha AND beta, but per-namespace secret
+	// read only in alpha. Should see alpha-secret only, not beta-secret —
+	// even though beta is in her namespace allow-list.
+	setupFakeCacheForFilterTests(t)
+	ctx := withRestrictedUser(t, "alice", []string{"alpha", "beta"})
+	seedSecretListCanI(t, "alice", []string{"alpha"}, []string{"beta"})
+
+	result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "secrets"})
+	if err != nil {
+		t.Fatalf("handleListResources: %v", err)
+	}
+	body := extractText(t, result)
+	if !containsName(body, "alpha-secret") {
+		t.Errorf("expected alpha-secret in result: %s", body)
+	}
+	if containsName(body, "beta-secret") {
+		t.Errorf("beta-secret leaked despite per-namespace secret deny: %s", body)
+	}
+}
+
+func TestHandleListResources_Secrets_ClusterWideShape_NoSecretRBAC(t *testing.T) {
+	// User with AllowedNamespaces==nil (cluster-wide namespace sentinel from
+	// DiscoverNamespaces stage 1: list-pods cluster-wide) but no cluster-scope
+	// secrets RBAC. Cluster-wide pod visibility does NOT imply cluster-wide
+	// secret visibility — pin the cluster-scope SAR gate so this conflation
+	// can't return.
+	setupFakeCacheForFilterTests(t)
+	ctx := withClusterAdmin(t, "broad-reader")
+	perms := getPermCache().Get("broad-reader")
+	if perms == nil {
+		t.Fatalf("broad-reader not in cache")
+	}
+	perms.SetCanI("list", "", "secrets", "", false)
+
+	result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "secrets"})
+	if err != nil {
+		t.Fatalf("handleListResources: %v", err)
+	}
+	body := extractText(t, result)
+	for _, want := range []string{"alpha-secret", "beta-secret", "gamma-secret"} {
+		if containsName(body, want) {
+			t.Errorf("secret %q leaked to cluster-wide-pods user without secrets SAR: %s", want, body)
+		}
+	}
+}
+
+func TestHandleListResources_Secrets_ClusterWideShape_WithSecretRBAC(t *testing.T) {
+	// Same shape as the previous test but with the cluster-scope secrets SAR
+	// allowed — user sees every secret in the cache.
+	setupFakeCacheForFilterTests(t)
+	ctx := withClusterAdmin(t, "broad-reader")
+	perms := getPermCache().Get("broad-reader")
+	if perms == nil {
+		t.Fatalf("broad-reader not in cache")
+	}
+	perms.SetCanI("list", "", "secrets", "", true)
+
+	result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "secrets"})
+	if err != nil {
+		t.Fatalf("handleListResources: %v", err)
+	}
+	body := extractText(t, result)
+	for _, want := range []string{"alpha-secret", "beta-secret", "gamma-secret"} {
+		if !containsName(body, want) {
+			t.Errorf("cluster-wide secret reader missing %s: %s", want, body)
+		}
+	}
+}
+
+func TestHandleListResources_Secrets_NoAuthPassthrough(t *testing.T) {
+	// auth.mode=none: no user on context. Helpers passthrough; the SA's cache
+	// RBAC is the only gate. Every cached secret is visible.
+	setupFakeCacheForFilterTests(t)
+
+	result, _, err := handleListResources(context.Background(), nil, listResourcesInput{Kind: "secrets"})
+	if err != nil {
+		t.Fatalf("handleListResources: %v", err)
+	}
+	body := extractText(t, result)
+	for _, want := range []string{"alpha-secret", "beta-secret", "gamma-secret"} {
+		if !containsName(body, want) {
+			t.Errorf("no-auth passthrough missing %s: %s", want, body)
+		}
+	}
+}
+
+func TestHandleGetResource_Secret_DeniedInNamespace(t *testing.T) {
+	// alice has namespace access to alpha and to the alpha namespace's
+	// other resources, but the per-namespace secret get SAR denies. The
+	// cache has alpha-secret; without the gate this would 200 with the
+	// secret object.
+	setupFakeCacheForFilterTests(t)
+	ctx := withRestrictedUser(t, "alice", []string{"alpha"})
+	seedSecretGetCanI(t, "alice", nil, []string{"alpha"})
+
+	_, _, err := handleGetResource(ctx, nil, getResourceInput{Kind: "secrets", Namespace: "alpha", Name: "alpha-secret"})
+	if err == nil {
+		t.Fatal("expected forbidden error for secret in denied-secret namespace, got nil")
+	}
+	if !strings.Contains(err.Error(), "forbidden") {
+		t.Errorf("expected 'forbidden' in error, got: %v", err)
+	}
+}
+
+func TestHandleGetResource_Secret_AllowedInNamespace(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	ctx := withRestrictedUser(t, "alice", []string{"alpha"})
+	seedSecretGetCanI(t, "alice", []string{"alpha"}, nil)
+
+	result, _, err := handleGetResource(ctx, nil, getResourceInput{Kind: "secrets", Namespace: "alpha", Name: "alpha-secret"})
+	if err != nil {
+		t.Fatalf("handleGetResource: %v", err)
+	}
+	body := extractText(t, result)
+	if !containsName(body, "alpha-secret") {
+		t.Errorf("expected alpha-secret in result, got: %s", body)
+	}
+}
+
+func TestHandleSearch_Secrets_PerNamespaceFanout(t *testing.T) {
+	// /api/search (and the MCP equivalent) must do per-namespace SAR fanout
+	// for Secrets so the resource browser and search agree on visibility.
+	// A cluster-scope SAR alone would silently drop Secret for any
+	// namespace-bounded user. Pin: secrets in allowed namespaces are
+	// searchable; those in denied namespaces are not.
+	setupFakeCacheForFilterTests(t)
+	ctx := withRestrictedUser(t, "alice", []string{"alpha", "beta"})
+	seedSecretListCanI(t, "alice", []string{"alpha"}, []string{"beta"})
+
+	result, _, err := handleSearch(ctx, nil, searchInput{Q: "kind:Secret"})
+	if err != nil {
+		t.Fatalf("handleSearch: %v", err)
+	}
+	body := extractText(t, result)
+	if !containsName(body, "alpha-secret") {
+		t.Errorf("expected alpha-secret in search hits: %s", body)
+	}
+	if containsName(body, "beta-secret") {
+		t.Errorf("beta-secret leaked in search despite per-ns deny: %s", body)
+	}
+}
+
+func TestHandleSearch_Secrets_ClusterWideShape_NsFilter(t *testing.T) {
+	// Regression for the bug where AllowedNamespaces==nil (cluster-wide
+	// namespace sentinel) plus a concrete `ns:` filter took the cluster-
+	// scope SAR branch and skipped Secret entirely. The user has list-pods
+	// cluster-wide but secrets only in alpha — the search-RBAC decision
+	// must fan out over the requested namespaces, not run a cluster-scope
+	// `list secrets` SAR.
+	setupFakeCacheForFilterTests(t)
+	ctx := withClusterAdmin(t, "broad-reader")
+	perms := getPermCache().Get("broad-reader")
+	if perms == nil {
+		t.Fatalf("broad-reader not in cache")
+	}
+	// No cluster-scope secrets RBAC — only per-namespace in alpha.
+	perms.SetCanI("list", "", "secrets", "", false)
+	perms.SetCanI("list", "", "secrets", "alpha", true)
+	perms.SetCanI("list", "", "secrets", "beta", false)
+
+	result, _, err := handleSearch(ctx, nil, searchInput{Q: "kind:Secret ns:alpha"})
+	if err != nil {
+		t.Fatalf("handleSearch: %v", err)
+	}
+	body := extractText(t, result)
+	if !containsName(body, "alpha-secret") {
+		t.Errorf("expected alpha-secret in search hits (cluster-wide-shape user with per-ns secret RBAC): %s", body)
+	}
+	if containsName(body, "beta-secret") {
+		t.Errorf("beta-secret leaked despite ns:alpha filter + per-ns RBAC: %s", body)
 	}
 }

@@ -63,7 +63,8 @@ cleanup() {
   info "removing test RBAC + namespaces + CRD"
   kubectl delete clusterrolebinding "radar-rbac-test-impersonator" "radar-rbac-test-carol" "radar-rbac-test-erin" --ignore-not-found >/dev/null 2>&1
   kubectl delete clusterrole "radar-rbac-test-pods-only" "radar-rbac-test-nodes-only" --ignore-not-found >/dev/null 2>&1
-  kubectl delete -n "$NS_ALICE" rolebinding "radar-test-alice" "radar-test-dave-a" --ignore-not-found >/dev/null 2>&1
+  kubectl delete -n "$NS_ALICE" rolebinding "radar-test-alice" "radar-test-dave-a" "radar-test-frank" "radar-test-frank-view" --ignore-not-found >/dev/null 2>&1
+  kubectl delete -n "$NS_ALICE" role "radar-rbac-test-secret-reader" --ignore-not-found >/dev/null 2>&1
   kubectl delete -n "$NS_BOB" rolebinding "radar-test-bob" "radar-test-dave-b" --ignore-not-found >/dev/null 2>&1
   kubectl delete namespace "$NS_ALICE" "$NS_BOB" --ignore-not-found >/dev/null 2>&1
   # Delete CRD instances first, then the CRD itself
@@ -100,6 +101,14 @@ kubectl create namespace "$NS_BOB"   --dry-run=client -o yaml | kubectl apply -f
 kubectl run -n "$NS_ALICE" rbac-test-pod-a --image=registry.k8s.io/pause:3.9 --restart=Never \
   --dry-run=client -o yaml 2>/dev/null | kubectl apply -f - >/dev/null
 kubectl run -n "$NS_BOB"   rbac-test-pod-b --image=registry.k8s.io/pause:3.9 --restart=Never \
+  --dry-run=client -o yaml 2>/dev/null | kubectl apply -f - >/dev/null
+
+# Seed a Secret in NS_ALICE so per-namespace Secret RBAC tests have something
+# to leak (or correctly hide). When the chart grants the SA cluster-wide
+# secrets (rbac.secrets / rbac.helm / auth.mode != "none" / cloud.enabled),
+# the cache holds it and per-user RBAC must decide visibility on read.
+kubectl create secret generic -n "$NS_ALICE" rbac-test-secret-a \
+  --from-literal=token=ignored \
   --dry-run=client -o yaml 2>/dev/null | kubectl apply -f - >/dev/null
 
 info "installing test CRD (cluster-scoped, not in static cluster-only list)"
@@ -256,6 +265,50 @@ subjects:
 roleRef:
   kind: ClusterRole
   name: radar-rbac-test-nodes-only
+  apiGroup: rbac.authorization.k8s.io
+---
+# frank: view in NS_ALICE PLUS explicit secret list/get. Same namespace
+# ceiling as alice (who is bound to view, which excludes secrets) — frank
+# is the positive control. He must see Secrets where alice can't, proving
+# the per-namespace SAR gate honors RBAC grants rather than blanket-denying
+# secrets to all namespace-bound users.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: radar-rbac-test-secret-reader
+  namespace: $NS_ALICE
+rules:
+- apiGroups: [""]
+  resources: ["secrets"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: radar-test-frank
+  namespace: $NS_ALICE
+subjects:
+- kind: User
+  name: frank
+roleRef:
+  kind: Role
+  name: radar-rbac-test-secret-reader
+  apiGroup: rbac.authorization.k8s.io
+---
+# frank also needs view (pods/services/etc.) so DiscoverNamespaces picks
+# up NS_ALICE as accessible. Without the view-binding, list-pods SAR fails
+# and AllowedNamespaces is empty, so the secret-only Role wouldn't matter.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: radar-test-frank-view
+  namespace: $NS_ALICE
+subjects:
+- kind: User
+  name: frank
+roleRef:
+  kind: ClusterRole
+  name: view
   apiGroup: rbac.authorization.k8s.io
 EOF
 
@@ -628,6 +681,69 @@ if [[ "$DAVE_DASH_CRDS" != *"RadarTest"* ]]; then
   ok "dave's /api/dashboard/crds does not include cluster-scoped RadarTest"
 else
   fail "dave's /api/dashboard/crds leaked RadarTest: $DAVE_DASH_CRDS"
+fi
+
+echo
+echo -e "${B}=== Per-namespace Secret RBAC (alice's view role excludes secrets) ===${N}"
+# The K8s `view` ClusterRole does NOT include secrets. The chart can grant
+# the SA cluster-wide secrets (rbac.helm / auth.mode != "none" / etc.), so
+# the cache may hold rbac-test-secret-a; the server's per-namespace
+# `list secrets` SAR must gate the read. alice's view role fails that SAR
+# and she sees nothing. frank (same namespace, plus explicit secret-reader
+# Role) sees the secret.
+
+ALICE_SECRETS=$(as_user alice GET /api/resources/secrets | arr_len)
+expect_zero "REST alice cannot list secrets (view role excludes them)" "$ALICE_SECRETS"
+
+ALICE_SECRET_GET_HTTP=$(curl -s -o /dev/null -w '%{http_code}' -H "X-Forwarded-User: alice" \
+  "http://localhost:$PORT/api/resources/secrets/$NS_ALICE/rbac-test-secret-a")
+if [[ "$ALICE_SECRET_GET_HTTP" == "403" ]]; then
+  ok "REST alice GET secret returns 403"
+else
+  fail "REST alice GET secret returned $ALICE_SECRET_GET_HTTP; expected 403"
+fi
+
+ALICE_MCP_SECRETS=$(mcp_call alice list_resources '{"kind":"secrets"}' | arr_len)
+expect_zero "MCP alice list_resources kind=secrets returns 0" "$ALICE_MCP_SECRETS"
+
+# MCP get_resource returns an error string on forbidden — not a structured
+# 403. Check for the substring instead of HTTP code.
+ALICE_MCP_SECRET_GET=$(mcp_call alice get_resource "{\"kind\":\"secrets\",\"namespace\":\"$NS_ALICE\",\"name\":\"rbac-test-secret-a\"}")
+if [[ -z "$ALICE_MCP_SECRET_GET" ]] || ! echo "$ALICE_MCP_SECRET_GET" | jq -e '.name == "rbac-test-secret-a"' >/dev/null 2>&1; then
+  ok "MCP alice get_resource secrets denied (no rbac-test-secret-a in payload)"
+else
+  fail "MCP alice get_resource leaked secret: $ALICE_MCP_SECRET_GET"
+fi
+
+ALICE_SEARCH_SECRETS=$(as_user alice GET "/api/search?q=kind:Secret" | jq -r '[.hits[]?.name] | join(",")' 2>/dev/null || echo "ERR")
+if [[ "$ALICE_SEARCH_SECRETS" != *"rbac-test-secret-a"* ]]; then
+  ok "REST search kind:Secret hides rbac-test-secret-a from alice"
+else
+  fail "REST search leaked secret to alice: [$ALICE_SEARCH_SECRETS]"
+fi
+
+# frank: positive control. Same namespace ceiling as alice, but with explicit
+# secret-reader Role bound. He must see the secret.
+FRANK_SECRETS=$(as_user frank GET /api/resources/secrets | jq -r '[.[].metadata.name] | join(",")')
+if [[ "$FRANK_SECRETS" == *"rbac-test-secret-a"* ]]; then
+  ok "REST frank can list secrets (explicit secret-reader Role)"
+else
+  fail "REST frank should see rbac-test-secret-a, got: [$FRANK_SECRETS]"
+fi
+
+FRANK_SECRET_GET_HTTP=$(curl -s -o /dev/null -w '%{http_code}' -H "X-Forwarded-User: frank" \
+  "http://localhost:$PORT/api/resources/secrets/$NS_ALICE/rbac-test-secret-a")
+if [[ "$FRANK_SECRET_GET_HTTP" == "200" ]]; then
+  ok "REST frank GET secret returns 200"
+else
+  fail "REST frank GET secret returned $FRANK_SECRET_GET_HTTP; expected 200"
+fi
+
+FRANK_SEARCH_SECRETS=$(as_user frank GET "/api/search?q=kind:Secret" | jq -r '[.hits[]?.name] | join(",")' 2>/dev/null || echo "ERR")
+if [[ "$FRANK_SEARCH_SECRETS" == *"rbac-test-secret-a"* ]]; then
+  ok "REST search kind:Secret shows rbac-test-secret-a to frank"
+else
+  fail "REST search missing secret for frank: [$FRANK_SEARCH_SECRETS]"
 fi
 
 # --- Summary ---

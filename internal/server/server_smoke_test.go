@@ -120,6 +120,17 @@ func TestMain(m *testing.M) {
 				Ports:    []corev1.ServicePort{{Port: 80, TargetPort: intstr.FromInt(80)}},
 			},
 		},
+		// Seed Secrets in two namespaces so per-user RBAC tests can
+		// distinguish "gate denied → []" from "no secrets in cache" and can
+		// exercise the partial-allow case (one ns allowed, the other denied).
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "nginx-tls", Namespace: "default"},
+			Type:       corev1.SecretTypeOpaque,
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "system-token", Namespace: "kube-system"},
+			Type:       corev1.SecretTypeOpaque,
+		},
 	)
 
 	// Initialize cache from fake client (bypasses RBAC checks)

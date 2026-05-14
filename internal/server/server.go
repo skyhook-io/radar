@@ -774,6 +774,32 @@ func (s *Server) canRead(r *http.Request, group, resource, namespace, verb strin
 	return allowed
 }
 
+// filterNamespacesByCanRead returns the subset of `namespaces` where the
+// calling user passes a per-namespace SAR for (group, resource, verb).
+// Fail-closed: SAR errors drop the namespace.
+//
+// Used to enforce per-kind RBAC inside a namespace when the cache reads as
+// the SA and the SA has broader permissions than individual users (the chart
+// can grant the SA cluster-wide secrets — any of rbac.secrets / rbac.helm /
+// auth.mode != "none" / cloud.enabled triggers it, for Helm release
+// visibility). Results memoize through UserPermissions.canI, so repeated
+// reads within the cache TTL don't re-SAR.
+//
+// nil or empty input is returned unchanged; the caller's namespace-access
+// gate (parseNamespacesForUser / noNamespaceAccess) is the upstream decision.
+func (s *Server) filterNamespacesByCanRead(r *http.Request, group, resource, verb string, namespaces []string) []string {
+	if len(namespaces) == 0 {
+		return namespaces
+	}
+	out := make([]string, 0, len(namespaces))
+	for _, ns := range namespaces {
+		if s.canRead(r, group, resource, ns, verb) {
+			out = append(out, ns)
+		}
+	}
+	return out
+}
+
 // clusterScopedTopologyKinds maps topology NodeKinds for cluster-scoped
 // resources to the (group, resource) tuple a SAR needs. Mirrors the MCP
 // table — kept in sync manually since each side gates with its own helper.
@@ -1034,6 +1060,32 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	} else if !isNamespacesKind && noNamespaceAccess(namespaces) {
 		s.writeJSON(w, []any{})
 		return
+	}
+
+	// Per-kind RBAC inside a namespace. Helm release storage IS K8s Secrets,
+	// so the chart can grant the SA cluster-wide secrets (rbac.secrets,
+	// rbac.helm, auth.mode != "none", or cloud.enabled — see deploy/helm/
+	// radar/templates/clusterrole.yaml). When any of those triggers fires
+	// the cache holds every secret in the cluster, so per-user RBAC must
+	// gate the read. Other namespaced kinds are deferred.
+	if (kind == "secrets" || kind == "secret") && !isClusterScoped {
+		if auth.UserFromContext(r.Context()) != nil {
+			if namespaces == nil {
+				// Auth user with cluster-wide namespace access (e.g. picked up
+				// via DiscoverNamespaces stage 1: cluster-wide list pods). The
+				// cache will serve all secrets — gate on cluster-scope SAR.
+				if !s.canRead(r, "", "secrets", "", "list") {
+					s.writeJSON(w, []any{})
+					return
+				}
+			} else {
+				namespaces = s.filterNamespacesByCanRead(r, "", "secrets", "list", namespaces)
+				if len(namespaces) == 0 {
+					s.writeJSON(w, []any{})
+					return
+				}
+			}
+		}
 	}
 
 	cache := k8s.GetResourceCache()
@@ -1433,6 +1485,14 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		allowed := s.getUserNamespaces(r, []string{namespace})
 		if noNamespaceAccess(allowed) {
 			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", namespace))
+			return
+		}
+		// Per-kind RBAC inside the namespace for Secrets — the chart can
+		// grant the SA cluster-wide secrets (Helm release visibility), so
+		// namespace-list discovery is not a sufficient gate here. The list
+		// handler has the matching list-SAR.
+		if (kind == "secrets" || kind == "secret") && !s.canRead(r, "", "secrets", namespace, "get") {
+			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to secrets in namespace %q", namespace))
 			return
 		}
 	}

@@ -10,31 +10,23 @@ import (
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
 
-// sensitiveSearchKinds enumerates kinds whose default presence in
-// /api/search results would leak information beyond what the calling
-// user can fetch via /api/resources/{kind} under their own RBAC.
-// Secrets are sensitive even when redacted (names, label keys, env-
-// var names already enough for a recon foothold). Cluster-scoped
-// kinds (Node, PersistentVolume, StorageClass, Namespace) imply
-// cluster-wide read which a namespace-bounded Cloud viewer doesn't
-// have.
+// sensitiveSearchKinds enumerates cluster-scoped kinds whose default presence
+// in /api/search results would leak information beyond what the calling user
+// can fetch via /api/resources/{kind} under their own RBAC. Read access to a
+// namespace doesn't imply read access to Node, PersistentVolume,
+// StorageClass, or Namespace metadata — these need their own cluster-scope
+// SAR. Secrets are namespaced and handled separately by
+// computeSearchSecretsRBAC, which supports per-namespace permission.
 //
-// The walker in internal/search consults Options.SkipKinds, populated
-// by SAR per (user, kind) at cluster scope. Users without `list X`
-// at cluster scope have X dropped from the scan — including for
-// explicit `kind:X` queries, which return zero hits silently.
-// Trade-off: a user with per-namespace `list secrets` permission
-// loses /api/search coverage for secrets; they can still hit
-// /api/resources/secrets?namespace=X directly, which the cache layer
-// handles with its own SA-level gating. Deemed acceptable for v1.
-// Per-namespace SAR fanout (one SAR per requested namespace per
-// kind) is a follow-up if customer evidence demands it.
+// The walker in internal/search consults Options.SkipKinds, populated by SAR
+// per (user, kind) at cluster scope. Users without `list X` at cluster scope
+// have X dropped from the scan — including for explicit `kind:X` queries,
+// which return zero hits silently.
 var sensitiveSearchKinds = []struct {
 	Kind     string // singular Kind for SkipKinds map
 	Resource string // plural for SAR ResourceAttributes
 	Group    string // API group; empty for core
 }{
-	{"Secret", "secrets", ""},
 	{"Node", "nodes", ""},
 	{"PersistentVolume", "persistentvolumes", ""},
 	{"StorageClass", "storageclasses", "storage.k8s.io"},
@@ -101,6 +93,54 @@ func (s *Server) computeSearchSkipKinds(r *http.Request) map[string]bool {
 		}
 	}
 	return skip
+}
+
+// computeSearchSecretsRBAC decides how /api/search should treat Secrets for
+// the calling user. scanNamespaces is the effective set of namespaces the
+// walker would scan absent per-kind RBAC — the intersection of the user's
+// RBAC-allowed namespaces and any `ns:` modifier in the query. Three cases:
+//
+//   - Auth disabled (no user on context): returns ("", nil). SA RBAC at the
+//     cache layer is the only gate.
+//   - Cluster-wide scan (scanNamespaces == nil): the user is reading at
+//     cluster scope (cluster-wide-namespace sentinel from DiscoverNamespaces
+//     stage 1 — list-pods cluster-wide — AND no `ns:` modifier narrowed it).
+//     Cluster-wide list-pods does NOT imply cluster-wide list-secrets, so
+//     gate via a `list secrets` SAR at cluster scope. Returns ("skip", nil)
+//     when denied; ("", nil) when allowed (cluster-wide informer scan runs).
+//   - Namespace-scoped scan (scanNamespaces != nil): per-namespace SAR
+//     fanout. Returns ("skip", nil) when the user can't list secrets in any
+//     scan namespace; ("override", subset) when they can in a subset (walker
+//     uses NamespacesByKind for Secrets only).
+//
+// Fail-closed on SAR API errors at any step — a transient apiserver hiccup
+// drops Secret rather than leaking through.
+func (s *Server) computeSearchSecretsRBAC(r *http.Request, scanNamespaces []string) (decision string, scopedNamespaces []string) {
+	if auth.UserFromContext(r.Context()) == nil {
+		return "", nil
+	}
+
+	if scanNamespaces == nil {
+		if s.canRead(r, "", "secrets", "", "list") {
+			return "", nil
+		}
+		return "skip", nil
+	}
+
+	if len(scanNamespaces) == 0 {
+		return "skip", nil
+	}
+
+	scoped := make([]string, 0, len(scanNamespaces))
+	for _, ns := range scanNamespaces {
+		if s.canRead(r, "", "secrets", ns, "list") {
+			scoped = append(scoped, ns)
+		}
+	}
+	if len(scoped) == 0 {
+		return "skip", nil
+	}
+	return "override", scoped
 }
 
 // _ context.Context — kept to make ctx threading explicit if a future

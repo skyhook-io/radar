@@ -82,13 +82,19 @@ type Options struct {
 	Namespaces []string
 	// SkipKinds names kinds the walker must NOT scan, regardless of
 	// query/filter content. The handler populates this from per-user
-	// SubjectAccessReviews against sensitive kinds (Secret, Node,
-	// PersistentVolume, StorageClass, Namespace) — users without the
-	// list verb at cluster scope don't see those rows even if the
-	// underlying SA's informer cache holds them. Without this gate, a
-	// k8s `view` Cloud viewer would see Secret names, Node IPs, etc.
-	// because the cache reads happen as the SA, not the end user.
+	// SubjectAccessReviews against sensitive kinds (Node, PersistentVolume,
+	// StorageClass, Namespace, and Secrets when the user has no per-namespace
+	// access at all) — users without the list verb don't see those rows even
+	// if the underlying SA's informer cache holds them. Without this gate, a
+	// k8s `view` Cloud viewer would see Secret names, Node IPs, etc. because
+	// the cache reads happen as the SA, not the end user.
 	SkipKinds map[string]bool
+	// NamespacesByKind, when set for a typed kind, replaces Options.Namespaces
+	// for that kind only. Use this when per-kind RBAC narrows access below
+	// the namespace-discovery boundary (e.g. user can list pods cluster-wide
+	// but secrets only in `team-a`). Cluster-scoped kinds and dynamic CRDs
+	// ignore this map. nil entries fall back to Options.Namespaces.
+	NamespacesByKind map[string][]string
 	// CanReadClusterScoped authorizes cluster-scoped resources before the
 	// cache walker scans them. Handlers provide a per-user SAR-backed
 	// predicate; nil preserves auth-mode=none behavior where the service
@@ -141,13 +147,17 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 			continue
 		}
 		// Cluster-scoped kinds ignore the namespace constraint — they're
-		// orthogonal to namespace RBAC.
+		// orthogonal to namespace RBAC. Namespaced kinds may have a per-kind
+		// override (e.g. user has list-secrets only in a subset of their
+		// allowed namespaces); fall back to Options.Namespaces otherwise.
 		listNs := opts.Namespaces
 		if isClusterScopedKind(tk.Kind) {
 			if opts.CanReadClusterScoped != nil && !opts.CanReadClusterScoped(tk.Kind, tk.Group, tk.Plural) {
 				continue
 			}
 			listNs = nil
+		} else if override, ok := opts.NamespacesByKind[tk.Kind]; ok {
+			listNs = override
 		}
 		objs, err := p.ListTyped(tk.Plural, listNs)
 		if err != nil {

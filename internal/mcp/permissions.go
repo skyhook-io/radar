@@ -176,6 +176,62 @@ func canReadClusterScopedKind(ctx context.Context, kind, group, verb string) boo
 	return allowed
 }
 
+// canReadInNamespace authorizes a single (verb, group, resource, namespace)
+// read via SubjectAccessReview, memoizing on UserPermissions.canI. Use when
+// per-kind RBAC inside a namespace differs from namespace-list discovery
+// (e.g. user can list pods but not secrets in `team-a`).
+//
+// namespace="" issues an any-namespace SAR — for a *namespaced* kind that
+// asks "can the user list this kind cluster-wide?" (useful as the
+// cluster-wide-scan branch in search RBAC). For *cluster-scoped* kinds
+// keep using canReadClusterScopedKind; it routes via ClassifyKindScope.
+//
+// Returns true (passthrough) when no user is on context — auth-mode=none
+// applies the SA's RBAC at the cache layer.
+func canReadInNamespace(ctx context.Context, group, resource, namespace, verb string) bool {
+	user, perms := resolveUserPerms(ctx)
+	if user == nil {
+		return true
+	}
+	if perms != nil {
+		if v, ok := perms.CanI(verb, group, resource, namespace); ok {
+			return v
+		}
+	}
+	client := k8s.GetClient()
+	if client == nil {
+		log.Printf("[mcp] canReadInNamespace: no K8s client, denying %s on %s/%s in %q for %s", k8s.SanitizeForLog(verb), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(user.Username))
+		return false
+	}
+	allowed, err := subjectCanI(ctx, client, user.Username, user.Groups, namespace, group, resource, verb)
+	if err != nil {
+		log.Printf("[mcp] canReadInNamespace SAR failed for %s on %s/%s in %q: %v", k8s.SanitizeForLog(user.Username), k8s.SanitizeForLog(group), k8s.SanitizeForLog(resource), k8s.SanitizeForLog(namespace), err)
+		return false
+	}
+	if perms != nil {
+		perms.SetCanI(verb, group, resource, namespace, allowed)
+	}
+	return allowed
+}
+
+// filterNamespacesByCanRead returns the subset of `namespaces` where the
+// calling user passes a per-namespace SAR for (group, resource, verb). The
+// MCP-side mirror of Server.filterNamespacesByCanRead.
+//
+// nil or empty input is returned unchanged.
+func filterNamespacesByCanRead(ctx context.Context, group, resource, verb string, namespaces []string) []string {
+	if len(namespaces) == 0 {
+		return namespaces
+	}
+	out := make([]string, 0, len(namespaces))
+	for _, ns := range namespaces {
+		if canReadInNamespace(ctx, group, resource, ns, verb) {
+			out = append(out, ns)
+		}
+	}
+	return out
+}
+
 // retainAllowedObjects post-filters cache results for namespace-restricted users.
 // FetchResourceList accepts an `allowed` namespace slice for namespaced kinds
 // (it iterates per-namespace), but cluster-scoped lookups (e.g. cache.Nodes)

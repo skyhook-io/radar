@@ -57,18 +57,44 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	skipKinds := s.computeSearchSkipKinds(r)
+	// Secrets are namespaced and get per-namespace RBAC treatment so a user
+	// with per-namespace Secret access (e.g. a Role-bound viewer) sees those
+	// rows in search instead of having Secret dropped at cluster scope.
+	// scanNamespaces (not allowed) is the right input: a user with
+	// AllowedNamespaces==nil (cluster-wide-pods sentinel) who queries
+	// `ns:team-a` should get per-namespace fanout over team-a, not a
+	// cluster-scope `list secrets` SAR — they may have list-secrets in
+	// team-a but not cluster-wide. nil scanNamespaces (truly cluster-wide
+	// query) still routes to the cluster-scope SAR branch.
+	var namespacesByKind map[string][]string
+	switch decision, scoped := s.computeSearchSecretsRBAC(r, scanNamespaces); decision {
+	case "skip":
+		if skipKinds == nil {
+			skipKinds = make(map[string]bool)
+		}
+		skipKinds["Secret"] = true
+	case "override":
+		// scoped ⊆ scanNamespaces ⊆ parsed.NSFilter already (the SAR fanout
+		// iterates scanNamespaces, which is the upstream intersection of
+		// allowed and parsed.NSFilter). Use the SAR result directly.
+		namespacesByKind = map[string][]string{"Secret": scoped}
+	}
+
 	opts := search.Options{
 		Limit:      parseLimit(r.URL.Query().Get("limit")),
 		Include:    include,
 		Namespaces: scanNamespaces,
-		// SAR-gate sensitive kinds (Secret + cluster-scoped) by the
-		// END user's identity, not the SA's. The cache itself reads
-		// as the SA so it carries Secrets/Nodes/etc., but exposing
-		// them through search to a namespace-bound viewer would let
-		// them enumerate cluster-scope info their k8s RBAC denies.
-		// In auth-mode=none, returns nil and the SA's own RBAC at
-		// the cache lister layer is the only filter.
-		SkipKinds: s.computeSearchSkipKinds(r),
+		// SAR-gate sensitive cluster-scoped kinds (Node, PV, StorageClass,
+		// Namespace) by the END user's identity, not the SA's. The cache
+		// itself reads as the SA so it carries those rows, but exposing
+		// them through search to a namespace-bound viewer would let them
+		// enumerate cluster-scope info their k8s RBAC denies. Secrets get
+		// per-namespace RBAC via NamespacesByKind/SkipKinds above. In
+		// auth-mode=none, computeSearchSkipKinds returns nil and the SA's
+		// own RBAC at the cache lister layer is the only filter.
+		SkipKinds:        skipKinds,
+		NamespacesByKind: namespacesByKind,
 		CanReadClusterScoped: func(kind, group, resource string) bool {
 			if auth.UserFromContext(r.Context()) == nil {
 				return true

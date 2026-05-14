@@ -413,6 +413,26 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 		return toJSONResult([]any{})
 	}
 
+	// Per-kind RBAC inside a namespace for Secrets. The cache reads as the SA,
+	// and the chart can grant the SA cluster-wide secrets (rbac.secrets,
+	// rbac.helm, auth.mode != "none", or cloud.enabled — Helm release
+	// visibility), so per-user RBAC must gate the read. canReadInNamespace
+	// and filterNamespacesByCanRead pass through when no user is on context
+	// (auth-mode=none — SA RBAC at the cache layer is the only gate). Other
+	// namespaced kinds are deferred.
+	if kind == "secrets" || kind == "secret" {
+		if allowed == nil {
+			if !canReadInNamespace(ctx, "", "secrets", "", "list") {
+				return toJSONResult([]any{})
+			}
+		} else {
+			allowed = filterNamespacesByCanRead(ctx, "", "secrets", "list", allowed)
+			if len(allowed) == 0 {
+				return toJSONResult([]any{})
+			}
+		}
+	}
+
 	// For cluster-scoped reads, force a cluster-wide list (don't iterate
 	// per allowed namespace — cluster-scoped resources don't live there).
 	listScope := allowed
@@ -510,6 +530,14 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		}
 	} else if !checkNamespaceAccess(ctx, namespace) {
 		return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", namespace)
+	} else if kind == "secrets" || kind == "secret" {
+		// Per-kind RBAC inside the namespace — the chart can grant the SA
+		// cluster-wide secrets (Helm release visibility), so namespace-list
+		// discovery is not a sufficient gate. The list handler has the
+		// matching list-SAR.
+		if !canReadInNamespace(ctx, "", "secrets", namespace, "get") {
+			return nil, nil, fmt.Errorf("forbidden: no access to secrets in namespace %q", namespace)
+		}
 	}
 
 	// Try typed cache first
@@ -1849,12 +1877,15 @@ func intersectAllowedNamespaces(allowed, requested []string) []string {
 	return out
 }
 
+// mcpSensitiveSearchKinds is the MCP mirror of the REST sensitiveSearchKinds —
+// cluster-scoped kinds that need their own list-SAR per user. Secrets are
+// namespaced and handled by mcpSearchSecretsRBAC instead, which supports
+// per-namespace permission.
 var mcpSensitiveSearchKinds = []struct {
 	Kind     string
 	Resource string
 	Group    string
 }{
-	{"Secret", "secrets", ""},
 	{"Node", "nodes", ""},
 	{"PersistentVolume", "persistentvolumes", ""},
 	{"StorageClass", "storageclasses", "storage.k8s.io"},
@@ -1900,6 +1931,39 @@ func mcpSearchSkipKinds(ctx context.Context) map[string]bool {
 	return out
 }
 
+// mcpSearchSecretsRBAC mirrors Server.computeSearchSecretsRBAC for MCP. See
+// that function for the three-case semantics. scanNamespaces is the
+// effective scan scope (intersection of the user's RBAC-allowed namespaces
+// and any `ns:` modifier in the query) — nil means a true cluster-wide scan.
+//
+// Cached canI hits short-circuit before the live-client path, so a seeded
+// test cache authorizes without needing a real K8s client.
+func mcpSearchSecretsRBAC(ctx context.Context, scanNamespaces []string) (decision string, scopedNamespaces []string) {
+	if user, _ := resolveUserPerms(ctx); user == nil {
+		return "", nil
+	}
+
+	if scanNamespaces == nil {
+		if canReadInNamespace(ctx, "", "secrets", "", "list") {
+			return "", nil
+		}
+		return "skip", nil
+	}
+	if len(scanNamespaces) == 0 {
+		return "skip", nil
+	}
+	scoped := make([]string, 0, len(scanNamespaces))
+	for _, ns := range scanNamespaces {
+		if canReadInNamespace(ctx, "", "secrets", ns, "list") {
+			scoped = append(scoped, ns)
+		}
+	}
+	if len(scoped) == 0 {
+		return "skip", nil
+	}
+	return "override", scoped
+}
+
 func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInput) (*mcp.CallToolResult, any, error) {
 	provider := search.NewCacheProvider()
 	if provider == nil {
@@ -1926,11 +1990,33 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	default:
 		return nil, nil, fmt.Errorf("unknown include=%q (want: summary, raw, none)", input.Include)
 	}
+
+	skipKinds := mcpSearchSkipKinds(ctx)
+	// Secrets: per-namespace SAR fanout. See REST handleSearch for rationale.
+	// scanNamespaces (not allowed) is the SAR-fanout input — a user with
+	// AllowedNamespaces==nil (cluster-wide-pods sentinel) who constrains
+	// with `ns:team-a` should fanout over team-a, not run a cluster-scope
+	// `list secrets` SAR they may not have.
+	var namespacesByKind map[string][]string
+	switch decision, scoped := mcpSearchSecretsRBAC(ctx, scanNamespaces); decision {
+	case "skip":
+		if skipKinds == nil {
+			skipKinds = make(map[string]bool)
+		}
+		skipKinds["Secret"] = true
+	case "override":
+		// scoped ⊆ scanNamespaces ⊆ parsed.NSFilter already (the SAR fanout
+		// iterates scanNamespaces, which is the upstream intersection of
+		// allowed and parsed.NSFilter). Use the SAR result directly.
+		namespacesByKind = map[string][]string{"Secret": scoped}
+	}
+
 	opts := search.Options{
-		Limit:      input.Limit,
-		Include:    include,
-		Namespaces: scanNamespaces,
-		SkipKinds:  mcpSearchSkipKinds(ctx),
+		Limit:            input.Limit,
+		Include:          include,
+		Namespaces:       scanNamespaces,
+		SkipKinds:        skipKinds,
+		NamespacesByKind: namespacesByKind,
 		CanReadClusterScoped: func(kind, group, resource string) bool {
 			return canReadClusterScopedKind(ctx, kind, group, "list")
 		},

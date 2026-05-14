@@ -90,3 +90,74 @@ func TestSearch_SkipKinds_PreservesOtherKinds(t *testing.T) {
 // Keep appsv1 referenced so future test cases retain the import without
 // linter churn.
 var _ = appsv1.SchemeGroupVersion
+
+// recordingProvider wraps fakeProvider to capture the namespaces argument
+// each ListTyped call receives. Used to verify per-kind namespace scoping.
+type recordingProvider struct {
+	*fakeProvider
+	listedWith map[string][]string // kind → namespaces last passed
+}
+
+func (r *recordingProvider) ListTyped(kind string, namespaces []string) ([]runtime.Object, error) {
+	if r.listedWith == nil {
+		r.listedWith = make(map[string][]string)
+	}
+	r.listedWith[kind] = append([]string(nil), namespaces...)
+	return r.fakeProvider.ListTyped(kind, namespaces)
+}
+
+func TestSearch_NamespacesByKind_OverridesPerKind(t *testing.T) {
+	// Per-kind namespace override. When Secrets get a tighter scope than the
+	// global Options.Namespaces (e.g. user has list pods in ns-a+ns-b but
+	// list secrets only in ns-a), Secrets must list only the override set
+	// while other kinds keep using Options.Namespaces.
+	rec := &recordingProvider{
+		fakeProvider: &fakeProvider{
+			typed: map[string][]runtime.Object{
+				"secrets": {
+					&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-a", Name: "redis-cred"}},
+				},
+				"pods": {
+					&corev1.Pod{
+						ObjectMeta: metav1.ObjectMeta{Namespace: "ns-a", Name: "redis-loader"},
+						Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "c", Image: "redis"}}},
+					},
+				},
+			},
+		},
+	}
+	res, _ := Search(context.Background(), rec, Parse("redis"), Options{
+		Include:          IncludeNone,
+		Namespaces:       []string{"ns-a", "ns-b"},
+		NamespacesByKind: map[string][]string{"Secret": {"ns-a"}},
+	})
+
+	if got := rec.listedWith["pods"]; len(got) != 2 || got[0] != "ns-a" || got[1] != "ns-b" {
+		t.Errorf("pods listed with %v, want [ns-a ns-b]", got)
+	}
+	if got := rec.listedWith["secrets"]; len(got) != 1 || got[0] != "ns-a" {
+		t.Errorf("secrets listed with %v, want [ns-a]", got)
+	}
+	if len(res.Hits) == 0 {
+		t.Error("expected at least one hit")
+	}
+}
+
+func TestSearch_NamespacesByKind_NilFallsThroughToNamespaces(t *testing.T) {
+	rec := &recordingProvider{
+		fakeProvider: &fakeProvider{
+			typed: map[string][]runtime.Object{
+				"secrets": {&corev1.Secret{ObjectMeta: metav1.ObjectMeta{Namespace: "ns-a", Name: "redis-cred"}}},
+			},
+		},
+	}
+	_, _ = Search(context.Background(), rec, Parse("redis"), Options{
+		Include:          IncludeNone,
+		Namespaces:       []string{"ns-a"},
+		NamespacesByKind: nil,
+	})
+
+	if got := rec.listedWith["secrets"]; len(got) != 1 || got[0] != "ns-a" {
+		t.Errorf("secrets listed with %v, want [ns-a] (Options.Namespaces fallback)", got)
+	}
+}
