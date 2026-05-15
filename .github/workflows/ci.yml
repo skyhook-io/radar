@@ -114,3 +114,13 @@ jobs:
             echo "ERROR: helm template should have failed with no token set"
             exit 1
           fi
+
+      - name: Intall helmfile
+        uses: helmfile/helmfile-action@v2.2.0
+        with:
+          helmfile-auto-init: 'true'
+          helm-plugins: >
+            https://github.com/helm-unittest/helm-unittest@v1.1.0
+
+      - name: Run all helmfile unittests
+        run: helmfile -f ./deploy/helm/ unittest

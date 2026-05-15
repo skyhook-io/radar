@@ -1,0 +1,3 @@
+service:
+  annotations:
+    svc-annotation-key: svc-annotation-value

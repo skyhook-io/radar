@@ -1,0 +1,8 @@
+releases:
+  - chart: ./radar/
+    name: radar
+    namespace: radar
+    values:
+      - ./radar/tests/ci/values.yaml
+    unitTests:
+      - ./tests/*_test.yaml
