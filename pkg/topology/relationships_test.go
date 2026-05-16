@@ -74,21 +74,22 @@ func TestGetRelationships_IncomingEdgeProtects_DispatchesByKind(t *testing.T) {
 // which conflated PDB-side and NP-side outgoing edges).
 func TestGetRelationships_OutgoingEdgeProtects_NotSurfaced(t *testing.T) {
 	cases := []struct {
-		name     string
-		queryKnd string
-		sourceID string
-		sourceKd NodeKind
+		name       string
+		queryKind  string
+		queryName  string // must match the name component of sourceID below
+		sourceID   string
+		sourceKind NodeKind
 	}{
-		{"PDB outgoing", "PodDisruptionBudget", "poddisruptionbudget/demo/web-pdb", KindPDB},
-		{"NetworkPolicy outgoing", "NetworkPolicy", "networkpolicy/demo/deny-egress", KindNetworkPolicy},
-		{"CiliumNetworkPolicy outgoing", "CiliumNetworkPolicy", "ciliumnetworkpolicy/demo/cnp-1", KindCiliumNetworkPolicy},
+		{"PDB outgoing", "PodDisruptionBudget", "web-pdb", "poddisruptionbudget/demo/web-pdb", KindPDB},
+		{"NetworkPolicy outgoing", "NetworkPolicy", "deny-egress", "networkpolicy/demo/deny-egress", KindNetworkPolicy},
+		{"CiliumNetworkPolicy outgoing", "CiliumNetworkPolicy", "cnp-1", "ciliumnetworkpolicy/demo/cnp-1", KindCiliumNetworkPolicy},
 	}
 
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			topo := &Topology{
 				Nodes: []Node{
-					{ID: c.sourceID, Kind: c.sourceKd, Name: "src"},
+					{ID: c.sourceID, Kind: c.sourceKind, Name: c.queryName},
 					{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"},
 					{ID: "deployment/demo/api", Kind: KindDeployment, Name: "api"},
 				},
@@ -98,7 +99,30 @@ func TestGetRelationships_OutgoingEdgeProtects_NotSurfaced(t *testing.T) {
 				},
 			}
 
-			rel := GetRelationships(c.queryKnd, "demo", "src", topo, nil, nil)
+			// Control: the SAME topology, queried from the workload side, MUST
+			// surface the policy via incoming-EdgeProtects dispatch. If this
+			// fails, the test below would pass for the wrong reason — the
+			// edges or node IDs aren't matching at all. Catches the
+			// vacuous-pass class of mistakes.
+			incoming := GetRelationships("Deployment", "demo", "web", topo, nil, nil)
+			if incoming == nil {
+				t.Fatalf("control assertion failed: querying the target Deployment should surface the policy via incoming EdgeProtects, got nil relationships")
+			}
+			switch c.sourceKind {
+			case KindPDB:
+				if len(incoming.PDBs) == 0 {
+					t.Fatalf("control: expected workload to see incoming PDB, got %+v", incoming)
+				}
+			case KindNetworkPolicy, KindCiliumNetworkPolicy:
+				if len(incoming.NetworkPolicies) == 0 {
+					t.Fatalf("control: expected workload to see incoming NetworkPolicy, got %+v", incoming)
+				}
+			}
+
+			// Actual assertion: querying from the source policy side should
+			// NOT surface its targets (outgoing direction intentionally
+			// unsurfaced until a Protects[] field exists).
+			rel := GetRelationships(c.queryKind, "demo", c.queryName, topo, nil, nil)
 			if rel != nil {
 				t.Errorf("want nil (outgoing protects intentionally not surfaced), got %+v", rel)
 			}
