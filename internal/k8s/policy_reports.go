@@ -42,10 +42,15 @@ const kyvernoReportWarmupCap = policyreports.MaxIndexedReports
 // Kyverno is detected and kept up to date by PolicyReport informer
 // events. Nil when Kyverno is absent — callers must nil-check.
 var (
-	policyReportIndex   atomic.Pointer[policyreports.Index]
-	policyReportInit    sync.Once
-	policyReportWatched []schema.GroupVersionResource // set during warmup, used by event-driven refresh
-	policyReportMu      sync.Mutex                    // guards rebuild (debounce)
+	policyReportIndex atomic.Pointer[policyreports.Index]
+	// policyReportInit is a *sync.Once (pointer), not a value, because
+	// ResetPolicyReportIndex replaces it on context switch. Overwriting a
+	// value-type sync.Once whose mutex is currently held by a concurrent
+	// Do() crashes with "unlock of unlocked mutex". Every other sync.Once
+	// in internal/k8s/ uses this same pointer pattern for the same reason.
+	policyReportInit    = new(sync.Once)
+	policyReportWatched []schema.GroupVersionResource // guarded by policyReportMu
+	policyReportMu      sync.Mutex                    // guards policyReportWatched + serializes rebuild
 	policyReportPending atomic.Bool                   // true when a rebuild is already queued
 
 	// debounceDelay is how long after an informer event we wait before
@@ -157,8 +162,16 @@ func WarmupKyvernoPolicyReports() {
 		// with the informer's initial event burst.
 		idx := policyreports.NewIndex()
 		idx.Replace(listPolicyReportsAll(watched))
+		// Publish index + watched-GVR list together under the mutex. The
+		// rebuild path reads policyReportWatched while holding the same
+		// mutex, and ResetPolicyReportIndex (context switch) takes it to
+		// clear both. Without the lock here, a concurrent Reset would race
+		// with this assignment and could leave the new context with stale
+		// GVRs from the prior cluster.
+		policyReportMu.Lock()
 		policyReportIndex.Store(idx)
 		policyReportWatched = watched
+		policyReportMu.Unlock()
 
 		// Register event handlers for live updates. Each handler does a
 		// debounced rebuild — PolicyReport events arrive in bursts when
@@ -256,5 +269,9 @@ func ResetPolicyReportIndex() {
 	policyReportIndex.Store(nil)
 	policyReportWatched = nil
 	policyReportPending.Store(false)
-	policyReportInit = sync.Once{}
+	// Replace the pointer rather than zeroing the value — see the comment
+	// on policyReportInit's declaration. Any Do() lambda still running on
+	// the old *sync.Once finishes against that instance without
+	// corrupting the new one.
+	policyReportInit = new(sync.Once)
 }

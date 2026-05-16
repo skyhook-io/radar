@@ -490,29 +490,8 @@ func (d *ResourceDiscovery) SupportsWatchGVR(gvr schema.GroupVersionResource) bo
 	return false
 }
 
-// HasGroup reports whether at least one resource from the given API group
-// is present in discovery. Useful for cheap "is X installed" feature gates
-// (e.g. Kyverno → kyverno.io group) without having to enumerate the full
-// resources list at call sites.
-func (d *ResourceDiscovery) HasGroup(group string) bool {
-	if d == nil {
-		return false
-	}
-
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-
-	for _, res := range d.resources {
-		if res.Group == group {
-			return true
-		}
-	}
-	return false
-}
-
 // HasKindInGroup reports whether a specific Kind exists within an API
-// group. Stricter than HasGroup — use this when you depend on a specific
-// CRD being registered, not just any resource from the operator's group.
+// group. Use this when you depend on a specific CRD being registered.
 func (d *ResourceDiscovery) HasKindInGroup(kind, group string) bool {
 	if d == nil {
 		return false
