@@ -128,12 +128,17 @@ func TestWrapToolCallEmitsStructuredLog(t *testing.T) {
 	}
 }
 
-// TestLogToolCallSanitizesUserControlledFields verifies that newline /
-// carriage-return / control characters in user-supplied tool input fields
-// (kind, namespace) are replaced before reaching the log line. Without
-// this, a tool input of `{"kind": "Pod\nlevel=error fake=line"}` would
-// inject a forged log entry that downstream scrapers would parse as a
-// separate event.
+// TestLogToolCallSanitizesUserControlledFields verifies that BOTH classes
+// of log injection are neutralized:
+//
+//  1. Multi-line injection — `\n`, `\r`, control chars: would otherwise
+//     forge a separate log "event" that scrapers parse as its own entry.
+//  2. Same-line logfmt field injection — space and `=`: would otherwise
+//     introduce new key=value tokens on the SAME line that scrapers
+//     parse as legitimate fields (e.g. forging `level=error`).
+//
+// A tool input of `{"kind": "Pod level=error fake=line"}` is enough to
+// inject same-line fields; control chars aren't required.
 func TestLogToolCallSanitizesUserControlledFields(t *testing.T) {
 	var buf bytes.Buffer
 	defer log.SetOutput(log.Writer())
@@ -149,28 +154,47 @@ func TestLogToolCallSanitizesUserControlledFields(t *testing.T) {
 	})
 
 	_, _, _ = wrapped(context.Background(), &mcp.CallToolRequest{}, input{
+		// Newline (multi-line attack) + same-line attack in one payload.
 		Kind:      "Pod\nlevel=error fake=line",
 		Namespace: "prod\rfake=ns",
 	})
 
-	line := buf.String()
-	// The single emitted structured log line should not contain literal newlines
-	// or CRs in the values. Split on newline; only ONE structured line should appear.
-	structuredLines := 0
-	for _, l := range strings.Split(line, "\n") {
+	full := buf.String()
+
+	// Isolate the structured log line — the dev log (colored `[MCP]` lines)
+	// legitimately contains the raw JSON-marshaled args including
+	// `\nlevel=error fake=line`, but those are inside JSON quotes and don't
+	// pollute logfmt parsers. The structured line is what scrapers consume.
+	var structured string
+	structuredCount := 0
+	for _, l := range strings.Split(full, "\n") {
 		if strings.Contains(l, "component=mcp tool=inject_tool") {
-			structuredLines++
+			structured = l
+			structuredCount++
 		}
 	}
-	if structuredLines != 1 {
-		t.Errorf("expected exactly 1 structured log line, found %d (injection succeeded?)\nfull output:\n%s", structuredLines, line)
+	if structuredCount != 1 {
+		t.Fatalf("expected exactly 1 structured log line, found %d (multi-line injection succeeded?)\nfull output:\n%s", structuredCount, full)
 	}
-	if strings.Contains(line, "kind=Pod\nlevel=error") || strings.Contains(line, "ns=prod\rfake=ns") {
-		t.Errorf("user-controlled control chars reached the log line unchanged\nfull output:\n%s", line)
+
+	// Multi-line attack: structured line must not be broken across newlines.
+	// (Already guaranteed by structuredCount == 1 + log.Printf semantics.)
+
+	// Same-line attack: forged "level=error" / "fake=line" / "fake=ns" must
+	// NOT appear as standalone kv tokens on the structured line.
+	for _, forged := range []string{" level=error", " fake=line", " fake=ns"} {
+		if strings.Contains(structured, forged) {
+			t.Errorf("same-line logfmt injection reached the structured line (substring %q present)\nstructured: %s", forged, structured)
+		}
 	}
-	// The sanitized form should still surface the values so the operator sees them.
-	if !strings.Contains(line, "kind=Pod_level=error fake=line") {
-		t.Errorf("expected sanitized kind value with underscore replacement\nfull output:\n%s", line)
+
+	// Sanitized form: spaces, `=`, and newlines all collapse to '_'. Values
+	// stay visible so operators still see what was attempted.
+	if !strings.Contains(structured, "kind=Pod_level_error_fake_line") {
+		t.Errorf("expected sanitized kind value with underscore replacement\nstructured: %s", structured)
+	}
+	if !strings.Contains(structured, "ns=prod_fake_ns") {
+		t.Errorf("expected sanitized ns value with underscore replacement\nstructured: %s", structured)
 	}
 }
 

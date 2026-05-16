@@ -87,11 +87,15 @@ func TestAIAgentLogMiddlewareClusterScopedNamespace(t *testing.T) {
 }
 
 // TestAIAgentLogMiddlewareSanitizesURLParams verifies that URL-param-derived
-// kind/ns values containing newline / CR / control chars do NOT inject extra
-// "log entries" into the structured line. A request like
-// `/api/ai/resources/Pod%0Alevel=error fake=line/prod/x` would otherwise
-// produce a forged log entry that downstream scrapers parse as a separate
-// event.
+// kind/ns values can't inject log structure. Two attack vectors:
+//
+//  1. Multi-line: a request like `/api/ai/resources/Pod%0Alevel=error/...`
+//     decodes to a literal newline that would otherwise split the log entry.
+//  2. Same-line logfmt injection: even without control chars, spaces and
+//     `=` in URL values introduce new key=value tokens on the SAME line
+//     that scrapers parse as legitimate fields.
+//
+// Both vectors must be neutralized via logsafe.Sanitize.
 func TestAIAgentLogMiddlewareSanitizesURLParams(t *testing.T) {
 	var buf bytes.Buffer
 	defer log.SetOutput(log.Writer())
@@ -107,15 +111,15 @@ func TestAIAgentLogMiddlewareSanitizesURLParams(t *testing.T) {
 		})
 	})
 
-	// Build the request with raw control chars in the URL path. httptest
-	// won't percent-decode for us, so we set the chi URL params via Path
-	// after construction. Simpler: just include literal newline characters
-	// in the path components — chi.RouteContext will surface them verbatim.
-	req := httptest.NewRequest("GET", "/api/ai/resources/Pod%0Alevel=error/prod%0Dfake=ns/x", nil)
+	// %0A = newline (multi-line attack); %20 = space + literal `=` (same-line
+	// attack). Combined into one request to exercise both vectors.
+	req := httptest.NewRequest("GET", "/api/ai/resources/Pod%0Alevel=error%20fake=ns/prod%0Dfake=ns2/x", nil)
 	rr := httptest.NewRecorder()
 	r.ServeHTTP(rr, req)
 
 	line := buf.String()
+
+	// Multi-line vector: exactly ONE structured line in the output.
 	structuredLines := 0
 	for _, l := range strings.Split(line, "\n") {
 		if strings.Contains(l, "component=rest") {
@@ -123,10 +127,16 @@ func TestAIAgentLogMiddlewareSanitizesURLParams(t *testing.T) {
 		}
 	}
 	if structuredLines != 1 {
-		t.Errorf("expected exactly 1 structured log line, found %d (injection succeeded?)\nfull output:\n%s", structuredLines, line)
+		t.Errorf("expected exactly 1 structured log line, found %d (multi-line injection succeeded?)\nfull output:\n%s", structuredLines, line)
 	}
-	if strings.Contains(line, "level=error fake=") {
-		t.Errorf("user-controlled control chars reached the log line and forged a kv pair\nfull output:\n%s", line)
+
+	// Same-line vector: forged "level=error" / "fake=ns" / "fake=ns2"
+	// fields must NOT appear as standalone kv tokens. Sanitizer collapses
+	// space+`=` to underscores, so these key= patterns can't form.
+	for _, forged := range []string{" level=error", " fake=ns", " fake=ns2"} {
+		if strings.Contains(line, forged) {
+			t.Errorf("same-line logfmt injection reached the wire (substring %q present)\nfull output:\n%s", forged, line)
+		}
 	}
 }
 
