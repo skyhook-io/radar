@@ -59,40 +59,50 @@ func TestGetRelationships_IncomingEdgeProtects_DispatchesByKind(t *testing.T) {
 	}
 }
 
-// TestGetRelationships_OutgoingEdgeProtects_PDBLandsInPDBs verifies the B1 bug
-// fix: outgoing "protects" edges from a PDB land in rel.PDBs instead of being
-// silently overwritten into rel.ScaleTarget (which is reserved for HPA targets).
-func TestGetRelationships_OutgoingEdgeProtects_PDBLandsInPDBs(t *testing.T) {
-	topo := &Topology{
-		Nodes: []Node{
-			{ID: "poddisruptionbudget/demo/web-pdb", Kind: KindPDB, Name: "web-pdb"},
-			{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"},
-			{ID: "deployment/demo/api", Kind: KindDeployment, Name: "api"},
-		},
-		Edges: []Edge{
-			{ID: "pdb-to-web", Source: "poddisruptionbudget/demo/web-pdb", Target: "deployment/demo/web", Type: EdgeProtects},
-			{ID: "pdb-to-api", Source: "poddisruptionbudget/demo/web-pdb", Target: "deployment/demo/api", Type: EdgeProtects},
-		},
+// TestGetRelationships_OutgoingEdgeProtects_NotSurfaced verifies that outgoing
+// EdgeProtects edges (a PDB / NetworkPolicy / CiliumNetworkPolicy / etc. pointing
+// at the workloads it protects) are intentionally NOT projected into the
+// Relationships of the source resource. The PDBs / NetworkPolicies fields are
+// reserved for the INCOMING-direction semantic ("things that act on me").
+//
+// Surfacing the outgoing direction requires a new Protects/SelectedWorkloads
+// field, which is out of scope here. Until that field lands, querying a PDB
+// or NetworkPolicy that has only outgoing protects edges returns nil.
+//
+// This also guards B1 (the old bug that wrote outgoing protects into
+// rel.ScaleTarget) and the post-B1 over-fix (writing them into rel.PDBs,
+// which conflated PDB-side and NP-side outgoing edges).
+func TestGetRelationships_OutgoingEdgeProtects_NotSurfaced(t *testing.T) {
+	cases := []struct {
+		name     string
+		queryKnd string
+		sourceID string
+		sourceKd NodeKind
+	}{
+		{"PDB outgoing", "PodDisruptionBudget", "poddisruptionbudget/demo/web-pdb", KindPDB},
+		{"NetworkPolicy outgoing", "NetworkPolicy", "networkpolicy/demo/deny-egress", KindNetworkPolicy},
+		{"CiliumNetworkPolicy outgoing", "CiliumNetworkPolicy", "ciliumnetworkpolicy/demo/cnp-1", KindCiliumNetworkPolicy},
 	}
 
-	rel := GetRelationships("PodDisruptionBudget", "demo", "web-pdb", topo, nil, nil)
-	if rel == nil {
-		t.Fatal("GetRelationships returned nil for PDB with outgoing protects edges")
-	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			topo := &Topology{
+				Nodes: []Node{
+					{ID: c.sourceID, Kind: c.sourceKd, Name: "src"},
+					{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"},
+					{ID: "deployment/demo/api", Kind: KindDeployment, Name: "api"},
+				},
+				Edges: []Edge{
+					{ID: "src-to-web", Source: c.sourceID, Target: "deployment/demo/web", Type: EdgeProtects},
+					{ID: "src-to-api", Source: c.sourceID, Target: "deployment/demo/api", Type: EdgeProtects},
+				},
+			}
 
-	// Bug B1: previously these went into rel.ScaleTarget, overwriting each
-	// other. rel.ScaleTarget must remain nil for PDBs.
-	if rel.ScaleTarget != nil {
-		t.Errorf("rel.ScaleTarget: want nil (reserved for HPA scale targets), got %+v", rel.ScaleTarget)
-	}
-
-	if len(rel.PDBs) != 2 {
-		t.Fatalf("rel.PDBs: want 2 entries (web and api Deployments), got %d (%+v)", len(rel.PDBs), rel.PDBs)
-	}
-
-	// Both should also flow through to the deprecated Policies union.
-	if len(rel.Policies) != 2 {
-		t.Errorf("rel.Policies (deprecated union): want 2 entries, got %d (%+v)", len(rel.Policies), rel.Policies)
+			rel := GetRelationships(c.queryKnd, "demo", "src", topo, nil, nil)
+			if rel != nil {
+				t.Errorf("want nil (outgoing protects intentionally not surfaced), got %+v", rel)
+			}
+		})
 	}
 }
 

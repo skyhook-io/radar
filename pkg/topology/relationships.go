@@ -147,13 +147,26 @@ func GetRelationships(kind, namespace, name string, topo *Topology, provider Res
 				// HPA/ScaledObject/ScaledJob scales a workload
 				rel.ScaleTarget = ref
 			case EdgeProtects:
-				// Outgoing EdgeProtects: this resource protects the target workload.
-				// Per the plan, the queried source is a PDB here, so its outgoing
-				// "protects" target lands in rel.PDBs (and the deprecated union).
-				// Previously this overwrote rel.ScaleTarget, which is semantically
-				// reserved for HPA/ScaledObject scale targets (bug B1).
-				rel.PDBs = append(rel.PDBs, *ref)
-				rel.Policies = append(rel.Policies, *ref)
+				// Outgoing EdgeProtects fires when the queried resource IS a
+				// PDB, NetworkPolicy, CiliumNetworkPolicy, or MachineHealthCheck —
+				// each of these emits a "protects/selects target workload" edge.
+				//
+				// Intentionally NOT surfaced today. The existing per-resource
+				// relationship fields (PDBs, NetworkPolicies, Scalers, etc.)
+				// describe "things that act on me," not "things I act on" —
+				// so there's no semantically correct field to land outgoing
+				// protects refs in.
+				//
+				// Previously this case wrote to rel.ScaleTarget (bug B1) and
+				// then briefly to rel.PDBs (which conflated PDB-side and NP-
+				// side outgoing edges into the same incoming-direction field).
+				// Both were wrong.
+				//
+				// TODO: when we introduce a target-side "Protects []ResourceRef"
+				// field on Relationships, surface these refs there with their
+				// source kind preserved. Until then, leave the outgoing direction
+				// of EdgeProtects unsurfaced. The topology graph itself still
+				// carries these edges; only the per-resource projection skips them.
 			case EdgeConfigures:
 				// ConfigMap/Secret is used by a workload (outgoing from config)
 				rel.Consumers = append(rel.Consumers, *ref)
