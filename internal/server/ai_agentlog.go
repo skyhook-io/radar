@@ -47,15 +47,26 @@ func aiAgentLogMiddleware(next http.Handler) http.Handler {
 		tw := &aiAgentLogResponseWriter{ResponseWriter: w, status: http.StatusOK}
 		start := time.Now()
 
-		// Emit the log line on the way out — even on panic. chi's
-		// Recoverer middleware is mounted OUTERMOST (it converts panics into
-		// 500s), so without this defer a panicking handler would unwind past
-		// this middleware before any log.Printf ran, and the most-interesting
-		// failures would silently miss the log line. Status remains 200 on the
-		// wrapped writer in that case because WriteHeader was never called;
-		// downstream scrapers can disambiguate via the duration outlier or by
-		// cross-referencing the Recoverer's own log line.
+		// Emit the log line on the way out — even on panic. chi's Recoverer
+		// middleware is mounted OUTERMOST (it converts panics into 500s).
+		// Without this defer, a panicking handler would unwind past this
+		// middleware before log.Printf ran, and the most-interesting failures
+		// would silently miss the log line.
+		//
+		// recover() is used here NOT to swallow the panic — we re-panic so
+		// the outer Recoverer still writes the 500 and logs the trace — but
+		// to (a) update tw.status to 500 before the line is emitted, so
+		// scrapers tracking error-rate SLOs see the correct status, and (b)
+		// flip the level field to "error" via the existing tw.status >= 500
+		// branch. Without this, the line would say status=200 while the
+		// wire response is 500, breaking observability for the exact failure
+		// mode the defer was meant to cover.
 		defer func() {
+			rec := recover()
+			if rec != nil {
+				tw.status = http.StatusInternalServerError
+			}
+
 			dur := time.Since(start)
 
 			// chi populates URL params after route matching. Read them inside
@@ -92,6 +103,10 @@ func aiAgentLogMiddleware(next http.Handler) http.Handler {
 				level, logsafe.Sanitize(pattern), dur.Milliseconds(), tw.bytes, tw.bytes/4,
 				false, 0, "none", logsafe.Sanitize(kind), logsafe.Sanitize(ns), tw.status,
 			)
+
+			if rec != nil {
+				panic(rec) // let outer Recoverer write the 500 + log the trace
+			}
 		}()
 
 		next.ServeHTTP(tw, r)

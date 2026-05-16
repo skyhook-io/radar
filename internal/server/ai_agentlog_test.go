@@ -164,6 +164,16 @@ func TestAIAgentLogMiddlewareEmitsOnPanic(t *testing.T) {
 	if !strings.Contains(line, "handler=/api/ai/resources/{kind}/{namespace}/{name}") {
 		t.Errorf("log line missing route pattern on panic path; got:\n%s", line)
 	}
+	// Panic path MUST log status=500 and level=error, not the default 200 /
+	// info. The wire response is 500 (chi.Recoverer writes it after the
+	// middleware re-panics), so the structured line must agree — otherwise
+	// scrapers tracking error-rate SLOs miss the failures.
+	if !strings.Contains(line, "status=500") {
+		t.Errorf("panic-path log line must report status=500 (not the default 200); got:\n%s", line)
+	}
+	if !strings.Contains(line, "level=error") {
+		t.Errorf("panic-path log line must report level=error (not info); got:\n%s", line)
+	}
 	if !strings.Contains(line, "kind=Pod") {
 		t.Errorf("log line missing kind on panic path; got:\n%s", line)
 	}
