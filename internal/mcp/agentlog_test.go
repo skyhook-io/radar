@@ -128,6 +128,52 @@ func TestWrapToolCallEmitsStructuredLog(t *testing.T) {
 	}
 }
 
+// TestLogToolCallSanitizesUserControlledFields verifies that newline /
+// carriage-return / control characters in user-supplied tool input fields
+// (kind, namespace) are replaced before reaching the log line. Without
+// this, a tool input of `{"kind": "Pod\nlevel=error fake=line"}` would
+// inject a forged log entry that downstream scrapers would parse as a
+// separate event.
+func TestLogToolCallSanitizesUserControlledFields(t *testing.T) {
+	var buf bytes.Buffer
+	defer log.SetOutput(log.Writer())
+	log.SetOutput(&buf)
+
+	type input struct {
+		Kind      string `json:"kind"`
+		Namespace string `json:"namespace"`
+	}
+
+	wrapped := logToolCall("inject_tool", func(_ context.Context, _ *mcp.CallToolRequest, _ input) (*mcp.CallToolResult, any, error) {
+		return &mcp.CallToolResult{}, nil, nil
+	})
+
+	_, _, _ = wrapped(context.Background(), &mcp.CallToolRequest{}, input{
+		Kind:      "Pod\nlevel=error fake=line",
+		Namespace: "prod\rfake=ns",
+	})
+
+	line := buf.String()
+	// The single emitted structured log line should not contain literal newlines
+	// or CRs in the values. Split on newline; only ONE structured line should appear.
+	structuredLines := 0
+	for _, l := range strings.Split(line, "\n") {
+		if strings.Contains(l, "component=mcp tool=inject_tool") {
+			structuredLines++
+		}
+	}
+	if structuredLines != 1 {
+		t.Errorf("expected exactly 1 structured log line, found %d (injection succeeded?)\nfull output:\n%s", structuredLines, line)
+	}
+	if strings.Contains(line, "kind=Pod\nlevel=error") || strings.Contains(line, "ns=prod\rfake=ns") {
+		t.Errorf("user-controlled control chars reached the log line unchanged\nfull output:\n%s", line)
+	}
+	// The sanitized form should still surface the values so the operator sees them.
+	if !strings.Contains(line, "kind=Pod_level=error fake=line") {
+		t.Errorf("expected sanitized kind value with underscore replacement\nfull output:\n%s", line)
+	}
+}
+
 // TestWrapToolCallErrorChangesLevel verifies that a handler returning an error
 // flips the structured line's level field from info to error, so scrapers can
 // distinguish failures without parsing the colored dev log.

@@ -86,6 +86,50 @@ func TestAIAgentLogMiddlewareClusterScopedNamespace(t *testing.T) {
 	}
 }
 
+// TestAIAgentLogMiddlewareSanitizesURLParams verifies that URL-param-derived
+// kind/ns values containing newline / CR / control chars do NOT inject extra
+// "log entries" into the structured line. A request like
+// `/api/ai/resources/Pod%0Alevel=error fake=line/prod/x` would otherwise
+// produce a forged log entry that downstream scrapers parse as a separate
+// event.
+func TestAIAgentLogMiddlewareSanitizesURLParams(t *testing.T) {
+	var buf bytes.Buffer
+	defer log.SetOutput(log.Writer())
+	log.SetOutput(&buf)
+
+	r := chi.NewRouter()
+	r.Route("/api", func(r chi.Router) {
+		r.Group(func(r chi.Router) {
+			r.Use(aiAgentLogMiddleware)
+			r.Get("/ai/resources/{kind}/{namespace}/{name}", func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			})
+		})
+	})
+
+	// Build the request with raw control chars in the URL path. httptest
+	// won't percent-decode for us, so we set the chi URL params via Path
+	// after construction. Simpler: just include literal newline characters
+	// in the path components — chi.RouteContext will surface them verbatim.
+	req := httptest.NewRequest("GET", "/api/ai/resources/Pod%0Alevel=error/prod%0Dfake=ns/x", nil)
+	rr := httptest.NewRecorder()
+	r.ServeHTTP(rr, req)
+
+	line := buf.String()
+	structuredLines := 0
+	for _, l := range strings.Split(line, "\n") {
+		if strings.Contains(l, "component=rest") {
+			structuredLines++
+		}
+	}
+	if structuredLines != 1 {
+		t.Errorf("expected exactly 1 structured log line, found %d (injection succeeded?)\nfull output:\n%s", structuredLines, line)
+	}
+	if strings.Contains(line, "level=error fake=") {
+		t.Errorf("user-controlled control chars reached the log line and forged a kv pair\nfull output:\n%s", line)
+	}
+}
+
 // TestAIAgentLogMiddlewareEmitsOnPanic verifies the middleware emits a
 // log line even when the handler panics. Without the deferred logger
 // the most-interesting failures (handler crashes) would silently miss

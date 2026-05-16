@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"log"
+	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -17,23 +18,35 @@ import (
 // agent-context enrichment work will populate; today they are emitted as
 // zero / false / "none" so the line shape stays stable across releases.
 type agentLogFields struct {
-	Component    string // "mcp" or "rest"
-	Tool         string // MCP tool name (empty for REST)
-	Handler      string // REST route pattern (empty for MCP)
-	DurationMS   int64
-	Bytes        int
-	EstTokens    int
-	Truncated    bool
-	Omitted      int
-	ContextTier  string // "none" | "basic" | "diagnostic"
-	Kind         string
-	Namespace    string
-	Err          error
+	Tool        string
+	DurationMS  int64
+	Bytes       int
+	EstTokens   int
+	Truncated   bool
+	Omitted     int
+	ContextTier string // "none" | "basic" | "diagnostic"
+	Kind        string
+	Namespace   string
+	Err         error
 }
 
-// emitAgentLog writes a single logfmt-style line summarizing one
-// MCP tool call or one /api/ai/* REST request. Format is intentionally flat
-// and parser-friendly:
+// sanitizeLogValue strips newlines, carriage returns, and other control
+// characters from user-controlled strings before they go into a log line.
+// Prevents log forgery via an attacker crafting tool input or URL params
+// containing `\n` to inject fake log entries that confuse log scrapers.
+// Replaces dangerous runes with '_' rather than dropping them so the
+// untrusted value is still visibly present in the line.
+func sanitizeLogValue(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r < 0x20 || r == 0x7f {
+			return '_'
+		}
+		return r
+	}, s)
+}
+
+// emitAgentLog writes a single logfmt-style line summarizing one MCP tool
+// call. Format is intentionally flat and parser-friendly:
 //
 //	level=info component=mcp tool=get_resource duration_ms=42 bytes=2156 \
 //	  est_tokens=539 truncated=false omitted=0 context_tier=none kind=Pod ns=prod
@@ -46,19 +59,10 @@ func emitAgentLog(f agentLogFields) {
 	if tier == "" {
 		tier = "none"
 	}
-	// Build the line; we use a fixed field order so log scrapers can rely on it.
-	if f.Component == "mcp" {
-		log.Printf(
-			"level=%s component=%s tool=%s duration_ms=%d bytes=%d est_tokens=%d truncated=%t omitted=%d context_tier=%s kind=%s ns=%s",
-			level, f.Component, f.Tool, f.DurationMS, f.Bytes, f.EstTokens,
-			f.Truncated, f.Omitted, tier, f.Kind, f.Namespace,
-		)
-		return
-	}
 	log.Printf(
-		"level=%s component=%s handler=%s duration_ms=%d bytes=%d est_tokens=%d truncated=%t omitted=%d context_tier=%s kind=%s ns=%s",
-		level, f.Component, f.Handler, f.DurationMS, f.Bytes, f.EstTokens,
-		f.Truncated, f.Omitted, tier, f.Kind, f.Namespace,
+		"level=%s component=mcp tool=%s duration_ms=%d bytes=%d est_tokens=%d truncated=%t omitted=%d context_tier=%s kind=%s ns=%s",
+		level, f.Tool, f.DurationMS, f.Bytes, f.EstTokens,
+		f.Truncated, f.Omitted, tier, sanitizeLogValue(f.Kind), sanitizeLogValue(f.Namespace),
 	)
 }
 
@@ -156,7 +160,6 @@ func logToolCall[In any](
 		bytes := resultBytes(result)
 		kind, ns := extractKindNamespace(input)
 		emitAgentLog(agentLogFields{
-			Component:   "mcp",
 			Tool:        name,
 			DurationMS:  dur.Milliseconds(),
 			Bytes:       bytes,

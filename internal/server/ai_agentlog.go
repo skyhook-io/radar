@@ -3,10 +3,27 @@ package server
 import (
 	"log"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
 )
+
+// sanitizeLogValue strips newlines, carriage returns, and other control
+// characters from user-controlled strings (URL params) before they go into
+// a log line. Prevents log forgery via attacker-crafted requests like
+// `/api/ai/resources/Pod%0Alevel=error fake=line/...` that would otherwise
+// inject extra "log entries" into the stream and confuse log scrapers.
+// Replaces dangerous runes with '_' rather than dropping them so the
+// untrusted value is still visibly present.
+func sanitizeLogValue(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r == '\n' || r == '\r' || r < 0x20 || r == 0x7f {
+			return '_'
+		}
+		return r
+	}, s)
+}
 
 // aiAgentLogResponseWriter wraps http.ResponseWriter to count bytes written
 // to the wire. Status capture is a bonus — useful for debugging.
@@ -82,7 +99,7 @@ func aiAgentLogMiddleware(next http.Handler) http.Handler {
 			log.Printf(
 				"level=%s component=rest handler=%s duration_ms=%d bytes=%d est_tokens=%d truncated=%t omitted=%d context_tier=%s kind=%s ns=%s status=%d",
 				level, pattern, dur.Milliseconds(), tw.bytes, tw.bytes/4,
-				false, 0, "none", kind, ns, tw.status,
+				false, 0, "none", sanitizeLogValue(kind), sanitizeLogValue(ns), tw.status,
 			)
 		}()
 
