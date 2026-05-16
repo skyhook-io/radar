@@ -371,9 +371,14 @@ func (s *Server) setupRoutes() {
 			r.Post("/argo/applications/{namespace}/{name}/suspend", s.handleArgoSuspend)
 			r.Post("/argo/applications/{namespace}/{name}/resume", s.handleArgoResume)
 
-			// AI resource preview (minified output for MCP/debugging)
-			r.Get("/ai/resources/{kind}", s.handleAIListResources)
-			r.Get("/ai/resources/{kind}/{namespace}/{name}", s.handleAIGetResource)
+			// AI resource preview (minified output for MCP/debugging).
+			// Mounted as a sub-group so agent-log middleware applies only
+			// to /api/ai/* — UI-facing /api/resources/* stays untouched.
+			r.Group(func(r chi.Router) {
+				r.Use(aiAgentLogMiddleware)
+				r.Get("/ai/resources/{kind}", s.handleAIListResources)
+				r.Get("/ai/resources/{kind}/{namespace}/{name}", s.handleAIGetResource)
+			})
 
 			// Debug routes (for event pipeline diagnostics)
 			r.Get("/debug/events", s.handleDebugEvents)

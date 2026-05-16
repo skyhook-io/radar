@@ -24,23 +24,6 @@ import (
 	topology "github.com/skyhook-io/radar/pkg/topology"
 )
 
-// logToolCall logs an MCP tool invocation with colored formatting for terminal visibility.
-func logToolCall[In any](name string, handler func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error)) func(context.Context, *mcp.CallToolRequest, In) (*mcp.CallToolResult, any, error) {
-	return func(ctx context.Context, req *mcp.CallToolRequest, input In) (*mcp.CallToolResult, any, error) {
-		args, _ := json.Marshal(input)
-		log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m %s", name, string(args))
-		start := time.Now()
-		result, extra, err := handler(ctx, req, input)
-		dur := time.Since(start)
-		if err != nil {
-			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[31mERROR\033[0m (%s) %v", name, dur.Round(time.Millisecond), err)
-		} else {
-			log.Printf("\033[1;35m[MCP]\033[0m \033[1m%s\033[0m \033[32mOK\033[0m (%s)", name, dur.Round(time.Millisecond))
-		}
-		return result, extra, err
-	}
-}
-
 func registerTools(server *mcp.Server) {
 	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true}
 
