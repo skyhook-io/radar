@@ -709,6 +709,8 @@ function dedupeRefs(refs: ResourceRef[]): ResourceRef[] {
   })
 }
 
+const NETPOL_KINDS = new Set(['NetworkPolicy', 'CiliumNetworkPolicy', 'CiliumClusterwideNetworkPolicy', 'ClusterNetworkPolicy'])
+
 export function RelatedResourcesSection({ relationships, onNavigate }: RelatedResourcesSectionProps) {
   if (!relationships) return null
 
@@ -716,7 +718,6 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
   // after the T1/Phase 1a migration. Fall back to filtering `policies` by kind
   // only when BOTH new fields are absent — that handles older radar instances
   // (e.g. through a hub) that still emit just the legacy `policies` union.
-  const NETPOL_KINDS = new Set(['NetworkPolicy', 'CiliumNetworkPolicy', 'CiliumClusterwideNetworkPolicy', 'ClusterNetworkPolicy'])
   const usingLegacyPolicies = relationships.pdbs === undefined && relationships.networkPolicies === undefined
   const resolvedPDBs: ResourceRef[] = usingLegacyPolicies
     ? (relationships.policies ?? []).filter(r => r.kind === 'PodDisruptionBudget')
