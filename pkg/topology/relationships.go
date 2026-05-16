@@ -204,15 +204,13 @@ func GetRelationships(kind, namespace, name string, topo *Topology, provider Res
 				rel.Scalers = append(rel.Scalers, *ref)
 			case EdgeProtects:
 				// Incoming EdgeProtects: dispatch on source kind so PDBs and
-				// NetworkPolicies land in distinct fields. rel.Policies is
-				// still populated as the union for one release (deprecated alias).
+				// NetworkPolicies land in distinct fields.
 				switch ref.Kind {
 				case "PodDisruptionBudget":
 					rel.PDBs = append(rel.PDBs, *ref)
 				case "NetworkPolicy", "CiliumNetworkPolicy", "ClusterNetworkPolicy", "CiliumClusterwideNetworkPolicy":
 					rel.NetworkPolicies = append(rel.NetworkPolicies, *ref)
 				}
-				rel.Policies = append(rel.Policies, *ref)
 			case EdgeConfigures:
 				// A ConfigMap/Secret is used by this resource
 				rel.ConfigRefs = append(rel.ConfigRefs, *ref)
@@ -314,7 +312,7 @@ func GetRelationships(kind, namespace, name string, topo *Topology, provider Res
 	if rel.Owner == nil && rel.Deployment == nil && len(rel.Children) == 0 && len(rel.Services) == 0 &&
 		len(rel.Ingresses) == 0 && len(rel.Gateways) == 0 && len(rel.Routes) == 0 &&
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
-		len(rel.Policies) == 0 && len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 &&
+		len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 &&
 		rel.ScaleTarget == nil && len(rel.Pods) == 0 {
 		return nil
 	}

@@ -6,16 +6,13 @@ import (
 
 // TestGetRelationships_IncomingEdgeProtects_DispatchesByKind verifies that
 // incoming "protects" edges split into rel.PDBs vs rel.NetworkPolicies based
-// on the source kind, and that rel.Policies stays populated as the union for
-// the deprecation period (so old clients/hub-fed responses keep working).
+// on the source kind.
+//
+// (Cluster-scoped NetworkPolicy variants like ClusterNetworkPolicy and
+// CiliumClusterwideNetworkPolicy use a 2-segment node ID — parseNodeID
+// rejects those today, so they never reach this dispatch. Pre-existing
+// behavior, out of scope here.)
 func TestGetRelationships_IncomingEdgeProtects_DispatchesByKind(t *testing.T) {
-	// A Deployment receives incoming EdgeProtects from a PDB, a NetworkPolicy,
-	// and a CiliumNetworkPolicy. Each should land in its appropriate field;
-	// all three should appear in rel.Policies (deprecated union).
-	// (Cluster-scoped NetworkPolicy variants like ClusterNetworkPolicy and
-	// CiliumClusterwideNetworkPolicy use a 2-segment node ID — parseNodeID
-	// rejects those today, so they never reach this dispatch. That's
-	// pre-existing behavior and out of scope for this change.)
 	topo := &Topology{
 		Nodes: []Node{
 			{ID: "deployment/demo/web", Kind: KindDeployment, Name: "web"},
@@ -50,12 +47,6 @@ func TestGetRelationships_IncomingEdgeProtects_DispatchesByKind(t *testing.T) {
 		if !gotKinds[expected] {
 			t.Errorf("rel.NetworkPolicies missing %s; got kinds=%v", expected, gotKinds)
 		}
-	}
-
-	// rel.Policies must contain the union of all three, since we keep it
-	// populated for one release as a deprecated alias.
-	if len(rel.Policies) != 3 {
-		t.Errorf("rel.Policies (deprecated union): want 3 entries, got %d (%+v)", len(rel.Policies), rel.Policies)
 	}
 }
 
@@ -153,8 +144,5 @@ func TestGetRelationships_NoProtects_FieldsOmitted(t *testing.T) {
 	}
 	if len(rel.NetworkPolicies) != 0 {
 		t.Errorf("rel.NetworkPolicies: want empty, got %+v", rel.NetworkPolicies)
-	}
-	if len(rel.Policies) != 0 {
-		t.Errorf("rel.Policies: want empty, got %+v", rel.Policies)
 	}
 }
