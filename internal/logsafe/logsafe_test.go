@@ -2,6 +2,24 @@ package logsafe
 
 import "testing"
 
+func TestEstimateTokens(t *testing.T) {
+	// English-JSON heuristic: 4 chars/token. Cheap and deterministic.
+	cases := []struct {
+		bytes int
+		want  int
+	}{
+		{0, 0},
+		{1, 0},
+		{4, 1},
+		{2156, 539},
+	}
+	for _, c := range cases {
+		if got := EstimateTokens(c.bytes); got != c.want {
+			t.Errorf("EstimateTokens(%d) = %d, want %d", c.bytes, got, c.want)
+		}
+	}
+}
+
 func TestSanitize(t *testing.T) {
 	cases := []struct {
 		name string

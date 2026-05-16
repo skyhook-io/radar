@@ -52,14 +52,6 @@ func emitAgentLog(f agentLogFields) {
 	)
 }
 
-// estimateTokens is an English-JSON heuristic: ~4 characters per token.
-// Cheap, deterministic, and good enough for "is this response 200 tokens or
-// 200k tokens?" budgeting decisions on the agent side. Real tokenization
-// happens client-side; this is only a rough budget signal.
-func estimateTokens(bytes int) int {
-	return bytes / 4
-}
-
 // resultBytes computes the wire-payload size of a CallToolResult. We sum the
 // text length of every TextContent (the only content type radar tools emit
 // today) plus a marshaled view of any StructuredContent. JSON-marshaling the
@@ -149,7 +141,7 @@ func logToolCall[In any](
 			Tool:        name,
 			DurationMS:  dur.Milliseconds(),
 			Bytes:       bytes,
-			EstTokens:   estimateTokens(bytes),
+			EstTokens:   logsafe.EstimateTokens(bytes),
 			ContextTier: "none",
 			Kind:        kind,
 			Namespace:   ns,

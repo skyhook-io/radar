@@ -100,7 +100,7 @@ func aiAgentLogMiddleware(next http.Handler) http.Handler {
 			// we sanitize kind/ns to stay consistent.
 			log.Printf(
 				"level=%s component=rest handler=%s duration_ms=%d bytes=%d est_tokens=%d truncated=%t omitted=%d context_tier=%s kind=%s ns=%s status=%d",
-				level, logsafe.Sanitize(pattern), dur.Milliseconds(), tw.bytes, tw.bytes/4,
+				level, logsafe.Sanitize(pattern), dur.Milliseconds(), tw.bytes, logsafe.EstimateTokens(tw.bytes),
 				false, 0, "none", logsafe.Sanitize(kind), logsafe.Sanitize(ns), tw.status,
 			)
 

@@ -11,24 +11,6 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
-func TestEstimateTokens(t *testing.T) {
-	// English JSON heuristic: 4 chars/token. Cheap and deterministic.
-	cases := []struct {
-		bytes int
-		want  int
-	}{
-		{0, 0},
-		{1, 0},
-		{4, 1},
-		{2156, 539},
-	}
-	for _, c := range cases {
-		if got := estimateTokens(c.bytes); got != c.want {
-			t.Errorf("estimateTokens(%d) = %d, want %d", c.bytes, got, c.want)
-		}
-	}
-}
-
 func TestResultBytesTextContent(t *testing.T) {
 	res := &mcp.CallToolResult{
 		Content: []mcp.Content{

@@ -46,3 +46,16 @@ func Sanitize(s string) string {
 		return r
 	}, s)
 }
+
+// EstimateTokens converts a response byte count into a rough token estimate
+// using an English-JSON heuristic of ~4 characters per token. Cheap,
+// deterministic, and good enough for "is this response 200 tokens or 200k
+// tokens?" budgeting decisions. Real tokenization happens client-side; this
+// is only a budget signal.
+//
+// Lives here (alongside Sanitize) so MCP and REST log emitters share a single
+// definition. Without this, divergence between the two log-line `est_tokens`
+// fields is one heuristic change away.
+func EstimateTokens(bytes int) int {
+	return bytes / 4
+}
