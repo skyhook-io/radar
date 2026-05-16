@@ -290,10 +290,14 @@ func (d *DynamicResourceCache) factoryForGVR(gvr schema.GroupVersionResource) dy
 	return d.factory
 }
 
-// probeCount does a quick list with limit=1 and returns the approximate resource count.
+// ProbeCount does a quick list with limit=1 and returns the approximate resource count.
 // Returns -1 if access is denied, -2 if the probe failed for non-auth reasons (caller
 // should defer), or the count (items + remainingItemCount) on success.
-func (d *DynamicResourceCache) probeCount(gvr schema.GroupVersionResource) int {
+//
+// Exported so callers outside this package (e.g. internal/k8s when deciding
+// whether to eager-warm high-cardinality CRDs like PolicyReports) can gate
+// informer creation on cluster size before paying the watch-layer cost.
+func (d *DynamicResourceCache) ProbeCount(gvr schema.GroupVersionResource) int {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
@@ -945,7 +949,7 @@ func (d *DynamicResourceCache) DiscoverAllCRDs() {
 						results <- probeResult{gvr: g, count: -1}
 					}
 				}()
-				count := d.probeCount(g)
+				count := d.ProbeCount(g)
 				results <- probeResult{gvr: g, count: count}
 			}(gvr)
 		}

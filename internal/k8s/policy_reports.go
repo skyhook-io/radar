@@ -126,7 +126,30 @@ func WarmupKyvernoPolicyReports() {
 			return
 		}
 
-		log.Printf("[policy-reports] Kyverno detected; warming up %d PolicyReport CRDs (cap=%d reports)", len(watched), kyvernoReportWarmupCap)
+		// Probe cluster size before starting informers. The index caps what we
+		// keep in memory (MaxIndexedReports), but informers themselves
+		// list/watch/cache every PolicyReport object cluster-wide — on a
+		// Kyverno-heavy cluster with tens of thousands of reports, that's
+		// exactly the high-cardinality cost we're trying to avoid. If the
+		// aggregate count across watched GVRs exceeds the cap, leave reports
+		// in the deferred-fetch tier so callers can resolve them on demand.
+		var total int
+		for _, gvr := range watched {
+			count := cache.ProbeCount(gvr)
+			if count < 0 {
+				// -1 RBAC denied, -2 transient probe error. Either way, we
+				// can't bound the warmup cost; defer rather than gamble.
+				log.Printf("[policy-reports] Probe for %s returned %d; deferring PolicyReport warmup", gvr, count)
+				return
+			}
+			total += count
+		}
+		if total > kyvernoReportWarmupCap {
+			log.Printf("[policy-reports] Cluster has %d PolicyReports across %d CRDs (cap=%d); leaving deferred to avoid full-cluster watch cost", total, len(watched), kyvernoReportWarmupCap)
+			return
+		}
+
+		log.Printf("[policy-reports] Kyverno detected; warming up %d PolicyReport CRDs (probed %d reports, cap=%d)", len(watched), total, kyvernoReportWarmupCap)
 		cache.WarmupParallel(watched, 30*time.Second)
 
 		// Initialize the index from current cache contents so the first

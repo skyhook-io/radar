@@ -79,8 +79,13 @@ func (i *Index) Replace(reports []*unstructured.Unstructured) {
 }
 
 // FindingsFor returns the findings indexed for the given subject. Returns
-// nil if no findings are recorded for that subject. The returned slice is
-// safe to read but must not be mutated — it is shared with the index.
+// nil if no findings are recorded for that subject.
+//
+// The returned slice is a defensive copy: callers may freely sort, truncate,
+// or filter it without racing the index's own rebuild path. The cost is
+// modest — findings per subject are bounded (Kyverno emits at most one
+// PolicyReport entry per (policy, rule, resource) tuple, and pathological
+// reports are capped during BuildIndex anyway).
 func (i *Index) FindingsFor(kind, namespace, name string) []Finding {
 	if i == nil {
 		return nil
@@ -88,7 +93,13 @@ func (i *Index) FindingsFor(kind, namespace, name string) []Finding {
 	key := audit.ResourceKey(kind, namespace, name)
 	i.mu.RLock()
 	defer i.mu.RUnlock()
-	return i.bySubject[key]
+	src := i.bySubject[key]
+	if len(src) == 0 {
+		return nil
+	}
+	out := make([]Finding, len(src))
+	copy(out, src)
+	return out
 }
 
 // Size returns the number of distinct subjects with at least one indexed
@@ -247,4 +258,3 @@ func stringField(m map[string]any, key string) string {
 	s, _ := v.(string)
 	return s
 }
-
