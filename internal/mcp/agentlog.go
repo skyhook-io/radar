@@ -4,10 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+
+	"github.com/skyhook-io/radar/internal/logsafe"
 )
 
 // agentLogFields is the fixed shape of the agent-context log line emitted
@@ -30,21 +31,6 @@ type agentLogFields struct {
 	Err         error
 }
 
-// sanitizeLogValue strips newlines, carriage returns, and other control
-// characters from user-controlled strings before they go into a log line.
-// Prevents log forgery via an attacker crafting tool input or URL params
-// containing `\n` to inject fake log entries that confuse log scrapers.
-// Replaces dangerous runes with '_' rather than dropping them so the
-// untrusted value is still visibly present in the line.
-func sanitizeLogValue(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' || r < 0x20 || r == 0x7f {
-			return '_'
-		}
-		return r
-	}, s)
-}
-
 // emitAgentLog writes a single logfmt-style line summarizing one MCP tool
 // call. Format is intentionally flat and parser-friendly:
 //
@@ -62,7 +48,7 @@ func emitAgentLog(f agentLogFields) {
 	log.Printf(
 		"level=%s component=mcp tool=%s duration_ms=%d bytes=%d est_tokens=%d truncated=%t omitted=%d context_tier=%s kind=%s ns=%s",
 		level, f.Tool, f.DurationMS, f.Bytes, f.EstTokens,
-		f.Truncated, f.Omitted, tier, sanitizeLogValue(f.Kind), sanitizeLogValue(f.Namespace),
+		f.Truncated, f.Omitted, tier, logsafe.Sanitize(f.Kind), logsafe.Sanitize(f.Namespace),
 	)
 }
 

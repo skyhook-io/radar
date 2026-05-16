@@ -3,27 +3,12 @@ package server
 import (
 	"log"
 	"net/http"
-	"strings"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-)
 
-// sanitizeLogValue strips newlines, carriage returns, and other control
-// characters from user-controlled strings (URL params) before they go into
-// a log line. Prevents log forgery via attacker-crafted requests like
-// `/api/ai/resources/Pod%0Alevel=error fake=line/...` that would otherwise
-// inject extra "log entries" into the stream and confuse log scrapers.
-// Replaces dangerous runes with '_' rather than dropping them so the
-// untrusted value is still visibly present.
-func sanitizeLogValue(s string) string {
-	return strings.Map(func(r rune) rune {
-		if r == '\n' || r == '\r' || r < 0x20 || r == 0x7f {
-			return '_'
-		}
-		return r
-	}, s)
-}
+	"github.com/skyhook-io/radar/internal/logsafe"
+)
 
 // aiAgentLogResponseWriter wraps http.ResponseWriter to count bytes written
 // to the wire. Status capture is a bonus — useful for debugging.
@@ -96,10 +81,16 @@ func aiAgentLogMiddleware(next http.Handler) http.Handler {
 				level = "error"
 			}
 
+			// `pattern` comes from chi.RouteContext().RoutePattern() — which is
+			// the static route template like "/api/ai/resources/{kind}/...",
+			// safe by construction — but we fall back to r.URL.Path when the
+			// route didn't match (e.g. middleware misfiring on a 404). The
+			// fallback path IS user-controlled, so sanitize it the same way
+			// we sanitize kind/ns to stay consistent.
 			log.Printf(
 				"level=%s component=rest handler=%s duration_ms=%d bytes=%d est_tokens=%d truncated=%t omitted=%d context_tier=%s kind=%s ns=%s status=%d",
-				level, pattern, dur.Milliseconds(), tw.bytes, tw.bytes/4,
-				false, 0, "none", sanitizeLogValue(kind), sanitizeLogValue(ns), tw.status,
+				level, logsafe.Sanitize(pattern), dur.Milliseconds(), tw.bytes, tw.bytes/4,
+				false, 0, "none", logsafe.Sanitize(kind), logsafe.Sanitize(ns), tw.status,
 			)
 		}()
 
