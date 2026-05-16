@@ -61,8 +61,21 @@ var (
 )
 
 // GetPolicyReportIndex returns the singleton PolicyReport index, or nil
-// when Kyverno is not installed on the cluster. Callers must treat the
-// nil return as "no Kyverno findings available" and degrade gracefully.
+// when no findings are available for any reason.
+//
+// "Nil" collapses several distinct conditions today — discovery not
+// available, Kyverno not installed, dynamic cache not initialized, no
+// PolicyReport CRDs registered, RBAC denied on the count probe, or the
+// aggregate report count exceeded the warmup cap (deferred). Callers
+// that need to distinguish these — e.g. to emit the correct
+// `resourcecontext.OmittedReason` (not_installed vs rbac_denied vs
+// budget_exceeded vs cache_cold) — cannot do so today.
+//
+// TODO(T10): when the diagnostic `policySummary.kyverno` consumer
+// arrives, introduce a sibling accessor that returns an enum status
+// alongside the index so consumers can populate `omitted` faithfully.
+// The reason isn't tracked yet because there's no consumer to need it;
+// adding it speculatively is YAGNI surface.
 //
 // Returned indexes are safe for concurrent reads; the index swaps its
 // internal state atomically during rebuilds.
