@@ -77,6 +77,15 @@ func GetPolicyReportIndex() *policyreports.Index {
 // Safe to call multiple times; only the first invocation does work.
 // Subsequent calls are no-ops (sync.Once-guarded). Reset via
 // ResetPolicyReportIndex on context switch.
+//
+// TODO(post-T5): mid-runtime Kyverno install is not handled. If Kyverno is
+// installed AFTER initial CRD discovery completes (e.g. operator deployed
+// post-boot), this function won't re-fire and PolicyReports stay in the
+// deferred tier until the next context switch resets the once. To support
+// this, hook OnCRDDiscoveryComplete in pkg/k8score/dynamic_cache.go (around
+// the rediscovery path) to re-evaluate IsKyvernoInstalled and warm up
+// lazily. Documented limitation, not blocking — context switches are the
+// dominant lifecycle event in practice.
 func WarmupKyvernoPolicyReports() {
 	policyReportInit.Do(func() {
 		discovery := GetResourceDiscovery()
@@ -182,10 +191,17 @@ func scheduleRebuild() {
 		return // rebuild already scheduled
 	}
 	time.AfterFunc(rebuildDebounce, func() {
-		// Clear the pending flag BEFORE the rebuild — any event that
-		// arrives between this line and Replace() arms a fresh timer,
-		// which is the desired behavior. Without clearing first, an
-		// event firing concurrently could be lost.
+		// Clear the pending flag BEFORE the rebuild, not after. The
+		// hazard avoided: if we cleared after, an event arriving between
+		// rebuild's List() snapshot and the final Store(false) would
+		// neither be visible to the current rebuild nor able to arm a
+		// fresh timer (CAS would fail while pending=true), and would
+		// only be picked up when *some later* event happened to fire.
+		// Clearing first means any event during the rebuild always
+		// either lands in the current rebuild's snapshot OR arms a
+		// fresh timer. The cost is one extra rebuild per event that
+		// arrives during the rebuild window — cheaper than chasing
+		// silent staleness.
 		policyReportPending.Store(false)
 		rebuildPolicyReportIndex()
 	})
