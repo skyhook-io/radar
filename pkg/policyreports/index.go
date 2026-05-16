@@ -165,12 +165,24 @@ func extractFindings(report *unstructured.Unstructured, dst map[string][]Finding
 
 		subjects, hasResources := resultResources(entry)
 
-		if !hasResources || len(subjects) == 0 {
-			// Scope-only report: the report itself is bound to one subject
-			// via `report.scope`. The PolicyReport namespace overrides the
-			// scope's namespace when scope.namespace is unset (some
-			// engines emit only kind/name in scope for namespaced reports
-			// and rely on metadata.namespace).
+		// Pre-filter to subjects that can actually be indexed. A non-empty
+		// resources[] slice of empty objects (e.g. `resources: [{}]` from
+		// a malformed CRD) would otherwise skip scope fallback below AND
+		// then get filtered to nothing in the index loop — silently
+		// dropping a finding that the report's scope could have rescued.
+		validSubjects := make([]subjectRef, 0, len(subjects))
+		for _, s := range subjects {
+			if s.kind != "" && s.name != "" {
+				validSubjects = append(validSubjects, s)
+			}
+		}
+
+		if !hasResources || len(validSubjects) == 0 {
+			// Scope-only report (or all subjects malformed): the report
+			// itself is bound to one subject via `report.scope`. The
+			// PolicyReport namespace overrides the scope's namespace when
+			// scope.namespace is unset (some engines emit only kind/name
+			// in scope for namespaced reports and rely on metadata.namespace).
 			if scopeKind != "" && scopeName != "" {
 				ns := scopeNS
 				if ns == "" {
@@ -182,10 +194,7 @@ func extractFindings(report *unstructured.Unstructured, dst map[string][]Finding
 			continue
 		}
 
-		for _, s := range subjects {
-			if s.kind == "" || s.name == "" {
-				continue
-			}
+		for _, s := range validSubjects {
 			ns := s.namespace
 			// Namespaced PolicyReports default subject namespace to the
 			// report's namespace when not set on the resource ref — this

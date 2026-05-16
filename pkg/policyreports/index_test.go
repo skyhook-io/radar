@@ -258,6 +258,37 @@ func TestBuildIndex_EmptyResourcesArray_FallsBackToScope(t *testing.T) {
 	}
 }
 
+// TestBuildIndex_MalformedResourcesEntries_FallsBackToScope pins the edge case
+// reviewer caught: `resources: [{}]` is a non-empty slice that previously
+// skipped scope fallback (because hasResources && len(subjects) > 0) but then
+// got filtered to nothing in the index loop (every subject has empty kind/name).
+// The finding was silently dropped even when scope could have rescued it.
+func TestBuildIndex_MalformedResourcesEntries_FallsBackToScope(t *testing.T) {
+	scope := map[string]any{
+		"kind":      "Deployment",
+		"namespace": "prod",
+		"name":      "cart",
+	}
+	report := makeReport(t, "PolicyReport", "prod", "malformed-resources", scope, time.Now(), []map[string]any{
+		{
+			"policy": "require-resource-limits",
+			"result": "fail",
+			// Non-empty resources[] but every entry is empty — produced
+			// by some buggy emitters when policy match conditions fail.
+			"resources": []any{
+				map[string]any{},
+				map[string]any{},
+			},
+		},
+	})
+
+	idx := BuildIndex([]*unstructured.Unstructured{report})
+	got := idx.FindingsFor("Deployment", "prod", "cart")
+	if len(got) != 1 {
+		t.Fatalf("expected scope fallback when all resources entries are empty, got %d findings", len(got))
+	}
+}
+
 func TestBuildIndex_FindingsForUnknownSubject(t *testing.T) {
 	report := makeReport(t, "PolicyReport", "prod", "rep", nil, time.Now(), []map[string]any{
 		{
