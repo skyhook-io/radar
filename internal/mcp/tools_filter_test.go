@@ -148,6 +148,46 @@ func containsName(payload, name string) bool {
 	return strings.Contains(payload, `"name":"`+name+`"`)
 }
 
+// TestHandleListResources_GroupRoutesToDynamic pins the group-aware
+// short-circuit on the MCP list_resources path. For kind=services with
+// no group, the typed core Service list returns the seeded fixture. For
+// kind=services&group=serving.knative.dev, the handler must skip the
+// typed cache (which is group-blind — it would silently return core
+// Services and drop the group filter on the floor) and route through
+// listDynamicResources instead. Mirrors the REST-side fix in
+// handleAIListResources and the GET-side fix from PR #721.
+//
+// setupFakeCacheForFilterTests doesn't initialize the dynamic cache, so
+// the dynamic call surfaces an error. listDynamicResources wraps it in
+// "failed to list %s: …" — pin both that the result does NOT contain
+// the core Service AND that the call returned the dynamic-cache error
+// (proving the routing change is in place).
+func TestHandleListResources_GroupRoutesToDynamic(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	ctx := withRestrictedUser(t, "alice", []string{"alpha"})
+
+	// With no group: typed cache, but no Services in the fixture so
+	// it's an empty list. Sanity check the baseline.
+	_, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "services", Namespace: "alpha"})
+	if err != nil {
+		t.Fatalf("baseline (no group): %v", err)
+	}
+
+	// With group=serving.knative.dev: must route to dynamic. The fake
+	// cache has no dynamic discovery wired, so we expect an error
+	// rather than a (wrong) 200 with typed core Services.
+	_, _, err = handleListResources(ctx, nil, listResourcesInput{Kind: "services", Namespace: "alpha", Group: "serving.knative.dev"})
+	if err == nil {
+		t.Fatalf("group=serving.knative.dev: expected dynamic-cache routing error (no discovery in test harness), got nil err — handler may have silently returned typed core Services (pre-fix bug)")
+	}
+	// The wrapped error should reflect the dynamic path, not a typed
+	// cache lookup. Match loosely on shape so future error-text
+	// refactors don't flake the test.
+	if !strings.Contains(err.Error(), "services") {
+		t.Errorf("error should mention services kind: %v", err)
+	}
+}
+
 func TestHandleListResources_RestrictedUser(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 

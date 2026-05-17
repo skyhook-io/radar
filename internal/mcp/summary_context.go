@@ -29,21 +29,62 @@ import (
 type summaryContextBuilder func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.SummaryContext
 
 // newSummaryContextBuilder assembles the per-request closure for MCP
-// list_resources / search. Returns nil when the cache or topology
-// isn't available, in which case the caller should skip context
-// attachment rather than emit empty objects.
+// list_resources. Returns nil when the cache or topology isn't
+// available, in which case the caller should skip context attachment
+// rather than emit empty objects.
 //
 // namespaces scopes the issue index to just the rows being returned;
 // pass nil for cluster-wide. kindFilter ("" for search, the requested
 // kind for list_resources) narrows the issue compose to a single kind
 // so list_resources kind=pod doesn't pull deployment + service issues.
+//
+// Use newSearchSummaryContextBuilder for MCP search, which routes
+// per-hit between a namespaced and a cluster-wide index — search
+// returns mixed kinds in one response, so a single index can't get
+// both right.
 func newSummaryContextBuilder(namespaces []string, kindFilter string) summaryContextBuilder {
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil
 	}
-	topo := buildSummaryContextTopology(namespaces)
 	idx := buildIssueIndex(provider, namespaces, kindFilter)
+	return summaryContextBuilderFromIndexes(namespaces, idx, idx)
+}
+
+// newSearchSummaryContextBuilder is the MCP search variant. Mirrors
+// internal/server.newSearchSummaryContextBuilder — see that comment for
+// the dual-index rationale (mixed-kind hits, cluster-scoped issues at
+// namespace=""). MCP search-level RBAC (CanReadClusterScoped via
+// canReadClusterScopedKind) already gates which cluster-scoped kinds
+// are reachable, so composing the cluster-wide index doesn't leak
+// rows the user can't see.
+func newSearchSummaryContextBuilder(scanNamespaces []string) summaryContextBuilder {
+	provider := issues.NewCacheProvider()
+	if provider == nil {
+		return nil
+	}
+	namespacedIdx := buildIssueIndex(provider, scanNamespaces, "")
+	clusterIdx := namespacedIdx
+	if scanNamespaces != nil {
+		clusterIdx = buildIssueIndex(provider, nil, "")
+	}
+	return summaryContextBuilderFromIndexes(scanNamespaces, namespacedIdx, clusterIdx)
+}
+
+// summaryContextBuilderFromIndexes is the shared closure body. The list
+// path passes the same index for both args; search passes two distinct
+// indexes (namespacedIdx scoped to user namespaces, clusterIdx composed
+// cluster-wide). The closure dispatches per-hit by scope so cluster-
+// scoped hits read the cluster-wide index and surface namespace=""
+// issues that the namespaced filter would otherwise drop.
+//
+// topoNamespaces is the namespace hint for the topology build —
+// search passes the same scanNamespaces it used for the namespaced
+// index; list passes its allowed-namespace set. Topology snapshot is
+// memoized; passing the same hint hits the cache across list and
+// search invocations in a burst.
+func summaryContextBuilderFromIndexes(topoNamespaces []string, namespacedIdx, clusterIdx issueIndex) summaryContextBuilder {
+	topo := buildSummaryContextTopology(topoNamespaces)
 
 	resourceProvider := k8s.NewTopologyResourceProvider(k8s.GetResourceCache())
 	dynamicProvider := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
@@ -76,6 +117,15 @@ func newSummaryContextBuilder(namespaces []string, kindFilter string) summaryCon
 		var source runtime.Object = obj
 		if source == nil && u != nil {
 			source = u
+		}
+		// Dispatch by scope: cluster-scoped hits read clusterIdx (composed
+		// at namespace=nil so namespace="" issues are present), namespaced
+		// hits read namespacedIdx (which honors the user's namespace
+		// filter so the per-row count doesn't pull in noise from
+		// namespaces the user can't see).
+		idx := namespacedIdx
+		if clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group); clusterScoped {
+			idx = clusterIdx
 		}
 		return resourcecontext.BuildSummary(source, resourcecontext.SummaryOptions{
 			ManagedBy:  managedBy,

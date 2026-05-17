@@ -125,6 +125,71 @@ func TestBuildIssueIndex_BeyondMaxLimit(t *testing.T) {
 	}
 }
 
+// TestSummaryContextBuilderFromIndexes_DispatchesByScope pins the
+// dual-index dispatch on the MCP path. Search returns mixed-kind hits
+// (namespaced Pods + cluster-scoped Nodes); a single namespace-scoped
+// index would zero issueCount on the Node hits because their problems
+// live at namespace="". Mirror of the REST-side test in
+// internal/server.
+func TestSummaryContextBuilderFromIndexes_DispatchesByScope(t *testing.T) {
+	namespacedIdx := issueIndex{}
+	namespacedIdx[issueIndexKey("", "Pod", "prod", "api-7")] = 4
+
+	clusterIdx := issueIndex{}
+	clusterIdx[issueIndexKey("", "Node", "", "worker-1")] = 2
+
+	build := summaryContextBuilderFromIndexes(nil, namespacedIdx, clusterIdx)
+
+	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 2 {
+		t.Errorf("Node hit: got %+v, want IssueCount=2 from clusterIdx", sc)
+	}
+	if sc := build(nil, nil, "", "Pod", "prod", "api-7"); sc == nil || sc.IssueCount != 4 {
+		t.Errorf("Pod hit: got %+v, want IssueCount=4 from namespacedIdx", sc)
+	}
+	// Cross-bucket name lookups must not leak.
+	if sc := build(nil, nil, "", "Node", "", "api-7"); sc != nil && sc.IssueCount != 0 {
+		t.Errorf("Node hit using Pod-bucket name leaked count: %+v", sc)
+	}
+	if sc := build(nil, nil, "", "Pod", "prod", "worker-1"); sc != nil && sc.IssueCount != 0 {
+		t.Errorf("Pod hit using Node-bucket name leaked count: %+v", sc)
+	}
+}
+
+// TestNewSearchSummaryContextBuilder_BuildsDualIndex pins the
+// constructor: scanNamespaces non-nil → two distinct indexes, one
+// scoped, one cluster-wide. Without this, MCP search responses zero
+// out issueCount on Node / PV / cluster-scoped CRD hits. Mirror of the
+// REST-side test.
+func TestNewSearchSummaryContextBuilder_BuildsDualIndex(t *testing.T) {
+	p := &fakeIssuesProvider{
+		problems: []k8s.Problem{
+			{Kind: "Node", Group: "", Namespace: "", Name: "worker-1", Reason: "NotReady", Severity: "critical"},
+			{Kind: "Pod", Group: "", Namespace: "prod", Name: "api-7", Reason: "ImagePullBackOff", Severity: "warning"},
+		},
+	}
+
+	namespacedIdx := buildIssueIndex(p, []string{"prod"}, "")
+	clusterIdx := buildIssueIndex(p, nil, "")
+
+	if got := namespacedIdx.count("", "Node", "", "worker-1"); got != 0 {
+		t.Errorf("namespacedIdx Node count = %d, want 0 (sanity)", got)
+	}
+	if got := clusterIdx.count("", "Node", "", "worker-1"); got != 1 {
+		t.Errorf("clusterIdx Node count = %d, want 1", got)
+	}
+	if got := namespacedIdx.count("", "Pod", "prod", "api-7"); got != 1 {
+		t.Errorf("namespacedIdx Pod count = %d, want 1", got)
+	}
+
+	build := summaryContextBuilderFromIndexes(nil, namespacedIdx, clusterIdx)
+	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 1 {
+		t.Errorf("Node hit via builder: got %+v, want IssueCount=1 (was 0 pre-fix)", sc)
+	}
+	if sc := build(nil, nil, "", "Pod", "prod", "api-7"); sc == nil || sc.IssueCount != 1 {
+		t.Errorf("Pod hit via builder: got %+v, want IssueCount=1", sc)
+	}
+}
+
 // TestBuildIssueIndex_ClusterScopedIssueRequiresUnfilteredCompose pins
 // the MCP-side regression for the cluster-scoped issueCount bug. When
 // handleListResources hands a namespace-restricted slice to the issue

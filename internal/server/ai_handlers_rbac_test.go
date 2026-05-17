@@ -161,6 +161,68 @@ func TestAI_NamespacesList_NoListNamespacesSAR_Returns403(t *testing.T) {
 	}
 }
 
+// TestAI_ListServices_WithGroup_RoutesToDynamicCache pins the group-aware
+// short-circuit in handleAIListResources. For kind=services with no group,
+// the typed core Service list path returns the seeded nginx Service. For
+// kind=services&group=serving.knative.dev, the handler must skip the
+// typed cache (which is group-blind — it would silently return core
+// Services and drop the group filter on the floor) and route through
+// aiListDynamic instead. Mirrors the same fix on GET in PR #721.
+//
+// The smoke TestMain seeds typed caches only; the dynamic resource cache
+// isn't initialized, so the dynamic path surfaces a 500 with "resource
+// discovery not initialized". That 500 IS the assertion: pre-fix the
+// handler would return 200 with the core Service rows (silent
+// wrong-kind result), which is the bug.
+func TestAI_ListServices_WithGroup_RoutesToDynamicCache(t *testing.T) {
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("bob", &auth.UserPermissions{
+		AllowedNamespaces: []string{"default"},
+	})
+
+	// Baseline: no group → typed cache returns the seeded core Service.
+	respCore := env.authGet(t, "/api/ai/resources/services?namespace=default", "bob", "")
+	defer respCore.Body.Close()
+	if respCore.StatusCode != http.StatusOK {
+		t.Fatalf("baseline (no group): expected 200, got %d", respCore.StatusCode)
+	}
+	var coreRows []map[string]any
+	if err := json.NewDecoder(respCore.Body).Decode(&coreRows); err != nil {
+		t.Fatalf("decode core: %v", err)
+	}
+	var foundNginxSvc bool
+	for _, row := range coreRows {
+		if row["kind"] == "Service" && row["name"] == "nginx" {
+			foundNginxSvc = true
+			break
+		}
+	}
+	if !foundNginxSvc {
+		t.Fatalf("baseline (no group): expected nginx Service in typed list, got %+v", coreRows)
+	}
+
+	// With group: must route through aiListDynamic. Dynamic cache isn't
+	// initialized in the smoke harness, so we expect either 400 ("unknown
+	// resource kind") or 500 ("dynamic resource cache not initialized" /
+	// "resource discovery not initialized") — anything BUT a 200 with
+	// core Services, which is the pre-fix wrong-result path.
+	respCRD := env.authGet(t, "/api/ai/resources/services?namespace=default&group=serving.knative.dev", "bob", "")
+	defer respCRD.Body.Close()
+	if respCRD.StatusCode == http.StatusOK {
+		var crdRows []map[string]any
+		if err := json.NewDecoder(respCRD.Body).Decode(&crdRows); err == nil {
+			for _, row := range crdRows {
+				if row["name"] == "nginx" {
+					t.Fatalf("group=serving.knative.dev leaked typed core Service into result (pre-fix bug): row=%+v", row)
+				}
+			}
+		}
+	}
+	if respCRD.StatusCode != http.StatusBadRequest && respCRD.StatusCode != http.StatusInternalServerError && respCRD.StatusCode != http.StatusOK {
+		t.Fatalf("group=serving.knative.dev: unexpected status %d (want 400/500 from uninitialized dynamic cache, or 200 with non-core rows)", respCRD.StatusCode)
+	}
+}
+
 func TestAI_DeploymentsList_HappyPath_AttachesSummaryContext(t *testing.T) {
 	// Allowed user, summary-verbosity default. The envelope must
 	// include the seeded nginx deployment AND each row must carry a

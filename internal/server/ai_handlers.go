@@ -128,7 +128,19 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Try typed cache first
+	// When a group is specified, route straight to the dynamic cache so
+	// CRDs whose plural collides with a core kind (e.g. Knative
+	// serving.knative.dev/Service vs corev1 ""/Service, KEDA's HPA-like
+	// kinds) reach the right resource. FetchResourceList is group-blind
+	// — it would silently return the core typed list, dropping the
+	// query's group filter on the floor. Mirrors the same group-aware
+	// short-circuit in handleGetResource (PR #721).
+	if group != "" {
+		s.aiListDynamic(w, r, cache, kind, namespaces, group, level, skipContext)
+		return
+	}
+
+	// Try typed cache first (group=="" → core/built-in lookup).
 	objs, err := k8s.FetchResourceList(cache, kind, namespaces)
 	if err == k8s.ErrUnknownKind {
 		// Fall through to dynamic cache for CRDs

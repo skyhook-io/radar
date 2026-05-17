@@ -468,7 +468,18 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 		listScope = nil
 	}
 
-	// Try typed cache first
+	// When a group is specified, route straight to the dynamic cache so
+	// CRDs whose plural collides with a core kind (e.g. Knative
+	// serving.knative.dev/Service vs corev1 ""/Service) reach the right
+	// resource. FetchResourceList is group-blind — it would silently
+	// return the core typed list, dropping the caller's group filter on
+	// the floor. Mirrors the group-aware short-circuit in REST
+	// handleAIListResources and handleGetResource (PR #721).
+	if group != "" {
+		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Context)
+	}
+
+	// Try typed cache first (group=="" → core/built-in lookup).
 	objs, err := k8s.FetchResourceList(cache, kind, listScope)
 	if err == k8s.ErrUnknownKind {
 		// Fall through to dynamic cache for CRDs. ClassifyKindScope/SAR
@@ -2152,8 +2163,14 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 		}
 		opts.Filter = f
 	}
+	// Search uses the dual-index variant: hits are mixed-kind (a single
+	// query can return both namespaced Pods and cluster-scoped Nodes),
+	// so a single namespace-scoped issue index zeroes issueCount on
+	// cluster-scoped hits whose problems live at namespace="". The
+	// builder routes per-hit by scope; CanReadClusterScoped above
+	// already gates which cluster-scoped kinds are reachable.
 	if input.Context != "none" {
-		if builder := newSummaryContextBuilder(scanNamespaces, ""); builder != nil {
+		if builder := newSearchSummaryContextBuilder(scanNamespaces); builder != nil {
 			opts.SummaryBuilder = search.SummaryBuilderFunc(builder)
 		}
 	}

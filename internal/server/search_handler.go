@@ -106,8 +106,16 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	// the per-request closure once (one Compose call + cached topology
 	// snapshot) and let the search executor invoke it per kept hit.
 	// ?context=none opts out so legacy callers don't pay for the join.
+	//
+	// Search uses the dual-index variant: hits are mixed-kind in one
+	// response (namespaced Pods alongside cluster-scoped Nodes), so a
+	// single-namespace-scoped issue index would zero issueCount on
+	// cluster-scoped hits (whose issues live at namespace=""). The
+	// builder routes per-hit by scope. SAR gating above
+	// (CanReadClusterScoped) already constrains which cluster-scoped
+	// kinds are reachable.
 	if r.URL.Query().Get("context") != "none" {
-		if builder := s.newSummaryContextBuilder(scanNamespaces, ""); builder != nil {
+		if builder := s.newSearchSummaryContextBuilder(scanNamespaces); builder != nil {
 			opts.SummaryBuilder = search.SummaryBuilderFunc(builder)
 		}
 	}

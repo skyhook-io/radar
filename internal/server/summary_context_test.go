@@ -446,6 +446,112 @@ func TestIssueIndexNamespaces_ClusterScopedDropsFilter(t *testing.T) {
 	}
 }
 
+// TestSummaryContextBuilderFromIndexes_DispatchesByScope pins the
+// dual-index dispatch: cluster-scoped hits (Node, PV, …) read the
+// cluster-wide index (where namespace="" issues live), namespaced hits
+// (Pod, Deployment, …) read the namespace-scoped index. Without this
+// dispatch, a search response that mixes Pods and Nodes silently zeros
+// issueCount on the Node hits — the namespace-scoped index drops every
+// namespace="" issue.
+//
+// This pins what the search-handler-level fix relies on: the two
+// indexes must be wired to the two scopes via the closure, not the
+// other way around. A wiring inversion (cluster-scoped → namespaced
+// index) would re-introduce the bug.
+func TestSummaryContextBuilderFromIndexes_DispatchesByScope(t *testing.T) {
+	// Build two distinct indexes so we can tell which one was consulted.
+	// The cluster index sees a Node issue at namespace=""; the
+	// namespaced index has a Pod issue in "prod". An index leak would
+	// surface either the Node count under Pod or vice versa.
+	namespacedIdx := issueIndex{}
+	namespacedIdx[issueIndexKey("", "Pod", "prod", "api-7")] = 4
+
+	clusterIdx := issueIndex{}
+	clusterIdx[issueIndexKey("", "Node", "", "worker-1")] = 2
+
+	// Server with a no-op broadcaster — the builder reads
+	// GetCachedTopology() which returns nil when no topology has been
+	// built; managedBy will be nil but issueCount dispatch is what we're
+	// pinning here.
+	s := &Server{broadcaster: NewSSEBroadcaster()}
+	build := s.summaryContextBuilderFromIndexes(namespacedIdx, clusterIdx)
+
+	// Cluster-scoped Node hit — must read clusterIdx.
+	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 2 {
+		t.Errorf("Node hit: got %+v, want IssueCount=2 from clusterIdx", sc)
+	}
+	// Namespaced Pod hit — must read namespacedIdx.
+	if sc := build(nil, nil, "", "Pod", "prod", "api-7"); sc == nil || sc.IssueCount != 4 {
+		t.Errorf("Pod hit: got %+v, want IssueCount=4 from namespacedIdx", sc)
+	}
+	// A cluster-scoped hit whose name only lives in the namespaced
+	// index must return 0 (no cross-bucket leak).
+	if sc := build(nil, nil, "", "Node", "", "api-7"); sc != nil && sc.IssueCount != 0 {
+		t.Errorf("Node hit using Pod-bucket name leaked count: %+v", sc)
+	}
+	// And a namespaced hit whose name only lives in the cluster index
+	// likewise returns 0.
+	if sc := build(nil, nil, "", "Pod", "prod", "worker-1"); sc != nil && sc.IssueCount != 0 {
+		t.Errorf("Pod hit using Node-bucket name leaked count: %+v", sc)
+	}
+}
+
+// TestNewSearchSummaryContextBuilder_BuildsDualIndex pins the end-to-end
+// shape used by /api/search and MCP search: scanNamespaces is non-nil
+// (a namespace-restricted user, or a user with a `ns:` query modifier),
+// so the constructor must compose TWO issue indexes — one scoped to
+// those namespaces, one cluster-wide for cluster-scoped hits. Without
+// the second index, the Node hit's summaryContext.issueCount returns
+// 0 because every Node issue lives at namespace="" and the namespace
+// filter drops them.
+//
+// Exercise via the issues.Provider seam: a fakeIssuesProvider that
+// emits one Node problem at namespace="" and one Pod problem in
+// "prod". With scanNamespaces=["prod"], the Node count must still
+// surface (proving the cluster-wide index was built and routed to).
+func TestNewSearchSummaryContextBuilder_BuildsDualIndex(t *testing.T) {
+	p := &fakeIssuesProvider{
+		problems: []k8sProblem{
+			{Kind: "Node", Group: "", Namespace: "", Name: "worker-1", Reason: "NotReady", Severity: "critical"},
+			{Kind: "Pod", Group: "", Namespace: "prod", Name: "api-7", Reason: "ImagePullBackOff", Severity: "warning"},
+		},
+	}
+
+	// Build the two indexes the constructor would build.
+	namespacedIdx := buildIssueIndex(p, []string{"prod"}, "")
+	clusterIdx := buildIssueIndex(p, nil, "")
+
+	// Sanity: pre-fix, the search handler passed namespacedIdx for
+	// both; Node issueCount silently zeroed.
+	if got := namespacedIdx.count("", "Node", "", "worker-1"); got != 0 {
+		t.Errorf("namespacedIdx Node count = %d, want 0 (sanity — namespace filter drops cluster-scoped issues)", got)
+	}
+	if got := clusterIdx.count("", "Node", "", "worker-1"); got != 1 {
+		t.Errorf("clusterIdx Node count = %d, want 1 (cluster-wide compose surfaces namespace=\"\" issues)", got)
+	}
+
+	// And the namespaced Pod issue must surface in the namespaced
+	// index — search RBAC has already gated namespace visibility, so
+	// the per-row count should respect the scan boundary instead of
+	// composing cluster-wide and pulling in noise from other
+	// namespaces.
+	if got := namespacedIdx.count("", "Pod", "prod", "api-7"); got != 1 {
+		t.Errorf("namespacedIdx Pod count = %d, want 1", got)
+	}
+
+	// With both indexes built, the closure dispatches per-hit by
+	// scope. Replay the dispatch via the shared helper to pin the
+	// end-to-end shape.
+	s := &Server{broadcaster: NewSSEBroadcaster()}
+	build := s.summaryContextBuilderFromIndexes(namespacedIdx, clusterIdx)
+	if sc := build(nil, nil, "", "Node", "", "worker-1"); sc == nil || sc.IssueCount != 1 {
+		t.Errorf("Node hit via builder: got %+v, want IssueCount=1 (was 0 pre-fix)", sc)
+	}
+	if sc := build(nil, nil, "", "Pod", "prod", "api-7"); sc == nil || sc.IssueCount != 1 {
+		t.Errorf("Pod hit via builder: got %+v, want IssueCount=1", sc)
+	}
+}
+
 // TestBuildIssueIndex_ClusterScopedIssueSurfacedWhenUnfiltered pins the
 // end-to-end behavior the issueIndexNamespaces helper enables: when the
 // builder passes nil for the namespace filter (cluster-scoped kind),
