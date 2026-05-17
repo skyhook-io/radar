@@ -83,12 +83,12 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		since = time.Hour
 	}
 	filters := issues.Filters{
-		Namespaces:    namespaces,
-		Severities:    severities,
-		Sources:       sources,
-		Kinds:         splitCSV(q.Get("kind")),
-		Since:         since,
-		Limit:         parseLimit(q.Get("limit")),
+		Namespaces:     namespaces,
+		Severities:     severities,
+		Sources:        sources,
+		Kinds:          splitCSV(q.Get("kind")),
+		Since:          since,
+		Limit:          parseLimit(q.Get("limit")),
 		IncludeAudit:   q.Get("include_audit") == "true" || hasSource(q.Get("source"), "audit"),
 		IncludeEvents:  includeEvents,
 		IncludeKyverno: q.Get("include_kyverno") == "true" || hasSource(q.Get("source"), "kyverno"),

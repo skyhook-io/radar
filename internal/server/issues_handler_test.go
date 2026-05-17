@@ -29,10 +29,10 @@ func TestIssuesHandler_KyvernoMetaEmittedOnOptIn(t *testing.T) {
 	})
 
 	cases := []struct {
-		name        string
-		setup       func()
-		wantMeta    string
-		queryParam  string // "include_kyverno=true" or "source=kyverno"
+		name       string
+		setup      func()
+		wantMeta   string
+		queryParam string // "include_kyverno=true" or "source=kyverno"
 	}{
 		{
 			name: "not_installed surfaces in meta.kyverno",

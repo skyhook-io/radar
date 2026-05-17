@@ -93,3 +93,32 @@ func TestResetPolicyReportIndex_ClearsKyvernoDecision(t *testing.T) {
 		t.Errorf("after reset: got %q want %q (must not inherit prior cluster's decision)", got, KyvernoStatusWarmup)
 	}
 }
+
+// TestResetPolicyReportIndex_BumpsWarmupGen pins the race-protection
+// invariant: each Reset advances kyvernoWarmupGen so any in-flight Warmup
+// goroutine's setDecision/publishReady writes (which capture gen at
+// lambda entry and verify under the mutex before storing) become no-ops
+// against the new cluster. Without this bump, a slow Warmup from the
+// previous cluster context could stamp KyvernoStatusReady onto the new
+// cluster's atomic between the Reset and the new cluster's own Warmup.
+func TestResetPolicyReportIndex_BumpsWarmupGen(t *testing.T) {
+	t.Cleanup(func() {
+		policyReportMu.Lock()
+		policyReportInit = new(sync.Once)
+		policyReportMu.Unlock()
+	})
+
+	before := kyvernoWarmupGen.Load()
+	ResetPolicyReportIndex()
+	after := kyvernoWarmupGen.Load()
+	if after <= before {
+		t.Fatalf("kyvernoWarmupGen did not advance: before=%d after=%d (Reset must bump gen so in-flight warmups skip stale writes)", before, after)
+	}
+
+	// A second Reset should bump again — bounded monotonic counter, not
+	// a toggle.
+	ResetPolicyReportIndex()
+	if after2 := kyvernoWarmupGen.Load(); after2 <= after {
+		t.Fatalf("kyvernoWarmupGen not strictly monotonic: %d -> %d", after, after2)
+	}
+}

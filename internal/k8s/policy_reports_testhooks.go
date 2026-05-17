@@ -1,6 +1,8 @@
 package k8s
 
 import (
+	"fmt"
+
 	"github.com/skyhook-io/radar/pkg/policyreports"
 )
 
@@ -57,10 +59,11 @@ func StoreKyvernoIndexForTest(v any) {
 	}
 	idx, ok := v.(*policyreports.Index)
 	if !ok {
-		// Defensive: callers should only pass values produced by
-		// NewEmptyKyvernoIndexForTest or a real Load output. Refuse
-		// to corrupt the atomic with an unrelated type.
-		return
+		// Test-only hook: a wrong type here is a test bug, not a runtime
+		// condition to handle gracefully. Panic immediately so the test
+		// fails at the misuse site instead of producing confusing
+		// downstream failures.
+		panic(fmt.Sprintf("StoreKyvernoIndexForTest: want *policyreports.Index, got %T", v))
 	}
 	policyReportIndex.Store(idx)
 }
