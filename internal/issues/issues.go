@@ -74,10 +74,17 @@ func Compose(p Provider, f Filters) []Issue {
 // severity desc, then last-seen desc, then kind/ns/name for stable
 // tiebreaks.
 func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
+	// Negative Limit is the "uncapped" sentinel: callers that need the
+	// full matched set (per-resource issue indexes for /api/ai list +
+	// search summaryContext) pass NoLimit so a 5000-issue cluster
+	// doesn't silently drop counts for resources whose issues fall in
+	// the tail beyond MaxLimit. Zero still maps to DefaultLimit so the
+	// public /api/issues + MCP issues_list keep their tight caps.
+	uncapped := f.Limit < 0
 	if f.Limit == 0 {
 		f.Limit = DefaultLimit
 	}
-	if f.Limit > MaxLimit {
+	if !uncapped && f.Limit > MaxLimit {
 		f.Limit = MaxLimit
 	}
 
@@ -201,7 +208,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 		return out[i].Name < out[j].Name
 	})
 	stats.TotalMatched = len(out)
-	if len(out) > f.Limit {
+	if !uncapped && len(out) > f.Limit {
 		out = out[:f.Limit]
 	}
 	return out, stats

@@ -27,7 +27,12 @@ import (
 // summaryContextBuilder is the per-request closure that produces a
 // SummaryContext for a single resource. nil result is fine — the
 // SummaryContext field is omitempty on every consumer.
-type summaryContextBuilder func(obj runtime.Object, u *unstructured.Unstructured, kind, namespace, name string) *resourcecontext.SummaryContext
+//
+// group is required so the per-resource issue lookup can distinguish
+// CRDs that share kind+namespace+name across API groups (e.g. Knative
+// Service vs corev1 Service, or two custom CRDs both named "Cluster"
+// from different operators). Pass "" for core-group resources.
+type summaryContextBuilder func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.SummaryContext
 
 // newSummaryContextBuilder assembles the per-request closure for the
 // list/search handlers. Returns nil when the cache or topology isn't
@@ -64,7 +69,7 @@ func (s *Server) newSummaryContextBuilder(namespaces []string, kindFilter string
 		relIdx = topology.IndexByResource(topo)
 	}
 
-	return func(obj runtime.Object, u *unstructured.Unstructured, kind, namespace, name string) *resourcecontext.SummaryContext {
+	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.SummaryContext {
 		var managedBy *resourcecontext.ManagedByRef
 		if topo != nil {
 			// Pass the fetched object when available so synthesis is
@@ -87,23 +92,29 @@ func (s *Server) newSummaryContextBuilder(namespaces []string, kindFilter string
 		}
 		return resourcecontext.BuildSummary(source, resourcecontext.SummaryOptions{
 			ManagedBy:  managedBy,
-			IssueCount: idx.count(kind, namespace, name),
+			IssueCount: idx.count(group, kind, namespace, name),
 		})
 	}
 }
 
-// issueIndex keys per-resource issue counts as "kind|namespace|name".
-// Kind is canonicalized via strings.ToLower because issue sources emit
-// the kind as-typed (Deployment) while callers may pass the URL plural
-// (deployments) — lowercase normalizes both.
+// issueIndex keys per-resource issue counts as "group|kind|namespace|name".
+// Group goes FIRST so two CRDs sharing kind+namespace+name across API
+// groups (e.g. Knative serving.knative.dev/Service vs corev1 ""/Service,
+// or two operators each shipping a "Cluster" CRD) get independent counts
+// instead of inheriting each other's. Kind is canonicalized via
+// strings.ToLower because issue sources emit the kind as-typed
+// (Deployment) while callers may pass the URL plural (deployments) —
+// lowercase normalizes both. "|" can't appear in a Kubernetes API group
+// (groups follow DNS subdomain rules: lowercase alphanumerics, "-",
+// and "."), so it's a safe delimiter.
 type issueIndex map[string]int
 
-func (i issueIndex) count(kind, namespace, name string) int {
-	return i[issueIndexKey(kind, namespace, name)]
+func (i issueIndex) count(group, kind, namespace, name string) int {
+	return i[issueIndexKey(group, kind, namespace, name)]
 }
 
-func issueIndexKey(kind, namespace, name string) string {
-	return strings.ToLower(canonicalSingular(kind)) + "|" + namespace + "|" + name
+func issueIndexKey(group, kind, namespace, name string) string {
+	return group + "|" + strings.ToLower(canonicalSingular(kind)) + "|" + namespace + "|" + name
 }
 
 // canonicalSingular collapses common plural forms back to the singular
@@ -155,9 +166,14 @@ func canonicalSingular(kind string) string {
 }
 
 func buildIssueIndex(p issues.Provider, namespaces []string, kindFilter string) issueIndex {
+	// NoLimit (not MaxLimit) is required here: a 5000-issue cluster would
+	// otherwise truncate after the first 1000 sorted rows, silently
+	// zeroing issueCount for resources whose issues fall in the tail.
+	// We're bucketing for a per-resource lookup, not paginating — the
+	// caller of summaryContext never sees the issue list itself.
 	filters := issues.Filters{
 		Namespaces: namespaces,
-		Limit:      issues.MaxLimit,
+		Limit:      issues.NoLimit,
 	}
 	if kindFilter != "" {
 		// Compose's Kinds filter expects the singular kind ("Pod"). The
@@ -168,7 +184,7 @@ func buildIssueIndex(p issues.Provider, namespaces []string, kindFilter string) 
 	composed := issues.Compose(p, filters)
 	idx := make(issueIndex, len(composed))
 	for _, iss := range composed {
-		idx[issueIndexKey(iss.Kind, iss.Namespace, iss.Name)]++
+		idx[issueIndexKey(iss.Group, iss.Kind, iss.Namespace, iss.Name)]++
 	}
 	return idx
 }

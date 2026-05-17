@@ -1,0 +1,102 @@
+// Mirror of internal/server/summary_context_test.go for the MCP path —
+// pins the group-aware issue index key and the NoLimit fix so the MCP
+// list_resources / search builders stay in lockstep with REST.
+
+package mcp
+
+import (
+	"fmt"
+	"testing"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/internal/issues"
+	"github.com/skyhook-io/radar/internal/k8s"
+	bp "github.com/skyhook-io/radar/pkg/audit"
+)
+
+// fakeIssuesProvider is a minimal issues.Provider for the buildIssueIndex
+// tests. Only the fields the index path touches are wired.
+type fakeIssuesProvider struct {
+	problems []k8s.Problem
+}
+
+func (f *fakeIssuesProvider) DetectProblems(_ []string) []k8s.Problem     { return f.problems }
+func (f *fakeIssuesProvider) DetectCAPIProblems(_ []string) []k8s.Problem { return nil }
+func (f *fakeIssuesProvider) AuditFindings(_ []string) []bp.Finding       { return nil }
+func (f *fakeIssuesProvider) WarningEvents(_ []string, _ time.Duration) []*corev1.Event {
+	return nil
+}
+func (f *fakeIssuesProvider) WatchedDynamic() []schema.GroupVersionResource { return nil }
+func (f *fakeIssuesProvider) ListDynamic(_ schema.GroupVersionResource, _ string) ([]*unstructured.Unstructured, error) {
+	return nil, nil
+}
+func (f *fakeIssuesProvider) KindForGVR(_ schema.GroupVersionResource) string { return "" }
+
+func fmtPodName(i int) string { return fmt.Sprintf("pod-%05d", i) }
+
+// TestIssueIndexKey_GroupAware pins that two resources sharing
+// kind+namespace+name but in different API groups get independent
+// counts. The MCP layer mirrors the REST layer's index — same hazard,
+// same fix.
+func TestIssueIndexKey_GroupAware(t *testing.T) {
+	idx := issueIndex{}
+	idx[issueIndexKey("", "Service", "prod", "api")] = 2
+	idx[issueIndexKey("serving.knative.dev", "Service", "prod", "api")] = 5
+
+	if got := idx.count("", "Service", "prod", "api"); got != 2 {
+		t.Errorf("core Service count = %d, want 2 (Knative bucket bleeding through?)", got)
+	}
+	if got := idx.count("serving.knative.dev", "Service", "prod", "api"); got != 5 {
+		t.Errorf("Knative Service count = %d, want 5 (collided with core Service bucket?)", got)
+	}
+	if got := idx.count("example.io", "Service", "prod", "api"); got != 0 {
+		t.Errorf("unknown-group lookup = %d, want 0", got)
+	}
+}
+
+// TestBuildIssueIndex_GroupAware exercises the full buildIssueIndex
+// path with two CRDs that share kind+namespace+name across groups.
+func TestBuildIssueIndex_GroupAware(t *testing.T) {
+	p := &fakeIssuesProvider{
+		problems: []k8s.Problem{
+			{Kind: "Service", Group: "", Namespace: "prod", Name: "api", Reason: "Endpoints", Severity: "warning"},
+			{Kind: "Service", Group: "serving.knative.dev", Namespace: "prod", Name: "api", Reason: "RevisionFailed", Severity: "warning"},
+			{Kind: "Service", Group: "serving.knative.dev", Namespace: "prod", Name: "api", Reason: "RouteNotReady", Severity: "warning"},
+		},
+	}
+	idx := buildIssueIndex(p, nil, "")
+	if got := idx.count("", "Service", "prod", "api"); got != 1 {
+		t.Errorf("core Service count = %d, want 1", got)
+	}
+	if got := idx.count("serving.knative.dev", "Service", "prod", "api"); got != 2 {
+		t.Errorf("Knative Service count = %d, want 2", got)
+	}
+}
+
+// TestBuildIssueIndex_BeyondMaxLimit pins that resources whose issues
+// would fall in the tail beyond MaxLimit still get correct issueCounts.
+// Pre-fix, buildIssueIndex passed Limit:MaxLimit (1000) to Compose; on
+// a cluster with >1000 issues the post-sort truncation silently zeroed
+// tail counts. NoLimit removes the cap because the index is a per-
+// resource bucket count, not a paginated list.
+func TestBuildIssueIndex_BeyondMaxLimit(t *testing.T) {
+	probs := make([]k8s.Problem, 0, issues.MaxLimit+50)
+	for i := 0; i < issues.MaxLimit+50; i++ {
+		probs = append(probs, k8s.Problem{
+			Kind: "Pod", Namespace: "prod", Name: fmtPodName(i), Reason: "ImagePullBackOff", Severity: "warning",
+		})
+	}
+	p := &fakeIssuesProvider{problems: probs}
+	idx := buildIssueIndex(p, nil, "")
+	tailName := fmtPodName(issues.MaxLimit + 25)
+	if got := idx.count("", "Pod", "prod", tailName); got != 1 {
+		t.Fatalf("tail pod %s count = %d, want 1 (silent MaxLimit truncation?)", tailName, got)
+	}
+	if got := idx.count("", "Pod", "prod", fmtPodName(0)); got != 1 {
+		t.Errorf("head pod count = %d, want 1", got)
+	}
+}

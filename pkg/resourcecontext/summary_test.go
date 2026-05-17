@@ -300,6 +300,21 @@ func TestManagedByFromOwner(t *testing.T) {
 			ownerName: "repo",
 			want:      &ManagedByRef{Kind: "GitRepository", Source: "flux", Name: "repo", Namespace: "flux-system"},
 		},
+		{
+			// Native Helm release: topology's detectManagedByFromMeta emits
+			// {Kind:"HelmRelease", Group:""} when it sees Helm's release-name
+			// annotation (no Flux/GitOps signal). Must classify as "helm",
+			// not "native" — distinguishes Helm-managed resources in the
+			// list/search UI from raw kubectl-applied ones. The Flux
+			// HelmRelease CR lives at helm.toolkit.fluxcd.io and is covered
+			// by the case above; the empty-group form is unambiguous.
+			name:      "native_helm_release",
+			kind:      "HelmRelease",
+			group:     "",
+			namespace: "cert-manager",
+			ownerName: "cert-manager",
+			want:      &ManagedByRef{Kind: "HelmRelease", Source: "helm", Name: "cert-manager", Namespace: "cert-manager"},
+		},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

@@ -31,7 +31,13 @@ import (
 // non-nil — typed kinds pass obj, dynamic CRDs pass u. Returning nil
 // is fine (the field is omitempty); callers use it to gate context
 // emission per request (context=none opts out by passing nil here).
-type SummaryBuilderFunc func(obj runtime.Object, u *unstructured.Unstructured, kind, namespace, name string) *resourcecontext.SummaryContext
+//
+// group is the candidate's API group (already known to the search
+// walker — typed kinds via typedKinds, CRDs via gvr.Group). Threading
+// it through lets the builder distinguish CRDs that share
+// kind+namespace+name across groups (e.g. Knative Service vs corev1
+// Service) in its per-resource issue index.
+type SummaryBuilderFunc func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.SummaryContext
 
 // Provider abstracts the cache so tests can inject a fake.
 type Provider interface {
@@ -396,7 +402,7 @@ func buildHit(score int, matched []MatchedField, c candidate, mode IncludeMode, 
 		}
 	}
 	if summaryBuilder != nil {
-		h.SummaryContext = summaryBuilder(obj, u, c.Kind, c.Namespace, c.Name)
+		h.SummaryContext = summaryBuilder(obj, u, c.Group, c.Kind, c.Namespace, c.Name)
 	}
 	return h
 }

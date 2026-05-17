@@ -31,8 +31,10 @@ func TestSearch_SummaryBuilderAttached(t *testing.T) {
 	}
 
 	var calls int
-	builder := func(obj runtime.Object, u *unstructured.Unstructured, kind, namespace, name string) *resourcecontext.SummaryContext {
+	var gotGroup string
+	builder := func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.SummaryContext {
 		calls++
+		gotGroup = group
 		return &resourcecontext.SummaryContext{
 			ManagedBy:  &resourcecontext.ManagedByRef{Kind: "Deployment", Source: "native", Name: "api", Namespace: namespace},
 			Health:     "healthy",
@@ -59,6 +61,11 @@ func TestSearch_SummaryBuilderAttached(t *testing.T) {
 	}
 	if h.SummaryContext.ManagedBy == nil || h.SummaryContext.ManagedBy.Name != "api" {
 		t.Errorf("ManagedBy mismatch: %+v", h.SummaryContext.ManagedBy)
+	}
+	// Pod is core-group — builder should see "" for group, threaded
+	// through from candidate.Group (set on the typed walker via tk.Group).
+	if gotGroup != "" {
+		t.Errorf("builder saw group=%q for core-group Pod, want \"\"", gotGroup)
 	}
 }
 

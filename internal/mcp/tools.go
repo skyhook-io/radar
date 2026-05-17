@@ -512,6 +512,10 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 // Summary-verbosity ResourceSummary in-place. results and objs are
 // produced in lockstep by MinifyList — a length mismatch is defensive
 // (skip rather than panic).
+//
+// Group is sourced per-object from each typed object's GVK (SetTypeMeta
+// is called by Minify, so apiVersion is reliable here) — passed through
+// to the builder so the per-resource issue lookup stays group-aware.
 func attachSummaryContextToTyped(results []any, objs []runtime.Object, builder summaryContextBuilder) {
 	if len(results) != len(objs) {
 		return
@@ -521,7 +525,8 @@ func attachSummaryContextToTyped(results []any, objs []runtime.Object, builder s
 		if !ok || summary == nil {
 			continue
 		}
-		summary.SummaryContext = builder(objs[i], nil, summary.Kind, summary.Namespace, summary.Name)
+		group := groupFromObject(objs[i])
+		summary.SummaryContext = builder(objs[i], nil, group, summary.Kind, summary.Namespace, summary.Name)
 	}
 }
 
@@ -560,6 +565,10 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 // attachSummaryContextToUnstructured fills in SummaryContext for the
 // dynamic-CRD list path. summarizeUnstructured returns
 // *aicontext.ResourceSummary, so the cast matches the typed path.
+//
+// Group comes from each unstructured's apiVersion so two CRDs that share
+// kind+ns+name across API groups (e.g. multiple operators each shipping
+// a "Cluster" resource) get independent issue counts.
 func attachSummaryContextToUnstructured(results []any, items []*unstructured.Unstructured, builder summaryContextBuilder) {
 	if len(results) != len(items) {
 		return
@@ -569,8 +578,29 @@ func attachSummaryContextToUnstructured(results []any, items []*unstructured.Uns
 		if !ok || summary == nil {
 			continue
 		}
-		summary.SummaryContext = builder(nil, items[i], summary.Kind, summary.Namespace, summary.Name)
+		group := groupFromUnstructured(items[i])
+		summary.SummaryContext = builder(nil, items[i], group, summary.Kind, summary.Namespace, summary.Name)
 	}
+}
+
+// groupFromObject extracts the API group from a typed runtime.Object's
+// GroupVersionKind. Returns "" for core-group objects (Pod, Service,
+// etc.) and when the GVK is unset.
+func groupFromObject(obj runtime.Object) string {
+	if obj == nil {
+		return ""
+	}
+	k8s.SetTypeMeta(obj)
+	return obj.GetObjectKind().GroupVersionKind().Group
+}
+
+// groupFromUnstructured pulls the API group from an unstructured's
+// apiVersion. Mirrors groupFromObject for the dynamic-CRD path.
+func groupFromUnstructured(u *unstructured.Unstructured) string {
+	if u == nil {
+		return ""
+	}
+	return u.GroupVersionKind().Group
 }
 
 func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getResourceInput) (*mcp.CallToolResult, any, error) {

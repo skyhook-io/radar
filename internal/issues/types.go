@@ -123,4 +123,11 @@ type Filters struct {
 const (
 	DefaultLimit = 200
 	MaxLimit     = 1000
+	// NoLimit disables the result cap. Pass as Filters.Limit when the
+	// caller needs the full matched set (e.g. building a per-resource
+	// issue index for summaryContext — capping there would silently zero
+	// out counts for resources whose issues fall in the tail beyond
+	// MaxLimit on large clusters). Stats.TotalMatched is reliable
+	// regardless; this just turns off the post-sort slice.
+	NoLimit = -1
 )

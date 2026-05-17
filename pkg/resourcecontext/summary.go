@@ -63,6 +63,9 @@ func BuildSummary(obj runtime.Object, opts SummaryOptions) *SummaryContext {
 // Source classification:
 //   - "argocd" for argoproj.io kinds (Application, ApplicationSet, Rollout)
 //   - "flux" for *.fluxcd.io kinds (Kustomization, HelmRelease, GitRepository, …)
+//   - "helm" for the native Helm release pseudo-owner (kind "HelmRelease"
+//     with no group — emitted by topology's detectManagedByFromMeta to
+//     distinguish from Flux's HelmRelease CR in helm.toolkit.fluxcd.io)
 //   - "native" for everything else (Deployment, StatefulSet, DaemonSet, ReplicaSet, Job, …)
 func ManagedByFromOwner(ownerKind, ownerGroup, ownerNamespace, ownerName string) *ManagedByRef {
 	if ownerKind == "" || ownerName == "" {
@@ -76,7 +79,15 @@ func ManagedByFromOwner(ownerKind, ownerGroup, ownerNamespace, ownerName string)
 	}
 }
 
-func sourceForOwner(_ string, group string) string {
+func sourceForOwner(ownerKind, group string) string {
+	// Native Helm install: topology synthesizes a {Kind:"HelmRelease", Group:""}
+	// pseudo-owner from Helm's release-name/namespace annotations. This must
+	// be classified BEFORE the group-based GitOps branches so we don't fall
+	// through to "native" — Flux's HelmRelease lives at helm.toolkit.fluxcd.io
+	// and is handled by the *.fluxcd.io branch below.
+	if ownerKind == "HelmRelease" && group == "" {
+		return "helm"
+	}
 	switch group {
 	case "argoproj.io":
 		return "argocd"
