@@ -308,7 +308,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		canonicalKind = kind
 	}
 
-	issueSum := computeIssueSummaryForResource(cache, kind, namespace, name)
+	issueSum := computeIssueSummaryForResource(cache, canonicalKind, namespace, name)
 	auditSum := computeAuditSummaryForResource(cache, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
@@ -335,8 +335,17 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		// vs core/v1 Service). idx=nil is fine for single-resource: the
 		// per-call inline scan is O(E) once. Bulk callers (T12/T89) should
 		// build a shared index via topology.IndexByResource(topo).
+		//
+		// Route through KindForGVK so cross-group CRDs whose Kind collides
+		// with a core kind (Knative {Service, Configuration, Revision, Route},
+		// CAPI Cluster, Istio Gateway) resolve to the right topology node.
+		// The builder writes those as pseudo-kinds (e.g. "knativeservice/...")
+		// — without remapping, buildNodeID would resolve "services/..." to
+		// the core Service node and walk the wrong edges.
+		gvk := obj.GetObjectKind().GroupVersionKind()
+		relKind := topology.KindForGVK(gvk.Kind, gvk.Group)
 		opts.Relationships = topology.GetRelationshipsWithObject(
-			kind, namespace, name, obj, topo, prov, dyn, nil,
+			relKind, namespace, name, obj, topo, prov, dyn, nil,
 		)
 	}
 
@@ -378,6 +387,13 @@ func (s *Server) topologyForContext(namespace string) (*topology.Topology, topol
 // and generic CRD condition fallback. Filtering to a single (kind, name)
 // is done client-side; the composer's native namespace filter restricts the
 // scan to the resource's namespace so we don't walk the whole cluster.
+//
+// kind MUST be the Pascal singular form the issue composer writes into
+// Issue.Kind (e.g. "Deployment", "Pod") — the caller derives it from obj's
+// TypeMeta. The composer's Filters.Kinds matcher case-folds both sides, but
+// it does NOT plural-to-singular convert, so URL forms ("deployments",
+// "pods") drop every issue ("deployments" != lower("Deployment")) and the
+// summary silently collapses to nil.
 //
 // Returns nil when no issues match — Build then omits the IssueSummary field.
 func computeIssueSummaryForResource(cache *k8s.ResourceCache, kind, namespace, name string) *resourcecontext.IssueSummary {
