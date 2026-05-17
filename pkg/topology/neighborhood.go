@@ -224,6 +224,12 @@ func BuildNeighborhood(t *Topology, root ResourceRef, opts NeighborhoodOptions) 
 
 // edgeTypesForProfile returns the set of edge types a profile traverses.
 // rootKind is used for ProfileAuto only.
+//
+// Empty and unrecognized profile values BOTH normalize to ProfileAuto.
+// Returning ProfileAll for an unknown agent-supplied string would
+// silently expand traversal to every edge type — far too aggressive for
+// a typo. Auto picks a sensible profile based on the root kind instead.
+// Callers wanting the broadest expansion must pass ProfileAll explicitly.
 func edgeTypesForProfile(p Profile, rootKind NodeKind) map[EdgeType]bool {
 	switch p {
 	case ProfileManagement:
@@ -235,12 +241,17 @@ func edgeTypesForProfile(p Profile, rootKind NodeKind) map[EdgeType]bool {
 	case ProfileSecurity:
 		// v1: empty — synthesized edges live in a later phase.
 		return map[EdgeType]bool{}
-	case ProfileAll, "":
+	case ProfileAll:
 		return allEdgeTypes()
-	case ProfileAuto:
+	case ProfileAuto, "":
+		// Empty falls through here so direct lib callers that leave
+		// Profile unset get the documented default (auto), matching what
+		// the REST and MCP handlers already produce.
 		return edgeTypesForAuto(rootKind)
 	default:
-		return allEdgeTypes()
+		// Unknown profile string (typo, future profile name from an old
+		// client): pick auto rather than the broadest possible expansion.
+		return edgeTypesForAuto(rootKind)
 	}
 }
 

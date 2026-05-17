@@ -373,6 +373,55 @@ func TestBuildNeighborhood_RootMissingReturnsEmpty(t *testing.T) {
 	}
 }
 
+// TestBuildNeighborhood_UnknownProfileDefaultsToAuto verifies that an
+// unrecognized profile string (typo, future profile name from an older
+// client) is normalized to ProfileAuto rather than silently expanding
+// to ProfileAll. Empty profile gets the same treatment so direct lib
+// callers that don't pre-default through a handler see the documented
+// "Profile=auto" default.
+func TestBuildNeighborhood_UnknownProfileDefaultsToAuto(t *testing.T) {
+	topo := podNeighborhood()
+	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}
+
+	// Reference: ProfileAuto for a Pod traverses management + networking + policy.
+	auto := BuildNeighborhood(topo, root, NeighborhoodOptions{
+		Profile: ProfileAuto,
+		Hops:    2,
+	})
+	autoNodeIDs := nodeIDs(auto)
+
+	cases := []struct {
+		name    string
+		profile Profile
+	}{
+		{"empty profile", ""},
+		{"unknown profile string", "banana"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := BuildNeighborhood(topo, root, NeighborhoodOptions{
+				Profile: c.profile,
+				Hops:    2,
+			})
+			if !equalStrings(nodeIDs(got), autoNodeIDs) {
+				t.Errorf("%q profile should match ProfileAuto:\n  got:  %v\n  want: %v", c.profile, nodeIDs(got), autoNodeIDs)
+			}
+		})
+	}
+
+	// Sanity: ProfileAll is broader than auto for a Pod (auto excludes
+	// EdgeUses + EdgeConfigures). Confirms our "unknown→auto" guard
+	// actually narrows the expansion vs. the previous "unknown→all"
+	// behavior.
+	all := BuildNeighborhood(topo, root, NeighborhoodOptions{
+		Profile: ProfileAll,
+		Hops:    2,
+	})
+	if len(nodeIDs(all)) <= len(autoNodeIDs) {
+		t.Errorf("expected ProfileAll to cover at least as many nodes as ProfileAuto for a Pod root; got all=%d auto=%d", len(nodeIDs(all)), len(autoNodeIDs))
+	}
+}
+
 // TestBuildNeighborhood_AllowSkipsForbidden verifies that nodes for which
 // Allow returns false are skipped during BFS — they don't appear in the
 // output AND don't consume the MaxNodes budget. This is the security
