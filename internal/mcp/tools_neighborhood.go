@@ -198,6 +198,15 @@ func canReadNeighborhoodNodeMCP(ctx context.Context, n *topology.Node) bool {
 		}
 		return true
 	}
+	// Cluster-scoped: try the topology pseudo-kind table FIRST. NodeClass
+	// and friends synthesize a topology-only label that ClassifyKindScope
+	// doesn't recognize ("NodeClass" isn't a real K8s kind — the variants
+	// are EC2NodeClass / AKSNodeClass / GCPNodeClass). Without this branch
+	// pseudo-kind nodes hit the unclassified+empty-namespace fallback below
+	// and leak unconditionally to users without provider-specific RBAC.
+	if hit, ok := canReadClusterScopedTopoKindMCP(ctx, n.Kind); ok {
+		return hit
+	}
 	clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(string(n.Kind), group)
 	if !clusterScoped {
 		// Unclassified node with no namespace — let it through; we'd rather
@@ -205,6 +214,52 @@ func canReadNeighborhoodNodeMCP(ctx context.Context, n *topology.Node) bool {
 		return true
 	}
 	return canReadClusterScopedKind(ctx, gvrResource, gvrGroup, "get")
+}
+
+// canReadClusterScopedTopoKindMCP authorizes a topology cluster-scoped
+// pseudo-kind via the same clusterScopedTopologyKinds table that
+// deniedClusterScopedTopoKinds uses for /api/topology gating. Returns
+// (allowed, true) when kind is a tracked pseudo-kind, or (_, false) so
+// the caller falls through to the ClassifyKindScope path.
+//
+// Allow if ANY variant present in discovery passes — a user with
+// get-ec2nodeclasses RBAC sees EC2 NodeClass nodes even on a cluster that
+// also has AKSNodeClass installed but the user lacks AKS-get. Discovery
+// gating prevents an absent CRD (AKSNodeClass on an EKS cluster) from
+// blanket-denying the kind. Mirrors REST canReadClusterScopedTopoKind.
+func canReadClusterScopedTopoKindMCP(ctx context.Context, kind topology.NodeKind) (allowed, matched bool) {
+	disc := k8s.GetResourceDiscovery()
+	hasEntry := false
+	hasInDiscovery := false
+	for _, ck := range clusterScopedTopologyKinds {
+		if ck.kind != kind {
+			continue
+		}
+		hasEntry = true
+		if ck.group != "" && disc != nil {
+			if _, ok := disc.GetResourceWithGroup(ck.resource, ck.group); !ok {
+				continue
+			}
+		}
+		hasInDiscovery = true
+		// SAR cluster-scoped (namespace="") on the per-variant resource
+		// directly. We deliberately skip canReadClusterScopedKind here: its
+		// internal ClassifyKindScope re-resolves the resource via discovery,
+		// which over-broadens (passthrough-allow) when discovery is missing
+		// the CRD. The table is the source of truth for "this is cluster-
+		// scoped" — we don't need discovery to re-confirm that.
+		if canReadInNamespace(ctx, ck.group, ck.resource, "", "get") {
+			return true, true
+		}
+	}
+	if !hasEntry {
+		return false, false
+	}
+	if !hasInDiscovery {
+		// No variant installed — fall back to allow (matches REST helper).
+		return true, true
+	}
+	return false, true
 }
 
 func apiVersionGroupMCP(apiVersion string) string {

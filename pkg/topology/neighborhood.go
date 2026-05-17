@@ -148,6 +148,15 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 	// buildNodeID's static map can't construct the right ID for arbitrary CRDs.
 	rootID := buildNodeID(root.Kind, root.Namespace, root.Name, dp)
 	rootNode, ok := nodeByID[rootID]
+	// When root.Group is set, the rootID match alone isn't enough: two CRDs
+	// sharing the same lowercase plural collide on the ID (e.g. CAPI
+	// cluster.x-k8s.io/Cluster vs CNPG postgresql.cnpg.io/Cluster — whichever
+	// was inserted last wins in nodeByID). Verify the candidate's apiGroup
+	// matches; otherwise fall through to findNodeByRef which does the
+	// group-aware tuple match.
+	if ok && root.Group != "" && nodeAPIGroupFromData(rootNode) != root.Group {
+		ok = false
+	}
 	if !ok {
 		// Fallback: try matching by (kind, namespace, name [+ group]) tuple.
 		// Mostly for CRDs whose topology node ID uses a different prefix than
@@ -159,6 +168,22 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 			return sub
 		}
 		rootID = rootNode.ID
+	}
+
+	// Apply the Allow gate to the root itself. Callers' upfront RBAC checks
+	// (REST: kind+namespace, MCP: kind+namespace) authorize the kind class but
+	// don't catch per-kind tightening inside an allowed namespace — a Secret
+	// root in a namespace the user can list still needs `get secrets` for
+	// THAT namespace. Without this gate the root Secret leaks (name+status+
+	// data preview) even though the matching neighbor-Secret would be hidden.
+	//
+	// Empty subgraph + RBACDenied=1 lets callers translate to 404 (same as
+	// "root not in topology") so the response doesn't act as an existence
+	// oracle: a user with namespace-list access but no `get secrets` can't
+	// distinguish "Secret doesn't exist" from "Secret exists, you can't read".
+	if opts.Allow != nil && !opts.Allow(rootNode) {
+		sub.RBACDenied = 1
+		return sub
 	}
 
 	allowedEdges := edgeTypesForProfile(opts.Profile, rootNode.Kind)
@@ -379,10 +404,25 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 // when both share the same kind+namespace+name. When ref.Group is empty
 // the group check is skipped (back-compat: callers that don't supply a group
 // get the first matching node, same as before).
+//
+// Pseudo-kinds: some CRDs are stored in the topology under a synthesized kind
+// distinct from their API kind (KnativeService for serving.knative.dev/Service,
+// CAPICluster for cluster.x-k8s.io/Cluster, …). We map (ref.Kind, ref.Group)
+// through pseudoKindFor BEFORE the direct kind comparison so a caller asking
+// for kind=Service&group=serving.knative.dev finds the KnativeService topology
+// node. Without this, the comparison Node.Kind="KnativeService" vs
+// ref.Kind="Service" never matches and the root lookup silently fails.
 func findNodeByRef(nodes []Node, ref ResourceRef) *Node {
+	// Resolve the caller-facing (kind, group) tuple to the kind the topology
+	// builder uses on Node.Kind. Falls back to ref.Kind unchanged when there's
+	// no pseudo-kind mapping for this (kind, group).
+	wantKind := pseudoKindFor(ref.Kind, ref.Group)
 	for i := range nodes {
 		n := &nodes[i]
-		if !strings.EqualFold(string(n.Kind), ref.Kind) {
+		// Compare against the resolved pseudo-kind first; if that misses fall
+		// back to the original ref.Kind so the back-compat path (callers that
+		// don't supply a group, or kinds that aren't pseudo-mapped) still works.
+		if !strings.EqualFold(string(n.Kind), wantKind) && !strings.EqualFold(string(n.Kind), ref.Kind) {
 			continue
 		}
 		if n.Name != ref.Name {
@@ -400,6 +440,51 @@ func findNodeByRef(nodes []Node, ref ResourceRef) *Node {
 		return n
 	}
 	return nil
+}
+
+// pseudoKindFor maps an (API kind, API group) to the synthesized topology
+// kind the builder assigns when both differ. For (kind, group) pairs that
+// aren't pseudo-mapped (or when group is empty), returns kind unchanged.
+//
+// Examples:
+//
+//	("Service",       "serving.knative.dev") → "KnativeService"
+//	("Configuration", "serving.knative.dev") → "KnativeConfiguration"
+//	("Cluster",       "cluster.x-k8s.io")    → "CAPICluster"
+//	("Cluster",       "postgresql.cnpg.io")  → "Cluster"  (no pseudo-mapping)
+//
+// Keep this table in sync with the kinds the topology builder synthesizes —
+// see the NodeKind constants prefixed Knative*/CAPI* in types.go. Missing an
+// entry here means the caller-supplied API kind never matches the topology
+// node, so the neighborhood root lookup silently returns "not found."
+func pseudoKindFor(kind, group string) string {
+	if group == "" {
+		return kind
+	}
+	switch group {
+	case "serving.knative.dev":
+		switch kind {
+		case "Service":
+			return string(KindKnativeService)
+		case "Configuration":
+			return string(KindKnativeConfiguration)
+		case "Revision":
+			return string(KindKnativeRevision)
+		case "Route":
+			return string(KindKnativeRoute)
+		}
+	case "cluster.x-k8s.io":
+		if kind == "Cluster" {
+			return string(KindCAPICluster)
+		}
+	case "networking.istio.io":
+		// Istio Gateway lives under IstioGateway to avoid collision with
+		// gateway.networking.k8s.io/Gateway.
+		if kind == "Gateway" {
+			return string(KindIstioGateway)
+		}
+	}
+	return kind
 }
 
 // nodeNamespaceFromData reads the namespace from a Node's Data map. Mirrors

@@ -88,3 +88,87 @@ func TestCanReadNeighborhoodNodeMCP_NoAuthPassthrough(t *testing.T) {
 		t.Error("no-auth caller denied — Secret gate must not fail-closed when auth is disabled")
 	}
 }
+
+// makeNodeClassNode builds a topology pseudo-kind NodeClass node. The Kind is
+// the synthesized topology label ("NodeClass"), not a real K8s resource — the
+// actual variants are EC2NodeClass / AKSNodeClass / GCPNodeClass.
+func makeNodeClassNode(name string) *topology.Node {
+	return &topology.Node{
+		ID:     "nodeclass/" + name,
+		Kind:   topology.KindNodeClass,
+		Name:   name,
+		Status: topology.StatusHealthy,
+		Data: map[string]any{
+			// No namespace — NodeClass is cluster-scoped.
+			"apiVersion": "karpenter.k8s.aws/v1",
+		},
+	}
+}
+
+func makeKnativeServiceNode(ns, name string) *topology.Node {
+	return &topology.Node{
+		ID:     "knativeservice/" + ns + "/" + name,
+		Kind:   topology.KindKnativeService,
+		Name:   name,
+		Status: topology.StatusHealthy,
+		Data: map[string]any{
+			"namespace":  ns,
+			"apiVersion": "serving.knative.dev/v1",
+		},
+	}
+}
+
+// TestCanReadNeighborhoodNodeMCP_NodeClassRequiresPerProviderSAR pins the
+// pseudo-kind cluster-scoped fix: NodeClass is a topology-only label that
+// ClassifyKindScope doesn't recognize. Without the clusterScopedTopologyKinds
+// lookup, NodeClass nodes hit the unclassified+empty-namespace allow branch
+// and surface to users without provider-specific RBAC.
+func TestCanReadNeighborhoodNodeMCP_NodeClassDeniedWithoutSAR(t *testing.T) {
+	ctx := withTestUserPerms(t, "alice", nil, nil)
+	perms := getPermCache().Get("alice")
+	// Deny all NodeClass variants. The helper iterates the table; without
+	// discovery only ec2 enters the SAR loop (group != "" check is harmless
+	// — the discovery filter is skip-when-missing).
+	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+
+	n := makeNodeClassNode("default-class")
+	if canReadNeighborhoodNodeMCP(ctx, n) {
+		t.Error("NodeClass pseudo-kind leaked to user without any provider get-SAR")
+	}
+}
+
+// Counterpart: user with one provider's get-SAR sees NodeClass nodes. Mirrors
+// the topology-strip semantics — denial requires ALL discovery-present
+// providers to fail.
+func TestCanReadNeighborhoodNodeMCP_NodeClassAllowedWithProviderSAR(t *testing.T) {
+	ctx := withTestUserPerms(t, "bob", nil, nil)
+	perms := getPermCache().Get("bob")
+	// Bob has EC2 access only — should still pass for NodeClass.
+	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
+	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+
+	n := makeNodeClassNode("default-class")
+	if !canReadNeighborhoodNodeMCP(ctx, n) {
+		t.Error("NodeClass denied for user with EC2 get-SAR — single-provider RBAC must allow")
+	}
+}
+
+// KnativeService is a namespaced pseudo-kind. The cluster-scoped table
+// shouldn't match it; the helper must fall through to the namespaced branch
+// and ride on namespace access alone (no per-kind tightening for Knative).
+func TestCanReadNeighborhoodNodeMCP_KnativeServiceUsesNamespaceGate(t *testing.T) {
+	ctx := withTestUserPerms(t, "alice", nil, []string{"prod"})
+	n := makeKnativeServiceNode("prod", "api")
+	if !canReadNeighborhoodNodeMCP(ctx, n) {
+		t.Error("namespaced pseudo-kind KnativeService denied — namespace access should be sufficient")
+	}
+
+	// User without namespace access → denied.
+	ctxDenied := withTestUserPerms(t, "carol", nil, []string{"staging"})
+	if canReadNeighborhoodNodeMCP(ctxDenied, n) {
+		t.Error("KnativeService allowed for user without namespace access — namespace gate must apply")
+	}
+}

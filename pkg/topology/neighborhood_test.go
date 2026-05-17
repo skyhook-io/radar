@@ -649,6 +649,204 @@ func TestBuildNeighborhood_GroupEmptyRootBackCompat(t *testing.T) {
 	}
 }
 
+// TestBuildNeighborhood_AllowDeniesRoot verifies the root is gated by Allow,
+// not just the BFS frontier. A Secret root with namespace access but no
+// per-namespace `get secrets` SAR is the load-bearing case: callers' upfront
+// RBAC check (kind+namespace) doesn't catch per-kind tightening inside a
+// namespace, so the root Allow gate is the only place that denial surfaces.
+//
+// Empty subgraph + RBACDenied=1 lets handlers translate to 404 (matching the
+// "root not in topology" path), preserving existence-hiding — a user without
+// `get secrets` can't distinguish "Secret doesn't exist" from "Secret exists,
+// you can't read it."
+func TestBuildNeighborhood_AllowDeniesRoot(t *testing.T) {
+	pod := makeNode(KindPod, "prod", "cart-xyz")
+	secret := makeNode(KindSecret, "prod", "api-tls")
+	topo := &Topology{
+		Nodes: []Node{pod, secret},
+		Edges: []Edge{
+			makeEdge(EdgeConfigures, secret.ID, pod.ID),
+		},
+	}
+
+	sub := BuildNeighborhoodWithIndex(topo,
+		ResourceRef{Kind: "Secret", Namespace: "prod", Name: "api-tls"},
+		NeighborhoodOptions{
+			Profile: ProfileAll,
+			Hops:    1,
+			// Simulate "user has namespace access but no get-secrets" — the
+			// root Secret is rejected before BFS starts.
+			Allow: func(n *Node) bool { return n.Kind != KindSecret },
+		},
+		nil, nil,
+	)
+
+	if len(sub.Nodes) != 0 {
+		t.Errorf("expected empty subgraph when root Allow denies; got %v", nodeIDs(sub))
+	}
+	if len(sub.Edges) != 0 {
+		t.Errorf("expected no edges when root denied; got %d", len(sub.Edges))
+	}
+	if sub.RBACDenied != 1 {
+		t.Errorf("expected RBACDenied=1 for denied root, got %d", sub.RBACDenied)
+	}
+}
+
+// TestBuildNeighborhood_AllowAllowsRoot is the positive counterpart: a Secret
+// root passes the Allow gate when the caller's predicate accepts it, and the
+// expansion proceeds normally.
+func TestBuildNeighborhood_AllowAllowsRoot(t *testing.T) {
+	pod := makeNode(KindPod, "prod", "cart-xyz")
+	secret := makeNode(KindSecret, "prod", "api-tls")
+	topo := &Topology{
+		Nodes: []Node{pod, secret},
+		Edges: []Edge{
+			makeEdge(EdgeConfigures, secret.ID, pod.ID),
+		},
+	}
+
+	sub := BuildNeighborhoodWithIndex(topo,
+		ResourceRef{Kind: "Secret", Namespace: "prod", Name: "api-tls"},
+		NeighborhoodOptions{
+			Profile: ProfileAll,
+			Hops:    1,
+			Allow:   func(n *Node) bool { return true },
+		},
+		nil, nil,
+	)
+	if len(sub.Nodes) == 0 {
+		t.Fatalf("expected non-empty subgraph when Allow accepts root")
+	}
+	if sub.Nodes[0].ID != secret.ID {
+		t.Errorf("expected Secret root first, got %s", sub.Nodes[0].ID)
+	}
+	if sub.RBACDenied != 0 {
+		t.Errorf("expected RBACDenied=0 when nothing was denied, got %d", sub.RBACDenied)
+	}
+}
+
+// TestBuildNeighborhood_GroupAwareRootIDMatch pins the group-aware check
+// applied even when buildNodeID's direct ID match hits. The default
+// buildNodeID heuristic (lowercase kind / namespace / name) collides when
+// two CRDs share a plural — without the apiVersion-group validation, the
+// caller-supplied group is silently ignored on the direct-match path.
+//
+// Setup: a CNPG Cluster occupies the lowercase-kind ID "cluster/fleet/prod"
+// (what buildNodeID produces for kind=Cluster). The CAPI Cluster lives under
+// a distinct ID to avoid the collision. A caller asking for
+// group=cluster.x-k8s.io must NOT silently get the CNPG node back just
+// because the direct ID lookup hit.
+func TestBuildNeighborhood_GroupAwareRootIDMatch(t *testing.T) {
+	// CNPG Cluster: occupies the lowercase-kind ID buildNodeID produces.
+	cnpg := Node{
+		ID:     "cluster/fleet/prod",
+		Kind:   "Cluster",
+		Name:   "prod",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace":  "fleet",
+			"apiVersion": "postgresql.cnpg.io/v1",
+		},
+	}
+	// CAPI Cluster: same kind+namespace+name but distinct ID (group-prefixed
+	// to mirror real-world collision-avoidance). The caller asks for it by
+	// group; the direct-ID path must reject CNPG, then findNodeByRef must
+	// surface the CAPI variant.
+	capi := Node{
+		ID:     "cluster.x-k8s.io/cluster/fleet/prod",
+		Kind:   "Cluster",
+		Name:   "prod",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace":  "fleet",
+			"apiVersion": "cluster.x-k8s.io/v1beta1",
+		},
+	}
+	topo := &Topology{Nodes: []Node{cnpg, capi}}
+
+	sub := BuildNeighborhoodWithIndex(topo,
+		ResourceRef{Kind: "Cluster", Namespace: "fleet", Name: "prod", Group: "cluster.x-k8s.io"},
+		NeighborhoodOptions{Profile: ProfileAll, Hops: 1},
+		nil, nil,
+	)
+	if len(sub.Nodes) == 0 {
+		t.Fatal("expected non-empty neighborhood for group-disambiguated root")
+	}
+	got := nodeAPIGroupFromData(&sub.Nodes[0])
+	if got != "cluster.x-k8s.io" {
+		t.Errorf("group-aware lookup picked apiGroup=%q (id=%s), expected cluster.x-k8s.io (CAPI)", got, sub.Nodes[0].ID)
+	}
+
+	// Sanity counterpart: caller asking for the CNPG group must get CNPG via
+	// the direct-ID path with the apiGroup matching.
+	sub2 := BuildNeighborhoodWithIndex(topo,
+		ResourceRef{Kind: "Cluster", Namespace: "fleet", Name: "prod", Group: "postgresql.cnpg.io"},
+		NeighborhoodOptions{Profile: ProfileAll, Hops: 1},
+		nil, nil,
+	)
+	if len(sub2.Nodes) == 0 {
+		t.Fatal("expected non-empty neighborhood for CNPG-disambiguated root")
+	}
+	got2 := nodeAPIGroupFromData(&sub2.Nodes[0])
+	if got2 != "postgresql.cnpg.io" {
+		t.Errorf("group=postgresql.cnpg.io picked apiGroup=%q, expected postgresql.cnpg.io", got2)
+	}
+}
+
+// TestBuildNeighborhood_PseudoKindRootLookup pins the pseudo-kind mapping in
+// findNodeByRef. KNative serving.knative.dev/Service is stored in the topology
+// under NodeKind="KnativeService" (a synthesized label, not a real K8s kind).
+// A caller asking for kind=Service&group=serving.knative.dev must find the
+// KnativeService node — without the (kind, group) → pseudo-kind translation,
+// the direct kind comparison ("Service" vs "KnativeService") never matches.
+//
+// Also pins the disambiguation: a core Service of the same name in the same
+// namespace must NOT be returned when group=serving.knative.dev is supplied.
+func TestBuildNeighborhood_PseudoKindRootLookup(t *testing.T) {
+	knsvc := Node{
+		ID:     "knativeservice/prod/api",
+		Kind:   KindKnativeService,
+		Name:   "api",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace":  "prod",
+			"apiVersion": "serving.knative.dev/v1",
+		},
+	}
+	coreSvc := Node{
+		ID:     "service/prod/api",
+		Kind:   KindService,
+		Name:   "api",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace":  "prod",
+			"apiVersion": "v1",
+		},
+	}
+	pod := makeNode(KindPod, "prod", "api-xyz")
+	topo := &Topology{
+		Nodes: []Node{knsvc, coreSvc, pod},
+		Edges: []Edge{
+			makeEdge(EdgeExposes, knsvc.ID, pod.ID),
+		},
+	}
+
+	sub := BuildNeighborhoodWithIndex(topo,
+		ResourceRef{Kind: "Service", Namespace: "prod", Name: "api", Group: "serving.knative.dev"},
+		NeighborhoodOptions{Profile: ProfileNetworking, Hops: 1},
+		nil, nil,
+	)
+	if len(sub.Nodes) == 0 {
+		t.Fatal("expected non-empty neighborhood for KnativeService pseudo-kind root")
+	}
+	if sub.Nodes[0].ID != knsvc.ID {
+		t.Errorf("pseudo-kind root lookup returned %s, expected KnativeService %s", sub.Nodes[0].ID, knsvc.ID)
+	}
+	if sub.Nodes[0].Kind != KindKnativeService {
+		t.Errorf("expected NodeKind=KnativeService, got %s", sub.Nodes[0].Kind)
+	}
+}
+
 // TestBuildNeighborhood_SecretFilteredByAllow verifies the secret-leak fix at
 // the topology layer: a Secret node in the BFS frontier is dropped when the
 // caller's Allow predicate rejects it, matching the per-kind RBAC gate the
