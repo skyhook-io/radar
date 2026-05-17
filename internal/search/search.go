@@ -22,7 +22,16 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
+
+// SummaryBuilderFunc, when supplied via Options.SummaryBuilder, is
+// invoked once per matched hit to produce the compact per-row
+// SummaryContext attached to the Hit. Exactly one of obj/u will be
+// non-nil — typed kinds pass obj, dynamic CRDs pass u. Returning nil
+// is fine (the field is omitempty); callers use it to gate context
+// emission per request (context=none opts out by passing nil here).
+type SummaryBuilderFunc func(obj runtime.Object, u *unstructured.Unstructured, kind, namespace, name string) *resourcecontext.SummaryContext
 
 // Provider abstracts the cache so tests can inject a fake.
 type Provider interface {
@@ -106,6 +115,13 @@ type Options struct {
 	// drop the candidate. Compile happens in the handler; this layer
 	// just runs the program.
 	Filter *CELFilter
+	// SummaryBuilder, when non-nil, is invoked per matched hit to
+	// attach the compact SummaryContext (managedBy + health +
+	// issueCount). Handlers provide a closure that wraps the
+	// request-scoped topology + per-namespace issue index so the
+	// per-row cost stays flat. Pass nil to opt out (context=none) —
+	// the field is omitempty and consumers must tolerate its absence.
+	SummaryBuilder SummaryBuilderFunc
 }
 
 // Search runs the parsed query against the provider and returns ranked hits.
@@ -204,7 +220,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 					continue
 				}
 			}
-			hits = append(hits, buildHit(score, matched, c, opts.Include, obj, nil))
+			hits = append(hits, buildHit(score, matched, c, opts.Include, obj, nil, opts.SummaryBuilder))
 		}
 	}
 
@@ -270,7 +286,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 					continue
 				}
 			}
-			hits = append(hits, buildHit(score, matched, c, opts.Include, nil, u))
+			hits = append(hits, buildHit(score, matched, c, opts.Include, nil, u, opts.SummaryBuilder))
 		}
 	}
 
@@ -345,8 +361,12 @@ func isClusterScopedKind(kind string) bool {
 
 // buildHit assembles the response shape for a matched candidate. Exactly
 // one of obj/u will be non-nil. minify-on-demand keeps the cost of
-// IncludeNone (identity-only) flat.
-func buildHit(score int, matched []MatchedField, c candidate, mode IncludeMode, obj runtime.Object, u *unstructured.Unstructured) Hit {
+// IncludeNone (identity-only) flat. summaryBuilder, when non-nil, is
+// invoked to attach the compact per-row SummaryContext — kept separate
+// from Include because context applies to every verbosity (including
+// IncludeNone identity-only hits), while Summary/Raw control the full
+// minified body.
+func buildHit(score int, matched []MatchedField, c candidate, mode IncludeMode, obj runtime.Object, u *unstructured.Unstructured, summaryBuilder SummaryBuilderFunc) Hit {
 	h := Hit{
 		Score:     score,
 		Kind:      c.Kind,
@@ -374,6 +394,9 @@ func buildHit(score int, matched []MatchedField, c candidate, mode IncludeMode, 
 		} else if u != nil {
 			h.Raw = aicontext.MinifyUnstructured(u, aicontext.LevelDetail)
 		}
+	}
+	if summaryBuilder != nil {
+		h.SummaryContext = summaryBuilder(obj, u, c.Kind, c.Namespace, c.Name)
 	}
 	return h
 }

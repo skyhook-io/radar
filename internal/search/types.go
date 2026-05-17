@@ -1,6 +1,9 @@
 package search
 
-import "github.com/skyhook-io/radar/internal/filter"
+import (
+	"github.com/skyhook-io/radar/internal/filter"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
+)
 
 const (
 	DefaultLimit = 50
@@ -46,6 +49,10 @@ type Hit struct {
 	Summary   any            `json:"summary,omitempty"`
 	Raw       any            `json:"raw,omitempty"`
 	Matched   []MatchedField `json:"matched,omitempty"`
+	// SummaryContext is the compact per-row enrichment (managedBy, health,
+	// issueCount). Populated by handlers via Options.SummaryBuilder; nil
+	// when the caller opted out (context=none) or no fields apply.
+	SummaryContext *resourcecontext.SummaryContext `json:"summaryContext,omitempty"`
 }
 
 // MatchedField records where a query token landed (debug + UI highlight).

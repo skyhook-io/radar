@@ -94,7 +94,11 @@ func parseVerbosity(r *http.Request, defaultLevel aicontext.VerbosityLevel) aico
 }
 
 // handleAIListResources returns a minified list of resources for AI consumption.
-// GET /api/ai/resources/{kind}?namespace=X&group=X&verbosity=summary|detail|compact
+// GET /api/ai/resources/{kind}?namespace=X&group=X&verbosity=summary|detail|compact&context=none
+//
+// summaryContext (managedBy + health + issueCount) is attached per row
+// at Summary verbosity by default. Pass ?context=none to opt out for a
+// bare list.
 func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -107,6 +111,7 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	}
 	group := r.URL.Query().Get("group")
 	level := parseVerbosity(r, aicontext.LevelSummary)
+	skipContext := r.URL.Query().Get("context") == "none"
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {
@@ -118,7 +123,7 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	objs, err := k8s.FetchResourceList(cache, kind, namespaces)
 	if err == k8s.ErrUnknownKind {
 		// Fall through to dynamic cache for CRDs
-		s.aiListDynamic(w, r, cache, kind, namespaces, group, level)
+		s.aiListDynamic(w, r, cache, kind, namespaces, group, level, skipContext)
 		return
 	}
 	if err != nil {
@@ -136,11 +141,54 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Attach summaryContext per row at Summary verbosity. Compact/Detail
+	// already carry richer context on the get-resource path; the
+	// per-row attachment is specifically for cheap list triage.
+	if !skipContext && level == aicontext.LevelSummary {
+		if builder := s.newSummaryContextBuilder(namespaces, kind); builder != nil {
+			attachSummaryContextToList(results, objs, builder)
+		}
+	}
+
 	s.writeJSON(w, results)
 }
 
+// attachSummaryContextToList walks the typed-cache list and assigns the
+// per-row SummaryContext into each ResourceSummary in-place. results and
+// objs are produced in lockstep by MinifyList; a length mismatch is
+// defensive (and silently skips attachment rather than panicking) but
+// shouldn't occur in practice.
+func attachSummaryContextToList(results []any, objs []runtime.Object, builder summaryContextBuilder) {
+	if len(results) != len(objs) {
+		return
+	}
+	for i, row := range results {
+		summary, ok := row.(*aicontext.ResourceSummary)
+		if !ok || summary == nil {
+			continue
+		}
+		summary.SummaryContext = builder(objs[i], nil, summary.Kind, summary.Namespace, summary.Name)
+	}
+}
+
+// attachSummaryContextToUnstructuredList does the same for the dynamic
+// CRD path. MinifyUnstructured returns *ResourceSummary (Summary level)
+// so the cast is the same shape.
+func attachSummaryContextToUnstructuredList(results []any, items []*unstructured.Unstructured, builder summaryContextBuilder) {
+	if len(results) != len(items) {
+		return
+	}
+	for i, row := range results {
+		summary, ok := row.(*aicontext.ResourceSummary)
+		if !ok || summary == nil {
+			continue
+		}
+		summary.SummaryContext = builder(nil, items[i], summary.Kind, summary.Namespace, summary.Name)
+	}
+}
+
 // aiListDynamic handles the CRD/dynamic fallback for AI list.
-func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8s.ResourceCache, kind string, namespaces []string, group string, level aicontext.VerbosityLevel) {
+func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8s.ResourceCache, kind string, namespaces []string, group string, level aicontext.VerbosityLevel, skipContext bool) {
 	var allItems []*unstructured.Unstructured
 
 	if len(namespaces) > 0 {
@@ -172,6 +220,12 @@ func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8
 	results := make([]any, 0, len(allItems))
 	for _, item := range allItems {
 		results = append(results, aicontext.MinifyUnstructured(item, level))
+	}
+
+	if !skipContext && level == aicontext.LevelSummary {
+		if builder := s.newSummaryContextBuilder(namespaces, kind); builder != nil {
+			attachSummaryContextToUnstructuredList(results, allItems, builder)
+		}
 	}
 
 	s.writeJSON(w, results)

@@ -12,7 +12,9 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/helm"
@@ -315,6 +317,7 @@ type listResourcesInput struct {
 	Kind      string `json:"kind" jsonschema:"resource kind to list, e.g. pods, deployments, services, configmaps"`
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. serving.knative.dev for Knative Service vs core Service)"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace"`
+	Context   string `json:"context,omitempty" jsonschema:"per-row context: omit (default) attaches summaryContext (managedBy + health + issueCount) for triage; 'none' returns bare rows"`
 }
 
 type getResourceInput struct {
@@ -358,6 +361,7 @@ type searchInput struct {
 	Limit   int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
 	Include string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
 	Filter  string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each candidate K8s object. Bindings: kind, apiVersion, metadata, spec, status, labels, annotations. Use has(x.y) before optional fields. Examples: 'kind == \"Pod\" && status.phase == \"Failed\"', 'labels[\"app\"] == \"cart\"', 'has(status.readyReplicas) && status.readyReplicas == 0'"`
+	Context string `json:"context,omitempty" jsonschema:"per-hit context: omit (default) attaches summaryContext (managedBy + health + issueCount) for triage; 'none' returns bare hits"`
 }
 
 type issuesInput struct {
@@ -470,7 +474,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 		// Fall through to dynamic cache for CRDs. ClassifyKindScope/SAR
 		// above already authorized cluster-scoped CRDs; namespaced CRDs
 		// are scoped via listScope.
-		return listDynamicResources(ctx, cache, kind, group, listScope)
+		return listDynamicResources(ctx, cache, kind, group, listScope, input.Context)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
@@ -492,32 +496,81 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 		return nil, nil, fmt.Errorf("failed to minify: %w", err)
 	}
 
+	// Attach summaryContext per row unless caller opted out. Issue index
+	// is scoped to the listed kind so the per-row count reflects only
+	// the resource being listed (not unrelated noise in the namespace).
+	if input.Context != "none" {
+		if builder := newSummaryContextBuilder(allowed, kind); builder != nil {
+			attachSummaryContextToTyped(results, objs, builder)
+		}
+	}
+
 	return toJSONResult(results)
 }
 
-func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, namespaces []string) (*mcp.CallToolResult, any, error) {
-	var allItems []any
+// attachSummaryContextToTyped fills in SummaryContext on each
+// Summary-verbosity ResourceSummary in-place. results and objs are
+// produced in lockstep by MinifyList — a length mismatch is defensive
+// (skip rather than panic).
+func attachSummaryContextToTyped(results []any, objs []runtime.Object, builder summaryContextBuilder) {
+	if len(results) != len(objs) {
+		return
+	}
+	for i, row := range results {
+		summary, ok := row.(*aicontext.ResourceSummary)
+		if !ok || summary == nil {
+			continue
+		}
+		summary.SummaryContext = builder(objs[i], nil, summary.Kind, summary.Namespace, summary.Name)
+	}
+}
+
+func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, namespaces []string, contextMode string) (*mcp.CallToolResult, any, error) {
+	var rawItems []*unstructured.Unstructured
 	if len(namespaces) > 0 {
 		for _, ns := range namespaces {
 			items, err := cache.ListDynamicWithGroup(ctx, kind, ns, group)
 			if err != nil {
 				return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
 			}
-			for _, item := range items {
-				allItems = append(allItems, aicontext.MinifyUnstructured(item, aicontext.LevelSummary))
-			}
+			rawItems = append(rawItems, items...)
 		}
 	} else {
 		items, err := cache.ListDynamicWithGroup(ctx, kind, "", group)
 		if err != nil {
 			return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
 		}
-		for _, item := range items {
-			allItems = append(allItems, aicontext.MinifyUnstructured(item, aicontext.LevelSummary))
+		rawItems = items
+	}
+
+	allItems := make([]any, 0, len(rawItems))
+	for _, item := range rawItems {
+		allItems = append(allItems, aicontext.MinifyUnstructured(item, aicontext.LevelSummary))
+	}
+
+	if contextMode != "none" {
+		if builder := newSummaryContextBuilder(namespaces, kind); builder != nil {
+			attachSummaryContextToUnstructured(allItems, rawItems, builder)
 		}
 	}
 
 	return toJSONResult(allItems)
+}
+
+// attachSummaryContextToUnstructured fills in SummaryContext for the
+// dynamic-CRD list path. summarizeUnstructured returns
+// *aicontext.ResourceSummary, so the cast matches the typed path.
+func attachSummaryContextToUnstructured(results []any, items []*unstructured.Unstructured, builder summaryContextBuilder) {
+	if len(results) != len(items) {
+		return
+	}
+	for i, row := range results {
+		summary, ok := row.(*aicontext.ResourceSummary)
+		if !ok || summary == nil {
+			continue
+		}
+		summary.SummaryContext = builder(nil, items[i], summary.Kind, summary.Namespace, summary.Name)
+	}
 }
 
 func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getResourceInput) (*mcp.CallToolResult, any, error) {
@@ -2047,6 +2100,11 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 			return nil, nil, fmt.Errorf("filter: %w", err)
 		}
 		opts.Filter = f
+	}
+	if input.Context != "none" {
+		if builder := newSummaryContextBuilder(scanNamespaces, ""); builder != nil {
+			opts.SummaryBuilder = search.SummaryBuilderFunc(builder)
+		}
 	}
 	result, err := search.Search(ctx, provider, parsed, opts)
 	if err != nil {

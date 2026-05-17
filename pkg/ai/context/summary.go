@@ -14,6 +14,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
 // ResourceSummary is the typed output for Summary-level minification.
@@ -68,6 +70,12 @@ type ResourceSummary struct {
 	Capacity    string   `json:"capacity,omitempty"`
 	AccessModes []string `json:"accessModes,omitempty"`
 	Owner       string   `json:"owner,omitempty"`
+
+	// SummaryContext is the per-row enrichment attached by AI-facing list
+	// surfaces (REST /api/ai/resources/{kind}, MCP list_resources, search
+	// hits). Populated by handlers post-minify via resourcecontext.BuildSummary;
+	// nil when the caller opted out (?context=none) or when no fields apply.
+	SummaryContext *resourcecontext.SummaryContext `json:"summaryContext,omitempty"`
 }
 
 // summarize dispatches to the appropriate per-type extractor and then
