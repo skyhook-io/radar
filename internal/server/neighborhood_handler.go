@@ -108,24 +108,39 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 		Name:      name,
 		Group:     group,
 	}
+
+	// Push RBAC into the BFS expansion itself. If we filtered post-hoc,
+	// a forbidden node could still influence which allowed nodes surface
+	// (acting as a path-fragment between two readable endpoints) and
+	// could consume the MaxNodes truncation budget before being dropped.
+	// Skipping during traversal keeps the visible graph independent of
+	// hidden nodes — both for security and for predictable truncation.
+	opts.Allow = func(n *topology.Node) bool {
+		return s.canReadNeighborhoodNode(r, n)
+	}
+
 	sub := topology.BuildNeighborhood(topo, root, opts)
 	if len(sub.Nodes) == 0 {
 		s.writeError(w, http.StatusNotFound, "resource not found in topology")
 		return
 	}
 
-	// Per-node RBAC sweep: drop nodes the user can't read and record the
-	// reason. The root is already authorized above.
-	kept, omitted := s.filterNeighborhoodForUser(r, sub)
-
 	resp := neighborhoodResponse{
 		Root: root,
 		Subgraph: neighborhoodSubgraph{
-			Nodes: kept.Nodes,
-			Edges: kept.Edges,
+			Nodes: sub.Nodes,
+			Edges: sub.Edges,
 		},
 		Truncated: sub.Truncated,
-		Omitted:   omitted,
+	}
+	if sub.RBACDenied > 0 {
+		// Single aggregated omission rather than per-node entries —
+		// surfacing the specific names of denied nodes would defeat the
+		// existence-hiding guarantee the pre-filter provides.
+		resp.Omitted = append(resp.Omitted, resourcecontext.OmittedField{
+			Field:  "subgraph.nodes",
+			Reason: resourcecontext.OmittedRBACDenied,
+		})
 	}
 	if sub.Truncated {
 		resp.Omitted = append(resp.Omitted, resourcecontext.OmittedField{
@@ -166,51 +181,6 @@ func parseNeighborhoodOptions(r *http.Request) topology.NeighborhoodOptions {
 		opts.MaxNodes = 200
 	}
 	return opts
-}
-
-// filterNeighborhoodForUser drops nodes the calling user can't read and
-// returns the trimmed Subgraph plus an []OmittedField record. The root node
-// is always retained — its RBAC is checked separately upstream.
-func (s *Server) filterNeighborhoodForUser(r *http.Request, sub *topology.Subgraph) (*topology.Subgraph, []resourcecontext.OmittedField) {
-	if sub == nil || len(sub.Nodes) == 0 {
-		return sub, nil
-	}
-	// Compute root ID once so we can never drop the root even if a permission
-	// check disagrees with the upstream authorization (defensive).
-	rootIdx := 0
-
-	keptIDs := make(map[string]bool, len(sub.Nodes))
-	kept := &topology.Subgraph{
-		Root:      sub.Root,
-		Truncated: sub.Truncated,
-		Nodes:     make([]topology.Node, 0, len(sub.Nodes)),
-	}
-	var omitted []resourcecontext.OmittedField
-
-	for i, n := range sub.Nodes {
-		if i == rootIdx {
-			kept.Nodes = append(kept.Nodes, n)
-			keptIDs[n.ID] = true
-			continue
-		}
-		if s.canReadNeighborhoodNode(r, &n) {
-			kept.Nodes = append(kept.Nodes, n)
-			keptIDs[n.ID] = true
-			continue
-		}
-		omitted = append(omitted, resourcecontext.OmittedField{
-			Field:  "subgraph.nodes[" + strconv.Itoa(i) + "]",
-			Reason: resourcecontext.OmittedRBACDenied,
-		})
-	}
-
-	kept.Edges = make([]topology.Edge, 0, len(sub.Edges))
-	for _, e := range sub.Edges {
-		if keptIDs[e.Source] && keptIDs[e.Target] {
-			kept.Edges = append(kept.Edges, e)
-		}
-	}
-	return kept, omitted
 }
 
 // canReadNeighborhoodNode is the REST-side per-node RBAC gate. Mirrors the

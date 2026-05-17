@@ -36,6 +36,21 @@ type NeighborhoodOptions struct {
 	Profile  Profile
 	Hops     int
 	MaxNodes int
+
+	// Allow gates each candidate node during BFS expansion. nil means
+	// allow all. When non-nil, BFS skips nodes for which Allow returns
+	// false — they don't consume the MaxNodes budget, can't appear as
+	// path-fragments between two allowed nodes, and bump
+	// Subgraph.RBACDenied so callers can report omissions to the user.
+	// The root node is exempt — callers verify root access separately
+	// before calling Build.
+	//
+	// This is the security boundary: forbidden nodes must not influence
+	// the visible graph shape. Post-hoc filtering would let an
+	// unauthorized node act as a bridge in the BFS frontier (or consume
+	// truncation budget) before being dropped, leaking its existence
+	// indirectly.
+	Allow func(*Node) bool
 }
 
 // Subgraph is the BFS-expanded neighborhood of a root resource. Nodes are
@@ -47,6 +62,13 @@ type Subgraph struct {
 	Nodes     []Node      `json:"nodes"`
 	Edges     []Edge      `json:"edges"`
 	Truncated bool        `json:"truncated,omitempty"`
+
+	// RBACDenied counts nodes skipped during BFS because Allow returned
+	// false. Reported as a single aggregated omission by the caller; we
+	// intentionally do NOT track which specific nodes were denied, since
+	// surfacing those names would re-introduce the existence-leak the
+	// Allow gate exists to prevent.
+	RBACDenied int `json:"-"`
 }
 
 // neighborhoodMaxHops is the hard ceiling on BFS depth. Two hops is enough
@@ -122,11 +144,15 @@ func BuildNeighborhood(t *Topology, root ResourceRef, opts NeighborhoodOptions) 
 	}
 
 	// BFS by hop level. visited[id] = hop at which the node entered the
-	// frontier, so we can stop when we'd exceed hops.
+	// frontier, so we can stop when we'd exceed hops. RBAC-denied nodes
+	// are skipped here (not post-filtered) so they neither consume budget
+	// nor act as path-fragments to allowed nodes downstream.
 	included := map[string]bool{rootID: true}
 	order := []string{rootID}
 	frontier := []string{rootID}
 	truncated := false
+	rbacDenied := 0
+	deniedIDs := make(map[string]bool) // dedupe — same denied node may surface via multiple edges
 
 	for hop := 0; hop < hops; hop++ {
 		var next []string
@@ -139,8 +165,16 @@ func BuildNeighborhood(t *Topology, root ResourceRef, opts NeighborhoodOptions) 
 				if included[other] {
 					continue
 				}
-				if _, exists := nodeByID[other]; !exists {
+				candidate, exists := nodeByID[other]
+				if !exists {
 					// Edge dangles off a node that isn't in the topology.
+					continue
+				}
+				if opts.Allow != nil && !opts.Allow(candidate) {
+					if !deniedIDs[other] {
+						deniedIDs[other] = true
+						rbacDenied++
+					}
 					continue
 				}
 				if len(included) >= maxNodes {
@@ -162,6 +196,7 @@ func BuildNeighborhood(t *Topology, root ResourceRef, opts NeighborhoodOptions) 
 	}
 
 	sub.Truncated = truncated
+	sub.RBACDenied = rbacDenied
 
 	// Materialize nodes in BFS order so the root is always first and the
 	// rest follow predictable expansion order.

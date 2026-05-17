@@ -373,6 +373,96 @@ func TestBuildNeighborhood_RootMissingReturnsEmpty(t *testing.T) {
 	}
 }
 
+// TestBuildNeighborhood_AllowSkipsForbidden verifies that nodes for which
+// Allow returns false are skipped during BFS — they don't appear in the
+// output AND don't consume the MaxNodes budget. This is the security
+// boundary: forbidden nodes must not influence the visible graph.
+func TestBuildNeighborhood_AllowSkipsForbidden(t *testing.T) {
+	topo := podNeighborhood()
+	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}
+
+	// Deny ReplicaSet — forbidden during BFS.
+	sub := BuildNeighborhood(topo, root, NeighborhoodOptions{
+		Profile: ProfileAll,
+		Hops:    2,
+		Allow: func(n *Node) bool {
+			return n.Kind != KindReplicaSet
+		},
+	})
+
+	for _, n := range sub.Nodes {
+		if n.Kind == KindReplicaSet {
+			t.Errorf("BFS surfaced a forbidden ReplicaSet node: %s", n.ID)
+		}
+	}
+	if sub.RBACDenied != 1 {
+		t.Errorf("expected RBACDenied=1 (the single ReplicaSet), got %d", sub.RBACDenied)
+	}
+}
+
+// TestBuildNeighborhood_AllowPreventsPathFragments verifies the path-fragment
+// guarantee: a forbidden node cannot serve as a bridge between two allowed
+// nodes the user reaches via BFS. Without pre-filtering, BFS would traverse
+// through the forbidden node and surface its downstream allowed neighbors
+// (leaking that the forbidden node connects them).
+//
+// Topology: Pod → ReplicaSet → Deployment (management chain). With
+// ReplicaSet forbidden, BFS from Pod must NOT reach Deployment.
+func TestBuildNeighborhood_AllowPreventsPathFragments(t *testing.T) {
+	topo := podNeighborhood()
+	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}
+
+	sub := BuildNeighborhood(topo, root, NeighborhoodOptions{
+		Profile: ProfileManagement,
+		Hops:    2,
+		Allow: func(n *Node) bool {
+			return n.Kind != KindReplicaSet
+		},
+	})
+
+	for _, n := range sub.Nodes {
+		if n.Kind == KindDeployment {
+			t.Errorf("BFS reached Deployment through a forbidden ReplicaSet — path-fragment leak: %s", n.ID)
+		}
+	}
+}
+
+// TestBuildNeighborhood_AllowProtectsBudget verifies that forbidden nodes
+// don't consume the MaxNodes truncation budget. Without pre-filtering, a
+// run of forbidden nodes near the root could exhaust the budget and cause
+// allowed nodes further out to be truncated — a side-channel leak.
+func TestBuildNeighborhood_AllowProtectsBudget(t *testing.T) {
+	topo := podNeighborhood()
+	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}
+
+	// With ReplicaSet denied AND MaxNodes=2, BFS should NOT count the
+	// denied node toward the budget. We should still fit the root +
+	// another allowed node, instead of root + denied node (which would
+	// trip truncation with zero allowed neighbors).
+	sub := BuildNeighborhood(topo, root, NeighborhoodOptions{
+		Profile:  ProfileAll,
+		Hops:     2,
+		MaxNodes: 2,
+		Allow: func(n *Node) bool {
+			return n.Kind != KindReplicaSet
+		},
+	})
+
+	// At least the root must be present.
+	if len(sub.Nodes) == 0 {
+		t.Fatal("expected non-empty subgraph; got zero nodes")
+	}
+	if sub.Nodes[0].Kind != "Pod" {
+		t.Errorf("expected Pod root first, got %s", sub.Nodes[0].Kind)
+	}
+	// Denied node must not appear.
+	for _, n := range sub.Nodes {
+		if n.Kind == KindReplicaSet {
+			t.Errorf("denied node consumed budget and appeared: %s", n.ID)
+		}
+	}
+}
+
 func TestBuildNeighborhood_EdgesOnlyBetweenIncludedNodes(t *testing.T) {
 	topo := podNeighborhood()
 	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}

@@ -3,7 +3,6 @@ package mcp
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
@@ -97,21 +96,33 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 		Name:      input.Name,
 		Group:     input.Group,
 	}
+	// Pre-filter RBAC into BFS so forbidden nodes can't shape the visible
+	// graph (path-fragment effects, budget consumption). See the matching
+	// REST handler for the rationale.
+	opts.Allow = func(n *topology.Node) bool {
+		return canReadNeighborhoodNodeMCP(ctx, n)
+	}
+
 	sub := topology.BuildNeighborhood(topo, root, opts)
 	if len(sub.Nodes) == 0 {
 		return nil, nil, fmt.Errorf("resource not found in topology: %s/%s/%s", input.Kind, input.Namespace, input.Name)
 	}
 
-	kept, omitted := filterNeighborhoodForUserMCP(ctx, sub)
-
 	result := neighborhoodResult{
 		Root: root,
 		Subgraph: neighborhoodSubgraphMCP{
-			Nodes: kept.Nodes,
-			Edges: kept.Edges,
+			Nodes: sub.Nodes,
+			Edges: sub.Edges,
 		},
 		Truncated: sub.Truncated,
-		Omitted:   omitted,
+	}
+	if sub.RBACDenied > 0 {
+		// Aggregated rather than per-node — denied node refs would
+		// re-leak existence info the Allow gate exists to hide.
+		result.Omitted = append(result.Omitted, resourcecontext.OmittedField{
+			Field:  "subgraph.nodes",
+			Reason: resourcecontext.OmittedRBACDenied,
+		})
 	}
 	if sub.Truncated {
 		result.Omitted = append(result.Omitted, resourcecontext.OmittedField{
@@ -149,52 +160,6 @@ func resolveProfile(s string) topology.Profile {
 // convention; the topology graph uses display forms (Pod, Deployment, …).
 func displayKindForMCP(kind string) string {
 	return normalizeDisplayKind(strings.ToLower(kind))
-}
-
-// filterNeighborhoodForUserMCP is the MCP-side per-node RBAC sweep. Mirrors
-// the REST helper, but uses the MCP RBAC helpers (canReadClusterScopedKind,
-// checkNamespaceAccess) so SARs are cached on the right per-user cache.
-//
-// Root is always retained: the upstream RBAC check authorized it. Per-node
-// drops are recorded in the returned []OmittedField using the locked
-// "subgraph.nodes[i]" path convention.
-func filterNeighborhoodForUserMCP(ctx context.Context, sub *topology.Subgraph) (*topology.Subgraph, []resourcecontext.OmittedField) {
-	if sub == nil || len(sub.Nodes) == 0 {
-		return sub, nil
-	}
-
-	keptIDs := make(map[string]bool, len(sub.Nodes))
-	kept := &topology.Subgraph{
-		Root:      sub.Root,
-		Truncated: sub.Truncated,
-		Nodes:     make([]topology.Node, 0, len(sub.Nodes)),
-	}
-	var omitted []resourcecontext.OmittedField
-
-	for i, n := range sub.Nodes {
-		if i == 0 {
-			kept.Nodes = append(kept.Nodes, n)
-			keptIDs[n.ID] = true
-			continue
-		}
-		if canReadNeighborhoodNodeMCP(ctx, &n) {
-			kept.Nodes = append(kept.Nodes, n)
-			keptIDs[n.ID] = true
-			continue
-		}
-		omitted = append(omitted, resourcecontext.OmittedField{
-			Field:  "subgraph.nodes[" + strconv.Itoa(i) + "]",
-			Reason: resourcecontext.OmittedRBACDenied,
-		})
-	}
-
-	kept.Edges = make([]topology.Edge, 0, len(sub.Edges))
-	for _, e := range sub.Edges {
-		if keptIDs[e.Source] && keptIDs[e.Target] {
-			kept.Edges = append(kept.Edges, e)
-		}
-	}
-	return kept, omitted
 }
 
 func canReadNeighborhoodNodeMCP(ctx context.Context, n *topology.Node) bool {
