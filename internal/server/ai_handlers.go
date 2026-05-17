@@ -230,7 +230,23 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 
 // fetchAIResource resolves the resource from the typed cache or dynamic cache.
 // The bool reports whether the returned object is an unstructured (CRD) value.
+//
+// When a group is provided, the typed cache is skipped entirely and the
+// dynamic cache is consulted with the group qualifier. This prevents kind
+// collisions where a CRD plural shadows a core kind (e.g., Knative
+// serving.knative.dev/Service vs core/v1 Service): without this branch,
+// FetchResource("services", ...) would return the core Service from the
+// typed informer and the requested group would never be consulted, leaking
+// the wrong object via the AI surface. Mirrors handleGetResource's
+// group-first dispatch in server.go.
 func (s *Server) fetchAIResource(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name, group string) (runtime.Object, bool, error) {
+	if group != "" {
+		u, err := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
+		if err != nil {
+			return nil, false, err
+		}
+		return u, true, nil
+	}
 	obj, err := k8s.FetchResource(cache, kind, namespace, name)
 	if err == nil {
 		return obj, false, nil
