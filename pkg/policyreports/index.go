@@ -2,12 +2,28 @@ package policyreports
 
 import (
 	"sort"
+	"strings"
 	"sync"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/pkg/audit"
 )
+
+// Subject identifies the resource a set of Findings applies to.
+type Subject struct {
+	Kind      string
+	Namespace string
+	Name      string
+}
+
+// SubjectFindings pairs a subject ref with the findings indexed against it.
+// Returned by Index.All so consumers can enumerate every indexed subject
+// without needing per-subject lookups.
+type SubjectFindings struct {
+	Subject  Subject
+	Findings []Finding
+}
 
 // MaxIndexedReports caps how many PolicyReport documents the index keeps,
 // chosen by newest `metadata.creationTimestamp` first. Reports beyond the
@@ -100,6 +116,62 @@ func (i *Index) FindingsFor(kind, namespace, name string) []Finding {
 	out := make([]Finding, len(src))
 	copy(out, src)
 	return out
+}
+
+// All returns every indexed subject together with its findings. Both the
+// outer slice and each per-subject Findings slice are defensive copies —
+// callers may freely sort, truncate, or filter them without racing the
+// index's rebuild path. Subjects appear in alphabetical key order so the
+// caller's downstream output is stable regardless of go's map-iteration
+// randomization.
+func (i *Index) All() []SubjectFindings {
+	if i == nil {
+		return nil
+	}
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	if len(i.bySubject) == 0 {
+		return nil
+	}
+	keys := make([]string, 0, len(i.bySubject))
+	for k := range i.bySubject {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make([]SubjectFindings, 0, len(keys))
+	for _, k := range keys {
+		src := i.bySubject[k]
+		if len(src) == 0 {
+			continue
+		}
+		kind, ns, name, ok := parseSubjectKey(k)
+		if !ok {
+			continue
+		}
+		fs := make([]Finding, len(src))
+		copy(fs, src)
+		out = append(out, SubjectFindings{
+			Subject:  Subject{Kind: kind, Namespace: ns, Name: name},
+			Findings: fs,
+		})
+	}
+	return out
+}
+
+// parseSubjectKey reverses audit.ResourceKey ("Kind/namespace/name", with
+// an empty namespace segment for cluster-scoped subjects). Returns ok=false
+// for any key that does not have exactly three slash-delimited parts —
+// K8s names, namespaces, and kinds can't contain '/' (DNS-label rules),
+// so the SplitN is unambiguous in practice.
+func parseSubjectKey(key string) (string, string, string, bool) {
+	parts := strings.SplitN(key, "/", 3)
+	if len(parts) != 3 {
+		return "", "", "", false
+	}
+	if parts[0] == "" || parts[2] == "" {
+		return "", "", "", false
+	}
+	return parts[0], parts[1], parts[2], true
 }
 
 // Size returns the number of distinct subjects with at least one indexed

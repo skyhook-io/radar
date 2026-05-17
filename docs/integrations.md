@@ -765,8 +765,10 @@ See the main [README](../README.md#gitops) for the user-facing overview. This se
 |-----|-------|----------|-------------|------------|
 | Policy | `kyverno.io/v1` | — | Yes | — |
 | ClusterPolicy | `kyverno.io/v1` | — | Yes | — |
-| PolicyReport | `wgpolicyk8s.io/v1alpha2` | — | Yes | — |
-| ClusterPolicyReport | `wgpolicyk8s.io/v1alpha2` | — | Yes | — |
+| PolicyReport | `wgpolicyk8s.io/v1alpha2` | — | Yes | Yes |
+| ClusterPolicyReport | `wgpolicyk8s.io/v1alpha2` | — | Yes | Yes |
+
+PolicyReport findings also surface through the unified `/api/issues` endpoint (and the MCP `issues` tool) when opted in via `source=kyverno` / `include_kyverno=true` — `fail` and `error` results map to `critical`, `warn` maps to `warning`, and `pass` / `skip` are omitted.
 
 ---
 

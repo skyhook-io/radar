@@ -12,6 +12,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/policyreports"
 )
 
 // Provider abstracts the data sources Compose needs. Implementations
@@ -26,6 +27,11 @@ type Provider interface {
 	WatchedDynamic() []schema.GroupVersionResource
 	ListDynamic(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error)
 	KindForGVR(gvr schema.GroupVersionResource) string
+	// KyvernoFindings returns every subject + findings pair currently
+	// indexed from PolicyReport / ClusterPolicyReport documents. Returns
+	// nil when Kyverno is not installed (the common case) — callers
+	// must treat nil as "no findings to surface" rather than an error.
+	KyvernoFindings() []policyreports.SubjectFindings
 }
 
 type dynamicScopeProvider interface {
@@ -92,6 +98,25 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	if f.IncludeAudit && wantSource(f, SourceAudit) {
 		for _, fin := range p.AuditFindings(f.Namespaces) {
 			out = append(out, fromAudit(fin, now))
+		}
+	}
+
+	// ---- Source: kyverno (PolicyReport findings) -------------------
+	// Off by default, mirroring audit. Kyverno emits findings per
+	// (policy, rule, subject) tuple and a baseline PSS profile alone
+	// produces 10+ rows per workload — surfacing them in the default
+	// Issue view would drown the operator-actionable signals. Opt in
+	// via IncludeKyverno or source=kyverno.
+	if f.IncludeKyverno && wantSource(f, SourceKyverno) {
+		for _, sf := range p.KyvernoFindings() {
+			if !subjectInNamespaces(sf.Subject, f.Namespaces) {
+				continue
+			}
+			for _, fin := range sf.Findings {
+				if issue, ok := fromKyverno(sf.Subject, fin, now); ok {
+					out = append(out, issue)
+				}
+			}
 		}
 	}
 
@@ -309,6 +334,62 @@ func fromAudit(fin bp.Finding, now time.Time) Issue {
 		LastSeen:  now,
 		Count:     1,
 	}
+}
+
+// fromKyverno maps a single PolicyReport Finding into an Issue. The
+// second return is false when the finding's result is not a violation
+// we surface (pass / skip / unknown verdicts produce no Issue).
+//
+// Severity mapping is by Kyverno's `result` field — NOT by the report's
+// `severity` field. Rationale: `severity` is a free-form string set by
+// policy authors (e.g. "high", "medium", "low", or empty), inconsistent
+// across policies, and not aligned with the operator-actionable axis we
+// expose to consumers. The `result` enum is authoritative on whether
+// the engine considered the subject in violation, which is what the
+// Issue list represents.
+//
+//	fail  → SeverityCritical  (policy actively rejected the subject)
+//	warn  → SeverityWarning   (policy flagged but did not block)
+//	error → SeverityCritical  (engine could not evaluate; operator needs to know)
+//	pass / skip / other → omitted
+func fromKyverno(subj policyreports.Subject, fin policyreports.Finding, now time.Time) (Issue, bool) {
+	var sev Severity
+	switch strings.ToLower(fin.Result) {
+	case "fail", "error":
+		sev = SeverityCritical
+	case "warn":
+		sev = SeverityWarning
+	default:
+		return Issue{}, false
+	}
+	return Issue{
+		Severity:  sev,
+		Source:    SourceKyverno,
+		Kind:      subj.Kind,
+		Namespace: subj.Namespace,
+		Name:      subj.Name,
+		Reason:    fin.Policy,
+		Message:   fin.Message,
+		FirstSeen: now,
+		LastSeen:  now,
+		Count:     1,
+	}, true
+}
+
+// subjectInNamespaces reports whether a Kyverno subject should pass the
+// namespace filter. Empty Namespaces means "all namespaces"; cluster-
+// scoped subjects (Namespace == "") always pass — they're gated later
+// by CanReadClusterScoped.
+func subjectInNamespaces(subj policyreports.Subject, namespaces []string) bool {
+	if len(namespaces) == 0 || subj.Namespace == "" {
+		return true
+	}
+	for _, ns := range namespaces {
+		if ns == subj.Namespace {
+			return true
+		}
+	}
+	return false
 }
 
 // fromWarningEvent maps a K8s Warning event to an Issue. Severity is

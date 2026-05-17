@@ -389,6 +389,117 @@ func TestIndex_NilSafe(t *testing.T) {
 	if got := idx.Size(); got != 0 {
 		t.Errorf("nil index Size returned %d", got)
 	}
+	if got := idx.All(); got != nil {
+		t.Errorf("nil index All returned %v", got)
+	}
 	// Replace on nil receiver should not panic.
 	idx.Replace(nil)
+}
+
+func TestIndex_All(t *testing.T) {
+	report := makeReport(t, "PolicyReport", "prod", "rep-1", nil, time.Now(), []map[string]any{
+		{
+			"policy": "p1",
+			"rule":   "r1",
+			"result": "fail",
+			"resources": []any{
+				resourceRef("Pod", "prod", "web"),
+				resourceRef("Pod", "prod", "api"),
+			},
+		},
+		{
+			"policy": "p2",
+			"rule":   "r2",
+			"result": "warn",
+			"resources": []any{
+				resourceRef("Deployment", "prod", "web"),
+			},
+		},
+	})
+	// Cluster-scoped subject via ClusterPolicyReport.
+	clusterReport := makeReport(t, "ClusterPolicyReport", "", "cluster-rep-1", nil, time.Now(), []map[string]any{
+		{
+			"policy": "p3",
+			"rule":   "r3",
+			"result": "fail",
+			"resources": []any{
+				resourceRef("ClusterRole", "", "admin"),
+			},
+		},
+	})
+
+	idx := BuildIndex([]*unstructured.Unstructured{report, clusterReport})
+	all := idx.All()
+	if len(all) != 4 {
+		t.Fatalf("expected 4 subjects (2 pods + 1 deployment + 1 clusterrole), got %d: %+v", len(all), all)
+	}
+
+	// Verify subjects + findings round-trip; iteration order must be stable
+	// (alphabetical by key) — pin it explicitly so a regression is loud.
+	gotKeys := make([]string, 0, len(all))
+	for _, sf := range all {
+		gotKeys = append(gotKeys, sf.Subject.Kind+"/"+sf.Subject.Namespace+"/"+sf.Subject.Name)
+	}
+	wantKeys := []string{
+		"ClusterRole//admin",
+		"Deployment/prod/web",
+		"Pod/prod/api",
+		"Pod/prod/web",
+	}
+	if !sort.StringsAreSorted(gotKeys) {
+		t.Fatalf("All() iteration not sorted by key: %v", gotKeys)
+	}
+	for i := range wantKeys {
+		if gotKeys[i] != wantKeys[i] {
+			t.Errorf("subject[%d]: got %q want %q (full: %v)", i, gotKeys[i], wantKeys[i], gotKeys)
+		}
+	}
+
+	// Verify per-subject Findings: the cluster-scoped one.
+	for _, sf := range all {
+		if sf.Subject.Kind != "ClusterRole" {
+			continue
+		}
+		if sf.Subject.Namespace != "" || sf.Subject.Name != "admin" {
+			t.Errorf("cluster-scoped subject malformed: %+v", sf.Subject)
+		}
+		if len(sf.Findings) != 1 || sf.Findings[0].Policy != "p3" {
+			t.Errorf("cluster-scoped findings wrong: %+v", sf.Findings)
+		}
+	}
+
+	// Returned slices must be defensive copies — mutating must not
+	// corrupt subsequent FindingsFor lookups.
+	for _, sf := range all {
+		if sf.Subject.Kind == "Pod" && sf.Subject.Name == "web" {
+			sf.Findings[0].Policy = "MUTATED"
+			break
+		}
+	}
+	got := idx.FindingsFor("Pod", "prod", "web")
+	if len(got) == 0 || got[0].Policy == "MUTATED" {
+		t.Fatalf("All() returned non-defensive copy — mutation leaked: %+v", got)
+	}
+}
+
+func TestParseSubjectKey(t *testing.T) {
+	cases := []struct {
+		key                 string
+		kind, ns, name      string
+		ok                  bool
+	}{
+		{"Pod/prod/web", "Pod", "prod", "web", true},
+		{"ClusterRole//admin", "ClusterRole", "", "admin", true},
+		{"malformed", "", "", "", false},
+		{"two/parts", "", "", "", false},
+		{"/ns/name", "", "", "", false}, // empty kind invalid
+		{"Kind/ns/", "", "", "", false}, // empty name invalid
+	}
+	for _, c := range cases {
+		k, ns, n, ok := parseSubjectKey(c.key)
+		if ok != c.ok || k != c.kind || ns != c.ns || n != c.name {
+			t.Errorf("parseSubjectKey(%q) = (%q, %q, %q, %v), want (%q, %q, %q, %v)",
+				c.key, k, ns, n, ok, c.kind, c.ns, c.name, c.ok)
+		}
+	}
 }

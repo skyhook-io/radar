@@ -43,6 +43,7 @@ const (
 	SourceAudit     Source = "audit"     // best-practice audit findings
 	SourceEvent     Source = "event"     // K8s Warning events (recent)
 	SourceCondition Source = "condition" // generic CRD .status.conditions[].status=False fallback
+	SourceKyverno   Source = "kyverno"   // Kyverno PolicyReport findings (opt-in)
 )
 
 // Ref is a lightweight resource reference, used for owner pointers.
@@ -102,6 +103,12 @@ type Filters struct {
 	// window (handler defaults to 1h when events are on and Since is
 	// zero).
 	IncludeEvents bool
+	// IncludeKyverno defaults to false. Kyverno PolicyReport findings
+	// are loud (a baseline cluster-pss profile alone emits 10+ findings
+	// per workload) and the default Issue view should not be dominated
+	// by best-practice/policy noise. Opt in via include_kyverno=true
+	// or by passing "kyverno" in the source list.
+	IncludeKyverno bool
 	// Filter is an optional compiled CEL predicate evaluated against
 	// each composed Issue's row bindings. Compile happens in the
 	// handler (and is cached); this layer just runs the program.

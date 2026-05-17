@@ -180,10 +180,11 @@ func registerTools(server *mcp.Server) {
 			"recent K8s Warning events, and a generic CRD .status.conditions[] " +
 			"fallback that lights up Argo / Flux / Knative / Crossplane / cert-manager / " +
 			"KEDA without per-integration code. Severity is normalized to " +
-			"critical / warning / info. Audit findings (best-practice scan) are excluded " +
-			"by default — pass source=audit to opt them in. Use this instead of " +
-			"get_dashboard when you want the full health picture across all sources, or " +
-			"to filter by severity / source / kind / namespace.",
+			"critical / warning / info. Audit findings (best-practice scan) and Kyverno " +
+			"PolicyReport findings are excluded by default — pass source=audit and/or " +
+			"source=kyverno to opt them in. Use this instead of get_dashboard when you " +
+			"want the full health picture across all sources, or to filter by " +
+			"severity / source / kind / namespace.",
 		Annotations: readOnly,
 	}, logToolCall("issues", handleIssuesTool))
 
@@ -335,7 +336,7 @@ type searchInput struct {
 type issuesInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to one namespace"`
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical,warning"`
-	Source    string `json:"source,omitempty" jsonschema:"comma-separated: problem,audit,event,condition. Defaults to problem+condition only. Pass 'event' to opt in K8s Warning events (off by default — they flood thousands per cluster and mostly duplicate problem-source rows). Pass 'audit' to opt in best-practice findings (off by default — 50–200 per cluster)."`
+	Source    string `json:"source,omitempty" jsonschema:"comma-separated: problem,audit,event,condition,kyverno. Defaults to problem+condition only. Pass 'event' to opt in K8s Warning events (off by default — they flood thousands per cluster and mostly duplicate problem-source rows). Pass 'audit' to opt in best-practice findings (off by default — 50–200 per cluster). Pass 'kyverno' to opt in Kyverno PolicyReport findings (off by default — typically 10+ rows per workload under a baseline PSS profile). Sources are AND'd with each other; opting one in does not silence the defaults."`
 	Kind      string `json:"kind,omitempty" jsonschema:"comma-separated kind filter (e.g. Deployment,Pod)"`
 	Since     string `json:"since,omitempty" jsonschema:"event lookback window, e.g. 15m or 1h. Only affects the event source; when events are enabled and since is omitted, defaults to 1h to avoid pulling the full event-cache backlog."`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max issues returned (default 200, max 1000)"`
@@ -1747,6 +1748,8 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 			filters.IncludeAudit = true
 		case issues.SourceEvent:
 			filters.IncludeEvents = true
+		case issues.SourceKyverno:
+			filters.IncludeKyverno = true
 		}
 	}
 	if filters.IncludeEvents && filters.Since == 0 {
@@ -1806,8 +1809,10 @@ func parseSourceList(v string) ([]issues.Source, error) {
 			out = append(out, issues.SourceEvent)
 		case "condition":
 			out = append(out, issues.SourceCondition)
+		case "kyverno":
+			out = append(out, issues.SourceKyverno)
 		default:
-			return nil, fmt.Errorf("unknown source %q (want: problem, audit, event, condition)", p)
+			return nil, fmt.Errorf("unknown source %q (want: problem, audit, event, condition, kyverno)", p)
 		}
 	}
 	return out, nil

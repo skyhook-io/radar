@@ -11,6 +11,7 @@ import (
 	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/policyreports"
 )
 
 // CacheProvider adapts radar's in-process caches to the Provider
@@ -151,6 +152,14 @@ func (p *CacheProvider) ListDynamic(gvr schema.GroupVersionResource, namespace s
 		return nil, nil
 	}
 	return p.dynamic.List(gvr, namespace)
+}
+
+func (p *CacheProvider) KyvernoFindings() []policyreports.SubjectFindings {
+	idx := k8s.GetPolicyReportIndex()
+	if idx == nil {
+		return nil
+	}
+	return idx.All()
 }
 
 func (p *CacheProvider) KindForGVR(gvr schema.GroupVersionResource) string {

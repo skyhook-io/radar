@@ -22,12 +22,12 @@ import (
 //
 //	namespace= / namespaces=  one or comma-separated
 //	severity=  critical,warning  (default: all)
-//	source=    problem,audit,event,condition. Defaults to problem+
-//	           condition (audit + event excluded). Pass any source
-//	           explicitly to opt it in; "audit" lifts include_audit,
-//	           "event" lifts include_events. The two flags exist so
-//	           callers can opt those sources in without also
-//	           narrowing to ONLY them.
+//	source=    problem,audit,event,condition,kyverno. Defaults to
+//	           problem+condition (audit + event + kyverno excluded).
+//	           Pass any source explicitly to opt it in; "audit" lifts
+//	           include_audit, "event" lifts include_events, "kyverno"
+//	           lifts include_kyverno. The flags exist so callers can
+//	           opt those sources in without also narrowing to ONLY them.
 //	kind=      Pod,Deployment,...  (default: all)
 //	since=     duration like 15m, 1h. Affects event source only;
 //	           when events are enabled and since is omitted, the
@@ -36,6 +36,7 @@ import (
 //	limit=     default 200, max 1000
 //	include_audit=true   opt audit findings in
 //	include_events=true  opt warning events in
+//	include_kyverno=true opt Kyverno PolicyReport findings in
 func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -88,8 +89,9 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		Kinds:         splitCSV(q.Get("kind")),
 		Since:         since,
 		Limit:         parseLimit(q.Get("limit")),
-		IncludeAudit:  q.Get("include_audit") == "true" || hasSource(q.Get("source"), "audit"),
-		IncludeEvents: includeEvents,
+		IncludeAudit:   q.Get("include_audit") == "true" || hasSource(q.Get("source"), "audit"),
+		IncludeEvents:  includeEvents,
+		IncludeKyverno: q.Get("include_kyverno") == "true" || hasSource(q.Get("source"), "kyverno"),
 		CanReadClusterScoped: func(kind, group string) bool {
 			if auth.UserFromContext(r.Context()) == nil {
 				return true
@@ -169,8 +171,10 @@ func parseSources(v string) ([]issues.Source, error) {
 			out = append(out, issues.SourceEvent)
 		case "condition":
 			out = append(out, issues.SourceCondition)
+		case "kyverno":
+			out = append(out, issues.SourceKyverno)
 		default:
-			return nil, fmt.Errorf("unknown source %q (want: problem, audit, event, condition)", p)
+			return nil, fmt.Errorf("unknown source %q (want: problem, audit, event, condition, kyverno)", p)
 		}
 	}
 	return out, nil
