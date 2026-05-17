@@ -6,12 +6,18 @@ import (
 	"sync"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-
-	"github.com/skyhook-io/radar/pkg/audit"
 )
 
 // Subject identifies the resource a set of Findings applies to.
+//
+// Group is the API group of the subject (e.g. "apps" for Deployment,
+// "" for core/v1 kinds like Pod). Without it, a CRD with the same Kind
+// as a built-in (or two CRDs sharing a Kind across different groups,
+// e.g. argoproj.io/Application vs unrelated.io/Application) would
+// collide on the same index entry and consumers couldn't apply group-
+// aware RBAC checks against the resulting Issues.
 type Subject struct {
+	Group     string
 	Kind      string
 	Namespace string
 	Name      string
@@ -32,10 +38,11 @@ type SubjectFindings struct {
 // purely diagnostic, so dropping the oldest is acceptable.
 const MaxIndexedReports = 500
 
-// Index maps subject keys ("Kind/namespace/name", per audit.ResourceKey) to
-// the policy findings that apply to that subject. It is safe for concurrent
-// read/write: callers building the index from informer events may swap
-// contents while other callers serve `FindingsFor` lookups.
+// Index maps subject keys ("Group/Kind/namespace/name", group-prefixed
+// so distinct CRDs sharing a Kind don't collide) to the policy findings
+// that apply to that subject. It is safe for concurrent read/write:
+// callers building the index from informer events may swap contents
+// while other callers serve `FindingsFor` lookups.
 //
 // The index is a pure projection of the input reports — it owns no
 // underlying state and does not refetch.
@@ -97,16 +104,19 @@ func (i *Index) Replace(reports []*unstructured.Unstructured) {
 // FindingsFor returns the findings indexed for the given subject. Returns
 // nil if no findings are recorded for that subject.
 //
+// Group is the subject's API group ("" for core kinds like Pod). It's
+// part of the index key so distinct CRDs sharing a Kind don't collide.
+//
 // The returned slice is a defensive copy: callers may freely sort, truncate,
 // or filter it without racing the index's own rebuild path. The cost is
 // modest — findings per subject are bounded (Kyverno emits at most one
 // PolicyReport entry per (policy, rule, resource) tuple, and pathological
 // reports are capped during BuildIndex anyway).
-func (i *Index) FindingsFor(kind, namespace, name string) []Finding {
+func (i *Index) FindingsFor(group, kind, namespace, name string) []Finding {
 	if i == nil {
 		return nil
 	}
-	key := audit.ResourceKey(kind, namespace, name)
+	key := subjectKey(group, kind, namespace, name)
 	i.mu.RLock()
 	defer i.mu.RUnlock()
 	src := i.bySubject[key]
@@ -144,34 +154,46 @@ func (i *Index) All() []SubjectFindings {
 		if len(src) == 0 {
 			continue
 		}
-		kind, ns, name, ok := parseSubjectKey(k)
+		group, kind, ns, name, ok := parseSubjectKey(k)
 		if !ok {
 			continue
 		}
 		fs := make([]Finding, len(src))
 		copy(fs, src)
 		out = append(out, SubjectFindings{
-			Subject:  Subject{Kind: kind, Namespace: ns, Name: name},
+			Subject:  Subject{Group: group, Kind: kind, Namespace: ns, Name: name},
 			Findings: fs,
 		})
 	}
 	return out
 }
 
-// parseSubjectKey reverses audit.ResourceKey ("Kind/namespace/name", with
-// an empty namespace segment for cluster-scoped subjects). Returns ok=false
-// for any key that does not have exactly three slash-delimited parts —
-// K8s names, namespaces, and kinds can't contain '/' (DNS-label rules),
-// so the SplitN is unambiguous in practice.
-func parseSubjectKey(key string) (string, string, string, bool) {
-	parts := strings.SplitN(key, "/", 3)
-	if len(parts) != 3 {
-		return "", "", "", false
+// subjectKey is the index key format: "group/Kind/namespace/name", with
+// an empty group segment for core kinds (Pod, Service, ...) and an empty
+// namespace segment for cluster-scoped subjects (Node, ClusterRole, ...).
+// Group must come first because both "group" and "namespace" can be
+// empty independently; encoding group last would make a cluster-scoped
+// CRD ("apps.example.io/Foo//bar") indistinguishable from a namespaced
+// core-group subject under a parse that allowed three-part keys.
+func subjectKey(group, kind, namespace, name string) string {
+	return group + "/" + kind + "/" + namespace + "/" + name
+}
+
+// parseSubjectKey reverses subjectKey. Returns ok=false for any key that
+// does not have exactly four slash-delimited parts. K8s groups, names,
+// namespaces, and kinds can't contain '/' (DNS-label / DNS-subdomain
+// rules), so the SplitN is unambiguous in practice.
+func parseSubjectKey(key string) (group, kind, namespace, name string, ok bool) {
+	parts := strings.SplitN(key, "/", 4)
+	if len(parts) != 4 {
+		return "", "", "", "", false
 	}
-	if parts[0] == "" || parts[2] == "" {
-		return "", "", "", false
+	// Kind and name must be non-empty; group and namespace may be empty
+	// (core-group + cluster-scoped subjects respectively).
+	if parts[1] == "" || parts[3] == "" {
+		return "", "", "", "", false
 	}
-	return parts[0], parts[1], parts[2], true
+	return parts[0], parts[1], parts[2], parts[3], true
 }
 
 // Size returns the number of distinct subjects with at least one indexed
@@ -186,8 +208,8 @@ func (i *Index) Size() int {
 }
 
 // extractFindings appends one Finding per (result, resource) pair into the
-// destination map. The map's keys are `audit.ResourceKey` values; the
-// helper centralizes the shape so callers don't have to know about the
+// destination map. The map's keys are subjectKey values; the helper
+// centralizes the shape so callers don't have to know about the
 // PolicyReport schema.
 //
 // Schema reference (https://github.com/kubernetes-sigs/wg-policy-prototypes):
@@ -211,7 +233,7 @@ func extractFindings(report *unstructured.Unstructured, dst map[string][]Finding
 		return
 	}
 
-	scopeKind, scopeNS, scopeName := reportScope(report)
+	scopeGroup, scopeKind, scopeNS, scopeName := reportScope(report)
 
 	results, found, err := unstructured.NestedSlice(report.Object, "results")
 	if err != nil || !found {
@@ -260,7 +282,7 @@ func extractFindings(report *unstructured.Unstructured, dst map[string][]Finding
 				if ns == "" {
 					ns = reportNamespace
 				}
-				key := audit.ResourceKey(scopeKind, ns, scopeName)
+				key := subjectKey(scopeGroup, scopeKind, ns, scopeName)
 				dst[key] = append(dst[key], f)
 			}
 			continue
@@ -274,24 +296,30 @@ func extractFindings(report *unstructured.Unstructured, dst map[string][]Finding
 			if ns == "" {
 				ns = reportNamespace
 			}
-			key := audit.ResourceKey(s.kind, ns, s.name)
+			key := subjectKey(s.group, s.kind, ns, s.name)
 			dst[key] = append(dst[key], f)
 		}
 	}
 }
 
-// reportScope returns the `report.scope` subject as (kind, namespace, name).
-// All three are empty strings when scope is missing — the caller treats
-// that case as "no scope-only fallback available".
-func reportScope(report *unstructured.Unstructured) (string, string, string) {
+// reportScope returns the `report.scope` subject as (group, kind,
+// namespace, name). All four are empty strings when scope is missing —
+// the caller treats that case as "no scope-only fallback available".
+// Group is derived from `scope.apiVersion` (the part before "/"; "" for
+// core kinds like Pod whose apiVersion is just "v1").
+func reportScope(report *unstructured.Unstructured) (group, kind, namespace, name string) {
 	scope, found, err := unstructured.NestedMap(report.Object, "scope")
 	if err != nil || !found {
-		return "", "", ""
+		return "", "", "", ""
 	}
-	return stringField(scope, "kind"), stringField(scope, "namespace"), stringField(scope, "name")
+	return groupFromAPIVersion(stringField(scope, "apiVersion")),
+		stringField(scope, "kind"),
+		stringField(scope, "namespace"),
+		stringField(scope, "name")
 }
 
 type subjectRef struct {
+	group     string
 	kind      string
 	namespace string
 	name      string
@@ -323,12 +351,30 @@ func resultResources(entry map[string]any) ([]subjectRef, bool) {
 			continue
 		}
 		refs = append(refs, subjectRef{
+			group:     groupFromAPIVersion(stringField(m, "apiVersion")),
 			kind:      stringField(m, "kind"),
 			namespace: stringField(m, "namespace"),
 			name:      stringField(m, "name"),
 		})
 	}
 	return refs, true
+}
+
+// groupFromAPIVersion extracts the API group from a Kubernetes apiVersion
+// string ("apps/v1" → "apps", "v1" → "", "" → ""). The pkg/gitops package
+// has a public helper that does the same job, but we copy it here so that
+// the policyreports package stays free of cross-package dependencies (it
+// is reused by callers that don't want the gitops surface).
+func groupFromAPIVersion(apiVersion string) string {
+	if apiVersion == "" || apiVersion == "v1" {
+		return ""
+	}
+	if before, _, ok := strings.Cut(apiVersion, "/"); ok {
+		return before
+	}
+	// apiVersion without a slash is a non-core group with no version
+	// (rare/malformed) — treat the whole string as the group.
+	return apiVersion
 }
 
 func stringField(m map[string]any, key string) string {

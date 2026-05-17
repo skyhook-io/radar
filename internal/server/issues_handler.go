@@ -127,6 +127,22 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		resp["filter_errors"] = stats.FilterErrors
 		resp["filter_error_sample"] = stats.FilterErrorSample
 	}
+	// When the caller asked for Kyverno findings (either via opt-in flag
+	// or source=kyverno), surface the index lifecycle phase under
+	// `meta.kyverno`. Without this, an empty list collapses four distinct
+	// states (not_installed / deferred / warmup / ready-but-empty) into
+	// one and the SPA + agents can't render the right copy. Emitted on
+	// every kyverno-touching request — agents can ignore it, but humans
+	// in the SPA get a clear "Kyverno not installed" vs "Indexing in
+	// progress" vs "No violations" distinction.
+	if filters.IncludeKyverno {
+		meta, _ := resp["meta"].(map[string]any)
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		meta["kyverno"] = provider.KyvernoStatus()
+		resp["meta"] = meta
+	}
 	s.writeJSON(w, resp)
 }
 

@@ -1769,6 +1769,20 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 		resp["filter_errors"] = stats.FilterErrors
 		resp["filter_error_sample"] = stats.FilterErrorSample
 	}
+	// Surface the Kyverno index lifecycle when the caller asked for it.
+	// Without this an empty kyverno list collapses four states
+	// (not_installed / deferred / warmup / ready-but-empty) into one,
+	// and the agent can't tell whether to fall back to a direct fetch
+	// or report "cluster has no violations" to the operator. Mirrors
+	// the HTTP /api/issues response shape.
+	if filters.IncludeKyverno {
+		meta, _ := resp["meta"].(map[string]any)
+		if meta == nil {
+			meta = map[string]any{}
+		}
+		meta["kyverno"] = provider.KyvernoStatus()
+		resp["meta"] = meta
+	}
 	return toJSONResult(resp)
 }
 

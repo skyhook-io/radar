@@ -51,6 +51,18 @@ func resourceRef(kind, ns, name string) map[string]any {
 	return m
 }
 
+// resourceRefWithGroup builds a `results[].resources[]` entry that
+// includes `apiVersion`, so the index can derive Subject.Group from it.
+// Pass groupVersion in the standard K8s shape: "apps/v1", "v1" (core), or
+// "argoproj.io/v1alpha1".
+func resourceRefWithGroup(groupVersion, kind, ns, name string) map[string]any {
+	m := resourceRef(kind, ns, name)
+	if groupVersion != "" {
+		m["apiVersion"] = groupVersion
+	}
+	return m
+}
+
 func TestBuildIndex_PerResourceFindings(t *testing.T) {
 	// One report with two results, each targeting a distinct subject.
 	report := makeReport(t, "PolicyReport", "prod", "kyverno-report-1", nil, time.Now(), []map[string]any{
@@ -80,7 +92,7 @@ func TestBuildIndex_PerResourceFindings(t *testing.T) {
 
 	idx := BuildIndex([]*unstructured.Unstructured{report})
 
-	podFindings := idx.FindingsFor("Pod", "prod", "web-abc123")
+	podFindings := idx.FindingsFor("", "Pod", "prod", "web-abc123")
 	if len(podFindings) != 1 {
 		t.Fatalf("expected 1 finding for Pod/prod/web-abc123, got %d", len(podFindings))
 	}
@@ -91,7 +103,7 @@ func TestBuildIndex_PerResourceFindings(t *testing.T) {
 		t.Errorf("severity/category not preserved: %+v", podFindings[0])
 	}
 
-	depFindings := idx.FindingsFor("Deployment", "prod", "web")
+	depFindings := idx.FindingsFor("", "Deployment", "prod", "web")
 	if len(depFindings) != 1 {
 		t.Fatalf("expected 1 finding for Deployment/prod/web, got %d", len(depFindings))
 	}
@@ -119,7 +131,7 @@ func TestBuildIndex_MultipleResourcesPerResult(t *testing.T) {
 	idx := BuildIndex([]*unstructured.Unstructured{report})
 
 	for _, name := range []string{"a", "b", "c"} {
-		got := idx.FindingsFor("Pod", "prod", name)
+		got := idx.FindingsFor("", "Pod", "prod", name)
 		if len(got) != 1 {
 			t.Errorf("expected 1 finding for Pod/prod/%s, got %d", name, len(got))
 		}
@@ -157,7 +169,7 @@ func TestBuildIndex_ScopeOnlyReport(t *testing.T) {
 
 	idx := BuildIndex([]*unstructured.Unstructured{report})
 
-	got := idx.FindingsFor("Deployment", "prod", "api")
+	got := idx.FindingsFor("", "Deployment", "prod", "api")
 	if len(got) != 2 {
 		t.Fatalf("expected 2 findings under scope subject, got %d", len(got))
 	}
@@ -189,7 +201,7 @@ func TestBuildIndex_ScopeFallback_NamespaceFromReportMetadata(t *testing.T) {
 	})
 
 	idx := BuildIndex([]*unstructured.Unstructured{report})
-	got := idx.FindingsFor("Pod", "dev", "lonely")
+	got := idx.FindingsFor("", "Pod", "dev", "lonely")
 	if len(got) != 1 {
 		t.Fatalf("expected 1 finding inherited from report namespace, got %d", len(got))
 	}
@@ -210,7 +222,7 @@ func TestBuildIndex_ClusterPolicyReport(t *testing.T) {
 
 	idx := BuildIndex([]*unstructured.Unstructured{report})
 
-	got := idx.FindingsFor("Node", "", "gke-pool-a-1")
+	got := idx.FindingsFor("", "Node", "", "gke-pool-a-1")
 	if len(got) != 1 {
 		t.Fatalf("expected 1 finding on Node, got %d", len(got))
 	}
@@ -252,7 +264,7 @@ func TestBuildIndex_EmptyResourcesArray_FallsBackToScope(t *testing.T) {
 	})
 
 	idx := BuildIndex([]*unstructured.Unstructured{report})
-	got := idx.FindingsFor("Service", "default", "svc")
+	got := idx.FindingsFor("", "Service", "default", "svc")
 	if len(got) != 1 {
 		t.Fatalf("expected scope fallback to trigger on empty resources, got %d findings", len(got))
 	}
@@ -283,7 +295,7 @@ func TestBuildIndex_MalformedResourcesEntries_FallsBackToScope(t *testing.T) {
 	})
 
 	idx := BuildIndex([]*unstructured.Unstructured{report})
-	got := idx.FindingsFor("Deployment", "prod", "cart")
+	got := idx.FindingsFor("", "Deployment", "prod", "cart")
 	if len(got) != 1 {
 		t.Fatalf("expected scope fallback when all resources entries are empty, got %d findings", len(got))
 	}
@@ -301,7 +313,7 @@ func TestBuildIndex_FindingsForUnknownSubject(t *testing.T) {
 	})
 	idx := BuildIndex([]*unstructured.Unstructured{report})
 
-	if got := idx.FindingsFor("Pod", "prod", "missing"); got != nil {
+	if got := idx.FindingsFor("", "Pod", "prod", "missing"); got != nil {
 		t.Errorf("expected nil for unknown subject, got %v", got)
 	}
 }
@@ -332,11 +344,11 @@ func TestBuildIndex_Cap_OldestDropped(t *testing.T) {
 	}
 	// The 5 oldest (indexes 0..4) should be absent. The newest (index
 	// MaxIndexedReports+4) should be present.
-	if got := idx.FindingsFor("Pod", "ns", "pod-0"); got != nil {
+	if got := idx.FindingsFor("", "Pod", "ns", "pod-0"); got != nil {
 		t.Errorf("pod-0 should have been dropped by cap, got %v", got)
 	}
 	newestName := fmt.Sprintf("pod-%d", MaxIndexedReports+4)
-	if got := idx.FindingsFor("Pod", "ns", newestName); len(got) != 1 {
+	if got := idx.FindingsFor("", "Pod", "ns", newestName); len(got) != 1 {
 		t.Errorf("newest pod %s should be present, got %v", newestName, got)
 	}
 }
@@ -356,7 +368,7 @@ func TestIndex_ReplaceSwapsContents(t *testing.T) {
 			},
 		}),
 	})
-	if got := idx.FindingsFor("Pod", "ns", "first"); len(got) != 1 {
+	if got := idx.FindingsFor("", "Pod", "ns", "first"); len(got) != 1 {
 		t.Fatalf("first build missed: %v", got)
 	}
 
@@ -373,17 +385,17 @@ func TestIndex_ReplaceSwapsContents(t *testing.T) {
 		}),
 	})
 
-	if got := idx.FindingsFor("Pod", "ns", "first"); got != nil {
+	if got := idx.FindingsFor("", "Pod", "ns", "first"); got != nil {
 		t.Errorf("old subject leaked after Replace: %v", got)
 	}
-	if got := idx.FindingsFor("Pod", "ns", "second"); len(got) != 1 {
+	if got := idx.FindingsFor("", "Pod", "ns", "second"); len(got) != 1 {
 		t.Errorf("new subject missing after Replace: %v", got)
 	}
 }
 
 func TestIndex_NilSafe(t *testing.T) {
 	var idx *Index
-	if got := idx.FindingsFor("Pod", "ns", "name"); got != nil {
+	if got := idx.FindingsFor("", "Pod", "ns", "name"); got != nil {
 		t.Errorf("nil index FindingsFor returned %v", got)
 	}
 	if got := idx.Size(); got != 0 {
@@ -476,30 +488,184 @@ func TestIndex_All(t *testing.T) {
 			break
 		}
 	}
-	got := idx.FindingsFor("Pod", "prod", "web")
+	got := idx.FindingsFor("", "Pod", "prod", "web")
 	if len(got) == 0 || got[0].Policy == "MUTATED" {
 		t.Fatalf("All() returned non-defensive copy — mutation leaked: %+v", got)
 	}
 }
 
+// TestBuildIndex_GroupFromResourceAPIVersion pins the per-result resource
+// group propagation. Each `results[].resources[]` entry carries its own
+// apiVersion in the wg-policy schema; the index must derive Subject.Group
+// from that so two CRDs sharing a Kind across different groups don't
+// collide on the same index entry and so consumers (Issues, RBAC checks)
+// see the group.
+func TestBuildIndex_GroupFromResourceAPIVersion(t *testing.T) {
+	report := makeReport(t, "PolicyReport", "prod", "groups-from-resources", nil, time.Now(), []map[string]any{
+		{
+			"policy": "p-app",
+			"result": "fail",
+			"resources": []any{
+				resourceRefWithGroup("argoproj.io/v1alpha1", "Application", "prod", "argo-app"),
+			},
+		},
+		{
+			"policy": "p-deploy",
+			"result": "fail",
+			"resources": []any{
+				resourceRefWithGroup("apps/v1", "Deployment", "prod", "web"),
+			},
+		},
+		{
+			"policy": "p-pod",
+			"result": "warn",
+			"resources": []any{
+				// Core kind: apiVersion=v1 → group="".
+				resourceRefWithGroup("v1", "Pod", "prod", "web-abc"),
+			},
+		},
+	})
+
+	idx := BuildIndex([]*unstructured.Unstructured{report})
+
+	if got := idx.FindingsFor("argoproj.io", "Application", "prod", "argo-app"); len(got) != 1 {
+		t.Errorf("expected Application finding under group=argoproj.io, got %v", got)
+	}
+	// Without group, the lookup must miss — pins that group is part of
+	// the key, not a side-channel attribute.
+	if got := idx.FindingsFor("", "Application", "prod", "argo-app"); len(got) != 0 {
+		t.Errorf("group=\"\" lookup leaked CRD Application: %v", got)
+	}
+	if got := idx.FindingsFor("apps", "Deployment", "prod", "web"); len(got) != 1 {
+		t.Errorf("expected Deployment finding under group=apps, got %v", got)
+	}
+	if got := idx.FindingsFor("", "Pod", "prod", "web-abc"); len(got) != 1 {
+		t.Errorf("core-group Pod (apiVersion=v1) should have group=\"\", got %v", got)
+	}
+
+	// All() must surface Subject.Group on the projected SubjectFindings.
+	groupByName := map[string]string{}
+	for _, sf := range idx.All() {
+		groupByName[sf.Subject.Kind+"/"+sf.Subject.Name] = sf.Subject.Group
+	}
+	if got := groupByName["Application/argo-app"]; got != "argoproj.io" {
+		t.Errorf("All().Subject.Group for Application: got %q want %q", got, "argoproj.io")
+	}
+	if got := groupByName["Deployment/web"]; got != "apps" {
+		t.Errorf("All().Subject.Group for Deployment: got %q want %q", got, "apps")
+	}
+	if got := groupByName["Pod/web-abc"]; got != "" {
+		t.Errorf("All().Subject.Group for Pod: got %q want %q", got, "")
+	}
+}
+
+// TestBuildIndex_GroupFromScopeAPIVersion pins the scope-only path: when
+// a result has no resources[] (or only malformed ones), the report's
+// `scope.apiVersion` provides the group for the materialized Subject.
+func TestBuildIndex_GroupFromScopeAPIVersion(t *testing.T) {
+	scope := map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Application",
+		"namespace":  "prod",
+		"name":       "scope-app",
+	}
+	report := makeReport(t, "PolicyReport", "prod", "scope-with-group", scope, time.Now(), []map[string]any{
+		{
+			"policy":  "no-sync-loop",
+			"result":  "fail",
+			"message": "sync loop detected",
+			// no resources[] → scope fallback
+		},
+	})
+
+	idx := BuildIndex([]*unstructured.Unstructured{report})
+
+	// Lookup with the right group succeeds.
+	got := idx.FindingsFor("argoproj.io", "Application", "prod", "scope-app")
+	if len(got) != 1 {
+		t.Fatalf("expected scope-only finding under group=argoproj.io, got %v", got)
+	}
+	// Lookup without the group misses (proving group is materialized from
+	// scope.apiVersion into the index key, not silently dropped).
+	if got := idx.FindingsFor("", "Application", "prod", "scope-app"); len(got) != 0 {
+		t.Errorf("group=\"\" lookup leaked scope CRD: %v", got)
+	}
+
+	// Subject from All() must carry the group too.
+	all := idx.All()
+	if len(all) != 1 {
+		t.Fatalf("expected 1 subject, got %d", len(all))
+	}
+	if all[0].Subject.Group != "argoproj.io" {
+		t.Errorf("All().Subject.Group: got %q want %q", all[0].Subject.Group, "argoproj.io")
+	}
+}
+
+// TestBuildIndex_GroupCollisionAcrossCRDs pins the underlying motivation
+// for keying on group: two CRDs sharing a Kind across different groups
+// must NOT collide on the same index entry.
+func TestBuildIndex_GroupCollisionAcrossCRDs(t *testing.T) {
+	// Two CRDs both named "Foo" but in different groups, same namespace +
+	// name. Without group-keying, the second would overwrite the first.
+	report := makeReport(t, "PolicyReport", "ns", "collision", nil, time.Now(), []map[string]any{
+		{
+			"policy": "alpha-policy",
+			"result": "fail",
+			"resources": []any{
+				resourceRefWithGroup("alpha.example.com/v1", "Foo", "ns", "shared"),
+			},
+		},
+		{
+			"policy": "beta-policy",
+			"result": "fail",
+			"resources": []any{
+				resourceRefWithGroup("beta.example.com/v1", "Foo", "ns", "shared"),
+			},
+		},
+	})
+
+	idx := BuildIndex([]*unstructured.Unstructured{report})
+	if idx.Size() != 2 {
+		t.Fatalf("expected 2 distinct subjects (group-keyed), got %d", idx.Size())
+	}
+	alpha := idx.FindingsFor("alpha.example.com", "Foo", "ns", "shared")
+	if len(alpha) != 1 || alpha[0].Policy != "alpha-policy" {
+		t.Errorf("alpha CRD findings wrong: %v", alpha)
+	}
+	beta := idx.FindingsFor("beta.example.com", "Foo", "ns", "shared")
+	if len(beta) != 1 || beta[0].Policy != "beta-policy" {
+		t.Errorf("beta CRD findings wrong: %v", beta)
+	}
+}
+
 func TestParseSubjectKey(t *testing.T) {
 	cases := []struct {
-		key                 string
-		kind, ns, name      string
-		ok                  bool
+		key                    string
+		group, kind, ns, name  string
+		ok                     bool
 	}{
-		{"Pod/prod/web", "Pod", "prod", "web", true},
-		{"ClusterRole//admin", "ClusterRole", "", "admin", true},
-		{"malformed", "", "", "", false},
-		{"two/parts", "", "", "", false},
-		{"/ns/name", "", "", "", false}, // empty kind invalid
-		{"Kind/ns/", "", "", "", false}, // empty name invalid
+		// Core-group + namespaced
+		{"/Pod/prod/web", "", "Pod", "prod", "web", true},
+		// Core-group + cluster-scoped
+		{"/ClusterRole//admin", "", "ClusterRole", "", "admin", true},
+		// Non-core CRD + namespaced
+		{"argoproj.io/Application/default/myapp", "argoproj.io", "Application", "default", "myapp", true},
+		// Non-core CRD + cluster-scoped
+		{"karpenter.sh/NodePool//default", "karpenter.sh", "NodePool", "", "default", true},
+		// Malformed: not enough parts
+		{"malformed", "", "", "", "", false},
+		{"two/parts", "", "", "", "", false},
+		{"three/parts/here", "", "", "", "", false},
+		// Empty kind invalid even when group set
+		{"group//ns/name", "", "", "", "", false},
+		// Empty name invalid
+		{"group/Kind/ns/", "", "", "", "", false},
 	}
 	for _, c := range cases {
-		k, ns, n, ok := parseSubjectKey(c.key)
-		if ok != c.ok || k != c.kind || ns != c.ns || n != c.name {
-			t.Errorf("parseSubjectKey(%q) = (%q, %q, %q, %v), want (%q, %q, %q, %v)",
-				c.key, k, ns, n, ok, c.kind, c.ns, c.name, c.ok)
+		g, k, ns, n, ok := parseSubjectKey(c.key)
+		if ok != c.ok || g != c.group || k != c.kind || ns != c.ns || n != c.name {
+			t.Errorf("parseSubjectKey(%q) = (%q, %q, %q, %q, %v), want (%q, %q, %q, %q, %v)",
+				c.key, g, k, ns, n, ok, c.group, c.kind, c.ns, c.name, c.ok)
 		}
 	}
 }

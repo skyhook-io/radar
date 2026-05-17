@@ -162,6 +162,13 @@ func (p *CacheProvider) KyvernoFindings() []policyreports.SubjectFindings {
 	return idx.All()
 }
 
+// KyvernoStatus is a thin string-typed wrapper around k8s.GetKyvernoStatus
+// so the issues package doesn't need to depend on the k8s package for the
+// enum. Values are the constants documented on k8s.KyvernoStatus.
+func (p *CacheProvider) KyvernoStatus() string {
+	return string(k8s.GetKyvernoStatus())
+}
+
 func (p *CacheProvider) KindForGVR(gvr schema.GroupVersionResource) string {
 	if p.discovery == nil {
 		return ""

@@ -32,6 +32,13 @@ type Provider interface {
 	// nil when Kyverno is not installed (the common case) — callers
 	// must treat nil as "no findings to surface" rather than an error.
 	KyvernoFindings() []policyreports.SubjectFindings
+	// KyvernoStatus reports the PolicyReport index lifecycle phase so
+	// callers can distinguish "Kyverno not installed" from "warmup
+	// deferred (cluster too large)" from "warmup in flight" from "ready
+	// but empty". See k8s.KyvernoStatus for the enum values. Returned as
+	// a plain string so callers in this package don't need to import
+	// internal/k8s just to read the value.
+	KyvernoStatus() string
 }
 
 type dynamicScopeProvider interface {
@@ -366,6 +373,7 @@ func fromKyverno(subj policyreports.Subject, fin policyreports.Finding, now time
 		Severity:  sev,
 		Source:    SourceKyverno,
 		Kind:      subj.Kind,
+		Group:     subj.Group,
 		Namespace: subj.Namespace,
 		Name:      subj.Name,
 		Reason:    fin.Policy,

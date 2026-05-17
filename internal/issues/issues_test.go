@@ -28,6 +28,7 @@ type fakeProvider struct {
 	kinds        map[schema.GroupVersionResource]string
 	namespaced   map[schema.GroupVersionResource]bool
 	kyverno      []policyreports.SubjectFindings
+	kyvernoStat  string
 }
 
 func (f *fakeProvider) DetectProblems(_ []string) []k8s.Problem     { return f.problems }
@@ -55,6 +56,9 @@ func (f *fakeProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool, 
 }
 func (f *fakeProvider) KyvernoFindings() []policyreports.SubjectFindings {
 	return f.kyverno
+}
+func (f *fakeProvider) KyvernoStatus() string {
+	return f.kyvernoStat
 }
 
 func TestCompose_NormalizesProblemSeverity(t *testing.T) {
@@ -404,6 +408,56 @@ func TestCompose_KyvernoNilFindingsGraceful(t *testing.T) {
 		if i.Source == SourceKyverno {
 			t.Fatalf("nil findings should not produce kyverno issues: %+v", i)
 		}
+	}
+}
+
+// TestCompose_KyvernoGroupPropagated pins that fromKyverno wires the
+// Subject.Group into Issue.Group. Without this, agents and the SPA can't
+// tell which CRD a finding belongs to when the Kind is ambiguous (e.g.
+// argoproj.io/Application vs another vendor's Application), and the
+// SAR-backed CanReadClusterScoped check would query the wrong group.
+func TestCompose_KyvernoGroupPropagated(t *testing.T) {
+	p := &fakeProvider{
+		kyverno: []policyreports.SubjectFindings{
+			{
+				Subject: policyreports.Subject{
+					Group:     "argoproj.io",
+					Kind:      "Application",
+					Namespace: "prod",
+					Name:      "myapp",
+				},
+				Findings: []policyreports.Finding{
+					{Policy: "no-sync-loop", Result: "fail", Message: "sync loop"},
+				},
+			},
+			{
+				// Core kind: empty group must pass through (not silently
+				// replaced with anything else).
+				Subject: policyreports.Subject{
+					Group:     "",
+					Kind:      "Pod",
+					Namespace: "prod",
+					Name:      "web",
+				},
+				Findings: []policyreports.Finding{
+					{Policy: "require-resource-limits", Result: "fail"},
+				},
+			},
+		},
+	}
+	out := Compose(p, Filters{IncludeKyverno: true})
+	if len(out) != 2 {
+		t.Fatalf("expected 2 issues, got %d: %+v", len(out), out)
+	}
+	byKind := map[string]Issue{}
+	for _, i := range out {
+		byKind[i.Kind] = i
+	}
+	if app, ok := byKind["Application"]; !ok || app.Group != "argoproj.io" {
+		t.Errorf("Application Group not propagated: %+v", app)
+	}
+	if pod, ok := byKind["Pod"]; !ok || pod.Group != "" {
+		t.Errorf("Pod Group should be empty: %+v", pod)
 	}
 }
 
