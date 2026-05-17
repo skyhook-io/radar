@@ -3,7 +3,6 @@ package resourcecontext
 import (
 	"context"
 	"sort"
-	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -34,10 +33,27 @@ type Options struct {
 	AccessChecker RefAccessChecker
 
 	// Topology data sources. When Topology is nil, the topology-derived
-	// fields (Exposes, SelectedBy, ScaledBy) are skipped.
+	// fields (Exposes, SelectedBy, ScaledBy, ManagedBy, RunsOn,
+	// Uses.ServiceAccount) are skipped.
 	Topology    *topology.Topology
 	Provider    topology.ResourceProvider
 	DynamicProv topology.DynamicProvider
+
+	// Relationships is the pre-computed per-resource projection. When non-nil,
+	// Build consumes it directly instead of calling
+	// topology.GetRelationshipsWithObject — single-resource handlers should
+	// leave this nil and let Build compute; bulk/list callers that already
+	// loop over relationships per row SHOULD pass it to avoid double work.
+	//
+	// Topology MUST still be set when Relationships is set — synthesis
+	// helpers (e.g. ManagedBy owner walk) read Topology and RelIndex through
+	// it.
+	Relationships *topology.Relationships
+
+	// RelIndex is the topology inverted-edge index. Pass a shared instance
+	// (topology.IndexByResource(topo)) for high-fanout callers; nil is fine
+	// for single-resource Build paths — the per-call inline scan is O(E) once.
+	RelIndex *topology.RelationshipsIndex
 
 	// Pre-computed summaries — pass-through into the response.
 	IssueSummary  *IssueSummary
@@ -86,18 +102,47 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc := &ResourceContext{Tier: opts.Tier}
 	omitted := newOmittedTracker()
 
-	// 1. ManagedBy — owner chain + GitOps labels/annotations
-	rc.ManagedBy = filterRefs(
-		ctx, opts.AccessChecker,
-		buildManagedBy(ident),
-		"managedBy", omitted,
-	)
+	// Topology-derived relationships drive ManagedBy / Exposes / SelectedBy /
+	// ScaledBy / RunsOn / Uses.ServiceAccount. T23 made
+	// topology.Relationships the canonical projection: server-side
+	// SynthesizeManagedBy walks the owner chain + GitOps signals, and the Pod
+	// hygiene fields (.ServiceAccount, .Node) are populated from pod.Spec.
+	// We do NOT re-walk owner refs here — that would duplicate the topology
+	// package's logic and risk drift.
+	//
+	// Single-resource callers (REST GET, MCP get_resource) leave
+	// opts.Relationships nil and let us compute via GetRelationshipsWithObject
+	// — passing obj keeps kind/group disambiguation correct for CRDs whose
+	// plural collides with a core resource. Bulk callers that already loop
+	// over relationships per row pass them in directly.
+	rel := opts.Relationships
+	if rel == nil && opts.Topology != nil {
+		rel = topology.GetRelationshipsWithObject(
+			ident.Kind, ident.Namespace, ident.Name, obj,
+			opts.Topology, opts.Provider, opts.DynamicProv, opts.RelIndex,
+		)
+	}
+
+	// 1. ManagedBy — prefer Relationships.ManagedBy (server-synthesized when
+	// a topology is available; covers GitOps signals + owner-chain walk).
+	// Fall back to topology.SynthesizeManagedBy with the obj alone when no
+	// topology is provided — that path still detects Argo/Flux/Helm signals
+	// from labels and annotations without needing a graph.
+	var managedBy []topology.ResourceRef
+	if rel != nil && len(rel.ManagedBy) > 0 {
+		managedBy = rel.ManagedBy
+	} else if rel == nil {
+		if m, ok := obj.(metav1.Object); ok {
+			managedBy = topology.SynthesizeManagedBy(m, ident.Kind, ident.Namespace, ident.Name, nil, nil, nil)
+		}
+	}
+	if len(managedBy) > 0 {
+		rc.ManagedBy = filterRefs(ctx, opts.AccessChecker,
+			toContextRefs(managedBy, ReasonOwnerReference, SourceOwnerChain),
+			"managedBy", omitted)
+	}
 
 	// 2. Topology-derived: Exposes, SelectedBy, ScaledBy
-	var rel *topology.Relationships
-	if opts.Topology != nil {
-		rel = topology.GetRelationships(ident.Kind, ident.Namespace, ident.Name, opts.Topology, opts.Provider, opts.DynamicProv)
-	}
 	if rel != nil {
 		exposes := make([]topology.ResourceRef, 0, len(rel.Services)+len(rel.Ingresses)+len(rel.Gateways)+len(rel.Routes))
 		exposes = append(exposes, rel.Services...)
@@ -120,14 +165,49 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			"scaledBy", omitted)
 	}
 
-	// 3. Pod-specific: Uses + RunsOn
+	// 3. Pod-specific: RunsOn (Node) + Uses (ConfigMap/Secret/PVC/SA).
+	//
+	// RunsOn and Uses.ServiceAccount come from topology.Relationships when
+	// available (T23 populates them from pod.Spec server-side). We still
+	// scan pod.Spec.Volumes / .EnvFrom directly for the ConfigMap/Secret/PVC
+	// inventory — topology doesn't model those use-edges at the granularity
+	// Build needs.
 	if pod, ok := obj.(*corev1.Pod); ok {
 		rc.Uses = buildUsesFromPod(ctx, pod, opts.AccessChecker, omitted)
 
-		if pod.Spec.NodeName != "" {
+		// Prefer rel.ServiceAccount over re-reading pod.Spec — same source,
+		// but consolidating through Relationships keeps Build aligned with
+		// how MCP/agents consume the field.
+		if rc.Uses != nil && rc.Uses.ServiceAccount == nil && rel != nil && rel.ServiceAccount != nil {
+			candidate := &ContextRef{
+				Kind:      rel.ServiceAccount.Kind,
+				Group:     rel.ServiceAccount.Group,
+				Namespace: rel.ServiceAccount.Namespace,
+				Name:      rel.ServiceAccount.Name,
+				Reason:    ReasonSAName,
+				Source:    SourceK8sSpec,
+			}
+			if checkRef(ctx, opts.AccessChecker, candidate) {
+				rc.Uses.ServiceAccount = candidate
+			} else {
+				omitted.add("uses.serviceAccount", OmittedRBACDenied)
+			}
+		}
+
+		// RunsOn: prefer the topology-supplied Node ref; fall back to
+		// pod.Spec.NodeName only when topology is absent (no rel).
+		var nodeName, nodeGroup string
+		if rel != nil && rel.Node != nil {
+			nodeName = rel.Node.Name
+			nodeGroup = rel.Node.Group
+		} else if rel == nil {
+			nodeName = pod.Spec.NodeName
+		}
+		if nodeName != "" {
 			candidate := &ContextRef{
 				Kind:   "Node",
-				Name:   pod.Spec.NodeName,
+				Group:  nodeGroup,
+				Name:   nodeName,
 				Reason: ReasonNodeName,
 				Source: SourceK8sSpec,
 			}
@@ -167,16 +247,14 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 // ---------------------------------------------------------------------------
 
 // resourceIdentity is the projection of obj that Build needs without holding
-// on to the full runtime.Object. Owner refs and labels feed ManagedBy; the
-// (Kind, Namespace, Name) tuple keys topology + summary lookups.
+// on to the full runtime.Object. The (Kind, Namespace, Name) tuple keys
+// topology relationship lookups and summary lookups; Group is retained for
+// future use by callers inspecting the identity directly.
 type resourceIdentity struct {
-	Kind        string
-	Group       string
-	Namespace   string
-	Name        string
-	Labels      map[string]string
-	Annotations map[string]string
-	Owners      []metav1.OwnerReference
+	Kind      string
+	Group     string
+	Namespace string
+	Name      string
 }
 
 // identityOf extracts identity from a typed K8s object or unstructured.
@@ -241,13 +319,10 @@ func identityOf(obj runtime.Object) (resourceIdentity, bool) {
 	case *unstructured.Unstructured:
 		gvk := v.GroupVersionKind()
 		return resourceIdentity{
-			Kind:        gvk.Kind,
-			Group:       gvk.Group,
-			Namespace:   v.GetNamespace(),
-			Name:        v.GetName(),
-			Labels:      v.GetLabels(),
-			Annotations: v.GetAnnotations(),
-			Owners:      v.GetOwnerReferences(),
+			Kind:      gvk.Kind,
+			Group:     gvk.Group,
+			Namespace: v.GetNamespace(),
+			Name:      v.GetName(),
 		}, true
 	}
 	return resourceIdentity{}, false
@@ -255,156 +330,11 @@ func identityOf(obj runtime.Object) (resourceIdentity, bool) {
 
 func identFromMeta(kind, group string, m *metav1.ObjectMeta) resourceIdentity {
 	return resourceIdentity{
-		Kind:        kind,
-		Group:       group,
-		Namespace:   m.Namespace,
-		Name:        m.Name,
-		Labels:      m.Labels,
-		Annotations: m.Annotations,
-		Owners:      m.OwnerReferences,
+		Kind:      kind,
+		Group:     group,
+		Namespace: m.Namespace,
+		Name:      m.Name,
 	}
-}
-
-// ---------------------------------------------------------------------------
-// ManagedBy detection
-// ---------------------------------------------------------------------------
-
-// GitOps label/annotation keys — kept in sync with packages/k8s-ui/src/utils/gitops-owner.ts.
-const (
-	argoTrackingIDAnnotation = "argocd.argoproj.io/tracking-id"
-	argoInstanceLabel        = "argocd.argoproj.io/instance"
-	fluxKustomizeNameLabel   = "kustomize.toolkit.fluxcd.io/name"
-	fluxKustomizeNSLabel     = "kustomize.toolkit.fluxcd.io/namespace"
-	fluxHelmNameLabel        = "helm.toolkit.fluxcd.io/name"
-	fluxHelmNSLabel          = "helm.toolkit.fluxcd.io/namespace"
-)
-
-// buildManagedBy returns the ContextRefs describing what manages this
-// resource. Precedence (most-specific wins):
-//  1. Flux HelmRelease labels
-//  2. Flux Kustomization labels
-//  3. Argo tracking-id annotation
-//  4. Argo instance label
-//  5. First owner reference (controller=true preferred)
-//
-// Only one path emits today — the field is a slice so future taxonomies
-// (e.g. dual ArgoCD + Flux) can list multiple managers without a wire change.
-func buildManagedBy(ident resourceIdentity) []ContextRef {
-	if name, ns, ok := readPair(ident.Labels, fluxHelmNameLabel, fluxHelmNSLabel); ok {
-		return []ContextRef{{
-			Kind:      "HelmRelease",
-			Group:     "helm.toolkit.fluxcd.io",
-			Namespace: ns,
-			Name:      name,
-			Reason:    ReasonOwnerReference,
-			Source:    SourceOwnerChain,
-		}}
-	}
-	if name, ns, ok := readPair(ident.Labels, fluxKustomizeNameLabel, fluxKustomizeNSLabel); ok {
-		return []ContextRef{{
-			Kind:      "Kustomization",
-			Group:     "kustomize.toolkit.fluxcd.io",
-			Namespace: ns,
-			Name:      name,
-			Reason:    ReasonOwnerReference,
-			Source:    SourceOwnerChain,
-		}}
-	}
-	if id := ident.Annotations[argoTrackingIDAnnotation]; id != "" {
-		if ns, name, ok := parseArgoTrackingID(id); ok && name != "" {
-			return []ContextRef{{
-				Kind:      "Application",
-				Group:     "argoproj.io",
-				Namespace: ns,
-				Name:      name,
-				Reason:    ReasonOwnerReference,
-				Source:    SourceOwnerChain,
-			}}
-		}
-	}
-	if inst := ident.Labels[argoInstanceLabel]; inst != "" {
-		// App namespace unknown without tracking-id — emit with empty ns
-		// like the UI does; the consumer decides whether to navigate.
-		return []ContextRef{{
-			Kind:   "Application",
-			Group:  "argoproj.io",
-			Name:   inst,
-			Reason: ReasonOwnerReference,
-			Source: SourceOwnerChain,
-		}}
-	}
-
-	if owner := pickControllerOwner(ident.Owners); owner != nil {
-		group := groupFromAPIVersion(owner.APIVersion)
-		return []ContextRef{{
-			Kind:      owner.Kind,
-			Group:     group,
-			Namespace: ident.Namespace,
-			Name:      owner.Name,
-			Reason:    ReasonOwnerReference,
-			Source:    SourceOwnerChain,
-		}}
-	}
-	return nil
-}
-
-func readPair(m map[string]string, k1, k2 string) (string, string, bool) {
-	a := m[k1]
-	b := m[k2]
-	if a == "" || b == "" {
-		return "", "", false
-	}
-	return a, b, true
-}
-
-// parseArgoTrackingID mirrors gitops-owner.ts. Two forms:
-//
-//	"<appName>:..."                  (legacy, single name)
-//	"<appNamespace>_<appName>:..."   (namespaced install)
-//
-// Returns (ns, name, ok).
-func parseArgoTrackingID(value string) (string, string, bool) {
-	colon := strings.IndexByte(value, ':')
-	if colon < 0 {
-		return "", "", false
-	}
-	head := value[:colon]
-	if head == "" {
-		return "", "", false
-	}
-	if sep := strings.IndexByte(head, '_'); sep >= 0 {
-		ns := head[:sep]
-		name := head[sep+1:]
-		if name == "" {
-			return "", "", false
-		}
-		return ns, name, true
-	}
-	return "", head, true
-}
-
-// pickControllerOwner returns the first owner with Controller=true; falls
-// back to the first owner if none are marked controller. Returns nil when
-// the slice is empty.
-func pickControllerOwner(owners []metav1.OwnerReference) *metav1.OwnerReference {
-	for i := range owners {
-		if owners[i].Controller != nil && *owners[i].Controller {
-			return &owners[i]
-		}
-	}
-	if len(owners) > 0 {
-		return &owners[0]
-	}
-	return nil
-}
-
-// groupFromAPIVersion extracts the group from "group/version" or "version"
-// (core/v1 form). Mirrors schema.ParseGroupVersion without the import.
-func groupFromAPIVersion(apiVersion string) string {
-	if i := strings.IndexByte(apiVersion, '/'); i >= 0 {
-		return apiVersion[:i]
-	}
-	return ""
 }
 
 // ---------------------------------------------------------------------------

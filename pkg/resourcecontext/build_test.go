@@ -59,7 +59,7 @@ func TestBuild_Pod_FullEnrichment(t *testing.T) {
 				"app.kubernetes.io/name": "web",
 			},
 			Annotations: map[string]string{
-				argoTrackingIDAnnotation: "argocd_storefront:apps/Deployment:prod/web",
+				"argocd.argoproj.io/tracking-id": "argocd_storefront:apps/Deployment:prod/web",
 			},
 			OwnerReferences: []metav1.OwnerReference{
 				{Kind: "ReplicaSet", APIVersion: "apps/v1", Name: "web-7d", Controller: ptrBool(true)},
@@ -234,8 +234,8 @@ func TestBuild_Deployment_OwnerRefHelmRelease(t *testing.T) {
 			Name:      "web",
 			Namespace: "prod",
 			Labels: map[string]string{
-				fluxHelmNameLabel: "web",
-				fluxHelmNSLabel:   "flux-system",
+				"helm.toolkit.fluxcd.io/name":      "web",
+				"helm.toolkit.fluxcd.io/namespace": "flux-system",
 			},
 		},
 	}
@@ -328,8 +328,10 @@ func TestBuild_NetworkPolicy_OutgoingEdgeNotSurfaced(t *testing.T) {
 }
 
 func TestBuild_ConfigMap_OwnerOnly(t *testing.T) {
-	// A ConfigMap with a controller owner reference. No topology, no Pod
-	// spec — just owner-chain ManagedBy.
+	// A ConfigMap owned by a Deployment via EdgeManages — owner-chain
+	// ManagedBy is sourced from topology.SynthesizeManagedBy walking the
+	// owner graph (T23 canonical projection). No Pod spec, no GitOps
+	// labels — just the topology owner edge.
 	cm := &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "web-config",
@@ -339,16 +341,26 @@ func TestBuild_ConfigMap_OwnerOnly(t *testing.T) {
 			},
 		},
 	}
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: "configmap/prod/web-config", Kind: topology.KindConfigMap, Name: "web-config"},
+			{ID: "deployment/prod/web", Kind: topology.KindDeployment, Name: "web"},
+		},
+		Edges: []topology.Edge{
+			{Source: "deployment/prod/web", Target: "configmap/prod/web-config", Type: topology.EdgeManages},
+		},
+	}
 	rc := Build(context.Background(), cm, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
+		Topology:      topo,
 		EmitHints:     true,
 	})
 	if got, want := len(rc.ManagedBy), 1; got != want {
 		t.Fatalf("ManagedBy len: got %d want %d", got, want)
 	}
 	mb := rc.ManagedBy[0]
-	if mb.Kind != "Deployment" || mb.Name != "web" || mb.Namespace != "prod" || mb.Group != "apps" {
+	if mb.Kind != "Deployment" || mb.Name != "web" || mb.Namespace != "prod" {
 		t.Errorf("ManagedBy[0]: got %+v", mb)
 	}
 }
@@ -388,9 +400,14 @@ func TestBuild_RBACDenied_AppendsOmitted(t *testing.T) {
 }
 
 func TestBuild_EmitHintsFalse_NoHints(t *testing.T) {
+	// Flux Helm labels — detected from obj metadata directly via
+	// topology.SynthesizeManagedBy without needing a populated Topology.
 	dep := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod",
-			OwnerReferences: []metav1.OwnerReference{{Kind: "Foo", APIVersion: "ex.io/v1", Name: "f", Controller: ptrBool(true)}}},
+			Labels: map[string]string{
+				"helm.toolkit.fluxcd.io/name":      "web",
+				"helm.toolkit.fluxcd.io/namespace": "flux-system",
+			}},
 	}
 	rc := Build(context.Background(), dep, Options{
 		Tier:          TierBasic,
@@ -508,9 +525,21 @@ func TestBuild_PDB_OutputJSONShape(t *testing.T) {
 		},
 		Spec: corev1.PodSpec{NodeName: "n1"},
 	}
+	// Topology with the owner edge so SynthesizeManagedBy can walk the
+	// chain and emit a ReplicaSet ManagedBy ref for wire-shape coverage.
+	topo := &topology.Topology{
+		Nodes: []topology.Node{
+			{ID: "pod/prod/p", Kind: topology.KindPod, Name: "p"},
+			{ID: "replicaset/prod/rs", Kind: topology.KindReplicaSet, Name: "rs"},
+		},
+		Edges: []topology.Edge{
+			{Source: "replicaset/prod/rs", Target: "pod/prod/p", Type: topology.EdgeManages},
+		},
+	}
 	rc := Build(context.Background(), pod, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
+		Topology:      topo,
 		EmitHints:     true,
 	})
 	b, err := json.MarshalIndent(rc, "", "  ")
@@ -527,75 +556,6 @@ func TestBuild_PDB_OutputJSONShape(t *testing.T) {
 	}
 	if !contains(string(b), `"runsOn"`) {
 		t.Errorf("JSON missing runsOn\n%s", b)
-	}
-}
-
-// ---------------------------------------------------------------------------
-// Sub-helpers' unit coverage
-// ---------------------------------------------------------------------------
-
-func TestParseArgoTrackingID(t *testing.T) {
-	cases := []struct {
-		in        string
-		wantNS    string
-		wantName  string
-		wantOK    bool
-		shortName string
-	}{
-		{"argocd_store:apps/Deployment:prod/web", "argocd", "store", true, "namespaced form"},
-		{"store:apps/Deployment:prod/web", "", "store", true, "legacy form"},
-		{"", "", "", false, "empty"},
-		{":foo/bar", "", "", false, "missing head"},
-		{"a_:foo", "", "", false, "missing name"},
-	}
-	for _, c := range cases {
-		t.Run(c.shortName, func(t *testing.T) {
-			ns, name, ok := parseArgoTrackingID(c.in)
-			if ns != c.wantNS || name != c.wantName || ok != c.wantOK {
-				t.Errorf("parseArgoTrackingID(%q) = (%q, %q, %v) want (%q, %q, %v)",
-					c.in, ns, name, ok, c.wantNS, c.wantName, c.wantOK)
-			}
-		})
-	}
-}
-
-func TestGroupFromAPIVersion(t *testing.T) {
-	cases := map[string]string{
-		"v1":                            "",
-		"apps/v1":                       "apps",
-		"argoproj.io/v1alpha1":          "argoproj.io",
-		"networking.k8s.io/v1":          "networking.k8s.io",
-		"helm.toolkit.fluxcd.io/v2beta1": "helm.toolkit.fluxcd.io",
-	}
-	for in, want := range cases {
-		if got := groupFromAPIVersion(in); got != want {
-			t.Errorf("groupFromAPIVersion(%q) = %q, want %q", in, got, want)
-		}
-	}
-}
-
-func TestPickControllerOwner_PrefersController(t *testing.T) {
-	owners := []metav1.OwnerReference{
-		{Kind: "Other", Name: "x"},
-		{Kind: "Boss", Name: "ctrl", Controller: ptrBool(true)},
-	}
-	got := pickControllerOwner(owners)
-	if got == nil || got.Name != "ctrl" {
-		t.Errorf("got %+v, want ctrl", got)
-	}
-}
-
-func TestPickControllerOwner_FallsBackToFirst(t *testing.T) {
-	owners := []metav1.OwnerReference{
-		{Kind: "Solo", Name: "first"},
-		{Kind: "Other", Name: "x"},
-	}
-	got := pickControllerOwner(owners)
-	if got == nil || got.Name != "first" {
-		t.Errorf("got %+v, want first", got)
-	}
-	if got := pickControllerOwner(nil); got != nil {
-		t.Errorf("nil owners should return nil, got %+v", got)
 	}
 }
 

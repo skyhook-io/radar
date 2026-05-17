@@ -292,6 +292,14 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		opts.Topology = topo
 		opts.Provider = prov
 		opts.DynamicProv = dyn
+		// Pre-compute Relationships once with the already-fetched obj so
+		// kind/group disambiguation works (Knative serving.knative.dev/Service
+		// vs core/v1 Service). idx=nil is fine for single-resource: the
+		// per-call inline scan is O(E) once. Bulk callers (T12/T89) should
+		// build a shared index via topology.IndexByResource(topo).
+		opts.Relationships = topology.GetRelationshipsWithObject(
+			kind, namespace, name, obj, topo, prov, dyn, nil,
+		)
 	}
 
 	return resourcecontext.Build(r.Context(), obj, opts)
