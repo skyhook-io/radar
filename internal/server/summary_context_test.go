@@ -32,11 +32,39 @@ var issuesMaxLimit = issues.MaxLimit
 // fakeIssuesProvider is a minimal issues.Provider for the buildIssueIndex
 // tests. Only the fields the index path touches are wired; the CRD-
 // condition fallback path is exercised by issues' own tests.
+//
+// DetectProblems mirrors CacheProvider.DetectProblems' shape:
+// namespaces=nil returns the full set (including cluster-scoped rows at
+// namespace=""); a non-empty namespaces slice drops cluster-scoped rows
+// (matching flattenNamespacedProblems) so per-row tests can pin the
+// "cluster-scoped issue silently filtered" behavior the production code
+// exhibits.
 type fakeIssuesProvider struct {
 	problems []k8s.Problem
 }
 
-func (f *fakeIssuesProvider) DetectProblems(_ []string) []k8s.Problem     { return f.problems }
+func (f *fakeIssuesProvider) DetectProblems(namespaces []string) []k8s.Problem {
+	if len(namespaces) == 0 {
+		return f.problems
+	}
+	allowed := map[string]bool{}
+	for _, ns := range namespaces {
+		allowed[ns] = true
+	}
+	out := make([]k8s.Problem, 0, len(f.problems))
+	for _, p := range f.problems {
+		// Cluster-scoped problems (Namespace=="") are dropped under a
+		// namespace filter — matches flattenNamespacedProblems in the
+		// production CacheProvider.
+		if p.Namespace == "" {
+			continue
+		}
+		if allowed[p.Namespace] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 func (f *fakeIssuesProvider) DetectCAPIProblems(_ []string) []k8s.Problem { return nil }
 func (f *fakeIssuesProvider) AuditFindings(_ []string) []bp.Finding       { return nil }
 func (f *fakeIssuesProvider) WarningEvents(_ []string, _ time.Duration) []*corev1.Event {
@@ -353,4 +381,98 @@ func contains(s, sub string) bool {
 		}
 	}
 	return false
+}
+
+// TestIssueIndexNamespaces_ClusterScopedDropsFilter pins the fix for the
+// "cluster-scoped issues filtered out for cluster-scoped rows" bug.
+// Pre-fix, handleAIListResources passed the user's namespaced-access set
+// straight into the issue index. For cluster-scoped kinds (Node, PV,
+// cluster-scoped CRDs) every issue lives at namespace="" — the index
+// then dropped them all, silently zeroing issueCount on every row even
+// when the user had cluster-scoped read access. The helper now returns
+// nil for cluster-scoped kinds so Compose runs cluster-wide.
+func TestIssueIndexNamespaces_ClusterScopedDropsFilter(t *testing.T) {
+	userNs := []string{"prod", "staging"}
+
+	// Cluster-scoped built-ins from the static catalogue (ClassifyKindScope
+	// hits ClusterOnlyKindGVR before touching discovery, so this works
+	// without a discovery client wired up).
+	clusterCases := []struct {
+		kind  string
+		group string
+	}{
+		{"Node", ""},
+		{"nodes", ""},
+		{"PersistentVolume", ""},
+		{"ClusterRole", "rbac.authorization.k8s.io"},
+		{"StorageClass", "storage.k8s.io"},
+	}
+	for _, tc := range clusterCases {
+		got := issueIndexNamespaces(userNs, tc.kind, tc.group)
+		if got != nil {
+			t.Errorf("issueIndexNamespaces(%q, %q) = %v, want nil — cluster-scoped kinds must not be namespace-filtered",
+				tc.kind, tc.group, got)
+		}
+	}
+
+	// Namespaced kinds preserve the user's namespace set as-is so the
+	// scoping the per-user RBAC enforced upstream is honored.
+	namespacedCases := []struct {
+		kind  string
+		group string
+	}{
+		{"Pod", ""},
+		{"Deployment", "apps"},
+		{"ConfigMap", ""},
+	}
+	for _, tc := range namespacedCases {
+		got := issueIndexNamespaces(userNs, tc.kind, tc.group)
+		if len(got) != len(userNs) {
+			t.Errorf("issueIndexNamespaces(%q, %q) len = %d, want %d (namespace filter must pass through for namespaced kinds)",
+				tc.kind, tc.group, len(got), len(userNs))
+			continue
+		}
+		for i := range got {
+			if got[i] != userNs[i] {
+				t.Errorf("issueIndexNamespaces(%q, %q)[%d] = %q, want %q",
+					tc.kind, tc.group, i, got[i], userNs[i])
+			}
+		}
+	}
+
+	// Pass-through when caller already provided nil (cluster-wide).
+	if got := issueIndexNamespaces(nil, "Pod", ""); got != nil {
+		t.Errorf("issueIndexNamespaces(nil, Pod) = %v, want nil", got)
+	}
+}
+
+// TestBuildIssueIndex_ClusterScopedIssueSurfacedWhenUnfiltered pins the
+// end-to-end behavior the issueIndexNamespaces helper enables: when the
+// builder passes nil for the namespace filter (cluster-scoped kind),
+// node-level issues at namespace="" surface in the index and the
+// per-resource lookup returns the correct count. With a namespace
+// filter populated, those same issues are dropped because Compose's
+// per-namespace problem walk never sees them.
+func TestBuildIssueIndex_ClusterScopedIssueSurfacedWhenUnfiltered(t *testing.T) {
+	p := &fakeIssuesProvider{
+		problems: []k8sProblem{
+			// Cluster-scoped Node issue: namespace="" — the actual shape
+			// k8s.DetectProblems emits for NodeNotReady / DiskPressure etc.
+			{Kind: "Node", Namespace: "", Name: "worker-1", Reason: "NotReady", Severity: "critical"},
+		},
+	}
+
+	// Cluster-wide compose (nil namespaces) — issue surfaces.
+	idx := buildIssueIndex(p, nil, "Node")
+	if got := idx.count("", "Node", "", "worker-1"); got != 1 {
+		t.Errorf("cluster-wide index: Node issueCount = %d, want 1 (cluster-scoped issue should appear)", got)
+	}
+
+	// Namespace-scoped compose — same issue, but ns filter to ["prod","staging"]
+	// drops it because the user-namespaced perm slice never matches "".
+	// This is what the pre-fix handler did for Node lists.
+	scopedIdx := buildIssueIndex(p, []string{"prod", "staging"}, "Node")
+	if got := scopedIdx.count("", "Node", "", "worker-1"); got != 0 {
+		t.Errorf("namespace-scoped index: Node issueCount = %d, want 0 (namespace filter drops cluster-scoped issue)", got)
+	}
 }

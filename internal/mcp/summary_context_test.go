@@ -20,11 +20,35 @@ import (
 
 // fakeIssuesProvider is a minimal issues.Provider for the buildIssueIndex
 // tests. Only the fields the index path touches are wired.
+//
+// DetectProblems mirrors CacheProvider.DetectProblems: empty namespaces
+// returns the full set; a non-empty slice drops cluster-scoped rows
+// (Namespace=="") to match the production flattenNamespacedProblems
+// behavior — needed so the cluster-scoped-filter regression test can
+// pin the actual bug.
 type fakeIssuesProvider struct {
 	problems []k8s.Problem
 }
 
-func (f *fakeIssuesProvider) DetectProblems(_ []string) []k8s.Problem     { return f.problems }
+func (f *fakeIssuesProvider) DetectProblems(namespaces []string) []k8s.Problem {
+	if len(namespaces) == 0 {
+		return f.problems
+	}
+	allowed := map[string]bool{}
+	for _, ns := range namespaces {
+		allowed[ns] = true
+	}
+	out := make([]k8s.Problem, 0, len(f.problems))
+	for _, p := range f.problems {
+		if p.Namespace == "" {
+			continue
+		}
+		if allowed[p.Namespace] {
+			out = append(out, p)
+		}
+	}
+	return out
+}
 func (f *fakeIssuesProvider) DetectCAPIProblems(_ []string) []k8s.Problem { return nil }
 func (f *fakeIssuesProvider) AuditFindings(_ []string) []bp.Finding       { return nil }
 func (f *fakeIssuesProvider) WarningEvents(_ []string, _ time.Duration) []*corev1.Event {
@@ -98,5 +122,33 @@ func TestBuildIssueIndex_BeyondMaxLimit(t *testing.T) {
 	}
 	if got := idx.count("", "Pod", "prod", fmtPodName(0)); got != 1 {
 		t.Errorf("head pod count = %d, want 1", got)
+	}
+}
+
+// TestBuildIssueIndex_ClusterScopedIssueRequiresUnfilteredCompose pins
+// the MCP-side regression for the cluster-scoped issueCount bug. When
+// handleListResources hands a namespace-restricted slice to the issue
+// index, cluster-scoped issues (Namespace=="") are dropped by Compose's
+// per-namespace problem walk — every Node row gets issueCount=0 even
+// when the user has cluster-scoped Node access. The fix routes
+// clusterScoped through and forces idxNamespaces=nil before calling
+// newSummaryContextBuilder; this test pins the buildIssueIndex behavior
+// that backs that path.
+func TestBuildIssueIndex_ClusterScopedIssueRequiresUnfilteredCompose(t *testing.T) {
+	p := &fakeIssuesProvider{
+		problems: []k8s.Problem{
+			{Kind: "Node", Namespace: "", Name: "worker-1", Reason: "NotReady", Severity: "critical"},
+		},
+	}
+	// Cluster-wide compose surfaces the Node issue.
+	idx := buildIssueIndex(p, nil, "Node")
+	if got := idx.count("", "Node", "", "worker-1"); got != 1 {
+		t.Errorf("cluster-wide index: Node issueCount = %d, want 1", got)
+	}
+	// Namespace-scoped compose drops the same issue — what the pre-fix
+	// MCP handler did on every Node list for a namespace-restricted user.
+	scopedIdx := buildIssueIndex(p, []string{"prod", "staging"}, "Node")
+	if got := scopedIdx.count("", "Node", "", "worker-1"); got != 0 {
+		t.Errorf("namespace-scoped index: Node issueCount = %d, want 0 (namespace filter drops cluster-scoped issue)", got)
 	}
 }

@@ -153,8 +153,15 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	// Attach summaryContext per row at Summary verbosity. Compact/Detail
 	// already carry richer context on the get-resource path; the
 	// per-row attachment is specifically for cheap list triage.
+	//
+	// For cluster-scoped kinds (Node, PV, cluster-scoped CRDs) issues
+	// live at namespace="" — scoping the issue index to the user's
+	// namespace set would silently zero issueCount on every row. The
+	// preflight RBAC above has already authorized cluster-scoped reads,
+	// so we pass nil here to compose cluster-wide.
 	if !skipContext && level == aicontext.LevelSummary {
-		if builder := s.newSummaryContextBuilder(namespaces, kind); builder != nil {
+		idxNamespaces := issueIndexNamespaces(namespaces, kind, group)
+		if builder := s.newSummaryContextBuilder(idxNamespaces, kind); builder != nil {
 			// Typed list resolves group from each object's TypeMeta —
 			// MinifyList sets it via SetTypeMeta before producing rows,
 			// so we can trust apiVersion on the typed source.
@@ -163,6 +170,19 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, results)
+}
+
+// issueIndexNamespaces returns the namespace slice to scope the issue
+// index by. For cluster-scoped kinds (Node, PV, cluster-scoped CRDs)
+// returns nil so cluster-scoped issues (which live at namespace="") are
+// not filtered out by the user's namespace-restricted access set.
+// Namespaced kinds pass through unchanged.
+func issueIndexNamespaces(namespaces []string, kind, group string) []string {
+	clusterScoped, _, _ := k8s.ClassifyKindScope(kind, group)
+	if clusterScoped {
+		return nil
+	}
+	return namespaces
 }
 
 // attachSummaryContextToList walks the typed-cache list and assigns the
@@ -266,7 +286,8 @@ func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8
 	}
 
 	if !skipContext && level == aicontext.LevelSummary {
-		if builder := s.newSummaryContextBuilder(namespaces, kind); builder != nil {
+		idxNamespaces := issueIndexNamespaces(namespaces, kind, group)
+		if builder := s.newSummaryContextBuilder(idxNamespaces, kind); builder != nil {
 			attachSummaryContextToUnstructuredList(results, allItems, builder)
 		}
 	}

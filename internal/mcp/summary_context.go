@@ -222,4 +222,3 @@ func managedByFromRelationships(rel *topology.Relationships) *resourcecontext.Ma
 	}
 	return nil
 }
-

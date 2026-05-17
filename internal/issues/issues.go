@@ -218,10 +218,23 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 // warning Issue for each object that has a False Ready/Available/etc.
 // condition. Skips kinds owned by curated checkers (Cluster API today)
 // to avoid double-reporting.
+//
+// When f.Kinds is non-empty (e.g. summaryContext building a per-resource
+// issue index for a list_resources call on a single kind), GVRs whose
+// kind isn't in the filter are skipped BEFORE the ListDynamic call —
+// without this gate, a pods-only request still scanned every watched
+// CRD up front and applyFilters discarded the rows afterward. Kind
+// comparison mirrors applyFilters: lowercase for case-insensitive
+// match against the user's filter (which itself is canonicalized to
+// the singular form upstream).
 func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 	gvrs := p.WatchedDynamic()
 	if len(gvrs) == 0 {
 		return nil
+	}
+	wantKind := map[string]bool{}
+	for _, k := range f.Kinds {
+		wantKind[strings.ToLower(k)] = true
 	}
 	var out []Issue
 	for _, gvr := range gvrs {
@@ -230,6 +243,15 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 		}
 		kind := p.KindForGVR(gvr)
 		if kind == "" {
+			continue
+		}
+		// applyFilters runs after Compose returns — but on hot paths that
+		// pin a single kind (summaryContext per-row index), routing the
+		// kind filter through here skips the per-GVR ListDynamic call
+		// entirely. Match in lowercase (same as applyFilters) so
+		// "Pod"/"pod" and CRD-typed "MyResource"/"myresource" both
+		// compare equal.
+		if len(wantKind) > 0 && !wantKind[strings.ToLower(kind)] {
 			continue
 		}
 		clusterScoped, _, _ := classifyDynamicScope(p, gvr, kind)

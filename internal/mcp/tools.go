@@ -473,8 +473,11 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	if err == k8s.ErrUnknownKind {
 		// Fall through to dynamic cache for CRDs. ClassifyKindScope/SAR
 		// above already authorized cluster-scoped CRDs; namespaced CRDs
-		// are scoped via listScope.
-		return listDynamicResources(ctx, cache, kind, group, listScope, input.Context)
+		// are scoped via listScope. Pass clusterScoped through so the
+		// issue index drops the namespace filter for cluster-scoped
+		// CRDs — those issues live at namespace="" and would otherwise
+		// be filtered out by the user's namespaced-access set.
+		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Context)
 	}
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to list %s: %w", kind, err)
@@ -499,8 +502,18 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 	// Attach summaryContext per row unless caller opted out. Issue index
 	// is scoped to the listed kind so the per-row count reflects only
 	// the resource being listed (not unrelated noise in the namespace).
+	//
+	// Cluster-scoped kinds (Node, PV, cluster-scoped CRDs) emit issues
+	// at namespace="" — scoping the index to the user's namespaced
+	// access set would silently zero issueCount on every row. The
+	// cluster-scoped RBAC gate above (canReadClusterScopedKind) already
+	// authorized the read, so we pass nil here to compose cluster-wide.
 	if input.Context != "none" {
-		if builder := newSummaryContextBuilder(allowed, kind); builder != nil {
+		idxNamespaces := allowed
+		if clusterScoped {
+			idxNamespaces = nil
+		}
+		if builder := newSummaryContextBuilder(idxNamespaces, kind); builder != nil {
 			attachSummaryContextToTyped(results, objs, builder)
 		}
 	}
@@ -530,7 +543,7 @@ func attachSummaryContextToTyped(results []any, objs []runtime.Object, builder s
 	}
 }
 
-func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, namespaces []string, contextMode string) (*mcp.CallToolResult, any, error) {
+func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, namespaces []string, clusterScoped bool, contextMode string) (*mcp.CallToolResult, any, error) {
 	var rawItems []*unstructured.Unstructured
 	if len(namespaces) > 0 {
 		for _, ns := range namespaces {
@@ -554,7 +567,15 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 	}
 
 	if contextMode != "none" {
-		if builder := newSummaryContextBuilder(namespaces, kind); builder != nil {
+		// Cluster-scoped CRDs emit issues at namespace="" — passing a
+		// namespace-restricted slice would silently zero issueCount on
+		// every row. Caller has already gated cluster-scoped reads via
+		// canReadClusterScopedKind, so cluster-wide compose is safe.
+		idxNamespaces := namespaces
+		if clusterScoped {
+			idxNamespaces = nil
+		}
+		if builder := newSummaryContextBuilder(idxNamespaces, kind); builder != nil {
 			attachSummaryContextToUnstructured(allItems, rawItems, builder)
 		}
 	}

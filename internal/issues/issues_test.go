@@ -622,3 +622,87 @@ func TestFlattenNamespacedProblems_EmptyInputReturnsNil(t *testing.T) {
 		t.Errorf("empty input should produce empty output, got %+v", out)
 	}
 }
+
+// countingProvider wraps fakeProvider and tallies ListDynamic calls per
+// GVR. Used by TestDetectGenericCRDIssues_SkipsListWhenKindFiltered to
+// pin that detectGenericCRDIssues short-circuits the per-GVR
+// ListDynamic call when f.Kinds excludes the GVR's kind — on clusters
+// with hundreds of watched CRDs, scanning every one for a pods-only
+// summaryContext request was the dominant cost.
+type countingProvider struct {
+	fakeProvider
+	listCalls map[schema.GroupVersionResource]int
+}
+
+func (c *countingProvider) ListDynamic(gvr schema.GroupVersionResource, ns string) ([]*unstructured.Unstructured, error) {
+	if c.listCalls == nil {
+		c.listCalls = map[schema.GroupVersionResource]int{}
+	}
+	c.listCalls[gvr]++
+	return c.fakeProvider.ListDynamic(gvr, ns)
+}
+
+// TestDetectGenericCRDIssues_SkipsListWhenKindFiltered pins the
+// "scan all CRDs before kindFilter applies" perf fix in
+// detectGenericCRDIssues. Pre-fix, a Compose call with Kinds=["Pod"]
+// still iterated every watched CRD GVR and ran ListDynamic on each;
+// applyFilters then discarded the non-matching rows at the end.
+//
+// On a cluster with hundreds of watched CRDs this dominated the
+// summaryContext per-row index build for list_resources kind=pods.
+// The fix routes f.Kinds awareness into detectGenericCRDIssues so
+// non-matching GVRs skip the ListDynamic call entirely.
+func TestDetectGenericCRDIssues_SkipsListWhenKindFiltered(t *testing.T) {
+	podGVR := schema.GroupVersionResource{Group: "", Version: "v1", Resource: "pods"}
+	appGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	npGVR := schema.GroupVersionResource{Group: "karpenter.sh", Version: "v1", Resource: "nodepools"}
+
+	p := &countingProvider{
+		fakeProvider: fakeProvider{
+			dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+				podGVR: {}, // empty — only counts the call.
+				appGVR: {{Object: map[string]any{
+					"metadata": map[string]any{"name": "a", "namespace": "argocd"},
+					"status": map[string]any{
+						"conditions": []any{
+							map[string]any{"type": "Synced", "status": "False", "reason": "Drift"},
+						},
+					},
+				}}},
+				npGVR: {}, // empty — only counts the call.
+			},
+			kinds: map[schema.GroupVersionResource]string{
+				podGVR: "Pod",
+				appGVR: "Application",
+				npGVR:  "NodePool",
+			},
+		},
+	}
+
+	// kindFilter restricts to Application — the other two GVRs must NOT
+	// be listed. detectGenericCRDIssues lowercases the kind comparison
+	// (mirrors applyFilters), so the canonical "Application" matches the
+	// emitted Kind for the argoproj.io GVR.
+	_ = detectGenericCRDIssues(p, Filters{Kinds: []string{"Application"}})
+
+	if got := p.listCalls[podGVR]; got != 0 {
+		t.Errorf("Pod GVR ListDynamic calls = %d, want 0 (kind filter must skip non-matching GVRs)", got)
+	}
+	if got := p.listCalls[npGVR]; got != 0 {
+		t.Errorf("NodePool GVR ListDynamic calls = %d, want 0 (kind filter must skip non-matching GVRs)", got)
+	}
+	if got := p.listCalls[appGVR]; got == 0 {
+		t.Errorf("Application GVR ListDynamic calls = %d, want >= 1 (matching kind must still be scanned)", got)
+	}
+
+	// Sanity: empty Kinds filter scans every GVR (no per-kind shortcut
+	// when caller didn't ask for one). Pins that the fix is filter-aware
+	// rather than always-skip.
+	p.listCalls = nil
+	_ = detectGenericCRDIssues(p, Filters{})
+	for gvr, want := range map[schema.GroupVersionResource]bool{podGVR: true, appGVR: true, npGVR: true} {
+		if got := p.listCalls[gvr] > 0; got != want {
+			t.Errorf("no kind filter: GVR %s called=%v, want %v", gvr.Resource, got, want)
+		}
+	}
+}
