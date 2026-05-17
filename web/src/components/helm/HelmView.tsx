@@ -1,12 +1,12 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'react'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
-import { Package, Search, RefreshCw, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch } from 'lucide-react'
+import { Package, Search, RefreshCw, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight } from 'lucide-react'
 import { PaneLoader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
 import type { HelmRelease, SelectedHelmRelease, UpgradeInfo, ChartSource } from '../../types'
-import { getStatusColor, formatAge, truncate } from './helm-utils'
+import { getStatusColor, formatAge, truncate, isHelmReleaseActionable } from './helm-utils'
 import { SEVERITY_BADGE } from '../../utils/badge-colors'
 import { Tooltip } from '../ui/Tooltip'
 import { ChartBrowser } from './ChartBrowser'
@@ -481,17 +481,34 @@ const ReleaseRow = forwardRef<HTMLTableRowElement, ReleaseRowProps>(
         </Tooltip>
       </td>
       <td className="px-4 py-3 w-24 hidden xl:table-cell">
-        <span className="text-sm text-theme-text-secondary">{release.appVersion || '-'}</span>
+        {release.appVersion ? (
+          <span className="text-sm text-theme-text-secondary">{release.appVersion}</span>
+        ) : (
+          <Tooltip content="This chart did not declare an appVersion in Chart.yaml.">
+            <span className="text-sm text-theme-text-disabled cursor-help">—</span>
+          </Tooltip>
+        )}
       </td>
       <td className="px-4 py-3 w-28">
-        <span
-          className={clsx(
-            'badge',
-            getStatusColor(release.status)
-          )}
-        >
-          {release.status}
-        </span>
+        {isHelmReleaseActionable(release.status) ? (
+          <Tooltip content="Click row to view rollback / history / logs and recover">
+            <span
+              className={clsx('badge inline-flex items-center gap-1', getStatusColor(release.status))}
+            >
+              {release.status}
+              <ChevronRight className="w-3 h-3 opacity-70" />
+            </span>
+          </Tooltip>
+        ) : (
+          <span
+            className={clsx(
+              'badge',
+              getStatusColor(release.status)
+            )}
+          >
+            {release.status}
+          </span>
+        )}
       </td>
       <td className="px-4 py-3 w-20">
         <span className="text-sm text-theme-text-secondary">{release.revision}</span>

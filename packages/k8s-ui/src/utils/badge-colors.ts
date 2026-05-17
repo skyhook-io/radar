@@ -286,6 +286,31 @@ export function getHelmStatusColor(status: string): string {
   return HELM_STATUS_COLORS[statusLower] || 'bg-theme-hover/50 text-theme-text-secondary'
 }
 
+/**
+ * Helm release statuses where the row UI should signpost the user
+ * toward the drawer (history / rollback / logs).
+ *
+ * Currently `failed` only. The `pending-*` statuses (install /
+ * upgrade / rollback) are excluded deliberately: they're Helm's
+ * normal in-flight states during every routine operation. Treating
+ * them as "actionable" would briefly attach an alarming chevron +
+ * tooltip to every install while it ran — indistinguishable from
+ * the genuinely-stuck case (controller crashed mid-flight). Until
+ * we have release age available client-side to disambiguate
+ * "in-flight" from "stuck > N min", we give up the stuck-detect
+ * signpost rather than wrongly alarm the common case.
+ *
+ * @see https://github.com/helm/helm/blob/dev-v3/pkg/release/status.go
+ */
+const ACTIONABLE_HELM_STATUSES: ReadonlySet<string> = new Set([
+  'failed',
+])
+
+export function isHelmReleaseActionable(status: string | null | undefined): boolean {
+  if (!status) return false
+  return ACTIONABLE_HELM_STATUSES.has(status.toLowerCase())
+}
+
 // =============================================================================
 // VULNERABILITY SEVERITY COLORS - for Trivy and other security scanners
 // =============================================================================

@@ -2148,29 +2148,49 @@ export function useHelmRepositories() {
   })
 }
 
+// Shared mutation fn + cache invalidation for the helm-repo
+// update endpoint. Hoisted so useUpdateRepository and
+// useUpdateRepositorySilent can't drift on URL, error parsing, or
+// invalidation keys — only the toast meta differs.
+async function updateRepositoryFn(repoName: string): Promise<unknown> {
+  const response = await apiFetch(`${getApiBase()}/helm/repositories/${repoName}/update`, {
+    method: 'POST',
+  })
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+    throw new Error(error.error || `HTTP ${response.status}`)
+  }
+  return response.json()
+}
+
+function invalidateHelmAfterRepoUpdate(queryClient: ReturnType<typeof useQueryClient>) {
+  queryClient.invalidateQueries({ queryKey: ['helm-repositories'] })
+  queryClient.invalidateQueries({ queryKey: ['helm-charts'] })
+}
+
 // Update a repository index
 export function useUpdateRepository() {
   const queryClient = useQueryClient()
-
   return useMutation({
-    mutationFn: async (repoName: string) => {
-      const response = await apiFetch(`${getApiBase()}/helm/repositories/${repoName}/update`, {
-        method: 'POST',
-      })
-      if (!response.ok) {
-        const error = await response.json().catch(() => ({ error: 'Unknown error' }))
-        throw new Error(error.error || `HTTP ${response.status}`)
-      }
-      return response.json()
-    },
+    mutationFn: updateRepositoryFn,
     meta: {
       errorMessage: 'Failed to update repository',
       successMessage: 'Repository updated',
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['helm-repositories'] })
-      queryClient.invalidateQueries({ queryKey: ['helm-charts'] })
-    },
+    onSuccess: () => invalidateHelmAfterRepoUpdate(queryClient),
+  })
+}
+
+// Same endpoint as useUpdateRepository but without meta — the
+// caller surfaces ONE aggregate toast for the whole batch, so the
+// global MutationCache must NOT fire a per-call toast (otherwise
+// N failures = N identical "Failed to update repository" toasts
+// with no repo name).
+export function useUpdateRepositorySilent() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: updateRepositoryFn,
+    onSuccess: () => invalidateHelmAfterRepoUpdate(queryClient),
   })
 }
 
