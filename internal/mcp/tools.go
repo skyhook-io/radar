@@ -63,6 +63,23 @@ func registerTools(server *mcp.Server) {
 	}, logToolCall("get_topology", handleGetTopology))
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name: "get_neighborhood",
+		Description: "Get the BFS-expanded neighborhood of a specific resource — the slice " +
+			"of the topology graph immediately relevant to one root. Cheaper and more " +
+			"focused than get_topology when you already know which resource you care " +
+			"about. Profile selects edge types: 'management' (owner chain), 'networking' " +
+			"(routing + exposure), 'policy' (PDB / NetworkPolicy attachments), 'security' " +
+			"(reserved, currently empty), 'all', or 'auto' (default — picks based on root " +
+			"kind: workloads get management+networking+policy, GitOps controllers get " +
+			"management, Services/Ingresses get networking). Hops controls BFS depth " +
+			"(default 1, max 2). Nodes are RBAC-filtered against the caller; dropped " +
+			"neighbors are listed in `omitted` with reason=rbac_denied. If max_nodes is " +
+			"exceeded mid-expansion, truncated=true is set and a partial subgraph is " +
+			"returned.",
+		Annotations: readOnly,
+	}, logToolCall("get_neighborhood", handleGetNeighborhood))
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_events",
 		Description: "Get recent Kubernetes warning events, deduplicated and sorted by recency. " +
 			"Useful for diagnosing issues — shows event reason, message, and occurrence count.",

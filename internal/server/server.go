@@ -378,6 +378,7 @@ func (s *Server) setupRoutes() {
 				r.Use(aiAgentLogMiddleware)
 				r.Get("/ai/resources/{kind}", s.handleAIListResources)
 				r.Get("/ai/resources/{kind}/{namespace}/{name}", s.handleAIGetResource)
+				r.Get("/ai/neighborhood/{kind}/{namespace}/{name}", s.handleAINeighborhood)
 			})
 
 			// Debug routes (for event pipeline diagnostics)
