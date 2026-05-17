@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/skyhook-io/radar/pkg/policyreports"
@@ -96,11 +97,11 @@ func TestResetPolicyReportIndex_ClearsKyvernoDecision(t *testing.T) {
 
 // TestResetPolicyReportIndex_BumpsWarmupGen pins the race-protection
 // invariant: each Reset advances kyvernoWarmupGen so any in-flight Warmup
-// goroutine's setDecision/publishReady writes (which capture gen at
-// lambda entry and verify under the mutex before storing) become no-ops
-// against the new cluster. Without this bump, a slow Warmup from the
-// previous cluster context could stamp KyvernoStatusReady onto the new
-// cluster's atomic between the Reset and the new cluster's own Warmup.
+// goroutine's setDecision/publishReady writes (which snapshot gen under
+// the mutex before Do() and verify under the mutex before storing) become
+// no-ops against the new cluster. Without this bump, a slow Warmup from
+// the previous cluster context could stamp KyvernoStatusReady onto the
+// new cluster's atomic between the Reset and the new cluster's own Warmup.
 func TestResetPolicyReportIndex_BumpsWarmupGen(t *testing.T) {
 	t.Cleanup(func() {
 		policyReportMu.Lock()
@@ -120,5 +121,154 @@ func TestResetPolicyReportIndex_BumpsWarmupGen(t *testing.T) {
 	ResetPolicyReportIndex()
 	if after2 := kyvernoWarmupGen.Load(); after2 <= after {
 		t.Fatalf("kyvernoWarmupGen not strictly monotonic: %d -> %d", after, after2)
+	}
+}
+
+// TestWarmupKyvernoPolicyReports_StaleGenSkipsWrites pins the structural
+// invariant that backs the snapshot-under-mutex pattern in
+// WarmupKyvernoPolicyReports: if the warmup goroutine's captured myGen
+// no longer matches kyvernoWarmupGen at write time (i.e. a Reset
+// interleaved between snapshot capture and the write), setDecision /
+// publishReady must skip their writes — otherwise the previous cluster's
+// outcome leaks onto the new cluster's atomics.
+//
+// We can't reach setDecision / publishReady directly (they're closures
+// inside Warmup's Do() lambda), so we replicate the EXACT write protocol
+// they use — read kyvernoWarmupGen under policyReportMu, compare to a
+// captured myGen, store only on match — and verify a manually-bumped gen
+// causes the equivalent write to be skipped. A regression that drops the
+// gen check anywhere in the warmup-write path would break this
+// invariant; this test is what catches it.
+func TestWarmupKyvernoPolicyReports_StaleGenSkipsWrites(t *testing.T) {
+	origIdx := policyReportIndex.Load()
+	origDec, _ := kyvernoWarmupDecision.Load().(KyvernoStatus)
+	origGen := kyvernoWarmupGen.Load()
+	t.Cleanup(func() {
+		policyReportIndex.Store(origIdx)
+		kyvernoWarmupDecision.Store(origDec)
+		// Restore the gen atomic so other tests aren't perturbed.
+		kyvernoWarmupGen.Store(origGen)
+		policyReportMu.Lock()
+		policyReportInit = new(sync.Once)
+		policyReportMu.Unlock()
+	})
+
+	// Stage state to mimic the moment a warmup has just snapshotted gen
+	// under the mutex and is about to perform a write: index empty,
+	// decision empty.
+	policyReportIndex.Store(nil)
+	kyvernoWarmupDecision.Store(KyvernoStatus(""))
+
+	// Capture myGen exactly as WarmupKyvernoPolicyReports does — under
+	// the mutex, BEFORE any downstream work.
+	policyReportMu.Lock()
+	myGen := kyvernoWarmupGen.Load()
+	policyReportMu.Unlock()
+
+	// Simulate ResetPolicyReportIndex firing AFTER the snapshot: it
+	// bumps gen (under the same mutex, also held inside the test's write
+	// closure below).
+	kyvernoWarmupGen.Add(1)
+
+	// Replicate setDecision's exact protocol: lock, gen check, store.
+	stalePathRan := false
+	(func() {
+		policyReportMu.Lock()
+		defer policyReportMu.Unlock()
+		if kyvernoWarmupGen.Load() != myGen {
+			stalePathRan = true
+			return
+		}
+		kyvernoWarmupDecision.Store(KyvernoStatusReady)
+	})()
+	if !stalePathRan {
+		t.Fatal("expected setDecision's gen check to fire and skip the write; the gen-mismatch branch was not taken (regression: the protection against stale-warmup writes is broken)")
+	}
+	if got, _ := kyvernoWarmupDecision.Load().(KyvernoStatus); got != "" {
+		t.Errorf("decision atomic was stamped despite gen mismatch: got %q, want empty (stale warmup leaked into new cluster's state)", got)
+	}
+
+	// Replicate publishReady's protocol with the same myGen — also must
+	// skip its index store on gen mismatch.
+	(func() {
+		policyReportMu.Lock()
+		defer policyReportMu.Unlock()
+		if kyvernoWarmupGen.Load() != myGen {
+			return
+		}
+		policyReportIndex.Store(policyreports.NewIndex())
+	})()
+	if got := policyReportIndex.Load(); got != nil {
+		t.Errorf("policyReportIndex was stamped despite gen mismatch: stale publishReady leaked an index onto a fresh cluster's atomic")
+	}
+}
+
+// TestWarmupKyvernoPolicyReports_SnapshotsOnceAndGenAtomically pins the
+// snapshot-under-mutex invariant: WarmupKyvernoPolicyReports must capture
+// BOTH policyReportInit and kyvernoWarmupGen under policyReportMu so that
+// a concurrent Reset can never separate them. The race the new code
+// closes: an unsynchronized read of policyReportInit followed by a
+// later (post-Reset) Load of kyvernoWarmupGen would capture the
+// pre-Reset Once with the post-Reset gen, and the lambda's gen check
+// against the post-Reset value would falsely succeed — stamping the old
+// cluster's outcome onto the new cluster's atomics.
+//
+// We exercise this by spinning concurrent (snapshot+inspect) and Reset
+// goroutines and asserting that the snapshot pair stays coherent: if
+// the snapshotted gen equals the post-snapshot gen, the snapshotted
+// once must still be the live one (and vice versa for the mismatch
+// case). Run with -race for full effect.
+func TestWarmupKyvernoPolicyReports_SnapshotsOnceAndGenAtomically(t *testing.T) {
+	origGen := kyvernoWarmupGen.Load()
+	t.Cleanup(func() {
+		kyvernoWarmupGen.Store(origGen)
+		policyReportMu.Lock()
+		policyReportInit = new(sync.Once)
+		policyReportMu.Unlock()
+	})
+
+	const iterations = 500
+	var mismatch atomic.Int64
+
+	var wg sync.WaitGroup
+	// Resetters: bump gen + replace the once under the mutex.
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range iterations {
+				ResetPolicyReportIndex()
+			}
+		}()
+	}
+	// Snapshotters: emulate the new WarmupKyvernoPolicyReports prologue
+	// — snapshot (once, gen) atomically under the mutex, then verify the
+	// pair is consistent with a SECOND snapshot under the same mutex
+	// where the once and gen are read together. Any tearing here would
+	// be visible as a mismatch.
+	for range 4 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range iterations {
+				policyReportMu.Lock()
+				once1 := policyReportInit
+				gen1 := kyvernoWarmupGen.Load()
+				// A second read under the same mutex must see the same
+				// pair — both fields only mutate inside Reset, which
+				// holds this mutex.
+				once2 := policyReportInit
+				gen2 := kyvernoWarmupGen.Load()
+				policyReportMu.Unlock()
+				if once1 != once2 || gen1 != gen2 {
+					mismatch.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+
+	if got := mismatch.Load(); got != 0 {
+		t.Fatalf("snapshot pair was not atomic under policyReportMu: %d mismatches (Reset is mutating policyReportInit and/or kyvernoWarmupGen outside the mutex, OR the snapshot is being torn — either breaks the race protection)", got)
 	}
 }

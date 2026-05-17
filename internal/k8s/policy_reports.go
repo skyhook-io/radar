@@ -151,13 +151,22 @@ func GetPolicyReportIndex() *policyreports.Index {
 // lazily. Documented limitation, not blocking — context switches are the
 // dominant lifecycle event in practice.
 func WarmupKyvernoPolicyReports() {
-	policyReportInit.Do(func() {
-		// Capture the generation at the start of THIS warmup. If a context
-		// switch runs Reset before we finish, kyvernoWarmupGen advances and
-		// setDecision / publishReady become no-ops — preventing this lambda
-		// from stamping the old cluster's outcome onto the new cluster's
-		// atomic. See kyvernoWarmupGen's declaration for the race scenario.
-		myGen := kyvernoWarmupGen.Load()
+	// Snapshot BOTH the *sync.Once and the warmup generation under the
+	// mutex BEFORE entering Do(). If we read policyReportInit unsynchronized
+	// and captured myGen inside the lambda, a Reset interleaving between the
+	// caller's read of policyReportInit and the lambda's Load of
+	// kyvernoWarmupGen would let the lambda capture the POST-Reset gen,
+	// and its subsequent writes (which check gen under the mutex) would
+	// match — stamping the previous cluster's outcome onto the new cluster's
+	// atomics. Capturing both under the same mutex Reset holds closes that
+	// window: either we see the pre-Reset (once, gen) pair and Reset's
+	// bump invalidates our writes, or we see the post-Reset (once', gen')
+	// pair and run cleanly under the new sync.Once.
+	policyReportMu.Lock()
+	once := policyReportInit
+	myGen := kyvernoWarmupGen.Load()
+	policyReportMu.Unlock()
+	once.Do(func() {
 		setDecision := func(s KyvernoStatus) {
 			policyReportMu.Lock()
 			defer policyReportMu.Unlock()
