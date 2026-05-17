@@ -50,12 +50,13 @@ func (s *Server) newSummaryContextBuilder(namespaces []string, kindFilter string
 		return nil
 	}
 
-	// One pass over the issue engine; group by kind/ns/name. Sources
-	// are restricted to "problem" + "condition" — the two always-on
-	// surfaces that match the default /api/issues + MCP issues_list
-	// behavior. Audit + Warning events are loud and require explicit
-	// opt-in; rolling them into the per-row count would distort
-	// "this Pod has 1 issue" for the common case.
+	// One pass over the issue engine; group by group/kind/ns/name. We
+	// rely on Filters.IncludeAudit and Filters.IncludeEvents staying
+	// false-by-default in buildIssueIndex — that's what keeps the
+	// per-row count to "problem" + "condition" only. Audit + Warning
+	// events are loud and require explicit opt-in; rolling them into
+	// the per-row count would distort "this Pod has 1 issue" for the
+	// common case.
 	idx := buildIssueIndex(provider, namespaces, kindFilter)
 
 	resourceProvider := k8s.NewTopologyResourceProvider(k8s.GetResourceCache())

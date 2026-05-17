@@ -7,6 +7,7 @@ package mcp
 
 import (
 	"strings"
+	"time"
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -83,23 +84,36 @@ func newSummaryContextBuilder(namespaces []string, kindFilter string) summaryCon
 	}
 }
 
-// buildSummaryContextTopology builds a topology snapshot suitable for
-// resolving managedBy pointers. MCP has no shared broadcaster cache,
-// so we build directly via the builder. Returns nil on failure — the
-// caller falls back to a managedBy-less SummaryContext rather than
-// failing the response.
+// summaryCtxTopoMemo caches topology builds across summary-context list and
+// search invocations. MCP has no shared broadcaster cache, so without
+// memoization every list_resources / search call from an agent pays a
+// full topology build (multi-second on multi-thousand-resource clusters).
+// 5s TTL matches the REST broadcaster's cadence — short enough that
+// managedBy stays current after a context switch, long enough that a
+// burst of agent calls amortizes the build cost.
+//
+// Other MCP tools (handleGetResource, get_neighborhood) still build
+// inline; threading them through here is a separate follow-up.
+var summaryCtxTopoMemo = topology.NewMemoizer(5 * time.Second)
+
+// buildSummaryContextTopology returns a topology snapshot suitable for
+// resolving managedBy pointers, reusing a cached snapshot when one is
+// fresh. Returns nil on failure — the caller falls back to a
+// managedBy-less SummaryContext rather than failing the response.
 func buildSummaryContextTopology(namespaces []string) *topology.Topology {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil
 	}
-	builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
-		WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
 	opts := topology.DefaultBuildOptions()
 	if len(namespaces) > 0 {
 		opts.Namespaces = namespaces
 	}
-	topo, err := builder.Build(opts)
+	topo, err := summaryCtxTopoMemo.Get(opts, func() (*topology.Topology, error) {
+		builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
+			WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
+		return builder.Build(opts)
+	})
 	if err != nil {
 		return nil
 	}
