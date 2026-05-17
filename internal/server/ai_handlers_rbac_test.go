@@ -99,3 +99,111 @@ func TestProxyAuth_AIGetPod_NamespaceAllowed(t *testing.T) {
 		t.Errorf("expected 'resourceContext' field in AI get response, got: %+v", body)
 	}
 }
+
+// AI list path RBAC at the /api/ai/resources/{kind} layer.
+//
+// handleAIListResources shares preflightResourceList with
+// handleListResources so the same gates run on both paths:
+//   - cluster-scoped SAR for Node / cluster-scoped CRDs
+//   - list-namespaces SAR for `kind=namespaces`
+//   - per-namespace and/or cluster-wide list-secrets SAR for `kind=secrets`
+//
+// Where the REST path returns 200 with `[]` for denies (legacy SPA
+// shape that doesn't leak kind existence), the AI path returns the
+// explicit status so agents see the failure instead of confusing
+// "empty cluster" output.
+
+func TestAI_SecretsList_PerNamespaceDenied_Returns403(t *testing.T) {
+	// alice has namespace access to default but per-namespace
+	// `list secrets` is denied. preflightResourceList must intercept
+	// before reaching the cache.
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("alice", &auth.UserPermissions{
+		AllowedNamespaces: []string{"default"},
+	})
+	seedServerSecretListCanI(t, env, "alice", nil, []string{"default"})
+
+	resp := env.authGet(t, "/api/ai/resources/secrets?namespace=default", "alice", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for AI secrets list with per-namespace deny, got %d", resp.StatusCode)
+	}
+}
+
+func TestAI_NodesList_NoClusterRBAC_Returns403(t *testing.T) {
+	// Nodes are cluster-scoped. Cluster-wide pod visibility
+	// (AllowedNamespaces nil sentinel) is not a license to read
+	// cluster-scoped kinds — the SAR-level gate must reject.
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "", "nodes", "", false)
+	env.srv.permCache.Set("broad-reader", perms)
+
+	resp := env.authGet(t, "/api/ai/resources/nodes", "broad-reader", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for AI nodes list without cluster-scope RBAC, got %d", resp.StatusCode)
+	}
+}
+
+func TestAI_NamespacesList_NoListNamespacesSAR_Returns403(t *testing.T) {
+	// /api/ai/resources/namespaces returns full Namespace objects.
+	// Strict SAR gate — cluster-wide pod RBAC alone is not sufficient.
+	env := newAuthTestServer(t)
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("list", "", "namespaces", "", false)
+	env.srv.permCache.Set("broad-reader", perms)
+
+	resp := env.authGet(t, "/api/ai/resources/namespaces", "broad-reader", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("expected 403 for AI namespaces list without list-namespaces SAR, got %d", resp.StatusCode)
+	}
+}
+
+func TestAI_DeploymentsList_HappyPath_AttachesSummaryContext(t *testing.T) {
+	// Allowed user, summary-verbosity default. The envelope must
+	// include the seeded nginx deployment AND each row must carry a
+	// summaryContext field (the load-bearing new wire shape this PR
+	// adds — pin it so a refactor that skipped attachment surfaces
+	// here).
+	env := newAuthTestServer(t)
+	env.srv.permCache.Set("bob", &auth.UserPermissions{
+		AllowedNamespaces: []string{"default"},
+	})
+
+	resp := env.authGet(t, "/api/ai/resources/deployments", "bob", "")
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var rows []map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&rows); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(rows) == 0 {
+		t.Fatalf("allowed user got 0 deployments, expected seeded nginx")
+	}
+
+	// AI list rows are flat (kind/name/namespace at the top level —
+	// the minified shape, distinct from the REST handler's K8s-native
+	// metadata-nested objects). Find the nginx row and assert
+	// summaryContext is present. Empty map is acceptable (the
+	// deployment is healthy and not managed by an external
+	// controller) — what matters is the envelope field exists so
+	// consumers don't have to special-case its absence.
+	var found bool
+	for _, row := range rows {
+		if row["name"] != "nginx" {
+			continue
+		}
+		found = true
+		if _, has := row["summaryContext"]; !has {
+			t.Errorf("nginx row missing summaryContext envelope: %+v", row)
+		}
+	}
+	if !found {
+		t.Errorf("nginx deployment not in AI list response: %+v", rows)
+	}
+}

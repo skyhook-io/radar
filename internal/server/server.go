@@ -1010,17 +1010,20 @@ func (s *Server) handleAPIResources(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, resources)
 }
 
-func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
-	if !s.requireConnected(w) {
-		return
-	}
-	kind := normalizeKind(chi.URLParam(r, "kind"))
-	group := r.URL.Query().Get("group") // API group for CRD disambiguation
-
-	// parseNamespacesForUser primes the per-user perm cache (triggers
-	// DiscoverNamespaces if needed). canRead below relies on it.
-	namespaces := s.parseNamespacesForUser(r)
-
+// preflightResourceList runs the per-user RBAC gates shared by the REST
+// (/api/resources/{kind}) and AI (/api/ai/resources/{kind}) list paths.
+// It assumes the caller has already populated `namespaces` via
+// parseNamespacesForUser (which primes the canI cache that canRead relies on)
+// and has classified the kind for cluster-scope.
+//
+// Returns the (possibly-rewritten) namespace slice that downstream cache
+// reads should use. When ok=false the gate denied or the user has no
+// namespace access; (status, msg) carry the canonical HTTP response. REST
+// callers historically convert denies to a 200 with `[]` to avoid leaking
+// kind existence; the AI path returns the explicit status so agents see the
+// failure. Same gates run in the same order on both paths — the response
+// shape is the only thing that differs.
+func (s *Server) preflightResourceList(r *http.Request, kind, group string, namespaces []string) (finalNamespaces []string, status int, msg string, ok bool) {
 	// "namespaces" is cluster-scoped at the K8s API. Full Namespace objects
 	// (labels, annotations, spec) require explicit list-namespaces SAR.
 	// AllowedNamespaces is NOT a sufficient fallback: list-pods-in-alpha
@@ -1032,10 +1035,9 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	isNamespacesKind := kind == "namespaces" || kind == "namespace"
 	if isNamespacesKind {
 		if !s.canRead(r, "", "namespaces", "", "list") {
-			s.writeJSON(w, []any{})
-			return
+			return nil, http.StatusForbidden, "insufficient permissions to list namespaces", false
 		}
-		namespaces = nil // full lister output for SAR-authorized users
+		return nil, 0, "", true // full lister output for SAR-authorized users
 	}
 
 	// Cluster-only kinds (Nodes, PVs, StorageClasses, ClusterRoles, cluster-
@@ -1043,19 +1045,19 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	// noNamespaceAccess check so a user with explicit cluster-scoped RBAC but
 	// no namespace access can still read those resources.
 	isClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
-	if isClusterScoped && !isNamespacesKind {
+	if isClusterScoped {
 		if !s.canRead(r, gvrGroup, gvrResource, "", "list") {
-			s.writeJSON(w, []any{})
-			return
+			return nil, http.StatusForbidden, fmt.Sprintf("insufficient permissions to list %s", kind), false
 		}
 		// Cluster-scoped reads have no namespace dimension. Once the
 		// resource-level SAR passes, force the later typed/dynamic cache paths
 		// through their cluster-wide branch even if the user also has a
 		// namespace view preference.
-		namespaces = nil
-	} else if !isNamespacesKind && noNamespaceAccess(namespaces) {
-		s.writeJSON(w, []any{})
-		return
+		return nil, 0, "", true
+	}
+
+	if noNamespaceAccess(namespaces) {
+		return namespaces, http.StatusForbidden, "no namespace access", false
 	}
 
 	// Per-kind RBAC inside a namespace. Helm release storage IS K8s Secrets,
@@ -1064,25 +1066,47 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 	// radar/templates/clusterrole.yaml). When any of those triggers fires
 	// the cache holds every secret in the cluster, so per-user RBAC must
 	// gate the read. Other namespaced kinds are deferred.
-	if (kind == "secrets" || kind == "secret") && !isClusterScoped {
+	if kind == "secrets" || kind == "secret" {
 		if auth.UserFromContext(r.Context()) != nil {
 			if namespaces == nil {
 				// Auth user with cluster-wide namespace access (e.g. picked up
 				// via DiscoverNamespaces stage 1: cluster-wide list pods). The
 				// cache will serve all secrets — gate on cluster-scope SAR.
 				if !s.canRead(r, "", "secrets", "", "list") {
-					s.writeJSON(w, []any{})
-					return
+					return nil, http.StatusForbidden, "insufficient permissions to list secrets", false
 				}
 			} else {
 				namespaces = s.filterNamespacesByCanRead(r, "", "secrets", "list", namespaces)
 				if len(namespaces) == 0 {
-					s.writeJSON(w, []any{})
-					return
+					return namespaces, http.StatusForbidden, "insufficient permissions to list secrets", false
 				}
 			}
 		}
 	}
+
+	return namespaces, 0, "", true
+}
+
+func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	kind := normalizeKind(chi.URLParam(r, "kind"))
+	group := r.URL.Query().Get("group") // API group for CRD disambiguation
+
+	// parseNamespacesForUser primes the per-user perm cache (triggers
+	// DiscoverNamespaces if needed). canRead below relies on it.
+	namespaces := s.parseNamespacesForUser(r)
+
+	// Shared RBAC gate. REST converts denies to 200 with `[]` (legacy shape
+	// the SPA tolerates and that doesn't leak kind existence); the AI path
+	// returns the explicit status.
+	finalNamespaces, _, _, ok := s.preflightResourceList(r, kind, group, namespaces)
+	if !ok {
+		s.writeJSON(w, []any{})
+		return
+	}
+	namespaces = finalNamespaces
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {

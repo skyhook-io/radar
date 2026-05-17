@@ -103,15 +103,24 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
 	}
-	kind := chi.URLParam(r, "kind")
-	namespaces := s.parseNamespacesForUser(r)
-	if noNamespaceAccess(namespaces) {
-		s.writeJSON(w, []any{})
-		return
-	}
+	kind := normalizeKind(chi.URLParam(r, "kind"))
 	group := r.URL.Query().Get("group")
 	level := parseVerbosity(r, aicontext.LevelSummary)
 	skipContext := r.URL.Query().Get("context") == "none"
+
+	// parseNamespacesForUser primes the per-user perm cache. preflightResourceList
+	// then enforces the same RBAC gates as the REST list path (cluster-scoped
+	// SAR for cluster-only kinds, list-namespaces SAR for `kind=namespaces`,
+	// per-namespace and/or cluster-wide list-secrets SAR for `kind=secrets`).
+	// AI callers get an explicit 403 on deny instead of the empty-list shape
+	// the REST handler returns for backward compat.
+	namespaces := s.parseNamespacesForUser(r)
+	finalNamespaces, status, msg, ok := s.preflightResourceList(r, kind, group, namespaces)
+	if !ok {
+		s.writeError(w, status, msg)
+		return
+	}
+	namespaces = finalNamespaces
 
 	cache := k8s.GetResourceCache()
 	if cache == nil {
