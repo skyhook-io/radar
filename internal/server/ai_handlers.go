@@ -15,9 +15,41 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	bpaudit "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/policyreports"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
+
+// policyReportLookupAdapter wraps internal/k8s.GetPolicyReportIndex() into
+// the resourcecontext.PolicyReportLookup interface, translating the
+// richer pkg/policyreports.Finding shape (which carries Severity +
+// Category) into the agent-facing resourcecontext.KyvernoFinding shape
+// (Policy / Rule / Result / Message only). Keeping the projection narrow
+// here lets unrelated changes to policyreports.Finding evolve without
+// perturbing the wire contract that downstream callers depend on.
+type policyReportLookupAdapter struct {
+	idx *policyreports.Index
+}
+
+func (a policyReportLookupAdapter) FindingsFor(kind, namespace, name string) []resourcecontext.KyvernoFinding {
+	if a.idx == nil {
+		return nil
+	}
+	findings := a.idx.FindingsFor(kind, namespace, name)
+	if len(findings) == 0 {
+		return nil
+	}
+	out := make([]resourcecontext.KyvernoFinding, len(findings))
+	for i, f := range findings {
+		out[i] = resourcecontext.KyvernoFinding{
+			Policy:  f.Policy,
+			Rule:    f.Rule,
+			Result:  f.Result,
+			Message: f.Message,
+		}
+	}
+	return out
+}
 
 // parseVerbosity reads the ?verbosity= query parameter and returns the matching level.
 func parseVerbosity(r *http.Request, defaultLevel aicontext.VerbosityLevel) aicontext.VerbosityLevel {
@@ -247,6 +279,13 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		EmitHints:     true,
 		IssueSummary:  issueSum,
 		AuditSummary:  auditSum,
+	}
+
+	// Wire the PolicyReport index when Kyverno is installed. Build emits a
+	// counts-only `policySummary.kyverno` on the basic tier; diagnostic
+	// tier (T10) will surface the top[] findings.
+	if idx := k8s.GetPolicyReportIndex(); idx != nil {
+		opts.PolicyReports = policyReportLookupAdapter{idx: idx}
 	}
 
 	if topo, prov, dyn, ok := s.topologyForContext(namespace); ok {
