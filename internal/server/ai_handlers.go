@@ -182,6 +182,17 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 		namespace = ""
 	}
 
+	// Run the same RBAC preflight as handleGetResource — the AI endpoint
+	// returns the same resource bytes (just minified) and must gate on the
+	// same per-user SAR / namespace-access tuple. Without this, a user with
+	// no `get secrets` SAR could read Secret values via /api/ai/resources/…
+	// even though /api/resources/… correctly returns 403. Runs BEFORE the
+	// fetch so cluster-scoped denies don't leak existence by status code.
+	if status, msg, ok := s.preflightResourceGet(r, kind, namespace, name, group); !ok {
+		s.writeError(w, status, msg)
+		return
+	}
+
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		s.writeError(w, http.StatusServiceUnavailable, "Resource cache not available")

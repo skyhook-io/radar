@@ -1470,6 +1470,55 @@ func setTypeMeta(resource any) {
 	k8s.SetTypeMeta(resource)
 }
 
+// preflightResourceGet runs the per-user RBAC gates that must pass before any
+// single-resource GET fetch. Mirrors the kind/scope-aware logic used by both
+// the REST handler (handleGetResource) and the AI handler (handleAIGetResource)
+// so future RBAC adjustments stay in lockstep across both surfaces.
+//
+// Inputs are the already-normalized (kind, namespace, name, group); callers
+// must collapse the cluster-scoped "_" placeholder before calling. Returns
+// (status, message, ok=true) when the request passes the gates, or
+// (status, message, ok=false) with the HTTP status + body the caller should
+// emit on deny.
+//
+// Three gates, run in this order:
+//  1. kind == "namespaces"        → full Namespace object requires get-namespaces SAR
+//  2. cluster-scoped (Node/CRD/…) → per-kind get SAR (ClassifyKindScope)
+//  3. namespaced                   → namespace access via getUserNamespaces,
+//                                    plus per-namespace get SAR for Secrets
+func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, group string) (int, string, bool) {
+	isNamespacesKind := kind == "namespaces" || kind == "namespace"
+	isClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
+	switch {
+	case isNamespacesKind:
+		// Full Namespace object access requires explicit get-namespaces SAR.
+		// Read access to resources IN a namespace (list pods etc.) does not
+		// imply read access to the Namespace object itself. Restricted users
+		// without ClusterRole on namespaces get 403 here.
+		if !s.canRead(r, "", "namespaces", "", "get") {
+			return http.StatusForbidden, fmt.Sprintf("no access to namespace %q", name), false
+		}
+	case isClusterScoped:
+		if !s.canRead(r, gvrGroup, gvrResource, "", "get") {
+			return http.StatusForbidden, fmt.Sprintf("no access to %s (cluster-scoped resource requires explicit RBAC)", kind), false
+		}
+	case namespace != "":
+		// Namespaced kind: verify namespace access.
+		allowed := s.getUserNamespaces(r, []string{namespace})
+		if noNamespaceAccess(allowed) {
+			return http.StatusForbidden, fmt.Sprintf("no access to namespace %q", namespace), false
+		}
+		// Per-kind RBAC inside the namespace for Secrets — the chart can
+		// grant the SA cluster-wide secrets (Helm release visibility), so
+		// namespace-list discovery is not a sufficient gate here. The list
+		// handler has the matching list-SAR.
+		if (kind == "secrets" || kind == "secret") && !s.canRead(r, "", "secrets", namespace, "get") {
+			return http.StatusForbidden, fmt.Sprintf("no access to secrets in namespace %q", namespace), false
+		}
+	}
+	return 0, "", true
+}
+
 func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -1493,38 +1542,9 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	// "namespaces" is cluster-scoped at the K8s API but exposed as a per-user
 	// filtered list — gate the GET via the user's namespace access for the
 	// requested name, not via cluster-scoped SAR.
-	isNamespacesKind := kind == "namespaces" || kind == "namespace"
-	isClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
-	switch {
-	case isNamespacesKind:
-		// Full Namespace object access requires explicit get-namespaces SAR.
-		// Read access to resources IN a namespace (list pods etc.) does not
-		// imply read access to the Namespace object itself. Restricted users
-		// without ClusterRole on namespaces get 403 here.
-		if !s.canRead(r, "", "namespaces", "", "get") {
-			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", name))
-			return
-		}
-	case isClusterScoped:
-		if !s.canRead(r, gvrGroup, gvrResource, "", "get") {
-			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to %s (cluster-scoped resource requires explicit RBAC)", kind))
-			return
-		}
-	case namespace != "":
-		// Namespaced kind: verify namespace access.
-		allowed := s.getUserNamespaces(r, []string{namespace})
-		if noNamespaceAccess(allowed) {
-			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to namespace %q", namespace))
-			return
-		}
-		// Per-kind RBAC inside the namespace for Secrets — the chart can
-		// grant the SA cluster-wide secrets (Helm release visibility), so
-		// namespace-list discovery is not a sufficient gate here. The list
-		// handler has the matching list-SAR.
-		if (kind == "secrets" || kind == "secret") && !s.canRead(r, "", "secrets", namespace, "get") {
-			s.writeError(w, http.StatusForbidden, fmt.Sprintf("no access to secrets in namespace %q", namespace))
-			return
-		}
+	if status, msg, ok := s.preflightResourceGet(r, kind, namespace, name, group); !ok {
+		s.writeError(w, status, msg)
+		return
 	}
 
 	cache := k8s.GetResourceCache()
