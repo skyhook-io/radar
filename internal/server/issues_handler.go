@@ -13,30 +13,42 @@ import (
 )
 
 // handleIssues serves GET /api/issues — the unified cluster-health
-// endpoint. Composes problems + condition fallback by default; audit
-// + event sources are opt-in (both are loud — audit findings run 50–
-// 200 per cluster, and events flood with thousands of redundant
-// rows on noisy clusters).
+// endpoint. Composes problems + condition fallback by default; audit,
+// event, and kyverno sources are opt-in (all three are loud — audit
+// findings run 50–200 per cluster, events flood with thousands of
+// redundant rows on noisy clusters, and Kyverno PolicyReports add 10+
+// rows per workload under a baseline PSS profile).
 //
 // Query params:
 //
 //	namespace= / namespaces=  one or comma-separated
 //	severity=  critical,warning  (default: all)
-//	source=    problem,audit,event,condition,kyverno. Defaults to
-//	           problem+condition (audit + event + kyverno excluded).
-//	           Pass any source explicitly to opt it in; "audit" lifts
-//	           include_audit, "event" lifts include_events, "kyverno"
-//	           lifts include_kyverno. The flags exist so callers can
-//	           opt those sources in without also narrowing to ONLY them.
+//	source=    Comma-separated list of sources to RETURN. When set,
+//	           only the listed sources appear in the response.
+//	           Allowed: problem, audit, event, condition, kyverno.
+//	           Default (no source param): problem + condition only
+//	           (audit + event + kyverno excluded — all three are loud:
+//	           audit runs 50–200 findings per cluster, events flood
+//	           with thousands of redundant rows on noisy clusters,
+//	           and Kyverno PolicyReports can balloon similarly).
+//	           NOTE: source acts as a filter, not an additive opt-in.
+//	           Passing source=kyverno returns ONLY Kyverno rows, not
+//	           "defaults plus Kyverno". Use include_kyverno=true (or
+//	           include_audit / include_events) when you want
+//	           "defaults plus X".
+//	include_audit/include_events/include_kyverno=true
+//	           Add the named source to the DEFAULT set without
+//	           silencing the defaults. Effective filter:
+//	           include_X=true is equivalent to source=problem,
+//	           condition,X. These flags are also implicitly set when
+//	           the matching source appears in source= so the warmup
+//	           / collection path knows to fetch that source's data.
 //	kind=      Pod,Deployment,...  (default: all)
 //	since=     duration like 15m, 1h. Affects event source only;
 //	           when events are enabled and since is omitted, the
 //	           handler defaults to 1h to avoid pulling the full
 //	           cached event backlog.
 //	limit=     default 200, max 1000
-//	include_audit=true   opt audit findings in
-//	include_events=true  opt warning events in
-//	include_kyverno=true opt Kyverno PolicyReport findings in
 func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return

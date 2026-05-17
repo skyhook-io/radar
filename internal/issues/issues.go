@@ -431,6 +431,15 @@ func fromWarningEvent(e *corev1.Event) Issue {
 // Filter + sort helpers
 // ---------------------------------------------------------------------------
 
+// wantSource implements the documented `source=` contract: it is a FILTER,
+// not an additive opt-in. When Filters.Sources is empty, every source is
+// allowed (defaults are then narrowed elsewhere — e.g. audit / event /
+// kyverno collection only runs when the matching IncludeX flag is set).
+// When Filters.Sources is non-empty, only the listed sources pass through;
+// passing source=kyverno therefore returns ONLY Kyverno rows, not
+// "defaults plus Kyverno". Callers that want "defaults plus X" should use
+// the include_X flags instead (the HTTP handler translates include_X=true
+// into both IncludeX=true AND leaves Sources empty, so the defaults stay).
 func wantSource(f Filters, s Source) bool {
 	if len(f.Sources) == 0 {
 		return true

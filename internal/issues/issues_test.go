@@ -461,11 +461,16 @@ func TestCompose_KyvernoGroupPropagated(t *testing.T) {
 	}
 }
 
-func TestCompose_KyvernoSourceListOptsIn(t *testing.T) {
-	// Passing source=kyverno explicitly must NOT require IncludeKyverno.
-	// The HTTP/MCP handlers set the flag, but at the Compose layer the
-	// source list alone gates emission once IncludeKyverno is set —
-	// this test pins the "list narrows but does not opt in" contract.
+func TestCompose_KyvernoSourceListNarrowsButDoesNotOptIn(t *testing.T) {
+	// Pins the documented contract: `Sources` is a FILTER, not an
+	// additive opt-in. The list narrows the response to the named
+	// sources but does NOT enable collection of noisy sources —
+	// IncludeKyverno (set by the HTTP/MCP handlers) is what gates
+	// kyverno emission. With Sources={kyverno} and IncludeKyverno=false
+	// the response is empty. With IncludeKyverno=true the response is
+	// kyverno-only (problem source is filtered out because it isn't in
+	// Sources) — i.e. source=kyverno returns ONLY kyverno rows, not
+	// "defaults plus kyverno".
 	p := &fakeProvider{
 		kyverno: []policyreports.SubjectFindings{{
 			Subject:  policyreports.Subject{Kind: "Pod", Namespace: "ns", Name: "p"},
