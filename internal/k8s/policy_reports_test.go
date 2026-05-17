@@ -93,4 +93,3 @@ func TestResetPolicyReportIndex_ClearsKyvernoDecision(t *testing.T) {
 		t.Errorf("after reset: got %q want %q (must not inherit prior cluster's decision)", got, KyvernoStatusWarmup)
 	}
 }
-

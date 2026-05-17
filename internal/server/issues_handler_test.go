@@ -157,4 +157,3 @@ func storeKyvernoIndexForTest(v any) {
 func newEmptyIndexForTest() any {
 	return k8s.NewEmptyKyvernoIndexForTest()
 }
-
