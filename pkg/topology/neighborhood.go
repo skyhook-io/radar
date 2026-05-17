@@ -87,7 +87,26 @@ const neighborhoodDefaultMaxNodes = 25
 // BuildNeighborhood returns the BFS expansion of root in t, filtered by
 // opts.Profile. Returns a non-nil Subgraph even when the root is missing
 // from the topology — callers can check len(s.Nodes) == 0 for that case.
+//
+// Thin shim over BuildNeighborhoodWithIndex(nil) — every per-step neighbor
+// enumeration falls back to a linear scan over t.Edges. Hot callers that
+// already hold a RelationshipsIndex (REST + MCP handlers via Memoizer.GetIndex)
+// should call BuildNeighborhoodWithIndex directly to skip the index rebuild.
 func BuildNeighborhood(t *Topology, root ResourceRef, opts NeighborhoodOptions) *Subgraph {
+	return BuildNeighborhoodWithIndex(t, root, opts, nil)
+}
+
+// BuildNeighborhoodWithIndex is the indexed variant of BuildNeighborhood.
+// When idx is non-nil, per-node edge lookups go through idx.EdgesFor in O(1)
+// (well, O(degree)) instead of pre-computing an adjacency map from t.Edges.
+// When idx is nil, behavior matches BuildNeighborhood exactly: the BFS pays
+// a single O(E) adjacency build up front, which is fine for one-shot library
+// callers and tests.
+//
+// Hot callers — REST handleAINeighborhood, MCP handleGetNeighborhood — fetch
+// idx from Memoizer.GetIndex so the topology-wide inverted index is shared
+// with GetRelationshipsWithIndex / SynthesizeManagedBy on the same request.
+func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts NeighborhoodOptions, idx *RelationshipsIndex) *Subgraph {
 	hops := opts.Hops
 	if hops <= 0 {
 		hops = neighborhoodDefaultHops
@@ -130,17 +149,44 @@ func BuildNeighborhood(t *Topology, root ResourceRef, opts NeighborhoodOptions) 
 
 	allowedEdges := edgeTypesForProfile(opts.Profile, rootNode.Kind)
 
-	// Group edges by node ID with type filter applied. We walk the graph
-	// undirected — a Pod is the target of Service→Pod (exposes), but the
-	// agent wants to find the Service from the Pod just as much as vice
-	// versa.
-	adjacency := make(map[string][]Edge, len(t.Nodes))
-	for _, e := range t.Edges {
-		if !allowedEdges[e.Type] {
-			continue
+	// neighbors yields every edge touching id that passes the profile filter,
+	// preferring the precomputed index when supplied. The undirected walk
+	// matters: a Pod is the target of Service→Pod (exposes), but the agent
+	// wants to find the Service from the Pod just as much as vice versa.
+	//
+	// Without idx we walk t.Edges once per BFS step. That's O(E) per step
+	// instead of O(degree), but the index-free path is reserved for tests
+	// and library callers without a Memoizer — hot REST/MCP traffic always
+	// supplies idx.
+	neighbors := func(id string) []Edge {
+		if idx != nil {
+			incoming, outgoing := idx.EdgesFor(id)
+			// Filter both sides by allowed edge types. Concatenate into a
+			// fresh slice so the caller can't accidentally mutate the
+			// index's internal storage.
+			out := make([]Edge, 0, len(incoming)+len(outgoing))
+			for _, e := range outgoing {
+				if allowedEdges[e.Type] {
+					out = append(out, e)
+				}
+			}
+			for _, e := range incoming {
+				if allowedEdges[e.Type] {
+					out = append(out, e)
+				}
+			}
+			return out
 		}
-		adjacency[e.Source] = append(adjacency[e.Source], e)
-		adjacency[e.Target] = append(adjacency[e.Target], e)
+		var out []Edge
+		for _, e := range t.Edges {
+			if !allowedEdges[e.Type] {
+				continue
+			}
+			if e.Source == id || e.Target == id {
+				out = append(out, e)
+			}
+		}
+		return out
 	}
 
 	// BFS by hop level. visited[id] = hop at which the node entered the
@@ -157,7 +203,7 @@ func BuildNeighborhood(t *Topology, root ResourceRef, opts NeighborhoodOptions) 
 	for hop := 0; hop < hops; hop++ {
 		var next []string
 		for _, id := range frontier {
-			for _, e := range adjacency[id] {
+			for _, e := range neighbors(id) {
 				other := e.Source
 				if other == id {
 					other = e.Target
@@ -208,7 +254,9 @@ func BuildNeighborhood(t *Topology, root ResourceRef, opts NeighborhoodOptions) 
 	}
 
 	// Edges: include only edges whose type is allowed AND both endpoints
-	// are in the included set.
+	// are in the included set. Walking t.Edges once here keeps the output
+	// edge order stable regardless of whether we used the index or not —
+	// tests and clients depend on that ordering.
 	for _, e := range t.Edges {
 		if !allowedEdges[e.Type] {
 			continue

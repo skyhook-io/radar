@@ -89,6 +89,11 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build topology: %w", err)
 	}
+	// Build the inverted index once and reuse it across BFS expansion plus
+	// any per-resource relationship lookups downstream. Without a memoizer
+	// the cost is paid every call, but it's still cheaper than scanning
+	// topo.Edges from inside the BFS loop (O(E) per hop level).
+	idx := topology.IndexByResource(topo)
 
 	root := topology.ResourceRef{
 		Kind:      displayKindForMCP(input.Kind),
@@ -103,7 +108,7 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 		return canReadNeighborhoodNodeMCP(ctx, n)
 	}
 
-	sub := topology.BuildNeighborhood(topo, root, opts)
+	sub := topology.BuildNeighborhoodWithIndex(topo, root, opts, idx)
 	if len(sub.Nodes) == 0 {
 		return nil, nil, fmt.Errorf("resource not found in topology: %s/%s/%s", input.Kind, input.Namespace, input.Name)
 	}

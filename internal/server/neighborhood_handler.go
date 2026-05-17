@@ -87,17 +87,29 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 
 	// Build the full topology (memoized) and let BuildNeighborhood do the
 	// BFS slice. Cheaper than reaching into builder internals; topoMemo
-	// dedupes concurrent calls.
+	// dedupes concurrent calls. We also fetch the cached RelationshipsIndex
+	// so the BFS expansion uses O(degree) edge lookups instead of paying
+	// an O(E) adjacency-build per request.
 	buildOpts := topology.DefaultBuildOptions()
 	buildOpts.IncludeReplicaSets = true
 	buildOpts.ForRelationshipCache = true
-	topo, err := s.topoMemo.Get(buildOpts, func() (*topology.Topology, error) {
+	build := func() (*topology.Topology, error) {
 		return topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
 			WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())).
 			Build(buildOpts)
-	})
+	}
+	topo, err := s.topoMemo.Get(buildOpts, build)
 	if err != nil {
 		log.Printf("[neighborhood] Failed to build topology for %s %s/%s: %v", rawKind, namespace, name, err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	// GetIndex piggybacks on the memo entry just populated by Get above —
+	// the index is computed once per topology refresh and reused across
+	// requests, matching the relationships hot path.
+	idx, err := s.topoMemo.GetIndex(buildOpts, build)
+	if err != nil {
+		log.Printf("[neighborhood] Failed to fetch topology index for %s %s/%s: %v", rawKind, namespace, name, err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -119,7 +131,7 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 		return s.canReadNeighborhoodNode(r, n)
 	}
 
-	sub := topology.BuildNeighborhood(topo, root, opts)
+	sub := topology.BuildNeighborhoodWithIndex(topo, root, opts, idx)
 	if len(sub.Nodes) == 0 {
 		s.writeError(w, http.StatusNotFound, "resource not found in topology")
 		return
