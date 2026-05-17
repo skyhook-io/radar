@@ -98,6 +98,16 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	buildOpts := topology.DefaultBuildOptions()
 	buildOpts.IncludeReplicaSets = true
 	buildOpts.ForRelationshipCache = true
+	// Override the DefaultBuildOptions Secret-elision: without this a request
+	// for kind=secret resolves to an empty subgraph (root missing in topology)
+	// and 404s even for authorized users. The Allow gate below applies the
+	// per-namespace `get secrets` SAR per node, so unauthorized users still
+	// get a 404 via the empty-subgraph path — existence-hiding preserved.
+	//
+	// The Memoizer keys on a hash that includes IncludeSecrets (see
+	// pkg/topology/memo.go memoKey), so this lives in a separate cache slot
+	// from the IncludeSecrets=false topology used elsewhere.
+	buildOpts.IncludeSecrets = true
 	build := func() (*topology.Topology, error) {
 		return topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
 			WithDynamic(dp).
@@ -244,7 +254,7 @@ func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool
 	// pseudo-kind nodes hit the unclassified+empty-namespace fallback below
 	// and are surfaced unconditionally, leaking cluster-scoped existence to
 	// users who can't list any provider variant.
-	if hit, ok := s.canReadClusterScopedTopoKind(r, n.Kind); ok {
+	if hit, ok := s.canReadClusterScopedTopoKind(r, n); ok {
 		return hit
 	}
 	clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(string(n.Kind), group)
@@ -259,51 +269,72 @@ func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool
 }
 
 // canReadClusterScopedTopoKind authorizes a topology cluster-scoped pseudo-
-// kind (NodeClass, NodePool, …) by iterating topology.ClusterScopedKinds
-// (centralized table) and SAR-checking each (group, resource) entry under
-// it. Returns (allowed, true) when n is a pseudo-kind tracked by the
-// table, or (_, false) when n isn't a known pseudo-kind so the caller can
-// fall back to the ClassifyKindScope path.
+// kind (NodeClass, NodePool, …) against the SPECIFIC provider variant the
+// node represents. The node's apiVersion (set by the topology builder when
+// synthesizing the node) carries the provider group — e.g.
+// "karpenter.k8s.aws/v1" for an EC2 NodeClass. We look up the matching
+// (Kind, Group) row in topology.ClusterScopedKinds and SAR that single
+// row, so a user with EC2 RBAC sees EC2 NodeClass nodes only — not AKS or
+// GCP variants on a multi-provider cluster.
 //
-// Semantics for multi-entry kinds (NodeClass has three — EC2/AKS/GCP): allow
-// if the user passes any provider variant that's present in discovery. Skip
-// entries whose CRD isn't installed so a missing provider doesn't act as a
-// blanket-deny (AKSNodeClass absent on EKS must not strip EC2 NodeClass).
-// Mirrors deniedClusterScopedTopoKinds's discovery-presence filter so the
-// neighborhood gate doesn't over-deny relative to the topology-strip gate.
-func (s *Server) canReadClusterScopedTopoKind(r *http.Request, kind topology.NodeKind) (allowed, matched bool) {
-	disc := k8s.GetResourceDiscovery()
+// Returns (allowed, true) when n.Kind is a pseudo-kind tracked by the table,
+// or (_, false) when n.Kind isn't known so the caller can fall back to the
+// ClassifyKindScope path.
+//
+// For single-entry kinds (NodePool, GatewayClass, PV, StorageClass, etc.)
+// this collapses to a plain SAR on that one entry — the group-match still
+// works because there's exactly one row to find.
+//
+// Edge case: node's apiVersion-group doesn't match any entry under the
+// pseudo-kind. The topology builder only emits these nodes for known
+// providers, so this shouldn't happen in practice. We deny to avoid
+// surfacing an un-SARed node (which would be the failure mode the
+// per-variant fix exists to close).
+func (s *Server) canReadClusterScopedTopoKind(r *http.Request, n *topology.Node) (allowed, matched bool) {
+	// Find any entry under this NodeKind first so we can return matched=false
+	// for non-tracked kinds (caller falls back to ClassifyKindScope).
 	hasEntry := false
-	hasInDiscovery := false
 	for _, ck := range topology.ClusterScopedKinds {
-		if ck.Kind != kind {
-			continue
-		}
-		hasEntry = true
-		if ck.Group != "" && disc != nil {
-			if _, ok := disc.GetResourceWithGroup(ck.Resource, ck.Group); !ok {
-				continue
-			}
-		}
-		hasInDiscovery = true
-		if s.canRead(r, ck.Group, ck.Resource, "", "get") {
-			return true, true
+		if ck.Kind == n.Kind {
+			hasEntry = true
+			break
 		}
 	}
 	if !hasEntry {
-		// Not a tracked pseudo-kind — let the caller fall through to
-		// ClassifyKindScope (handles built-in cluster-scoped kinds like
-		// Nodes / PV / StorageClass via static catalogue + discovery).
 		return false, false
 	}
-	if !hasInDiscovery {
-		// Pseudo-kind tracked but no provider variant is in discovery
-		// (NodeClass on a cluster with no Karpenter providers installed).
-		// Allow: the topology builder wouldn't have surfaced this node for
-		// an unprivileged SA either, and over-denying would silently hide
-		// a node the cluster admin can see.
-		return true, true
+
+	// Group is derived from the node's apiVersion (set by the topology
+	// builder). For NodeClass nodes this is "karpenter.k8s.aws" /
+	// "karpenter.azure.com" / "karpenter.k8s.gcp" — the discriminator that
+	// picks the right table row.
+	group := ""
+	if n.Data != nil {
+		if v, ok := n.Data["apiVersion"].(string); ok {
+			group = apiVersionGroup(v)
+		}
 	}
+
+	disc := k8s.GetResourceDiscovery()
+	for _, ck := range topology.ClusterScopedKinds {
+		if ck.Kind != n.Kind || ck.Group != group {
+			continue
+		}
+		if ck.Group != "" && disc != nil {
+			if _, ok := disc.GetResourceWithGroup(ck.Resource, ck.Group); !ok {
+				// Pseudo-kind tracked + apiVersion match but no provider
+				// variant is in discovery (CRD removed mid-build). Allow:
+				// the topology builder wouldn't have surfaced this node for
+				// an unprivileged SA either, and over-denying would silently
+				// hide a node the cluster admin can see.
+				return true, true
+			}
+		}
+		return s.canRead(r, ck.Group, ck.Resource, "", "get"), true
+	}
+	// Tracked kind but the node's apiVersion-group doesn't match any entry.
+	// Deny rather than fall through to allow — the per-variant gate exists
+	// precisely to stop unmapped variants from leaking.
 	return false, true
 }
 

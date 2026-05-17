@@ -893,6 +893,95 @@ func TestBuildNeighborhood_SecretFilteredByAllow(t *testing.T) {
 	}
 }
 
+// TestBuildNeighborhood_NodeClassPerVariantSAR pins the per-variant
+// authorization at the topology layer: a single NodeKind (NodeClass) has
+// three discriminated variants (EC2NodeClass / AKSNodeClass / GCPNodeClass)
+// keyed by apiVersion-group. The caller's Allow predicate must be able to
+// pass one variant while denying another so a user with EC2-only RBAC
+// doesn't see AKS or GCP NodeClass nodes on a multi-provider cluster.
+//
+// Setup: a NodePool root with two child NodeClass nodes — one EC2
+// (karpenter.k8s.aws) and one AKS (karpenter.azure.com). Allow returns
+// true for EC2 group, false for AKS group. The BFS expansion must surface
+// EC2, drop AKS, and bump RBACDenied for the dropped AKS node.
+func TestBuildNeighborhood_NodeClassPerVariantSAR(t *testing.T) {
+	np := Node{
+		ID:     "nodepool/_/karpenter-default",
+		Kind:   KindNodePool,
+		Name:   "karpenter-default",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace":  "",
+			"apiVersion": "karpenter.sh/v1",
+		},
+	}
+	ec2 := Node{
+		ID:     "nodeclass/_/ec2-default",
+		Kind:   KindNodeClass,
+		Name:   "ec2-default",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace":  "",
+			"apiVersion": "karpenter.k8s.aws/v1",
+		},
+	}
+	aks := Node{
+		ID:     "nodeclass/_/aks-default",
+		Kind:   KindNodeClass,
+		Name:   "aks-default",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace":  "",
+			"apiVersion": "karpenter.azure.com/v1beta1",
+		},
+	}
+	topo := &Topology{
+		Nodes: []Node{np, ec2, aks},
+		Edges: []Edge{
+			makeEdge(EdgeConfigures, np.ID, ec2.ID),
+			makeEdge(EdgeConfigures, np.ID, aks.ID),
+		},
+	}
+
+	// Allow returns true for NodePool + EC2 NodeClass, false for AKS
+	// NodeClass — keyed on the node's apiVersion group, which is exactly
+	// the discriminator the handler-side fix relies on.
+	sub := BuildNeighborhoodWithIndex(topo,
+		ResourceRef{Kind: "NodePool", Namespace: "", Name: "karpenter-default", Group: "karpenter.sh"},
+		NeighborhoodOptions{
+			Profile: ProfileAll,
+			Hops:    1,
+			Allow: func(n *Node) bool {
+				if n.Kind != KindNodeClass {
+					return true
+				}
+				return nodeAPIGroupFromData(n) == "karpenter.k8s.aws"
+			},
+		},
+		nil, nil,
+	)
+
+	sawEC2 := false
+	sawAKS := false
+	for _, n := range sub.Nodes {
+		switch n.ID {
+		case ec2.ID:
+			sawEC2 = true
+		case aks.ID:
+			sawAKS = true
+		}
+	}
+	if !sawEC2 {
+		t.Errorf("EC2 NodeClass denied — per-variant Allow with karpenter.k8s.aws=true must surface it (got nodes: %v)", nodeIDs(sub))
+	}
+	if sawAKS {
+		t.Errorf("AKS NodeClass leaked despite Allow=false for karpenter.azure.com — per-variant gate must drop it")
+	}
+	if sub.RBACDenied != 1 {
+		t.Errorf("expected RBACDenied=1 for the dropped AKS NodeClass, got %d", sub.RBACDenied)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

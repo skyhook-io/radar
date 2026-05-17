@@ -1,8 +1,17 @@
 package mcp
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
+
+	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -156,6 +165,43 @@ func TestCanReadNeighborhoodNodeMCP_NodeClassAllowedWithProviderSAR(t *testing.T
 	}
 }
 
+// TestCanReadNeighborhoodNodeMCP_NodeClassPerVariantDeniesWrongProvider
+// pins the per-variant authorization fix on the MCP side: a user with
+// EC2 RBAC must not see AKS NodeClass nodes. Mirrors the REST test.
+func TestCanReadNeighborhoodNodeMCP_NodeClassPerVariantDeniesWrongProvider(t *testing.T) {
+	ctx := withTestUserPerms(t, "bob", nil, nil)
+	perms := getPermCache().Get("bob")
+	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
+	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+
+	aks := &topology.Node{
+		ID:     "nodeclass/aks-default",
+		Kind:   topology.KindNodeClass,
+		Name:   "aks-default",
+		Status: topology.StatusHealthy,
+		Data: map[string]any{
+			"apiVersion": "karpenter.azure.com/v1beta1",
+		},
+	}
+	if canReadNeighborhoodNodeMCP(ctx, aks) {
+		t.Error("AKS NodeClass leaked to user with EC2-only RBAC — per-variant gate must deny cross-provider")
+	}
+
+	ec2 := &topology.Node{
+		ID:     "nodeclass/ec2-default",
+		Kind:   topology.KindNodeClass,
+		Name:   "ec2-default",
+		Status: topology.StatusHealthy,
+		Data: map[string]any{
+			"apiVersion": "karpenter.k8s.aws/v1",
+		},
+	}
+	if !canReadNeighborhoodNodeMCP(ctx, ec2) {
+		t.Error("EC2 NodeClass denied to user with EC2 RBAC — per-variant gate must allow the matching provider")
+	}
+}
+
 // KnativeService is a namespaced pseudo-kind. The cluster-scoped table
 // shouldn't match it; the helper must fall through to the namespaced branch
 // and ride on namespace access alone (no per-kind tightening for Knative).
@@ -170,5 +216,119 @@ func TestCanReadNeighborhoodNodeMCP_KnativeServiceUsesNamespaceGate(t *testing.T
 	ctxDenied := withTestUserPerms(t, "carol", nil, []string{"staging"})
 	if canReadNeighborhoodNodeMCP(ctxDenied, n) {
 		t.Error("KnativeService allowed for user without namespace access — namespace gate must apply")
+	}
+}
+
+// setupSecretRefCacheMCP seeds a fake cache with a Deployment that references
+// a Secret via Volumes — the only shape the topology builder uses to decide
+// whether to surface the Secret node. Without this reference, IncludeSecrets=
+// true alone wouldn't make the Secret appear (see pkg/topology/builder.go's
+// "isReferenced" guard in section 9).
+func setupSecretRefCacheMCP(t *testing.T) {
+	t.Helper()
+	replicas := int32(1)
+	fakeClient := fake.NewClientset(
+		&corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: "default"},
+			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+		},
+		&corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "nginx-tls", Namespace: "default"},
+			Type:       corev1.SecretTypeOpaque,
+		},
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "nginx", Namespace: "default"},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &replicas,
+				Selector: &metav1.LabelSelector{MatchLabels: map[string]string{"app": "nginx"}},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "nginx"}},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "nginx", Image: "nginx:1.25"}},
+						Volumes: []corev1.Volume{{
+							Name: "tls",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{SecretName: "nginx-tls"},
+							},
+						}},
+					},
+				},
+			},
+		},
+	)
+	if err := k8s.InitTestResourceCache(fakeClient); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	t.Cleanup(func() {
+		k8s.ResetTestState()
+		getPermCache().Invalidate()
+	})
+}
+
+// TestNeighborhoodMCP_SecretRootIncluded pins the IncludeSecrets fix on the
+// MCP side. DefaultBuildOptions sets IncludeSecrets=false, so the Secret
+// node isn't in the topology and the root lookup returns "resource not
+// found" even for authorized users. The handler must override
+// IncludeSecrets=true so authorized callers find the root, while the
+// per-namespace `get secrets` Allow gate still denies unauthorized callers
+// via the empty-subgraph path (preserving existence-hiding).
+func TestNeighborhoodMCP_SecretRootIncluded(t *testing.T) {
+	setupSecretRefCacheMCP(t)
+
+	// Authorized user: namespace access to default + per-namespace
+	// `get secrets`. Both Allow checks must pass; root resolves; result
+	// includes the Secret node.
+	ctx := withTestUserPerms(t, "bob", nil, []string{"default"})
+	bobPerms := getPermCache().Get("bob")
+	bobPerms.SetCanI("get", "", "secrets", "default", true)
+
+	call, _, err := handleGetNeighborhood(ctx, nil, getNeighborhoodInput{
+		Kind:      "secret",
+		Namespace: "default",
+		Name:      "nginx-tls",
+	})
+	if err != nil {
+		t.Fatalf("authorized user got error for Secret root: %v — IncludeSecrets override must surface Secret nodes in topology", err)
+	}
+	if call == nil || len(call.Content) == 0 {
+		t.Fatal("expected MCP CallToolResult content for authorized Secret root")
+	}
+	tc, ok := call.Content[0].(*mcp.TextContent)
+	if !ok {
+		t.Fatalf("unexpected content type: %T", call.Content[0])
+	}
+	var result neighborhoodResult
+	if jsonErr := json.Unmarshal([]byte(tc.Text), &result); jsonErr != nil {
+		t.Fatalf("decode MCP result: %v (raw=%q)", jsonErr, tc.Text)
+	}
+	foundSecret := false
+	for _, n := range result.Subgraph.Nodes {
+		if n.Kind == topology.KindSecret && n.Name == "nginx-tls" {
+			foundSecret = true
+			break
+		}
+	}
+	if !foundSecret {
+		t.Errorf("authorized user's response missing Secret node — IncludeSecrets override should have surfaced it (nodes=%+v)", result.Subgraph.Nodes)
+	}
+
+	// Unauthorized user: namespace access but NO per-namespace `get secrets`
+	// SAR. Allow rejects the root → empty subgraph → "not found" error.
+	// Existence-hiding preserved: same 404-shape result the
+	// IncludeSecrets=false path produced, but driven by RBAC.
+	ctxDenied := withTestUserPerms(t, "alice", nil, []string{"default"})
+	alicePerms := getPermCache().Get("alice")
+	alicePerms.SetCanI("get", "", "secrets", "default", false)
+
+	_, _, err2 := handleGetNeighborhood(ctxDenied, nil, getNeighborhoodInput{
+		Kind:      "secret",
+		Namespace: "default",
+		Name:      "nginx-tls",
+	})
+	if err2 == nil {
+		t.Error("unauthorized user got success for Secret root — Allow gate must produce not-found via empty subgraph (existence-hiding)")
+	} else if !strings.Contains(err2.Error(), "not found") {
+		t.Errorf("unauthorized user got unexpected error %v — expected 'not found' shape to mirror existence-hiding", err2)
 	}
 }

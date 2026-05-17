@@ -1,6 +1,7 @@
 package server
 
 import (
+	"net/http"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/auth"
@@ -173,6 +174,57 @@ func TestCanReadNeighborhoodNode_NodeClassAllowedWithProviderSAR(t *testing.T) {
 	}
 }
 
+// TestCanReadNeighborhoodNode_NodeClassPerVariantSAR pins the per-variant
+// authorization fix: NodeClass has 3 entries in ClusterScopedKinds (EC2 /
+// AKS / GCP). Before the fix, the helper iterated ALL entries and returned
+// true on the FIRST passing SAR — so a user with EC2 RBAC saw AKS and GCP
+// NodeClass nodes too. The fix matches the table row by BOTH Kind and the
+// node's apiVersion-group, so an AKS NodeClass node is SARed against the
+// AKS row only.
+//
+// Setup: Bob has EC2 RBAC only. An AKS NodeClass node (apiVersion=
+// karpenter.azure.com/v1beta1) must be denied — his EC2 grant must not
+// leak across providers.
+func TestCanReadNeighborhoodNode_NodeClassPerVariantDeniesWrongProvider(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
+	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	s.permCache.Set("bob", perms)
+
+	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "bob"})
+
+	// AKS NodeClass node — apiVersion-group is karpenter.azure.com. The
+	// per-variant lookup must SAR ONLY the AKS row, which is denied.
+	aks := &topology.Node{
+		ID:     "nodeclass/aks-default",
+		Kind:   topology.KindNodeClass,
+		Name:   "aks-default",
+		Status: topology.StatusHealthy,
+		Data: map[string]any{
+			"apiVersion": "karpenter.azure.com/v1beta1",
+		},
+	}
+	if s.canReadNeighborhoodNode(r, aks) {
+		t.Error("AKS NodeClass leaked to user with EC2-only RBAC — per-variant gate must deny cross-provider")
+	}
+
+	// Sanity counterpart: same user, EC2 NodeClass — must allow.
+	ec2 := &topology.Node{
+		ID:     "nodeclass/ec2-default",
+		Kind:   topology.KindNodeClass,
+		Name:   "ec2-default",
+		Status: topology.StatusHealthy,
+		Data: map[string]any{
+			"apiVersion": "karpenter.k8s.aws/v1",
+		},
+	}
+	if !s.canReadNeighborhoodNode(r, ec2) {
+		t.Error("EC2 NodeClass denied to user with EC2 RBAC — per-variant gate must allow the matching provider")
+	}
+}
+
 // KnativeService is a namespaced pseudo-kind. The cluster-scoped table
 // shouldn't match it; the helper must fall through to the namespaced branch
 // and ride on namespace access alone (no per-kind tightening for Knative).
@@ -191,5 +243,51 @@ func TestCanReadNeighborhoodNode_KnativeServiceUsesNamespaceGate(t *testing.T) {
 	r2 := requestWithUser("GET", "/api/ai/neighborhood/service/prod/api", &auth.User{Username: "carol"})
 	if s.canReadNeighborhoodNode(r2, n) {
 		t.Error("KnativeService allowed for user without namespace access — namespace gate must apply")
+	}
+}
+
+// TestNeighborhood_SecretRootIncluded pins the IncludeSecrets fix at the
+// REST handler boundary. DefaultBuildOptions sets IncludeSecrets=false, so
+// Secret nodes don't enter the topology and root lookup for kind=secret
+// always returns "resource not found in topology" → 404, even for users
+// authorized to read the Secret. The handler must override
+// IncludeSecrets=true so authorized callers find the root, while the
+// per-namespace `get secrets` Allow gate still 404s unauthorized callers
+// via the empty-subgraph path.
+//
+// The seeded fake client (server_smoke_test.go TestMain) has a Secret
+// "nginx-tls" in "default". This test depends on that seed.
+func TestNeighborhood_SecretRootIncluded(t *testing.T) {
+	env := newAuthTestServer(t)
+
+	// Authorized user: namespace access to default + per-namespace
+	// `get secrets` SAR. Both Allow checks (namespace + per-kind Secret)
+	// must pass.
+	env.srv.permCache.Set("bob", &auth.UserPermissions{
+		AllowedNamespaces: []string{"default"},
+	})
+	bobPerms := env.srv.permCache.Get("bob")
+	bobPerms.SetCanI("get", "", "secrets", "default", true)
+
+	resp := env.authGet(t, "/api/ai/neighborhood/secret/default/nginx-tls", "bob", "")
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("authorized user got %d for Secret root — IncludeSecrets override must surface Secret nodes in topology", resp.StatusCode)
+	}
+
+	// Unauthorized user: namespace access to default but NO per-namespace
+	// `get secrets` SAR. Allow rejects the root → empty subgraph → 404.
+	// Existence-hiding preserved: same 404 the IncludeSecrets=false path
+	// produced, but now driven by RBAC instead of topology elision.
+	env.srv.permCache.Set("alice", &auth.UserPermissions{
+		AllowedNamespaces: []string{"default"},
+	})
+	alicePerms := env.srv.permCache.Get("alice")
+	alicePerms.SetCanI("get", "", "secrets", "default", false)
+
+	resp2 := env.authGet(t, "/api/ai/neighborhood/secret/default/nginx-tls", "alice", "")
+	resp2.Body.Close()
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Errorf("unauthorized user got %d for Secret root — Allow gate must produce 404 via empty subgraph (existence-hiding)", resp2.StatusCode)
 	}
 }

@@ -47,7 +47,20 @@ func TestMain(m *testing.M) {
 				},
 				Template: corev1.PodTemplateSpec{
 					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "nginx"}},
-					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "nginx", Image: "nginx:1.25"}}},
+					Spec: corev1.PodSpec{
+						Containers: []corev1.Container{{Name: "nginx", Image: "nginx:1.25"}},
+						// Reference nginx-tls so the topology builder includes
+						// the Secret node when IncludeSecrets=true. The
+						// neighborhood handler's Secret-root tests depend on
+						// this — without a reference the Secret would be
+						// elided regardless of IncludeSecrets.
+						Volumes: []corev1.Volume{{
+							Name: "tls",
+							VolumeSource: corev1.VolumeSource{
+								Secret: &corev1.SecretVolumeSource{SecretName: "nginx-tls"},
+							},
+						}},
+					},
 				},
 			},
 			Status: appsv1.DeploymentStatus{
