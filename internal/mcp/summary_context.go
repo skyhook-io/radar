@@ -42,10 +42,29 @@ func newSummaryContextBuilder(namespaces []string, kindFilter string) summaryCon
 	resourceProvider := k8s.NewTopologyResourceProvider(k8s.GetResourceCache())
 	dynamicProvider := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 
+	// One inverted-edges index per request — without it each
+	// GetRelationships call would re-scan topo.Edges in O(E), turning
+	// the list/search hot path into O(N × E). See pkg/topology T3.
+	var relIdx *topology.RelationshipsIndex
+	if topo != nil {
+		relIdx = topology.IndexByResource(topo)
+	}
+
 	return func(obj runtime.Object, u *unstructured.Unstructured, kind, namespace, name string) *resourcecontext.SummaryContext {
 		var managedBy *resourcecontext.ManagedByRef
 		if topo != nil {
-			rel := topology.GetRelationships(kind, namespace, name, topo, resourceProvider, dynamicProvider)
+			// Pass the fetched object when available so synthesis is
+			// group-aware (avoids kind/plural collisions like Knative
+			// Service vs corev1 Service). Falls back to (kind, ns, name)
+			// lookup when neither obj nor u is set.
+			var rawObj any
+			switch {
+			case obj != nil:
+				rawObj = obj
+			case u != nil:
+				rawObj = u
+			}
+			rel := topology.GetRelationshipsWithObject(kind, namespace, name, rawObj, topo, resourceProvider, dynamicProvider, relIdx)
 			managedBy = managedByFromRelationships(rel)
 		}
 		var source runtime.Object = obj
@@ -158,22 +177,20 @@ func buildIssueIndex(p issues.Provider, namespaces []string, kindFilter string) 
 }
 
 // managedByFromRelationships extracts a compact ManagedByRef from
-// computed topology relationships. Preference: Deployment grandparent
-// shortcut (Pods owned by ReplicaSets surface the controlling
-// Deployment, not the noisy hash-suffixed RS), then direct Owner.
+// computed topology relationships. Preference: server-synthesized
+// Relationships.ManagedBy (ArgoCD > Flux > Helm > topmost K8s owner),
+// then direct Owner as fallback when synthesis declines.
 func managedByFromRelationships(rel *topology.Relationships) *resourcecontext.ManagedByRef {
 	if rel == nil {
 		return nil
 	}
-	var ref *topology.ResourceRef
-	switch {
-	case rel.Deployment != nil:
-		ref = rel.Deployment
-	case rel.Owner != nil:
-		ref = rel.Owner
-	default:
-		return nil
+	if len(rel.ManagedBy) > 0 {
+		ref := rel.ManagedBy[0]
+		return resourcecontext.ManagedByFromOwner(ref.Kind, ref.Group, ref.Namespace, ref.Name)
 	}
-	return resourcecontext.ManagedByFromOwner(ref.Kind, ref.Group, ref.Namespace, ref.Name)
+	if rel.Owner != nil {
+		return resourcecontext.ManagedByFromOwner(rel.Owner.Kind, rel.Owner.Group, rel.Owner.Namespace, rel.Owner.Name)
+	}
+	return nil
 }
 

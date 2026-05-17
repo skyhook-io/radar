@@ -147,12 +147,16 @@ func TestAttachSummaryContextToUnstructuredList(t *testing.T) {
 	}
 }
 
-// TestManagedByFromRelationships_PrefersDeployment pins the Pod →
-// Deployment grandparent shortcut over the noisier ReplicaSet owner.
-func TestManagedByFromRelationships_PrefersDeployment(t *testing.T) {
+// TestManagedByFromRelationships_PrefersManagedBy pins the topmost-manager
+// shortcut: when topology has synthesized a ManagedBy chain (Pod →
+// ReplicaSet → Deployment), the helper surfaces the Deployment, not the
+// noisy hash-suffixed ReplicaSet that sits in Owner.
+func TestManagedByFromRelationships_PrefersManagedBy(t *testing.T) {
 	rel := &topology.Relationships{
-		Owner:      &topology.ResourceRef{Kind: "ReplicaSet", Namespace: "prod", Name: "api-7d5", Group: "apps"},
-		Deployment: &topology.ResourceRef{Kind: "Deployment", Namespace: "prod", Name: "api", Group: "apps"},
+		Owner: &topology.ResourceRef{Kind: "ReplicaSet", Namespace: "prod", Name: "api-7d5", Group: "apps"},
+		ManagedBy: []topology.ResourceRef{
+			{Kind: "Deployment", Namespace: "prod", Name: "api", Group: "apps"},
+		},
 	}
 	got := managedByFromRelationships(rel)
 	want := &resourcecontext.ManagedByRef{Kind: "Deployment", Source: "native", Name: "api", Namespace: "prod"}
@@ -161,8 +165,9 @@ func TestManagedByFromRelationships_PrefersDeployment(t *testing.T) {
 	}
 }
 
-// TestManagedByFromRelationships_FallsBackToOwner covers the
-// non-Pod case (StatefulSet → STS, Job pod → Job, etc.).
+// TestManagedByFromRelationships_FallsBackToOwner covers the case where
+// topology synthesis declined ManagedBy (e.g. cluster-scoped roots) —
+// we still surface the direct Owner so the row isn't context-less.
 func TestManagedByFromRelationships_FallsBackToOwner(t *testing.T) {
 	rel := &topology.Relationships{
 		Owner: &topology.ResourceRef{Kind: "Application", Namespace: "argocd", Name: "storefront", Group: "argoproj.io"},
@@ -173,6 +178,23 @@ func TestManagedByFromRelationships_FallsBackToOwner(t *testing.T) {
 	}
 	if got.Source != "argocd" {
 		t.Errorf("Source = %q, want argocd", got.Source)
+	}
+}
+
+// TestManagedByFromRelationships_ManagedByWinsOverOwner pins that when
+// both ManagedBy and Owner are set, ManagedBy[0] takes precedence — the
+// server-synthesized topmost-manager walk should never be shadowed by
+// the direct owner ref left over for back-compat.
+func TestManagedByFromRelationships_ManagedByWinsOverOwner(t *testing.T) {
+	rel := &topology.Relationships{
+		Owner: &topology.ResourceRef{Kind: "ReplicaSet", Namespace: "prod", Name: "api-7d5", Group: "apps"},
+		ManagedBy: []topology.ResourceRef{
+			{Kind: "Application", Namespace: "argocd", Name: "storefront", Group: "argoproj.io"},
+		},
+	}
+	got := managedByFromRelationships(rel)
+	if got == nil || got.Kind != "Application" || got.Source != "argocd" {
+		t.Errorf("got %#v, want Application/argocd", got)
 	}
 }
 

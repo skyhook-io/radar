@@ -56,10 +56,29 @@ func (s *Server) newSummaryContextBuilder(namespaces []string, kindFilter string
 	resourceProvider := k8s.NewTopologyResourceProvider(k8s.GetResourceCache())
 	dynamicProvider := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 
+	// One inverted-edges index per request — without it each
+	// GetRelationships call would re-scan topo.Edges in O(E), turning
+	// the list/search hot path into O(N × E). See pkg/topology T3.
+	var relIdx *topology.RelationshipsIndex
+	if topo != nil {
+		relIdx = topology.IndexByResource(topo)
+	}
+
 	return func(obj runtime.Object, u *unstructured.Unstructured, kind, namespace, name string) *resourcecontext.SummaryContext {
 		var managedBy *resourcecontext.ManagedByRef
 		if topo != nil {
-			rel := topology.GetRelationships(kind, namespace, name, topo, resourceProvider, dynamicProvider)
+			// Pass the fetched object when available so synthesis is
+			// group-aware (avoids kind/plural collisions like Knative
+			// Service vs corev1 Service). Falls back to (kind, ns, name)
+			// lookup when neither obj nor u is set.
+			var rawObj any
+			switch {
+			case obj != nil:
+				rawObj = obj
+			case u != nil:
+				rawObj = u
+			}
+			rel := topology.GetRelationshipsWithObject(kind, namespace, name, rawObj, topo, resourceProvider, dynamicProvider, relIdx)
 			managedBy = managedByFromRelationships(rel)
 		}
 		var source runtime.Object = obj
@@ -156,25 +175,25 @@ func buildIssueIndex(p issues.Provider, namespaces []string, kindFilter string) 
 
 // managedByFromRelationships extracts a compact ManagedByRef from
 // computed topology relationships. Preference order:
-//  1. Deployment grandparent shortcut (Pods owned by ReplicaSets surface
-//     the controlling Deployment, not the noisy hash-suffixed RS).
-//  2. Direct Owner — covers everything else (StatefulSet pod → STS,
-//     Job pod → Job, ArgoCD Application children, Flux Kustomization
-//     children, etc.).
+//  1. Relationships.ManagedBy[0] — the server-synthesized topmost
+//     manager (ArgoCD Application > Flux Kustomization/HelmRelease >
+//     Helm release > topmost K8s owner). Walks the owner chain past
+//     ReplicaSets to the controlling Deployment in one shot.
+//  2. Direct Owner — fallback for shapes ManagedBy synthesis declines
+//     (e.g. cluster-scoped roots where the topmost manager is the
+//     resource itself).
 //
 // Returns nil when topology has no relationship for the resource.
 func managedByFromRelationships(rel *topology.Relationships) *resourcecontext.ManagedByRef {
 	if rel == nil {
 		return nil
 	}
-	var ref *topology.ResourceRef
-	switch {
-	case rel.Deployment != nil:
-		ref = rel.Deployment
-	case rel.Owner != nil:
-		ref = rel.Owner
-	default:
-		return nil
+	if len(rel.ManagedBy) > 0 {
+		ref := rel.ManagedBy[0]
+		return resourcecontext.ManagedByFromOwner(ref.Kind, ref.Group, ref.Namespace, ref.Name)
 	}
-	return resourcecontext.ManagedByFromOwner(ref.Kind, ref.Group, ref.Namespace, ref.Name)
+	if rel.Owner != nil {
+		return resourcecontext.ManagedByFromOwner(rel.Owner.Kind, rel.Owner.Group, rel.Owner.Namespace, rel.Owner.Name)
+	}
+	return nil
 }
