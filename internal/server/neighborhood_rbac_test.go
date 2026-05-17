@@ -246,6 +246,154 @@ func TestCanReadNeighborhoodNode_KnativeServiceUsesNamespaceGate(t *testing.T) {
 	}
 }
 
+// TestCanReadClusterScopedTopoKindByName_NodeClass pins the root-preflight
+// helper: a user without ANY provider get-SAR for NodeClass must be denied,
+// while a user with EC2 RBAC must be allowed (single-provider grant is
+// sufficient, matching the per-node gate). This is the kind-only variant
+// used at root preflight before the topology has resolved a concrete node
+// with an apiVersion — so we iterate every table row under that kind and
+// allow on any pass.
+func TestCanReadClusterScopedTopoKindByName_NodeClass_DeniedWithoutSAR(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	s.permCache.Set("alice", perms)
+
+	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "alice"})
+	entries := topology.LookupClusterScopedTopoKind("nodeclass", "")
+	if len(entries) == 0 {
+		t.Fatal("LookupClusterScopedTopoKind returned 0 entries for nodeclass — table wiring is broken")
+	}
+	if s.canReadClusterScopedTopoKindByName(r, entries) {
+		t.Error("nodeclass root preflight allowed user without any provider get-SAR — must deny")
+	}
+}
+
+func TestCanReadClusterScopedTopoKindByName_NodeClass_AllowedWithProviderSAR(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	perms := &auth.UserPermissions{AllowedNamespaces: nil}
+	// Bob has EC2 RBAC only. Root preflight without a known provider group
+	// must still allow — the per-node Allow gate will then drop AKS/GCP
+	// variants. This mirrors topology-strip semantics: a single provider
+	// grant is sufficient for the kind-level gate.
+	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
+	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	s.permCache.Set("bob", perms)
+
+	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "bob"})
+	entries := topology.LookupClusterScopedTopoKind("nodeclass", "")
+	if !s.canReadClusterScopedTopoKindByName(r, entries) {
+		t.Error("nodeclass root preflight denied user with EC2 get-SAR — single-provider RBAC must pass")
+	}
+}
+
+// Same shape for NodePool, which has a SINGLE row in the table (karpenter.sh).
+// Pin that the kind-only path works for single-entry pseudo-kinds too.
+func TestCanReadClusterScopedTopoKindByName_NodePool(t *testing.T) {
+	s := newAuthServer(auth.Config{Mode: "proxy"})
+	denyPerms := &auth.UserPermissions{AllowedNamespaces: nil}
+	denyPerms.SetCanI("get", "karpenter.sh", "nodepools", "", false)
+	s.permCache.Set("alice", denyPerms)
+
+	allowPerms := &auth.UserPermissions{AllowedNamespaces: nil}
+	allowPerms.SetCanI("get", "karpenter.sh", "nodepools", "", true)
+	s.permCache.Set("bob", allowPerms)
+
+	entries := topology.LookupClusterScopedTopoKind("nodepool", "")
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 nodepool entry, got %d", len(entries))
+	}
+	rDeny := requestWithUser("GET", "/api/ai/neighborhood/nodepool/_/x", &auth.User{Username: "alice"})
+	if s.canReadClusterScopedTopoKindByName(rDeny, entries) {
+		t.Error("nodepool root preflight allowed user without karpenter.sh/nodepools get-SAR")
+	}
+	rAllow := requestWithUser("GET", "/api/ai/neighborhood/nodepool/_/x", &auth.User{Username: "bob"})
+	if !s.canReadClusterScopedTopoKindByName(rAllow, entries) {
+		t.Error("nodepool root preflight denied user WITH karpenter.sh/nodepools get-SAR")
+	}
+}
+
+// TestNeighborhood_NodeClassRootPreflightNotBadRequest is the integration
+// pin: the URL /api/ai/neighborhood/nodeclass/_/foo must NOT return 400
+// "namespace is required" — that's the regression we're fixing.
+//
+// Two assertions:
+//   - Unauthorized user (no provider get-SAR): preflight must reject as 403,
+//     not 400.
+//   - Authorized user (EC2 get-SAR): preflight passes, BFS runs against the
+//     test cache (which has no NodeClass nodes), root lookup misses → 404,
+//     also not 400. Both prove the preflight is no longer rejecting on
+//     namespace.
+func TestNeighborhood_NodeClassRootPreflightNotBadRequest(t *testing.T) {
+	env := newAuthTestServer(t)
+
+	// Unauthorized: all provider SARs denied → 403, not 400.
+	denyPerms := &auth.UserPermissions{AllowedNamespaces: nil}
+	denyPerms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
+	denyPerms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
+	denyPerms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	env.srv.permCache.Set("alice", denyPerms)
+
+	resp := env.authGet(t, "/api/ai/neighborhood/nodeclass/_/foo", "alice", "")
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusBadRequest {
+		t.Errorf("nodeclass root preflight returned 400 — regression: pseudo-kind classified as namespaced")
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("unauthorized user got %d for nodeclass — want 403 (cluster-scoped pseudo-kind gate)", resp.StatusCode)
+	}
+
+	// Authorized: EC2 get-SAR allowed → preflight passes; BFS finds no
+	// NodeClass node in the seeded cache → 404, not 400.
+	allowPerms := &auth.UserPermissions{AllowedNamespaces: nil}
+	allowPerms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
+	allowPerms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
+	allowPerms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	env.srv.permCache.Set("bob", allowPerms)
+
+	resp2 := env.authGet(t, "/api/ai/neighborhood/nodeclass/_/foo", "bob", "")
+	resp2.Body.Close()
+	if resp2.StatusCode == http.StatusBadRequest {
+		t.Errorf("nodeclass root preflight returned 400 even with EC2 SAR — regression")
+	}
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Errorf("authorized user got %d for nonexistent nodeclass — want 404 (preflight passed, BFS empty)", resp2.StatusCode)
+	}
+}
+
+// Same for NodePool — sanity that the fix covers all pseudo-kinds the
+// agent might request, not just NodeClass.
+func TestNeighborhood_NodePoolRootPreflightNotBadRequest(t *testing.T) {
+	env := newAuthTestServer(t)
+
+	denyPerms := &auth.UserPermissions{AllowedNamespaces: nil}
+	denyPerms.SetCanI("get", "karpenter.sh", "nodepools", "", false)
+	env.srv.permCache.Set("alice", denyPerms)
+	resp := env.authGet(t, "/api/ai/neighborhood/nodepool/_/foo", "alice", "")
+	resp.Body.Close()
+	if resp.StatusCode == http.StatusBadRequest {
+		t.Errorf("nodepool root preflight returned 400 — pseudo-kind misclassified as namespaced")
+	}
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("unauthorized user got %d for nodepool — want 403", resp.StatusCode)
+	}
+
+	allowPerms := &auth.UserPermissions{AllowedNamespaces: nil}
+	allowPerms.SetCanI("get", "karpenter.sh", "nodepools", "", true)
+	env.srv.permCache.Set("bob", allowPerms)
+	resp2 := env.authGet(t, "/api/ai/neighborhood/nodepool/_/foo", "bob", "")
+	resp2.Body.Close()
+	if resp2.StatusCode == http.StatusBadRequest {
+		t.Errorf("nodepool root preflight returned 400 even with karpenter.sh SAR")
+	}
+	if resp2.StatusCode != http.StatusNotFound {
+		t.Errorf("authorized user got %d for nonexistent nodepool — want 404", resp2.StatusCode)
+	}
+}
+
 // TestNeighborhood_SecretRootIncluded pins the IncludeSecrets fix at the
 // REST handler boundary. DefaultBuildOptions sets IncludeSecrets=false, so
 // Secret nodes don't enter the topology and root lookup for kind=secret

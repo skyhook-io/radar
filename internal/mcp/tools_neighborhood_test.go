@@ -219,6 +219,136 @@ func TestCanReadNeighborhoodNodeMCP_KnativeServiceUsesNamespaceGate(t *testing.T
 	}
 }
 
+// TestCanReadClusterScopedTopoKindByNameMCP_NodeClass pins the MCP-side
+// root-preflight helper: kind-only lookup (no node yet) iterates every
+// table row under that kind and allows on any pass. Mirrors the REST test
+// of the same name.
+func TestCanReadClusterScopedTopoKindByNameMCP_NodeClass_DeniedWithoutSAR(t *testing.T) {
+	ctx := withTestUserPerms(t, "alice", nil, nil)
+	perms := getPermCache().Get("alice")
+	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+
+	entries := topology.LookupClusterScopedTopoKind("nodeclass", "")
+	if len(entries) == 0 {
+		t.Fatal("LookupClusterScopedTopoKind returned 0 entries for nodeclass — table wiring is broken")
+	}
+	if canReadClusterScopedTopoKindByNameMCP(ctx, entries) {
+		t.Error("nodeclass root preflight allowed user without any provider get-SAR — must deny")
+	}
+}
+
+func TestCanReadClusterScopedTopoKindByNameMCP_NodeClass_AllowedWithProviderSAR(t *testing.T) {
+	ctx := withTestUserPerms(t, "bob", nil, nil)
+	perms := getPermCache().Get("bob")
+	// EC2 only — single-provider grant must be enough for the kind-level gate.
+	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
+	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+
+	entries := topology.LookupClusterScopedTopoKind("nodeclass", "")
+	if !canReadClusterScopedTopoKindByNameMCP(ctx, entries) {
+		t.Error("nodeclass root preflight denied user with EC2 get-SAR — single-provider RBAC must pass")
+	}
+}
+
+// TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired pins the
+// integration fix on the MCP surface: an agent calling get_neighborhood with
+// kind="nodeclass" and Namespace="" (which is what get_topology output
+// suggests) must NOT receive "namespace is required" — that's the bug we're
+// closing.
+//
+// Two cases:
+//   - Unauthorized user (no provider SAR): error must mention "forbidden",
+//     not "namespace is required".
+//   - Authorized user (EC2 SAR): preflight passes, BFS runs against the
+//     seeded cache (no NodeClass nodes there), root lookup misses → "not
+//     found" error, also not "namespace is required".
+func TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired(t *testing.T) {
+	setupSecretRefCacheMCP(t)
+
+	// Unauthorized
+	ctxDeny := withTestUserPerms(t, "alice", nil, nil)
+	denyPerms := getPermCache().Get("alice")
+	denyPerms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
+	denyPerms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
+	denyPerms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	_, _, err := handleGetNeighborhood(ctxDeny, nil, getNeighborhoodInput{
+		Kind: "nodeclass",
+		Name: "foo",
+	})
+	if err == nil {
+		t.Fatal("unauthorized nodeclass call succeeded — preflight must deny")
+	}
+	if strings.Contains(err.Error(), "namespace is required") {
+		t.Errorf("unauthorized nodeclass returned namespace error %q — regression: pseudo-kind misclassified as namespaced", err)
+	}
+	if !strings.Contains(err.Error(), "forbidden") {
+		t.Errorf("unauthorized nodeclass error = %q, want 'forbidden' substring", err)
+	}
+
+	// Authorized
+	ctxAllow := withTestUserPerms(t, "bob", nil, nil)
+	allowPerms := getPermCache().Get("bob")
+	allowPerms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
+	allowPerms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
+	allowPerms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	_, _, err2 := handleGetNeighborhood(ctxAllow, nil, getNeighborhoodInput{
+		Kind: "nodeclass",
+		Name: "foo",
+	})
+	if err2 == nil {
+		t.Fatal("authorized nodeclass call succeeded for nonexistent node — expected 'not found' error from empty subgraph")
+	}
+	if strings.Contains(err2.Error(), "namespace is required") {
+		t.Errorf("authorized nodeclass returned namespace error %q even WITH EC2 SAR — regression", err2)
+	}
+	if !strings.Contains(err2.Error(), "not found") {
+		t.Errorf("authorized nodeclass error = %q, want 'not found' substring (preflight passed, BFS empty)", err2)
+	}
+}
+
+// Same shape for NodePool — sanity that the fix covers every cluster-scoped
+// pseudo-kind in the table, not just NodeClass.
+func TestHandleGetNeighborhoodMCP_NodePoolRootNotNamespaceRequired(t *testing.T) {
+	setupSecretRefCacheMCP(t)
+
+	ctxDeny := withTestUserPerms(t, "alice", nil, nil)
+	denyPerms := getPermCache().Get("alice")
+	denyPerms.SetCanI("get", "karpenter.sh", "nodepools", "", false)
+	_, _, err := handleGetNeighborhood(ctxDeny, nil, getNeighborhoodInput{
+		Kind: "nodepool",
+		Name: "foo",
+	})
+	if err == nil {
+		t.Fatal("unauthorized nodepool call succeeded — preflight must deny")
+	}
+	if strings.Contains(err.Error(), "namespace is required") {
+		t.Errorf("unauthorized nodepool returned namespace error %q — pseudo-kind misclassified", err)
+	}
+	if !strings.Contains(err.Error(), "forbidden") {
+		t.Errorf("unauthorized nodepool error = %q, want 'forbidden' substring", err)
+	}
+
+	ctxAllow := withTestUserPerms(t, "bob", nil, nil)
+	allowPerms := getPermCache().Get("bob")
+	allowPerms.SetCanI("get", "karpenter.sh", "nodepools", "", true)
+	_, _, err2 := handleGetNeighborhood(ctxAllow, nil, getNeighborhoodInput{
+		Kind: "nodepool",
+		Name: "foo",
+	})
+	if err2 == nil {
+		t.Fatal("authorized nodepool call succeeded for nonexistent node — expected 'not found'")
+	}
+	if strings.Contains(err2.Error(), "namespace is required") {
+		t.Errorf("authorized nodepool returned namespace error %q even with SAR — regression", err2)
+	}
+	if !strings.Contains(err2.Error(), "not found") {
+		t.Errorf("authorized nodepool error = %q, want 'not found' substring", err2)
+	}
+}
+
 // setupSecretRefCacheMCP seeds a fake cache with a Deployment that references
 // a Secret via Volumes — the only shape the topology builder uses to decide
 // whether to surface the Secret node. Without this reference, IncludeSecrets=

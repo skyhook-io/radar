@@ -46,10 +46,18 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 		return nil, nil, fmt.Errorf("kind and name are required")
 	}
 
-	// RBAC for the root. Cluster-scoped kinds go through SAR; namespaced
-	// reads go through the per-user namespace filter.
-	clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(input.Kind, input.Group)
-	if clusterScoped {
+	// RBAC for the root. Topology pseudo-kinds (NodeClass, NodePool, NodeClaim,
+	// …) FIRST: ClassifyKindScope doesn't recognize them ("nodeclass" isn't a
+	// real K8s kind — the variants are EC2NodeClass / AKSNodeClass / GCPNodeClass).
+	// Without this branch we fall into the namespaced arm below and reject as
+	// "namespace is required" even though the agent sees these kinds in
+	// get_topology output. Match shape mirrors canReadClusterScopedTopoKindMCP:
+	// SAR each table entry, allow on any pass.
+	if entries := topology.LookupClusterScopedTopoKind(input.Kind, input.Group); len(entries) > 0 {
+		if !canReadClusterScopedTopoKindByNameMCP(ctx, entries) {
+			return nil, nil, fmt.Errorf("forbidden: %s requires explicit cluster-scoped RBAC", input.Kind)
+		}
+	} else if clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(input.Kind, input.Group); clusterScoped {
 		if !canReadClusterScopedKind(ctx, gvrResource, gvrGroup, "get") {
 			return nil, nil, fmt.Errorf("forbidden: %s requires explicit cluster-scoped RBAC", input.Kind)
 		}
@@ -282,6 +290,48 @@ func canReadClusterScopedTopoKindMCP(ctx context.Context, n *topology.Node) (all
 	// Deny rather than allow-through — the per-variant gate exists to stop
 	// unmapped variants from leaking.
 	return false, true
+}
+
+// canReadClusterScopedTopoKindByNameMCP authorizes a topology cluster-scoped
+// pseudo-kind at root preflight, BEFORE any node has been resolved (so no
+// apiVersion to pick a single provider variant). Caller-supplied (kind, group)
+// is resolved by topology.LookupClusterScopedTopoKind, which returns every
+// matching row — one row when group is supplied, all rows under the kind
+// when it isn't.
+//
+// SAR each row, allow on the first pass. Mirrors REST
+// canReadClusterScopedTopoKindByName so both surfaces accept the same
+// requests: an agent that can list ANY provider variant of NodeClass
+// reaches the BFS, then the per-node Allow gate (canReadNeighborhoodNodeMCP)
+// drops the variants it can't read.
+//
+// We call canReadInNamespace(group, resource, "", "get") directly rather than
+// canReadClusterScopedKind, matching the pattern in
+// canReadClusterScopedTopoKindMCP: canReadClusterScopedKind re-resolves the
+// resource via ClassifyKindScope's discovery, which over-broadens
+// (passthrough-allow) when the CRD is missing. The table is the source of
+// truth for "this is cluster-scoped" — no need for discovery to re-confirm.
+//
+// Discovery filter + empty-fallthrough mirror the REST helper — see those
+// comments for the rationale.
+func canReadClusterScopedTopoKindByNameMCP(ctx context.Context, entries []topology.ClusterScopedKindEntry) bool {
+	disc := k8s.GetResourceDiscovery()
+	considered := 0
+	for _, ck := range entries {
+		if ck.Group != "" && disc != nil {
+			if _, ok := disc.GetResourceWithGroup(ck.Resource, ck.Group); !ok {
+				continue
+			}
+		}
+		considered++
+		if canReadInNamespace(ctx, ck.Group, ck.Resource, "", "get") {
+			return true
+		}
+	}
+	if considered == 0 {
+		return true
+	}
+	return false
 }
 
 func apiVersionGroupMCP(apiVersion string) string {

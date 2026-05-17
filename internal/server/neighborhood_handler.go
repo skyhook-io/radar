@@ -59,8 +59,19 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 
 	// RBAC for the root.
 	group := r.URL.Query().Get("group")
-	rootClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(rawKind, group)
-	if rootClusterScoped {
+	// Topology pseudo-kinds (NodeClass, NodePool, NodeClaim, …) FIRST: these
+	// are synthesized labels that ClassifyKindScope doesn't recognize ("nodeclass"
+	// isn't a real K8s kind — the variants are EC2NodeClass / AKSNodeClass /
+	// GCPNodeClass). Without this branch the call falls into the namespaced
+	// arm below and 400s with "namespace is required" even though "_" was
+	// supplied (URL → namespace == ""). Match shape mirrors the per-node gate
+	// in canReadClusterScopedTopoKind: SAR each table entry, allow on any pass.
+	if entries := topology.LookupClusterScopedTopoKind(rawKind, group); len(entries) > 0 {
+		if !s.canReadClusterScopedTopoKindByName(r, entries) {
+			s.writeError(w, http.StatusForbidden, "insufficient permissions for cluster-scoped "+rawKind)
+			return
+		}
+	} else if rootClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(rawKind, group); rootClusterScoped {
 		if !s.canRead(r, gvrGroup, gvrResource, "", "get") {
 			s.writeError(w, http.StatusForbidden, "insufficient permissions for cluster-scoped "+rawKind)
 			return
@@ -336,6 +347,54 @@ func (s *Server) canReadClusterScopedTopoKind(r *http.Request, n *topology.Node)
 	// Deny rather than fall through to allow — the per-variant gate exists
 	// precisely to stop unmapped variants from leaking.
 	return false, true
+}
+
+// canReadClusterScopedTopoKindByName authorizes a topology cluster-scoped
+// pseudo-kind at root preflight, BEFORE the topology graph has resolved a
+// concrete node (so no node.apiVersion to pick a single provider variant).
+// The caller supplies the URL kind + optional ?group= query param; the table
+// lookup in topology.LookupClusterScopedTopoKind returns every row matching
+// that (kind, group) tuple — one row when group is supplied, all rows under
+// the kind when it isn't.
+//
+// We SAR each candidate row and allow on the FIRST pass. Matches the
+// topology-strip semantics: "user with EC2 RBAC sees NodeClass nodes" must
+// hold at the root level too — otherwise an agent calling
+// /api/ai/neighborhood/nodeclass/_/default with EC2-only RBAC would 403
+// at preflight even though the per-node Allow gate would let the same
+// nodes through.
+//
+// Discovery filter: when the row has a non-empty Group and the resource is
+// MISSING from discovery (CRD removed mid-build or not installed in this
+// cluster), skip the row. This matches canReadClusterScopedTopoKind — over-
+// denying on a provider absent from the cluster would silently hide nodes
+// the admin can see.
+//
+// Edge case: all matching rows fail discovery (every provider variant absent
+// from the cluster). The table-lookup hit means the kind IS tracked; we fall
+// through to allow because the topology builder wouldn't have surfaced any
+// node for an unprivileged SA either — matching the per-node behavior at
+// canReadClusterScopedTopoKind's "CRD removed mid-build" branch.
+func (s *Server) canReadClusterScopedTopoKindByName(r *http.Request, entries []topology.ClusterScopedKindEntry) bool {
+	disc := k8s.GetResourceDiscovery()
+	considered := 0
+	for _, ck := range entries {
+		if ck.Group != "" && disc != nil {
+			if _, ok := disc.GetResourceWithGroup(ck.Resource, ck.Group); !ok {
+				continue
+			}
+		}
+		considered++
+		if s.canRead(r, ck.Group, ck.Resource, "", "get") {
+			return true
+		}
+	}
+	// Tracked kind but every variant was filtered out by discovery → allow.
+	// See edge-case rationale above.
+	if considered == 0 {
+		return true
+	}
+	return false
 }
 
 // apiVersionGroup extracts the group from a Kubernetes apiVersion string.
