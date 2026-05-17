@@ -1752,6 +1752,51 @@ function getInitialFiltersFromURL() {
 // Sort state type
 type SortDirection = 'asc' | 'desc' | null
 
+// Coarse "just now / Xm / Xh / Xd" buckets — finer-grained updates
+// add motion in the periphery without aiding any user decision.
+function formatLastUpdatedBucket(elapsedMs: number): string {
+  const elapsedSec = Math.max(0, Math.floor(elapsedMs / 1000))
+  if (elapsedSec < 60) return 'just now'
+  const minutes = Math.floor(elapsedSec / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
+// ms until the displayed bucket would change.
+function msToNextBucket(elapsedMs: number): number {
+  const elapsed = Math.max(0, elapsedMs)
+  if (elapsed < 60_000) return 60_000 - elapsed
+  if (elapsed < 3_600_000) return 60_000 - (elapsed % 60_000)
+  if (elapsed < 86_400_000) return 3_600_000 - (elapsed % 3_600_000)
+  return 86_400_000 - (elapsed % 86_400_000)
+}
+
+// Isolated subtree so re-renders don't cascade into the parent's
+// virtualized table.
+function LastUpdatedLabel({ lastUpdated }: { lastUpdated: Date }) {
+  const [, force] = useState(0)
+  useEffect(() => {
+    let id: ReturnType<typeof setTimeout>
+    function schedule() {
+      const delay = Math.max(1000, msToNextBucket(Date.now() - lastUpdated.getTime()))
+      id = setTimeout(() => {
+        force(t => t + 1)
+        schedule()
+      }, delay)
+    }
+    schedule()
+    return () => clearTimeout(id)
+  }, [lastUpdated])
+  return (
+    <div className="flex items-center gap-1.5 text-xs text-theme-text-tertiary">
+      <Clock className="w-3.5 h-3.5" />
+      <span>Updated {formatLastUpdatedBucket(Date.now() - lastUpdated.getTime())}</span>
+    </div>
+  )
+}
+
 export function ResourcesView({
   namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange,
   apiResources: apiResourcesProp,
@@ -2680,12 +2725,18 @@ export function ResourcesView({
 
   const [refetch, isRefreshAnimating, refreshPhase] = useRefreshAnimation(() => refetchFn?.())
 
-  // Track last updated time
+  // React Query bumps dataUpdatedAt on no-op refetches (window focus,
+  // mount, sibling subscribers); structural sharing returns the same
+  // resources reference when data is byte-identical. Skip the timer
+  // reset in that case — otherwise opening a filter drawer looks like
+  // it triggered a real fetch.
+  const lastDataRef = useRef<unknown>(undefined)
   useEffect(() => {
-    if (dataUpdatedAt) {
-      setLastUpdated(new Date(dataUpdatedAt))
-    }
-  }, [dataUpdatedAt])
+    if (!dataUpdatedAt) return
+    if (resources === lastDataRef.current) return
+    lastDataRef.current = resources
+    setLastUpdated(new Date(dataUpdatedAt))
+  }, [dataUpdatedAt, resources])
 
   // Derive counts — prefer lightweight resourceCounts prop over full query data
   const counts = useMemo(() => {
@@ -3524,12 +3575,7 @@ export function ResourcesView({
             </span>
           )}
 
-          {lastUpdated && (
-            <div className="flex items-center gap-1.5 text-xs text-theme-text-tertiary">
-              <Clock className="w-3.5 h-3.5" />
-              <span>Updated <span className="inline-block min-w-[4ch] tabular-nums">{formatAge(lastUpdated.toISOString())}</span></span>
-            </div>
-          )}
+          {lastUpdated && <LastUpdatedLabel lastUpdated={lastUpdated} />}
           {/* Column picker */}
           <div className="relative" ref={columnPickerRef}>
             <button
@@ -4026,7 +4072,14 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
     )
   }
   if (column === 'age') {
-    return <span className="text-sm text-theme-text-secondary">{formatAge(meta.creationTimestamp)}</span>
+    if (!meta.creationTimestamp) {
+      return <span className="text-sm text-theme-text-secondary">-</span>
+    }
+    return (
+      <Tooltip content={new Date(meta.creationTimestamp).toLocaleString()}>
+        <span className="text-sm text-theme-text-secondary">{formatAge(meta.creationTimestamp)}</span>
+      </Tooltip>
+    )
   }
 
   // Kind-specific columns (normalize CRD singular names like 'ScaledObject' → 'scaledobjects')
