@@ -77,7 +77,10 @@ auth:
     clientSecret: your-client-secret
     redirectURL: https://radar.example.com/auth/callback
     groupsClaim: groups                        # JWT claim containing group membership
+    # scopes: ["openid", "profile", "email", "groups"]  # Default — uncomment to override (e.g., drop "groups" for Google)
 ```
+
+**Scopes:** by default Radar requests `openid profile email groups` at the authorization endpoint. The `groups` scope is required by Dex, Keycloak, and most IdPs to actually include the groups claim in the ID token. If your IdP rejects unknown scopes (Google in particular doesn't define `groups`), override via `auth.oidc.scopes` / `--auth-oidc-scopes` to drop it or substitute the provider-specific equivalent.
 
 **Logout behavior:**
 
@@ -387,6 +390,7 @@ Radar uses stateless HMAC-SHA256 signed cookies for sessions. The cookie contain
 | OIDC client secret key | — | `auth.oidc.clientSecretKey` | `client-secret` |
 | OIDC redirect URL | `--auth-oidc-redirect-url` | `auth.oidc.redirectURL` | — |
 | OIDC groups claim | `--auth-oidc-groups-claim` | `auth.oidc.groupsClaim` | `groups` |
+| OIDC scopes | `--auth-oidc-scopes` | `auth.oidc.scopes` | `openid,profile,email,groups` |
 | OIDC post-logout redirect | `--auth-oidc-post-logout-redirect-url` | `auth.oidc.postLogoutRedirectURL` | — |
 | OIDC username prefix | `--auth-oidc-username-prefix` | `auth.oidc.usernamePrefix` | — |
 | OIDC groups prefix | `--auth-oidc-groups-prefix` | `auth.oidc.groupsPrefix` | — |

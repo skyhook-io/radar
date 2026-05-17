@@ -77,6 +77,9 @@ spec:
             {{- if .Values.auth.oidc.groupsClaim }}
             - --auth-oidc-groups-claim={{ .Values.auth.oidc.groupsClaim }}
             {{- end }}
+            {{- if .Values.auth.oidc.scopes }}
+            - --auth-oidc-scopes={{ join "," .Values.auth.oidc.scopes }}
+            {{- end }}
             {{- if .Values.auth.oidc.postLogoutRedirectURL }}
             - --auth-oidc-post-logout-redirect-url={{ .Values.auth.oidc.postLogoutRedirectURL }}
             {{- end }}

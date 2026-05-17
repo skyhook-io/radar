@@ -29,7 +29,8 @@ type Config struct {
 	OIDCClientID     string
 	OIDCClientSecret string
 	OIDCRedirectURL           string
-	OIDCGroupsClaim           string // default "groups"
+	OIDCGroupsClaim           string   // default "groups"
+	OIDCScopes                []string // OAuth2 scopes requested at authorization; default ["openid", "profile", "email", "groups"]
 	OIDCPostLogoutRedirectURL  string // optional, URL to redirect after IdP logout
 	OIDCUsernamePrefix         string // prefix added to OIDC username for K8s impersonation (e.g., "oidc:")
 	OIDCGroupsPrefix           string // prefix added to OIDC groups for K8s impersonation (e.g., "oidc:")
@@ -63,6 +64,9 @@ func (c *Config) Defaults() {
 	}
 	if c.OIDCGroupsClaim == "" {
 		c.OIDCGroupsClaim = "groups"
+	}
+	if len(c.OIDCScopes) == 0 {
+		c.OIDCScopes = []string{"openid", "profile", "email", "groups"}
 	}
 	// Fall back to env vars for secrets (used by Helm chart)
 	if c.Secret == "" {

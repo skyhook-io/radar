@@ -233,6 +233,11 @@ auth:
     clientSecretKey: "client-secret"
     redirectURL: ""
     groupsClaim: "groups"
+    # OAuth2 scopes requested at authorization. Defaults to
+    # ["openid", "profile", "email", "groups"] inside the binary when empty.
+    # Override if your IdP rejects "groups" (e.g., Google — drop it) or you
+    # need extras like "offline_access".
+    scopes: []
     # URL to redirect after OIDC provider logout (must be registered with IdP)
     postLogoutRedirectURL: ""
     # Prefix for OIDC username/groups to match kube-apiserver --oidc-username-prefix / --oidc-groups-prefix

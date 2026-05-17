@@ -73,13 +73,18 @@ func NewOIDCHandler(ctx context.Context, cfg Config) (*OIDCHandler, error) {
 		return nil, err
 	}
 
+	scopes := cfg.OIDCScopes
+	if len(scopes) == 0 {
+		scopes = []string{oidc.ScopeOpenID, "profile", "email", "groups"}
+	}
 	oauthCfg := oauth2.Config{
 		ClientID:     cfg.OIDCClientID,
 		ClientSecret: cfg.OIDCClientSecret,
 		RedirectURL:  cfg.OIDCRedirectURL,
 		Endpoint:     provider.Endpoint(),
-		Scopes:       []string{oidc.ScopeOpenID, "profile", "email"},
+		Scopes:       scopes,
 	}
+	log.Printf("[oidc] Requesting scopes: %v", scopes)
 
 	verifier := provider.Verifier(&oidc.Config{ClientID: cfg.OIDCClientID})
 
