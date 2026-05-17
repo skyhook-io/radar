@@ -80,11 +80,16 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 	// Build the full topology and slice via BFS. The MCP server doesn't own
 	// a topology memoizer (the REST server does), so we accept the per-call
 	// rebuild cost here — neighborhood is a low-frequency tool.
+	//
+	// dp is captured once and threaded into both Builder and BuildNeighborhoodWithIndex
+	// so root-ID construction can resolve CRD plurals correctly (without it,
+	// buildNodeID falls back to the static kindMap which only covers built-in kinds).
+	dp := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 	buildOpts := topology.DefaultBuildOptions()
 	buildOpts.IncludeReplicaSets = true
 	buildOpts.ForRelationshipCache = true
 	topo, err := topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
-		WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())).
+		WithDynamic(dp).
 		Build(buildOpts)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to build topology: %w", err)
@@ -108,7 +113,7 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 		return canReadNeighborhoodNodeMCP(ctx, n)
 	}
 
-	sub := topology.BuildNeighborhoodWithIndex(topo, root, opts, idx)
+	sub := topology.BuildNeighborhoodWithIndex(topo, root, opts, idx, dp)
 	if len(sub.Nodes) == 0 {
 		return nil, nil, fmt.Errorf("resource not found in topology: %s/%s/%s", input.Kind, input.Namespace, input.Name)
 	}
@@ -167,6 +172,10 @@ func displayKindForMCP(kind string) string {
 	return normalizeDisplayKind(strings.ToLower(kind))
 }
 
+// canReadNeighborhoodNodeMCP is the MCP-side per-node RBAC gate. Mirrors
+// the REST canReadNeighborhoodNode. See that function for the Secret SAR
+// rationale — namespace access alone leaks Secrets when the cache SA has
+// cluster-wide secrets RBAC.
 func canReadNeighborhoodNodeMCP(ctx context.Context, n *topology.Node) bool {
 	ns := ""
 	group := ""
@@ -179,7 +188,15 @@ func canReadNeighborhoodNodeMCP(ctx context.Context, n *topology.Node) bool {
 		}
 	}
 	if ns != "" {
-		return checkNamespaceAccess(ctx, ns)
+		if !checkNamespaceAccess(ctx, ns) {
+			return false
+		}
+		// Per-kind tightening inside the namespace. v1 covers Secret only —
+		// reuse canReadInNamespace exactly as handleGetResource does.
+		if n.Kind == topology.KindSecret {
+			return canReadInNamespace(ctx, "", "secrets", ns, "get")
+		}
+		return true
 	}
 	clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(string(n.Kind), group)
 	if !clusterScoped {

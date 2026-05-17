@@ -90,12 +90,17 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	// dedupes concurrent calls. We also fetch the cached RelationshipsIndex
 	// so the BFS expansion uses O(degree) edge lookups instead of paying
 	// an O(E) adjacency-build per request.
+	//
+	// dp is captured once and threaded into both Builder and BuildNeighborhoodWithIndex
+	// so root-ID construction can resolve CRD plurals correctly (without it,
+	// buildNodeID falls back to the static kindMap which only covers built-in kinds).
+	dp := k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
 	buildOpts := topology.DefaultBuildOptions()
 	buildOpts.IncludeReplicaSets = true
 	buildOpts.ForRelationshipCache = true
 	build := func() (*topology.Topology, error) {
 		return topology.NewBuilder(k8s.NewTopologyResourceProvider(cache)).
-			WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())).
+			WithDynamic(dp).
 			Build(buildOpts)
 	}
 	topo, err := s.topoMemo.Get(buildOpts, build)
@@ -131,7 +136,7 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 		return s.canReadNeighborhoodNode(r, n)
 	}
 
-	sub := topology.BuildNeighborhoodWithIndex(topo, root, opts, idx)
+	sub := topology.BuildNeighborhoodWithIndex(topo, root, opts, idx, dp)
 	if len(sub.Nodes) == 0 {
 		s.writeError(w, http.StatusNotFound, "resource not found in topology")
 		return
@@ -199,6 +204,13 @@ func parseNeighborhoodOptions(r *http.Request) topology.NeighborhoodOptions {
 // MCP equivalent — splits on namespace presence: namespaced reads use the
 // per-user namespace filter; cluster-scoped reads go through canRead with
 // the kind classified via ClassifyKindScope.
+//
+// Secret nodes get an additional per-kind SAR inside the namespace: namespace
+// access (e.g. "user can list pods in team-a") is NOT a sufficient signal for
+// reading Secrets, because the SA the cache runs under may have cluster-wide
+// secrets RBAC (Helm release visibility) while the user does not. This mirrors
+// the same gate handleGetResource applies — without it, the neighborhood graph
+// would leak Secret existence + names to users who can't fetch them directly.
 func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool {
 	ns := ""
 	group := ""
@@ -212,7 +224,17 @@ func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool
 	}
 	if ns != "" {
 		allowed := s.getUserNamespaces(r, []string{ns})
-		return !noNamespaceAccess(allowed)
+		if noNamespaceAccess(allowed) {
+			return false
+		}
+		// Per-kind tightening inside the namespace. v1 covers Secret only —
+		// other namespaced kinds (Pods, ConfigMaps, …) ride on the namespace
+		// gate. Add new entries here when a kind's namespace-list discovery
+		// stops being a sufficient signal for that kind's read permission.
+		if n.Kind == topology.KindSecret {
+			return s.canRead(r, "", "secrets", ns, "get")
+		}
+		return true
 	}
 	clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(string(n.Kind), group)
 	if !clusterScoped {

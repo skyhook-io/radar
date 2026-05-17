@@ -539,6 +539,152 @@ func TestBuildNeighborhood_NilTopologyReturnsEmpty(t *testing.T) {
 	}
 }
 
+// TestBuildNeighborhood_GroupCollisionRoot pins the group-aware root lookup.
+// When two nodes share kind+namespace+name but come from different API
+// groups (a real collision: CAPI cluster.x-k8s.io/Cluster vs the hypothetical
+// KubeFleet cluster.fleet.io/Cluster — same kind, different groups), the
+// caller must be able to disambiguate by passing ResourceRef.Group. Without
+// the group filter, findNodeByRef returns the first match — a leak risk if
+// the wrong-group node has different visibility than the requested one.
+func TestBuildNeighborhood_GroupCollisionRoot(t *testing.T) {
+	// Two "Cluster" nodes in the same namespace, same name, different groups.
+	// Each has a distinct neighbor so we can verify which root was selected.
+	capi := Node{
+		ID:     "cluster.x-k8s.io/cluster/fleet/prod",
+		Kind:   "Cluster",
+		Name:   "prod",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace":  "fleet",
+			"apiVersion": "cluster.x-k8s.io/v1beta1",
+		},
+	}
+	capiMachine := makeNode("Machine", "fleet", "prod-md-0")
+	capiMachine.Data["apiVersion"] = "cluster.x-k8s.io/v1beta1"
+
+	fleet := Node{
+		ID:     "cluster.fleet.io/cluster/fleet/prod",
+		Kind:   "Cluster",
+		Name:   "prod",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace":  "fleet",
+			"apiVersion": "cluster.fleet.io/v1alpha1",
+		},
+	}
+	fleetGroup := makeNode("ClusterGroup", "fleet", "prod-grp")
+	fleetGroup.Data["apiVersion"] = "cluster.fleet.io/v1alpha1"
+
+	topo := &Topology{
+		Nodes: []Node{capi, capiMachine, fleet, fleetGroup},
+		Edges: []Edge{
+			makeEdge(EdgeManages, capi.ID, capiMachine.ID),
+			makeEdge(EdgeManages, fleet.ID, fleetGroup.ID),
+		},
+	}
+
+	// Explicit group=cluster.x-k8s.io must pick the CAPI Cluster and surface
+	// its Machine neighbor, NOT the Fleet ClusterGroup.
+	sub := BuildNeighborhoodWithIndex(topo,
+		ResourceRef{Kind: "Cluster", Namespace: "fleet", Name: "prod", Group: "cluster.x-k8s.io"},
+		NeighborhoodOptions{Profile: ProfileManagement, Hops: 1},
+		nil, nil,
+	)
+	if sub.Nodes[0].ID != capi.ID {
+		t.Fatalf("expected CAPI root (id=%s), got %s", capi.ID, sub.Nodes[0].ID)
+	}
+	got := nodeIDs(sub)
+	want := []string{capiMachine.ID, capi.ID}
+	sort.Strings(want)
+	if !equalStrings(got, want) {
+		t.Errorf("group=cluster.x-k8s.io root neighborhood = %v, want %v", got, want)
+	}
+}
+
+// TestBuildNeighborhood_GroupEmptyRootBackCompat pins the back-compat
+// behavior: when ResourceRef.Group is empty, group-blind matching wins
+// and the first matching node (by topology iteration order) is selected.
+// This preserves pre-fix behavior for callers that don't supply a group
+// (REST clients on /api/ai/neighborhood/{kind}/{ns}/{name} without ?group=).
+func TestBuildNeighborhood_GroupEmptyRootBackCompat(t *testing.T) {
+	// Same collision setup as GroupCollisionRoot. With Group="" the lookup
+	// should return one of the two "Cluster" nodes (current iteration order
+	// returns the first one — pin that as the contract).
+	capi := Node{
+		ID:     "cluster.x-k8s.io/cluster/fleet/prod",
+		Kind:   "Cluster",
+		Name:   "prod",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace":  "fleet",
+			"apiVersion": "cluster.x-k8s.io/v1beta1",
+		},
+	}
+	fleet := Node{
+		ID:     "cluster.fleet.io/cluster/fleet/prod",
+		Kind:   "Cluster",
+		Name:   "prod",
+		Status: StatusHealthy,
+		Data: map[string]any{
+			"namespace":  "fleet",
+			"apiVersion": "cluster.fleet.io/v1alpha1",
+		},
+	}
+	topo := &Topology{
+		Nodes: []Node{capi, fleet},
+		Edges: []Edge{},
+	}
+
+	sub := BuildNeighborhoodWithIndex(topo,
+		ResourceRef{Kind: "Cluster", Namespace: "fleet", Name: "prod", Group: ""},
+		NeighborhoodOptions{Profile: ProfileAll, Hops: 1},
+		nil, nil,
+	)
+	if len(sub.Nodes) == 0 {
+		t.Fatal("expected non-empty neighborhood for empty-group lookup")
+	}
+	// Back-compat: first node in topo.Nodes wins when group is unset.
+	if sub.Nodes[0].ID != capi.ID {
+		t.Errorf("empty-group lookup returned %s, expected first-match %s", sub.Nodes[0].ID, capi.ID)
+	}
+}
+
+// TestBuildNeighborhood_SecretFilteredByAllow verifies the secret-leak fix at
+// the topology layer: a Secret node in the BFS frontier is dropped when the
+// caller's Allow predicate rejects it, matching the per-kind RBAC gate the
+// REST and MCP handlers apply for Secret reads. The Secret must not appear in
+// the output and the RBACDenied counter must reflect the skip.
+func TestBuildNeighborhood_SecretFilteredByAllow(t *testing.T) {
+	pod := makeNode(KindPod, "prod", "cart-xyz")
+	secret := makeNode(KindSecret, "prod", "db-creds")
+	topo := &Topology{
+		Nodes: []Node{pod, secret},
+		Edges: []Edge{
+			makeEdge(EdgeConfigures, secret.ID, pod.ID),
+		},
+	}
+
+	// Caller drops the Secret — simulates the REST/MCP per-kind SAR refusing
+	// the user even though they have namespace access.
+	sub := BuildNeighborhoodWithIndex(topo,
+		ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"},
+		NeighborhoodOptions{
+			Profile: ProfileAll,
+			Hops:    1,
+			Allow:   func(n *Node) bool { return n.Kind != KindSecret },
+		},
+		nil, nil,
+	)
+	for _, n := range sub.Nodes {
+		if n.Kind == KindSecret {
+			t.Errorf("Secret leaked through BFS despite Allow=false: %s", n.ID)
+		}
+	}
+	if sub.RBACDenied != 1 {
+		t.Errorf("expected RBACDenied=1 for the denied Secret, got %d", sub.RBACDenied)
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

@@ -88,12 +88,14 @@ const neighborhoodDefaultMaxNodes = 25
 // opts.Profile. Returns a non-nil Subgraph even when the root is missing
 // from the topology — callers can check len(s.Nodes) == 0 for that case.
 //
-// Thin shim over BuildNeighborhoodWithIndex(nil) — every per-step neighbor
-// enumeration falls back to a linear scan over t.Edges. Hot callers that
-// already hold a RelationshipsIndex (REST + MCP handlers via Memoizer.GetIndex)
-// should call BuildNeighborhoodWithIndex directly to skip the index rebuild.
+// Thin shim over BuildNeighborhoodWithIndex(nil, nil) — every per-step neighbor
+// enumeration falls back to a linear scan over t.Edges, and root resolution
+// uses the lowercase-kind ID heuristic without CRD plural lookup. Hot callers
+// that already hold a RelationshipsIndex + DynamicProvider (REST + MCP
+// handlers) should call BuildNeighborhoodWithIndex directly to skip the index
+// rebuild and to enable group-aware root ID construction for CRDs.
 func BuildNeighborhood(t *Topology, root ResourceRef, opts NeighborhoodOptions) *Subgraph {
-	return BuildNeighborhoodWithIndex(t, root, opts, nil)
+	return BuildNeighborhoodWithIndex(t, root, opts, nil, nil)
 }
 
 // BuildNeighborhoodWithIndex is the indexed variant of BuildNeighborhood.
@@ -103,10 +105,18 @@ func BuildNeighborhood(t *Topology, root ResourceRef, opts NeighborhoodOptions) 
 // a single O(E) adjacency build up front, which is fine for one-shot library
 // callers and tests.
 //
+// dp threads the topology's DynamicProvider into root ID construction so
+// CRD plurals resolve correctly (e.g. "certificaterequests" → "certificaterequest").
+// Without dp, buildNodeID's static kindMap covers the built-in kinds only —
+// fine for tests but insufficient for ambiguous CRDs (CAPI vs CNPG Cluster).
+// When root.Group is non-empty it's also used by findNodeByRef to disambiguate
+// kind-collisions across API groups.
+//
 // Hot callers — REST handleAINeighborhood, MCP handleGetNeighborhood — fetch
 // idx from Memoizer.GetIndex so the topology-wide inverted index is shared
-// with GetRelationshipsWithIndex / SynthesizeManagedBy on the same request.
-func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts NeighborhoodOptions, idx *RelationshipsIndex) *Subgraph {
+// with GetRelationshipsWithIndex / SynthesizeManagedBy on the same request,
+// and pass the same dp they used to build the topology.
+func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts NeighborhoodOptions, idx *RelationshipsIndex, dp DynamicProvider) *Subgraph {
 	hops := opts.Hops
 	if hops <= 0 {
 		hops = neighborhoodDefaultHops
@@ -133,13 +143,17 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 		nodeByID[t.Nodes[i].ID] = &t.Nodes[i]
 	}
 
-	rootID := buildNodeID(root.Kind, root.Namespace, root.Name, nil)
+	// Use the same dp the topology was built with so CRD plurals resolve
+	// (e.g. "certificaterequests" → "certificaterequest"). Without it,
+	// buildNodeID's static map can't construct the right ID for arbitrary CRDs.
+	rootID := buildNodeID(root.Kind, root.Namespace, root.Name, dp)
 	rootNode, ok := nodeByID[rootID]
 	if !ok {
-		// Fallback: try matching by (kind, namespace, name) tuple. Mostly
-		// for CRDs whose topology node ID uses a different prefix than the
-		// lowercase kind (e.g. "knativeservice/"). Cheap because we already
-		// have the node map.
+		// Fallback: try matching by (kind, namespace, name [+ group]) tuple.
+		// Mostly for CRDs whose topology node ID uses a different prefix than
+		// the lowercase kind (e.g. "knativeservice/"). When root.Group is set,
+		// findNodeByRef also disambiguates kind-collisions across API groups
+		// (CAPI cluster.x-k8s.io/Cluster vs Fleet cluster.fleet.io/Cluster).
 		rootNode = findNodeByRef(t.Nodes, root)
 		if rootNode == nil {
 			return sub
@@ -354,11 +368,18 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 	}
 }
 
-// findNodeByRef looks up a node by (kind, namespace, name). Used as a
-// fallback when buildNodeID's lowercase-kind heuristic produces an ID that
+// findNodeByRef looks up a node by (kind, namespace, name [+ group]). Used as
+// a fallback when buildNodeID's lowercase-kind heuristic produces an ID that
 // doesn't match a CRD-prefixed node ID (e.g. "knativeservice/").
+//
+// When ref.Group is non-empty, the candidate node's apiGroup (derived from
+// Data["apiVersion"] via apiVersionGroupFromData) must match — this is how
+// callers disambiguate kind-collisions across API groups, e.g. asking for the
+// CAPI cluster.x-k8s.io/Cluster vs the KubeFleet cluster.fleet.io/Cluster
+// when both share the same kind+namespace+name. When ref.Group is empty
+// the group check is skipped (back-compat: callers that don't supply a group
+// get the first matching node, same as before).
 func findNodeByRef(nodes []Node, ref ResourceRef) *Node {
-	wantKind := strings.ToLower(string(ref.Kind))
 	for i := range nodes {
 		n := &nodes[i]
 		if !strings.EqualFold(string(n.Kind), ref.Kind) {
@@ -371,7 +392,11 @@ func findNodeByRef(nodes []Node, ref ResourceRef) *Node {
 		if ns != ref.Namespace {
 			continue
 		}
-		_ = wantKind
+		if ref.Group != "" {
+			if nodeAPIGroupFromData(n) != ref.Group {
+				continue
+			}
+		}
 		return n
 	}
 	return nil
@@ -385,6 +410,25 @@ func nodeNamespaceFromData(n *Node) string {
 	}
 	if ns, ok := n.Data["namespace"].(string); ok {
 		return ns
+	}
+	return ""
+}
+
+// nodeAPIGroupFromData extracts the API group from a Node's Data map by
+// splitting the apiVersion (e.g. "apps/v1" → "apps", "v1" → ""). Returns ""
+// when no apiVersion is set on the node.
+func nodeAPIGroupFromData(n *Node) string {
+	if n.Data == nil {
+		return ""
+	}
+	v, ok := n.Data["apiVersion"].(string)
+	if !ok {
+		return ""
+	}
+	for i := 0; i < len(v); i++ {
+		if v[i] == '/' {
+			return v[:i]
+		}
 	}
 	return ""
 }
