@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -281,8 +282,18 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	}
 	cache := k8s.GetResourceCache()
 
+	// Canonical kind from the resource's own TypeMeta (set at fetch). Pascal
+	// singular — matches what the audit check runner writes into Finding.Kind,
+	// so the audit index lookup keys correctly. Falls back to the URL kind
+	// only when TypeMeta is somehow empty; non-canonical input there would
+	// silently mis-key the audit lookup.
+	canonicalKind := obj.GetObjectKind().GroupVersionKind().Kind
+	if canonicalKind == "" {
+		canonicalKind = kind
+	}
+
 	issueSum := computeIssueSummaryForResource(cache, kind, namespace, name)
-	auditSum := computeAuditSummaryForResource(cache, namespace, name)
+	auditSum := computeAuditSummaryForResource(cache, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
 		Tier:          resourcecontext.TierBasic,
@@ -411,11 +422,19 @@ func composeSeverityRank(s issues.Severity) int {
 }
 
 // computeAuditSummaryForResource looks up audit findings for the subject
-// resource. Uses pkg/audit.IndexByResource so the lookup is keyed on the
-// canonical (Kind/ns/name) tuple — handles plural→singular normalization
-// via the Finding.Kind values written by the check runner.
-func computeAuditSummaryForResource(cache *k8s.ResourceCache, namespace, name string) *resourcecontext.AuditSummary {
-	if cache == nil {
+// resource via the canonical (Kind/ns/name) tuple. kind MUST be the Pascal
+// singular form the audit check runner writes into Finding.Kind (e.g. "Pod",
+// not "pod" or "pods") — the caller derives it from obj's TypeMeta. Without
+// a Kind-aware key, a Deployment "web" in "prod" would inherit findings
+// from a Service "web" in the same namespace, since map iteration in the
+// previous implementation only compared (namespace, name).
+//
+// TopFinding is selected deterministically: highest severity wins, with
+// CheckID as the ascending tiebreaker. Map iteration ordering does NOT
+// influence the choice — relevant because SynthesizeHints downstream
+// advertises deterministic output.
+func computeAuditSummaryForResource(cache *k8s.ResourceCache, kind, namespace, name string) *resourcecontext.AuditSummary {
+	if cache == nil || kind == "" {
 		return nil
 	}
 	results := audit.RunFromCache(cache, []string{namespace}, nil)
@@ -423,27 +442,22 @@ func computeAuditSummaryForResource(cache *k8s.ResourceCache, namespace, name st
 		return nil
 	}
 	idx := bpaudit.IndexByResource(results.Findings)
-	var match []bpaudit.Finding
-	for key, fs := range idx {
-		parts := strings.SplitN(key, "/", 3)
-		if len(parts) != 3 {
-			continue
-		}
-		if parts[1] == namespace && parts[2] == name {
-			match = append(match, fs...)
-		}
-	}
+	match := idx[bpaudit.ResourceKey(kind, namespace, name)]
 	if len(match) == 0 {
 		return nil
 	}
 
-	var topSeverity, topFinding string
-	for _, f := range match {
-		if topSeverity == "" || auditSeverityRank(f.Severity) > auditSeverityRank(topSeverity) {
-			topSeverity = f.Severity
-			topFinding = f.CheckID
+	// Sort by (severity desc, CheckID asc) so TopFinding is deterministic
+	// across runs even when multiple findings tie on severity.
+	sort.Slice(match, func(i, j int) bool {
+		ri, rj := auditSeverityRank(match[i].Severity), auditSeverityRank(match[j].Severity)
+		if ri != rj {
+			return ri > rj
 		}
-	}
+		return match[i].CheckID < match[j].CheckID
+	})
+	topSeverity := match[0].Severity
+	topFinding := match[0].CheckID
 	return &resourcecontext.AuditSummary{
 		Count:           len(match),
 		HighestSeverity: topSeverity,

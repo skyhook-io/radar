@@ -125,22 +125,31 @@ func selectedByHint(refs []ContextRef) string {
 	if len(refs) == 0 {
 		return ""
 	}
-	// Distinguish PDB vs NetworkPolicy in the hint — they read very
-	// differently to a human, and lumping them together loses signal.
-	var pdb, np []ContextRef
+	// Distinguish known SelectedBy kinds (PDB vs NetworkPolicy) in the hint —
+	// they read very differently to a human, and lumping them together loses
+	// signal. Match each kind explicitly: a future kind added to SelectedBy
+	// (e.g. ValidatingAdmissionPolicy) would otherwise be silently rendered
+	// as NetworkPolicy. Unrecognized kinds drop through to summarizeKindsCounts.
+	var pdb, np, other []ContextRef
 	for _, r := range refs {
-		if r.Kind == "PodDisruptionBudget" {
+		switch r.Kind {
+		case "PodDisruptionBudget":
 			pdb = append(pdb, r)
-		} else {
+		case "NetworkPolicy":
 			np = append(np, r)
+		default:
+			other = append(other, r)
 		}
 	}
-	parts := make([]string, 0, 2)
+	parts := make([]string, 0, 3)
 	if n := len(np); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d %s", n, pluralize("NetworkPolicy", n)))
 	}
 	if n := len(pdb); n > 0 {
 		parts = append(parts, fmt.Sprintf("%d %s", n, pluralize("PodDisruptionBudget", n)))
+	}
+	if len(other) > 0 {
+		parts = append(parts, summarizeKindsCounts(other))
 	}
 	return strings.Join(parts, " and ") + " " + selectVerb(len(refs))
 }

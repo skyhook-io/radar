@@ -194,13 +194,18 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			}
 		}
 
-		// RunsOn: prefer the topology-supplied Node ref; fall back to
-		// pod.Spec.NodeName only when topology is absent (no rel).
+		// RunsOn: prefer the topology-supplied Node ref. Fall back to
+		// pod.Spec.NodeName any time rel.Node is empty — the Node informer
+		// may be cold, the node may not yet be in the topology graph, or
+		// rel itself may be nil. The previous `else if rel == nil` guard
+		// dropped the fallback when topology was built but rel.Node hadn't
+		// been populated yet, leaving RunsOn empty even though the Pod
+		// spec clearly named a node.
 		var nodeName, nodeGroup string
 		if rel != nil && rel.Node != nil {
 			nodeName = rel.Node.Name
 			nodeGroup = rel.Node.Group
-		} else if rel == nil {
+		} else {
 			nodeName = pod.Spec.NodeName
 		}
 		if nodeName != "" {
