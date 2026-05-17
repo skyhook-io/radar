@@ -425,7 +425,9 @@ func TestBuild_HPA_Identity(t *testing.T) {
 	}
 }
 
-func TestBuild_PolicyReports_RolledUp(t *testing.T) {
+func TestBuild_PolicyReports_BasicTierCountsOnly(t *testing.T) {
+	// Basic tier emits counts only (fail/warn/pass). Top[] is reserved
+	// for diagnostic tier — keeps the basic-tier wire footprint minimal.
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "prod"}}
 	reports := mockPolicyReports{
 		"Pod/prod/p": {
@@ -447,8 +449,8 @@ func TestBuild_PolicyReports_RolledUp(t *testing.T) {
 	if k.Fail != 1 || k.Warn != 1 || k.Pass != 1 {
 		t.Errorf("Kyverno counts: got fail=%d warn=%d pass=%d", k.Fail, k.Warn, k.Pass)
 	}
-	if len(k.Top) == 0 || k.Top[0].Result != "fail" {
-		t.Errorf("Top[0] should be the failing finding; got %+v", k.Top)
+	if len(k.Top) != 0 {
+		t.Errorf("basic tier must NOT emit Top[]; got %d entries: %+v", len(k.Top), k.Top)
 	}
 	gotHint := false
 	for _, h := range rc.Hints {
@@ -459,6 +461,38 @@ func TestBuild_PolicyReports_RolledUp(t *testing.T) {
 	}
 	if !gotHint {
 		t.Errorf("expected Kyverno hint; got %v", rc.Hints)
+	}
+}
+
+func TestBuild_PolicyReports_DiagnosticTierIncludesTop(t *testing.T) {
+	// Diagnostic tier adds the Top[] findings (capped at 3, ordered
+	// fail > warn > error > pass). Used by the deep agent investigation
+	// path — basic tier is for everyday triage.
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "p", Namespace: "prod"}}
+	reports := mockPolicyReports{
+		"Pod/prod/p": {
+			{Policy: "require-labels", Rule: "check-app", Result: "fail", Message: "missing label"},
+			{Policy: "require-labels", Rule: "check-env", Result: "warn"},
+			{Policy: "no-host-network", Rule: "main", Result: "pass"},
+		},
+	}
+	rc := Build(context.Background(), pod, Options{
+		Tier:          TierDiagnostic,
+		AccessChecker: allowAllChecker{},
+		PolicyReports: reports,
+	})
+	if rc.PolicySummary == nil || rc.PolicySummary.Kyverno == nil {
+		t.Fatalf("PolicySummary.Kyverno: got nil; rc=%+v", rc)
+	}
+	k := rc.PolicySummary.Kyverno
+	if k.Fail != 1 || k.Warn != 1 || k.Pass != 1 {
+		t.Errorf("Kyverno counts: got fail=%d warn=%d pass=%d", k.Fail, k.Warn, k.Pass)
+	}
+	if len(k.Top) == 0 {
+		t.Fatal("diagnostic tier must emit Top[] findings")
+	}
+	if k.Top[0].Result != "fail" {
+		t.Errorf("Top[0] should be the failing finding; got %+v", k.Top)
 	}
 }
 

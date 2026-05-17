@@ -143,11 +143,13 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.IssueSummary = opts.IssueSummary
 	rc.AuditSummary = opts.AuditSummary
 
-	// 5. PolicyReports — Kyverno findings rolled up.
+	// 5. PolicyReports — Kyverno findings rolled up. Basic tier emits
+	// counts only (fail/warn/pass); diagnostic tier adds the top[]
+	// findings. Tier discrimination keeps the basic-tier wire size tight.
 	if opts.PolicyReports != nil {
 		findings := opts.PolicyReports.FindingsFor(ident.Kind, ident.Namespace, ident.Name)
 		if len(findings) > 0 {
-			rc.PolicySummary = buildPolicySummary(findings)
+			rc.PolicySummary = buildPolicySummary(findings, opts.Tier)
 		}
 	}
 
@@ -639,10 +641,14 @@ func checkRef(ctx context.Context, ac RefAccessChecker, r *ContextRef) bool {
 
 // buildPolicySummary rolls up Kyverno findings into the summary block.
 // Top findings are picked first by fail > warn > error > pass, then by
-// stable input order — callers can prune to MAX (3 today).
+// stable input order — capped at policySummaryTopMax.
+//
+// Tier discrimination: basic emits counts only (Fail/Warn/Pass) for a
+// minimal wire footprint; diagnostic adds the Top[] findings. Locked
+// in the plan's v1 contract.
 const policySummaryTopMax = 3
 
-func buildPolicySummary(findings []KyvernoFinding) *PolicySummary {
+func buildPolicySummary(findings []KyvernoFinding, tier ContextTier) *PolicySummary {
 	var fail, warn, pass int
 	for _, f := range findings {
 		switch f.Result {
@@ -655,23 +661,25 @@ func buildPolicySummary(findings []KyvernoFinding) *PolicySummary {
 		}
 	}
 
-	// Order Top by result priority; cap to policySummaryTopMax.
-	ordered := append([]KyvernoFinding(nil), findings...)
-	sort.SliceStable(ordered, func(i, j int) bool {
-		return resultRank(ordered[i].Result) < resultRank(ordered[j].Result)
-	})
-	if len(ordered) > policySummaryTopMax {
-		ordered = ordered[:policySummaryTopMax]
+	ks := &KyvernoSummary{
+		Fail: fail,
+		Warn: warn,
+		Pass: pass,
 	}
 
-	return &PolicySummary{
-		Kyverno: &KyvernoSummary{
-			Fail: fail,
-			Warn: warn,
-			Pass: pass,
-			Top:  ordered,
-		},
+	// Top[] only on diagnostic tier. Basic stays counts-only.
+	if tier == TierDiagnostic {
+		ordered := append([]KyvernoFinding(nil), findings...)
+		sort.SliceStable(ordered, func(i, j int) bool {
+			return resultRank(ordered[i].Result) < resultRank(ordered[j].Result)
+		})
+		if len(ordered) > policySummaryTopMax {
+			ordered = ordered[:policySummaryTopMax]
+		}
+		ks.Top = ordered
 	}
+
+	return &PolicySummary{Kyverno: ks}
 }
 
 func resultRank(r string) int {
