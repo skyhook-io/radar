@@ -15,7 +15,7 @@ import (
 // Neighborhood tool input.
 type getNeighborhoodInput struct {
 	Kind      string `json:"kind" jsonschema:"resource kind: pod, deployment, service, application, etc."`
-	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. cluster.x-k8s.io for CAPI Cluster vs CNPG Cluster)"`
+	Group     string `json:"group,omitempty" jsonschema:"API group required to disambiguate kinds that collide across groups. Examples: serving.knative.dev for KNative Service (vs core/v1 Service), cluster.x-k8s.io for CAPI Cluster (vs CNPG Cluster), networking.istio.io for Istio Gateway (vs gateway.networking.k8s.io Gateway). Omit for kinds with no known collisions."`
 	Namespace string `json:"namespace,omitempty" jsonschema:"resource namespace; omit for cluster-scoped kinds"`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Profile   string `json:"profile,omitempty" jsonschema:"edge-type preset: management, networking, policy, security, all, or auto. Default: auto (picks based on root kind)."`
@@ -217,10 +217,10 @@ func canReadNeighborhoodNodeMCP(ctx context.Context, n *topology.Node) bool {
 }
 
 // canReadClusterScopedTopoKindMCP authorizes a topology cluster-scoped
-// pseudo-kind via the same clusterScopedTopologyKinds table that
-// deniedClusterScopedTopoKinds uses for /api/topology gating. Returns
-// (allowed, true) when kind is a tracked pseudo-kind, or (_, false) so
-// the caller falls through to the ClassifyKindScope path.
+// pseudo-kind via topology.ClusterScopedKinds (centralized table — see
+// pkg/topology/cluster_scoped_kinds.go). Returns (allowed, true) when
+// kind is a tracked pseudo-kind, or (_, false) so the caller falls
+// through to the ClassifyKindScope path.
 //
 // Allow if ANY variant present in discovery passes — a user with
 // get-ec2nodeclasses RBAC sees EC2 NodeClass nodes even on a cluster that
@@ -231,13 +231,13 @@ func canReadClusterScopedTopoKindMCP(ctx context.Context, kind topology.NodeKind
 	disc := k8s.GetResourceDiscovery()
 	hasEntry := false
 	hasInDiscovery := false
-	for _, ck := range clusterScopedTopologyKinds {
-		if ck.kind != kind {
+	for _, ck := range topology.ClusterScopedKinds {
+		if ck.Kind != kind {
 			continue
 		}
 		hasEntry = true
-		if ck.group != "" && disc != nil {
-			if _, ok := disc.GetResourceWithGroup(ck.resource, ck.group); !ok {
+		if ck.Group != "" && disc != nil {
+			if _, ok := disc.GetResourceWithGroup(ck.Resource, ck.Group); !ok {
 				continue
 			}
 		}
@@ -248,7 +248,7 @@ func canReadClusterScopedTopoKindMCP(ctx context.Context, kind topology.NodeKind
 		// which over-broadens (passthrough-allow) when discovery is missing
 		// the CRD. The table is the source of truth for "this is cluster-
 		// scoped" — we don't need discovery to re-confirm that.
-		if canReadInNamespace(ctx, ck.group, ck.resource, "", "get") {
+		if canReadInNamespace(ctx, ck.Group, ck.Resource, "", "get") {
 			return true, true
 		}
 	}

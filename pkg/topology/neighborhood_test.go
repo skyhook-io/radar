@@ -831,19 +831,29 @@ func TestBuildNeighborhood_PseudoKindRootLookup(t *testing.T) {
 		},
 	}
 
-	sub := BuildNeighborhoodWithIndex(topo,
-		ResourceRef{Kind: "Service", Namespace: "prod", Name: "api", Group: "serving.knative.dev"},
-		NeighborhoodOptions{Profile: ProfileNetworking, Hops: 1},
-		nil, nil,
-	)
-	if len(sub.Nodes) == 0 {
-		t.Fatal("expected non-empty neighborhood for KnativeService pseudo-kind root")
-	}
-	if sub.Nodes[0].ID != knsvc.ID {
-		t.Errorf("pseudo-kind root lookup returned %s, expected KnativeService %s", sub.Nodes[0].ID, knsvc.ID)
-	}
-	if sub.Nodes[0].Kind != KindKnativeService {
-		t.Errorf("expected NodeKind=KnativeService, got %s", sub.Nodes[0].Kind)
+	// Both Pascal-case ("Service" — MCP path) and lowercase ("service" — REST
+	// path after normalizeKind) must resolve to the KnativeService pseudo-kind.
+	// REST's lowercasing previously slipped past pseudoKindFor's Pascal-only
+	// switch and returned 404 for legitimate cross-group root lookups.
+	// REST normalizes URL paths to lowercase plural ("services"); MCP arrives
+	// in Pascal singular ("Service"). Both must resolve.
+	for _, kind := range []string{"Service", "service", "services"} {
+		t.Run(kind, func(t *testing.T) {
+			sub := BuildNeighborhoodWithIndex(topo,
+				ResourceRef{Kind: kind, Namespace: "prod", Name: "api", Group: "serving.knative.dev"},
+				NeighborhoodOptions{Profile: ProfileNetworking, Hops: 1},
+				nil, nil,
+			)
+			if len(sub.Nodes) == 0 {
+				t.Fatalf("expected non-empty neighborhood for KnativeService pseudo-kind root with kind=%q", kind)
+			}
+			if sub.Nodes[0].ID != knsvc.ID {
+				t.Errorf("pseudo-kind root lookup with kind=%q returned %s, expected KnativeService %s", kind, sub.Nodes[0].ID, knsvc.ID)
+			}
+			if sub.Nodes[0].Kind != KindKnativeService {
+				t.Errorf("expected NodeKind=KnativeService for kind=%q, got %s", kind, sub.Nodes[0].Kind)
+			}
+		})
 	}
 }
 

@@ -461,26 +461,35 @@ func pseudoKindFor(kind, group string) string {
 	if group == "" {
 		return kind
 	}
+	// Accept both singular and plural lowercase forms because REST hits
+	// this with URL-path kinds (plural — "services") after normalizeKind
+	// lowercases them, while MCP arrives in Pascal-case singular
+	// ("Service"). Without case + plurality insensitivity, REST root
+	// lookups silently 404 for any cross-group CRD whose plural collides
+	// with a built-in (e.g. serving.knative.dev/Service vs core/v1
+	// Service, cluster.x-k8s.io/Cluster vs other CRDs).
 	switch group {
 	case "serving.knative.dev":
-		switch kind {
-		case "Service":
+		switch strings.ToLower(kind) {
+		case "service", "services":
 			return string(KindKnativeService)
-		case "Configuration":
+		case "configuration", "configurations":
 			return string(KindKnativeConfiguration)
-		case "Revision":
+		case "revision", "revisions":
 			return string(KindKnativeRevision)
-		case "Route":
+		case "route", "routes":
 			return string(KindKnativeRoute)
 		}
 	case "cluster.x-k8s.io":
-		if kind == "Cluster" {
+		switch strings.ToLower(kind) {
+		case "cluster", "clusters":
 			return string(KindCAPICluster)
 		}
 	case "networking.istio.io":
 		// Istio Gateway lives under IstioGateway to avoid collision with
 		// gateway.networking.k8s.io/Gateway.
-		if kind == "Gateway" {
+		switch strings.ToLower(kind) {
+		case "gateway", "gateways":
 			return string(KindIstioGateway)
 		}
 	}

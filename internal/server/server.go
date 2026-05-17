@@ -806,43 +806,11 @@ func (s *Server) filterNamespacesByCanRead(r *http.Request, group, resource, ver
 	return out
 }
 
-// clusterScopedTopologyKinds maps topology NodeKinds for cluster-scoped
-// resources to the (group, resource) tuple a SAR needs. Mirrors the MCP
-// table — kept in sync manually since each side gates with its own helper.
-//
-// This is a denylist: it must enumerate every cluster-scoped kind the
-// topology builder creates. Drift here = silent leak. The follow-up plan
-// (per-node GVR/scope metadata + scope-driven strip) removes the central
-// table; until then, the checklist comment on NodeKind in
-// pkg/topology/types.go is the maintenance signal for new kinds.
-//
-// KindNamespace is intentionally excluded — handled by per-user filter
-// upstream. KindNodeClass has multiple entries (one per cloud provider)
-// because the topology builder iterates EC2NodeClass / AKSNodeClass /
-// GCPNodeClass under the same NodeKind label; a denial on any provider
-// strips all NodeClass nodes. canRead's unknown-kind passthrough makes
-// providers absent from the cluster's discovery non-blocking.
-var clusterScopedTopologyKinds = []struct {
-	kind     topology.NodeKind
-	group    string
-	resource string
-}{
-	{topology.KindNode, "", "nodes"},
-	{topology.KindNodePool, "karpenter.sh", "nodepools"},
-	{topology.KindNodeClaim, "karpenter.sh", "nodeclaims"},
-	{topology.KindNodeClass, "karpenter.k8s.aws", "ec2nodeclasses"},
-	{topology.KindNodeClass, "karpenter.azure.com", "aksnodeclasses"},
-	{topology.KindNodeClass, "karpenter.k8s.gcp", "gcpnodeclasses"},
-	{topology.KindGatewayClass, "gateway.networking.k8s.io", "gatewayclasses"},
-	{topology.KindPV, "", "persistentvolumes"},
-	{topology.KindStorageClass, "storage.k8s.io", "storageclasses"},
-	{topology.KindCiliumClusterwideNetworkPolicy, "cilium.io", "ciliumclusterwidenetworkpolicies"},
-	{topology.KindClusterNetworkPolicy, "policy.networking.k8s.io", "clusternetworkpolicies"},
-}
-
 // deniedClusterScopedTopoKinds returns the set of cluster-scoped topology
-// NodeKinds the calling user cannot list. Reuses canRead's per-user canI
-// cache so subsequent topology calls within the TTL don't re-SAR.
+// NodeKinds the calling user cannot list. Walks topology.ClusterScopedKinds
+// (centralized table — see pkg/topology/cluster_scoped_kinds.go). Reuses
+// canRead's per-user canI cache so subsequent topology calls within the
+// TTL don't re-SAR.
 //
 // Skips CRDs not present in discovery (e.g. AKSNodeClass on an EKS cluster):
 // SARing a non-existent resource returns false because no RBAC rule covers
@@ -852,14 +820,14 @@ var clusterScopedTopologyKinds = []struct {
 func (s *Server) deniedClusterScopedTopoKinds(r *http.Request) map[topology.NodeKind]bool {
 	deny := make(map[topology.NodeKind]bool)
 	disc := k8s.GetResourceDiscovery()
-	for _, ck := range clusterScopedTopologyKinds {
-		if ck.group != "" && disc != nil {
-			if _, ok := disc.GetResourceWithGroup(ck.resource, ck.group); !ok {
+	for _, ck := range topology.ClusterScopedKinds {
+		if ck.Group != "" && disc != nil {
+			if _, ok := disc.GetResourceWithGroup(ck.Resource, ck.Group); !ok {
 				continue
 			}
 		}
-		if !s.canRead(r, ck.group, ck.resource, "", "list") {
-			deny[ck.kind] = true
+		if !s.canRead(r, ck.Group, ck.Resource, "", "list") {
+			deny[ck.Kind] = true
 		}
 	}
 	return deny

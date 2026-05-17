@@ -25,11 +25,11 @@ import (
 // - dashboard.go: resource counting (if applicable)
 // - capabilities.go: ResourcePermissions struct + permCheck array (if needs RBAC)
 // - dynamic_cache.go: warmup list (if CRD)
-// - if the kind is cluster-scoped: add an entry to clusterScopedTopologyKinds
-//   in BOTH internal/server/server.go and internal/mcp/tools.go so the
-//   topology strip helpers can SAR-gate it. Missing the strip table leaks
-//   the cluster-scoped node to namespace-restricted users via /api/topology
-//   and the get_topology MCP tool.
+// - if the kind is cluster-scoped: add an entry to topology.ClusterScopedKinds
+//   in pkg/topology/cluster_scoped_kinds.go so the topology strip helpers
+//   AND neighborhood per-node gates can SAR-check it. Missing the entry
+//   leaks the cluster-scoped node to namespace-restricted users via
+//   /api/topology, get_topology MCP, AND get_neighborhood MCP/REST.
 type NodeKind string
 
 const (

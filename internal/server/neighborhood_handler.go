@@ -259,11 +259,11 @@ func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool
 }
 
 // canReadClusterScopedTopoKind authorizes a topology cluster-scoped pseudo-
-// kind (NodeClass, NodePool, …) by iterating the clusterScopedTopologyKinds
-// table and SAR-checking each (group, resource) entry under it. Returns
-// (allowed, true) when n is a pseudo-kind tracked by the table, or
-// (_, false) when n isn't a known pseudo-kind so the caller can fall back to
-// the ClassifyKindScope path.
+// kind (NodeClass, NodePool, …) by iterating topology.ClusterScopedKinds
+// (centralized table) and SAR-checking each (group, resource) entry under
+// it. Returns (allowed, true) when n is a pseudo-kind tracked by the
+// table, or (_, false) when n isn't a known pseudo-kind so the caller can
+// fall back to the ClassifyKindScope path.
 //
 // Semantics for multi-entry kinds (NodeClass has three — EC2/AKS/GCP): allow
 // if the user passes any provider variant that's present in discovery. Skip
@@ -275,18 +275,18 @@ func (s *Server) canReadClusterScopedTopoKind(r *http.Request, kind topology.Nod
 	disc := k8s.GetResourceDiscovery()
 	hasEntry := false
 	hasInDiscovery := false
-	for _, ck := range clusterScopedTopologyKinds {
-		if ck.kind != kind {
+	for _, ck := range topology.ClusterScopedKinds {
+		if ck.Kind != kind {
 			continue
 		}
 		hasEntry = true
-		if ck.group != "" && disc != nil {
-			if _, ok := disc.GetResourceWithGroup(ck.resource, ck.group); !ok {
+		if ck.Group != "" && disc != nil {
+			if _, ok := disc.GetResourceWithGroup(ck.Resource, ck.Group); !ok {
 				continue
 			}
 		}
 		hasInDiscovery = true
-		if s.canRead(r, ck.group, ck.resource, "", "get") {
+		if s.canRead(r, ck.Group, ck.Resource, "", "get") {
 			return true, true
 		}
 	}
