@@ -105,7 +105,7 @@ func TestBuildIssueIndex_GroupAware(t *testing.T) {
 			{Kind: "Service", Group: "serving.knative.dev", Namespace: "prod", Name: "api", Reason: "RouteNotReady", Severity: "warning"},
 		},
 	}
-	idx := BuildIssueIndex(p, nil, "")
+	idx := BuildIssueIndex(p, nil)
 	if got := idx.Count("", "Service", "prod", "api"); got != 1 {
 		t.Errorf("core Service count = %d, want 1", got)
 	}
@@ -128,7 +128,7 @@ func TestBuildIssueIndex_BeyondMaxLimit(t *testing.T) {
 		})
 	}
 	p := &fakeIssuesProvider{problems: probs}
-	idx := BuildIssueIndex(p, nil, "")
+	idx := BuildIssueIndex(p, nil)
 	tailName := fmtPodName(issues.MaxLimit + 25)
 	if got := idx.Count("", "Pod", "prod", tailName); got != 1 {
 		t.Fatalf("tail pod %s count = %d, want 1 (silent MaxLimit truncation?)", tailName, got)
@@ -172,7 +172,7 @@ func TestBuildIssueIndex_ClusterScopedIssueSurfacedWhenUnfiltered(t *testing.T) 
 	}
 
 	// Cluster-wide compose (nil namespaces) — issue surfaces.
-	idx := BuildIssueIndex(p, nil, "Node")
+	idx := BuildIssueIndex(p, nil)
 	if got := idx.Count("", "Node", "", "worker-1"); got != 1 {
 		t.Errorf("cluster-wide index: Node issueCount = %d, want 1 (cluster-scoped issue should appear)", got)
 	}
@@ -181,9 +181,48 @@ func TestBuildIssueIndex_ClusterScopedIssueSurfacedWhenUnfiltered(t *testing.T) 
 	// ["prod","staging"] drops it because the user-namespaced perm
 	// slice never matches "". This is what the pre-fix handler did for
 	// Node lists.
-	scopedIdx := BuildIssueIndex(p, []string{"prod", "staging"}, "Node")
+	scopedIdx := BuildIssueIndex(p, []string{"prod", "staging"})
 	if got := scopedIdx.Count("", "Node", "", "worker-1"); got != 0 {
 		t.Errorf("namespace-scoped index: Node issueCount = %d, want 0 (namespace filter drops cluster-scoped issue)", got)
+	}
+}
+
+// TestBuildIssueIndex_CRDPlural_NonZeroCount pins the fix for a Bugbot
+// finding on PR #722: a CRD listed by its plural form (e.g.
+// "applications" for ArgoCD Application) silently returned
+// issueCount=0 because BuildIssueIndex used to push the URL kind
+// through CanonicalSingular into filters.Kinds. CanonicalSingular only
+// covers built-in plurals — CRD plurals fell through unchanged
+// ("applications" stayed "applications"), Compose's case-insensitive
+// Kind filter then failed against the singular "Application" the
+// issue engine emits, and every CRD row's count was zero. We dropped
+// the Kinds filter entirely: bucketing by issueIndexKey(group, kind,
+// ns, name) is already correct because the lookup side runs through
+// CanonicalSingular too. Per-resource lookup uses the row's singular
+// Kind (Pascal "Application") so the index and the query agree.
+func TestBuildIssueIndex_CRDPlural_NonZeroCount(t *testing.T) {
+	p := &fakeIssuesProvider{
+		problems: []k8s.Problem{
+			{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "storefront", Reason: "SyncFailed", Severity: "critical"},
+		},
+	}
+
+	// Pre-fix simulation: the handler would have passed kindFilter="applications"
+	// — the URL plural. We no longer take a kindFilter, but verify that
+	// the index contains the row keyed by the canonical singular form.
+	idx := BuildIssueIndex(p, []string{"argocd"})
+	if got := idx.Count("argoproj.io", "Application", "argocd", "storefront"); got != 1 {
+		t.Errorf("CRD Application count (singular kind) = %d, want 1", got)
+	}
+	// Also pin the URL-form lookup path: the per-row Builder is called
+	// with the kind as returned by MinifyUnstructured, which for CRDs
+	// is the singular ("Application"). If a caller ever pushed the
+	// plural ("applications") through Count(), CanonicalSingular won't
+	// normalize unknown CRD plurals — that's a separate latent issue
+	// that doesn't manifest today because the row source uses the
+	// singular. Document the asymmetry explicitly.
+	if got := idx.Count("argoproj.io", "applications", "argocd", "storefront"); got != 0 {
+		t.Errorf("CRD lookup via plural = %d, want 0 (CanonicalSingular only normalizes built-ins; row source uses singular Kind, so lookup matches via singular path)", got)
 	}
 }
 
@@ -204,8 +243,8 @@ func TestNewSearchSummaryContextBuilder_BuildsDualIndex(t *testing.T) {
 	}
 
 	// Build the two indexes the search constructor would build.
-	namespacedIdx := BuildIssueIndex(p, []string{"prod"}, "")
-	clusterIdx := BuildIssueIndex(p, nil, "")
+	namespacedIdx := BuildIssueIndex(p, []string{"prod"})
+	clusterIdx := BuildIssueIndex(p, nil)
 
 	// Sanity: pre-fix, the search handler passed namespacedIdx for
 	// both; Node issueCount silently zeroed.

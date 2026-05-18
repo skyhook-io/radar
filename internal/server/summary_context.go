@@ -27,12 +27,12 @@ import (
 // Use newSearchSummaryContextBuilder for search, which routes per-hit
 // between a namespaced and a cluster-wide index — search returns mixed
 // kinds in one response, so a single index can't get both right.
-func (s *Server) newResourceSummaryContextBuilder(namespaces []string, kindFilter string) summarycontext.Builder {
+func (s *Server) newResourceSummaryContextBuilder(namespaces []string) summarycontext.Builder {
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil
 	}
-	idx := summarycontext.BuildIssueIndex(provider, namespaces, kindFilter)
+	idx := summarycontext.BuildIssueIndex(provider, namespaces)
 	return summarycontext.BuilderFromIndexes(s.broadcaster.GetCachedTopology(), idx, idx)
 }
 
@@ -61,10 +61,10 @@ func (s *Server) newSearchSummaryContextBuilder(scanNamespaces []string) summary
 	if provider == nil {
 		return nil
 	}
-	namespacedIdx := summarycontext.BuildIssueIndex(provider, scanNamespaces, "")
+	namespacedIdx := summarycontext.BuildIssueIndex(provider, scanNamespaces)
 	clusterIdx := namespacedIdx
 	if scanNamespaces != nil {
-		clusterIdx = summarycontext.BuildIssueIndex(provider, nil, "")
+		clusterIdx = summarycontext.BuildIssueIndex(provider, nil)
 	}
 	return summarycontext.BuilderFromIndexes(s.broadcaster.GetCachedTopology(), namespacedIdx, clusterIdx)
 }

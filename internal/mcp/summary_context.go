@@ -24,20 +24,18 @@ import (
 // rather than emit empty objects.
 //
 // namespaces scopes the issue index to just the rows being returned;
-// pass nil for cluster-wide. kindFilter ("" for search, the requested
-// kind for list_resources) narrows the issue compose to a single kind
-// so list_resources kind=pod doesn't pull deployment + service issues.
+// pass nil for cluster-wide.
 //
 // Use newSearchSummaryContextBuilder for MCP search, which routes
 // per-hit between a namespaced and a cluster-wide index — search
 // returns mixed kinds in one response, so a single index can't get
 // both right.
-func newResourceSummaryContextBuilder(namespaces []string, kindFilter string) summarycontext.Builder {
+func newResourceSummaryContextBuilder(namespaces []string) summarycontext.Builder {
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil
 	}
-	idx := summarycontext.BuildIssueIndex(provider, namespaces, kindFilter)
+	idx := summarycontext.BuildIssueIndex(provider, namespaces)
 	return summarycontext.BuilderFromIndexes(buildSummaryContextTopology(namespaces), idx, idx)
 }
 
@@ -53,10 +51,10 @@ func newSearchSummaryContextBuilder(scanNamespaces []string) summarycontext.Buil
 	if provider == nil {
 		return nil
 	}
-	namespacedIdx := summarycontext.BuildIssueIndex(provider, scanNamespaces, "")
+	namespacedIdx := summarycontext.BuildIssueIndex(provider, scanNamespaces)
 	clusterIdx := namespacedIdx
 	if scanNamespaces != nil {
-		clusterIdx = summarycontext.BuildIssueIndex(provider, nil, "")
+		clusterIdx = summarycontext.BuildIssueIndex(provider, nil)
 	}
 	return summarycontext.BuilderFromIndexes(buildSummaryContextTopology(scanNamespaces), namespacedIdx, clusterIdx)
 }

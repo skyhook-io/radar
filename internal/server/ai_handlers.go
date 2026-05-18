@@ -173,7 +173,7 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	// so we pass nil here to compose cluster-wide.
 	if !skipContext && level == aicontext.LevelSummary {
 		idxNamespaces := issueIndexNamespaces(namespaces, kind, group)
-		if builder := s.newResourceSummaryContextBuilder(idxNamespaces, kind); builder != nil {
+		if builder := s.newResourceSummaryContextBuilder(idxNamespaces); builder != nil {
 			// Typed list resolves group from each object's TypeMeta —
 			// MinifyList sets it via SetTypeMeta before producing rows,
 			// so we can trust apiVersion on the typed source.
@@ -234,7 +234,7 @@ func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8
 
 	if !skipContext && level == aicontext.LevelSummary {
 		idxNamespaces := issueIndexNamespaces(namespaces, kind, group)
-		if builder := s.newResourceSummaryContextBuilder(idxNamespaces, kind); builder != nil {
+		if builder := s.newResourceSummaryContextBuilder(idxNamespaces); builder != nil {
 			summarycontext.AttachToUnstructuredList(results, allItems, builder)
 		}
 	}

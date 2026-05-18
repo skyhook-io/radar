@@ -176,16 +176,20 @@ func CanonicalSingular(kind string) string {
 // + "condition" only. Audit + Warning events are loud and require
 // explicit opt-in; rolling them into the per-row count would distort
 // "this Pod has 1 issue" for the common case.
-func BuildIssueIndex(p issues.Provider, namespaces []string, kindFilter string) IssueIndex {
+//
+// No Kinds filter on Compose: the index buckets every composed row by
+// (group, kind, ns, name), and the per-row lookup keys off
+// issueIndexKey(...) with the same canonicalization, so kind-mismatched
+// rows simply never read. Filtering Compose itself by Kind would need
+// CRD-plural awareness — CanonicalSingular handles built-ins but
+// returns CRD plurals (e.g. "applications") unchanged, and the issue
+// engine emits "Application", silently zeroing issueCount on every CRD
+// row. Bucketing is O(N) over the at-most-namespace-bounded issue set,
+// which the consumer materialises anyway.
+func BuildIssueIndex(p issues.Provider, namespaces []string) IssueIndex {
 	filters := issues.Filters{
 		Namespaces: namespaces,
 		Limit:      issues.NoLimit,
-	}
-	if kindFilter != "" {
-		// Compose's Kinds filter expects the singular kind ("Pod"). The
-		// caller may pass either the URL plural ("pods") or the singular —
-		// CanonicalSingular normalizes both before issuing the filter.
-		filters.Kinds = []string{CanonicalSingular(kindFilter)}
 	}
 	composed := issues.Compose(p, filters)
 	idx := make(IssueIndex, len(composed))
