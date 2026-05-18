@@ -111,99 +111,6 @@ func edgeIDs(s *Subgraph) []string {
 	return ids
 }
 
-func TestBuildNeighborhood_PodManagementProfile(t *testing.T) {
-	topo := podNeighborhood()
-	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}
-
-	sub := BuildNeighborhood(topo, root, NeighborhoodOptions{
-		Profile: ProfileManagement,
-		Hops:    1,
-	})
-	got := nodeIDs(sub)
-	want := []string{"pod/prod/cart-xyz", "replicaset/prod/cart-rs"}
-	if !equalStrings(got, want) {
-		t.Errorf("management 1-hop nodes = %v, want %v", got, want)
-	}
-	if sub.Truncated {
-		t.Errorf("did not expect truncated")
-	}
-}
-
-func TestBuildNeighborhood_PodManagementProfileTwoHops(t *testing.T) {
-	topo := podNeighborhood()
-	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}
-
-	sub := BuildNeighborhood(topo, root, NeighborhoodOptions{
-		Profile: ProfileManagement,
-		Hops:    2,
-	})
-	got := nodeIDs(sub)
-	want := []string{
-		"deployment/prod/cart",
-		"pod/prod/cart-xyz",
-		"replicaset/prod/cart-rs",
-	}
-	if !equalStrings(got, want) {
-		t.Errorf("management 2-hop nodes = %v, want %v", got, want)
-	}
-}
-
-func TestBuildNeighborhood_PodNetworkingProfile(t *testing.T) {
-	topo := podNeighborhood()
-	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}
-
-	sub := BuildNeighborhood(topo, root, NeighborhoodOptions{
-		Profile: ProfileNetworking,
-		Hops:    2,
-	})
-	got := nodeIDs(sub)
-	want := []string{
-		"ingress/prod/cart",
-		"pod/prod/cart-xyz",
-		"service/prod/cart",
-	}
-	if !equalStrings(got, want) {
-		t.Errorf("networking 2-hop nodes = %v, want %v", got, want)
-	}
-}
-
-func TestBuildNeighborhood_PolicyProfile(t *testing.T) {
-	topo := podNeighborhood()
-	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}
-
-	sub := BuildNeighborhood(topo, root, NeighborhoodOptions{
-		Profile: ProfilePolicy,
-		Hops:    1,
-	})
-	got := nodeIDs(sub)
-	want := []string{
-		"networkpolicy/prod/cart-allow",
-		"pod/prod/cart-xyz",
-		"poddisruptionbudget/prod/cart-pdb",
-	}
-	if !equalStrings(got, want) {
-		t.Errorf("policy 1-hop nodes = %v, want %v", got, want)
-	}
-}
-
-func TestBuildNeighborhood_SecurityProfileEmpty(t *testing.T) {
-	topo := podNeighborhood()
-	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}
-
-	sub := BuildNeighborhood(topo, root, NeighborhoodOptions{
-		Profile: ProfileSecurity,
-		Hops:    1,
-	})
-	got := nodeIDs(sub)
-	want := []string{"pod/prod/cart-xyz"}
-	if !equalStrings(got, want) {
-		t.Errorf("security profile should expand to root only, got %v", got)
-	}
-	if len(sub.Edges) != 0 {
-		t.Errorf("security profile should have no edges, got %d", len(sub.Edges))
-	}
-}
-
 func TestBuildNeighborhood_AutoForPod(t *testing.T) {
 	topo := podNeighborhood()
 	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}
@@ -340,17 +247,22 @@ func TestBuildNeighborhood_HopsClampedToMax(t *testing.T) {
 	topo := podNeighborhood()
 	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}
 
-	// Hops=99 should be clamped to neighborhoodMaxHops=2. Under
-	// management with 2 hops we reach Deployment but no further.
+	// Hops=99 should be clamped to neighborhoodMaxHops=2. Under auto for
+	// a Pod we reach the management chain plus adjacent networking/policy
+	// nodes, but still exclude config/configure edges.
 	sub := BuildNeighborhood(topo, root, NeighborhoodOptions{
-		Profile: ProfileManagement,
+		Profile: ProfileAuto,
 		Hops:    99,
 	})
 	got := nodeIDs(sub)
 	want := []string{
 		"deployment/prod/cart",
+		"ingress/prod/cart",
+		"networkpolicy/prod/cart-allow",
 		"pod/prod/cart-xyz",
+		"poddisruptionbudget/prod/cart-pdb",
 		"replicaset/prod/cart-rs",
+		"service/prod/cart",
 	}
 	if !equalStrings(got, want) {
 		t.Errorf("hops clamp: got %v, want %v", got, want)
@@ -462,7 +374,7 @@ func TestBuildNeighborhood_AllowPreventsPathFragments(t *testing.T) {
 	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}
 
 	sub := BuildNeighborhood(topo, root, NeighborhoodOptions{
-		Profile: ProfileManagement,
+		Profile: ProfileAuto,
 		Hops:    2,
 		Allow: func(n *Node) bool {
 			return n.Kind != KindReplicaSet
@@ -517,14 +429,18 @@ func TestBuildNeighborhood_EdgesOnlyBetweenIncludedNodes(t *testing.T) {
 	root := ResourceRef{Kind: "Pod", Namespace: "prod", Name: "cart-xyz"}
 
 	sub := BuildNeighborhood(topo, root, NeighborhoodOptions{
-		Profile: ProfileManagement,
+		Profile: ProfileAuto,
 		Hops:    1,
 	})
-	// Only edge should be the one between ReplicaSet and Pod under management.
 	gotEdges := edgeIDs(sub)
-	wantEdges := []string{"replicaset/prod/cart-rs-manages-pod/prod/cart-xyz"}
+	wantEdges := []string{
+		"networkpolicy/prod/cart-allow-protects-pod/prod/cart-xyz",
+		"poddisruptionbudget/prod/cart-pdb-protects-pod/prod/cart-xyz",
+		"replicaset/prod/cart-rs-manages-pod/prod/cart-xyz",
+		"service/prod/cart-exposes-pod/prod/cart-xyz",
+	}
 	if !equalStrings(gotEdges, wantEdges) {
-		t.Errorf("management 1-hop edges = %v, want %v", gotEdges, wantEdges)
+		t.Errorf("auto 1-hop edges = %v, want %v", gotEdges, wantEdges)
 	}
 }
 
@@ -543,9 +459,7 @@ func TestBuildNeighborhood_NilTopologyReturnsEmpty(t *testing.T) {
 // When two nodes share kind+namespace+name but come from different API
 // groups (a real collision: CAPI cluster.x-k8s.io/Cluster vs the hypothetical
 // KubeFleet cluster.fleet.io/Cluster — same kind, different groups), the
-// caller must be able to disambiguate by passing ResourceRef.Group. Without
-// the group filter, findNodeByRef returns the first match — a leak risk if
-// the wrong-group node has different visibility than the requested one.
+// caller must be able to disambiguate by passing ResourceRef.Group.
 func TestBuildNeighborhood_GroupCollisionRoot(t *testing.T) {
 	// Two "Cluster" nodes in the same namespace, same name, different groups.
 	// Each has a distinct neighbor so we can verify which root was selected.
@@ -587,7 +501,7 @@ func TestBuildNeighborhood_GroupCollisionRoot(t *testing.T) {
 	// its Machine neighbor, NOT the Fleet ClusterGroup.
 	sub := BuildNeighborhoodWithIndex(topo,
 		ResourceRef{Kind: "Cluster", Namespace: "fleet", Name: "prod", Group: "cluster.x-k8s.io"},
-		NeighborhoodOptions{Profile: ProfileManagement, Hops: 1},
+		NeighborhoodOptions{Profile: ProfileAll, Hops: 1},
 		nil, nil,
 	)
 	if sub.Nodes[0].ID != capi.ID {
@@ -601,15 +515,11 @@ func TestBuildNeighborhood_GroupCollisionRoot(t *testing.T) {
 	}
 }
 
-// TestBuildNeighborhood_GroupEmptyRootBackCompat pins the back-compat
-// behavior: when ResourceRef.Group is empty, group-blind matching wins
-// and the first matching node (by topology iteration order) is selected.
-// This preserves pre-fix behavior for callers that don't supply a group
-// (REST clients on /api/ai/neighborhood/{kind}/{ns}/{name} without ?group=).
-func TestBuildNeighborhood_GroupEmptyRootBackCompat(t *testing.T) {
-	// Same collision setup as GroupCollisionRoot. With Group="" the lookup
-	// should return one of the two "Cluster" nodes (current iteration order
-	// returns the first one — pin that as the contract).
+// TestBuildNeighborhood_GroupEmptyRootAmbiguous verifies that omitted group
+// does not silently pick an arbitrary node when multiple API groups share the
+// same kind+namespace+name. Callers must pass ResourceRef.Group to resolve the
+// collision.
+func TestBuildNeighborhood_GroupEmptyRootAmbiguous(t *testing.T) {
 	capi := Node{
 		ID:     "cluster.x-k8s.io/cluster/fleet/prod",
 		Kind:   "Cluster",
@@ -640,12 +550,11 @@ func TestBuildNeighborhood_GroupEmptyRootBackCompat(t *testing.T) {
 		NeighborhoodOptions{Profile: ProfileAll, Hops: 1},
 		nil, nil,
 	)
-	if len(sub.Nodes) == 0 {
-		t.Fatal("expected non-empty neighborhood for empty-group lookup")
+	if !sub.AmbiguousRoot {
+		t.Fatal("expected ambiguous root when group is omitted for colliding resources")
 	}
-	// Back-compat: first node in topo.Nodes wins when group is unset.
-	if sub.Nodes[0].ID != capi.ID {
-		t.Errorf("empty-group lookup returned %s, expected first-match %s", sub.Nodes[0].ID, capi.ID)
+	if len(sub.Nodes) != 0 || len(sub.Edges) != 0 {
+		t.Errorf("expected empty subgraph for ambiguous root, got nodes=%v edges=%v", nodeIDs(sub), edgeIDs(sub))
 	}
 }
 
@@ -841,7 +750,7 @@ func TestBuildNeighborhood_PseudoKindRootLookup(t *testing.T) {
 		t.Run(kind, func(t *testing.T) {
 			sub := BuildNeighborhoodWithIndex(topo,
 				ResourceRef{Kind: kind, Namespace: "prod", Name: "api", Group: "serving.knative.dev"},
-				NeighborhoodOptions{Profile: ProfileNetworking, Hops: 1},
+				NeighborhoodOptions{Profile: ProfileAuto, Hops: 1},
 				nil, nil,
 			)
 			if len(sub.Nodes) == 0 {
@@ -996,8 +905,8 @@ func TestAPIVersionGroup(t *testing.T) {
 		{"networking.k8s.io/v1", "networking.k8s.io"},
 		{"serving.knative.dev/v1", "serving.knative.dev"},
 		{"", ""},
-		{"/v1", ""},                 // leading slash → empty group
-		{"apps/v1/extra", "apps"},    // multi-slash → split on FIRST
+		{"/v1", ""},               // leading slash → empty group
+		{"apps/v1/extra", "apps"}, // multi-slash → split on FIRST
 	}
 	for _, tc := range cases {
 		if got := APIVersionGroup(tc.in); got != tc.want {

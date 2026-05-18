@@ -22,10 +22,10 @@ func TestParseNeighborhoodOptions_Defaults(t *testing.T) {
 }
 
 func TestParseNeighborhoodOptions_Custom(t *testing.T) {
-	r := httptest.NewRequest("GET", "/api/ai/neighborhood/Pod/prod/cart?profile=management&hops=2&max_nodes=10", nil)
+	r := httptest.NewRequest("GET", "/api/ai/neighborhood/Pod/prod/cart?profile=all&hops=2&max_nodes=10", nil)
 	opts := parseNeighborhoodOptions(r)
-	if opts.Profile != topology.ProfileManagement {
-		t.Errorf("profile = %q, want management", opts.Profile)
+	if opts.Profile != topology.ProfileAll {
+		t.Errorf("profile = %q, want all", opts.Profile)
 	}
 	if opts.Hops != 2 {
 		t.Errorf("hops = %d, want 2", opts.Hops)
@@ -66,22 +66,24 @@ func TestParseNeighborhoodOptions_InvalidValues(t *testing.T) {
 	}
 }
 
-// TestParseNeighborhoodOptions_ProfileNormalization pins that REST routes
-// profile through topology.ResolveProfile — case-mismatched or unknown
-// values fall back to ProfileAuto rather than passing through verbatim
-// and silently expanding to all edge types via edgeTypesForProfile's
-// default branch.
+// TestParseNeighborhoodOptions_ProfileNormalization pins that REST exposes
+// only auto/all. Unknown semantic bucket names fall back to ProfileAuto
+// rather than silently expanding to all edge types.
 func TestParseNeighborhoodOptions_ProfileNormalization(t *testing.T) {
 	cases := []struct {
 		query string
 		want  topology.Profile
 	}{
-		{"profile=management", topology.ProfileManagement},
-		{"profile=Management", topology.ProfileManagement},        // case-insensitive
-		{"profile=%20%20networking%20%20", topology.ProfileNetworking}, // whitespace trim
-		{"profile=garbage", topology.ProfileAuto},                 // unknown → auto
-		{"profile=", topology.ProfileAuto},                        // empty → auto
-		{"", topology.ProfileAuto},                                // missing → auto
+		{"profile=all", topology.ProfileAll},
+		{"profile=All", topology.ProfileAll},             // case-insensitive
+		{"profile=%20%20all%20%20", topology.ProfileAll}, // whitespace trim
+		{"profile=management", topology.ProfileAuto},     // unsupported bucket → auto
+		{"profile=networking", topology.ProfileAuto},     // unsupported bucket → auto
+		{"profile=policy", topology.ProfileAuto},         // unsupported bucket → auto
+		{"profile=security", topology.ProfileAuto},       // unsupported bucket → auto
+		{"profile=garbage", topology.ProfileAuto},        // unknown → auto
+		{"profile=", topology.ProfileAuto},               // empty → auto
+		{"", topology.ProfileAuto},                       // missing → auto
 	}
 	for _, c := range cases {
 		t.Run(c.query, func(t *testing.T) {
@@ -93,4 +95,3 @@ func TestParseNeighborhoodOptions_ProfileNormalization(t *testing.T) {
 		})
 	}
 }
-

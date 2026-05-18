@@ -16,8 +16,8 @@ import (
 // It deliberately differs from topology.Subgraph in two ways:
 //
 //   - root + truncated are lifted to top-level for easy parsing
-//   - omitted carries resourcecontext-style drop records (RBAC, budget) so
-//     agents can tell why a neighbor isn't present
+//   - omitted carries resourcecontext-style RBAC drop records so agents can
+//     tell when authorized context is incomplete
 type neighborhoodResponse struct {
 	Root      topology.ResourceRef           `json:"root"`
 	Subgraph  neighborhoodSubgraph           `json:"subgraph"`
@@ -35,9 +35,9 @@ type neighborhoodSubgraph struct {
 //
 // GET /api/ai/neighborhood/{kind}/{namespace}/{name}
 //
-//	?profile=management|networking|policy|security|all|auto  (default: auto)
-//	?hops=1|2                                                (default: 1)
-//	?max_nodes=25                                            (default: 25)
+//	?profile=auto|all  (default: auto)
+//	?hops=1|2          (default: 1)
+//	?max_nodes=25      (default: 25)
 //
 // Cluster-scoped roots use "_" as the namespace placeholder (same convention
 // as handleAIGetResource).
@@ -159,6 +159,10 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sub := topology.BuildNeighborhoodWithIndex(topo, root, opts, idx, dp)
+	if sub.AmbiguousRoot {
+		s.writeError(w, http.StatusBadRequest, "resource kind is ambiguous; provide group")
+		return
+	}
 	if len(sub.Nodes) == 0 {
 		s.writeError(w, http.StatusNotFound, "resource not found in topology")
 		return
@@ -191,12 +195,6 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 			Reason: resourcecontext.OmittedRBACDenied,
 		})
 	}
-	if sub.Truncated {
-		resp.Omitted = append(resp.Omitted, resourcecontext.OmittedField{
-			Field:  "subgraph.nodes",
-			Reason: resourcecontext.OmittedBudgetExceeded,
-		})
-	}
 
 	s.writeJSON(w, resp)
 }
@@ -213,10 +211,8 @@ func parseNeighborhoodOptions(r *http.Request) topology.NeighborhoodOptions {
 	}
 	if p := q.Get("profile"); p != "" {
 		// Mirror MCP via topology.ResolveProfile so both surfaces normalize
-		// identically. A direct cast would let `?profile=Management` or
-		// `?profile=garbage` fall through edgeTypesForProfile's default
-		// case (allEdgeTypes), silently exposing more topology edges than
-		// the caller intended.
+		// identically. Unknown values fall back to auto instead of silently
+		// broadening traversal to all edges.
 		opts.Profile = topology.ResolveProfile(p)
 	}
 	if h := q.Get("hops"); h != "" {

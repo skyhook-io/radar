@@ -4,25 +4,12 @@ import (
 	"strings"
 )
 
-// Profile is the agent-friendly preset for which edge types to traverse when
-// expanding a neighborhood. Each profile collapses a small set of edge types
-// that share a coherent semantic (management chain, network flow, policy
-// attachments, …) so an agent can ask for "the slice of the graph relevant
-// to this question" without needing to enumerate edge types directly.
+// Profile controls how broadly a neighborhood expands. The public surface is
+// intentionally small for agent ergonomics: auto picks a bounded edge set from
+// the root kind, while all is the explicit escape hatch.
 type Profile string
 
 const (
-	// ProfileManagement walks owner / controller edges (Deployment → RS → Pod,
-	// Application → workloads).
-	ProfileManagement Profile = "management"
-	// ProfileNetworking walks routing + exposure edges (Ingress → Service → Pod,
-	// Gateway → HTTPRoute → Service).
-	ProfileNetworking Profile = "networking"
-	// ProfilePolicy walks PDB / NetworkPolicy / MachineHealthCheck attachments.
-	ProfilePolicy Profile = "policy"
-	// ProfileSecurity is reserved for synthesized RBAC / image / SA relations.
-	// v1 produces no edges — populated when those are wired in.
-	ProfileSecurity Profile = "security"
 	// ProfileAll walks every edge type.
 	ProfileAll Profile = "all"
 	// ProfileAuto picks an edge-type set based on the root kind. See
@@ -32,23 +19,12 @@ const (
 
 // ResolveProfile normalizes a user-supplied profile string to a Profile
 // constant. Empty, whitespace, or unrecognized values fall back to
-// ProfileAuto — agents often forget the field and "auto" is the right
-// default; case-insensitive matching prevents `profile=Management` or
-// similar from silently falling through edgeTypesForProfile's default
-// branch and expanding to all edge types. Used by both REST and MCP
-// surface handlers so they normalize identically.
+// ProfileAuto. Callers wanting the broadest expansion must pass all
+// explicitly; unknown strings never silently broaden traversal.
 func ResolveProfile(s string) Profile {
 	switch strings.ToLower(strings.TrimSpace(s)) {
 	case "", string(ProfileAuto):
 		return ProfileAuto
-	case string(ProfileManagement):
-		return ProfileManagement
-	case string(ProfileNetworking):
-		return ProfileNetworking
-	case string(ProfilePolicy):
-		return ProfilePolicy
-	case string(ProfileSecurity):
-		return ProfileSecurity
 	case string(ProfileAll):
 		return ProfileAll
 	default:
@@ -68,8 +44,8 @@ type NeighborhoodOptions struct {
 	// false — they don't consume the MaxNodes budget, can't appear as
 	// path-fragments between two allowed nodes, and bump
 	// Subgraph.RBACDenied so callers can report omissions to the user.
-	// The root node is exempt — callers verify root access separately
-	// before calling Build.
+	// The root node is also checked so callers can hide roots that pass
+	// coarse preflight checks but fail per-kind gates such as Secrets.
 	//
 	// This is the security boundary: forbidden nodes must not influence
 	// the visible graph shape. Post-hoc filtering would let an
@@ -95,6 +71,11 @@ type Subgraph struct {
 	// surfacing those names would re-introduce the existence-leak the
 	// Allow gate exists to prevent.
 	RBACDenied int `json:"-"`
+
+	// AmbiguousRoot is set when the root lookup matched more than one API
+	// group and the caller omitted ResourceRef.Group. Callers should ask the
+	// user/agent to provide group instead of returning an arbitrary first match.
+	AmbiguousRoot bool `json:"-"`
 }
 
 // neighborhoodMaxHops is the hard ceiling on BFS depth. Two hops is enough
@@ -174,14 +155,25 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 	// buildNodeID's static map can't construct the right ID for arbitrary CRDs.
 	rootID := buildNodeID(root.Kind, root.Namespace, root.Name, dp)
 	rootNode, ok := nodeByID[rootID]
-	// When root.Group is set, the rootID match alone isn't enough: two CRDs
-	// sharing the same lowercase plural collide on the ID (e.g. CAPI
-	// cluster.x-k8s.io/Cluster vs CNPG postgresql.cnpg.io/Cluster — whichever
-	// was inserted last wins in nodeByID). Verify the candidate's apiGroup
-	// matches; otherwise fall through to findNodeByRef which does the
-	// group-aware tuple match.
-	if ok && root.Group != "" && nodeAPIGroupFromData(rootNode) != root.Group {
-		ok = false
+	if root.Group == "" {
+		if matched, ambiguous := findNodeByRef(t.Nodes, root); ambiguous {
+			sub.AmbiguousRoot = true
+			return sub
+		} else if matched != nil {
+			rootNode = matched
+			rootID = rootNode.ID
+			ok = true
+		}
+	} else {
+		// When root.Group is set, the rootID match alone isn't enough: two CRDs
+		// sharing the same lowercase plural collide on the ID (e.g. CAPI
+		// cluster.x-k8s.io/Cluster vs CNPG postgresql.cnpg.io/Cluster — whichever
+		// was inserted last wins in nodeByID). Verify the candidate's apiGroup
+		// matches; otherwise fall through to findNodeByRef which does the
+		// group-aware tuple match.
+		if ok && nodeAPIGroupFromData(rootNode) != root.Group {
+			ok = false
+		}
 	}
 	if !ok {
 		// Fallback: try matching by (kind, namespace, name [+ group]) tuple.
@@ -189,7 +181,12 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 		// the lowercase kind (e.g. "knativeservice/"). When root.Group is set,
 		// findNodeByRef also disambiguates kind-collisions across API groups
 		// (CAPI cluster.x-k8s.io/Cluster vs Fleet cluster.fleet.io/Cluster).
-		rootNode = findNodeByRef(t.Nodes, root)
+		var ambiguous bool
+		rootNode, ambiguous = findNodeByRef(t.Nodes, root)
+		if ambiguous {
+			sub.AmbiguousRoot = true
+			return sub
+		}
 		if rootNode == nil {
 			return sub
 		}
@@ -336,24 +333,10 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 }
 
 // edgeTypesForProfile returns the set of edge types a profile traverses.
-// rootKind is used for ProfileAuto only.
-//
-// Empty and unrecognized profile values BOTH normalize to ProfileAuto.
-// Returning ProfileAll for an unknown agent-supplied string would
-// silently expand traversal to every edge type — far too aggressive for
-// a typo. Auto picks a sensible profile based on the root kind instead.
-// Callers wanting the broadest expansion must pass ProfileAll explicitly.
+// rootKind is used for ProfileAuto only. Unknown profile values normalize to
+// auto rather than all, so typos do not silently broaden traversal.
 func edgeTypesForProfile(p Profile, rootKind NodeKind) map[EdgeType]bool {
 	switch p {
-	case ProfileManagement:
-		return map[EdgeType]bool{EdgeManages: true}
-	case ProfileNetworking:
-		return map[EdgeType]bool{EdgeRoutesTo: true, EdgeExposes: true}
-	case ProfilePolicy:
-		return map[EdgeType]bool{EdgeProtects: true}
-	case ProfileSecurity:
-		// v1: empty — synthesized edges live in a later phase.
-		return map[EdgeType]bool{}
 	case ProfileAll:
 		return allEdgeTypes()
 	case ProfileAuto, "":
@@ -366,6 +349,18 @@ func edgeTypesForProfile(p Profile, rootKind NodeKind) map[EdgeType]bool {
 		// client): pick auto rather than the broadest possible expansion.
 		return edgeTypesForAuto(rootKind)
 	}
+}
+
+func managementEdgeTypes() map[EdgeType]bool {
+	return map[EdgeType]bool{EdgeManages: true}
+}
+
+func networkingEdgeTypes() map[EdgeType]bool {
+	return map[EdgeType]bool{EdgeRoutesTo: true, EdgeExposes: true}
+}
+
+func policyEdgeTypes() map[EdgeType]bool {
+	return map[EdgeType]bool{EdgeProtects: true}
 }
 
 // allEdgeTypes returns the universal set. Kept centralized so adding an
@@ -398,22 +393,22 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 		}
 	// GitOps controllers: just the management chain (what they own).
 	case KindApplication, KindKustomization, KindHelmRelease, KindGitRepository:
-		return map[EdgeType]bool{EdgeManages: true}
+		return managementEdgeTypes()
 	// Network-shaped resources: routing topology.
 	case KindService, KindIngress, KindGateway, KindGatewayClass,
 		KindHTTPRoute, KindGRPCRoute, KindTCPRoute, KindTLSRoute,
 		KindVirtualService, KindIstioGateway, KindHTTPProxy,
 		KindIngressRoute, KindIngressRouteTCP, KindIngressRouteUDP:
-		return map[EdgeType]bool{EdgeRoutesTo: true, EdgeExposes: true}
+		return networkingEdgeTypes()
 	// Policies / protectors: who they attach to.
 	case KindNetworkPolicy, KindCiliumNetworkPolicy,
 		KindCiliumClusterwideNetworkPolicy, KindClusterNetworkPolicy,
 		KindPDB, KindMachineHealthCheck,
 		KindPeerAuthentication, KindAuthorizationPolicy:
-		return map[EdgeType]bool{EdgeProtects: true}
+		return policyEdgeTypes()
 	// Nodes / node pools: hosted workloads via management chain.
 	case KindNode, KindNodePool, KindNodeClaim, KindNodeClass:
-		return map[EdgeType]bool{EdgeManages: true}
+		return managementEdgeTypes()
 	default:
 		return allEdgeTypes()
 	}
@@ -427,9 +422,9 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 // Data["apiVersion"] via apiVersionGroupFromData) must match — this is how
 // callers disambiguate kind-collisions across API groups, e.g. asking for the
 // CAPI cluster.x-k8s.io/Cluster vs the KubeFleet cluster.fleet.io/Cluster
-// when both share the same kind+namespace+name. When ref.Group is empty
-// the group check is skipped (back-compat: callers that don't supply a group
-// get the first matching node, same as before).
+// when both share the same kind+namespace+name. When ref.Group is empty,
+// multiple matching API groups are reported as ambiguous instead of choosing
+// an arbitrary first match; callers should ask for an explicit group.
 //
 // Pseudo-kinds: some CRDs are stored in the topology under a synthesized kind
 // distinct from their API kind (KnativeService for serving.knative.dev/Service,
@@ -438,16 +433,18 @@ func edgeTypesForAuto(rootKind NodeKind) map[EdgeType]bool {
 // for kind=Service&group=serving.knative.dev finds the KnativeService topology
 // node. Without this, the comparison Node.Kind="KnativeService" vs
 // ref.Kind="Service" never matches and the root lookup silently fails.
-func findNodeByRef(nodes []Node, ref ResourceRef) *Node {
+func findNodeByRef(nodes []Node, ref ResourceRef) (*Node, bool) {
 	// Resolve the caller-facing (kind, group) tuple to the kind the topology
 	// builder uses on Node.Kind. Falls back to ref.Kind unchanged when there's
 	// no pseudo-kind mapping for this (kind, group).
 	wantKind := pseudoKindFor(ref.Kind, ref.Group)
+	var match *Node
+	matchGroup := ""
 	for i := range nodes {
 		n := &nodes[i]
 		// Compare against the resolved pseudo-kind first; if that misses fall
-		// back to the original ref.Kind so the back-compat path (callers that
-		// don't supply a group, or kinds that aren't pseudo-mapped) still works.
+		// back to the original ref.Kind so callers that don't supply a group,
+		// or kinds that aren't pseudo-mapped, still work when unambiguous.
 		if !strings.EqualFold(string(n.Kind), wantKind) && !strings.EqualFold(string(n.Kind), ref.Kind) {
 			continue
 		}
@@ -463,9 +460,14 @@ func findNodeByRef(nodes []Node, ref ResourceRef) *Node {
 				continue
 			}
 		}
-		return n
+		group := nodeAPIGroupFromData(n)
+		if match != nil && group != matchGroup {
+			return nil, true
+		}
+		match = n
+		matchGroup = group
 	}
-	return nil
+	return match, false
 }
 
 // pseudoKindFor maps an (API kind, API group) to the synthesized topology
