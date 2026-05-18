@@ -51,10 +51,11 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 	// real K8s kind — the variants are EC2NodeClass / AKSNodeClass / GCPNodeClass).
 	// Without this branch we fall into the namespaced arm below and reject as
 	// "namespace is required" even though the agent sees these kinds in
-	// get_topology output. Match shape mirrors canReadClusterScopedTopoKindMCP:
-	// SAR each table entry, allow on any pass.
-	if entries := topology.LookupClusterScopedTopoKind(input.Kind, input.Group); len(entries) > 0 {
-		if !canReadClusterScopedTopoKindByNameMCP(ctx, entries) {
+	// get_topology output. topology.RBACTuplesForKind returns the per-variant
+	// SAR tuples — we iterate through canReadInNamespace and allow on any
+	// pass, matching the per-node gate's first-success semantics.
+	if pseudoTuples, tracked, fallthroughAllow := topology.RBACTuplesForKind(input.Kind, input.Group, pseudoKindDiscoveryLookupMCP()); tracked {
+		if !allowPseudoKindTuplesMCP(ctx, pseudoTuples, fallthroughAllow) {
 			return nil, nil, fmt.Errorf("forbidden: %s requires explicit cluster-scoped RBAC", input.Kind)
 		}
 	} else if clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(input.Kind, input.Group); clusterScoped {
@@ -188,149 +189,93 @@ func displayKindForMCP(kind string) string {
 }
 
 // canReadNeighborhoodNodeMCP is the MCP-side per-node RBAC gate. Mirrors
-// the REST canReadNeighborhoodNode. See that function for the Secret SAR
-// rationale — namespace access alone leaks Secrets when the cache SA has
-// cluster-wide secrets RBAC.
+// the REST canReadNeighborhoodNode — same decision tree, different per-user
+// check function. Tuple-selection logic lives in topology.RBACTuplesForNode
+// so both surfaces stay in lockstep when the pseudo-kind table or Secret-
+// tightening rules evolve.
+//
+// See REST canReadNeighborhoodNode for the Secret SAR rationale — namespace
+// access alone leaks Secrets when the cache SA has cluster-wide secrets RBAC
+// the calling user doesn't.
 func canReadNeighborhoodNodeMCP(ctx context.Context, n *topology.Node) bool {
-	ns := ""
-	group := ""
-	if n.Data != nil {
-		if v, ok := n.Data["namespace"].(string); ok {
-			ns = v
-		}
-		if v, ok := n.Data["apiVersion"].(string); ok {
-			group = topology.APIVersionGroup(v)
-		}
-	}
-	if ns != "" {
-		if !checkNamespaceAccess(ctx, ns) {
-			return false
-		}
-		// Per-kind tightening inside the namespace. v1 covers Secret only —
-		// reuse canReadInNamespace exactly as handleGetResource does.
-		if n.Kind == topology.KindSecret {
-			return canReadInNamespace(ctx, "", "secrets", ns, "get")
-		}
-		return true
-	}
-	// Cluster-scoped: try the topology pseudo-kind table FIRST. NodeClass
-	// and friends synthesize a topology-only label that ClassifyKindScope
-	// doesn't recognize ("NodeClass" isn't a real K8s kind — the variants
-	// are EC2NodeClass / AKSNodeClass / GCPNodeClass). Without this branch
-	// pseudo-kind nodes hit the unclassified+empty-namespace fallback below
-	// and leak unconditionally to users without provider-specific RBAC.
-	if hit, ok := canReadClusterScopedTopoKindMCP(ctx, n); ok {
-		return hit
-	}
-	clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(string(n.Kind), group)
-	if !clusterScoped {
-		// Unclassified node with no namespace — let it through; we'd rather
-		// over-include than silently drop a kind we forgot to register.
-		return true
-	}
-	return canReadClusterScopedKind(ctx, gvrResource, gvrGroup, "get")
-}
-
-// canReadClusterScopedTopoKindMCP authorizes a topology cluster-scoped
-// pseudo-kind against the SPECIFIC provider variant the node represents.
-// The node's apiVersion (set by the topology builder) carries the provider
-// group — e.g. "karpenter.k8s.aws/v1" for an EC2 NodeClass. We look up the
-// matching (Kind, Group) row in topology.ClusterScopedKinds (centralized
-// table — see pkg/topology/cluster_scoped_kinds.go) and SAR that single
-// row, so a user with EC2 RBAC sees EC2 NodeClass nodes only — not AKS or
-// GCP variants on a multi-provider cluster.
-//
-// Returns (allowed, true) when n.Kind is a tracked pseudo-kind, or
-// (_, false) so the caller falls through to ClassifyKindScope.
-//
-// For single-entry kinds (NodePool, GatewayClass, PV, StorageClass, …) this
-// collapses to a plain SAR on that one entry. Mirrors REST
-// canReadClusterScopedTopoKind.
-func canReadClusterScopedTopoKindMCP(ctx context.Context, n *topology.Node) (allowed, matched bool) {
-	hasEntry := false
-	for _, ck := range topology.ClusterScopedKinds {
-		if ck.Kind == n.Kind {
-			hasEntry = true
-			break
-		}
-	}
-	if !hasEntry {
-		return false, false
-	}
-
-	group := ""
-	if n.Data != nil {
-		if v, ok := n.Data["apiVersion"].(string); ok {
-			group = topology.APIVersionGroup(v)
-		}
-	}
-
-	disc := k8s.GetResourceDiscovery()
-	for _, ck := range topology.ClusterScopedKinds {
-		if ck.Kind != n.Kind || ck.Group != group {
-			continue
-		}
-		if ck.Group != "" && disc != nil {
-			if _, ok := disc.GetResourceWithGroup(ck.Resource, ck.Group); !ok {
-				// CRD removed mid-build — match REST behavior and allow,
-				// since the topology builder wouldn't have surfaced this
-				// node for an unprivileged SA either.
-				return true, true
+	// Namespace-list gate is protocol-specific; apply it here for namespaced
+	// nodes BEFORE consulting the shared helper.
+	if n != nil && n.Data != nil {
+		if ns, ok := n.Data["namespace"].(string); ok && ns != "" {
+			if !checkNamespaceAccess(ctx, ns) {
+				return false
 			}
 		}
-		// SAR cluster-scoped (namespace="") on the per-variant resource
-		// directly. We deliberately skip canReadClusterScopedKind here: its
-		// internal ClassifyKindScope re-resolves the resource via discovery,
-		// which over-broadens (passthrough-allow) when discovery is missing
-		// the CRD. The table is the source of truth for "this is cluster-
-		// scoped" — we don't need discovery to re-confirm that.
-		return canReadInNamespace(ctx, ck.Group, ck.Resource, "", "get"), true
 	}
-	// Tracked kind but the node's apiVersion-group doesn't match any entry.
-	// Deny rather than allow-through — the per-variant gate exists to stop
-	// unmapped variants from leaking.
-	return false, true
+
+	decision, tuples := topology.RBACTuplesForNode(n, pseudoKindDiscoveryLookupMCP())
+	switch decision {
+	case topology.NodeRBACAllow:
+		return true
+	case topology.NodeRBACDeny:
+		return false
+	case topology.NodeRBACCheckTuples:
+		for _, t := range tuples {
+			if canReadInNamespace(ctx, t.Group, t.Resource, t.Namespace, "get") {
+				return true
+			}
+		}
+		return false
+	case topology.NodeRBACConsultClassifyKindScope:
+		// Cluster-scoped node that isn't a tracked pseudo-kind. Fall back to
+		// the regular static-catalogue / discovery path. Unclassified kinds
+		// allow-through: the topology graph wouldn't have surfaced the node
+		// for an unprivileged SA either.
+		group := ""
+		if n.Data != nil {
+			if v, ok := n.Data["apiVersion"].(string); ok {
+				group = topology.APIVersionGroup(v)
+			}
+		}
+		clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(string(n.Kind), group)
+		if !clusterScoped {
+			return true
+		}
+		return canReadClusterScopedKind(ctx, gvrResource, gvrGroup, "get")
+	default:
+		// New decision values must be handled explicitly; default-deny.
+		return false
+	}
 }
 
-// canReadClusterScopedTopoKindByNameMCP authorizes a topology cluster-scoped
-// pseudo-kind at root preflight, BEFORE any node has been resolved (so no
-// apiVersion to pick a single provider variant). Caller-supplied (kind, group)
-// is resolved by topology.LookupClusterScopedTopoKind, which returns every
-// matching row — one row when group is supplied, all rows under the kind
-// when it isn't.
+// pseudoKindDiscoveryLookupMCP returns the function form of the discovery
+// singleton that topology.RBACTuplesForKind / RBACTuplesForNode expect, or
+// nil when discovery isn't initialised (test envs). See the doc on
+// topology.PseudoKindDiscoveryLookup for why this is a function rather than
+// an interface (typed-nil-into-interface gotcha).
+func pseudoKindDiscoveryLookupMCP() topology.PseudoKindDiscoveryLookup {
+	disc := k8s.GetResourceDiscovery()
+	if disc == nil {
+		return nil
+	}
+	return disc.GetResourceWithGroup
+}
+
+// allowPseudoKindTuplesMCP authorizes a list of per-variant SAR tuples
+// returned by topology.RBACTuplesForKind for the root-preflight path.
+// Iterates each tuple through canReadInNamespace and allows on the first
+// pass; if the helper returned zero tuples + fallthroughAllow=true (every
+// variant was filtered out by discovery), allow — matches the pre-existing
+// "over-include on absent provider variants" behavior.
 //
-// SAR each row, allow on the first pass. Mirrors REST
-// canReadClusterScopedTopoKindByName so both surfaces accept the same
-// requests: an agent that can list ANY provider variant of NodeClass
-// reaches the BFS, then the per-node Allow gate (canReadNeighborhoodNodeMCP)
-// drops the variants it can't read.
-//
-// We call canReadInNamespace(group, resource, "", "get") directly rather than
-// canReadClusterScopedKind, matching the pattern in
-// canReadClusterScopedTopoKindMCP: canReadClusterScopedKind re-resolves the
+// We use canReadInNamespace(group, resource, "", "get") directly rather than
+// canReadClusterScopedKind: canReadClusterScopedKind re-resolves the
 // resource via ClassifyKindScope's discovery, which over-broadens
 // (passthrough-allow) when the CRD is missing. The table is the source of
 // truth for "this is cluster-scoped" — no need for discovery to re-confirm.
-//
-// Discovery filter + empty-fallthrough mirror the REST helper — see those
-// comments for the rationale.
-func canReadClusterScopedTopoKindByNameMCP(ctx context.Context, entries []topology.ClusterScopedKindEntry) bool {
-	disc := k8s.GetResourceDiscovery()
-	considered := 0
-	for _, ck := range entries {
-		if ck.Group != "" && disc != nil {
-			if _, ok := disc.GetResourceWithGroup(ck.Resource, ck.Group); !ok {
-				continue
-			}
-		}
-		considered++
-		if canReadInNamespace(ctx, ck.Group, ck.Resource, "", "get") {
+func allowPseudoKindTuplesMCP(ctx context.Context, tuples []topology.SARTuple, fallthroughAllow bool) bool {
+	if len(tuples) == 0 {
+		return fallthroughAllow
+	}
+	for _, t := range tuples {
+		if canReadInNamespace(ctx, t.Group, t.Resource, t.Namespace, "get") {
 			return true
 		}
 	}
-	if considered == 0 {
-		return true
-	}
 	return false
 }
-

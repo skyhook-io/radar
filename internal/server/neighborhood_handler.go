@@ -64,10 +64,11 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	// isn't a real K8s kind — the variants are EC2NodeClass / AKSNodeClass /
 	// GCPNodeClass). Without this branch the call falls into the namespaced
 	// arm below and 400s with "namespace is required" even though "_" was
-	// supplied (URL → namespace == ""). Match shape mirrors the per-node gate
-	// in canReadClusterScopedTopoKind: SAR each table entry, allow on any pass.
-	if entries := topology.LookupClusterScopedTopoKind(rawKind, group); len(entries) > 0 {
-		if !s.canReadClusterScopedTopoKindByName(r, entries) {
+	// supplied (URL → namespace == ""). topology.RBACTuplesForKind returns the
+	// per-variant SAR tuples — we iterate through s.canRead and allow on any
+	// pass, matching the per-node gate's first-success semantics.
+	if pseudoTuples, tracked, fallthroughAllow := topology.RBACTuplesForKind(rawKind, group, pseudoKindDiscoveryLookup()); tracked {
+		if !s.allowPseudoKindTuples(r, pseudoTuples, fallthroughAllow) {
 			s.writeError(w, http.StatusForbidden, "insufficient permissions for cluster-scoped "+rawKind)
 			return
 		}
@@ -243,10 +244,18 @@ func parseNeighborhoodOptions(r *http.Request) topology.NeighborhoodOptions {
 }
 
 // canReadNeighborhoodNode is the REST-side per-node RBAC gate. Mirrors the
-// MCP equivalent — splits on namespace presence: namespaced reads use the
-// per-user namespace filter; cluster-scoped reads go through canRead with
-// the kind classified via ClassifyKindScope OR (for synthesized pseudo-
-// kinds like NodeClass) via the clusterScopedTopologyKinds table.
+// MCP equivalent canReadNeighborhoodNodeMCP — same decision tree, different
+// per-user check function. The tuple-selection logic itself lives in
+// topology.RBACTuplesForNode so the two surfaces stay in lockstep when the
+// pseudo-kind table or Secret-tightening rules evolve.
+//
+// Decision dispatch (see topology.NodeRBACDecision for the four cases):
+//
+//   - Namespaced node: run protocol-specific namespace-list gate first, then
+//     dispatch on the topology decision. Allow + CheckTuples both require
+//     the namespace gate to have passed; Deny short-circuits before it.
+//   - Cluster-scoped node: namespace-list gate doesn't apply; dispatch
+//     directly.
 //
 // Secret nodes get an additional per-kind SAR inside the namespace: namespace
 // access (e.g. "user can list pods in team-a") is NOT a sufficient signal for
@@ -255,166 +264,80 @@ func parseNeighborhoodOptions(r *http.Request) topology.NeighborhoodOptions {
 // the same gate handleGetResource applies — without it, the neighborhood graph
 // would leak Secret existence + names to users who can't fetch them directly.
 func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool {
-	ns := ""
-	group := ""
-	if n.Data != nil {
-		if v, ok := n.Data["namespace"].(string); ok {
-			ns = v
-		}
-		if v, ok := n.Data["apiVersion"].(string); ok {
-			group = topology.APIVersionGroup(v)
-		}
-	}
-	if ns != "" {
-		allowed := s.getUserNamespaces(r, []string{ns})
-		if noNamespaceAccess(allowed) {
-			return false
-		}
-		// Per-kind tightening inside the namespace. v1 covers Secret only —
-		// other namespaced kinds (Pods, ConfigMaps, …) ride on the namespace
-		// gate. Add new entries here when a kind's namespace-list discovery
-		// stops being a sufficient signal for that kind's read permission.
-		if n.Kind == topology.KindSecret {
-			return s.canRead(r, "", "secrets", ns, "get")
-		}
-		return true
-	}
-	// Cluster-scoped: check the topology pseudo-kind table FIRST. Pseudo-kinds
-	// like NodeClass (synthesized from EC2NodeClass / AKSNodeClass / GCPNodeClass)
-	// don't classify under ClassifyKindScope — its argument is the real K8s
-	// kind, and "NodeClass" is a topology-only label. Without this branch
-	// pseudo-kind nodes hit the unclassified+empty-namespace fallback below
-	// and are surfaced unconditionally, leaking cluster-scoped existence to
-	// users who can't list any provider variant.
-	if hit, ok := s.canReadClusterScopedTopoKind(r, n); ok {
-		return hit
-	}
-	clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(string(n.Kind), group)
-	if !clusterScoped {
-		// Unclassified node with no namespace — fall back to "allow" since
-		// the topology graph wouldn't have surfaced it for an unprivileged
-		// SA, and we don't want to silently drop legitimate kinds we forgot
-		// to register.
-		return true
-	}
-	return s.canRead(r, gvrGroup, gvrResource, "", "get")
-}
-
-// canReadClusterScopedTopoKind authorizes a topology cluster-scoped pseudo-
-// kind (NodeClass, NodePool, …) against the SPECIFIC provider variant the
-// node represents. The node's apiVersion (set by the topology builder when
-// synthesizing the node) carries the provider group — e.g.
-// "karpenter.k8s.aws/v1" for an EC2 NodeClass. We look up the matching
-// (Kind, Group) row in topology.ClusterScopedKinds and SAR that single
-// row, so a user with EC2 RBAC sees EC2 NodeClass nodes only — not AKS or
-// GCP variants on a multi-provider cluster.
-//
-// Returns (allowed, true) when n.Kind is a pseudo-kind tracked by the table,
-// or (_, false) when n.Kind isn't known so the caller can fall back to the
-// ClassifyKindScope path.
-//
-// For single-entry kinds (NodePool, GatewayClass, PV, StorageClass, etc.)
-// this collapses to a plain SAR on that one entry — the group-match still
-// works because there's exactly one row to find.
-//
-// Edge case: node's apiVersion-group doesn't match any entry under the
-// pseudo-kind. The topology builder only emits these nodes for known
-// providers, so this shouldn't happen in practice. We deny to avoid
-// surfacing an un-SARed node (which would be the failure mode the
-// per-variant fix exists to close).
-func (s *Server) canReadClusterScopedTopoKind(r *http.Request, n *topology.Node) (allowed, matched bool) {
-	// Find any entry under this NodeKind first so we can return matched=false
-	// for non-tracked kinds (caller falls back to ClassifyKindScope).
-	hasEntry := false
-	for _, ck := range topology.ClusterScopedKinds {
-		if ck.Kind == n.Kind {
-			hasEntry = true
-			break
-		}
-	}
-	if !hasEntry {
-		return false, false
-	}
-
-	// Group is derived from the node's apiVersion (set by the topology
-	// builder). For NodeClass nodes this is "karpenter.k8s.aws" /
-	// "karpenter.azure.com" / "karpenter.k8s.gcp" — the discriminator that
-	// picks the right table row.
-	group := ""
-	if n.Data != nil {
-		if v, ok := n.Data["apiVersion"].(string); ok {
-			group = topology.APIVersionGroup(v)
-		}
-	}
-
-	disc := k8s.GetResourceDiscovery()
-	for _, ck := range topology.ClusterScopedKinds {
-		if ck.Kind != n.Kind || ck.Group != group {
-			continue
-		}
-		if ck.Group != "" && disc != nil {
-			if _, ok := disc.GetResourceWithGroup(ck.Resource, ck.Group); !ok {
-				// Pseudo-kind tracked + apiVersion match but no provider
-				// variant is in discovery (CRD removed mid-build). Allow:
-				// the topology builder wouldn't have surfaced this node for
-				// an unprivileged SA either, and over-denying would silently
-				// hide a node the cluster admin can see.
-				return true, true
+	// Namespace-list gate is protocol-specific (per-user state); apply it
+	// here for namespaced nodes BEFORE consulting the shared helper.
+	if n != nil && n.Data != nil {
+		if ns, ok := n.Data["namespace"].(string); ok && ns != "" {
+			allowed := s.getUserNamespaces(r, []string{ns})
+			if noNamespaceAccess(allowed) {
+				return false
 			}
 		}
-		return s.canRead(r, ck.Group, ck.Resource, "", "get"), true
 	}
-	// Tracked kind but the node's apiVersion-group doesn't match any entry.
-	// Deny rather than fall through to allow — the per-variant gate exists
-	// precisely to stop unmapped variants from leaking.
-	return false, true
-}
 
-// canReadClusterScopedTopoKindByName authorizes a topology cluster-scoped
-// pseudo-kind at root preflight, BEFORE the topology graph has resolved a
-// concrete node (so no node.apiVersion to pick a single provider variant).
-// The caller supplies the URL kind + optional ?group= query param; the table
-// lookup in topology.LookupClusterScopedTopoKind returns every row matching
-// that (kind, group) tuple — one row when group is supplied, all rows under
-// the kind when it isn't.
-//
-// We SAR each candidate row and allow on the FIRST pass. Matches the
-// topology-strip semantics: "user with EC2 RBAC sees NodeClass nodes" must
-// hold at the root level too — otherwise an agent calling
-// /api/ai/neighborhood/nodeclass/_/default with EC2-only RBAC would 403
-// at preflight even though the per-node Allow gate would let the same
-// nodes through.
-//
-// Discovery filter: when the row has a non-empty Group and the resource is
-// MISSING from discovery (CRD removed mid-build or not installed in this
-// cluster), skip the row. This matches canReadClusterScopedTopoKind — over-
-// denying on a provider absent from the cluster would silently hide nodes
-// the admin can see.
-//
-// Edge case: all matching rows fail discovery (every provider variant absent
-// from the cluster). The table-lookup hit means the kind IS tracked; we fall
-// through to allow because the topology builder wouldn't have surfaced any
-// node for an unprivileged SA either — matching the per-node behavior at
-// canReadClusterScopedTopoKind's "CRD removed mid-build" branch.
-func (s *Server) canReadClusterScopedTopoKindByName(r *http.Request, entries []topology.ClusterScopedKindEntry) bool {
-	disc := k8s.GetResourceDiscovery()
-	considered := 0
-	for _, ck := range entries {
-		if ck.Group != "" && disc != nil {
-			if _, ok := disc.GetResourceWithGroup(ck.Resource, ck.Group); !ok {
-				continue
+	decision, tuples := topology.RBACTuplesForNode(n, pseudoKindDiscoveryLookup())
+	switch decision {
+	case topology.NodeRBACAllow:
+		return true
+	case topology.NodeRBACDeny:
+		return false
+	case topology.NodeRBACCheckTuples:
+		for _, t := range tuples {
+			if s.canRead(r, t.Group, t.Resource, t.Namespace, "get") {
+				return true
 			}
 		}
-		considered++
-		if s.canRead(r, ck.Group, ck.Resource, "", "get") {
+		return false
+	case topology.NodeRBACConsultClassifyKindScope:
+		// Cluster-scoped node that isn't a tracked pseudo-kind. Fall back
+		// to the regular static-catalogue / discovery path. Unclassified
+		// kinds (returns false) allow-through: the topology graph wouldn't
+		// have surfaced the node for an unprivileged SA either.
+		group := ""
+		if n.Data != nil {
+			if v, ok := n.Data["apiVersion"].(string); ok {
+				group = topology.APIVersionGroup(v)
+			}
+		}
+		clusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(string(n.Kind), group)
+		if !clusterScoped {
+			return true
+		}
+		return s.canRead(r, gvrGroup, gvrResource, "", "get")
+	default:
+		// New decision values must be handled explicitly; default-deny is
+		// the security-safe fallthrough.
+		return false
+	}
+}
+
+// pseudoKindDiscoveryLookup returns the function form of the discovery
+// singleton that topology.RBACTuplesForKind / RBACTuplesForNode expect, or
+// nil when discovery isn't initialised (test envs). Centralised here to
+// sidestep the typed-nil-into-interface gotcha — see the doc on
+// topology.PseudoKindDiscoveryLookup for the full rationale.
+func pseudoKindDiscoveryLookup() topology.PseudoKindDiscoveryLookup {
+	disc := k8s.GetResourceDiscovery()
+	if disc == nil {
+		return nil
+	}
+	return disc.GetResourceWithGroup
+}
+
+// allowPseudoKindTuples authorizes a list of per-variant SAR tuples returned
+// by topology.RBACTuplesForKind for the root-preflight path. Iterates each
+// tuple through s.canRead and allows on the first pass; if the helper
+// returned zero tuples + fallthroughAllow=true (every variant was filtered
+// out by discovery), allow — matches the pre-existing "over-include on
+// absent provider variants" behavior.
+func (s *Server) allowPseudoKindTuples(r *http.Request, tuples []topology.SARTuple, fallthroughAllow bool) bool {
+	if len(tuples) == 0 {
+		return fallthroughAllow
+	}
+	for _, t := range tuples {
+		if s.canRead(r, t.Group, t.Resource, t.Namespace, "get") {
 			return true
 		}
 	}
-	// Tracked kind but every variant was filtered out by discovery → allow.
-	// See edge-case rationale above.
-	if considered == 0 {
-		return true
-	}
 	return false
 }
-

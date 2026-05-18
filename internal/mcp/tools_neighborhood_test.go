@@ -219,27 +219,33 @@ func TestCanReadNeighborhoodNodeMCP_KnativeServiceUsesNamespaceGate(t *testing.T
 	}
 }
 
-// TestCanReadClusterScopedTopoKindByNameMCP_NodeClass pins the MCP-side
-// root-preflight helper: kind-only lookup (no node yet) iterates every
-// table row under that kind and allows on any pass. Mirrors the REST test
-// of the same name.
-func TestCanReadClusterScopedTopoKindByNameMCP_NodeClass_DeniedWithoutSAR(t *testing.T) {
+// pseudoKindTuplesForTestMCP mirrors the inline topology.RBACTuplesForKind
+// call in handleGetNeighborhood. disc=nil in tests so no rows are filtered.
+func pseudoKindTuplesForTestMCP(kind, group string) (tuples []topology.SARTuple, fallthroughAllow bool) {
+	t, _, fa := topology.RBACTuplesForKind(kind, group, nil)
+	return t, fa
+}
+
+// TestAllowPseudoKindTuplesMCP_NodeClass pins the MCP-side root-preflight
+// helper: kind-only lookup (no node yet) iterates every table row under that
+// kind and allows on any pass. Mirrors the REST test of the same name.
+func TestAllowPseudoKindTuplesMCP_NodeClass_DeniedWithoutSAR(t *testing.T) {
 	ctx := withTestUserPerms(t, "alice", nil, nil)
 	perms := getPermCache().Get("alice")
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
 
-	entries := topology.LookupClusterScopedTopoKind("nodeclass", "")
-	if len(entries) == 0 {
-		t.Fatal("LookupClusterScopedTopoKind returned 0 entries for nodeclass — table wiring is broken")
+	tuples, fallthroughAllow := pseudoKindTuplesForTestMCP("nodeclass", "")
+	if len(tuples) == 0 {
+		t.Fatal("RBACTuplesForKind returned 0 tuples for nodeclass — table wiring is broken")
 	}
-	if canReadClusterScopedTopoKindByNameMCP(ctx, entries) {
+	if allowPseudoKindTuplesMCP(ctx, tuples, fallthroughAllow) {
 		t.Error("nodeclass root preflight allowed user without any provider get-SAR — must deny")
 	}
 }
 
-func TestCanReadClusterScopedTopoKindByNameMCP_NodeClass_AllowedWithProviderSAR(t *testing.T) {
+func TestAllowPseudoKindTuplesMCP_NodeClass_AllowedWithProviderSAR(t *testing.T) {
 	ctx := withTestUserPerms(t, "bob", nil, nil)
 	perms := getPermCache().Get("bob")
 	// EC2 only — single-provider grant must be enough for the kind-level gate.
@@ -247,8 +253,8 @@ func TestCanReadClusterScopedTopoKindByNameMCP_NodeClass_AllowedWithProviderSAR(
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
 
-	entries := topology.LookupClusterScopedTopoKind("nodeclass", "")
-	if !canReadClusterScopedTopoKindByNameMCP(ctx, entries) {
+	tuples, fallthroughAllow := pseudoKindTuplesForTestMCP("nodeclass", "")
+	if !allowPseudoKindTuplesMCP(ctx, tuples, fallthroughAllow) {
 		t.Error("nodeclass root preflight denied user with EC2 get-SAR — single-provider RBAC must pass")
 	}
 }

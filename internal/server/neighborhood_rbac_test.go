@@ -246,14 +246,23 @@ func TestCanReadNeighborhoodNode_KnativeServiceUsesNamespaceGate(t *testing.T) {
 	}
 }
 
-// TestCanReadClusterScopedTopoKindByName_NodeClass pins the root-preflight
-// helper: a user without ANY provider get-SAR for NodeClass must be denied,
-// while a user with EC2 RBAC must be allowed (single-provider grant is
-// sufficient, matching the per-node gate). This is the kind-only variant
-// used at root preflight before the topology has resolved a concrete node
-// with an apiVersion — so we iterate every table row under that kind and
-// allow on any pass.
-func TestCanReadClusterScopedTopoKindByName_NodeClass_DeniedWithoutSAR(t *testing.T) {
+// pseudoKindTuplesForTest is the test analogue of the inline
+// topology.RBACTuplesForKind call in handleAINeighborhood — disc=nil in
+// tests, so no rows are filtered, exactly matching the production path with
+// discovery offline.
+func pseudoKindTuplesForTest(kind, group string) (tuples []topology.SARTuple, fallthroughAllow bool) {
+	t, _, fa := topology.RBACTuplesForKind(kind, group, nil)
+	return t, fa
+}
+
+// TestAllowPseudoKindTuples_NodeClass pins the root-preflight helper: a user
+// without ANY provider get-SAR for NodeClass must be denied, while a user
+// with EC2 RBAC must be allowed (single-provider grant is sufficient,
+// matching the per-node gate). This is the kind-only variant used at root
+// preflight before the topology has resolved a concrete node with an
+// apiVersion — so we iterate every table row under that kind and allow on
+// any pass.
+func TestAllowPseudoKindTuples_NodeClass_DeniedWithoutSAR(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
@@ -262,16 +271,16 @@ func TestCanReadClusterScopedTopoKindByName_NodeClass_DeniedWithoutSAR(t *testin
 	s.permCache.Set("alice", perms)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "alice"})
-	entries := topology.LookupClusterScopedTopoKind("nodeclass", "")
-	if len(entries) == 0 {
-		t.Fatal("LookupClusterScopedTopoKind returned 0 entries for nodeclass — table wiring is broken")
+	tuples, fallthroughAllow := pseudoKindTuplesForTest("nodeclass", "")
+	if len(tuples) == 0 {
+		t.Fatal("RBACTuplesForKind returned 0 tuples for nodeclass — table wiring is broken")
 	}
-	if s.canReadClusterScopedTopoKindByName(r, entries) {
+	if s.allowPseudoKindTuples(r, tuples, fallthroughAllow) {
 		t.Error("nodeclass root preflight allowed user without any provider get-SAR — must deny")
 	}
 }
 
-func TestCanReadClusterScopedTopoKindByName_NodeClass_AllowedWithProviderSAR(t *testing.T) {
+func TestAllowPseudoKindTuples_NodeClass_AllowedWithProviderSAR(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	// Bob has EC2 RBAC only. Root preflight without a known provider group
@@ -284,15 +293,15 @@ func TestCanReadClusterScopedTopoKindByName_NodeClass_AllowedWithProviderSAR(t *
 	s.permCache.Set("bob", perms)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "bob"})
-	entries := topology.LookupClusterScopedTopoKind("nodeclass", "")
-	if !s.canReadClusterScopedTopoKindByName(r, entries) {
+	tuples, fallthroughAllow := pseudoKindTuplesForTest("nodeclass", "")
+	if !s.allowPseudoKindTuples(r, tuples, fallthroughAllow) {
 		t.Error("nodeclass root preflight denied user with EC2 get-SAR — single-provider RBAC must pass")
 	}
 }
 
 // Same shape for NodePool, which has a SINGLE row in the table (karpenter.sh).
 // Pin that the kind-only path works for single-entry pseudo-kinds too.
-func TestCanReadClusterScopedTopoKindByName_NodePool(t *testing.T) {
+func TestAllowPseudoKindTuples_NodePool(t *testing.T) {
 	s := newAuthServer(auth.Config{Mode: "proxy"})
 	denyPerms := &auth.UserPermissions{AllowedNamespaces: nil}
 	denyPerms.SetCanI("get", "karpenter.sh", "nodepools", "", false)
@@ -302,16 +311,16 @@ func TestCanReadClusterScopedTopoKindByName_NodePool(t *testing.T) {
 	allowPerms.SetCanI("get", "karpenter.sh", "nodepools", "", true)
 	s.permCache.Set("bob", allowPerms)
 
-	entries := topology.LookupClusterScopedTopoKind("nodepool", "")
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 nodepool entry, got %d", len(entries))
+	tuples, fallthroughAllow := pseudoKindTuplesForTest("nodepool", "")
+	if len(tuples) != 1 {
+		t.Fatalf("expected 1 nodepool tuple, got %d", len(tuples))
 	}
 	rDeny := requestWithUser("GET", "/api/ai/neighborhood/nodepool/_/x", &auth.User{Username: "alice"})
-	if s.canReadClusterScopedTopoKindByName(rDeny, entries) {
+	if s.allowPseudoKindTuples(rDeny, tuples, fallthroughAllow) {
 		t.Error("nodepool root preflight allowed user without karpenter.sh/nodepools get-SAR")
 	}
 	rAllow := requestWithUser("GET", "/api/ai/neighborhood/nodepool/_/x", &auth.User{Username: "bob"})
-	if !s.canReadClusterScopedTopoKindByName(rAllow, entries) {
+	if !s.allowPseudoKindTuples(rAllow, tuples, fallthroughAllow) {
 		t.Error("nodepool root preflight denied user WITH karpenter.sh/nodepools get-SAR")
 	}
 }
