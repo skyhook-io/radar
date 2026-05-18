@@ -72,7 +72,7 @@ type PseudoKindDiscoveryLookup func(resource, group string) (k8score.APIResource
 // discovery-filter logic that previously lived in four parallel helpers
 // (canReadClusterScopedTopoKind{,MCP} + canReadClusterScopedTopoKindByName{,MCP}).
 //
-// `group` semantics match LookupClusterScopedTopoKind:
+// `group` semantics:
 //   - Non-empty (per-node path: pass the node's apiVersion group) → returns
 //     ONLY the row matching that group. For pseudo-kinds like NodeClass this
 //     disambiguates EC2 / AKS / GCP variants so a user with one provider's
@@ -118,9 +118,7 @@ func RBACTuplesForKind(kind, group string, disc PseudoKindDiscoveryLookup) (tupl
 	// signal separately from "matched a row under the supplied group" so the
 	// per-variant deny case (tracked + supplied group doesn't match any row)
 	// is distinguishable from the not-tracked case (caller should fall
-	// through to ClassifyKindScope). LookupClusterScopedTopoKind collapses
-	// both into an empty slice — we re-walk ClusterScopedKinds to
-	// disambiguate.
+	// through to ClassifyKindScope).
 	for _, ck := range ClusterScopedKinds {
 		if strings.EqualFold(string(ck.Kind), resolved) {
 			tracked = true
@@ -270,44 +268,3 @@ func RBACTuplesForNode(n *Node, disc PseudoKindDiscoveryLookup) (decision NodeRB
 	return NodeRBACDeny, nil
 }
 
-// LookupClusterScopedTopoKind returns every ClusterScopedKinds row whose Kind
-// matches the caller-supplied (kind, group) tuple after pseudo-kind resolution.
-// Empty slice when no row matches — caller should fall back to the regular
-// ClassifyKindScope path.
-//
-// Match semantics:
-//
-//   - Kind is compared case-insensitively against the row's NodeKind, so URL-
-//     path kinds ("nodeclass", "nodepool" — already lowercased by REST's
-//     normalizeKind) line up with the Pascal-cased NodeKind constants used in
-//     the table. The MCP side feeds lowercase too via displayKindForMCP, so the
-//     same path covers both surfaces.
-//   - The caller-supplied (kind, group) is first resolved via pseudoKindFor so
-//     namespaced pseudo-kinds (KnativeService for serving.knative.dev/Service,
-//     CAPICluster for cluster.x-k8s.io/Cluster, …) don't false-match against
-//     the cluster-scoped table. ClusterScopedKinds contains only cluster-scoped
-//     entries, so if (kind, group) resolves to a namespaced pseudo-kind the
-//     lookup correctly returns no rows.
-//   - When `group` is supplied, ONLY the row matching that group is returned
-//     (single-variant disambiguation for kinds like NodeClass where the table
-//     has one row per provider). Empty group returns ALL rows under that kind
-//     so callers can SAR each (used by root preflight, which often gets
-//     kind=nodeclass without an explicit provider group).
-//
-// The returned slice is a fresh copy — callers may mutate freely. Reads only:
-// callers want to SAR each entry and allow on any pass, the standard pattern
-// the topology-strip and neighborhood-RBAC paths already use.
-func LookupClusterScopedTopoKind(kind, group string) []ClusterScopedKindEntry {
-	resolved := pseudoKindFor(kind, group)
-	out := make([]ClusterScopedKindEntry, 0, 3)
-	for _, ck := range ClusterScopedKinds {
-		if !strings.EqualFold(string(ck.Kind), resolved) {
-			continue
-		}
-		if group != "" && ck.Group != group {
-			continue
-		}
-		out = append(out, ck)
-	}
-	return out
-}
