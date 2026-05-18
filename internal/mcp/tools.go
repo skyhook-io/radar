@@ -183,14 +183,15 @@ func registerTools(server *mcp.Server) {
 			"critical / warning / info. Defaults to problem + condition sources; " +
 			"audit (best-practice scan), event (K8s Warning events) and kyverno " +
 			"(PolicyReport findings) are excluded by default because each can run " +
-			"50–1000+ rows per cluster. To add one of those sources to the default " +
-			"set, pass include_audit=true / include_events=true / include_kyverno=true. " +
-			"The `source` param is a FILTER, not an additive opt-in: source=kyverno " +
-			"returns ONLY Kyverno rows (no problems, no conditions); use include_kyverno " +
-			"if you want defaults plus Kyverno. Equivalently, include_X=true behaves " +
-			"like source=problem,condition,X. Use this instead of get_dashboard when " +
-			"you want the full health picture across all sources, or to filter by " +
-			"severity / source / kind / namespace.",
+			"50–1000+ rows per cluster. The `source` param is a FILTER: " +
+			"source=kyverno returns ONLY Kyverno rows (no problems, no conditions). " +
+			"To ADD an excluded source to the defaults via MCP, list everything " +
+			"you want explicitly — e.g. source=problem,condition,kyverno returns " +
+			"defaults plus Kyverno. (The REST /api/issues endpoint also exposes " +
+			"include_audit / include_events / include_kyverno boolean flags as " +
+			"shortcuts, but MCP only takes the source list.) Use this instead of " +
+			"get_dashboard when you want the full health picture across all " +
+			"sources, or to filter by severity / source / kind / namespace.",
 		Annotations: readOnly,
 	}, logToolCall("issues", handleIssuesTool))
 
