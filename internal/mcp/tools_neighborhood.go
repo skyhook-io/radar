@@ -81,6 +81,12 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 	if opts.MaxNodes <= 0 {
 		opts.MaxNodes = 25
 	}
+	// Top-end clamps symmetric with REST. BFS clamps Hops internally
+	// (neighborhoodMaxHops) but doing it here too means opts.Hops is
+	// correct if anything inspects/logs it before BFS.
+	if opts.Hops > 2 {
+		opts.Hops = 2
+	}
 	if opts.MaxNodes > 200 {
 		opts.MaxNodes = 200
 	}

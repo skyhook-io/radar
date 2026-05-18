@@ -228,8 +228,14 @@ func parseNeighborhoodOptions(r *http.Request) topology.NeighborhoodOptions {
 			opts.MaxNodes = n
 		}
 	}
-	// Top-end clamp on MaxNodes — keep responses bounded for agent contexts
-	// regardless of what the caller asks for.
+	// Top-end clamps on both Hops and MaxNodes — keep responses bounded for
+	// agent contexts regardless of what the caller asks for. BFS also clamps
+	// internally (neighborhoodMaxHops), but doing it here too matches the
+	// doc above, keeps the two budget fields symmetric, and means
+	// opts.Hops is correct if anything inspects/logs it before BFS.
+	if opts.Hops > 2 {
+		opts.Hops = 2
+	}
 	if opts.MaxNodes > 200 {
 		opts.MaxNodes = 200
 	}

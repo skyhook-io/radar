@@ -43,6 +43,18 @@ func TestParseNeighborhoodOptions_MaxNodesClamp(t *testing.T) {
 	}
 }
 
+// TestParseNeighborhoodOptions_HopsClamp pins that REST applies the hops=2
+// clamp at the handler level too, matching MaxNodes. BFS clamps internally,
+// but the handler-level clamp keeps opts.Hops correct if anything inspects
+// or logs it before BFS, and matches the doc on parseNeighborhoodOptions.
+func TestParseNeighborhoodOptions_HopsClamp(t *testing.T) {
+	r := httptest.NewRequest("GET", "/api/ai/neighborhood/Pod/prod/cart?hops=99", nil)
+	opts := parseNeighborhoodOptions(r)
+	if opts.Hops != 2 {
+		t.Errorf("hops clamp = %d, want 2", opts.Hops)
+	}
+}
+
 func TestParseNeighborhoodOptions_InvalidValues(t *testing.T) {
 	r := httptest.NewRequest("GET", "/api/ai/neighborhood/Pod/prod/cart?hops=abc&max_nodes=-5", nil)
 	opts := parseNeighborhoodOptions(r)
