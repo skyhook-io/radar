@@ -113,8 +113,15 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	// over relationships per row pass them in directly.
 	rel := opts.Relationships
 	if rel == nil && opts.Topology != nil {
+		// Resolve the topology-pseudo-kind so cross-group CRDs (Knative
+		// serving.knative.dev/Service, CAPI cluster.x-k8s.io/Cluster, …)
+		// look up the right node. Using ident.Kind directly would lower-
+		// case to "service" and resolve to the core Service node, leaking
+		// the wrong resource's relationships into the CRD's resourceContext.
+		// The handler-side pre-computation does this same KindForGVK
+		// resolution; mirror it here so the fallback path doesn't undo it.
 		rel = topology.GetRelationshipsWithObject(
-			ident.Kind, ident.Namespace, ident.Name, obj,
+			topology.KindForGVK(ident.Kind, ident.Group), ident.Namespace, ident.Name, obj,
 			opts.Topology, opts.Provider, opts.DynamicProv, opts.RelIndex,
 		)
 	}
@@ -357,9 +364,16 @@ func buildUsesFromPod(ctx context.Context, pod *corev1.Pod, ac RefAccessChecker,
 	scanContainers(pod.Spec.InitContainers, pod.Namespace, cmSet, secretSet)
 	scanContainers(pod.Spec.Containers, pod.Namespace, cmSet, secretSet)
 
+	// ConfigMaps are most often surfaced via volume mounts (volume.ConfigMap)
+	// and Secrets via env (SecretKeyRef on container.env). Both kinds appear
+	// via both paths in practice, so the single Reason label per kind is a
+	// best-effort discriminator: it answers "what's the dominant lookup
+	// pattern for THIS kind?" — not "how was THIS particular ref discovered?"
+	// Reversing them (the prior labelling had them swapped) made the
+	// metadata actively misleading.
 	uses := &UsesBlock{
-		ConfigMaps: filterRefs(ctx, ac, cmSet.refs("ConfigMap", "", ReasonEnvVarRef, SourceK8sSpec), "uses.configMaps", omitted),
-		Secrets:    filterRefs(ctx, ac, secretSet.refs("Secret", "", ReasonVolumeMount, SourceK8sSpec), "uses.secrets", omitted),
+		ConfigMaps: filterRefs(ctx, ac, cmSet.refs("ConfigMap", "", ReasonVolumeMount, SourceK8sSpec), "uses.configMaps", omitted),
+		Secrets:    filterRefs(ctx, ac, secretSet.refs("Secret", "", ReasonEnvVarRef, SourceK8sSpec), "uses.secrets", omitted),
 		PVCs:       filterRefs(ctx, ac, pvcSet.refs("PersistentVolumeClaim", "", ReasonClaimRef, SourceK8sSpec), "uses.pvcs", omitted),
 	}
 

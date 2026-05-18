@@ -300,7 +300,10 @@ func (s *Server) writeAIFetchError(w http.ResponseWriter, kind string, err error
 	case strings.Contains(msg, "not found"):
 		s.writeError(w, http.StatusNotFound, msg)
 	default:
-		s.writeError(w, http.StatusNotFound, msg)
+		// Unknown errors are server-side problems (e.g. "resource discovery
+		// not initialized", "dynamic resource cache not initialized") — surface
+		// as 500 so debugging upstream issues isn't masked by a misleading 404.
+		s.writeError(w, http.StatusInternalServerError, msg)
 	}
 }
 
