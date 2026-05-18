@@ -86,7 +86,7 @@ func TestBuildSummary_PodGoldens(t *testing.T) {
 				ManagedBy:  ManagedByFromOwner("ReplicaSet", "apps", "prod", "api-7d5"),
 				IssueCount: 2,
 			},
-			want: `{"managedBy":{"source":"native","ref":{"kind":"ReplicaSet","group":"apps","namespace":"prod","name":"api-7d5"}},"health":"healthy","issueCount":2}`,
+			want: `{"managedBy":{"kind":"ReplicaSet","source":"native","name":"api-7d5","namespace":"prod"},"health":"healthy","issueCount":2}`,
 		},
 	}
 	for _, c := range cases {
@@ -315,7 +315,7 @@ func TestManagedByFromOwner(t *testing.T) {
 			group:     "apps",
 			namespace: "prod",
 			ownerName: "api",
-			want:      &ManagedByRef{Source: "native", Ref: ResourceSummaryRef{Kind: "Deployment", Group: "apps", Namespace: "prod", Name: "api"}},
+			want:      &ManagedByRef{Kind: "Deployment", Source: "native", Name: "api", Namespace: "prod"},
 		},
 		{
 			name:      "argocd_application",
@@ -323,7 +323,7 @@ func TestManagedByFromOwner(t *testing.T) {
 			group:     "argoproj.io",
 			namespace: "argocd",
 			ownerName: "storefront",
-			want:      &ManagedByRef{Source: "argocd", Ref: ResourceSummaryRef{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "storefront"}},
+			want:      &ManagedByRef{Kind: "Application", Source: "argocd", Name: "storefront", Namespace: "argocd"},
 		},
 		{
 			name:      "flux_kustomization",
@@ -331,7 +331,7 @@ func TestManagedByFromOwner(t *testing.T) {
 			group:     "kustomize.toolkit.fluxcd.io",
 			namespace: "flux-system",
 			ownerName: "prod-apps",
-			want:      &ManagedByRef{Source: "flux", Ref: ResourceSummaryRef{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Namespace: "flux-system", Name: "prod-apps"}},
+			want:      &ManagedByRef{Kind: "Kustomization", Source: "flux", Name: "prod-apps", Namespace: "flux-system"},
 		},
 		{
 			name:      "flux_helmrelease",
@@ -339,7 +339,7 @@ func TestManagedByFromOwner(t *testing.T) {
 			group:     "helm.toolkit.fluxcd.io",
 			namespace: "flux-system",
 			ownerName: "prod-apps",
-			want:      &ManagedByRef{Source: "flux", Ref: ResourceSummaryRef{Kind: "HelmRelease", Group: "helm.toolkit.fluxcd.io", Namespace: "flux-system", Name: "prod-apps"}},
+			want:      &ManagedByRef{Kind: "HelmRelease", Source: "flux", Name: "prod-apps", Namespace: "flux-system"},
 		},
 		{
 			name:      "flux_gitrepository",
@@ -347,7 +347,7 @@ func TestManagedByFromOwner(t *testing.T) {
 			group:     "source.toolkit.fluxcd.io",
 			namespace: "flux-system",
 			ownerName: "repo",
-			want:      &ManagedByRef{Source: "flux", Ref: ResourceSummaryRef{Kind: "GitRepository", Group: "source.toolkit.fluxcd.io", Namespace: "flux-system", Name: "repo"}},
+			want:      &ManagedByRef{Kind: "GitRepository", Source: "flux", Name: "repo", Namespace: "flux-system"},
 		},
 		{
 			// Native Helm release: topology's detectManagedByFromMeta emits
@@ -362,7 +362,7 @@ func TestManagedByFromOwner(t *testing.T) {
 			group:     "",
 			namespace: "cert-manager",
 			ownerName: "cert-manager",
-			want:      &ManagedByRef{Source: "helm", Ref: ResourceSummaryRef{Kind: "HelmRelease", Namespace: "cert-manager", Name: "cert-manager"}},
+			want:      &ManagedByRef{Kind: "HelmRelease", Source: "helm", Name: "cert-manager", Namespace: "cert-manager"},
 		},
 	}
 	for _, c := range cases {

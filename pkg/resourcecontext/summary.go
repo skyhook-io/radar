@@ -40,7 +40,7 @@ type SummaryOptions struct {
 // Tightly bounded — only the triage fields needed to choose a next hop.
 // Returns nil when all three fields would be empty so callers can
 // `omitempty` the entire object on bare results and keep the wire shape minimal.
-func BuildSummary(obj runtime.Object, opts SummaryOptions) *ResourceSummaryContext {
+func BuildSummary(obj runtime.Object, opts SummaryOptions) *SummaryContext {
 	health := opts.Health
 	if health == "" {
 		health = deriveHealth(obj)
@@ -48,7 +48,7 @@ func BuildSummary(obj runtime.Object, opts SummaryOptions) *ResourceSummaryConte
 	if opts.ManagedBy == nil && health == "" && opts.IssueCount == 0 {
 		return nil
 	}
-	return &ResourceSummaryContext{
+	return &SummaryContext{
 		ManagedBy:  opts.ManagedBy,
 		Health:     health,
 		IssueCount: opts.IssueCount,
@@ -72,13 +72,10 @@ func ManagedByFromOwner(ownerKind, ownerGroup, ownerNamespace, ownerName string)
 		return nil
 	}
 	return &ManagedByRef{
-		Source: sourceForOwner(ownerKind, ownerGroup),
-		Ref: ResourceSummaryRef{
-			Kind:      ownerKind,
-			Group:     ownerGroup,
-			Namespace: ownerNamespace,
-			Name:      ownerName,
-		},
+		Kind:      ownerKind,
+		Source:    sourceForOwner(ownerKind, ownerGroup),
+		Name:      ownerName,
+		Namespace: ownerNamespace,
 	}
 }
 

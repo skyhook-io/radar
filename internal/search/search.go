@@ -26,7 +26,7 @@ import (
 )
 
 // SummaryBuilderFunc, when supplied via Options.SummaryBuilder, is
-// invoked once per matched hit to produce the compact ResourceSummaryContext
+// invoked once per matched hit to produce the compact SummaryContext
 // attached to the hit's summaryContext field. Exactly one of obj/u will be
 // non-nil — typed kinds pass obj, dynamic CRDs pass u. Returning nil
 // is fine (the field is omitempty); callers use it to gate context
@@ -37,7 +37,7 @@ import (
 // it through lets the builder distinguish CRDs that share
 // kind+namespace+name across groups (e.g. Knative Service vs corev1
 // Service) in its per-resource issue index.
-type SummaryBuilderFunc func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext
+type SummaryBuilderFunc func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.SummaryContext
 
 // Provider abstracts the cache so tests can inject a fake.
 type Provider interface {
