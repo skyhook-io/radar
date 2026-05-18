@@ -105,7 +105,6 @@ func TestResourceContextFieldOrdering(t *testing.T) {
 		IssueSummary:  &IssueSummary{Count: 1},
 		AuditSummary:  &AuditSummary{Count: 2},
 		PolicySummary: &PolicySummary{},
-		Hints:         []string{"hint"},
 		Omitted:       []OmittedField{{Field: "selectedBy", Reason: OmittedRBACDenied}},
 	}
 	b, err := json.Marshal(ac)
@@ -124,7 +123,6 @@ func TestResourceContextFieldOrdering(t *testing.T) {
 		`"issueSummary"`,
 		`"auditSummary"`,
 		`"policySummary"`,
-		`"hints"`,
 		`"omitted"`,
 	}
 	prev := -1
@@ -197,7 +195,6 @@ func TestResourceContextRoundTrip(t *testing.T) {
 				}},
 			},
 		},
-		Hints: []string{"Managed by Deployment api"},
 		Omitted: []OmittedField{
 			{Field: "selectedBy.networkPolicies", Reason: OmittedRBACDenied},
 			{Field: "policySummary.kyverno", Reason: OmittedNotInstalled},

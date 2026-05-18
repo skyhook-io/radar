@@ -314,7 +314,6 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	opts := resourcecontext.Options{
 		Tier:          resourcecontext.TierBasic,
 		AccessChecker: s.newRequestScopedChecker(r),
-		EmitHints:     true,
 		IssueSummary:  issueSum,
 		AuditSummary:  auditSum,
 	}
@@ -463,8 +462,8 @@ func composeSeverityRank(s issues.Severity) int {
 //
 // TopFinding is selected deterministically: highest severity wins, with
 // CheckID as the ascending tiebreaker. Map iteration ordering does NOT
-// influence the choice — relevant because SynthesizeHints downstream
-// advertises deterministic output.
+// influence the choice — agents pinning regression tests on
+// resourceContext output rely on stable field values across runs.
 func computeAuditSummaryForResource(cache *k8s.ResourceCache, kind, namespace, name string) *resourcecontext.AuditSummary {
 	if cache == nil || kind == "" {
 		return nil

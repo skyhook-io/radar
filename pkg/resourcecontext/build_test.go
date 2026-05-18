@@ -3,7 +3,6 @@ package resourcecontext
 import (
 	"context"
 	"encoding/json"
-	"reflect"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -132,7 +131,6 @@ func TestBuild_Pod_FullEnrichment(t *testing.T) {
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
-		EmitHints:     true,
 		IssueSummary: &IssueSummary{
 			Count: 1, HighestSeverity: "critical", TopReason: "ImagePullBackOff",
 			BySource: map[string]int{"problem": 1},
@@ -203,20 +201,6 @@ func TestBuild_Pod_FullEnrichment(t *testing.T) {
 		t.Errorf("Uses.ServiceAccount: got %+v", rc.Uses.ServiceAccount)
 	}
 
-	// Hints: deterministic ordering covers the high-signal fields.
-	wantHints := []string{
-		"Managed by Application storefront",
-		"1 issue (critical: ImagePullBackOff)",
-		"Running on node node-1",
-		"Exposed by 1 Service",
-		"1 NetworkPolicy and 1 PodDisruptionBudget select this resource",
-		"Scaled by 1 HorizontalPodAutoscaler",
-		"Uses 2 ConfigMaps, 2 Secrets, 1 PVC, ServiceAccount web-sa",
-	}
-	if !reflect.DeepEqual(rc.Hints, wantHints) {
-		t.Errorf("Hints mismatch.\n got: %v\nwant: %v", rc.Hints, wantHints)
-	}
-
 	// Pre-computed summaries are passed through.
 	if rc.IssueSummary == nil || rc.IssueSummary.Count != 1 {
 		t.Errorf("IssueSummary not passed through: %+v", rc.IssueSummary)
@@ -243,7 +227,6 @@ func TestBuild_Deployment_OwnerRefHelmRelease(t *testing.T) {
 	rc := Build(context.Background(), dep, Options{
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
-		EmitHints:     true,
 	})
 	if rc == nil {
 		t.Fatal("Build returned nil")
@@ -257,10 +240,6 @@ func TestBuild_Deployment_OwnerRefHelmRelease(t *testing.T) {
 	}
 	if mb.Group != "helm.toolkit.fluxcd.io" {
 		t.Errorf("ManagedBy[0].Group: got %q", mb.Group)
-	}
-	wantHint := "Managed by HelmRelease web"
-	if len(rc.Hints) == 0 || rc.Hints[0] != wantHint {
-		t.Errorf("first Hint: got %v want %q", rc.Hints, wantHint)
 	}
 }
 
@@ -281,7 +260,6 @@ func TestBuild_Service_ExposedByIngress(t *testing.T) {
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
-		EmitHints:     true,
 	})
 
 	if got, want := len(rc.Exposes), 1; got != want {
@@ -317,7 +295,6 @@ func TestBuild_NetworkPolicy_OutgoingEdgeNotSurfaced(t *testing.T) {
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
-		EmitHints:     true,
 	})
 	if rc == nil {
 		t.Fatal("Build returned nil")
@@ -354,7 +331,6 @@ func TestBuild_ConfigMap_OwnerOnly(t *testing.T) {
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
-		EmitHints:     true,
 	})
 	if got, want := len(rc.ManagedBy), 1; got != want {
 		t.Fatalf("ManagedBy len: got %d want %d", got, want)
@@ -382,7 +358,6 @@ func TestBuild_RBACDenied_AppendsOmitted(t *testing.T) {
 	rc := Build(context.Background(), pod, Options{
 		Tier:          TierBasic,
 		AccessChecker: denyChecker{group: "", kind: "Secret", namespace: "prod"},
-		EmitHints:     true,
 	})
 	if rc.Uses != nil && len(rc.Uses.Secrets) != 0 {
 		t.Errorf("Secrets should be empty after deny; got %+v", rc.Uses.Secrets)
@@ -396,30 +371,6 @@ func TestBuild_RBACDenied_AppendsOmitted(t *testing.T) {
 	}
 	if !gotOmitted {
 		t.Errorf("expected omitted [uses.secrets, rbac_denied]; got %+v", rc.Omitted)
-	}
-}
-
-func TestBuild_EmitHintsFalse_NoHints(t *testing.T) {
-	// Flux Helm labels — detected from obj metadata directly via
-	// topology.SynthesizeManagedBy without needing a populated Topology.
-	dep := &appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod",
-			Labels: map[string]string{
-				"helm.toolkit.fluxcd.io/name":      "web",
-				"helm.toolkit.fluxcd.io/namespace": "flux-system",
-			}},
-	}
-	rc := Build(context.Background(), dep, Options{
-		Tier:          TierBasic,
-		AccessChecker: allowAllChecker{},
-		EmitHints:     false,
-	})
-	if len(rc.Hints) != 0 {
-		t.Errorf("EmitHints=false but got hints: %v", rc.Hints)
-	}
-	// Structured fields still populated.
-	if len(rc.ManagedBy) != 1 {
-		t.Errorf("ManagedBy should still be populated: %+v", rc.ManagedBy)
 	}
 }
 
@@ -457,7 +408,6 @@ func TestBuild_PolicyReports_BasicTierCountsOnly(t *testing.T) {
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		PolicyReports: reports,
-		EmitHints:     true,
 	})
 	if rc.PolicySummary == nil || rc.PolicySummary.Kyverno == nil {
 		t.Fatalf("PolicySummary.Kyverno: got nil; rc=%+v", rc)
@@ -468,16 +418,6 @@ func TestBuild_PolicyReports_BasicTierCountsOnly(t *testing.T) {
 	}
 	if len(k.Top) != 0 {
 		t.Errorf("basic tier must NOT emit Top[]; got %d entries: %+v", len(k.Top), k.Top)
-	}
-	gotHint := false
-	for _, h := range rc.Hints {
-		if h == "Kyverno: 1 failing, 1 warning" {
-			gotHint = true
-			break
-		}
-	}
-	if !gotHint {
-		t.Errorf("expected Kyverno hint; got %v", rc.Hints)
 	}
 }
 
@@ -540,7 +480,6 @@ func TestBuild_PDB_OutputJSONShape(t *testing.T) {
 		Tier:          TierBasic,
 		AccessChecker: allowAllChecker{},
 		Topology:      topo,
-		EmitHints:     true,
 	})
 	b, err := json.MarshalIndent(rc, "", "  ")
 	if err != nil {

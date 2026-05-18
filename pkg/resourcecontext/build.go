@@ -59,10 +59,6 @@ type Options struct {
 	IssueSummary  *IssueSummary
 	AuditSummary  *AuditSummary
 	PolicyReports PolicyReportLookup // nil = Kyverno not installed / no findings
-
-	// EmitHints controls whether SynthesizeHints runs over the structured
-	// fields. AI-facing callers (MCP, /api/ai/*) set true; UI callers false.
-	EmitHints bool
 }
 
 // PolicyReportLookup is the minimal interface Build needs from the
@@ -236,11 +232,6 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		if len(findings) > 0 {
 			rc.PolicySummary = buildPolicySummary(findings, opts.Tier)
 		}
-	}
-
-	// 6. Hints — AI-only.
-	if opts.EmitHints {
-		rc.Hints = SynthesizeHints(rc, opts.Tier)
 	}
 
 	rc.Omitted = omitted.collect()

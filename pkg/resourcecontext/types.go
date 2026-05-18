@@ -20,10 +20,13 @@ package resourcecontext
 // response. Every field is optional; the zero value is a valid (empty)
 // "basic"-tier context.
 //
-// Hints is an optional, presentation-only field — populated by AI-facing
-// callers (MCP, /api/ai/*) and omitted by UI-facing callers. The structured
-// fields above are the canonical facts; hints are a derived prose
-// projection.
+// All fields are structured. A prose `Hints []string` projection was
+// considered (and prototyped) but cut from v1: our dominant agent consumer
+// composes triage prose from the structured fields itself, the additional
+// wire bytes earned no net signal, and once shipped, agents pattern-matching
+// on hint substrings would have ossified the wording. If a real consumer
+// emerges that needs deterministic prose, add it as a separate
+// `explain_resource` tool rather than re-introducing it inline here.
 type ResourceContext struct {
 	Tier          ContextTier    `json:"tier"`
 	ManagedBy     []ContextRef   `json:"managedBy,omitempty"`
@@ -35,7 +38,6 @@ type ResourceContext struct {
 	IssueSummary  *IssueSummary  `json:"issueSummary,omitempty"`
 	AuditSummary  *AuditSummary  `json:"auditSummary,omitempty"`
 	PolicySummary *PolicySummary `json:"policySummary,omitempty"`
-	Hints         []string       `json:"hints,omitempty"`
 	Omitted       []OmittedField `json:"omitted,omitempty"`
 }
 
