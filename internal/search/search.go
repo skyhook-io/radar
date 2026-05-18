@@ -242,7 +242,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				}
 			}
 			pending = append(pending, pendingHit{
-				hit: buildHit(score, matched, c, opts.Include, obj, nil, nil),
+				hit: buildHit(score, matched, c, opts.Include, obj, nil),
 				obj: obj,
 				c:   c,
 			})
@@ -312,7 +312,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				}
 			}
 			pending = append(pending, pendingHit{
-				hit: buildHit(score, matched, c, opts.Include, nil, u, nil),
+				hit: buildHit(score, matched, c, opts.Include, nil, u),
 				u:   u,
 				c:   c,
 			})
@@ -403,12 +403,11 @@ func isClusterScopedKind(kind string) bool {
 
 // buildHit assembles the response shape for a matched candidate. Exactly
 // one of obj/u will be non-nil. minify-on-demand keeps the cost of
-// IncludeNone (identity-only) flat. summaryBuilder, when non-nil, is
-// invoked to attach the compact per-result summaryContext — kept separate
-// from Include because context applies to every verbosity (including
-// IncludeNone identity-only hits), while Summary/Raw control the full
-// minified body.
-func buildHit(score int, matched []MatchedField, c candidate, mode IncludeMode, obj runtime.Object, u *unstructured.Unstructured, summaryBuilder SummaryBuilderFunc) Hit {
+// IncludeNone (identity-only) flat. SummaryContext attachment is NOT
+// done here — it happens in Search's post-truncation loop so the
+// expensive topology lookups + issue-index reads only run for the hits
+// that survive sort + Limit truncation.
+func buildHit(score int, matched []MatchedField, c candidate, mode IncludeMode, obj runtime.Object, u *unstructured.Unstructured) Hit {
 	h := Hit{
 		Score:     score,
 		Kind:      c.Kind,
@@ -436,9 +435,6 @@ func buildHit(score int, matched []MatchedField, c candidate, mode IncludeMode, 
 		} else if u != nil {
 			h.Raw = aicontext.MinifyUnstructured(u, aicontext.LevelDetail)
 		}
-	}
-	if summaryBuilder != nil {
-		h.SummaryContext = summaryBuilder(obj, u, c.Group, c.Kind, c.Namespace, c.Name)
 	}
 	return h
 }
