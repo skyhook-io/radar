@@ -303,6 +303,21 @@ func condTypeReason(condType, reason string) string {
 // Source-specific normalization
 // ---------------------------------------------------------------------------
 
+// resolveGroup returns the explicit group if set, else falls back to the
+// built-in (Kind→Group) table. Some legacy Problem emission sites in
+// k8s.DetectProblems still leave Group="" for built-in workloads
+// (Deployment, StatefulSet, etc.) — without this fallback, the
+// group-aware consumer (computeIssueSummaryForResource) would silently
+// drop those rows when looking up by canonical group like "apps".
+// Centralised here so the (Kind→Group) map lives in one place across
+// packages (pkg/audit owns the table; this is a pass-through).
+func resolveGroup(group, kind string) string {
+	if group != "" {
+		return group
+	}
+	return bp.GroupForBuiltinKind(kind)
+}
+
 func fromProblem(p k8s.Problem, now time.Time) Issue {
 	sev := SeverityWarning
 	if p.Severity == "critical" {
@@ -313,7 +328,7 @@ func fromProblem(p k8s.Problem, now time.Time) Issue {
 		Severity:  sev,
 		Source:    SourceProblem,
 		Kind:      p.Kind,
-		Group:     p.Group,
+		Group:     resolveGroup(p.Group, p.Kind),
 		Namespace: p.Namespace,
 		Name:      p.Name,
 		Reason:    p.Reason,
@@ -333,6 +348,7 @@ func fromAudit(fin bp.Finding, now time.Time) Issue {
 		Severity:  sev,
 		Source:    SourceAudit,
 		Kind:      fin.Kind,
+		Group:     resolveGroup(fin.Group, fin.Kind),
 		Namespace: fin.Namespace,
 		Name:      fin.Name,
 		Reason:    fin.CheckID,
@@ -413,10 +429,19 @@ func fromWarningEvent(e *corev1.Event) Issue {
 	if first.IsZero() {
 		first = last
 	}
+	// Event.InvolvedObject carries apiVersion (group/version); split out
+	// the group so cross-group consumers don't collide when a Knative
+	// Service and a core Service share name+ns.
+	group, _, _ := strings.Cut(e.InvolvedObject.APIVersion, "/")
+	if e.InvolvedObject.APIVersion != "" && !strings.Contains(e.InvolvedObject.APIVersion, "/") {
+		// "v1" → core group "".
+		group = ""
+	}
 	return Issue{
 		Severity:  SeverityWarning,
 		Source:    SourceEvent,
 		Kind:      e.InvolvedObject.Kind,
+		Group:     resolveGroup(group, e.InvolvedObject.Kind),
 		Namespace: e.Namespace,
 		Name:      e.InvolvedObject.Name,
 		Reason:    e.Reason,

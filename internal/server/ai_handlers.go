@@ -333,13 +333,15 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	// so the audit index lookup keys correctly. Falls back to the URL kind
 	// only when TypeMeta is somehow empty; non-canonical input there would
 	// silently mis-key the audit lookup.
-	canonicalKind := obj.GetObjectKind().GroupVersionKind().Kind
+	gvk := obj.GetObjectKind().GroupVersionKind()
+	canonicalKind := gvk.Kind
 	if canonicalKind == "" {
 		canonicalKind = kind
 	}
+	canonicalGroup := gvk.Group
 
-	issueSum := computeIssueSummaryForResource(cache, canonicalKind, namespace, name)
-	auditSum := computeAuditSummaryForResource(cache, canonicalKind, namespace, name)
+	issueSum := computeIssueSummaryForResource(cache, canonicalGroup, canonicalKind, namespace, name)
+	auditSum := computeAuditSummaryForResource(cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
 		Tier:          resourcecontext.TierBasic,
@@ -414,7 +416,7 @@ func (s *Server) topologyForContext(namespace string) (*topology.Topology, topol
 // summary silently collapses to nil.
 //
 // Returns nil when no issues match — Build then omits the IssueSummary field.
-func computeIssueSummaryForResource(cache *k8s.ResourceCache, kind, namespace, name string) *resourcecontext.IssueSummary {
+func computeIssueSummaryForResource(cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.IssueSummary {
 	if cache == nil {
 		return nil
 	}
@@ -438,6 +440,15 @@ func computeIssueSummaryForResource(cache *k8s.ResourceCache, kind, namespace, n
 			continue
 		}
 		if namespace != "" && row.Namespace != namespace {
+			continue
+		}
+		// Group-aware match: T11 populates Issue.Group for problem +
+		// condition sources, so a Knative serving.knative.dev/Service
+		// lookup won't pull in the core Service's issues (or vice
+		// versa). The fromAudit / fromEvent sources emit Group="" today
+		// — those correctly match only the core-group lookup, which is
+		// the existing behavior.
+		if row.Group != group {
 			continue
 		}
 		matched = append(matched, row)
@@ -490,7 +501,7 @@ func composeSeverityRank(s issues.Severity) int {
 // CheckID as the ascending tiebreaker. Map iteration ordering does NOT
 // influence the choice — agents pinning regression tests on
 // resourceContext output rely on stable field values across runs.
-func computeAuditSummaryForResource(cache *k8s.ResourceCache, kind, namespace, name string) *resourcecontext.AuditSummary {
+func computeAuditSummaryForResource(cache *k8s.ResourceCache, group, kind, namespace, name string) *resourcecontext.AuditSummary {
 	if cache == nil || kind == "" {
 		return nil
 	}
@@ -508,7 +519,7 @@ func computeAuditSummaryForResource(cache *k8s.ResourceCache, kind, namespace, n
 		return nil
 	}
 	idx := bpaudit.IndexByResource(results.Findings)
-	match := idx[bpaudit.ResourceKey(kind, namespace, name)]
+	match := idx[bpaudit.ResourceKey(group, kind, namespace, name)]
 	if len(match) == 0 {
 		return nil
 	}

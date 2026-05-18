@@ -63,8 +63,12 @@ type ScanResults struct {
 
 // ResourceGroup aggregates findings for a single resource.
 // Groups are sorted by severity (danger first), then by name.
+// Group disambiguates kinds that collide across API groups
+// (e.g. core/Service vs serving.knative.dev/Service); empty for the
+// core API group.
 type ResourceGroup struct {
 	Kind      string    `json:"kind"`
+	Group     string    `json:"group,omitempty"`
 	Namespace string    `json:"namespace"`
 	Name      string    `json:"name"`
 	Warning   int       `json:"warning"`
@@ -88,8 +92,14 @@ type CategorySummary struct {
 }
 
 // Finding represents a single best-practice violation.
+// Group disambiguates kinds that collide across API groups
+// (e.g. core/Service vs serving.knative.dev/Service); empty for the
+// core API group. Check emission sites leave Group="" — buildResults
+// populates it via groupForBuiltinKind so the (Kind→Group) map lives
+// in one place rather than every check function.
 type Finding struct {
 	Kind      string `json:"kind"`
+	Group     string `json:"group,omitempty"`
 	Namespace string `json:"namespace"`
 	Name      string `json:"name"`
 	CheckID   string `json:"checkID"`

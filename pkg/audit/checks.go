@@ -935,6 +935,15 @@ func buildResults(findings []Finding) *ScanResults {
 		categories[cat] = CategorySummary{}
 	}
 
+	// Populate Group from the built-in (Kind→Group) table. Check emission
+	// sites leave Group="" so the per-check code stays terse — single
+	// point of truth here instead of every Finding{} literal.
+	for i := range findings {
+		if findings[i].Group == "" {
+			findings[i].Group = GroupForBuiltinKind(findings[i].Kind)
+		}
+	}
+
 	// Merge findings: same (resource, checkID) get combined into one finding
 	// with messages joined, so multi-container workloads show all affected containers.
 	type checkKey struct{ resource, checkID string }
@@ -942,7 +951,7 @@ func buildResults(findings []Finding) *ScanResults {
 	var dedupFindings []Finding
 
 	for _, f := range findings {
-		key := checkKey{ResourceKey(f.Kind, f.Namespace, f.Name), f.CheckID}
+		key := checkKey{ResourceKey(f.Group, f.Kind, f.Namespace, f.Name), f.CheckID}
 		if idx, exists := mergeIndex[key]; exists {
 			dedupFindings[idx].Message += "; " + f.Message
 			continue
