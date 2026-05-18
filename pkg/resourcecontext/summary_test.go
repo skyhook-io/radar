@@ -86,7 +86,7 @@ func TestBuildSummary_PodGoldens(t *testing.T) {
 				ManagedBy:  ManagedByFromOwner("ReplicaSet", "apps", "prod", "api-7d5"),
 				IssueCount: 2,
 			},
-			want: `{"managedBy":{"kind":"ReplicaSet","source":"native","name":"api-7d5","namespace":"prod"},"health":"healthy","issueCount":2}`,
+			want: `{"managedBy":{"source":"native","ref":{"kind":"ReplicaSet","group":"apps","namespace":"prod","name":"api-7d5"}},"health":"healthy","issueCount":2}`,
 		},
 	}
 	for _, c := range cases {
@@ -122,10 +122,17 @@ func TestBuildSummary_DeploymentReplicasHealth(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
+			desired := c.desired
 			dep := &appsv1.Deployment{
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &desired, // desired is Spec.Replicas (not Status) — see deriveHealth
+				},
 				Status: appsv1.DeploymentStatus{
 					ReadyReplicas: c.ready,
-					Replicas:      c.desired,
+					// Status.Replicas mirrors the actual non-terminated pod count
+					// in real clusters; we set it equal to ready here so the
+					// fixture matches a steady-state Deployment for that test.
+					Replicas: c.ready,
 				},
 			}
 			got := BuildSummary(dep, SummaryOptions{})
@@ -143,6 +150,48 @@ func TestBuildSummary_DeploymentReplicasHealth(t *testing.T) {
 				t.Errorf("got %s\nwant %s", b, c.wantSlice)
 			}
 		})
+	}
+}
+
+// TestBuildSummary_DeploymentHealthDuringScaleDown pins the Spec-vs-Status
+// regression flagged on PR #722: during rolling updates or scale-down,
+// Status.Replicas (current pod count) can exceed Spec.Replicas (desired).
+// Before the fix, deriveHealth compared ReadyReplicas against Status.Replicas
+// and reported "degraded" because not all current pods were ready — even
+// though all DESIRED replicas were ready and the cluster was healthily
+// draining excess pods. Use Spec.Replicas as the denominator instead.
+func TestBuildSummary_DeploymentHealthDuringScaleDown(t *testing.T) {
+	desired := int32(2)
+	dep := &appsv1.Deployment{
+		Spec: appsv1.DeploymentSpec{Replicas: &desired},
+		Status: appsv1.DeploymentStatus{
+			ReadyReplicas: 2, // all DESIRED replicas are ready
+			Replicas:      4, // but 2 extras still terminating from a scale-down
+		},
+	}
+	got := BuildSummary(dep, SummaryOptions{})
+	if got == nil {
+		t.Fatal("got nil, want SummaryContext with health=healthy")
+	}
+	if got.Health != "healthy" {
+		t.Errorf("Health = %q, want %q (Spec.Replicas=2 ready, Status.Replicas=4 due to draining)", got.Health, "healthy")
+	}
+}
+
+// TestBuildSummary_ReplicaSetHealthDuringScaleDown pins the same fix for
+// ReplicaSet — the Deployment regression also applied here.
+func TestBuildSummary_ReplicaSetHealthDuringScaleDown(t *testing.T) {
+	desired := int32(3)
+	rs := &appsv1.ReplicaSet{
+		Spec: appsv1.ReplicaSetSpec{Replicas: &desired},
+		Status: appsv1.ReplicaSetStatus{
+			ReadyReplicas: 3,
+			Replicas:      5,
+		},
+	}
+	got := BuildSummary(rs, SummaryOptions{})
+	if got == nil || got.Health != "healthy" {
+		t.Errorf("ReplicaSet during scale-down: got %+v, want Health=healthy", got)
 	}
 }
 
@@ -266,7 +315,7 @@ func TestManagedByFromOwner(t *testing.T) {
 			group:     "apps",
 			namespace: "prod",
 			ownerName: "api",
-			want:      &ManagedByRef{Kind: "Deployment", Source: "native", Name: "api", Namespace: "prod"},
+			want:      &ManagedByRef{Source: "native", Ref: ResourceSummaryRef{Kind: "Deployment", Group: "apps", Namespace: "prod", Name: "api"}},
 		},
 		{
 			name:      "argocd_application",
@@ -274,7 +323,7 @@ func TestManagedByFromOwner(t *testing.T) {
 			group:     "argoproj.io",
 			namespace: "argocd",
 			ownerName: "storefront",
-			want:      &ManagedByRef{Kind: "Application", Source: "argocd", Name: "storefront", Namespace: "argocd"},
+			want:      &ManagedByRef{Source: "argocd", Ref: ResourceSummaryRef{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "storefront"}},
 		},
 		{
 			name:      "flux_kustomization",
@@ -282,7 +331,7 @@ func TestManagedByFromOwner(t *testing.T) {
 			group:     "kustomize.toolkit.fluxcd.io",
 			namespace: "flux-system",
 			ownerName: "prod-apps",
-			want:      &ManagedByRef{Kind: "Kustomization", Source: "flux", Name: "prod-apps", Namespace: "flux-system"},
+			want:      &ManagedByRef{Source: "flux", Ref: ResourceSummaryRef{Kind: "Kustomization", Group: "kustomize.toolkit.fluxcd.io", Namespace: "flux-system", Name: "prod-apps"}},
 		},
 		{
 			name:      "flux_helmrelease",
@@ -290,7 +339,7 @@ func TestManagedByFromOwner(t *testing.T) {
 			group:     "helm.toolkit.fluxcd.io",
 			namespace: "flux-system",
 			ownerName: "prod-apps",
-			want:      &ManagedByRef{Kind: "HelmRelease", Source: "flux", Name: "prod-apps", Namespace: "flux-system"},
+			want:      &ManagedByRef{Source: "flux", Ref: ResourceSummaryRef{Kind: "HelmRelease", Group: "helm.toolkit.fluxcd.io", Namespace: "flux-system", Name: "prod-apps"}},
 		},
 		{
 			name:      "flux_gitrepository",
@@ -298,7 +347,7 @@ func TestManagedByFromOwner(t *testing.T) {
 			group:     "source.toolkit.fluxcd.io",
 			namespace: "flux-system",
 			ownerName: "repo",
-			want:      &ManagedByRef{Kind: "GitRepository", Source: "flux", Name: "repo", Namespace: "flux-system"},
+			want:      &ManagedByRef{Source: "flux", Ref: ResourceSummaryRef{Kind: "GitRepository", Group: "source.toolkit.fluxcd.io", Namespace: "flux-system", Name: "repo"}},
 		},
 		{
 			// Native Helm release: topology's detectManagedByFromMeta emits
@@ -313,7 +362,7 @@ func TestManagedByFromOwner(t *testing.T) {
 			group:     "",
 			namespace: "cert-manager",
 			ownerName: "cert-manager",
-			want:      &ManagedByRef{Kind: "HelmRelease", Source: "helm", Name: "cert-manager", Namespace: "cert-manager"},
+			want:      &ManagedByRef{Source: "helm", Ref: ResourceSummaryRef{Kind: "HelmRelease", Namespace: "cert-manager", Name: "cert-manager"}},
 		},
 	}
 	for _, c := range cases {

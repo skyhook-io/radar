@@ -9,14 +9,14 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
-// SummaryOptions configures the per-row enrichment produced by
+// SummaryOptions configures the compact per-result enrichment produced by
 // BuildSummary. All fields are pre-computed by the caller — this
 // package never touches the issue engine, topology builder, or audit
 // cache directly. Handlers in internal/* (REST list, MCP list_resources,
 // search) walk the per-request topology + issue indexes once and pass
-// the per-row digest in here.
+// the per-result digest in here.
 type SummaryOptions struct {
-	// ManagedBy is the compact owner/GitOps pointer attached to the row.
+	// ManagedBy is the compact owner/GitOps pointer attached to the summary.
 	// Callers derive this from topology.Relationships via
 	// ManagedByFromOwner; nil leaves the field absent.
 	ManagedBy *ManagedByRef
@@ -24,7 +24,7 @@ type SummaryOptions struct {
 	// IssueCount is the count of internal issue-engine findings scoped to
 	// the subject resource. Callers pre-compute a per-namespace index
 	// (e.g. via internal/issues.ComposeWithStats) once per request and
-	// pass the count in for each row. Zero omits the field.
+	// pass the count in for each result. Zero omits the field.
 	IssueCount int
 
 	// Health, when non-empty, overrides the derived health string. The
@@ -34,13 +34,13 @@ type SummaryOptions struct {
 	Health string
 }
 
-// BuildSummary produces the compact per-row SummaryContext attached to
+// BuildSummary produces the compact per-result summaryContext attached to
 // list_resources, /api/ai/resources/{kind} list, and search hits.
 //
-// Tightly bounded — targets ≤ 60 bytes per row when present. Returns
-// nil when all three fields would be empty so callers can `omitempty`
-// the entire object on bare rows and keep the wire shape minimal.
-func BuildSummary(obj runtime.Object, opts SummaryOptions) *SummaryContext {
+// Tightly bounded — only the triage fields needed to choose a next hop.
+// Returns nil when all three fields would be empty so callers can
+// `omitempty` the entire object on bare results and keep the wire shape minimal.
+func BuildSummary(obj runtime.Object, opts SummaryOptions) *ResourceSummaryContext {
 	health := opts.Health
 	if health == "" {
 		health = deriveHealth(obj)
@@ -48,7 +48,7 @@ func BuildSummary(obj runtime.Object, opts SummaryOptions) *SummaryContext {
 	if opts.ManagedBy == nil && health == "" && opts.IssueCount == 0 {
 		return nil
 	}
-	return &SummaryContext{
+	return &ResourceSummaryContext{
 		ManagedBy:  opts.ManagedBy,
 		Health:     health,
 		IssueCount: opts.IssueCount,
@@ -72,10 +72,13 @@ func ManagedByFromOwner(ownerKind, ownerGroup, ownerNamespace, ownerName string)
 		return nil
 	}
 	return &ManagedByRef{
-		Kind:      ownerKind,
-		Source:    sourceForOwner(ownerKind, ownerGroup),
-		Name:      ownerName,
-		Namespace: ownerNamespace,
+		Source: sourceForOwner(ownerKind, ownerGroup),
+		Ref: ResourceSummaryRef{
+			Kind:      ownerKind,
+			Group:     ownerGroup,
+			Namespace: ownerNamespace,
+			Name:      ownerName,
+		},
 	}
 }
 
@@ -112,7 +115,16 @@ func deriveHealth(obj runtime.Object) string {
 	case *corev1.Pod:
 		return podHealth(o)
 	case *appsv1.Deployment:
-		return replicasHealth(o.Status.ReadyReplicas, o.Status.Replicas)
+		// Use Spec.Replicas (desired) not Status.Replicas (current). During
+		// scale-down or rolling updates, Status.Replicas can exceed
+		// Spec.Replicas while terminating pods drain; comparing ReadyReplicas
+		// against Status.Replicas would falsely report "degraded" when all
+		// desired replicas are actually ready. Matches StatefulSet semantics.
+		desired := int32(1)
+		if o.Spec.Replicas != nil {
+			desired = *o.Spec.Replicas
+		}
+		return replicasHealth(o.Status.ReadyReplicas, desired)
 	case *appsv1.StatefulSet:
 		desired := int32(1)
 		if o.Spec.Replicas != nil {
@@ -122,7 +134,12 @@ func deriveHealth(obj runtime.Object) string {
 	case *appsv1.DaemonSet:
 		return replicasHealth(o.Status.NumberReady, o.Status.DesiredNumberScheduled)
 	case *appsv1.ReplicaSet:
-		return replicasHealth(o.Status.ReadyReplicas, o.Status.Replicas)
+		// Same Spec-vs-Status concern as Deployment above.
+		desired := int32(1)
+		if o.Spec.Replicas != nil {
+			desired = *o.Spec.Replicas
+		}
+		return replicasHealth(o.Status.ReadyReplicas, desired)
 	case *unstructured.Unstructured:
 		return unstructuredHealth(o)
 	}

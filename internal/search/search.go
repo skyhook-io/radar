@@ -26,8 +26,8 @@ import (
 )
 
 // SummaryBuilderFunc, when supplied via Options.SummaryBuilder, is
-// invoked once per matched hit to produce the compact per-row
-// SummaryContext attached to the Hit. Exactly one of obj/u will be
+// invoked once per matched hit to produce the compact ResourceSummaryContext
+// attached to the hit's summaryContext field. Exactly one of obj/u will be
 // non-nil — typed kinds pass obj, dynamic CRDs pass u. Returning nil
 // is fine (the field is omitempty); callers use it to gate context
 // emission per request (context=none opts out by passing nil here).
@@ -37,7 +37,7 @@ import (
 // it through lets the builder distinguish CRDs that share
 // kind+namespace+name across groups (e.g. Knative Service vs corev1
 // Service) in its per-resource issue index.
-type SummaryBuilderFunc func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.SummaryContext
+type SummaryBuilderFunc func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext
 
 // Provider abstracts the cache so tests can inject a fake.
 type Provider interface {
@@ -122,7 +122,7 @@ type Options struct {
 	// just runs the program.
 	Filter *CELFilter
 	// SummaryBuilder, when non-nil, is invoked per matched hit to
-	// attach the compact SummaryContext (managedBy + health +
+	// attach the compact summaryContext (managedBy + health +
 	// issueCount). Handlers provide a closure that wraps the
 	// request-scoped topology + per-namespace issue index so the
 	// per-row cost stays flat. Pass nil to opt out (context=none) —
@@ -131,6 +131,17 @@ type Options struct {
 }
 
 // Search runs the parsed query against the provider and returns ranked hits.
+// pendingHit pairs a Hit with the source object that produced it, so the
+// SummaryBuilder (topology lookups, issue-index reads) can be deferred
+// until AFTER the hits are sorted and truncated to opts.Limit. Lifecycle is
+// strictly internal to Search — never escapes the function.
+type pendingHit struct {
+	hit Hit
+	obj runtime.Object             // typed source (nil for CRD hits)
+	u   *unstructured.Unstructured // unstructured source (nil for typed hits)
+	c   candidate                  // for c.Group/Kind/Namespace/Name when invoking SummaryBuilder
+}
+
 func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, error) {
 	if opts.Limit <= 0 {
 		opts.Limit = DefaultLimit
@@ -140,7 +151,11 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 	}
 
 	var res Result
-	var hits []Hit
+	// Buffer hits along with the source object so summaryBuilder (topology
+	// lookups, issue-index reads) can run AFTER sort + truncate — without
+	// this, broad queries pay topology lookups for thousands of matches
+	// only to ship at most opts.Limit of them.
+	var pending []pendingHit
 	// CEL filter eval errors are silently dropped per-row (the agent
 	// just gets fewer hits, no 500), but we log the first error so an
 	// operator can see when rows are dying to runtime issues — typical
@@ -226,7 +241,11 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 					continue
 				}
 			}
-			hits = append(hits, buildHit(score, matched, c, opts.Include, obj, nil, opts.SummaryBuilder))
+			pending = append(pending, pendingHit{
+				hit: buildHit(score, matched, c, opts.Include, obj, nil, nil),
+				obj: obj,
+				c:   c,
+			})
 		}
 	}
 
@@ -292,7 +311,11 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 					continue
 				}
 			}
-			hits = append(hits, buildHit(score, matched, c, opts.Include, nil, u, opts.SummaryBuilder))
+			pending = append(pending, pendingHit{
+				hit: buildHit(score, matched, c, opts.Include, nil, u, nil),
+				u:   u,
+				c:   c,
+			})
 		}
 	}
 
@@ -304,21 +327,34 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		}
 	}
 
-	sort.SliceStable(hits, func(i, j int) bool {
-		if hits[i].Score != hits[j].Score {
-			return hits[i].Score > hits[j].Score
+	sort.SliceStable(pending, func(i, j int) bool {
+		if pending[i].hit.Score != pending[j].hit.Score {
+			return pending[i].hit.Score > pending[j].hit.Score
 		}
-		if hits[i].Kind != hits[j].Kind {
-			return hits[i].Kind < hits[j].Kind
+		if pending[i].hit.Kind != pending[j].hit.Kind {
+			return pending[i].hit.Kind < pending[j].hit.Kind
 		}
-		if hits[i].Namespace != hits[j].Namespace {
-			return hits[i].Namespace < hits[j].Namespace
+		if pending[i].hit.Namespace != pending[j].hit.Namespace {
+			return pending[i].hit.Namespace < pending[j].hit.Namespace
 		}
-		return hits[i].Name < hits[j].Name
+		return pending[i].hit.Name < pending[j].hit.Name
 	})
-	res.TotalMatched = len(hits)
-	if len(hits) > opts.Limit {
-		hits = hits[:opts.Limit]
+	res.TotalMatched = len(pending)
+	if len(pending) > opts.Limit {
+		pending = pending[:opts.Limit]
+	}
+
+	// Summary attach happens HERE — after truncation — so the topology
+	// lookups + issue-index reads only run for the hits we'll actually
+	// ship. Skipped entirely when SummaryBuilder is nil (caller opted out
+	// via context=none).
+	hits := make([]Hit, len(pending))
+	for i := range pending {
+		hits[i] = pending[i].hit
+		if opts.SummaryBuilder != nil {
+			c := pending[i].c
+			hits[i].SummaryContext = opts.SummaryBuilder(pending[i].obj, pending[i].u, c.Group, c.Kind, c.Namespace, c.Name)
+		}
 	}
 	res.Hits = hits
 	res.Total = len(hits)
@@ -368,7 +404,7 @@ func isClusterScopedKind(kind string) bool {
 // buildHit assembles the response shape for a matched candidate. Exactly
 // one of obj/u will be non-nil. minify-on-demand keeps the cost of
 // IncludeNone (identity-only) flat. summaryBuilder, when non-nil, is
-// invoked to attach the compact per-row SummaryContext — kept separate
+// invoked to attach the compact per-result summaryContext — kept separate
 // from Include because context applies to every verbosity (including
 // IncludeNone identity-only hits), while Summary/Raw control the full
 // minified body.
