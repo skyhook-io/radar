@@ -11,11 +11,8 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
-<<<<<<< HEAD
-	rbacv1 "k8s.io/api/rbac/v1"
-=======
 	networkingv1 "k8s.io/api/networking/v1"
->>>>>>> b01d112 (fix(resourcecontext): canonical kind + cross-group pseudo-kind for relationship lookup)
+	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"

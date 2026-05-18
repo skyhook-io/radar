@@ -41,7 +41,7 @@ func (d denyChecker) CanRead(_ context.Context, group, kind, namespace string) b
 // mockPolicyReports implements PolicyReportLookup.
 type mockPolicyReports map[string][]KyvernoFinding
 
-func (m mockPolicyReports) FindingsFor(kind, namespace, name string) []KyvernoFinding {
+func (m mockPolicyReports) FindingsFor(group, kind, namespace, name string) []KyvernoFinding {
 	return m[kind+"/"+namespace+"/"+name]
 }
 

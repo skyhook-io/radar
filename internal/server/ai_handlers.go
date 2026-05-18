@@ -59,11 +59,11 @@ type policyReportLookupAdapter struct {
 	idx *policyreports.Index
 }
 
-func (a policyReportLookupAdapter) FindingsFor(kind, namespace, name string) []resourcecontext.KyvernoFinding {
+func (a policyReportLookupAdapter) FindingsFor(group, kind, namespace, name string) []resourcecontext.KyvernoFinding {
 	if a.idx == nil {
 		return nil
 	}
-	findings := a.idx.FindingsFor(kind, namespace, name)
+	findings := a.idx.FindingsFor(group, kind, namespace, name)
 	if len(findings) == 0 {
 		return nil
 	}

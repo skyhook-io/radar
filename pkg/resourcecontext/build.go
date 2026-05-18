@@ -66,7 +66,7 @@ type Options struct {
 // Build does not import pkg/policyreports directly because callers may
 // adapt other policy engines into the same shape.
 type PolicyReportLookup interface {
-	FindingsFor(kind, namespace, name string) []KyvernoFinding
+	FindingsFor(group, kind, namespace, name string) []KyvernoFinding
 }
 
 // RefAccessChecker abstracts the RBAC check so this package doesn't import
@@ -230,7 +230,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	// counts only (fail/warn/pass); diagnostic tier adds the top[]
 	// findings. Tier discrimination keeps the basic-tier wire size tight.
 	if opts.PolicyReports != nil {
-		findings := opts.PolicyReports.FindingsFor(ident.Kind, ident.Namespace, ident.Name)
+		findings := opts.PolicyReports.FindingsFor(ident.Group, ident.Kind, ident.Namespace, ident.Name)
 		if len(findings) > 0 {
 			rc.PolicySummary = buildPolicySummary(findings, opts.Tier)
 		}
