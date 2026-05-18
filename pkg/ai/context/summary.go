@@ -42,40 +42,42 @@ type ResourceSummary struct {
 	Finalizers []string `json:"finalizers,omitempty"`
 
 	// Type-specific fields (only populated when relevant)
-	Image       string   `json:"image,omitempty"`
-	Ports       string   `json:"ports,omitempty"`
-	Schedule    string   `json:"schedule,omitempty"`
-	Type        string   `json:"type,omitempty"` // Service type, Secret type
-	Selector    string   `json:"selector,omitempty"`
-	ClusterIP   string   `json:"clusterIP,omitempty"`
-	Hosts       []string `json:"hosts,omitempty"`
-	Restarts    int32    `json:"restarts,omitempty"`
-	Node        string   `json:"node,omitempty"`
-	Strategy    string   `json:"strategy,omitempty"`
-	Completions string   `json:"completions,omitempty"`
-	Duration    string   `json:"duration,omitempty"`
+	Image         string   `json:"image,omitempty"`
+	Ports         string   `json:"ports,omitempty"`
+	Schedule      string   `json:"schedule,omitempty"`
+	Type          string   `json:"type,omitempty"` // Service type, Secret type
+	Selector      string   `json:"selector,omitempty"`
+	ClusterIP     string   `json:"clusterIP,omitempty"`
+	Hosts         []string `json:"hosts,omitempty"`
+	Restarts      int32    `json:"restarts,omitempty"`
+	Node          string   `json:"node,omitempty"`
+	Strategy      string   `json:"strategy,omitempty"`
+	Completions   string   `json:"completions,omitempty"`
+	Duration      string   `json:"duration,omitempty"`
 	Suspended     *bool    `json:"suspended,omitempty"`
 	Unschedulable *bool    `json:"unschedulable,omitempty"`
-	Active      int      `json:"active,omitempty"`
-	Target      string   `json:"target,omitempty"`
-	MinReplicas *int32   `json:"minReplicas,omitempty"`
-	MaxReplicas int32    `json:"maxReplicas,omitempty"`
-	Current     int32    `json:"current,omitempty"`
-	Desired     int32    `json:"desired,omitempty"`
-	Roles       []string `json:"roles,omitempty"`
-	Version     string   `json:"version,omitempty"`
-	Pressures   []string `json:"pressures,omitempty"`
-	Keys        []string `json:"keys,omitempty"`
-	StorageClass string  `json:"storageClass,omitempty"`
-	Capacity    string   `json:"capacity,omitempty"`
-	AccessModes []string `json:"accessModes,omitempty"`
-	Owner       string   `json:"owner,omitempty"`
+	Active        int      `json:"active,omitempty"`
+	Target        string   `json:"target,omitempty"`
+	MinReplicas   *int32   `json:"minReplicas,omitempty"`
+	MaxReplicas   int32    `json:"maxReplicas,omitempty"`
+	Current       int32    `json:"current,omitempty"`
+	Desired       int32    `json:"desired,omitempty"`
+	Roles         []string `json:"roles,omitempty"`
+	Version       string   `json:"version,omitempty"`
+	Pressures     []string `json:"pressures,omitempty"`
+	Keys          []string `json:"keys,omitempty"`
+	StorageClass  string   `json:"storageClass,omitempty"`
+	Capacity      string   `json:"capacity,omitempty"`
+	AccessModes   []string `json:"accessModes,omitempty"`
+	Owner         string   `json:"owner,omitempty"`
 
 	// SummaryContext is the per-row enrichment attached by AI-facing list
 	// surfaces (REST /api/ai/resources/{kind}, MCP list_resources, search
 	// hits). Populated by handlers post-minify via resourcecontext.BuildSummary;
 	// nil when the caller opted out (?context=none) or when no fields apply.
-	SummaryContext *resourcecontext.SummaryContext `json:"summaryContext,omitempty"`
+	// Type is resourcecontext.ResourceSummaryContext — the field name keeps
+	// the shorter "SummaryContext" form to match the wire JSON tag.
+	SummaryContext *resourcecontext.ResourceSummaryContext `json:"summaryContext,omitempty"`
 }
 
 // summarize dispatches to the appropriate per-type extractor and then

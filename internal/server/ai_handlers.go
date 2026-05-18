@@ -174,11 +174,11 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 	// so we pass nil here to compose cluster-wide.
 	if !skipContext && level == aicontext.LevelSummary {
 		idxNamespaces := issueIndexNamespaces(namespaces, kind, group)
-		if builder := s.newSummaryContextBuilder(idxNamespaces, kind); builder != nil {
+		if builder := s.newResourceSummaryContextBuilder(idxNamespaces, kind); builder != nil {
 			// Typed list resolves group from each object's TypeMeta —
 			// MinifyList sets it via SetTypeMeta before producing rows,
 			// so we can trust apiVersion on the typed source.
-			attachSummaryContextToList(results, objs, builder)
+			attachResourceSummaryContextToList(results, objs, builder)
 		}
 	}
 
@@ -198,8 +198,8 @@ func issueIndexNamespaces(namespaces []string, kind, group string) []string {
 	return namespaces
 }
 
-// attachSummaryContextToList walks the typed-cache list and assigns the
-// per-row SummaryContext into each ResourceSummary in-place. results and
+// attachResourceSummaryContextToList walks the typed-cache list and assigns the
+// per-row ResourceSummaryContext into each ResourceSummary in-place. results and
 // objs are produced in lockstep by MinifyList; a length mismatch is
 // defensive (and silently skips attachment rather than panicking) but
 // shouldn't occur in practice.
@@ -207,7 +207,7 @@ func issueIndexNamespaces(namespaces []string, kind, group string) []string {
 // Group is sourced per-object from the typed object's GVK (via SetTypeMeta
 // + ObjectKind), so list paths that mix kinds — they don't today, but the
 // shape doesn't preclude it — stay correct.
-func attachSummaryContextToList(results []any, objs []runtime.Object, builder summarycontext.Builder) {
+func attachResourceSummaryContextToList(results []any, objs []runtime.Object, builder summarycontext.Builder) {
 	if len(results) != len(objs) {
 		return
 	}
@@ -221,14 +221,14 @@ func attachSummaryContextToList(results []any, objs []runtime.Object, builder su
 	}
 }
 
-// attachSummaryContextToUnstructuredList does the same for the dynamic
+// attachResourceSummaryContextToUnstructuredList does the same for the dynamic
 // CRD path. MinifyUnstructured returns *ResourceSummary (Summary level)
 // so the cast is the same shape.
 //
 // Group comes from each unstructured's apiVersion — required for issue-
 // index lookups so two CRDs that share kind+ns+name across groups don't
 // collide on the per-resource count.
-func attachSummaryContextToUnstructuredList(results []any, items []*unstructured.Unstructured, builder summarycontext.Builder) {
+func attachResourceSummaryContextToUnstructuredList(results []any, items []*unstructured.Unstructured, builder summarycontext.Builder) {
 	if len(results) != len(items) {
 		return
 	}
@@ -300,8 +300,8 @@ func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8
 
 	if !skipContext && level == aicontext.LevelSummary {
 		idxNamespaces := issueIndexNamespaces(namespaces, kind, group)
-		if builder := s.newSummaryContextBuilder(idxNamespaces, kind); builder != nil {
-			attachSummaryContextToUnstructuredList(results, allItems, builder)
+		if builder := s.newResourceSummaryContextBuilder(idxNamespaces, kind); builder != nil {
+			attachResourceSummaryContextToUnstructuredList(results, allItems, builder)
 		}
 	}
 

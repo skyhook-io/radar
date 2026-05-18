@@ -1,4 +1,4 @@
-// Per-request helpers that compute the compact SummaryContext attached
+// Per-request helpers that compute the compact ResourceSummaryContext attached
 // to list_resources rows and search hits served via MCP.
 //
 // The shared core (issue index, kind canonicalization, managedBy
@@ -18,7 +18,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
-// newSummaryContextBuilder assembles the per-request closure for MCP
+// newResourceSummaryContextBuilder assembles the per-request closure for MCP
 // list_resources. Returns nil when the cache or topology isn't
 // available, in which case the caller should skip context attachment
 // rather than emit empty objects.
@@ -32,7 +32,7 @@ import (
 // per-hit between a namespaced and a cluster-wide index — search
 // returns mixed kinds in one response, so a single index can't get
 // both right.
-func newSummaryContextBuilder(namespaces []string, kindFilter string) summarycontext.Builder {
+func newResourceSummaryContextBuilder(namespaces []string, kindFilter string) summarycontext.Builder {
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil
@@ -76,7 +76,7 @@ var summaryCtxTopoMemo = topology.NewMemoizer(5 * time.Second)
 // buildSummaryContextTopology returns a topology snapshot suitable for
 // resolving managedBy pointers, reusing a cached snapshot when one is
 // fresh. Returns nil on failure — the caller falls back to a
-// managedBy-less SummaryContext rather than failing the response.
+// managedBy-less ResourceSummaryContext rather than failing the response.
 func buildSummaryContextTopology(namespaces []string) *topology.Topology {
 	cache := k8s.GetResourceCache()
 	if cache == nil {

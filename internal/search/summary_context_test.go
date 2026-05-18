@@ -32,10 +32,10 @@ func TestSearch_SummaryBuilderAttached(t *testing.T) {
 
 	var calls int
 	var gotGroup string
-	builder := func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.SummaryContext {
+	builder := func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
 		calls++
 		gotGroup = group
-		return &resourcecontext.SummaryContext{
+		return &resourcecontext.ResourceSummaryContext{
 			ManagedBy:  &resourcecontext.ManagedByRef{Kind: "Deployment", Source: "native", Name: "api", Namespace: namespace},
 			Health:     "healthy",
 			IssueCount: 0,

@@ -1,5 +1,5 @@
 // Package summarycontext is the shared core that powers the compact
-// SummaryContext attached to /api/ai/resources/{kind} list rows, /api/search
+// ResourceSummaryContext attached to /api/ai/resources/{kind} list rows, /api/search
 // hits, and the MCP list_resources / search variants.
 //
 // The REST and MCP wrappers (internal/server, internal/mcp) differ only
@@ -24,15 +24,15 @@ import (
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
-// Builder is the per-request closure that produces a SummaryContext for
-// a single resource. nil result is fine — the SummaryContext field is
+// Builder is the per-request closure that produces a ResourceSummaryContext for
+// a single resource. nil result is fine — the ResourceSummaryContext field is
 // omitempty on every consumer.
 //
 // group is required so the per-resource issue lookup can distinguish
 // CRDs that share kind+namespace+name across API groups (e.g. Knative
 // Service vs corev1 Service, or two custom CRDs both named "Cluster"
 // from different operators). Pass "" for core-group resources.
-type Builder func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.SummaryContext
+type Builder func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext
 
 // BuilderFromIndexes assembles the per-request closure. The list path
 // passes the same index for both namespacedIdx and clusterIdx (single-
@@ -58,7 +58,7 @@ func BuilderFromIndexes(topo *topology.Topology, namespacedIdx, clusterIdx Issue
 		relIdx = topology.IndexByResource(topo)
 	}
 
-	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.SummaryContext {
+	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
 		var managedBy *resourcecontext.ManagedByRef
 		if topo != nil {
 			// Pass the fetched object when available so synthesis is

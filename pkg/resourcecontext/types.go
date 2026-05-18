@@ -64,20 +64,23 @@ type ContextRef struct {
 }
 
 // ManagedByRef is the compact form of a "managed-by" pointer used in
-// SummaryContext (list/search rows). Carries Kind alongside Source so
+// ResourceSummaryContext (list/search rows). Carries Kind alongside Source so
 // consumers can distinguish e.g. a Flux Kustomization from a Flux
 // HelmRelease without re-parsing the Source string. Intentionally lacks
 // Group to keep per-row bytes minimal.
 type ManagedByRef struct {
-	Kind      string `json:"kind"`             // "Application" | "Kustomization" | "HelmRelease" | "Deployment" | "DaemonSet" | "StatefulSet" | "Rollout" | …
-	Source    string `json:"source"`           // "argocd" | "flux" | "helm" | "native"
+	Kind      string `json:"kind"`   // "Application" | "Kustomization" | "HelmRelease" | "Deployment" | "DaemonSet" | "StatefulSet" | "Rollout" | …
+	Source    string `json:"source"` // "argocd" | "flux" | "helm" | "native"
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
 }
 
-// SummaryContext is the per-row enrichment attached to list_resources
-// and search hits. Always-on, intentionally minimal (≤ ~60 bytes).
-type SummaryContext struct {
+// ResourceSummaryContext is the per-row enrichment attached to
+// list_resources and search hits. The row-tier companion to
+// ResourceContext (the detail-tier enrichment on GET responses) —
+// optimised for bulk triage on lists at ≤ ~60 bytes per row. Always-on
+// when the caller didn't opt out via context=none.
+type ResourceSummaryContext struct {
 	ManagedBy  *ManagedByRef `json:"managedBy,omitempty"`
 	Health     string        `json:"health,omitempty"`
 	IssueCount int           `json:"issueCount,omitempty"`

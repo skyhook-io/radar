@@ -1,4 +1,4 @@
-// Per-request helpers that compute the compact SummaryContext attached
+// Per-request helpers that compute the compact ResourceSummaryContext attached
 // to /api/ai/resources/{kind} list rows and /api/search hits.
 //
 // The shared core (issue index, kind canonicalization, managedBy
@@ -14,7 +14,7 @@ import (
 	"github.com/skyhook-io/radar/internal/summarycontext"
 )
 
-// newSummaryContextBuilder assembles the per-request closure for the
+// newResourceSummaryContextBuilder assembles the per-request closure for the
 // list/search handlers. Returns nil when the cache or topology isn't
 // available, in which case callers should skip context attachment
 // rather than emit empty objects.
@@ -27,7 +27,7 @@ import (
 // Use newSearchSummaryContextBuilder for search, which routes per-hit
 // between a namespaced and a cluster-wide index — search returns mixed
 // kinds in one response, so a single index can't get both right.
-func (s *Server) newSummaryContextBuilder(namespaces []string, kindFilter string) summarycontext.Builder {
+func (s *Server) newResourceSummaryContextBuilder(namespaces []string, kindFilter string) summarycontext.Builder {
 	provider := issues.NewCacheProvider()
 	if provider == nil {
 		return nil

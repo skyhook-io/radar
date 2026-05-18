@@ -525,15 +525,15 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 		if clusterScoped {
 			idxNamespaces = nil
 		}
-		if builder := newSummaryContextBuilder(idxNamespaces, kind); builder != nil {
-			attachSummaryContextToTyped(results, objs, builder)
+		if builder := newResourceSummaryContextBuilder(idxNamespaces, kind); builder != nil {
+			attachResourceSummaryContextToTyped(results, objs, builder)
 		}
 	}
 
 	return toJSONResult(results)
 }
 
-// attachSummaryContextToTyped fills in SummaryContext on each
+// attachResourceSummaryContextToTyped fills in SummaryContext on each
 // Summary-verbosity ResourceSummary in-place. results and objs are
 // produced in lockstep by MinifyList — a length mismatch is defensive
 // (skip rather than panic).
@@ -541,7 +541,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 // Group is sourced per-object from each typed object's GVK (SetTypeMeta
 // is called by Minify, so apiVersion is reliable here) — passed through
 // to the builder so the per-resource issue lookup stays group-aware.
-func attachSummaryContextToTyped(results []any, objs []runtime.Object, builder summarycontext.Builder) {
+func attachResourceSummaryContextToTyped(results []any, objs []runtime.Object, builder summarycontext.Builder) {
 	if len(results) != len(objs) {
 		return
 	}
@@ -587,22 +587,22 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 		if clusterScoped {
 			idxNamespaces = nil
 		}
-		if builder := newSummaryContextBuilder(idxNamespaces, kind); builder != nil {
-			attachSummaryContextToUnstructured(allItems, rawItems, builder)
+		if builder := newResourceSummaryContextBuilder(idxNamespaces, kind); builder != nil {
+			attachResourceSummaryContextToUnstructured(allItems, rawItems, builder)
 		}
 	}
 
 	return toJSONResult(allItems)
 }
 
-// attachSummaryContextToUnstructured fills in SummaryContext for the
+// attachResourceSummaryContextToUnstructured fills in SummaryContext for the
 // dynamic-CRD list path. summarizeUnstructured returns
 // *aicontext.ResourceSummary, so the cast matches the typed path.
 //
 // Group comes from each unstructured's apiVersion so two CRDs that share
 // kind+ns+name across API groups (e.g. multiple operators each shipping
 // a "Cluster" resource) get independent issue counts.
-func attachSummaryContextToUnstructured(results []any, items []*unstructured.Unstructured, builder summarycontext.Builder) {
+func attachResourceSummaryContextToUnstructured(results []any, items []*unstructured.Unstructured, builder summarycontext.Builder) {
 	if len(results) != len(items) {
 		return
 	}

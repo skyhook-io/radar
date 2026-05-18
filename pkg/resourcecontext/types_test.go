@@ -214,10 +214,10 @@ func TestResourceContextRoundTrip(t *testing.T) {
 	}
 }
 
-// TestSummaryContextRoundTrip covers SummaryContext + ManagedByRef
+// TestResourceSummaryContextRoundTrip covers ResourceSummaryContext + ManagedByRef
 // which are not embedded in ResourceContext.
-func TestSummaryContextRoundTrip(t *testing.T) {
-	orig := SummaryContext{
+func TestResourceSummaryContextRoundTrip(t *testing.T) {
+	orig := ResourceSummaryContext{
 		ManagedBy:  &ManagedByRef{Kind: "Application", Source: "argocd", Name: "storefront", Namespace: "argocd"},
 		Health:     "degraded",
 		IssueCount: 2,
@@ -226,7 +226,7 @@ func TestSummaryContextRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
-	var got SummaryContext
+	var got ResourceSummaryContext
 	if err := json.Unmarshal(b, &got); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
@@ -241,12 +241,12 @@ func TestSummaryContextRoundTrip(t *testing.T) {
 	s := string(b)
 	for _, sub := range wantSubstr {
 		if !strings.Contains(s, sub) {
-			t.Errorf("SummaryContext JSON missing %s: %s", sub, s)
+			t.Errorf("ResourceSummaryContext JSON missing %s: %s", sub, s)
 		}
 	}
 	for _, forbidden := range []string{`"group"`} {
 		if strings.Contains(s, forbidden) {
-			t.Errorf("SummaryContext JSON leaks %s: %s", forbidden, s)
+			t.Errorf("ResourceSummaryContext JSON leaks %s: %s", forbidden, s)
 		}
 	}
 }
@@ -255,8 +255,8 @@ func TestSummaryContextRoundTrip(t *testing.T) {
 // without it, Flux Kustomization vs HelmRelease serialize to identical
 // JSON, forcing consumers to parse the Source string.
 func TestManagedByRefDistinguishesFluxKinds(t *testing.T) {
-	kustomization := SummaryContext{ManagedBy: &ManagedByRef{Kind: "Kustomization", Source: "flux", Name: "prod-apps", Namespace: "flux-system"}}
-	helmRelease := SummaryContext{ManagedBy: &ManagedByRef{Kind: "HelmRelease", Source: "flux", Name: "prod-apps", Namespace: "flux-system"}}
+	kustomization := ResourceSummaryContext{ManagedBy: &ManagedByRef{Kind: "Kustomization", Source: "flux", Name: "prod-apps", Namespace: "flux-system"}}
+	helmRelease := ResourceSummaryContext{ManagedBy: &ManagedByRef{Kind: "HelmRelease", Source: "flux", Name: "prod-apps", Namespace: "flux-system"}}
 
 	kJSON, _ := json.Marshal(kustomization)
 	hJSON, _ := json.Marshal(helmRelease)

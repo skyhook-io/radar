@@ -171,7 +171,7 @@ func TestBuildSummary_DeploymentHealthDuringScaleDown(t *testing.T) {
 	}
 	got := BuildSummary(dep, SummaryOptions{})
 	if got == nil {
-		t.Fatal("got nil, want SummaryContext with health=healthy")
+		t.Fatal("got nil, want ResourceSummaryContext with health=healthy")
 	}
 	if got.Health != "healthy" {
 		t.Errorf("Health = %q, want %q (Spec.Replicas=2 ready, Status.Replicas=4 due to draining)", got.Health, "healthy")

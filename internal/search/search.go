@@ -37,7 +37,7 @@ import (
 // it through lets the builder distinguish CRDs that share
 // kind+namespace+name across groups (e.g. Knative Service vs corev1
 // Service) in its per-resource issue index.
-type SummaryBuilderFunc func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.SummaryContext
+type SummaryBuilderFunc func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext
 
 // Provider abstracts the cache so tests can inject a fake.
 type Provider interface {

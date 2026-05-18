@@ -52,7 +52,7 @@ type Hit struct {
 	// SummaryContext is the compact per-row enrichment (managedBy, health,
 	// issueCount). Populated by handlers via Options.SummaryBuilder; nil
 	// when the caller opted out (context=none) or no fields apply.
-	SummaryContext *resourcecontext.SummaryContext `json:"summaryContext,omitempty"`
+	SummaryContext *resourcecontext.ResourceSummaryContext `json:"summaryContext,omitempty"`
 }
 
 // MatchedField records where a query token landed (debug + UI highlight).
@@ -93,4 +93,3 @@ const (
 	IncludeRaw
 	IncludeNone // identity only (cheapest)
 )
-

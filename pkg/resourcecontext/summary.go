@@ -34,13 +34,14 @@ type SummaryOptions struct {
 	Health string
 }
 
-// BuildSummary produces the compact per-result summaryContext attached to
-// list_resources, /api/ai/resources/{kind} list, and search hits.
+// BuildSummary produces the compact per-result ResourceSummaryContext
+// attached to list_resources, /api/ai/resources/{kind} list, and search
+// hits.
 //
 // Tightly bounded — only the triage fields needed to choose a next hop.
 // Returns nil when all three fields would be empty so callers can
 // `omitempty` the entire object on bare results and keep the wire shape minimal.
-func BuildSummary(obj runtime.Object, opts SummaryOptions) *SummaryContext {
+func BuildSummary(obj runtime.Object, opts SummaryOptions) *ResourceSummaryContext {
 	health := opts.Health
 	if health == "" {
 		health = deriveHealth(obj)
@@ -48,7 +49,7 @@ func BuildSummary(obj runtime.Object, opts SummaryOptions) *SummaryContext {
 	if opts.ManagedBy == nil && health == "" && opts.IssueCount == 0 {
 		return nil
 	}
-	return &SummaryContext{
+	return &ResourceSummaryContext{
 		ManagedBy:  opts.ManagedBy,
 		Health:     health,
 		IssueCount: opts.IssueCount,

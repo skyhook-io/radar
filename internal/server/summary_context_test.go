@@ -1,4 +1,4 @@
-// Wiring tests for the REST-side SummaryContext builders. The pure-
+// Wiring tests for the REST-side ResourceSummaryContext builders. The pure-
 // function tests (issueIndex key arithmetic, BuildIssueIndex over a
 // fake provider, CanonicalSingular, ManagedByFromRelationships) live in
 // internal/summarycontext alongside the shared core they exercise.
@@ -19,24 +19,24 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
-// stubBuilder records calls and returns a deterministic SummaryContext
+// stubBuilder records calls and returns a deterministic ResourceSummaryContext
 // keyed by the resource identity. Avoids standing up a topology cache or
 // issue provider — those are exercised by the per-layer unit tests.
 //
 // Key shape mirrors the production issueIndexKey (group|kind|ns|name)
 // so test fixtures pin the group-aware lookup.
-func stubBuilder(t *testing.T, want map[string]*resourcecontext.SummaryContext) summarycontext.Builder {
+func stubBuilder(t *testing.T, want map[string]*resourcecontext.ResourceSummaryContext) summarycontext.Builder {
 	t.Helper()
-	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.SummaryContext {
+	return func(obj runtime.Object, u *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
 		key := group + "|" + kind + "|" + namespace + "|" + name
 		return want[key]
 	}
 }
 
-// TestAttachSummaryContextToList wires together MinifyList + the
-// per-row attach helper and asserts the SummaryContext field lands in
+// TestAttachResourceSummaryContextToList wires together MinifyList + the
+// per-row attach helper and asserts the ResourceSummaryContext field lands in
 // the JSON each row marshals to.
-func TestAttachSummaryContextToList(t *testing.T) {
+func TestAttachResourceSummaryContextToList(t *testing.T) {
 	objs := []runtime.Object{
 		&corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{Name: "api-1", Namespace: "prod"},
@@ -48,7 +48,7 @@ func TestAttachSummaryContextToList(t *testing.T) {
 		},
 	}
 	// Group is "" for core-group Pods.
-	want := map[string]*resourcecontext.SummaryContext{
+	want := map[string]*resourcecontext.ResourceSummaryContext{
 		"|Pod|prod|api-1": {
 			ManagedBy:  &resourcecontext.ManagedByRef{Kind: "Deployment", Source: "native", Name: "api", Namespace: "prod"},
 			Health:     "healthy",
@@ -65,7 +65,7 @@ func TestAttachSummaryContextToList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MinifyList: %v", err)
 	}
-	attachSummaryContextToList(results, objs, stubBuilder(t, want))
+	attachResourceSummaryContextToList(results, objs, stubBuilder(t, want))
 
 	// Row 0 — healthy pod.
 	b, _ := json.Marshal(results[0])
@@ -93,10 +93,10 @@ func TestAttachSummaryContextToList(t *testing.T) {
 	}
 }
 
-// TestAttachSummaryContextToList_MismatchedLengthsSilent — defensive
+// TestAttachResourceSummaryContextToList_MismatchedLengthsSilent — defensive
 // path that protects against a future refactor where MinifyList might
 // drop unsupported kinds. Attach must skip rather than panic.
-func TestAttachSummaryContextToList_MismatchedLengthsSilent(t *testing.T) {
+func TestAttachResourceSummaryContextToList_MismatchedLengthsSilent(t *testing.T) {
 	objs := []runtime.Object{
 		&corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "api-1"}},
 	}
@@ -105,8 +105,8 @@ func TestAttachSummaryContextToList_MismatchedLengthsSilent(t *testing.T) {
 		&aicontext.ResourceSummary{Kind: "Pod", Name: "api-2"},
 	}
 	// Length mismatch (1 obj vs 2 results) — must not panic, must skip.
-	attachSummaryContextToList(results, objs, func(obj runtime.Object, _ *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.SummaryContext {
-		return &resourcecontext.SummaryContext{Health: "healthy"}
+	attachResourceSummaryContextToList(results, objs, func(obj runtime.Object, _ *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
+		return &resourcecontext.ResourceSummaryContext{Health: "healthy"}
 	})
 	for i, row := range results {
 		summary, ok := row.(*aicontext.ResourceSummary)
@@ -114,15 +114,15 @@ func TestAttachSummaryContextToList_MismatchedLengthsSilent(t *testing.T) {
 			t.Fatalf("row %d: unexpected type %T", i, row)
 		}
 		if summary.SummaryContext != nil {
-			t.Errorf("row %d: SummaryContext should be nil on length mismatch, got %#v", i, summary.SummaryContext)
+			t.Errorf("row %d: ResourceSummaryContext should be nil on length mismatch, got %#v", i, summary.SummaryContext)
 		}
 	}
 }
 
-// TestAttachSummaryContextToUnstructuredList covers the dynamic-CRD
+// TestAttachResourceSummaryContextToUnstructuredList covers the dynamic-CRD
 // path. summarizeUnstructured returns *ResourceSummary so the attach
 // helper is symmetric with the typed path.
-func TestAttachSummaryContextToUnstructuredList(t *testing.T) {
+func TestAttachResourceSummaryContextToUnstructuredList(t *testing.T) {
 	items := []*unstructured.Unstructured{
 		{Object: map[string]any{
 			"apiVersion": "argoproj.io/v1alpha1",
@@ -131,7 +131,7 @@ func TestAttachSummaryContextToUnstructuredList(t *testing.T) {
 			"status":     map[string]any{"conditions": []any{map[string]any{"type": "Ready", "status": "True"}}},
 		}},
 	}
-	want := map[string]*resourcecontext.SummaryContext{
+	want := map[string]*resourcecontext.ResourceSummaryContext{
 		"argoproj.io|Application|argocd|storefront": {
 			Health:     "healthy",
 			IssueCount: 1,
@@ -139,14 +139,14 @@ func TestAttachSummaryContextToUnstructuredList(t *testing.T) {
 	}
 
 	results := []any{aicontext.MinifyUnstructured(items[0], aicontext.LevelSummary)}
-	attachSummaryContextToUnstructuredList(results, items, stubBuilder(t, want))
+	attachResourceSummaryContextToUnstructuredList(results, items, stubBuilder(t, want))
 
 	summary, ok := results[0].(*aicontext.ResourceSummary)
 	if !ok || summary == nil {
 		t.Fatalf("unexpected row type %T", results[0])
 	}
 	if summary.SummaryContext == nil {
-		t.Fatalf("SummaryContext not attached")
+		t.Fatalf("ResourceSummaryContext not attached")
 	}
 	if summary.SummaryContext.Health != "healthy" {
 		t.Errorf("Health = %q, want healthy", summary.SummaryContext.Health)
