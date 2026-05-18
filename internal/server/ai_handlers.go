@@ -359,23 +359,12 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		opts.Topology = topo
 		opts.Provider = prov
 		opts.DynamicProv = dyn
-		// Pre-compute Relationships once with the already-fetched obj so
-		// kind/group disambiguation works (Knative serving.knative.dev/Service
-		// vs core/v1 Service). idx=nil is fine for single-resource: the
-		// per-call inline scan is O(E) once. Bulk callers (T12/T89) should
-		// build a shared index via topology.IndexByResource(topo).
-		//
-		// Route through KindForGVK so cross-group CRDs whose Kind collides
-		// with a core kind (Knative {Service, Configuration, Revision, Route},
-		// CAPI Cluster, Istio Gateway) resolve to the right topology node.
-		// The builder writes those as pseudo-kinds (e.g. "knativeservice/...")
-		// — without remapping, buildNodeID would resolve "services/..." to
-		// the core Service node and walk the wrong edges.
-		gvk := obj.GetObjectKind().GroupVersionKind()
-		relKind := topology.KindForGVK(gvk.Kind, gvk.Group)
-		opts.Relationships = topology.GetRelationshipsWithObject(
-			relKind, namespace, name, obj, topo, prov, dyn, nil,
-		)
+		// Relationships are computed inside Build via GetRelationshipsWithObject,
+		// which applies the same KindForGVK pseudo-kind remap we used to do
+		// here. Pre-computing in the handler doubled the work whenever the
+		// lookup returned nil (no edges): handler call returned nil, Build's
+		// `rel == nil && opts.Topology != nil` fallback re-ran the identical
+		// scan. Leaving opts.Relationships unset is the canonical path.
 	}
 
 	return resourcecontext.Build(r.Context(), obj, opts)
@@ -442,9 +431,7 @@ func computeIssueSummaryForResource(cache *k8s.ResourceCache, kind, namespace, n
 	}
 	rows, _ := issues.ComposeWithStats(provider, filters)
 
-	var count int
-	var topReason string
-	var topSeverity issues.Severity
+	matched := make([]issues.Issue, 0, len(rows))
 	bySource := make(map[string]int)
 	for _, row := range rows {
 		if row.Name != name {
@@ -453,16 +440,25 @@ func computeIssueSummaryForResource(cache *k8s.ResourceCache, kind, namespace, n
 		if namespace != "" && row.Namespace != namespace {
 			continue
 		}
-		count++
+		matched = append(matched, row)
 		bySource[string(row.Source)]++
-		if topSeverity == "" || composeSeverityRank(row.Severity) > composeSeverityRank(topSeverity) {
-			topSeverity = row.Severity
-			topReason = row.Reason
-		}
 	}
-	if count == 0 {
+	if len(matched) == 0 {
 		return nil
 	}
+	// Sort by (severity desc, Reason asc) so TopReason is deterministic
+	// across runs even when multiple rows tie on severity. Mirrors the
+	// stable sort applied in computeAuditSummaryForResource.
+	sort.Slice(matched, func(i, j int) bool {
+		ri, rj := composeSeverityRank(matched[i].Severity), composeSeverityRank(matched[j].Severity)
+		if ri != rj {
+			return ri > rj
+		}
+		return matched[i].Reason < matched[j].Reason
+	})
+	count := len(matched)
+	topSeverity := matched[0].Severity
+	topReason := matched[0].Reason
 	return &resourcecontext.IssueSummary{
 		Count:           count,
 		HighestSeverity: string(topSeverity),
