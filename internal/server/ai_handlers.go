@@ -36,7 +36,6 @@ import (
 
 	"github.com/go-chi/chi/v5"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
-	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/issues"
@@ -178,7 +177,7 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 			// Typed list resolves group from each object's TypeMeta —
 			// MinifyList sets it via SetTypeMeta before producing rows,
 			// so we can trust apiVersion on the typed source.
-			attachResourceSummaryContextToList(results, objs, builder)
+			summarycontext.AttachToTypedList(results, objs, builder)
 		}
 	}
 
@@ -196,71 +195,6 @@ func issueIndexNamespaces(namespaces []string, kind, group string) []string {
 		return nil
 	}
 	return namespaces
-}
-
-// attachResourceSummaryContextToList walks the typed-cache list and assigns the
-// per-row ResourceSummaryContext into each ResourceSummary in-place. results and
-// objs are produced in lockstep by MinifyList; a length mismatch is
-// defensive (and silently skips attachment rather than panicking) but
-// shouldn't occur in practice.
-//
-// Group is sourced per-object from the typed object's GVK (via SetTypeMeta
-// + ObjectKind), so list paths that mix kinds — they don't today, but the
-// shape doesn't preclude it — stay correct.
-func attachResourceSummaryContextToList(results []any, objs []runtime.Object, builder summarycontext.Builder) {
-	if len(results) != len(objs) {
-		return
-	}
-	for i, row := range results {
-		summary, ok := row.(*aicontext.ResourceSummary)
-		if !ok || summary == nil {
-			continue
-		}
-		group := groupFromObject(objs[i])
-		summary.SummaryContext = builder(objs[i], nil, group, summary.Kind, summary.Namespace, summary.Name)
-	}
-}
-
-// attachResourceSummaryContextToUnstructuredList does the same for the dynamic
-// CRD path. MinifyUnstructured returns *ResourceSummary (Summary level)
-// so the cast is the same shape.
-//
-// Group comes from each unstructured's apiVersion — required for issue-
-// index lookups so two CRDs that share kind+ns+name across groups don't
-// collide on the per-resource count.
-func attachResourceSummaryContextToUnstructuredList(results []any, items []*unstructured.Unstructured, builder summarycontext.Builder) {
-	if len(results) != len(items) {
-		return
-	}
-	for i, row := range results {
-		summary, ok := row.(*aicontext.ResourceSummary)
-		if !ok || summary == nil {
-			continue
-		}
-		group := groupFromUnstructured(items[i])
-		summary.SummaryContext = builder(nil, items[i], group, summary.Kind, summary.Namespace, summary.Name)
-	}
-}
-
-// groupFromObject extracts the API group from a typed runtime.Object's
-// GroupVersionKind. Returns "" for core-group objects and when the GVK
-// is unset (callers should SetTypeMeta first, but we don't panic on
-// the missing case).
-func groupFromObject(obj runtime.Object) string {
-	if obj == nil {
-		return ""
-	}
-	k8s.SetTypeMeta(obj)
-	return obj.GetObjectKind().GroupVersionKind().Group
-}
-
-// groupFromUnstructured pulls the API group from an unstructured's
-// apiVersion. Mirrors groupFromObject for the dynamic-CRD path.
-func groupFromUnstructured(u *unstructured.Unstructured) string {
-	if u == nil {
-		return ""
-	}
-	return u.GroupVersionKind().Group
 }
 
 // aiListDynamic handles the CRD/dynamic fallback for AI list.
@@ -301,7 +235,7 @@ func (s *Server) aiListDynamic(w http.ResponseWriter, r *http.Request, cache *k8
 	if !skipContext && level == aicontext.LevelSummary {
 		idxNamespaces := issueIndexNamespaces(namespaces, kind, group)
 		if builder := s.newResourceSummaryContextBuilder(idxNamespaces, kind); builder != nil {
-			attachResourceSummaryContextToUnstructuredList(results, allItems, builder)
+			summarycontext.AttachToUnstructuredList(results, allItems, builder)
 		}
 	}
 

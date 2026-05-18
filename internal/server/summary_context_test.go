@@ -65,7 +65,7 @@ func TestAttachResourceSummaryContextToList(t *testing.T) {
 	if err != nil {
 		t.Fatalf("MinifyList: %v", err)
 	}
-	attachResourceSummaryContextToList(results, objs, stubBuilder(t, want))
+	summarycontext.AttachToTypedList(results, objs, stubBuilder(t, want))
 
 	// Row 0 — healthy pod.
 	b, _ := json.Marshal(results[0])
@@ -105,7 +105,7 @@ func TestAttachResourceSummaryContextToList_MismatchedLengthsSilent(t *testing.T
 		&aicontext.ResourceSummary{Kind: "Pod", Name: "api-2"},
 	}
 	// Length mismatch (1 obj vs 2 results) — must not panic, must skip.
-	attachResourceSummaryContextToList(results, objs, func(obj runtime.Object, _ *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
+	summarycontext.AttachToTypedList(results, objs, func(obj runtime.Object, _ *unstructured.Unstructured, group, kind, namespace, name string) *resourcecontext.ResourceSummaryContext {
 		return &resourcecontext.ResourceSummaryContext{Health: "healthy"}
 	})
 	for i, row := range results {
@@ -139,7 +139,7 @@ func TestAttachResourceSummaryContextToUnstructuredList(t *testing.T) {
 	}
 
 	results := []any{aicontext.MinifyUnstructured(items[0], aicontext.LevelSummary)}
-	attachResourceSummaryContextToUnstructuredList(results, items, stubBuilder(t, want))
+	summarycontext.AttachToUnstructuredList(results, items, stubBuilder(t, want))
 
 	summary, ok := results[0].(*aicontext.ResourceSummary)
 	if !ok || summary == nil {

@@ -14,7 +14,6 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/helm"
@@ -526,33 +525,11 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 			idxNamespaces = nil
 		}
 		if builder := newResourceSummaryContextBuilder(idxNamespaces, kind); builder != nil {
-			attachResourceSummaryContextToTyped(results, objs, builder)
+			summarycontext.AttachToTypedList(results, objs, builder)
 		}
 	}
 
 	return toJSONResult(results)
-}
-
-// attachResourceSummaryContextToTyped fills in SummaryContext on each
-// Summary-verbosity ResourceSummary in-place. results and objs are
-// produced in lockstep by MinifyList — a length mismatch is defensive
-// (skip rather than panic).
-//
-// Group is sourced per-object from each typed object's GVK (SetTypeMeta
-// is called by Minify, so apiVersion is reliable here) — passed through
-// to the builder so the per-resource issue lookup stays group-aware.
-func attachResourceSummaryContextToTyped(results []any, objs []runtime.Object, builder summarycontext.Builder) {
-	if len(results) != len(objs) {
-		return
-	}
-	for i, row := range results {
-		summary, ok := row.(*aicontext.ResourceSummary)
-		if !ok || summary == nil {
-			continue
-		}
-		group := groupFromObject(objs[i])
-		summary.SummaryContext = builder(objs[i], nil, group, summary.Kind, summary.Namespace, summary.Name)
-	}
 }
 
 func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, group string, namespaces []string, clusterScoped bool, contextMode string) (*mcp.CallToolResult, any, error) {
@@ -588,52 +565,11 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 			idxNamespaces = nil
 		}
 		if builder := newResourceSummaryContextBuilder(idxNamespaces, kind); builder != nil {
-			attachResourceSummaryContextToUnstructured(allItems, rawItems, builder)
+			summarycontext.AttachToUnstructuredList(allItems, rawItems, builder)
 		}
 	}
 
 	return toJSONResult(allItems)
-}
-
-// attachResourceSummaryContextToUnstructured fills in SummaryContext for the
-// dynamic-CRD list path. summarizeUnstructured returns
-// *aicontext.ResourceSummary, so the cast matches the typed path.
-//
-// Group comes from each unstructured's apiVersion so two CRDs that share
-// kind+ns+name across API groups (e.g. multiple operators each shipping
-// a "Cluster" resource) get independent issue counts.
-func attachResourceSummaryContextToUnstructured(results []any, items []*unstructured.Unstructured, builder summarycontext.Builder) {
-	if len(results) != len(items) {
-		return
-	}
-	for i, row := range results {
-		summary, ok := row.(*aicontext.ResourceSummary)
-		if !ok || summary == nil {
-			continue
-		}
-		group := groupFromUnstructured(items[i])
-		summary.SummaryContext = builder(nil, items[i], group, summary.Kind, summary.Namespace, summary.Name)
-	}
-}
-
-// groupFromObject extracts the API group from a typed runtime.Object's
-// GroupVersionKind. Returns "" for core-group objects (Pod, Service,
-// etc.) and when the GVK is unset.
-func groupFromObject(obj runtime.Object) string {
-	if obj == nil {
-		return ""
-	}
-	k8s.SetTypeMeta(obj)
-	return obj.GetObjectKind().GroupVersionKind().Group
-}
-
-// groupFromUnstructured pulls the API group from an unstructured's
-// apiVersion. Mirrors groupFromObject for the dynamic-CRD path.
-func groupFromUnstructured(u *unstructured.Unstructured) string {
-	if u == nil {
-		return ""
-	}
-	return u.GroupVersionKind().Group
 }
 
 func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getResourceInput) (*mcp.CallToolResult, any, error) {
