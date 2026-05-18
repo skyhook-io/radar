@@ -18,6 +18,7 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	"github.com/skyhook-io/radar/pkg/policyreports"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
@@ -63,6 +64,8 @@ func (f *fakeIssuesProvider) ListDynamic(_ schema.GroupVersionResource, _ string
 	return nil, nil
 }
 func (f *fakeIssuesProvider) KindForGVR(_ schema.GroupVersionResource) string { return "" }
+func (f *fakeIssuesProvider) KyvernoFindings() []policyreports.SubjectFindings { return nil }
+func (f *fakeIssuesProvider) KyvernoStatus() string                              { return "" }
 
 func fmtPodName(i int) string { return fmt.Sprintf("pod-%05d", i) }
 
