@@ -25,8 +25,7 @@ import (
 // in internal/* pre-compute IssueSummary / AuditSummary / PolicyReports and
 // pass them in, so we don't reach into internal/issues or internal/audit.
 type Options struct {
-	Tier      ContextTier
-	MaxTokens int // reserved for future budgeting; not enforced in v1
+	Tier ContextTier
 
 	// AccessChecker gates every emitted ContextRef. nil = no gating (treat
 	// as fully authorized — local-kubeconfig / tests).
@@ -141,7 +140,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	}
 	if len(managedBy) > 0 {
 		rc.ManagedBy = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(managedBy, ReasonOwnerReference, SourceOwnerChain),
+			toContextRefs(managedBy),
 			"managedBy", omitted)
 	}
 
@@ -153,18 +152,18 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		exposes = append(exposes, rel.Gateways...)
 		exposes = append(exposes, rel.Routes...)
 		rc.Exposes = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(exposes, ReasonLabelSelector, SourceTopology),
+			toContextRefs(exposes),
 			"exposes", omitted)
 
 		selected := make([]topology.ResourceRef, 0, len(rel.PDBs)+len(rel.NetworkPolicies))
 		selected = append(selected, rel.PDBs...)
 		selected = append(selected, rel.NetworkPolicies...)
 		rc.SelectedBy = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(selected, ReasonPodSelector, SourceTopology),
+			toContextRefs(selected),
 			"selectedBy", omitted)
 
 		rc.ScaledBy = filterRefs(ctx, opts.AccessChecker,
-			toContextRefs(rel.Scalers, ReasonScaleTargetRef, SourceTopology),
+			toContextRefs(rel.Scalers),
 			"scaledBy", omitted)
 	}
 
@@ -187,8 +186,6 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 				Group:     rel.ServiceAccount.Group,
 				Namespace: rel.ServiceAccount.Namespace,
 				Name:      rel.ServiceAccount.Name,
-				Reason:    ReasonSAName,
-				Source:    SourceK8sSpec,
 			}
 			if checkRef(ctx, opts.AccessChecker, candidate) {
 				rc.Uses.ServiceAccount = candidate
@@ -213,11 +210,9 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 		}
 		if nodeName != "" {
 			candidate := &ContextRef{
-				Kind:   "Node",
-				Group:  nodeGroup,
-				Name:   nodeName,
-				Reason: ReasonNodeName,
-				Source: SourceK8sSpec,
+				Kind:  "Node",
+				Group: nodeGroup,
+				Name:  nodeName,
 			}
 			if checkRef(ctx, opts.AccessChecker, candidate) {
 				rc.RunsOn = candidate
@@ -364,17 +359,10 @@ func buildUsesFromPod(ctx context.Context, pod *corev1.Pod, ac RefAccessChecker,
 	scanContainers(pod.Spec.InitContainers, pod.Namespace, cmSet, secretSet)
 	scanContainers(pod.Spec.Containers, pod.Namespace, cmSet, secretSet)
 
-	// ConfigMaps are most often surfaced via volume mounts (volume.ConfigMap)
-	// and Secrets via env (SecretKeyRef on container.env). Both kinds appear
-	// via both paths in practice, so the single Reason label per kind is a
-	// best-effort discriminator: it answers "what's the dominant lookup
-	// pattern for THIS kind?" — not "how was THIS particular ref discovered?"
-	// Reversing them (the prior labelling had them swapped) made the
-	// metadata actively misleading.
 	uses := &UsesBlock{
-		ConfigMaps: filterRefs(ctx, ac, cmSet.refs("ConfigMap", "", ReasonVolumeMount, SourceK8sSpec), "uses.configMaps", omitted),
-		Secrets:    filterRefs(ctx, ac, secretSet.refs("Secret", "", ReasonEnvVarRef, SourceK8sSpec), "uses.secrets", omitted),
-		PVCs:       filterRefs(ctx, ac, pvcSet.refs("PersistentVolumeClaim", "", ReasonClaimRef, SourceK8sSpec), "uses.pvcs", omitted),
+		ConfigMaps: filterRefs(ctx, ac, cmSet.refs("ConfigMap", ""), "uses.configMaps", omitted),
+		Secrets:    filterRefs(ctx, ac, secretSet.refs("Secret", ""), "uses.secrets", omitted),
+		PVCs:       filterRefs(ctx, ac, pvcSet.refs("PersistentVolumeClaim", ""), "uses.pvcs", omitted),
 	}
 
 	if sa := pod.Spec.ServiceAccountName; sa != "" {
@@ -382,8 +370,6 @@ func buildUsesFromPod(ctx context.Context, pod *corev1.Pod, ac RefAccessChecker,
 			Kind:      "ServiceAccount",
 			Namespace: pod.Namespace,
 			Name:      sa,
-			Reason:    ReasonSAName,
-			Source:    SourceK8sSpec,
 		}
 		if checkRef(ctx, ac, candidate) {
 			uses.ServiceAccount = candidate
@@ -478,7 +464,7 @@ func (s *refSet) add(name, ns string) {
 
 // refs returns the accumulated set as ContextRefs sorted by (namespace, name)
 // for deterministic golden output.
-func (s *refSet) refs(kind, group string, reason RefReason, source RefSource) []ContextRef {
+func (s *refSet) refs(kind, group string) []ContextRef {
 	if len(s.order) == 0 {
 		return nil
 	}
@@ -496,8 +482,6 @@ func (s *refSet) refs(kind, group string, reason RefReason, source RefSource) []
 			Group:     group,
 			Namespace: e.Namespace,
 			Name:      e.Name,
-			Reason:    reason,
-			Source:    source,
 		}
 	}
 	return out
@@ -507,10 +491,10 @@ func (s *refSet) refs(kind, group string, reason RefReason, source RefSource) []
 // Topology ref → ContextRef
 // ---------------------------------------------------------------------------
 
-// toContextRefs translates a slice of topology.ResourceRef into ContextRefs
-// with the given reason+source. Sorted by (kind, namespace, name) for
-// determinism — golden tests rely on this ordering.
-func toContextRefs(refs []topology.ResourceRef, reason RefReason, source RefSource) []ContextRef {
+// toContextRefs translates a slice of topology.ResourceRef into ContextRefs.
+// Sorted by (kind, namespace, name) for determinism — golden tests rely on
+// this ordering.
+func toContextRefs(refs []topology.ResourceRef) []ContextRef {
 	if len(refs) == 0 {
 		return nil
 	}
@@ -521,8 +505,6 @@ func toContextRefs(refs []topology.ResourceRef, reason RefReason, source RefSour
 			Group:     r.Group,
 			Namespace: r.Namespace,
 			Name:      r.Name,
-			Reason:    reason,
-			Source:    source,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool {

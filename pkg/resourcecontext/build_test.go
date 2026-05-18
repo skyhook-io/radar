@@ -150,9 +150,6 @@ func TestBuild_Pod_FullEnrichment(t *testing.T) {
 	if mb.Kind != "Application" || mb.Name != "storefront" || mb.Namespace != "argocd" {
 		t.Errorf("ManagedBy[0]: got %+v, want Application argocd/storefront", mb)
 	}
-	if mb.Source != SourceOwnerChain {
-		t.Errorf("ManagedBy[0].Source: got %q want %q", mb.Source, SourceOwnerChain)
-	}
 
 	// Exposes: the Service routes to the pod.
 	if got, want := len(rc.Exposes), 1; got != want {
