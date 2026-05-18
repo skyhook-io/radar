@@ -21,6 +21,7 @@ import (
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/search"
+	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/internal/timeline"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	topology "github.com/skyhook-io/radar/pkg/topology"
@@ -540,7 +541,7 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 // Group is sourced per-object from each typed object's GVK (SetTypeMeta
 // is called by Minify, so apiVersion is reliable here) — passed through
 // to the builder so the per-resource issue lookup stays group-aware.
-func attachSummaryContextToTyped(results []any, objs []runtime.Object, builder summaryContextBuilder) {
+func attachSummaryContextToTyped(results []any, objs []runtime.Object, builder summarycontext.Builder) {
 	if len(results) != len(objs) {
 		return
 	}
@@ -601,7 +602,7 @@ func listDynamicResources(ctx context.Context, cache *k8s.ResourceCache, kind, g
 // Group comes from each unstructured's apiVersion so two CRDs that share
 // kind+ns+name across API groups (e.g. multiple operators each shipping
 // a "Cluster" resource) get independent issue counts.
-func attachSummaryContextToUnstructured(results []any, items []*unstructured.Unstructured, builder summaryContextBuilder) {
+func attachSummaryContextToUnstructured(results []any, items []*unstructured.Unstructured, builder summarycontext.Builder) {
 	if len(results) != len(items) {
 		return
 	}

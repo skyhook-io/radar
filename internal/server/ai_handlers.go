@@ -41,6 +41,7 @@ import (
 	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/summarycontext"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	bpaudit "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/policyreports"
@@ -206,7 +207,7 @@ func issueIndexNamespaces(namespaces []string, kind, group string) []string {
 // Group is sourced per-object from the typed object's GVK (via SetTypeMeta
 // + ObjectKind), so list paths that mix kinds — they don't today, but the
 // shape doesn't preclude it — stay correct.
-func attachSummaryContextToList(results []any, objs []runtime.Object, builder summaryContextBuilder) {
+func attachSummaryContextToList(results []any, objs []runtime.Object, builder summarycontext.Builder) {
 	if len(results) != len(objs) {
 		return
 	}
@@ -227,7 +228,7 @@ func attachSummaryContextToList(results []any, objs []runtime.Object, builder su
 // Group comes from each unstructured's apiVersion — required for issue-
 // index lookups so two CRDs that share kind+ns+name across groups don't
 // collide on the per-resource count.
-func attachSummaryContextToUnstructuredList(results []any, items []*unstructured.Unstructured, builder summaryContextBuilder) {
+func attachSummaryContextToUnstructuredList(results []any, items []*unstructured.Unstructured, builder summarycontext.Builder) {
 	if len(results) != len(items) {
 		return
 	}
