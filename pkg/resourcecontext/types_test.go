@@ -7,96 +7,6 @@ import (
 	"testing"
 )
 
-// TestRefReasonMarshalsSnakeCase asserts every RefReason constant
-// marshals to its locked snake_case literal — the wire contract.
-func TestRefReasonMarshalsSnakeCase(t *testing.T) {
-	cases := map[RefReason]string{
-		ReasonOwnerReference:   "owner_reference",
-		ReasonLabelSelector:    "label_selector",
-		ReasonPodSelector:      "pod_selector_match",
-		ReasonPolicyReportSubj: "policy_report_subject",
-		ReasonVolumeMount:      "volume_mount_ref",
-		ReasonEnvVarRef:        "env_var_ref",
-		ReasonScaleTargetRef:   "scale_target_ref",
-		ReasonClaimRef:         "claim_ref",
-		ReasonNodeName:         "node_name",
-		ReasonSAName:           "service_account_name",
-	}
-	for c, want := range cases {
-		got, err := json.Marshal(c)
-		if err != nil {
-			t.Fatalf("marshal RefReason %q: %v", c, err)
-		}
-		if string(got) != `"`+want+`"` {
-			t.Errorf("RefReason marshal: got %s, want %q", got, want)
-		}
-	}
-}
-
-// TestRefReasonUnmarshalsSnakeCase asserts each locked snake_case literal
-// round-trips into the matching constant.
-func TestRefReasonUnmarshalsSnakeCase(t *testing.T) {
-	cases := map[string]RefReason{
-		"owner_reference":       ReasonOwnerReference,
-		"label_selector":        ReasonLabelSelector,
-		"pod_selector_match":    ReasonPodSelector,
-		"policy_report_subject": ReasonPolicyReportSubj,
-		"volume_mount_ref":      ReasonVolumeMount,
-		"env_var_ref":           ReasonEnvVarRef,
-		"scale_target_ref":      ReasonScaleTargetRef,
-		"claim_ref":             ReasonClaimRef,
-		"node_name":             ReasonNodeName,
-		"service_account_name":  ReasonSAName,
-	}
-	for in, want := range cases {
-		var got RefReason
-		if err := json.Unmarshal([]byte(`"`+in+`"`), &got); err != nil {
-			t.Fatalf("unmarshal RefReason %q: %v", in, err)
-		}
-		if got != want {
-			t.Errorf("RefReason unmarshal %q: got %q, want %q", in, got, want)
-		}
-	}
-}
-
-func TestRefSourceMarshalsSnakeCase(t *testing.T) {
-	cases := map[RefSource]string{
-		SourceTopology:     "topology",
-		SourceOwnerChain:   "owner_chain",
-		SourcePolicyReport: "policy_report",
-		SourceAuditEngine:  "audit_engine",
-		SourceK8sSpec:      "k8s_spec",
-	}
-	for c, want := range cases {
-		got, err := json.Marshal(c)
-		if err != nil {
-			t.Fatalf("marshal RefSource %q: %v", c, err)
-		}
-		if string(got) != `"`+want+`"` {
-			t.Errorf("RefSource marshal: got %s, want %q", got, want)
-		}
-	}
-}
-
-func TestRefSourceUnmarshalsSnakeCase(t *testing.T) {
-	cases := map[string]RefSource{
-		"topology":      SourceTopology,
-		"owner_chain":   SourceOwnerChain,
-		"policy_report": SourcePolicyReport,
-		"audit_engine":  SourceAuditEngine,
-		"k8s_spec":      SourceK8sSpec,
-	}
-	for in, want := range cases {
-		var got RefSource
-		if err := json.Unmarshal([]byte(`"`+in+`"`), &got); err != nil {
-			t.Fatalf("unmarshal RefSource %q: %v", in, err)
-		}
-		if got != want {
-			t.Errorf("RefSource unmarshal %q: got %q, want %q", in, got, want)
-		}
-	}
-}
-
 func TestContextTierMarshalsSnakeCase(t *testing.T) {
 	cases := map[ContextTier]string{
 		TierBasic:      "basic",
@@ -131,12 +41,10 @@ func TestContextTierUnmarshalsSnakeCase(t *testing.T) {
 
 func TestOmittedReasonMarshalsSnakeCase(t *testing.T) {
 	cases := map[OmittedReason]string{
-		OmittedRBACDenied:       "rbac_denied",
-		OmittedBudgetExceeded:   "budget_exceeded",
-		OmittedCacheCold:        "cache_cold",
-		OmittedNotInstalled:     "not_installed",
-		OmittedKindUnsupported:  "kind_unsupported",
-		OmittedProviderDisabled: "provider_disabled",
+		OmittedRBACDenied:     "rbac_denied",
+		OmittedBudgetExceeded: "budget_exceeded",
+		OmittedCacheCold:      "cache_cold",
+		OmittedNotInstalled:   "not_installed",
 	}
 	for c, want := range cases {
 		got, err := json.Marshal(c)
@@ -151,12 +59,10 @@ func TestOmittedReasonMarshalsSnakeCase(t *testing.T) {
 
 func TestOmittedReasonUnmarshalsSnakeCase(t *testing.T) {
 	cases := map[string]OmittedReason{
-		"rbac_denied":       OmittedRBACDenied,
-		"budget_exceeded":   OmittedBudgetExceeded,
-		"cache_cold":        OmittedCacheCold,
-		"not_installed":     OmittedNotInstalled,
-		"kind_unsupported":  OmittedKindUnsupported,
-		"provider_disabled": OmittedProviderDisabled,
+		"rbac_denied":     OmittedRBACDenied,
+		"budget_exceeded": OmittedBudgetExceeded,
+		"cache_cold":      OmittedCacheCold,
+		"not_installed":   OmittedNotInstalled,
 	}
 	for in, want := range cases {
 		var got OmittedReason
@@ -201,7 +107,6 @@ func TestResourceContextFieldOrdering(t *testing.T) {
 		PolicySummary: &PolicySummary{},
 		Hints:         []string{"hint"},
 		Omitted:       []OmittedField{{Field: "selectedBy", Reason: OmittedRBACDenied}},
-		Truncated:     true,
 	}
 	b, err := json.Marshal(ac)
 	if err != nil {
@@ -221,7 +126,6 @@ func TestResourceContextFieldOrdering(t *testing.T) {
 		`"policySummary"`,
 		`"hints"`,
 		`"omitted"`,
-		`"truncated"`,
 	}
 	prev := -1
 	for _, key := range wantOrder {
@@ -247,40 +151,29 @@ func TestResourceContextRoundTrip(t *testing.T) {
 			Group:     "apps",
 			Namespace: "prod",
 			Name:      "api",
-			Reason:    ReasonOwnerReference,
-			Source:    SourceOwnerChain,
 		}},
 		Exposes: []ContextRef{{
 			Kind:      "Service",
 			Namespace: "prod",
 			Name:      "api",
-			Reason:    ReasonLabelSelector,
-			Source:    SourceTopology,
 		}},
 		SelectedBy: []ContextRef{{
 			Kind:      "NetworkPolicy",
 			Group:     "networking.k8s.io",
 			Namespace: "prod",
 			Name:      "default-deny",
-			Reason:    ReasonPodSelector,
-			Source:    SourceTopology,
 		}},
 		Uses: &UsesBlock{
-			ConfigMaps: []ContextRef{{Kind: "ConfigMap", Name: "api-config", Reason: ReasonEnvVarRef, Source: SourceK8sSpec}},
-			Secrets:    []ContextRef{{Kind: "Secret", Name: "api-creds", Reason: ReasonVolumeMount, Source: SourceK8sSpec}},
-			ServiceAccount: &ContextRef{
-				Kind: "ServiceAccount", Name: "api-sa",
-				Reason: ReasonSAName, Source: SourceK8sSpec,
-			},
-			PVCs: []ContextRef{{Kind: "PersistentVolumeClaim", Name: "data", Reason: ReasonClaimRef, Source: SourceK8sSpec}},
+			ConfigMaps:     []ContextRef{{Kind: "ConfigMap", Name: "api-config"}},
+			Secrets:        []ContextRef{{Kind: "Secret", Name: "api-creds"}},
+			ServiceAccount: &ContextRef{Kind: "ServiceAccount", Name: "api-sa"},
+			PVCs:           []ContextRef{{Kind: "PersistentVolumeClaim", Name: "data"}},
 		},
-		RunsOn: &ContextRef{Kind: "Node", Name: "node-1", Reason: ReasonNodeName, Source: SourceK8sSpec},
+		RunsOn: &ContextRef{Kind: "Node", Name: "node-1"},
 		ScaledBy: []ContextRef{{
-			Kind:   "HorizontalPodAutoscaler",
-			Group:  "autoscaling",
-			Name:   "api-hpa",
-			Reason: ReasonScaleTargetRef,
-			Source: SourceTopology,
+			Kind:  "HorizontalPodAutoscaler",
+			Group: "autoscaling",
+			Name:  "api-hpa",
 		}},
 		IssueSummary: &IssueSummary{
 			Count:           3,
@@ -309,7 +202,6 @@ func TestResourceContextRoundTrip(t *testing.T) {
 			{Field: "selectedBy.networkPolicies", Reason: OmittedRBACDenied},
 			{Field: "policySummary.kyverno", Reason: OmittedNotInstalled},
 		},
-		Truncated: true,
 	}
 
 	b, err := json.Marshal(orig)
@@ -355,7 +247,7 @@ func TestSummaryContextRoundTrip(t *testing.T) {
 			t.Errorf("SummaryContext JSON missing %s: %s", sub, s)
 		}
 	}
-	for _, forbidden := range []string{`"group"`, `"reason"`, `"confidence"`} {
+	for _, forbidden := range []string{`"group"`} {
 		if strings.Contains(s, forbidden) {
 			t.Errorf("SummaryContext JSON leaks %s: %s", forbidden, s)
 		}
@@ -382,15 +274,3 @@ func TestManagedByRefDistinguishesFluxKinds(t *testing.T) {
 	}
 }
 
-// TestConfidenceOmittedWhenEmpty pins the contract that the reserved
-// Confidence field is dropped from the wire when not populated.
-func TestConfidenceOmittedWhenEmpty(t *testing.T) {
-	ref := ContextRef{Kind: "Pod", Name: "p"}
-	b, err := json.Marshal(ref)
-	if err != nil {
-		t.Fatalf("marshal: %v", err)
-	}
-	if strings.Contains(string(b), "confidence") {
-		t.Errorf("expected confidence omitted when empty, got %s", b)
-	}
-}

@@ -37,7 +37,6 @@ type ResourceContext struct {
 	PolicySummary *PolicySummary `json:"policySummary,omitempty"`
 	Hints         []string       `json:"hints,omitempty"`
 	Omitted       []OmittedField `json:"omitted,omitempty"`
-	Truncated     bool           `json:"truncated,omitempty"`
 }
 
 // ContextTier signals how much enrichment is included. "basic" is the
@@ -52,51 +51,21 @@ const (
 
 // ContextRef is a typed pointer to another Kubernetes object that the
 // subject relates to. Group is omitted for core/v1 kinds; Namespace is
-// omitted for cluster-scoped objects.
+// omitted for cluster-scoped objects. The structural reason for the link
+// is implied by the parent field name (selectedBy → selector match,
+// runsOn → node binding, etc.) rather than re-encoded per-ref.
 type ContextRef struct {
-	Kind       string    `json:"kind"`
-	Group      string    `json:"group,omitempty"`
-	Namespace  string    `json:"namespace,omitempty"`
-	Name       string    `json:"name"`
-	Reason     RefReason `json:"reason,omitempty"`
-	Source     RefSource `json:"source,omitempty"`
-	Confidence string    `json:"confidence,omitempty"` // reserved; not populated in v1
+	Kind      string `json:"kind"`
+	Group     string `json:"group,omitempty"`
+	Namespace string `json:"namespace,omitempty"`
+	Name      string `json:"name"`
 }
-
-// RefReason describes WHY a ContextRef is being emitted — the structural
-// link between subject and target.
-type RefReason string
-
-const (
-	ReasonOwnerReference   RefReason = "owner_reference"
-	ReasonLabelSelector    RefReason = "label_selector"
-	ReasonPodSelector      RefReason = "pod_selector_match"
-	ReasonPolicyReportSubj RefReason = "policy_report_subject"
-	ReasonVolumeMount      RefReason = "volume_mount_ref"
-	ReasonEnvVarRef        RefReason = "env_var_ref"
-	ReasonScaleTargetRef   RefReason = "scale_target_ref"
-	ReasonClaimRef         RefReason = "claim_ref"
-	ReasonNodeName         RefReason = "node_name"
-	ReasonSAName           RefReason = "service_account_name"
-)
-
-// RefSource describes WHERE the link came from — which subsystem produced
-// the ref. Useful for debugging and for filtering on the agent side.
-type RefSource string
-
-const (
-	SourceTopology     RefSource = "topology"
-	SourceOwnerChain   RefSource = "owner_chain"
-	SourcePolicyReport RefSource = "policy_report"
-	SourceAuditEngine  RefSource = "audit_engine"
-	SourceK8sSpec      RefSource = "k8s_spec"
-)
 
 // ManagedByRef is the compact form of a "managed-by" pointer used in
 // SummaryContext (list/search rows). Carries Kind alongside Source so
 // consumers can distinguish e.g. a Flux Kustomization from a Flux
 // HelmRelease without re-parsing the Source string. Intentionally lacks
-// Group, Reason, and Confidence to keep per-row bytes minimal.
+// Group to keep per-row bytes minimal.
 type ManagedByRef struct {
 	Kind      string `json:"kind"`             // "Application" | "Kustomization" | "HelmRelease" | "Deployment" | "DaemonSet" | "StatefulSet" | "Rollout" | …
 	Source    string `json:"source"`           // "argocd" | "flux" | "helm" | "native"
@@ -177,10 +146,8 @@ type OmittedField struct {
 type OmittedReason string
 
 const (
-	OmittedRBACDenied       OmittedReason = "rbac_denied"
-	OmittedBudgetExceeded   OmittedReason = "budget_exceeded"
-	OmittedCacheCold        OmittedReason = "cache_cold"
-	OmittedNotInstalled     OmittedReason = "not_installed"
-	OmittedKindUnsupported  OmittedReason = "kind_unsupported"
-	OmittedProviderDisabled OmittedReason = "provider_disabled"
+	OmittedRBACDenied     OmittedReason = "rbac_denied"
+	OmittedBudgetExceeded OmittedReason = "budget_exceeded"
+	OmittedCacheCold      OmittedReason = "cache_cold"
+	OmittedNotInstalled   OmittedReason = "not_installed"
 )
