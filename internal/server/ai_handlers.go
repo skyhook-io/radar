@@ -533,13 +533,31 @@ func computeAuditSummaryForResource(cache *k8s.ResourceCache, group, kind, names
 		}
 		return match[i].CheckID < match[j].CheckID
 	})
-	topSeverity := match[0].Severity
 	topFinding := match[0].CheckID
 	return &resourcecontext.AuditSummary{
 		Count:           len(match),
-		HighestSeverity: topSeverity,
+		HighestSeverity: normalizeAuditSeverity(match[0].Severity),
 		TopFinding:      topFinding,
 	}
+}
+
+// normalizeAuditSeverity maps the audit suite's emission vocabulary
+// ("danger" / "warning") onto the unified resourceContext severity
+// scale ("critical" / "warning") used by issueSummary. Two sibling
+// fields in the same response reporting severity in different
+// vocabularies — "danger" vs "critical" — is a wire-shape footgun for
+// consumers. Mirrors the same mapping internal/issues.fromAudit
+// applies when audit findings flow through the unified issue stream.
+// Empty / unknown severities pass through unchanged so the contract
+// stays explicit if the audit suite ever grows new values.
+func normalizeAuditSeverity(s string) string {
+	switch s {
+	case bpaudit.SeverityDanger:
+		return string(issues.SeverityCritical)
+	case bpaudit.SeverityWarning:
+		return string(issues.SeverityWarning)
+	}
+	return s
 }
 
 // auditSeverityRank orders audit finding severities ("danger" > "warning").
