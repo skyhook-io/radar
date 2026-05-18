@@ -131,7 +131,6 @@ func RBACTuplesForKind(kind, group string, disc PseudoKindDiscoveryLookup) (tupl
 
 	// Caller-supplied group selects a specific variant; empty group returns
 	// every variant under the kind.
-	considered := 0
 	for _, ck := range ClusterScopedKinds {
 		if !strings.EqualFold(string(ck.Kind), resolved) {
 			continue
@@ -144,7 +143,6 @@ func RBACTuplesForKind(kind, group string, disc PseudoKindDiscoveryLookup) (tupl
 				continue
 			}
 		}
-		considered++
 		tuples = append(tuples, SARTuple{Group: ck.Group, Resource: ck.Resource, Namespace: ""})
 	}
 	if len(tuples) > 0 {
@@ -154,16 +152,14 @@ func RBACTuplesForKind(kind, group string, disc PseudoKindDiscoveryLookup) (tupl
 	// Tracked + zero tuples: distinguish "every row was filtered by
 	// discovery" (fallthroughAllow=true) from "no row matched supplied
 	// group" (fallthroughAllow=false, per-variant deny).
-	//
-	// When group != "" and considered == 0, we don't know whether the row
-	// would have existed before the discovery filter ran — re-walk WITHOUT
-	// the disc filter to find out. If a row exists pre-filter, the filter
-	// ate it → fallthrough-allow. Else no row matched group → deny.
 	if group == "" {
-		// Empty group means we walked every row under the kind. If considered
-		// is still 0, the disc filter dropped them all → fallthrough-allow.
+		// Empty group means we walked every row under the kind; if none
+		// survived the filter, the disc lookup dropped them all → fallthrough-allow.
 		return nil, true, true
 	}
+	// group != "" → re-walk WITHOUT the disc filter. If a row exists
+	// pre-filter, the filter ate it → fallthrough-allow. Else no row
+	// matched group → per-variant deny.
 	for _, ck := range ClusterScopedKinds {
 		if !strings.EqualFold(string(ck.Kind), resolved) {
 			continue
