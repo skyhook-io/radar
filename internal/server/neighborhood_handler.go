@@ -163,8 +163,18 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Use the resolved root node's Kind for the response, not the
+	// URL-derived (lowercase) form. Subgraph nodes carry display-form
+	// NodeKind values ("Pod", "KnativeService") — without this rewrite,
+	// the response's root.kind would be lowercase while
+	// subgraph.nodes[0].kind is display-form, breaking case-sensitive
+	// within-response matching and diverging from MCP's shape despite
+	// the header comment claiming both surfaces "parse identically".
+	rootResp := root
+	rootResp.Kind = string(sub.Nodes[0].Kind)
+
 	resp := neighborhoodResponse{
-		Root: root,
+		Root: rootResp,
 		Subgraph: neighborhoodSubgraph{
 			Nodes: sub.Nodes,
 			Edges: sub.Edges,
@@ -201,7 +211,12 @@ func parseNeighborhoodOptions(r *http.Request) topology.NeighborhoodOptions {
 		MaxNodes: 25,
 	}
 	if p := q.Get("profile"); p != "" {
-		opts.Profile = topology.Profile(p)
+		// Mirror MCP via topology.ResolveProfile so both surfaces normalize
+		// identically. A direct cast would let `?profile=Management` or
+		// `?profile=garbage` fall through edgeTypesForProfile's default
+		// case (allEdgeTypes), silently exposing more topology edges than
+		// the caller intended.
+		opts.Profile = topology.ResolveProfile(p)
 	}
 	if h := q.Get("hops"); h != "" {
 		if n, err := strconv.Atoi(h); err == nil && n > 0 {

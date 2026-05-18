@@ -158,26 +158,11 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 	return toJSONResult(result)
 }
 
-// resolveProfile maps a user-supplied profile string to a topology.Profile
-// constant. Empty or unrecognized values fall back to ProfileAuto — agents
-// often forget the field and "auto" is the right default.
+// resolveProfile is retained as a thin shim around topology.ResolveProfile
+// so the local call sites in this file don't need updating. New callers
+// should use topology.ResolveProfile directly.
 func resolveProfile(s string) topology.Profile {
-	switch strings.ToLower(strings.TrimSpace(s)) {
-	case "", string(topology.ProfileAuto):
-		return topology.ProfileAuto
-	case string(topology.ProfileManagement):
-		return topology.ProfileManagement
-	case string(topology.ProfileNetworking):
-		return topology.ProfileNetworking
-	case string(topology.ProfilePolicy):
-		return topology.ProfilePolicy
-	case string(topology.ProfileSecurity):
-		return topology.ProfileSecurity
-	case string(topology.ProfileAll):
-		return topology.ProfileAll
-	default:
-		return topology.ProfileAuto
-	}
+	return topology.ResolveProfile(s)
 }
 
 // displayKindForMCP normalizes a lowercased / plural kind into the

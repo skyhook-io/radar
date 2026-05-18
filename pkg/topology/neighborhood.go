@@ -30,6 +30,32 @@ const (
 	ProfileAuto Profile = "auto"
 )
 
+// ResolveProfile normalizes a user-supplied profile string to a Profile
+// constant. Empty, whitespace, or unrecognized values fall back to
+// ProfileAuto — agents often forget the field and "auto" is the right
+// default; case-insensitive matching prevents `profile=Management` or
+// similar from silently falling through edgeTypesForProfile's default
+// branch and expanding to all edge types. Used by both REST and MCP
+// surface handlers so they normalize identically.
+func ResolveProfile(s string) Profile {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "", string(ProfileAuto):
+		return ProfileAuto
+	case string(ProfileManagement):
+		return ProfileManagement
+	case string(ProfileNetworking):
+		return ProfileNetworking
+	case string(ProfilePolicy):
+		return ProfilePolicy
+	case string(ProfileSecurity):
+		return ProfileSecurity
+	case string(ProfileAll):
+		return ProfileAll
+	default:
+		return ProfileAuto
+	}
+}
+
 // NeighborhoodOptions configures a BuildNeighborhood call. Zero values are
 // replaced with sensible defaults: Profile=auto, Hops=1, MaxNodes=25.
 type NeighborhoodOptions struct {

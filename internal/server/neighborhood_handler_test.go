@@ -54,6 +54,34 @@ func TestParseNeighborhoodOptions_InvalidValues(t *testing.T) {
 	}
 }
 
+// TestParseNeighborhoodOptions_ProfileNormalization pins that REST routes
+// profile through topology.ResolveProfile — case-mismatched or unknown
+// values fall back to ProfileAuto rather than passing through verbatim
+// and silently expanding to all edge types via edgeTypesForProfile's
+// default branch.
+func TestParseNeighborhoodOptions_ProfileNormalization(t *testing.T) {
+	cases := []struct {
+		query string
+		want  topology.Profile
+	}{
+		{"profile=management", topology.ProfileManagement},
+		{"profile=Management", topology.ProfileManagement},        // case-insensitive
+		{"profile=%20%20networking%20%20", topology.ProfileNetworking}, // whitespace trim
+		{"profile=garbage", topology.ProfileAuto},                 // unknown → auto
+		{"profile=", topology.ProfileAuto},                        // empty → auto
+		{"", topology.ProfileAuto},                                // missing → auto
+	}
+	for _, c := range cases {
+		t.Run(c.query, func(t *testing.T) {
+			r := httptest.NewRequest("GET", "/api/ai/neighborhood/Pod/prod/cart?"+c.query, nil)
+			opts := parseNeighborhoodOptions(r)
+			if opts.Profile != c.want {
+				t.Errorf("profile = %q, want %q", opts.Profile, c.want)
+			}
+		})
+	}
+}
+
 func TestApiVersionGroup(t *testing.T) {
 	cases := []struct {
 		in   string
