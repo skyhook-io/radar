@@ -155,25 +155,14 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 	// buildNodeID's static map can't construct the right ID for arbitrary CRDs.
 	rootID := buildNodeID(root.Kind, root.Namespace, root.Name, dp)
 	rootNode, ok := nodeByID[rootID]
-	if root.Group == "" {
-		if matched, ambiguous := findNodeByRef(t.Nodes, root); ambiguous {
-			sub.AmbiguousRoot = true
-			return sub
-		} else if matched != nil {
-			rootNode = matched
-			rootID = rootNode.ID
-			ok = true
-		}
-	} else {
-		// When root.Group is set, the rootID match alone isn't enough: two CRDs
-		// sharing the same lowercase plural collide on the ID (e.g. CAPI
-		// cluster.x-k8s.io/Cluster vs CNPG postgresql.cnpg.io/Cluster — whichever
-		// was inserted last wins in nodeByID). Verify the candidate's apiGroup
-		// matches; otherwise fall through to findNodeByRef which does the
-		// group-aware tuple match.
-		if ok && nodeAPIGroupFromData(rootNode) != root.Group {
-			ok = false
-		}
+	// When root.Group is set, the rootID match alone isn't enough: two CRDs
+	// sharing the same lowercase plural collide on the ID (e.g. CAPI
+	// cluster.x-k8s.io/Cluster vs CNPG postgresql.cnpg.io/Cluster — whichever
+	// was inserted last wins in nodeByID). Verify the candidate's apiGroup
+	// matches; otherwise fall through to findNodeByRef which does the
+	// group-aware tuple match.
+	if ok && root.Group != "" && nodeAPIGroupFromData(rootNode) != root.Group {
+		ok = false
 	}
 	if !ok {
 		// Fallback: try matching by (kind, namespace, name [+ group]) tuple.
@@ -181,15 +170,15 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 		// the lowercase kind (e.g. "knativeservice/"). When root.Group is set,
 		// findNodeByRef also disambiguates kind-collisions across API groups
 		// (CAPI cluster.x-k8s.io/Cluster vs Fleet cluster.fleet.io/Cluster).
-		var ambiguous bool
-		rootNode, ambiguous = findNodeByRef(t.Nodes, root)
+		matched, ambiguous := findNodeByRef(t.Nodes, root)
 		if ambiguous {
 			sub.AmbiguousRoot = true
 			return sub
 		}
-		if rootNode == nil {
+		if matched == nil {
 			return sub
 		}
+		rootNode = matched
 		rootID = rootNode.ID
 	}
 
@@ -273,16 +262,19 @@ func BuildNeighborhoodWithIndex(t *Topology, root ResourceRef, opts Neighborhood
 				if included[other] {
 					continue
 				}
+				if deniedIDs[other] {
+					// Same denied node may surface via multiple edges; skip
+					// re-evaluating Allow (SAR cache hit, but still wasted work).
+					continue
+				}
 				candidate, exists := nodeByID[other]
 				if !exists {
 					// Edge dangles off a node that isn't in the topology.
 					continue
 				}
 				if opts.Allow != nil && !opts.Allow(candidate) {
-					if !deniedIDs[other] {
-						deniedIDs[other] = true
-						rbacDenied++
-					}
+					deniedIDs[other] = true
+					rbacDenied++
 					continue
 				}
 				if len(included) >= maxNodes {
