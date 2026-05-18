@@ -982,6 +982,30 @@ func TestBuildNeighborhood_NodeClassPerVariantSAR(t *testing.T) {
 	}
 }
 
+// TestAPIVersionGroup pins the canonical split-on-first-slash extraction.
+// Previously this function existed three times (REST, MCP, and inside
+// topology); the test now lives next to the single shared implementation.
+func TestAPIVersionGroup(t *testing.T) {
+	cases := []struct {
+		in   string
+		want string
+	}{
+		{"v1", ""},
+		{"apps/v1", "apps"},
+		{"argoproj.io/v1alpha1", "argoproj.io"},
+		{"networking.k8s.io/v1", "networking.k8s.io"},
+		{"serving.knative.dev/v1", "serving.knative.dev"},
+		{"", ""},
+		{"/v1", ""},                 // leading slash → empty group
+		{"apps/v1/extra", "apps"},    // multi-slash → split on FIRST
+	}
+	for _, tc := range cases {
+		if got := APIVersionGroup(tc.in); got != tc.want {
+			t.Errorf("APIVersionGroup(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
 func equalStrings(a, b []string) bool {
 	if len(a) != len(b) {
 		return false

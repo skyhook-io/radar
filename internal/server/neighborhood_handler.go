@@ -262,7 +262,7 @@ func (s *Server) canReadNeighborhoodNode(r *http.Request, n *topology.Node) bool
 			ns = v
 		}
 		if v, ok := n.Data["apiVersion"].(string); ok {
-			group = apiVersionGroup(v)
+			group = topology.APIVersionGroup(v)
 		}
 	}
 	if ns != "" {
@@ -343,7 +343,7 @@ func (s *Server) canReadClusterScopedTopoKind(r *http.Request, n *topology.Node)
 	group := ""
 	if n.Data != nil {
 		if v, ok := n.Data["apiVersion"].(string); ok {
-			group = apiVersionGroup(v)
+			group = topology.APIVersionGroup(v)
 		}
 	}
 
@@ -418,13 +418,3 @@ func (s *Server) canReadClusterScopedTopoKindByName(r *http.Request, entries []t
 	return false
 }
 
-// apiVersionGroup extracts the group from a Kubernetes apiVersion string.
-// "v1" → "", "apps/v1" → "apps", "argoproj.io/v1alpha1" → "argoproj.io".
-func apiVersionGroup(apiVersion string) string {
-	for i := 0; i < len(apiVersion); i++ {
-		if apiVersion[i] == '/' {
-			return apiVersion[:i]
-		}
-	}
-	return ""
-}

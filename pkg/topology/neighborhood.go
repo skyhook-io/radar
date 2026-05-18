@@ -534,9 +534,31 @@ func nodeNamespaceFromData(n *Node) string {
 	return ""
 }
 
-// nodeAPIGroupFromData extracts the API group from a Node's Data map by
-// splitting the apiVersion (e.g. "apps/v1" → "apps", "v1" → ""). Returns ""
-// when no apiVersion is set on the node.
+// APIVersionGroup extracts the API group from a Kubernetes apiVersion
+// string by splitting on the first '/'. The core group has no slash and
+// returns "" — matches K8s convention.
+//
+//	"v1"                     → ""
+//	"apps/v1"                → "apps"
+//	"serving.knative.dev/v1" → "serving.knative.dev"
+//	""                       → ""
+//
+// Exported so REST + MCP handlers share one implementation; previously
+// internal/server, internal/mcp, and this package each carried their own
+// copy of the same split-on-first-slash logic.
+func APIVersionGroup(apiVersion string) string {
+	for i := 0; i < len(apiVersion); i++ {
+		if apiVersion[i] == '/' {
+			return apiVersion[:i]
+		}
+	}
+	return ""
+}
+
+// nodeAPIGroupFromData extracts the API group from a Node's Data map.
+// Returns "" when no apiVersion is set on the node. Thin wrapper around
+// APIVersionGroup so callers walking topology nodes don't have to read
+// the Data map themselves.
 func nodeAPIGroupFromData(n *Node) string {
 	if n.Data == nil {
 		return ""
@@ -545,10 +567,5 @@ func nodeAPIGroupFromData(n *Node) string {
 	if !ok {
 		return ""
 	}
-	for i := 0; i < len(v); i++ {
-		if v[i] == '/' {
-			return v[:i]
-		}
-	}
-	return ""
+	return APIVersionGroup(v)
 }

@@ -199,7 +199,7 @@ func canReadNeighborhoodNodeMCP(ctx context.Context, n *topology.Node) bool {
 			ns = v
 		}
 		if v, ok := n.Data["apiVersion"].(string); ok {
-			group = apiVersionGroupMCP(v)
+			group = topology.APIVersionGroup(v)
 		}
 	}
 	if ns != "" {
@@ -261,7 +261,7 @@ func canReadClusterScopedTopoKindMCP(ctx context.Context, n *topology.Node) (all
 	group := ""
 	if n.Data != nil {
 		if v, ok := n.Data["apiVersion"].(string); ok {
-			group = apiVersionGroupMCP(v)
+			group = topology.APIVersionGroup(v)
 		}
 	}
 
@@ -334,11 +334,3 @@ func canReadClusterScopedTopoKindByNameMCP(ctx context.Context, entries []topolo
 	return false
 }
 
-func apiVersionGroupMCP(apiVersion string) string {
-	for i := 0; i < len(apiVersion); i++ {
-		if apiVersion[i] == '/' {
-			return apiVersion[:i]
-		}
-	}
-	return ""
-}

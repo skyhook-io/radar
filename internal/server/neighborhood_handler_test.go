@@ -94,20 +94,3 @@ func TestParseNeighborhoodOptions_ProfileNormalization(t *testing.T) {
 	}
 }
 
-func TestApiVersionGroup(t *testing.T) {
-	cases := []struct {
-		in   string
-		want string
-	}{
-		{"v1", ""},
-		{"apps/v1", "apps"},
-		{"argoproj.io/v1alpha1", "argoproj.io"},
-		{"networking.k8s.io/v1", "networking.k8s.io"},
-		{"", ""},
-	}
-	for _, tc := range cases {
-		if got := apiVersionGroup(tc.in); got != tc.want {
-			t.Errorf("apiVersionGroup(%q) = %q, want %q", tc.in, got, tc.want)
-		}
-	}
-}
