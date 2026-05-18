@@ -494,7 +494,16 @@ func computeAuditSummaryForResource(cache *k8s.ResourceCache, kind, namespace, n
 	if cache == nil || kind == "" {
 		return nil
 	}
-	results := audit.RunFromCache(cache, []string{namespace}, nil)
+	// Match computeIssueSummaryForResource's guard: passing []string{""} to
+	// RunFromCache would filter to literally namespace="" resources instead
+	// of scanning all namespaces. Latent today since the audit suite
+	// doesn't cover cluster-scoped kinds, but the inconsistency would
+	// silently miss findings the moment a cluster-scoped check lands.
+	var namespaces []string
+	if namespace != "" {
+		namespaces = []string{namespace}
+	}
+	results := audit.RunFromCache(cache, namespaces, nil)
 	if results == nil || len(results.Findings) == 0 {
 		return nil
 	}
