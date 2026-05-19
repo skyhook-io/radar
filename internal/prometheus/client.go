@@ -154,8 +154,14 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 	manualURL := ""
 	var headers map[string]string
 	if globalClient != nil {
+		// SetURL / SetHeaders write these under the per-client mutex after
+		// dropping clientMu, so reading without c.mu here would race even
+		// though we hold clientMu exclusively. copyHeaders also detaches the
+		// map from the old client so a late mutation can't bleed through.
+		globalClient.mu.RLock()
 		manualURL = globalClient.manualURL
-		headers = globalClient.headers
+		headers = copyHeaders(globalClient.headers)
+		globalClient.mu.RUnlock()
 	}
 
 	globalClient = &Client{
