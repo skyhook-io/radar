@@ -98,6 +98,17 @@ func registerTools(server *mcp.Server) {
 	}, logToolCall("list_namespaces", handleListNamespaces))
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name:        "list_contexts",
+		Description: "List all available kubeconfig contexts. Shows which context is currently active. Use before switch_context to discover valid context names.",
+		Annotations: readOnly,
+	}, logToolCall("list_contexts", handleListContexts))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name:        "switch_context",
+		Description: "Switch the active Kubernetes context. All subsequent tool calls will target the new cluster. Use list_contexts first to see available context names.",
+	}, logToolCall("switch_context", handleSwitchContext))
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_changes",
 		Description: "Get recent resource changes (creates, updates, deletes) from the cluster timeline. " +
 			"Use to investigate what changed before an incident. " +
