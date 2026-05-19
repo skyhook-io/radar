@@ -150,9 +150,22 @@ func New(cfg Config) *Server {
 			if s.authConfig.OIDCRedirectURL == "" {
 				log.Fatalf("[auth] --auth-oidc-redirect-url is required when auth-mode=oidc")
 			}
-			oidcHandler, err := auth.NewOIDCHandler(context.Background(), s.authConfig)
-			if err != nil {
-				log.Fatalf("[auth] OIDC initialization failed (issuer=%s): %v — cannot start with auth-mode=oidc", s.authConfig.OIDCIssuer, err)
+			var (
+				oidcHandler *auth.OIDCHandler
+				oidcErr     error
+			)
+			for attempt := 1; attempt <= 5; attempt++ {
+				oidcHandler, oidcErr = auth.NewOIDCHandler(context.Background(), s.authConfig)
+				if oidcErr == nil {
+					break
+				}
+				if attempt < 5 {
+					log.Printf("[auth] OIDC discovery failed (attempt %d/5, issuer=%s): %v — retrying in 5s", attempt, s.authConfig.OIDCIssuer, oidcErr)
+					time.Sleep(5 * time.Second)
+				}
+			}
+			if oidcErr != nil {
+				log.Fatalf("[auth] OIDC initialization failed after 5 attempts (issuer=%s): %v — cannot start with auth-mode=oidc", s.authConfig.OIDCIssuer, oidcErr)
 			}
 
 			// Wire up backchannel logout revocation store
