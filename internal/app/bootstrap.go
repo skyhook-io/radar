@@ -43,6 +43,7 @@ type AppConfig struct {
 	TimelineDBPath       string
 	TimelineRetention    time.Duration
 	PrometheusURL        string
+	PrometheusHeaders    map[string]string
 	Version              string
 	MCPEnabled           bool
 	AuthConfig           auth.Config
@@ -131,6 +132,10 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		traffic.SetMetricsURL(cfg.PrometheusURL)
 		prometheuspkg.SetManualURL(cfg.PrometheusURL)
 	}
+	if len(cfg.PrometheusHeaders) > 0 {
+		traffic.SetMetricsHeaders(cfg.PrometheusHeaders)
+		prometheuspkg.SetHeaders(cfg.PrometheusHeaders)
+	}
 
 	k8s.RegisterTrafficFuncs(traffic.Reset, func() error {
 		return traffic.ReinitializeWithConfig(k8s.GetClient(), k8s.GetConfig(), k8s.GetContextName())
@@ -141,6 +146,9 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 		if cfg.PrometheusURL != "" {
 			prometheuspkg.SetManualURL(cfg.PrometheusURL)
 		}
+		if len(cfg.PrometheusHeaders) > 0 {
+			prometheuspkg.SetHeaders(cfg.PrometheusHeaders)
+		}
 		return nil
 	})
 }
@@ -148,16 +156,17 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 // CreateServer creates the HTTP server with the given configuration.
 func CreateServer(cfg AppConfig) *server.Server {
 	effectiveCfg := &config.Config{
-		Kubeconfig:      cfg.Kubeconfig,
-		KubeconfigDirs:  cfg.KubeconfigDirs,
-		Namespace:       cfg.Namespace,
-		Port:            cfg.Port,
-		NoBrowser:       cfg.NoBrowser,
-		TimelineStorage: cfg.TimelineStorage,
-		TimelineDBPath:  cfg.TimelineDBPath,
-		HistoryLimit:    cfg.HistoryLimit,
-		PrometheusURL:   cfg.PrometheusURL,
-		MCP:             &cfg.MCPEnabled,
+		Kubeconfig:        cfg.Kubeconfig,
+		KubeconfigDirs:    cfg.KubeconfigDirs,
+		Namespace:         cfg.Namespace,
+		Port:              cfg.Port,
+		NoBrowser:         cfg.NoBrowser,
+		TimelineStorage:   cfg.TimelineStorage,
+		TimelineDBPath:    cfg.TimelineDBPath,
+		HistoryLimit:      cfg.HistoryLimit,
+		PrometheusURL:     cfg.PrometheusURL,
+		PrometheusHeaders: cfg.PrometheusHeaders,
+		MCP:               &cfg.MCPEnabled,
 	}
 
 	serverCfg := server.Config{
@@ -174,7 +183,8 @@ func CreateServer(cfg AppConfig) *server.Server {
 			HistoryLimit:     cfg.HistoryLimit,
 			DebugEvents:      cfg.DebugEvents,
 			MCPEnabled:       cfg.MCPEnabled,
-			HasPrometheusURL: cfg.PrometheusURL != "",
+			HasPrometheusURL:     cfg.PrometheusURL != "",
+			HasPrometheusHeaders: len(cfg.PrometheusHeaders) > 0,
 		},
 		AuthConfig: cfg.AuthConfig,
 	}

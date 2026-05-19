@@ -52,6 +52,9 @@ spec:
             {{- if .Values.traffic.prometheusUrl }}
             - --prometheus-url={{ .Values.traffic.prometheusUrl }}
             {{- end }}
+            {{- range $k, $v := .Values.traffic.prometheusHeaders }}
+            - --prometheus-header={{ $k }}={{ $v }}
+            {{- end }}
             {{- if not .Values.mcp.enabled }}
             - --no-mcp
             {{- end }}

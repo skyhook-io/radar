@@ -23,7 +23,11 @@ type Config struct {
 	TimelineRetention string   `json:"timelineRetention,omitempty"` // Go duration (e.g. "168h" for 7d); "0" disables
 	HistoryLimit      int      `json:"historyLimit,omitempty"`
 	PrometheusURL     string   `json:"prometheusUrl,omitempty"`
-	MCP               *bool    `json:"mcp,omitempty"` // nil = default (true), false = disabled
+	// PrometheusHeaders are sent with every request to the Prometheus API.
+	// Required for auth-protected backends (Bearer tokens, X-Scope-OrgID, etc.).
+	// Stored in plain text in ~/.radar/config.json — protect the file accordingly.
+	PrometheusHeaders map[string]string `json:"prometheusHeaders,omitempty"`
+	MCP               *bool             `json:"mcp,omitempty"` // nil = default (true), false = disabled
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent writes

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"maps"
 	"strings"
 	"sync"
 
@@ -34,11 +35,26 @@ var (
 	// configuredMetricsURL is the user-provided --prometheus-url flag value.
 	// Stored at package level so it persists across context-switch resets.
 	configuredMetricsURL string
+	// configuredMetricsHeaders are sent with every Prometheus query — required
+	// for auth-protected backends. Also persists across context switches.
+	configuredMetricsHeaders map[string]string
 )
 
 // SetMetricsURL sets a manual Prometheus/VictoriaMetrics URL, bypassing auto-discovery.
 func SetMetricsURL(url string) {
 	configuredMetricsURL = url
+}
+
+// SetMetricsHeaders sets HTTP headers attached to every Prometheus query.
+// Used for auth-protected backends (Bearer tokens, X-Scope-OrgID, etc.).
+func SetMetricsHeaders(h map[string]string) {
+	if len(h) == 0 {
+		configuredMetricsHeaders = nil
+		return
+	}
+	out := make(map[string]string, len(h))
+	maps.Copy(out, h)
+	configuredMetricsHeaders = out
 }
 
 // Initialize sets up the traffic manager with the given K8s client
@@ -61,6 +77,7 @@ func InitializeWithConfig(client kubernetes.Interface, config *rest.Config, cont
 		if configuredMetricsURL != "" {
 			caretta.metricsURL = configuredMetricsURL
 		}
+		caretta.headers = configuredMetricsHeaders
 		manager.sources["caretta"] = caretta
 		manager.sources["istio"] = NewIstioSource(client)
 

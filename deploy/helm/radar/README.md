@@ -92,6 +92,7 @@ touches its contents.
 | `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
 | `persistence.enabled` | Enable PVC for SQLite | `false` |
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) | `""` |
+| `traffic.prometheusHeaders` | HTTP headers sent with every Prometheus request (auth-protected backends) | `{}` |
 | `resources.limits.memory` | Memory limit | `512Mi` |
 | `resources.requests.memory` | Memory request | `128Mi` |
 

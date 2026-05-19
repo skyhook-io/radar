@@ -321,6 +321,16 @@ traffic:
   #   http://vmsingle.victoria-metrics:8428
   #   http://vmselect.victoria-metrics:8481/select/0/prometheus
   prometheusUrl: ""
+  # HTTP headers sent with every Prometheus request. Required for
+  # auth-protected backends (Bearer tokens, X-Scope-OrgID multi-tenancy, etc.).
+  # Values are rendered into the pod spec — for secrets, mount them via env
+  # and reference the env var in your own values file, or template these
+  # values from an external secret store (sealed-secrets, external-secrets).
+  # Example:
+  #   prometheusHeaders:
+  #     Authorization: "Bearer <token>"
+  #     X-Scope-OrgID: "my-org"
+  prometheusHeaders: {}
 
 # Persistence for SQLite timeline storage
 # Required when timeline.storage is "sqlite" (readOnlyRootFilesystem prevents local writes)

@@ -247,7 +247,11 @@
       "type": "object",
       "additionalProperties": true,
       "properties": {
-        "prometheusUrl": { "type": "string" }
+        "prometheusUrl": { "type": "string" },
+        "prometheusHeaders": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
       }
     },
     "persistence": {

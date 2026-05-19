@@ -37,7 +37,11 @@ func TestSaveAndLoad(t *testing.T) {
 		TimelineStorage: "sqlite",
 		HistoryLimit:    5000,
 		PrometheusURL:   "http://prom:9090",
-		MCP:             &mcp,
+		PrometheusHeaders: map[string]string{
+			"Authorization": "Bearer abc",
+			"X-Scope-OrgID": "tenant-1",
+		},
+		MCP: &mcp,
 	}
 
 	if err := Save(want); err != nil {
@@ -74,6 +78,11 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 	if got.MCP == nil || *got.MCP != true {
 		t.Errorf("MCP = %v, want true", got.MCP)
+	}
+	if len(got.PrometheusHeaders) != 2 ||
+		got.PrometheusHeaders["Authorization"] != "Bearer abc" ||
+		got.PrometheusHeaders["X-Scope-OrgID"] != "tenant-1" {
+		t.Errorf("PrometheusHeaders = %v, want %v", got.PrometheusHeaders, want.PrometheusHeaders)
 	}
 }
 

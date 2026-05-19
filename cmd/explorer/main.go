@@ -6,9 +6,11 @@ import (
 	"flag"
 	"fmt"
 	"log"
+	"maps"
 	"net"
 	"os"
 	"os/signal"
+	"sort"
 	"strings"
 	"syscall"
 	"time"
@@ -61,6 +63,11 @@ func main() {
 	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables cleanup (unbounded growth).")
 	// Traffic/metrics options
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
+	// --prometheus-header Key=Value, repeatable. Defaults populated from
+	// config file; any --prometheus-header flag replaces the file value rather
+	// than merging — matches kubectl semantics (file is the default, CLI wins).
+	promHeaders := newHeaderFlag(fileCfg.PrometheusHeaders)
+	flag.Var(promHeaders, "prometheus-header", "HTTP header to send with Prometheus requests, e.g. 'Authorization=Bearer <token>' (repeatable). Required for auth-protected backends.")
 	// MCP server
 	noMCP := flag.Bool("no-mcp", !fileCfg.MCPEnabledOr(true), "Disable MCP (Model Context Protocol) server for AI tools")
 	// Auth flags
@@ -161,6 +168,7 @@ func main() {
 		TimelineDBPath:       *timelineDBPath,
 		TimelineRetention:    *timelineRetention,
 		PrometheusURL:        *prometheusURL,
+		PrometheusHeaders:    promHeaders.value(),
 		MCPEnabled:           !*noMCP,
 		Version:              version,
 		AuthConfig: auth.Config{
@@ -305,4 +313,64 @@ func parseCSV(s string) []string {
 		}
 	}
 	return out
+}
+
+// headerFlag is a flag.Value that accumulates repeated --prometheus-header
+// Key=Value pairs into a map. The first Set call after construction wipes any
+// defaults populated from the config file (kubectl-style: file = default, CLI
+// wins outright instead of merging).
+type headerFlag struct {
+	m         map[string]string
+	overrides bool
+}
+
+func newHeaderFlag(defaults map[string]string) *headerFlag {
+	out := make(map[string]string, len(defaults))
+	maps.Copy(out, defaults)
+	return &headerFlag{m: out}
+}
+
+// value returns a defensive copy of the accumulated headers (nil if empty).
+func (h *headerFlag) value() map[string]string {
+	if len(h.m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(h.m))
+	maps.Copy(out, h.m)
+	return out
+}
+
+func (h *headerFlag) String() string {
+	if len(h.m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(h.m))
+	for k := range h.m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+h.m[k])
+	}
+	return strings.Join(parts, ",")
+}
+
+func (h *headerFlag) Set(raw string) error {
+	idx := strings.IndexByte(raw, '=')
+	if idx <= 0 {
+		return fmt.Errorf("expected Key=Value, got %q", raw)
+	}
+	key := strings.TrimSpace(raw[:idx])
+	val := raw[idx+1:]
+	if key == "" {
+		return fmt.Errorf("empty header key in %q", raw)
+	}
+	if !h.overrides {
+		// First CLI flag wipes file defaults — all-or-nothing replacement.
+		h.m = make(map[string]string)
+		h.overrides = true
+	}
+	h.m[key] = val
+	return nil
 }

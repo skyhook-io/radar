@@ -27,7 +27,8 @@ type DiagConfig struct {
 	HistoryLimit     int    `json:"historyLimit"`
 	DebugEvents      bool   `json:"debugEvents"`
 	MCPEnabled       bool   `json:"mcpEnabled"`
-	HasPrometheusURL bool   `json:"hasPrometheusURL"`
+	HasPrometheusURL     bool `json:"hasPrometheusURL"`
+	HasPrometheusHeaders bool `json:"hasPrometheusHeaders"`
 }
 
 // DiagnosticsSnapshot is the top-level diagnostics response.

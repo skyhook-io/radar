@@ -2998,6 +2998,7 @@ export interface DiagnosticsSnapshot {
     debugEvents: boolean
     mcpEnabled: boolean
     hasPrometheusURL: boolean
+    hasPrometheusHeaders: boolean
   }
   recentErrors?: DiagErrorEntry[]
   totalErrorsRecorded?: number

@@ -69,10 +69,22 @@ type CarettaSource struct {
 	metricsNamespace string // namespace where metrics service was found
 	metricsService   string // service name for port-forward
 	metricsPort      int    // port for port-forward
-	metricsURL       string // manual override URL from --prometheus-url flag
+	metricsURL       string            // manual override URL from --prometheus-url flag
+	headers          map[string]string // sent with every Prometheus query (e.g. Bearer token)
 	isConnected      bool
 	currentContext   string // current K8s context name
 	mu               sync.RWMutex
+}
+
+// applyHeaders attaches the configured custom headers to a Prometheus
+// request. Read under the source's read lock so a concurrent context-switch
+// reinit doesn't race with in-flight queries.
+func (c *CarettaSource) applyHeaders(req *http.Request) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	for k, v := range c.headers {
+		req.Header.Set(k, v)
+	}
 }
 
 // NewCarettaSource creates a new Caretta traffic source
@@ -333,6 +345,7 @@ func (c *CarettaSource) queryPrometheusForFlows(ctx context.Context, promAddr st
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
+	c.applyHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -856,6 +869,7 @@ func (c *CarettaSource) tryMetricsEndpointLocked(ctx context.Context, addr strin
 	if err != nil {
 		return false
 	}
+	c.applyHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -897,6 +911,7 @@ func (c *CarettaSource) queryPrometheusRaw(ctx context.Context, query string) (*
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
+	c.applyHeaders(req)
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
