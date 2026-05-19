@@ -24,6 +24,10 @@ type Config struct {
 	// Session revocation (optional, used by backchannel logout)
 	Revoker SessionRevoker
 
+	// APIKeys enables per-user API key authentication when non-nil.
+	// Keys are matched after session cookies but before proxy headers.
+	APIKeys *APIKeyStore
+
 	// OIDC mode
 	OIDCIssuer       string
 	OIDCClientID     string

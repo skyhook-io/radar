@@ -74,6 +74,19 @@ func Authenticate(cfg Config) func(http.Handler) http.Handler {
 				return
 			}
 
+			// Try API key — stateless per-request, no session cookie set.
+			// Works in all auth modes; inherits stored username+groups from key creation time.
+			if cfg.APIKeys != nil {
+				if raw := extractAPIKey(r); raw != "" {
+					if entry := cfg.APIKeys.Lookup(raw); entry != nil {
+						user := &User{Username: entry.Username, Groups: entry.Groups}
+						ctx := ContextWithUser(r.Context(), user)
+						next.ServeHTTP(w, r.WithContext(ctx))
+						return
+					}
+				}
+			}
+
 			// In proxy mode, extract from headers and create session
 			if cfg.Mode == "proxy" {
 				username := r.Header.Get(cfg.UserHeader)
@@ -153,6 +166,15 @@ func isExemptPath(path string) bool {
 // require it. These endpoints work with or without a user in context.
 func isSoftAuthPath(path string) bool {
 	return path == "/api/auth/me"
+}
+
+// extractAPIKey extracts a raw API key from the request.
+// Tries Authorization: Bearer first, then X-Api-Key header.
+func extractAPIKey(r *http.Request) string {
+	if v := r.Header.Get("Authorization"); strings.HasPrefix(v, "Bearer ") {
+		return strings.TrimPrefix(v, "Bearer ")
+	}
+	return r.Header.Get("X-Api-Key")
 }
 
 // AuditLog logs a write operation with user identity

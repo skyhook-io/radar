@@ -195,7 +195,7 @@ func (s *Server) setupRoutes() {
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"http://localhost:*", "http://127.0.0.1:*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Content-Type"},
+		AllowedHeaders:   []string{"Accept", "Content-Type", "Authorization", "X-Api-Key"},
 		AllowCredentials: true,
 	}))
 
@@ -258,6 +258,9 @@ func (s *Server) setupRoutes() {
 			r.Get("/health", s.handleHealth)
 			r.Get("/diagnostics", s.handleDiagnostics)
 			r.Get("/auth/me", s.handleAuthMe)
+			r.Get("/auth/api-keys", auth.HandleListAPIKeys(s.authConfig))
+			r.Post("/auth/api-keys", auth.HandleCreateAPIKey(s.authConfig))
+			r.Delete("/auth/api-keys/{id}", auth.HandleDeleteAPIKey(s.authConfig))
 			r.Get("/version-check", s.handleVersionCheck)
 			r.Get("/dashboard", s.handleDashboard)
 			r.Get("/dashboard/crds", s.handleDashboardCRDs)

@@ -14,6 +14,8 @@ type SessionRevoker = pkgauth.SessionRevoker
 type UserPermissions = pkgauth.UserPermissions
 type PermissionCache = pkgauth.PermissionCache
 type CloudRole = pkgauth.CloudRole
+type APIKeyStore = pkgauth.APIKeyStore
+type APIKey = pkgauth.APIKey
 
 // Re-export constants from pkg/auth
 const DefaultCookieName = pkgauth.DefaultCookieName
@@ -44,4 +46,5 @@ var (
 	ClearSessionCookie       = pkgauth.ClearSessionCookie
 	CloudRoleFromGroups      = pkgauth.CloudRoleFromGroups
 	CloudRoleFromContext     = pkgauth.CloudRoleFromContext
+	NewAPIKeyStore           = pkgauth.NewAPIKeyStore
 )
