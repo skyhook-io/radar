@@ -67,7 +67,7 @@ func scopeOf(r *PermissionCheckResult, k string) k8score.ResourceScope {
 func TestProbeResourceAccess_ClusterWideUser(t *testing.T) {
 	dyn := fakeDyn(t, func(_ schema.GroupVersionResource, _ string) bool { return true })
 
-	result, hadErrors := probeResourceAccess(context.Background(), dyn, "", false)
+	result, hadErrors := probeResourceAccess(context.Background(), dyn, nil, false)
 
 	if hadErrors {
 		t.Fatalf("hadErrors should be false on a clean run")
@@ -99,7 +99,7 @@ func TestProbeResourceAccess_NamespaceOnlyUser(t *testing.T) {
 		return namespace == ns
 	})
 
-	result, _ := probeResourceAccess(context.Background(), dyn, ns, false)
+	result, _ := probeResourceAccess(context.Background(), dyn, []string{ns}, false)
 
 	if !result.NamespaceScoped {
 		t.Fatalf("NamespaceScoped should be true when namespaced fallback succeeded")
@@ -126,6 +126,27 @@ func TestProbeResourceAccess_NamespaceOnlyUser(t *testing.T) {
 	}
 }
 
+// A user with secret-list permission in a namespace that isn't the
+// kubeconfig context namespace should still get the Secret informer wired
+// — the probe must walk every candidate, not just the first one.
+func TestProbeResourceAccess_FallbackCandidatesBeyondFirst(t *testing.T) {
+	const accessibleNs = "team-a"
+	dyn := fakeDyn(t, func(gvr schema.GroupVersionResource, namespace string) bool {
+		// User has secret-list in team-a only — nothing cluster-wide, nothing
+		// in `default` (which would be the kubeconfig fallback).
+		return gvr.Group == "" && gvr.Resource == "secrets" && namespace == accessibleNs
+	})
+
+	// `default` is first in the candidate list (typical kubeconfig context),
+	// team-a follows. Pre-fix the probe stopped at `default` and disabled
+	// Secrets — now it walks to team-a.
+	result, _ := probeResourceAccess(context.Background(), dyn, []string{"default", accessibleNs}, false)
+
+	if got := scopeOf(result, k8score.Secrets); got != (k8score.ResourceScope{Enabled: true, Namespace: accessibleNs}) {
+		t.Errorf("Secrets scope = %+v, want enabled+%q (fallback must walk past first candidate)", got, accessibleNs)
+	}
+}
+
 // TestProbeResourceAccess_MixedScope verifies that each kind is probed
 // independently: a kind with cluster-wide read access (e.g. Events) must
 // not suppress the namespace-scoped retry for other kinds in the same run.
@@ -141,7 +162,7 @@ func TestProbeResourceAccess_MixedScope(t *testing.T) {
 		return namespace == ns
 	})
 
-	result, _ := probeResourceAccess(context.Background(), dyn, ns, false)
+	result, _ := probeResourceAccess(context.Background(), dyn, []string{ns}, false)
 
 	if !result.NamespaceScoped {
 		t.Fatalf("NamespaceScoped should be true (some kinds ended up ns-scoped)")
@@ -166,7 +187,7 @@ func TestProbeResourceAccess_AllDenied(t *testing.T) {
 	dyn := fakeDyn(t, func(_ schema.GroupVersionResource, _ string) bool { return false })
 
 	// No fallback namespace — nothing can succeed.
-	result, _ := probeResourceAccess(context.Background(), dyn, "", false)
+	result, _ := probeResourceAccess(context.Background(), dyn, nil, false)
 
 	if result.NamespaceScoped {
 		t.Errorf("NamespaceScoped should be false when nothing succeeded")
@@ -198,7 +219,7 @@ func TestProbeResourceAccess_TransientErrorTreatedAsAllow(t *testing.T) {
 		return true, nil, transient
 	})
 
-	result, hadErrors := probeResourceAccess(context.Background(), dyn, "", false)
+	result, hadErrors := probeResourceAccess(context.Background(), dyn, nil, false)
 
 	if !hadErrors {
 		t.Errorf("hadErrors should be true when a probe hit a transient error")
@@ -224,7 +245,7 @@ func TestProbeResourceAccess_ForceNamespaceClusterWideUser(t *testing.T) {
 	// pin namespaced kinds to ns and keep cluster-only kinds cluster-wide.
 	dyn := fakeDyn(t, func(_ schema.GroupVersionResource, _ string) bool { return true })
 
-	result, _ := probeResourceAccess(context.Background(), dyn, ns, true)
+	result, _ := probeResourceAccess(context.Background(), dyn, []string{ns}, true)
 
 	if !result.NamespaceScoped {
 		t.Fatalf("NamespaceScoped should be true in forced-namespace mode")
@@ -259,7 +280,7 @@ func TestProbeResourceAccess_ForceNamespaceClusterOnlyMixed(t *testing.T) {
 		return true
 	})
 
-	result, _ := probeResourceAccess(context.Background(), dyn, ns, true)
+	result, _ := probeResourceAccess(context.Background(), dyn, []string{ns}, true)
 
 	if scopeOf(result, k8score.Nodes).Enabled {
 		t.Errorf("Nodes should be disabled when cluster-wide Node list is forbidden")
@@ -279,7 +300,7 @@ func TestProbeResourceAccess_ForceNamespaceAllDeniedKeepsScoped(t *testing.T) {
 	const ns = "dev-ns-1"
 	dyn := fakeDyn(t, func(_ schema.GroupVersionResource, _ string) bool { return false })
 
-	result, _ := probeResourceAccess(context.Background(), dyn, ns, true)
+	result, _ := probeResourceAccess(context.Background(), dyn, []string{ns}, true)
 
 	if !result.NamespaceScoped {
 		t.Errorf("NamespaceScoped should remain true under forceNamespace even when every probe failed")
@@ -317,7 +338,7 @@ func TestProbeResourceAccess_ClusterOnlyKindsNoNsFallback(t *testing.T) {
 		return namespace == ns
 	})
 
-	_, _ = probeResourceAccess(context.Background(), dyn, ns, false)
+	_, _ = probeResourceAccess(context.Background(), dyn, []string{ns}, false)
 
 	if len(nsProbedClusterOnly) > 0 {
 		t.Errorf("cluster-scoped kinds were probed namespace-scoped (would 404 in real cluster): %v", nsProbedClusterOnly)

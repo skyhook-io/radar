@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sort"
 	"strings"
@@ -779,14 +780,16 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 		return &PermissionCheckResult{Perms: &ResourcePermissions{}, Scopes: map[string]k8score.ResourceScope{}}
 	}
 
-	// scopeNs comes from the kubeconfig context namespace or --namespace
-	// flag — a fallback used when cluster-wide access is denied. The cache
-	// boots cluster-wide and per-user view filtering happens at the HTTP
-	// layer (see internal/server/namespace_scope.go), so the probe never
-	// pins informers to a single namespace on behalf of one user.
-	scopeNs := GetEffectiveNamespace()
+	// Candidate namespaces (priority order) for the fallback probe when
+	// cluster-wide is denied. The kubeconfig context namespace / --namespace
+	// flag gets first crack; if that fails, every other namespace the user
+	// can reach (via GetAccessibleNamespaces) is tried. First grant wins
+	// per kind — without this, a user with namespace-scoped list permission
+	// in a namespace that isn't the kubeconfig default would have those
+	// kinds disabled entirely.
+	scopeNamespaces := buildScopeCandidates(ctx)
 
-	result, hadErrors := probeResourceAccess(ctx, GetDynamicClient(), scopeNs, false)
+	result, hadErrors := probeResourceAccess(ctx, GetDynamicClient(), scopeNamespaces, false)
 
 	resourcePermsMu.Lock()
 	cachedPermResult = result
@@ -801,24 +804,75 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 	return result
 }
 
+// maxScopeCandidates bounds the namespace-fallback probe fanout. For a user
+// who can list namespaces cluster-wide but can't list one of the probed
+// kinds cluster-wide (e.g. a tenant operator that grants namespace read but
+// not secret read), GetAccessibleNamespaces could return hundreds of
+// namespaces. We probe in priority order (kubeconfig context first) and stop
+// after this many — the typical namespace-restricted user has 1–5
+// namespaces, so the cap matters only for pathological deployments.
+const maxScopeCandidates = 20
+
+// buildScopeCandidates returns the priority-ordered namespace candidates for
+// the cluster-wide-denied fallback probe. The kubeconfig context namespace
+// (or --namespace flag) wins ties; remaining slots are filled from
+// GetAccessibleNamespaces. Empty when no fallback is configured and the user
+// can't enumerate namespaces — caller treats it as "no fallback, fail closed".
+func buildScopeCandidates(ctx context.Context) []string {
+	seen := map[string]bool{}
+	out := make([]string, 0, maxScopeCandidates)
+	add := func(ns string) bool {
+		if ns == "" || seen[ns] {
+			return false
+		}
+		seen[ns] = true
+		out = append(out, ns)
+		return len(out) >= maxScopeCandidates
+	}
+	if add(GetEffectiveNamespace()) {
+		return out
+	}
+	// GetAccessibleNamespaces is a single cluster-wide list-namespaces call
+	// with a kubeconfig-fallback when denied; safe to invoke during probe
+	// startup. Authoritative=false means we already added everything it
+	// would return via the GetEffectiveNamespace line above.
+	accessible, authoritative := GetAccessibleNamespaces(ctx)
+	if !authoritative {
+		return out
+	}
+	for _, ns := range accessible {
+		if add(ns) {
+			return out
+		}
+	}
+	return out
+}
+
 // probeResourceAccess is the testable inner of CheckResourcePermissions.
-// It does the actual probing with the supplied dynamic client and namespace,
+// It does the actual probing with the supplied dynamic client and namespaces,
 // with no caching and no global state. The returned bool is true when at
 // least one probe hit a non-auth (transient) error — caller uses this to
 // shorten the cache TTL so the next attempt re-probes.
 //
-// scopeNs and forceNamespace together describe the namespace's role:
-//   - forceNamespace=false: scopeNs is a kubeconfig fallback only. Probe
-//     cluster-wide first; on 403 retry namespace-scoped against scopeNs.
-//     This is the only path used by production code — the cache always boots
-//     cluster-wide and per-user view filtering happens at the HTTP layer
-//     (see internal/server/namespace_scope.go).
-//   - forceNamespace=true: probe namespaced kinds ONLY in scopeNs. Reserved
-//     for tests / a hypothetical future per-cache pin; not reachable from
-//     CheckResourcePermissions today. Cluster-only kinds (nodes, namespaces,
-//     PV, storageclasses, ingressclasses) are still probed cluster-wide
-//     since they have no namespace dimension to pin to.
-func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNs string, forceNamespace bool) (*PermissionCheckResult, bool) {
+// scopeNamespaces is a priority-ordered list of candidate fallback namespaces.
+// The first entry that grants list access for a given kind becomes that kind's
+// scope. Typical contents (set by CheckResourcePermissions): the kubeconfig
+// context namespace first, then namespaces from GetAccessibleNamespaces. Pass
+// nil/empty to disable namespace fallback. Without walking past the first
+// candidate, a user whose namespace-scoped list permission lives outside the
+// kubeconfig default would have those kinds disabled entirely.
+//
+// forceNamespace describes the role of scopeNamespaces:
+//   - false: scopeNamespaces is a kubeconfig fallback. Probe cluster-wide
+//     first; on 403 try each candidate until one succeeds. The cache always
+//     boots cluster-wide preferentially and per-user view filtering happens
+//     at the HTTP layer (see internal/server/namespace_scope.go).
+//   - true: probe namespaced kinds ONLY in the first scopeNamespaces entry.
+//     Reserved for tests / a hypothetical future per-cache pin; not reachable
+//     from CheckResourcePermissions today. Cluster-only kinds (nodes,
+//     namespaces, PV, storageclasses, ingressclasses) are still probed
+//     cluster-wide since they have no namespace dimension to pin to.
+func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamespaces []string, forceNamespace bool) (*PermissionCheckResult, bool) {
 	perms := &ResourcePermissions{}
 	probes := resourceProbeTargets(perms)
 
@@ -827,7 +881,14 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNs str
 	}
 	outcomes := make([]probeOutcome, len(probes))
 
-	logTiming("   [perms] Probing list access for %d typed resources (scopeNs=%q forced=%v)", len(probes), scopeNs, forceNamespace)
+	// Forced-namespace mode uses only the first candidate — caller's pinning
+	// intent is a single namespace.
+	var forcedNs string
+	if forceNamespace && len(scopeNamespaces) > 0 {
+		forcedNs = scopeNamespaces[0]
+	}
+
+	logTiming("   [perms] Probing list access for %d typed resources (scopeNamespaces=%q forced=%v)", len(probes), scopeNamespaces, forceNamespace)
 	probeStart := time.Now()
 	var wg sync.WaitGroup
 	var hadErrors atomic.Bool
@@ -862,15 +923,15 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNs str
 					}
 					return
 				}
-				if scopeNs == "" {
+				if forcedNs == "" {
 					return
 				}
-				nsAllowed, _, nsTransient := probeKindAccess(ctx, dyn, p, scopeNs)
+				nsAllowed, _, nsTransient := probeKindAccess(ctx, dyn, p, forcedNs)
 				if nsTransient != nil {
 					hadErrors.Store(true)
 				}
 				if nsAllowed {
-					outcomes[i] = probeOutcome{scope: k8score.ResourceScope{Enabled: true, Namespace: scopeNs}}
+					outcomes[i] = probeOutcome{scope: k8score.ResourceScope{Enabled: true, Namespace: forcedNs}}
 				}
 				return
 			}
@@ -887,15 +948,22 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNs str
 			// Dynamic CRDs that were marked not-installed (all versions
 			// returned NotFound) also skip the fallback — the namespace
 			// probe would hit the same NotFound for every version.
-			if !forbidden || p.clusterOnly || scopeNs == "" {
+			if !forbidden || p.clusterOnly || len(scopeNamespaces) == 0 {
 				return
 			}
-			nsAllowed, _, nsTransient := probeKindAccess(ctx, dyn, p, scopeNs)
-			if nsTransient != nil {
-				hadErrors.Store(true)
-			}
-			if nsAllowed {
-				outcomes[i] = probeOutcome{scope: k8score.ResourceScope{Enabled: true, Namespace: scopeNs}}
+			// Try candidate namespaces in priority order. First grant wins.
+			// Multi-ns users (secret-list in NS A and NS B but neither
+			// cluster-wide) get partial coverage of one ns per kind — proper
+			// multi-ns scope per kind would need the cache to support it.
+			for _, ns := range scopeNamespaces {
+				nsAllowed, _, nsTransient := probeKindAccess(ctx, dyn, p, ns)
+				if nsTransient != nil {
+					hadErrors.Store(true)
+				}
+				if nsAllowed {
+					outcomes[i] = probeOutcome{scope: k8score.ResourceScope{Enabled: true, Namespace: ns}}
+					return
+				}
 			}
 		}(i, p)
 	}
@@ -929,24 +997,32 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNs str
 		}
 	}
 
-	// scopeNs comes from operator-controlled config (kubeconfig context
-	// namespace or --namespace flag), but strip CR/LF defensively so log
-	// scrapers can't be tricked by a malicious kubeconfig. CodeQL's taint
-	// analysis doesn't model %q escaping, so be explicit.
-	logSafeNs := SanitizeForLog(scopeNs)
+	// Build a per-kind ns label for the log so operators can see which
+	// candidate granted each kind. Candidates come from operator-controlled
+	// config (kubeconfig context namespace, --namespace flag, accessible-
+	// namespaces list); strip CR/LF defensively so a malicious kubeconfig
+	// can't inject lines into log scrapers. CodeQL's taint analysis doesn't
+	// model %q escaping, so be explicit.
+	scopedDetail := make([]string, 0, len(nsScopedKeys))
+	for _, k := range nsScopedKeys {
+		scopedDetail = append(scopedDetail, fmt.Sprintf("%s=%s", k, SanitizeForLog(scopes[k].Namespace)))
+	}
+	sort.Strings(scopedDetail)
+	candidatesLog := make([]string, 0, len(scopeNamespaces))
+	for _, ns := range scopeNamespaces {
+		candidatesLog = append(candidatesLog, SanitizeForLog(ns))
+	}
 	if len(restricted) > 0 {
 		sort.Strings(restricted)
 		if namespaceScoped {
-			sort.Strings(nsScopedKeys)
-			log.Printf("RBAC: mixed scope (namespace=%q; ns-scoped: %s); denied: %s",
-				logSafeNs, strings.Join(nsScopedKeys, ", "), strings.Join(restricted, ", "))
+			log.Printf("RBAC: mixed scope (candidates=%q; ns-scoped: %s); denied: %s",
+				candidatesLog, strings.Join(scopedDetail, ", "), strings.Join(restricted, ", "))
 		} else {
 			log.Printf("RBAC: restricted resources (no list permission): %s", strings.Join(restricted, ", "))
 		}
 	} else if namespaceScoped {
-		sort.Strings(nsScopedKeys)
-		log.Printf("RBAC: mixed scope (namespace=%q; ns-scoped: %s); all kinds accessible",
-			logSafeNs, strings.Join(nsScopedKeys, ", "))
+		log.Printf("RBAC: mixed scope (candidates=%q; ns-scoped: %s); all kinds accessible",
+			candidatesLog, strings.Join(scopedDetail, ", "))
 	}
 
 	// In forced-namespace mode the user's intent is to be ns-scoped — even
@@ -954,14 +1030,22 @@ func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNs str
 	// no access to). Force NamespaceScoped=true so the dynamic cache scopes
 	// CRD informers to the same namespace and doesn't silently fall through
 	// to cluster-wide watches.
-	if forceNamespace && scopeNs != "" {
+	if forceNamespace && forcedNs != "" {
 		namespaceScoped = true
 	}
 
+	// Namespace reports the primary kubeconfig fallback (first candidate).
+	// Other callers (dynamic_cache.go, diagnostics.go) read this as the
+	// "this is the namespace we're nominally scoped to" anchor — keep it
+	// single-valued for backward compat; per-kind scope lives in Scopes.
+	var primaryNs string
+	if len(scopeNamespaces) > 0 {
+		primaryNs = scopeNamespaces[0]
+	}
 	return &PermissionCheckResult{
 		Perms:           perms,
 		NamespaceScoped: namespaceScoped,
-		Namespace:       scopeNs,
+		Namespace:       primaryNs,
 		Scopes:          scopes,
 	}, hadErrors.Load()
 }
