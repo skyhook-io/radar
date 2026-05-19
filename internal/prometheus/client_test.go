@@ -87,9 +87,6 @@ func TestProbe(t *testing.T) {
 	}
 }
 
-// TestHeadersOnQuery verifies that headers configured via SetHeaders are
-// attached to outgoing Prometheus requests — the load-bearing behavior for
-// auth-protected backends (Bearer tokens, X-Scope-OrgID multi-tenancy).
 func TestHeadersOnQuery(t *testing.T) {
 	var gotAuth, gotOrg atomic.Value
 	gotAuth.Store("")
@@ -134,8 +131,6 @@ func TestHeadersOnQuery(t *testing.T) {
 	}
 }
 
-// TestHeadersNoneWhenUnset verifies the no-headers path doesn't accidentally
-// attach an empty Authorization header (which can trip some reverse proxies).
 func TestHeadersNoneWhenUnset(t *testing.T) {
 	var sawAuth atomic.Bool
 

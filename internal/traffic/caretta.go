@@ -17,6 +17,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 
+	"github.com/skyhook-io/radar/internal/errorlog"
 	"github.com/skyhook-io/radar/internal/portforward"
 	promclient "github.com/skyhook-io/radar/internal/prometheus"
 )
@@ -69,8 +70,8 @@ type CarettaSource struct {
 	metricsNamespace string // namespace where metrics service was found
 	metricsService   string // service name for port-forward
 	metricsPort      int    // port for port-forward
-	metricsURL       string            // manual override URL from --prometheus-url flag
-	headers          map[string]string // sent with every Prometheus query (e.g. Bearer token)
+	metricsURL       string // manual override URL from --prometheus-url flag
+	headers          map[string]string
 	isConnected      bool
 	currentContext   string // current K8s context name
 	mu               sync.RWMutex
@@ -877,6 +878,10 @@ func (c *CarettaSource) tryMetricsEndpointLocked(ctx context.Context, addr strin
 	}
 	defer resp.Body.Close()
 
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		// See client.go probe — auth failures must not look like "not found".
+		errorlog.Record("traffic", "error", "metrics endpoint %s returned HTTP %d (check --prometheus-header credentials)", addr, resp.StatusCode)
+	}
 	return resp.StatusCode == http.StatusOK
 }
 

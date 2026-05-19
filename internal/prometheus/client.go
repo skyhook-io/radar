@@ -30,9 +30,9 @@ type Client struct {
 
 	// Discovery state
 	discovered       bool
-	discoveryService *ServiceInfo      // discovered service info for port-forward
-	manualURL        string            // --prometheus-url override
-	headers          map[string]string // sent with every Prometheus request (e.g. Bearer token)
+	discoveryService *ServiceInfo // discovered service info for port-forward
+	manualURL        string       // --prometheus-url override
+	headers          map[string]string
 
 	// K8s clients for discovery
 	k8sClient   kubernetes.Interface
@@ -315,6 +315,12 @@ func (c *Client) probe(ctx context.Context, addr string) bool {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
+		// Surface auth failures explicitly — otherwise a misconfigured Bearer
+		// token shows up as "Prometheus not found" after discovery falls
+		// through every candidate.
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			errorlog.Record("prometheus", "error", "endpoint %s returned HTTP %d (check --prometheus-header credentials)", addr, resp.StatusCode)
+		}
 		return false
 	}
 

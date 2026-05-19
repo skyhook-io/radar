@@ -20,6 +20,7 @@ import (
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"golang.org/x/net/http/httpguts"
 	_ "k8s.io/client-go/plugin/pkg/client/auth" // Register all auth provider plugins (OIDC, GCP, Azure, etc.)
 	"k8s.io/klog/v2"
 )
@@ -365,6 +366,15 @@ func (h *headerFlag) Set(raw string) error {
 	val := raw[idx+1:]
 	if key == "" {
 		return fmt.Errorf("empty header key in %q", raw)
+	}
+	// Reject anything net/http would silently corrupt or refuse at send time
+	// (control bytes, separators in the key, CR/LF in the value — the classic
+	// CRLF-injection vector for header smuggling).
+	if !httpguts.ValidHeaderFieldName(key) {
+		return fmt.Errorf("invalid header name %q (must be RFC 7230 tokens)", key)
+	}
+	if !httpguts.ValidHeaderFieldValue(val) {
+		return fmt.Errorf("invalid header value for %q (control characters not allowed)", key)
 	}
 	if !h.overrides {
 		// First CLI flag wipes file defaults — all-or-nothing replacement.

@@ -53,7 +53,7 @@ spec:
             - --prometheus-url={{ .Values.traffic.prometheusUrl }}
             {{- end }}
             {{- range $k, $v := .Values.traffic.prometheusHeaders }}
-            - --prometheus-header={{ $k }}={{ $v }}
+            - {{ printf "--prometheus-header=%s=%s" $k $v | quote }}
             {{- end }}
             {{- if not .Values.mcp.enabled }}
             - --no-mcp

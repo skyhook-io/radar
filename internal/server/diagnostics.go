@@ -20,15 +20,15 @@ import (
 // DiagConfig holds sanitized configuration for the diagnostics endpoint.
 // No sensitive values (kubeconfig paths, Prometheus URLs, etc.).
 type DiagConfig struct {
-	Port             int    `json:"port"`
-	DevMode          bool   `json:"devMode"`
-	Namespace        string `json:"namespace,omitempty"`
-	TimelineStorage  string `json:"timelineStorage"`
-	HistoryLimit     int    `json:"historyLimit"`
-	DebugEvents      bool   `json:"debugEvents"`
-	MCPEnabled       bool   `json:"mcpEnabled"`
-	HasPrometheusURL     bool `json:"hasPrometheusURL"`
-	HasPrometheusHeaders bool `json:"hasPrometheusHeaders"`
+	Port                 int    `json:"port"`
+	DevMode              bool   `json:"devMode"`
+	Namespace            string `json:"namespace,omitempty"`
+	TimelineStorage      string `json:"timelineStorage"`
+	HistoryLimit         int    `json:"historyLimit"`
+	DebugEvents          bool   `json:"debugEvents"`
+	MCPEnabled           bool   `json:"mcpEnabled"`
+	HasPrometheusURL     bool   `json:"hasPrometheusURL"`
+	HasPrometheusHeaders bool   `json:"hasPrometheusHeaders"`
 }
 
 // DiagnosticsSnapshot is the top-level diagnostics response.
@@ -79,13 +79,13 @@ type DiagConnection struct {
 // collisions, shell env enrichment, or an exec auth plugin missing from
 // the desktop app's PATH.
 type DiagKubeconfig struct {
-	Mode                   string   `json:"mode"`                             // in-cluster, single, multi-env, multi-dir, or "" if not initialized
-	FileCount              int      `json:"fileCount"`                        // Number of kubeconfig files loaded
-	ContextCount           int      `json:"contextCount"`                     // Contexts exposed after client-go merge
-	EnrichedFromShell      bool     `json:"enrichedFromShell"`                // Desktop app captured KUBECONFIG from login shell
-	CurrentContextUsesExec bool     `json:"currentContextUsesExec"`           // Current context's AuthInfo uses an exec credential plugin
-	ExecPluginsPresent     []string `json:"execPluginsPresent,omitempty"`     // Exec plugin command basenames resolvable on $PATH
-	ExecPluginsMissing     []string `json:"execPluginsMissing,omitempty"`     // Exec plugin command basenames NOT resolvable on $PATH (smoking gun for desktop-app multi-cluster failures)
+	Mode                   string   `json:"mode"`                         // in-cluster, single, multi-env, multi-dir, or "" if not initialized
+	FileCount              int      `json:"fileCount"`                    // Number of kubeconfig files loaded
+	ContextCount           int      `json:"contextCount"`                 // Contexts exposed after client-go merge
+	EnrichedFromShell      bool     `json:"enrichedFromShell"`            // Desktop app captured KUBECONFIG from login shell
+	CurrentContextUsesExec bool     `json:"currentContextUsesExec"`       // Current context's AuthInfo uses an exec credential plugin
+	ExecPluginsPresent     []string `json:"execPluginsPresent,omitempty"` // Exec plugin command basenames resolvable on $PATH
+	ExecPluginsMissing     []string `json:"execPluginsMissing,omitempty"` // Exec plugin command basenames NOT resolvable on $PATH (smoking gun for desktop-app multi-cluster failures)
 }
 
 // DiagCluster holds cluster detection info.
