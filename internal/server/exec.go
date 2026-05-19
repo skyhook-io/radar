@@ -279,11 +279,13 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 	}
 	auth.AuditLog(r, namespace, podName)
 
-	// OS detection only runs when we'd fall through to the built-in default;
-	// ?shell= and --pod-shell-default short-circuit it. Pod-fetch failure is
-	// non-fatal: log and assume Linux.
+	// OS detection runs whenever the operator hasn't picked the exact shell
+	// via ?shell=. Notably it still runs when --pod-shell-default is set:
+	// that flag is a POSIX-only fallback (see DefaultPodShellCommand), so
+	// Windows pods must be detected here and routed to the Windows script
+	// regardless. Pod-fetch failure is non-fatal: log and assume Linux.
 	var podOS string
-	if overrideShell == "" && DefaultPodShellCommand == "" {
+	if overrideShell == "" {
 		pod, err := client.CoreV1().Pods(namespace).Get(r.Context(), podName, metav1.GetOptions{})
 		if err != nil {
 			log.Printf("[exec] OS detection skipped for %s/%s (assuming Linux): %v", namespace, podName, err)
