@@ -813,10 +813,41 @@ const maxScopeCandidates = 20
 // and the user can't enumerate namespaces — caller treats that as "no
 // fallback".
 func buildScopeCandidates(ctx context.Context) []string {
+	// GetEffectiveNamespace would return only one (kubeconfig context wins
+	// over --namespace). Reach into both globals so when an operator sets
+	// `--namespace` distinct from the context, both surface as candidates.
+	clientMu.RLock()
+	ctxNs, flagNs := contextNamespace, fallbackNamespace
+	clientMu.RUnlock()
+
+	accessible, authoritative := GetAccessibleNamespaces(ctx)
+	out, dropped := mergeScopeCandidates(ctxNs, flagNs, accessible, authoritative)
+	if !authoritative {
+		// Authoritative=false means the user can't list namespaces. Without
+		// that list the probe can only try whatever the operator named
+		// explicitly — log it so an operator diagnosing "Radar disabled my
+		// kinds" has a breadcrumb instead of silence.
+		log.Printf("RBAC: namespace discovery non-authoritative (cluster-wide list namespaces denied); fallback candidates limited to %v", out)
+		return out
+	}
+	if dropped > 0 {
+		// Capped: kinds the user can list only in a dropped namespace stay
+		// marked denied. Workaround: name the target with --namespace (or
+		// the kubeconfig context) so it sits ahead of the alphabetical
+		// accessible list and survives truncation.
+		log.Printf("RBAC: candidate namespaces truncated (cap=%d, %d dropped); kinds reachable only in dropped namespaces will be marked denied", maxScopeCandidates, dropped)
+	}
+	return out
+}
+
+// mergeScopeCandidates is the pure-function core of buildScopeCandidates:
+// dedup + cap + drop-counting with no globals or network calls. When
+// authoritative is false the accessible list is ignored — the caller has
+// already decided that list is not trustworthy as a probe target.
+func mergeScopeCandidates(ctxNs, flagNs string, accessible []string, authoritative bool) (out []string, dropped int) {
 	seen := map[string]bool{}
-	out := make([]string, 0, maxScopeCandidates)
+	out = make([]string, 0, maxScopeCandidates)
 	atCap := false
-	dropped := 0
 	add := func(ns string) {
 		if ns == "" || seen[ns] {
 			return
@@ -831,38 +862,16 @@ func buildScopeCandidates(ctx context.Context) []string {
 			atCap = true
 		}
 	}
-	// GetEffectiveNamespace would return only one (kubeconfig context wins
-	// over --namespace). Reach into both globals so when an operator sets
-	// `--namespace` distinct from the context, both surface as candidates.
-	clientMu.RLock()
-	ctxNs, flagNs := contextNamespace, fallbackNamespace
-	clientMu.RUnlock()
 	add(ctxNs)
 	add(flagNs)
-
-	accessible, authoritative := GetAccessibleNamespaces(ctx)
 	if !authoritative {
-		// Authoritative=false means the user can't list namespaces. Without
-		// that list the probe can only try whatever the operator named
-		// explicitly — log it so an operator diagnosing "Radar disabled my
-		// kinds" has a breadcrumb instead of silence.
-		log.Printf("RBAC: namespace discovery non-authoritative (cluster-wide list namespaces denied); fallback candidates limited to %v", out)
-		return out
+		return out, 0
 	}
+	// Iterate the full accessible list after cap so add() counts drops.
 	for _, ns := range accessible {
 		add(ns)
-		if atCap {
-			break
-		}
 	}
-	if dropped > 0 {
-		// Capped: kinds the user can list only in a dropped namespace stay
-		// marked denied. Workaround: name the target with --namespace (or
-		// the kubeconfig context) so it sits ahead of the alphabetical
-		// accessible list and survives truncation.
-		log.Printf("RBAC: candidate namespaces truncated (cap=%d, %d dropped); kinds reachable only in dropped namespaces will be marked denied", maxScopeCandidates, dropped)
-	}
-	return out
+	return out, dropped
 }
 
 // pickPrimaryNs picks the namespace that PermissionCheckResult.Namespace

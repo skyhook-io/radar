@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -240,6 +241,86 @@ func TestBuildScopeCandidates_EmptyWhenNothingConfigured(t *testing.T) {
 	got := buildScopeCandidates(context.Background())
 	if len(got) != 0 {
 		t.Errorf("buildScopeCandidates = %v, want empty when no ns config and no client", got)
+	}
+}
+
+// genNamespaces produces N distinct namespace names — used to drive
+// mergeScopeCandidates past the cap, which a live-client test can't do
+// without a fake clientset.
+func genNamespaces(prefix string, count int) []string {
+	out := make([]string, count)
+	for i := range out {
+		out[i] = fmt.Sprintf("%s-%03d", prefix, i)
+	}
+	return out
+}
+
+func TestMergeScopeCandidates_BelowCap(t *testing.T) {
+	out, dropped := mergeScopeCandidates("dev", "prod", []string{"alpha", "beta"}, true)
+	want := []string{"dev", "prod", "alpha", "beta"}
+	if !reflect.DeepEqual(out, want) {
+		t.Errorf("out = %v, want %v", out, want)
+	}
+	if dropped != 0 {
+		t.Errorf("dropped = %d, want 0", dropped)
+	}
+}
+
+func TestMergeScopeCandidates_NonAuthoritativeIgnoresAccessible(t *testing.T) {
+	out, dropped := mergeScopeCandidates("dev", "prod", []string{"alpha", "beta"}, false)
+	want := []string{"dev", "prod"}
+	if !reflect.DeepEqual(out, want) {
+		t.Errorf("out = %v, want %v (accessible must be ignored when non-authoritative)", out, want)
+	}
+	if dropped != 0 {
+		t.Errorf("dropped = %d, want 0 (no truncation reported on non-authoritative path)", dropped)
+	}
+}
+
+// Regression: the previous implementation `break`-ed out of the accessible
+// loop on atCap, so dropped never reached the log threshold and operators
+// got no truncation breadcrumb in the very case the log was added for.
+func TestMergeScopeCandidates_CountsAllDrops(t *testing.T) {
+	// 25 accessible namespaces, no overlap with context/flag — pure cap test.
+	out, dropped := mergeScopeCandidates("", "", genNamespaces("ns", 25), true)
+	if len(out) != maxScopeCandidates {
+		t.Errorf("len(out) = %d, want %d", len(out), maxScopeCandidates)
+	}
+	if dropped != 5 {
+		t.Errorf("dropped = %d, want 5 (25 accessible - 20 cap)", dropped)
+	}
+}
+
+// Drops must still count when context+flag occupy the first slots — the
+// case the second-round review flagged where the original predicate
+// missed truncation.
+func TestMergeScopeCandidates_CountsDropsWithContextAndFlag(t *testing.T) {
+	out, dropped := mergeScopeCandidates("dev", "prod", genNamespaces("ns", 25), true)
+	if len(out) != maxScopeCandidates {
+		t.Errorf("len(out) = %d, want %d", len(out), maxScopeCandidates)
+	}
+	if out[0] != "dev" || out[1] != "prod" {
+		t.Errorf("out[0..1] = %v, want [dev prod]", out[:2])
+	}
+	// 25 accessible, 18 of them fit (after dev+prod take 2 slots), 7 drop.
+	if dropped != 7 {
+		t.Errorf("dropped = %d, want 7 (25 accessible - 18 remaining cap slots)", dropped)
+	}
+}
+
+// Dedup must not contribute to dropped — a duplicate of an already-seen
+// namespace is a no-op, not a drop. Construct accessible so that AFTER
+// dedup the total exactly fills the cap; if dedup were miscounted as a
+// drop, dropped would be non-zero.
+func TestMergeScopeCandidates_DedupDoesNotCountAsDrop(t *testing.T) {
+	// dev + prod (2 slots) + dup of prod (no-op) + 18 unique = 20 = cap.
+	accessible := append([]string{"prod"}, genNamespaces("ns", 18)...)
+	out, dropped := mergeScopeCandidates("dev", "prod", accessible, true)
+	if len(out) != maxScopeCandidates {
+		t.Errorf("len(out) = %d, want %d", len(out), maxScopeCandidates)
+	}
+	if dropped != 0 {
+		t.Errorf("dropped = %d, want 0 (the dup of `prod` is dedup, not truncation)", dropped)
 	}
 }
 
