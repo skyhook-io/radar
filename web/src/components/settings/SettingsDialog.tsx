@@ -1,10 +1,11 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { Settings, X, RotateCcw, Loader2, Copy, Check, Pin } from 'lucide-react'
+import { Settings, X, RotateCcw, Loader2, Copy, Check, Pin, KeyRound, Trash2, Plus } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { useAuthMe } from '../../api/client'
 
 interface Config {
   kubeconfig?: string
@@ -33,6 +34,7 @@ interface SettingsDialogProps {
 export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
+  const { data: authMe } = useAuthMe()
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
   const [editedConfig, setEditedConfig] = useState<Config>({})
   const [saving, setSaving] = useState(false)
@@ -173,6 +175,7 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
             isDesktop={isDesktop}
             onChange={updateConfigField}
           />
+          {authMe?.authEnabled && <APIKeysSection open={open} />}
         </div>
 
         {/* Footer */}
@@ -411,6 +414,208 @@ function MCPSection({
               Port is pinned. MCP endpoint will remain stable across restarts.
             </p>
           )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// -- API Keys Section ---------------------------------------------------------
+
+interface APIKeyEntry {
+  id: string
+  description: string
+  username: string
+  groups: string[]
+  createdAt: string
+  lastUsedAt?: string
+}
+
+function APIKeysSection({ open }: { open: boolean }) {
+  const [keys, setKeys] = useState<APIKeyEntry[]>([])
+  const [loading, setLoading] = useState(false)
+  const [description, setDescription] = useState('')
+  const [creating, setCreating] = useState(false)
+  const [newKey, setNewKey] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const loadKeys = useCallback(async () => {
+    setLoading(true)
+    setError(null)
+    try {
+      const res = await fetch(apiUrl('/auth/api-keys'), {
+        credentials: getCredentialsMode(),
+        headers: getAuthHeaders(),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setKeys(await res.json())
+    } catch (e) {
+      setError('Failed to load API keys.')
+    } finally {
+      setLoading(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (open) loadKeys()
+  }, [open, loadKeys])
+
+  const handleCreate = async () => {
+    if (creating) return
+    setCreating(true)
+    setError(null)
+    setNewKey(null)
+    try {
+      const res = await fetch(apiUrl('/auth/api-keys'), {
+        method: 'POST',
+        credentials: getCredentialsMode(),
+        headers: { 'Content-Type': 'application/json', ...getAuthHeaders() },
+        body: JSON.stringify({ description }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`)
+      setNewKey(data.key)
+      setDescription('')
+      setKeys((prev) => [data, ...prev])
+    } catch (e: any) {
+      setError(e.message || 'Failed to create API key.')
+    } finally {
+      setCreating(false)
+    }
+  }
+
+  const handleDelete = async (id: string) => {
+    if (deleteConfirm !== id) {
+      setDeleteConfirm(id)
+      return
+    }
+    setDeleteConfirm(null)
+    setError(null)
+    try {
+      const res = await fetch(apiUrl(`/auth/api-keys/${id}`), {
+        method: 'DELETE',
+        credentials: getCredentialsMode(),
+        headers: getAuthHeaders(),
+      })
+      if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`)
+      setKeys((prev) => prev.filter((k) => k.id !== id))
+    } catch {
+      setError('Failed to revoke key.')
+    }
+  }
+
+  const handleCopy = () => {
+    if (!newKey) return
+    navigator.clipboard.writeText(newKey)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 2000)
+  }
+
+  return (
+    <div className="border-t border-theme-border pt-4 mt-4">
+      <div className="flex items-center gap-2 mb-3">
+        <KeyRound className="w-3.5 h-3.5 text-theme-text-secondary" />
+        <h4 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider">
+          API Keys
+        </h4>
+      </div>
+
+      <p className="text-xs text-theme-text-tertiary mb-3">
+        API keys let headless clients (MCP, CI, scripts) authenticate without a browser login.
+        Each key inherits your current permissions.
+      </p>
+
+      {error && (
+        <div className="mb-3 px-3 py-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md">
+          {error}
+        </div>
+      )}
+
+      {/* Revealed key — shown once immediately after creation */}
+      {newKey && (
+        <div className="mb-3 p-3 bg-green-500/10 border border-green-500/30 rounded-md space-y-1.5">
+          <p className="text-xs font-medium text-green-400">
+            Save this key now — it won't be shown again.
+          </p>
+          <div className="flex items-center gap-2">
+            <code className="flex-1 px-2 py-1 text-xs font-mono bg-theme-elevated border border-theme-border rounded text-theme-text-primary break-all">
+              {newKey}
+            </code>
+            <button
+              onClick={handleCopy}
+              className="shrink-0 p-1.5 text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated rounded-md transition-colors"
+              title="Copy key"
+            >
+              {copied ? <Check className="w-3.5 h-3.5 text-green-500" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
+          </div>
+          <p className="text-xs text-theme-text-tertiary">
+            Use as: <code className="font-mono">Authorization: Bearer {newKey.slice(0, 8)}…</code>
+          </p>
+        </div>
+      )}
+
+      {/* Create new key */}
+      <div className="flex gap-2 mb-3">
+        <input
+          type="text"
+          value={description}
+          onChange={(e) => setDescription(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && description && handleCreate()}
+          placeholder="Key description (e.g. MCP tool, CI pipeline)"
+          className="flex-1 px-3 py-1.5 text-sm bg-theme-elevated border border-theme-border rounded-md text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-blue-500"
+        />
+        <button
+          onClick={handleCreate}
+          disabled={!description || creating}
+          className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium btn-brand rounded-md disabled:opacity-50"
+        >
+          {creating ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Plus className="w-3.5 h-3.5" />}
+          Create
+        </button>
+      </div>
+
+      {/* Key list */}
+      {loading ? (
+        <div className="flex items-center gap-2 text-xs text-theme-text-tertiary py-2">
+          <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          Loading keys…
+        </div>
+      ) : keys.length === 0 ? (
+        <p className="text-xs text-theme-text-tertiary py-1">No API keys yet.</p>
+      ) : (
+        <div className="space-y-1.5">
+          {keys.map((key) => (
+            <div
+              key={key.id}
+              className="flex items-center justify-between gap-2 px-3 py-2 bg-theme-elevated border border-theme-border rounded-md"
+            >
+              <div className="min-w-0">
+                <p className="text-sm text-theme-text-primary truncate">
+                  {key.description || <span className="text-theme-text-tertiary italic">no description</span>}
+                </p>
+                <p className="text-xs text-theme-text-tertiary">
+                  {key.id} · created {new Date(key.createdAt).toLocaleDateString()}
+                  {key.lastUsedAt && ` · last used ${new Date(key.lastUsedAt).toLocaleDateString()}`}
+                </p>
+              </div>
+              <button
+                onClick={() => handleDelete(key.id)}
+                className={clsx(
+                  'shrink-0 flex items-center gap-1 px-2 py-1 text-xs rounded-md transition-colors',
+                  deleteConfirm === key.id
+                    ? 'bg-red-500/20 text-red-400 hover:bg-red-500/30'
+                    : 'text-theme-text-tertiary hover:text-red-400 hover:bg-theme-elevated'
+                )}
+                title={deleteConfirm === key.id ? 'Click again to confirm revoke' : 'Revoke key'}
+              >
+                <Trash2 className="w-3 h-3" />
+                {deleteConfirm === key.id ? 'Confirm' : 'Revoke'}
+              </button>
+            </div>
+          ))}
         </div>
       )}
     </div>
