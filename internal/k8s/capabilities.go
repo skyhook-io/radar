@@ -816,8 +816,13 @@ func buildScopeCandidates(ctx context.Context) []string {
 	seen := map[string]bool{}
 	out := make([]string, 0, maxScopeCandidates)
 	atCap := false
+	dropped := 0
 	add := func(ns string) {
-		if atCap || ns == "" || seen[ns] {
+		if ns == "" || seen[ns] {
+			return
+		}
+		if atCap {
+			dropped++
 			return
 		}
 		seen[ns] = true
@@ -826,9 +831,9 @@ func buildScopeCandidates(ctx context.Context) []string {
 			atCap = true
 		}
 	}
-	// GetEffectiveNamespace picks one of contextNamespace / fallbackNamespace.
-	// Reach into both globals so the rare case where context is `dev` and
-	// `--namespace=prod` overrides surfaces both as candidates.
+	// GetEffectiveNamespace would return only one (kubeconfig context wins
+	// over --namespace). Reach into both globals so when an operator sets
+	// `--namespace` distinct from the context, both surface as candidates.
 	clientMu.RLock()
 	ctxNs, flagNs := contextNamespace, fallbackNamespace
 	clientMu.RUnlock()
@@ -839,9 +844,9 @@ func buildScopeCandidates(ctx context.Context) []string {
 	if !authoritative {
 		// Authoritative=false means the user can't list namespaces. Without
 		// that list the probe can only try whatever the operator named
-		// explicitly. Log it so an Issue #686-shape report has a breadcrumb
-		// — otherwise the fix silently no-ops for this user.
-		logTiming("   [perms] namespace discovery non-authoritative (cluster-wide list namespaces denied); fallback candidates limited to %v", out)
+		// explicitly — log it so an operator diagnosing "Radar disabled my
+		// kinds" has a breadcrumb instead of silence.
+		log.Printf("RBAC: namespace discovery non-authoritative (cluster-wide list namespaces denied); fallback candidates limited to %v", out)
 		return out
 	}
 	for _, ns := range accessible {
@@ -850,21 +855,32 @@ func buildScopeCandidates(ctx context.Context) []string {
 			break
 		}
 	}
-	if atCap && len(accessible) > maxScopeCandidates {
+	if dropped > 0 {
 		// Capped: kinds the user can list only in a dropped namespace stay
-		// marked denied. Workaround: pass --namespace to put the target ns
-		// at position 0 (operator never gets truncated).
-		logTiming("   [perms] candidate namespaces truncated at %d of %d; kinds reachable only in dropped namespaces will be marked denied", maxScopeCandidates, len(accessible))
+		// marked denied. Workaround: name the target with --namespace (or
+		// the kubeconfig context) so it sits ahead of the alphabetical
+		// accessible list and survives truncation.
+		log.Printf("RBAC: candidate namespaces truncated (cap=%d, %d dropped); kinds reachable only in dropped namespaces will be marked denied", maxScopeCandidates, dropped)
 	}
 	return out
 }
 
 // pickPrimaryNs picks the namespace that PermissionCheckResult.Namespace
-// reports. The dynamic CRD cache and the diagnostics page read this as a
-// single anchor — it has to be a namespace where the user actually has
-// reads, otherwise CRD informers get pinned to a namespace they 403 on.
-// Walk candidates in priority order and pick the first one any typed kind
-// landed in. Falls back to scopeNamespaces[0] when nothing was granted.
+// reports. The dynamic CRD cache reads it as NamespaceFallback (single
+// anchor for all CRD informers) and the diagnostics page surfaces it as
+// the operating namespace. It has to be a namespace where the user
+// actually has reads, otherwise CRD informers get pinned where they 403.
+// Walk candidates in order and pick the first one any typed kind landed
+// in. When nothing was granted, fall back to scopeNamespaces[0] — the
+// dynamic cache short-circuits on NamespaceScoped=false in that case, so
+// the fallback is inert there, but diagnostics still displays it as the
+// nominal anchor (preserves pre-fix behavior).
+//
+// When typed kinds get granted across multiple distinct namespaces, this
+// picks one and the CRD cache anchors to it — CRDs the user reads in the
+// other granted namespaces will silently 403. Log a warning when that
+// happens so the operator can see the asymmetry. A proper fix needs
+// multi-ns scope per kind in pkg/k8score.
 func pickPrimaryNs(scopeNamespaces []string, scopes map[string]k8score.ResourceScope) string {
 	granted := map[string]bool{}
 	for _, s := range scopes {
@@ -874,6 +890,9 @@ func pickPrimaryNs(scopeNamespaces []string, scopes map[string]k8score.ResourceS
 	}
 	for _, ns := range scopeNamespaces {
 		if granted[ns] {
+			if len(granted) > 1 {
+				log.Printf("RBAC: typed kinds granted in %d distinct namespaces; CRD informer fallback pinned to %q — CRDs in the others will be marked denied", len(granted), SanitizeForLog(ns))
+			}
 			return ns
 		}
 	}

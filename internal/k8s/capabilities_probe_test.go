@@ -166,6 +166,15 @@ func TestPickPrimaryNs(t *testing.T) {
 			want: "team-a",
 		},
 		{
+			name:       "single granted candidate not at position 0",
+			candidates: []string{"default", "team-a"},
+			scopes: map[string]k8score.ResourceScope{
+				k8score.Pods:    disabled,
+				k8score.Secrets: scope("team-a"),
+			},
+			want: "team-a",
+		},
+		{
 			name:       "no candidates returns empty",
 			candidates: nil,
 			scopes:     map[string]k8score.ResourceScope{k8score.Pods: scope("team-a")},
@@ -203,9 +212,10 @@ func setNamespaceGlobals(t *testing.T, ctxNs, flagNs string) {
 	})
 }
 
-// buildScopeCandidates is exercised without a live client — the nil-client
-// branch in GetAccessibleNamespaces takes the non-authoritative path, which
-// is the realistic shape for the namespace-restricted user filing #686.
+// buildScopeCandidates exercised without a live client — the nil-client
+// branch in GetAccessibleNamespaces takes the non-authoritative path,
+// matching the real shape of a namespace-restricted user (no cluster-wide
+// list-namespaces grant).
 func TestBuildScopeCandidates_NonAuthoritativeUsesContextAndFlag(t *testing.T) {
 	setNamespaceGlobals(t, "dev", "prod")
 
