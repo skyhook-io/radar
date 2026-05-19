@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import { useDashboard, useDashboardCRDs, useDashboardHelm } from '../../api/client'
 import type { DashboardResponse } from '../../api/client'
 import type { ExtendedMainView, Topology, SelectedResource } from '../../types'
@@ -25,6 +26,21 @@ interface HomeViewProps {
 
 export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToResourceKind, onNavigateToResource }: HomeViewProps) {
   const { data, isLoading, error } = useDashboard(namespaces)
+
+  // SSE is cluster-wide on small/medium clusters; the picker only narrows the
+  // dashboard summary, so re-apply the filter here or the legend disagrees.
+  const scopedTopology = useMemo<Topology | null>(() => {
+    if (!topology) return null
+    if (namespaces.length === 0) return topology
+    const nsSet = new Set(namespaces)
+    const nodes = topology.nodes.filter(n => {
+      const ns = n.data.namespace as string | undefined
+      return !ns || nsSet.has(ns)
+    })
+    const nodeIds = new Set(nodes.map(n => n.id))
+    const edges = topology.edges.filter(e => nodeIds.has(e.source) && nodeIds.has(e.target))
+    return { nodes, edges }
+  }, [topology, namespaces])
   // CRDs and Helm load lazily after main dashboard to keep initial load fast
   const { data: crdsData } = useDashboardCRDs(namespaces)
   const { data: helmData } = useDashboardHelm(namespaces)
@@ -100,7 +116,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
             {/* Primary cards — 2-col grid */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
               <TopologyPreview
-                topology={topology}
+                topology={scopedTopology}
                 summary={data.topologySummary}
                 onNavigate={() => onNavigateToView('topology')}
               />
@@ -110,7 +126,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
               />
               <ActivitySummary
                 namespaces={namespaces}
-                topology={topology}
+                topology={scopedTopology}
                 onNavigate={() => onNavigateToView('timeline')}
               />
               <TrafficSummary

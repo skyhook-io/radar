@@ -446,6 +446,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 			nss, _ := nsLister.List(labels.Everything())
 			resp.ResourceCounts.Namespaces = len(nss)
 		}
+	} else if len(namespaces) > 0 {
+		// Restricted user — surface their accessible count instead of "0".
+		resp.ResourceCounts.Namespaces = len(namespaces)
 	}
 
 	if canReadNodes && cache.Nodes() != nil {
