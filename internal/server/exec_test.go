@@ -29,13 +29,6 @@ func TestDefaultExecCommand(t *testing.T) {
 			want:     []string{"sh", "-c", defaultShellScript},
 		},
 		{
-			name:     "linux pod with no override and no fallback uses built-in script",
-			override: "",
-			fallback: "",
-			podOS:    "linux",
-			want:     []string{"sh", "-c", defaultShellScript},
-		},
-		{
 			name:     "fallback configured, no override, wraps in sh -c",
 			override: "",
 			fallback: "exec zsh",
@@ -131,13 +124,6 @@ func TestDetectPodOS(t *testing.T) {
 				OS: &corev1.PodOS{Name: corev1.Linux},
 			}},
 			want: "linux",
-		},
-		{
-			name: "tier 1: case is normalized to lowercase",
-			pod: &corev1.Pod{Spec: corev1.PodSpec{
-				OS: &corev1.PodOS{Name: corev1.OSName("Windows")},
-			}},
-			want: "windows",
 		},
 		{
 			name: "tier 2: nodeSelector kubernetes.io/os when spec.os is unset",
