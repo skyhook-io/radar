@@ -78,11 +78,12 @@ type CarettaSource struct {
 }
 
 // applyHeaders attaches the configured custom headers to a Prometheus
-// request. Read under the source's read lock so a concurrent context-switch
-// reinit doesn't race with in-flight queries.
+// request. No lock: c.headers is assigned exactly once inside
+// manager.go's initOnce.Do and never mutated afterwards (a context
+// switch builds a fresh CarettaSource). Locking here would deadlock the
+// tryMetricsEndpointLocked path, which holds c.mu.Lock() and cannot
+// re-enter as a reader — sync.RWMutex isn't reentrant.
 func (c *CarettaSource) applyHeaders(req *http.Request) {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
 	for k, v := range c.headers {
 		req.Header.Set(k, v)
 	}

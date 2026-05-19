@@ -47,9 +47,15 @@ func TestCarettaAppliesHeaders(t *testing.T) {
 
 	// tryMetricsEndpointLocked must carry the same headers, otherwise
 	// discovery would 401 against an auth-protected endpoint and the user
-	// would see "no metrics source found".
+	// would see "no metrics source found". Acquire the write lock first —
+	// that's what every production caller does, and the function name's
+	// "Locked" suffix is the Go convention saying so. A previous version
+	// of applyHeaders took c.mu.RLock and deadlocked here.
 	gotAuth.Store("")
-	if !c.tryMetricsEndpointLocked(context.Background(), srv.URL) {
+	c.mu.Lock()
+	ok := c.tryMetricsEndpointLocked(context.Background(), srv.URL)
+	c.mu.Unlock()
+	if !ok {
 		t.Fatal("tryMetricsEndpointLocked returned false for healthy server")
 	}
 	if got := gotAuth.Load().(string); got != "Bearer caretta-token" {
