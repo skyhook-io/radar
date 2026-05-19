@@ -126,6 +126,112 @@ func TestProbeResourceAccess_NamespaceOnlyUser(t *testing.T) {
 	}
 }
 
+func TestPickPrimaryNs(t *testing.T) {
+	scope := func(ns string) k8score.ResourceScope {
+		return k8score.ResourceScope{Enabled: true, Namespace: ns}
+	}
+	disabled := k8score.ResourceScope{}
+
+	cases := []struct {
+		name       string
+		candidates []string
+		scopes     map[string]k8score.ResourceScope
+		want       string
+	}{
+		{
+			name:       "no grants falls back to first candidate",
+			candidates: []string{"default", "team-a"},
+			scopes:     map[string]k8score.ResourceScope{k8score.Pods: disabled},
+			want:       "default",
+		},
+		{
+			name:       "first candidate granted",
+			candidates: []string{"default", "team-a"},
+			scopes:     map[string]k8score.ResourceScope{k8score.Pods: scope("default")},
+			want:       "default",
+		},
+		{
+			name:       "later candidate granted, primary follows the actual grant",
+			candidates: []string{"default", "team-a"},
+			scopes:     map[string]k8score.ResourceScope{k8score.Secrets: scope("team-a")},
+			want:       "team-a",
+		},
+		{
+			name:       "grants in multiple candidates, earliest in priority wins",
+			candidates: []string{"default", "team-a", "team-b"},
+			scopes: map[string]k8score.ResourceScope{
+				k8score.Secrets:    scope("team-b"),
+				k8score.ConfigMaps: scope("team-a"),
+			},
+			want: "team-a",
+		},
+		{
+			name:       "no candidates returns empty",
+			candidates: nil,
+			scopes:     map[string]k8score.ResourceScope{k8score.Pods: scope("team-a")},
+			want:       "",
+		},
+		{
+			name:       "cluster-wide grant ignored (empty ns doesn't count as a grant location)",
+			candidates: []string{"default"},
+			scopes:     map[string]k8score.ResourceScope{k8score.Pods: scope("")},
+			want:       "default",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := pickPrimaryNs(tc.candidates, tc.scopes); got != tc.want {
+				t.Errorf("pickPrimaryNs(%v, …) = %q, want %q", tc.candidates, got, tc.want)
+			}
+		})
+	}
+}
+
+// setNamespaceGlobals stashes and restores the package-level namespace
+// globals so tests can drive buildScopeCandidates deterministically.
+func setNamespaceGlobals(t *testing.T, ctxNs, flagNs string) {
+	t.Helper()
+	clientMu.Lock()
+	origCtx, origFlag := contextNamespace, fallbackNamespace
+	contextNamespace, fallbackNamespace = ctxNs, flagNs
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextNamespace, fallbackNamespace = origCtx, origFlag
+		clientMu.Unlock()
+	})
+}
+
+// buildScopeCandidates is exercised without a live client — the nil-client
+// branch in GetAccessibleNamespaces takes the non-authoritative path, which
+// is the realistic shape for the namespace-restricted user filing #686.
+func TestBuildScopeCandidates_NonAuthoritativeUsesContextAndFlag(t *testing.T) {
+	setNamespaceGlobals(t, "dev", "prod")
+
+	got := buildScopeCandidates(context.Background())
+	want := []string{"dev", "prod"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Errorf("buildScopeCandidates = %v, want %v (both kubeconfig context and --namespace flag must surface)", got, want)
+	}
+}
+
+func TestBuildScopeCandidates_NonAuthoritativeDedupes(t *testing.T) {
+	setNamespaceGlobals(t, "shared", "shared")
+	got := buildScopeCandidates(context.Background())
+	if len(got) != 1 || got[0] != "shared" {
+		t.Errorf("buildScopeCandidates = %v, want exactly [shared]", got)
+	}
+}
+
+func TestBuildScopeCandidates_EmptyWhenNothingConfigured(t *testing.T) {
+	setNamespaceGlobals(t, "", "")
+	got := buildScopeCandidates(context.Background())
+	if len(got) != 0 {
+		t.Errorf("buildScopeCandidates = %v, want empty when no ns config and no client", got)
+	}
+}
+
 // A user with secret-list permission in a namespace that isn't the
 // kubeconfig context namespace should still get the Secret informer wired
 // — the probe must walk every candidate, not just the first one.
@@ -144,6 +250,12 @@ func TestProbeResourceAccess_FallbackCandidatesBeyondFirst(t *testing.T) {
 
 	if got := scopeOf(result, k8score.Secrets); got != (k8score.ResourceScope{Enabled: true, Namespace: accessibleNs}) {
 		t.Errorf("Secrets scope = %+v, want enabled+%q (fallback must walk past first candidate)", got, accessibleNs)
+	}
+	// result.Namespace must follow the actual grant — otherwise the dynamic
+	// CRD cache (which reads it as NamespaceFallback) would pin CRD informers
+	// to `default` where the user has nothing.
+	if result.Namespace != accessibleNs {
+		t.Errorf("result.Namespace = %q, want %q so CRD informer fallback lands where the user has reads", result.Namespace, accessibleNs)
 	}
 }
 
