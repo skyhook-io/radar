@@ -1263,6 +1263,7 @@ export {
   getFluxHelmReleaseChart,
   getFluxHelmReleaseVersion,
   getFluxHelmReleaseRevision,
+  getFluxHelmReleaseMessage,
   getFluxAlertProvider,
   getFluxAlertEventCount,
 } from './resource-utils-flux'

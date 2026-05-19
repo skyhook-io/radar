@@ -22,6 +22,7 @@ import {
   getFluxHelmReleaseVersion,
   getFluxHelmReleaseStatus,
   getFluxHelmReleaseRevision,
+  getFluxHelmReleaseMessage,
   getFluxAlertProvider,
   getFluxAlertEventCount,
   getFluxAlertStatus,
@@ -200,6 +201,17 @@ export function FluxHelmReleaseCell({ resource, column }: { resource: any; colum
         <span className={clsx('badge', status.color)}>
           {status.text}
         </span>
+      )
+    }
+    case 'message': {
+      const message = getFluxHelmReleaseMessage(resource)
+      if (!message) {
+        return <span className="text-sm text-theme-text-tertiary">-</span>
+      }
+      return (
+        <Tooltip content={message}>
+          <span className="text-sm text-theme-text-secondary truncate block">{message}</span>
+        </Tooltip>
       )
     }
     case 'revision': {

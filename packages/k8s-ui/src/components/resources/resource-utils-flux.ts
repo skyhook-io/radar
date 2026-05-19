@@ -86,6 +86,20 @@ export function getFluxHelmReleaseStatus(hr: any): StatusBadge {
   return { text: 'Unknown', color: healthColors.unknown, level: 'unknown' }
 }
 
+/**
+ * Last diagnostic message for a HelmRelease — surfaces dependency-wait vs install/upgrade failure
+ * vs test failure, which is otherwise hidden inside conditions. Returns '' for healthy releases
+ * (Ready=True) so the table column stays quiet on a green cluster.
+ */
+export function getFluxHelmReleaseMessage(hr: any): string {
+  const conditions: FluxCondition[] = hr.status?.conditions || []
+  const readyCondition = conditions.find((c) => c.type === 'Ready')
+  if (readyCondition?.status === 'True') return ''
+  if (readyCondition?.message) return readyCondition.message
+  const releasedCondition = conditions.find((c) => c.type === 'Released')
+  return releasedCondition?.message || ''
+}
+
 // ============================================================================
 // FLUXCD TABLE CELL UTILITIES
 // ============================================================================
