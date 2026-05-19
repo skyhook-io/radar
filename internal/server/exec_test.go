@@ -10,13 +10,9 @@ import (
 	corev1 "k8s.io/api/core/v1"
 )
 
-// TestDefaultExecCommand covers the precedence rules for building the argv
-// passed to the pod exec subresource:
-//   - ?shell= override always wins and is passed verbatim as a single argv element
-//   - Windows pods route to cmd.exe + windowsDefaultShellScript (skips the
-//     POSIX-only --pod-shell-default fallback by design)
-//   - --pod-shell-default fallback is used when no override and pod is Linux
-//   - the built-in defaultShellScript is used when nothing is configured
+// TestDefaultExecCommand pins the argv precedence: ?shell= override wins
+// over everything; Windows pods route to cmd.exe ahead of the POSIX-only
+// --pod-shell-default fallback; built-in script is the floor.
 func TestDefaultExecCommand(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -93,10 +89,9 @@ func TestDefaultExecCommand(t *testing.T) {
 	}
 }
 
-// TestWindowsDefaultShellScript pins the Windows shell-selection script.
-// The `where powershell` probe + `|| cmd` fallback is load-bearing for
-// Nano Server (no PowerShell) and Server Core (PowerShell present). If you
-// edit this, manually verify against both image families before merging.
+// TestWindowsDefaultShellScript is a tripwire — if you edit the script,
+// manually verify against both Nano Server (no PowerShell) and Server Core
+// (PowerShell present) before merging.
 func TestWindowsDefaultShellScript(t *testing.T) {
 	const expected = `where powershell >nul 2>&1 && powershell || cmd`
 	if windowsDefaultShellScript != expected {
@@ -110,14 +105,8 @@ func TestWindowsDefaultShellScript(t *testing.T) {
 	}
 }
 
-// TestDetectPodOS covers the three-tier OS detection:
-//  1. pod.Spec.OS.Name (authoritative, GA in 1.25)
-//  2. pod.Spec.NodeSelector kubernetes.io/os labels
-//  3. The scheduled node's labels (for pods that omit the selector)
-//
-// The pod-level signal wins over nodeSelector; nodeSelector wins over the node
-// label fetch; if all three are absent we return "" so the caller defaults to
-// the Linux path (matches pre-Windows-support behavior).
+// TestDetectPodOS pins the three-tier authority order and the
+// degrade-to-empty contract for tier-3 lookup failures.
 func TestDetectPodOS(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -177,6 +166,21 @@ func TestDetectPodOS(t *testing.T) {
 			want: "windows",
 		},
 		{
+			// Guards against a "simplify the `v != \"\"` check" refactor.
+			// Some admission webhooks emit an empty-string label rather than
+			// omitting the key; treating empty as absent lets the beta
+			// fallback (or tier 3) take over instead of returning "" as a
+			// valid OS and routing Windows pods to sh -c.
+			name: "tier 2: empty kubernetes.io/os value falls through to beta label",
+			pod: &corev1.Pod{Spec: corev1.PodSpec{
+				NodeSelector: map[string]string{
+					"kubernetes.io/os":      "",
+					"beta.kubernetes.io/os": "windows",
+				},
+			}},
+			want: "windows",
+		},
+		{
 			name: "tier 3: node label fetched when pod has no selector",
 			pod: &corev1.Pod{Spec: corev1.PodSpec{
 				NodeName: "n1",
@@ -196,11 +200,6 @@ func TestDetectPodOS(t *testing.T) {
 			}},
 			nodeErr: errors.New("forbidden: cannot get nodes"),
 			want:    "",
-		},
-		{
-			name: "nil pod returns empty",
-			pod:  nil,
-			want: "",
 		},
 	}
 
@@ -299,18 +298,15 @@ func TestIsShellNotFoundError(t *testing.T) {
 			want:   false,
 		},
 		{
-			// Verbatim error from skyhook-io/radar#687 — a sh -c invocation
-			// against a Windows pod. Once we route Windows pods through
-			// cmd.exe this exact shape stops appearing, but the same family
-			// of hcs::System::CreateProcess errors still surfaces if cmd.exe
-			// itself is missing or if an operator-supplied ?shell= is wrong.
-			// Pin both signatures so the frontend's "Start debug container"
-			// CTA fires.
+			// Verbatim hcs error surface — full kubectl-style wrapping
+			// around the inner CreateProcess failure.
 			name:   "windows: hcs CreateProcess + 'the system cannot find the file'",
 			errMsg: `Internal error occurred: error executing command in container: failed to exec in container: failed to start exec "abc": hcs::System::CreateProcess: sh -c "..." def: The system cannot find the file specified.: unknown`,
 			want:   true,
 		},
 		{
+			// Non-English Windows surfaces the same hcs prefix but localizes
+			// the tail; prefix match alone must be enough.
 			name:   "windows: hcs CreateProcess prefix alone (non-English locale)",
 			errMsg: `hcs::System::CreateProcess: cmd.exe /c "..." ghi: <localized message>: unknown`,
 			want:   true,

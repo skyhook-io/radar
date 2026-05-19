@@ -56,42 +56,30 @@ var upgrader = websocket.Upgrader{
 // working-directory-in-prompt symptom from skyhook-io/radar#452.
 const defaultShellScript = "export TERM=xterm-256color; if command -v bash >/dev/null 2>&1; then exec bash -il; elif command -v ash >/dev/null 2>&1; then exec ash; else exec sh; fi"
 
-// windowsDefaultShellScript runs under cmd.exe and prefers PowerShell when
-// installed, falling back to cmd.exe itself. `where powershell` is the Windows
-// equivalent of `command -v` — its exit status is the existence check, and
-// stdout is silenced via `>nul 2>&1`. Nano Server images ship without
-// PowerShell, so the `|| cmd` branch is load-bearing for those.
-//
-// Note we deliberately do NOT try `pwsh` (PowerShell Core) first: Windows
-// container images that ship the OSS pwsh are rare in the wild, while the
-// in-box Windows PowerShell 5.1 is present on Server Core. Operators who want
-// pwsh can pass `?shell=pwsh.exe`.
+// windowsDefaultShellScript prefers PowerShell, falling back to cmd.exe.
+// The `|| cmd` branch is load-bearing for Nano Server images, which ship
+// without PowerShell.
 const windowsDefaultShellScript = `where powershell >nul 2>&1 && powershell || cmd`
 
 // DefaultPodShellCommand, when non-empty, overrides defaultShellScript as the
 // script passed to `sh -c`. Set by the bootstrap layer from the
 // --pod-shell-default CLI flag. Empty means "use the built-in default".
 //
-// This is POSIX-only by design — operators setting a custom default shell are
-// expressing intent for their Linux fleet. Windows pods continue to use
-// windowsDefaultShellScript regardless. (If we ever need Windows-specific
-// overrides, add a second flag rather than overloading this one.)
+// POSIX-only by design — Windows pods always use windowsDefaultShellScript
+// regardless of this value. A single command string can't safely target both
+// shells.
 var DefaultPodShellCommand string
 
 // defaultExecCommand builds the command argv for a pod exec session.
 //
 // Precedence:
-//  1. If override is non-empty (from ?shell=), use it verbatim as a single argv
-//     element — the caller is explicitly asking for that shell.
-//  2. If fallback is non-empty (from --pod-shell-default), run it as `sh -c fallback`
-//     UNLESS the pod is Windows, in which case the fallback is ignored (see
-//     DefaultPodShellCommand doc comment).
-//  3. If podOS == "windows", run `cmd.exe /c windowsDefaultShellScript`.
-//  4. Otherwise run `sh -c defaultShellScript`.
+//  1. ?shell= override — verbatim as a single argv element.
+//  2. podOS == "windows" — cmd.exe + windowsDefaultShellScript.
+//  3. --pod-shell-default fallback (POSIX-only, see DefaultPodShellCommand).
+//  4. Built-in defaultShellScript.
 //
-// podOS is the lowercase OS string ("linux", "windows", or "" when unknown).
-// An empty podOS is treated as Linux — the historical default — so detection
-// failures don't break the common case.
+// Empty podOS defaults to Linux so detection failures don't break the
+// common case.
 func defaultExecCommand(override, fallback, podOS string) []string {
 	if override != "" {
 		return []string{override}
@@ -105,52 +93,44 @@ func defaultExecCommand(override, fallback, podOS string) []string {
 	return []string{"sh", "-c", defaultShellScript}
 }
 
-// osNodeLabelsLookup fetches a node's labels for OS detection. Injected as a
-// function so detectPodOS is unit-testable without a fake client.
+// osNodeLabelsLookup is injected so detectPodOS is unit-testable without a
+// fake client.
 type osNodeLabelsLookup func(ctx context.Context, nodeName string) (map[string]string, error)
 
-// detectPodOS returns "windows" or "linux" (lowercased) for the pod, or "" if
-// the OS could not be determined. Detection follows three tiers, in order of
-// authority:
+// detectPodOS returns "windows" or "linux" (lowercased), or "" when unknown.
+// Three tiers, in order of authority:
 //
-//  1. pod.Spec.OS.Name — GA in K8s 1.25, the field explicitly designed for
-//     this. When present, trust it unconditionally.
-//  2. pod.Spec.NodeSelector — falls back to the older `kubernetes.io/os` /
-//     `beta.kubernetes.io/os` labels. Works because most Windows-bound pods
-//     carry an explicit selector (operators or admission webhooks inject it
-//     since Windows nodes are typically tainted to prevent accidental
-//     scheduling).
-//  3. The scheduled node's labels — for pods that omit the selector and rely
-//     on default node-affinity. This is the edge k9s has over Headlamp /
-//     Freelens, which only check the pod's selector and fail open here.
+//  1. pod.Spec.OS.Name — GA in K8s 1.25, designed for exactly this.
+//  2. pod.Spec.NodeSelector kubernetes.io/os (beta. variant as fallback).
+//  3. The scheduled node's labels — covers pods placed by default
+//     node-affinity rather than an explicit selector, common when Windows
+//     nodes are tainted and admission webhooks add the toleration without
+//     also injecting the selector.
 //
-// If lookupNode is nil or the node fetch returns an error (e.g. RBAC denies
-// `get nodes`), tier 3 is skipped and "" is returned — the caller will then
-// default to the Linux exec path, matching pre-Windows-support behavior.
+// On tier-3 lookup failure (typically RBAC denying `get nodes`), returns ""
+// so the caller defaults to Linux — matches pre-Windows-support behavior.
 func detectPodOS(ctx context.Context, pod *corev1.Pod, lookupNode osNodeLabelsLookup) string {
-	if pod == nil {
-		return ""
-	}
 	if pod.Spec.OS != nil && pod.Spec.OS.Name != "" {
 		return strings.ToLower(string(pod.Spec.OS.Name))
 	}
 	if osName, ok := osFromLabels(pod.Spec.NodeSelector); ok {
 		return strings.ToLower(osName)
 	}
-	if pod.Spec.NodeName != "" && lookupNode != nil {
-		if labels, err := lookupNode(ctx, pod.Spec.NodeName); err == nil {
-			if osName, ok := osFromLabels(labels); ok {
-				return strings.ToLower(osName)
-			}
-		}
+	if pod.Spec.NodeName == "" || lookupNode == nil {
+		return ""
+	}
+	labels, err := lookupNode(ctx, pod.Spec.NodeName)
+	if err != nil {
+		log.Printf("[exec] node label lookup for OS detection failed (node=%s, assuming Linux): %v", pod.Spec.NodeName, err)
+		return ""
+	}
+	if osName, ok := osFromLabels(labels); ok {
+		return strings.ToLower(osName)
 	}
 	return ""
 }
 
-// osFromLabels reads the OS from a label/selector map, preferring the current
-// `kubernetes.io/os` label over the deprecated `beta.kubernetes.io/os`. Both
-// hold the same value when both are present, so the order only matters when
-// one is missing.
+// osFromLabels prefers kubernetes.io/os over the deprecated beta. variant.
 func osFromLabels(m map[string]string) (string, bool) {
 	if v, ok := m["kubernetes.io/os"]; ok && v != "" {
 		return v, true
@@ -161,8 +141,6 @@ func osFromLabels(m map[string]string) (string, bool) {
 	return "", false
 }
 
-// nodeLabelsLookupFor returns an osNodeLabelsLookup backed by the given
-// kubernetes client. Extracted so handlePodExec stays readable.
 func nodeLabelsLookupFor(client kubernetes.Interface) osNodeLabelsLookup {
 	if client == nil {
 		return nil
@@ -304,16 +282,9 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 	}
 	auth.AuditLog(r, namespace, podName)
 
-	// Build the argv. If the caller explicitly asked for a shell via ?shell=,
-	// skip OS detection entirely — they've chosen the command, we just run it.
-	// Same when a Linux fallback is configured via --pod-shell-default: that
-	// flag is POSIX-only by contract (see DefaultPodShellCommand), so OS
-	// detection would do nothing useful for it.
-	//
-	// We only fetch the pod to detect Windows when we'd otherwise fall through
-	// to the built-in default script. A pod-fetch failure here is non-fatal:
-	// we log it and proceed assuming Linux, matching pre-Windows-support
-	// behavior. The exec attempt itself surfaces any deeper auth problems.
+	// OS detection only runs when we'd fall through to the built-in default;
+	// ?shell= and --pod-shell-default short-circuit it. Pod-fetch failure is
+	// non-fatal: log and assume Linux.
 	var podOS string
 	if overrideShell == "" && DefaultPodShellCommand == "" {
 		pod, err := client.CoreV1().Pods(namespace).Get(r.Context(), podName, metav1.GetOptions{})
