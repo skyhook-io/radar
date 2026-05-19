@@ -876,20 +876,12 @@ func mergeScopeCandidates(ctxNs, flagNs string, accessible []string, authoritati
 
 // pickPrimaryNs picks the namespace that PermissionCheckResult.Namespace
 // reports. The dynamic CRD cache reads it as NamespaceFallback (single
-// anchor for all CRD informers) and the diagnostics page surfaces it as
-// the operating namespace. It has to be a namespace where the user
+// anchor for all CRD informers); it has to be a namespace where the user
 // actually has reads, otherwise CRD informers get pinned where they 403.
 // Walk candidates in order and pick the first one any typed kind landed
-// in. When nothing was granted, fall back to scopeNamespaces[0] — the
+// in. Fall back to scopeNamespaces[0] when nothing was granted — the
 // dynamic cache short-circuits on NamespaceScoped=false in that case, so
-// the fallback is inert there, but diagnostics still displays it as the
-// nominal anchor (preserves pre-fix behavior).
-//
-// When typed kinds get granted across multiple distinct namespaces, this
-// picks one and the CRD cache anchors to it — CRDs the user reads in the
-// other granted namespaces will silently 403. Log a warning when that
-// happens so the operator can see the asymmetry. A proper fix needs
-// multi-ns scope per kind in pkg/k8score.
+// the value is only used by the diagnostics page (preserves prior shape).
 func pickPrimaryNs(scopeNamespaces []string, scopes map[string]k8score.ResourceScope) string {
 	granted := map[string]bool{}
 	for _, s := range scopes {
@@ -899,6 +891,9 @@ func pickPrimaryNs(scopeNamespaces []string, scopes map[string]k8score.ResourceS
 	}
 	for _, ns := range scopeNamespaces {
 		if granted[ns] {
+			// CRDs the user reads in the OTHER granted namespaces will
+			// silently 403 — proper fix needs multi-ns scope per kind in
+			// pkg/k8score; warn so the operator can see the asymmetry.
 			if len(granted) > 1 {
 				log.Printf("RBAC: typed kinds granted in %d distinct namespaces; CRD informer fallback pinned to %q — CRDs in the others will be marked denied", len(granted), SanitizeForLog(ns))
 			}

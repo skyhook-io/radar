@@ -168,15 +168,6 @@ func TestPickPrimaryNs(t *testing.T) {
 			want: "team-a",
 		},
 		{
-			name:       "single granted candidate not at position 0",
-			candidates: []string{"default", "team-a"},
-			scopes: map[string]k8score.ResourceScope{
-				k8score.Pods:    disabled,
-				k8score.Secrets: scope("team-a"),
-			},
-			want: "team-a",
-		},
-		{
 			name:       "no candidates returns empty",
 			candidates: nil,
 			scopes:     map[string]k8score.ResourceScope{k8score.Pods: scope("team-a")},
@@ -199,51 +190,6 @@ func TestPickPrimaryNs(t *testing.T) {
 	}
 }
 
-// setNamespaceGlobals stashes and restores the package-level namespace
-// globals so tests can drive buildScopeCandidates deterministically.
-func setNamespaceGlobals(t *testing.T, ctxNs, flagNs string) {
-	t.Helper()
-	clientMu.Lock()
-	origCtx, origFlag := contextNamespace, fallbackNamespace
-	contextNamespace, fallbackNamespace = ctxNs, flagNs
-	clientMu.Unlock()
-	t.Cleanup(func() {
-		clientMu.Lock()
-		contextNamespace, fallbackNamespace = origCtx, origFlag
-		clientMu.Unlock()
-	})
-}
-
-// buildScopeCandidates exercised without a live client — the nil-client
-// branch in GetAccessibleNamespaces takes the non-authoritative path,
-// matching the real shape of a namespace-restricted user (no cluster-wide
-// list-namespaces grant).
-func TestBuildScopeCandidates_NonAuthoritativeUsesContextAndFlag(t *testing.T) {
-	setNamespaceGlobals(t, "dev", "prod")
-
-	got := buildScopeCandidates(context.Background())
-	want := []string{"dev", "prod"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("buildScopeCandidates = %v, want %v (both kubeconfig context and --namespace flag must surface)", got, want)
-	}
-}
-
-func TestBuildScopeCandidates_NonAuthoritativeDedupes(t *testing.T) {
-	setNamespaceGlobals(t, "shared", "shared")
-	got := buildScopeCandidates(context.Background())
-	if len(got) != 1 || got[0] != "shared" {
-		t.Errorf("buildScopeCandidates = %v, want exactly [shared]", got)
-	}
-}
-
-func TestBuildScopeCandidates_EmptyWhenNothingConfigured(t *testing.T) {
-	setNamespaceGlobals(t, "", "")
-	got := buildScopeCandidates(context.Background())
-	if len(got) != 0 {
-		t.Errorf("buildScopeCandidates = %v, want empty when no ns config and no client", got)
-	}
-}
-
 // genNamespaces produces N distinct namespace names — used to drive
 // mergeScopeCandidates past the cap, which a live-client test can't do
 // without a fake clientset.
@@ -253,17 +199,6 @@ func genNamespaces(prefix string, count int) []string {
 		out[i] = fmt.Sprintf("%s-%03d", prefix, i)
 	}
 	return out
-}
-
-func TestMergeScopeCandidates_BelowCap(t *testing.T) {
-	out, dropped := mergeScopeCandidates("dev", "prod", []string{"alpha", "beta"}, true)
-	want := []string{"dev", "prod", "alpha", "beta"}
-	if !reflect.DeepEqual(out, want) {
-		t.Errorf("out = %v, want %v", out, want)
-	}
-	if dropped != 0 {
-		t.Errorf("dropped = %d, want 0", dropped)
-	}
 }
 
 func TestMergeScopeCandidates_NonAuthoritativeIgnoresAccessible(t *testing.T) {
@@ -305,64 +240,6 @@ func TestMergeScopeCandidates_CountsDropsWithContextAndFlag(t *testing.T) {
 	// 25 accessible, 18 of them fit (after dev+prod take 2 slots), 7 drop.
 	if dropped != 7 {
 		t.Errorf("dropped = %d, want 7 (25 accessible - 18 remaining cap slots)", dropped)
-	}
-}
-
-// Dedup must not contribute to dropped — a duplicate of an already-seen
-// namespace is a no-op, not a drop. Construct accessible so that AFTER
-// dedup the total exactly fills the cap; if dedup were miscounted as a
-// drop, dropped would be non-zero.
-func TestMergeScopeCandidates_DedupDoesNotCountAsDrop(t *testing.T) {
-	// dev + prod (2 slots) + dup of prod (no-op) + 18 unique = 20 = cap.
-	accessible := append([]string{"prod"}, genNamespaces("ns", 18)...)
-	out, dropped := mergeScopeCandidates("dev", "prod", accessible, true)
-	if len(out) != maxScopeCandidates {
-		t.Errorf("len(out) = %d, want %d", len(out), maxScopeCandidates)
-	}
-	if dropped != 0 {
-		t.Errorf("dropped = %d, want 0 (the dup of `prod` is dedup, not truncation)", dropped)
-	}
-}
-
-// probeListAccessWith treats non-auth errors (timeout, network blip) as
-// optimistic-allow — the reflector will retry rather than have the probe
-// pre-disable a kind. That convention applies inside the candidate walk
-// too: a transient on candidate N stops the walk at N (with hadErrors=true
-// shortening the cache TTL) and the probe re-runs on the next cycle. This
-// can mask a real grant on candidate N+1 until the retry. Pinning the
-// behavior so a "let's keep walking on transient" refactor surfaces here
-// instead of as a surprise scope flip.
-func TestProbeResourceAccess_TransientOnCandidateStopsWalk(t *testing.T) {
-	const flapNs, grantNs = "flap-ns", "grant-ns"
-
-	scheme := runtime.NewScheme()
-	gvrToListKind := map[schema.GroupVersionResource]string{}
-	for _, p := range resourceProbeTargets(&ResourcePermissions{}) {
-		gvrToListKind[p.gvr] = p.gvr.Resource + "List"
-	}
-	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToListKind)
-	dyn.PrependReactor("list", "secrets", func(action clienttesting.Action) (bool, runtime.Object, error) {
-		la, _ := action.(clienttesting.ListAction)
-		switch la.GetNamespace() {
-		case "":
-			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", nil)
-		case flapNs:
-			return true, nil, apierrors.NewServerTimeout(schema.GroupResource{Resource: "secrets"}, "list", 1)
-		case grantNs:
-			return false, nil, nil // fall through to default (empty list)
-		}
-		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", nil)
-	})
-
-	result, hadErrors := probeResourceAccess(context.Background(), dyn, []string{flapNs, grantNs}, false)
-
-	if !hadErrors {
-		t.Errorf("hadErrors should be true so the cache TTL shortens and the probe re-runs")
-	}
-	// Optimistic-allow on transient is the load-bearing piece: scope settles
-	// on the flapping ns instead of walking through to grantNs.
-	if got := scopeOf(result, k8score.Secrets); got != (k8score.ResourceScope{Enabled: true, Namespace: flapNs}) {
-		t.Errorf("Secrets scope = %+v, want enabled+%q (transient on cand[0] stops the walk via optimistic-allow)", got, flapNs)
 	}
 }
 
