@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"context"
+	"reflect"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -221,7 +222,7 @@ func TestBuildScopeCandidates_NonAuthoritativeUsesContextAndFlag(t *testing.T) {
 
 	got := buildScopeCandidates(context.Background())
 	want := []string{"dev", "prod"}
-	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+	if !reflect.DeepEqual(got, want) {
 		t.Errorf("buildScopeCandidates = %v, want %v (both kubeconfig context and --namespace flag must surface)", got, want)
 	}
 }
@@ -239,6 +240,48 @@ func TestBuildScopeCandidates_EmptyWhenNothingConfigured(t *testing.T) {
 	got := buildScopeCandidates(context.Background())
 	if len(got) != 0 {
 		t.Errorf("buildScopeCandidates = %v, want empty when no ns config and no client", got)
+	}
+}
+
+// probeListAccessWith treats non-auth errors (timeout, network blip) as
+// optimistic-allow — the reflector will retry rather than have the probe
+// pre-disable a kind. That convention applies inside the candidate walk
+// too: a transient on candidate N stops the walk at N (with hadErrors=true
+// shortening the cache TTL) and the probe re-runs on the next cycle. This
+// can mask a real grant on candidate N+1 until the retry. Pinning the
+// behavior so a "let's keep walking on transient" refactor surfaces here
+// instead of as a surprise scope flip.
+func TestProbeResourceAccess_TransientOnCandidateStopsWalk(t *testing.T) {
+	const flapNs, grantNs = "flap-ns", "grant-ns"
+
+	scheme := runtime.NewScheme()
+	gvrToListKind := map[schema.GroupVersionResource]string{}
+	for _, p := range resourceProbeTargets(&ResourcePermissions{}) {
+		gvrToListKind[p.gvr] = p.gvr.Resource + "List"
+	}
+	dyn := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(scheme, gvrToListKind)
+	dyn.PrependReactor("list", "secrets", func(action clienttesting.Action) (bool, runtime.Object, error) {
+		la, _ := action.(clienttesting.ListAction)
+		switch la.GetNamespace() {
+		case "":
+			return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", nil)
+		case flapNs:
+			return true, nil, apierrors.NewServerTimeout(schema.GroupResource{Resource: "secrets"}, "list", 1)
+		case grantNs:
+			return false, nil, nil // fall through to default (empty list)
+		}
+		return true, nil, apierrors.NewForbidden(schema.GroupResource{Resource: "secrets"}, "", nil)
+	})
+
+	result, hadErrors := probeResourceAccess(context.Background(), dyn, []string{flapNs, grantNs}, false)
+
+	if !hadErrors {
+		t.Errorf("hadErrors should be true so the cache TTL shortens and the probe re-runs")
+	}
+	// Optimistic-allow on transient is the load-bearing piece: scope settles
+	// on the flapping ns instead of walking through to grantNs.
+	if got := scopeOf(result, k8score.Secrets); got != (k8score.ResourceScope{Enabled: true, Namespace: flapNs}) {
+		t.Errorf("Secrets scope = %+v, want enabled+%q (transient on cand[0] stops the walk via optimistic-allow)", got, flapNs)
 	}
 }
 
