@@ -116,7 +116,7 @@ func detectPodOS(ctx context.Context, pod *corev1.Pod, lookupNode osNodeLabelsLo
 	if osName, ok := osFromLabels(pod.Spec.NodeSelector); ok {
 		return strings.ToLower(osName)
 	}
-	if pod.Spec.NodeName == "" || lookupNode == nil {
+	if pod.Spec.NodeName == "" {
 		return ""
 	}
 	labels, err := lookupNode(ctx, pod.Spec.NodeName)
@@ -142,9 +142,6 @@ func osFromLabels(m map[string]string) (string, bool) {
 }
 
 func nodeLabelsLookupFor(client kubernetes.Interface) osNodeLabelsLookup {
-	if client == nil {
-		return nil
-	}
 	return func(ctx context.Context, nodeName string) (map[string]string, error) {
 		node, err := client.CoreV1().Nodes().Get(ctx, nodeName, metav1.GetOptions{})
 		if err != nil {
