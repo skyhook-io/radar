@@ -37,6 +37,9 @@ interface ResourceActionsBarProps {
   showYaml?: boolean
   onToggleYaml?: () => void
 
+  /** When provided, renders a "Compare" button that opens the compare picker. */
+  onCompareTo?: () => void
+
   // Capabilities (injected by platform)
   canExec?: boolean
   canViewLogs?: boolean
@@ -111,6 +114,7 @@ interface ResourceActionsBarProps {
 
 export function ResourceActionsBar({
   resource, data, onClose, hideLogs, showYaml, onToggleYaml,
+  onCompareTo,
   canExec, canViewLogs, canPortForward,
   onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
   renderPortForward,
@@ -481,6 +485,18 @@ export function ResourceActionsBar({
           <FileCode2 className="w-3.5 h-3.5" />
           YAML
         </button>
+      )}
+
+      {onCompareTo && (
+        <Tooltip content={`Compare to another ${formatKindName(resource.kind).toLowerCase()}`}>
+          <button
+            onClick={onCompareTo}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary border border-theme-border-light hover:bg-theme-elevated rounded-lg transition-colors"
+          >
+            <GitCompare className="w-3.5 h-3.5" />
+            Compare
+          </button>
+        </Tooltip>
       )}
 
       {onDelete && (

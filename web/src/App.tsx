@@ -12,6 +12,7 @@ import { ResourcesView } from './components/resources/ResourcesView'
 import { serializeColumnFilters } from './components/resources/resource-utils'
 import { ResourceDetailDrawer } from './components/resources/ResourceDetailDrawer'
 import { WorkloadViewRoute } from './components/workload/WorkloadView'
+import { CompareViewRoute } from './components/compare/CompareViewRoute'
 import { HelmView } from './components/helm/HelmView'
 import { TrafficView } from './components/traffic/TrafficView'
 import { CostView } from './components/cost/CostView'
@@ -117,7 +118,7 @@ function apiResourceToNodeIdPrefix(apiResource: string): string {
 }
 
 // Extended MainView type that includes traffic and cost
-type ExtendedMainView = MainView | 'traffic' | 'cost' | 'workload' | 'audit' | 'gitops'
+type ExtendedMainView = MainView | 'traffic' | 'cost' | 'workload' | 'audit' | 'gitops' | 'compare'
 
 // Extract view from URL path
 function getViewFromPath(pathname: string): ExtendedMainView {
@@ -132,6 +133,7 @@ function getViewFromPath(pathname: string): ExtendedMainView {
   if (path === 'workload') return 'workload'
   if (path === 'audit') return 'audit'
   if (path === 'gitops') return 'gitops'
+  if (path === 'compare') return 'compare'
   return 'home'
 }
 
@@ -1489,6 +1491,9 @@ function AppInner() {
             }}
           />
         )}
+
+        {/* Compare two resources of the same kind side-by-side */}
+        {mainView === 'compare' && <CompareViewRoute />}
 
         </ErrorBoundary>
       </div>}

@@ -43,6 +43,8 @@ import { NamespaceRenderer } from '../resources/renderers/NamespaceRenderer'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
 import { cleanYamlForDuplicate } from '../../utils/skeleton-yaml'
 import { useDesktopDownload } from '../../hooks/useDesktopDownload'
+import { useCompareLauncher } from '../compare/useCompareLauncher'
+import { apiVersionToGroup } from '../../utils/navigation'
 
 type TabType = 'overview' | 'timeline' | 'logs' | 'metrics' | 'yaml'
 
@@ -332,8 +334,23 @@ export function WorkloadView({
   // RBAC
   const canUpdateSecrets = useCanUpdateSecrets()
   const updateResource = useUpdateResource()
-  const actionsBarProps = useActionsBarProps(kindProp, namespace, name)
+  const baseActionsBarProps = useActionsBarProps(kindProp, namespace, name)
   const desktopDownload = useDesktopDownload()
+
+  const resourceGroup = useMemo(
+    () => (resource?.apiVersion ? apiVersionToGroup(resource.apiVersion) : undefined),
+    [resource?.apiVersion],
+  )
+  const { onCompareTo, picker: comparePicker } = useCompareLauncher({
+    kind: kindProp,
+    namespace,
+    name,
+    group: resourceGroup || undefined,
+  })
+  const actionsBarProps = useMemo(
+    () => ({ ...baseActionsBarProps, onCompareTo }),
+    [baseActionsBarProps, onCompareTo],
+  )
 
   const handleUpdateResource = useCallback(async (params: { kind: string; namespace: string; name: string; yaml: string }) => {
     await updateResource.mutateAsync(params)
@@ -421,6 +438,7 @@ export function WorkloadView({
         rest.onNavigateToResource?.({ kind: kindToPlural(result.kind), namespace: result.namespace, name: result.name, group: '' })
       }}
     />
+    {comparePicker}
     </>
   )
 }

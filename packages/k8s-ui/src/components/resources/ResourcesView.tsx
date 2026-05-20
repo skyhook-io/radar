@@ -22,6 +22,7 @@ import {
   Copy,
   Check,
   Plus,
+  GitCompare,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { ResourceBar } from '../ui/ResourceBar'
@@ -150,6 +151,7 @@ import { AzureManagedControlPlaneCell, AzureManagedMachinePoolCell, AzureMachine
 import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { ResourcesSidebar } from './ResourcesSidebar'
 import type { SelectedKindInfo } from './ResourcesSidebar'
+import { CompareTray, togglePick, pickIndex, refToParam, type CompareTrayPick } from '../compare'
 
 // Pod problem filter options (special multi-select, not a single column value)
 const POD_PROBLEMS = ['CrashLoopBackOff', 'ImagePullBackOff', 'OOMKilled', 'Unschedulable', 'Not Ready', 'High Restarts', 'Init Failed', 'Exit Code Error', 'Failed', 'Other'] as const
@@ -2185,6 +2187,37 @@ export function ResourcesView({
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
   const virtuosoRef = useRef<TableVirtuosoHandle>(null)
 
+  // Compare mode is only meaningful when the host wired onNavigate — without it the Compare
+  // CTA in the tray would silently no-op. Gate everything below on this capability.
+  const compareEnabled = !!onNavigate
+  const [compareMode, setCompareMode] = useState(false)
+  const [comparePicks, setComparePicks] = useState<CompareTrayPick[]>([])
+
+  // Picks reference the previous kind's resources — clear when the kind changes.
+  useEffect(() => { setComparePicks([]) }, [selectedKind.name, selectedKind.group])
+
+  const exitCompareMode = useCallback(() => {
+    setCompareMode(false)
+    setComparePicks([])
+  }, [])
+
+  const toggleComparePick = useCallback((resource: any) => {
+    const ns = resource.metadata?.namespace || ''
+    const name = resource.metadata?.name
+    if (!name) return
+    setComparePicks(prev => togglePick(prev, { namespace: ns, name }))
+  }, [])
+
+  const handleCompareNavigate = useCallback(() => {
+    if (comparePicks.length !== 2 || !onNavigate) return
+    const params = new URLSearchParams()
+    params.set('kind', selectedKind.name)
+    if (selectedKind.group) params.set('group', selectedKind.group)
+    params.set('a', refToParam(comparePicks[0]))
+    params.set('b', refToParam(comparePicks[1]))
+    onNavigate(`/compare?${params.toString()}`)
+  }, [comparePicks, selectedKind.name, selectedKind.group, onNavigate])
+
   // Reset highlight when kind, search, sort, or namespace changes
   const namespacesKey = namespaces.join(',')
   useEffect(() => { setHighlightedIndex(-1) }, [selectedKind.name, searchTerm, sortColumn, sortDirection, namespacesKey])
@@ -2290,7 +2323,11 @@ export function ResourcesView({
       description: 'Open resource detail',
       category: 'Resource Actions',
       scope: 'resources',
-      handler: () => selectResource(getHighlightedResource()),
+      handler: () => {
+        const res = getHighlightedResource()
+        if (compareMode) toggleComparePick(res)
+        else selectResource(res)
+      },
       enabled: highlightedIndex >= 0,
     },
     {
@@ -2299,7 +2336,11 @@ export function ResourcesView({
       description: 'Open resource detail',
       category: 'Resource Actions',
       scope: 'resources',
-      handler: () => selectResource(getHighlightedResource()),
+      handler: () => {
+        const res = getHighlightedResource()
+        if (compareMode) toggleComparePick(res)
+        else selectResource(res)
+      },
       enabled: highlightedIndex >= 0,
     },
     {
@@ -2314,7 +2355,7 @@ export function ResourcesView({
         const cb = onResourceClickYaml || onResourceClick
         cb?.({ kind: selectedKind.name, namespace: res.metadata.namespace || '', name: res.metadata.name, group: selectedKind.group })
       },
-      enabled: highlightedIndex >= 0,
+      enabled: highlightedIndex >= 0 && !compareMode,
     },
     {
       id: 'resources-logs',
@@ -2338,7 +2379,7 @@ export function ResourcesView({
           openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })
         }
       },
-      enabled: highlightedIndex >= 0 && ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs'].includes(selectedKind.name.toLowerCase()),
+      enabled: highlightedIndex >= 0 && !compareMode && ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs'].includes(selectedKind.name.toLowerCase()),
     },
     {
       id: 'resources-sort-name',
@@ -2371,11 +2412,11 @@ export function ResourcesView({
       category: 'Table',
       scope: 'resources',
       handler: () => {
-        // Close dropdowns first, then clear highlight, then blur search
         if (showColumnPicker) { setShowColumnPicker(false); return }
         if (openColumnFilter) { setOpenColumnFilter(null); return }
         if (showProblemsDropdown) { setShowProblemsDropdown(false); return }
         if (showLabelsDropdown) { setShowLabelsDropdown(false); return }
+        if (compareMode) { exitCompareMode(); return }
         if (highlightedIndex >= 0) setHighlightedIndex(-1)
         else searchInputRef.current?.blur()
       },
@@ -3712,6 +3753,22 @@ export function ResourcesView({
               </button>
             </Tooltip>
           )}
+          {compareEnabled && (
+            <Tooltip content={compareMode ? 'Exit compare mode' : 'Compare two resources side-by-side'}>
+              <button
+                onClick={() => (compareMode ? exitCompareMode() : setCompareMode(true))}
+                aria-pressed={compareMode}
+                className={clsx(
+                  'p-2 rounded-lg transition-colors',
+                  compareMode
+                    ? 'bg-skyhook-500/15 text-skyhook-300 border border-skyhook-400/50'
+                    : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated',
+                )}
+              >
+                <GitCompare className="w-4 h-4" />
+              </button>
+            </Tooltip>
+          )}
         </div>
 
         {/* Table */}
@@ -3814,6 +3871,14 @@ export function ResourcesView({
               components={virtuosoComponents}
               fixedHeaderContent={() => (
                 <tr>
+                  {compareMode && (
+                    <th
+                      className="w-9 px-2 py-3 text-xs font-medium uppercase tracking-wide bg-theme-base border-b border-r-subtle border-theme-border text-center text-skyhook-400"
+                      title="Compare mode"
+                    >
+                      <GitCompare className="w-3.5 h-3.5 inline-block opacity-70" />
+                    </th>
+                  )}
                   {columns.map((col, colIdx) => {
                     const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object', 'cpu', 'memory'].includes(col.key)
                     const isSorted = sortColumn === col.key
@@ -3985,6 +4050,9 @@ export function ResourcesView({
                   selectedResource?.namespace === resource.metadata?.namespace &&
                   selectedResource?.name === resource.metadata?.name
                 const isHighlighted = index === highlightedIndex
+                const pickIdx = compareMode
+                  ? pickIndex(comparePicks, { namespace: resource.metadata?.namespace || '', name: resource.metadata?.name || '' })
+                  : -1
                 return (
                   <ResourceRowCells
                     resource={resource}
@@ -3996,8 +4064,10 @@ export function ResourcesView({
                     isSelected={isSelected}
                     isHighlighted={isHighlighted}
                     majorityNodeMinorVersion={majorityNodeMinorVersion}
-                    onClick={() => selectResource(resource, isSelected)}
+                    onClick={() => compareMode ? toggleComparePick(resource) : selectResource(resource, isSelected)}
                     onMouseEnter={() => setHighlightedIndex(-1)}
+                    compareMode={compareMode}
+                    comparePickIndex={pickIdx}
                   />
                 )
               }}
@@ -4013,6 +4083,15 @@ export function ResourcesView({
             </MetricsContext.Provider>
           )}
         </div>
+        {compareMode && (
+          <CompareTray
+            kind={selectedKind.name}
+            picks={comparePicks}
+            onRemove={(idx) => setComparePicks(prev => prev.filter((_, i) => i !== idx))}
+            onCompare={handleCompareNavigate}
+            onExit={exitCompareMode}
+          />
+        )}
       </div>
     </div>
     </ResourcesViewDataContext.Provider>
@@ -4031,11 +4110,52 @@ interface ResourceRowCellsProps {
   majorityNodeMinorVersion?: string
   onClick?: () => void
   onMouseEnter?: () => void
+  compareMode?: boolean
+  /** -1 when not picked; 0 = pick A; 1 = pick B. */
+  comparePickIndex?: number
 }
 
-function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter }: ResourceRowCellsProps) {
+function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter, compareMode, comparePickIndex = -1 }: ResourceRowCellsProps) {
+  const isPicked = comparePickIndex >= 0
+  const rowHighlight = compareMode
+    ? isPicked
+      ? comparePickIndex === 0
+        ? 'bg-blue-500/15 group-hover/row:bg-blue-500/25'
+        : 'bg-emerald-500/15 group-hover/row:bg-emerald-500/25'
+      : isHighlighted
+        ? 'selection selection-ring'
+        : 'group-hover/row:bg-theme-surface/50'
+    : isSelected
+      ? 'selection-strong group-hover/row:bg-skyhook-500/30'
+      : isHighlighted
+        ? 'selection selection-ring'
+        : 'group-hover/row:bg-theme-surface/50'
   return (
     <>
+      {compareMode && (
+        <td
+          onClick={onClick}
+          onMouseEnter={onMouseEnter}
+          className={clsx('w-9 px-2 py-3 border-b-subtle cursor-pointer text-center align-middle transition-colors', rowHighlight)}
+        >
+          {isPicked ? (
+            <span
+              className={clsx(
+                'inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold leading-none',
+                comparePickIndex === 0 ? 'bg-blue-400/90 text-blue-950' : 'bg-emerald-400/90 text-emerald-950',
+              )}
+              aria-label={comparePickIndex === 0 ? 'Pick A' : 'Pick B'}
+            >
+              {comparePickIndex === 0 ? 'A' : 'B'}
+            </span>
+          ) : (
+            <span
+              className="inline-block w-4 h-4 rounded border border-theme-border-light group-hover/row:border-skyhook-400/60 transition-colors"
+              aria-hidden
+            />
+          )}
+        </td>
+      )}
       {columns.map((col) => (
         <td
           key={col.key}
@@ -4044,11 +4164,7 @@ function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, h
           className={clsx(
             'px-4 py-3 border-b-subtle cursor-pointer transition-colors',
             col.key !== 'status' && 'overflow-hidden truncate',
-            isSelected
-              ? 'selection-strong group-hover/row:bg-skyhook-500/30'
-              : isHighlighted
-                ? 'selection selection-ring'
-                : 'group-hover/row:bg-theme-surface/50'
+            rowHighlight,
           )}
         >
           <CellContent resource={resource} kind={kind} group={group} column={col.key} majorityNodeMinorVersion={majorityNodeMinorVersion} extraColumn={extraColumnsByKey?.get(col.key)} />
