@@ -6,6 +6,9 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps(go):"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
     groups:
       k8s:
         patterns:
@@ -21,6 +24,9 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps(npm):"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
 
   - package-ecosystem: github-actions
     directory: /
@@ -28,3 +34,6 @@ updates:
       interval: weekly
     commit-message:
       prefix: "deps(actions):"
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
