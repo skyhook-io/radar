@@ -1,7 +1,7 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CompareResourcePicker, refToParam, type CompareResourceRef } from '@skyhook-io/k8s-ui'
-import { useResources } from '../../api/client'
+import { useCompareCandidates } from './useCompareCandidates'
 
 interface UseCompareLauncherArgs {
   /** API plural kind (e.g. "deployments") — must match the route segment used by `/api/resources/{kind}`. */
@@ -22,26 +22,8 @@ interface CompareLauncher {
 export function useCompareLauncher({ kind, namespace, name, group }: UseCompareLauncherArgs): CompareLauncher {
   const navigate = useNavigate()
   const [open, setOpen] = useState(false)
-
   const kindLower = kind.toLowerCase()
-
-  const { data, isPending, error } = useResources<{ metadata?: { name?: string; namespace?: string } }>(
-    open ? kindLower : '',
-    undefined,
-    group,
-  )
-
-  const candidates: CompareResourceRef[] = useMemo(() => {
-    if (!data) return []
-    return data
-      .filter(r => r?.metadata?.name)
-      .map(r => ({
-        kind: kindLower,
-        namespace: r.metadata?.namespace ?? '',
-        name: r.metadata!.name!,
-        group,
-      }))
-  }, [data, kindLower, group])
+  const { candidates, isPending, error } = useCompareCandidates(kindLower, group, open)
 
   const onCompareTo = useCallback(() => setOpen(true), [])
 

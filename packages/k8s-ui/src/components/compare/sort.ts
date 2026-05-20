@@ -1,24 +1,11 @@
-export interface SortableCandidate {
-  namespace: string
-  name: string
-}
-
-export interface SortSource {
-  namespace: string
-  name: string
-}
+import type { NamespacedRef } from './types'
 
 /**
- * Order candidates for the compare picker:
- * 1. Same-namespace as source first — that's the obvious target.
- * 2. Then alphabetical by name (locale).
- * 3. Tie-break by namespace.
+ * Order candidates for the compare picker: same-namespace as source first
+ * (that's the obvious target), then alphabetical, then namespace tie-break.
  * The source itself is filtered out.
  */
-export function sortCandidates<T extends SortableCandidate>(
-  candidates: T[],
-  source: SortSource,
-): T[] {
+export function sortCandidates<T extends NamespacedRef>(candidates: T[], source: NamespacedRef): T[] {
   return [...candidates]
     .filter(c => !(c.namespace === source.namespace && c.name === source.name))
     .sort((x, y) => {
@@ -32,7 +19,7 @@ export function sortCandidates<T extends SortableCandidate>(
 }
 
 /** Apply a free-text filter to candidates by name OR namespace substring. */
-export function filterCandidates<T extends SortableCandidate>(candidates: T[], query: string): T[] {
+export function filterCandidates<T extends NamespacedRef>(candidates: T[], query: string): T[] {
   const q = query.trim().toLowerCase()
   if (!q) return candidates
   return candidates.filter(c => c.name.toLowerCase().includes(q) || c.namespace.toLowerCase().includes(q))

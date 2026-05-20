@@ -5,8 +5,9 @@ import { YamlDiffEditor } from '../ui/YamlEditor'
 import { Tooltip } from '../ui/Tooltip'
 import { pluralToKind } from '../../utils/navigation'
 import { toComparableYaml } from './normalize'
+import { SIDE_TONES, type CompareSide } from './types'
 
-export type CompareSide = 'a' | 'b'
+export type { CompareSide }
 
 export interface CompareResourceRef {
   kind: string
@@ -48,22 +49,19 @@ function ResourcePill({
   error?: string
   onChange?: () => void
 }) {
-  const okTone = side === 'a'
-    ? 'border-blue-400/40 bg-blue-500/10'
-    : 'border-emerald-400/40 bg-emerald-500/10'
+  const tones = SIDE_TONES[side]
   const errTone = 'border-red-400/50 bg-red-500/10'
-  const dotTone = side === 'a' ? 'bg-blue-400/90 text-blue-950' : 'bg-emerald-400/90 text-emerald-950'
   const label = side === 'a' ? 'A' : 'B'
   const full = resource.namespace ? `${resource.namespace}/${resource.name}` : resource.name
   return (
     <div
       className={clsx(
         'group flex items-center gap-2 pl-1.5 pr-2 py-1 rounded-lg border text-xs font-mono min-w-0 max-w-[18rem]',
-        error ? errTone : okTone,
+        error ? errTone : clsx(tones.containerBorder, tones.containerBg),
       )}
       title={error ? `${full} — ${error}` : full}
     >
-      <span className={clsx('inline-flex items-center justify-center w-4 h-4 rounded text-[10px] font-bold leading-none shrink-0', error ? 'bg-red-400/90 text-red-950' : dotTone)}>
+      <span className={clsx('inline-flex items-center justify-center w-4 h-4 rounded text-[10px] font-bold leading-none shrink-0', error ? 'bg-red-400/90 text-red-950' : tones.chipBg)}>
         {label}
       </span>
       {error && <AlertTriangle className="w-3 h-3 text-red-400 shrink-0" aria-hidden />}
@@ -113,7 +111,6 @@ export function ResourceCompareView({
 
   return (
     <div className="flex flex-col h-full bg-theme-base">
-      {/* The A→B gradient ribbon pairs the two pills below — visually communicates "this vs that". */}
       <div className="h-0.5 w-full bg-gradient-to-r from-blue-400/70 via-skyhook-400/40 to-emerald-400/70" />
 
       <div className="flex items-center gap-3 px-4 py-2.5 border-b border-theme-border bg-theme-surface">
@@ -159,9 +156,9 @@ export function ResourceCompareView({
           <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
           <span className="min-w-0">
             Failed to load {aError && bError ? 'both sides' : aError ? 'side A' : 'side B'}
-            {(aError || bError) ? ': ' : ''}
+            {': '}
             <span className="font-mono">{aError || bError}</span>
-            {onChangeA || onChangeB ? ' — use the pencil icon on the affected pill to pick a different resource.' : ''}
+            {(onChangeA || onChangeB) && ' — use the pencil icon on the affected pill to pick a different resource.'}
           </span>
         </div>
       )}

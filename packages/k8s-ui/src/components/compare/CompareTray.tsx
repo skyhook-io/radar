@@ -2,18 +2,14 @@ import { clsx } from 'clsx'
 import { GitCompare, X, ArrowRight } from 'lucide-react'
 import { Tooltip } from '../ui/Tooltip'
 import { pluralToKind } from '../../utils/navigation'
-import type { CompareSide } from './ResourceCompareView'
+import { SIDE_TONES, type CompareSide, type NamespacedRef } from './types'
 
-export interface CompareTrayPick {
-  namespace: string
-  name: string
-}
+export type CompareTrayPick = NamespacedRef
 
 export interface CompareTrayProps {
   /** Plural kind (e.g. "deployments") — used to label the tray. */
   kind: string
   picks: CompareTrayPick[]
-  /** Called when the user removes pick at index. */
   onRemove: (index: number) => void
   /** Called when the user hits the Compare CTA. Only invoked when 2 picks. */
   onCompare: () => void
@@ -21,10 +17,6 @@ export interface CompareTrayProps {
   onExit: () => void
 }
 
-/**
- * Sticky bottom tray for the "select 2, hit Compare" flow.
- * Sized for one line of content with two pick slots side-by-side.
- */
 export function CompareTray({ kind, picks, onRemove, onCompare, onExit }: CompareTrayProps) {
   const slotA = picks[0]
   const slotB = picks[1]
@@ -96,13 +88,12 @@ function PickSlot({
   pick?: CompareTrayPick
   onRemove: () => void
 }) {
-  const dotTone = side === 'a' ? 'bg-blue-400/90 text-blue-950' : 'bg-emerald-400/90 text-emerald-950'
-  const borderTone = side === 'a' ? 'border-blue-400/40 bg-blue-500/8' : 'border-emerald-400/40 bg-emerald-500/8'
+  const tones = SIDE_TONES[side]
 
   if (!pick) {
     return (
       <div className="group flex items-center gap-2 pl-1.5 pr-2.5 py-1 rounded-lg border border-dashed border-theme-border-light text-xs font-mono min-w-0 max-w-[22rem] text-theme-text-tertiary italic flex-1">
-        <span className={clsx('inline-flex items-center justify-center w-4 h-4 rounded text-[10px] font-bold leading-none shrink-0', dotTone, 'opacity-50')}>
+        <span className={clsx('inline-flex items-center justify-center w-4 h-4 rounded text-[10px] font-bold leading-none shrink-0 opacity-50', tones.chipBg)}>
           {side === 'a' ? 'A' : 'B'}
         </span>
         <span className="truncate">Pick {side === 'a' ? 'a resource' : 'a second resource'} from the table…</span>
@@ -115,11 +106,11 @@ function PickSlot({
     <div
       className={clsx(
         'group flex items-center gap-2 pl-1.5 pr-1.5 py-1 rounded-lg border text-xs font-mono min-w-0 max-w-[22rem] flex-1',
-        borderTone,
+        tones.containerBorder, tones.containerBg,
       )}
       title={full}
     >
-      <span className={clsx('inline-flex items-center justify-center w-4 h-4 rounded text-[10px] font-bold leading-none shrink-0', dotTone)}>
+      <span className={clsx('inline-flex items-center justify-center w-4 h-4 rounded text-[10px] font-bold leading-none shrink-0', tones.chipBg)}>
         {side === 'a' ? 'A' : 'B'}
       </span>
       <span className="text-theme-text-primary truncate min-w-0 flex-1">

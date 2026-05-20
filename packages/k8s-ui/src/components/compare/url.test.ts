@@ -22,9 +22,14 @@ describe('parseRef', () => {
     expect(parseRef('')).toBeNull()
   })
 
+  it('returns null when name is empty after the slash', () => {
+    // A URL like `?a=prod/` would otherwise leave the caller stuck in loading
+    // because the gated query has nothing to fetch.
+    expect(parseRef('prod/')).toBeNull()
+    expect(parseRef('/')).toBeNull()
+  })
+
   it('splits on FIRST slash only — pins behavior against name shape changes', () => {
-    // K8s names are DNS-1123 (no `/`), so this scenario never lands today.
-    // The pinning test catches accidental regression if anyone "improves" the split.
     expect(parseRef('ns/a/b')).toEqual({ namespace: 'ns', name: 'a/b' })
   })
 

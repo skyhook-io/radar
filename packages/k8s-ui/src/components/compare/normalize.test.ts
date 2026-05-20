@@ -126,11 +126,8 @@ describe('normalizeForCompare', () => {
     expect(out.metadata.annotations).toBeNull()
   })
 
-  // PINNING: normalize only touches the top-level metadata, NOT spec.template.metadata.
-  // pod-template-hash / controller-revision-hash labels live on ReplicaSet/Pod objects
-  // (one level down), not on the workload's pod template — so for Deployment-vs-Deployment
-  // diffs the template's labels stay meaningful. If anyone changes this to recurse, they
-  // also need to make sure they don't strip user-defined selector labels that ARE the diff.
+  // Recursing into spec.template.metadata risks stripping user-defined selector
+  // labels that are themselves the diff signal — leave the template alone.
   it('does NOT strip pod-template-hash inside spec.template.metadata.labels', () => {
     const out = normalizeForCompare({
       spec: {

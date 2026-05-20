@@ -14,7 +14,7 @@ export interface CompareResourcePickerProps {
   /** Candidate resources — same kind as source. Source is filtered out automatically. */
   candidates: CompareResourceRef[]
   loading?: boolean
-  error?: Error | null
+  error?: unknown
   onPick: (r: CompareResourceRef) => void
 }
 
@@ -114,12 +114,12 @@ export function CompareResourcePicker({
             Loading {source.kind}…
           </div>
         )}
-        {error && (
+        {error != null && (
           <div className="flex items-center justify-center py-8 text-red-400 text-sm">
-            {error instanceof Error ? error.message : 'Failed to load resources'}
+            {error instanceof Error ? error.message : String(error)}
           </div>
         )}
-        {!loading && !error && filtered.length === 0 && (
+        {!loading && error == null && filtered.length === 0 && (
           <div className="flex flex-col items-center justify-center py-12 text-theme-text-tertiary text-sm gap-1">
             {candidates.length <= 1
               ? `No other ${source.kind} available to compare against.`

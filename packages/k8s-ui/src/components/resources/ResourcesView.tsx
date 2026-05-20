@@ -151,7 +151,7 @@ import { AzureManagedControlPlaneCell, AzureManagedMachinePoolCell, AzureMachine
 import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { ResourcesSidebar } from './ResourcesSidebar'
 import type { SelectedKindInfo } from './ResourcesSidebar'
-import { CompareTray, togglePick, pickIndex, refToParam, type CompareTrayPick } from '../compare'
+import { CompareTray, togglePick, pickIndex, refToParam, SIDE_TONES, type CompareTrayPick } from '../compare'
 
 // Pod problem filter options (special multi-select, not a single column value)
 const POD_PROBLEMS = ['CrashLoopBackOff', 'ImagePullBackOff', 'OOMKilled', 'Unschedulable', 'Not Ready', 'High Restarts', 'Init Failed', 'Exit Code Error', 'Failed', 'Other'] as const
@@ -2193,8 +2193,12 @@ export function ResourcesView({
   const [compareMode, setCompareMode] = useState(false)
   const [comparePicks, setComparePicks] = useState<CompareTrayPick[]>([])
 
-  // Picks reference the previous kind's resources — clear when the kind changes.
-  useEffect(() => { setComparePicks([]) }, [selectedKind.name, selectedKind.group])
+  // Kind change invalidates picks AND mode — leaving the tray on with empty
+  // pills after the user moves to a different kind is more confusing than helpful.
+  useEffect(() => {
+    setComparePicks([])
+    setCompareMode(false)
+  }, [selectedKind.name, selectedKind.group])
 
   const exitCompareMode = useCallback(() => {
     setCompareMode(false)
@@ -2202,10 +2206,9 @@ export function ResourcesView({
   }, [])
 
   const toggleComparePick = useCallback((resource: any) => {
-    const ns = resource.metadata?.namespace || ''
-    const name = resource.metadata?.name
-    if (!name) return
-    setComparePicks(prev => togglePick(prev, { namespace: ns, name }))
+    if (!resource?.metadata?.name) return
+    const ns = resource.metadata.namespace || ''
+    setComparePicks(prev => togglePick(prev, { namespace: ns, name: resource.metadata.name }))
   }, [])
 
   const handleCompareNavigate = useCallback(() => {
@@ -4083,7 +4086,7 @@ export function ResourcesView({
             </MetricsContext.Provider>
           )}
         </div>
-        {compareMode && (
+        {compareMode && compareEnabled && (
           <CompareTray
             kind={selectedKind.name}
             picks={comparePicks}
@@ -4115,21 +4118,26 @@ interface ResourceRowCellsProps {
   comparePickIndex?: number
 }
 
+function rowHighlightClass(
+  compareMode: boolean | undefined,
+  comparePickIndex: number,
+  isSelected: boolean | undefined,
+  isHighlighted: boolean | undefined,
+): string {
+  if (compareMode) {
+    if (comparePickIndex === 0) return `${SIDE_TONES.a.rowBg} ${SIDE_TONES.a.rowBgHover}`
+    if (comparePickIndex === 1) return `${SIDE_TONES.b.rowBg} ${SIDE_TONES.b.rowBgHover}`
+    if (isHighlighted) return 'selection selection-ring'
+    return 'group-hover/row:bg-theme-surface/50'
+  }
+  if (isSelected) return 'selection-strong group-hover/row:bg-skyhook-500/30'
+  if (isHighlighted) return 'selection selection-ring'
+  return 'group-hover/row:bg-theme-surface/50'
+}
+
 function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter, compareMode, comparePickIndex = -1 }: ResourceRowCellsProps) {
-  const isPicked = comparePickIndex >= 0
-  const rowHighlight = compareMode
-    ? isPicked
-      ? comparePickIndex === 0
-        ? 'bg-blue-500/15 group-hover/row:bg-blue-500/25'
-        : 'bg-emerald-500/15 group-hover/row:bg-emerald-500/25'
-      : isHighlighted
-        ? 'selection selection-ring'
-        : 'group-hover/row:bg-theme-surface/50'
-    : isSelected
-      ? 'selection-strong group-hover/row:bg-skyhook-500/30'
-      : isHighlighted
-        ? 'selection selection-ring'
-        : 'group-hover/row:bg-theme-surface/50'
+  const rowHighlight = rowHighlightClass(compareMode, comparePickIndex, isSelected, isHighlighted)
+  const pickedSide = comparePickIndex === 0 ? 'a' : comparePickIndex === 1 ? 'b' : null
   return (
     <>
       {compareMode && (
@@ -4138,15 +4146,15 @@ function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, h
           onMouseEnter={onMouseEnter}
           className={clsx('w-9 px-2 py-3 border-b-subtle cursor-pointer text-center align-middle transition-colors', rowHighlight)}
         >
-          {isPicked ? (
+          {pickedSide ? (
             <span
               className={clsx(
                 'inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold leading-none',
-                comparePickIndex === 0 ? 'bg-blue-400/90 text-blue-950' : 'bg-emerald-400/90 text-emerald-950',
+                SIDE_TONES[pickedSide].chipBg,
               )}
-              aria-label={comparePickIndex === 0 ? 'Pick A' : 'Pick B'}
+              aria-label={pickedSide === 'a' ? 'Pick A' : 'Pick B'}
             >
-              {comparePickIndex === 0 ? 'A' : 'B'}
+              {pickedSide === 'a' ? 'A' : 'B'}
             </span>
           ) : (
             <span

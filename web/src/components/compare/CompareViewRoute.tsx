@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import {
   ResourceCompareView,
@@ -9,8 +9,9 @@ import {
   type CompareSide,
   type CompareSideError,
 } from '@skyhook-io/k8s-ui'
-import { useResource, useResources } from '../../api/client'
+import { useResource } from '../../api/client'
 import { useTheme } from '../../context/ThemeContext'
+import { useCompareCandidates } from './useCompareCandidates'
 
 export function CompareViewRoute() {
   const navigate = useNavigate()
@@ -30,22 +31,7 @@ export function CompareViewRoute() {
   const aQuery = useResource<unknown>(a?.kind ?? '', a?.namespace ?? '', a?.name ?? '', a?.group)
   const bQuery = useResource<unknown>(b?.kind ?? '', b?.namespace ?? '', b?.name ?? '', b?.group)
 
-  const candidatesQuery = useResources<{ metadata?: { name?: string; namespace?: string } }>(
-    pickerOpen ? kind : '',
-    undefined,
-    group,
-  )
-  const candidates: CompareResourceRef[] = useMemo(() => {
-    if (!candidatesQuery.data) return []
-    return candidatesQuery.data
-      .filter(r => r?.metadata?.name)
-      .map(r => ({
-        kind,
-        namespace: r.metadata?.namespace ?? '',
-        name: r.metadata!.name!,
-        group,
-      }))
-  }, [candidatesQuery.data, kind, group])
+  const { candidates, isPending: candidatesPending, error: candidatesError } = useCompareCandidates(kind, group, !!pickerOpen)
 
   const updateParam = useCallback(
     (next: Record<string, string>) => {
@@ -90,9 +76,11 @@ export function CompareViewRoute() {
 
   const loading = aQuery.isPending || bQuery.isPending
 
+  // A refetch failure with cached data is not worth shouting about — show the
+  // stale data instead of blanking the side with a misleading "failed" banner.
   const errors: CompareSideError[] = []
-  if (aQuery.error) errors.push({ side: 'a', message: aQuery.error instanceof Error ? aQuery.error.message : String(aQuery.error) })
-  if (bQuery.error) errors.push({ side: 'b', message: bQuery.error instanceof Error ? bQuery.error.message : String(bQuery.error) })
+  if (aQuery.error && !aQuery.data) errors.push({ side: 'a', message: aQuery.error instanceof Error ? aQuery.error.message : String(aQuery.error) })
+  if (bQuery.error && !bQuery.data) errors.push({ side: 'b', message: bQuery.error instanceof Error ? bQuery.error.message : String(bQuery.error) })
 
   const source = pickerOpen === 'a' ? a : pickerOpen === 'b' ? b : null
 
@@ -117,8 +105,8 @@ export function CompareViewRoute() {
           onClose={() => setPickerOpen(null)}
           source={source}
           candidates={candidates}
-          loading={candidatesQuery.isPending}
-          error={candidatesQuery.error}
+          loading={candidatesPending}
+          error={candidatesError}
           onPick={handlePick}
         />
       )}
