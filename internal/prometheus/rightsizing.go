@@ -2,6 +2,7 @@ package prometheus
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -12,6 +13,16 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+)
+
+// Sentinel errors distinguish the cache-loading failure modes so handlers can
+// map them to the right HTTP status. A user without `list deployments` would
+// otherwise see "404 not found" for a workload they simply can't read, and
+// conclude Radar is broken.
+var (
+	errCacheNotReady  = errors.New("resource cache not initialized")
+	errKindRBACDenied = errors.New("kind not listable by service account")
+	errWorkloadMissing = errors.New("workload not found")
 )
 
 // Tone is the recommendation severity used by the rightsizing UI.
@@ -75,15 +86,34 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Per-user RBAC: the cache is populated under Radar's SA, so without this
+	// gate any authenticated user could fetch any namespace's container spec
+	// + P95 by guessing names. Use "get" — matches normal resource-detail reads.
+	resource := strings.ToLower(kind) + "s"
+	if !canRead(r, "apps", resource, namespace, "get") {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	containers, err := loadWorkloadContainers(kind, namespace, name)
 	if err != nil {
-		writeError(w, http.StatusNotFound, err.Error())
+		switch {
+		case errors.Is(err, errCacheNotReady):
+			writeError(w, http.StatusServiceUnavailable, err.Error())
+		case errors.Is(err, errKindRBACDenied):
+			writeError(w, http.StatusForbidden, err.Error())
+		case errors.Is(err, errWorkloadMissing):
+			writeError(w, http.StatusNotFound, err.Error())
+		default:
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
 		return
 	}
 	if len(containers) == 0 {
 		writeJSON(w, http.StatusOK, RightsizingResponse{
 			Kind: kind, Namespace: namespace, Name: name,
 			Window: "24h", SampleAvailable: false,
+			Rows:   []RightsizingRow{},
 			Reason: "Workload has no runtime containers (init-only or empty spec).",
 		})
 		return
@@ -131,60 +161,68 @@ type containerSpec struct {
 }
 
 // loadWorkloadContainers reads runtime container specs (excluding pure init,
-// including native sidecars) from the K8s cache.
+// including native sidecars) from the K8s cache. Returns sentinel errors so
+// the handler can map cache-not-ready to 503, RBAC-denied to 403, and only
+// genuine misses to 404.
 func loadWorkloadContainers(kind, namespace, name string) ([]containerSpec, error) {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
-		return nil, fmt.Errorf("resource cache not initialized")
+		return nil, errCacheNotReady
 	}
 
 	var podTemplate *corev1.PodSpec
 	switch strings.ToLower(kind) {
 	case "deployment":
 		if cache.Deployments() == nil {
-			return nil, fmt.Errorf("deployment cache not available")
+			return nil, fmt.Errorf("%w: deployments", errKindRBACDenied)
 		}
 		d, err := cache.Deployments().Deployments(namespace).Get(name)
 		if err != nil {
-			return nil, fmt.Errorf("deployment %s/%s not found", namespace, name)
+			return nil, fmt.Errorf("%w: deployment %s/%s", errWorkloadMissing, namespace, name)
 		}
 		podTemplate = &d.Spec.Template.Spec
 	case "statefulset":
 		if cache.StatefulSets() == nil {
-			return nil, fmt.Errorf("statefulset cache not available")
+			return nil, fmt.Errorf("%w: statefulsets", errKindRBACDenied)
 		}
 		ss, err := cache.StatefulSets().StatefulSets(namespace).Get(name)
 		if err != nil {
-			return nil, fmt.Errorf("statefulset %s/%s not found", namespace, name)
+			return nil, fmt.Errorf("%w: statefulset %s/%s", errWorkloadMissing, namespace, name)
 		}
 		podTemplate = &ss.Spec.Template.Spec
 	case "daemonset":
 		if cache.DaemonSets() == nil {
-			return nil, fmt.Errorf("daemonset cache not available")
+			return nil, fmt.Errorf("%w: daemonsets", errKindRBACDenied)
 		}
 		ds, err := cache.DaemonSets().DaemonSets(namespace).Get(name)
 		if err != nil {
-			return nil, fmt.Errorf("daemonset %s/%s not found", namespace, name)
+			return nil, fmt.Errorf("%w: daemonset %s/%s", errWorkloadMissing, namespace, name)
 		}
 		podTemplate = &ds.Spec.Template.Spec
 	}
 
 	if podTemplate == nil {
-		return nil, fmt.Errorf("could not load pod template")
+		return nil, errCacheNotReady
 	}
 
-	containers := make([]containerSpec, 0, len(podTemplate.Containers))
-	for _, c := range podTemplate.Containers {
+	return extractRuntimeContainers(podTemplate), nil
+}
+
+// extractRuntimeContainers returns containers + native-sidecar init containers
+// (initContainers with restartPolicy=Always, GA in 1.33). Native sidecars run
+// for the pod's lifetime and must be included alongside regular containers;
+// pure init containers run to completion and are excluded.
+func extractRuntimeContainers(podSpec *corev1.PodSpec) []containerSpec {
+	containers := make([]containerSpec, 0, len(podSpec.Containers))
+	for _, c := range podSpec.Containers {
 		containers = append(containers, extractContainerSpec(c))
 	}
-	// Native sidecars: initContainers with restartPolicy=Always (GA in 1.33).
-	// They run for the pod's lifetime — must be included alongside runtime containers.
-	for _, c := range podTemplate.InitContainers {
+	for _, c := range podSpec.InitContainers {
 		if c.RestartPolicy != nil && *c.RestartPolicy == corev1.ContainerRestartPolicyAlways {
 			containers = append(containers, extractContainerSpec(c))
 		}
 	}
-	return containers, nil
+	return containers
 }
 
 func extractContainerSpec(c corev1.Container) containerSpec {
@@ -451,11 +489,16 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 
+	if !canRead(r, "", "persistentvolumeclaims", namespace, "get") {
+		writeError(w, http.StatusForbidden, "forbidden")
+		return
+	}
+
 	ns := SanitizeLabelValue(namespace)
 	pvc := SanitizeLabelValue(name)
 
-	// Some scrape configs key on `persistentvolumeclaim` (kubelet's native label);
-	// others rewrite to `pvc` or `claim`. Native first; degrade silently otherwise.
+	// kubelet's native label is `persistentvolumeclaim`; clusters with custom
+	// relabeling that renamed it will return no series and the gauge hides.
 	usedQuery := fmt.Sprintf(`max(kubelet_volume_stats_used_bytes{namespace='%s',persistentvolumeclaim='%s'})`, ns, pvc)
 	capQuery := fmt.Sprintf(`max(kubelet_volume_stats_capacity_bytes{namespace='%s',persistentvolumeclaim='%s'})`, ns, pvc)
 
@@ -463,11 +506,16 @@ func handlePVCUsage(w http.ResponseWriter, r *http.Request) {
 
 	usedRes, err := client.Query(r.Context(), usedQuery)
 	if err != nil {
+		// Distinguish "Prometheus is unreachable" from "CSI doesn't report" so
+		// operators can find this in the errorlog stream when the gauge mysteriously
+		// disappears. The frontend still hides on hasData=false.
+		errorlog.Record("prometheus", "warning", "pvc used-bytes query failed for %s/%s: %v", namespace, name, err)
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}
 	capRes, err := client.Query(r.Context(), capQuery)
 	if err != nil {
+		errorlog.Record("prometheus", "warning", "pvc capacity-bytes query failed for %s/%s: %v", namespace, name, err)
 		writeJSON(w, http.StatusOK, resp)
 		return
 	}

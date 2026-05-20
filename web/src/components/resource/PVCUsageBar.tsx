@@ -30,9 +30,11 @@ export function PVCUsageBar({ namespace, name }: { namespace: string; name: stri
     tone === 'critical' ? 'bg-red-500' :
     tone === 'warning' ? 'bg-amber-500' :
     'bg-emerald-500'
+  // Light/dark-paired text tones — `text-red-400` alone washes out in light
+  // mode (Tailwind's 400 stop is calibrated for dark backgrounds).
   const textColor =
-    tone === 'critical' ? 'text-red-400' :
-    tone === 'warning' ? 'text-amber-400' :
+    tone === 'critical' ? 'text-red-700 dark:text-red-400' :
+    tone === 'warning' ? 'text-amber-700 dark:text-amber-400' :
     'text-theme-text-secondary'
 
   return (

@@ -16,9 +16,16 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
 }) {
   const { data: status } = usePrometheusStatus()
   const isConnected = status?.connected === true
-  const { data: metrics, isLoading } = usePrometheusResourceMetrics(kind, namespace, name, 'restarts', range, isConnected)
+  const { data: metrics, isLoading, error } = usePrometheusResourceMetrics(kind, namespace, name, 'restarts', range, isConnected)
 
   const restarts = useMemo(() => collectRestartEvents(metrics?.result?.series), [metrics])
+
+  // A real Prom-side failure shouldn't look identical to "no restarts" — log
+  // it so an operator investigating a missing lane has a breadcrumb. The lane
+  // still hides because we don't want a permanent red banner on every pod.
+  if (error) {
+    console.warn('[RestartEventLane] restart query failed', error)
+  }
 
   if (!isConnected || isLoading) return null
   if (restarts.length === 0) return null
@@ -76,12 +83,26 @@ function collectRestartEvents(series: PrometheusSeries[] | undefined): RestartEv
   const events: RestartEvent[] = []
   for (const s of series) {
     const pod = s.labels.pod ?? 'pod'
-    // A nonzero `changes()` value at timestamp T means restarts happened in the
-    // preceding window. Use the timestamp as the event marker position.
+    // `changes(...[1h])` produces a rolling count, so a single restart shows
+    // value=1 for ~60 consecutive samples (the whole 1h window). Emit a marker
+    // only when the count increases — that's when a *new* restart entered the
+    // window — and use the increase as the marker's restart count.
+    let prev: number | null = null
     for (const dp of s.dataPoints) {
-      if (dp.value > 0) {
-        events.push({ timestamp: dp.timestamp, value: dp.value, label: pod })
+      if (prev === null) {
+        // First sample. If nonzero, the restart happened just before our
+        // window started but is still recent enough to flag; record one
+        // marker rather than fabricate a count.
+        if (dp.value > 0) {
+          events.push({ timestamp: dp.timestamp, value: 1, label: pod })
+        }
+      } else {
+        const delta = dp.value - prev
+        if (delta > 0) {
+          events.push({ timestamp: dp.timestamp, value: delta, label: pod })
+        }
       }
+      prev = dp.value
     }
   }
   events.sort((a, b) => a.timestamp - b.timestamp)

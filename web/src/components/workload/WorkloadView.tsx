@@ -666,14 +666,8 @@ function FluxSourceConsumersInner({ sourceKind, namespace, name }: { sourceKind:
   )
 }
 
-// MetricsTabContent composes the Metrics tab: rightsizing strip (workloads,
-// full-screen only), the existing PrometheusCharts (request/limit overlay
-// driven by the resource spec), and a restart event lane below the chart.
-//
-// Each child renders conditionally:
-//  - RightsizingStrip: Deployment/StatefulSet/DaemonSet + expanded full-screen
-//  - PrometheusCharts: existing supported-kinds gate
-//  - RestartEventLane: hidden when no restarts recorded (KSM-gated)
+// Rightsizing only fits the full-screen layout — drawer mode would cramp the
+// chart underneath it. The other two children gate themselves on data.
 function MetricsTabContent({ kind, namespace, name, resource, expanded }: {
   kind: string
   namespace: string
@@ -682,9 +676,6 @@ function MetricsTabContent({ kind, namespace, name, resource, expanded }: {
   expanded: boolean
 }) {
   const showRightsizing = expanded && ['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)
-  // Pods are too granular for restart-lane (they restart themselves into
-  // oblivion); the lane is most useful for workloads where pod-restart
-  // patterns surface a flapping deployment.
   const showRestartLane = kind !== 'Node'
 
   return (

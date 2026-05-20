@@ -34,13 +34,20 @@ export function HPACharts({ data }: { data: any }) {
   )
 
   const enabled = isConnected && Boolean(namespace && name)
-  const { data: currentRes } = usePromQLRange(currentQuery, '1h', enabled)
-  const { data: desiredRes } = usePromQLRange(desiredQuery, '1h', enabled)
+  const { data: currentRes, error: currentErr } = usePromQLRange(currentQuery, '1h', enabled)
+  const { data: desiredRes, error: desiredErr } = usePromQLRange(desiredQuery, '1h', enabled)
 
   const replicasPoints = useMemo(() => combineSeries({
     current: currentRes?.series,
     desired: desiredRes?.series,
   }), [currentRes, desiredRes])
+
+  // Surface Prom-side failures in the console so an operator debugging a
+  // missing HPA chart has a breadcrumb; the chart still hides silently when
+  // KSM isn't reporting (the common no-data case).
+  if (currentErr || desiredErr) {
+    console.warn('[HPACharts] PromQL query failed', { currentErr, desiredErr })
+  }
 
   if (!isConnected) return null
   if (!replicasPoints) return null

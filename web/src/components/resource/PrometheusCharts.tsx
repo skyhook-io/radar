@@ -18,12 +18,6 @@ const SUPPORTED_KINDS = new Set([
   'Pod', 'Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Job', 'CronJob', 'Node',
 ])
 
-// Workload kinds where multiplying per-pod requests/limits by readyReplicas
-// makes the reference line align with the chart's pod-sum aggregation.
-const REPLICATED_WORKLOAD_KINDS = new Set([
-  'Deployment', 'StatefulSet', 'ReplicaSet',
-])
-
 interface CategoryDef {
   key: PrometheusMetricCategory
   label: string
@@ -755,12 +749,12 @@ function formatTimestamp(unix: number): string {
 /**
  * Compute aggregate request + limit reference lines from a K8s resource spec.
  * Sums across runtime containers (regular + native sidecars), excluding pure
- * init containers, then multiplies by readyReplicas for replicated workloads
- * so the line aligns with PromQL's pod-sum aggregation.
+ * init containers. The values are per-pod — workload charts use
+ * `sum(...) by (pod, namespace)` (one series per pod, at per-pod scale), so
+ * the reference line lives on the same axis without any replica multiplier.
  *
- * Returns undefined when the spec doesn't have enough information (e.g. zero
- * runtime containers, no values set on any container) so we don't render a
- * misleading "0" line.
+ * Returns undefined when the spec doesn't have enough information to render
+ * a meaningful line (no runtime containers, or no values set on any container).
  */
 function computeRequestLimitLines(
   resource: any,
@@ -774,9 +768,6 @@ function computeRequestLimitLines(
   const runtimeContainers = collectRuntimeContainers(podSpec)
   if (runtimeContainers.length === 0) return undefined
 
-  const replicas = REPLICATED_WORKLOAD_KINDS.has(kind) ? getReadyReplicas(resource) : 1
-  if (replicas === 0) return undefined
-
   let reqSum = 0, reqAny = false
   let limSum = 0, limAny = false
   for (const c of runtimeContainers) {
@@ -789,15 +780,15 @@ function computeRequestLimitLines(
   const lines: ReferenceLine[] = []
   if (reqAny) {
     lines.push({
-      value: reqSum * replicas,
-      label: `request ${formatRequestLimitLabel(reqSum * replicas, category)}`,
+      value: reqSum,
+      label: `request ${formatRequestLimitLabel(reqSum, category)}`,
       tone: 'request',
     })
   }
   if (limAny) {
     lines.push({
-      value: limSum * replicas,
-      label: `limit ${formatRequestLimitLabel(limSum * replicas, category)}`,
+      value: limSum,
+      label: `limit ${formatRequestLimitLabel(limSum, category)}`,
       tone: 'limit',
     })
   }
@@ -822,14 +813,6 @@ function collectRuntimeContainers(podSpec: any): any[] {
   return out
 }
 
-function getReadyReplicas(resource: any): number {
-  const status = resource?.status || {}
-  if (typeof status.readyReplicas === 'number') return status.readyReplicas
-  if (typeof status.numberReady === 'number') return status.numberReady // DaemonSet
-  if (typeof status.replicas === 'number') return status.replicas
-  return 1
-}
-
 const CPU_SUFFIXES: Record<string, number> = { n: 1e-9, u: 1e-6, m: 1e-3 }
 const MEMORY_SUFFIXES: Record<string, number> = {
   Ki: 1024, Mi: 1024 ** 2, Gi: 1024 ** 3, Ti: 1024 ** 4, Pi: 1024 ** 5, Ei: 1024 ** 6,
@@ -840,23 +823,30 @@ function readQuantity(raw: unknown, category: 'cpu' | 'memory'): number | null {
   if (raw == null) return null
   const s = String(raw).trim()
   if (s === '') return null
-  // Strip suffix and parse.
+  // Strip suffix and parse. Each branch must guard against NaN — otherwise
+  // garbage like "abcMi" returns NaN and poisons the caller's running sum,
+  // which silently produces a missing/zeroed reference line on the chart.
   if (category === 'cpu') {
-    if (s.endsWith('m')) return parseFloat(s) * CPU_SUFFIXES.m
-    if (s.endsWith('n')) return parseFloat(s) * CPU_SUFFIXES.n
-    if (s.endsWith('u')) return parseFloat(s) * CPU_SUFFIXES.u
+    if (s.endsWith('m')) return scaleOrNull(s, CPU_SUFFIXES.m)
+    if (s.endsWith('n')) return scaleOrNull(s, CPU_SUFFIXES.n)
+    if (s.endsWith('u')) return scaleOrNull(s, CPU_SUFFIXES.u)
     const v = parseFloat(s)
     return isNaN(v) ? null : v
   }
   // Memory: try two-character then one-character suffixes (Mi before M).
   for (const suffix of ['Ki', 'Mi', 'Gi', 'Ti', 'Pi', 'Ei']) {
-    if (s.endsWith(suffix)) return parseFloat(s) * MEMORY_SUFFIXES[suffix]
+    if (s.endsWith(suffix)) return scaleOrNull(s, MEMORY_SUFFIXES[suffix])
   }
   for (const suffix of ['K', 'M', 'G', 'T', 'P', 'E']) {
-    if (s.endsWith(suffix)) return parseFloat(s) * MEMORY_SUFFIXES[suffix]
+    if (s.endsWith(suffix)) return scaleOrNull(s, MEMORY_SUFFIXES[suffix])
   }
   const v = parseFloat(s)
   return isNaN(v) ? null : v
+}
+
+function scaleOrNull(s: string, scale: number): number | null {
+  const v = parseFloat(s)
+  return isNaN(v) ? null : v * scale
 }
 
 function formatRequestLimitLabel(value: number, category: 'cpu' | 'memory'): string {

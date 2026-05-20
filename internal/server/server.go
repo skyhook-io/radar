@@ -373,7 +373,13 @@ func (s *Server) setupRoutes() {
 			imageHandlers := images.NewHandlers()
 			imageHandlers.RegisterRoutes(r)
 
-			// Prometheus metrics routes
+			// Prometheus metrics routes. The auth gate is required for endpoints
+			// that read K8s spec data via the shared informer cache (rightsizing,
+			// PVC usage) — the cache is populated under Radar's SA, so without
+			// it any authenticated user could fetch any namespace's spec.
+			prometheuspkg.SetAuthGate(func(req *http.Request, group, resource, namespace, verb string) bool {
+				return s.canRead(req, group, resource, namespace, verb)
+			})
 			prometheuspkg.RegisterRoutes(r)
 
 			// OpenCost routes
