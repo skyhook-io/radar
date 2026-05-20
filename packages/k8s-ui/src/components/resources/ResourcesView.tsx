@@ -165,7 +165,7 @@ const SKIP_FILTER_COLUMNS = new Set([
   'issuer', 'domain', 'presented', 'listeners', 'routes', 'addresses', 'hostnames',
   'parents', 'backends', 'controller', 'description', 'externalIP', 'address',
   'conditions', 'taints', 'desired', 'upToDate', 'available', 'owner',
-  'tls', 'endpoints', 'object', 'count', 'lastSeen', 'reason', 'source', 'inventory',
+  'tls', 'endpoints', 'object', 'count', 'lastSeen', 'source', 'inventory',
   'lastUpdated', 'chart', 'events', 'repo',
   'generators', 'applications', 'destinations', 'sources', 'budget', 'healthy', 'allowed',
   'secrets', 'subjects', 'role', 'entrypoint', 'templates',
@@ -3277,9 +3277,11 @@ export function ResourcesView({
       }
 
       const distinctCount = Object.keys(valueCounts).length
-      // Only include if 2-20 distinct values (too few = useless, too many = not a filter)
-      // Node column gets a higher cap (50) since clusters commonly have 20-50 nodes
-      const maxDistinct = col.key === 'node' ? 50 : 20
+      // Namespace and node columns scale with cluster size, not with kind enum cardinality —
+      // capping them at a small enum-style limit silently hides the most useful filters.
+      const maxDistinct = col.key === 'namespace'
+        ? Number.POSITIVE_INFINITY
+        : col.key === 'node' ? 200 : 30
       if (distinctCount >= 2 && distinctCount <= maxDistinct) {
         filterableColumns.push({
           key: col.key,
@@ -3815,7 +3817,7 @@ export function ResourcesView({
               fixedHeaderContent={() => (
                 <tr>
                   {columns.map((col, colIdx) => {
-                    const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object', 'cpu', 'memory'].includes(col.key)
+                    const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object', 'cpu', 'memory', 'containers'].includes(col.key)
                     const isSorted = sortColumn === col.key
                     const isLastCol = colIdx === columns.length - 1
                     const filterCol = filterableColumnMap.get(col.key)
