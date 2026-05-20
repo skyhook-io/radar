@@ -327,7 +327,17 @@ type headerFlag struct {
 
 func newHeaderFlag(defaults map[string]string) *headerFlag {
 	out := make(map[string]string, len(defaults))
-	maps.Copy(out, defaults)
+	for k, v := range defaults {
+		if !httpguts.ValidHeaderFieldName(k) {
+			log.Printf("[config] Dropping invalid prometheus header name %q (must be RFC 7230 tokens)", k)
+			continue
+		}
+		if !httpguts.ValidHeaderFieldValue(v) {
+			log.Printf("[config] Dropping prometheus header %q: value contains control characters", k)
+			continue
+		}
+		out[k] = v
+	}
 	return &headerFlag{m: out}
 }
 

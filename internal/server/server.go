@@ -3307,31 +3307,44 @@ type configResponse struct {
 }
 
 // handleGetConfig returns the on-disk config file alongside the effective startup config.
+// PrometheusHeaders are redacted — they may contain Bearer tokens / tenant IDs and the
+// diagnostics endpoint already masks them as a presence bool.
 func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
+	file := config.Load()
+	file.PrometheusHeaders = nil
 	resp := configResponse{
-		File:      config.Load(),
+		File:      file,
 		IsDesktop: version.IsDesktop(),
 	}
 	if s.effectiveConfig != nil {
-		resp.Effective = *s.effectiveConfig
+		effective := *s.effectiveConfig
+		effective.PrometheusHeaders = nil
+		resp.Effective = effective
 	}
 	s.writeJSON(w, resp)
 }
 
 // handlePutConfig replaces the entire config file. Changes take effect on next restart.
 // Unlike handlePutSettings (which merges fields), this is a full replacement.
+// PrometheusHeaders are preserved from the on-disk file: the GET response redacts them,
+// so a UI round-trip would otherwise silently wipe the user's auth headers.
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 	var updated config.Config
 	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	result, err := config.Update(func(c *config.Config) { *c = updated })
+	result, err := config.Update(func(c *config.Config) {
+		preserved := c.PrometheusHeaders
+		*c = updated
+		c.PrometheusHeaders = preserved
+	})
 	if err != nil {
 		log.Printf("[config] Failed to save config: %v", err)
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	result.PrometheusHeaders = nil
 	s.writeJSON(w, result)
 }
 
