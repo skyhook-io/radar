@@ -72,7 +72,7 @@
     "tailwind-merge": "^3.5.0",
     "tailwindcss": "^4.2.4",
     "typescript": "^6.0.2",
-    "vite": "^8.0.12"
+    "vite": "^8.0.13"
   },
   "sideEffects": [
     "*.css"
