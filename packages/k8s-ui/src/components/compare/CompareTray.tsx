@@ -34,7 +34,8 @@ export function CompareTray({ kind, picks, onRemove, onCompare, onExit }: Compar
     >
       <div className="h-0.5 w-full bg-gradient-to-r from-blue-400/70 via-skyhook-400/40 to-emerald-400/70" />
 
-      <div className="flex items-center gap-3 px-4 py-2.5">
+      {/* Right padding clears the fixed bottom-right overlay buttons (debug / shortcut-help). */}
+      <div className="flex items-center gap-3 pl-4 pr-20 py-2.5">
         <div className="flex items-center gap-2 shrink-0">
           <GitCompare className="w-4 h-4 text-skyhook-400" />
           <span className="text-xs font-semibold text-theme-text-primary uppercase tracking-wider">

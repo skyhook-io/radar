@@ -110,7 +110,7 @@ export function ResourceCompareView({
   const anyError = !!(aError || bError)
 
   return (
-    <div className="flex flex-col h-full bg-theme-base">
+    <div className="flex-1 min-w-0 flex flex-col h-full bg-theme-base">
       <div className="h-0.5 w-full bg-gradient-to-r from-blue-400/70 via-skyhook-400/40 to-emerald-400/70" />
 
       <div className="flex items-center gap-3 px-4 py-2.5 border-b border-theme-border bg-theme-surface">
