@@ -157,7 +157,7 @@ const WORKLOAD_PROBLEMS = ['Unavailable', 'Rollout Stuck', 'Rollout In Progress'
 const WORKLOAD_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets'])
 
 // Columns to skip for auto-detected filters (high cardinality, text-like, or non-filterable)
-const SKIP_FILTER_COLUMNS = new Set([
+export const SKIP_FILTER_COLUMNS = new Set([
   'name', 'age', 'keys', 'size', 'images', 'domains', 'hosts', 'rules',
   'ports', 'message', 'url', 'ref', 'revision', 'path', 'selector', 'ready', 'restarts',
   'completions', 'duration', 'schedule', 'lastRun', 'target', 'replicas', 'metrics',
@@ -170,6 +170,16 @@ const SKIP_FILTER_COLUMNS = new Set([
   'generators', 'applications', 'destinations', 'sources', 'budget', 'healthy', 'allowed',
   'secrets', 'subjects', 'role', 'entrypoint', 'templates',
 ])
+
+// Namespace/node cardinality scales with cluster size, not kind enum size;
+// node keeps a generous cap as a sanity bound, namespace is uncapped.
+export function isColumnFilterableByDistinctCount(colKey: string, distinctCount: number): boolean {
+  if (SKIP_FILTER_COLUMNS.has(colKey)) return false
+  const maxDistinct = colKey === 'namespace'
+    ? Number.POSITIVE_INFINITY
+    : colKey === 'node' ? 200 : 30
+  return distinctCount >= 2 && distinctCount <= maxDistinct
+}
 
 // Column definitions per resource kind
 interface Column {
@@ -3277,12 +3287,7 @@ export function ResourcesView({
       }
 
       const distinctCount = Object.keys(valueCounts).length
-      // Namespace and node columns scale with cluster size, not with kind enum cardinality —
-      // capping them at a small enum-style limit silently hides the most useful filters.
-      const maxDistinct = col.key === 'namespace'
-        ? Number.POSITIVE_INFINITY
-        : col.key === 'node' ? 200 : 30
-      if (distinctCount >= 2 && distinctCount <= maxDistinct) {
+      if (isColumnFilterableByDistinctCount(col.key, distinctCount)) {
         filterableColumns.push({
           key: col.key,
           label: col.label,
