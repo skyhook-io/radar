@@ -320,43 +320,7 @@ function ToggleButton({ showAll, onToggle, disabled }: { showAll: boolean; onTog
   )
 }
 
-// Simple JSON to YAML converter for display
-function jsonToYaml(obj: Record<string, unknown>, indent = 0): string {
-  const spaces = '  '.repeat(indent)
-  let result = ''
-
-  for (const [key, value] of Object.entries(obj)) {
-    if (value === null || value === undefined) {
-      result += `${spaces}${key}: null\n`
-    } else if (typeof value === 'object' && !Array.isArray(value)) {
-      result += `${spaces}${key}:\n`
-      result += jsonToYaml(value as Record<string, unknown>, indent + 1)
-    } else if (Array.isArray(value)) {
-      result += `${spaces}${key}:\n`
-      for (const item of value) {
-        if (typeof item === 'object' && item !== null) {
-          result += `${spaces}- \n`
-          const itemYaml = jsonToYaml(item as Record<string, unknown>, indent + 2)
-          result += itemYaml
-        } else {
-          result += `${spaces}- ${formatValue(item)}\n`
-        }
-      }
-    } else {
-      result += `${spaces}${key}: ${formatValue(value)}\n`
-    }
-  }
-
-  return result
-}
-
-function formatValue(value: unknown): string {
-  if (typeof value === 'string') {
-    // Quote strings that contain special characters
-    if (value.includes(':') || value.includes('#') || value.includes('\n') || value.startsWith(' ') || value.endsWith(' ')) {
-      return `"${value.replace(/"/g, '\\"')}"`
-    }
-    return value
-  }
-  return String(value)
+function jsonToYaml(obj: Record<string, unknown>): string {
+  if (!obj || Object.keys(obj).length === 0) return ''
+  return yaml.stringify(obj, { lineWidth: 0 })
 }

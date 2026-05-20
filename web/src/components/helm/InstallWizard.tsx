@@ -106,11 +106,11 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
       }
     }
     if (baseValues && defaultValues) {
-      setValuesYaml(yaml.stringify(deepMerge(baseValues, defaultValues)))
+      setValuesYaml(yaml.stringify(deepMerge(baseValues, defaultValues), { lineWidth: 0 }))
     } else if (defaultValues && !baseValues) {
-      setValuesYaml(yaml.stringify(defaultValues))
+      setValuesYaml(yaml.stringify(defaultValues, { lineWidth: 0 }))
     } else if (baseValues) {
-      setValuesYaml(yaml.stringify(baseValues))
+      setValuesYaml(yaml.stringify(baseValues, { lineWidth: 0 }))
     }
   }, [localChartDetail?.values, artifactHubDetail?.values, isLocal, defaultValues])
 
@@ -349,7 +349,7 @@ export function InstallWizard({ repo, chartName, version, source, repoUrl, defau
                   valuesYaml={valuesYaml}
                   defaultValuesYaml={
                     isLocal
-                      ? (localChartDetail?.values ? yaml.stringify(localChartDetail.values) : '')
+                      ? (localChartDetail?.values ? yaml.stringify(localChartDetail.values, { lineWidth: 0 }) : '')
                       : (artifactHubDetail?.values || '')
                   }
                 />
@@ -664,7 +664,7 @@ function ValuesStep({ valuesYaml, setValuesYaml, yamlError, setYamlError, chartD
   const ahDetail = chartDetail as ArtifactHubChartDetail | undefined
 
   const defaultValues = isLocal
-    ? (localDetail?.values ? yaml.stringify(localDetail.values) : '')
+    ? (localDetail?.values ? yaml.stringify(localDetail.values, { lineWidth: 0 }) : '')
     : (ahDetail?.values || '')
 
   const hasDefaults = Boolean(defaultValues)

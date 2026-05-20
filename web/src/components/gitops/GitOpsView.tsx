@@ -685,7 +685,7 @@ function extractHelmValues(kind: string, resource: any): HelmValuesData | null {
 
 function safeStringifyYaml(value: unknown): string {
   try {
-    return yaml.stringify(value)
+    return yaml.stringify(value, { lineWidth: 0 })
   } catch {
     return JSON.stringify(value, null, 2)
   }
