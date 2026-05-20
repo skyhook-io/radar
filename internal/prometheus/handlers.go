@@ -26,6 +26,8 @@ func RegisterRoutes(r chi.Router) {
 	r.Get("/prometheus/namespace/{namespace}", handleNamespaceMetrics)
 	r.Get("/prometheus/cluster", handleClusterMetrics)
 	r.Get("/prometheus/query", handleRawQuery)
+	r.Get("/prometheus/pvc/{namespace}/{name}", handlePVCUsage)
+	r.Get("/prometheus/rightsizing/{kind}/{namespace}/{name}", handleRightsizing)
 }
 
 func writeJSON(w http.ResponseWriter, status int, v interface{}) {
@@ -443,7 +445,7 @@ func handleRawQuery(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, result)
 }
 
-// retryWithoutContainerFilter re-runs the query without the container!='' filter
+// retryWithoutContainerFilter re-runs the query without the container!=” filter
 // when the primary result is empty and the category uses that filter. This handles
 // cri-docker and other setups where cAdvisor metrics lack the container label.
 // Returns the updated result (original or fallback) and the query that produced it.

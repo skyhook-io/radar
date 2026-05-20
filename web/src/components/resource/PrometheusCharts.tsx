@@ -18,6 +18,12 @@ const SUPPORTED_KINDS = new Set([
   'Pod', 'Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Job', 'CronJob', 'Node',
 ])
 
+// Workload kinds where multiplying per-pod requests/limits by readyReplicas
+// makes the reference line align with the chart's pod-sum aggregation.
+const REPLICATED_WORKLOAD_KINDS = new Set([
+  'Deployment', 'StatefulSet', 'ReplicaSet',
+])
+
 interface CategoryDef {
   key: PrometheusMetricCategory
   label: string
@@ -76,9 +82,15 @@ interface PrometheusChartsProps {
   name: string
   /** When true, show "no data" empty state instead of hiding. Defaults to false (hide when no data). */
   showEmptyState?: boolean
+  /**
+   * Full K8s resource. When provided, CPU and memory charts overlay the
+   * aggregate request/limit (summed across runtime containers including
+   * native sidecars, multiplied by readyReplicas for replicated workloads).
+   */
+  resource?: any
 }
 
-export function PrometheusCharts({ kind, namespace, name, showEmptyState = false }: PrometheusChartsProps) {
+export function PrometheusCharts({ kind, namespace, name, showEmptyState = false, resource }: PrometheusChartsProps) {
   const { data: status, isLoading: statusLoading } = usePrometheusStatus()
   const connectMutation = usePrometheusConnect()
 
@@ -144,6 +156,13 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
 
   const activeCategoryDef = categories.find(c => c.key === activeCategory) || categories[0]
 
+  // Reference lines: aggregate request/limit overlaid on CPU and memory charts.
+  // Memory unit is bytes; CPU unit is cores; both match the chart axis.
+  const referenceLines = useMemo<ReferenceLine[] | undefined>(() => {
+    if (!resource || (activeCategory !== 'cpu' && activeCategory !== 'memory')) return undefined
+    return computeRequestLimitLines(resource, kind, activeCategory)
+  }, [resource, kind, activeCategory])
+
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
@@ -206,6 +225,7 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
                 color={activeCategoryDef.chartColor}
                 fillColor={activeCategoryDef.fillColor}
                 unit={metrics.unit}
+                referenceLines={referenceLines}
               />
             </div>
 
@@ -329,11 +349,19 @@ function computeShortLabels(labels: string[]): string[] {
   return suffixes
 }
 
-function AreaChart({ series, color, fillColor, unit }: {
+export interface ReferenceLine {
+  value: number
+  label: string
+  /** 'request' is muted gray, 'limit' is amber — neither alarming */
+  tone: 'request' | 'limit'
+}
+
+function AreaChart({ series, color, fillColor, unit, referenceLines }: {
   series: PrometheusSeries[]
   color: string
   fillColor: string
   unit: string
+  referenceLines?: ReferenceLine[]
 }) {
   const svgRef = useRef<SVGSVGElement>(null)
   const [hoverX, setHoverX] = useState<number | null>(null)
@@ -361,11 +389,19 @@ function AreaChart({ series, color, fillColor, unit }: {
       maxVal = unit === 'cores' ? 0.01 : unit === 'bytes' ? 1024 * 1024 : unit === 'bytes/s' ? 1024 : 1
     }
 
+    // Extend axis to include reference lines so request/limit aren't clipped at
+    // the top, which would make the relationship between usage and limit unreadable.
+    if (referenceLines) {
+      for (const rl of referenceLines) {
+        if (rl.value > maxVal) maxVal = rl.value
+      }
+    }
+
     const padding = maxVal * 0.1
     const yMax = maxVal + padding
 
     return { minTs, maxTs, yMax, series }
-  }, [series, unit])
+  }, [series, unit, referenceLines])
 
   if (!chartData) return null
 
@@ -544,6 +580,40 @@ function AreaChart({ series, color, fillColor, unit }: {
           />
         ))}
 
+        {/* Reference lines (request / limit overlays) */}
+        {referenceLines?.map((rl, i) => {
+          // Clamp y so the line never escapes the plot — the yMax expansion
+          // above keeps it in bounds normally, but guard against rounding.
+          const y = Math.max(marginTop, Math.min(marginTop + plotHeight, toY(rl.value)))
+          const stroke = rl.tone === 'limit' ? '#f59e0b' : '#94a3b8'
+          // Tone-matched labels on the right edge.
+          return (
+            <g key={`ref-${i}`}>
+              <line
+                x1={marginLeft}
+                y1={y}
+                x2={width - marginRight}
+                y2={y}
+                stroke={stroke}
+                strokeWidth="1"
+                strokeDasharray="6 4"
+                opacity="0.75"
+              />
+              <text
+                x={width - marginRight - 4}
+                y={y - 4}
+                textAnchor="end"
+                fontSize="10"
+                fontFamily="ui-monospace, monospace"
+                fill={stroke}
+                opacity="0.9"
+              >
+                {rl.label}
+              </text>
+            </g>
+          )
+        })}
+
         {/* Hover crosshair + dots */}
         {hoverData && (
           <>
@@ -676,6 +746,128 @@ function formatMetricValue(value: number, unit: string): string {
 function formatTimestamp(unix: number): string {
   const d = new Date(unix * 1000)
   return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+}
+
+// ============================================================================
+// Request/limit overlay derivation
+// ============================================================================
+
+/**
+ * Compute aggregate request + limit reference lines from a K8s resource spec.
+ * Sums across runtime containers (regular + native sidecars), excluding pure
+ * init containers, then multiplies by readyReplicas for replicated workloads
+ * so the line aligns with PromQL's pod-sum aggregation.
+ *
+ * Returns undefined when the spec doesn't have enough information (e.g. zero
+ * runtime containers, no values set on any container) so we don't render a
+ * misleading "0" line.
+ */
+function computeRequestLimitLines(
+  resource: any,
+  kind: string,
+  category: 'cpu' | 'memory',
+): ReferenceLine[] | undefined {
+  if (!resource) return undefined
+  const podSpec = extractPodSpec(resource, kind)
+  if (!podSpec) return undefined
+
+  const runtimeContainers = collectRuntimeContainers(podSpec)
+  if (runtimeContainers.length === 0) return undefined
+
+  const replicas = REPLICATED_WORKLOAD_KINDS.has(kind) ? getReadyReplicas(resource) : 1
+  if (replicas === 0) return undefined
+
+  let reqSum = 0, reqAny = false
+  let limSum = 0, limAny = false
+  for (const c of runtimeContainers) {
+    const req = readQuantity(c.resources?.requests?.[category], category)
+    const lim = readQuantity(c.resources?.limits?.[category], category)
+    if (req != null) { reqSum += req; reqAny = true }
+    if (lim != null) { limSum += lim; limAny = true }
+  }
+
+  const lines: ReferenceLine[] = []
+  if (reqAny) {
+    lines.push({
+      value: reqSum * replicas,
+      label: `request ${formatRequestLimitLabel(reqSum * replicas, category)}`,
+      tone: 'request',
+    })
+  }
+  if (limAny) {
+    lines.push({
+      value: limSum * replicas,
+      label: `limit ${formatRequestLimitLabel(limSum * replicas, category)}`,
+      tone: 'limit',
+    })
+  }
+  return lines.length > 0 ? lines : undefined
+}
+
+function extractPodSpec(resource: any, kind: string): any | undefined {
+  if (kind === 'Pod') return resource?.spec
+  if (kind === 'CronJob') return resource?.spec?.jobTemplate?.spec?.template?.spec
+  return resource?.spec?.template?.spec
+}
+
+function collectRuntimeContainers(podSpec: any): any[] {
+  const out: any[] = []
+  for (const c of (podSpec?.containers || [])) out.push(c)
+  // Native sidecars (initContainers with restartPolicy: Always, GA in 1.33)
+  // run for the pod's lifetime and contribute to steady-state usage. Pure
+  // init containers run to completion and don't.
+  for (const c of (podSpec?.initContainers || [])) {
+    if (c?.restartPolicy === 'Always') out.push(c)
+  }
+  return out
+}
+
+function getReadyReplicas(resource: any): number {
+  const status = resource?.status || {}
+  if (typeof status.readyReplicas === 'number') return status.readyReplicas
+  if (typeof status.numberReady === 'number') return status.numberReady // DaemonSet
+  if (typeof status.replicas === 'number') return status.replicas
+  return 1
+}
+
+const CPU_SUFFIXES: Record<string, number> = { n: 1e-9, u: 1e-6, m: 1e-3 }
+const MEMORY_SUFFIXES: Record<string, number> = {
+  Ki: 1024, Mi: 1024 ** 2, Gi: 1024 ** 3, Ti: 1024 ** 4, Pi: 1024 ** 5, Ei: 1024 ** 6,
+  K: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18,
+}
+
+function readQuantity(raw: unknown, category: 'cpu' | 'memory'): number | null {
+  if (raw == null) return null
+  const s = String(raw).trim()
+  if (s === '') return null
+  // Strip suffix and parse.
+  if (category === 'cpu') {
+    if (s.endsWith('m')) return parseFloat(s) * CPU_SUFFIXES.m
+    if (s.endsWith('n')) return parseFloat(s) * CPU_SUFFIXES.n
+    if (s.endsWith('u')) return parseFloat(s) * CPU_SUFFIXES.u
+    const v = parseFloat(s)
+    return isNaN(v) ? null : v
+  }
+  // Memory: try two-character then one-character suffixes (Mi before M).
+  for (const suffix of ['Ki', 'Mi', 'Gi', 'Ti', 'Pi', 'Ei']) {
+    if (s.endsWith(suffix)) return parseFloat(s) * MEMORY_SUFFIXES[suffix]
+  }
+  for (const suffix of ['K', 'M', 'G', 'T', 'P', 'E']) {
+    if (s.endsWith(suffix)) return parseFloat(s) * MEMORY_SUFFIXES[suffix]
+  }
+  const v = parseFloat(s)
+  return isNaN(v) ? null : v
+}
+
+function formatRequestLimitLabel(value: number, category: 'cpu' | 'memory'): string {
+  if (category === 'cpu') {
+    if (value < 1) return `${Math.round(value * 1000)}m`
+    return value.toFixed(2).replace(/\.?0+$/, '')
+  }
+  // Memory — match formatMetricValue's tier breakpoints.
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(0)}KiB`
+  if (value < 1024 ** 3) return `${(value / (1024 ** 2)).toFixed(0)}MiB`
+  return `${(value / (1024 ** 3)).toFixed(1)}GiB`
 }
 
 // ============================================================================

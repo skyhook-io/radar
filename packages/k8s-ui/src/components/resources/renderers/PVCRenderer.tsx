@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { HardDrive } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
@@ -5,6 +6,8 @@ import { Section, PropertyList, Property, ConditionsSection, AlertBanner, Resour
 interface PVCRendererProps {
   data: any
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  /** Optional host-provided section, used for a Prometheus-derived usage gauge. */
+  extraSections?: ReactNode
 }
 
 const accessModeShorthand: Record<string, string> = {
@@ -19,7 +22,7 @@ function formatAccessModes(modes: string[] | undefined): string | undefined {
   return modes.map(m => accessModeShorthand[m] || m).join(', ')
 }
 
-export function PVCRenderer({ data, onNavigate }: PVCRendererProps) {
+export function PVCRenderer({ data, onNavigate, extraSections }: PVCRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const annotations = data.metadata?.annotations || {}
@@ -91,6 +94,8 @@ export function PVCRenderer({ data, onNavigate }: PVCRendererProps) {
           </PropertyList>
         </Section>
       )}
+
+      {extraSections}
 
       <ConditionsSection conditions={status.conditions} />
     </>

@@ -1246,8 +1246,43 @@ export interface PrometheusResourceMetrics {
   hint?: string  // Contextual hint when results are empty (e.g. cri-docker label issues)
 }
 
-export type PrometheusMetricCategory = 'cpu' | 'memory' | 'network_rx' | 'network_tx' | 'filesystem'
+export type PrometheusMetricCategory = 'cpu' | 'memory' | 'network_rx' | 'network_tx' | 'filesystem' | 'restarts'
 export type PrometheusTimeRange = '10m' | '30m' | '1h' | '3h' | '6h' | '12h' | '24h' | '48h' | '7d' | '14d'
+
+// PVC usage at a moment in time, derived from kubelet_volume_stats_*.
+// HasData=false silently indicates the CSI driver doesn't report or Prom
+// isn't scraping kubelet endpoints — UI should hide the gauge in that case.
+export interface PrometheusPVCUsage {
+  namespace: string
+  name: string
+  used: number
+  capacity: number
+  ratio: number
+  hasData: boolean
+}
+
+export type RightsizingTone = 'ok' | 'info' | 'warning' | 'alert' | 'critical'
+
+export interface RightsizingRow {
+  container: string
+  resource: 'cpu' | 'memory'
+  currentRequest?: string
+  currentLimit?: string
+  p95?: string
+  recommendedRequest?: string
+  tone: RightsizingTone
+  message: string
+}
+
+export interface PrometheusRightsizing {
+  kind: string
+  namespace: string
+  name: string
+  window: string
+  sampleAvailable: boolean
+  rows: RightsizingRow[]
+  reason?: string
+}
 
 // Check Prometheus availability
 export function usePrometheusStatus() {
@@ -1332,6 +1367,40 @@ export function usePrometheusClusterMetrics(
     queryFn: () =>
       fetchJSON(`/prometheus/cluster?category=${category}&range=${range}`),
     enabled,
+    staleTime: 30000,
+    refetchInterval: 60000,
+  })
+}
+
+// Fetch PVC usage. hasData=false when no series — UI should hide the gauge.
+export function usePrometheusPVCUsage(namespace: string, name: string, enabled = true) {
+  return useQuery<PrometheusPVCUsage>({
+    queryKey: ['prometheus-pvc-usage', namespace, name],
+    queryFn: () => fetchJSON(`/prometheus/pvc/${namespace}/${name}`),
+    enabled: enabled && Boolean(namespace && name),
+    staleTime: 60000,
+    refetchInterval: 120000,
+  })
+}
+
+// Fetch rightsizing recommendations for a workload (Deployment / StatefulSet / DaemonSet).
+export function usePrometheusRightsizing(kind: string, namespace: string, name: string, enabled = true) {
+  return useQuery<PrometheusRightsizing>({
+    queryKey: ['prometheus-rightsizing', kind, namespace, name],
+    queryFn: () => fetchJSON(`/prometheus/rightsizing/${kind}/${namespace}/${name}`),
+    enabled: enabled && Boolean(kind && namespace && name),
+    staleTime: 5 * 60 * 1000, // P95 over 24h is slow to shift; cache aggressively
+    refetchInterval: 10 * 60 * 1000,
+  })
+}
+
+// Raw PromQL query (range). Used by HPA charts for status_current_replicas etc.
+export function usePromQLRange(query: string, range: PrometheusTimeRange = '1h', enabled = true) {
+  return useQuery<PrometheusQueryResult>({
+    queryKey: ['promql-range', query, range],
+    queryFn: () =>
+      fetchJSON(`/prometheus/query?query=${encodeURIComponent(query)}&range=${range}`),
+    enabled: enabled && Boolean(query),
     staleTime: 30000,
     refetchInterval: 60000,
   })

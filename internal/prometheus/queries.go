@@ -32,11 +32,14 @@ const (
 	CategoryNetworkRX  MetricCategory = "network_rx"
 	CategoryNetworkTX  MetricCategory = "network_tx"
 	CategoryFilesystem MetricCategory = "filesystem"
+	// CategoryRestarts is sourced from KSM and represents the rate-of-change
+	// of container restart counters; gracefully degrades when KSM isn't scraped.
+	CategoryRestarts MetricCategory = "restarts"
 )
 
 // AllCategories returns all metric categories in display order.
 func AllCategories() []MetricCategory {
-	return []MetricCategory{CategoryCPU, CategoryMemory, CategoryNetworkRX, CategoryNetworkTX, CategoryFilesystem}
+	return []MetricCategory{CategoryCPU, CategoryMemory, CategoryNetworkRX, CategoryNetworkTX, CategoryFilesystem, CategoryRestarts}
 }
 
 // CategoryLabel returns a human-readable label for a metric category.
@@ -52,6 +55,8 @@ func CategoryLabel(cat MetricCategory) string {
 		return "Network Transmitted"
 	case CategoryFilesystem:
 		return "Filesystem"
+	case CategoryRestarts:
+		return "Restarts"
 	default:
 		return string(cat)
 	}
@@ -70,6 +75,8 @@ func CategoryUnit(cat MetricCategory) string {
 		return "bytes/s"
 	case CategoryFilesystem:
 		return "bytes/s"
+	case CategoryRestarts:
+		return "count"
 	default:
 		return ""
 	}
@@ -97,6 +104,8 @@ func SupportedKinds() []string {
 func CategoriesForKind(kind string) []MetricCategory {
 	switch strings.ToLower(kind) {
 	case "node":
+		// Nodes have neither workload restart semantics nor the network/filesystem
+		// container metrics — node-exporter covers them separately on the Node page.
 		return []MetricCategory{CategoryCPU, CategoryMemory, CategoryFilesystem}
 	default:
 		return AllCategories()
@@ -112,7 +121,7 @@ func BuildQuery(kind, namespace, name string, category MetricCategory) string {
 }
 
 // BuildQueryNoContainerFilter builds the same query as BuildQuery but without
-// the container!='' filter. This is used as a fallback for clusters where cAdvisor
+// the container!=” filter. This is used as a fallback for clusters where cAdvisor
 // metrics lack the container label (e.g. cri-docker setups).
 func BuildQueryNoContainerFilter(kind, namespace, name string, category MetricCategory) string {
 	return buildQueryInner(kind, namespace, name, category, false)
@@ -136,7 +145,7 @@ func BuildNamespaceQuery(namespace string, category MetricCategory) string {
 	return buildNamespaceQueryInner(namespace, category, true)
 }
 
-// BuildNamespaceQueryNoContainerFilter is the fallback variant without container!='' filter.
+// BuildNamespaceQueryNoContainerFilter is the fallback variant without container!=” filter.
 func BuildNamespaceQueryNoContainerFilter(namespace string, category MetricCategory) string {
 	return buildNamespaceQueryInner(namespace, category, false)
 }
@@ -166,7 +175,7 @@ func BuildClusterQuery(category MetricCategory) string {
 	return buildClusterQueryInner(category, true)
 }
 
-// BuildClusterQueryNoContainerFilter is the fallback variant without container!='' filter.
+// BuildClusterQueryNoContainerFilter is the fallback variant without container!=” filter.
 func BuildClusterQueryNoContainerFilter(category MetricCategory) string {
 	return buildClusterQueryInner(category, false)
 }
@@ -191,7 +200,7 @@ func buildClusterQueryInner(category MetricCategory, filterContainer bool) strin
 }
 
 // categoryUsesContainerFilter returns true if the category's queries include
-// the container!='' filter that may need fallback on cri-docker clusters.
+// the container!=” filter that may need fallback on cri-docker clusters.
 func categoryUsesContainerFilter(category MetricCategory) bool {
 	return category == CategoryCPU || category == CategoryMemory
 }
@@ -205,6 +214,13 @@ func buildPodQuery(namespace, podName string, category MetricCategory, filterCon
 	}
 
 	switch category {
+	case CategoryRestarts:
+		// changes() over a 1h window gives the count of restarts during that window;
+		// using a long window keeps the chart legible (most pods never restart).
+		// Sums across containers so a multi-container pod surfaces one line per pod.
+		return fmt.Sprintf(
+			`sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='%s',pod='%s'}[1h]))`,
+			ns, pod)
 	case CategoryCPU:
 		return fmt.Sprintf(
 			`sum(rate(container_cpu_usage_seconds_total{%snamespace='%s',pod='%s'}[5m])) by (pod,namespace)`,
@@ -240,6 +256,10 @@ func buildWorkloadQuery(namespace, workloadName string, category MetricCategory,
 	}
 
 	switch category {
+	case CategoryRestarts:
+		return fmt.Sprintf(
+			`sum by (pod,namespace) (changes(kube_pod_container_status_restarts_total{namespace='%s',pod=~'%s'}[1h]))`,
+			ns, podPattern)
 	case CategoryCPU:
 		return fmt.Sprintf(
 			`sum(rate(container_cpu_usage_seconds_total{%snamespace='%s',pod=~'%s'}[5m])) by (pod,namespace)`,

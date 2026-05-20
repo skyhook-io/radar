@@ -1,3 +1,4 @@
+import type { ReactNode } from 'react'
 import { Cpu, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, ResourceLink } from '../../ui/drawer-components'
@@ -7,6 +8,8 @@ import { formatAge } from '../resource-utils'
 interface HPARendererProps {
   data: any
   onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  /** Optional host-provided section rendered after Conditions — used to inject Prometheus-backed charts. */
+  extraSections?: ReactNode
 }
 
 // Extract problems from HPA conditions
@@ -53,7 +56,7 @@ function getHPAProblems(data: any): string[] {
   return problems
 }
 
-export function HPARenderer({ data, onNavigate }: HPARendererProps) {
+export function HPARenderer({ data, onNavigate, extraSections }: HPARendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const metrics = status.currentMetrics || []
@@ -160,6 +163,8 @@ export function HPARenderer({ data, onNavigate }: HPARendererProps) {
       )}
 
       <ConditionsSection conditions={status.conditions} />
+
+      {extraSections}
     </>
   )
 }

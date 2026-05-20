@@ -279,6 +279,18 @@ export interface RendererOverrides {
     data: any
     onNavigate?: (ref: ResourceRef) => void
   }>
+  // HPA: host wraps the base renderer to add Prometheus-backed replicas /
+  // metric charts below the static spec data.
+  HPARenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
+  // PVC: host wraps the base renderer to add a kubelet-derived usage gauge
+  // when Prometheus is scraping kubelet endpoints.
+  PVCRenderer?: React.ComponentType<{
+    data: any
+    onNavigate?: (ref: ResourceRef) => void
+  }>
 }
 
 // Known resource types with specific renderers (module-level to avoid re-allocation)
@@ -450,6 +462,8 @@ export function ResourceRendererDispatch({
   const RoleComp = rendererOverrides?.RoleRenderer ?? RoleRenderer
   const RoleBindingComp = rendererOverrides?.RoleBindingRenderer ?? RoleBindingRenderer
   const NamespaceComp = rendererOverrides?.NamespaceRenderer ?? NamespaceRenderer
+  const HPAComp = rendererOverrides?.HPARenderer ?? HPARenderer
+  const PVCComp = rendererOverrides?.PVCRenderer ?? PVCRenderer
 
   const sidebarContent = showCommonSections && (
     <>
@@ -474,9 +488,9 @@ export function ResourceRendererDispatch({
         {kind === 'secrets' && <SecretRenderer data={data} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && <JobRenderer data={data} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
-        {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPARenderer data={data} onNavigate={onNavigate} />}
+        {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPAComp data={data} onNavigate={onNavigate} />}
         {kind === 'nodes' && <NodeComp data={data} relationships={relationships} />}
-        {kind === 'persistentvolumeclaims' && <PVCRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'persistentvolumeclaims' && <PVCComp data={data} onNavigate={onNavigate} />}
         {kind === 'rollouts' && <RolloutRenderer data={data} />}
         {kind === 'certificates' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <CertificateRenderer data={data} />}
         {kind === 'workflows' && <WorkflowRenderer data={data} />}
