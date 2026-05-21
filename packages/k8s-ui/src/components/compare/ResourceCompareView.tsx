@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { clsx } from 'clsx'
-import { ArrowLeftRight, GitCompare, Rows, Columns, FileText, FileCode2, X, Pencil, AlertTriangle } from 'lucide-react'
+import { ArrowLeftRight, GitCompare, Rows, FileText, FileCode2, X, Pencil, AlertTriangle, Sparkles } from 'lucide-react'
 import { YamlDiffEditor } from '../ui/YamlEditor'
 import { Tooltip } from '../ui/Tooltip'
 import { pluralToKind } from '../../utils/navigation'
@@ -99,9 +99,10 @@ export function ResourceCompareView({
   const [specOnly, setSpecOnly] = useState(false)
   const [unified, setUnified] = useState(false)
   const [hideUnchanged, setHideUnchanged] = useState(true)
+  const [rawMetadata, setRawMetadata] = useState(false)
 
-  const aYaml = useMemo(() => (aData ? toComparableYaml(aData, { specOnly }) : ''), [aData, specOnly])
-  const bYaml = useMemo(() => (bData ? toComparableYaml(bData, { specOnly }) : ''), [bData, specOnly])
+  const aYaml = useMemo(() => (aData ? toComparableYaml(aData, { specOnly, rawMetadata }) : ''), [aData, specOnly, rawMetadata])
+  const bYaml = useMemo(() => (bData ? toComparableYaml(bData, { specOnly, rawMetadata }) : ''), [bData, specOnly, rawMetadata])
 
   const identical = aYaml && bYaml && aYaml === bYaml
   const kindLabel = pluralToKind(a.kind)
@@ -134,9 +135,10 @@ export function ResourceCompareView({
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
+          <ToggleButton active={rawMetadata} onClick={() => setRawMetadata(v => !v)} icon={<Sparkles className="w-3.5 h-3.5" />} label="Raw metadata" tooltip="Keep server-assigned noise (uid, resourceVersion, managedFields, last-applied)" />
           <ToggleButton active={specOnly} onClick={() => setSpecOnly(v => !v)} icon={<FileCode2 className="w-3.5 h-3.5" />} label="Spec only" tooltip="Drop status fields from both sides" />
           <ToggleButton active={hideUnchanged} onClick={() => setHideUnchanged(v => !v)} icon={<FileText className="w-3.5 h-3.5" />} label="Diff only" tooltip="Collapse unchanged regions" />
-          <ToggleButton active={unified} onClick={() => setUnified(v => !v)} icon={unified ? <Rows className="w-3.5 h-3.5" /> : <Columns className="w-3.5 h-3.5" />} label={unified ? 'Unified' : 'Side-by-side'} tooltip={unified ? 'Switch to side-by-side' : 'Switch to unified'} />
+          <ToggleButton active={unified} onClick={() => setUnified(v => !v)} icon={<Rows className="w-3.5 h-3.5" />} label="Unified" tooltip="Switch between side-by-side and single-column" />
         </div>
 
         <div className="w-px h-5 bg-theme-border shrink-0" aria-hidden />

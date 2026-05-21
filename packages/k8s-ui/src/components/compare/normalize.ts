@@ -21,6 +21,9 @@ const NOISY_ANNOTATIONS = new Set([
 export interface NormalizeOptions {
   /** When true, drop status from both sides — focuses the diff on intent. */
   specOnly?: boolean
+  /** When true, keep server-assigned metadata noise (resourceVersion, uid, managedFields, etc.).
+   *  Off by default — the diff is signal not noise. Flip on when debugging API-level oddities. */
+  rawMetadata?: boolean
 }
 
 /**
@@ -32,7 +35,7 @@ export function normalizeForCompare(input: unknown, opts: NormalizeOptions = {})
 
   const obj = JSON.parse(JSON.stringify(input)) as Record<string, any>
 
-  if (obj.metadata && typeof obj.metadata === 'object') {
+  if (!opts.rawMetadata && obj.metadata && typeof obj.metadata === 'object') {
     for (const key of NOISY_METADATA_KEYS) {
       delete obj.metadata[key]
     }

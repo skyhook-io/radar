@@ -95,6 +95,32 @@ describe('normalizeForCompare', () => {
     expect(out.status.readyReplicas).toBe(3)
   })
 
+  it('keeps server-assigned metadata when rawMetadata is true', () => {
+    const input = {
+      metadata: {
+        name: 'api',
+        resourceVersion: '12345',
+        uid: 'abc-def',
+        managedFields: [{ manager: 'kubectl' }],
+        annotations: { 'kubectl.kubernetes.io/last-applied-configuration': '{}' },
+        labels: { 'pod-template-hash': 'abc123', app: 'api' },
+      },
+    }
+    const out = normalizeForCompare(input, { rawMetadata: true }) as any
+    expect(out.metadata.resourceVersion).toBe('12345')
+    expect(out.metadata.uid).toBe('abc-def')
+    expect(out.metadata.managedFields).toEqual([{ manager: 'kubectl' }])
+    expect(out.metadata.annotations['kubectl.kubernetes.io/last-applied-configuration']).toBe('{}')
+    expect(out.metadata.labels['pod-template-hash']).toBe('abc123')
+  })
+
+  it('still drops status when rawMetadata is true and specOnly is true', () => {
+    const input = { metadata: { name: 'api', uid: 'x' }, status: { phase: 'Running' } }
+    const out = normalizeForCompare(input, { rawMetadata: true, specOnly: true }) as any
+    expect(out.metadata.uid).toBe('x')
+    expect(out.status).toBeUndefined()
+  })
+
   it('does not mutate the input', () => {
     const input = {
       metadata: { name: 'api', resourceVersion: '1', managedFields: [{ manager: 'kubectl' }] },

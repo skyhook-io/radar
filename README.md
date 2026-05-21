@@ -239,7 +239,7 @@ Diff any two Kubernetes resources of the same kind side-by-side — like compari
 - **Side-by-side or unified** view, with one-click swap of A ↔ B
 - **Diff-only mode** collapses unchanged regions so you only see what differs
 - **Spec-only mode** drops `status` fields to focus on intent rather than observed state
-- Server-assigned noise (`managedFields`, `resourceVersion`, `kubectl.kubernetes.io/last-applied-configuration`) is stripped automatically so the diff stays signal
+- Server-assigned noise (`managedFields`, `resourceVersion`, `kubectl.kubernetes.io/last-applied-configuration`) is stripped automatically so the diff stays signal — flip **Raw metadata** on if you actually want to see it
 - Same-namespace candidates are surfaced first in the picker — usually the resource you want to compare against
 - Shareable URLs: `/compare?kind=&a=ns/name&b=ns/name`
 
