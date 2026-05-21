@@ -131,6 +131,8 @@ rbac:
 
 podAnnotations: {}
 
+podLabels: {}
+
 podSecurityContext:
   runAsNonRoot: true
   runAsUser: 65532
