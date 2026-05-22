@@ -99,11 +99,12 @@ export function CompareViewRoute() {
         onChangeA={() => setPickerOpen('a')}
         onChangeB={() => setPickerOpen('b')}
       />
-      {source && (
+      {source && pickerOpen && (
         <CompareResourcePicker
           open={true}
           onClose={() => setPickerOpen(null)}
           source={source}
+          sourceSide={pickerOpen}
           candidates={candidates}
           loading={candidatesPending}
           error={candidatesError}

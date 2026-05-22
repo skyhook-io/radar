@@ -345,7 +345,10 @@ export function WorkloadView({
     kind: kindProp,
     namespace,
     name,
-    group: resourceGroup || undefined,
+    // Prefer the URL-supplied group so Compare works even before the resource
+    // fetch completes; fall back to the derived group for callers that don't
+    // pass one.
+    group: rest.group || resourceGroup || undefined,
   })
   const actionsBarProps = useMemo(
     () => ({ ...baseActionsBarProps, onCompareTo }),

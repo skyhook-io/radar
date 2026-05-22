@@ -5,12 +5,16 @@ import { DialogPortal } from '../ui/DialogPortal'
 import { pluralToKind } from '../../utils/navigation'
 import type { CompareResourceRef } from './ResourceCompareView'
 import { sortCandidates, filterCandidates } from './sort'
+import { SIDE_TONES, type CompareSide } from './types'
 
 export interface CompareResourcePickerProps {
   open: boolean
   onClose: () => void
   /** The resource the user is comparing *from*. */
   source: CompareResourceRef
+  /** Which side the source occupies — drives the chip color/label in the dialog header.
+   *  Defaults to 'a': the launcher flow's source becomes A in the resulting URL. */
+  sourceSide?: CompareSide
   /** Candidate resources — same kind as source. Source is filtered out automatically. */
   candidates: CompareResourceRef[]
   loading?: boolean
@@ -22,6 +26,7 @@ export function CompareResourcePicker({
   open,
   onClose,
   source,
+  sourceSide = 'a',
   candidates,
   loading,
   error,
@@ -31,14 +36,26 @@ export function CompareResourcePicker({
   const [highlightIdx, setHighlightIdx] = useState(0)
   const listRef = useRef<HTMLUListElement | null>(null)
 
+  // Reset query + highlight every time the picker opens. The drawer flow keeps
+  // the picker mounted across opens, so without this a previous session's
+  // search would leak into the next compare.
+  useEffect(() => {
+    if (open) {
+      setQuery('')
+      setHighlightIdx(0)
+    }
+  }, [open])
+
   const filtered = useMemo(
     () => filterCandidates(sortCandidates(candidates, source), query),
     [candidates, source, query],
   )
 
+  // Clamp on any filter shape change — list length OR query (the user typing
+  // can swap which rows are visible without changing length).
   useEffect(() => {
     setHighlightIdx(prev => (prev >= filtered.length ? 0 : prev))
-  }, [filtered.length])
+  }, [filtered.length, query])
 
   useEffect(() => {
     if (!listRef.current) return
@@ -47,6 +64,8 @@ export function CompareResourcePicker({
   }, [highlightIdx])
 
   function handleKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    // Empty list: arrow keys would otherwise compute Math.min(0+1, -1) = -1.
+    if (filtered.length === 0) return
     if (e.key === 'ArrowDown') {
       e.preventDefault()
       setHighlightIdx(i => Math.min(i + 1, filtered.length - 1))
@@ -62,9 +81,12 @@ export function CompareResourcePicker({
       setHighlightIdx(0)
     } else if (e.key === 'End') {
       e.preventDefault()
-      setHighlightIdx(Math.max(0, filtered.length - 1))
+      setHighlightIdx(filtered.length - 1)
     }
   }
+
+  const sourceLabel = sourceSide === 'a' ? 'A' : 'B'
+  const sourceChipBg = SIDE_TONES[sourceSide].chipBg
 
   return (
     <DialogPortal open={open} onClose={onClose} className="max-w-xl w-full max-h-[70vh] flex flex-col">
@@ -72,7 +94,9 @@ export function CompareResourcePicker({
         <div className="flex items-center gap-2">
           <GitCompare className="w-5 h-5 text-skyhook-400" />
           <h3 className="text-sm font-semibold text-theme-text-primary">
-            Compare to another {pluralToKind(source.kind)}
+            {sourceSide === 'a'
+              ? `Compare to another ${pluralToKind(source.kind)}`
+              : `Replace side B with another ${pluralToKind(source.kind)}`}
           </h3>
         </div>
         <button
@@ -86,8 +110,8 @@ export function CompareResourcePicker({
 
       <div className="px-4 py-3 border-b border-theme-border shrink-0 space-y-2">
         <div className="text-xs text-theme-text-secondary flex items-center gap-1.5 flex-wrap">
-          <span className="inline-flex items-center justify-center w-4 h-4 rounded text-[10px] font-bold leading-none bg-blue-400/90 text-blue-950">
-            A
+          <span className={clsx('inline-flex items-center justify-center w-4 h-4 rounded text-[10px] font-bold leading-none', sourceChipBg)}>
+            {sourceLabel}
           </span>
           <span className="font-mono text-theme-text-primary">
             {source.namespace && <span className="opacity-60">{source.namespace}/</span>}
@@ -126,7 +150,7 @@ export function CompareResourcePicker({
               : 'No matches.'}
           </div>
         )}
-        {!loading && !error && filtered.length > 0 && (
+        {!loading && error == null && filtered.length > 0 && (
           <ul ref={listRef} className="divide-y divide-theme-border/50">
             {filtered.map((c, idx) => {
               const sameNs = c.namespace === source.namespace
