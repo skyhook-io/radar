@@ -11,6 +11,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
+	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
@@ -60,6 +61,16 @@ func setupFakeCacheForFilterTests(t *testing.T) {
 	// checks. (The MCP handlers don't use requireConnected directly, but
 	// downstream code paths do.)
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+}
+
+func TestParseSourceListRejectsAudit(t *testing.T) {
+	_, err := issues.ParseSources("audit")
+	if err == nil {
+		t.Fatal("issues.ParseSources(\"audit\") succeeded; want error")
+	}
+	if !strings.Contains(err.Error(), "get_cluster_audit") {
+		t.Fatalf("error did not point caller to get_cluster_audit: %v", err)
+	}
 }
 
 // withRestrictedUser primes the perm cache for a namespace-restricted user
@@ -623,7 +634,7 @@ func TestHandleSearch_Secrets_PerNamespaceFanout(t *testing.T) {
 	ctx := withRestrictedUser(t, "alice", []string{"alpha", "beta"})
 	seedSecretListCanI(t, "alice", []string{"alpha"}, []string{"beta"})
 
-	result, _, err := handleSearch(ctx, nil, searchInput{Q: "kind:Secret"})
+	result, _, err := handleSearch(ctx, nil, searchInput{Query: "kind:Secret"})
 	if err != nil {
 		t.Fatalf("handleSearch: %v", err)
 	}
@@ -654,7 +665,7 @@ func TestHandleSearch_Secrets_ClusterWideShape_NsFilter(t *testing.T) {
 	perms.SetCanI("list", "", "secrets", "alpha", true)
 	perms.SetCanI("list", "", "secrets", "beta", false)
 
-	result, _, err := handleSearch(ctx, nil, searchInput{Q: "kind:Secret ns:alpha"})
+	result, _, err := handleSearch(ctx, nil, searchInput{Query: "kind:Secret ns:alpha"})
 	if err != nil {
 		t.Fatalf("handleSearch: %v", err)
 	}
@@ -664,5 +675,61 @@ func TestHandleSearch_Secrets_ClusterWideShape_NsFilter(t *testing.T) {
 	}
 	if containsName(body, "beta-secret") {
 		t.Errorf("beta-secret leaked despite ns:alpha filter + per-ns RBAC: %s", body)
+	}
+}
+
+func TestNormalizeWorkloadLogsKind_DefaultsToDeployment(t *testing.T) {
+	if got := normalizeWorkloadLogsKind(""); got != "deployments" {
+		t.Fatalf("blank workload-log kind = %q, want deployments", got)
+	}
+	if got := normalizeWorkloadLogsKind("statefulset"); got != "statefulsets" {
+		t.Fatalf("statefulset workload-log kind = %q, want statefulsets", got)
+	}
+}
+
+func TestParseLogsSince(t *testing.T) {
+	tests := []struct {
+		name      string
+		in        string
+		wantSecs  int64
+		wantNil   bool
+		wantError bool
+	}{
+		{name: "empty returns nil", in: "", wantNil: true},
+		{name: "whitespace returns nil", in: "  ", wantNil: true},
+		{name: "30s", in: "30s", wantSecs: 30},
+		{name: "10m", in: "10m", wantSecs: 600},
+		{name: "1h", in: "1h", wantSecs: 3600},
+		{name: "sub-second floors to 1s", in: "500ms", wantSecs: 1},
+		{name: "invalid format", in: "10minutes", wantError: true},
+		{name: "negative duration", in: "-5m", wantError: true},
+		{name: "zero duration", in: "0s", wantError: true},
+		{name: "junk", in: "soon", wantError: true},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseLogsSince(tc.in)
+			if tc.wantError {
+				if err == nil {
+					t.Fatalf("expected error, got nil (result=%v)", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if tc.wantNil {
+				if got != nil {
+					t.Fatalf("expected nil, got %d", *got)
+				}
+				return
+			}
+			if got == nil {
+				t.Fatalf("expected %d, got nil", tc.wantSecs)
+			}
+			if *got != tc.wantSecs {
+				t.Fatalf("got %d, want %d", *got, tc.wantSecs)
+			}
+		})
 	}
 }

@@ -8,9 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
-	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/k8s"
-	bp "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/policyreports"
 )
 
@@ -83,14 +81,6 @@ func flattenNamespacedProblems(perNs [][]k8s.Problem) []k8s.Problem {
 		}
 	}
 	return out
-}
-
-func (p *CacheProvider) AuditFindings(namespaces []string) []bp.Finding {
-	results := audit.RunFromCache(p.cache, namespaces, nil)
-	if results == nil {
-		return nil
-	}
-	return results.Findings
 }
 
 func (p *CacheProvider) WarningEvents(namespaces []string, since time.Duration) []*corev1.Event {

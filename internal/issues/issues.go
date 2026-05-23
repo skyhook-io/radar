@@ -21,7 +21,6 @@ import (
 type Provider interface {
 	DetectProblems(namespaces []string) []k8s.Problem
 	DetectCAPIProblems(namespaces []string) []k8s.Problem
-	AuditFindings(namespaces []string) []bp.Finding
 	WarningEvents(namespaces []string, since time.Duration) []*corev1.Event
 	// CRD-condition fallback inputs.
 	WatchedDynamic() []schema.GroupVersionResource
@@ -104,15 +103,6 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	// ---- Source: condition (generic CRD .status.conditions fallback) ----
 	if wantSource(f, SourceCondition) {
 		out = append(out, detectGenericCRDIssues(p, f)...)
-	}
-
-	// ---- Source: audit (best-practice findings) --------------------
-	// Off by default — audit findings are loud; the AI/MCP user case
-	// usually wants problems first. Set IncludeAudit to opt in.
-	if f.IncludeAudit && wantSource(f, SourceAudit) {
-		for _, fin := range p.AuditFindings(f.Namespaces) {
-			out = append(out, fromAudit(fin, now))
-		}
 	}
 
 	// ---- Source: kyverno (PolicyReport findings) -------------------
@@ -363,26 +353,6 @@ func fromProblem(p k8s.Problem, now time.Time) Issue {
 		Reason:    p.Reason,
 		Message:   p.Message,
 		FirstSeen: since,
-		LastSeen:  now,
-		Count:     1,
-	}
-}
-
-func fromAudit(fin bp.Finding, now time.Time) Issue {
-	sev := SeverityWarning
-	if fin.Severity == bp.SeverityDanger {
-		sev = SeverityCritical
-	}
-	return Issue{
-		Severity:  sev,
-		Source:    SourceAudit,
-		Kind:      fin.Kind,
-		Group:     resolveGroup(fin.Group, fin.Kind),
-		Namespace: fin.Namespace,
-		Name:      fin.Name,
-		Reason:    fin.CheckID,
-		Message:   fin.Message,
-		FirstSeen: now,
 		LastSeen:  now,
 		Count:     1,
 	}

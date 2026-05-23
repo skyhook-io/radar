@@ -17,10 +17,11 @@
 // two protocols.
 //
 // Revisit this opt-out when:
-//   (a) the agent surface stabilizes (no major shape changes for two
-//       release cycles), AND
-//   (b) Skyhook commits to a public customer-facing AI SDK that needs
-//       generated bindings.
+//
+//	(a) the agent surface stabilizes (no major shape changes for two
+//	    release cycles), AND
+//	(b) Skyhook commits to a public customer-facing AI SDK that needs
+//	    generated bindings.
 //
 // Until both conditions are met, bringing /api/ai/* under openapi.yaml
 // is premature — it would pay the spec-authoring tax during evolution
@@ -35,7 +36,9 @@ import (
 	"strings"
 
 	"github.com/go-chi/chi/v5"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/audit"
@@ -78,6 +81,17 @@ func (a policyReportLookupAdapter) FindingsFor(group, kind, namespace, name stri
 		}
 	}
 	return out
+}
+
+type serviceBackendLookup struct {
+	cache *k8s.ResourceCache
+}
+
+func (l serviceBackendLookup) PodsForServiceSelector(namespace string, selector labels.Selector) ([]*corev1.Pod, error) {
+	if l.cache == nil || l.cache.Pods() == nil {
+		return nil, nil
+	}
+	return l.cache.Pods().Pods(namespace).List(selector)
 }
 
 // parseVerbosity reads the ?verbosity= query parameter and returns the matching level.
@@ -410,10 +424,11 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 	auditSum := computeAuditSummaryForResource(cache, canonicalGroup, canonicalKind, namespace, name)
 
 	opts := resourcecontext.Options{
-		Tier:          resourcecontext.TierBasic,
-		AccessChecker: s.newRequestScopedChecker(r),
-		IssueSummary:  issueSum,
-		AuditSummary:  auditSum,
+		Tier:            resourcecontext.TierBasic,
+		AccessChecker:   s.newRequestScopedChecker(r),
+		IssueSummary:    issueSum,
+		AuditSummary:    auditSum,
+		ServiceBackends: serviceBackendLookup{cache: cache},
 	}
 
 	// Wire the PolicyReport index when Kyverno is installed. Build emits a

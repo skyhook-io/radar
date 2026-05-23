@@ -3,6 +3,7 @@ package resourcecontext
 import (
 	"context"
 	"sort"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -14,6 +15,7 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -58,6 +60,12 @@ type Options struct {
 	IssueSummary  *IssueSummary
 	AuditSummary  *AuditSummary
 	PolicyReports PolicyReportLookup // nil = Kyverno not installed / no findings
+
+	// Optional kind-specific lookups. ServiceBackends is used only for
+	// Service resources to attach realized pod-selection state. The raw
+	// Service spec already carries selector/ports; this lookup answers
+	// whether that selector currently resolves to ready Pods.
+	ServiceBackends ServiceBackendLookup
 }
 
 // PolicyReportLookup is the minimal interface Build needs from the
@@ -67,6 +75,10 @@ type Options struct {
 // adapt other policy engines into the same shape.
 type PolicyReportLookup interface {
 	FindingsFor(group, kind, namespace, name string) []KyvernoFinding
+}
+
+type ServiceBackendLookup interface {
+	PodsForServiceSelector(namespace string, selector labels.Selector) ([]*corev1.Pod, error)
 }
 
 // RefAccessChecker abstracts the RBAC check so this package doesn't import
@@ -102,8 +114,9 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	// topology.Relationships the canonical projection: server-side
 	// SynthesizeManagedBy walks the owner chain + GitOps signals, and the Pod
 	// hygiene fields (.ServiceAccount, .Node) are populated from pod.Spec.
-	// We do NOT re-walk owner refs here — that would duplicate the topology
-	// package's logic and risk drift.
+	// ManagedBy stays delegated to topology to avoid duplicating its owner-chain
+	// and GitOps logic. The direct Owner field below may still fall back to the
+	// object's controller OwnerReference when topology is absent or cold.
 	//
 	// Single-resource callers (REST GET, MCP get_resource) leave
 	// opts.Relationships nil and let us compute via GetRelationshipsWithObject
@@ -144,6 +157,26 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			"managedBy", omitted)
 	}
 
+	if rel != nil && rel.Owner != nil {
+		candidate := &ContextRef{
+			Kind:      rel.Owner.Kind,
+			Group:     rel.Owner.Group,
+			Namespace: rel.Owner.Namespace,
+			Name:      rel.Owner.Name,
+		}
+		if checkRef(ctx, opts.AccessChecker, candidate) {
+			rc.Owner = candidate
+		} else {
+			omitted.add("owner", OmittedRBACDenied)
+		}
+	} else if owner := ownerFromObject(obj, ident.Namespace); owner != nil {
+		if checkRef(ctx, opts.AccessChecker, owner) {
+			rc.Owner = owner
+		} else {
+			omitted.add("owner", OmittedRBACDenied)
+		}
+	}
+
 	// 2. Topology-derived: Exposes, SelectedBy, ScaledBy
 	if rel != nil {
 		exposes := make([]topology.ResourceRef, 0, len(rel.Services)+len(rel.Ingresses)+len(rel.Gateways)+len(rel.Routes))
@@ -176,6 +209,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	// Build needs.
 	if pod, ok := obj.(*corev1.Pod); ok {
 		rc.Uses = buildUsesFromPod(ctx, pod, opts.AccessChecker, omitted)
+		rc.PodSummary = buildPodSummary(pod)
 
 		// Prefer rel.ServiceAccount over re-reading pod.Spec — same source,
 		// but consolidating through Relationships keeps Build aligned with
@@ -221,6 +255,21 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 			}
 		}
 	}
+
+	if svc, ok := obj.(*corev1.Service); ok {
+		rc.ServiceSummary = buildServiceSummary(ctx, svc, opts.ServiceBackends, opts.AccessChecker, omitted)
+	}
+	rc.ReferencedBy = buildReferencedBy(ctx, obj, opts.Provider, opts.AccessChecker, omitted)
+	if uses := buildUsesFromWorkload(ctx, obj, opts.AccessChecker, omitted); uses != nil {
+		rc.Uses = uses
+	}
+	rc.WorkloadSummary = buildWorkloadSummary(obj)
+	rc.IngressSummary = buildIngressSummary(ctx, obj, opts.AccessChecker, omitted)
+	rc.NodeSummary = buildNodeSummary(obj)
+	rc.PVCSummary = buildPVCSummary(obj)
+	rc.JobSummary = buildJobSummary(obj)
+	rc.CronJobSummary = buildCronJobSummary(ctx, obj, opts.AccessChecker, omitted)
+	rc.StatusSummary = buildStatusSummary(obj)
 
 	// 4. Pre-computed summaries — pass-through.
 	rc.IssueSummary = opts.IssueSummary
@@ -335,6 +384,37 @@ func identFromMeta(kind, group string, m *metav1.ObjectMeta) resourceIdentity {
 	}
 }
 
+func ownerFromObject(obj runtime.Object, namespace string) *ContextRef {
+	m, ok := obj.(metav1.Object)
+	if !ok {
+		return nil
+	}
+	owners := m.GetOwnerReferences()
+	if len(owners) == 0 {
+		return nil
+	}
+	chosen := owners[0]
+	for _, owner := range owners {
+		if owner.Controller != nil && *owner.Controller {
+			chosen = owner
+			break
+		}
+	}
+	return &ContextRef{
+		Kind:      chosen.Kind,
+		Group:     groupFromAPIVersion(chosen.APIVersion),
+		Namespace: namespace,
+		Name:      chosen.Name,
+	}
+}
+
+func groupFromAPIVersion(apiVersion string) string {
+	if apiVersion == "" || !strings.Contains(apiVersion, "/") {
+		return ""
+	}
+	return strings.SplitN(apiVersion, "/", 2)[0]
+}
+
 // ---------------------------------------------------------------------------
 // Uses (Pod-specific)
 // ---------------------------------------------------------------------------
@@ -350,14 +430,17 @@ func buildUsesFromPod(ctx context.Context, pod *corev1.Pod, ac RefAccessChecker,
 	if pod == nil {
 		return nil
 	}
+	return buildUsesFromPodSpec(ctx, pod.Namespace, pod.Spec, ac, omitted)
+}
 
+func buildUsesFromPodSpec(ctx context.Context, namespace string, spec corev1.PodSpec, ac RefAccessChecker, omitted *omittedTracker) *UsesBlock {
 	cmSet := newRefSet()
 	secretSet := newRefSet()
 	pvcSet := newRefSet()
 
-	scanVolumes(pod.Spec.Volumes, pod.Namespace, cmSet, secretSet, pvcSet)
-	scanContainers(pod.Spec.InitContainers, pod.Namespace, cmSet, secretSet)
-	scanContainers(pod.Spec.Containers, pod.Namespace, cmSet, secretSet)
+	scanVolumes(spec.Volumes, namespace, cmSet, secretSet, pvcSet)
+	scanContainers(spec.InitContainers, namespace, cmSet, secretSet)
+	scanContainers(spec.Containers, namespace, cmSet, secretSet)
 
 	uses := &UsesBlock{
 		ConfigMaps: filterRefs(ctx, ac, cmSet.refs("ConfigMap", ""), "uses.configMaps", omitted),
@@ -365,10 +448,10 @@ func buildUsesFromPod(ctx context.Context, pod *corev1.Pod, ac RefAccessChecker,
 		PVCs:       filterRefs(ctx, ac, pvcSet.refs("PersistentVolumeClaim", ""), "uses.pvcs", omitted),
 	}
 
-	if sa := pod.Spec.ServiceAccountName; sa != "" {
+	if sa := spec.ServiceAccountName; sa != "" {
 		candidate := &ContextRef{
 			Kind:      "ServiceAccount",
-			Namespace: pod.Namespace,
+			Namespace: namespace,
 			Name:      sa,
 		}
 		if checkRef(ctx, ac, candidate) {
@@ -382,6 +465,246 @@ func buildUsesFromPod(ctx context.Context, pod *corev1.Pod, ac RefAccessChecker,
 		return nil
 	}
 	return uses
+}
+
+func buildUsesFromWorkload(ctx context.Context, obj runtime.Object, ac RefAccessChecker, omitted *omittedTracker) *UsesBlock {
+	switch v := obj.(type) {
+	case *appsv1.Deployment:
+		return buildUsesFromPodSpec(ctx, v.Namespace, v.Spec.Template.Spec, ac, omitted)
+	case *appsv1.StatefulSet:
+		return buildUsesFromPodSpec(ctx, v.Namespace, v.Spec.Template.Spec, ac, omitted)
+	case *appsv1.DaemonSet:
+		return buildUsesFromPodSpec(ctx, v.Namespace, v.Spec.Template.Spec, ac, omitted)
+	case *appsv1.ReplicaSet:
+		return buildUsesFromPodSpec(ctx, v.Namespace, v.Spec.Template.Spec, ac, omitted)
+	case *batchv1.Job:
+		return buildUsesFromPodSpec(ctx, v.Namespace, v.Spec.Template.Spec, ac, omitted)
+	case *batchv1.CronJob:
+		return buildUsesFromPodSpec(ctx, v.Namespace, v.Spec.JobTemplate.Spec.Template.Spec, ac, omitted)
+	default:
+		return nil
+	}
+}
+
+const (
+	maxReferencedByItems       = 20
+	maxReferencedByPathsPerRef = 8
+)
+
+func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topology.ResourceProvider, ac RefAccessChecker, omitted *omittedTracker) *ReferencedBy {
+	if provider == nil {
+		return nil
+	}
+
+	ident, ok := identityOf(obj)
+	if !ok || ident.Namespace == "" {
+		return nil
+	}
+
+	var target refTarget
+	switch ident.Kind {
+	case "ConfigMap":
+		target = refTarget{kind: "ConfigMap", namespace: ident.Namespace, name: ident.Name}
+	case "Secret":
+		target = refTarget{kind: "Secret", namespace: ident.Namespace, name: ident.Name}
+	default:
+		return nil
+	}
+
+	var refs []ReferenceUse
+	appendRef := func(ref ReferenceUse) {
+		if len(ref.Paths) == 0 || ref.Namespace != target.namespace {
+			return
+		}
+		refs = append(refs, ref)
+	}
+
+	if deployments, _ := provider.Deployments(); deployments != nil {
+		for _, d := range deployments {
+			if d == nil || d.Namespace != target.namespace {
+				continue
+			}
+			appendRef(referenceUseForPodSpec("Deployment", "apps", d.Namespace, d.Name, d.Spec.Template.Spec, "spec.template.spec", target))
+		}
+	}
+	if statefulSets, _ := provider.StatefulSets(); statefulSets != nil {
+		for _, s := range statefulSets {
+			if s == nil || s.Namespace != target.namespace {
+				continue
+			}
+			appendRef(referenceUseForPodSpec("StatefulSet", "apps", s.Namespace, s.Name, s.Spec.Template.Spec, "spec.template.spec", target))
+		}
+	}
+	if daemonSets, _ := provider.DaemonSets(); daemonSets != nil {
+		for _, d := range daemonSets {
+			if d == nil || d.Namespace != target.namespace {
+				continue
+			}
+			appendRef(referenceUseForPodSpec("DaemonSet", "apps", d.Namespace, d.Name, d.Spec.Template.Spec, "spec.template.spec", target))
+		}
+	}
+	if jobs, _ := provider.Jobs(); jobs != nil {
+		for _, j := range jobs {
+			if j == nil || j.Namespace != target.namespace {
+				continue
+			}
+			appendRef(referenceUseForPodSpec("Job", "batch", j.Namespace, j.Name, j.Spec.Template.Spec, "spec.template.spec", target))
+		}
+	}
+	if cronJobs, _ := provider.CronJobs(); cronJobs != nil {
+		for _, c := range cronJobs {
+			if c == nil || c.Namespace != target.namespace {
+				continue
+			}
+			appendRef(referenceUseForPodSpec("CronJob", "batch", c.Namespace, c.Name, c.Spec.JobTemplate.Spec.Template.Spec, "spec.jobTemplate.spec.template.spec", target))
+		}
+	}
+	if pods, _ := provider.Pods(); pods != nil {
+		for _, p := range pods {
+			if p == nil || p.Namespace != target.namespace || hasControllerOwner(p.OwnerReferences) {
+				continue
+			}
+			appendRef(referenceUseForPodSpec("Pod", "", p.Namespace, p.Name, p.Spec, "spec", target))
+		}
+	}
+
+	if len(refs) == 0 {
+		return nil
+	}
+	sort.Slice(refs, func(i, j int) bool {
+		if refs[i].Kind != refs[j].Kind {
+			return refs[i].Kind < refs[j].Kind
+		}
+		if refs[i].Namespace != refs[j].Namespace {
+			return refs[i].Namespace < refs[j].Namespace
+		}
+		return refs[i].Name < refs[j].Name
+	})
+
+	total := len(refs)
+	filtered := make([]ReferenceUse, 0, minInt(total, maxReferencedByItems))
+	for i := range refs {
+		ref := refs[i]
+		if len(ref.Paths) > maxReferencedByPathsPerRef {
+			ref.Paths = append([]string(nil), ref.Paths[:maxReferencedByPathsPerRef]...)
+		}
+		candidate := &ContextRef{Kind: ref.Kind, Group: ref.Group, Namespace: ref.Namespace, Name: ref.Name}
+		if !checkRef(ctx, ac, candidate) {
+			omitted.add("referencedBy", OmittedRBACDenied)
+			continue
+		}
+		if len(filtered) < maxReferencedByItems {
+			filtered = append(filtered, ref)
+		}
+	}
+	if len(filtered) == 0 {
+		return nil
+	}
+	return &ReferencedBy{
+		Total:     total,
+		Items:     filtered,
+		Truncated: total > len(filtered),
+	}
+}
+
+type refTarget struct {
+	kind      string
+	namespace string
+	name      string
+}
+
+func referenceUseForPodSpec(kind, group, namespace, name string, spec corev1.PodSpec, pathPrefix string, target refTarget) ReferenceUse {
+	paths := podSpecReferencePaths(spec, pathPrefix, target)
+	return ReferenceUse{
+		Kind:      kind,
+		Group:     group,
+		Namespace: namespace,
+		Name:      name,
+		Paths:     paths,
+	}
+}
+
+func podSpecReferencePaths(spec corev1.PodSpec, pathPrefix string, target refTarget) []string {
+	pathSet := map[string]struct{}{}
+	add := func(path string) {
+		pathSet[path] = struct{}{}
+	}
+
+	for _, v := range spec.Volumes {
+		if target.kind == "ConfigMap" && v.ConfigMap != nil && v.ConfigMap.Name == target.name {
+			add(pathPrefix + ".volumes[].configMap.name")
+		}
+		if target.kind == "Secret" && v.Secret != nil && v.Secret.SecretName == target.name {
+			add(pathPrefix + ".volumes[].secret.secretName")
+		}
+		if v.Projected != nil {
+			for _, src := range v.Projected.Sources {
+				if target.kind == "ConfigMap" && src.ConfigMap != nil && src.ConfigMap.Name == target.name {
+					add(pathPrefix + ".volumes[].projected.sources[].configMap.name")
+				}
+				if target.kind == "Secret" && src.Secret != nil && src.Secret.Name == target.name {
+					add(pathPrefix + ".volumes[].projected.sources[].secret.name")
+				}
+			}
+		}
+	}
+	if target.kind == "Secret" {
+		for _, pullSecret := range spec.ImagePullSecrets {
+			if pullSecret.Name == target.name {
+				add(pathPrefix + ".imagePullSecrets[].name")
+			}
+		}
+	}
+
+	scanContainerReferencePaths(spec.InitContainers, pathPrefix, target, add)
+	scanContainerReferencePaths(spec.Containers, pathPrefix, target, add)
+
+	paths := make([]string, 0, len(pathSet))
+	for path := range pathSet {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	return paths
+}
+
+func scanContainerReferencePaths(containers []corev1.Container, pathPrefix string, target refTarget, add func(string)) {
+	for _, c := range containers {
+		for _, ef := range c.EnvFrom {
+			if target.kind == "ConfigMap" && ef.ConfigMapRef != nil && ef.ConfigMapRef.Name == target.name {
+				add(pathPrefix + ".containers[].envFrom[].configMapRef.name")
+			}
+			if target.kind == "Secret" && ef.SecretRef != nil && ef.SecretRef.Name == target.name {
+				add(pathPrefix + ".containers[].envFrom[].secretRef.name")
+			}
+		}
+		for _, e := range c.Env {
+			if e.ValueFrom == nil {
+				continue
+			}
+			if target.kind == "ConfigMap" && e.ValueFrom.ConfigMapKeyRef != nil && e.ValueFrom.ConfigMapKeyRef.Name == target.name {
+				add(pathPrefix + ".containers[].env[].valueFrom.configMapKeyRef.name")
+			}
+			if target.kind == "Secret" && e.ValueFrom.SecretKeyRef != nil && e.ValueFrom.SecretKeyRef.Name == target.name {
+				add(pathPrefix + ".containers[].env[].valueFrom.secretKeyRef.name")
+			}
+		}
+	}
+}
+
+func hasControllerOwner(refs []metav1.OwnerReference) bool {
+	for _, ref := range refs {
+		if ref.Controller != nil && *ref.Controller {
+			return true
+		}
+	}
+	return false
+}
+
+func minInt(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func scanVolumes(vols []corev1.Volume, ns string, cm, secret, pvc *refSet) {
@@ -430,6 +753,480 @@ func scanContainers(containers []corev1.Container, ns string, cm, secret *refSet
 			}
 		}
 	}
+}
+
+const maxServicePodRefs = 10
+
+func buildServiceSummary(ctx context.Context, svc *corev1.Service, lookup ServiceBackendLookup, ac RefAccessChecker, omitted *omittedTracker) *ServiceSummary {
+	if svc == nil {
+		return nil
+	}
+	out := &ServiceSummary{}
+
+	if len(svc.Spec.Selector) == 0 {
+		if svc.Spec.Type != corev1.ServiceTypeExternalName {
+			out.Warnings = append(out.Warnings, ServiceWarningNoSelector)
+		}
+		return out
+	}
+	if lookup == nil {
+		return nil
+	}
+
+	selector := labels.SelectorFromSet(labels.Set(svc.Spec.Selector))
+	pods, err := lookup.PodsForServiceSelector(svc.Namespace, selector)
+	if err != nil {
+		return nil
+	}
+
+	sel := &PodSelectionSummary{Total: len(pods)}
+	for _, pod := range pods {
+		ref := ContextRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
+		if !checkRef(ctx, ac, &ref) {
+			omitted.add("serviceSummary.selectedPods", OmittedRBACDenied)
+			continue
+		}
+		if isPodReady(pod) {
+			sel.Ready++
+			appendBoundedPodRef(&sel.ReadyPods, ref, sel)
+		} else {
+			sel.NotReady++
+			appendBoundedPodRef(&sel.NotReadyPods, ref, sel)
+		}
+	}
+
+	if sel.Total == 0 {
+		out.Warnings = append(out.Warnings, ServiceWarningNoSelectedPods)
+	} else if sel.Ready == 0 {
+		out.Warnings = append(out.Warnings, ServiceWarningNoReadyPods)
+	}
+	out.SelectedPods = sel
+	return out
+}
+
+func appendBoundedPodRef(dst *[]ContextRef, ref ContextRef, sel *PodSelectionSummary) {
+	if len(*dst) >= maxServicePodRefs {
+		sel.Truncated = true
+		return
+	}
+	*dst = append(*dst, ref)
+}
+
+func isPodReady(pod *corev1.Pod) bool {
+	if pod == nil {
+		return false
+	}
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady {
+			return cond.Status == corev1.ConditionTrue
+		}
+	}
+	return false
+}
+
+const maxSummaryItems = 12
+
+func buildPodSummary(pod *corev1.Pod) *PodSummary {
+	if pod == nil {
+		return nil
+	}
+	out := &PodSummary{
+		Phase: string(pod.Status.Phase),
+		Ready: isPodReady(pod),
+	}
+	statuses := make([]corev1.ContainerStatus, 0, len(pod.Status.InitContainerStatuses)+len(pod.Status.ContainerStatuses))
+	statuses = append(statuses, pod.Status.InitContainerStatuses...)
+	statuses = append(statuses, pod.Status.ContainerStatuses...)
+	if len(statuses) > maxSummaryItems {
+		statuses = statuses[:maxSummaryItems]
+	}
+	for _, st := range statuses {
+		out.RestartCount += st.RestartCount
+		out.Containers = append(out.Containers, containerStateSummary(st))
+	}
+	return out
+}
+
+func containerStateSummary(st corev1.ContainerStatus) ContainerStateSummary {
+	out := ContainerStateSummary{
+		Name:         st.Name,
+		Ready:        st.Ready,
+		RestartCount: st.RestartCount,
+	}
+	switch {
+	case st.State.Waiting != nil:
+		out.State = "waiting"
+		out.Reason = st.State.Waiting.Reason
+	case st.State.Running != nil:
+		out.State = "running"
+	case st.State.Terminated != nil:
+		out.State = "terminated"
+		out.Reason = st.State.Terminated.Reason
+	}
+	if st.LastTerminationState.Terminated != nil {
+		out.LastTerminationReason = st.LastTerminationState.Terminated.Reason
+	}
+	return out
+}
+
+func buildWorkloadSummary(obj runtime.Object) *WorkloadSummary {
+	switch v := obj.(type) {
+	case *appsv1.Deployment:
+		return &WorkloadSummary{Replicas: &ReplicaSummary{
+			Desired:     replicasOrZero(v.Spec.Replicas),
+			Ready:       v.Status.ReadyReplicas,
+			Available:   v.Status.AvailableReplicas,
+			Updated:     v.Status.UpdatedReplicas,
+			Unavailable: v.Status.UnavailableReplicas,
+		}}
+	case *appsv1.StatefulSet:
+		return &WorkloadSummary{Replicas: &ReplicaSummary{
+			Desired:   replicasOrZero(v.Spec.Replicas),
+			Ready:     v.Status.ReadyReplicas,
+			Available: v.Status.AvailableReplicas,
+			Updated:   v.Status.UpdatedReplicas,
+		}}
+	case *appsv1.DaemonSet:
+		return &WorkloadSummary{Replicas: &ReplicaSummary{
+			Desired:     v.Status.DesiredNumberScheduled,
+			Ready:       v.Status.NumberReady,
+			Available:   v.Status.NumberAvailable,
+			Updated:     v.Status.UpdatedNumberScheduled,
+			Unavailable: v.Status.NumberUnavailable,
+		}}
+	case *appsv1.ReplicaSet:
+		return &WorkloadSummary{Replicas: &ReplicaSummary{
+			Desired:     replicasOrZero(v.Spec.Replicas),
+			Ready:       v.Status.ReadyReplicas,
+			Available:   v.Status.AvailableReplicas,
+			Unavailable: maxInt32(0, v.Status.Replicas-v.Status.AvailableReplicas),
+		}}
+	default:
+		return nil
+	}
+}
+
+func buildIngressSummary(ctx context.Context, obj runtime.Object, ac RefAccessChecker, omitted *omittedTracker) *IngressSummary {
+	ing, ok := obj.(*networkingv1.Ingress)
+	if !ok || ing == nil {
+		return nil
+	}
+	out := &IngressSummary{}
+	if ing.Spec.IngressClassName != nil {
+		out.Class = *ing.Spec.IngressClassName
+	} else if ing.Annotations != nil {
+		out.Class = ing.Annotations["kubernetes.io/ingress.class"]
+	}
+	for _, addr := range ing.Status.LoadBalancer.Ingress {
+		if addr.IP != "" {
+			out.Addresses = append(out.Addresses, addr.IP)
+		} else if addr.Hostname != "" {
+			out.Addresses = append(out.Addresses, addr.Hostname)
+		}
+	}
+	if len(out.Addresses) == 0 {
+		out.Warnings = append(out.Warnings, IngressWarningNoAddress)
+	}
+	if out.Class == "" {
+		out.Warnings = append(out.Warnings, IngressWarningNoClass)
+	}
+	if len(ing.Spec.Rules) == 0 {
+		out.Warnings = append(out.Warnings, IngressWarningNoRules)
+	}
+
+	svcSet := newRefSet()
+	addIngressBackendService(svcSet, ing.Namespace, ing.Spec.DefaultBackend)
+	for _, rule := range ing.Spec.Rules {
+		if rule.HTTP == nil {
+			continue
+		}
+		for _, path := range rule.HTTP.Paths {
+			addIngressBackendService(svcSet, ing.Namespace, &path.Backend)
+		}
+	}
+	out.BackendServices = filterRefs(ctx, ac, svcSet.refs("Service", ""), "ingressSummary.backendServices", omitted)
+
+	secretSet := newRefSet()
+	for _, tls := range ing.Spec.TLS {
+		secretSet.add(tls.SecretName, ing.Namespace)
+	}
+	out.TLSSecrets = filterRefs(ctx, ac, secretSet.refs("Secret", ""), "ingressSummary.tlsSecrets", omitted)
+
+	if out.Class == "" && len(out.Addresses) == 0 && len(out.BackendServices) == 0 && len(out.TLSSecrets) == 0 && len(out.Warnings) == 0 {
+		return nil
+	}
+	return out
+}
+
+func addIngressBackendService(dst *refSet, namespace string, backend *networkingv1.IngressBackend) {
+	if backend == nil || backend.Service == nil {
+		return
+	}
+	dst.add(backend.Service.Name, namespace)
+}
+
+func buildNodeSummary(obj runtime.Object) *NodeSummary {
+	node, ok := obj.(*corev1.Node)
+	if !ok || node == nil {
+		return nil
+	}
+	out := &NodeSummary{
+		Unschedulable: node.Spec.Unschedulable,
+		Capacity:      compactResourceList(node.Status.Capacity),
+		Allocatable:   compactResourceList(node.Status.Allocatable),
+	}
+	if out.Unschedulable {
+		out.Warnings = append(out.Warnings, NodeWarningUnschedulable)
+	}
+	for _, cond := range node.Status.Conditions {
+		switch cond.Type {
+		case corev1.NodeReady:
+			out.ReadyStatus = string(cond.Status)
+			if cond.Status != corev1.ConditionTrue {
+				out.Warnings = append(out.Warnings, NodeWarningNotReady)
+			}
+		case corev1.NodeDiskPressure:
+			if cond.Status == corev1.ConditionTrue {
+				out.Warnings = append(out.Warnings, NodeWarningDiskPressure)
+			}
+		case corev1.NodeMemoryPressure:
+			if cond.Status == corev1.ConditionTrue {
+				out.Warnings = append(out.Warnings, NodeWarningMemoryPressure)
+			}
+		case corev1.NodePIDPressure:
+			if cond.Status == corev1.ConditionTrue {
+				out.Warnings = append(out.Warnings, NodeWarningPIDPressure)
+			}
+		case corev1.NodeNetworkUnavailable:
+			if cond.Status == corev1.ConditionTrue {
+				out.Warnings = append(out.Warnings, NodeWarningNetworkUnavailable)
+			}
+		}
+	}
+	for _, taint := range node.Spec.Taints {
+		out.Taints = append(out.Taints, TaintSummary{
+			Key:    taint.Key,
+			Value:  taint.Value,
+			Effect: string(taint.Effect),
+		})
+	}
+	return out
+}
+
+func compactResourceList(resources corev1.ResourceList) map[string]string {
+	if len(resources) == 0 {
+		return nil
+	}
+	out := make(map[string]string, 4)
+	for _, name := range []corev1.ResourceName{
+		corev1.ResourceCPU,
+		corev1.ResourceMemory,
+		corev1.ResourcePods,
+		corev1.ResourceEphemeralStorage,
+	} {
+		if qty, ok := resources[name]; ok {
+			out[string(name)] = qty.String()
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func buildPVCSummary(obj runtime.Object) *PVCSummary {
+	pvc, ok := obj.(*corev1.PersistentVolumeClaim)
+	if !ok || pvc == nil {
+		return nil
+	}
+	out := &PVCSummary{
+		Phase:            string(pvc.Status.Phase),
+		StorageClassName: valueOrEmpty(pvc.Spec.StorageClassName),
+		VolumeName:       pvc.Spec.VolumeName,
+		VolumeMode:       string(valueOrZero(pvc.Spec.VolumeMode)),
+	}
+	if req, ok := pvc.Spec.Resources.Requests[corev1.ResourceStorage]; ok {
+		out.RequestedStorage = req.String()
+	}
+	if cap, ok := pvc.Status.Capacity[corev1.ResourceStorage]; ok {
+		out.CapacityStorage = cap.String()
+	}
+	for _, mode := range pvc.Spec.AccessModes {
+		out.AccessModes = append(out.AccessModes, string(mode))
+	}
+	if pvc.Annotations != nil {
+		out.Provisioner = pvc.Annotations["volume.kubernetes.io/storage-provisioner"]
+		out.SelectedNode = pvc.Annotations["volume.kubernetes.io/selected-node"]
+		out.BindCompleted = pvc.Annotations["pv.kubernetes.io/bind-completed"]
+	}
+	switch pvc.Status.Phase {
+	case corev1.ClaimPending:
+		out.Warnings = append(out.Warnings, PVCWarningPending)
+	case corev1.ClaimLost:
+		out.Warnings = append(out.Warnings, PVCWarningLost)
+	}
+	return out
+}
+
+func buildJobSummary(obj runtime.Object) *JobSummary {
+	job, ok := obj.(*batchv1.Job)
+	if !ok || job == nil {
+		return nil
+	}
+	out := &JobSummary{
+		Active:       job.Status.Active,
+		Succeeded:    job.Status.Succeeded,
+		Failed:       job.Status.Failed,
+		Completions:  int32OrDefault(job.Spec.Completions, 1),
+		Parallelism:  int32OrDefault(job.Spec.Parallelism, 1),
+		BackoffLimit: int32OrDefault(job.Spec.BackoffLimit, 6),
+		Suspended:    boolOrFalse(job.Spec.Suspend),
+	}
+	return out
+}
+
+func buildCronJobSummary(ctx context.Context, obj runtime.Object, ac RefAccessChecker, omitted *omittedTracker) *CronJobSummary {
+	cj, ok := obj.(*batchv1.CronJob)
+	if !ok || cj == nil {
+		return nil
+	}
+	out := &CronJobSummary{
+		Schedule:  cj.Spec.Schedule,
+		Suspended: boolOrFalse(cj.Spec.Suspend),
+	}
+	if cj.Status.LastScheduleTime != nil {
+		out.LastScheduleTime = cj.Status.LastScheduleTime.Format("2006-01-02T15:04:05Z07:00")
+	}
+	if cj.Status.LastSuccessfulTime != nil {
+		out.LastSuccessfulTime = cj.Status.LastSuccessfulTime.Format("2006-01-02T15:04:05Z07:00")
+	}
+	active := make([]ContextRef, 0, len(cj.Status.Active))
+	for _, ref := range cj.Status.Active {
+		if ref.Kind == "" || ref.Name == "" {
+			continue
+		}
+		active = append(active, ContextRef{
+			Kind:      ref.Kind,
+			Group:     groupFromAPIVersion(ref.APIVersion),
+			Namespace: cj.Namespace,
+			Name:      ref.Name,
+		})
+	}
+	out.ActiveJobs = filterRefs(ctx, ac, active, "cronJobSummary.activeJobs", omitted)
+	return out
+}
+
+func replicasOrZero(p *int32) int32 {
+	if p == nil {
+		return 0
+	}
+	return *p
+}
+
+func int32OrDefault(p *int32, fallback int32) int32 {
+	if p == nil {
+		return fallback
+	}
+	return *p
+}
+
+func boolOrFalse(p *bool) bool {
+	return p != nil && *p
+}
+
+func valueOrEmpty(p *string) string {
+	if p == nil {
+		return ""
+	}
+	return *p
+}
+
+func valueOrZero[T ~string](p *T) T {
+	var zero T
+	if p == nil {
+		return zero
+	}
+	return *p
+}
+
+func maxInt32(a, b int32) int32 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func buildStatusSummary(obj runtime.Object) *StatusSummary {
+	if obj == nil {
+		return nil
+	}
+	u, ok := objectToMap(obj)
+	if !ok {
+		return nil
+	}
+	status, ok, _ := unstructured.NestedMap(u, "status")
+	if !ok {
+		return nil
+	}
+	out := &StatusSummary{}
+	if phase, ok, _ := unstructured.NestedString(status, "phase"); ok {
+		out.Phase = phase
+	}
+	if conditions, ok, _ := unstructured.NestedSlice(status, "conditions"); ok {
+		if len(conditions) > maxSummaryItems {
+			conditions = conditions[:maxSummaryItems]
+		}
+		for _, item := range conditions {
+			cond, ok := item.(map[string]interface{})
+			if !ok {
+				continue
+			}
+			summary := ConditionSummary{
+				Type:               stringField(cond, "type"),
+				Status:             stringField(cond, "status"),
+				Reason:             stringField(cond, "reason"),
+				Message:            truncateRunes(stringField(cond, "message"), 300),
+				LastTransitionTime: stringField(cond, "lastTransitionTime"),
+			}
+			if summary.Type == "" && summary.Status == "" {
+				continue
+			}
+			out.Conditions = append(out.Conditions, summary)
+		}
+	}
+	if out.Phase == "" && len(out.Conditions) == 0 {
+		return nil
+	}
+	return out
+}
+
+func objectToMap(obj runtime.Object) (map[string]interface{}, bool) {
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		return u.Object, true
+	}
+	out, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		return nil, false
+	}
+	return out, true
+}
+
+func stringField(m map[string]interface{}, key string) string {
+	if v, ok := m[key].(string); ok {
+		return v
+	}
+	return ""
+}
+
+func truncateRunes(s string, limit int) string {
+	if limit <= 0 || len(s) == 0 {
+		return ""
+	}
+	runes := []rune(s)
+	if len(runes) <= limit {
+		return s
+	}
+	return string(runes[:limit])
 }
 
 // refSet collects (name, namespace) pairs with insertion-order preservation

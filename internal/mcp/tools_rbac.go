@@ -35,12 +35,12 @@ type subjectPermissionsInput struct {
 }
 
 type subjectPermissionsResult struct {
-	Subject    mcpSubject       `json:"subject"`
-	Bindings   []mcpBindingLite `json:"bindings"`
+	Subject    mcpSubject          `json:"subject"`
+	Bindings   []mcpBindingLite    `json:"bindings"`
 	FlatRules  []rbacv1.PolicyRule `json:"flatRules"`
-	Truncated  bool             `json:"truncated,omitempty"`
-	UsedByPods []string         `json:"usedByPods,omitempty"` // "ns/name" pairs
-	PodsTotal  int              `json:"podsTotal,omitempty"`  // >0 when usedByPods was truncated
+	Truncated  bool                `json:"truncated,omitempty"`
+	UsedByPods []string            `json:"usedByPods,omitempty"` // "ns/name" pairs
+	PodsTotal  int                 `json:"podsTotal,omitempty"`  // >0 when usedByPods was truncated
 }
 
 type mcpSubject struct {
@@ -53,7 +53,7 @@ type mcpSubject struct {
 // identify the binding and the role it grants; rule details are accessible
 // via get_resource on the role.
 type mcpBindingLite struct {
-	BindingKind      string `json:"bindingKind"`            // "RoleBinding" | "ClusterRoleBinding"
+	BindingKind      string `json:"bindingKind"` // "RoleBinding" | "ClusterRoleBinding"
 	BindingNamespace string `json:"bindingNamespace,omitempty"`
 	BindingName      string `json:"bindingName"`
 	RoleKind         string `json:"roleKind"` // "Role" | "ClusterRole"

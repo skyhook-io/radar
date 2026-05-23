@@ -118,6 +118,69 @@ func TestSearch_ImageMatch(t *testing.T) {
 	}
 }
 
+func TestSearch_ConfigMapDataMatchWithSnippet(t *testing.T) {
+	p := &fakeProvider{
+		typed: map[string][]runtime.Object{
+			"configmaps": {
+				&corev1.ConfigMap{
+					ObjectMeta: metav1.ObjectMeta{Name: "flagd-config", Namespace: "astronomy-shop"},
+					Data: map[string]string{
+						"flags.json": `{"adServiceFailure":{"defaultVariant":"on"}}`,
+					},
+				},
+			},
+		},
+	}
+	res, err := Search(context.Background(), p, Parse("adServiceFailure"), Options{Include: IncludeNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Hits) != 1 {
+		t.Fatalf("expected configmap content hit, got %+v", res.Hits)
+	}
+	h := res.Hits[0]
+	if h.Kind != "ConfigMap" || h.Name != "flagd-config" {
+		t.Fatalf("wrong hit: %+v", h)
+	}
+	if len(h.Snippets) != 1 || h.Snippets[0].Path != "data.flags.json" {
+		t.Fatalf("expected data snippet, got %+v", h.Snippets)
+	}
+}
+
+func TestSearch_DynamicSpecMatchWithSnippet(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "chaos-mesh.org", Version: "v1alpha1", Resource: "networkchaos"}
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "chaos-mesh.org/v1alpha1",
+		"kind":       "NetworkChaos",
+		"metadata": map[string]any{
+			"name":      "net-fault",
+			"namespace": "hotel",
+		},
+		"spec": map[string]any{
+			"selector": map[string]any{
+				"labelSelectors": map[string]any{
+					"app": "user",
+				},
+			},
+			"action": "delay",
+		},
+	}}
+	p := &fakeProvider{
+		dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}},
+		kinds:   map[schema.GroupVersionResource]string{gvr: "NetworkChaos"},
+	}
+	res, err := Search(context.Background(), p, Parse("delay"), Options{Include: IncludeNone})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Hits) != 1 {
+		t.Fatalf("expected CRD content hit, got %+v", res.Hits)
+	}
+	if len(res.Hits[0].Snippets) != 1 || res.Hits[0].Snippets[0].Path != "spec.action" {
+		t.Fatalf("expected spec snippet, got %+v", res.Hits[0].Snippets)
+	}
+}
+
 func TestSearch_LimitTruncates(t *testing.T) {
 	pods := make([]runtime.Object, 0, 100)
 	for i := 0; i < 100; i++ {

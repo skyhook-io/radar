@@ -1,9 +1,20 @@
-// Package issues unifies cluster health signals from radar's three
-// parallel sources — hardcoded problem detection, audit findings, and
-// K8s Warning events — into a single normalized envelope. It also adds
-// a generic CRD condition-based fallback so any CRD with a False
-// Ready/Available/Reconciled/Healthy/Synced condition surfaces a
-// warning without per-integration code.
+// Package issues unifies cluster health signals into a single
+// normalized envelope. It composes:
+//   - problem    — radar's hardcoded per-kind live-state detection
+//     (failing Deployments, NotReady Nodes, pending PVCs…)
+//   - condition  — generic CRD .status.conditions[].status=False fallback
+//     (Argo/Flux/Knative/Crossplane/cert-manager/KEDA)
+//   - event      — recent K8s Warning events (opt-in; noisy)
+//   - kyverno    — PolicyReport findings (opt-in)
+//
+// All four describe LIVE OPERATIONAL STATE — "what is failing right
+// now". Static best-practice/posture findings (runAsRoot, missing
+// probes, no PDB, deprecated APIs, …) are a separate axis and live
+// in pkg/audit + /api/audit + MCP get_cluster_audit. The two are NOT
+// composed here: a healthy pod can have many audit findings, a
+// crashing pod can have zero. Combining them would force consumers
+// to disambiguate "is this critical operational or critical posture?"
+// at every callsite.
 //
 // The Issue type is what /api/issues and the hub's fleet_issues MCP
 // tool emit. Severity is normalized to a 3-tier vocabulary
@@ -23,9 +34,13 @@ type CELFilter = filter.Filter
 
 // Severity is the normalized 3-tier severity. Mapping rules:
 //
-//	critical = problem.critical | audit.danger
-//	warning  = problem.high|medium | audit.warning | event.Warning | CRD-condition False
+//	critical = problem.critical | kyverno.fail|error
+//	warning  = problem.<any non-critical> | event.Warning | CRD-condition False | kyverno.warn
 //	info     = reserved (currently unused)
+//
+// problem severities other than "critical" all collapse to warning — see
+// fromProblem. Today that's "high"/"medium", but the mapping is non-critical
+// by exclusion, not by an explicit allow-list.
 type Severity string
 
 const (
@@ -34,13 +49,12 @@ const (
 )
 
 // Source records which underlying detection channel emitted this
-// issue. Useful for filtering ("only show me problems, not audit
-// findings") and for SPA copy that explains why a row appeared.
+// issue. Useful for filtering ("only show me problems, not events")
+// and for SPA copy that explains why a row appeared.
 type Source string
 
 const (
 	SourceProblem   Source = "problem"   // radar's hardcoded per-kind detection
-	SourceAudit     Source = "audit"     // best-practice audit findings
 	SourceEvent     Source = "event"     // K8s Warning events (recent)
 	SourceCondition Source = "condition" // generic CRD .status.conditions[].status=False fallback
 	SourceKyverno   Source = "kyverno"   // Kyverno PolicyReport findings (opt-in)
@@ -56,8 +70,9 @@ type Ref struct {
 // Issue is the unified cluster-health record.
 //
 // FirstSeen / LastSeen / Count are populated for events (which arrive
-// pre-aggregated from the K8s API). For problems and audit findings,
-// FirstSeen and LastSeen are both the snapshot time and Count = 1.
+// pre-aggregated from the K8s API). For problems, conditions, and
+// Kyverno findings, FirstSeen and LastSeen are both the snapshot time
+// and Count = 1.
 type Issue struct {
 	Severity  Severity  `json:"severity"`
 	Source    Source    `json:"source"`
@@ -88,20 +103,15 @@ type Filters struct {
 	Since time.Duration
 	// Limit caps the returned slice. Zero means default (200).
 	Limit int
-	// IncludeAudit defaults to false — audit findings are loud (50–200
-	// per cluster) and the LLM use case usually wants problems first.
-	// Set true to opt in.
-	IncludeAudit bool
 	// IncludeEvents defaults to false. Warning events are the noisiest
 	// source by an order of magnitude — a single broken Pod emits a
 	// FailedScheduling / BackOff / etc. Event every few seconds, and
 	// the event informer retains them for the cache window (default 1h+).
 	// On a multi-thousand-Pod cluster this floods the Issue list with
 	// rows that mostly duplicate `problem` source (a CrashLoopBackOff
-	// Pod already shows up under SourceProblem). Treat events as opt-in
-	// like audit; when enabled the caller should also pass a Since
-	// window (handler defaults to 1h when events are on and Since is
-	// zero).
+	// Pod already shows up under SourceProblem). Treat events as opt-in;
+	// when enabled the caller should also pass a Since window (handler
+	// defaults to 1h when events are on and Since is zero).
 	IncludeEvents bool
 	// IncludeKyverno defaults to false. Kyverno PolicyReport findings
 	// are loud (a baseline cluster-pss profile alone emits 10+ findings

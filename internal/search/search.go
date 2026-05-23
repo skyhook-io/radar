@@ -213,7 +213,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				continue
 			}
 			c.Group = tk.Group
-			score, matched, ok := match(q, c)
+			score, matched, snippets, ok := match(q, c)
 			if !ok {
 				continue
 			}
@@ -242,7 +242,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				}
 			}
 			pending = append(pending, pendingHit{
-				hit: buildHit(score, matched, c, opts.Include, obj, nil),
+				hit: buildHit(score, matched, snippets, c, opts.Include, obj, nil),
 				obj: obj,
 				c:   c,
 			})
@@ -285,7 +285,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		res.Searched += len(items)
 		for _, u := range items {
 			c := fromUnstructured(u, kind, gvr.Group)
-			score, matched, ok := match(q, c)
+			score, matched, snippets, ok := match(q, c)
 			if !ok {
 				continue
 			}
@@ -312,7 +312,7 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 				}
 			}
 			pending = append(pending, pendingHit{
-				hit: buildHit(score, matched, c, opts.Include, nil, u),
+				hit: buildHit(score, matched, snippets, c, opts.Include, nil, u),
 				u:   u,
 				c:   c,
 			})
@@ -407,7 +407,7 @@ func isClusterScopedKind(kind string) bool {
 // done here — it happens in Search's post-truncation loop so the
 // expensive topology lookups + issue-index reads only run for the hits
 // that survive sort + Limit truncation.
-func buildHit(score int, matched []MatchedField, c candidate, mode IncludeMode, obj runtime.Object, u *unstructured.Unstructured) Hit {
+func buildHit(score int, matched []MatchedField, snippets []MatchSnippet, c candidate, mode IncludeMode, obj runtime.Object, u *unstructured.Unstructured) Hit {
 	h := Hit{
 		Score:     score,
 		Kind:      c.Kind,
@@ -415,6 +415,7 @@ func buildHit(score int, matched []MatchedField, c candidate, mode IncludeMode, 
 		Namespace: c.Namespace,
 		Name:      c.Name,
 		Matched:   matched,
+		Snippets:  snippets,
 	}
 	switch mode {
 	case IncludeSummary:

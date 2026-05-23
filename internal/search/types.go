@@ -49,6 +49,7 @@ type Hit struct {
 	Summary   any            `json:"summary,omitempty"`
 	Raw       any            `json:"raw,omitempty"`
 	Matched   []MatchedField `json:"matched,omitempty"`
+	Snippets  []MatchSnippet `json:"snippets,omitempty"`
 	// SummaryContext is the compact per-row enrichment (managedBy, health,
 	// issueCount). Populated by handlers via Options.SummaryBuilder; nil
 	// when the caller opted out (context=none) or no fields apply.
@@ -58,8 +59,17 @@ type Hit struct {
 // MatchedField records where a query token landed (debug + UI highlight).
 type MatchedField struct {
 	Token string `json:"token"`
-	Site  string `json:"site"` // "name" | "namespace" | "label:k" | "annotation:k" | "image" | "kind"
+	Site  string `json:"site"` // "name" | "namespace" | "label:k" | "annotation:k" | "image" | "kind" | "content:path"
 	Score int    `json:"score"`
+}
+
+// MatchSnippet is a short excerpt from a content field that matched a free
+// token. It lets agents use search as a cheap grep-like first pass without
+// fetching the full resource body for every hit.
+type MatchSnippet struct {
+	Token   string `json:"token"`
+	Path    string `json:"path"`
+	Snippet string `json:"snippet"`
 }
 
 // Result is the full response shape for a search request.

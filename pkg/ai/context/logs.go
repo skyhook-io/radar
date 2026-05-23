@@ -74,6 +74,26 @@ func FilterLogs(rawLogs string) FilteredLogs {
 	}
 }
 
+// FilterLogsByPattern first keeps only lines matching pattern, then applies
+// the usual diagnostic log filtering. This gives agents a server-side
+// equivalent of `kubectl logs ... | grep PATTERN | tail`.
+func FilterLogsByPattern(rawLogs, pattern string) (FilteredLogs, error) {
+	if strings.TrimSpace(pattern) == "" {
+		return FilterLogs(rawLogs), nil
+	}
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return FilteredLogs{}, err
+	}
+	var matched []string
+	for _, line := range strings.Split(strings.TrimRight(rawLogs, "\n"), "\n") {
+		if re.MatchString(line) {
+			matched = append(matched, line)
+		}
+	}
+	return FilterLogs(strings.Join(matched, "\n")), nil
+}
+
 // deduplicateStackTraces collapses identical consecutive lines with a repeat count.
 func deduplicateStackTraces(lines []string) []string {
 	if len(lines) == 0 {

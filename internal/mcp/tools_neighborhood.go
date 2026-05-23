@@ -18,7 +18,7 @@ type getNeighborhoodInput struct {
 	Group     string `json:"group,omitempty" jsonschema:"API group required to disambiguate kinds that collide across groups. Examples: serving.knative.dev for KNative Service (vs core/v1 Service), cluster.x-k8s.io for CAPI Cluster (vs CNPG Cluster), networking.istio.io for Istio Gateway (vs gateway.networking.k8s.io Gateway). Omit for kinds with no known collisions."`
 	Namespace string `json:"namespace,omitempty" jsonschema:"resource namespace; omit for cluster-scoped kinds"`
 	Name      string `json:"name" jsonschema:"resource name"`
-	Profile   string `json:"profile,omitempty" jsonschema:"neighborhood breadth: auto or all. Default: auto (picks a bounded edge set from the root kind)."`
+	Profile   string `json:"profile,omitempty" jsonschema:"neighborhood breadth: auto or all. Default: auto (picks a bounded edge set from the root kind). all expands every edge type and is heavier; use only when auto produced a too-narrow neighborhood."`
 	Hops      int    `json:"hops,omitempty" jsonschema:"BFS depth. Default 1, max 2."`
 	MaxNodes  int    `json:"max_nodes,omitempty" jsonschema:"node-budget cap. Default 25. When the cap is hit mid-expansion, truncated=true is set and the partial subgraph is returned."`
 }
@@ -30,6 +30,11 @@ type neighborhoodResult struct {
 	Subgraph  neighborhoodSubgraphMCP        `json:"subgraph"`
 	Truncated bool                           `json:"truncated"`
 	Omitted   []resourcecontext.OmittedField `json:"omitted,omitempty"`
+	// NarrowHint is the one-line steering string emitted when Truncated=true:
+	// truncated responses include explicit narrowing instructions so the agent
+	// can re-query under budget instead of guessing what to drop. Empty when
+	// no truncation occurred. Same shape used across all paginating MCP tools.
+	NarrowHint string `json:"narrowHint,omitempty"`
 }
 
 type neighborhoodSubgraphMCP struct {
@@ -159,6 +164,12 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 			Edges: sub.Edges,
 		},
 		Truncated: sub.Truncated,
+	}
+	if sub.Truncated {
+		result.NarrowHint = fmt.Sprintf(
+			"subgraph capped at %d nodes (returned %d) — reduce hops (current %d, max 2), tighten profile (auto is narrower than all), or raise max_nodes (cap 200)",
+			opts.MaxNodes, len(sub.Nodes), opts.Hops,
+		)
 	}
 	if sub.RBACDenied > 0 {
 		// Aggregated rather than per-node — denied node refs would

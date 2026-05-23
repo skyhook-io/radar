@@ -16,14 +16,14 @@ type auditInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace"`
 	Category  string `json:"category,omitempty" jsonschema:"filter by category: Security, Reliability, or Efficiency"`
 	Severity  string `json:"severity,omitempty" jsonschema:"filter by severity: danger or warning"`
-	Limit     int    `json:"limit,omitempty" jsonschema:"max findings to return (default 30, max 100)"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"max audit violation findings to return (default 30, max 100). This limits findings only; compliant resources are not returned."`
 }
 
 type auditToolResult struct {
-	Summary    auditSummary      `json:"summary"`
-	Findings   []auditFinding    `json:"findings"`
-	TotalCount int               `json:"totalCount"`
-	Truncated  bool              `json:"truncated,omitempty"`
+	Summary    auditSummary   `json:"summary"`
+	Findings   []auditFinding `json:"findings"`
+	TotalCount int            `json:"totalCount"`
+	Truncated  bool           `json:"truncated,omitempty"`
 }
 
 type auditSummary struct {
@@ -34,10 +34,10 @@ type auditSummary struct {
 }
 
 type auditFinding struct {
-	Resource    string `json:"resource"`    // "Deployment/default/web"
-	Check       string `json:"check"`       // "runAsRoot"
-	Severity    string `json:"severity"`    // "danger" or "warning"
-	Category    string `json:"category"`    // "Security"
+	Resource    string `json:"resource"` // "Deployment/default/web"
+	Check       string `json:"check"`    // "runAsRoot"
+	Severity    string `json:"severity"` // "danger" or "warning"
+	Category    string `json:"category"` // "Security"
 	Message     string `json:"message"`
 	Remediation string `json:"remediation,omitempty"`
 }
@@ -154,4 +154,3 @@ func loadAuditConfig() settings.AuditConfig {
 	}
 	return settings.DefaultAuditConfig()
 }
-

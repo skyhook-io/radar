@@ -1,6 +1,10 @@
 package search
 
 import (
+	"fmt"
+	"sort"
+	"strconv"
+
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -25,6 +29,7 @@ func fromObject(obj runtime.Object, kind string) (candidate, bool) {
 		Annotations: m.GetAnnotations(),
 	}
 	c.Images = imagesForTyped(obj)
+	c.Content = contentForTyped(obj, kind)
 	return c, true
 }
 
@@ -41,7 +46,79 @@ func fromUnstructured(u *unstructured.Unstructured, kind, group string) candidat
 		Annotations: u.GetAnnotations(),
 	}
 	c.Images = imagesFromUnstructured(u)
+	c.Content = contentFromUnstructured(u, kind)
 	return c
+}
+
+func contentForTyped(obj runtime.Object, kind string) []ContentField {
+	if obj == nil {
+		return nil
+	}
+	// Secrets are intentionally not content-indexed. Search may expose Secret
+	// names to callers with Secret RBAC, but matching/snippeting data values
+	// would turn search into a secret-value disclosure path.
+	if kind == "Secret" {
+		return nil
+	}
+	m, err := runtime.DefaultUnstructuredConverter.ToUnstructured(obj)
+	if err != nil {
+		return nil
+	}
+	return contentFromMap(m, kind)
+}
+
+func contentFromUnstructured(u *unstructured.Unstructured, kind string) []ContentField {
+	if u == nil || u.Object == nil || kind == "Secret" {
+		return nil
+	}
+	return contentFromMap(u.Object, kind)
+}
+
+func contentFromMap(obj map[string]any, kind string) []ContentField {
+	var out []ContentField
+	if kind == "ConfigMap" {
+		walkContent("data", obj["data"], &out)
+		walkContent("binaryData", obj["binaryData"], &out)
+		return out
+	}
+	// These roots capture the useful grep-like surface without indexing noisy
+	// metadata such as managedFields or leaking Secret data values.
+	walkContent("spec", obj["spec"], &out)
+	walkContent("status", obj["status"], &out)
+	walkContent("data", obj["data"], &out)
+	return out
+}
+
+func walkContent(path string, v any, out *[]ContentField) {
+	switch x := v.(type) {
+	case nil:
+		return
+	case string:
+		if x != "" {
+			*out = append(*out, ContentField{Path: path, Value: x})
+		}
+	case bool:
+		*out = append(*out, ContentField{Path: path, Value: strconv.FormatBool(x)})
+	case int:
+		*out = append(*out, ContentField{Path: path, Value: strconv.Itoa(x)})
+	case int64:
+		*out = append(*out, ContentField{Path: path, Value: strconv.FormatInt(x, 10)})
+	case float64:
+		*out = append(*out, ContentField{Path: path, Value: strconv.FormatFloat(x, 'f', -1, 64)})
+	case map[string]any:
+		keys := make([]string, 0, len(x))
+		for k := range x {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			walkContent(path+"."+k, x[k], out)
+		}
+	case []any:
+		for i, item := range x {
+			walkContent(fmt.Sprintf("%s[%d]", path, i), item, out)
+		}
+	}
 }
 
 func imagesForTyped(obj runtime.Object) []string {

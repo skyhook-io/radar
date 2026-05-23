@@ -88,4 +88,3 @@ func handleApplyResource(ctx context.Context, req *mcp.CallToolRequest, input ap
 		"resources": results,
 	})
 }
-

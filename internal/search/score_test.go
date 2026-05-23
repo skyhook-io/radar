@@ -1,6 +1,9 @@
 package search
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func cand() candidate {
 	return candidate{
@@ -15,7 +18,7 @@ func cand() candidate {
 
 func TestMatch_FreeTokenScoresHighestSite(t *testing.T) {
 	q := Parse("redis")
-	score, _, ok := match(q, cand())
+	score, _, _, ok := match(q, cand())
 	if !ok {
 		t.Fatal("expected match")
 	}
@@ -27,7 +30,7 @@ func TestMatch_FreeTokenScoresHighestSite(t *testing.T) {
 
 func TestMatch_TwoTokensSummed(t *testing.T) {
 	q := Parse("redis cache")
-	score, matched, ok := match(q, cand())
+	score, matched, _, ok := match(q, cand())
 	if !ok {
 		t.Fatal("expected match")
 	}
@@ -42,57 +45,57 @@ func TestMatch_TwoTokensSummed(t *testing.T) {
 
 func TestMatch_TokenMustMatchSomewhere(t *testing.T) {
 	q := Parse("redis nope-not-here")
-	if _, _, ok := match(q, cand()); ok {
+	if _, _, _, ok := match(q, cand()); ok {
 		t.Fatal("expected no match — second token must reject")
 	}
 }
 
 func TestMatch_KindFilter(t *testing.T) {
 	c := cand()
-	if _, _, ok := match(Parse("kind:Service"), c); ok {
+	if _, _, _, ok := match(Parse("kind:Service"), c); ok {
 		t.Fatal("kind:Service should reject a Pod candidate")
 	}
-	if _, _, ok := match(Parse("kind:Pod"), c); !ok {
+	if _, _, _, ok := match(Parse("kind:Pod"), c); !ok {
 		t.Fatal("kind:Pod should match a Pod candidate")
 	}
 	// Pluralized form too — radar fetch.go uses lowercase plural keys.
-	if _, _, ok := match(Parse("kind:pods"), c); !ok {
+	if _, _, _, ok := match(Parse("kind:pods"), c); !ok {
 		t.Fatal("kind:pods should match")
 	}
 }
 
 func TestMatch_NSFilter(t *testing.T) {
 	c := cand()
-	if _, _, ok := match(Parse("ns:dev"), c); ok {
+	if _, _, _, ok := match(Parse("ns:dev"), c); ok {
 		t.Fatal("ns:dev should reject prod candidate")
 	}
-	if _, _, ok := match(Parse("ns:prod"), c); !ok {
+	if _, _, _, ok := match(Parse("ns:prod"), c); !ok {
 		t.Fatal("ns:prod should match")
 	}
 }
 
 func TestMatch_LabelFilter(t *testing.T) {
 	c := cand()
-	if _, _, ok := match(Parse("label:app=redis"), c); !ok {
+	if _, _, _, ok := match(Parse("label:app=redis"), c); !ok {
 		t.Fatal("label:app=redis should match")
 	}
-	if _, _, ok := match(Parse("label:app=postgres"), c); ok {
+	if _, _, _, ok := match(Parse("label:app=postgres"), c); ok {
 		t.Fatal("label:app=postgres should reject")
 	}
-	if _, _, ok := match(Parse("label:app"), c); !ok {
+	if _, _, _, ok := match(Parse("label:app"), c); !ok {
 		t.Fatal("label:app (key-only) should match when label exists")
 	}
-	if _, _, ok := match(Parse("label:missing"), c); ok {
+	if _, _, _, ok := match(Parse("label:missing"), c); ok {
 		t.Fatal("label:missing should reject when label absent")
 	}
 }
 
 func TestMatch_ImageFilter(t *testing.T) {
 	c := cand()
-	if _, _, ok := match(Parse("image:redis"), c); !ok {
+	if _, _, _, ok := match(Parse("image:redis"), c); !ok {
 		t.Fatal("image:redis should match")
 	}
-	if _, _, ok := match(Parse("image:nginx"), c); ok {
+	if _, _, _, ok := match(Parse("image:nginx"), c); ok {
 		t.Fatal("image:nginx should reject")
 	}
 }
@@ -100,7 +103,7 @@ func TestMatch_ImageFilter(t *testing.T) {
 func TestMatch_PureFilterReturnsFlatScore(t *testing.T) {
 	// Filter-only query (no free tokens) should return a positive flat
 	// score so candidates show up at all.
-	score, _, ok := match(Parse("kind:Pod ns:prod"), cand())
+	score, _, _, ok := match(Parse("kind:Pod ns:prod"), cand())
 	if !ok || score <= 0 {
 		t.Fatalf("filter-only match: score=%d ok=%v", score, ok)
 	}
@@ -108,8 +111,29 @@ func TestMatch_PureFilterReturnsFlatScore(t *testing.T) {
 
 func TestMatch_CaseInsensitive(t *testing.T) {
 	q := Parse("REDIS")
-	if _, _, ok := match(q, cand()); !ok {
+	if _, _, _, ok := match(q, cand()); !ok {
 		t.Fatal("expected case-insensitive match")
+	}
+}
+
+func TestMatch_ContentSnippet(t *testing.T) {
+	c := cand()
+	c.Content = []ContentField{{
+		Path:  "data.flags.json",
+		Value: `{"adServiceFailure":{"defaultVariant":"on"}}`,
+	}}
+	score, matched, snippets, ok := match(Parse("adServiceFailure"), c)
+	if !ok {
+		t.Fatal("expected content match")
+	}
+	if score != scoreContentSubstr {
+		t.Fatalf("score=%d, expected content score %d", score, scoreContentSubstr)
+	}
+	if len(matched) != 1 || matched[0].Site != "content:data.flags.json" {
+		t.Fatalf("matched=%+v", matched)
+	}
+	if len(snippets) != 1 || snippets[0].Path != "data.flags.json" || !strings.Contains(snippets[0].Snippet, "adServiceFailure") {
+		t.Fatalf("snippets=%+v", snippets)
 	}
 }
 

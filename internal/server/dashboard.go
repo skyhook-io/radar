@@ -42,14 +42,15 @@ type DashboardResponse struct {
 	NetworkPolicyCoverage  *DashboardNetworkPolicyCoverage `json:"networkPolicyCoverage,omitempty"`
 	NodeVersionSkew        *k8s.VersionSkew                `json:"nodeVersionSkew,omitempty"`
 	Audit                  *DashboardAudit                 `json:"audit,omitempty"`
+	Visibility             *k8s.VisibilitySummary          `json:"visibility,omitempty"`
 	// GitOpsControllers summarizes Argo CD / Flux controller pod health.
 	// Omitted when no controllers are detected — the Home dashboard
 	// hides the card entirely on non-GitOps clusters rather than
 	// rendering an empty state.
-	GitOpsControllers      *DashboardGitOpsControllers     `json:"gitopsControllers,omitempty"`
-	DeferredLoading        bool                            `json:"deferredLoading,omitempty"`  // True while deferred informers (secrets, events, etc.) are still syncing
-	PartialData            []string                        `json:"partialData,omitempty"`      // Resource kinds that timed out during critical sync (e.g. ["Pod", "Deployment"])
-	AccessRestricted       bool                            `json:"accessRestricted,omitempty"` // True when user has no namespace access (RBAC)
+	GitOpsControllers *DashboardGitOpsControllers `json:"gitopsControllers,omitempty"`
+	DeferredLoading   bool                        `json:"deferredLoading,omitempty"`  // True while deferred informers (secrets, events, etc.) are still syncing
+	PartialData       []string                    `json:"partialData,omitempty"`      // Resource kinds that timed out during critical sync (e.g. ["Pod", "Deployment"])
+	AccessRestricted  bool                        `json:"accessRestricted,omitempty"` // True when user has no namespace access (RBAC)
 }
 
 // DashboardCRDsResponse is the response for CRD counts (loaded lazily)
@@ -329,6 +330,9 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 	}
 
 	resp := DashboardResponse{}
+	if result := k8s.GetCachedPermissionResult(); result != nil {
+		resp.Visibility = k8s.BuildVisibilitySummary(result, k8s.VisibilityNamespace(namespaces))
+	}
 	canReadNodes := s.canRead(r, "", "nodes", "", "list")
 	canReadNamespaces := s.canRead(r, "", "namespaces", "", "list")
 

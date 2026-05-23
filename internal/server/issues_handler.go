@@ -13,11 +13,12 @@ import (
 )
 
 // handleIssues serves GET /api/issues — the unified cluster-health
-// endpoint. Composes problems + condition fallback by default; audit,
-// event, and kyverno sources are opt-in (all three are loud — audit
-// findings run 50–200 per cluster, events flood with thousands of
-// redundant rows on noisy clusters, and Kyverno PolicyReports add 10+
-// rows per workload under a baseline PSS profile).
+// endpoint. Composes problems + condition fallback by default. Events
+// and Kyverno are opt-in because both are loud — events flood with
+// thousands of redundant rows on noisy clusters, and Kyverno
+// PolicyReports add 10+ rows per workload under a baseline PSS profile.
+// Static best-practice / posture findings are intentionally not an
+// issues source; use /api/audit or MCP get_cluster_audit.
 //
 // Query params:
 //
@@ -25,18 +26,16 @@ import (
 //	severity=  critical,warning  (default: all)
 //	source=    Comma-separated list of sources to RETURN. When set,
 //	           only the listed sources appear in the response.
-//	           Allowed: problem, audit, event, condition, kyverno.
+//	           Allowed: problem, event, condition, kyverno.
 //	           Default (no source param): problem + condition only
-//	           (audit + event + kyverno excluded — all three are loud:
-//	           audit runs 50–200 findings per cluster, events flood
-//	           with thousands of redundant rows on noisy clusters,
-//	           and Kyverno PolicyReports can balloon similarly).
+//	           (event + kyverno excluded because they can flood with
+//	           noisy rows).
 //	           NOTE: source acts as a filter, not an additive opt-in.
 //	           Passing source=kyverno returns ONLY Kyverno rows, not
 //	           "defaults plus Kyverno". Use include_kyverno=true (or
-//	           include_audit / include_events) when you want
+//	           include_events) when you want
 //	           "defaults plus X".
-//	include_audit/include_events/include_kyverno=true
+//	include_events/include_kyverno=true
 //	           Add the named source to the DEFAULT set without
 //	           silencing the defaults. Effective filter:
 //	           include_X=true is equivalent to source=problem,
@@ -75,7 +74,7 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	sources, err := parseSources(q.Get("source"))
+	sources, err := issues.ParseSources(q.Get("source"))
 	if err != nil {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
@@ -101,7 +100,6 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		Kinds:          splitCSV(q.Get("kind")),
 		Since:          since,
 		Limit:          parseLimit(q.Get("limit")),
-		IncludeAudit:   q.Get("include_audit") == "true" || hasSource(q.Get("source"), "audit"),
 		IncludeEvents:  includeEvents,
 		IncludeKyverno: q.Get("include_kyverno") == "true" || hasSource(q.Get("source"), "kyverno"),
 		CanReadClusterScoped: func(kind, group string) bool {
@@ -134,6 +132,11 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		// whole set. The hub forwards this per-cluster in fleet
 		// envelopes so the SPA can render "X of N total".
 		"total_matched": stats.TotalMatched,
+	}
+	if result := k8s.GetCachedPermissionResult(); result != nil {
+		if visibility := k8s.BuildVisibilitySummary(result, k8s.VisibilityNamespace(namespaces)); visibility != nil {
+			resp["visibility"] = visibility
+		}
 	}
 	if stats.FilterErrors > 0 {
 		resp["filter_errors"] = stats.FilterErrors
@@ -180,39 +183,10 @@ func parseSeverities(v string) ([]issues.Severity, error) {
 	return out, nil
 }
 
-func parseSources(v string) ([]issues.Source, error) {
-	if v == "" {
-		return nil, nil
-	}
-	parts := strings.Split(v, ",")
-	out := make([]issues.Source, 0, len(parts))
-	for _, p := range parts {
-		s := strings.ToLower(strings.TrimSpace(p))
-		switch s {
-		case "":
-			continue
-		case "problem":
-			out = append(out, issues.SourceProblem)
-		case "audit":
-			out = append(out, issues.SourceAudit)
-		case "event":
-			out = append(out, issues.SourceEvent)
-		case "condition":
-			out = append(out, issues.SourceCondition)
-		case "kyverno":
-			out = append(out, issues.SourceKyverno)
-		default:
-			return nil, fmt.Errorf("unknown source %q (want: problem, audit, event, condition, kyverno)", p)
-		}
-	}
-	return out, nil
-}
-
 // hasSource reports whether the caller's `?source=` list explicitly
 // names `target`. Used to derive the opt-in flags for audit and
-// event sources — passing them in the source list is more
-// discoverable than the parallel include_* booleans, and we honor
-// both.
+// event / Kyverno sources — passing them in the source list is more
+// discoverable than the parallel include_* booleans, and we honor both.
 func hasSource(v, target string) bool {
 	for _, p := range strings.Split(v, ",") {
 		if strings.EqualFold(strings.TrimSpace(p), target) {

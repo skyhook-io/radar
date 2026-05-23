@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"regexp"
 	"sort"
 	"strings"
 	"sync"
@@ -13,8 +14,8 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	corev1 "k8s.io/api/core/v1"
 
-	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/internal/k8s"
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 )
 
 // Workload tool input types
@@ -35,11 +36,37 @@ type manageCronJobInput struct {
 }
 
 type getWorkloadLogsInput struct {
-	Kind      string `json:"kind" jsonschema:"workload kind: deployment, statefulset, or daemonset"`
+	Kind      string `json:"kind,omitempty" jsonschema:"workload kind: deployment, statefulset, or daemonset. Defaults to deployment when omitted."`
 	Namespace string `json:"namespace" jsonschema:"workload namespace"`
 	Name      string `json:"name" jsonschema:"workload name"`
 	Container string `json:"container,omitempty" jsonschema:"specific container name, defaults to all containers"`
 	TailLines int    `json:"tail_lines,omitempty" jsonschema:"lines per pod (default 100)"`
+	Grep      string `json:"grep,omitempty" jsonschema:"optional regular expression to keep matching log lines before diagnostic filtering, like kubectl logs | grep PATTERN"`
+	Since     string `json:"since,omitempty" jsonschema:"only return logs newer than this duration (e.g. 30s, 10m, 1h), like kubectl logs --since"`
+	Previous  bool   `json:"previous,omitempty" jsonschema:"return logs from the previous terminated container instance (e.g. for CrashLoopBackOff diagnosis), like kubectl logs -p"`
+}
+
+// parseLogsSince converts a relative duration string like "30s"/"10m"/"1h"
+// into seconds for corev1.PodLogOptions.SinceSeconds. Empty input returns
+// (nil, nil) so the caller can leave SinceSeconds unset. Negative or zero
+// durations are rejected — kubectl's behavior on these is implementation-
+// dependent and not useful for diagnosis.
+func parseLogsSince(s string) (*int64, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return nil, fmt.Errorf("invalid since duration %q: %w (expected e.g. 30s, 10m, 1h)", s, err)
+	}
+	if d <= 0 {
+		return nil, fmt.Errorf("invalid since duration %q: must be positive", s)
+	}
+	secs := int64(d.Seconds())
+	if secs < 1 {
+		secs = 1
+	}
+	return &secs, nil
 }
 
 // Workload tool handlers
@@ -141,7 +168,7 @@ func handleManageCronJob(ctx context.Context, req *mcp.CallToolRequest, input ma
 }
 
 func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input getWorkloadLogsInput) (*mcp.CallToolResult, any, error) {
-	kind := normalizeWorkloadKind(input.Kind)
+	kind := normalizeWorkloadLogsKind(input.Kind)
 	if kind == "" {
 		return nil, nil, fmt.Errorf("invalid kind %q: must be deployment, statefulset, or daemonset", input.Kind)
 	}
@@ -180,6 +207,15 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 	if input.TailLines > 0 {
 		tailLines = int64(input.TailLines)
 	}
+	if strings.TrimSpace(input.Grep) != "" {
+		if _, err := regexp.Compile(input.Grep); err != nil {
+			return nil, nil, fmt.Errorf("invalid grep regex: %w", err)
+		}
+	}
+	sinceSeconds, err := parseLogsSince(input.Since)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	// Validate container name if specified
 	if input.Container != "" {
@@ -200,37 +236,72 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 		}
 	}
 
-	// Collect logs from all pods concurrently
-	type logEntry struct {
-		Pod       string                 `json:"pod"`
-		Container string                 `json:"container"`
-		Logs      aicontext.FilteredLogs `json:"logs,omitempty"`
-		Error     string                 `json:"error,omitempty"`
+	allLogs := fetchPodLogs(ctx, pods, input.Namespace, input.Container, input.Grep, tailLines, sinceSeconds, input.Previous)
+
+	resp := map[string]any{
+		"workload": fmt.Sprintf("%s/%s/%s", kind, input.Namespace, input.Name),
+		"pods":     len(pods),
+		"logs":     allLogs,
+	}
+	// Steering hint when any pod's stream hit its tail cap.
+	// Heuristic mirrors handleGetPodLogs.
+	for _, e := range allLogs {
+		if int64(e.Logs.TotalLines) >= tailLines {
+			resp["narrowHint"] = fmt.Sprintf(
+				"at least one pod's log stream tailed to %d lines (cap reached) — narrow with since= (e.g. 10m), grep= regex, container=, or raise tail_lines",
+				tailLines,
+			)
+			break
+		}
+	}
+	return toJSONResult(resp)
+}
+
+// podLogEntry is the per-pod-per-container log row returned by fetchPodLogs.
+type podLogEntry struct {
+	Pod       string                 `json:"pod"`
+	Container string                 `json:"container"`
+	Logs      aicontext.FilteredLogs `json:"logs,omitempty"`
+	Error     string                 `json:"error,omitempty"`
+}
+
+// fetchPodLogs fans out kubectl-logs requests across the given pods x containers.
+// containerFilter "" includes every container; non-empty restricts to that name.
+// grep is server-side regex applied before diagnostic filtering. previous=true
+// fetches the prior terminated container instance (CrashLoopBackOff diagnosis).
+// Returns entries sorted by (pod, container) for deterministic output.
+// Resolves the kube client from ctx so the call still honors per-request RBAC.
+func fetchPodLogs(ctx context.Context, pods []*corev1.Pod, namespace, containerFilter, grep string, tailLines int64, sinceSeconds *int64, previous bool) []podLogEntry {
+	client := k8s.ClientFromContext(ctx)
+	if client == nil {
+		return nil
 	}
 
-	var allLogs []logEntry
+	var allLogs []podLogEntry
 	var mu sync.Mutex
 	var wg sync.WaitGroup
 
 	for _, pod := range pods {
-		containers := k8s.GetContainersForPod(pod, input.Container, true)
+		containers := k8s.GetContainersForPod(pod, containerFilter, true)
 		for _, c := range containers {
 			wg.Add(1)
 			go func(podName, containerName string) {
 				defer wg.Done()
 
 				opts := &corev1.PodLogOptions{
-					Container:  containerName,
-					TailLines:  &tailLines,
-					Timestamps: true,
+					Container:    containerName,
+					TailLines:    &tailLines,
+					SinceSeconds: sinceSeconds,
+					Previous:     previous,
+					Timestamps:   true,
 				}
 
-				entry := logEntry{
+				entry := podLogEntry{
 					Pod:       podName,
 					Container: containerName,
 				}
 
-				stream, err := client.CoreV1().Pods(input.Namespace).GetLogs(podName, opts).Stream(ctx)
+				stream, err := client.CoreV1().Pods(namespace).GetLogs(podName, opts).Stream(ctx)
 				if err != nil {
 					log.Printf("[mcp] Failed to get logs for %s/%s: %v", podName, containerName, err)
 					entry.Error = fmt.Sprintf("failed to get logs: %v", err)
@@ -251,8 +322,16 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 					return
 				}
 
-				// Apply AI-optimized log filtering
-				entry.Logs = aicontext.FilterLogs(string(data))
+				// handleGetWorkloadLogs pre-validates the regex, but this
+				// helper is exported within the package — propagate any
+				// filter error per-entry so a future caller that skips
+				// pre-validation doesn't silently lose log lines.
+				filtered, filterErr := aicontext.FilterLogsByPattern(string(data), grep)
+				if filterErr != nil {
+					entry.Error = fmt.Sprintf("filter error: %v", filterErr)
+				} else {
+					entry.Logs = filtered
+				}
 
 				mu.Lock()
 				allLogs = append(allLogs, entry)
@@ -263,19 +342,13 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 
 	wg.Wait()
 
-	// Sort by pod name for deterministic output
 	sort.Slice(allLogs, func(i, j int) bool {
 		if allLogs[i].Pod != allLogs[j].Pod {
 			return allLogs[i].Pod < allLogs[j].Pod
 		}
 		return allLogs[i].Container < allLogs[j].Container
 	})
-
-	return toJSONResult(map[string]any{
-		"workload": fmt.Sprintf("%s/%s/%s", kind, input.Namespace, input.Name),
-		"pods":     len(pods),
-		"logs":     allLogs,
-	})
+	return allLogs
 }
 
 // Node tool input and handler
@@ -367,4 +440,11 @@ func normalizeWorkloadKind(kind string) string {
 	default:
 		return ""
 	}
+}
+
+func normalizeWorkloadLogsKind(kind string) string {
+	if strings.TrimSpace(kind) == "" {
+		return "deployments"
+	}
+	return normalizeWorkloadKind(kind)
 }

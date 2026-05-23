@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"regexp"
 	"sort"
 	"strings"
 	"time"
@@ -14,6 +15,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/helm"
@@ -23,6 +25,7 @@ import (
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/internal/timeline"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -31,66 +34,124 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_dashboard",
-		Description: "Get cluster health overview including resource counts, " +
-			"problems (failing pods, unhealthy deployments), recent warning events, " +
-			"and Helm release status. Start here to understand cluster state before " +
-			"drilling into specific resources.",
+		Description: "Use for inventory-style cluster or namespace health triage, like " +
+			"`kubectl get all` plus detected problems and warning events in one call. " +
+			"Returns resource counts, failing pods, unhealthy workloads, recent Warning " +
+			"events, and Helm release status so you can rank likely suspects before " +
+			"calling get_resource or logs. Routing: unknown broken thing -> issues; " +
+			"content/name search -> search; service routing/dependencies -> get_topology " +
+			"or get_neighborhood; inventory/counts/Helm/events overview -> get_dashboard.",
 		Annotations: readOnly,
 	}, logToolCall("get_dashboard", handleGetDashboard))
 
 	mcp.AddTool(server, &mcp.Tool{
+		Name: "top_resources",
+		Description: "Use when investigating high CPU, memory pressure, OOMKills, " +
+			"slow services, noisy pods, or uneven node load. Returns live metrics " +
+			"ranked like `kubectl top pods|nodes | sort`, joined with Kubernetes " +
+			"context: pod status, readiness, restarts, owner workload, requests, and " +
+			"limits. kind=pods ranks individual Pods, kind=workloads aggregates Pods " +
+			"to Deployments/StatefulSets/DaemonSets/Jobs, and kind=nodes ranks Nodes. " +
+			"Use before reading logs when the symptom mentions CPU, memory, GC, OOM, " +
+			"latency, or load.",
+		Annotations: readOnly,
+	}, logToolCall("top_resources", handleTopResources))
+
+	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_resources",
-		Description: "List Kubernetes resources of a given kind with minified summaries. " +
-			"Supports all built-in kinds (pods, deployments, services, etc.) and CRDs. " +
-			"Use to discover what's running before inspecting individual resources.",
+		Description: "Use for a jq-like namespace sweep when you know the resource kind " +
+			"(pods, deployments, services, configmaps, CRDs). Returns compact Kubernetes-shaped " +
+			"rows plus summaryContext by default (managedBy, health, issueCount) so you can " +
+			"compare many similar resources and pick suspects before calling get_resource. " +
+			"For unknown kind/name searches, use search. For broad health triage, use " +
+			"get_dashboard or issues first.",
 		Annotations: readOnly,
 	}, logToolCall("list_resources", handleListResources))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_resource",
-		Description: "Get detailed information about a single Kubernetes resource. " +
-			"Returns minified spec, status, and metadata. " +
-			"Use after list_resources to drill into a specific resource. " +
-			"Optionally include related context (events, relationships, metrics, logs) " +
-			"using the 'include' parameter (comma-separated) to avoid extra tool calls.",
+		Description: "Use AFTER narrowing to one resource. Returns the resource's " +
+			"Kubernetes-shaped spec/status/metadata plus resourceContext when available " +
+			"(relationships, refs, issue/audit/policy rollups). This is the drill-down " +
+			"tool, not the best first call for broad incidents. Start with issues, " +
+			"get_dashboard, search, or list_resources to rank candidates; then call " +
+			"get_resource for the exact object. If you are looking for a string across " +
+			"ConfigMaps, CRD specs, env refs, or object content, use search instead of " +
+			"fetching resources one by one. Use the group parameter for ambiguous " +
+			"kinds such as Knative Service vs core Service.",
 		Annotations: readOnly,
 	}, logToolCall("get_resource", handleGetResource))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_topology",
-		Description: "Get the topology graph showing relationships between Kubernetes resources. " +
-			"Returns nodes and edges representing Deployments, Services, Ingresses, Pods, etc. " +
-			"Use 'traffic' view for network flow or 'resources' view for ownership hierarchy.",
+		Description: "Use to map a multi-service incident or dependency graph, preferably " +
+			"scoped to a namespace. " +
+			"Returns Kubernetes resource nodes and edges (Services, workloads, Pods, " +
+			"Ingresses, ConfigMaps, Secrets, owners) so you can see service-to-workload " +
+			"traffic and ownership relationships instead of inspecting resources one by one. " +
+			"Use view=traffic for routing/connectivity questions and view=resources for " +
+			"ownership/deployment hierarchy. Always specify namespace unless you specifically " +
+			"need a cross-namespace graph. If you already know the suspicious root, use " +
+			"get_neighborhood for a smaller focused graph.",
 		Annotations: readOnly,
 	}, logToolCall("get_topology", handleGetTopology))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_neighborhood",
-		Description: "Get the BFS-expanded neighborhood of a specific resource — the slice " +
-			"of the topology graph immediately relevant to one root. Cheaper and more " +
-			"focused than get_topology when you already know which resource you care " +
-			"about. Profile is 'auto' (default — picks a bounded edge set from the root " +
-			"kind) or 'all' (every edge type). Hops controls BFS depth (default 1, max " +
-			"2). Nodes are RBAC-filtered against the caller; dropped neighbors are " +
-			"listed in `omitted` with reason=rbac_denied. If max_nodes is exceeded " +
-			"mid-expansion, truncated=true is set and a partial subgraph is returned.",
+		Description: "Use when investigating cross-resource failures around a known " +
+			"resource: service routing, targetPort/selector/endpoints problems, dependency " +
+			"timeouts, config/secret refs, owner chains, or traffic not reaching pods. " +
+			"Returns the BFS-expanded topology neighborhood around one root, which is " +
+			"usually cheaper and clearer than get_topology once you have a suspect. " +
+			"Typical flow: issues/search/list_resources identify a Service or workload, " +
+			"then get_neighborhood traces its upstream/downstream Services, workloads, " +
+			"Pods, refs, and owners. Profile auto (default) picks a bounded edge set " +
+			"from the root kind; profile all expands every edge type and is heavier, " +
+			"use it only when auto produced a too-narrow neighborhood. Hops defaults to " +
+			"1 and maxes at 2. Nodes are RBAC-filtered; denied neighbors appear only as " +
+			"aggregate omitted counts.",
 		Annotations: readOnly,
 	}, logToolCall("get_neighborhood", handleGetNeighborhood))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_events",
-		Description: "Get recent Kubernetes warning events, deduplicated and sorted by recency. " +
-			"Useful for diagnosing issues — shows event reason, message, and occurrence count.",
+		Description: "Use for recent Kubernetes Warning events after an overview points " +
+			"at a namespace or resource, or when the symptom is scheduling, pulling images, " +
+			"restarts, failed mounts, readiness, or controller errors. Events are deduplicated " +
+			"and sorted by recency with reason, message, and count. For a ranked issue list " +
+			"that includes problems/conditions, use issues first.",
 		Annotations: readOnly,
 	}, logToolCall("get_events", handleGetEvents))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_pod_logs",
-		Description: "Get filtered log lines from a pod, prioritizing errors and warnings. " +
-			"Returns diagnostically relevant lines (errors, panics, stack traces) or " +
-			"falls back to the last 20 lines if no error patterns match.",
+		Description: "Use only after narrowing to a specific Pod/container. Returns " +
+			"diagnostically relevant log lines (errors, panics, stack traces, warnings) " +
+			"or falls back to recent tail lines. Set grep to server-side filter like " +
+			"`kubectl logs | grep PATTERN` when you know an error string, request path, " +
+			"service name, or trace id. For broad incidents, first use issues, " +
+			"get_dashboard, search, list_resources, or get_neighborhood to avoid reading " +
+			"logs from many unrelated pods. If the target is a config value, feature flag, " +
+			"CRD field, env ref, or YAML/spec content, use search rather than logs.",
 		Annotations: readOnly,
 	}, logToolCall("get_pod_logs", handleGetPodLogs))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "diagnose",
+		Description: "Use when the agent's decision is 'this thing is broken — give me " +
+			"everything in one call'. Bundles for a single Pod/Deployment/StatefulSet/" +
+			"DaemonSet: the resource (Kubernetes-shaped detail) + diagnostic resourceContext " +
+			"(managedBy, exposes, selectedBy, uses, runsOn, issue/audit/policy rollups) + " +
+			"current AND previous container logs across the workload's pods + recent " +
+			"Warning events filtered to this resource. Use for CrashLoopBackOff, failed " +
+			"deploys, image-pull errors, readiness flaps, scheduling failures, or any " +
+			"first-pass triage where you would otherwise call get_resource → events → " +
+			"get_pod_logs → get_pod_logs(previous=true) in sequence. If you only need ONE " +
+			"facet (e.g. just spec, just logs), prefer the targeted tool — diagnose is " +
+			"heavier. Not for CRDs or non-workload kinds; use get_resource " +
+			"(with optional include=events) for those.",
+		Annotations: readOnly,
+	}, logToolCall("diagnose", handleDiagnose))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_namespaces",
@@ -101,9 +162,12 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_changes",
-		Description: "Get recent resource changes (creates, updates, deletes) from the cluster timeline. " +
-			"Use to investigate what changed before an incident. " +
-			"Filter by namespace, resource kind, or specific resource name.",
+		Description: "Use when the symptom is 'this worked earlier' or 'something broke " +
+			"after a deploy/config change.' Returns a chronological feed of resource " +
+			"creates, updates, and deletes such as image changes, ConfigMap edits, scale " +
+			"events, label edits, and rollout churn. This is often faster than reading " +
+			"ReplicaSet histories or individual audit/log streams. Pair with since to " +
+			"bound the window; filter by namespace, kind, or name when you know the scope.",
 		Annotations: readOnly,
 	}, logToolCall("get_changes", handleGetChanges))
 
@@ -111,13 +175,21 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_cluster_audit",
-		Description: "Run best-practice checks against cluster resources and return findings " +
-			"with remediation guidance. Checks cover security (running as root, privileged " +
-			"containers, dangerous capabilities), reliability (missing probes, single replicas, " +
-			"no PDB), and efficiency (missing resource requests/limits). " +
-			"Each finding includes what's wrong and how to fix it. " +
-			"Respects user's audit settings (ignored namespaces, disabled checks). " +
-			"Filter by namespace, category, or severity.",
+		Description: "Use when the agent's decision is 'is this cluster well-configured / " +
+			"compliant?' — STATIC CONFIG POSTURE, not live operational state. Returns " +
+			"best-practice findings: Security (runAsRoot, privileged containers, dangerous " +
+			"capabilities, hostPath/hostNetwork, secret-in-ConfigMap), Reliability (single " +
+			"replicas, missing PDB, missing TopologySpread, podHARisk, Service/Ingress " +
+			"without matching backends, stuckTerminating, deprecatedAPIVersion), and " +
+			"Efficiency (missing resource requests/limits, orphaned ConfigMaps/Secrets, " +
+			"under/over-utilization). Each finding has remediation guidance. " +
+			"INDEPENDENT of operational health: a healthy pod can have many audit findings " +
+			"(badly configured but working), a crashing pod can have zero (cleanly " +
+			"configured but failing). For 'what's broken right now?' use the issues tool. " +
+			"Respects user's audit settings (ignored namespaces, disabled checks). Filter " +
+			"by namespace, category, or severity. Resources absent from findings should " +
+			"NOT be reported as non-compliant — empty findings for a scope means no " +
+			"violations, not a failed check.",
 		Annotations: readOnly,
 	}, logToolCall("get_cluster_audit", handleGetAudit))
 
@@ -137,7 +209,7 @@ func registerTools(server *mcp.Server) {
 		Description: "Get detailed information about a specific Helm release including owned resources " +
 			"and their status. Optionally include values, revision history, or manifest diff between revisions " +
 			"using the 'include' parameter (comma-separated: values, history, diff). " +
-			"For diff, also provide diff_revision_1 and optionally diff_revision_2.",
+			"diff_revision_1 and diff_revision_2 are only used when include contains diff.",
 		Annotations: readOnly,
 	}, logToolCall("get_helm_release", handleGetHelmRelease))
 
@@ -177,23 +249,23 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "issues",
-		Description: "Unified cluster-health view. Combines hardcoded problem detection " +
-			"(failing Deployments / StatefulSets / CronJobs / HPAs / Nodes / Jobs / PVCs), " +
-			"recent K8s Warning events, and a generic CRD .status.conditions[] " +
-			"fallback that lights up Argo / Flux / Knative / Crossplane / cert-manager / " +
-			"KEDA without per-integration code. Severity is normalized to " +
-			"critical / warning / info. Defaults to problem + condition sources; " +
-			"audit (best-practice scan), event (K8s Warning events) and kyverno " +
-			"(PolicyReport findings) are excluded by default because each can run " +
-			"50–1000+ rows per cluster. The `source` param is a FILTER: " +
-			"source=kyverno returns ONLY Kyverno rows (no problems, no conditions). " +
-			"To ADD an excluded source to the defaults via MCP, list everything " +
-			"you want explicitly — e.g. source=problem,condition,kyverno returns " +
-			"defaults plus Kyverno. (The REST /api/issues endpoint also exposes " +
-			"include_audit / include_events / include_kyverno boolean flags as " +
-			"shortcuts, but MCP only takes the source list.) Use this instead of " +
-			"get_dashboard when you want the full health picture across all " +
-			"sources, or to filter by severity / source / kind / namespace.",
+		Description: "Use when the agent's decision is 'what's broken right now?' — LIVE " +
+			"OPERATIONAL STATE, not config posture. Returns a ranked list of currently " +
+			"failing resources: failing Deployments/StatefulSets/CronJobs/HPAs/Nodes/Jobs/" +
+			"PVCs (problem source), False .status.conditions on CRDs from Argo/Flux/Knative/" +
+			"Crossplane/cert-manager/KEDA (condition source), recent K8s Warning events " +
+			"(event source, opt-in), Kyverno PolicyReport policy violations (kyverno source, " +
+			"opt-in). Severity normalized to critical/warning. Defaults: problem + condition. " +
+			"event and kyverno are opt-in because they run 50–1000+ rows per cluster. " +
+			"For STATIC best-practice / security-posture / compliance findings (runAsRoot, " +
+			"missing PDB, no probes, missing resource limits, etc.), use get_cluster_audit — " +
+			"that's a separate axis and the two should never be conflated (a healthy pod " +
+			"can have many audit findings; a crashing pod can have zero). The `source` " +
+			"param is a FILTER: source=kyverno returns ONLY Kyverno rows. To ADD an opt-in " +
+			"source to the defaults, list everything explicitly — e.g. source=problem," +
+			"condition,kyverno. After identifying a suspect issue, call get_resource (or " +
+			"diagnose for a full debug bundle) for spec/status, or get_neighborhood when " +
+			"the failure likely crosses Services/workloads/Pods/dependencies.",
 		Annotations: readOnly,
 	}, logToolCall("issues", handleIssuesTool))
 
@@ -201,15 +273,21 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "search",
-		Description: "Free-text resource search across this cluster's cache. Matches on " +
-			"name, namespace, label values, annotation values, container images, and " +
-			"kind. Tokens are AND'd. Modifiers: kind:Pod, ns:foo, label:app=bar, " +
-			"image:redis. Returns ranked hits with optional summary or raw object. " +
-			"Use this instead of list_resources when you don't already know the kind, " +
-			"namespace, or exact name — for example 'find anything called redis' or " +
-			"'show me everything pulling from quay.io/x'. Searches typed kinds plus " +
-			"any CRDs already warmed in the cache; cold CRDs need a list_resources " +
-			"call first to start watching.",
+		Description: "Use when you do not know the exact kind, namespace, or name, or " +
+			"when you need a grep-like scan across cached Kubernetes objects. Matches " +
+			"name, namespace, label values, annotation values, container images, kind, " +
+			"and searchable object content such as ConfigMap data, spec fields, status " +
+			"messages, env refs, and CRD specs. Tokens are AND'd. Examples: " +
+			"`adServiceFailure` finds feature flags in ConfigMap data; " +
+			"`kind:NetworkChaos delay` or `kind:PodChaos app=cart` finds Chaos Mesh " +
+			"faults; `image:flagd` finds feature-flag infrastructure. Modifiers include " +
+			"kind:Pod, kind:NetworkChaos, ns:foo, label:app=bar, image:redis. Returns ranked hits with matched " +
+			"content snippets and summaryContext by default so you can rank suspects " +
+			"before get_resource. Use this for feature flags, Chaos Mesh objects, " +
+			"secret/config refs, unknown CRD names, or 'where does this string appear?' " +
+			"questions. Use CEL filter for structural predicates over kind/apiVersion/" +
+			"metadata/spec/status/labels/annotations. Searches typed kinds plus CRDs " +
+			"already warmed in cache; cold CRDs need list_resources first to start watching.",
 		Annotations: readOnly,
 	}, logToolCall("search", handleSearch))
 
@@ -237,9 +315,14 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_workload_logs",
-		Description: "Get aggregated, AI-filtered logs from all pods of a workload (Deployment, StatefulSet, " +
-			"or DaemonSet). Logs are collected from all matching pods concurrently, filtered for errors/warnings, " +
-			"and deduplicated. More useful than get_pod_logs when you need logs across all replicas of a workload.",
+		Description: "Get aggregated logs from all pods of a workload (Deployment, StatefulSet, " +
+			"or DaemonSet). Logs are collected from all matching pods concurrently, then " +
+			"server-side filtered to errors, warnings, panics, and stack traces using " +
+			"deterministic regex patterns and deduplicated. Set grep for additional " +
+			"server-side filtering before that summary stage, like `kubectl logs | grep PATTERN`. " +
+			"More useful than get_pod_logs when you need logs across all replicas of a workload. " +
+			"If the target is a config value, feature flag, CRD field, env ref, or YAML/spec " +
+			"content, use search rather than logs.",
 		Annotations: readOnly,
 	}, logToolCall("get_workload_logs", handleGetWorkloadLogs))
 
@@ -310,14 +393,21 @@ func registerTools(server *mcp.Server) {
 // Tool input types
 
 type dashboardInput struct {
-	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace. Use when triaging one app/tenant namespace before drilling into individual resources."`
+}
+
+type topResourcesInput struct {
+	Kind      string `json:"kind,omitempty" jsonschema:"what to rank: pods (default), workloads, or nodes"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"filter pods/workloads to a namespace. Required for namespace-restricted users unless they have cluster-wide namespace access."`
+	Sort      string `json:"sort,omitempty" jsonschema:"sort by cpu (default) or memory"`
+	Limit     int    `json:"limit,omitempty" jsonschema:"max rows returned, default 20, max 100"`
 }
 
 type listResourcesInput struct {
-	Kind      string `json:"kind" jsonschema:"resource kind to list, e.g. pods, deployments, services, configmaps"`
+	Kind      string `json:"kind" jsonschema:"resource kind to list for a broad sweep, e.g. pods, deployments, services, configmaps. Prefer this before get_resource when comparing many same-kind objects."`
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. serving.knative.dev for Knative Service vs core Service)"`
-	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace"`
-	Context   string `json:"context,omitempty" jsonschema:"per-row context: omit (default) attaches summaryContext (managedBy + health + issueCount) for triage; 'none' returns bare rows"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace for app-scoped triage"`
+	Context   string `json:"context,omitempty" jsonschema:"per-row context: default attaches summaryContext (managedBy + health + issueCount) for suspect ranking; 'none' returns bare rows"`
 }
 
 type getResourceInput struct {
@@ -325,12 +415,13 @@ type getResourceInput struct {
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. cluster.x-k8s.io for CAPI Cluster vs CNPG Cluster)"`
 	Namespace string `json:"namespace" jsonschema:"resource namespace"`
 	Name      string `json:"name" jsonschema:"resource name"`
-	Include   string `json:"include,omitempty" jsonschema:"comma-separated extras to include: events, relationships, metrics, logs"`
+	Include   string `json:"include,omitempty" jsonschema:"optional sidecar data after narrowing to this object: events, metrics, logs. Separate from context; include may fetch heavier live/derived data."`
+	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches managedBy / exposes / selectedBy / uses / runsOn / issueSummary / auditSummary rollups) or 'none' (bare minified resource). For full diagnostic tier with logs + events bundled, use the diagnose tool instead."`
 }
 
 type topologyInput struct {
-	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace"`
-	View      string `json:"view,omitempty" jsonschema:"view mode: traffic for network flow or resources for ownership hierarchy"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"filter to a specific namespace for a multi-service incident map; recommended unless you need cross-namespace topology"`
+	View      string `json:"view,omitempty" jsonschema:"view mode: traffic for service routing/connectivity or resources for ownership hierarchy"`
 	Format    string `json:"format,omitempty" jsonschema:"output format: graph (default, full node/edge data) or summary (text description of resource chains)"`
 }
 
@@ -354,20 +445,23 @@ type podLogsInput struct {
 	Name      string `json:"name" jsonschema:"pod name"`
 	Container string `json:"container,omitempty" jsonschema:"container name, defaults to first container"`
 	TailLines int    `json:"tail_lines,omitempty" jsonschema:"number of lines to fetch from the end (default 200)"`
+	Grep      string `json:"grep,omitempty" jsonschema:"optional regular expression to keep matching log lines before diagnostic filtering, like kubectl logs | grep PATTERN"`
+	Since     string `json:"since,omitempty" jsonschema:"only return logs newer than this duration (e.g. 30s, 10m, 1h), like kubectl logs --since"`
+	Previous  bool   `json:"previous,omitempty" jsonschema:"return logs from the previous terminated container instance (e.g. for CrashLoopBackOff diagnosis), like kubectl logs -p"`
 }
 
 type searchInput struct {
-	Q       string `json:"q" jsonschema:"search string. Free tokens AND'd. Modifiers: kind:Pod, ns:foo, label:k=v, image:redis"`
+	Query   string `json:"query" jsonschema:"search query for unknown resources or broad content scans. Free tokens AND'd. Matches identity plus searchable object content. Examples: adServiceFailure, kind:NetworkChaos delay, kind:ConfigMap flagd, image:flagd. Modifiers: kind:Pod, kind:NetworkChaos, ns:foo, label:k=v, image:redis"`
 	Limit   int    `json:"limit,omitempty" jsonschema:"max hits returned (default 50, max 500)"`
 	Include string `json:"include,omitempty" jsonschema:"per-hit detail: summary (default), raw, or none"`
 	Filter  string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each candidate K8s object. Bindings: kind, apiVersion, metadata, spec, status, labels, annotations. Use has(x.y) before optional fields. Examples: 'kind == \"Pod\" && status.phase == \"Failed\"', 'labels[\"app\"] == \"cart\"', 'has(status.readyReplicas) && status.readyReplicas == 0'"`
-	Context string `json:"context,omitempty" jsonschema:"per-hit context: omit (default) attaches summaryContext (managedBy + health + issueCount) for triage; 'none' returns bare hits"`
+	Context string `json:"context,omitempty" jsonschema:"per-hit context: default attaches summaryContext (managedBy + health + issueCount) for suspect ranking; 'none' returns bare hits"`
 }
 
 type issuesInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to one namespace"`
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical,warning"`
-	Source    string `json:"source,omitempty" jsonschema:"comma-separated list of sources to RETURN: problem,audit,event,condition,kyverno. Acts as a FILTER, not an additive opt-in — when set, only the listed sources appear in the response. Default (omitted): problem+condition only (audit + event + kyverno excluded because each is loud: events flood thousands per cluster and mostly duplicate problem-source rows; audit runs 50–200 per cluster; Kyverno PolicyReports typically 10+ rows per workload under a baseline PSS profile). Examples: source='kyverno' returns ONLY Kyverno rows (no problems, no conditions); source='problem,condition,kyverno' returns the defaults plus Kyverno. To add a noisy source without silencing the defaults, list the defaults explicitly alongside it."`
+	Source    string `json:"source,omitempty" jsonschema:"comma-separated list of LIVE operational sources to RETURN: problem,event,condition,kyverno. Acts as a FILTER, not an additive opt-in — when set, only the listed sources appear in the response. Default (omitted): problem+condition only (event + kyverno excluded because each is loud: events flood thousands per cluster and mostly duplicate problem-source rows; Kyverno PolicyReports typically 10+ rows per workload under a baseline PSS profile). Examples: source='kyverno' returns ONLY Kyverno rows (no problems, no conditions); source='problem,condition,kyverno' returns the defaults plus Kyverno. Static best-practice/security-posture audit findings are intentionally not a source here; use get_cluster_audit."`
 	Kind      string `json:"kind,omitempty" jsonschema:"comma-separated kind filter (e.g. Deployment,Pod)"`
 	Since     string `json:"since,omitempty" jsonschema:"event lookback window, e.g. 15m or 1h. Only affects the event source; when events are enabled and since is omitted, defaults to 1h to avoid pulling the full event-cache backlog."`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max issues returned (default 200, max 1000)"`
@@ -396,6 +490,68 @@ func handleGetDashboard(ctx context.Context, req *mcp.CallToolRequest, input das
 
 	dashboard := buildDashboard(ctx, cache, input.Namespace, canReadClusterScopedKind(ctx, "nodes", "", "list"), canReadClusterScopedKind(ctx, "namespaces", "", "list"))
 	return toJSONResult(dashboard)
+}
+
+func handleTopResources(ctx context.Context, _ *mcp.CallToolRequest, input topResourcesInput) (*mcp.CallToolResult, any, error) {
+	opts := k8s.NormalizeTopMetricsOptions(k8s.TopMetricsOptions{
+		Kind:      input.Kind,
+		Namespace: input.Namespace,
+		Sort:      input.Sort,
+		Limit:     input.Limit,
+	})
+	switch opts.Kind {
+	case k8s.TopMetricsKindPods, k8s.TopMetricsKindWorkloads:
+	case k8s.TopMetricsKindNodes:
+		if !canReadClusterScopedKind(ctx, "nodes", "", "list") {
+			return toJSONResult(k8s.TopMetricsResponse{
+				Kind:   opts.Kind,
+				Sort:   opts.Sort,
+				Reason: "no access to nodes (cluster-scoped resource requires explicit RBAC)",
+			})
+		}
+	default:
+		return nil, nil, fmt.Errorf("unknown kind %q (want pods, workloads, or nodes)", input.Kind)
+	}
+
+	if opts.Kind != k8s.TopMetricsKindNodes {
+		if opts.Namespace != "" {
+			if !checkNamespaceAccess(ctx, opts.Namespace) {
+				return toJSONResult(k8s.TopMetricsResponse{
+					Kind:      opts.Kind,
+					Sort:      opts.Sort,
+					Namespace: opts.Namespace,
+					Reason:    "no access to namespace",
+				})
+			}
+		} else if filterNamespacesForUser(ctx, nil) != nil {
+			return nil, nil, fmt.Errorf("namespace is required when access is namespace-restricted")
+		}
+	}
+
+	resp := k8s.BuildTopMetrics(opts)
+	// Heuristic: items/workloads at or above the limit suggests the cap
+	// was reached (the cluster may have more candidates beyond the top N).
+	itemCount := len(resp.Items)
+	if itemCount == 0 {
+		itemCount = len(resp.Workloads)
+	}
+	if opts.Limit > 0 && itemCount >= opts.Limit {
+		return toJSONResult(topResourcesResponseMCP{
+			TopMetricsResponse: resp,
+			NarrowHint: fmt.Sprintf(
+				"returned %d rows at limit — narrow with namespace= (for pods/workloads), tighten sort by switching cpu/memory, or raise limit (cap 100)",
+				itemCount,
+			),
+		})
+	}
+	return toJSONResult(resp)
+}
+
+// topResourcesResponseMCP embeds TopMetricsResponse so the JSON shape stays
+// identical except for the added narrowHint field.
+type topResourcesResponseMCP struct {
+	k8s.TopMetricsResponse
+	NarrowHint string `json:"narrowHint,omitempty"`
 }
 
 func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input listResourcesInput) (*mcp.CallToolResult, any, error) {
@@ -616,41 +772,117 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		}
 	}
 
-	// Try typed cache first. rawObj is the un-minified resource, threaded
-	// into attachResourceExtras so ManagedBy synthesis can disambiguate by
-	// group (avoids Knative Service vs core Service kind/plural collisions).
+	// Fetch the resource. When group is set, skip the typed cache and route
+	// directly to the dynamic cache: typed FetchResource is group-blind
+	// (e.g. for kind=services it returns the core Service regardless of any
+	// group qualifier), so a group-qualified call like serving.knative.dev/
+	// Service would silently leak the wrong object. Mirrors the same
+	// group-first dispatch fix on the REST GET path in PR #721.
 	var resourceData any
-	var rawObj any
-	obj, err := k8s.FetchResource(cache, kind, namespace, name)
-	if err == k8s.ErrUnknownKind {
-		// Fall through to dynamic cache for CRDs
+	var rawObj runtime.Object
+	if group != "" {
 		u, dynErr := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
 		if dynErr != nil {
 			return nil, nil, fmt.Errorf("resource not found: %w", dynErr)
 		}
 		resourceData = aicontext.MinifyUnstructured(u, aicontext.LevelDetail)
 		rawObj = u
-	} else if err != nil {
-		return nil, nil, fmt.Errorf("resource not found: %w", err)
 	} else {
-		k8s.SetTypeMeta(obj)
-		minified, minErr := aicontext.Minify(obj, aicontext.LevelDetail)
-		if minErr != nil {
-			return nil, nil, fmt.Errorf("failed to minify: %w", minErr)
+		obj, err := k8s.FetchResource(cache, kind, namespace, name)
+		if err == k8s.ErrUnknownKind {
+			u, dynErr := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
+			if dynErr != nil {
+				return nil, nil, fmt.Errorf("resource not found: %w", dynErr)
+			}
+			resourceData = aicontext.MinifyUnstructured(u, aicontext.LevelDetail)
+			rawObj = u
+		} else if err != nil {
+			return nil, nil, fmt.Errorf("resource not found: %w", err)
+		} else {
+			k8s.SetTypeMeta(obj)
+			minified, minErr := aicontext.Minify(obj, aicontext.LevelDetail)
+			if minErr != nil {
+				return nil, nil, fmt.Errorf("failed to minify: %w", minErr)
+			}
+			resourceData = minified
+			rawObj = obj
 		}
-		resourceData = minified
-		rawObj = obj
 	}
 
+	// Build the resourceContext sidecar unless the caller opted out. Basic
+	// tier is the default: cheap managedBy / exposes / selectedBy /
+	// runsOn / uses / issueSummary / auditSummary / policySummary. Pass
+	// context=none for a bare minified resource (bulk scans, raw jq work).
+	contextMode := strings.ToLower(strings.TrimSpace(input.Context))
 	includes := parseIncludes(input.Include)
-	if len(includes) == 0 {
+	skipContext := contextMode == "none"
+
+	var resourceCtx *resourcecontext.ResourceContext
+	if !skipContext {
+		resourceCtx = buildMCPResourceContext(ctx, rawObj, kind, namespace, name, resourcecontext.TierBasic)
+	}
+
+	// Three shapes:
+	//   - bare resource: no includes, context=none
+	//   - resource + resourceContext: no includes, default context
+	//   - resource + resourceContext + extras: includes set
+	if len(includes) == 0 && resourceCtx == nil {
 		return toJSONResult(resourceData)
 	}
 
-	// Build enriched response with requested extras
 	result := map[string]any{"resource": resourceData}
-	attachResourceExtras(ctx, cache, result, includes, kind, namespace, name, rawObj)
+	if resourceCtx != nil {
+		result["resourceContext"] = resourceCtx
+	}
+	if len(includes) > 0 {
+		attachResourceExtras(ctx, cache, result, includes, kind, namespace, name, rawObj)
+	}
 	return toJSONResult(result)
+}
+
+// buildMCPResourceContext assembles the resourceContext sidecar for MCP
+// get_resource. Mirrors the REST handler's buildAIResourceContext: pre-
+// computes IssueSummary + AuditSummary in the caller, threads the
+// PolicyReport index when Kyverno is installed, hands a request-scoped
+// RBAC checker to Build for per-ref gating, and lets Build's own
+// fallback resolve Relationships via topology.GetRelationshipsWithObject
+// (which applies KindForGVK so cross-group CRDs map to the right
+// topology node).
+func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, namespace, name string, tier resourcecontext.ContextTier) *resourcecontext.ResourceContext {
+	if obj == nil {
+		return nil
+	}
+	cache := k8s.GetResourceCache()
+
+	gvk := obj.GetObjectKind().GroupVersionKind()
+	canonicalKind := gvk.Kind
+	if canonicalKind == "" {
+		canonicalKind = kind
+	}
+	canonicalGroup := gvk.Group
+
+	issueSum := computeMCPIssueSummary(cache, canonicalGroup, canonicalKind, namespace, name)
+	auditSum := computeMCPAuditSummary(cache, canonicalGroup, canonicalKind, namespace, name)
+
+	opts := resourcecontext.Options{
+		Tier:            tier,
+		AccessChecker:   newMCPRequestScopedChecker(ctx),
+		IssueSummary:    issueSum,
+		AuditSummary:    auditSum,
+		ServiceBackends: mcpServiceBackendLookup{cache: cache},
+	}
+
+	if idx := k8s.GetPolicyReportIndex(); idx != nil {
+		opts.PolicyReports = mcpPolicyReportLookupAdapter{idx: idx}
+	}
+
+	if topo, prov, dyn, ok := mcpTopologyForContext(namespace); ok {
+		opts.Topology = topo
+		opts.Provider = prov
+		opts.DynamicProv = dyn
+	}
+
+	return resourcecontext.Build(ctx, obj, opts)
 }
 
 // attachResourceExtras populates optional extras (events, relationships, metrics, logs)
@@ -670,39 +902,18 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 			if listErr != nil {
 				log.Printf("[mcp] Failed to list events for %s/%s/%s: %v", kind, namespace, name, listErr)
 			}
-			// Filter to events involving this resource
-			var matched []corev1.Event
-			displayKind := normalizeDisplayKind(kind)
-			for _, e := range events {
-				if strings.EqualFold(e.InvolvedObject.Kind, displayKind) && e.InvolvedObject.Name == name {
-					matched = append(matched, *e)
-				}
-			}
+			// Sidecar include — controller-level events only. Pod-level
+			// events on a workload's pods (CrashLoopBackOff, etc.) require
+			// resolving the pod set; that's the diagnose tool's job, not
+			// this sidecar's. nil podNames intentionally restricts to
+			// InvolvedObject == this kind+name.
+			matched := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), name, nil)
 			if len(matched) > 0 {
 				deduplicated := aicontext.DeduplicateEvents(matched)
 				if len(deduplicated) > 10 {
 					deduplicated = deduplicated[:10]
 				}
 				result["events"] = deduplicated
-			}
-		}
-	}
-
-	if includes["relationships"] {
-		opts := topology.DefaultBuildOptions()
-		if namespace != "" {
-			opts.Namespaces = []string{namespace}
-		}
-		builder := topology.NewBuilder(k8s.NewTopologyResourceProvider(k8s.GetResourceCache())).WithDynamic(k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()))
-		topo, err := builder.Build(opts)
-		if err != nil {
-			log.Printf("[mcp] Failed to build topology for relationships %s/%s/%s: %v", kind, namespace, name, err)
-		} else {
-			displayKind := normalizeDisplayKind(kind)
-			if rels := topology.GetRelationshipsWithObject(displayKind, namespace, name, rawObj, topo,
-				k8s.NewTopologyResourceProvider(k8s.GetResourceCache()),
-				k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery()), nil); rels != nil {
-				result["relationships"] = rels
 			}
 		}
 	}
@@ -837,6 +1048,9 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to query timeline: %w", err)
 	}
+	// Track whether the upstream store query hit its cap — if so there may
+	// be more changes outside the window even after client-side filtering.
+	upstreamCapped := len(events) >= queryOpts.Limit
 
 	// Client-side name filter (QueryOptions doesn't support name filtering)
 	if input.Name != "" {
@@ -870,7 +1084,21 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		})
 	}
 
-	return toJSONResult(changes)
+	// Always wrap so capped + uncapped agree on wire shape
+	// ({changes: [...], narrowHint?: "..."}).
+	resp := getChangesResponseMCP{Changes: changes}
+	if upstreamCapped {
+		resp.NarrowHint = fmt.Sprintf(
+			"feed capped at %d entries — narrow with namespace=, kind=, name=, shorten since= (e.g. 15m), or raise limit (cap 50)",
+			limit,
+		)
+	}
+	return toJSONResult(resp)
+}
+
+type getChangesResponseMCP struct {
+	Changes    []mcpChange `json:"changes"`
+	NarrowHint string      `json:"narrowHint,omitempty"`
 }
 
 func handleGetTopology(ctx context.Context, req *mcp.CallToolRequest, input topologyInput) (*mcp.CallToolResult, any, error) {
@@ -1182,11 +1410,26 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 	if input.Limit > 0 {
 		limit = min(input.Limit, 100)
 	}
-	if len(deduplicated) > limit {
+	preCap := len(deduplicated)
+	if preCap > limit {
 		deduplicated = deduplicated[:limit]
 	}
 
-	return toJSONResult(deduplicated)
+	// Always wrap into the response struct so capped + uncapped agree on
+	// wire shape ({events: [...], narrowHint?: "..."}).
+	resp := getEventsResponseMCP{Events: deduplicated}
+	if preCap > limit {
+		resp.NarrowHint = fmt.Sprintf(
+			"returned %d of %d events — narrow with namespace=, kind=, name=, or raise limit (cap 100)",
+			limit, preCap,
+		)
+	}
+	return toJSONResult(resp)
+}
+
+type getEventsResponseMCP struct {
+	Events     []aicontext.DeduplicatedEvent `json:"events"`
+	NarrowHint string                        `json:"narrowHint,omitempty"`
 }
 
 func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLogsInput) (*mcp.CallToolResult, any, error) {
@@ -1203,9 +1446,20 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 	if input.TailLines > 0 {
 		tailLines = int64(input.TailLines)
 	}
+	if strings.TrimSpace(input.Grep) != "" {
+		if _, err := regexp.Compile(input.Grep); err != nil {
+			return nil, nil, fmt.Errorf("invalid grep regex: %w", err)
+		}
+	}
+	sinceSeconds, err := parseLogsSince(input.Since)
+	if err != nil {
+		return nil, nil, err
+	}
 
 	opts := &corev1.PodLogOptions{
-		TailLines: &tailLines,
+		TailLines:    &tailLines,
+		SinceSeconds: sinceSeconds,
+		Previous:     input.Previous,
 	}
 	if input.Container != "" {
 		opts.Container = input.Container
@@ -1222,8 +1476,29 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 		return nil, nil, fmt.Errorf("failed to read logs: %w", err)
 	}
 
-	filtered := aicontext.FilterLogs(string(data))
+	filtered, err := aicontext.FilterLogsByPattern(string(data), input.Grep)
+	if err != nil {
+		return nil, nil, fmt.Errorf("invalid grep regex: %w", err)
+	}
+	// Heuristic: if we received tailLines or more raw lines, the kubectl
+	// stream was likely capped (there may be older lines we didn't fetch).
+	if int64(filtered.TotalLines) >= tailLines {
+		return toJSONResult(podLogsResponseMCP{
+			FilteredLogs: filtered,
+			NarrowHint: fmt.Sprintf(
+				"log stream tailed to %d lines (cap reached) — narrow with since= (e.g. 10m), grep= regex, container=, or raise tail_lines",
+				filtered.TotalLines,
+			),
+		})
+	}
 	return toJSONResult(filtered)
+}
+
+// podLogsResponseMCP embeds FilteredLogs so the JSON shape stays identical
+// except for the added narrowHint field.
+type podLogsResponseMCP struct {
+	aicontext.FilteredLogs
+	NarrowHint string `json:"narrowHint,omitempty"`
 }
 
 func handleListNamespaces(ctx context.Context, req *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, any, error) {
@@ -1277,19 +1552,20 @@ func handleListNamespaces(ctx context.Context, req *mcp.CallToolRequest, input s
 // Dashboard builder for MCP (simplified version of server/dashboard.go)
 
 type mcpDashboard struct {
-	Cluster        mcpClusterInfo   `json:"cluster"`
-	Nodes          mcpNodeSummary   `json:"nodes"`
-	VersionSkew    []string         `json:"versionSkew,omitempty"`
-	Health         mcpHealthSummary `json:"health"`
-	Problems       []mcpProblem     `json:"problems"`
-	RecentChanges  []mcpChange      `json:"recentChanges,omitempty"`
-	WarningEvents  int              `json:"warningEvents"`
-	TopWarnings    []mcpWarning     `json:"topWarnings"`
-	HelmReleases   mcpHelmSummary   `json:"helmReleases"`
-	Metrics        *mcpMetrics      `json:"metrics,omitempty"`
-	TopologyNodes  int              `json:"topologyNodes"`
-	TopologyEdges  int              `json:"topologyEdges"`
-	ResourceCounts map[string]int   `json:"resourceCounts"`
+	Cluster        mcpClusterInfo         `json:"cluster"`
+	Nodes          mcpNodeSummary         `json:"nodes"`
+	VersionSkew    []string               `json:"versionSkew,omitempty"`
+	Health         mcpHealthSummary       `json:"health"`
+	Problems       []mcpProblem           `json:"problems"`
+	RecentChanges  []mcpChange            `json:"recentChanges,omitempty"`
+	WarningEvents  int                    `json:"warningEvents"`
+	TopWarnings    []mcpWarning           `json:"topWarnings"`
+	HelmReleases   mcpHelmSummary         `json:"helmReleases"`
+	Metrics        *mcpMetrics            `json:"metrics,omitempty"`
+	TopologyNodes  int                    `json:"topologyNodes"`
+	TopologyEdges  int                    `json:"topologyEdges"`
+	ResourceCounts map[string]int         `json:"resourceCounts"`
+	Visibility     *k8s.VisibilitySummary `json:"visibility,omitempty"`
 }
 
 type mcpChange struct {
@@ -1368,6 +1644,9 @@ type mcpHelmRelease struct {
 func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace string, includeNodes bool, includeNamespaces bool) mcpDashboard {
 	d := mcpDashboard{
 		ResourceCounts: make(map[string]int),
+	}
+	if result := k8s.GetCachedPermissionResult(); result != nil {
+		d.Visibility = k8s.BuildVisibilitySummary(result, namespace)
 	}
 
 	// Cluster info
@@ -1784,7 +2063,7 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	if err != nil {
 		return nil, nil, err
 	}
-	sources, err := parseSourceList(input.Source)
+	sources, err := issues.ParseSources(input.Source)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -1828,8 +2107,6 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	// event-cache backlog.
 	for _, s := range filters.Sources {
 		switch s {
-		case issues.SourceAudit:
-			filters.IncludeAudit = true
 		case issues.SourceEvent:
 			filters.IncludeEvents = true
 		case issues.SourceKyverno:
@@ -1848,6 +2125,18 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 		// it, an MCP agent can't distinguish "200 returned" from
 		// "200 of 1000". Mirrors the HTTP /api/issues response shape.
 		"total_matched": stats.TotalMatched,
+	}
+	// Steering hint when the issue list was capped.
+	if stats.TotalMatched > len(out) {
+		resp["narrowHint"] = fmt.Sprintf(
+			"returned %d of %d issues — narrow with namespace=, kind=, severity=critical, source= (e.g. problem,condition), since= (e.g. 15m), add filter= CEL, or raise limit (cap 1000)",
+			len(out), stats.TotalMatched,
+		)
+	}
+	if result := k8s.GetCachedPermissionResult(); result != nil {
+		if visibility := k8s.BuildVisibilitySummary(result, k8s.VisibilityNamespace(allowedNamespaces)); visibility != nil {
+			resp["visibility"] = visibility
+		}
 	}
 	if stats.FilterErrors > 0 {
 		resp["filter_errors"] = stats.FilterErrors
@@ -1885,32 +2174,6 @@ func parseSeverityList(v string) ([]issues.Severity, error) {
 			out = append(out, issues.SeverityWarning)
 		default:
 			return nil, fmt.Errorf("unknown severity %q (want: critical, warning)", p)
-		}
-	}
-	return out, nil
-}
-
-func parseSourceList(v string) ([]issues.Source, error) {
-	if v == "" {
-		return nil, nil
-	}
-	var out []issues.Source
-	for _, p := range strings.Split(v, ",") {
-		switch strings.ToLower(strings.TrimSpace(p)) {
-		case "":
-			continue
-		case "problem":
-			out = append(out, issues.SourceProblem)
-		case "audit":
-			out = append(out, issues.SourceAudit)
-		case "event":
-			out = append(out, issues.SourceEvent)
-		case "condition":
-			out = append(out, issues.SourceCondition)
-		case "kyverno":
-			out = append(out, issues.SourceKyverno)
-		default:
-			return nil, fmt.Errorf("unknown source %q (want: problem, audit, event, condition, kyverno)", p)
 		}
 	}
 	return out, nil
@@ -2041,7 +2304,11 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	if provider == nil {
 		return nil, nil, fmt.Errorf("not connected to cluster")
 	}
-	parsed := search.Parse(input.Q)
+	query := input.Query
+	if query == "" {
+		return nil, nil, fmt.Errorf("query is required")
+	}
+	parsed := search.Parse(query)
 	allowed := filterNamespacesForUser(ctx, nil)
 	if allowed != nil && len(allowed) == 0 {
 		return toJSONResult(search.Result{Hits: []search.Hit{}})
@@ -2115,7 +2382,24 @@ func handleSearch(ctx context.Context, req *mcp.CallToolRequest, input searchInp
 	if err != nil {
 		return nil, nil, err
 	}
+	// Steering hint when the result was capped.
+	if result.TotalMatched > result.Total {
+		return toJSONResult(searchResponseMCP{
+			Result: result,
+			NarrowHint: fmt.Sprintf(
+				"returned %d of %d hits — narrow with modifiers (kind:, ns:, label:k=v, image:), tighten the query, add a filter= CEL expression, or raise limit (cap 500)",
+				result.Total, result.TotalMatched,
+			),
+		})
+	}
 	return toJSONResult(result)
+}
+
+// searchResponseMCP embeds search.Result so the JSON shape stays identical
+// except for the added narrowHint field.
+type searchResponseMCP struct {
+	search.Result
+	NarrowHint string `json:"narrowHint,omitempty"`
 }
 
 // toJSONResult marshals data into a text content MCP result.

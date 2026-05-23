@@ -17,7 +17,6 @@ import (
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
-	bp "github.com/skyhook-io/radar/pkg/audit"
 	"github.com/skyhook-io/radar/pkg/policyreports"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	"github.com/skyhook-io/radar/pkg/topology"
@@ -55,7 +54,6 @@ func (f *fakeIssuesProvider) DetectProblems(namespaces []string) []k8s.Problem {
 	return out
 }
 func (f *fakeIssuesProvider) DetectCAPIProblems(_ []string) []k8s.Problem { return nil }
-func (f *fakeIssuesProvider) AuditFindings(_ []string) []bp.Finding       { return nil }
 func (f *fakeIssuesProvider) WarningEvents(_ []string, _ time.Duration) []*corev1.Event {
 	return nil
 }
