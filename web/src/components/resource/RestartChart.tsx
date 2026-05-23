@@ -30,10 +30,12 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
   if (!isConnected || isLoading) return null
   if (restarts.length === 0) return null
 
-  const minTs = Math.min(...restarts.map(r => r.timestamp))
-  const maxTs = Math.max(...restarts.map(r => r.timestamp))
-  // Avoid divide-by-zero when there's a single event.
-  const span = Math.max(maxTs - minTs, 60)
+  // Position markers within the chart's full time window — not the
+  // min/max of detected events — so a cluster of restarts at the start
+  // of the window doesn't visually spread across the whole lane.
+  const nowSec = Date.now() / 1000
+  const windowStart = nowSec - rangeToSeconds(range)
+  const span = nowSec - windowStart
 
   return (
     <div className="rounded-md border border-amber-500/20 bg-amber-500/[0.04] px-3 py-2">
@@ -51,7 +53,7 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
         <div className="absolute inset-x-0 top-1/2 h-px bg-theme-border/40" />
         {/* Markers */}
         {restarts.map((r, i) => {
-          const left = `${((r.timestamp - minTs) / span) * 100}%`
+          const left = `${Math.max(0, Math.min(100, ((r.timestamp - windowStart) / span) * 100))}%`
           return (
             <div
               key={i}
@@ -104,4 +106,16 @@ function collectRestartEvents(series: PrometheusSeries[] | undefined): RestartEv
   }
   events.sort((a, b) => a.timestamp - b.timestamp)
   return events
+}
+
+function rangeToSeconds(range: PrometheusTimeRange): number {
+  const match = range.match(/^(\d+)([mhd])$/)
+  if (!match) return 3600 // default to 1h if unrecognized
+  const n = parseInt(match[1], 10)
+  switch (match[2]) {
+    case 'm': return n * 60
+    case 'h': return n * 3600
+    case 'd': return n * 86400
+    default: return 3600
+  }
 }
