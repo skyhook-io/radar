@@ -59,6 +59,11 @@ func TestClassifyRightsizing(t *testing.T) {
 
 		// Defensive: zero request short-circuits without crashing.
 		{"zero cpu request", 0.5, q("0"), nil, "cpu", ToneOK, "", false},
+
+		// p95 == 0 must not produce "+Inf headroom" via reqVal/p95. Treat idle
+		// containers as well-sized and emit no recommendation.
+		{"cpu p95 zero is idle, not +Inf", 0, q("100m"), q("1"), "cpu", ToneOK, "Idle", false},
+		{"memory p95 zero is idle, not +Inf", 0, q("128Mi"), q("256Mi"), "memory", ToneOK, "Idle", false},
 	}
 
 	for _, tc := range tests {

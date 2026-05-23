@@ -1,4 +1,5 @@
 import { ArrowRight, Check, Info, AlertTriangle } from 'lucide-react'
+import { SEVERITY_TEXT, SEVERITY_BADGE, type Severity } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import { usePrometheusRightsizing, usePrometheusStatus, type RightsizingTone, type RightsizingRow } from '../../api/client'
 
 const RIGHTSIZING_KINDS = new Set(['Deployment', 'StatefulSet', 'DaemonSet'])
@@ -28,7 +29,20 @@ export function RightsizingStrip({ kind, namespace, name }: {
 
   if (!supported || !isConnected || isLoading) return null
   if (!data) return null
-  if (!data.sampleAvailable || data.rows.length === 0) return null
+  if (!data.sampleAvailable || data.rows.length === 0) {
+    // Backend distinguishes "workload too new / retention short" from "Prometheus
+    // query failed" — show the reason inline so operators have an actionable signal
+    // instead of an empty section.
+    if (!data.reason) return null
+    return (
+      <section className="rounded-lg border border-theme-border bg-theme-surface/40 p-3 mb-3">
+        <header className="flex items-center justify-between mb-1">
+          <h3 className="text-sm font-medium text-theme-text-primary">Right-sizing</h3>
+        </header>
+        <p className="text-xs text-theme-text-tertiary">{data.reason}</p>
+      </section>
+    )
+  }
 
   // Group rows by container so each container is a compact two-row block (cpu+mem).
   const byContainer = new Map<string, RightsizingRow[]>()
@@ -105,21 +119,22 @@ function RightsizingLine({ row }: { row: RightsizingRow }) {
   )
 }
 
+const TONE_TO_SEVERITY: Record<RightsizingTone, Severity> = {
+  critical: 'error',
+  alert: 'alert',
+  warning: 'warning',
+  info: 'info',
+  ok: 'neutral',
+}
+
 function toneClasses(tone: RightsizingTone): { value: string; badge: string } {
-  switch (tone) {
-    case 'critical':
-      return { value: 'text-red-400', badge: 'text-red-400 bg-red-500/10' }
-    case 'alert':
-      return { value: 'text-orange-400', badge: 'text-orange-400 bg-orange-500/10' }
-    case 'warning':
-      return { value: 'text-amber-400', badge: 'text-amber-400 bg-amber-500/10' }
-    case 'info':
-      // Muted on purpose — "could reduce" is a suggestion, not a problem.
-      return { value: 'text-blue-300', badge: 'text-theme-text-tertiary bg-theme-elevated/60' }
-    case 'ok':
-    default:
-      return { value: 'text-theme-text-secondary', badge: '' }
+  if (tone === 'ok') return { value: 'text-theme-text-secondary', badge: '' }
+  if (tone === 'info') {
+    // "Could reduce" is a suggestion, not a problem — mute the badge.
+    return { value: SEVERITY_TEXT.info, badge: 'text-theme-text-tertiary bg-theme-elevated/60' }
   }
+  const sev = TONE_TO_SEVERITY[tone]
+  return { value: SEVERITY_TEXT[sev], badge: SEVERITY_BADGE[sev] }
 }
 
 function toneIcon(tone: RightsizingTone) {

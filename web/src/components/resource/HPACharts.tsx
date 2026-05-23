@@ -8,11 +8,9 @@ import { usePromQLRange, usePrometheusStatus, type PrometheusSeries } from '../.
  * Sources from KSM `kube_horizontalpodautoscaler_status_{current,desired}_replicas`.
  * Hidden silently when Prom isn't connected or KSM isn't reporting the series.
  *
- * v0 deliberately ships only the replicas chart. The "observed CPU vs target"
- * chart that mixin dashboards show requires deriving utilization from cAdvisor
- * (since KSM exposes the spec target but not the observed metric), which adds
- * complexity that doesn't change the primary question — "did the HPA actually
- * scale during this spike?".
+ * Only the replicas series is plotted — KSM doesn't expose the observed metric
+ * the HPA target compares against, so an "observed vs target" chart would need
+ * cAdvisor derivation.
  */
 export function HPACharts({ data }: { data: any }) {
   const { data: status } = usePrometheusStatus()

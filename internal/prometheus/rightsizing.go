@@ -20,8 +20,8 @@ import (
 // otherwise see "404 not found" for a workload they simply can't read, and
 // conclude Radar is broken.
 var (
-	errCacheNotReady  = errors.New("resource cache not initialized")
-	errKindRBACDenied = errors.New("kind not listable by service account")
+	errCacheNotReady   = errors.New("resource cache not initialized")
+	errKindRBACDenied  = errors.New("kind not listable by service account")
 	errWorkloadMissing = errors.New("workload not found")
 )
 
@@ -31,11 +31,11 @@ var (
 type Tone string
 
 const (
-	ToneOK       Tone = "ok"       // Well-sized, no action needed
-	ToneInfo     Tone = "info"     // Mildly over-provisioned, optional tightening
-	ToneWarning  Tone = "warning"  // Worth reviewing (significantly over, or no requests set)
-	ToneAlert    Tone = "alert"    // Throttling / approaching limit
-	ToneCritical Tone = "critical" // Active OOM risk (mem P95 ≥ limit)
+	ToneOK       Tone = "ok"
+	ToneInfo     Tone = "info"
+	ToneWarning  Tone = "warning"
+	ToneAlert    Tone = "alert"
+	ToneCritical Tone = "critical"
 )
 
 // RightsizingRow is one row of the rightsizing recommendation: a container × resource.
@@ -89,8 +89,8 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 	// Per-user RBAC: the cache is populated under Radar's SA, so without this
 	// gate any authenticated user could fetch any namespace's container spec
 	// + P95 by guessing names. Use "get" — matches normal resource-detail reads.
-	resource := strings.ToLower(kind) + "s"
-	if !canRead(r, "apps", resource, namespace, "get") {
+	resourcePlural := strings.ToLower(kind) + "s"
+	if !canRead(r, "apps", resourcePlural, namespace, "get") {
 		writeError(w, http.StatusForbidden, "forbidden")
 		return
 	}
@@ -105,7 +105,8 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 		case errors.Is(err, errWorkloadMissing):
 			writeError(w, http.StatusNotFound, err.Error())
 		default:
-			writeError(w, http.StatusInternalServerError, err.Error())
+			errorlog.Record("prometheus", "error", "rightsizing: failed to load containers for %s %s/%s: %v", kind, namespace, name, err)
+			writeError(w, http.StatusInternalServerError, "failed to load workload containers")
 		}
 		return
 	}
@@ -127,18 +128,26 @@ func handleRightsizing(w http.ResponseWriter, r *http.Request) {
 	}
 
 	anyData := false
+	anyQueryErr := false
 	for _, c := range containers {
-		cpuRow := computeRightsizingRow(r.Context(), client, namespace, name, c, "cpu")
-		memRow := computeRightsizingRow(r.Context(), client, namespace, name, c, "memory")
+		cpuRow, cpuErr := computeRightsizingRow(r.Context(), client, namespace, name, c, "cpu")
+		memRow, memErr := computeRightsizingRow(r.Context(), client, namespace, name, c, "memory")
 		if cpuRow.P95 != nil || memRow.P95 != nil {
 			anyData = true
+		}
+		if cpuErr || memErr {
+			anyQueryErr = true
 		}
 		resp.Rows = append(resp.Rows, cpuRow, memRow)
 	}
 
 	if !anyData {
 		resp.SampleAvailable = false
-		resp.Reason = "No usage samples in the last 24h — workload may be too new, or Prometheus retention is short."
+		if anyQueryErr {
+			resp.Reason = "Prometheus query failed — see server logs."
+		} else {
+			resp.Reason = "No usage samples in the last 24h — workload may be too new, or Prometheus retention is short."
+		}
 	}
 
 	writeJSON(w, http.StatusOK, resp)
@@ -246,7 +255,10 @@ func extractContainerSpec(c corev1.Container) containerSpec {
 	return out
 }
 
-func computeRightsizingRow(ctx context.Context, client *Client, namespace, workload string, c containerSpec, resKind string) RightsizingRow {
+// computeRightsizingRow returns the row plus whether the Prometheus query
+// errored (distinct from genuine empty data, so the handler can compose an
+// accurate Reason instead of telling the user their workload is "too new").
+func computeRightsizingRow(ctx context.Context, client *Client, namespace, workload string, c containerSpec, resKind string) (RightsizingRow, bool) {
 	row := RightsizingRow{
 		Container: c.name,
 		Resource:  resKind,
@@ -271,19 +283,18 @@ func computeRightsizingRow(ctx context.Context, client *Client, namespace, workl
 	}
 
 	p95, err := queryContainerP95(ctx, client, namespace, workload, c.name, resKind)
-	if err != nil || p95 == nil {
-		// No data — return row with what we know from spec but no recommendation.
-		// Skip the row entirely from the UI's perspective by leaving P95 nil; the
-		// frontend can still display current requests if it wants.
-		return row
+	if err != nil {
+		return row, true
+	}
+	if p95 == nil {
+		return row, false
 	}
 
-	// Format P95 for display.
 	p95Str := formatRightsizingValue(*p95, resKind)
 	row.P95 = &p95Str
 
 	classifyRightsizing(&row, *p95, req, lim, resKind)
-	return row
+	return row, false
 }
 
 // queryContainerP95 returns the P95 of a container's CPU/memory usage over the
@@ -355,6 +366,16 @@ func classifyRightsizing(row *RightsizingRow, p95 float64, req, lim *resource.Qu
 
 	reqVal := quantityToFloat(*req, resKind)
 	if reqVal <= 0 {
+		return
+	}
+
+	// p95 == 0 (idle container, or all-zero rate over the window) — ratio would
+	// be +Inf and render as "Over-provisioned by +Infx". An idle container with
+	// a request set is "well-sized" by definition (it's reserving its quota),
+	// and there's no useful recommendation we can derive from a zero sample.
+	if p95 <= 0 {
+		row.Tone = ToneOK
+		row.Message = "Idle — no usage in window"
 		return
 	}
 

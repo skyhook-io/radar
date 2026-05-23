@@ -11,9 +11,6 @@ import (
 // user could fetch any namespace's spec by guessing names. Server.canRead is
 // the concrete implementation; passing it via SetAuthGate avoids an import
 // cycle (server imports prometheus, not the other way around).
-//
-// Implementations should return true when auth is disabled or the user can
-// read the resource; false to refuse with 403.
 type AuthGate func(r *http.Request, group, resource, namespace, verb string) bool
 
 var authGate atomic.Pointer[AuthGate]
@@ -29,8 +26,8 @@ func SetAuthGate(fn AuthGate) {
 }
 
 // canRead consults the installed AuthGate. Returns true when no gate is
-// installed (e.g. tests, transitional state during init) so the gate is
-// strictly additive — never accidentally locks out the OSS no-auth path.
+// installed so the gate stays strictly additive — never accidentally locks
+// out the OSS no-auth path.
 func canRead(r *http.Request, group, resource, namespace, verb string) bool {
 	g := authGate.Load()
 	if g == nil {
