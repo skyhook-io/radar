@@ -1756,15 +1756,12 @@ interface ResourcesViewProps {
    *  case. */
   onRowSelect?: (resource: any) => void
   /**
-   * When provided, replaces the built-in compare-mode submit (which
-   * navigates to `/compare?kind=...&a=...&b=...`). Hosts use this to
-   * route to a different URL — e.g. Radar Hub's `/fleet/compare` with
-   * cluster IDs in the URL. Picks are passed in click order; each carries
-   * `clusterId`/`clusterName` when the host stamps them via
-   * `extraLeadingColumns` row data, so cross-cluster picks survive the
-   * pick-equality check that would otherwise collapse same-named rows
-   * from different clusters into one. When undefined, default same-
-   * cluster navigation behavior is preserved.
+   * Overrides the default compare-mode submit (which navigates to
+   * `/compare?kind=...&a=...&b=...`). Hosts use this to route to a
+   * different URL — e.g. Radar Hub's `/fleet/compare` with cluster IDs.
+   * Picks arrive in click order, each carrying `clusterId`/`clusterName`
+   * when `resolveRowCluster` is set (which is what keeps cross-cluster
+   * picks distinct in the equality check).
    */
   onCompareSubmit?: (
     picks: NamespacedRef[],
@@ -1772,10 +1769,10 @@ interface ResourcesViewProps {
   ) => void
   /**
    * Resolves the cluster scope for a row when compare-mode is enabled.
-   * Used to stamp `clusterId`/`clusterName` onto each pick so the same
-   * `ns/name` in two different clusters is treated as two distinct picks.
-   * Hub-web returns `row._cluster` here; OSS leaves this unset and picks
-   * key on namespace+name only (same as before).
+   * Stamps `clusterId`/`clusterName` onto each pick so the same `ns/name`
+   * in two different clusters is treated as two distinct picks. Hub-web
+   * returns `row._cluster` here; OSS leaves it unset and picks key on
+   * namespace+name only.
    */
   resolveRowCluster?: (resource: any) => { id: string; name: string } | undefined
 }
@@ -2068,11 +2065,9 @@ export function ResourcesView({
   useEffect(() => {
     const saved = loadColumnSettings(selectedKind.name, selectedKind.group)
     // Host-injected extra columns (e.g. fleet Cluster) default to visible
-    // regardless of saved state. The saved blob was written by an earlier
-    // mount that didn't know these columns existed, so a naive Set(saved)
-    // would silently hide them. Union the saved set with extra keys so
-    // user-hidden built-in columns still respect their saved hidden state,
-    // while newly-introduced host extras appear by default.
+    // even when the saved column-visibility blob predates them — a naive
+    // Set(saved.visible) would silently hide host columns the user has
+    // never been shown.
     const extraKeys = extraLeadingColumns?.map(c => c.key) ?? []
     if (saved) {
       // If saved columns are just the defaults but this kind has specialized columns,
@@ -3941,12 +3936,9 @@ export function ResourcesView({
                 <tr>
                   {compareMode && (
                     <th
-                      // Force a narrow width — Tailwind's w-9 is honored
-                      // as a hint under table-layout:auto, but the browser
-                      // distributes extra row width to whichever column
-                      // doesn't have a definitive width, and this column's
-                      // single small icon makes it that target. Inline
-                      // px width clamps it before that happens.
+                      // Inline px width — under `table-layout:fixed`,
+                      // `w-9` is a hint the browser absorbs into leftover
+                      // row width on an icon-only column.
                       style={{ width: 36, minWidth: 36, maxWidth: 36 }}
                       className="px-2 py-3 text-xs font-medium uppercase tracking-wide bg-theme-base border-b border-r-subtle border-theme-border text-center text-skyhook-400"
                       title="Compare mode"

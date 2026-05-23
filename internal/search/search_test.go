@@ -155,11 +155,10 @@ func TestSearch_DefaultSkipsEvents(t *testing.T) {
 
 func TestSearch_DedupsResourceIndexedTwice(t *testing.T) {
 	// A Deployment that's also registered as a watched dynamic GVR (e.g.
-	// by a controller indexing built-in workloads as CRDs) used to surface
-	// in both the typed loop and the dynamic loop, producing visible
-	// duplicate rows in the UI. We dedup by (kind, group, ns, name) at
-	// the end so each resource appears at most once regardless of how
-	// many indexing paths reached it.
+	// by a controller indexing built-in workloads as CRDs) would surface
+	// in both the typed loop and the dynamic loop. Dedup by
+	// (kind, group, ns, name) keeps a single hit regardless of how many
+	// indexing paths reached the resource.
 	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
 	u := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apps/v1",

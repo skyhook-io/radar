@@ -133,17 +133,13 @@ export function ResourceCompareView({
   const bError = errors?.find(e => e.side === 'b')?.message
   const anyError = !!(aError || bError)
 
-  // First-settle gate. The cold-start splash should NOT reappear when the
-  // user re-picks one side after the editor has mounted — once both sides
-  // have produced data or an error at least once, we mark the editor as
-  // "settled" and from then on Monaco re-renders in place even if a side's
-  // query data briefly clears during a re-fetch. Without this, the entire
-  // diff view flashed back to the loader on every pencil click.
-  //
-  // The settle ref is keyed on the A/B identity so that navigating to a
-  // different pair (e.g. /compare?a=X&b=Y → /compare?a=Z&b=W on the same
-  // route) re-triggers the loader instead of flashing a blank diff while
-  // the new fetches are in flight.
+  // Settle gate, keyed on the rendered A/B identity. Mount the diff
+  // editor only after both sides have first settled (data or error) for
+  // the current pair. Once settled, Monaco stays mounted across re-picks
+  // — clearing a side's data transiently during a refetch must not
+  // blank the editor. When the A/B identity changes (navigating to a
+  // new pair on the same route), the latch resets so the loader shows
+  // again until the new fetches settle.
   const settleKey = `${a.kind}|${a.namespace}|${a.name}|${a.group ?? ''}|${aSubtitle ?? ''}` +
     `|${b.kind}|${b.namespace}|${b.name}|${b.group ?? ''}|${bSubtitle ?? ''}`
   const settleKeyRef = useRef(settleKey)
@@ -225,16 +221,6 @@ export function ResourceCompareView({
       )}
 
       <div className={clsx('flex-1 min-h-0', bleed ? '' : 'p-3')}>
-        {/*
-          Defer mounting the diff editor until BOTH sides have settled
-          (data or per-side error) on FIRST load. Mounting Monaco when
-          only one side has data flashes a second loading state — its own
-          internal "Loading…" placeholder — before re-rendering with the
-          full diff. After the initial settle (tracked via hasSettledRef
-          above), Monaco stays mounted even when a side's query data
-          briefly clears during a pencil re-pick — re-rendering in place
-          rather than blanking the whole diff.
-        */}
         {showInitialLoader ? (
           <PaneLoader label="Loading resources…" className="h-full" />
         ) : (

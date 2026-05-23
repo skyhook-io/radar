@@ -1199,12 +1199,9 @@ function AppInner() {
         />
       )}
 
-      {/* Connecting view - show during initial connection or retry.
-          Icon is viewport-anchored (fixed inset-0 + pointer-events-none)
-          so it sits at the same screen position as the host hub splash —
-          centering in the flex-1 content area would push it below the
-          navbar and visibly drift the icon when transitioning from a
-          hub splash on cluster open. */}
+      {/* Connecting view — shown during initial connection or retry.
+          Icon is viewport-anchored so its screen position matches the
+          host hub splash across cross-document transitions. */}
       {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connecting' && (
         <div className="flex-1 relative bg-theme-base">
           {/* Icon absolutely anchored to viewport-center. The label block
@@ -1216,8 +1213,8 @@ function AppInner() {
               src={radarLoadingIcon}
               alt=""
               aria-hidden
-              // Integer offset (vw/2 - 22) — avoids 1-2px sub-pixel jitter
-              // from translate(-50%, -50%) on odd-pixel viewports.
+              // Integer offset (vw/2 − 22) — avoids sub-pixel jitter from
+              // `translate(-50%, -50%)` on odd-width viewports.
               className="absolute w-11 h-11"
               style={{ left: 'calc(50% - 22px)', top: 'calc(50% - 22px)' }}
             />
@@ -1225,10 +1222,9 @@ function AppInner() {
               className="absolute left-1/2 -translate-x-1/2 text-center"
               style={{ top: 'calc(50% + 34px)' }}
             >
-              {/* Title style mirrors every other splash (RadarSplash,
-                  LoadingState, pre-React) — 17px semibold so the font
-                  doesn't visibly swap across the hub → cluster splash
-                  chain. Subtitles below stay smaller/dimmer. */}
+              {/* 17px semibold matches the other splash surfaces so font
+                  weight doesn't visibly swap during hub → cluster
+                  transitions. Subtitles below stay smaller/dimmer. */}
               <p className="whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
                 Connecting to cluster
               </p>
@@ -1253,8 +1249,8 @@ function AppInner() {
               src={radarLoadingIcon}
               alt=""
               aria-hidden
-              // Integer offset (vw/2 - 22) — avoids 1-2px sub-pixel jitter
-              // from translate(-50%, -50%) on odd-pixel viewports.
+              // Integer offset (vw/2 − 22) — avoids sub-pixel jitter from
+              // `translate(-50%, -50%)` on odd-width viewports.
               className="absolute w-11 h-11"
               style={{ left: 'calc(50% - 22px)', top: 'calc(50% - 22px)' }}
             />
