@@ -1,6 +1,13 @@
 import { useMemo, useState } from 'react'
 import { BarChart3, ChevronDown, ChevronRight, Loader2, Wifi, WifiOff } from 'lucide-react'
 import {
+  AreaChart,
+  SeriesLegend,
+  type PrometheusSeries,
+  type ReferenceLine,
+} from '@skyhook-io/k8s-ui/components/charts'
+import { SEVERITY_BADGE, type Severity } from '@skyhook-io/k8s-ui/utils/badge-colors'
+import {
   usePrometheusStatus,
   usePrometheusConnect,
   usePrometheusResourceMetrics,
@@ -8,20 +15,15 @@ import {
   useAutoPromConnect,
   type PrometheusMetricCategory,
   type PrometheusTimeRange,
-  type PrometheusSeries,
   type RightsizingTone,
 } from '../../api/client'
-import { SEVERITY_BADGE, type Severity } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import {
-  AreaChart,
   MetricsSummary,
-  SeriesLegend,
   TIME_RANGES,
   WORKLOAD_CATEGORIES,
   NODE_CATEGORIES,
   computeRequestLimitLines,
   type CategoryDef,
-  type ReferenceLine,
 } from './PrometheusCharts'
 import { RestartEventLane } from './RestartChart'
 

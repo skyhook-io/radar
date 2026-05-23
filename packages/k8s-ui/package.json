@@ -35,6 +35,11 @@
       "./src/components/timeline/*.tsx",
       "./src/components/timeline/*.ts"
     ],
+    "./components/charts": "./src/components/charts/index.ts",
+    "./components/charts/*": [
+      "./src/components/charts/*.tsx",
+      "./src/components/charts/*.ts"
+    ],
     "./hooks/*": [
       "./src/hooks/*.ts",
       "./src/hooks/*.tsx"

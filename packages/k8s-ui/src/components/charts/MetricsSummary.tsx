@@ -1,0 +1,59 @@
+import { useMemo } from 'react'
+import { clsx } from 'clsx'
+import { formatMetricValue } from './format'
+import type { PrometheusSeries } from './types'
+
+/**
+ * MetricsSummary — Current / Average / Peak pills computed from a set of
+ * time-series. "Current" sums each series' most recent sample (the
+ * across-pods aggregate); "Peak" is the worst-case across all samples.
+ *
+ * Generic on prop interface — takes the highlight color class for the
+ * Current pill directly, rather than a full category config object, so
+ * library consumers can supply their own theming without dragging a
+ * Radar-specific config type along.
+ */
+export function MetricsSummary({ series, unit, currentColorClass }: {
+  series: PrometheusSeries[]
+  unit: string
+  /** Tailwind text class for the "Current" pill — caller's accent color. */
+  currentColorClass?: string
+}) {
+  const stats = useMemo(() => {
+    const allValues: number[] = []
+    for (const s of series) {
+      for (const dp of s.dataPoints) {
+        allValues.push(dp.value)
+      }
+    }
+    if (allValues.length === 0) return null
+
+    // Current = sum of each series' most recent data point (matches
+    // operator mental model of "total across pods right now").
+    const lastValues = series.map(s => s.dataPoints[s.dataPoints.length - 1]?.value ?? 0)
+    const current = lastValues.reduce((a, b) => a + b, 0)
+    const max = Math.max(...allValues)
+    const avg = allValues.reduce((a, b) => a + b, 0) / allValues.length
+
+    return { current, max, avg }
+  }, [series])
+
+  if (!stats) return null
+
+  return (
+    <div className="flex items-center gap-6">
+      <StatPill label="Current" value={formatMetricValue(stats.current, unit)} className={currentColorClass} />
+      <StatPill label="Average" value={formatMetricValue(stats.avg, unit)} className="text-theme-text-secondary" />
+      <StatPill label="Peak" value={formatMetricValue(stats.max, unit)} className="text-theme-text-secondary" />
+    </div>
+  )
+}
+
+function StatPill({ label, value, className }: { label: string; value: string; className?: string }) {
+  return (
+    <div className="flex items-baseline gap-1.5">
+      <span className="text-xs text-theme-text-quaternary uppercase tracking-wide">{label}</span>
+      <span className={clsx('text-sm font-semibold tabular-nums', className)}>{value}</span>
+    </div>
+  )
+}
