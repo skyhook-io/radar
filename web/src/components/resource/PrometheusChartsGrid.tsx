@@ -15,6 +15,7 @@ import {
   useAutoPromConnect,
   type PrometheusMetricCategory,
   type PrometheusTimeRange,
+  type RightsizingTone,
 } from '../../api/client'
 import {
   MetricsSummary,
@@ -25,7 +26,6 @@ import {
   type CategoryDef,
 } from './PrometheusCharts'
 import { RestartEventLane } from './RestartChart'
-import { worstTone } from './prometheus-grid-utils'
 
 // Used when MetricsTabContent is in expanded (full-screen) mode. Drawer mode
 // uses the single-chart tabbed `PrometheusCharts` instead — drawer width
@@ -36,8 +36,6 @@ export interface PrometheusChartsGridProps {
   name: string
   /** Optional full K8s resource for request/limit overlay derivation. */
   resource?: any
-  /** When false, suppresses the restart event lane (e.g. Node kind). */
-  showRestartLane?: boolean
 }
 
 const SUPPORTED_KINDS = new Set([
@@ -49,8 +47,10 @@ export function PrometheusChartsGrid({
   namespace,
   name,
   resource,
-  showRestartLane = true,
 }: PrometheusChartsGridProps) {
+  // Node-kind workloads don't have container restart semantics — KSM would
+  // return empty series anyway, but suppressing the lane spares the query.
+  const showRestartLane = kind !== 'Node'
   useAutoPromConnect()
   const { data: status, isLoading: statusLoading } = usePrometheusStatus()
   const connectMutation = usePrometheusConnect()
@@ -270,6 +270,17 @@ function SaturationChip({ ratio, against }: { ratio: number; against: 'limit' | 
   return <span className={`badge badge-sm ${SEVERITY_BADGE[tone]}`}>{label}</span>
 }
 
+// Severity ordering for rightsizing tones. Aligned with `Tone` constants in
+// `internal/prometheus/rightsizing.go` — adding a new tone there triggers a
+// TypeScript exhaustiveness error on the Record key set here.
+const TONE_RANK: Record<RightsizingTone, number> = {
+  ok: 0,
+  info: 1,
+  warning: 2,
+  alert: 3,
+  critical: 4,
+}
+
 function WorkloadHealthBadge({ kind, namespace, name }: { kind: string; namespace: string; name: string }) {
   const supported = kind === 'Deployment' || kind === 'StatefulSet' || kind === 'DaemonSet'
   const { data, error } = usePrometheusRightsizing(kind, namespace, name, supported)
@@ -283,7 +294,10 @@ function WorkloadHealthBadge({ kind, namespace, name }: { kind: string; namespac
   }
   if (!data?.sampleAvailable || data.rows.length === 0) return null
 
-  const worst = worstTone(data.rows.map(r => r.tone))
+  const worst = data.rows.reduce<RightsizingTone>(
+    (acc, r) => (TONE_RANK[r.tone] > TONE_RANK[acc] ? r.tone : acc),
+    'ok',
+  )
   // Skip the chip for the steady-state tones to avoid badge-blindness — we
   // only want to draw the eye when there's something to address.
   if (worst === 'ok' || worst === 'info') return null

@@ -678,7 +678,6 @@ function MetricsTabContent({ kind, namespace, name, resource, expanded }: {
   expanded: boolean
 }) {
   const showRightsizing = expanded && ['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)
-  const showRestartLane = kind !== 'Node'
 
   if (expanded) {
     return (
@@ -694,7 +693,6 @@ function MetricsTabContent({ kind, namespace, name, resource, expanded }: {
             namespace={namespace}
             name={name}
             resource={resource}
-            showRestartLane={showRestartLane}
           />
         </div>
       </div>
@@ -709,19 +707,18 @@ function MetricsTabContent({ kind, namespace, name, resource, expanded }: {
       namespace={namespace}
       name={name}
       resource={resource}
-      showRestartLane={showRestartLane}
     />
   )
 }
 
-function DrawerMetricsContent({ kind, namespace, name, resource, showRestartLane }: {
+function DrawerMetricsContent({ kind, namespace, name, resource }: {
   kind: string
   namespace: string
   name: string
   resource: any
-  showRestartLane: boolean
 }) {
   const [chartRange, setChartRange] = useState<import('../../api/client').PrometheusTimeRange>('1h')
+  const showRestartLane = kind !== 'Node'
 
   return (
     <div className="flex flex-col h-full">
