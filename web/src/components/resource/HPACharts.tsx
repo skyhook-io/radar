@@ -1,6 +1,6 @@
 import { useEffect, useMemo } from 'react'
 import { LineChart } from 'lucide-react'
-import { usePromQLRange, usePrometheusStatus, type PrometheusSeries } from '../../api/client'
+import { usePromQLRange, usePrometheusStatus, useAutoPromConnect, type PrometheusSeries } from '../../api/client'
 
 /**
  * HPACharts — replicas-over-time chart for an HPA.
@@ -13,6 +13,9 @@ import { usePromQLRange, usePrometheusStatus, type PrometheusSeries } from '../.
  * cAdvisor derivation.
  */
 export function HPACharts({ data }: { data: any }) {
+  // HPA detail can be the first Prometheus-backed surface a user opens; without
+  // this, the chart silently stays empty until they open a workload metrics tab.
+  useAutoPromConnect()
   const { data: status } = usePrometheusStatus()
   const isConnected = status?.connected === true
 

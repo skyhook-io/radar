@@ -1,5 +1,5 @@
 import { formatMemoryBytes } from '@skyhook-io/k8s-ui/utils/format'
-import { usePrometheusPVCUsage, usePrometheusStatus } from '../../api/client'
+import { useAutoPromConnect, usePrometheusPVCUsage, usePrometheusStatus } from '../../api/client'
 
 /**
  * PVCUsageBar — single-line capacity gauge derived from kubelet_volume_stats_*.
@@ -13,6 +13,9 @@ import { usePrometheusPVCUsage, usePrometheusStatus } from '../../api/client'
  * is broken — the absence is information enough.
  */
 export function PVCUsageBar({ namespace, name }: { namespace: string; name: string }) {
+  // PVC detail can be the first Prometheus-backed surface a user opens; without
+  // this, the gauge silently stays hidden until they open a workload metrics tab.
+  useAutoPromConnect()
   const { data: status } = usePrometheusStatus()
   const isConnected = status?.connected === true
   const { data: usage } = usePrometheusPVCUsage(namespace, name, isConnected)
