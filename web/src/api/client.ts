@@ -1319,20 +1319,32 @@ export function usePrometheusConnect() {
   })
 }
 
-// Auto-reconnect Prometheus across radar restarts.
+// Auto-discover Prometheus on first mount of any Prom-backed view, and
+// auto-reconnect across radar restarts on subsequent mounts.
 //
-// Persistence rules:
-// - On any successful connect, mark this cluster context as "auto-discoverable"
-//   in localStorage (browser-scoped, per-cluster, opaque flag).
-// - On mount, if status reports disconnected AND the current context is flagged,
-//   silently retry connect once. If the retry fails, clear the flag and let the
-//   user see the manual "Discover Prometheus" CTA — the cached environment is
-//   no longer reachable, falling back to manual auto-detect is the right move.
+// Two paths through this hook, both running once per cluster context per
+// component-instance:
+//   1. Cached path — localStorage flag means "Prom was discovered before on
+//      this context". Probe fires immediately on mount; the user sees
+//      charts populate without manual interaction.
+//   2. First-time path — no flag yet. Probe fires after a small delay so the
+//      initial workload-view render lands before we hit the cluster network.
+//      Behavior matches Lens / Headlamp defaults; the trade-off is one
+//      cluster probe per session per fresh kubeconfig context.
 //
-// The cache key includes context name so cluster switches don't carry over
-// stale assumptions. localStorage is fine here: the user's intent ("this
-// cluster has Prom") is browser-local, not a server-side preference.
+// On success either way we set the flag, so subsequent mounts take path 1.
+// On failure we clear the flag (path 1) or leave it cleared (path 2) and
+// reset attemptedRef, so the existing "Discover Prometheus" CTA renders
+// once status refreshes. Manual interaction stays available as the fallback.
+//
+// localStorage is the right surface: connection intent is browser-local,
+// not a server-side preference, and we want it to persist across radar
+// restarts on the same port.
 const PROM_AUTOCONNECT_PREFIX = 'radar.prometheus.autoConnect:'
+// First-mount delay before probing the cluster. Chosen short enough that the
+// CTA → charts transition feels prompt, long enough that the probe doesn't
+// race the initial workload-view render.
+const PROM_FIRSTLAUNCH_PROBE_DELAY_MS = 500
 
 function promAutoConnectKey(contextName: string): string {
   return `${PROM_AUTOCONNECT_PREFIX}${contextName}`
@@ -1362,26 +1374,28 @@ export function useAutoPromConnect(): void {
     try { cached = window.localStorage.getItem(promAutoConnectKey(context)) } catch {
       cached = null
     }
-    if (cached !== '1') return
 
     attemptedRef.current = context
 
-    // Direct apiFetch (not via the usePrometheusConnect mutation) so the
-    // meta-driven toast handler stays silent — the user didn't click anything.
-    // If the cached environment has moved, we clear the flag, reset the ref so
-    // a future flap can retry, and let the existing "Discover Prometheus" CTA
-    // appear on the next status refresh.
-    apiFetch(`${getApiBase()}/prometheus/connect`, { method: 'POST' })
-      .then(resp => {
-        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
-        queryClient.invalidateQueries({ queryKey: ['prometheus-status'] })
-      })
-      .catch(() => {
-        try { window.localStorage.removeItem(promAutoConnectKey(context)) } catch {
-          // ignore — manual CTA will render once status refreshes
-        }
-        attemptedRef.current = null
-      })
+    // Cached path probes immediately; first-time path defers briefly so the
+    // initial UI render isn't competing with the cluster network call.
+    const delay = cached === '1' ? 0 : PROM_FIRSTLAUNCH_PROBE_DELAY_MS
+    const timeout = window.setTimeout(() => {
+      // Direct apiFetch (not via the usePrometheusConnect mutation) so the
+      // meta-driven toast handler stays silent — the user didn't click anything.
+      apiFetch(`${getApiBase()}/prometheus/connect`, { method: 'POST' })
+        .then(resp => {
+          if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+          queryClient.invalidateQueries({ queryKey: ['prometheus-status'] })
+        })
+        .catch(() => {
+          try { window.localStorage.removeItem(promAutoConnectKey(context)) } catch {
+            // ignore — manual CTA will render once status refreshes
+          }
+          attemptedRef.current = null
+        })
+    }, delay)
+    return () => window.clearTimeout(timeout)
   }, [clusterInfo?.context, status?.connected, statusLoading, queryClient])
 }
 
