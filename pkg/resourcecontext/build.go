@@ -581,8 +581,14 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		return refs[i].Name < refs[j].Name
 	})
 
-	total := len(refs)
-	filtered := make([]ReferenceUse, 0, minInt(total, maxReferencedByItems))
+	// Count visible refs only — leaking the pre-RBAC total would let a
+	// caller infer the count of consuming resources they can't otherwise
+	// see (e.g. ConfigMap visible to caller but consuming workloads in
+	// hidden namespaces). The omitted=[referencedBy:rbac_denied] marker
+	// emitted above signals that some refs were filtered without
+	// disclosing how many.
+	visible := 0
+	filtered := make([]ReferenceUse, 0, minInt(len(refs), maxReferencedByItems))
 	for i := range refs {
 		ref := refs[i]
 		if len(ref.Paths) > maxReferencedByPathsPerRef {
@@ -593,6 +599,7 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 			omitted.add("referencedBy", OmittedRBACDenied)
 			continue
 		}
+		visible++
 		if len(filtered) < maxReferencedByItems {
 			filtered = append(filtered, ref)
 		}
@@ -601,9 +608,9 @@ func buildReferencedBy(ctx context.Context, obj runtime.Object, provider topolog
 		return nil
 	}
 	return &ReferencedBy{
-		Total:     total,
+		Total:     visible,
 		Items:     filtered,
-		Truncated: total > len(filtered),
+		Truncated: visible > len(filtered),
 	}
 }
 

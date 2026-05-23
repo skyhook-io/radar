@@ -56,7 +56,7 @@ func (l mcpServiceBackendLookup) PodsForServiceSelector(namespace string, select
 }
 
 // computeMCPIssueSummary rolls up per-resource issue-composer rows
-// (problem + condition + optional audit) into an IssueSummary. Mirrors the
+// (problem + condition) into an IssueSummary. Mirrors the
 // REST handler's computeIssueSummaryForResource — same composer call, same
 // group-aware iteration filter, same deterministic sort. The composer's
 // native namespace filter restricts the scan to the resource's namespace;
@@ -210,6 +210,13 @@ func mcpTopologyForContext(namespace string) (*topo.Topology, topo.ResourceProvi
 		return nil, nil, nil, false
 	}
 	opts := topo.DefaultBuildOptions()
+	// Match the REST handler's build options (see ai_handlers.go) so MCP
+	// get_resource produces the same relationship context as REST. Without
+	// these the topology drops the RS layer for Pod→Deployment chains and
+	// the relationship cache uses a thinner shape — silently weakening
+	// resourceContext for MCP callers.
+	opts.IncludeReplicaSets = true
+	opts.ForRelationshipCache = true
 	if namespace != "" {
 		opts.Namespaces = []string{namespace}
 	}

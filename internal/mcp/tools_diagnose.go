@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 
@@ -35,6 +36,8 @@ type diagnoseInput struct {
 // LogsError + EventsError distinguish "no logs/events exist" from "couldn't
 // fetch them" (nil kube client, lister error). Without these fields, an
 // agent reading empty arrays as ground truth would misdiagnose.
+// NarrowHint is set when the resolved pod set was capped for log fan-out
+// — see capDiagnosePods.
 type diagnoseResponse struct {
 	Resource        any                              `json:"resource"`
 	ResourceContext *resourcecontext.ResourceContext `json:"resourceContext,omitempty"`
@@ -44,6 +47,46 @@ type diagnoseResponse struct {
 	Events          []aicontext.DeduplicatedEvent    `json:"events,omitempty"`
 	EventsError     string                           `json:"eventsError,omitempty"`
 	Pods            int                              `json:"pods"`
+	NarrowHint      string                           `json:"narrowHint,omitempty"`
+}
+
+// maxDiagnosePods caps the log fan-out so large DaemonSets / Deployments
+// don't trigger N × M concurrent apiserver /pods/{name}/log calls and an
+// unbounded response. Chosen to comfortably cover typical Deployment
+// replica counts (3–5) and small DaemonSets (one-per-node on a 10-node
+// cluster) while still bounding the worst case.
+const maxDiagnosePods = 10
+
+// capDiagnosePods returns the subset of pods to fetch logs from when the
+// resolved set is larger than the cap. Pods are sorted by total container
+// restart count descending so the most-likely-broken ones are sampled
+// first. Returns the (possibly trimmed) slice and a truncated flag.
+func capDiagnosePods(pods []*corev1.Pod, cap int) ([]*corev1.Pod, bool) {
+	if len(pods) <= cap {
+		return pods, false
+	}
+	sorted := make([]*corev1.Pod, len(pods))
+	copy(sorted, pods)
+	sort.SliceStable(sorted, func(i, j int) bool {
+		return podTotalRestarts(sorted[i]) > podTotalRestarts(sorted[j])
+	})
+	return sorted[:cap], true
+}
+
+// podTotalRestarts sums RestartCount across containers + init containers.
+// Used by capDiagnosePods to prioritize failing pods.
+func podTotalRestarts(p *corev1.Pod) int32 {
+	if p == nil {
+		return 0
+	}
+	var total int32
+	for _, cs := range p.Status.ContainerStatuses {
+		total += cs.RestartCount
+	}
+	for _, cs := range p.Status.InitContainerStatuses {
+		total += cs.RestartCount
+	}
+	return total
 }
 
 func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseInput) (*mcp.CallToolResult, any, error) {
@@ -103,6 +146,15 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		Pods:            len(pods),
 	}
 
+	// Cap the log fan-out so a DaemonSet with 50 nodes doesn't trigger
+	// 50 × N containers × 2 (current + previous) concurrent apiserver
+	// /pods/{name}/log requests and a multi-MB response. Sample the
+	// "most likely broken" pods first by total restart count — the
+	// failing pods are usually the ones a debugger wants logs from
+	// anyway. Emit a narrowHint so the caller knows to drill down via
+	// kind=pod + specific pod name when they want full coverage.
+	logPods, logsTruncated := capDiagnosePods(pods, maxDiagnosePods)
+
 	// Fan out current + previous in parallel — previous is expected to error
 	// for healthy pods (no previous container instance); fetchPodLogs records
 	// per-entry Error so the caller can see which streams failed without
@@ -110,7 +162,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	// (auth drop, expired token, missing rest.Config), we surface that as
 	// LogsError instead of silently returning empty arrays — without it the
 	// agent can't distinguish "no logs" from "couldn't fetch logs."
-	if len(pods) > 0 {
+	if len(logPods) > 0 {
 		if k8s.ClientFromContext(ctx) == nil {
 			resp.LogsError = "no kube client on context — logs unavailable for this request"
 		} else {
@@ -121,16 +173,22 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 			wg.Add(2)
 			go func() {
 				defer wg.Done()
-				current = fetchPodLogs(ctx, pods, input.Namespace, input.Container, "", tailLines, sinceSeconds, false)
+				current = fetchPodLogs(ctx, logPods, input.Namespace, input.Container, "", tailLines, sinceSeconds, false)
 			}()
 			go func() {
 				defer wg.Done()
-				previous = fetchPodLogs(ctx, pods, input.Namespace, input.Container, "", tailLines, sinceSeconds, true)
+				previous = fetchPodLogs(ctx, logPods, input.Namespace, input.Container, "", tailLines, sinceSeconds, true)
 			}()
 			wg.Wait()
 			resp.LogsCurrent = current
 			resp.LogsPrevious = previous
 		}
+	}
+	if logsTruncated {
+		resp.NarrowHint = fmt.Sprintf(
+			"workload has %d pods; sampled top %d by restart count for logs — for full coverage, call diagnose with kind=pod and a specific pod name, or fall back to get_workload_logs which fans out across all pods",
+			len(pods), len(logPods),
+		)
 	}
 
 	events, eventsErr := fetchEventsForResource(cache, kindNorm, input.Namespace, input.Name, pods, 10)
