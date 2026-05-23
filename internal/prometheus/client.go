@@ -211,9 +211,14 @@ func (c *Client) Prom() *prom.Client {
 	return c.getPromClient()
 }
 
-// getPromClient returns a pkg/prom.Client pointed at the current baseURL/basePath,
-// building (and caching) one if necessary. Callers must hold the read or
-// write lock appropriately; see QueryRange/Query.
+// getPromClient returns a pkg/prom.Client pointed at the current
+// baseURL/basePath, building (and caching) one if necessary.
+//
+// Fast path: cached client under RLock. Slow path: take the write lock and
+// build from the live state, which guarantees baseURL/basePath/headers all
+// reflect the same point-in-time view. Transport construction is just
+// struct-field assignments (no I/O) so holding the write lock across it
+// is cheap, and avoids the read-then-rebuild-then-recheck race entirely.
 func (c *Client) getPromClient() *prom.Client {
 	c.mu.RLock()
 	if c.prom != nil {
@@ -221,33 +226,20 @@ func (c *Client) getPromClient() *prom.Client {
 		c.mu.RUnlock()
 		return p
 	}
-	base, bp, httpC := c.baseURL, c.basePath, c.httpClient
-	headers := copyHeaders(c.headers)
 	c.mu.RUnlock()
 
-	if base == "" {
-		return nil
-	}
-
-	tr := prom.NewHTTPTransport(base, bp, httpC)
-	tr.Headers = headers
-	p := prom.NewClient(tr)
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	// Three things can have changed under us while the RLock was released:
-	//   1. Another goroutine cached its own client (c.prom != nil) — use theirs.
-	//   2. baseURL/basePath changed under us (concurrent markConnected/Reset).
-	//      Our client points at the old address — discard it. Return nil so
-	//      the caller can re-snapshot on its next attempt; the next request
-	//      will rebuild against the new address.
 	if c.prom != nil {
 		return c.prom
 	}
-	if c.baseURL != base || c.basePath != bp {
+	if c.baseURL == "" {
 		return nil
 	}
-	c.prom = p
-	return p
+	tr := prom.NewHTTPTransport(c.baseURL, c.basePath, c.httpClient)
+	tr.Headers = copyHeaders(c.headers)
+	c.prom = prom.NewClient(tr)
+	return c.prom
 }
 
 // probe checks if a Prometheus endpoint at `addr` is reachable and has at
