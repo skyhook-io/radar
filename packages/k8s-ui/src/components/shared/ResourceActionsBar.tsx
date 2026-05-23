@@ -540,7 +540,7 @@ export function ResourceActionsBar({
             </button>
           </Tooltip>
           {showCompareMenu && onCompareTo && onCompareAcrossClusters && (
-            <div className="absolute top-full right-0 mt-1 min-w-[220px] py-1 bg-theme-surface border border-theme-border rounded-lg shadow-lg z-50">
+            <div className="absolute top-full right-0 mt-1 min-w-[220px] py-1 bg-theme-surface border border-theme-border rounded-lg shadow-theme-lg z-50">
               <button
                 onClick={() => { onCompareTo(); setShowCompareMenu(false) }}
                 className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-theme-text-primary hover:bg-theme-hover transition-colors text-left"

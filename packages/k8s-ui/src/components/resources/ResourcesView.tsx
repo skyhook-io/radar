@@ -2067,7 +2067,9 @@ export function ResourcesView({
     // Host-injected extra columns (e.g. fleet Cluster) default to visible
     // even when the saved column-visibility blob predates them — a naive
     // Set(saved.visible) would silently hide host columns the user has
-    // never been shown.
+    // never been shown. Trade-off: a user can't permanently hide a host
+    // extra column via the column picker — next mount re-adds it. Track
+    // a sibling "hidden-extras" set if this becomes a real complaint.
     const extraKeys = extraLeadingColumns?.map(c => c.key) ?? []
     if (saved) {
       // If saved columns are just the defaults but this kind has specialized columns,

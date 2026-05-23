@@ -37,7 +37,7 @@ export function useCompareLauncher({ kind, namespace, name, group }: UseCompareL
 
   const onCompareAcrossClusters = useCallback(() => {
     if (!crossClusterCompareHref) return
-    const href = crossClusterCompareHref({ kind: kindLower, namespace, name, apiGroup: group })
+    const href = crossClusterCompareHref({ kind: kindLower, namespace, name, group })
     window.location.assign(href)
   }, [crossClusterCompareHref, kindLower, namespace, name, group])
 

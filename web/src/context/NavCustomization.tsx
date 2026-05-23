@@ -29,7 +29,7 @@ interface NavCustomizationBase {
     kind: string;
     namespace: string;
     name: string;
-    apiGroup?: string;
+    group?: string;
   }) => string;
 }
 
