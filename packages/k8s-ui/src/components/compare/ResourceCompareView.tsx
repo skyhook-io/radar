@@ -27,9 +27,6 @@ export interface ResourceCompareViewProps {
   b: CompareResourceRef
   aData: unknown
   bData: unknown
-  /** Per-side loading — a ready side renders while the slow side spins. */
-  aLoading?: boolean
-  bLoading?: boolean
   /** Per-side fetch errors. Each side renders independently — a working side stays useful. */
   errors?: CompareSideError[]
   /** Caller-supplied theme passthrough for the Monaco editor. */
@@ -112,12 +109,6 @@ export function ResourceCompareView({
   b,
   aData,
   bData,
-  // aLoading / bLoading remain in the props for host wiring stability,
-  // but the cold-start gate below derives loading purely from data
-  // presence — flashing Monaco when only one side has data was worse
-  // than a slightly delayed initial render. Per-side spinners after
-  // the editor mounts aren't needed: Monaco re-renders in place when
-  // a side's content swaps.
   errors,
   editorTheme = 'vs-dark',
   onSwap,

@@ -92,8 +92,6 @@ export function CompareViewRoute() {
         b={b}
         aData={aQuery.data}
         bData={bQuery.data}
-        aLoading={aQuery.isPending}
-        bLoading={bQuery.isPending}
         errors={errors}
         editorTheme={theme === 'dark' ? 'vs-dark' : 'vs'}
         onSwap={handleSwap}
