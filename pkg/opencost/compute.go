@@ -143,6 +143,18 @@ func ComputeCostSummary(ctx context.Context, client *RESTClient, opts SummaryOpt
 				}
 			}
 			if existing, ok := combined[name]; ok {
+				// Weight TotalEfficiency by the per-bucket allocation cost
+				// BEFORE adding this bucket's cost into the running total.
+				// Each row's TotalEfficiency is independently per-bucket;
+				// the merged row's effective efficiency is the cost-weighted
+				// average. Without this, the merged efficiency would just
+				// be the first bucket's value.
+				existingAlloc := existing.CPUCost + existing.RAMCost
+				bucketAlloc := a.CPUCost + a.RAMCost
+				if totalAlloc := existingAlloc + bucketAlloc; totalAlloc > 0 {
+					existing.TotalEfficiency =
+						(existing.TotalEfficiency*existingAlloc + a.TotalEfficiency*bucketAlloc) / totalAlloc
+				}
 				existing.CPUCost += a.CPUCost
 				existing.RAMCost += a.RAMCost
 				existing.PVCost += a.PVCost

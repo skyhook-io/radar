@@ -233,13 +233,20 @@ func (c *Client) getPromClient() *prom.Client {
 	tr.Headers = headers
 	p := prom.NewClient(tr)
 	c.mu.Lock()
-	// Double-check in case another goroutine built one.
-	if c.prom == nil {
-		c.prom = p
-	} else {
-		p = c.prom
+	defer c.mu.Unlock()
+	// Three things can have changed under us while the RLock was released:
+	//   1. Another goroutine cached its own client (c.prom != nil) — use theirs.
+	//   2. baseURL/basePath changed under us (concurrent markConnected/Reset).
+	//      Our client points at the old address — discard it. Return nil so
+	//      the caller can re-snapshot on its next attempt; the next request
+	//      will rebuild against the new address.
+	if c.prom != nil {
+		return c.prom
 	}
-	c.mu.Unlock()
+	if c.baseURL != base || c.basePath != bp {
+		return nil
+	}
+	c.prom = p
 	return p
 }
 
