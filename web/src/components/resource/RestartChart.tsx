@@ -89,15 +89,11 @@ function collectRestartEvents(series: PrometheusSeries[] | undefined): RestartEv
     // window — and use the increase as the marker's restart count.
     let prev: number | null = null
     for (const dp of s.dataPoints) {
-      if (prev === null) {
-        // First sample. `changes(...[1h])` at this timestamp counts restarts in
-        // the trailing 1h window — honor that count rather than collapsing to
-        // one marker. The exact event timestamps within that pre-window hour
-        // are unknown; we attribute them to the first chart timestamp.
-        if (dp.value > 0) {
-          events.push({ timestamp: dp.timestamp, value: dp.value, label: pod })
-        }
-      } else {
+      if (prev !== null) {
+        // Only count positive deltas — restarts that entered the rolling 1h
+        // window during the chart range. The first sample's value covers
+        // [start-1h, start] which is outside the user's chosen window; counting
+        // it would inflate the total with pre-window restarts.
         const delta = dp.value - prev
         if (delta > 0) {
           events.push({ timestamp: dp.timestamp, value: delta, label: pod })
