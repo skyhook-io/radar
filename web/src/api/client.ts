@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
 import { useCanHelmWrite } from '../contexts/CapabilitiesContext'
@@ -1314,6 +1315,62 @@ export function usePrometheusConnect() {
       successMessage: 'Connected to Prometheus',
     },
   })
+}
+
+// Auto-reconnect Prometheus across radar restarts.
+//
+// Persistence rules:
+// - On any successful connect, mark this cluster context as "auto-discoverable"
+//   in localStorage (browser-scoped, per-cluster, opaque flag).
+// - On mount, if status reports disconnected AND the current context is flagged,
+//   silently retry connect once. If the retry fails, clear the flag and let the
+//   user see the manual "Discover Prometheus" CTA — the cached environment is
+//   no longer reachable, falling back to manual auto-detect is the right move.
+//
+// The cache key includes context name so cluster switches don't carry over
+// stale assumptions. localStorage is fine here: the user's intent ("this
+// cluster has Prom") is browser-local, not a server-side preference.
+const PROM_AUTOCONNECT_PREFIX = 'radar.prometheus.autoConnect:'
+
+function promAutoConnectKey(contextName: string): string {
+  return `${PROM_AUTOCONNECT_PREFIX}${contextName}`
+}
+
+export function useAutoPromConnect(): void {
+  const { data: clusterInfo } = useClusterInfo()
+  const { data: status, isLoading: statusLoading } = usePrometheusStatus()
+  const connectMutation = usePrometheusConnect()
+  const attemptedRef = useRef<string | null>(null)
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const context = clusterInfo?.context
+    if (!context || statusLoading) return
+
+    // Persist the "we've connected here before" signal once a connection lands.
+    if (status?.connected) {
+      try { window.localStorage.setItem(promAutoConnectKey(context), '1') } catch {
+        // localStorage can throw in some restricted browser modes — fail open.
+      }
+      return
+    }
+
+    if (attemptedRef.current === context) return
+    let cached: string | null = null
+    try { cached = window.localStorage.getItem(promAutoConnectKey(context)) } catch {
+      cached = null
+    }
+    if (cached !== '1') return
+
+    attemptedRef.current = context
+    connectMutation.mutate(undefined, {
+      onError: () => {
+        try { window.localStorage.removeItem(promAutoConnectKey(context)) } catch {
+          // ignore — user will see the manual CTA on the next render
+        }
+      },
+    })
+  }, [clusterInfo?.context, status?.connected, statusLoading])
 }
 
 // Fetch Prometheus metrics for a resource

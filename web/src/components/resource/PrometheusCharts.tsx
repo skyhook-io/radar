@@ -5,6 +5,7 @@ import {
   usePrometheusStatus,
   usePrometheusConnect,
   usePrometheusResourceMetrics,
+  useAutoPromConnect,
   type PrometheusMetricCategory,
   type PrometheusTimeRange,
   type PrometheusSeries,
@@ -88,6 +89,7 @@ interface PrometheusChartsProps {
 }
 
 export function PrometheusCharts({ kind, namespace, name, showEmptyState = false, resource, onTimeRangeChange }: PrometheusChartsProps) {
+  useAutoPromConnect()
   const { data: status, isLoading: statusLoading } = usePrometheusStatus()
   const connectMutation = usePrometheusConnect()
 
@@ -600,13 +602,20 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines }: {
           />
         ))}
 
-        {/* Reference lines (request / limit overlays) */}
+        {/* Reference lines (request / limit overlays). Label rendered on a
+            subtle background pill so it stays legible against the chart fill
+            even when reference lines pass through the data band. */}
         {referenceLines?.map((rl, i) => {
-          // Clamp y so the line never escapes the plot — the yMax expansion
-          // above keeps it in bounds normally, but guard against rounding.
           const y = Math.max(marginTop, Math.min(marginTop + plotHeight, toY(rl.value)))
           const stroke = rl.tone === 'limit' ? '#f59e0b' : '#94a3b8'
-          // Tone-matched labels on the right edge.
+          const labelText = rl.label
+          // Sized to fit common label widths ("limit 384MiB", "request 100m"
+          // ≈ 90px at fontSize 11). Conservative width prevents overlap with
+          // the chart's right edge.
+          const labelWidth = labelText.length * 6.5 + 10
+          const labelHeight = 14
+          const labelX = width - marginRight - labelWidth
+          const labelY = Math.max(marginTop + labelHeight + 2, y - 6)
           return (
             <g key={`ref-${i}`}>
               <line
@@ -619,16 +628,26 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines }: {
                 strokeDasharray="6 4"
                 opacity="0.75"
               />
+              <rect
+                x={labelX}
+                y={labelY - labelHeight + 2}
+                width={labelWidth}
+                height={labelHeight}
+                rx="3"
+                fill="currentColor"
+                className="text-theme-surface"
+                opacity="0.85"
+              />
               <text
-                x={width - marginRight - 4}
-                y={y - 4}
+                x={width - marginRight - 5}
+                y={labelY - 2}
                 textAnchor="end"
-                fontSize="10"
+                fontSize="11"
                 fontFamily="ui-monospace, monospace"
+                fontWeight="500"
                 fill={stroke}
-                opacity="0.9"
               >
-                {rl.label}
+                {labelText}
               </text>
             </g>
           )

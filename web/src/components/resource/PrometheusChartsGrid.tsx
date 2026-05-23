@@ -4,10 +4,14 @@ import {
   usePrometheusStatus,
   usePrometheusConnect,
   usePrometheusResourceMetrics,
+  usePrometheusRightsizing,
+  useAutoPromConnect,
   type PrometheusMetricCategory,
   type PrometheusTimeRange,
   type PrometheusSeries,
+  type RightsizingTone,
 } from '../../api/client'
+import { SEVERITY_BADGE, type Severity } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import {
   AreaChart,
   MetricsSummary,
@@ -53,6 +57,7 @@ export function PrometheusChartsGrid({
   resource,
   showRestartLane = true,
 }: PrometheusChartsGridProps) {
+  useAutoPromConnect()
   const { data: status, isLoading: statusLoading } = usePrometheusStatus()
   const connectMutation = usePrometheusConnect()
   const isConnected = status?.connected === true
@@ -136,6 +141,7 @@ export function PrometheusChartsGrid({
         <div className="flex items-center gap-2 text-sm font-medium text-theme-text-secondary">
           <BarChart3 className="w-4 h-4 text-theme-text-tertiary" />
           Metrics
+          <WorkloadHealthBadge kind={kind} namespace={namespace} name={name} />
         </div>
         <select
           value={timeRange}
@@ -222,12 +228,22 @@ function MetricsPanel({ category, kind, namespace, name, timeRange, referenceLin
   const series = metrics?.result?.series
   const hasData = (series?.length ?? 0) > 0
 
+  // "% of limit / request" derived from current peak vs reference lines.
+  // Without this, a low-utilization workload with a high limit looks like
+  // an empty chart — the user can't tell healthy from starved at a glance.
+  const saturation = hasData && series && referenceLines
+    ? computeSaturation(series, referenceLines)
+    : undefined
+
   return (
     <section className="rounded-lg border border-theme-border bg-theme-surface/30 p-3 flex flex-col min-h-[260px]">
       <header className="flex items-center justify-between mb-2 gap-3">
-        <h3 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wide">
-          {category.label}
-        </h3>
+        <div className="flex items-center gap-2">
+          <h3 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wide">
+            {category.label}
+          </h3>
+          {saturation && <SaturationChip {...saturation} />}
+        </div>
         {hasData && series && (
           <MetricsSummary series={series} category={category} unit={metrics!.unit} />
         )}
@@ -259,6 +275,68 @@ function MetricsPanel({ category, kind, namespace, name, timeRange, referenceLin
       </div>
     </section>
   )
+}
+
+// ============================================================================
+// SaturationChip — "12% of limit" at-a-glance read on utilization.
+// Picks limit when both present (limit is the operationally meaningful number).
+// Tone ramps with the percentage so a glance at the chip tells you "fine" vs
+// "approaching pressure" vs "active risk" without reading the chart.
+// ============================================================================
+
+function computeSaturation(series: PrometheusSeries[], refs: ReferenceLine[]): { pct: number; against: 'limit' | 'request' } | undefined {
+  // Peak across all series; matches the operator's "worst case in window" mental model.
+  let peak = 0
+  for (const s of series) {
+    for (const dp of s.dataPoints) {
+      if (dp.value > peak) peak = dp.value
+    }
+  }
+  if (peak <= 0) return undefined
+  const limit = refs.find(r => r.tone === 'limit')
+  const request = refs.find(r => r.tone === 'request')
+  const ref = limit ?? request
+  if (!ref || ref.value <= 0) return undefined
+  return { pct: peak / ref.value, against: limit ? 'limit' : 'request' }
+}
+
+function SaturationChip({ pct, against }: { pct: number; against: 'limit' | 'request' }) {
+  // Thresholds chosen to match the rightsizing tone vocabulary: amber from
+  // 75% (start watching), red at 90% (the same OOM-risk boundary the
+  // backend uses for memory in classifyRightsizing).
+  const tone: Severity = pct >= 0.9 ? 'error' : pct >= 0.75 ? 'warning' : pct < 0.05 ? 'info' : 'neutral'
+  const label = `${(pct * 100).toFixed(pct < 0.1 ? 1 : 0)}% of ${against}`
+  return <span className={`badge badge-sm ${SEVERITY_BADGE[tone]}`}>{label}</span>
+}
+
+// ============================================================================
+// WorkloadHealthBadge — single-pill summary of the worst rightsizing tone
+// across all containers × resources. Surfaces at-a-glance health state
+// (Throttled / OOM risk / Healthy) without making the operator read the
+// per-row rightsizing strip.
+// ============================================================================
+
+function WorkloadHealthBadge({ kind, namespace, name }: { kind: string; namespace: string; name: string }) {
+  // The badge is only meaningful on rightsizing-supported workload kinds.
+  const supported = kind === 'Deployment' || kind === 'StatefulSet' || kind === 'DaemonSet'
+  const { data } = usePrometheusRightsizing(kind, namespace, name, supported)
+  if (!supported || !data?.sampleAvailable || data.rows.length === 0) return null
+
+  const worst = worstTone(data.rows.map(r => r.tone))
+  // Skip the chip for the steady-state tones to avoid badge-blindness — we
+  // only want to draw the eye when there's something to address.
+  if (worst === 'ok' || worst === 'info') return null
+
+  const { label, severity }: { label: string; severity: Severity } =
+    worst === 'critical' ? { label: 'OOM risk', severity: 'error' } :
+    worst === 'alert' ? { label: 'CPU throttling', severity: 'alert' } :
+    /* warning */ { label: 'Needs review', severity: 'warning' }
+  return <span className={`badge badge-sm ${SEVERITY_BADGE[severity]}`}>{label}</span>
+}
+
+const TONE_RANK: Record<RightsizingTone, number> = { ok: 0, info: 1, warning: 2, alert: 3, critical: 4 }
+function worstTone(tones: RightsizingTone[]): RightsizingTone {
+  return tones.reduce((acc, t) => (TONE_RANK[t] > TONE_RANK[acc] ? t : acc), 'ok' as RightsizingTone)
 }
 
 function PanelLoading() {
