@@ -1,12 +1,9 @@
 import { seriesColor } from './colors'
-import type { PrometheusSeries } from './types'
+import type { TimeSeries } from './types'
 
-/**
- * SeriesLegend — colored dots + pod labels for multi-series charts.
- * Caps at 10 visible entries (matches AreaChart's distinct color count);
- * extras collapse to a "+N more" summary.
- */
-export function SeriesLegend({ series, color }: { series: PrometheusSeries[]; color: string }) {
+// Caps visible entries to match AreaChart's SERIES_COLORS length; extras
+// collapse to "+N more".
+export function SeriesLegend({ series, color }: { series: TimeSeries[]; color: string }) {
   const labels = series.map((s, i) => s.labels.pod || s.labels.instance || `series-${i}`)
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 px-1">

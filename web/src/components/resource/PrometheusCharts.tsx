@@ -5,7 +5,7 @@ import {
   AreaChart,
   MetricsSummary as BaseMetricsSummary,
   SeriesLegend,
-  type PrometheusSeries,
+  type TimeSeries,
   type ReferenceLine,
 } from '@skyhook-io/k8s-ui/components/charts'
 import {
@@ -62,16 +62,12 @@ export const TIME_RANGES: { value: PrometheusTimeRange; label: string }[] = [
 // Radar's MetricsSummary thin wrapper — adapts CategoryDef to the slim
 // interface of the shared k8s-ui primitive so callers downstream don't change.
 export function MetricsSummary({ series, category, unit }: {
-  series: PrometheusSeries[]
+  series: TimeSeries[]
   category: CategoryDef
   unit: string
 }) {
   return <BaseMetricsSummary series={series} unit={unit} currentColorClass={category.color} />
 }
-
-// Re-export from k8s-ui so existing sibling-file consumers (PrometheusChartsGrid)
-// can keep their relative imports stable.
-export { AreaChart, SeriesLegend, type PrometheusSeries, type ReferenceLine }
 
 // ============================================================================
 // Main Component
@@ -319,14 +315,14 @@ export function computeRequestLimitLines(
     lines.push({
       value: reqSum,
       label: `request ${formatRequestLimitLabel(reqSum, category)}`,
-      tone: 'request',
+      kind: 'request',
     })
   }
   if (limAny) {
     lines.push({
       value: limSum,
       label: `limit ${formatRequestLimitLabel(limSum, category)}`,
-      tone: 'limit',
+      kind: 'limit',
     })
   }
   return lines.length > 0 ? lines : undefined

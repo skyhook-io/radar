@@ -1220,19 +1220,21 @@ export interface PrometheusStatus {
   error?: string
 }
 
-export interface PrometheusDataPoint {
-  timestamp: number
-  value: number
-}
+// Time-series sample types live in @skyhook-io/k8s-ui (shared with library
+// consumers). Re-export here so radar-app callers keep their existing import
+// paths; the Prom-prefixed names are deprecated aliases.
+export type {
+  TimeSeriesPoint,
+  TimeSeries,
+  PrometheusDataPoint,
+  PrometheusSeries,
+} from '@skyhook-io/k8s-ui/components/charts'
 
-export interface PrometheusSeries {
-  labels: Record<string, string>
-  dataPoints: PrometheusDataPoint[]
-}
+import type { TimeSeries as ChartTimeSeries } from '@skyhook-io/k8s-ui/components/charts'
 
 export interface PrometheusQueryResult {
   resultType: string
-  series: PrometheusSeries[]
+  series: ChartTimeSeries[]
 }
 
 export interface PrometheusResourceMetrics {
@@ -1337,9 +1339,9 @@ function promAutoConnectKey(contextName: string): string {
 }
 
 export function useAutoPromConnect(): void {
+  const queryClient = useQueryClient()
   const { data: clusterInfo } = useClusterInfo()
   const { data: status, isLoading: statusLoading } = usePrometheusStatus()
-  const connectMutation = usePrometheusConnect()
   const attemptedRef = useRef<string | null>(null)
 
   useEffect(() => {
@@ -1363,14 +1365,24 @@ export function useAutoPromConnect(): void {
     if (cached !== '1') return
 
     attemptedRef.current = context
-    connectMutation.mutate(undefined, {
-      onError: () => {
+
+    // Direct apiFetch (not via the usePrometheusConnect mutation) so the
+    // meta-driven toast handler stays silent — the user didn't click anything.
+    // If the cached environment has moved, we clear the flag, reset the ref so
+    // a future flap can retry, and let the existing "Discover Prometheus" CTA
+    // appear on the next status refresh.
+    apiFetch(`${getApiBase()}/prometheus/connect`, { method: 'POST' })
+      .then(resp => {
+        if (!resp.ok) throw new Error(`HTTP ${resp.status}`)
+        queryClient.invalidateQueries({ queryKey: ['prometheus-status'] })
+      })
+      .catch(() => {
         try { window.localStorage.removeItem(promAutoConnectKey(context)) } catch {
-          // ignore — user will see the manual CTA on the next render
+          // ignore — manual CTA will render once status refreshes
         }
-      },
-    })
-  }, [clusterInfo?.context, status?.connected, statusLoading])
+        attemptedRef.current = null
+      })
+  }, [clusterInfo?.context, status?.connected, statusLoading, queryClient])
 }
 
 // Fetch Prometheus metrics for a resource

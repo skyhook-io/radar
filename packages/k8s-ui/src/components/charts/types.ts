@@ -1,27 +1,36 @@
-// Shared time-series chart types. Named with the "Prometheus" prefix because
-// the shape originated from Prometheus query results, but the structure is
-// generic — any source emitting time-stamped numeric samples can feed AreaChart.
+// Shared time-series chart types. The shape originated from Prometheus query
+// results but is generic — any source emitting time-stamped numeric samples
+// can feed AreaChart.
 
-export interface PrometheusDataPoint {
+export interface TimeSeriesPoint {
   timestamp: number
   value: number
 }
 
-export interface PrometheusSeries {
+export interface TimeSeries {
   labels: Record<string, string>
-  dataPoints: PrometheusDataPoint[]
+  /** Expected to be sorted ascending by timestamp and finite-valued. The
+   *  chart's path math and saturation peak scans assume this; passing
+   *  unsorted or NaN samples will produce garbage rendering, not crashes. */
+  dataPoints: TimeSeriesPoint[]
 }
 
+/** @deprecated Use {@link TimeSeriesPoint}. Kept for one release for callers
+ *  still importing the Prom-prefixed name. */
+export type PrometheusDataPoint = TimeSeriesPoint
+
+/** @deprecated Use {@link TimeSeries}. Kept for one release for callers still
+ *  importing the Prom-prefixed name. */
+export type PrometheusSeries = TimeSeries
+
 /**
- * Horizontal reference line overlaid on a chart (e.g. request / limit).
- * - tone='request' renders in muted gray
- * - tone='limit' renders in amber
- *
- * Neither tone is alarming on its own — the chart auto-extends its Y axis
- * to include reference lines, so they're always visible without clipping.
+ * Horizontal reference line overlaid on a chart. `kind` is semantic — it
+ * drives which value `computeSaturation` treats as the operational ceiling.
+ * The chart auto-extends its Y axis to fit reference lines, so they're
+ * never clipped.
  */
 export interface ReferenceLine {
   value: number
   label: string
-  tone: 'request' | 'limit'
+  kind: 'request' | 'limit'
 }

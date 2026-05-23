@@ -1,20 +1,10 @@
 import { useMemo } from 'react'
 import { clsx } from 'clsx'
 import { formatMetricValue } from './format'
-import type { PrometheusSeries } from './types'
+import type { TimeSeries } from './types'
 
-/**
- * MetricsSummary — Current / Average / Peak pills computed from a set of
- * time-series. "Current" sums each series' most recent sample (the
- * across-pods aggregate); "Peak" is the worst-case across all samples.
- *
- * Generic on prop interface — takes the highlight color class for the
- * Current pill directly, rather than a full category config object, so
- * library consumers can supply their own theming without dragging a
- * Radar-specific config type along.
- */
 export function MetricsSummary({ series, unit, currentColorClass }: {
-  series: PrometheusSeries[]
+  series: TimeSeries[]
   unit: string
   /** Tailwind text class for the "Current" pill — caller's accent color. */
   currentColorClass?: string

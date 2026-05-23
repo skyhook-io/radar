@@ -3,10 +3,10 @@ import { BarChart3, ChevronDown, ChevronRight, Loader2, Wifi, WifiOff } from 'lu
 import {
   AreaChart,
   SeriesLegend,
-  type PrometheusSeries,
+  computeSaturation,
   type ReferenceLine,
 } from '@skyhook-io/k8s-ui/components/charts'
-import { SEVERITY_BADGE, type Severity } from '@skyhook-io/k8s-ui/utils/badge-colors'
+import { SEVERITY_BADGE, SEVERITY_TEXT, type Severity } from '@skyhook-io/k8s-ui/utils/badge-colors'
 import {
   usePrometheusStatus,
   usePrometheusConnect,
@@ -15,7 +15,6 @@ import {
   useAutoPromConnect,
   type PrometheusMetricCategory,
   type PrometheusTimeRange,
-  type RightsizingTone,
 } from '../../api/client'
 import {
   MetricsSummary,
@@ -26,18 +25,11 @@ import {
   type CategoryDef,
 } from './PrometheusCharts'
 import { RestartEventLane } from './RestartChart'
+import { worstTone } from './prometheus-grid-utils'
 
-/**
- * PrometheusChartsGrid — wide-screen multi-chart layout for the workload
- * Metrics tab. Renders CPU + Memory side-by-side on ≥md viewports, adds
- * Network RX/TX as a second row, with Disk I/O collapsed by default.
- *
- * All panels share a single time range so they stay aligned. The restart
- * event lane spans full grid width above the panels.
- *
- * Used when MetricsTabContent is in expanded (full-screen) mode. Drawer
- * mode continues to use the single-chart tabbed `PrometheusCharts`.
- */
+// Used when MetricsTabContent is in expanded (full-screen) mode. Drawer mode
+// uses the single-chart tabbed `PrometheusCharts` instead — drawer width
+// can't fit the grid cleanly.
 export interface PrometheusChartsGridProps {
   kind: string
   namespace: string
@@ -121,7 +113,6 @@ export function PrometheusChartsGrid({
   const findCategory = (key: PrometheusMetricCategory): CategoryDef | undefined =>
     categories.find(c => c.key === key)
 
-  // Build the primary panel set: CPU + Memory + (for workloads) Net RX + Net TX.
   // Disk I/O is collapsed by default — niche metric.
   const primaryCats: { def: CategoryDef; refLines?: ReferenceLine[] }[] = []
   const cpu = findCategory('cpu')
@@ -138,7 +129,6 @@ export function PrometheusChartsGrid({
 
   return (
     <div className="flex flex-col h-full overflow-auto">
-      {/* Toolbar — shared time range across all panels */}
       <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-theme-border bg-theme-surface/50">
         <div className="flex items-center gap-2 text-sm font-medium text-theme-text-secondary">
           <BarChart3 className="w-4 h-4 text-theme-text-tertiary" />
@@ -156,17 +146,14 @@ export function PrometheusChartsGrid({
         </select>
       </div>
 
-      {/* Restart event lane — full width, above the grid so its markers
-          visually align with the time axis of the charts below. */}
+      {/* Restart lane sits above the grid so its markers visually align with
+          the time axis of the charts below. */}
       {showRestartLane && (
         <div className="px-4 pt-3">
           <RestartEventLane kind={kind} namespace={namespace} name={name} range={timeRange} />
         </div>
       )}
 
-      {/* Primary grid — CPU + Memory always; Net RX + TX for non-Node workloads.
-          1-col at narrow viewports, 2-col at md+ (768px) so primary panels sit
-          side-by-side on any normal full-screen view. */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3 p-4">
         {primaryCats.map(({ def, refLines }) => (
           <MetricsPanel
@@ -181,7 +168,6 @@ export function PrometheusChartsGrid({
         ))}
       </div>
 
-      {/* Disk I/O — collapsible, full-width when expanded. */}
       {disk && (
         <div className="px-4 pb-4">
           <button
@@ -208,10 +194,6 @@ export function PrometheusChartsGrid({
     </div>
   )
 }
-
-// ============================================================================
-// MetricsPanel — a single category card. One query, one chart, one summary.
-// ============================================================================
 
 interface MetricsPanelProps {
   category: CategoryDef
@@ -279,50 +261,27 @@ function MetricsPanel({ category, kind, namespace, name, timeRange, referenceLin
   )
 }
 
-// ============================================================================
-// SaturationChip — "12% of limit" at-a-glance read on utilization.
-// Picks limit when both present (limit is the operationally meaningful number).
-// Tone ramps with the percentage so a glance at the chip tells you "fine" vs
-// "approaching pressure" vs "active risk" without reading the chart.
-// ============================================================================
-
-function computeSaturation(series: PrometheusSeries[], refs: ReferenceLine[]): { pct: number; against: 'limit' | 'request' } | undefined {
-  // Peak across all series; matches the operator's "worst case in window" mental model.
-  let peak = 0
-  for (const s of series) {
-    for (const dp of s.dataPoints) {
-      if (dp.value > peak) peak = dp.value
-    }
-  }
-  if (peak <= 0) return undefined
-  const limit = refs.find(r => r.tone === 'limit')
-  const request = refs.find(r => r.tone === 'request')
-  const ref = limit ?? request
-  if (!ref || ref.value <= 0) return undefined
-  return { pct: peak / ref.value, against: limit ? 'limit' : 'request' }
-}
-
-function SaturationChip({ pct, against }: { pct: number; against: 'limit' | 'request' }) {
-  // Thresholds chosen to match the rightsizing tone vocabulary: amber from
-  // 75% (start watching), red at 90% (the same OOM-risk boundary the
-  // backend uses for memory in classifyRightsizing).
-  const tone: Severity = pct >= 0.9 ? 'error' : pct >= 0.75 ? 'warning' : pct < 0.05 ? 'info' : 'neutral'
-  const label = `${(pct * 100).toFixed(pct < 0.1 ? 1 : 0)}% of ${against}`
+function SaturationChip({ ratio, against }: { ratio: number; against: 'limit' | 'request' }) {
+  // Thresholds match the rightsizing tone vocabulary: amber from 75% (start
+  // watching), red at 90% (the same OOM-risk boundary the backend uses for
+  // memory in classifyRightsizing).
+  const tone: Severity = ratio >= 0.9 ? 'error' : ratio >= 0.75 ? 'warning' : ratio < 0.05 ? 'info' : 'neutral'
+  const label = `${(ratio * 100).toFixed(ratio < 0.1 ? 1 : 0)}% of ${against}`
   return <span className={`badge badge-sm ${SEVERITY_BADGE[tone]}`}>{label}</span>
 }
 
-// ============================================================================
-// WorkloadHealthBadge — single-pill summary of the worst rightsizing tone
-// across all containers × resources. Surfaces at-a-glance health state
-// (Throttled / OOM risk / Healthy) without making the operator read the
-// per-row rightsizing strip.
-// ============================================================================
-
 function WorkloadHealthBadge({ kind, namespace, name }: { kind: string; namespace: string; name: string }) {
-  // The badge is only meaningful on rightsizing-supported workload kinds.
   const supported = kind === 'Deployment' || kind === 'StatefulSet' || kind === 'DaemonSet'
-  const { data } = usePrometheusRightsizing(kind, namespace, name, supported)
-  if (!supported || !data?.sampleAvailable || data.rows.length === 0) return null
+  const { data, error } = usePrometheusRightsizing(kind, namespace, name, supported)
+  if (!supported) return null
+  // Surface a neutral "Health unknown" pill when the rightsizing endpoint
+  // errors — otherwise an actually-throttled or OOM-risk workload would
+  // silently render as fine while we have no signal to display.
+  if (error && !data) {
+    const msg = error instanceof Error ? error.message : String(error)
+    return <span className={`badge badge-sm ${SEVERITY_BADGE.neutral}`} title={`Health check failed: ${msg}`}>Health unknown</span>
+  }
+  if (!data?.sampleAvailable || data.rows.length === 0) return null
 
   const worst = worstTone(data.rows.map(r => r.tone))
   // Skip the chip for the steady-state tones to avoid badge-blindness — we
@@ -336,11 +295,6 @@ function WorkloadHealthBadge({ kind, namespace, name }: { kind: string; namespac
   return <span className={`badge badge-sm ${SEVERITY_BADGE[severity]}`}>{label}</span>
 }
 
-const TONE_RANK: Record<RightsizingTone, number> = { ok: 0, info: 1, warning: 2, alert: 3, critical: 4 }
-function worstTone(tones: RightsizingTone[]): RightsizingTone {
-  return tones.reduce((acc, t) => (TONE_RANK[t] > TONE_RANK[acc] ? t : acc), 'ok' as RightsizingTone)
-}
-
 function PanelLoading() {
   return (
     <div className="flex items-center justify-center h-full min-h-[160px] text-theme-text-tertiary text-xs">
@@ -352,9 +306,9 @@ function PanelLoading() {
 
 function PanelError({ message }: { message: string }) {
   return (
-    <div className="flex flex-col items-center justify-center h-full min-h-[160px] text-amber-700 dark:text-amber-400 text-xs px-3 text-center">
+    <div className={`flex flex-col items-center justify-center h-full min-h-[160px] ${SEVERITY_TEXT.warning} text-xs px-3 text-center`}>
       Query failed
-      <span className="text-theme-text-quaternary mt-0.5 line-clamp-2">{message}</span>
+      <span className="text-theme-text-quaternary mt-0.5 line-clamp-2" title={message}>{message}</span>
     </div>
   )
 }
@@ -368,10 +322,4 @@ function PanelNoData({ hint }: { hint?: string }) {
   )
 }
 
-// Re-export so library consumers can detect whether a kind is chartable
-// without importing from the tabbed component.
 export { isPrometheusSupported } from './PrometheusCharts'
-
-// Used by the type system inside this file. Re-exported as a value to keep
-// PrometheusCharts.tsx the canonical source of `PrometheusSeries` typing.
-export type { PrometheusSeries }

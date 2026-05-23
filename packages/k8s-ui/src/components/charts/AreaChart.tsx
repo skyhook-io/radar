@@ -2,20 +2,10 @@ import { useCallback, useMemo, useRef, useState } from 'react'
 import type * as React from 'react'
 import { seriesColor, seriesFill, computeShortLabels } from './colors'
 import { formatMetricValue, formatTimestamp } from './format'
-import type { PrometheusSeries, ReferenceLine } from './types'
+import type { TimeSeries, ReferenceLine } from './types'
 
-/**
- * AreaChart — pure-SVG multi-series time-series chart used across Radar's
- * resource detail pages. Renders with internal hover crosshair + per-pod
- * tooltip; the tooltip filters series to those active at the hovered
- * timestamp (so crashlooping pods don't leave ghost entries).
- *
- * Generic over data source: any caller producing {timestamp, value} samples
- * grouped by labels can feed it. Lives in @skyhook-io/k8s-ui so consumers
- * like Radar Hub can build custom dashboards on the same chart primitive.
- */
 export function AreaChart({ series, color, fillColor, unit, referenceLines }: {
-  series: PrometheusSeries[]
+  series: TimeSeries[]
   color: string
   fillColor: string
   unit: string
@@ -60,14 +50,11 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines }: {
     return { minTs, maxTs, yMax, series }
   }, [series, unit, referenceLines])
 
-  if (!chartData) return null
-
-  const { minTs, maxTs, yMax } = chartData
+  // Layout constants. marginLeft sized for the widest expected Y-tick label
+  // ("422.4 MiB" etc.) — narrow grid panels squeeze the X axis so labels
+  // need extra viewBox-space to survive the down-scale.
   const width = 1000
   const height = 300
-  // marginLeft sized for the widest expected Y-tick label ("422.4 MiB" etc.).
-  // The chart can render in narrow grid panels where the SVG scales down,
-  // so labels need extra viewBox-space to survive the X-direction squeeze.
   const marginLeft = 84
   const marginRight = 40
   const marginTop = 10
@@ -75,26 +62,40 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines }: {
   const plotWidth = width - marginLeft - marginRight
   const plotHeight = height - marginTop - marginBottom
 
-  const toX = (ts: number) => marginLeft + ((ts - minTs) / (maxTs - minTs)) * plotWidth
-  const toY = (val: number) => marginTop + plotHeight - (val / yMax) * plotHeight
+  // Coord transforms. When chartData is null (empty series) these return 0;
+  // the hooks downstream check chartData and bail to empty results so no
+  // bad coords ever reach the DOM.
+  const toX = (ts: number) => {
+    if (!chartData) return marginLeft
+    return marginLeft + ((ts - chartData.minTs) / (chartData.maxTs - chartData.minTs)) * plotWidth
+  }
+  const toY = (val: number) => {
+    if (!chartData) return marginTop + plotHeight
+    return marginTop + plotHeight - (val / chartData.yMax) * plotHeight
+  }
 
   const yTicks = useMemo(() => {
+    if (!chartData) return []
+    const { yMax } = chartData
     const count = 4
     return Array.from({ length: count + 1 }, (_, i) => {
       const val = (yMax / count) * i
       return { val, y: toY(val), label: formatMetricValue(val, unit) }
     })
-  }, [yMax, unit])
+  }, [chartData, unit])
 
   const xTicks = useMemo(() => {
+    if (!chartData) return []
+    const { minTs, maxTs } = chartData
     const count = 6
     return Array.from({ length: count + 1 }, (_, i) => {
       const ts = minTs + ((maxTs - minTs) / count) * i
       return { ts, x: toX(ts), label: formatTimestamp(ts) }
     })
-  }, [minTs, maxTs])
+  }, [chartData])
 
   const paths = useMemo(() => {
+    if (!chartData) return []
     return chartData.series.map((s, seriesIdx) => {
       if (s.dataPoints.length < 2) return null
       const points = s.dataPoints.map(dp => ({ x: toX(dp.timestamp), y: toY(dp.value) }))
@@ -118,7 +119,8 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines }: {
   // the series' actual sample range (with 2× median-step tolerance). Without
   // this filter a series that ended mid-window leaves stale ghost entries.
   const hoverData = useMemo(() => {
-    if (hoverX === null) return null
+    if (!chartData || hoverX === null) return null
+    const { minTs, maxTs } = chartData
     const clampedX = Math.max(marginLeft, Math.min(marginLeft + plotWidth, hoverX))
     const frac = (clampedX - marginLeft) / plotWidth
     const ts = minTs + frac * (maxTs - minTs)
@@ -171,6 +173,10 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines }: {
     if (!ctm) return
     setHoverX((e.clientX - ctm.e) / ctm.a)
   }, [])
+
+  // Hook calls above run unconditionally; bail out of rendering only after
+  // every hook has been invoked (Rules of Hooks).
+  if (!chartData) return null
 
   return (
     <div className="relative">
@@ -250,7 +256,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines }: {
             background pill so it stays legible against the chart fill. */}
         {referenceLines?.map((rl, i) => {
           const y = Math.max(marginTop, Math.min(marginTop + plotHeight, toY(rl.value)))
-          const stroke = rl.tone === 'limit' ? '#f59e0b' : '#94a3b8'
+          const stroke = rl.kind === 'limit' ? '#f59e0b' : '#94a3b8'
           const labelText = rl.label
           // Sized to fit common label widths ("limit 384MiB", "request 100m"
           // ≈ 90px at fontSize 11). Conservative to prevent right-edge overlap.
