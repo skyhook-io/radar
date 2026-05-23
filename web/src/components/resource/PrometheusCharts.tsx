@@ -82,9 +82,12 @@ interface PrometheusChartsProps {
    * native sidecars, multiplied by readyReplicas for replicated workloads).
    */
   resource?: any
+  /** Notifies the parent when the user changes the time range, so sibling
+   * panels (e.g. restart lane) can mirror the selection. */
+  onTimeRangeChange?: (range: PrometheusTimeRange) => void
 }
 
-export function PrometheusCharts({ kind, namespace, name, showEmptyState = false, resource }: PrometheusChartsProps) {
+export function PrometheusCharts({ kind, namespace, name, showEmptyState = false, resource, onTimeRangeChange }: PrometheusChartsProps) {
   const { data: status, isLoading: statusLoading } = usePrometheusStatus()
   const connectMutation = usePrometheusConnect()
 
@@ -183,7 +186,11 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
         {/* Time range selector */}
         <select
           value={timeRange}
-          onChange={e => setTimeRange(e.target.value as PrometheusTimeRange)}
+          onChange={e => {
+            const next = e.target.value as PrometheusTimeRange
+            setTimeRange(next)
+            onTimeRangeChange?.(next)
+          }}
           className="px-2 py-1 text-xs rounded-md bg-theme-elevated border border-theme-border text-theme-text-secondary focus:outline-none focus:ring-1 focus:ring-blue-500/50"
         >
           {TIME_RANGES.map(tr => (

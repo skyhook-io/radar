@@ -677,6 +677,9 @@ function MetricsTabContent({ kind, namespace, name, resource, expanded }: {
 }) {
   const showRightsizing = expanded && ['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)
   const showRestartLane = kind !== 'Node'
+  // Mirror the chart's time range so the restart lane queries the same window.
+  // Default matches PrometheusCharts's internal initial state.
+  const [chartRange, setChartRange] = useState<import('../../api/client').PrometheusTimeRange>('1h')
 
   return (
     <div className="flex flex-col h-full">
@@ -686,11 +689,11 @@ function MetricsTabContent({ kind, namespace, name, resource, expanded }: {
         </div>
       )}
       <div className="flex-1 min-h-0">
-        <PrometheusCharts kind={kind} namespace={namespace} name={name} showEmptyState resource={resource} />
+        <PrometheusCharts kind={kind} namespace={namespace} name={name} showEmptyState resource={resource} onTimeRangeChange={setChartRange} />
       </div>
       {showRestartLane && (
         <div className="px-4 pb-4">
-          <RestartEventLane kind={kind} namespace={namespace} name={name} />
+          <RestartEventLane kind={kind} namespace={namespace} name={name} range={chartRange} />
         </div>
       )}
     </div>

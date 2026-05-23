@@ -1,6 +1,6 @@
 import { useMemo } from 'react'
 import { AlertCircle } from 'lucide-react'
-import { usePrometheusResourceMetrics, usePrometheusStatus, type PrometheusSeries } from '../../api/client'
+import { usePrometheusResourceMetrics, usePrometheusStatus, type PrometheusSeries, type PrometheusTimeRange } from '../../api/client'
 
 /**
  * RestartEventLane — vertical markers at each restart event, on a dedicated
@@ -12,7 +12,7 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
   kind: string
   namespace: string
   name: string
-  range?: '1h' | '6h' | '24h' | '7d'
+  range?: PrometheusTimeRange
 }) {
   const { data: status } = usePrometheusStatus()
   const isConnected = status?.connected === true
@@ -90,11 +90,12 @@ function collectRestartEvents(series: PrometheusSeries[] | undefined): RestartEv
     let prev: number | null = null
     for (const dp of s.dataPoints) {
       if (prev === null) {
-        // First sample. If nonzero, the restart happened just before our
-        // window started but is still recent enough to flag; record one
-        // marker rather than fabricate a count.
+        // First sample. `changes(...[1h])` at this timestamp counts restarts in
+        // the trailing 1h window — honor that count rather than collapsing to
+        // one marker. The exact event timestamps within that pre-window hour
+        // are unknown; we attribute them to the first chart timestamp.
         if (dp.value > 0) {
-          events.push({ timestamp: dp.timestamp, value: 1, label: pod })
+          events.push({ timestamp: dp.timestamp, value: dp.value, label: pod })
         }
       } else {
         const delta = dp.value - prev

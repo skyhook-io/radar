@@ -284,6 +284,11 @@ func computeRightsizingRow(ctx context.Context, client *Client, namespace, workl
 
 	p95, err := queryContainerP95(ctx, client, namespace, workload, c.name, resKind)
 	if err != nil {
+		// Mark the row so the UI can distinguish it from genuinely-healthy rows.
+		// Otherwise a partial failure (some containers query OK, others error) would
+		// render the errored containers as well-sized with no signal of the failure.
+		row.Tone = ToneInfo
+		row.Message = "Prometheus query failed"
 		return row, true
 	}
 	if p95 == nil {
