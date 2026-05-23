@@ -148,8 +148,20 @@ export function ResourceCompareView({
   // "settled" and from then on Monaco re-renders in place even if a side's
   // query data briefly clears during a re-fetch. Without this, the entire
   // diff view flashed back to the loader on every pencil click.
-  const bothSettled = (!!aData || !!aError) && (!!bData || !!bError)
+  //
+  // The settle ref is keyed on the A/B identity so that navigating to a
+  // different pair (e.g. /compare?a=X&b=Y → /compare?a=Z&b=W on the same
+  // route) re-triggers the loader instead of flashing a blank diff while
+  // the new fetches are in flight.
+  const settleKey = `${a.kind}|${a.namespace}|${a.name}|${a.group ?? ''}|${aSubtitle ?? ''}` +
+    `|${b.kind}|${b.namespace}|${b.name}|${b.group ?? ''}|${bSubtitle ?? ''}`
+  const settleKeyRef = useRef(settleKey)
   const hasSettledRef = useRef(false)
+  if (settleKeyRef.current !== settleKey) {
+    settleKeyRef.current = settleKey
+    hasSettledRef.current = false
+  }
+  const bothSettled = (!!aData || !!aError) && (!!bData || !!bError)
   if (bothSettled) hasSettledRef.current = true
   const showInitialLoader = !hasSettledRef.current && !bothSettled
 
