@@ -226,6 +226,28 @@ Manage Helm releases deployed in your cluster.
 - Inspect values, compare revisions, view release history
 - Upgrade, rollback, or uninstall releases directly from the UI
 
+### Compare Resources
+
+Diff any two Kubernetes resources of the same kind side-by-side — like comparing a staging Deployment to its production sibling, or two pods that should be identical but aren't.
+
+<p align="center">
+  <img src="docs/screenshots/compare-view.png" alt="Compare View" width="800">
+  <br><em>Compare View — Side-by-side YAML diff with field-level highlighting</em>
+</p>
+
+- **Two entry points**: a `Compare` button in the resource detail drawer, or compare mode in the resource table (toggle, pick two rows, hit Compare)
+- **Side-by-side or unified** view, with one-click swap of A ↔ B
+- **Diff-only mode** collapses unchanged regions so you only see what differs
+- **Spec-only mode** drops `status` fields to focus on intent rather than observed state
+- Server-assigned noise (`managedFields`, `resourceVersion`, `kubectl.kubernetes.io/last-applied-configuration`) is stripped automatically so the diff stays signal — flip **Raw metadata** on if you actually want to see it
+- Same-namespace candidates are surfaced first in the picker — usually the resource you want to compare against
+- Shareable URLs: `/compare?kind=&apiGroup=&a=ns/name&b=ns/name`
+
+<p align="center">
+  <img src="docs/screenshots/compare-mode-tray.png" alt="Compare Mode Tray" width="800">
+  <br><em>Compare mode in the resource table — pick two rows, hit Compare</em>
+</p>
+
 ### TLS Certificate Management
 
 View TLS certificate details and expiry dates across all namespaces — catch expiring certificates before they cause outages.

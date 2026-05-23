@@ -4,7 +4,9 @@ import (
 	"sync"
 
 	"github.com/skyhook-io/radar/pkg/k8score"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
+	fakeclientset "k8s.io/client-go/kubernetes/fake"
 )
 
 // InitTestResourceCache creates a resource cache from a fake or test client,
@@ -66,6 +68,56 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 	cacheOnce.Do(func() {})
 
 	return nil
+}
+
+// InitTestDynamicResourceCache wires the dynamic resource cache and discovery
+// singletons against test fakes. Pass a dynamic client (typically from
+// dynamicfake.NewSimpleDynamicClientWithCustomListKinds) and the set of
+// APIResources to register in discovery. Each registered resource gets a GVR
+// entry that group-qualified lookups (GetGVRWithGroup) and dynamic informers
+// can resolve.
+//
+// Callers should defer ResetTestDynamicState — without it, the dynamic
+// singletons leak into other tests that share TestMain state.
+//
+// This is intended for integration tests only.
+func InitTestDynamicResourceCache(dynClient dynamic.Interface, resources []APIResource) error {
+	clientMu.Lock()
+	dynamicClient = dynClient
+	clientMu.Unlock()
+
+	// Bootstrap discovery from a fake clientset so NewResourceDiscovery has a
+	// non-nil discovery client; AddAPIResource then registers the test-only
+	// GVRs (e.g. serving.knative.dev/Service) the test depends on.
+	fakeDisc := fakeclientset.NewSimpleClientset().Discovery()
+	core, err := k8score.NewResourceDiscovery(fakeDisc)
+	if err != nil {
+		clientMu.Lock()
+		dynamicClient = nil
+		clientMu.Unlock()
+		return err
+	}
+	for _, r := range resources {
+		core.AddAPIResource(r)
+	}
+
+	discoveryMu.Lock()
+	resourceDiscovery = &ResourceDiscovery{ResourceDiscovery: core}
+	discoveryOnce = new(sync.Once)
+	discoveryOnce.Do(func() {})
+	discoveryMu.Unlock()
+
+	return InitDynamicResourceCache(nil)
+}
+
+// ResetTestDynamicState tears down the dynamic cache + discovery singletons
+// and clears the dynamic client. Pairs with InitTestDynamicResourceCache.
+func ResetTestDynamicState() {
+	ResetDynamicResourceCache()
+	ResetResourceDiscovery()
+	clientMu.Lock()
+	dynamicClient = nil
+	clientMu.Unlock()
 }
 
 // SetTestContextName is a test-only helper that overrides the package-level

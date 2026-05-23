@@ -130,12 +130,16 @@ func (s *Server) handleAuditResource(w http.ResponseWriter, r *http.Request) {
 	results = applyAuditSettings(results, getAuditConfig())
 	index := bp.IndexByResource(results.Findings)
 
-	// Try exact kind first, then map API resource name (e.g. "deployments") to Go kind (e.g. "Deployment")
-	findings := index[bp.ResourceKey(kind, namespace, name)]
+	// Try exact kind first, then map API resource name (e.g. "deployments") to Go kind (e.g. "Deployment").
+	// This handler is the UI's per-resource audit drill-down — group isn't on
+	// the URL today (the UI doesn't list grouped CRDs here yet), so we look
+	// up with group="" which matches the built-ins the audit suite scans.
+	// When CRD audit lands (#35 follow-up), thread group through the URL.
+	findings := index[bp.ResourceKey("", kind, namespace, name)]
 	if findings == nil {
 		goKind := apiResourceToKind(kind)
 		if goKind != kind {
-			findings = index[bp.ResourceKey(goKind, namespace, name)]
+			findings = index[bp.ResourceKey("", goKind, namespace, name)]
 		}
 	}
 	if findings == nil {

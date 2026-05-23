@@ -103,6 +103,7 @@
       }
     },
     "podAnnotations": { "type": "object", "additionalProperties": { "type": "string" } },
+    "podLabels": { "type": "object", "additionalProperties": { "type": "string" } },
     "podSecurityContext": { "type": "object" },
     "securityContext": { "type": "object" },
     "service": {

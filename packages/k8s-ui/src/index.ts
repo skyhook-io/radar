@@ -42,3 +42,6 @@ export * from './components/audit'
 
 // Cluster switcher (shared trigger+dropdown for OSS Radar and Radar Hub)
 export * from './components/cluster-switcher'
+
+// Compare (ResourceCompareView, CompareResourcePicker, normalize utilities)
+export * from './components/compare'

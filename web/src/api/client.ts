@@ -891,7 +891,7 @@ export function useResourceWithRelationships<T>(kind: string, namespace: string,
 }
 
 // List resources - queryKey includes group for cache sharing with ResourcesView
-export function useResources<T>(kind: string, namespace?: string, group?: string) {
+export function useResources<T>(kind: string, namespace?: string, group?: string, options?: { enabled?: boolean }) {
   const params = new URLSearchParams()
   if (namespace) params.set('namespace', namespace)
   if (group) params.set('group', group)
@@ -900,6 +900,7 @@ export function useResources<T>(kind: string, namespace?: string, group?: string
   return useQuery<T[]>({
     queryKey: ['resources', kind, group, namespace],
     queryFn: () => fetchJSON(`/resources/${kind}${queryString ? `?${queryString}` : ''}`),
+    enabled: (options?.enabled ?? true) && Boolean(kind),
     staleTime: 30000, // 30 seconds - matches refetchInterval in ResourcesView
   })
 }

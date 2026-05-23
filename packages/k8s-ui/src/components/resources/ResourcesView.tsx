@@ -22,6 +22,7 @@ import {
   Copy,
   Check,
   Plus,
+  GitCompare,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { ResourceBar } from '../ui/ResourceBar'
@@ -150,6 +151,7 @@ import { AzureManagedControlPlaneCell, AzureManagedMachinePoolCell, AzureMachine
 import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { ResourcesSidebar } from './ResourcesSidebar'
 import type { SelectedKindInfo } from './ResourcesSidebar'
+import { CompareTray, togglePick, pickIndex, refToParam, SIDE_TONES, type CompareTrayPick } from '../compare'
 
 // Pod problem filter options (special multi-select, not a single column value)
 const POD_PROBLEMS = ['CrashLoopBackOff', 'ImagePullBackOff', 'OOMKilled', 'Unschedulable', 'Not Ready', 'High Restarts', 'Init Failed', 'Exit Code Error', 'Failed', 'Other'] as const
@@ -157,7 +159,7 @@ const WORKLOAD_PROBLEMS = ['Unavailable', 'Rollout Stuck', 'Rollout In Progress'
 const WORKLOAD_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets'])
 
 // Columns to skip for auto-detected filters (high cardinality, text-like, or non-filterable)
-const SKIP_FILTER_COLUMNS = new Set([
+export const SKIP_FILTER_COLUMNS = new Set([
   'name', 'age', 'keys', 'size', 'images', 'domains', 'hosts', 'rules',
   'ports', 'message', 'url', 'ref', 'revision', 'path', 'selector', 'ready', 'restarts',
   'completions', 'duration', 'schedule', 'lastRun', 'target', 'replicas', 'metrics',
@@ -165,11 +167,21 @@ const SKIP_FILTER_COLUMNS = new Set([
   'issuer', 'domain', 'presented', 'listeners', 'routes', 'addresses', 'hostnames',
   'parents', 'backends', 'controller', 'description', 'externalIP', 'address',
   'conditions', 'taints', 'desired', 'upToDate', 'available', 'owner',
-  'tls', 'endpoints', 'object', 'count', 'lastSeen', 'reason', 'source', 'inventory',
+  'tls', 'endpoints', 'object', 'count', 'lastSeen', 'source', 'inventory',
   'lastUpdated', 'chart', 'events', 'repo',
   'generators', 'applications', 'destinations', 'sources', 'budget', 'healthy', 'allowed',
   'secrets', 'subjects', 'role', 'entrypoint', 'templates',
 ])
+
+// Namespace/node cardinality scales with cluster size, not kind enum size;
+// node keeps a generous cap as a sanity bound, namespace is uncapped.
+export function isColumnFilterableByDistinctCount(colKey: string, distinctCount: number): boolean {
+  if (SKIP_FILTER_COLUMNS.has(colKey)) return false
+  const maxDistinct = colKey === 'namespace'
+    ? Number.POSITIVE_INFINITY
+    : colKey === 'node' ? 200 : 30
+  return distinctCount >= 2 && distinctCount <= maxDistinct
+}
 
 // Column definitions per resource kind
 interface Column {
@@ -235,11 +247,11 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   pods: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'containers', label: 'Containers', width: 'w-28' },
+    { key: 'containers', label: 'Containers', width: 'w-32' },
     { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'cpu', label: 'CPU', width: 'w-40', tooltip: 'CPU usage / limit (marker = request)' },
     { key: 'memory', label: 'Memory', width: 'w-40', tooltip: 'Memory usage / limit (marker = request)' },
-    { key: 'restarts', label: 'Restarts', width: 'w-24' },
+    { key: 'restarts', label: 'Restarts', width: 'w-28' },
     { key: 'podIP', label: 'Pod IP', width: 'w-32', defaultVisible: false },
     { key: 'node', label: 'Node', width: 'w-44', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -248,8 +260,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
-    { key: 'upToDate', label: 'Up-to-date', width: 'w-24', hideOnMobile: true, tooltip: 'Number of pods running the current pod template' },
-    { key: 'available', label: 'Available', width: 'w-24', hideOnMobile: true, tooltip: 'Number of pods available (ready for minReadySeconds)' },
+    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', hideOnMobile: true, tooltip: 'Number of pods running the current pod template' },
+    { key: 'available', label: 'Available', width: 'w-28', hideOnMobile: true, tooltip: 'Number of pods available (ready for minReadySeconds)' },
     { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -258,8 +270,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'desired', label: 'Desired', width: 'w-20', tooltip: 'Number of nodes that should run the daemon pod (based on node selector)' },
     { key: 'ready', label: 'Ready', width: 'w-20', tooltip: 'Number of pods that are ready (passing readiness probes)' },
-    { key: 'upToDate', label: 'Up-to-date', width: 'w-24', hideOnMobile: true, tooltip: 'Number of pods running the current pod template spec' },
-    { key: 'available', label: 'Available', width: 'w-24', hideOnMobile: true, tooltip: 'Number of pods available (ready for minReadySeconds duration)' },
+    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', hideOnMobile: true, tooltip: 'Number of pods running the current pod template spec' },
+    { key: 'available', label: 'Available', width: 'w-28', hideOnMobile: true, tooltip: 'Number of pods available (ready for minReadySeconds duration)' },
     { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -267,7 +279,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'ready', label: 'Ready', width: 'w-24', tooltip: 'Ready pods / Desired replicas' },
-    { key: 'upToDate', label: 'Up-to-date', width: 'w-24', hideOnMobile: true, tooltip: 'Number of pods running the current pod template' },
+    { key: 'upToDate', label: 'Up-to-date', width: 'w-32', hideOnMobile: true, tooltip: 'Number of pods running the current pod template' },
     { key: 'images', label: 'Images', width: 'w-48', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -330,7 +342,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'completions', label: 'Completions', width: 'w-28' },
+    { key: 'completions', label: 'Completions', width: 'w-32' },
     { key: 'duration', label: 'Duration', width: 'w-24', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -365,7 +377,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'capacity', label: 'Capacity', width: 'w-24' },
-    { key: 'storageClass', label: 'Storage Class', width: 'w-36', hideOnMobile: true },
+    { key: 'storageClass', label: 'Storage Class', width: 'w-40', hideOnMobile: true },
     { key: 'accessModes', label: 'Access', width: 'w-20', tooltip: 'Access modes: RWO=ReadWriteOnce, RWX=ReadWriteMany, ROX=ReadOnlyMany' },
     { key: 'volume', label: 'Volume', width: 'w-48', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -404,7 +416,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'capacity', label: 'Capacity', width: 'w-24' },
     { key: 'accessModes', label: 'Access', width: 'w-20', tooltip: 'RWO=ReadWriteOnce, ROX=ReadOnlyMany, RWX=ReadWriteMany' },
     { key: 'reclaimPolicy', label: 'Reclaim', width: 'w-20' },
-    { key: 'storageClass', label: 'Storage Class', width: 'w-36', hideOnMobile: true },
+    { key: 'storageClass', label: 'Storage Class', width: 'w-40', hideOnMobile: true },
     { key: 'claim', label: 'Claim', width: 'w-48', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
@@ -669,8 +681,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   serviceaccounts: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'automount', label: 'Automount', width: 'w-24', tooltip: 'Whether token is automatically mounted in pods' },
-    { key: 'secrets', label: 'Secrets', width: 'w-20' },
+    { key: 'automount', label: 'Automount', width: 'w-32', tooltip: 'Whether token is automatically mounted in pods' },
+    { key: 'secrets', label: 'Secrets', width: 'w-24' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   roles: [
@@ -707,13 +719,13 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
     { key: 'holder', label: 'Holder', width: 'w-48' },
-    { key: 'renewTime', label: 'Last Renewed', width: 'w-28' },
+    { key: 'renewTime', label: 'Last Renewed', width: 'w-32' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   priorityclasses: [
     { key: 'name', label: 'Name' },
     { key: 'value', label: 'Value', width: 'w-24' },
-    { key: 'globalDefault', label: 'Global Default', width: 'w-28' },
+    { key: 'globalDefault', label: 'Global Default', width: 'w-36' },
     { key: 'preemptionPolicy', label: 'Preemption', width: 'w-32' },
     { key: 'description', label: 'Description', width: 'w-64', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -725,27 +737,27 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ],
   mutatingwebhookconfigurations: [
     { key: 'name', label: 'Name' },
-    { key: 'webhooks', label: 'Webhooks', width: 'w-20' },
-    { key: 'failurePolicy', label: 'Failure Policy', width: 'w-28' },
+    { key: 'webhooks', label: 'Webhooks', width: 'w-28' },
+    { key: 'failurePolicy', label: 'Failure Policy', width: 'w-36' },
     { key: 'target', label: 'Target', width: 'w-48', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   validatingwebhookconfigurations: [
     { key: 'name', label: 'Name' },
-    { key: 'webhooks', label: 'Webhooks', width: 'w-20' },
-    { key: 'failurePolicy', label: 'Failure Policy', width: 'w-28' },
+    { key: 'webhooks', label: 'Webhooks', width: 'w-28' },
+    { key: 'failurePolicy', label: 'Failure Policy', width: 'w-36' },
     { key: 'target', label: 'Target', width: 'w-48', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   events: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
-    { key: 'type', label: 'Type', width: 'w-20' },
-    { key: 'reason', label: 'Reason', width: 'w-28' },
+    { key: 'type', label: 'Type', width: 'w-24' },
+    { key: 'reason', label: 'Reason', width: 'w-32' },
     { key: 'message', label: 'Message', width: 'w-64' },
     { key: 'object', label: 'Object', width: 'w-48', hideOnMobile: true },
-    { key: 'count', label: 'Count', width: 'w-16' },
-    { key: 'lastSeen', label: 'Last Seen', width: 'w-24' },
+    { key: 'count', label: 'Count', width: 'w-20' },
+    { key: 'lastSeen', label: 'Last Seen', width: 'w-28' },
   ],
   // ============================================================================
   // FLUXCD GITOPS RESOURCES
@@ -935,7 +947,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'store', label: 'Store', width: 'w-36' },
     { key: 'provider', label: 'Provider', width: 'w-28' },
     { key: 'refreshInterval', label: 'Refresh', width: 'w-24' },
-    { key: 'lastSync', label: 'Last Sync', width: 'w-24' },
+    { key: 'lastSync', label: 'Last Sync', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   clusterexternalsecrets: [
@@ -969,7 +981,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespaces', label: 'Scope', width: 'w-24', tooltip: 'Included namespaces (* = all)' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
     { key: 'expiry', label: 'Expires', width: 'w-24' },
-    { key: 'errors', label: 'Errors', width: 'w-16' },
+    { key: 'errors', label: 'Errors', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   restores: [
@@ -978,7 +990,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'backupName', label: 'Backup', width: 'w-40' },
     { key: 'duration', label: 'Duration', width: 'w-24' },
-    { key: 'errors', label: 'Errors', width: 'w-16' },
+    { key: 'errors', label: 'Errors', width: 'w-20' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   schedules: [
@@ -1007,10 +1019,10 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-36' },
     { key: 'status', label: 'Status', width: 'w-28' },
-    { key: 'instances', label: 'Instances', width: 'w-24', tooltip: 'Ready/Total' },
+    { key: 'instances', label: 'Instances', width: 'w-28', tooltip: 'Ready/Total' },
     { key: 'primary', label: 'Primary', width: 'w-36' },
     { key: 'image', label: 'Image', width: 'w-28' },
-    { key: 'storage', label: 'Storage', width: 'w-20' },
+    { key: 'storage', label: 'Storage', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   scheduledbackups: [
@@ -1019,8 +1031,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'cluster', label: 'Cluster', width: 'w-36' },
     { key: 'schedule', label: 'Schedule', width: 'w-36' },
-    { key: 'lastSchedule', label: 'Last Run', width: 'w-24' },
-    { key: 'suspended', label: 'Suspended', width: 'w-20' },
+    { key: 'lastSchedule', label: 'Last Run', width: 'w-28' },
+    { key: 'suspended', label: 'Suspended', width: 'w-28' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   poolers: [
@@ -1029,8 +1041,8 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-24' },
     { key: 'cluster', label: 'Cluster', width: 'w-36' },
     { key: 'type', label: 'Type', width: 'w-16' },
-    { key: 'poolMode', label: 'Pool Mode', width: 'w-28' },
-    { key: 'instances', label: 'Instances', width: 'w-24', tooltip: 'Ready/Total' },
+    { key: 'poolMode', label: 'Pool Mode', width: 'w-32' },
+    { key: 'instances', label: 'Instances', width: 'w-28', tooltip: 'Ready/Total' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   // ============================================================================
@@ -1104,7 +1116,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'status', label: 'Status', width: 'w-28' },
     { key: 'routing', label: 'Traffic', width: 'w-20', tooltip: 'Whether this revision is receiving traffic' },
     { key: 'image', label: 'Image', width: 'w-48' },
-    { key: 'concurrency', label: 'Concurrency', width: 'w-24' },
+    { key: 'concurrency', label: 'Concurrency', width: 'w-32' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   knativeroutes: [
@@ -1366,7 +1378,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-36 shrink-0' },
     { key: 'cluster', label: 'Cluster', width: 'w-32 shrink-0' },
     { key: 'ready', label: 'Ready', width: 'w-20 shrink-0' },
-    { key: 'initialized', label: 'Initialized', width: 'w-24 shrink-0' },
+    { key: 'initialized', label: 'Initialized', width: 'w-28 shrink-0' },
     { key: 'version', label: 'Version', width: 'w-24 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
@@ -1523,7 +1535,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'namespace', label: 'Namespace', width: 'w-32 shrink-0' },
     { key: 'kind', label: 'Kind', width: 'w-32 shrink-0' },
     { key: 'external', label: 'External Name', width: 'min-w-48', hideOnMobile: true },
-    { key: 'provider', label: 'Provider Config', width: 'w-36 shrink-0', hideOnMobile: true },
+    { key: 'provider', label: 'Provider Config', width: 'w-40 shrink-0', hideOnMobile: true },
     { key: 'status', label: 'Status', width: 'w-32 shrink-0' },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
@@ -1542,9 +1554,9 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   ],
   compositions: [
     { key: 'name', label: 'Name', width: 'min-w-40' },
-    { key: 'composite', label: 'Composite Kind', width: 'w-40 shrink-0' },
+    { key: 'composite', label: 'Composite Kind', width: 'w-44 shrink-0' },
     { key: 'mode', label: 'Mode', width: 'w-24 shrink-0' },
-    { key: 'functions', label: 'Functions', width: 'w-24 shrink-0', hideOnMobile: true },
+    { key: 'functions', label: 'Functions', width: 'w-28 shrink-0', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24 shrink-0' },
   ],
   compositeresourcedefinitions: [
@@ -2185,6 +2197,40 @@ export function ResourcesView({
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
   const virtuosoRef = useRef<TableVirtuosoHandle>(null)
 
+  // Compare mode is only meaningful when the host wired onNavigate — without it the Compare
+  // CTA in the tray would silently no-op. Gate everything below on this capability.
+  const compareEnabled = !!onNavigate
+  const [compareMode, setCompareMode] = useState(false)
+  const [comparePicks, setComparePicks] = useState<CompareTrayPick[]>([])
+
+  // Kind change invalidates picks AND mode — leaving the tray on with empty
+  // pills after the user moves to a different kind is more confusing than helpful.
+  useEffect(() => {
+    setComparePicks([])
+    setCompareMode(false)
+  }, [selectedKind.name, selectedKind.group])
+
+  const exitCompareMode = useCallback(() => {
+    setCompareMode(false)
+    setComparePicks([])
+  }, [])
+
+  const toggleComparePick = useCallback((resource: any) => {
+    if (!resource?.metadata?.name) return
+    const ns = resource.metadata.namespace || ''
+    setComparePicks(prev => togglePick(prev, { namespace: ns, name: resource.metadata.name }))
+  }, [])
+
+  const handleCompareNavigate = useCallback(() => {
+    if (comparePicks.length !== 2 || !onNavigate) return
+    const params = new URLSearchParams()
+    params.set('kind', selectedKind.name)
+    if (selectedKind.group) params.set('apiGroup', selectedKind.group)
+    params.set('a', refToParam(comparePicks[0]))
+    params.set('b', refToParam(comparePicks[1]))
+    onNavigate(`/compare?${params.toString()}`)
+  }, [comparePicks, selectedKind.name, selectedKind.group, onNavigate])
+
   // Reset highlight when kind, search, sort, or namespace changes
   const namespacesKey = namespaces.join(',')
   useEffect(() => { setHighlightedIndex(-1) }, [selectedKind.name, searchTerm, sortColumn, sortDirection, namespacesKey])
@@ -2290,7 +2336,11 @@ export function ResourcesView({
       description: 'Open resource detail',
       category: 'Resource Actions',
       scope: 'resources',
-      handler: () => selectResource(getHighlightedResource()),
+      handler: () => {
+        const res = getHighlightedResource()
+        if (compareMode) toggleComparePick(res)
+        else selectResource(res)
+      },
       enabled: highlightedIndex >= 0,
     },
     {
@@ -2299,7 +2349,11 @@ export function ResourcesView({
       description: 'Open resource detail',
       category: 'Resource Actions',
       scope: 'resources',
-      handler: () => selectResource(getHighlightedResource()),
+      handler: () => {
+        const res = getHighlightedResource()
+        if (compareMode) toggleComparePick(res)
+        else selectResource(res)
+      },
       enabled: highlightedIndex >= 0,
     },
     {
@@ -2314,7 +2368,7 @@ export function ResourcesView({
         const cb = onResourceClickYaml || onResourceClick
         cb?.({ kind: selectedKind.name, namespace: res.metadata.namespace || '', name: res.metadata.name, group: selectedKind.group })
       },
-      enabled: highlightedIndex >= 0,
+      enabled: highlightedIndex >= 0 && !compareMode,
     },
     {
       id: 'resources-logs',
@@ -2338,7 +2392,7 @@ export function ResourcesView({
           openWorkloadLogs?.({ namespace: ns, workloadKind: selectedKind.kind, workloadName: name })
         }
       },
-      enabled: highlightedIndex >= 0 && ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs'].includes(selectedKind.name.toLowerCase()),
+      enabled: highlightedIndex >= 0 && !compareMode && ['pods', 'deployments', 'statefulsets', 'daemonsets', 'replicasets', 'jobs'].includes(selectedKind.name.toLowerCase()),
     },
     {
       id: 'resources-sort-name',
@@ -2371,11 +2425,11 @@ export function ResourcesView({
       category: 'Table',
       scope: 'resources',
       handler: () => {
-        // Close dropdowns first, then clear highlight, then blur search
         if (showColumnPicker) { setShowColumnPicker(false); return }
         if (openColumnFilter) { setOpenColumnFilter(null); return }
         if (showProblemsDropdown) { setShowProblemsDropdown(false); return }
         if (showLabelsDropdown) { setShowLabelsDropdown(false); return }
+        if (compareMode) { exitCompareMode(); return }
         if (highlightedIndex >= 0) setHighlightedIndex(-1)
         else searchInputRef.current?.blur()
       },
@@ -3277,10 +3331,7 @@ export function ResourcesView({
       }
 
       const distinctCount = Object.keys(valueCounts).length
-      // Only include if 2-20 distinct values (too few = useless, too many = not a filter)
-      // Node column gets a higher cap (50) since clusters commonly have 20-50 nodes
-      const maxDistinct = col.key === 'node' ? 50 : 20
-      if (distinctCount >= 2 && distinctCount <= maxDistinct) {
+      if (isColumnFilterableByDistinctCount(col.key, distinctCount)) {
         filterableColumns.push({
           key: col.key,
           label: col.label,
@@ -3712,6 +3763,22 @@ export function ResourcesView({
               </button>
             </Tooltip>
           )}
+          {compareEnabled && (
+            <Tooltip content={compareMode ? 'Exit compare mode' : 'Compare two resources side-by-side'}>
+              <button
+                onClick={() => (compareMode ? exitCompareMode() : setCompareMode(true))}
+                aria-pressed={compareMode}
+                className={clsx(
+                  'p-2 rounded-lg transition-colors',
+                  compareMode
+                    ? 'bg-skyhook-500/15 text-skyhook-300 border border-skyhook-400/50'
+                    : 'text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated',
+                )}
+              >
+                <GitCompare className="w-4 h-4" />
+              </button>
+            </Tooltip>
+          )}
         </div>
 
         {/* Table */}
@@ -3814,8 +3881,16 @@ export function ResourcesView({
               components={virtuosoComponents}
               fixedHeaderContent={() => (
                 <tr>
+                  {compareMode && (
+                    <th
+                      className="w-9 px-2 py-3 text-xs font-medium uppercase tracking-wide bg-theme-base border-b border-r-subtle border-theme-border text-center text-skyhook-400"
+                      title="Compare mode"
+                    >
+                      <GitCompare className="w-3.5 h-3.5 inline-block opacity-70" />
+                    </th>
+                  )}
                   {columns.map((col, colIdx) => {
-                    const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object', 'cpu', 'memory'].includes(col.key)
+                    const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object', 'cpu', 'memory', 'containers'].includes(col.key)
                     const isSorted = sortColumn === col.key
                     const isLastCol = colIdx === columns.length - 1
                     const filterCol = filterableColumnMap.get(col.key)
@@ -3873,7 +3948,7 @@ export function ResourcesView({
                                     ? 'px-1.5 py-0.5 -my-0.5 selection-strong selection-text hover:bg-skyhook-500/30'
                                     : isFilterOpen
                                       ? 'p-0.5 text-theme-text-primary'
-                                      : 'p-0.5 text-theme-text-disabled opacity-0 group-hover/th:opacity-100 hover:text-theme-text-primary'
+                                      : 'p-0.5 text-theme-text-disabled opacity-40 group-hover/th:opacity-100 hover:text-theme-text-primary'
                                 )}
                               >
                                 <ListFilter className="w-3 h-3" />
@@ -3985,6 +4060,9 @@ export function ResourcesView({
                   selectedResource?.namespace === resource.metadata?.namespace &&
                   selectedResource?.name === resource.metadata?.name
                 const isHighlighted = index === highlightedIndex
+                const pickIdx = compareMode
+                  ? pickIndex(comparePicks, { namespace: resource.metadata?.namespace || '', name: resource.metadata?.name || '' })
+                  : -1
                 return (
                   <ResourceRowCells
                     resource={resource}
@@ -3996,8 +4074,10 @@ export function ResourcesView({
                     isSelected={isSelected}
                     isHighlighted={isHighlighted}
                     majorityNodeMinorVersion={majorityNodeMinorVersion}
-                    onClick={() => selectResource(resource, isSelected)}
+                    onClick={() => compareMode ? toggleComparePick(resource) : selectResource(resource, isSelected)}
                     onMouseEnter={() => setHighlightedIndex(-1)}
+                    compareMode={compareMode}
+                    comparePickIndex={pickIdx}
                   />
                 )
               }}
@@ -4013,6 +4093,15 @@ export function ResourcesView({
             </MetricsContext.Provider>
           )}
         </div>
+        {compareMode && compareEnabled && (
+          <CompareTray
+            kind={selectedKind.name}
+            picks={comparePicks}
+            onRemove={(idx) => setComparePicks(prev => prev.filter((_, i) => i !== idx))}
+            onCompare={handleCompareNavigate}
+            onExit={exitCompareMode}
+          />
+        )}
       </div>
     </div>
     </ResourcesViewDataContext.Provider>
@@ -4031,11 +4120,57 @@ interface ResourceRowCellsProps {
   majorityNodeMinorVersion?: string
   onClick?: () => void
   onMouseEnter?: () => void
+  compareMode?: boolean
+  /** -1 when not picked; 0 = pick A; 1 = pick B. */
+  comparePickIndex?: number
 }
 
-function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter }: ResourceRowCellsProps) {
+function rowHighlightClass(
+  compareMode: boolean | undefined,
+  comparePickIndex: number,
+  isSelected: boolean | undefined,
+  isHighlighted: boolean | undefined,
+): string {
+  if (compareMode) {
+    if (comparePickIndex === 0) return `${SIDE_TONES.a.rowBg} ${SIDE_TONES.a.rowBgHover}`
+    if (comparePickIndex === 1) return `${SIDE_TONES.b.rowBg} ${SIDE_TONES.b.rowBgHover}`
+    if (isHighlighted) return 'selection selection-ring'
+    return 'group-hover/row:bg-theme-surface/50'
+  }
+  if (isSelected) return 'selection-strong group-hover/row:bg-skyhook-500/30'
+  if (isHighlighted) return 'selection selection-ring'
+  return 'group-hover/row:bg-theme-surface/50'
+}
+
+function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter, compareMode, comparePickIndex = -1 }: ResourceRowCellsProps) {
+  const rowHighlight = rowHighlightClass(compareMode, comparePickIndex, isSelected, isHighlighted)
+  const pickedSide = comparePickIndex === 0 ? 'a' : comparePickIndex === 1 ? 'b' : null
   return (
     <>
+      {compareMode && (
+        <td
+          onClick={onClick}
+          onMouseEnter={onMouseEnter}
+          className={clsx('w-9 px-2 py-3 border-b-subtle cursor-pointer text-center align-middle transition-colors', rowHighlight)}
+        >
+          {pickedSide ? (
+            <span
+              className={clsx(
+                'inline-flex items-center justify-center w-5 h-5 rounded text-[10px] font-bold leading-none',
+                SIDE_TONES[pickedSide].chipBg,
+              )}
+              aria-label={pickedSide === 'a' ? 'Pick A' : 'Pick B'}
+            >
+              {pickedSide === 'a' ? 'A' : 'B'}
+            </span>
+          ) : (
+            <span
+              className="inline-block w-4 h-4 rounded border border-theme-border-light group-hover/row:border-skyhook-400/60 transition-colors"
+              aria-hidden
+            />
+          )}
+        </td>
+      )}
       {columns.map((col) => (
         <td
           key={col.key}
@@ -4044,11 +4179,7 @@ function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, h
           className={clsx(
             'px-4 py-3 border-b-subtle cursor-pointer transition-colors',
             col.key !== 'status' && 'overflow-hidden truncate',
-            isSelected
-              ? 'selection-strong group-hover/row:bg-skyhook-500/30'
-              : isHighlighted
-                ? 'selection selection-ring'
-                : 'group-hover/row:bg-theme-surface/50'
+            rowHighlight,
           )}
         >
           <CellContent resource={resource} kind={kind} group={group} column={col.key} majorityNodeMinorVersion={majorityNodeMinorVersion} extraColumn={extraColumnsByKey?.get(col.key)} />

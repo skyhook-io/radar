@@ -37,7 +37,7 @@ interface ResourceDetailDrawerProps {
   }) => ReactNode
 }
 
-const MIN_WIDTH = 400
+const MIN_WIDTH = 520
 const MAX_WIDTH_PERCENT = 0.7
 const DEFAULT_WIDTH = 550
 const WIDE_WIDTH = 750

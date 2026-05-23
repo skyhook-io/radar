@@ -11,6 +11,7 @@ import (
 
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -28,6 +29,7 @@ var (
 
 func TestMain(m *testing.M) {
 	replicas := int32(1)
+	brokenReplicas := int32(3)
 
 	deployUID := "deploy-uid-1234"
 	rsUID := "rs-uid-5678"
@@ -36,6 +38,37 @@ func TestMain(m *testing.M) {
 		&corev1.Namespace{
 			ObjectMeta: metav1.ObjectMeta{Name: "default"},
 			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+		},
+		&corev1.Namespace{
+			ObjectMeta: metav1.ObjectMeta{Name: "broken"},
+			Status:     corev1.NamespaceStatus{Phase: corev1.NamespaceActive},
+		},
+		// Broken Deployment in its own namespace so it doesn't perturb the
+		// "default" fixture used by every other smoke test. Used by
+		// TestAIGetResource_IssueSummaryCountsURLPluralKind to assert the
+		// composer's URL-plural-kind filter actually matches the canonical
+		// Pascal-singular Issue.Kind values — pre-fix, count was 0.
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "stuck-app",
+				Namespace: "broken",
+				Labels:    map[string]string{"app": "stuck"},
+			},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &brokenReplicas,
+				Selector: &metav1.LabelSelector{
+					MatchLabels: map[string]string{"app": "stuck"},
+				},
+				Template: corev1.PodTemplateSpec{
+					ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{"app": "stuck"}},
+					Spec:       corev1.PodSpec{Containers: []corev1.Container{{Name: "stuck", Image: "registry.example/stuck:1"}}},
+				},
+			},
+			Status: appsv1.DeploymentStatus{
+				Replicas:            3,
+				AvailableReplicas:   0,
+				UnavailableReplicas: 3,
+			},
 		},
 		&appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{
@@ -135,6 +168,37 @@ func TestMain(m *testing.M) {
 			Spec: corev1.ServiceSpec{
 				Selector: map[string]string{"app": "nginx"},
 				Ports:    []corev1.ServicePort{{Port: 80, TargetPort: intstr.FromInt(80)}},
+			},
+		},
+		// Ingress routing to the core Service "nginx". Used by
+		// TestAIGetResource_GroupRoutesRelationshipsToKnative to give the
+		// core Service a distinct incoming edge (EdgeRoutesTo) that the
+		// Knative Service node does NOT inherit — the test compares whether
+		// the AI GET handler picks up that edge under ?group=serving.knative.dev
+		// (regression for the kind-passed-to-relationship-lookup bug).
+		&networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      "nginx-ingress",
+				Namespace: "default",
+			},
+			Spec: networkingv1.IngressSpec{
+				Rules: []networkingv1.IngressRule{{
+					Host: "nginx.example.com",
+					IngressRuleValue: networkingv1.IngressRuleValue{
+						HTTP: &networkingv1.HTTPIngressRuleValue{
+							Paths: []networkingv1.HTTPIngressPath{{
+								Path:     "/",
+								PathType: func() *networkingv1.PathType { p := networkingv1.PathTypePrefix; return &p }(),
+								Backend: networkingv1.IngressBackend{
+									Service: &networkingv1.IngressServiceBackend{
+										Name: "nginx",
+										Port: networkingv1.ServiceBackendPort{Number: 80},
+									},
+								},
+							}},
+						},
+					},
+				}},
 			},
 		},
 		// Seed Secrets in two namespaces so per-user RBAC tests can
