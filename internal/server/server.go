@@ -377,8 +377,23 @@ func (s *Server) setupRoutes() {
 			// that read K8s spec data via the shared informer cache (rightsizing,
 			// PVC usage) — the cache is populated under Radar's SA, so without
 			// it any authenticated user could fetch any namespace's spec.
+			//
+			// Two checks here, both load-bearing:
+			//   1. canRead (SAR) — does the user have RBAC for this verb on this
+			//      resource? Catches missing-RBAC.
+			//   2. getUserNamespaces — is the namespace in the user's discovered
+			//      allow-list? Matches handleGetResource semantics on the main
+			//      resource API. Without this, a user with cluster-wide SAR for
+			//      "get" could read derived data via these endpoints in namespaces
+			//      they're otherwise filtered out of (multi-tenant separation).
 			prometheuspkg.SetAuthGate(func(req *http.Request, group, resource, namespace, verb string) bool {
-				return s.canRead(req, group, resource, namespace, verb)
+				if !s.canRead(req, group, resource, namespace, verb) {
+					return false
+				}
+				if namespace != "" && noNamespaceAccess(s.getUserNamespaces(req, []string{namespace})) {
+					return false
+				}
+				return true
 			})
 			prometheuspkg.RegisterRoutes(r)
 
