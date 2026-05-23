@@ -352,13 +352,15 @@ const MEMORY_SUFFIXES: Record<string, number> = {
   K: 1e3, M: 1e6, G: 1e9, T: 1e12, P: 1e15, E: 1e18,
 }
 
+// NOT a duplicate of @skyhook-io/k8s-ui/utils/format's parseCPUToNanocores /
+// parseMemoryToBytes — those return 0 on invalid input. We need null so that
+// "abcMi" doesn't silently poison the caller's running sum and produce a
+// missing/zeroed reference line on the chart (real garbage data must be
+// distinguishable from a legit 0).
 function readQuantity(raw: unknown, category: 'cpu' | 'memory'): number | null {
   if (raw == null) return null
   const s = String(raw).trim()
   if (s === '') return null
-  // Strip suffix and parse. Each branch must guard against NaN — otherwise
-  // garbage like "abcMi" returns NaN and poisons the caller's running sum,
-  // which silently produces a missing/zeroed reference line on the chart.
   if (category === 'cpu') {
     if (s.endsWith('m')) return scaleOrNull(s, CPU_SUFFIXES.m)
     if (s.endsWith('n')) return scaleOrNull(s, CPU_SUFFIXES.n)

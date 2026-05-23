@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { LineChart } from 'lucide-react'
 import { usePromQLRange, usePrometheusStatus, type PrometheusSeries } from '../../api/client'
 
@@ -42,10 +42,13 @@ export function HPACharts({ data }: { data: any }) {
 
   // Surface Prom-side failures in the console so an operator debugging a
   // missing HPA chart has a breadcrumb; the chart still hides silently when
-  // KSM isn't reporting (the common no-data case).
-  if (currentErr || desiredErr) {
-    console.warn('[HPACharts] PromQL query failed', { currentErr, desiredErr })
-  }
+  // KSM isn't reporting (the common no-data case). Effect-gated so we log
+  // once per error change, not on every re-render.
+  useEffect(() => {
+    if (currentErr || desiredErr) {
+      console.warn('[HPACharts] PromQL query failed', { currentErr, desiredErr })
+    }
+  }, [currentErr, desiredErr])
 
   if (!isConnected) return null
   if (!replicasPoints) return null

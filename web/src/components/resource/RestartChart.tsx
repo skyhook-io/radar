@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useEffect, useMemo } from 'react'
 import { AlertCircle } from 'lucide-react'
 import { usePrometheusResourceMetrics, usePrometheusStatus, type PrometheusSeries, type PrometheusTimeRange } from '../../api/client'
 
@@ -23,9 +23,12 @@ export function RestartEventLane({ kind, namespace, name, range = '1h' }: {
   // A real Prom-side failure shouldn't look identical to "no restarts" — log
   // it so an operator investigating a missing lane has a breadcrumb. The lane
   // still hides because we don't want a permanent red banner on every pod.
-  if (error) {
-    console.warn('[RestartEventLane] restart query failed', error)
-  }
+  // Effect-gated so we log once per error change, not on every re-render.
+  useEffect(() => {
+    if (error) {
+      console.warn('[RestartEventLane] restart query failed', error)
+    }
+  }, [error])
 
   if (!isConnected || isLoading) return null
   if (restarts.length === 0) return null

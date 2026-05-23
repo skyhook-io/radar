@@ -1,3 +1,4 @@
+import { formatMemoryBytes } from '@skyhook-io/k8s-ui/utils/format'
 import { usePrometheusPVCUsage, usePrometheusStatus } from '../../api/client'
 
 /**
@@ -19,8 +20,8 @@ export function PVCUsageBar({ namespace, name }: { namespace: string; name: stri
   if (!usage || !usage.hasData) return null
 
   const pct = Math.max(0, Math.min(1, usage.ratio))
-  const usedLabel = formatBytes(usage.used)
-  const capLabel = formatBytes(usage.capacity)
+  const usedLabel = formatMemoryBytes(usage.used)
+  const capLabel = formatMemoryBytes(usage.capacity)
   const pctLabel = `${(pct * 100).toFixed(0)}%`
 
   // Tone: green well under, amber > 75%, red > 90%. PVCs fill silently — the
@@ -53,10 +54,3 @@ export function PVCUsageBar({ namespace, name }: { namespace: string; name: stri
   )
 }
 
-function formatBytes(b: number): string {
-  if (b < 1024) return `${b} B`
-  if (b < 1024 ** 2) return `${(b / 1024).toFixed(1)} KiB`
-  if (b < 1024 ** 3) return `${(b / 1024 ** 2).toFixed(1)} MiB`
-  if (b < 1024 ** 4) return `${(b / 1024 ** 3).toFixed(2)} GiB`
-  return `${(b / 1024 ** 4).toFixed(2)} TiB`
-}

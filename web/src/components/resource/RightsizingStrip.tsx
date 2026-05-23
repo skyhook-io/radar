@@ -25,9 +25,23 @@ export function RightsizingStrip({ kind, namespace, name }: {
   const { data: status } = usePrometheusStatus()
   const isConnected = status?.connected === true
   const supported = RIGHTSIZING_KINDS.has(kind)
-  const { data, isLoading } = usePrometheusRightsizing(kind, namespace, name, isConnected && supported)
+  const { data, error, isLoading } = usePrometheusRightsizing(kind, namespace, name, isConnected && supported)
 
   if (!supported || !isConnected || isLoading) return null
+  // Stay consistent with WorkloadHealthBadge — when the rightsizing query
+  // fails, surface a small inline note so the absence of recommendations
+  // doesn't read as "everything is fine."
+  if (error && !data) {
+    const msg = error instanceof Error ? error.message : String(error)
+    return (
+      <section className="rounded-lg border border-theme-border bg-theme-surface/40 p-3 mb-3">
+        <header className="flex items-center justify-between mb-1">
+          <h3 className="text-sm font-medium text-theme-text-primary">Right-sizing</h3>
+        </header>
+        <p className="text-xs text-theme-text-tertiary" title={msg}>Right-sizing unavailable — Prometheus query failed.</p>
+      </section>
+    )
+  }
   if (!data) return null
   if (!data.sampleAvailable || data.rows.length === 0) {
     // Backend distinguishes "workload too new / retention short" from "Prometheus
