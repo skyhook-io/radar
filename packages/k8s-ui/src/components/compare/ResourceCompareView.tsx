@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { clsx } from 'clsx'
 import { ArrowLeftRight, GitCompare, Rows, FileText, FileCode2, X, Pencil, AlertTriangle, Sparkles } from 'lucide-react'
 import { YamlDiffEditor } from '../ui/YamlEditor'
@@ -142,6 +142,17 @@ export function ResourceCompareView({
   const bError = errors?.find(e => e.side === 'b')?.message
   const anyError = !!(aError || bError)
 
+  // First-settle gate. The cold-start splash should NOT reappear when the
+  // user re-picks one side after the editor has mounted — once both sides
+  // have produced data or an error at least once, we mark the editor as
+  // "settled" and from then on Monaco re-renders in place even if a side's
+  // query data briefly clears during a re-fetch. Without this, the entire
+  // diff view flashed back to the loader on every pencil click.
+  const bothSettled = (!!aData || !!aError) && (!!bData || !!bError)
+  const hasSettledRef = useRef(false)
+  if (bothSettled) hasSettledRef.current = true
+  const showInitialLoader = !hasSettledRef.current && !bothSettled
+
   return (
     <div className="flex-1 min-w-0 flex flex-col h-full bg-theme-base">
       <div className="h-0.5 w-full bg-gradient-to-r from-blue-400/70 via-skyhook-400/40 to-emerald-400/70" />
@@ -213,17 +224,15 @@ export function ResourceCompareView({
       <div className={clsx('flex-1 min-h-0', bleed ? '' : 'p-3')}>
         {/*
           Defer mounting the diff editor until BOTH sides have settled
-          (data or per-side error). Mounting Monaco when only one side
-          has data flashes a second loading state — its own internal
-          "Loading…" placeholder — before re-rendering with the full
-          diff, producing the double-flash on cold start. With this
-          gate the user sees one consistent splash, then the full diff
-          appears in a single transition. After the initial settle,
-          re-picking one side stays per-side (the existing aLoading /
-          bLoading props flow into Monaco's input — Monaco itself just
-          re-renders without re-initializing).
+          (data or per-side error) on FIRST load. Mounting Monaco when
+          only one side has data flashes a second loading state — its own
+          internal "Loading…" placeholder — before re-rendering with the
+          full diff. After the initial settle (tracked via hasSettledRef
+          above), Monaco stays mounted even when a side's query data
+          briefly clears during a pencil re-pick — re-rendering in place
+          rather than blanking the whole diff.
         */}
-        {(!aData && !aError) || (!bData && !bError) ? (
+        {showInitialLoader ? (
           <PaneLoader label="Loading resources…" className="h-full" />
         ) : (
           <YamlDiffEditor
