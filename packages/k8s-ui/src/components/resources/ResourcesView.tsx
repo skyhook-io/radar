@@ -2215,7 +2215,7 @@ export function ResourcesView({
     if (comparePicks.length !== 2 || !onNavigate) return
     const params = new URLSearchParams()
     params.set('kind', selectedKind.name)
-    if (selectedKind.group) params.set('group', selectedKind.group)
+    if (selectedKind.group) params.set('apiGroup', selectedKind.group)
     params.set('a', refToParam(comparePicks[0]))
     params.set('b', refToParam(comparePicks[1]))
     onNavigate(`/compare?${params.toString()}`)

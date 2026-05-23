@@ -19,7 +19,10 @@ export function CompareViewRoute() {
   const { theme } = useTheme()
 
   const kind = (searchParams.get('kind') ?? '').toLowerCase()
-  const group = searchParams.get('group') ?? undefined
+  // Matches Radar's repo-wide URL convention. The bare `group` param is
+  // reserved for topology grouping mode and gets stripped by App.tsx's URL
+  // sync on every non-topology view.
+  const group = searchParams.get('apiGroup') ?? undefined
   const aParsed = parseRef(searchParams.get('a'))
   const bParsed = parseRef(searchParams.get('b'))
 
@@ -74,8 +77,6 @@ export function CompareViewRoute() {
     )
   }
 
-  const loading = aQuery.isPending || bQuery.isPending
-
   // A refetch failure with cached data is not worth shouting about — show the
   // stale data instead of blanking the side with a misleading "failed" banner.
   const errors: CompareSideError[] = []
@@ -91,7 +92,8 @@ export function CompareViewRoute() {
         b={b}
         aData={aQuery.data}
         bData={bQuery.data}
-        loading={loading}
+        aLoading={aQuery.isPending}
+        bLoading={bQuery.isPending}
         errors={errors}
         editorTheme={theme === 'dark' ? 'vs-dark' : 'vs'}
         onSwap={handleSwap}

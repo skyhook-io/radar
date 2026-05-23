@@ -26,7 +26,9 @@ export interface ResourceCompareViewProps {
   b: CompareResourceRef
   aData: unknown
   bData: unknown
-  loading?: boolean
+  /** Per-side loading — a ready side renders while the slow side spins. */
+  aLoading?: boolean
+  bLoading?: boolean
   /** Per-side fetch errors. Each side renders independently — a working side stays useful. */
   errors?: CompareSideError[]
   /** Caller-supplied theme passthrough for the Monaco editor. */
@@ -88,7 +90,8 @@ export function ResourceCompareView({
   b,
   aData,
   bData,
-  loading,
+  aLoading,
+  bLoading,
   errors,
   editorTheme = 'vs-dark',
   onSwap,
@@ -153,19 +156,25 @@ export function ResourceCompareView({
         </Tooltip>
       </div>
 
-      {anyError && !loading && (
+      {anyError && (
         <div className="px-4 py-2 text-xs text-red-400 bg-red-500/10 border-b border-red-500/20 flex items-center gap-2">
           <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
           <span className="min-w-0">
-            Failed to load {aError && bError ? 'both sides' : aError ? 'side A' : 'side B'}
-            {': '}
-            <span className="font-mono">{aError || bError}</span>
+            {aError && bError ? (
+              <>
+                Failed to load both sides — <span className="font-mono">A: {aError}</span>{' · '}<span className="font-mono">B: {bError}</span>
+              </>
+            ) : (
+              <>
+                Failed to load side {aError ? 'A' : 'B'}: <span className="font-mono">{aError || bError}</span>
+              </>
+            )}
             {(onChangeA || onChangeB) && ' — use the pencil icon on the affected pill to pick a different resource.'}
           </span>
         </div>
       )}
 
-      {identical && !anyError && !loading && (
+      {identical && !anyError && (
         <div className="px-4 py-2 text-xs text-emerald-400 bg-emerald-500/10 border-b border-emerald-500/20 flex items-center gap-2">
           <GitCompare className="w-3.5 h-3.5" />
           These resources are identical{specOnly ? ' (spec only)' : ''}.
@@ -173,7 +182,7 @@ export function ResourceCompareView({
       )}
 
       <div className="flex-1 min-h-0 p-3">
-        {loading ? (
+        {aLoading && bLoading ? (
           <div className="flex items-center justify-center h-full text-theme-text-secondary text-sm">
             Loading resources…
           </div>

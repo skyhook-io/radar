@@ -32,7 +32,7 @@ export function useCompareLauncher({ kind, namespace, name, group }: UseCompareL
       setOpen(false)
       const params = new URLSearchParams()
       params.set('kind', kindLower)
-      if (group) params.set('group', group)
+      if (group) params.set('apiGroup', group)
       params.set('a', refToParam({ namespace, name }))
       params.set('b', refToParam({ namespace: picked.namespace, name: picked.name }))
       navigate({ pathname: '/compare', search: params.toString() })

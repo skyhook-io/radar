@@ -241,7 +241,7 @@ Diff any two Kubernetes resources of the same kind side-by-side — like compari
 - **Spec-only mode** drops `status` fields to focus on intent rather than observed state
 - Server-assigned noise (`managedFields`, `resourceVersion`, `kubectl.kubernetes.io/last-applied-configuration`) is stripped automatically so the diff stays signal — flip **Raw metadata** on if you actually want to see it
 - Same-namespace candidates are surfaced first in the picker — usually the resource you want to compare against
-- Shareable URLs: `/compare?kind=&a=ns/name&b=ns/name`
+- Shareable URLs: `/compare?kind=&apiGroup=&a=ns/name&b=ns/name`
 
 <p align="center">
   <img src="docs/screenshots/compare-mode-tray.png" alt="Compare Mode Tray" width="800">
