@@ -491,10 +491,10 @@ export function ResourceActionsBar({
         <Tooltip content={`Compare to another ${formatKindName(resource.kind).toLowerCase()}`}>
           <button
             onClick={onCompareTo}
-            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary border border-theme-border-light hover:bg-theme-elevated rounded-lg transition-colors"
+            aria-label={`Compare to another ${formatKindName(resource.kind).toLowerCase()}`}
+            className="p-1.5 text-theme-text-secondary border border-theme-border-light rounded-lg hover:text-theme-text-primary hover:bg-theme-elevated transition-colors"
           >
             <GitCompare className="w-3.5 h-3.5" />
-            Compare
           </button>
         </Tooltip>
       )}
