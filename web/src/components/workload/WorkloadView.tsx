@@ -23,6 +23,7 @@ import {
   fetchJSON,
 } from '../../api/client'
 import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
+import { PrometheusChartsGrid } from '../resource/PrometheusChartsGrid'
 import { RestartEventLane } from '../resource/RestartChart'
 import { RightsizingStrip } from '../resource/RightsizingStrip'
 import { useResourceAudit, useResources } from '../../api/client'
@@ -666,8 +667,9 @@ function FluxSourceConsumersInner({ sourceKind, namespace, name }: { sourceKind:
   )
 }
 
-// Rightsizing only fits the full-screen layout — drawer mode would cramp the
-// chart underneath it. The other two children gate themselves on data.
+// Drawer mode: single chart + category tabs (compact for ~500px width).
+// Full-screen mode: multi-chart grid so CPU + Memory + Network can be
+// compared side-by-side without tab switching.
 function MetricsTabContent({ kind, namespace, name, resource, expanded }: {
   kind: string
   namespace: string
@@ -677,17 +679,52 @@ function MetricsTabContent({ kind, namespace, name, resource, expanded }: {
 }) {
   const showRightsizing = expanded && ['Deployment', 'StatefulSet', 'DaemonSet'].includes(kind)
   const showRestartLane = kind !== 'Node'
-  // Mirror the chart's time range so the restart lane queries the same window.
-  // Default matches PrometheusCharts's internal initial state.
+
+  if (expanded) {
+    return (
+      <div className="flex flex-col h-full">
+        {showRightsizing && (
+          <div className="px-4 pt-4">
+            <RightsizingStrip kind={kind} namespace={namespace} name={name} />
+          </div>
+        )}
+        <div className="flex-1 min-h-0">
+          <PrometheusChartsGrid
+            kind={kind}
+            namespace={namespace}
+            name={name}
+            resource={resource}
+            showRestartLane={showRestartLane}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // Drawer fallback: single chart with tabs + restart lane below. The chart's
+  // time-range selector is mirrored to the restart lane so they stay aligned.
+  return (
+    <DrawerMetricsContent
+      kind={kind}
+      namespace={namespace}
+      name={name}
+      resource={resource}
+      showRestartLane={showRestartLane}
+    />
+  )
+}
+
+function DrawerMetricsContent({ kind, namespace, name, resource, showRestartLane }: {
+  kind: string
+  namespace: string
+  name: string
+  resource: any
+  showRestartLane: boolean
+}) {
   const [chartRange, setChartRange] = useState<import('../../api/client').PrometheusTimeRange>('1h')
 
   return (
     <div className="flex flex-col h-full">
-      {showRightsizing && (
-        <div className="px-4 pt-4">
-          <RightsizingStrip kind={kind} namespace={namespace} name={name} />
-        </div>
-      )}
       <div className="flex-1 min-h-0">
         <PrometheusCharts kind={kind} namespace={namespace} name={name} showEmptyState resource={resource} onTimeRangeChange={setChartRange} />
       </div>

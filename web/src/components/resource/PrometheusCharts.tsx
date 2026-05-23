@@ -18,7 +18,7 @@ const SUPPORTED_KINDS = new Set([
   'Pod', 'Deployment', 'StatefulSet', 'DaemonSet', 'ReplicaSet', 'Job', 'CronJob', 'Node',
 ])
 
-interface CategoryDef {
+export interface CategoryDef {
   key: PrometheusMetricCategory
   label: string
   color: string       // tailwind text class
@@ -26,7 +26,7 @@ interface CategoryDef {
   fillColor: string   // hex with alpha for SVG fill
 }
 
-const WORKLOAD_CATEGORIES: CategoryDef[] = [
+export const WORKLOAD_CATEGORIES: CategoryDef[] = [
   { key: 'cpu', label: 'CPU', color: 'text-blue-400', chartColor: '#60a5fa', fillColor: '#60a5fa22' },
   { key: 'memory', label: 'Memory', color: 'text-purple-400', chartColor: '#c084fc', fillColor: '#c084fc22' },
   { key: 'network_rx', label: 'Net RX', color: 'text-emerald-400', chartColor: '#34d399', fillColor: '#34d39922' },
@@ -34,7 +34,7 @@ const WORKLOAD_CATEGORIES: CategoryDef[] = [
   { key: 'filesystem', label: 'Disk I/O', color: 'text-amber-400', chartColor: '#fbbf24', fillColor: '#fbbf2422' },
 ]
 
-const NODE_CATEGORIES: CategoryDef[] = [
+export const NODE_CATEGORIES: CategoryDef[] = [
   { key: 'cpu', label: 'CPU', color: 'text-blue-400', chartColor: '#60a5fa', fillColor: '#60a5fa22' },
   { key: 'memory', label: 'Memory', color: 'text-purple-400', chartColor: '#c084fc', fillColor: '#c084fc22' },
   { key: 'filesystem', label: 'Disk', color: 'text-amber-400', chartColor: '#fbbf24', fillColor: '#fbbf2422' },
@@ -55,7 +55,7 @@ const SERIES_COLORS = [
   '#6366f1', // indigo-500
 ]
 
-const TIME_RANGES: { value: PrometheusTimeRange; label: string }[] = [
+export const TIME_RANGES: { value: PrometheusTimeRange; label: string }[] = [
   { value: '10m', label: '10m' },
   { value: '30m', label: '30m' },
   { value: '1h', label: '1h' },
@@ -103,6 +103,14 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
     kind, namespace, name, activeCategory, timeRange,
     isConnected && isSupported,
   )
+
+  // Reference lines: aggregate request/limit overlaid on CPU and memory charts.
+  // Computed unconditionally and placed above early returns to keep hook order
+  // stable when connection state transitions (Rules of Hooks).
+  const referenceLines = useMemo<ReferenceLine[] | undefined>(() => {
+    if (!resource || (activeCategory !== 'cpu' && activeCategory !== 'memory')) return undefined
+    return computeRequestLimitLines(resource, kind, activeCategory)
+  }, [resource, kind, activeCategory])
 
   if (!isSupported) {
     return null
@@ -152,13 +160,6 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
   }
 
   const activeCategoryDef = categories.find(c => c.key === activeCategory) || categories[0]
-
-  // Reference lines: aggregate request/limit overlaid on CPU and memory charts.
-  // Memory unit is bytes; CPU unit is cores; both match the chart axis.
-  const referenceLines = useMemo<ReferenceLine[] | undefined>(() => {
-    if (!resource || (activeCategory !== 'cpu' && activeCategory !== 'memory')) return undefined
-    return computeRequestLimitLines(resource, kind, activeCategory)
-  }, [resource, kind, activeCategory])
 
   return (
     <div className="flex flex-col h-full">
@@ -273,7 +274,7 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
 // Sub-Components
 // ============================================================================
 
-function MetricsSummary({ series, category, unit }: {
+export function MetricsSummary({ series, category, unit }: {
   series: PrometheusSeries[]
   category: CategoryDef
   unit: string
@@ -357,7 +358,7 @@ export interface ReferenceLine {
   tone: 'request' | 'limit'
 }
 
-function AreaChart({ series, color, fillColor, unit, referenceLines }: {
+export function AreaChart({ series, color, fillColor, unit, referenceLines }: {
   series: PrometheusSeries[]
   color: string
   fillColor: string
@@ -409,8 +410,11 @@ function AreaChart({ series, color, fillColor, unit, referenceLines }: {
   const { minTs, maxTs, yMax } = chartData
   const width = 1000
   const height = 300
-  const marginLeft = 60
-  const marginRight = 20
+  // marginLeft sized for the widest expected Y-tick label ("422.4 MiB" etc.).
+  // The chart can render in narrow grid panels where the SVG scales down,
+  // so labels need extra viewBox-space to survive the X-direction squeeze.
+  const marginLeft = 84
+  const marginRight = 40
   const marginTop = 10
   const marginBottom = 30
   const plotWidth = width - marginLeft - marginRight
@@ -476,10 +480,25 @@ function AreaChart({ series, color, fillColor, unit, referenceLines }: {
     )
     const shortLabels = computeShortLabels(fullLabels)
 
+    // Tolerance for considering a series "active" at the hovered timestamp.
+    // A series that ended several minutes before the cursor shouldn't appear
+    // in the tooltip (otherwise crashlooping pods leave stale ghost entries).
+    // Use 2× the median step between samples on this series, falling back to
+    // a small constant when the series is too short to estimate.
     const points = validSeries.map(({ s, i }, vi) => {
-      let closest = s.dataPoints[0]
+      const dps = s.dataPoints
+      const seriesMin = dps[0].timestamp
+      const seriesMax = dps[dps.length - 1].timestamp
+      const medianStep = dps.length >= 2
+        ? (seriesMax - seriesMin) / (dps.length - 1)
+        : 30
+      const tolerance = Math.max(medianStep * 2, 60)
+      if (ts < seriesMin - tolerance || ts > seriesMax + tolerance) {
+        return null
+      }
+      let closest = dps[0]
       let closestDist = Infinity
-      for (const dp of s.dataPoints) {
+      for (const dp of dps) {
         const dist = Math.abs(dp.timestamp - ts)
         if (dist < closestDist) {
           closestDist = dist
@@ -493,7 +512,7 @@ function AreaChart({ series, color, fillColor, unit, referenceLines }: {
         y: toY(closest.value),
         color: multiSeries ? seriesColor(i, color) : color,
       }
-    })
+    }).filter((p): p is NonNullable<typeof p> => p !== null)
 
     return { ts, x: clampedX, points }
   }, [hoverX, chartData])
@@ -684,7 +703,7 @@ function AreaChart({ series, color, fillColor, unit, referenceLines }: {
   )
 }
 
-function SeriesLegend({ series, color }: { series: PrometheusSeries[]; color: string }) {
+export function SeriesLegend({ series, color }: { series: PrometheusSeries[]; color: string }) {
   const labels = series.map((s, i) => s.labels.pod || s.labels.instance || `series-${i}`)
   return (
     <div className="flex flex-wrap gap-x-4 gap-y-1 px-1">
@@ -763,7 +782,7 @@ function formatTimestamp(unix: number): string {
  * Returns undefined when the spec doesn't have enough information to render
  * a meaningful line (no runtime containers, or no values set on any container).
  */
-function computeRequestLimitLines(
+export function computeRequestLimitLines(
   resource: any,
   kind: string,
   category: 'cpu' | 'memory',
