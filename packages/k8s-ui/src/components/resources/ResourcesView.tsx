@@ -151,7 +151,7 @@ import { AzureManagedControlPlaneCell, AzureManagedMachinePoolCell, AzureMachine
 import { useRegisterShortcut, useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { ResourcesSidebar } from './ResourcesSidebar'
 import type { SelectedKindInfo } from './ResourcesSidebar'
-import { CompareTray, togglePick, pickIndex, refToParam, SIDE_TONES, type CompareTrayPick } from '../compare'
+import { CompareTray, togglePick, pickIndex, refToParam, SIDE_TONES, type CompareTrayPick, type NamespacedRef } from '../compare'
 
 // Pod problem filter options (special multi-select, not a single column value)
 const POD_PROBLEMS = ['CrashLoopBackOff', 'ImagePullBackOff', 'OOMKilled', 'Unschedulable', 'Not Ready', 'High Restarts', 'Init Failed', 'Exit Code Error', 'Failed', 'Other'] as const
@@ -1755,6 +1755,29 @@ interface ResourcesViewProps {
    *  should also wire onResourceClick to handle the deep-link-on-load
    *  case. */
   onRowSelect?: (resource: any) => void
+  /**
+   * When provided, replaces the built-in compare-mode submit (which
+   * navigates to `/compare?kind=...&a=...&b=...`). Hosts use this to
+   * route to a different URL — e.g. Radar Hub's `/fleet/compare` with
+   * cluster IDs in the URL. Picks are passed in click order; each carries
+   * `clusterId`/`clusterName` when the host stamps them via
+   * `extraLeadingColumns` row data, so cross-cluster picks survive the
+   * pick-equality check that would otherwise collapse same-named rows
+   * from different clusters into one. When undefined, default same-
+   * cluster navigation behavior is preserved.
+   */
+  onCompareSubmit?: (
+    picks: NamespacedRef[],
+    kind: { name: string; group?: string },
+  ) => void
+  /**
+   * Resolves the cluster scope for a row when compare-mode is enabled.
+   * Used to stamp `clusterId`/`clusterName` onto each pick so the same
+   * `ns/name` in two different clusters is treated as two distinct picks.
+   * Hub-web returns `row._cluster` here; OSS leaves this unset and picks
+   * key on namespace+name only (same as before).
+   */
+  resolveRowCluster?: (resource: any) => { id: string; name: string } | undefined
 }
 
 // Default selected kind
@@ -1899,6 +1922,8 @@ export function ResourcesView({
   defaultKind = DEFAULT_KIND_INFO,
   extraLeadingColumns,
   onRowSelect,
+  onCompareSubmit,
+  resolveRowCluster,
 }: ResourcesViewProps) {
   const initialFilters = getInitialFiltersFromURL()
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath, defaultKind, locationPathname, locationSearch))
@@ -2042,6 +2067,13 @@ export function ResourcesView({
 
   useEffect(() => {
     const saved = loadColumnSettings(selectedKind.name, selectedKind.group)
+    // Host-injected extra columns (e.g. fleet Cluster) default to visible
+    // regardless of saved state. The saved blob was written by an earlier
+    // mount that didn't know these columns existed, so a naive Set(saved)
+    // would silently hide them. Union the saved set with extra keys so
+    // user-hidden built-in columns still respect their saved hidden state,
+    // while newly-introduced host extras appear by default.
+    const extraKeys = extraLeadingColumns?.map(c => c.key) ?? []
     if (saved) {
       // If saved columns are just the defaults but this kind has specialized columns,
       // discard the stale save and use the specialized columns instead
@@ -2054,14 +2086,16 @@ export function ResourcesView({
         setVisibleColumns(getDefaultVisibleColumns(allColumns))
         setColumnWidths({})
       } else {
-        setVisibleColumns(new Set(saved.visible))
+        const merged = new Set(saved.visible)
+        for (const k of extraKeys) merged.add(k)
+        setVisibleColumns(merged)
         setColumnWidths(saved.widths || {})
       }
     } else {
       setVisibleColumns(getDefaultVisibleColumns(allColumns))
       setColumnWidths({})
     }
-  }, [selectedKind.name, selectedKind.group, allColumns])
+  }, [selectedKind.name, selectedKind.group, allColumns, extraLeadingColumns])
 
   // Save column settings when they change (skip initial load)
   const isColumnSettingsLoaded = useRef(false)
@@ -2197,9 +2231,11 @@ export function ResourcesView({
   const [highlightedIndex, setHighlightedIndex] = useState(-1)
   const virtuosoRef = useRef<TableVirtuosoHandle>(null)
 
-  // Compare mode is only meaningful when the host wired onNavigate — without it the Compare
-  // CTA in the tray would silently no-op. Gate everything below on this capability.
-  const compareEnabled = !!onNavigate
+  // Compare mode is only meaningful when the host can route picks. Either
+  // path qualifies: onNavigate for the default same-cluster `/compare?...`
+  // URL, or onCompareSubmit for hosts that build their own URL (e.g.
+  // Radar Hub's `/fleet/compare` with cluster IDs).
+  const compareEnabled = !!onNavigate || !!onCompareSubmit
   const [compareMode, setCompareMode] = useState(false)
   const [comparePicks, setComparePicks] = useState<CompareTrayPick[]>([])
 
@@ -2218,18 +2254,32 @@ export function ResourcesView({
   const toggleComparePick = useCallback((resource: any) => {
     if (!resource?.metadata?.name) return
     const ns = resource.metadata.namespace || ''
-    setComparePicks(prev => togglePick(prev, { namespace: ns, name: resource.metadata.name }))
-  }, [])
+    // Stamp clusterId on the pick when the host provides a resolver
+    // (cross-cluster compare). Without it, two rows with the same ns+name
+    // from different clusters would collapse into one pick.
+    const cluster = resolveRowCluster?.(resource)
+    setComparePicks(prev => togglePick(prev, {
+      namespace: ns,
+      name: resource.metadata.name,
+      clusterId: cluster?.id,
+      clusterName: cluster?.name,
+    }))
+  }, [resolveRowCluster])
 
   const handleCompareNavigate = useCallback(() => {
-    if (comparePicks.length !== 2 || !onNavigate) return
+    if (comparePicks.length !== 2) return
+    if (onCompareSubmit) {
+      onCompareSubmit(comparePicks, { name: selectedKind.name, group: selectedKind.group })
+      return
+    }
+    if (!onNavigate) return
     const params = new URLSearchParams()
     params.set('kind', selectedKind.name)
     if (selectedKind.group) params.set('apiGroup', selectedKind.group)
     params.set('a', refToParam(comparePicks[0]))
     params.set('b', refToParam(comparePicks[1]))
     onNavigate(`/compare?${params.toString()}`)
-  }, [comparePicks, selectedKind.name, selectedKind.group, onNavigate])
+  }, [comparePicks, selectedKind.name, selectedKind.group, onNavigate, onCompareSubmit])
 
   // Reset highlight when kind, search, sort, or namespace changes
   const namespacesKey = namespaces.join(',')
@@ -3274,6 +3324,14 @@ export function ResourcesView({
           style={{ ...props.style, tableLayout: 'fixed' }}
         >
           <colgroup>
+            {/*
+              Compare-mode adds a leading <th>/<td> per row but isn't part
+              of `columns`. Under table-layout:fixed the <colgroup> must
+              match the actual column count, otherwise the browser pads
+              the missing entry by stealing width from a sized neighbour
+              — typically blowing this narrow column out to ~200px.
+            */}
+            {compareMode && <col style={{ width: 36 }} />}
             {columns.map(col => (
               <col
                 key={col.key}
@@ -3291,7 +3349,7 @@ export function ResourcesView({
       )
     }),
     TableRow: VirtuosoTableRow,
-  }), [columns, columnWidths, hasResizedColumns])
+  }), [columns, columnWidths, hasResizedColumns, compareMode])
 
   // Calculate filter options with counts based on current resources (before filtering)
   const filterOptions = useMemo(() => {
@@ -3883,7 +3941,14 @@ export function ResourcesView({
                 <tr>
                   {compareMode && (
                     <th
-                      className="w-9 px-2 py-3 text-xs font-medium uppercase tracking-wide bg-theme-base border-b border-r-subtle border-theme-border text-center text-skyhook-400"
+                      // Force a narrow width — Tailwind's w-9 is honored
+                      // as a hint under table-layout:auto, but the browser
+                      // distributes extra row width to whichever column
+                      // doesn't have a definitive width, and this column's
+                      // single small icon makes it that target. Inline
+                      // px width clamps it before that happens.
+                      style={{ width: 36, minWidth: 36, maxWidth: 36 }}
+                      className="px-2 py-3 text-xs font-medium uppercase tracking-wide bg-theme-base border-b border-r-subtle border-theme-border text-center text-skyhook-400"
                       title="Compare mode"
                     >
                       <GitCompare className="w-3.5 h-3.5 inline-block opacity-70" />
@@ -4061,7 +4126,11 @@ export function ResourcesView({
                   selectedResource?.name === resource.metadata?.name
                 const isHighlighted = index === highlightedIndex
                 const pickIdx = compareMode
-                  ? pickIndex(comparePicks, { namespace: resource.metadata?.namespace || '', name: resource.metadata?.name || '' })
+                  ? pickIndex(comparePicks, {
+                      namespace: resource.metadata?.namespace || '',
+                      name: resource.metadata?.name || '',
+                      clusterId: resolveRowCluster?.(resource)?.id,
+                    })
                   : -1
                 return (
                   <ResourceRowCells
@@ -4151,7 +4220,8 @@ function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, h
         <td
           onClick={onClick}
           onMouseEnter={onMouseEnter}
-          className={clsx('w-9 px-2 py-3 border-b-subtle cursor-pointer text-center align-middle transition-colors', rowHighlight)}
+          style={{ width: 36, minWidth: 36, maxWidth: 36 }}
+          className={clsx('px-2 py-3 border-b-subtle cursor-pointer text-center align-middle transition-colors', rowHighlight)}
         >
           {pickedSide ? (
             <span

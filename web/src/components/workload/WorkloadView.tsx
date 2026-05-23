@@ -348,7 +348,7 @@ export function WorkloadView({
     () => (resource?.apiVersion ? apiVersionToGroup(resource.apiVersion) : undefined),
     [resource?.apiVersion],
   )
-  const { onCompareTo, picker: comparePicker } = useCompareLauncher({
+  const { onCompareTo, onCompareAcrossClusters, picker: comparePicker } = useCompareLauncher({
     kind: kindProp,
     namespace,
     name,
@@ -358,8 +358,8 @@ export function WorkloadView({
     group: rest.group || resourceGroup || undefined,
   })
   const actionsBarProps = useMemo(
-    () => ({ ...baseActionsBarProps, onCompareTo }),
-    [baseActionsBarProps, onCompareTo],
+    () => ({ ...baseActionsBarProps, onCompareTo, onCompareAcrossClusters }),
+    [baseActionsBarProps, onCompareTo, onCompareAcrossClusters],
   )
 
   const handleUpdateResource = useCallback(async (params: { kind: string; namespace: string; name: string; yaml: string }) => {

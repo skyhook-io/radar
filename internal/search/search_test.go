@@ -2,6 +2,7 @@ package search
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -119,9 +120,11 @@ func TestSearch_ImageMatch(t *testing.T) {
 }
 
 func TestSearch_LimitTruncates(t *testing.T) {
+	// Unique names per pod — dedup-by-(kind,group,ns,name) collapses
+	// identical entries, so a limit-truncation test needs distinct inputs.
 	pods := make([]runtime.Object, 0, 100)
 	for i := 0; i < 100; i++ {
-		pods = append(pods, newPod("ns", "pod-with-redis", "redis:6.2", nil))
+		pods = append(pods, newPod("ns", fmt.Sprintf("pod-with-redis-%03d", i), "redis:6.2", nil))
 	}
 	p := &fakeProvider{typed: map[string][]runtime.Object{"pods": pods}}
 	res, _ := Search(context.Background(), p, Parse("redis"), Options{Limit: 10, Include: IncludeNone})
@@ -147,6 +150,38 @@ func TestSearch_DefaultSkipsEvents(t *testing.T) {
 	res, _ = Search(context.Background(), p, Parse("kind:Event redis"), Options{Include: IncludeNone})
 	if len(res.Hits) != 1 {
 		t.Fatalf("kind:Event should opt in, got %+v", res.Hits)
+	}
+}
+
+func TestSearch_DedupsResourceIndexedTwice(t *testing.T) {
+	// A Deployment that's also registered as a watched dynamic GVR (e.g.
+	// by a controller indexing built-in workloads as CRDs) used to surface
+	// in both the typed loop and the dynamic loop, producing visible
+	// duplicate rows in the UI. We dedup by (kind, group, ns, name) at
+	// the end so each resource appears at most once regardless of how
+	// many indexing paths reached it.
+	gvr := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata": map[string]any{
+			"name":      "coredns",
+			"namespace": "kube-system",
+		},
+	}}
+	p := &fakeProvider{
+		typed: map[string][]runtime.Object{
+			"deployments": {newDeploy("kube-system", "coredns", "coredns:1.10", nil)},
+		},
+		dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {u}},
+		kinds:   map[schema.GroupVersionResource]string{gvr: "Deployment"},
+	}
+	res, _ := Search(context.Background(), p, Parse("coredns"), Options{Include: IncludeNone})
+	if len(res.Hits) != 1 {
+		t.Fatalf("expected 1 hit after dedup, got %d: %+v", len(res.Hits), res.Hits)
+	}
+	if res.Hits[0].Name != "coredns" || res.Hits[0].Kind != "Deployment" {
+		t.Fatalf("unexpected hit: %+v", res.Hits[0])
 	}
 }
 

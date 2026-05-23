@@ -146,10 +146,20 @@ function AuthBarrier({ authMode }: { authMode: string }) {
 
   if (authMode === 'oidc') {
     return (
-      <div className="flex-1 flex items-center justify-center bg-theme-base">
-        <div className="flex flex-col items-center gap-4">
-          <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
-          <p className="text-sm text-theme-text-secondary">Redirecting to login…</p>
+      <div className="flex-1 relative bg-theme-base">
+        <div className="fixed inset-0 pointer-events-none">
+          <img
+            src={radarLoadingIcon}
+            alt=""
+            aria-hidden
+            className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-11 h-11"
+          />
+          <p
+            className="absolute left-1/2 -translate-x-1/2 whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary"
+            style={{ top: 'calc(50% + 34px)' }}
+          >
+            Redirecting to login…
+          </p>
         </div>
       </div>
     )
@@ -1189,13 +1199,39 @@ function AppInner() {
         />
       )}
 
-      {/* Connecting view - show during initial connection or retry */}
+      {/* Connecting view - show during initial connection or retry.
+          Icon is viewport-anchored (fixed inset-0 + pointer-events-none)
+          so it sits at the same screen position as the host hub splash —
+          centering in the flex-1 content area would push it below the
+          navbar and visibly drift the icon when transitioning from a
+          hub splash on cluster open. */}
       {!isSwitching && !(authMe?.authEnabled && !authMe?.username) && connection.state === 'connecting' && (
-        <div className="flex-1 flex items-center justify-center bg-theme-base">
-          <div className="flex flex-col items-center gap-4 text-theme-text-secondary">
-            <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
-            <div className="text-center">
-              <p className="font-medium text-theme-text-primary">Connecting to cluster</p>
+        <div className="flex-1 relative bg-theme-base">
+          {/* Icon absolutely anchored to viewport-center. The label block
+              sits at a fixed offset below — independent of label height
+              so multi-line messages (context + progress) don't shift the
+              icon's screen position. */}
+          <div className="fixed inset-0 pointer-events-none">
+            <img
+              src={radarLoadingIcon}
+              alt=""
+              aria-hidden
+              // Integer offset (vw/2 - 22) — avoids 1-2px sub-pixel jitter
+              // from translate(-50%, -50%) on odd-pixel viewports.
+              className="absolute w-11 h-11"
+              style={{ left: 'calc(50% - 22px)', top: 'calc(50% - 22px)' }}
+            />
+            <div
+              className="absolute left-1/2 -translate-x-1/2 text-center"
+              style={{ top: 'calc(50% + 34px)' }}
+            >
+              {/* Title style mirrors every other splash (RadarSplash,
+                  LoadingState, pre-React) — 17px semibold so the font
+                  doesn't visibly swap across the hub → cluster splash
+                  chain. Subtitles below stay smaller/dimmer. */}
+              <p className="whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">
+                Connecting to cluster
+              </p>
               {connection.context && (
                 <p className="text-sm text-theme-text-secondary mt-1">{connection.context}</p>
               )}
@@ -1209,13 +1245,24 @@ function AppInner() {
         </div>
       )}
 
-      {/* Context switching overlay */}
+      {/* Context switching overlay — icon viewport-anchored, label below. */}
       {isSwitching && (
-        <div className="flex-1 flex items-center justify-center bg-theme-base">
-          <div className="flex flex-col items-center gap-4 text-theme-text-secondary">
-            <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
-            <div className="text-center">
-              <div className="text-sm font-medium text-theme-text-primary">Switching context</div>
+        <div className="flex-1 relative bg-theme-base">
+          <div className="fixed inset-0 pointer-events-none">
+            <img
+              src={radarLoadingIcon}
+              alt=""
+              aria-hidden
+              // Integer offset (vw/2 - 22) — avoids 1-2px sub-pixel jitter
+              // from translate(-50%, -50%) on odd-pixel viewports.
+              className="absolute w-11 h-11"
+              style={{ left: 'calc(50% - 22px)', top: 'calc(50% - 22px)' }}
+            />
+            <div
+              className="absolute left-1/2 -translate-x-1/2 text-center"
+              style={{ top: 'calc(50% + 34px)' }}
+            >
+              <div className="whitespace-nowrap text-[17px] font-semibold tracking-tight text-theme-text-primary">Switching context</div>
               {targetContext && (
                 <div className="text-xs mt-2 text-theme-text-tertiary">
                   {targetContext.provider ? (

@@ -18,6 +18,19 @@ interface NavCustomizationBase {
   brandSlot?: ReactNode;
   /** Replaces the ContextSwitcher (kubeconfig-context picker). */
   contextSlot?: ReactNode;
+  /**
+   * When set, a "Compare across clusters" option is added to the Compare
+   * button in resource action bars. The host returns the URL that should
+   * be navigated to (via window.location.assign — typically a hub fleet
+   * route). Standalone Radar omits this and the compare action stays
+   * single-cluster.
+   */
+  crossClusterCompareHref?: (ref: {
+    kind: string;
+    namespace: string;
+    name: string;
+    apiGroup?: string;
+  }) => string;
 }
 
 /**

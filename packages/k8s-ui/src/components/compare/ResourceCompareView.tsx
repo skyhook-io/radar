@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { clsx } from 'clsx'
 import { ArrowLeftRight, GitCompare, Rows, FileText, FileCode2, X, Pencil, AlertTriangle, Sparkles } from 'lucide-react'
 import { YamlDiffEditor } from '../ui/YamlEditor'
+import { PaneLoader } from '../ui/PaneLoader'
 import { Tooltip } from '../ui/Tooltip'
 import { pluralToKind } from '../../utils/navigation'
 import { toComparableYaml } from './normalize'
@@ -38,6 +39,20 @@ export interface ResourceCompareViewProps {
   /** Optional — when provided, the resource pill shows a pencil button to re-pick. */
   onChangeA?: () => void
   onChangeB?: () => void
+  /**
+   * Optional small label rendered after the resource name in each pill.
+   * Used by cross-cluster compare to surface the cluster identity for
+   * each side; single-cluster compare leaves these undefined.
+   */
+  aSubtitle?: string
+  bSubtitle?: string
+  /**
+   * When true, the diff editor area drops its padding + rounded border.
+   * Use when the host renders compare as a full-bleed page (the diff IS
+   * the page). Default false preserves the inset-card look that works
+   * inside OSS Radar's narrower compare route.
+   */
+  bleed?: boolean
 }
 
 function ResourcePill({
@@ -45,11 +60,13 @@ function ResourcePill({
   side,
   error,
   onChange,
+  subtitle,
 }: {
   resource: CompareResourceRef
   side: CompareSide
   error?: string
   onChange?: () => void
+  subtitle?: string
 }) {
   const tones = SIDE_TONES[side]
   const errTone = 'border-red-400/50 bg-red-500/10'
@@ -70,6 +87,11 @@ function ResourcePill({
       <span className={clsx('truncate min-w-0', error ? 'text-red-300' : 'text-theme-text-primary')}>
         {resource.namespace && <span className="opacity-60">{resource.namespace}/</span>}
         {resource.name}
+        {subtitle && (
+          <span className="opacity-60 ml-1" aria-label={`Source: ${subtitle}`}>
+            · {subtitle}
+          </span>
+        )}
       </span>
       {onChange && (
         <Tooltip content="Pick a different resource">
@@ -90,14 +112,21 @@ export function ResourceCompareView({
   b,
   aData,
   bData,
-  aLoading,
-  bLoading,
+  // aLoading / bLoading remain in the props for host wiring stability,
+  // but the cold-start gate below derives loading purely from data
+  // presence — flashing Monaco when only one side has data was worse
+  // than a slightly delayed initial render. Per-side spinners after
+  // the editor mounts aren't needed: Monaco re-renders in place when
+  // a side's content swaps.
   errors,
   editorTheme = 'vs-dark',
   onSwap,
   onClose,
   onChangeA,
   onChangeB,
+  aSubtitle,
+  bSubtitle,
+  bleed = false,
 }: ResourceCompareViewProps) {
   const [specOnly, setSpecOnly] = useState(false)
   const [unified, setUnified] = useState(false)
@@ -125,7 +154,7 @@ export function ResourceCompareView({
         </h2>
 
         <div className="flex items-center gap-2 min-w-0 flex-1">
-          <ResourcePill resource={a} side="a" error={aError} onChange={onChangeA} />
+          <ResourcePill resource={a} side="a" error={aError} onChange={onChangeA} subtitle={aSubtitle} />
           <Tooltip content="Swap A and B">
             <button
               onClick={onSwap}
@@ -134,7 +163,7 @@ export function ResourceCompareView({
               <ArrowLeftRight className="w-3.5 h-3.5" />
             </button>
           </Tooltip>
-          <ResourcePill resource={b} side="b" error={bError} onChange={onChangeB} />
+          <ResourcePill resource={b} side="b" error={bError} onChange={onChangeB} subtitle={bSubtitle} />
         </div>
 
         <div className="flex items-center gap-1 shrink-0">
@@ -181,11 +210,21 @@ export function ResourceCompareView({
         </div>
       )}
 
-      <div className="flex-1 min-h-0 p-3">
-        {aLoading && bLoading ? (
-          <div className="flex items-center justify-center h-full text-theme-text-secondary text-sm">
-            Loading resources…
-          </div>
+      <div className={clsx('flex-1 min-h-0', bleed ? '' : 'p-3')}>
+        {/*
+          Defer mounting the diff editor until BOTH sides have settled
+          (data or per-side error). Mounting Monaco when only one side
+          has data flashes a second loading state — its own internal
+          "Loading…" placeholder — before re-rendering with the full
+          diff, producing the double-flash on cold start. With this
+          gate the user sees one consistent splash, then the full diff
+          appears in a single transition. After the initial settle,
+          re-picking one side stays per-side (the existing aLoading /
+          bLoading props flow into Monaco's input — Monaco itself just
+          re-renders without re-initializing).
+        */}
+        {(!aData && !aError) || (!bData && !bError) ? (
+          <PaneLoader label="Loading resources…" className="h-full" />
         ) : (
           <YamlDiffEditor
             original={aYaml}
@@ -194,6 +233,7 @@ export function ResourceCompareView({
             hideUnchanged={hideUnchanged && !identical}
             theme={editorTheme}
             height="100%"
+            bleed={bleed}
           />
         )}
       </div>

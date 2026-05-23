@@ -1,6 +1,15 @@
 export interface NamespacedRef {
   namespace: string
   name: string
+  /**
+   * Optional cluster scope. Populated by cross-cluster compare flows
+   * (Radar Hub fleet search) so the same `kube-system/coredns` in two
+   * different clusters can both be picked. Undefined in OSS single-
+   * cluster compare; equality then falls back to namespace+name only.
+   */
+  clusterId?: string
+  /** Display name for the cluster — surfaced in tray pills + diff side titles. */
+  clusterName?: string
 }
 
 export type CompareSide = 'a' | 'b'

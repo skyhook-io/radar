@@ -2,6 +2,7 @@ import { useCallback, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CompareResourcePicker, refToParam, type CompareResourceRef } from '@skyhook-io/k8s-ui'
 import { useCompareCandidates } from './useCompareCandidates'
+import { useNavCustomization } from '../../context/NavCustomization'
 
 interface UseCompareLauncherArgs {
   /** API plural kind (e.g. "deployments") — must match the route segment used by `/api/resources/{kind}`. */
@@ -15,6 +16,12 @@ interface UseCompareLauncherArgs {
 interface CompareLauncher {
   /** Wire this to ResourceActionsBar's `onCompareTo` prop. */
   onCompareTo: () => void
+  /**
+   * Wire this to ResourceActionsBar's `onCompareAcrossClusters` prop. Undefined
+   * when the host (NavCustomization.crossClusterCompareHref) hasn't opted in
+   * — keeps the standalone Radar experience identical.
+   */
+  onCompareAcrossClusters?: () => void
   /** Render this anywhere in the same tree to surface the picker dialog. */
   picker: React.ReactNode
 }
@@ -24,8 +31,15 @@ export function useCompareLauncher({ kind, namespace, name, group }: UseCompareL
   const [open, setOpen] = useState(false)
   const kindLower = kind.toLowerCase()
   const { candidates, isPending, error } = useCompareCandidates(kindLower, group, open)
+  const { crossClusterCompareHref } = useNavCustomization()
 
   const onCompareTo = useCallback(() => setOpen(true), [])
+
+  const onCompareAcrossClusters = useCallback(() => {
+    if (!crossClusterCompareHref) return
+    const href = crossClusterCompareHref({ kind: kindLower, namespace, name, apiGroup: group })
+    window.location.assign(href)
+  }, [crossClusterCompareHref, kindLower, namespace, name, group])
 
   const handlePick = useCallback(
     (picked: CompareResourceRef) => {
@@ -54,5 +68,9 @@ export function useCompareLauncher({ kind, namespace, name, group }: UseCompareL
     />
   )
 
-  return { onCompareTo, picker }
+  return {
+    onCompareTo,
+    onCompareAcrossClusters: crossClusterCompareHref ? onCompareAcrossClusters : undefined,
+    picker,
+  }
 }

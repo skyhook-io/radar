@@ -40,6 +40,15 @@ interface ResourceActionsBarProps {
   /** When provided, renders a "Compare" button that opens the compare picker. */
   onCompareTo?: () => void
 
+  /**
+   * Host-supplied callback for cross-cluster compare. When set alongside
+   * onCompareTo, the Compare button becomes a small dropdown offering both
+   * scopes. When set alone, the button opens cross-cluster compare directly.
+   * Only embedded hosts (Radar Hub) wire this; standalone Radar leaves it
+   * undefined and the button stays single-cluster.
+   */
+  onCompareAcrossClusters?: () => void
+
   // Capabilities (injected by platform)
   canExec?: boolean
   canViewLogs?: boolean
@@ -115,6 +124,7 @@ interface ResourceActionsBarProps {
 export function ResourceActionsBar({
   resource, data, onClose, hideLogs, showYaml, onToggleYaml,
   onCompareTo,
+  onCompareAcrossClusters,
   canExec, canViewLogs, canPortForward,
   onOpenTerminal, onOpenLogs: openLogs, onOpenWorkloadLogs: openWorkloadLogs, onCopyCommand,
   renderPortForward,
@@ -192,6 +202,16 @@ export function ResourceActionsBar({
 
   const [showLogsMenu, setShowLogsMenu] = useState(false)
   const logsMenuTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const [showCompareMenu, setShowCompareMenu] = useState(false)
+  const compareMenuTimeout = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const handleCompareMouseEnter = () => {
+    if (compareMenuTimeout.current) clearTimeout(compareMenuTimeout.current)
+    if (onCompareTo && onCompareAcrossClusters) setShowCompareMenu(true)
+  }
+  const handleCompareMouseLeave = () => {
+    compareMenuTimeout.current = setTimeout(() => setShowCompareMenu(false), 150)
+  }
 
   const handleLogsMouseEnter = () => {
     if (logsMenuTimeout.current) clearTimeout(logsMenuTimeout.current)
@@ -487,16 +507,57 @@ export function ResourceActionsBar({
         </button>
       )}
 
-      {onCompareTo && (
-        <Tooltip content={`Compare to another ${formatKindName(resource.kind).toLowerCase()}`}>
-          <button
-            onClick={onCompareTo}
-            aria-label={`Compare to another ${formatKindName(resource.kind).toLowerCase()}`}
-            className="p-1.5 text-theme-text-secondary border border-theme-border-light rounded-lg hover:text-theme-text-primary hover:bg-theme-elevated transition-colors"
+      {(onCompareTo || onCompareAcrossClusters) && (
+        <div
+          className="relative"
+          onMouseEnter={handleCompareMouseEnter}
+          onMouseLeave={handleCompareMouseLeave}
+        >
+          <Tooltip
+            content={
+              onCompareTo && onCompareAcrossClusters
+                ? `Compare ${formatKindName(resource.kind).toLowerCase()}`
+                : onCompareAcrossClusters
+                  ? `Compare across clusters`
+                  : `Compare to another ${formatKindName(resource.kind).toLowerCase()}`
+            }
           >
-            <GitCompare className="w-3.5 h-3.5" />
-          </button>
-        </Tooltip>
+            <button
+              onClick={onCompareTo ?? onCompareAcrossClusters}
+              aria-label={
+                onCompareTo && onCompareAcrossClusters
+                  ? `Compare ${formatKindName(resource.kind).toLowerCase()}`
+                  : onCompareAcrossClusters
+                    ? `Compare across clusters`
+                    : `Compare to another ${formatKindName(resource.kind).toLowerCase()}`
+              }
+              className="p-1.5 text-theme-text-secondary border border-theme-border-light rounded-lg hover:text-theme-text-primary hover:bg-theme-elevated transition-colors flex items-center"
+            >
+              <GitCompare className="w-3.5 h-3.5" />
+              {onCompareTo && onCompareAcrossClusters && (
+                <ChevronDown className="w-3 h-3 ml-0.5" />
+              )}
+            </button>
+          </Tooltip>
+          {showCompareMenu && onCompareTo && onCompareAcrossClusters && (
+            <div className="absolute top-full right-0 mt-1 min-w-[220px] py-1 bg-theme-surface border border-theme-border rounded-lg shadow-lg z-50">
+              <button
+                onClick={() => { onCompareTo(); setShowCompareMenu(false) }}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-theme-text-primary hover:bg-theme-hover transition-colors text-left"
+              >
+                <GitCompare className="w-3 h-3 text-theme-text-tertiary shrink-0" />
+                <span>Compare in this cluster</span>
+              </button>
+              <button
+                onClick={() => { onCompareAcrossClusters(); setShowCompareMenu(false) }}
+                className="flex items-center gap-2 w-full px-3 py-1.5 text-xs text-theme-text-primary hover:bg-theme-hover transition-colors text-left"
+              >
+                <GitCompare className="w-3 h-3 text-theme-text-tertiary shrink-0" />
+                <span>Compare across clusters</span>
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
       {onDelete && (

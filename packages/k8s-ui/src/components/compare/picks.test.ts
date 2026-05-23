@@ -68,3 +68,30 @@ describe('pickIndex', () => {
     expect(pickIndex([ref('prod', 'api')], ref('prod', ''))).toBe(-1)
   })
 })
+
+describe('togglePick — cross-cluster scope', () => {
+  // Same ns/name in DIFFERENT clusters must be treated as distinct
+  // picks. Otherwise the second click on the same resource name in the
+  // second cluster would deselect the first.
+  const refC = (cid: string, namespace: string, name: string): NamespacedRef => (
+    { namespace, name, clusterId: cid }
+  )
+
+  it('keeps two same-ns-name picks from different clusters', () => {
+    const start: NamespacedRef[] = [refC('cl_a', 'kube-system', 'coredns')]
+    expect(togglePick(start, refC('cl_b', 'kube-system', 'coredns'))).toEqual([
+      refC('cl_a', 'kube-system', 'coredns'),
+      refC('cl_b', 'kube-system', 'coredns'),
+    ])
+  })
+
+  it('removes a pick keyed by clusterId when same ref re-clicked', () => {
+    const start: NamespacedRef[] = [refC('cl_a', 'kube-system', 'coredns')]
+    expect(togglePick(start, refC('cl_a', 'kube-system', 'coredns'))).toEqual([])
+  })
+
+  it('does not match scoped ref against unscoped pick of same ns+name', () => {
+    const unscoped: NamespacedRef = { namespace: 'kube-system', name: 'coredns' }
+    expect(pickIndex([unscoped], refC('cl_a', 'kube-system', 'coredns'))).toBe(-1)
+  })
+})

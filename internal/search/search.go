@@ -327,6 +327,32 @@ func Search(ctx context.Context, p Provider, q Query, opts Options) (Result, err
 		}
 	}
 
+	// Dedup before sorting. A resource can land in the pending slice
+	// twice when it's reachable via both the typed loop (Deployment,
+	// Pod, …) and the dynamic loop (an integration registered
+	// Deployment/Pod as a watched GVR — e.g. a controller indexing
+	// built-in workloads as dynamic resources). Without dedup the table
+	// shows visible doubles. Keep the highest-scoring instance so the
+	// typed-path match (which usually has richer per-kind scoring) wins
+	// ties.
+	if len(pending) > 1 {
+		type hitKey struct{ kind, group, ns, name string }
+		seen := make(map[hitKey]int, len(pending))
+		out := pending[:0]
+		for _, p := range pending {
+			k := hitKey{p.hit.Kind, p.hit.Group, p.hit.Namespace, p.hit.Name}
+			if idx, ok := seen[k]; ok {
+				if p.hit.Score > out[idx].hit.Score {
+					out[idx] = p
+				}
+				continue
+			}
+			seen[k] = len(out)
+			out = append(out, p)
+		}
+		pending = out
+	}
+
 	sort.SliceStable(pending, func(i, j int) bool {
 		if pending[i].hit.Score != pending[j].hit.Score {
 			return pending[i].hit.Score > pending[j].hit.Score
