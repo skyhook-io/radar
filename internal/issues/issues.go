@@ -362,17 +362,19 @@ func fromProblem(p k8s.Problem, now time.Time, source Source) Issue {
 	}
 	since := now.Add(-time.Duration(p.DurationSeconds) * time.Second)
 	return Issue{
-		Severity:  sev,
-		Source:    source,
-		Kind:      p.Kind,
-		Group:     resolveGroup(p.Group, p.Kind),
-		Namespace: p.Namespace,
-		Name:      p.Name,
-		Reason:    p.Reason,
-		Message:   p.Message,
-		FirstSeen: since,
-		LastSeen:  now,
-		Count:     1,
+		Severity:             sev,
+		Source:               source,
+		Kind:                 p.Kind,
+		Group:                resolveGroup(p.Group, p.Kind),
+		Namespace:            p.Namespace,
+		Name:                 p.Name,
+		Reason:               p.Reason,
+		Message:              p.Message,
+		FirstSeen:            since,
+		LastSeen:              now,
+		Count:                1,
+		RestartCount:         p.RestartCount,
+		LastTerminatedReason: p.LastTerminatedReason,
 	}
 }
 

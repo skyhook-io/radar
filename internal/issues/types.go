@@ -2,12 +2,14 @@
 // normalized envelope. It composes:
 //   - problem    — radar's hardcoded per-kind live-state detection
 //     (failing Deployments, NotReady Nodes, pending PVCs…)
+//   - missing_ref — direct by-name references to objects that do not exist
+//     (missing PVCs, ConfigMaps, Secrets, backend Services, roleRefs…)
 //   - condition  — generic CRD .status.conditions[].status=False fallback
 //     (Argo/Flux/Knative/Crossplane/cert-manager/KEDA)
 //   - event      — recent K8s Warning events (opt-in; noisy)
 //   - kyverno    — PolicyReport findings (opt-in)
 //
-// All four describe LIVE OPERATIONAL STATE — "what is failing right
+// All five describe LIVE OPERATIONAL STATE — "what is failing right
 // now". Static best-practice/posture findings (runAsRoot, missing
 // probes, no PDB, deprecated APIs, …) are a separate axis and live
 // in pkg/audit + /api/audit + MCP get_cluster_audit. The two are NOT
@@ -87,6 +89,15 @@ type Issue struct {
 	LastSeen  time.Time `json:"last_seen,omitzero"`
 	Count     int       `json:"count,omitempty"`
 	Owner     Ref       `json:"owner,omitzero"`
+	// RestartCount + LastTerminatedReason carry Pod crash-debugging
+	// context from k8s.Problem through to issues consumers (MCP `issues`
+	// tool + /api/issues + hub fleet_issues). Populated only for Pod
+	// problem rows where the kubelet has recorded crash data. Together
+	// they answer "is this chronic or acute?" (RestartCount) and "what
+	// kind of failure?" (LastTerminatedReason: OOMKilled / Error /
+	// Completed) without the agent needing a follow-up get_resource call.
+	RestartCount         int32  `json:"restart_count,omitempty"`
+	LastTerminatedReason string `json:"last_terminated_reason,omitempty"`
 	// Cluster is left empty here; the hub injects it when emitting
 	// cross-cluster envelopes via fleet_issues.
 	Cluster string `json:"cluster,omitempty"`

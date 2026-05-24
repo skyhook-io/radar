@@ -152,19 +152,15 @@ func BuildTopMetrics(opts TopMetricsOptions) TopMetricsResponse {
 }
 
 func hasTopMetrics(resp TopMetricsResponse) bool {
-	if len(resp.Items) > 0 {
-		for _, item := range resp.Items {
-			if item.CPU != 0 || item.Memory != 0 {
-				return true
-			}
-		}
-	}
-	for _, item := range resp.Workloads {
-		if item.CPU != 0 || item.Memory != 0 {
-			return true
-		}
-	}
-	return false
+	// buildTopPodItems / buildTopNodeItems now filter out resources
+	// without a metrics-server sample (rows with no metricsMap entry are
+	// reported via SkippedNoMetrics rather than included as zero-usage
+	// inventory). After that filter, presence in Items/Workloads itself
+	// is the signal that metrics-server delivered data — zero CPU+memory
+	// rows now mean "real measurement of an idle workload," not "no data."
+	// Checking CPU/Memory>0 here would incorrectly mark idle-but-scraped
+	// clusters as having no metrics.
+	return len(resp.Items) > 0 || len(resp.Workloads) > 0
 }
 
 func buildTopPodItems(store *MetricsHistoryStore, namespace string) (items []TopMetricsItem, skippedNoMetrics int) {
