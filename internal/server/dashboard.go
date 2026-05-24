@@ -604,9 +604,12 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 
 	// Workload/HPA/CronJob/Node problems (excluding pods, handled above) +
 	// direct dangling-ref errors (missing CM/Secret/PVC/SA refs, missing
-	// HPA target, missing Ingress backend, missing roleRef, missing
-	// StorageClass on a PVC).
+	// HPA target, missing Ingress backend / TLS / port, missing roleRef,
+	// missing StorageClass on a PVC, missing headless Service on a
+	// StatefulSet) + webhook-config refs (missing Service on
+	// Validating/MutatingWebhookConfiguration or CRD conversion webhook).
 	detected := append(k8s.DetectProblems(cache, namespace), k8s.DetectMissingRefs(cache, namespace)...)
+	detected = append(detected, k8s.DetectMissingWebhookRefs(cache, k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery(), namespace)...)
 	for _, p := range detected {
 		problems = append(problems, DashboardProblem{
 			Kind:            p.Kind,

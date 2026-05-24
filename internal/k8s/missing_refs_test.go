@@ -51,6 +51,10 @@ func TestDetectMissingRefs(t *testing.T) {
 				// Optional CM ref MUST NOT be flagged.
 				{Name: "cm-opt", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "optional-cm-missing"}, Optional: &optTrue}}},
 			},
+			ImagePullSecrets: []corev1.LocalObjectReference{
+				{Name: "missing-pull"},
+				{Name: "real-secret"}, // existing — must NOT be flagged
+			},
 			Containers: []corev1.Container{{
 				Name: "app",
 				EnvFrom: []corev1.EnvFromSource{
@@ -109,18 +113,41 @@ func TestDetectMissingRefs(t *testing.T) {
 		},
 	}
 
-	// Ingress with missing backend + existing default backend (must not double-flag)
+	// Service with an http port, used for port-match testing.
+	existingSvc.Spec = corev1.ServiceSpec{Ports: []corev1.ServicePort{{Name: "http", Port: 80}}}
+
+	// Ingress: missing backend Service + missing port + missing TLS secret.
+	// Mixed with valid refs so the negative-assert path also runs.
 	ingMixed := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{Name: "ing", Namespace: "prod", CreationTimestamp: now},
 		Spec: networkingv1.IngressSpec{
-			DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "real-svc"}},
+			DefaultBackend: &networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "real-svc", Port: networkingv1.ServiceBackendPort{Name: "http"}}},
 			Rules: []networkingv1.IngressRule{{
 				Host: "app.example.com",
 				IngressRuleValue: networkingv1.IngressRuleValue{HTTP: &networkingv1.HTTPIngressRuleValue{
-					Paths: []networkingv1.HTTPIngressPath{{Path: "/api", Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "missing-svc"}}}},
+					Paths: []networkingv1.HTTPIngressPath{
+						// Missing Service.
+						{Path: "/api", Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "missing-svc", Port: networkingv1.ServiceBackendPort{Number: 8080}}}},
+						// Existing Service, wrong port name.
+						{Path: "/bad-port", Backend: networkingv1.IngressBackend{Service: &networkingv1.IngressServiceBackend{Name: "real-svc", Port: networkingv1.ServiceBackendPort{Name: "grpc-not-there"}}}},
+					},
 				}},
 			}},
+			TLS: []networkingv1.IngressTLS{
+				{Hosts: []string{"app.example.com"}, SecretName: "missing-tls"},
+				{Hosts: []string{"other.example.com"}, SecretName: "real-secret"}, // existing — must NOT be flagged
+			},
 		},
+	}
+
+	// StatefulSet with missing headless service.
+	stsMissingSvc := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sts-bad", Namespace: "prod", CreationTimestamp: now},
+		Spec:       appsv1.StatefulSetSpec{ServiceName: "missing-headless"},
+	}
+	stsExistingSvc := &appsv1.StatefulSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "sts-ok", Namespace: "prod", CreationTimestamp: now},
+		Spec:       appsv1.StatefulSetSpec{ServiceName: "real-svc"},
 	}
 
 	// PVCs
@@ -161,6 +188,7 @@ func TestDetectMissingRefs(t *testing.T) {
 		podMissing, podHealthy, podDefaultSA,
 		hpaMissingTarget, hpaExistingTarget, hpaUnknownKind,
 		ingMixed,
+		stsMissingSvc, stsExistingSvc,
 		pvcExplicitMissingSC, pvcExistingSC, pvcDefaultSC,
 		rbMissing, rbExisting, crbMissing, crbExisting,
 	)
@@ -169,12 +197,15 @@ func TestDetectMissingRefs(t *testing.T) {
 	}
 	cache := GetResourceCache()
 
-	// Wait for informers to populate before asserting.
+	// Wait for informers to populate before asserting. Need at least 12
+	// distinct {kind,reason} hits — 8 from the original 8-check set plus
+	// 4 from the new ones (imagePullSecret, headless Service, TLS Secret,
+	// backend port match).
 	deadline := time.Now().Add(2 * time.Second)
 	var problems []Problem
 	for time.Now().Before(deadline) {
 		problems = DetectMissingRefs(cache, "")
-		if len(problems) >= 9 {
+		if len(problems) >= 12 {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -188,8 +219,12 @@ func TestDetectMissingRefs(t *testing.T) {
 		{"Pod", "prod", "broken", "Missing ServiceAccount"},
 		{"Pod", "prod", "broken", "Missing ConfigMap"},
 		{"Pod", "prod", "broken", "Missing Secret"},
+		{"Pod", "prod", "broken", "Missing imagePullSecret"},
+		{"StatefulSet", "prod", "sts-bad", "Missing headless Service"},
 		{"HorizontalPodAutoscaler", "prod", "hpa-bad", "Missing scaleTargetRef"},
 		{"Ingress", "prod", "ing", "Missing backend Service"},
+		{"Ingress", "prod", "ing", "Missing backend Service port"},
+		{"Ingress", "prod", "ing", "Missing TLS Secret"},
 		{"PersistentVolumeClaim", "prod", "pvc-bad-sc", "Missing StorageClass"},
 		{"RoleBinding", "prod", "rb-bad", "Missing roleRef target"},
 		{"ClusterRoleBinding", "", "crb-bad", "Missing roleRef target"},
@@ -214,6 +249,7 @@ func TestDetectMissingRefs(t *testing.T) {
 		{"PersistentVolumeClaim", "pvc-default", "Missing"}, // nil storageClassName uses default
 		{"RoleBinding", "rb-ok", "Missing"},
 		{"ClusterRoleBinding", "crb-ok", "Missing"},
+		{"StatefulSet", "sts-ok", "Missing"},
 	}
 	for _, f := range forbidden {
 		for _, p := range problems {
@@ -237,6 +273,19 @@ func TestDetectMissingRefs(t *testing.T) {
 	for _, p := range nsScoped {
 		if p.Kind == "ClusterRoleBinding" {
 			t.Errorf("ClusterRoleBinding leaked into namespace-scoped result: %+v", p)
+		}
+	}
+
+	// TLS-secret-missing must be `warning`, not `critical` — Ingress
+	// controller falls back to default cert, degraded but not broken.
+	// All other missing-ref problems must stay `critical`.
+	for _, p := range problems {
+		if p.Reason == "Missing TLS Secret" {
+			if p.Severity != "warning" {
+				t.Errorf("TLS-secret-missing should be warning severity, got %q: %+v", p.Severity, p)
+			}
+		} else if p.Severity != "critical" {
+			t.Errorf("non-TLS missing-ref should be critical severity, got %q: %+v", p.Severity, p)
 		}
 	}
 }

@@ -2,12 +2,15 @@ package k8s
 
 import (
 	"fmt"
+	"log"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 )
 
@@ -19,10 +22,18 @@ import (
 //   - Pod → ServiceAccount (non-default)         (pod can't start)
 //   - Pod → ConfigMap   (when not optional)      (pod fails to start)
 //   - Pod → Secret      (when not optional)      (pod fails to start)
+//   - Pod → imagePullSecret                      (ImagePullBackOff on private registry)
+//   - StatefulSet → headless serviceName         (per-pod DNS not created, peer discovery broken)
 //   - HPA → scaleTargetRef                       (HPA inert until target exists)
 //   - Ingress → backend Service                  (route returns nothing)
+//   - Ingress → backend service port             (proxy config breaks, traffic dropped)
+//   - Ingress → TLS secretName                   (TLS falls back to default cert)
 //   - PVC → StorageClass (when specified)        (PVC stays Pending)
 //   - RoleBinding / ClusterRoleBinding → Role / ClusterRole (binding inert)
+//
+// Webhook-config / CRD-conversion ref checks live in DetectMissingWebhookRefs
+// since they require the dynamic cache (admissionregistration / apiextensions
+// kinds aren't in the typed lister set).
 //
 // Heuristic-tier checks (NetworkPolicy podSelector matching no pods,
 // "Deployment without a Service when peers have one") are NOT included —
@@ -47,6 +58,7 @@ func DetectMissingRefs(cache *ResourceCache, namespace string) []Problem {
 
 	var problems []Problem
 	problems = append(problems, detectPodMissingRefs(cache, namespace, now)...)
+	problems = append(problems, detectStatefulSetMissingService(cache, namespace, now)...)
 	problems = append(problems, detectHPAMissingTarget(cache, namespace, now)...)
 	problems = append(problems, detectIngressMissingBackend(cache, namespace, now)...)
 	problems = append(problems, detectPVCMissingStorageClass(cache, namespace, now)...)
@@ -235,6 +247,27 @@ func detectPodMissingRefs(cache *ResourceCache, namespace string, now time.Time)
 				}
 			}
 		}
+
+		// imagePullSecrets — Secrets that authenticate against private
+		// registries. No optional flag exists; a missing pull secret means
+		// ImagePullBackOff for any container pulled from a registry that
+		// needed those credentials. Pods whose images are all public would
+		// still start, but the wire-shape signal is identical to the
+		// always-real case, so flag uniformly.
+		for _, ips := range p.Spec.ImagePullSecrets {
+			name := ips.Name
+			if name == "" || seen["pull:"+name] {
+				continue
+			}
+			seen["pull:"+name] = true
+			if secLister == nil {
+				continue
+			}
+			if _, err := secLister.Secrets(p.Namespace).Get(name); err != nil {
+				emit("Missing imagePullSecret",
+					fmt.Sprintf("references Secret %q which does not exist (private-registry pulls will fail with ImagePullBackOff)", name))
+			}
+		}
 	}
 	return out
 }
@@ -312,6 +345,7 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 		// Can't verify Service existence; refuse to flag.
 		return nil
 	}
+	secLister := cache.Secrets()
 	var ings []*networkingv1.Ingress
 	if namespace != "" {
 		ings, _ = ingLister.Ingresses(namespace).List(labels.Everything())
@@ -322,23 +356,59 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 	var out []Problem
 	for _, ing := range ings {
 		age := now.Sub(ing.CreationTimestamp.Time)
-		seen := map[string]bool{}
+		seenSvc := map[string]bool{}
+		seenSec := map[string]bool{}
 
-		check := func(svcName string, sourcePath string) {
-			if svcName == "" || seen[svcName] {
+		// checkBackend verifies (a) the Service exists, and (b) the port
+		// reference resolves against the Service's port list. A backend that
+		// names a Service which exists but doesn't expose the named/numbered
+		// port silently drops traffic just as badly as a missing Service.
+		checkBackend := func(b networkingv1.IngressServiceBackend, sourcePath string) {
+			if b.Name == "" {
 				return
 			}
-			seen[svcName] = true
-			if _, err := svcLister.Services(ing.Namespace).Get(svcName); err != nil {
+			key := b.Name + "|" + b.Port.Name + "|" + fmt.Sprint(b.Port.Number)
+			if seenSvc[key] {
+				return
+			}
+			seenSvc[key] = true
+			svc, err := svcLister.Services(ing.Namespace).Get(b.Name)
+			if err != nil {
 				out = append(out, missingRefProblem("Ingress", "networking.k8s.io", ing.Namespace, ing.Name,
 					"Missing backend Service",
-					fmt.Sprintf("%s references Service %q which does not exist (route returns nothing)", sourcePath, svcName),
+					fmt.Sprintf("%s references Service %q which does not exist (route returns nothing)", sourcePath, b.Name),
+					age))
+				return
+			}
+			// Service exists — verify the port resolves.
+			if b.Port.Name == "" && b.Port.Number == 0 {
+				return
+			}
+			matched := false
+			for _, sp := range svc.Spec.Ports {
+				if b.Port.Name != "" && sp.Name == b.Port.Name {
+					matched = true
+					break
+				}
+				if b.Port.Number != 0 && sp.Port == b.Port.Number {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				portDesc := b.Port.Name
+				if portDesc == "" {
+					portDesc = fmt.Sprintf("%d", b.Port.Number)
+				}
+				out = append(out, missingRefProblem("Ingress", "networking.k8s.io", ing.Namespace, ing.Name,
+					"Missing backend Service port",
+					fmt.Sprintf("%s targets Service %q port %q which does not exist on the Service (reverse-proxy config breaks; traffic dropped)", sourcePath, b.Name, portDesc),
 					age))
 			}
 		}
 
 		if ing.Spec.DefaultBackend != nil && ing.Spec.DefaultBackend.Service != nil {
-			check(ing.Spec.DefaultBackend.Service.Name, "defaultBackend")
+			checkBackend(*ing.Spec.DefaultBackend.Service, "defaultBackend")
 		}
 		for _, rule := range ing.Spec.Rules {
 			if rule.HTTP == nil {
@@ -346,9 +416,186 @@ func detectIngressMissingBackend(cache *ResourceCache, namespace string, now tim
 			}
 			for _, path := range rule.HTTP.Paths {
 				if path.Backend.Service != nil {
-					check(path.Backend.Service.Name, fmt.Sprintf("rule[host=%q].path[%q]", rule.Host, path.Path))
+					checkBackend(*path.Backend.Service, fmt.Sprintf("rule[host=%q].path[%q]", rule.Host, path.Path))
 				}
 			}
+		}
+
+		// TLS secrets. Severity is warning (not critical): when the named
+		// Secret is missing, the Ingress controller typically falls back to
+		// the default cert and TLS still terminates — just with the wrong
+		// (or self-signed) certificate. Functionally degraded, not broken.
+		if secLister == nil {
+			continue
+		}
+		for _, tls := range ing.Spec.TLS {
+			if tls.SecretName == "" || seenSec[tls.SecretName] {
+				continue
+			}
+			seenSec[tls.SecretName] = true
+			if _, err := secLister.Secrets(ing.Namespace).Get(tls.SecretName); err != nil {
+				p := missingRefProblem("Ingress", "networking.k8s.io", ing.Namespace, ing.Name,
+					"Missing TLS Secret",
+					fmt.Sprintf("tls[].secretName references Secret %q which does not exist (controller will fall back to default cert; HTTPS clients will see cert warnings)", tls.SecretName),
+					age)
+				p.Severity = "warning"
+				out = append(out, p)
+			}
+		}
+	}
+	return out
+}
+
+func detectStatefulSetMissingService(cache *ResourceCache, namespace string, now time.Time) []Problem {
+	stsLister := cache.StatefulSets()
+	if stsLister == nil {
+		return nil
+	}
+	svcLister := cache.Services()
+	if svcLister == nil {
+		return nil
+	}
+	var stss []*appsv1.StatefulSet
+	if namespace != "" {
+		stss, _ = stsLister.StatefulSets(namespace).List(labels.Everything())
+	} else {
+		stss, _ = stsLister.List(labels.Everything())
+	}
+
+	var out []Problem
+	for _, sts := range stss {
+		// spec.serviceName names the headless Service that creates per-pod
+		// DNS records. It's required by the StatefulSet API, so an empty
+		// value is a different problem class (admission would normally
+		// reject); only flag when it's set-and-missing.
+		if sts.Spec.ServiceName == "" {
+			continue
+		}
+		if _, err := svcLister.Services(sts.Namespace).Get(sts.Spec.ServiceName); err != nil {
+			age := now.Sub(sts.CreationTimestamp.Time)
+			out = append(out, missingRefProblem("StatefulSet", "apps", sts.Namespace, sts.Name,
+				"Missing headless Service",
+				fmt.Sprintf("spec.serviceName references Service %q which does not exist (pods will schedule but per-pod DNS records won't be created; peer discovery silently broken)", sts.Spec.ServiceName),
+				age))
+		}
+	}
+	return out
+}
+
+// DetectMissingWebhookRefs scans admission-webhook configs and CRD conversion
+// webhooks for clientConfig.service refs that point at missing Services.
+// Returned separately from DetectMissingRefs because these checks need the
+// dynamic cache: admissionregistration.k8s.io and apiextensions.k8s.io kinds
+// aren't in the typed lister set. Mirrors the DetectCAPIProblems shape.
+//
+// Webhook misconfigurations are particularly worth surfacing because the
+// failure mode is silent: with failurePolicy=Ignore, security/mutation
+// rules are skipped without any visible cluster-level signal.
+func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, namespace string) []Problem {
+	if cache == nil || dynamicCache == nil || discovery == nil {
+		return nil
+	}
+	// All three sources are cluster-scoped — emit only when scanning all
+	// namespaces, same convention DetectMissingRefs uses for CRBs.
+	if namespace != "" {
+		return nil
+	}
+	svcLister := cache.Services()
+	if svcLister == nil {
+		return nil
+	}
+	now := time.Now()
+
+	listByKind := func(kind, group string) []*unstructured.Unstructured {
+		gvr, ok := discovery.GetGVRWithGroup(kind, group)
+		if !ok {
+			return nil
+		}
+		items, err := dynamicCache.List(gvr, "")
+		if err != nil {
+			log.Printf("[missing-refs] failed to list %s.%s: %v", kind, group, err)
+			return nil
+		}
+		return items
+	}
+
+	emit := func(kind, group, name, source, svcNS, svcName string, age time.Duration) Problem {
+		return missingRefProblem(kind, group, "", name,
+			"Missing webhook backend Service",
+			fmt.Sprintf("%s references Service %q in namespace %q which does not exist (webhook will not be invoked; admission rules silently bypassed when failurePolicy=Ignore, or admission halted when failurePolicy=Fail)",
+				source, svcName, svcNS),
+			age)
+	}
+
+	checkWebhookList := func(items []*unstructured.Unstructured, ownerKind, ownerGroup, webhookPath string) []Problem {
+		var problems []Problem
+		for _, item := range items {
+			webhooks, found, err := unstructured.NestedSlice(item.Object, webhookPath)
+			if err != nil || !found {
+				continue
+			}
+			age := now.Sub(item.GetCreationTimestamp().Time)
+			seen := map[string]bool{}
+			for _, w := range webhooks {
+				wm, ok := w.(map[string]any)
+				if !ok {
+					continue
+				}
+				ccSvc, found, err := unstructured.NestedMap(wm, "clientConfig", "service")
+				if err != nil || !found {
+					continue // URL-based clientConfig has no Service ref
+				}
+				svcName, _ := ccSvc["name"].(string)
+				svcNS, _ := ccSvc["namespace"].(string)
+				if svcName == "" || svcNS == "" {
+					continue
+				}
+				key := svcNS + "/" + svcName
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				if _, err := svcLister.Services(svcNS).Get(svcName); err != nil {
+					whName, _ := wm["name"].(string)
+					source := fmt.Sprintf("webhook %q clientConfig.service", whName)
+					problems = append(problems, emit(ownerKind, ownerGroup, item.GetName(), source, svcNS, svcName, age))
+				}
+			}
+		}
+		return problems
+	}
+
+	var out []Problem
+	out = append(out, checkWebhookList(
+		listByKind("ValidatingWebhookConfiguration", "admissionregistration.k8s.io"),
+		"ValidatingWebhookConfiguration", "admissionregistration.k8s.io", "webhooks",
+	)...)
+	out = append(out, checkWebhookList(
+		listByKind("MutatingWebhookConfiguration", "admissionregistration.k8s.io"),
+		"MutatingWebhookConfiguration", "admissionregistration.k8s.io", "webhooks",
+	)...)
+
+	// CRD conversion webhooks: spec.conversion.webhook.clientConfig.service.
+	// Not a list; one Service per CRD's conversion path.
+	for _, crd := range listByKind("CustomResourceDefinition", "apiextensions.k8s.io") {
+		ccSvc, found, err := unstructured.NestedMap(crd.Object,
+			"spec", "conversion", "webhook", "clientConfig", "service")
+		if err != nil || !found {
+			continue
+		}
+		svcName, _ := ccSvc["name"].(string)
+		svcNS, _ := ccSvc["namespace"].(string)
+		if svcName == "" || svcNS == "" {
+			continue
+		}
+		if _, err := svcLister.Services(svcNS).Get(svcName); err != nil {
+			age := now.Sub(crd.GetCreationTimestamp().Time)
+			out = append(out, missingRefProblem(
+				"CustomResourceDefinition", "apiextensions.k8s.io", "", crd.GetName(),
+				"Missing conversion-webhook Service",
+				fmt.Sprintf("spec.conversion.webhook.clientConfig.service references Service %q in namespace %q which does not exist (CR reads/writes for this kind will fail conversion)",
+					svcName, svcNS),
+				age))
 		}
 	}
 	return out

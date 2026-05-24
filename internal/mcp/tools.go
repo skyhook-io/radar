@@ -1763,7 +1763,9 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	for _, p := range d.Problems {
 		seenProblem[p.Kind+"/"+p.Namespace+"/"+p.Name] = true
 	}
-	for _, p := range k8s.DetectMissingRefs(cache, namespace) {
+	missingRefs := k8s.DetectMissingRefs(cache, namespace)
+	missingRefs = append(missingRefs, k8s.DetectMissingWebhookRefs(cache, k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery(), namespace)...)
+	for _, p := range missingRefs {
 		if len(d.Problems) >= 10 {
 			break
 		}
