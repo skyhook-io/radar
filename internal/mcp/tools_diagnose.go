@@ -238,7 +238,10 @@ func resolveDiagnosePods(cache *k8s.ResourceCache, kindNorm, namespace, name str
 func fetchEventsForResource(cache *k8s.ResourceCache, kind, namespace, name string, pods []*corev1.Pod, limit int) ([]aicontext.DeduplicatedEvent, error) {
 	eventLister := cache.Events()
 	if eventLister == nil {
-		return nil, nil
+		// Mirror attachResourceExtras / get_resource(include=events): surface
+		// "couldn't load" rather than returning empty, so handleDiagnose sets
+		// EventsError and agents don't read silence as "no warnings."
+		return nil, fmt.Errorf("events lister unavailable (insufficient permissions or cache cold)")
 	}
 	events, err := eventLister.Events(namespace).List(labels.Everything())
 	if err != nil {
