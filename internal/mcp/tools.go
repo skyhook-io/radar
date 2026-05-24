@@ -38,13 +38,12 @@ func registerTools(server *mcp.Server) {
 		ReadOnlyHint:  true,
 		OpenWorldHint: boolPtr(false),
 	}
-	// writeTool reflects worst-case action: apply_resource uses SSA with
-	// Force=true (rips ownership from other field managers); manage_node
-	// drains pods; manage_workload rollback/restart overwrites desired
-	// state or terminates pods; manage_gitops terminate/rollback aborts
-	// or overwrites; manage_cronjob suspend mutates schedule state
-	// (not additive). MCP annotations are tool-level, so the worst-case
-	// action sets the hint for the whole tool.
+	// writeTool reflects worst-case action across the tools that share it:
+	// apply_resource uses SSA with Force=true (rips ownership from other
+	// field managers); manage_node drains evict pods; manage_workload
+	// rollback/restart overwrites desired state or terminates pods;
+	// manage_gitops terminate/rollback aborts or overwrites; manage_cronjob
+	// suspend mutates schedule state (not additive).
 	writeTool := &mcp.ToolAnnotations{
 		DestructiveHint: boolPtr(true),
 		OpenWorldHint:   boolPtr(false),
@@ -1727,11 +1726,10 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		}
 	}
 
-	// Workload/HPA/CronJob/Node problems (excluding pods, handled above).
-	// DetectProblems was expanded in this PR to emit Pod-level rows
-	// (CrashLoopBackOff, not-ready, etc.); the dashboard pod loop above
-	// is the canonical source for those, so skip Pod here to avoid the
-	// same failing pod appearing twice.
+	// DetectProblems emits Pod-level rows (CrashLoopBackOff, not-ready,
+	// etc.) as well as workload/HPA/CronJob/Node ones. The dashboard pod
+	// loop above is the canonical source for pod problems, so skip Pod
+	// here to avoid the same failing pod appearing twice.
 	for _, p := range k8s.DetectProblems(cache, namespace) {
 		if len(d.Problems) >= 10 {
 			break
