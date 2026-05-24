@@ -127,6 +127,26 @@ func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditIn
 		})
 	}
 
+	// Summary.Critical / Warning / Resources reflect the same filter scope
+	// as Findings — counting from the post-filter slice so an agent that
+	// passed namespace/category/severity gets summary numbers that match
+	// what it actually received. Pre-filter totals (results.Summary.Danger,
+	// len(results.Groups)) over-counted the agent's filtered view and were
+	// misleading when the tool description promises filterable output.
+	// Categories stays post-RBAC + pre-category-filter so the agent can
+	// still see which categories have findings before narrowing.
+	var critical, warning int
+	resourceSet := map[string]struct{}{}
+	for _, f := range filtered {
+		switch f.Severity {
+		case "danger", "critical":
+			critical++
+		case "warning":
+			warning++
+		}
+		resourceSet[f.Resource] = struct{}{}
+	}
+
 	totalCount := len(filtered)
 	truncated := false
 	if len(filtered) > limit {
@@ -136,9 +156,9 @@ func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditIn
 
 	return toJSONResult(auditToolResult{
 		Summary: auditSummary{
-			Critical:   results.Summary.Danger,
-			Warning:    results.Summary.Warning,
-			Resources:  len(results.Groups),
+			Critical:   critical,
+			Warning:    warning,
+			Resources:  len(resourceSet),
 			Categories: catCounts,
 		},
 		Findings:   filtered,

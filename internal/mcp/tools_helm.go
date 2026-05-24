@@ -118,10 +118,16 @@ func handleGetHelmRelease(ctx context.Context, req *mcp.CallToolRequest, input g
 		result["history"] = detail.History
 	}
 
-	if includes["diff"] && input.DiffRev1 > 0 {
-		if gatedSensitive {
+	if includes["diff"] {
+		switch {
+		case input.DiffRev1 <= 0:
+			// Surface the contract gap instead of silently producing no `diff`
+			// field — the agent can't tell whether the call was a no-op
+			// versus the diff being empty.
+			result["diffError"] = "include=diff requires diff_revision_1 (the earlier revision to compare); diff_revision_2 defaults to current"
+		case gatedSensitive:
 			result["diffError"] = fmt.Sprintf("Radar Cloud role %q cannot view Helm release diffs (requires member or higher)", cloudRole.String())
-		} else {
+		default:
 			rev2 := input.DiffRev2
 			if rev2 == 0 {
 				rev2 = detail.Revision // default to current revision

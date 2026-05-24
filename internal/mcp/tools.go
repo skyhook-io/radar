@@ -30,7 +30,25 @@ import (
 )
 
 func registerTools(server *mcp.Server) {
-	readOnly := &mcp.ToolAnnotations{ReadOnlyHint: true}
+	boolPtr := func(b bool) *bool { return &b }
+	// All radar tools operate against the connected cluster (closed world),
+	// not the open internet — set OpenWorldHint=false so MCP clients that
+	// gate on this hint don't treat radar like a web-search tool.
+	readOnly := &mcp.ToolAnnotations{
+		ReadOnlyHint:  true,
+		OpenWorldHint: boolPtr(false),
+	}
+	// writeTool reflects worst-case action: apply_resource uses SSA with
+	// Force=true (rips ownership from other field managers); manage_node
+	// drains pods; manage_workload rollback/restart overwrites desired
+	// state or terminates pods; manage_gitops terminate/rollback aborts
+	// or overwrites; manage_cronjob suspend mutates schedule state
+	// (not additive). MCP annotations are tool-level, so the worst-case
+	// action sets the hint for the whole tool.
+	writeTool := &mcp.ToolAnnotations{
+		DestructiveHint: boolPtr(true),
+		OpenWorldHint:   boolPtr(false),
+	}
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_dashboard",
@@ -273,21 +291,15 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "search",
-		Description: "Use when you do not know the exact kind, namespace, or name, or " +
-			"when you need a grep-like scan across cached Kubernetes objects. Matches " +
-			"name, namespace, label values, annotation values, container images, kind, " +
-			"and searchable object content such as ConfigMap data, spec fields, status " +
-			"messages, env refs, and CRD specs. Tokens are AND'd. Examples: " +
-			"`adServiceFailure` finds feature flags in ConfigMap data; " +
-			"`kind:NetworkChaos delay` or `kind:PodChaos app=cart` finds Chaos Mesh " +
-			"faults; `image:flagd` finds feature-flag infrastructure. Modifiers include " +
-			"kind:Pod, kind:NetworkChaos, ns:foo, label:app=bar, image:redis. Returns ranked hits with matched " +
-			"content snippets and summaryContext by default so you can rank suspects " +
-			"before get_resource. Use this for feature flags, Chaos Mesh objects, " +
-			"secret/config refs, unknown CRD names, or 'where does this string appear?' " +
-			"questions. Use CEL filter for structural predicates over kind/apiVersion/" +
-			"metadata/spec/status/labels/annotations. Searches typed kinds plus CRDs " +
-			"already warmed in cache; cold CRDs need list_resources first to start watching.",
+		Description: "Find resources by content/term match when you do not know which object " +
+			"contains a string, config key, env ref, image, label/annotation value, " +
+			"ConfigMap/Secret data, CRD field, or status message. Tokens are AND'd. " +
+			"Examples: `readinessProbe user-service`, `image:flagd`, `kind:Pod label:app=cart error`. " +
+			"Modifiers such as kind:Pod, ns:foo, label:app=bar, and image:redis narrow a " +
+			"term match; modifier-only queries are enumeration, so use list_resources when " +
+			"you already know the kind/namespace. Returns ranked hits with snippets and " +
+			"summaryContext. Use CEL filter for structural predicates. Searches typed kinds " +
+			"plus warmed CRDs; cold CRDs need list_resources first.",
 		Annotations: readOnly,
 	}, logToolCall("search", handleSearch))
 
@@ -328,17 +340,13 @@ func registerTools(server *mcp.Server) {
 
 	// --- Write tools (workload, cronjob, gitops) ---
 
-	boolPtr := func(b bool) *bool { return &b }
-
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "manage_workload",
 		Description: "Perform operations on a Kubernetes workload (Deployment, StatefulSet, or DaemonSet). " +
 			"Supported actions: 'restart' triggers a rolling restart, 'scale' changes the replica count " +
 			"(requires 'replicas' parameter), 'rollback' reverts to a previous revision " +
 			"(requires 'revision' parameter). Use list_resources or get_dashboard first to identify the target.",
-		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: boolPtr(false),
-		},
+		Annotations: writeTool,
 	}, logToolCall("manage_workload", handleManageWorkload))
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -347,9 +355,7 @@ func registerTools(server *mcp.Server) {
 			"'trigger' creates a manual Job run from the CronJob's template, " +
 			"'suspend' pauses the CronJob schedule (no new Jobs will be created), " +
 			"'resume' re-enables a suspended CronJob's schedule.",
-		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: boolPtr(false),
-		},
+		Annotations: writeTool,
 	}, logToolCall("manage_cronjob", handleManageCronJob))
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -359,21 +365,20 @@ func registerTools(server *mcp.Server) {
 			"'suspend' (disable auto-sync), 'resume' (re-enable auto-sync). Resource kind is always Application. " +
 			"For FluxCD: actions are 'reconcile' (trigger sync), 'sync-with-source', 'suspend', 'resume'. " +
 			"Requires 'kind' parameter (kustomization, helmrelease, gitrepository, etc.).",
-		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: boolPtr(false),
-		},
+		Annotations: writeTool,
 	}, logToolCall("manage_gitops", handleManageGitOps))
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "apply_resource",
 		Description: "Create or update a Kubernetes resource from a YAML manifest. " +
-			"In 'apply' mode (default), performs a server-side apply (idempotent create-or-update). " +
+			"In 'apply' mode (default), performs a server-side apply with FieldManager=radar " +
+			"and Force=true — this can take field ownership from other managers (Helm, Flux, " +
+			"GitOps controllers, kubectl), so applies against Helm/Flux-owned objects will " +
+			"succeed but may conflict with the upstream reconciler on the next sync. " +
 			"In 'create' mode, performs a strict create that fails if the resource already exists. " +
 			"Supports multi-document YAML separated by '---'. " +
 			"Use dry_run to validate without persisting changes.",
-		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: boolPtr(false),
-		},
+		Annotations: writeTool,
 	}, logToolCall("apply_resource", handleApplyResource))
 
 	mcp.AddTool(server, &mcp.Tool{
@@ -384,9 +389,7 @@ func registerTools(server *mcp.Server) {
 			"'drain' cordons the node and evicts all non-DaemonSet pods. " +
 			"Drain options: 'delete_empty_dir_data' (allow evicting pods with emptyDir volumes), " +
 			"'force' (evict pods not managed by a controller), 'timeout' (seconds, default 60).",
-		Annotations: &mcp.ToolAnnotations{
-			DestructiveHint: boolPtr(false),
-		},
+		Annotations: writeTool,
 	}, logToolCall("manage_node", handleManageNode))
 }
 
@@ -413,7 +416,7 @@ type listResourcesInput struct {
 type getResourceInput struct {
 	Kind      string `json:"kind" jsonschema:"resource kind, e.g. pod, deployment, service"`
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. cluster.x-k8s.io for CAPI Cluster vs CNPG Cluster)"`
-	Namespace string `json:"namespace" jsonschema:"resource namespace"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Include   string `json:"include,omitempty" jsonschema:"optional sidecar data after narrowing to this object: events, metrics, logs. Separate from context; include may fetch heavier live/derived data."`
 	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches managedBy / exposes / selectedBy / uses / runsOn / issueSummary / auditSummary rollups) or 'none' (bare minified resource). For full diagnostic tier with logs + events bundled, use the diagnose tool instead."`
