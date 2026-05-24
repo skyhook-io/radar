@@ -306,11 +306,13 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
                   { name: 'kind', required: true, desc: 'resource kind, e.g. pods, deployments, services' },
                   { name: 'namespace', required: false, desc: 'filter to a specific namespace' },
                 ]},
-                { name: 'get_resource', desc: 'Get detailed information about a single Kubernetes resource. Returns minified spec, status, and metadata. Optionally include related context (events, relationships, metrics, logs) to avoid extra tool calls.', params: [
+                { name: 'get_resource', desc: 'Get a single Kubernetes resource: minified spec/status/metadata plus default-on resourceContext (managedBy, exposes, selectedBy, uses, runsOn, issue/audit rollups). Optionally include heavier sidecars (events, metrics, logs).', params: [
                   { name: 'kind', required: true, desc: 'resource kind, e.g. pod, deployment, service' },
-                  { name: 'namespace', required: true, desc: 'resource namespace' },
+                  { name: 'namespace', required: false, desc: 'omit for cluster-scoped kinds (Node, ClusterRole, IngressClass, etc.)' },
                   { name: 'name', required: true, desc: 'resource name' },
-                  { name: 'include', required: false, desc: 'events, relationships, metrics, logs' },
+                  { name: 'group', required: false, desc: 'API group when the kind is ambiguous (e.g. serving.knative.dev for Knative Service vs core Service)' },
+                  { name: 'include', required: false, desc: 'events, metrics, logs' },
+                  { name: 'context', required: false, desc: 'resourceContext tier: basic (default) or none (bare minified)' },
                 ]},
                 { name: 'get_topology', desc: 'Get the topology graph showing relationships between Kubernetes resources. Returns nodes and edges representing Deployments, Services, Ingresses, Pods, etc. Use \'traffic\' view for network flow or \'resources\' view for ownership hierarchy. Use \'summary\' format for LLM-friendly text descriptions.', params: [
                   { name: 'namespace', required: false, desc: 'filter to a specific namespace' },

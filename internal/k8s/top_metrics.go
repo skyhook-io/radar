@@ -461,14 +461,29 @@ func podRestartCount(pod *corev1.Pod) int32 {
 	for _, c := range pod.Status.ContainerStatuses {
 		total += c.RestartCount
 	}
+	// Init container restarts matter — Init:CrashLoopBackOff pods are
+	// exactly the ones an operator wants to see at the top of top_resources,
+	// and they have zero restart counts on the main containers. Mirror
+	// podTotalRestarts in internal/mcp/tools_diagnose.go.
+	for _, c := range pod.Status.InitContainerStatuses {
+		total += c.RestartCount
+	}
 	return total
 }
 
 func podReadyString(pod *corev1.Pod) string {
+	// Match status entries to spec.Containers by name so that any entries
+	// kubelet may surface outside the main-container set (sidecars in
+	// initContainerStatuses, ephemerals, etc.) can't push `ready` above
+	// `total` and produce nonsense readouts like "2/1".
+	specNames := make(map[string]bool, len(pod.Spec.Containers))
+	for _, c := range pod.Spec.Containers {
+		specNames[c.Name] = true
+	}
 	total := len(pod.Spec.Containers)
 	ready := 0
 	for _, c := range pod.Status.ContainerStatuses {
-		if c.Ready {
+		if specNames[c.Name] && c.Ready {
 			ready++
 		}
 	}

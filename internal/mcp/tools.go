@@ -292,7 +292,10 @@ func registerTools(server *mcp.Server) {
 		Name: "search",
 		Description: "Find resources by content/term match when you do not know which object " +
 			"contains a string, config key, env ref, image, label/annotation value, " +
-			"ConfigMap/Secret data, CRD field, or status message. Tokens are AND'd. " +
+			"ConfigMap data, CRD field, or status message. Tokens are AND'd. " +
+			"Secret content is intentionally NOT indexed — Secret names match by " +
+			"metadata, but data values won't appear in snippets to avoid leaking " +
+			"secret material through search results. " +
 			"Examples: `readinessProbe user-service`, `image:flagd`, `kind:Pod label:app=cart error`. " +
 			"Modifiers such as kind:Pod, ns:foo, label:app=bar, and image:redis narrow a " +
 			"term match; modifier-only queries are enumeration, so use list_resources when " +
@@ -836,7 +839,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		result["resourceContext"] = resourceCtx
 	}
 	if len(includes) > 0 {
-		attachResourceExtras(ctx, cache, result, includes, kind, namespace, name, rawObj)
+		attachResourceExtras(ctx, cache, result, includes, kind, namespace, name)
 	}
 	return toJSONResult(result)
 }
@@ -886,11 +889,10 @@ func buildMCPResourceContext(ctx context.Context, obj runtime.Object, kind, name
 	return resourcecontext.Build(ctx, obj, opts)
 }
 
-// attachResourceExtras populates optional extras (events, relationships, metrics, logs)
-// on the result map based on the includes set. rawObj is the already-fetched
-// resource (typed or *unstructured); passed through so relationship synthesis
-// uses the authoritative object instead of a group-blind kind/name lookup.
-func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result map[string]any, includes map[string]bool, kind, namespace, name string, rawObj any) {
+// attachResourceExtras populates optional extras (events, metrics, logs) on
+// the result map based on the includes set. relationship synthesis moved to
+// resourceContext via Build and is no longer routed through this function.
+func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result map[string]any, includes map[string]bool, kind, namespace, name string) {
 	if includes["events"] {
 		if eventLister := cache.Events(); eventLister != nil {
 			var events []*corev1.Event

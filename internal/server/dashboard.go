@@ -607,10 +607,33 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 	// HPA target, missing Ingress backend / TLS / port, missing roleRef,
 	// missing StorageClass on a PVC, missing headless Service on a
 	// StatefulSet) + webhook-config refs (missing Service on
-	// Validating/MutatingWebhookConfiguration or CRD conversion webhook).
+	// Validating/MutatingWebhookConfiguration). Skip Pod-kind rows from
+	// DetectProblems — REST's pod rollup + orphan handling above is the
+	// canonical pod surface; including DetectProblems Pod rows would
+	// duplicate them. (Missing-ref Pod rows are intentionally kept: those
+	// catch pods stuck Pending on missing refs, which the pod-error loop
+	// above doesn't surface.)
 	detected := append(k8s.DetectProblems(cache, namespace), k8s.DetectMissingRefs(cache, namespace)...)
 	detected = append(detected, k8s.DetectMissingWebhookRefs(cache, k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery(), namespace)...)
+	seenPod := map[string]bool{}
 	for _, p := range detected {
+		// DetectProblems Pod rows duplicate REST's pod rollup; DetectMissingRefs
+		// Pod rows are kept (different failure category — won't-schedule etc).
+		// We can't tell the source from the Problem struct, so distinguish by
+		// whether the Reason starts with "Missing " (only emitted by
+		// DetectMissingRefs at present). Defensive belt-and-braces dedupe
+		// keys by (kind, ns, name) for missing-ref Pods so the same pod
+		// doesn't get two missing-ref rows in the orphan list as well.
+		if p.Kind == "Pod" {
+			if !strings.HasPrefix(p.Reason, "Missing ") {
+				continue
+			}
+			key := p.Namespace + "/" + p.Name
+			if seenPod[key] {
+				continue
+			}
+			seenPod[key] = true
+		}
 		problems = append(problems, DashboardProblem{
 			Kind:            p.Kind,
 			Namespace:       p.Namespace,
@@ -643,7 +666,10 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 	}
 
 	// Sort: critical first, then high, then medium; within each group sort by age (most recent first)
-	severityOrder := map[string]int{"critical": 0, "high": 1, "medium": 2}
+	// "warning" is below medium — degraded states that aren't immediate
+	// failures. Listed explicitly so the Go zero-value (0) doesn't accidentally
+	// sort warnings ahead of critical when an unknown severity is encountered.
+	severityOrder := map[string]int{"critical": 0, "high": 1, "medium": 2, "warning": 3}
 	sort.SliceStable(problems, func(i, j int) bool {
 		si, sj := severityOrder[problems[i].Severity], severityOrder[problems[j].Severity]
 		if si != sj {
@@ -791,7 +817,7 @@ func collectPodForRollup(pod *corev1.Pod, severity string, now time.Time, groups
 
 	g.podCount++
 	// Keep worst severity: critical > high > medium
-	order := map[string]int{"critical": 0, "high": 1, "medium": 2}
+	order := map[string]int{"critical": 0, "high": 1, "medium": 2, "warning": 3}
 	if g.severity == "" || order[severity] < order[g.severity] {
 		g.severity = severity
 	}

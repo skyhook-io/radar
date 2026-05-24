@@ -31,9 +31,10 @@ import (
 //   - PVC → StorageClass (when specified)        (PVC stays Pending)
 //   - RoleBinding / ClusterRoleBinding → Role / ClusterRole (binding inert)
 //
-// Webhook-config / CRD-conversion ref checks live in DetectMissingWebhookRefs
-// since they require the dynamic cache (admissionregistration / apiextensions
-// kinds aren't in the typed lister set).
+// Admission-webhook ref checks (Validating/MutatingWebhookConfiguration →
+// clientConfig.service) live in DetectMissingWebhookRefs — they require the
+// dynamic cache because admissionregistration.k8s.io kinds aren't in the
+// typed lister set.
 //
 // Heuristic-tier checks (NetworkPolicy podSelector matching no pods,
 // "Deployment without a Service when peers have one") are NOT included —
@@ -482,15 +483,21 @@ func detectStatefulSetMissingService(cache *ResourceCache, namespace string, now
 	return out
 }
 
-// DetectMissingWebhookRefs scans admission-webhook configs and CRD conversion
-// webhooks for clientConfig.service refs that point at missing Services.
-// Returned separately from DetectMissingRefs because these checks need the
-// dynamic cache: admissionregistration.k8s.io and apiextensions.k8s.io kinds
-// aren't in the typed lister set. Mirrors the DetectCAPIProblems shape.
+// DetectMissingWebhookRefs scans admission-webhook configs
+// (ValidatingWebhookConfiguration, MutatingWebhookConfiguration) for
+// clientConfig.service refs that point at missing Services. Returned
+// separately from DetectMissingRefs because admissionregistration.k8s.io
+// kinds aren't in the typed lister set. Mirrors DetectCAPIProblems shape.
 //
 // Webhook misconfigurations are particularly worth surfacing because the
 // failure mode is silent: with failurePolicy=Ignore, security/mutation
 // rules are skipped without any visible cluster-level signal.
+//
+// CRD conversion webhook refs (spec.conversion.webhook.clientConfig.service)
+// are NOT checked here. The dynamic cache strips spec.conversion via
+// pkg/k8score/transform.go to avoid retaining heavy schema/caBundle data,
+// so reading those refs from the cache is impossible. Would need a direct
+// API list bypassing the transform — tracked as a follow-up.
 func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, namespace string) []Problem {
 	if cache == nil || dynamicCache == nil || discovery == nil {
 		return nil
@@ -574,30 +581,6 @@ func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 		listByKind("MutatingWebhookConfiguration", "admissionregistration.k8s.io"),
 		"MutatingWebhookConfiguration", "admissionregistration.k8s.io", "webhooks",
 	)...)
-
-	// CRD conversion webhooks: spec.conversion.webhook.clientConfig.service.
-	// Not a list; one Service per CRD's conversion path.
-	for _, crd := range listByKind("CustomResourceDefinition", "apiextensions.k8s.io") {
-		ccSvc, found, err := unstructured.NestedMap(crd.Object,
-			"spec", "conversion", "webhook", "clientConfig", "service")
-		if err != nil || !found {
-			continue
-		}
-		svcName, _ := ccSvc["name"].(string)
-		svcNS, _ := ccSvc["namespace"].(string)
-		if svcName == "" || svcNS == "" {
-			continue
-		}
-		if _, err := svcLister.Services(svcNS).Get(svcName); err != nil {
-			age := now.Sub(crd.GetCreationTimestamp().Time)
-			out = append(out, missingRefProblem(
-				"CustomResourceDefinition", "apiextensions.k8s.io", "", crd.GetName(),
-				"Missing conversion-webhook Service",
-				fmt.Sprintf("spec.conversion.webhook.clientConfig.service references Service %q in namespace %q which does not exist (CR reads/writes for this kind will fail conversion)",
-					svcName, svcNS),
-				age))
-		}
-	}
 	return out
 }
 
