@@ -498,7 +498,29 @@ func handleGetDashboard(ctx context.Context, req *mcp.CallToolRequest, input das
 	}
 
 	dashboard := buildDashboard(ctx, cache, input.Namespace, canReadClusterScopedKind(ctx, "nodes", "", "list"), canReadClusterScopedKind(ctx, "namespaces", "", "list"))
+	// Surface the truncation explicitly so the agent doesn't read the capped
+	// problem list as the full set. The wire shape already carries
+	// TotalProblems + ProblemsBySeverity for richer counts; this hint is
+	// the steering signal that says "you're seeing a subset, narrow with
+	// namespace= for full coverage."
+	if dashboard.TotalProblems > len(dashboard.Problems) {
+		return toJSONResult(getDashboardResponseMCP{
+			mcpDashboard: dashboard,
+			NarrowHint: fmt.Sprintf(
+				"showing %d of %d problems (sorted by severity then recency) — narrow with namespace= for the full list at that scope",
+				len(dashboard.Problems), dashboard.TotalProblems,
+			),
+		})
+	}
 	return toJSONResult(dashboard)
+}
+
+// getDashboardResponseMCP wraps mcpDashboard so the JSON shape stays
+// identical except for the added narrowHint field when the dashboard cap
+// truncated the problem list. Same pattern as get_changes / get_events.
+type getDashboardResponseMCP struct {
+	mcpDashboard
+	NarrowHint string `json:"narrowHint,omitempty"`
 }
 
 func handleTopResources(ctx context.Context, _ *mcp.CallToolRequest, input topResourcesInput) (*mcp.CallToolResult, any, error) {
@@ -1613,6 +1635,8 @@ type mcpDashboard struct {
 	VersionSkew    []string               `json:"versionSkew,omitempty"`
 	Health         mcpHealthSummary       `json:"health"`
 	Problems       []mcpProblem           `json:"problems"`
+	TotalProblems  int                    `json:"totalProblems"`           // count before the dashboard cap was applied
+	ProblemsBySeverity map[string]int     `json:"problemsBySeverity,omitempty"` // critical/high/medium/warning counts across the full set
 	RecentChanges  []mcpChange            `json:"recentChanges,omitempty"`
 	WarningEvents  int                    `json:"warningEvents"`
 	TopWarnings    []mcpWarning           `json:"topWarnings"`
@@ -1660,13 +1684,68 @@ type mcpHealthSummary struct {
 }
 
 type mcpProblem struct {
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace,omitempty"`
-	Name      string `json:"name"`
-	Group     string `json:"group,omitempty"`
-	Reason    string `json:"reason"`
-	Message   string `json:"message,omitempty"`
-	Age       string `json:"age"`
+	Kind                 string `json:"kind"`
+	Namespace            string `json:"namespace,omitempty"`
+	Name                 string `json:"name"`
+	Group                string `json:"group,omitempty"`
+	Severity             string `json:"severity,omitempty"`
+	Reason               string `json:"reason"`
+	Message              string `json:"message,omitempty"`
+	Age                  string `json:"age"`
+	RestartCount         int32  `json:"restartCount,omitempty"`         // Pod problems only
+	LastTerminatedReason string `json:"lastTerminatedReason,omitempty"` // Pod problems only (OOMKilled / Error / Completed)
+	// ageSeconds is for sort tiebreak; not serialized so it doesn't widen
+	// the wire shape callers depend on.
+	ageSeconds int64 `json:"-"`
+}
+
+// problemSeverityRank maps the Problem.Severity vocabulary onto sort order.
+// Lower rank sorts first. Unknown severities fall to the end (rank=99) so a
+// future "info"-tier value doesn't accidentally outrank critical via the
+// Go zero-value (which would happen with map[string]int default lookups).
+func problemSeverityRank(s string) int {
+	switch s {
+	case "critical":
+		return 0
+	case "high":
+		return 1
+	case "medium":
+		return 2
+	case "warning":
+		return 3
+	}
+	return 99
+}
+
+// sortMCPDashboardProblems applies (severity desc, age desc) to the
+// dashboard problem list before the cap, so a critical missing-ref isn't
+// dropped in favour of a medium-severity workload problem that happened
+// to be appended earlier.
+func sortMCPDashboardProblems(problems []mcpProblem) {
+	sort.SliceStable(problems, func(i, j int) bool {
+		ri, rj := problemSeverityRank(problems[i].Severity), problemSeverityRank(problems[j].Severity)
+		if ri != rj {
+			return ri < rj
+		}
+		// Same severity: most recent (lowest ageSeconds) first. Newly-
+		// failed resources are usually more interesting for triage than
+		// the chronic crash-loopers — and chronic ones are already
+		// signaled via the RestartCount field on the row.
+		return problems[i].ageSeconds < problems[j].ageSeconds
+	})
+}
+
+// countBySeverity tallies problems across the full uncapped set so the
+// agent can see the real scale even when only 30 rows are returned.
+func countBySeverity(problems []mcpProblem) map[string]int {
+	if len(problems) == 0 {
+		return nil
+	}
+	out := make(map[string]int, 4)
+	for _, p := range problems {
+		out[p.Severity]++
+	}
+	return out
 }
 
 type mcpWarning struct {
@@ -1716,6 +1795,13 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 
 	now := time.Now()
 
+	// Collect all problems first (uncapped), sort by severity+age, then
+	// apply the dashboard cap. Previously each loop applied its own
+	// >=10 cap independently, which meant a critical missing-ref could
+	// be dropped in favour of a medium-severity workload problem that
+	// happened to be appended earlier in the sequence.
+	var allProblems []mcpProblem
+
 	// Pod health
 	if podLister := cache.Pods(); podLister != nil {
 		var pods []*corev1.Pod
@@ -1733,15 +1819,23 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 				d.Health.WarningPods++
 			case "error":
 				d.Health.ErrorPods++
-				if len(d.Problems) < 10 {
-					d.Problems = append(d.Problems, mcpProblem{
-						Kind:      "Pod",
-						Namespace: pod.Namespace,
-						Name:      pod.Name,
-						Reason:    k8s.PodProblemReason(pod),
-						Age:       k8s.FormatAge(now.Sub(pod.CreationTimestamp.Time)),
-					})
-				}
+				severity := "critical"
+				// PodProblemReason returns the kubelet's waiting/terminated
+				// reason; ClassifyPodHealth==error implies the pod is in a
+				// failing state, so critical is the right default.
+				restarts, lastTermReason := k8s.PodRestartContext(pod)
+				ageDur := now.Sub(pod.CreationTimestamp.Time)
+				allProblems = append(allProblems, mcpProblem{
+					Kind:                 "Pod",
+					Namespace:            pod.Namespace,
+					Name:                 pod.Name,
+					Severity:             severity,
+					Reason:               k8s.PodProblemReason(pod),
+					Age:                  k8s.FormatAge(ageDur),
+					RestartCount:         restarts,
+					LastTerminatedReason: lastTermReason,
+					ageSeconds:           int64(ageDur.Seconds()),
+				})
 			}
 		}
 	}
@@ -1751,22 +1845,24 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	// loop above is the canonical source for pod problems, so skip Pod
 	// here to avoid the same failing pod appearing twice.
 	for _, p := range k8s.DetectProblems(cache, namespace) {
-		if len(d.Problems) >= 10 {
-			break
-		}
 		if p.Kind == "Pod" {
 			continue
 		}
 		if p.Kind == "Node" && !includeNodes {
 			continue
 		}
-		d.Problems = append(d.Problems, mcpProblem{
-			Kind:      p.Kind,
-			Namespace: p.Namespace,
-			Name:      p.Name,
-			Reason:    p.Reason,
-			Message:   p.Message,
-			Age:       p.Age,
+		allProblems = append(allProblems, mcpProblem{
+			Kind:                 p.Kind,
+			Namespace:            p.Namespace,
+			Name:                 p.Name,
+			Group:                p.Group,
+			Severity:             p.Severity,
+			Reason:               p.Reason,
+			Message:              p.Message,
+			Age:                  p.Age,
+			RestartCount:         p.RestartCount,
+			LastTerminatedReason: p.LastTerminatedReason,
+			ageSeconds:           p.AgeSeconds,
 		})
 	}
 
@@ -1779,44 +1875,56 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	// by (kind, ns, name) so a Pod already flagged by the pod-error loop
 	// (e.g. CreateContainerConfigError on a missing ConfigMap) doesn't
 	// appear twice.
-	seenProblem := make(map[string]bool, len(d.Problems))
-	for _, p := range d.Problems {
+	seenProblem := make(map[string]bool, len(allProblems))
+	for _, p := range allProblems {
 		seenProblem[p.Kind+"/"+p.Namespace+"/"+p.Name] = true
 	}
 	missingRefs := k8s.DetectMissingRefs(cache, namespace)
 	missingRefs = append(missingRefs, k8s.DetectMissingWebhookRefs(cache, k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery(), namespace)...)
 	for _, p := range missingRefs {
-		if len(d.Problems) >= 10 {
-			break
-		}
 		if seenProblem[p.Kind+"/"+p.Namespace+"/"+p.Name] {
 			continue
 		}
-		d.Problems = append(d.Problems, mcpProblem{
-			Kind:      p.Kind,
-			Namespace: p.Namespace,
-			Name:      p.Name,
-			Reason:    p.Reason,
-			Message:   p.Message,
-			Age:       p.Age,
+		allProblems = append(allProblems, mcpProblem{
+			Kind:       p.Kind,
+			Namespace:  p.Namespace,
+			Name:       p.Name,
+			Group:      p.Group,
+			Severity:   p.Severity,
+			Reason:     p.Reason,
+			Message:    p.Message,
+			Age:        p.Age,
+			ageSeconds: p.AgeSeconds,
 		})
 	}
 
 	// CAPI problems (Cluster API resources)
 	for _, p := range k8s.DetectCAPIProblems(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery(), namespace) {
-		if len(d.Problems) >= 10 {
-			break
-		}
-		d.Problems = append(d.Problems, mcpProblem{
-			Kind:      p.Kind,
-			Namespace: p.Namespace,
-			Name:      p.Name,
-			Group:     p.Group,
-			Reason:    p.Reason,
-			Message:   p.Message,
-			Age:       p.Age,
+		allProblems = append(allProblems, mcpProblem{
+			Kind:       p.Kind,
+			Namespace:  p.Namespace,
+			Name:       p.Name,
+			Group:      p.Group,
+			Severity:   p.Severity,
+			Reason:     p.Reason,
+			Message:    p.Message,
+			Age:        p.Age,
+			ageSeconds: p.AgeSeconds,
 		})
 	}
+
+	// Sort by severity desc then by age desc (newest first), then cap.
+	// Without this, the cap drops critical missing-refs in favour of
+	// medium-severity workload problems that happened to be appended
+	// earlier — the agent gets a non-representative subset.
+	sortMCPDashboardProblems(allProblems)
+	d.TotalProblems = len(allProblems)
+	d.ProblemsBySeverity = countBySeverity(allProblems)
+	const dashboardCap = 30
+	if len(allProblems) > dashboardCap {
+		allProblems = allProblems[:dashboardCap]
+	}
+	d.Problems = allProblems
 
 	// Deployment resource count
 	if depLister := cache.Deployments(); depLister != nil {

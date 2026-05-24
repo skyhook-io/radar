@@ -63,6 +63,30 @@ func ClassifyPodHealth(pod *corev1.Pod, now time.Time) string {
 	return "healthy"
 }
 
+// PodRestartContext extracts crash-debugging context from a pod's container
+// statuses: total restarts across main + init containers, and the kubelet-
+// recorded reason for the most recent container termination (OOMKilled,
+// Error, Completed, etc.). Used by Pod problem rows so agents can tell
+// chronic-vs-acute (high RestartCount = old) and pick the right next call
+// (OOMKilled → memory analysis; Error → fetch previous logs).
+func PodRestartContext(pod *corev1.Pod) (restartCount int32, lastTerminatedReason string) {
+	var newestFinish time.Time
+	walk := func(statuses []corev1.ContainerStatus) {
+		for _, cs := range statuses {
+			restartCount += cs.RestartCount
+			if t := cs.LastTerminationState.Terminated; t != nil && !t.FinishedAt.IsZero() {
+				if newestFinish.IsZero() || t.FinishedAt.After(newestFinish) {
+					newestFinish = t.FinishedAt.Time
+					lastTerminatedReason = t.Reason
+				}
+			}
+		}
+	}
+	walk(pod.Status.ContainerStatuses)
+	walk(pod.Status.InitContainerStatuses)
+	return restartCount, lastTerminatedReason
+}
+
 // PodProblemReason returns a short reason string for a problematic pod.
 func PodProblemReason(pod *corev1.Pod) string {
 	for _, cs := range pod.Status.ContainerStatuses {
@@ -252,10 +276,18 @@ type HPAProblem struct {
 	Reason    string
 }
 
-// DetectHPAProblems finds HPAs that have hit their replica ceiling.
+// DetectHPAProblems finds HPAs that have hit their replica ceiling OR that
+// cannot scale because the autoscaler can't fetch metrics. The latter is
+// the silent-broken-HPA case: spec is valid, target exists, but
+// status.conditions[?type=ScalingActive].status=False means the controller
+// gave up — metrics-server unavailable, broken adapter, missing resource
+// requests on target pods, etc. K8s autoscaler condition reasons are
+// stable across versions (FailedGetResourceMetric / FailedGetScale /
+// FailedGetExternalMetric / FailedGetObjectMetric).
 func DetectHPAProblems(hpas []*autoscalingv2.HorizontalPodAutoscaler) []HPAProblem {
 	var problems []HPAProblem
 	for _, hpa := range hpas {
+		// "maxed" — at replica ceiling and wanting more.
 		if hpa.Spec.MaxReplicas > 0 && hpa.Status.CurrentReplicas >= hpa.Spec.MaxReplicas && hpa.Status.DesiredReplicas >= hpa.Spec.MaxReplicas {
 			problems = append(problems, HPAProblem{
 				Name:      hpa.Name,
@@ -263,6 +295,29 @@ func DetectHPAProblems(hpas []*autoscalingv2.HorizontalPodAutoscaler) []HPAProbl
 				Problem:   "maxed",
 				Reason:    fmt.Sprintf("%d/%d replicas (wants %d)", hpa.Status.CurrentReplicas, hpa.Spec.MaxReplicas, hpa.Status.DesiredReplicas),
 			})
+		}
+		// "cannot scale" — the autoscaler controller reports it can't get
+		// metrics or scale calls are failing. Emitted as a separate problem
+		// so the maxed-check above isn't masked by an unrelated metrics
+		// outage on the same HPA.
+		for _, cond := range hpa.Status.Conditions {
+			if cond.Type == autoscalingv2.ScalingActive && cond.Status == corev1.ConditionFalse {
+				reason := cond.Reason
+				if reason == "" {
+					reason = "ScalingActive=False"
+				}
+				msg := cond.Message
+				if msg == "" {
+					msg = "HPA controller reports it cannot scale this workload"
+				}
+				problems = append(problems, HPAProblem{
+					Name:      hpa.Name,
+					Namespace: hpa.Namespace,
+					Problem:   "cannot-scale",
+					Reason:    fmt.Sprintf("%s: %s", reason, msg),
+				})
+				break
+			}
 		}
 	}
 	return problems

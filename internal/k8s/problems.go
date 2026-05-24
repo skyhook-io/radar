@@ -29,6 +29,15 @@ type Problem struct {
 	AgeSeconds      int64  // for sorting
 	Duration        string // how long the problem has persisted
 	DurationSeconds int64
+	// RestartCount + LastTerminatedReason are populated for Pod problems where
+	// the kubelet has recorded crash data. Together they answer the two
+	// questions an agent needs about a CrashLoopBackOff in one read:
+	// chronic-vs-acute (RestartCount: 2 vs 2000) and what kind of failure
+	// (Reason: OOMKilled / Error / Completed — disambiguates memory pressure
+	// from app bug from misconfigured-as-long-running). Zero / empty values
+	// mean either non-Pod problem or no crash data on this Pod yet.
+	RestartCount         int32
+	LastTerminatedReason string
 }
 
 // DetectProblems scans workloads in cache and returns detected problems.
@@ -166,16 +175,19 @@ func DetectProblems(cache *ResourceCache, namespace string) []Problem {
 			if health == "error" {
 				severity = "critical"
 			}
+			restartCount, lastTermReason := PodRestartContext(pod)
 			problems = append(problems, Problem{
-				Kind:            "Pod",
-				Namespace:       pod.Namespace,
-				Name:            pod.Name,
-				Severity:        severity,
-				Reason:          PodProblemReason(pod),
-				Age:             FormatAge(ageDur),
-				AgeSeconds:      int64(ageDur.Seconds()),
-				Duration:        FormatAge(ageDur),
-				DurationSeconds: int64(ageDur.Seconds()),
+				Kind:                 "Pod",
+				Namespace:            pod.Namespace,
+				Name:                 pod.Name,
+				Severity:             severity,
+				Reason:               PodProblemReason(pod),
+				Age:                  FormatAge(ageDur),
+				AgeSeconds:           int64(ageDur.Seconds()),
+				Duration:             FormatAge(ageDur),
+				DurationSeconds:      int64(ageDur.Seconds()),
+				RestartCount:         restartCount,
+				LastTerminatedReason: lastTermReason,
 			})
 		}
 	}
@@ -264,12 +276,20 @@ func DetectProblems(cache *ResourceCache, namespace string) []Problem {
 			hpas, _ = hpaLister.List(labels.Everything())
 		}
 		for _, hp := range DetectHPAProblems(hpas) {
+			// "cannot-scale" is critical (HPA inert; workload's scaling
+			// guarantees silently broken). "maxed" stays medium (HPA is
+			// working; signal is that the ceiling was hit, which may or
+			// may not be a problem depending on intent).
+			severity := "medium"
+			if hp.Problem == "cannot-scale" {
+				severity = "critical"
+			}
 			problems = append(problems, Problem{
 				Kind:      "HorizontalPodAutoscaler",
 				Namespace: hp.Namespace,
 				Name:      hp.Name,
 				Group:     "autoscaling",
-				Severity:  "medium",
+				Severity:  severity,
 				Reason:    hp.Problem,
 				Message:   hp.Reason,
 			})
