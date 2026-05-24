@@ -1875,14 +1875,20 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	// by (kind, ns, name) so a Pod already flagged by the pod-error loop
 	// (e.g. CreateContainerConfigError on a missing ConfigMap) doesn't
 	// appear twice.
+	// Dedupe exact-duplicate rows, not resource identities. Keying on
+	// (kind, ns, name, reason) lets distinct missing-ref reasons on the
+	// same Pod survive — a Pod missing both PVC and ConfigMap emits two
+	// rows — and prevents a generic kubelet-state row (e.g.
+	// CreateContainerConfigError) from suppressing the underlying
+	// root-cause row (e.g. Missing Secret) for the same resource.
 	seenProblem := make(map[string]bool, len(allProblems))
 	for _, p := range allProblems {
-		seenProblem[p.Kind+"/"+p.Namespace+"/"+p.Name] = true
+		seenProblem[p.Kind+"/"+p.Namespace+"/"+p.Name+"/"+p.Reason] = true
 	}
 	missingRefs := k8s.DetectMissingRefs(cache, namespace)
 	missingRefs = append(missingRefs, k8s.DetectMissingWebhookRefs(cache, k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery(), namespace)...)
 	for _, p := range missingRefs {
-		if seenProblem[p.Kind+"/"+p.Namespace+"/"+p.Name] {
+		if seenProblem[p.Kind+"/"+p.Namespace+"/"+p.Name+"/"+p.Reason] {
 			continue
 		}
 		allProblems = append(allProblems, mcpProblem{

@@ -88,7 +88,20 @@ func PodRestartContext(pod *corev1.Pod) (restartCount int32, lastTerminatedReaso
 }
 
 // PodProblemReason returns a short reason string for a problematic pod.
+// Walks init containers first because when init is failing the pod stays
+// Pending and main ContainerStatuses haven't been populated yet — without
+// the init check the reason would fall through to "Pending", masking
+// CrashLoopBackOff / ImagePullBackOff / etc. on the actual failing
+// init container.
 func PodProblemReason(pod *corev1.Pod) string {
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
+			return cs.State.Waiting.Reason
+		}
+		if cs.State.Terminated != nil && cs.State.Terminated.Reason != "" {
+			return cs.State.Terminated.Reason
+		}
+	}
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.State.Waiting != nil && cs.State.Waiting.Reason != "" {
 			return cs.State.Waiting.Reason

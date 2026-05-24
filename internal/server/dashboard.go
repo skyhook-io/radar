@@ -615,24 +615,25 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 	// above doesn't surface.)
 	detected := append(k8s.DetectProblems(cache, namespace), k8s.DetectMissingRefs(cache, namespace)...)
 	detected = append(detected, k8s.DetectMissingWebhookRefs(cache, k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery(), namespace)...)
-	seenPod := map[string]bool{}
+	// DetectProblems Pod rows duplicate REST's pod rollup above; skip them.
+	// DetectMissingRefs Pod rows are kept (different failure category — won't-
+	// schedule etc.). We can't tell the source from the Problem struct, so
+	// distinguish by whether Reason starts with "Missing " (only emitted by
+	// DetectMissingRefs at present). Dedupe keys by (ns, name, reason) so a
+	// Pod with multiple distinct missing-ref reasons (e.g. PVC + ConfigMap)
+	// keeps a row per blocker — agents triaging a Pending pod need ALL of
+	// the missing refs, not just whichever fired first.
+	seenPodReason := map[string]bool{}
 	for _, p := range detected {
-		// DetectProblems Pod rows duplicate REST's pod rollup; DetectMissingRefs
-		// Pod rows are kept (different failure category — won't-schedule etc).
-		// We can't tell the source from the Problem struct, so distinguish by
-		// whether the Reason starts with "Missing " (only emitted by
-		// DetectMissingRefs at present). Defensive belt-and-braces dedupe
-		// keys by (kind, ns, name) for missing-ref Pods so the same pod
-		// doesn't get two missing-ref rows in the orphan list as well.
 		if p.Kind == "Pod" {
 			if !strings.HasPrefix(p.Reason, "Missing ") {
 				continue
 			}
-			key := p.Namespace + "/" + p.Name
-			if seenPod[key] {
+			key := p.Namespace + "/" + p.Name + "/" + p.Reason
+			if seenPodReason[key] {
 				continue
 			}
-			seenPod[key] = true
+			seenPodReason[key] = true
 		}
 		problems = append(problems, DashboardProblem{
 			Kind:            p.Kind,

@@ -674,6 +674,51 @@ func TestPodProblemReason(t *testing.T) {
 			},
 			want: "Pending",
 		},
+		{
+			// Init-container failure: main ContainerStatuses haven't been
+			// populated yet (init is blocking) so without the init-status
+			// check the reason would fall through to "Pending", masking
+			// the real CrashLoopBackOff signal that the agent needs to
+			// triage. Pins the init-reason fix.
+			name: "init waiting reason wins over phase",
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+					InitContainerStatuses: []corev1.ContainerStatus{
+						{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}}},
+					},
+				},
+			},
+			want: "CrashLoopBackOff",
+		},
+		{
+			name: "init terminated reason wins over phase",
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					Phase: corev1.PodPending,
+					InitContainerStatuses: []corev1.ContainerStatus{
+						{State: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{Reason: "ImagePullBackOff"}}},
+					},
+				},
+			},
+			want: "ImagePullBackOff",
+		},
+		{
+			// Init reason wins when both present — init failures are the
+			// actual blocker; main containers haven't even started yet.
+			name: "init reason wins when both present",
+			pod: &corev1.Pod{
+				Status: corev1.PodStatus{
+					InitContainerStatuses: []corev1.ContainerStatus{
+						{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "PostStartHookError"}}},
+					},
+					ContainerStatuses: []corev1.ContainerStatus{
+						{State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "PodInitializing"}}},
+					},
+				},
+			},
+			want: "PostStartHookError",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
