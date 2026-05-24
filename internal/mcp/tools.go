@@ -1724,10 +1724,17 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		}
 	}
 
-	// Workload/HPA/CronJob/Node problems (excluding pods, handled above)
+	// Workload/HPA/CronJob/Node problems (excluding pods, handled above).
+	// DetectProblems was expanded in this PR to emit Pod-level rows
+	// (CrashLoopBackOff, not-ready, etc.); the dashboard pod loop above
+	// is the canonical source for those, so skip Pod here to avoid the
+	// same failing pod appearing twice.
 	for _, p := range k8s.DetectProblems(cache, namespace) {
 		if len(d.Problems) >= 10 {
 			break
+		}
+		if p.Kind == "Pod" {
+			continue
 		}
 		if p.Kind == "Node" && !includeNodes {
 			continue
