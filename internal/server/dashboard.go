@@ -602,8 +602,12 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 	// Add orphan pod problems (no owner workload)
 	problems = append(problems, orphanProblems...)
 
-	// Workload/HPA/CronJob/Node problems (excluding pods, handled above)
-	for _, p := range k8s.DetectProblems(cache, namespace) {
+	// Workload/HPA/CronJob/Node problems (excluding pods, handled above) +
+	// direct dangling-ref errors (missing CM/Secret/PVC/SA refs, missing
+	// HPA target, missing Ingress backend, missing roleRef, missing
+	// StorageClass on a PVC).
+	detected := append(k8s.DetectProblems(cache, namespace), k8s.DetectMissingRefs(cache, namespace)...)
+	for _, p := range detected {
 		problems = append(problems, DashboardProblem{
 			Kind:            p.Kind,
 			Namespace:       p.Namespace,

@@ -1750,6 +1750,36 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		})
 	}
 
+	// Missing-ref problems (Pod→missing CM/Secret/PVC/SA, HPA→missing
+	// target, Ingress→missing backend, PVC→missing SC, RoleBinding→missing
+	// roleRef). Pod rows are intentionally kept here because the pod-error
+	// loop above only catches running-but-broken pods (CrashLoopBackOff,
+	// not-ready); Pods that fail to schedule on a missing PVC stay Pending
+	// without container statuses and would otherwise be invisible. Dedupe
+	// by (kind, ns, name) so a Pod already flagged by the pod-error loop
+	// (e.g. CreateContainerConfigError on a missing ConfigMap) doesn't
+	// appear twice.
+	seenProblem := make(map[string]bool, len(d.Problems))
+	for _, p := range d.Problems {
+		seenProblem[p.Kind+"/"+p.Namespace+"/"+p.Name] = true
+	}
+	for _, p := range k8s.DetectMissingRefs(cache, namespace) {
+		if len(d.Problems) >= 10 {
+			break
+		}
+		if seenProblem[p.Kind+"/"+p.Namespace+"/"+p.Name] {
+			continue
+		}
+		d.Problems = append(d.Problems, mcpProblem{
+			Kind:      p.Kind,
+			Namespace: p.Namespace,
+			Name:      p.Name,
+			Reason:    p.Reason,
+			Message:   p.Message,
+			Age:       p.Age,
+		})
+	}
+
 	// CAPI problems (Cluster API resources)
 	for _, p := range k8s.DetectCAPIProblems(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery(), namespace) {
 		if len(d.Problems) >= 10 {
