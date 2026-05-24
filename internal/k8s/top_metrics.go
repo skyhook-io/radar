@@ -187,7 +187,17 @@ func buildTopPodItems(store *MetricsHistoryStore, namespace string) []TopMetrics
 		pods, err = cache.Pods().List(labels.Everything())
 	}
 	if err != nil {
-		return nil
+		// Fall back to metrics-only rows on transient list errors —
+		// mirrors the cache.Pods()==nil branch above so a brief apiserver
+		// hiccup doesn't blank top_resources when usage samples are present.
+		items := make([]TopMetricsItem, 0, len(metricsMap))
+		for _, m := range metricsMap {
+			if namespace != "" && m.Namespace != namespace {
+				continue
+			}
+			items = append(items, topPodMetricsOnly(m))
+		}
+		return items
 	}
 
 	items := make([]TopMetricsItem, 0, len(pods))
@@ -219,7 +229,14 @@ func buildTopNodeItems(store *MetricsHistoryStore) []TopMetricsItem {
 
 	nodes, err := cache.Nodes().List(labels.Everything())
 	if err != nil {
-		return nil
+		// Mirror cache.Nodes()==nil above — fall back to metrics-only rows
+		// so a transient list error doesn't blank the response when usage
+		// samples are available from metrics-server.
+		items := make([]TopMetricsItem, 0, len(metricsMap))
+		for _, m := range metricsMap {
+			items = append(items, topNodeMetricsOnly(m))
+		}
+		return items
 	}
 	items := make([]TopMetricsItem, 0, len(nodes))
 	for _, node := range nodes {

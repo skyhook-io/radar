@@ -236,6 +236,17 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 		}
 	}
 
+	// Mirror diagnose's logsError contract: surface a missing kube client
+	// distinctly from an empty pod set, so agents don't read "no log lines"
+	// as truth when we couldn't even try to fetch.
+	if k8s.ClientFromContext(ctx) == nil {
+		return toJSONResult(map[string]any{
+			"workload":  fmt.Sprintf("%s/%s/%s", kind, input.Namespace, input.Name),
+			"pods":      len(pods),
+			"logsError": "no kube client in request context",
+		})
+	}
+
 	allLogs := fetchPodLogs(ctx, pods, input.Namespace, input.Container, input.Grep, tailLines, sinceSeconds, input.Previous)
 
 	resp := map[string]any{
@@ -243,10 +254,11 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 		"pods":     len(pods),
 		"logs":     allLogs,
 	}
-	// Steering hint when any pod's stream hit its tail cap.
+	// Steering hint when any pod's stream hit its tail cap. Compare against
+	// RawLines (pre-grep) so grep-filtered streams still surface the hint.
 	// Heuristic mirrors handleGetPodLogs.
 	for _, e := range allLogs {
-		if int64(e.Logs.TotalLines) >= tailLines {
+		if int64(e.RawLines) >= tailLines {
 			resp["narrowHint"] = fmt.Sprintf(
 				"at least one pod's log stream tailed to %d lines (cap reached) — narrow with since= (e.g. 10m), grep= regex, container=, or raise tail_lines",
 				tailLines,
@@ -258,9 +270,14 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 }
 
 // podLogEntry is the per-pod-per-container log row returned by fetchPodLogs.
+//
+// RawLines is the line count of the pre-grep stream so the workload-logs
+// narrowHint can detect upstream truncation correctly even when grep is
+// active. FilteredLogs.TotalLines reflects the post-grep count.
 type podLogEntry struct {
 	Pod       string                 `json:"pod"`
 	Container string                 `json:"container"`
+	RawLines  int                    `json:"-"`
 	Logs      aicontext.FilteredLogs `json:"logs,omitempty"`
 	Error     string                 `json:"error,omitempty"`
 }
@@ -322,6 +339,9 @@ func fetchPodLogs(ctx context.Context, pods []*corev1.Pod, namespace, containerF
 					return
 				}
 
+				// Capture pre-grep line count so callers can detect upstream
+				// truncation even when grep filters heavily — see RawLines.
+				entry.RawLines = countLines(string(data))
 				// handleGetWorkloadLogs pre-validates the regex, but this
 				// helper is exported within the package — propagate any
 				// filter error per-entry so a future caller that skips

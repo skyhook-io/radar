@@ -776,8 +776,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	// directly to the dynamic cache: typed FetchResource is group-blind
 	// (e.g. for kind=services it returns the core Service regardless of any
 	// group qualifier), so a group-qualified call like serving.knative.dev/
-	// Service would silently leak the wrong object. Mirrors the same
-	// group-first dispatch fix on the REST GET path in PR #721.
+	// Service would silently leak the wrong object.
 	var resourceData any
 	var rawObj runtime.Object
 	if group != "" {
@@ -901,20 +900,24 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 			}
 			if listErr != nil {
 				log.Printf("[mcp] Failed to list events for %s/%s/%s: %v", kind, namespace, name, listErr)
-			}
-			// Sidecar include — controller-level events only. Pod-level
-			// events on a workload's pods (CrashLoopBackOff, etc.) require
-			// resolving the pod set; that's the diagnose tool's job, not
-			// this sidecar's. nil podNames intentionally restricts to
-			// InvolvedObject == this kind+name.
-			matched := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), name, nil)
-			if len(matched) > 0 {
-				deduplicated := aicontext.DeduplicateEvents(matched)
-				if len(deduplicated) > 10 {
-					deduplicated = deduplicated[:10]
+				result["eventsError"] = listErr.Error()
+			} else {
+				// Sidecar include — controller-level events only. Pod-level
+				// events on a workload's pods (CrashLoopBackOff, etc.) require
+				// resolving the pod set; that's the diagnose tool's job, not
+				// this sidecar's. nil podNames intentionally restricts to
+				// InvolvedObject == this kind+name.
+				matched := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), name, nil)
+				if len(matched) > 0 {
+					deduplicated := aicontext.DeduplicateEvents(matched)
+					if len(deduplicated) > 10 {
+						deduplicated = deduplicated[:10]
+					}
+					result["events"] = deduplicated
 				}
-				result["events"] = deduplicated
 			}
+		} else {
+			result["eventsError"] = "events lister unavailable (insufficient permissions or cache cold)"
 		}
 	}
 
@@ -922,23 +925,31 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 		if isPodKind(kind) {
 			if metrics, err := k8s.GetPodMetrics(ctx, namespace, name); err == nil {
 				result["metrics"] = metrics
+			} else {
+				log.Printf("[mcp] Failed to get pod metrics for %s/%s: %v", namespace, name, err)
+				result["metricsError"] = err.Error()
 			}
 		}
 	}
 
 	if includes["logs"] {
 		if isPodKind(kind) {
-			if client := k8s.ClientFromContext(ctx); client != nil {
+			client := k8s.ClientFromContext(ctx)
+			if client == nil {
+				result["logsError"] = "no kube client in request context"
+			} else {
 				tailLines := int64(100)
 				opts := &corev1.PodLogOptions{TailLines: &tailLines}
 				stream, err := client.CoreV1().Pods(namespace).GetLogs(name, opts).Stream(ctx)
 				if err != nil {
 					log.Printf("[mcp] Failed to get logs for %s/%s: %v", namespace, name, err)
+					result["logsError"] = fmt.Sprintf("failed to open log stream: %v", err)
 				} else {
 					defer stream.Close()
 					data, readErr := io.ReadAll(stream)
 					if readErr != nil {
 						log.Printf("[mcp] Failed to read logs for %s/%s: %v", namespace, name, readErr)
+						result["logsError"] = fmt.Sprintf("failed to read log stream: %v", readErr)
 					} else {
 						result["logs"] = aicontext.FilterLogs(string(data))
 					}
@@ -1021,7 +1032,8 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	}
 	allowed := filterNamespacesForUser(ctx, requested)
 	if allowed != nil && len(allowed) == 0 {
-		return toJSONResult([]mcpChange{})
+		// Wrap the empty result so capped + uncapped + denied agree on wire shape.
+		return toJSONResult(getChangesResponseMCP{Changes: []mcpChange{}})
 	}
 
 	queryOpts := timeline.QueryOptions{
@@ -1088,9 +1100,12 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 	// ({changes: [...], narrowHint?: "..."}).
 	resp := getChangesResponseMCP{Changes: changes}
 	if upstreamCapped {
+		// queryOpts.Limit is the actual store-side cap (10x when a name
+		// filter triggered fetch-extra). Citing `limit` would mislead
+		// the agent on the name-filter path where the real cap is higher.
 		resp.NarrowHint = fmt.Sprintf(
-			"feed capped at %d entries — narrow with namespace=, kind=, name=, shorten since= (e.g. 15m), or raise limit (cap 50)",
-			limit,
+			"upstream feed capped at %d entries — narrow with namespace=, kind=, name=, shorten since= (e.g. 15m), or raise limit (cap 50)",
+			queryOpts.Limit,
 		)
 	}
 	return toJSONResult(resp)
@@ -1358,7 +1373,8 @@ func handleGetEvents(ctx context.Context, req *mcp.CallToolRequest, input events
 	}
 	allowed := filterNamespacesForUser(ctx, requested)
 	if allowed != nil && len(allowed) == 0 {
-		return toJSONResult([]any{})
+		// Wrap the empty result so capped + uncapped + denied agree on wire shape.
+		return toJSONResult(getEventsResponseMCP{Events: []aicontext.DeduplicatedEvent{}})
 	}
 
 	var events []*corev1.Event
@@ -1476,22 +1492,40 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 		return nil, nil, fmt.Errorf("failed to read logs: %w", err)
 	}
 
+	// rawLines counts lines BEFORE grep — grep filtering down would make
+	// filtered.TotalLines (post-grep) smaller than tailLines even on a
+	// capped stream, suppressing the hint exactly when the agent needs it.
+	rawLines := countLines(string(data))
 	filtered, err := aicontext.FilterLogsByPattern(string(data), input.Grep)
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid grep regex: %w", err)
 	}
 	// Heuristic: if we received tailLines or more raw lines, the kubectl
 	// stream was likely capped (there may be older lines we didn't fetch).
-	if int64(filtered.TotalLines) >= tailLines {
+	if int64(rawLines) >= tailLines {
 		return toJSONResult(podLogsResponseMCP{
 			FilteredLogs: filtered,
 			NarrowHint: fmt.Sprintf(
 				"log stream tailed to %d lines (cap reached) — narrow with since= (e.g. 10m), grep= regex, container=, or raise tail_lines",
-				filtered.TotalLines,
+				rawLines,
 			),
 		})
 	}
 	return toJSONResult(filtered)
+}
+
+// countLines returns the number of newline-delimited lines in s, treating
+// a trailing newline as a terminator (not a separate line). Used to detect
+// stream truncation before grep filtering rewrites TotalLines.
+func countLines(s string) int {
+	if s == "" {
+		return 0
+	}
+	n := strings.Count(s, "\n")
+	if !strings.HasSuffix(s, "\n") {
+		n++
+	}
+	return n
 }
 
 // podLogsResponseMCP embeds FilteredLogs so the JSON shape stays identical

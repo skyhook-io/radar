@@ -786,13 +786,17 @@ func buildServiceSummary(ctx context.Context, svc *corev1.Service, lookup Servic
 		return nil
 	}
 
-	sel := &PodSelectionSummary{Total: len(pods)}
+	// Total counts visible refs only — leaking len(pods) would let a
+	// caller with Service access infer the pod count even when RBAC
+	// hides the individual Pods. Mirrors ReferencedBy.Total semantics.
+	sel := &PodSelectionSummary{}
 	for _, pod := range pods {
 		ref := ContextRef{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name}
 		if !checkRef(ctx, ac, &ref) {
 			omitted.add("serviceSummary.selectedPods", OmittedRBACDenied)
 			continue
 		}
+		sel.Total++
 		if isPodReady(pod) {
 			sel.Ready++
 			appendBoundedPodRef(&sel.ReadyPods, ref, sel)

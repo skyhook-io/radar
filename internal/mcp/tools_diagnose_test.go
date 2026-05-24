@@ -1,7 +1,6 @@
 package mcp
 
 import (
-	"context"
 	"strings"
 	"testing"
 
@@ -218,6 +217,3 @@ func TestHandleDiagnose_DeploymentNotFound(t *testing.T) {
 		t.Errorf("expected 'not found' error, got %v", err)
 	}
 }
-
-// Ensure the test file compiles even if some helpers go unused in lean builds.
-var _ = context.Background

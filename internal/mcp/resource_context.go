@@ -5,7 +5,6 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
-	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/issues"
@@ -232,6 +231,3 @@ func mcpTopologyForContext(namespace string) (*topo.Topology, topo.ResourceProvi
 	return topology, provider, dyn, true
 }
 
-// _ guards the imports used by Build's Options struct from being marked
-// unused if the helpers above ever drop their references during refactors.
-var _ = runtime.Object(nil)

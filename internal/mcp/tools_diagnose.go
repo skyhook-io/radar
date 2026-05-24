@@ -73,8 +73,6 @@ func capDiagnosePods(pods []*corev1.Pod, cap int) ([]*corev1.Pod, bool) {
 	return sorted[:cap], true
 }
 
-// podTotalRestarts sums RestartCount across containers + init containers.
-// Used by capDiagnosePods to prioritize failing pods.
 func podTotalRestarts(p *corev1.Pod) int32 {
 	if p == nil {
 		return 0
