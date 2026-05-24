@@ -34,6 +34,12 @@ type TopMetricsResponse struct {
 	Reason           string               `json:"reason,omitempty"`
 	Items            []TopMetricsItem     `json:"items,omitempty"`
 	Workloads        []TopWorkloadMetrics `json:"workloads,omitempty"`
+	// SkippedNoMetrics counts resources omitted from Items because
+	// metrics-server has no sample for them yet (new pods, Pending pods,
+	// scrape gap). Distinguishes "no top consumers" from "we have no
+	// metrics data" so callers can surface a useful hint instead of
+	// listing inventory pods with zero usage.
+	SkippedNoMetrics int `json:"skippedNoMetrics,omitempty"`
 }
 
 type TopMetricsItem struct {
@@ -128,11 +134,11 @@ func BuildTopMetrics(opts TopMetricsOptions) TopMetricsResponse {
 
 	switch opts.Kind {
 	case TopMetricsKindNodes:
-		resp.Items = buildTopNodeItems(store)
+		resp.Items, resp.SkippedNoMetrics = buildTopNodeItems(store)
 	case TopMetricsKindWorkloads:
 		resp.Workloads = buildTopWorkloadItems(store, opts.Namespace)
 	case TopMetricsKindPods:
-		resp.Items = buildTopPodItems(store, opts.Namespace)
+		resp.Items, resp.SkippedNoMetrics = buildTopPodItems(store, opts.Namespace)
 	default:
 		resp.Reason = "unsupported kind"
 		return resp
@@ -161,7 +167,7 @@ func hasTopMetrics(resp TopMetricsResponse) bool {
 	return false
 }
 
-func buildTopPodItems(store *MetricsHistoryStore, namespace string) []TopMetricsItem {
+func buildTopPodItems(store *MetricsHistoryStore, namespace string) (items []TopMetricsItem, skippedNoMetrics int) {
 	metricsMap := map[string]TopPodMetrics{}
 	for _, m := range store.GetAllPodMetricsLatest() {
 		metricsMap[m.Namespace+"/"+m.Name] = m
@@ -169,14 +175,16 @@ func buildTopPodItems(store *MetricsHistoryStore, namespace string) []TopMetrics
 
 	cache := GetResourceCache()
 	if cache == nil || cache.Pods() == nil {
-		items := make([]TopMetricsItem, 0, len(metricsMap))
+		// Metrics-only path: every emitted row came from a metricsMap entry,
+		// so nothing was skipped by definition.
+		out := make([]TopMetricsItem, 0, len(metricsMap))
 		for _, m := range metricsMap {
 			if namespace != "" && m.Namespace != namespace {
 				continue
 			}
-			items = append(items, topPodMetricsOnly(m))
+			out = append(out, topPodMetricsOnly(m))
 		}
-		return items
+		return out, 0
 	}
 
 	var pods []*corev1.Pod
@@ -190,28 +198,36 @@ func buildTopPodItems(store *MetricsHistoryStore, namespace string) []TopMetrics
 		// Fall back to metrics-only rows on transient list errors —
 		// mirrors the cache.Pods()==nil branch above so a brief apiserver
 		// hiccup doesn't blank top_resources when usage samples are present.
-		items := make([]TopMetricsItem, 0, len(metricsMap))
+		out := make([]TopMetricsItem, 0, len(metricsMap))
 		for _, m := range metricsMap {
 			if namespace != "" && m.Namespace != namespace {
 				continue
 			}
-			items = append(items, topPodMetricsOnly(m))
+			out = append(out, topPodMetricsOnly(m))
 		}
-		return items
+		return out, 0
 	}
 
-	items := make([]TopMetricsItem, 0, len(pods))
+	// Only emit pods that have a metricsMap entry — "no entry" means
+	// metrics-server hasn't scraped this pod (new pod, Pending/Failed,
+	// scrape gap) and is distinct from "has entry, usage is 0" (rare
+	// genuinely-idle pod, real data). Filling slots with no-data pods
+	// would make agents read inventory as top consumers.
+	items = make([]TopMetricsItem, 0, len(pods))
 	for _, pod := range pods {
-		entry := topPodFromObject(pod)
-		if m, ok := metricsMap[pod.Namespace+"/"+pod.Name]; ok {
-			applyPodUsage(&entry, m)
+		m, ok := metricsMap[pod.Namespace+"/"+pod.Name]
+		if !ok {
+			skippedNoMetrics++
+			continue
 		}
+		entry := topPodFromObject(pod)
+		applyPodUsage(&entry, m)
 		items = append(items, entry)
 	}
-	return items
+	return items, skippedNoMetrics
 }
 
-func buildTopNodeItems(store *MetricsHistoryStore) []TopMetricsItem {
+func buildTopNodeItems(store *MetricsHistoryStore) (items []TopMetricsItem, skippedNoMetrics int) {
 	metricsMap := map[string]TopNodeMetrics{}
 	for _, m := range store.GetAllNodeMetricsLatest() {
 		metricsMap[m.Name] = m
@@ -220,11 +236,11 @@ func buildTopNodeItems(store *MetricsHistoryStore) []TopMetricsItem {
 
 	cache := GetResourceCache()
 	if cache == nil || cache.Nodes() == nil {
-		items := make([]TopMetricsItem, 0, len(metricsMap))
+		out := make([]TopMetricsItem, 0, len(metricsMap))
 		for _, m := range metricsMap {
-			items = append(items, topNodeMetricsOnly(m))
+			out = append(out, topNodeMetricsOnly(m))
 		}
-		return items
+		return out, 0
 	}
 
 	nodes, err := cache.Nodes().List(labels.Everything())
@@ -232,26 +248,32 @@ func buildTopNodeItems(store *MetricsHistoryStore) []TopMetricsItem {
 		// Mirror cache.Nodes()==nil above — fall back to metrics-only rows
 		// so a transient list error doesn't blank the response when usage
 		// samples are available from metrics-server.
-		items := make([]TopMetricsItem, 0, len(metricsMap))
+		out := make([]TopMetricsItem, 0, len(metricsMap))
 		for _, m := range metricsMap {
-			items = append(items, topNodeMetricsOnly(m))
+			out = append(out, topNodeMetricsOnly(m))
 		}
-		return items
+		return out, 0
 	}
-	items := make([]TopMetricsItem, 0, len(nodes))
+	// Same rule as buildTopPodItems: only emit nodes with a metricsMap
+	// entry. Node metrics are normally more reliably present than pods,
+	// but the same "no data ≠ idle" semantics apply.
+	items = make([]TopMetricsItem, 0, len(nodes))
 	for _, node := range nodes {
+		m, ok := metricsMap[node.Name]
+		if !ok {
+			skippedNoMetrics++
+			continue
+		}
 		entry := TopMetricsItem{
 			Kind:     "Node",
 			Name:     node.Name,
 			PodCount: podCounts[node.Name],
 			Status:   nodeReadyStatus(node),
 		}
-		if m, ok := metricsMap[node.Name]; ok {
-			entry.CPU = m.CPU
-			entry.CPUMilli = nanoToMilli(m.CPU)
-			entry.Memory = m.Memory
-			entry.MemoryMi = bytesToMi(m.Memory)
-		}
+		entry.CPU = m.CPU
+		entry.CPUMilli = nanoToMilli(m.CPU)
+		entry.Memory = m.Memory
+		entry.MemoryMi = bytesToMi(m.Memory)
 		if cpu := node.Status.Allocatable[corev1.ResourceCPU]; !cpu.IsZero() {
 			entry.CPUAllocatable = cpu.MilliValue() * 1000000
 			entry.CPUAllocatableMilli = cpu.MilliValue()
@@ -262,11 +284,14 @@ func buildTopNodeItems(store *MetricsHistoryStore) []TopMetricsItem {
 		}
 		items = append(items, entry)
 	}
-	return items
+	return items, skippedNoMetrics
 }
 
 func buildTopWorkloadItems(store *MetricsHistoryStore, namespace string) []TopWorkloadMetrics {
-	pods := buildTopPodItems(store, namespace)
+	// Workload aggregation already drops no-metrics pods at the per-pod
+	// layer (buildTopPodItems filters them out), so we don't need to track
+	// a per-workload skipped count separately.
+	pods, _ := buildTopPodItems(store, namespace)
 	workloads := map[string]*TopWorkloadMetrics{}
 	for _, pod := range pods {
 		if pod.Owner == nil {

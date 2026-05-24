@@ -269,20 +269,24 @@ func registerTools(server *mcp.Server) {
 		Description: "Use when the agent's decision is 'what's broken right now?' — LIVE " +
 			"OPERATIONAL STATE, not config posture. Returns a ranked list of currently " +
 			"failing resources: failing Deployments/StatefulSets/CronJobs/HPAs/Nodes/Jobs/" +
-			"PVCs (problem source), False .status.conditions on CRDs from Argo/Flux/Knative/" +
-			"Crossplane/cert-manager/KEDA (condition source), recent K8s Warning events " +
-			"(event source, opt-in), Kyverno PolicyReport policy violations (kyverno source, " +
-			"opt-in). Severity normalized to critical/warning. Defaults: problem + condition. " +
-			"event and kyverno are opt-in because they run 50–1000+ rows per cluster. " +
-			"For STATIC best-practice / security-posture / compliance findings (runAsRoot, " +
-			"missing PDB, no probes, missing resource limits, etc.), use get_cluster_audit — " +
-			"that's a separate axis and the two should never be conflated (a healthy pod " +
-			"can have many audit findings; a crashing pod can have zero). The `source` " +
-			"param is a FILTER: source=kyverno returns ONLY Kyverno rows. To ADD an opt-in " +
-			"source to the defaults, list everything explicitly — e.g. source=problem," +
-			"condition,kyverno. After identifying a suspect issue, call get_resource (or " +
-			"diagnose for a full debug bundle) for spec/status, or get_neighborhood when " +
-			"the failure likely crosses Services/workloads/Pods/dependencies.",
+			"PVCs (problem source), dangling-reference errors like Pod→missing PVC/CM/" +
+			"Secret/SA, HPA→missing scaleTargetRef, Ingress→missing backend Service, " +
+			"RoleBinding→missing Role, webhook→missing Service (missing_ref source), " +
+			"False .status.conditions on CRDs from Argo/Flux/Knative/Crossplane/" +
+			"cert-manager/KEDA (condition source), recent K8s Warning events (event " +
+			"source, opt-in), Kyverno PolicyReport policy violations (kyverno source, " +
+			"opt-in). Severity normalized to critical/warning. Defaults: problem + " +
+			"missing_ref + condition. event and kyverno are opt-in because they run " +
+			"50–1000+ rows per cluster. For STATIC best-practice / security-posture / " +
+			"compliance findings (runAsRoot, missing PDB, no probes, missing resource " +
+			"limits, etc.), use get_cluster_audit — that's a separate axis and the two " +
+			"should never be conflated (a healthy pod can have many audit findings; a " +
+			"crashing pod can have zero). The `source` param is a FILTER: source=kyverno " +
+			"returns ONLY Kyverno rows. To ADD an opt-in source to the defaults, list " +
+			"everything explicitly — e.g. source=problem,missing_ref,condition,kyverno. " +
+			"After identifying a suspect issue, call get_resource (or diagnose for a " +
+			"full debug bundle) for spec/status, or get_neighborhood when the failure " +
+			"likely crosses Services/workloads/Pods/dependencies.",
 		Annotations: readOnly,
 	}, logToolCall("issues", handleIssuesTool))
 
@@ -534,19 +538,33 @@ func handleTopResources(ctx context.Context, _ *mcp.CallToolRequest, input topRe
 	}
 
 	resp := k8s.BuildTopMetrics(opts)
-	// Heuristic: items/workloads at or above the limit suggests the cap
-	// was reached (the cluster may have more candidates beyond the top N).
+	// Two narrowHint conditions can fire together:
+	//   1. results at/above the limit suggest the cap was reached
+	//   2. some resources were skipped because metrics-server hasn't
+	//      scraped them yet (new pods, Pending, scrape gap) — useful
+	//      to surface so the agent knows "no top consumers" isn't
+	//      necessarily "no data" when SkippedNoMetrics is high.
 	itemCount := len(resp.Items)
 	if itemCount == 0 {
 		itemCount = len(resp.Workloads)
 	}
+	var hints []string
 	if opts.Limit > 0 && itemCount >= opts.Limit {
+		hints = append(hints, fmt.Sprintf(
+			"returned %d rows at limit — narrow with namespace= (for pods/workloads), tighten sort by switching cpu/memory, or raise limit (cap 100)",
+			itemCount,
+		))
+	}
+	if resp.SkippedNoMetrics > 0 {
+		hints = append(hints, fmt.Sprintf(
+			"%d %s skipped (no metrics samples yet — typically new/Pending pods or a metrics-server scrape gap)",
+			resp.SkippedNoMetrics, opts.Kind,
+		))
+	}
+	if len(hints) > 0 {
 		return toJSONResult(topResourcesResponseMCP{
 			TopMetricsResponse: resp,
-			NarrowHint: fmt.Sprintf(
-				"returned %d rows at limit — narrow with namespace= (for pods/workloads), tighten sort by switching cpu/memory, or raise limit (cap 100)",
-				itemCount,
-			),
+			NarrowHint:         strings.Join(hints, "; "),
 		})
 	}
 	return toJSONResult(resp)

@@ -20,6 +20,7 @@ import (
 // one of these and pass it to Compose.
 type fakeProvider struct {
 	problems     []k8s.Problem
+	missingRefs  []k8s.Problem
 	capiProblems []k8s.Problem
 	events       []*corev1.Event
 	dynamic      map[schema.GroupVersionResource][]*unstructured.Unstructured
@@ -30,6 +31,7 @@ type fakeProvider struct {
 }
 
 func (f *fakeProvider) DetectProblems(_ []string) []k8s.Problem     { return f.problems }
+func (f *fakeProvider) DetectMissingRefs(_ []string) []k8s.Problem  { return f.missingRefs }
 func (f *fakeProvider) DetectCAPIProblems(_ []string) []k8s.Problem { return f.capiProblems }
 func (f *fakeProvider) WarningEvents(_ []string, _ time.Duration) []*corev1.Event {
 	return f.events

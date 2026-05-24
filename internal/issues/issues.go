@@ -21,6 +21,12 @@ import (
 type Provider interface {
 	DetectProblems(namespaces []string) []k8s.Problem
 	DetectCAPIProblems(namespaces []string) []k8s.Problem
+	// DetectMissingRefs returns dangling-reference problems (Pod→missing
+	// PVC/CM/Secret/SA, HPA→missing target, Ingress→missing backend, etc.)
+	// plus webhook-config refs. Surfaced under SourceMissingRef so agents
+	// can filter the "direct config error" category separately from the
+	// workload-state-based SourceProblem signals.
+	DetectMissingRefs(namespaces []string) []k8s.Problem
 	WarningEvents(namespaces []string, since time.Duration) []*corev1.Event
 	// CRD-condition fallback inputs.
 	WatchedDynamic() []schema.GroupVersionResource
@@ -93,10 +99,22 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	// ---- Source: problem (radar's hardcoded checks) -----------------
 	if wantSource(f, SourceProblem) {
 		for _, p := range p.DetectProblems(f.Namespaces) {
-			out = append(out, fromProblem(p, now))
+			out = append(out, fromProblem(p, now, SourceProblem))
 		}
 		for _, p := range p.DetectCAPIProblems(f.Namespaces) {
-			out = append(out, fromProblem(p, now))
+			out = append(out, fromProblem(p, now, SourceProblem))
+		}
+	}
+
+	// ---- Source: missing_ref (dangling-ref detection) --------------
+	// Direct by-name reference targets that don't exist (Pod → missing
+	// PVC / CM / Secret / SA, HPA → missing scaleTargetRef, Ingress →
+	// missing backend Service, etc.). Same Problem shape as SourceProblem
+	// rows, separate Source so callers can filter "direct config errors"
+	// from "workload-state problems."
+	if wantSource(f, SourceMissingRef) {
+		for _, p := range p.DetectMissingRefs(f.Namespaces) {
+			out = append(out, fromProblem(p, now, SourceMissingRef))
 		}
 	}
 
@@ -125,8 +143,8 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	}
 
 	// ---- Source: event (recent K8s Warning events) -----------------
-	// Gated by IncludeEvents, analogous to IncludeAudit. Events are
-	// the noisiest source by far on real clusters (each broken Pod
+	// Gated by IncludeEvents. Events are the noisiest source by far
+	// on real clusters (each broken Pod
 	// emits a Warning Event every few seconds, retained for the cache
 	// window) and almost always duplicate signal already surfaced by
 	// SourceProblem. Default-off keeps the Issue count aligned with
@@ -337,7 +355,7 @@ func resolveGroup(group, kind string) string {
 	return bp.GroupForBuiltinKind(kind)
 }
 
-func fromProblem(p k8s.Problem, now time.Time) Issue {
+func fromProblem(p k8s.Problem, now time.Time, source Source) Issue {
 	sev := SeverityWarning
 	if p.Severity == "critical" {
 		sev = SeverityCritical
@@ -345,7 +363,7 @@ func fromProblem(p k8s.Problem, now time.Time) Issue {
 	since := now.Add(-time.Duration(p.DurationSeconds) * time.Second)
 	return Issue{
 		Severity:  sev,
-		Source:    SourceProblem,
+		Source:    source,
 		Kind:      p.Kind,
 		Group:     resolveGroup(p.Group, p.Kind),
 		Namespace: p.Namespace,
@@ -457,8 +475,8 @@ func fromWarningEvent(e *corev1.Event) Issue {
 
 // wantSource implements the documented `source=` contract: it is a FILTER,
 // not an additive opt-in. When Filters.Sources is empty, every source is
-// allowed (defaults are then narrowed elsewhere — e.g. audit / event /
-// kyverno collection only runs when the matching IncludeX flag is set).
+// allowed (defaults are then narrowed elsewhere — e.g. event / kyverno
+// collection only runs when the matching IncludeX flag is set).
 // When Filters.Sources is non-empty, only the listed sources pass through;
 // passing source=kyverno therefore returns ONLY Kyverno rows, not
 // "defaults plus Kyverno". Callers that want "defaults plus X" should use

@@ -54,10 +54,11 @@ const (
 type Source string
 
 const (
-	SourceProblem   Source = "problem"   // radar's hardcoded per-kind detection
-	SourceEvent     Source = "event"     // K8s Warning events (recent)
-	SourceCondition Source = "condition" // generic CRD .status.conditions[].status=False fallback
-	SourceKyverno   Source = "kyverno"   // Kyverno PolicyReport findings (opt-in)
+	SourceProblem    Source = "problem"     // radar's hardcoded per-kind detection
+	SourceMissingRef Source = "missing_ref" // dangling-ref detection (Pod→missing PVC/CM/Secret/SA, HPA→missing target, Ingress→missing backend, etc.)
+	SourceEvent      Source = "event"       // K8s Warning events (recent)
+	SourceCondition  Source = "condition"   // generic CRD .status.conditions[].status=False fallback
+	SourceKyverno    Source = "kyverno"     // Kyverno PolicyReport findings (opt-in)
 )
 
 // Ref is a lightweight resource reference, used for owner pointers.
