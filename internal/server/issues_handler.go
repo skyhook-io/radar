@@ -26,10 +26,13 @@ import (
 //	severity=  critical,warning  (default: all)
 //	source=    Comma-separated list of sources to RETURN. When set,
 //	           only the listed sources appear in the response.
-//	           Allowed: problem, event, condition, kyverno.
-//	           Default (no source param): problem + condition only
-//	           (event + kyverno excluded because they can flood with
-//	           noisy rows).
+//	           Allowed: problem, missing_ref, event, condition, kyverno.
+//	           Default (no source param): problem + missing_ref +
+//	           condition (event + kyverno excluded because they can
+//	           flood with noisy rows). missing_ref surfaces dangling-
+//	           reference errors (Pod→missing PVC/CM/Secret/SA, HPA→
+//	           missing target, Ingress→missing backend, RoleBinding→
+//	           missing roleRef, webhook→missing Service).
 //	           NOTE: source acts as a filter, not an additive opt-in.
 //	           Passing source=kyverno returns ONLY Kyverno rows, not
 //	           "defaults plus Kyverno". Use include_kyverno=true (or
@@ -184,8 +187,8 @@ func parseSeverities(v string) ([]issues.Severity, error) {
 }
 
 // hasSource reports whether the caller's `?source=` list explicitly
-// names `target`. Used to derive the opt-in flags for audit and
-// event / Kyverno sources — passing them in the source list is more
+// names `target`. Used to derive the opt-in flags for event / Kyverno
+// sources — passing them in the source list is more
 // discoverable than the parallel include_* booleans, and we honor both.
 func hasSource(v, target string) bool {
 	for _, p := range strings.Split(v, ",") {
