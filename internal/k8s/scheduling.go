@@ -866,9 +866,11 @@ func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReferenc
 	case "Job":
 		if l := cache.Jobs(); l != nil {
 			if j, err := l.Jobs(obj.Namespace).Get(obj.Name); err == nil {
-				// Only "blocked" if it has created nothing yet. A running,
-				// succeeded, OR terminally-failed (backoffLimit) Job no longer
-				// creates pods, so a stale quota event shouldn't surface.
+				// Only "blocked" if the Job has created NO pod yet — any of
+				// Active/Succeeded/Failed > 0 means a pod was created (so the
+				// rejection isn't admission-from-the-start), and a stale quota
+				// event shouldn't surface for it. (Trade-off: a Job that ran
+				// some pods, then gets quota-blocked mid-retry, is not flagged.)
 				return j.Status.Active == 0 && j.Status.Succeeded == 0 && j.Status.Failed == 0
 			}
 		}
