@@ -656,6 +656,30 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 		})
 	}
 
+	// Scheduling problems: unschedulable pods (with the offending node
+	// constraint named), admission rejections (quota/PodSecurity/webhook — no
+	// Pod exists, so the pod rollup above can't see them), and post-bind
+	// CNI/volume stalls. Appended directly (not through the Missing-ref Pod
+	// filter above) — an Unschedulable row IS the pod's scheduling reason, not
+	// a duplicate of the pod rollup, which only emits error-state pods.
+	sched := k8s.DetectSchedulingProblems(cache, namespace)
+	sched = append(sched, k8s.DetectAdmissionProblems(cache, namespace)...)
+	sched = append(sched, k8s.DetectPostBindProblems(cache, namespace)...)
+	for _, p := range sched {
+		problems = append(problems, DashboardProblem{
+			Kind:            p.Kind,
+			Namespace:       p.Namespace,
+			Name:            p.Name,
+			Severity:        p.Severity,
+			Reason:          p.Reason,
+			Message:         p.Message,
+			Age:             p.Age,
+			AgeSeconds:      p.AgeSeconds,
+			Duration:        p.Duration,
+			DurationSeconds: p.DurationSeconds,
+		})
+	}
+
 	// CAPI problems (Cluster API resources)
 	for _, p := range k8s.DetectCAPIProblems(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery(), namespace) {
 		problems = append(problems, DashboardProblem{
