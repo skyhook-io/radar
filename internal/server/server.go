@@ -1188,6 +1188,10 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 						s.writeError(w, http.StatusBadRequest, listErr.Error())
 						return
 					}
+					if apierrors.IsForbidden(listErr) || apierrors.IsUnauthorized(listErr) {
+						forbiddenMsg(kind)
+						return
+					}
 					log.Printf("[resources] Failed to list %s in namespace %s (group=%s): %v", kind, ns, group, listErr)
 					s.writeError(w, http.StatusInternalServerError, listErr.Error())
 					return
@@ -1202,6 +1206,10 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				if strings.Contains(err.Error(), "unknown resource kind") {
 					s.writeError(w, http.StatusBadRequest, err.Error())
+					return
+				}
+				if apierrors.IsForbidden(err) || apierrors.IsUnauthorized(err) {
+					forbiddenMsg(kind)
 					return
 				}
 				log.Printf("[resources] Failed to list %s (group=%s): %v", kind, group, err)
