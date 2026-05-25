@@ -46,8 +46,23 @@ type diagnoseResponse struct {
 	LogsError       string                           `json:"logsError,omitempty"`
 	Events          []aicontext.DeduplicatedEvent    `json:"events,omitempty"`
 	EventsError     string                           `json:"eventsError,omitempty"`
-	Pods            int                              `json:"pods"`
-	NarrowHint      string                           `json:"narrowHint,omitempty"`
+	// Scheduling carries why the workload can't run when that's the failure
+	// mode: unschedulable pods (offending node constraint named), admission
+	// rejections (quota/PodSecurity/webhook — where no Pod is created), or
+	// post-bind CNI/volume stalls. Empty when the workload schedules fine.
+	Scheduling []schedulingFinding `json:"scheduling,omitempty"`
+	Pods       int                 `json:"pods"`
+	NarrowHint string              `json:"narrowHint,omitempty"`
+}
+
+// schedulingFinding is the compact scheduling row diagnose embeds — the same
+// signal the `scheduling` issue source emits, scoped to this workload.
+type schedulingFinding struct {
+	Kind     string `json:"kind"`
+	Name     string `json:"name"`
+	Reason   string `json:"reason"`
+	Severity string `json:"severity"`
+	Message  string `json:"message"`
 }
 
 // maxDiagnosePods caps the log fan-out so large DaemonSets / Deployments
@@ -194,7 +209,56 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	if eventsErr != nil {
 		resp.EventsError = eventsErr.Error()
 	}
+
+	resp.Scheduling = schedulingFindingsForWorkload(cache, kindNorm, input.Namespace, input.Name, pods)
 	return toJSONResult(resp)
+}
+
+// schedulingFindingsForWorkload runs the scheduling detectors over the
+// namespace and keeps the rows relevant to this workload: its own pods
+// (bind-time / post-bind), the workload or its ReplicaSet (admission
+// FailedCreate), and any ResourceQuota in the namespace (a saturated quota
+// is exactly why the workload can't create more pods — high-signal context
+// even though it's namespace-scoped).
+func schedulingFindingsForWorkload(cache *k8s.ResourceCache, kind, namespace, name string, pods []*corev1.Pod) []schedulingFinding {
+	all := k8s.DetectSchedulingProblems(cache, namespace)
+	all = append(all, k8s.DetectAdmissionProblems(cache, namespace)...)
+	all = append(all, k8s.DetectPostBindProblems(cache, namespace)...)
+	if len(all) == 0 {
+		return nil
+	}
+
+	podNames := make(map[string]bool, len(pods))
+	for _, p := range pods {
+		podNames[p.Name] = true
+	}
+	dispKind := normalizeDisplayKind(kind)
+
+	var out []schedulingFinding
+	for _, p := range all {
+		relevant := false
+		switch {
+		case p.Kind == "Pod" && podNames[p.Name]:
+			relevant = true
+		case p.Kind == "ResourceQuota":
+			relevant = true
+		case p.Kind == dispKind && p.Name == name:
+			relevant = true // FailedCreate on the workload itself (StatefulSet/DaemonSet)
+		case dispKind == "Deployment" && p.Kind == "ReplicaSet" && strings.HasPrefix(p.Name, name+"-"):
+			relevant = true // FailedCreate on the Deployment's ReplicaSet
+		}
+		if !relevant {
+			continue
+		}
+		out = append(out, schedulingFinding{
+			Kind:     p.Kind,
+			Name:     p.Name,
+			Reason:   p.Reason,
+			Severity: p.Severity,
+			Message:  p.Message,
+		})
+	}
+	return out
 }
 
 // normalizeDiagnoseKind accepts pod/deployment/statefulset/daemonset in any

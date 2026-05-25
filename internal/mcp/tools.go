@@ -160,7 +160,10 @@ func registerTools(server *mcp.Server) {
 			"DaemonSet: the resource (Kubernetes-shaped detail) + diagnostic resourceContext " +
 			"(managedBy, exposes, selectedBy, uses, runsOn, issue/audit/policy rollups) + " +
 			"current AND previous container logs across the workload's pods + recent " +
-			"Warning events filtered to this resource. Use for CrashLoopBackOff, failed " +
+			"Warning events filtered to this resource + a schedulability section when the " +
+			"workload can't run (unschedulable with the offending node constraint named, " +
+			"admission/quota rejection, or a post-bind CNI/volume stall). Use for " +
+			"CrashLoopBackOff, failed " +
 			"deploys, image-pull errors, readiness flaps, scheduling failures, or any " +
 			"first-pass triage where you would otherwise call get_resource → events → " +
 			"get_pod_logs → get_pod_logs(previous=true) in sequence. If you only need ONE " +
@@ -470,7 +473,7 @@ type searchInput struct {
 type issuesInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to one namespace"`
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical,warning"`
-	Source    string `json:"source,omitempty" jsonschema:"comma-separated list of LIVE operational sources to RETURN: problem,missing_ref,event,condition,kyverno. Acts as a FILTER, not an additive opt-in — when set, only the listed sources appear in the response. Default (omitted): problem+missing_ref+condition (event + kyverno excluded because each is loud: events flood thousands per cluster and mostly duplicate problem-source rows; Kyverno PolicyReports typically 10+ rows per workload under a baseline PSS profile). missing_ref surfaces dangling-reference errors (Pod→missing PVC/CM/Secret/SA, HPA→missing target, Ingress→missing backend, RoleBinding→missing roleRef, webhook→missing Service). Examples: source='kyverno' returns ONLY Kyverno rows (no problems, no missing_refs, no conditions); source='problem,missing_ref,condition,kyverno' returns the defaults plus Kyverno. Static best-practice/security-posture audit findings are intentionally not a source here; use get_cluster_audit."`
+	Source    string `json:"source,omitempty" jsonschema:"comma-separated list of LIVE operational sources to RETURN: problem,missing_ref,scheduling,event,condition,kyverno. Acts as a FILTER, not an additive opt-in — when set, only the listed sources appear in the response. Default (omitted): problem+missing_ref+scheduling+condition (event + kyverno excluded because each is loud: events flood thousands per cluster and mostly duplicate problem-source rows; Kyverno PolicyReports typically 10+ rows per workload under a baseline PSS profile). missing_ref surfaces dangling-reference errors (Pod→missing PVC/CM/Secret/SA, HPA→missing target, Ingress→missing backend, RoleBinding→missing roleRef, webhook→missing Service). scheduling surfaces why a Pod can't run — unschedulable (insufficient resources, untolerated taint, or node affinity/selector mismatch with the offending node label named, e.g. kubernetes.io/arch=arm64), admission-rejected (ResourceQuota/LimitRange/PodSecurity/webhook, where no Pod is even created), or stuck post-bind (CNI IP exhaustion, volume attach/mount). Examples: source='kyverno' returns ONLY Kyverno rows (no problems, no missing_refs, no conditions); source='problem,missing_ref,condition,kyverno' returns the defaults plus Kyverno. Static best-practice/security-posture audit findings are intentionally not a source here; use get_cluster_audit."`
 	Kind      string `json:"kind,omitempty" jsonschema:"comma-separated kind filter (e.g. Deployment,Pod)"`
 	Since     string `json:"since,omitempty" jsonschema:"event lookback window, e.g. 15m or 1h. Only affects the event source; when events are enabled and since is omitted, defaults to 1h to avoid pulling the full event-cache backlog."`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max issues returned (default 200, max 1000)"`
@@ -1863,6 +1866,29 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 			RestartCount:         p.RestartCount,
 			LastTerminatedReason: p.LastTerminatedReason,
 			ageSeconds:           p.AgeSeconds,
+		})
+	}
+
+	// Scheduling problems: unschedulable pods (with the offending node
+	// constraint named), admission rejections (quota/PodSecurity/webhook —
+	// no Pod exists, so the pod loop above can't see them), and post-bind
+	// CNI/volume stalls. The pod loop only emits "error" pods, so these are
+	// additive; the seenProblem dedup below keys on reason, letting a pod's
+	// scheduling row coexist with a distinct missing-ref row.
+	sched := k8s.DetectSchedulingProblems(cache, namespace)
+	sched = append(sched, k8s.DetectAdmissionProblems(cache, namespace)...)
+	sched = append(sched, k8s.DetectPostBindProblems(cache, namespace)...)
+	for _, p := range sched {
+		allProblems = append(allProblems, mcpProblem{
+			Kind:       p.Kind,
+			Namespace:  p.Namespace,
+			Name:       p.Name,
+			Group:      p.Group,
+			Severity:   p.Severity,
+			Reason:     p.Reason,
+			Message:    p.Message,
+			Age:        p.Age,
+			ageSeconds: p.AgeSeconds,
 		})
 	}
 

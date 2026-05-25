@@ -26,13 +26,18 @@ import (
 //	severity=  critical,warning  (default: all)
 //	source=    Comma-separated list of sources to RETURN. When set,
 //	           only the listed sources appear in the response.
-//	           Allowed: problem, missing_ref, event, condition, kyverno.
+//	           Allowed: problem, missing_ref, scheduling, event,
+//	           condition, kyverno.
 //	           Default (no source param): problem + missing_ref +
-//	           condition (event + kyverno excluded because they can
-//	           flood with noisy rows). missing_ref surfaces dangling-
-//	           reference errors (Pod→missing PVC/CM/Secret/SA, HPA→
-//	           missing target, Ingress→missing backend, RoleBinding→
-//	           missing roleRef, webhook→missing Service).
+//	           scheduling + condition (event + kyverno excluded because
+//	           they can flood with noisy rows). missing_ref surfaces
+//	           dangling-reference errors (Pod→missing PVC/CM/Secret/SA,
+//	           HPA→missing target, Ingress→missing backend, RoleBinding→
+//	           missing roleRef, webhook→missing Service). scheduling
+//	           surfaces why a Pod can't run: unschedulable (with the
+//	           offending node constraint named), admission-rejected
+//	           (quota/LimitRange/PodSecurity/webhook), or post-bind
+//	           CNI/volume stalls.
 //	           NOTE: source acts as a filter, not an additive opt-in.
 //	           Passing source=kyverno returns ONLY Kyverno rows, not
 //	           "defaults plus Kyverno". Use include_kyverno=true (or
