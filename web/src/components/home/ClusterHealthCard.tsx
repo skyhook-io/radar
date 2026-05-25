@@ -389,12 +389,14 @@ export function ClusterHealthCard({
                     <Cpu className="w-3.5 h-3.5 text-theme-text-tertiary" />
                     CPU
                   </div>
-                  <ResourceBar
-                    label="Used"
-                    used={formatCPUMillicores(metrics.cpu.usageMillis)}
-                    total={formatCPUMillicores(metrics.cpu.capacityMillis)}
-                    percent={metrics.cpu.usagePercent}
-                  />
+                  {metricsServerAvailable && (
+                    <ResourceBar
+                      label="Used"
+                      used={formatCPUMillicores(metrics.cpu.usageMillis)}
+                      total={formatCPUMillicores(metrics.cpu.capacityMillis)}
+                      percent={metrics.cpu.usagePercent}
+                    />
+                  )}
                   <ResourceBar
                     label="Requested"
                     used={formatCPUMillicores(metrics.cpu.requestsMillis)}
@@ -409,12 +411,14 @@ export function ClusterHealthCard({
                     <MemoryStick className="w-3.5 h-3.5 text-theme-text-tertiary" />
                     Memory
                   </div>
-                  <ResourceBar
-                    label="Used"
-                    used={formatMemoryMiB(metrics.memory.usageMillis)}
-                    total={formatMemoryMiB(metrics.memory.capacityMillis)}
-                    percent={metrics.memory.usagePercent}
-                  />
+                  {metricsServerAvailable && (
+                    <ResourceBar
+                      label="Used"
+                      used={formatMemoryMiB(metrics.memory.usageMillis)}
+                      total={formatMemoryMiB(metrics.memory.capacityMillis)}
+                      percent={metrics.memory.usagePercent}
+                    />
+                  )}
                   <ResourceBar
                     label="Requested"
                     used={formatMemoryMiB(metrics.memory.requestsMillis)}
@@ -423,7 +427,7 @@ export function ClusterHealthCard({
                   />
                 </div>
               )}
-              {!metrics?.cpu && !metrics?.memory && (
+              {!metricsServerAvailable && (
                 <MetricsUnavailableHint platform={cluster.platform} metricsServerAvailable={metricsServerAvailable} />
               )}
             </div>

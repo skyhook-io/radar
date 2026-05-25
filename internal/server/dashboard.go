@@ -168,6 +168,10 @@ type WorkloadCount struct {
 type DashboardMetrics struct {
 	CPU    *MetricSummary `json:"cpu,omitempty"`
 	Memory *MetricSummary `json:"memory,omitempty"`
+	// UsageAvailable reports whether live usage (UsageMillis/UsagePercent) came
+	// from metrics-server. When false, only RequestsMillis/CapacityMillis are
+	// meaningful — usage fields are zero.
+	UsageAvailable bool `json:"usageAvailable"`
 }
 
 type MetricSummary struct {
@@ -465,7 +469,10 @@ func (s *Server) handleDashboard(w http.ResponseWriter, r *http.Request) {
 
 	resp.Cluster = cluster
 	resp.Metrics = metrics
-	resp.MetricsServerAvailable = metrics != nil
+	// "Available" means live usage is present — not merely that capacity/request
+	// data exists. metrics is now non-nil whenever nodes are cached, so gate the
+	// flag on actual usage so the frontend's "usage unavailable" hint still fires.
+	resp.MetricsServerAvailable = metrics != nil && metrics.UsageAvailable
 	resp.TrafficSummary = trafficSummary
 
 	k8s.LogTiming(" [dashboard] total: %v", time.Since(dashStart))
@@ -1390,45 +1397,16 @@ func (s *Server) countWarningEvents(cache *k8s.ResourceCache, namespace string) 
 	return count
 }
 
+// metricsServerTimeout bounds the metrics-server query so a slow or unreachable
+// metrics endpoint can't consume the dashboard's whole request budget (the
+// handler runs this in a goroutine and blocks on it in wg.Wait()).
+const metricsServerTimeout = 8 * time.Second
+
 func (s *Server) getDashboardMetrics(ctx context.Context, allowedNamespaces []string) *DashboardMetrics {
-	client := k8s.ClientFromContext(ctx)
-	if client == nil {
-		return nil
-	}
-
-	// Query metrics-server via raw REST to avoid adding k8s.io/metrics dependency.
-	// GET /apis/metrics.k8s.io/v1beta1/nodes. Metrics-server forwards the
-	// impersonation headers, so a user without metrics.k8s.io/nodes access
-	// gets a 403 here and dashboard metrics are silently omitted.
-	data, err := client.CoreV1().RESTClient().Get().
-		AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").
-		DoRaw(ctx)
-	if err != nil {
-		// metrics-server not installed or not accessible — that's fine
-		return nil
-	}
-
-	var nodeMetricsList struct {
-		Items []struct {
-			Metadata struct {
-				Name string `json:"name"`
-			} `json:"metadata"`
-			Usage struct {
-				CPU    string `json:"cpu"`
-				Memory string `json:"memory"`
-			} `json:"usage"`
-		} `json:"items"`
-	}
-	if err := json.Unmarshal(data, &nodeMetricsList); err != nil {
-		log.Printf("Failed to parse node metrics: %v", err)
-		return nil
-	}
-
-	if len(nodeMetricsList.Items) == 0 {
-		return nil
-	}
-
-	// Get node capacity from the cache
+	// Node capacity and pod requests come from the cache — they don't need
+	// metrics-server. Live usage does. Compute the cached values first and
+	// treat usage as best-effort so a missing/slow metrics-server still leaves
+	// requests vs. capacity on the dashboard.
 	cache := k8s.GetResourceCache()
 	if cache == nil {
 		return nil
@@ -1442,7 +1420,7 @@ func (s *Server) getDashboardMetrics(ctx context.Context, allowedNamespaces []st
 		return nil
 	}
 
-	// Sum capacity across all nodes
+	// Sum capacity across all nodes (cached)
 	var cpuCapacityMillis int64
 	var memCapacityBytes int64
 	for _, n := range nodes {
@@ -1450,18 +1428,10 @@ func (s *Server) getDashboardMetrics(ctx context.Context, allowedNamespaces []st
 		memCapacityBytes += n.Status.Capacity.Memory().Value()
 	}
 
-	// Sum usage across all nodes
-	var cpuUsageMillis int64
-	var memUsageBytes int64
-	for _, item := range nodeMetricsList.Items {
-		cpuUsageMillis += parseCPUToMillis(item.Usage.CPU)
-		memUsageBytes += parseMemoryToBytes(item.Usage.Memory)
-	}
-
-	// Sum requests across pods the user can see. For namespace-restricted
-	// users this scopes to allowedNamespaces — without it, the dashboard
-	// would expose aggregate pod-resource totals from namespaces they have
-	// no read access to.
+	// Sum requests across pods the user can see (cached). For namespace-
+	// restricted users this scopes to allowedNamespaces — without it, the
+	// dashboard would expose aggregate pod-resource totals from namespaces they
+	// have no read access to.
 	var cpuRequestsMillis int64
 	var memRequestsBytes int64
 	var metricPods []*corev1.Pod
@@ -1492,7 +1462,44 @@ func (s *Server) getDashboardMetrics(ctx context.Context, allowedNamespaces []st
 		}
 	}
 
-	metrics := &DashboardMetrics{}
+	// Live usage from metrics-server — best-effort. Query via raw REST to avoid
+	// adding k8s.io/metrics dependency; metrics-server forwards impersonation
+	// headers, so a user without metrics.k8s.io/nodes access gets a 403. A
+	// missing, forbidden, or slow metrics-server leaves usageAvailable false
+	// rather than discarding the capacity/request data computed above.
+	var cpuUsageMillis int64
+	var memUsageBytes int64
+	usageAvailable := false
+	if client := k8s.ClientFromContext(ctx); client != nil {
+		mctx, cancel := context.WithTimeout(ctx, metricsServerTimeout)
+		defer cancel()
+		data, err := client.CoreV1().RESTClient().Get().
+			AbsPath("/apis/metrics.k8s.io/v1beta1/nodes").
+			DoRaw(mctx)
+		if err != nil {
+			log.Printf("[dashboard] node metrics unavailable (showing requests/capacity only): %v", err)
+		} else {
+			var nodeMetricsList struct {
+				Items []struct {
+					Usage struct {
+						CPU    string `json:"cpu"`
+						Memory string `json:"memory"`
+					} `json:"usage"`
+				} `json:"items"`
+			}
+			if err := json.Unmarshal(data, &nodeMetricsList); err != nil {
+				log.Printf("[dashboard] failed to parse node metrics: %v", err)
+			} else if len(nodeMetricsList.Items) > 0 {
+				for _, item := range nodeMetricsList.Items {
+					cpuUsageMillis += parseCPUToMillis(item.Usage.CPU)
+					memUsageBytes += parseMemoryToBytes(item.Usage.Memory)
+				}
+				usageAvailable = true
+			}
+		}
+	}
+
+	metrics := &DashboardMetrics{UsageAvailable: usageAvailable}
 	if cpuCapacityMillis > 0 {
 		metrics.CPU = &MetricSummary{
 			UsageMillis:    cpuUsageMillis,
