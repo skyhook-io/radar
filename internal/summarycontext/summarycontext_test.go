@@ -55,6 +55,7 @@ func (f *fakeIssuesProvider) DetectProblems(namespaces []string) []k8s.Problem {
 }
 func (f *fakeIssuesProvider) DetectCAPIProblems(_ []string) []k8s.Problem { return nil }
 func (f *fakeIssuesProvider) DetectMissingRefs(_ []string) []k8s.Problem  { return nil }
+func (f *fakeIssuesProvider) DetectScheduling(_ []string) []k8s.Problem   { return nil }
 func (f *fakeIssuesProvider) WarningEvents(_ []string, _ time.Duration) []*corev1.Event {
 	return nil
 }

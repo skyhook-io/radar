@@ -4,12 +4,16 @@
 //     (failing Deployments, NotReady Nodes, pending PVCs…)
 //   - missing_ref — direct by-name references to objects that do not exist
 //     (missing PVCs, ConfigMaps, Secrets, backend Services, roleRefs…)
+//   - scheduling — why a Pod can't run: unschedulable (arch/taint/resources/
+//     affinity, with the offending node label named), rejected at admission
+//     (quota/LimitRange/PodSecurity/webhook — no Pod is even created), or
+//     stuck post-bind (CNI IP exhaustion, volume attach/mount)
 //   - condition  — generic CRD .status.conditions[].status=False fallback
 //     (Argo/Flux/Knative/Crossplane/cert-manager/KEDA)
 //   - event      — recent K8s Warning events (opt-in; noisy)
 //   - kyverno    — PolicyReport findings (opt-in)
 //
-// All five describe LIVE OPERATIONAL STATE — "what is failing right
+// All six describe LIVE OPERATIONAL STATE — "what is failing right
 // now". Static best-practice/posture findings (runAsRoot, missing
 // probes, no PDB, deprecated APIs, …) are a separate axis and live
 // in pkg/audit + /api/audit + MCP get_cluster_audit. The two are NOT
@@ -58,6 +62,7 @@ type Source string
 const (
 	SourceProblem    Source = "problem"     // radar's hardcoded per-kind detection
 	SourceMissingRef Source = "missing_ref" // dangling-ref detection (Pod→missing PVC/CM/Secret/SA, HPA→missing target, Ingress→missing backend, etc.)
+	SourceScheduling Source = "scheduling"  // placement/admission/post-bind failures (unschedulable, quota/PodSecurity/webhook, CNI/volume)
 	SourceEvent      Source = "event"       // K8s Warning events (recent)
 	SourceCondition  Source = "condition"   // generic CRD .status.conditions[].status=False fallback
 	SourceKyverno    Source = "kyverno"     // Kyverno PolicyReport findings (opt-in)

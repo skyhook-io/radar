@@ -21,6 +21,7 @@ import (
 type fakeProvider struct {
 	problems     []k8s.Problem
 	missingRefs  []k8s.Problem
+	scheduling   []k8s.Problem
 	capiProblems []k8s.Problem
 	events       []*corev1.Event
 	dynamic      map[schema.GroupVersionResource][]*unstructured.Unstructured
@@ -32,6 +33,7 @@ type fakeProvider struct {
 
 func (f *fakeProvider) DetectProblems(_ []string) []k8s.Problem     { return f.problems }
 func (f *fakeProvider) DetectMissingRefs(_ []string) []k8s.Problem  { return f.missingRefs }
+func (f *fakeProvider) DetectScheduling(_ []string) []k8s.Problem   { return f.scheduling }
 func (f *fakeProvider) DetectCAPIProblems(_ []string) []k8s.Problem { return f.capiProblems }
 func (f *fakeProvider) WarningEvents(_ []string, _ time.Duration) []*corev1.Event {
 	return f.events
@@ -130,6 +132,38 @@ func TestCompose_EventsExcludedByDefault(t *testing.T) {
 	out := Compose(p, Filters{})
 	if len(out) != 0 {
 		t.Fatalf("event leaked through default Compose: %+v", out)
+	}
+}
+
+func TestCompose_SchedulingDefaultAndSourceFilter(t *testing.T) {
+	countSource := func(in []Issue, s Source) int {
+		n := 0
+		for _, i := range in {
+			if i.Source == s {
+				n++
+			}
+		}
+		return n
+	}
+	p := &fakeProvider{
+		problems: []k8s.Problem{
+			{Kind: "Deployment", Namespace: "prod", Name: "api", Severity: "critical", Reason: "Unavailable"},
+		},
+		scheduling: []k8s.Problem{
+			{Kind: "Pod", Namespace: "prod", Name: "web-x", Severity: "high", Reason: "Unschedulable", Message: "no node has kubernetes.io/arch=arm64"},
+		},
+	}
+
+	// scheduling is default-on (no Sources filter).
+	out := Compose(p, Filters{})
+	if countSource(out, SourceScheduling) != 1 || countSource(out, SourceProblem) != 1 {
+		t.Fatalf("default Compose should include problem + scheduling, got %+v", out)
+	}
+
+	// source=scheduling returns only scheduling rows.
+	out = Compose(p, Filters{Sources: []Source{SourceScheduling}})
+	if len(out) != 1 || out[0].Source != SourceScheduling || out[0].Reason != "Unschedulable" {
+		t.Fatalf("source=scheduling should return only scheduling rows, got %+v", out)
 	}
 }
 

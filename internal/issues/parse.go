@@ -30,6 +30,8 @@ func ParseSources(v string) ([]Source, error) {
 			out = append(out, SourceProblem)
 		case "missing_ref":
 			out = append(out, SourceMissingRef)
+		case "scheduling":
+			out = append(out, SourceScheduling)
 		case "event":
 			out = append(out, SourceEvent)
 		case "condition":
@@ -39,7 +41,7 @@ func ParseSources(v string) ([]Source, error) {
 		case "audit":
 			return nil, fmt.Errorf("source=audit was removed — use GET /api/audit (or MCP get_cluster_audit) for static best-practice findings; issues now covers live operational state only")
 		default:
-			return nil, fmt.Errorf("unknown source %q (want: problem, missing_ref, event, condition, kyverno)", p)
+			return nil, fmt.Errorf("unknown source %q (want: problem, missing_ref, scheduling, event, condition, kyverno)", p)
 		}
 	}
 	return out, nil

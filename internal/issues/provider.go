@@ -65,6 +65,26 @@ func (p *CacheProvider) DetectMissingRefs(namespaces []string) []k8s.Problem {
 	return flattenNamespacedProblems(perNs)
 }
 
+// DetectScheduling fans the three scheduling detectors (bind-time,
+// admission, post-bind) across namespaces. All rows are namespaced, so the
+// flattenNamespacedProblems convention applies unchanged.
+func (p *CacheProvider) DetectScheduling(namespaces []string) []k8s.Problem {
+	detect := func(ns string) []k8s.Problem {
+		out := k8s.DetectSchedulingProblems(p.cache, ns)
+		out = append(out, k8s.DetectAdmissionProblems(p.cache, ns)...)
+		out = append(out, k8s.DetectPostBindProblems(p.cache, ns)...)
+		return out
+	}
+	if len(namespaces) == 0 {
+		return detect("")
+	}
+	perNs := make([][]k8s.Problem, 0, len(namespaces))
+	for _, ns := range namespaces {
+		perNs = append(perNs, detect(ns))
+	}
+	return flattenNamespacedProblems(perNs)
+}
+
 func (p *CacheProvider) DetectCAPIProblems(namespaces []string) []k8s.Problem {
 	if p.dynamic == nil || p.discovery == nil {
 		return nil

@@ -27,6 +27,12 @@ type Provider interface {
 	// can filter the "direct config error" category separately from the
 	// workload-state-based SourceProblem signals.
 	DetectMissingRefs(namespaces []string) []k8s.Problem
+	// DetectScheduling returns placement/admission/post-bind failures —
+	// unschedulable Pods (with the offending node constraint resolved),
+	// admission rejections (quota/LimitRange/PodSecurity/webhook, where no
+	// Pod exists), and pods stuck post-bind (CNI/volume). Surfaced under
+	// SourceScheduling so agents/UI can isolate "why won't this run".
+	DetectScheduling(namespaces []string) []k8s.Problem
 	WarningEvents(namespaces []string, since time.Duration) []*corev1.Event
 	// CRD-condition fallback inputs.
 	WatchedDynamic() []schema.GroupVersionResource
@@ -115,6 +121,17 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	if wantSource(f, SourceMissingRef) {
 		for _, p := range p.DetectMissingRefs(f.Namespaces) {
 			out = append(out, fromProblem(p, now, SourceMissingRef))
+		}
+	}
+
+	// ---- Source: scheduling (placement + admission + post-bind) -----
+	// Why a Pod can't run, decomposed: unschedulable (with the offending
+	// node label/taint named), admission-rejected (quota/PodSecurity/
+	// webhook — no Pod object exists), or stuck post-bind (CNI/volume).
+	// Default-on: high-signal operational state, not event noise.
+	if wantSource(f, SourceScheduling) {
+		for _, p := range p.DetectScheduling(f.Namespaces) {
+			out = append(out, fromProblem(p, now, SourceScheduling))
 		}
 	}
 
