@@ -133,6 +133,32 @@ func TestCompose_EventsExcludedByDefault(t *testing.T) {
 	}
 }
 
+func TestCompose_MissingRefsDefaultAndSourceFilter(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Problem{
+			{Kind: "Service", Namespace: "prod", Name: "api", Severity: "warning", Reason: "Selector matches no pods"},
+		},
+		missingRefs: []k8s.Problem{
+			{Kind: "Pod", Namespace: "prod", Name: "web", Severity: "critical", Reason: "Missing PVC"},
+		},
+	}
+
+	out := Compose(p, Filters{})
+	if !hasIssueSource(out, SourceProblem) || !hasIssueSource(out, SourceMissingRef) {
+		t.Fatalf("default Compose should include problem + missing_ref, got %+v", out)
+	}
+
+	out = Compose(p, Filters{Sources: []Source{SourceMissingRef}})
+	if len(out) != 1 || out[0].Source != SourceMissingRef || out[0].Reason != "Missing PVC" {
+		t.Fatalf("source=missing_ref should return only missing refs, got %+v", out)
+	}
+
+	out = Compose(p, Filters{Sources: []Source{SourceProblem}})
+	if len(out) != 1 || out[0].Source != SourceProblem || out[0].Reason != "Selector matches no pods" {
+		t.Fatalf("source=problem should exclude missing refs, got %+v", out)
+	}
+}
+
 func TestCompose_GenericCRDConditionFallback(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
 	app := &unstructured.Unstructured{Object: map[string]any{
@@ -537,6 +563,15 @@ func TestCompose_DeterministicOrderForTies(t *testing.T) {
 
 // silence unused-import lint when sort isn't used elsewhere
 var _ = sort.Strings
+
+func hasIssueSource(issues []Issue, source Source) bool {
+	for _, issue := range issues {
+		if issue.Source == source {
+			return true
+		}
+	}
+	return false
+}
 
 // flattenNamespacedProblems exists to keep CacheProvider's per-
 // namespace fan-out from leaking + duplicating cluster-scoped

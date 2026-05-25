@@ -155,18 +155,19 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "diagnose",
-		Description: "Use when the agent's decision is 'this thing is broken — give me " +
-			"everything in one call'. Bundles for a single Pod/Deployment/StatefulSet/" +
-			"DaemonSet: the resource (Kubernetes-shaped detail) + diagnostic resourceContext " +
-			"(managedBy, exposes, selectedBy, uses, runsOn, issue/audit/policy rollups) + " +
-			"current AND previous container logs across the workload's pods + recent " +
-			"Warning events filtered to this resource. Use for CrashLoopBackOff, failed " +
-			"deploys, image-pull errors, readiness flaps, scheduling failures, or any " +
-			"first-pass triage where you would otherwise call get_resource → events → " +
-			"get_pod_logs → get_pod_logs(previous=true) in sequence. If you only need ONE " +
-			"facet (e.g. just spec, just logs), prefer the targeted tool — diagnose is " +
-			"heavier. Not for CRDs or non-workload kinds; use get_resource " +
-			"(with optional include=events) for those.",
+		Description: "Use when the agent's decision is 'this workload is broken — find the " +
+			"root cause / localize the failure'. Bundles for a single Pod/Deployment/" +
+			"StatefulSet/DaemonSet: the resource (Kubernetes-shaped detail) + diagnostic " +
+			"resourceContext (managedBy, exposes, selectedBy, uses, runsOn, " +
+			"issue/audit/policy rollups) + current AND previous container logs across the " +
+			"workload's pods + recent Warning events filtered to this resource. Use for " +
+			"CrashLoopBackOff, OOMKills, failed deploys, image-pull errors, readiness " +
+			"flaps, scheduling failures, error-spewing services, or any workload " +
+			"root-causing where you would otherwise call get_resource → events → " +
+			"get_pod_logs → get_pod_logs(previous=true) in sequence — this returns the " +
+			"same data in one round-trip. If you only need ONE facet (e.g. just spec, " +
+			"just logs), prefer the targeted tool. Not for CRDs or non-workload kinds; " +
+			"use get_resource (with optional include=events) for those.",
 		Annotations: readOnly,
 	}, logToolCall("diagnose", handleDiagnose))
 
@@ -284,9 +285,11 @@ func registerTools(server *mcp.Server) {
 			"crashing pod can have zero). The `source` param is a FILTER: source=kyverno " +
 			"returns ONLY Kyverno rows. To ADD an opt-in source to the defaults, list " +
 			"everything explicitly — e.g. source=problem,missing_ref,condition,kyverno. " +
-			"After identifying a suspect issue, call get_resource (or diagnose for a " +
-			"full debug bundle) for spec/status, or get_neighborhood when the failure " +
-			"likely crosses Services/workloads/Pods/dependencies.",
+			"After identifying a suspect issue, call diagnose when the affected resource " +
+			"is a workload (Pod/Deployment/StatefulSet/DaemonSet) — it bundles spec + " +
+			"logs + events + context in one call. For non-workload kinds, call " +
+			"get_resource. Use get_neighborhood when the failure likely crosses " +
+			"Services/workloads/Pods/dependencies.",
 		Annotations: readOnly,
 	}, logToolCall("issues", handleIssuesTool))
 
@@ -1630,22 +1633,22 @@ func handleListNamespaces(ctx context.Context, req *mcp.CallToolRequest, input s
 // Dashboard builder for MCP (simplified version of server/dashboard.go)
 
 type mcpDashboard struct {
-	Cluster        mcpClusterInfo         `json:"cluster"`
-	Nodes          mcpNodeSummary         `json:"nodes"`
-	VersionSkew    []string               `json:"versionSkew,omitempty"`
-	Health         mcpHealthSummary       `json:"health"`
-	Problems       []mcpProblem           `json:"problems"`
-	TotalProblems  int                    `json:"totalProblems"`           // count before the dashboard cap was applied
-	ProblemsBySeverity map[string]int     `json:"problemsBySeverity,omitempty"` // critical/high/medium/warning counts across the full set
-	RecentChanges  []mcpChange            `json:"recentChanges,omitempty"`
-	WarningEvents  int                    `json:"warningEvents"`
-	TopWarnings    []mcpWarning           `json:"topWarnings"`
-	HelmReleases   mcpHelmSummary         `json:"helmReleases"`
-	Metrics        *mcpMetrics            `json:"metrics,omitempty"`
-	TopologyNodes  int                    `json:"topologyNodes"`
-	TopologyEdges  int                    `json:"topologyEdges"`
-	ResourceCounts map[string]int         `json:"resourceCounts"`
-	Visibility     *k8s.VisibilitySummary `json:"visibility,omitempty"`
+	Cluster            mcpClusterInfo         `json:"cluster"`
+	Nodes              mcpNodeSummary         `json:"nodes"`
+	VersionSkew        []string               `json:"versionSkew,omitempty"`
+	Health             mcpHealthSummary       `json:"health"`
+	Problems           []mcpProblem           `json:"problems"`
+	TotalProblems      int                    `json:"totalProblems"`                // count before the dashboard cap was applied
+	ProblemsBySeverity map[string]int         `json:"problemsBySeverity,omitempty"` // critical/high/medium/warning counts across the full set
+	RecentChanges      []mcpChange            `json:"recentChanges,omitempty"`
+	WarningEvents      int                    `json:"warningEvents"`
+	TopWarnings        []mcpWarning           `json:"topWarnings"`
+	HelmReleases       mcpHelmSummary         `json:"helmReleases"`
+	Metrics            *mcpMetrics            `json:"metrics,omitempty"`
+	TopologyNodes      int                    `json:"topologyNodes"`
+	TopologyEdges      int                    `json:"topologyEdges"`
+	ResourceCounts     map[string]int         `json:"resourceCounts"`
+	Visibility         *k8s.VisibilitySummary `json:"visibility,omitempty"`
 }
 
 type mcpChange struct {
@@ -1872,9 +1875,6 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 	// loop above only catches running-but-broken pods (CrashLoopBackOff,
 	// not-ready); Pods that fail to schedule on a missing PVC stay Pending
 	// without container statuses and would otherwise be invisible. Dedupe
-	// by (kind, ns, name) so a Pod already flagged by the pod-error loop
-	// (e.g. CreateContainerConfigError on a missing ConfigMap) doesn't
-	// appear twice.
 	// Dedupe exact-duplicate rows, not resource identities. Keying on
 	// (kind, ns, name, reason) lets distinct missing-ref reasons on the
 	// same Pod survive — a Pod missing both PVC and ConfigMap emits two

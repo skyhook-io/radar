@@ -11,6 +11,10 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	dynamicfake "k8s.io/client-go/dynamic/fake"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
@@ -287,6 +291,113 @@ func TestDetectMissingRefs(t *testing.T) {
 		} else if p.Severity != "critical" {
 			t.Errorf("non-TLS missing-ref should be critical severity, got %q: %+v", p.Severity, p)
 		}
+	}
+}
+
+func TestDetectMissingWebhookRefs(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+
+	now := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	existingSvc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "webhook-ok", Namespace: "hooks", CreationTimestamp: now}}
+	client := fake.NewClientset(existingSvc)
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	vwhGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"}
+	mwhGVR := schema.GroupVersionResource{Group: "admissionregistration.k8s.io", Version: "v1", Resource: "mutatingwebhookconfigurations"}
+	scheme := runtime.NewScheme()
+	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		scheme,
+		map[schema.GroupVersionResource]string{
+			vwhGVR: "ValidatingWebhookConfigurationList",
+			mwhGVR: "MutatingWebhookConfigurationList",
+		},
+		webhookConfig("ValidatingWebhookConfiguration", "validate-hooks", now, []any{
+			webhookWithService("missing", "hooks", "does-not-exist"),
+			webhookWithService("existing", "hooks", "webhook-ok"),
+			webhookWithURL("external"),
+		}),
+		webhookConfig("MutatingWebhookConfiguration", "mutate-hooks", now, []any{
+			webhookWithService("missing-mutating", "hooks", "mutating-missing"),
+		}),
+	)
+	if err := InitTestDynamicResourceCache(dynClient, []APIResource{
+		{Group: "admissionregistration.k8s.io", Version: "v1", Kind: "ValidatingWebhookConfiguration", Name: "validatingwebhookconfigurations", Verbs: []string{"list", "watch"}},
+		{Group: "admissionregistration.k8s.io", Version: "v1", Kind: "MutatingWebhookConfiguration", Name: "mutatingwebhookconfigurations", Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+
+	dynCache := GetDynamicResourceCache()
+	discovery := GetResourceDiscovery()
+	if err := dynCache.EnsureWatching(vwhGVR); err != nil {
+		t.Fatalf("EnsureWatching validating webhooks: %v", err)
+	}
+	if err := dynCache.EnsureWatching(mwhGVR); err != nil {
+		t.Fatalf("EnsureWatching mutating webhooks: %v", err)
+	}
+	if !dynCache.WaitForSync(vwhGVR, 2*time.Second) {
+		t.Fatal("validating webhook dynamic cache did not sync")
+	}
+	if !dynCache.WaitForSync(mwhGVR, 2*time.Second) {
+		t.Fatal("mutating webhook dynamic cache did not sync")
+	}
+
+	problems := DetectMissingWebhookRefs(GetResourceCache(), dynCache, discovery, "")
+	if !findProblem(problems, "ValidatingWebhookConfiguration", "", "validate-hooks", "Missing webhook backend Service") {
+		t.Fatalf("missing validating webhook Service not detected: %+v", problems)
+	}
+	if !findProblem(problems, "MutatingWebhookConfiguration", "", "mutate-hooks", "Missing webhook backend Service") {
+		t.Fatalf("missing mutating webhook Service not detected: %+v", problems)
+	}
+	if len(problems) != 2 {
+		t.Fatalf("expected exactly 2 missing webhook refs, got %+v", problems)
+	}
+	for _, p := range problems {
+		if p.Namespace != "" {
+			t.Errorf("webhook configs are cluster-scoped; got namespace on problem: %+v", p)
+		}
+		if hasSubstr(p.Message, "webhook-ok") || hasSubstr(p.Message, "external") {
+			t.Errorf("existing Service or URL-based webhook should not flag: %+v", p)
+		}
+	}
+	if scoped := DetectMissingWebhookRefs(GetResourceCache(), dynCache, discovery, "hooks"); len(scoped) != 0 {
+		t.Fatalf("namespace-scoped call should omit cluster-scoped webhook configs, got %+v", scoped)
+	}
+}
+
+func webhookConfig(kind, name string, ts metav1.Time, webhooks []any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "admissionregistration.k8s.io/v1",
+		"kind":       kind,
+		"metadata": map[string]any{
+			"name":              name,
+			"creationTimestamp": ts.Format(time.RFC3339),
+		},
+		"webhooks": webhooks,
+	}}
+}
+
+func webhookWithService(name, namespace, service string) map[string]any {
+	return map[string]any{
+		"name": name,
+		"clientConfig": map[string]any{
+			"service": map[string]any{
+				"name":      service,
+				"namespace": namespace,
+			},
+		},
+	}
+}
+
+func webhookWithURL(name string) map[string]any {
+	return map[string]any{
+		"name": name,
+		"clientConfig": map[string]any{
+			"url": "https://example.com/webhook",
+		},
 	}
 }
 

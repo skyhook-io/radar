@@ -85,6 +85,7 @@ type Capabilities struct {
 	AuthEnabled   bool                 `json:"authEnabled,omitempty"` // Auth is enabled on the server
 	Username      string               `json:"username,omitempty"`    // Authenticated username (when auth enabled)
 	Resources     *ResourcePermissions `json:"resources,omitempty"`   // Per-resource-type permissions
+	Visibility    *VisibilitySummary   `json:"visibility,omitempty"`  // Present when resource visibility is limited enough to make diagnostics incomplete
 }
 
 // NamespaceCapabilities holds the effective exec/logs/portForward capabilities

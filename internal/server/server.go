@@ -340,6 +340,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/metrics/nodes/{name}/history", s.handleNodeMetricsHistory)
 			r.Get("/metrics/top/pods", s.handleTopPods)
 			r.Get("/metrics/top/nodes", s.handleTopNodes)
+			r.Get("/metrics/top/resources", s.handleTopResources)
 
 			// Port forwarding
 			r.Get("/portforwards", s.handleListPortForwards)
@@ -721,9 +722,11 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	// state to distinguish loading from RBAC restrictions.
 	if result := k8s.GetCachedPermissionResult(); result != nil {
 		caps.Resources = result.Perms
+		caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
 	} else if k8s.GetResourceCache() != nil {
 		if result := k8s.CheckResourcePermissions(r.Context()); result != nil {
 			caps.Resources = result.Perms
+			caps.Visibility = k8s.BuildVisibilitySummary(result, r.URL.Query().Get("namespace"))
 		}
 	}
 
@@ -1530,7 +1533,7 @@ func setTypeMeta(resource any) {
 //  1. kind == "namespaces"        → full Namespace object requires get-namespaces SAR
 //  2. cluster-scoped (Node/CRD/…) → per-kind get SAR (ClassifyKindScope)
 //  3. namespaced                   → namespace access via getUserNamespaces,
-//                                    plus per-namespace get SAR for Secrets
+//     plus per-namespace get SAR for Secrets
 func (s *Server) preflightResourceGet(r *http.Request, kind, namespace, name, group string) (int, string, bool) {
 	isNamespacesKind := kind == "namespaces" || kind == "namespace"
 	isClusterScoped, gvrGroup, gvrResource := k8s.ClassifyKindScope(kind, group)
@@ -2116,6 +2119,80 @@ func (s *Server) handleTopNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, result)
+}
+
+// handleTopResources returns ranked live metrics for agents and compact
+// diagnostics. It is intentionally separate from /metrics/top/{pods,nodes},
+// which back UI tables and preserve their unsorted array shape.
+func (s *Server) handleTopResources(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	q := r.URL.Query()
+	kind := q.Get("kind")
+	if kind == "" {
+		kind = k8s.TopMetricsKindPods
+	}
+	opts := k8s.NormalizeTopMetricsOptions(k8s.TopMetricsOptions{
+		Kind:      kind,
+		Namespace: q.Get("namespace"),
+		Sort:      q.Get("sort"),
+		Limit:     parseLimit(q.Get("limit")),
+	})
+
+	if opts.Kind == k8s.TopMetricsKindNodes {
+		if !s.canRead(r, "", "nodes", "", "list") {
+			s.writeJSON(w, k8s.TopMetricsResponse{
+				Kind:   opts.Kind,
+				Sort:   opts.Sort,
+				Reason: "no access to nodes (cluster-scoped resource requires explicit RBAC)",
+			})
+			return
+		}
+		s.writeJSON(w, k8s.BuildTopMetrics(opts))
+		return
+	}
+
+	namespaces := s.parseNamespacesForUser(r)
+	if opts.Namespace != "" {
+		if !namespaceAllowed(namespaces, opts.Namespace) {
+			s.writeJSON(w, k8s.TopMetricsResponse{
+				Kind:      opts.Kind,
+				Sort:      opts.Sort,
+				Namespace: opts.Namespace,
+				Reason:    "no access to namespace",
+			})
+			return
+		}
+		s.writeJSON(w, k8s.BuildTopMetrics(opts))
+		return
+	}
+	if noNamespaceAccess(namespaces) {
+		s.writeJSON(w, k8s.TopMetricsResponse{Kind: opts.Kind, Sort: opts.Sort, Reason: "no namespace access"})
+		return
+	}
+	if namespaces == nil {
+		s.writeJSON(w, k8s.BuildTopMetrics(opts))
+		return
+	}
+	if len(namespaces) == 1 {
+		opts.Namespace = namespaces[0]
+		s.writeJSON(w, k8s.BuildTopMetrics(opts))
+		return
+	}
+	s.writeError(w, http.StatusBadRequest, "namespace is required when access is limited to multiple namespaces")
+}
+
+func namespaceAllowed(namespaces []string, namespace string) bool {
+	if namespaces == nil {
+		return true
+	}
+	for _, ns := range namespaces {
+		if ns == namespace {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
