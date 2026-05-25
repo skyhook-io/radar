@@ -1,4 +1,5 @@
 import { useState, useMemo } from 'react'
+import { Virtuoso } from 'react-virtuoso'
 import type { TrafficFlow } from '../../types'
 import { clsx } from 'clsx'
 import { ChevronDown, ChevronUp, ShieldCheck } from 'lucide-react'
@@ -141,14 +142,18 @@ export function TrafficFlowList({ flows }: TrafficFlowListProps) {
         <span className="text-right">Verdict</span>
       </div>
 
-      {/* Flow rows */}
-      <div className="flex-1 overflow-y-auto">
-        {sorted.length === 0 ? (
-          <div className="flex items-center justify-center h-32 text-sm text-theme-text-tertiary">
-            {search ? 'No flows match the search' : 'No flows to display'}
-          </div>
-        ) : (
-          sorted.map((flow, i) => {
+      {/* Flow rows — virtualized so tens of thousands of Hubble/Cilium flows
+          don't all become DOM. Virtuoso measures variable row heights, so the
+          expand/collapse panel still works. */}
+      {sorted.length === 0 ? (
+        <div className="flex-1 flex items-center justify-center text-sm text-theme-text-tertiary">
+          {search ? 'No flows match the search' : 'No flows to display'}
+        </div>
+      ) : (
+        <Virtuoso
+          className="flex-1"
+          data={sorted}
+          itemContent={(i, flow) => {
             const isExpanded = expandedIdx === i
             const isHTTP = flow.l7Protocol === 'HTTP'
             const isDNS = flow.l7Protocol === 'DNS'
@@ -316,9 +321,9 @@ export function TrafficFlowList({ flows }: TrafficFlowListProps) {
                 )}
               </div>
             )
-          })
-        )}
-      </div>
+          }}
+        />
+      )}
 
       {/* Footer */}
       <div className="px-3 py-1.5 border-t border-theme-border text-[10px] text-theme-text-tertiary">

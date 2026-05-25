@@ -166,6 +166,24 @@ async function runLayoutOnMainThread(
   const ungroupedNodes: LayoutResult['ungroupedNodes'] = []
   const groupNodeIds = new Map<string, Set<string>>()
 
+  // Pre-bucket intra-group edges in a single O(edges) pass — filtering all of
+  // elkGraph.edges inside the per-group loop below is O(groups × edges).
+  const nodeGroupId = new Map<string, string>()
+  for (const child of elkGraph.children) {
+    if (child.id.startsWith('group-') && child.children) {
+      for (const c of child.children) nodeGroupId.set(c.id, child.id)
+    }
+  }
+  const intraEdgesByGroup = new Map<string, ElkEdge[]>()
+  for (const e of elkGraph.edges) {
+    const sg = nodeGroupId.get(e.sources[0])
+    if (sg && sg === nodeGroupId.get(e.targets[0])) {
+      const arr = intraEdgesByGroup.get(sg)
+      if (arr) arr.push(e)
+      else intraEdgesByGroup.set(sg, [e])
+    }
+  }
+
   // Phase 1: Layout each group independently
   for (const child of elkGraph.children) {
     const isGroup = child.id.startsWith('group-')
@@ -176,9 +194,7 @@ async function runLayoutOnMainThread(
       const nodeIds = new Set(child.children.map(c => c.id))
       groupNodeIds.set(child.id, nodeIds)
 
-      const intraGroupEdges = elkGraph.edges.filter(e =>
-        nodeIds.has(e.sources[0]) && nodeIds.has(e.targets[0])
-      )
+      const intraGroupEdges = intraEdgesByGroup.get(child.id) ?? []
 
       const layoutResult = await elk.layout({
         id: child.id,
