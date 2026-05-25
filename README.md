@@ -145,6 +145,7 @@ radar
 | `--disable-exec` | `false` | Disable terminal and debug shell |
 | `--disable-helm-write` | `false` | Disable Helm write operations |
 | `--disable-local-terminal` | `false` | Disable local terminal feature |
+| `--debug-image` | `busybox:latest` | Image for ephemeral debug containers and node debug pods. Point at a mirror for air-gapped / private-registry clusters. |
 | `--prometheus-url` | (auto-discover) | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) |
 | `--prometheus-header` | | HTTP header sent with every Prometheus request, format `Key=Value` (repeatable). Required for auth-protected backends. |
 | `--auth-mode` | `none` | Authentication mode: `none`, `proxy`, or `oidc` ([details](docs/authentication.md)) |

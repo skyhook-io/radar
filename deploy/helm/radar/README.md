@@ -86,6 +86,7 @@ touches its contents.
 | `image.tag` | Image tag | Chart appVersion |
 | `service.type` | Service type | `ClusterIP` |
 | `service.port` | Service port | `9280` |
+| `debug.image` | Image for ephemeral debug containers and node debug pods (point at a mirror for air-gapped / private-registry clusters) | `""` (busybox:latest) |
 | `ingress.enabled` | Enable ingress | `false` |
 | `ingress.className` | Ingress class name | `""` |
 | `timeline.storage` | Timeline storage (memory/sqlite) | `memory` |

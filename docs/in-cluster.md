@@ -153,6 +153,16 @@ rbac:
   helm: false         # Enable Helm write operations (broad permissions)
 ```
 
+The terminal's **Debug** action launches a throwaway container (ephemeral container on a pod, or a privileged pod on a node) using `busybox:latest` by default. In air-gapped or private-registry clusters where that image can't be pulled, point it at a reachable mirror:
+
+```yaml
+# values.yaml
+debug:
+  image: my-registry.internal/busybox:1.36
+```
+
+Ephemeral debug containers can't carry their own image-pull secrets — they reuse the target pod's — so the image must be pullable by the workload being debugged.
+
 ### CRD Permissions
 
 Radar reads CRDs from many popular tools. Each CRD group can be toggled individually:
@@ -286,6 +296,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `ingress.className` | Ingress class | `""` |
 | `service.port` | Service port | `9280` |
 | `mcp.enabled` | Enable MCP server for AI tools | `true` |
+| `debug.image` | Image for ephemeral debug containers and node debug pods (point at a mirror for air-gapped / private-registry clusters) | `""` (busybox:latest) |
 | `timeline.storage` | Event storage (memory/sqlite) | `memory` |
 | `timeline.dbPath` | SQLite database path | `/data/timeline.db` |
 | `timeline.historyLimit` | Max events to retain (memory only) | `10000` |
