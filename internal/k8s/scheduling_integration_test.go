@@ -3,6 +3,7 @@ package k8s
 import (
 	"strings"
 	"testing"
+	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
@@ -99,9 +100,9 @@ func TestDetectSchedulingProblems_BindTime(t *testing.T) {
 	}
 }
 
-// Exercises the admission FailedCreate path AND the recovered-workload
-// cross-check: a quota rejection on a still-blocked ReplicaSet surfaces; the
-// same event on a recovered ReplicaSet (all replicas ready) is skipped.
+// Exercises the admission FailedCreate path: dedup to one row per object, the
+// recovered-workload cross-check (created-but-not-ready is skipped), and that
+// the LATEST event wins when the active blocker changed (quota → webhook).
 func TestDetectAdmissionProblems_FailedCreateCrossCheck(t *testing.T) {
 	defer ResetTestState()
 	// replicas = pods actually CREATED. "blocked" = couldn't create (replicas<2);
@@ -114,39 +115,50 @@ func TestDetectAdmissionProblems_FailedCreateCrossCheck(t *testing.T) {
 			Status:     appsv1.ReplicaSetStatus{Replicas: replicas, ReadyReplicas: 0},
 		}
 	}
-	evt := func(name, rsName string) *corev1.Event {
+	evt := func(name, rsName, msg string, last metav1.Time) *corev1.Event {
 		return &corev1.Event{
 			ObjectMeta:     metav1.ObjectMeta{Name: name, Namespace: "prod"},
 			InvolvedObject: corev1.ObjectReference{Kind: "ReplicaSet", Namespace: "prod", Name: rsName},
 			Reason:         "FailedCreate",
 			Type:           corev1.EventTypeWarning,
-			Message:        `Error creating: pods "x" is forbidden: exceeded quota: mem-quota, used: requests.memory=2Gi, limited: requests.memory=2Gi`,
-			LastTimestamp:  metav1.Now(),
+			Message:        msg,
+			LastTimestamp:  last,
 		}
 	}
-	// Two FailedCreate events for rs-blocked (a controller emits one per failed
-	// attempt, each with a different generated pod name) → exactly one row.
-	if err := InitTestResourceCache(fake.NewClientset(rs("rs-blocked", 0), rs("rs-ok", 2), evt("e1", "rs-blocked"), evt("e1b", "rs-blocked"), evt("e2", "rs-ok"))); err != nil {
+	quotaMsg := `Error creating: pods "x" is forbidden: exceeded quota: mem-quota, used: requests.memory=2Gi, limited: requests.memory=2Gi`
+	webhookMsg := `Error creating: admission webhook "vpod.example.com" denied the request: blocked`
+	nowT := metav1.Now()
+	oldT := metav1.NewTime(nowT.Add(-10 * time.Minute))
+
+	// rs-blocked has two events: an OLDER quota rejection and a NEWER webhook
+	// rejection (the active blocker changed). Expect exactly one row, carrying
+	// the LATEST reason (webhook) — not whichever the informer iterates first.
+	if err := InitTestResourceCache(fake.NewClientset(
+		rs("rs-blocked", 0), rs("rs-ok", 2),
+		evt("e1", "rs-blocked", quotaMsg, oldT), evt("e1b", "rs-blocked", webhookMsg, nowT),
+		evt("e2", "rs-ok", quotaMsg, nowT),
+	)); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 	problems := DetectAdmissionProblems(GetResourceCache(), "prod")
 
-	if !findProblem(problems, "ReplicaSet", "prod", "rs-blocked", "QuotaExceeded") {
-		t.Errorf("still-blocked ReplicaSet should surface QuotaExceeded, got %+v", problems)
+	if !findProblem(problems, "ReplicaSet", "prod", "rs-blocked", "WebhookDenied") {
+		t.Errorf("rs-blocked should surface the LATEST blocker (WebhookDenied), got %+v", problems)
 	}
 	blockedRows := 0
 	for _, p := range problems {
 		if p.Name == "rs-blocked" {
 			blockedRows++
+			if p.Reason == "QuotaExceeded" {
+				t.Errorf("stale (older) quota event must not win over the newer webhook one: %+v", p)
+			}
+		}
+		if p.Name == "rs-ok" {
+			t.Errorf("ReplicaSet with pods created (replicas met) but not ready — e.g. now unschedulable — is not admission-blocked and must be skipped: %+v", p)
 		}
 	}
 	if blockedRows != 1 {
 		t.Errorf("expected exactly 1 row for rs-blocked (deduped by object), got %d: %+v", blockedRows, problems)
-	}
-	for _, p := range problems {
-		if p.Name == "rs-ok" {
-			t.Errorf("ReplicaSet with pods created (replicas met) but not ready — e.g. now unschedulable — is not admission-blocked and must be skipped: %+v", p)
-		}
 	}
 }
 

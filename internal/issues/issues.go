@@ -72,7 +72,7 @@ type ComposeStats struct {
 	TotalMatched int
 }
 
-// Compose runs the four sources and merges their output. Backward-
+// Compose runs the default sources and merges their output. Backward-
 // compatible signature for callers that don't care about stats.
 func Compose(p Provider, f Filters) []Issue {
 	out, _ := ComposeWithStats(p, f)

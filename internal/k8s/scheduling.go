@@ -772,20 +772,23 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Problem {
 	}
 
 	now := time.Now()
-	var problems []Problem
-	// One row per blocked controller: a quota-blocked workload emits a
-	// FailedCreate per attempt, each with a different generated pod name in the
-	// message (so they're distinct cached events) — dedup by involved object.
-	seen := map[string]bool{}
+	// One row per blocked controller, showing the CURRENT blocker. A workload
+	// emits a FailedCreate per attempt (each with a different generated pod name
+	// → distinct cached events), and the active blocker can change within the
+	// window (quota cleared, webhook now rejects). Informer List order is
+	// arbitrary, so keep the LATEST event by LastTimestamp per object rather
+	// than whichever happened to be iterated first.
+	type admCandidate struct {
+		ev     *corev1.Event
+		reason string
+	}
+	latest := map[string]admCandidate{}
+	var order []string
 	for _, e := range events {
 		if e.Reason != "FailedCreate" {
 			continue
 		}
-		last := e.LastTimestamp.Time
-		if last.IsZero() {
-			last = e.EventTime.Time
-		}
-		if !last.IsZero() && now.Sub(last) > admissionFailureWindow {
+		if t := eventLastTime(e); !t.IsZero() && now.Sub(t) > admissionFailureWindow {
 			continue // stale — the controller stopped retrying
 		}
 		reason, ok := classifyAdmissionFailure(e.Message)
@@ -793,39 +796,59 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Problem {
 			continue
 		}
 		obj := e.InvolvedObject
-		key := obj.Kind + "/" + obj.Namespace + "/" + obj.Name
-		if seen[key] {
-			continue
-		}
 		// A blocked controller re-emits FailedCreate continuously, but a since-
-		// recovered one's event lingers in the cache for the whole window —
-		// cross-check current state so we don't flag a now-healthy workload as
-		// critical (the recency guard alone can't tell recovered from active).
+		// recovered one's event lingers for the whole window — cross-check
+		// current state so we don't flag a now-healthy workload as critical.
 		if !admissionTargetStillBlocked(cache, obj) {
 			continue
 		}
-		seen[key] = true
-		first := e.FirstTimestamp.Time
-		if first.IsZero() {
-			first = e.EventTime.Time
+		key := obj.Kind + "/" + obj.Namespace + "/" + obj.Name
+		if cur, exists := latest[key]; exists {
+			if eventLastTime(e).After(eventLastTime(cur.ev)) {
+				latest[key] = admCandidate{ev: e, reason: reason}
+			}
+			continue
 		}
-		ageDur := now.Sub(first)
+		latest[key] = admCandidate{ev: e, reason: reason}
+		order = append(order, key)
+	}
+
+	problems := make([]Problem, 0, len(order))
+	for _, key := range order {
+		c := latest[key]
+		obj := c.ev.InvolvedObject
+		ageDur := now.Sub(eventFirstTime(c.ev))
 		problems = append(problems, Problem{
-			Kind:                 obj.Kind,
-			Namespace:            obj.Namespace,
-			Name:                 obj.Name,
-			Severity:             "critical",
-			Reason:               reason,
-			Message:              "pod creation blocked: " + strings.TrimSpace(e.Message),
-			Age:                  FormatAge(ageDur),
-			AgeSeconds:           int64(ageDur.Seconds()),
-			Duration:             FormatAge(ageDur),
-			DurationSeconds:      int64(ageDur.Seconds()),
-			RestartCount:         0,
-			LastTerminatedReason: "",
+			Kind:            obj.Kind,
+			Namespace:       obj.Namespace,
+			Name:            obj.Name,
+			Severity:        "critical",
+			Reason:          c.reason,
+			Message:         "pod creation blocked: " + strings.TrimSpace(c.ev.Message),
+			Age:             FormatAge(ageDur),
+			AgeSeconds:      int64(ageDur.Seconds()),
+			Duration:        FormatAge(ageDur),
+			DurationSeconds: int64(ageDur.Seconds()),
 		})
 	}
 	return problems
+}
+
+// eventLastTime / eventFirstTime return the most-recent / earliest timestamp on
+// an Event, falling back to EventTime (events API v1) when the legacy
+// First/LastTimestamp fields are unset.
+func eventLastTime(e *corev1.Event) time.Time {
+	if !e.LastTimestamp.Time.IsZero() {
+		return e.LastTimestamp.Time
+	}
+	return e.EventTime.Time
+}
+
+func eventFirstTime(e *corev1.Event) time.Time {
+	if !e.FirstTimestamp.Time.IsZero() {
+		return e.FirstTimestamp.Time
+	}
+	return e.EventTime.Time
 }
 
 // admissionTargetStillBlocked reports whether the controller named by a
