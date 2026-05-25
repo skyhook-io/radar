@@ -448,6 +448,26 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 				return ToRuntimeObjects(items), nil
 			},
 		)
+	case "resourcequotas", "resourcequota":
+		if cache.ResourceQuotas() == nil {
+			return nil, fmt.Errorf("forbidden: resourcequotas")
+		}
+		return listPerNs(
+			func() ([]runtime.Object, error) {
+				items, err := cache.ResourceQuotas().List(labels.Everything())
+				if err != nil {
+					return nil, err
+				}
+				return ToRuntimeObjects(items), nil
+			},
+			func(ns string) ([]runtime.Object, error) {
+				items, err := cache.ResourceQuotas().ResourceQuotas(ns).List(labels.Everything())
+				if err != nil {
+					return nil, err
+				}
+				return ToRuntimeObjects(items), nil
+			},
+		)
 	case "roles", "role":
 		if cache.Roles() == nil {
 			return nil, fmt.Errorf("forbidden: roles")
@@ -625,6 +645,11 @@ func FetchResource(cache *ResourceCache, kind, namespace, name string) (runtime.
 			return nil, fmt.Errorf("forbidden: limitranges")
 		}
 		return cache.LimitRanges().LimitRanges(namespace).Get(name)
+	case "resourcequotas", "resourcequota":
+		if cache.ResourceQuotas() == nil {
+			return nil, fmt.Errorf("forbidden: resourcequotas")
+		}
+		return cache.ResourceQuotas().ResourceQuotas(namespace).Get(name)
 	case "roles", "role":
 		if cache.Roles() == nil {
 			return nil, fmt.Errorf("forbidden: roles")
@@ -720,6 +745,9 @@ func SetTypeMeta(resource any) {
 	case *corev1.LimitRange:
 		r.APIVersion = "v1"
 		r.Kind = "LimitRange"
+	case *corev1.ResourceQuota:
+		r.APIVersion = "v1"
+		r.Kind = "ResourceQuota"
 	case *rbacv1.Role:
 		r.APIVersion = "rbac.authorization.k8s.io/v1"
 		r.Kind = "Role"

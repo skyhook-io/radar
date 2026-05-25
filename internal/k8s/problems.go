@@ -170,6 +170,11 @@ func DetectProblems(cache *ResourceCache, namespace string) []Problem {
 			if health == "healthy" {
 				continue
 			}
+			// Unschedulable pods are owned by the scheduling source, which
+			// names the offending constraint instead of a bare "Pending".
+			if IsPodUnschedulable(pod) {
+				continue
+			}
 			ageDur := now.Sub(pod.CreationTimestamp.Time)
 			severity := "high"
 			if health == "error" {

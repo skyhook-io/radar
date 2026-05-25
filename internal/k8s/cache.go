@@ -63,6 +63,7 @@ var deferredResources = map[string]bool{
 	"horizontalpodautoscalers": true, // problems detection, not critical for first render
 	"serviceaccounts":          true, // audit inheritance lookups, not first-render
 	"limitranges":              true, // audit inheritance lookups, not first-render
+	"resourcequotas":           true, // scheduling/admission diagnostics, not first-render
 }
 
 // minimalFirstPaintSet is the subset of critical informers the home

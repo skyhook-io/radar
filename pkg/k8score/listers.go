@@ -214,6 +214,13 @@ func (rc *ResourceCache) LimitRanges() listerscorev1.LimitRangeLister {
 	return rc.factoryFor(LimitRanges).Core().V1().LimitRanges().Lister()
 }
 
+func (rc *ResourceCache) ResourceQuotas() listerscorev1.ResourceQuotaLister {
+	if rc == nil || !rc.isEnabled(ResourceQuotas) {
+		return nil
+	}
+	return rc.factoryFor(ResourceQuotas).Core().V1().ResourceQuotas().Lister()
+}
+
 // listCountNamespaced counts items from a lister filtered to specific namespaces.
 // If namespaces is empty, it returns the total count (same as listCount).
 func listCountNamespaced(lister any, namespaces []string) int {
@@ -270,6 +277,9 @@ func listCountInNamespace(lister any, ns string) int {
 		return len(items)
 	case listerscorev1.LimitRangeLister:
 		items, _ := l.LimitRanges(ns).List(labels.Everything())
+		return len(items)
+	case listerscorev1.ResourceQuotaLister:
+		items, _ := l.ResourceQuotas(ns).List(labels.Everything())
 		return len(items)
 	case listersrbacv1.RoleLister:
 		items, _ := l.Roles(ns).List(labels.Everything())
@@ -353,6 +363,9 @@ func listCount(lister any) int {
 		items, _ := l.List(labels.Everything())
 		return len(items)
 	case listerscorev1.LimitRangeLister:
+		items, _ := l.List(labels.Everything())
+		return len(items)
+	case listerscorev1.ResourceQuotaLister:
 		items, _ := l.List(labels.Everything())
 		return len(items)
 	case listersrbacv1.RoleLister:

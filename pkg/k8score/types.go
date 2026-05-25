@@ -47,6 +47,7 @@ const (
 	RoleBindings             ResourceType = "rolebindings"
 	ClusterRoleBindings      ResourceType = "clusterrolebindings"
 	LimitRanges              ResourceType = "limitranges"
+	ResourceQuotas           ResourceType = "resourcequotas"
 )
 
 // Operation constants for resource change events.

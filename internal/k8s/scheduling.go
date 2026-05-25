@@ -1,0 +1,949 @@
+package k8s
+
+import (
+	"fmt"
+	"regexp"
+	"slices"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
+)
+
+// Scheduling failure decomposition.
+//
+// The kube-scheduler already did the root-cause analysis — it just hands
+// it back as one opaque string in the FailedScheduling event and the
+// Pod's PodScheduled=False condition message, e.g.:
+//
+//	0/5 nodes are available: 2 Insufficient cpu, 3 node(s) had untolerated
+//	taint {dedicated: gpu}. preemption: 0/5 nodes are available: 5 No
+//	preemption victims found for incoming pod.
+//
+// parseSchedulerMessage turns that into structured, per-predicate reasons
+// so callers (the issues engine, MCP diagnose, the Pod UI banner) can show
+// "why won't this schedule" without the operator re-reading scheduler prose.
+// It is a pure function — the node-fit resolver (resolveUnsatisfiable*) is
+// what later joins NodeAffinitySelector / UntoleratedTaint reasons against
+// the live node cache to name the specific offending label or taint.
+
+// SchedReasonClass is the predicate family a scheduling failure falls into.
+type SchedReasonClass string
+
+const (
+	SchedInsufficientResource SchedReasonClass = "InsufficientResource"
+	SchedUntoleratedTaint     SchedReasonClass = "UntoleratedTaint"
+	SchedNodeAffinitySelector SchedReasonClass = "NodeAffinitySelector"
+	SchedPodAffinity          SchedReasonClass = "PodAffinity"
+	SchedPodAntiAffinity      SchedReasonClass = "PodAntiAffinity"
+	SchedTopologySpread       SchedReasonClass = "TopologySpread"
+	SchedVolumeNodeAffinity   SchedReasonClass = "VolumeNodeAffinity"
+	SchedVolumeBinding        SchedReasonClass = "VolumeBinding" // unbound PVC / no available PVs to bind
+	SchedVolumeCount          SchedReasonClass = "VolumeCount"
+	SchedNoPorts              SchedReasonClass = "NoPorts"
+	SchedNodeUnschedulable    SchedReasonClass = "NodeUnschedulable" // cordoned / not-ready / unschedulable taint
+	SchedOther                SchedReasonClass = "Other"
+)
+
+// SchedulingReason is one decomposed clause of a scheduler verdict.
+type SchedulingReason struct {
+	Class SchedReasonClass
+	// NodeCount is how many nodes this clause rejected. 0 when the clause
+	// is whole-message (e.g. unbound PVC) or the count couldn't be parsed.
+	NodeCount int
+	// Resource is set for SchedInsufficientResource: "cpu", "memory",
+	// "ephemeral-storage", "pods", "nvidia.com/gpu", …
+	Resource string
+	// TaintKey / TaintValue are set for SchedUntoleratedTaint. TaintValue
+	// is empty for valueless taints (e.g. {node.kubernetes.io/unreachable}).
+	TaintKey   string
+	TaintValue string
+	// Raw is the original clause text, preserved so callers can fall back
+	// to it for classes we don't further structure.
+	Raw string
+}
+
+var (
+	// "0/5 nodes are available" / "1/12 nodes are available"
+	reNodesAvailable = regexp.MustCompile(`(\d+)/(\d+)\s+nodes? are available`)
+	// leading integer count on a clause: "2 Insufficient cpu", "3 node(s) had…"
+	reLeadingCount = regexp.MustCompile(`^\s*(\d+)\s+`)
+	// "Insufficient <resource>" — resource may contain '.'/'-'/'/'
+	reInsufficient = regexp.MustCompile(`Insufficient\s+([A-Za-z0-9./_-]+)`)
+	// taint payload: "{key: value}" or "{key}"
+	reTaint = regexp.MustCompile(`\{([^}]*)\}`)
+)
+
+// parseSchedulerMessage decomposes a scheduler verdict (from a
+// FailedScheduling event message or a PodScheduled=False condition message)
+// into structured reasons. totalNodes is the node count the scheduler
+// considered (the denominator of "0/N nodes are available"); 0 when the
+// message carries no such prefix. An empty/unrecognized message yields nil
+// reasons so callers can fall back to the raw text.
+func parseSchedulerMessage(msg string) (totalNodes int, reasons []SchedulingReason) {
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return 0, nil
+	}
+
+	// Drop the "preemption: …" tail — it restates the same node set from
+	// the preemption scheduler's point of view and only adds noise.
+	if before, _, ok := strings.Cut(msg, ". preemption:"); ok {
+		msg = before
+	} else if before, _, ok := strings.Cut(msg, " preemption:"); ok {
+		msg = before
+	}
+
+	if m := reNodesAvailable.FindStringSubmatch(msg); m != nil {
+		totalNodes, _ = strconv.Atoi(m[2])
+	}
+
+	// Everything after the first ":" is the comma-separated clause list.
+	// Messages without a colon (e.g. "pod has unbound immediate
+	// PersistentVolumeClaims") are treated as a single clause.
+	clauseStr := msg
+	if _, rest, ok := strings.Cut(msg, ":"); ok {
+		clauseStr = rest
+	}
+	clauseStr = strings.TrimRight(strings.TrimSpace(clauseStr), ".")
+	if clauseStr == "" {
+		return totalNodes, nil
+	}
+
+	for clause := range strings.SplitSeq(clauseStr, ", ") {
+		clause = strings.TrimSpace(clause)
+		if clause == "" {
+			continue
+		}
+		if r, ok := classifyClause(clause); ok {
+			reasons = append(reasons, r)
+		}
+	}
+	return totalNodes, reasons
+}
+
+// classifyClause maps one scheduler clause to a structured reason. The
+// substring checks are ordered so the more specific phrasings win (e.g.
+// "anti-affinity" before "affinity", "node affinity/selector" before the
+// bare "affinity" used by pod-affinity).
+func classifyClause(clause string) (SchedulingReason, bool) {
+	r := SchedulingReason{Raw: clause}
+	if m := reLeadingCount.FindStringSubmatch(clause); m != nil {
+		r.NodeCount, _ = strconv.Atoi(m[1])
+	}
+
+	lower := strings.ToLower(clause)
+
+	switch {
+	case strings.Contains(clause, "Insufficient"):
+		r.Class = SchedInsufficientResource
+		if m := reInsufficient.FindStringSubmatch(clause); m != nil {
+			r.Resource = m[1]
+		}
+	case strings.Contains(lower, "too many pods"):
+		r.Class = SchedInsufficientResource
+		r.Resource = "pods"
+	case strings.Contains(lower, "untolerated taint"):
+		r.Class = SchedUntoleratedTaint
+		r.TaintKey, r.TaintValue = parseTaintPayload(clause)
+		// A cordon / not-ready taint is really a node-availability problem,
+		// not a pod-misconfiguration; classify it as such so the UI doesn't
+		// tell the user to "add a toleration" for node.kubernetes.io/*.
+		if isNodeLifecycleTaint(r.TaintKey) {
+			r.Class = SchedNodeUnschedulable
+		}
+	case strings.Contains(lower, "volume node affinity"):
+		// Must precede the bare "node affinity" check below — this clause
+		// contains the substring "node affinity" but is a volume-topology
+		// failure, not a pod node-affinity mismatch.
+		r.Class = SchedVolumeNodeAffinity
+	case strings.Contains(lower, "anti-affinity"):
+		r.Class = SchedPodAntiAffinity
+	case strings.Contains(lower, "node affinity") || strings.Contains(lower, "node selector"):
+		r.Class = SchedNodeAffinitySelector
+	case strings.Contains(lower, "pod affinity"):
+		r.Class = SchedPodAffinity
+	case strings.Contains(lower, "topology spread"):
+		r.Class = SchedTopologySpread
+	case strings.Contains(lower, "max volume count"):
+		r.Class = SchedVolumeCount
+	case strings.Contains(lower, "free ports"):
+		r.Class = SchedNoPorts
+	case strings.Contains(lower, "unbound") && strings.Contains(lower, "persistentvolumeclaim"),
+		strings.Contains(lower, "persistent volumes to bind"):
+		r.Class = SchedVolumeBinding
+	case strings.Contains(lower, "unschedulable"), strings.Contains(lower, "were not ready"):
+		r.Class = SchedNodeUnschedulable
+	default:
+		r.Class = SchedOther
+	}
+	return r, true
+}
+
+// parseTaintPayload extracts key/value from an "untolerated taint {k: v}"
+// or "{k}" clause. Returns empty strings if no {…} payload is present.
+func parseTaintPayload(clause string) (key, value string) {
+	m := reTaint.FindStringSubmatch(clause)
+	if m == nil {
+		return "", ""
+	}
+	inner := strings.TrimSpace(m[1])
+	if inner == "" {
+		return "", ""
+	}
+	if k, v, ok := strings.Cut(inner, ":"); ok {
+		return strings.TrimSpace(k), strings.TrimSpace(v)
+	}
+	return inner, ""
+}
+
+// isNodeLifecycleTaint reports whether a taint key is one the control plane
+// sets to mark a node temporarily unusable (cordon, not-ready, pressure),
+// as opposed to an operator-applied dedicated/workload taint.
+func isNodeLifecycleTaint(key string) bool {
+	return strings.HasPrefix(key, "node.kubernetes.io/") ||
+		strings.HasPrefix(key, "node-role.kubernetes.io/") ||
+		strings.HasPrefix(key, "node.cloudprovider.kubernetes.io/")
+}
+
+// ---- Node-fit resolution ------------------------------------------------
+//
+// The scheduler reports "N node(s) didn't match Pod's node affinity/selector"
+// without naming WHICH label is unsatisfiable. resolveUnsatisfiableNodeSelector
+// joins the pod's nodeSelector + required nodeAffinity against the fleet's
+// node labels to name the specific offending key — turning the opaque verdict
+// into "no node has kubernetes.io/arch=arm64 (6 nodes are amd64)". This is the
+// step that makes arch/os/zone/instance-type mismatches self-explanatory.
+//
+// These functions are pure (operate on plain NodeFacts / PodPlacement); the
+// detector populates them from the live node cache.
+
+// NodeFacts is the minimal per-node view the fit resolver needs.
+type NodeFacts struct {
+	Name          string
+	Labels        map[string]string
+	Taints        []TaintFact
+	Unschedulable bool
+}
+
+// TaintFact is one node taint.
+type TaintFact struct {
+	Key, Value, Effect string
+}
+
+// MatchExpr is a node-affinity match expression (key, operator, values).
+type MatchExpr struct {
+	Key      string
+	Operator string // In, NotIn, Exists, DoesNotExist, Gt, Lt
+	Values   []string
+}
+
+// NodeSelectorTermFacts is one required nodeAffinity term — a node satisfies
+// the term if it matches ALL of the term's expressions.
+type NodeSelectorTermFacts struct {
+	Expressions []MatchExpr
+}
+
+// PodPlacement is the pod's scheduling constraints, extracted from its spec.
+type PodPlacement struct {
+	NodeSelector map[string]string
+	// RequiredNodeAffinity is the flattened requiredDuringScheduling terms.
+	// A node satisfies the affinity if it matches ANY term.
+	RequiredNodeAffinity []NodeSelectorTermFacts
+}
+
+// resolveUnsatisfiableNodeSelector returns human-readable explanations of
+// which label requirement no node satisfies, naming the offending key(s)
+// and the values the fleet actually carries. Empty slice means the pod's
+// label constraints are individually satisfiable (so the placement failure
+// lies elsewhere — taints, resources, a term combination).
+func resolveUnsatisfiableNodeSelector(p PodPlacement, nodes []NodeFacts) []string {
+	var out []string
+
+	for _, k := range sortedKeys(p.NodeSelector) {
+		v := p.NodeSelector[k]
+		if countNodesWithLabel(nodes, k, v) == 0 {
+			out = append(out, explainMissingLabel(k, v, nodes))
+		}
+	}
+
+	if len(p.RequiredNodeAffinity) > 0 && !anyTermMatches(p.RequiredNodeAffinity, nodes) {
+		seen := map[string]bool{}
+		var affinityMsgs []string
+		for _, term := range p.RequiredNodeAffinity {
+			for _, e := range term.Expressions {
+				if countNodesMatchingExpr(nodes, e) == 0 {
+					msg := explainMissingExpr(e, nodes)
+					if !seen[msg] {
+						seen[msg] = true
+						affinityMsgs = append(affinityMsgs, msg)
+					}
+				}
+			}
+		}
+		if len(affinityMsgs) == 0 {
+			// Every expression is individually satisfiable but no single
+			// node satisfies a whole term — a constraint combination.
+			affinityMsgs = append(affinityMsgs, "no node satisfies the pod's required nodeAffinity term combination")
+		}
+		out = append(out, affinityMsgs...)
+	}
+
+	return out
+}
+
+func explainMissingLabel(key, val string, nodes []NodeFacts) string {
+	present := distinctLabelValues(nodes, key)
+	if len(present) == 0 {
+		return fmt.Sprintf("no node carries label %s (pod requires %s=%s)", key, key, val)
+	}
+	return fmt.Sprintf("no node has %s=%s — %d node(s) carry %s: [%s]",
+		key, val, countNodesWithLabelKey(nodes, key), key, strings.Join(present, ", "))
+}
+
+func explainMissingExpr(e MatchExpr, nodes []NodeFacts) string {
+	present := distinctLabelValues(nodes, e.Key)
+	switch e.Operator {
+	case "In":
+		if len(present) == 0 {
+			return fmt.Sprintf("no node carries label %s (pod requires %s in [%s])", e.Key, e.Key, strings.Join(e.Values, ", "))
+		}
+		return fmt.Sprintf("no node has %s in [%s] — fleet %s: [%s]", e.Key, strings.Join(e.Values, ", "), e.Key, strings.Join(present, ", "))
+	case "Exists":
+		return fmt.Sprintf("no node carries label %s (pod requires it to exist)", e.Key)
+	case "DoesNotExist":
+		return fmt.Sprintf("every node carries label %s (pod requires it absent)", e.Key)
+	case "NotIn":
+		return fmt.Sprintf("every node has %s in [%s] (pod requires otherwise)", e.Key, strings.Join(e.Values, ", "))
+	default:
+		return fmt.Sprintf("no node satisfies nodeAffinity %s %s [%s]", e.Key, e.Operator, strings.Join(e.Values, ", "))
+	}
+}
+
+func anyTermMatches(terms []NodeSelectorTermFacts, nodes []NodeFacts) bool {
+	for _, n := range nodes {
+		for _, term := range terms {
+			if nodeMatchesTerm(n, term) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func nodeMatchesTerm(n NodeFacts, term NodeSelectorTermFacts) bool {
+	for _, e := range term.Expressions {
+		if !nodeMatchesExpr(n, e) {
+			return false
+		}
+	}
+	return true
+}
+
+func nodeMatchesExpr(n NodeFacts, e MatchExpr) bool {
+	v, ok := n.Labels[e.Key]
+	switch e.Operator {
+	case "In":
+		return ok && slices.Contains(e.Values, v)
+	case "NotIn":
+		return !ok || !slices.Contains(e.Values, v)
+	case "Exists":
+		return ok
+	case "DoesNotExist":
+		return !ok
+	case "Gt", "Lt":
+		if !ok || len(e.Values) == 0 {
+			return false
+		}
+		nv, err1 := strconv.ParseInt(v, 10, 64)
+		bound, err2 := strconv.ParseInt(e.Values[0], 10, 64)
+		if err1 != nil || err2 != nil {
+			return false
+		}
+		if e.Operator == "Gt" {
+			return nv > bound
+		}
+		return nv < bound
+	default:
+		return false
+	}
+}
+
+func countNodesMatchingExpr(nodes []NodeFacts, e MatchExpr) int {
+	n := 0
+	for _, node := range nodes {
+		if nodeMatchesExpr(node, e) {
+			n++
+		}
+	}
+	return n
+}
+
+func countNodesWithLabel(nodes []NodeFacts, key, val string) int {
+	n := 0
+	for _, node := range nodes {
+		if node.Labels[key] == val {
+			n++
+		}
+	}
+	return n
+}
+
+func countNodesWithLabelKey(nodes []NodeFacts, key string) int {
+	n := 0
+	for _, node := range nodes {
+		if _, ok := node.Labels[key]; ok {
+			n++
+		}
+	}
+	return n
+}
+
+func distinctLabelValues(nodes []NodeFacts, key string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, node := range nodes {
+		if v, ok := node.Labels[key]; ok && !seen[v] {
+			seen[v] = true
+			out = append(out, v)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func sortedKeys(m map[string]string) []string {
+	out := make([]string, 0, len(m))
+	for k := range m {
+		out = append(out, k)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// ---- Bind-time detection ------------------------------------------------
+
+// DetectSchedulingProblems flags Pending pods the scheduler tried to place
+// and rejected (PodScheduled=False). It reads the scheduler's own verdict
+// from the condition message — current state, one row per pod, no event
+// noise — decomposes it, and resolves node-affinity/selector misses against
+// the live node cache so the Message names the specific offending constraint
+// (arch/zone/taint/resources) instead of just "Pending". namespace="" scans
+// all namespaces. Post-bind (ContainerCreating/CNI/volume) and admission
+// (quota with no Pod) failures are handled by separate detectors.
+func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Problem {
+	if cache == nil {
+		return nil
+	}
+	var problems []Problem
+	now := time.Now()
+	nodes := schedulingNodeFacts(cache)
+
+	for _, pods := range listPodsByNamespace(cache, namespace) {
+		for _, pod := range pods {
+			if pod.Status.Phase != corev1.PodPending {
+				continue
+			}
+			cond := podScheduledCondition(pod)
+			// PodScheduled=False is the scheduler's definitive "I tried and
+			// couldn't place this" — present only after a real scheduling
+			// attempt, so no age grace is needed to filter transients.
+			if cond == nil || cond.Status != corev1.ConditionFalse {
+				continue
+			}
+			ageDur := now.Sub(pod.CreationTimestamp.Time)
+			dur := ageDur
+			if !cond.LastTransitionTime.IsZero() {
+				dur = now.Sub(cond.LastTransitionTime.Time)
+			}
+			problems = append(problems, Problem{
+				Kind:            "Pod",
+				Namespace:       pod.Namespace,
+				Name:            pod.Name,
+				Severity:        schedulingSeverity(dur),
+				Reason:          "Unschedulable",
+				Message:         describeUnschedulable(pod, cond.Message, nodes),
+				Age:             FormatAge(ageDur),
+				AgeSeconds:      int64(ageDur.Seconds()),
+				Duration:        FormatAge(dur),
+				DurationSeconds: int64(dur.Seconds()),
+			})
+		}
+	}
+	return problems
+}
+
+func podScheduledCondition(pod *corev1.Pod) *corev1.PodCondition {
+	for i := range pod.Status.Conditions {
+		if pod.Status.Conditions[i].Type == corev1.PodScheduled {
+			return &pod.Status.Conditions[i]
+		}
+	}
+	return nil
+}
+
+// IsPodUnschedulable reports whether the scheduler tried and failed to place
+// the pod (PodScheduled=False). Such pods are owned by SourceScheduling,
+// which explains WHY — the generic problem detector skips them to avoid a
+// duplicate bare "Pending" row.
+func IsPodUnschedulable(pod *corev1.Pod) bool {
+	c := podScheduledCondition(pod)
+	return c != nil && c.Status == corev1.ConditionFalse
+}
+
+// schedulingSeverity ramps with how long the pod has been unschedulable: a
+// momentary miss right after creation is usually transient; one stuck for
+// many minutes is a real, operator-actionable failure.
+func schedulingSeverity(d time.Duration) string {
+	switch {
+	case d >= 10*time.Minute:
+		return "critical"
+	case d >= 2*time.Minute:
+		return "high"
+	default:
+		return "medium"
+	}
+}
+
+// describeUnschedulable builds the operator-facing message: lead with the
+// resolved offending constraint (the value the bare scheduler verdict hides)
+// when we can name it, then summarize the scheduler's per-predicate counts.
+// Pure over its inputs (pod spec + verdict string + node facts).
+func describeUnschedulable(pod *corev1.Pod, schedMsg string, nodes []NodeFacts) string {
+	total, reasons := parseSchedulerMessage(schedMsg)
+
+	var parts []string
+	resolvedAffinity := false
+	for _, r := range reasons {
+		if r.Class == SchedNodeAffinitySelector {
+			if resolved := resolveUnsatisfiableNodeSelector(extractPodPlacement(pod), nodes); len(resolved) > 0 {
+				parts = append(parts, resolved...)
+				resolvedAffinity = true
+			}
+			break
+		}
+	}
+	if summary := summarizeReasons(reasons, resolvedAffinity); summary != "" {
+		parts = append(parts, summary)
+	}
+	if len(parts) == 0 {
+		if msg := strings.TrimSpace(schedMsg); msg != "" {
+			return msg
+		}
+		return "Pod is unschedulable"
+	}
+	msg := strings.Join(parts, "; ")
+	if total > 0 {
+		msg = fmt.Sprintf("%s (0/%d nodes available)", msg, total)
+	}
+	return msg
+}
+
+// summarizeReasons renders the parsed predicate counts into a compact phrase.
+// When skipAffinity is set, the generic node-affinity/selector clause is
+// omitted because describeUnschedulable already emitted the resolved label.
+func summarizeReasons(reasons []SchedulingReason, skipAffinity bool) string {
+	var parts []string
+	for _, r := range reasons {
+		switch r.Class {
+		case SchedInsufficientResource:
+			parts = append(parts, fmt.Sprintf("%s insufficient %s", nodesPhrase(r.NodeCount), r.Resource))
+		case SchedUntoleratedTaint:
+			t := r.TaintKey
+			if r.TaintValue != "" {
+				t += "=" + r.TaintValue
+			}
+			parts = append(parts, fmt.Sprintf("%s untolerated taint %s", nodesPhrase(r.NodeCount), t))
+		case SchedNodeAffinitySelector:
+			if skipAffinity {
+				continue
+			}
+			parts = append(parts, fmt.Sprintf("%s node affinity/selector mismatch", nodesPhrase(r.NodeCount)))
+		case SchedPodAffinity:
+			parts = append(parts, fmt.Sprintf("%s pod affinity unmet", nodesPhrase(r.NodeCount)))
+		case SchedPodAntiAffinity:
+			parts = append(parts, fmt.Sprintf("%s pod anti-affinity conflict", nodesPhrase(r.NodeCount)))
+		case SchedTopologySpread:
+			parts = append(parts, fmt.Sprintf("%s topology-spread unmet", nodesPhrase(r.NodeCount)))
+		case SchedVolumeNodeAffinity:
+			parts = append(parts, fmt.Sprintf("%s volume node-affinity conflict", nodesPhrase(r.NodeCount)))
+		case SchedVolumeBinding:
+			parts = append(parts, "unbound PersistentVolumeClaim")
+		case SchedVolumeCount:
+			parts = append(parts, fmt.Sprintf("%s at max volume count", nodesPhrase(r.NodeCount)))
+		case SchedNoPorts:
+			parts = append(parts, fmt.Sprintf("%s no free host ports", nodesPhrase(r.NodeCount)))
+		case SchedNodeUnschedulable:
+			parts = append(parts, fmt.Sprintf("%s cordoned/not-ready", nodesPhrase(r.NodeCount)))
+		default:
+			if r.Raw != "" {
+				parts = append(parts, r.Raw)
+			}
+		}
+	}
+	return strings.Join(parts, ", ")
+}
+
+func nodesPhrase(n int) string {
+	if n <= 0 {
+		return "node(s)"
+	}
+	return fmt.Sprintf("%d node(s)", n)
+}
+
+// extractPodPlacement pulls the pod's node-targeting constraints (nodeSelector
+// + required nodeAffinity matchExpressions) into the resolver's plain shape.
+func extractPodPlacement(pod *corev1.Pod) PodPlacement {
+	p := PodPlacement{NodeSelector: pod.Spec.NodeSelector}
+	if pod.Spec.Affinity == nil || pod.Spec.Affinity.NodeAffinity == nil {
+		return p
+	}
+	req := pod.Spec.Affinity.NodeAffinity.RequiredDuringSchedulingIgnoredDuringExecution
+	if req == nil {
+		return p
+	}
+	for _, term := range req.NodeSelectorTerms {
+		var t NodeSelectorTermFacts
+		for _, e := range term.MatchExpressions {
+			t.Expressions = append(t.Expressions, MatchExpr{
+				Key:      e.Key,
+				Operator: string(e.Operator),
+				Values:   e.Values,
+			})
+		}
+		if len(t.Expressions) > 0 {
+			p.RequiredNodeAffinity = append(p.RequiredNodeAffinity, t)
+		}
+	}
+	return p
+}
+
+// schedulingNodeFacts snapshots the node cache into the resolver's plain
+// NodeFacts shape (labels + taints + cordon state).
+func schedulingNodeFacts(cache *ResourceCache) []NodeFacts {
+	lister := cache.Nodes()
+	if lister == nil {
+		return nil
+	}
+	nodeList, _ := lister.List(labels.Everything())
+	facts := make([]NodeFacts, 0, len(nodeList))
+	for _, n := range nodeList {
+		taints := make([]TaintFact, 0, len(n.Spec.Taints))
+		for _, t := range n.Spec.Taints {
+			taints = append(taints, TaintFact{Key: t.Key, Value: t.Value, Effect: string(t.Effect)})
+		}
+		facts = append(facts, NodeFacts{
+			Name:          n.Name,
+			Labels:        n.Labels,
+			Taints:        taints,
+			Unschedulable: n.Spec.Unschedulable,
+		})
+	}
+	return facts
+}
+
+// ---- Admission-layer detection ------------------------------------------
+//
+// The layer where NO pod is ever created: the controller's pod template is
+// rejected at admission, so there's no Pod to inspect — the Deployment just
+// sits at "Progressing". This is where the bench's namespace_memory_limit
+// fault lives. Two complementary signals:
+//
+//   - Proactive: a ResourceQuota at/near its hard limit (read from cache) —
+//     it will block the next pod the namespace creates.
+//   - Reactive: controller FailedCreate events naming the workload blocked
+//     right now (exceeded quota / LimitRange / PodSecurity / webhook).
+
+// quotaWarnRatio is the ResourceQuota saturation that warrants a heads-up
+// before it starts rejecting pods.
+const quotaWarnRatio = 0.90
+
+// admissionFailureWindow bounds how recently a FailedCreate must have fired
+// to count as "still happening" — a stuck controller re-emits continuously,
+// so a fresh LastTimestamp means the failure is active.
+const admissionFailureWindow = 30 * time.Minute
+
+// DetectAdmissionProblems flags pod-template rejections at admission time.
+// namespace="" scans all namespaces.
+func DetectAdmissionProblems(cache *ResourceCache, namespace string) []Problem {
+	if cache == nil {
+		return nil
+	}
+	var problems []Problem
+	problems = append(problems, detectQuotaPressure(cache, namespace)...)
+	problems = append(problems, detectAdmissionFailures(cache, namespace)...)
+	return problems
+}
+
+type quotaSaturation struct {
+	resource         string
+	usedStr, hardStr string
+	ratio            float64
+}
+
+// quotaWorstResource returns the most-saturated resource in a ResourceQuota.
+func quotaWorstResource(q *corev1.ResourceQuota) quotaSaturation {
+	var worst quotaSaturation
+	for res, hard := range q.Status.Hard {
+		used, ok := q.Status.Used[res]
+		if !ok {
+			continue
+		}
+		hv := hard.MilliValue()
+		if hv <= 0 {
+			continue
+		}
+		ratio := float64(used.MilliValue()) / float64(hv)
+		if ratio > worst.ratio {
+			worst = quotaSaturation{
+				resource: string(res),
+				usedStr:  used.String(),
+				hardStr:  hard.String(),
+				ratio:    ratio,
+			}
+		}
+	}
+	return worst
+}
+
+func detectQuotaPressure(cache *ResourceCache, namespace string) []Problem {
+	lister := cache.ResourceQuotas()
+	if lister == nil {
+		return nil
+	}
+	var quotas []*corev1.ResourceQuota
+	if namespace != "" {
+		quotas, _ = lister.ResourceQuotas(namespace).List(labels.Everything())
+	} else {
+		quotas, _ = lister.List(labels.Everything())
+	}
+
+	now := time.Now()
+	var problems []Problem
+	for _, q := range quotas {
+		worst := quotaWorstResource(q)
+		if worst.ratio < quotaWarnRatio {
+			continue
+		}
+		severity, reason := "high", "QuotaNearLimit"
+		if worst.ratio >= 1.0 {
+			severity, reason = "critical", "QuotaExceeded"
+		}
+		ageDur := now.Sub(q.CreationTimestamp.Time)
+		problems = append(problems, Problem{
+			Kind:       "ResourceQuota",
+			Namespace:  q.Namespace,
+			Name:       q.Name,
+			Severity:   severity,
+			Reason:     reason,
+			Message:    fmt.Sprintf("%s at %s/%s (%.0f%%) — blocks new pods in namespace %s", worst.resource, worst.usedStr, worst.hardStr, worst.ratio*100, q.Namespace),
+			Age:        FormatAge(ageDur),
+			AgeSeconds: int64(ageDur.Seconds()),
+		})
+	}
+	return problems
+}
+
+func detectAdmissionFailures(cache *ResourceCache, namespace string) []Problem {
+	if cache.Events() == nil {
+		return nil
+	}
+	var events []*corev1.Event
+	if namespace != "" {
+		events, _ = cache.Events().Events(namespace).List(labels.Everything())
+	} else {
+		events, _ = cache.Events().List(labels.Everything())
+	}
+
+	now := time.Now()
+	var problems []Problem
+	for _, e := range events {
+		if e.Reason != "FailedCreate" {
+			continue
+		}
+		last := e.LastTimestamp.Time
+		if last.IsZero() {
+			last = e.EventTime.Time
+		}
+		if !last.IsZero() && now.Sub(last) > admissionFailureWindow {
+			continue // stale — the controller stopped retrying
+		}
+		reason, ok := classifyAdmissionFailure(e.Message)
+		if !ok {
+			continue
+		}
+		obj := e.InvolvedObject
+		first := e.FirstTimestamp.Time
+		if first.IsZero() {
+			first = e.EventTime.Time
+		}
+		ageDur := now.Sub(first)
+		problems = append(problems, Problem{
+			Kind:                 obj.Kind,
+			Namespace:            obj.Namespace,
+			Name:                 obj.Name,
+			Severity:             "critical",
+			Reason:               reason,
+			Message:              "pod creation blocked: " + strings.TrimSpace(e.Message),
+			Age:                  FormatAge(ageDur),
+			AgeSeconds:           int64(ageDur.Seconds()),
+			Duration:             FormatAge(ageDur),
+			DurationSeconds:      int64(ageDur.Seconds()),
+			RestartCount:         0,
+			LastTerminatedReason: "",
+		})
+	}
+	return problems
+}
+
+// classifyAdmissionFailure maps a FailedCreate event message to a reason.
+// Returns ok=false for FailedCreate messages that aren't admission denials
+// (e.g. transient "object is being deleted") so we don't over-report.
+func classifyAdmissionFailure(msg string) (string, bool) {
+	lower := strings.ToLower(msg)
+	switch {
+	case strings.Contains(lower, "exceeded quota"), strings.Contains(lower, "failed quota"):
+		return "QuotaExceeded", true
+	case strings.Contains(lower, "violates podsecurity"), strings.Contains(lower, "violates pod security"):
+		return "PodSecurityViolation", true
+	case strings.Contains(lower, "admission webhook") && strings.Contains(lower, "denied"):
+		return "WebhookDenied", true
+	case strings.Contains(lower, "forbidden") && (strings.Contains(lower, "limitrange") ||
+		strings.Contains(lower, "maximum") || strings.Contains(lower, "minimum")):
+		return "LimitRangeViolation", true
+	default:
+		return "", false
+	}
+}
+
+// ---- Post-bind detection ------------------------------------------------
+//
+// The pod was scheduled (a node accepted it) but the kubelet can't bring it
+// up — stuck in ContainerCreating because the CNI can't hand out an IP or the
+// CSI can't attach/mount a volume. radar otherwise treats ContainerCreating
+// as benign, so these silently sit as "Pending". The failure detail lives in
+// kubelet events (FailedCreatePodSandBox / FailedMount / FailedAttachVolume),
+// so this detector is event-driven, cross-checked against still-stuck pods so
+// a pod that recovered after a retry isn't falsely flagged.
+
+const postBindFailureWindow = 10 * time.Minute
+
+var postBindSeverity = map[string]string{
+	"IPExhaustion":          "critical",
+	"SandboxCreationFailed": "high",
+	"VolumeMultiAttach":     "critical",
+	"VolumeAttach":          "high",
+	"VolumeMount":           "high",
+}
+
+// DetectPostBindProblems flags pods stuck in ContainerCreating due to CNI/IP
+// or volume failures. namespace="" scans all namespaces.
+func DetectPostBindProblems(cache *ResourceCache, namespace string) []Problem {
+	if cache == nil || cache.Events() == nil {
+		return nil
+	}
+	stuck := stuckScheduledPods(cache, namespace)
+	if len(stuck) == 0 {
+		return nil
+	}
+
+	var events []*corev1.Event
+	if namespace != "" {
+		events, _ = cache.Events().Events(namespace).List(labels.Everything())
+	} else {
+		events, _ = cache.Events().List(labels.Everything())
+	}
+
+	now := time.Now()
+	var problems []Problem
+	seen := map[string]bool{} // one row per pod
+	for _, e := range events {
+		if e.InvolvedObject.Kind != "Pod" {
+			continue
+		}
+		reason, ok := classifyPostBindFailure(e.Reason, e.Message)
+		if !ok {
+			continue
+		}
+		last := e.LastTimestamp.Time
+		if last.IsZero() {
+			last = e.EventTime.Time
+		}
+		if !last.IsZero() && now.Sub(last) > postBindFailureWindow {
+			continue
+		}
+		key := e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
+		pod, isStuck := stuck[key]
+		if !isStuck || seen[key] {
+			continue
+		}
+		seen[key] = true
+
+		severity := postBindSeverity[reason]
+		if severity == "" {
+			severity = "high"
+		}
+		ageDur := now.Sub(pod.CreationTimestamp.Time)
+		problems = append(problems, Problem{
+			Kind:            "Pod",
+			Namespace:       pod.Namespace,
+			Name:            pod.Name,
+			Severity:        severity,
+			Reason:          reason,
+			Message:         "stuck creating: " + strings.TrimSpace(e.Message),
+			Age:             FormatAge(ageDur),
+			AgeSeconds:      int64(ageDur.Seconds()),
+			Duration:        FormatAge(ageDur),
+			DurationSeconds: int64(ageDur.Seconds()),
+		})
+	}
+	return problems
+}
+
+// stuckScheduledPods returns Pending pods that the scheduler DID place
+// (PodScheduled is not False) — i.e. owned by the post-bind layer, not the
+// bind-time detector. Keyed "namespace/name".
+func stuckScheduledPods(cache *ResourceCache, namespace string) map[string]*corev1.Pod {
+	out := map[string]*corev1.Pod{}
+	for _, pods := range listPodsByNamespace(cache, namespace) {
+		for _, pod := range pods {
+			if pod.Status.Phase != corev1.PodPending {
+				continue
+			}
+			if cond := podScheduledCondition(pod); cond != nil && cond.Status == corev1.ConditionFalse {
+				continue // unschedulable — the bind-time detector owns it
+			}
+			out[pod.Namespace+"/"+pod.Name] = pod
+		}
+	}
+	return out
+}
+
+// classifyPostBindFailure maps a kubelet event (reason + message) to a
+// post-bind failure class, distinguishing IP exhaustion from generic sandbox
+// failures and multi-attach from generic volume-attach errors.
+func classifyPostBindFailure(reason, msg string) (string, bool) {
+	lower := strings.ToLower(msg)
+	switch {
+	case reason == "FailedCreatePodSandBox" || strings.Contains(lower, "failed to create pod sandbox"):
+		if strings.Contains(lower, "assign an ip") ||
+			strings.Contains(lower, "insufficientfreeaddresses") ||
+			strings.Contains(lower, "no ip addresses available") ||
+			strings.Contains(lower, "all ip addresses") {
+			return "IPExhaustion", true
+		}
+		return "SandboxCreationFailed", true
+	case reason == "FailedAttachVolume":
+		if strings.Contains(lower, "multi-attach") {
+			return "VolumeMultiAttach", true
+		}
+		return "VolumeAttach", true
+	case reason == "FailedMount":
+		return "VolumeMount", true
+	default:
+		return "", false
+	}
+}

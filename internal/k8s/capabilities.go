@@ -48,6 +48,7 @@ type ResourcePermissions struct {
 	RoleBindings             bool `json:"roleBindings"`
 	ClusterRoleBindings      bool `json:"clusterRoleBindings"`
 	LimitRanges              bool `json:"limitRanges"`
+	ResourceQuotas           bool `json:"resourceQuotas"`
 	Gateways                 bool `json:"gateways"`
 	HTTPRoutes               bool `json:"httpRoutes"`
 	VerticalPodAutoscalers   bool `json:"verticalPodAutoscalers"`
@@ -581,6 +582,7 @@ func resourceProbeTargets(perms *ResourcePermissions) []resourceProbe {
 		{key: k8score.PersistentVolumeClaims, gvr: schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumeclaims"}, field: &perms.PersistentVolumeClaims},
 		{key: k8score.ServiceAccounts, gvr: schema.GroupVersionResource{Version: "v1", Resource: "serviceaccounts"}, field: &perms.ServiceAccounts},
 		{key: k8score.LimitRanges, gvr: schema.GroupVersionResource{Version: "v1", Resource: "limitranges"}, field: &perms.LimitRanges},
+		{key: k8score.ResourceQuotas, gvr: schema.GroupVersionResource{Version: "v1", Resource: "resourcequotas"}, field: &perms.ResourceQuotas},
 		{key: k8score.Nodes, gvr: schema.GroupVersionResource{Version: "v1", Resource: "nodes"}, clusterOnly: true, field: &perms.Nodes},
 		{key: k8score.Namespaces, gvr: schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}, clusterOnly: true, field: &perms.Namespaces},
 		{key: k8score.PersistentVolumes, gvr: schema.GroupVersionResource{Version: "v1", Resource: "persistentvolumes"}, clusterOnly: true, field: &perms.PersistentVolumes},

@@ -859,6 +859,9 @@ func buildInformerSetups() []informerSetup {
 		mk(LimitRanges, "LimitRange", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
 			return f.Core().V1().LimitRanges().Informer()
 		}),
+		mk(ResourceQuotas, "ResourceQuota", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+			return f.Core().V1().ResourceQuotas().Informer()
+		}),
 	}
 }
 
@@ -1325,6 +1328,7 @@ var allKindListers = []kindLister{
 	{"RoleBinding", "rbac.authorization.k8s.io", func(rc *ResourceCache) any { return rc.RoleBindings() }},
 	{"ClusterRoleBinding", "rbac.authorization.k8s.io", func(rc *ResourceCache) any { return rc.ClusterRoleBindings() }},
 	{"LimitRange", "", func(rc *ResourceCache) any { return rc.LimitRanges() }},
+	{"ResourceQuota", "", func(rc *ResourceCache) any { return rc.ResourceQuotas() }},
 }
 
 // AllKindListers returns the table of all resource kinds with their group and lister.
