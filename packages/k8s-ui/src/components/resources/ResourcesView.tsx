@@ -23,6 +23,7 @@ import {
   Check,
   Plus,
   GitCompare,
+  Regex,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { ResourceBar } from '../ui/ResourceBar'
@@ -1940,6 +1941,7 @@ export function ResourcesView({
     onSelectedKindChange?.(selectedKind)
   }, [selectedKind.name, selectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
   const [searchTerm, setSearchTerm] = useState(initialFilters.search)
+  const [regexMode, setRegexMode] = useState(false)
   const [sortColumn, setSortColumn] = useState<string | null>(null)
   const [sortDirection, setSortDirection] = useState<SortDirection>(null)
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null)
@@ -2280,7 +2282,7 @@ export function ResourcesView({
 
   // Reset highlight when kind, search, sort, or namespace changes
   const namespacesKey = namespaces.join(',')
-  useEffect(() => { setHighlightedIndex(-1) }, [selectedKind.name, searchTerm, sortColumn, sortDirection, namespacesKey])
+  useEffect(() => { setHighlightedIndex(-1) }, [selectedKind.name, searchTerm, regexMode, sortColumn, sortDirection, namespacesKey])
 
   // Scroll highlighted row into view
   useEffect(() => {
@@ -3073,6 +3075,18 @@ export function ResourcesView({
   }, [])
 
 
+  // On an invalid pattern, fall back to a null matcher (search un-applied, all
+  // rows shown) rather than zero results, so the table doesn't flash empty
+  // while the user is mid-typing a pattern.
+  const searchRegex = useMemo<{ re: RegExp | null; error: string | null }>(() => {
+    if (!regexMode || !searchTerm) return { re: null, error: null }
+    try {
+      return { re: new RegExp(searchTerm, 'i'), error: null }
+    } catch (e) {
+      return { re: null, error: e instanceof Error ? e.message : 'Invalid regex' }
+    }
+  }, [regexMode, searchTerm])
+
   // Filter resources by search term, status, problems, and sort
   const filteredResources = useMemo(() => {
     if (!resources) return []
@@ -3081,11 +3095,21 @@ export function ResourcesView({
 
     // Apply search filter
     if (searchTerm) {
-      const term = searchTerm.toLowerCase()
-      result = result.filter((r: any) =>
-        r.metadata?.name?.toLowerCase().includes(term) ||
-        r.metadata?.namespace?.toLowerCase().includes(term)
-      )
+      if (regexMode) {
+        const re = searchRegex.re
+        if (re) {
+          result = result.filter((r: any) =>
+            re.test(r.metadata?.name ?? '') ||
+            re.test(r.metadata?.namespace ?? '')
+          )
+        }
+      } else {
+        const term = searchTerm.toLowerCase()
+        result = result.filter((r: any) =>
+          r.metadata?.name?.toLowerCase().includes(term) ||
+          r.metadata?.namespace?.toLowerCase().includes(term)
+        )
+      }
     }
 
     // Apply column filters (generic, multi-select per column — OR within column, AND across columns)
@@ -3241,7 +3265,7 @@ export function ResourcesView({
     }
 
     return result
-  }, [resources, searchTerm, columnFilters, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, sortColumn, sortDirection, getSortValue, podMatchesProblemFilter])
+  }, [resources, searchTerm, regexMode, searchRegex, columnFilters, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, sortColumn, sortDirection, getSortValue, podMatchesProblemFilter])
 
   // For nodes table: compute the majority minor version so outliers can be highlighted
   const majorityNodeMinorVersion = useMemo(() => {
@@ -3557,38 +3581,68 @@ export function ResourcesView({
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 bg-theme-surface">
         {/* Toolbar */}
         <div className="flex items-center gap-3 px-4 py-3 border-b border-theme-border bg-theme-base shrink-0">
-          <div className="flex-1 relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              placeholder="Search... (press /)"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'ArrowDown') {
-                  // Hand off to the table's keyboard navigation — blur the input
-                  // so the registered ArrowDown/j/k shortcuts take over, and
-                  // highlight the first row.
-                  e.preventDefault()
-                  searchInputRef.current?.blur()
-                  setHighlightedIndex(0)
-                } else if (e.key === 'Enter' && filteredResourceCountRef.current > 0) {
-                  // Select the first (or currently highlighted) resource
-                  e.preventDefault()
-                  searchInputRef.current?.blur()
-                  if (highlightedIndex < 0) setHighlightedIndex(0)
-                  // Defer to next frame so the highlight renders before we open
-                  requestAnimationFrame(() => {
-                    const res = highlightedResourceRef.current ?? filteredResources[0]
-                    selectResource(res)
-                  })
-                } else if (e.key === 'Escape') {
-                  searchInputRef.current?.blur()
-                }
-              }}
-              className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-skyhook-500"
-            />
+          <div className="flex-1 min-w-0">
+            <div className="relative max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
+              <input
+                ref={searchInputRef}
+                type="text"
+                placeholder={regexMode ? 'Search by regex... (press /)' : 'Search... (press /)'}
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === 'ArrowDown') {
+                    // Hand off to the table's keyboard navigation — blur the input
+                    // so the registered ArrowDown/j/k shortcuts take over, and
+                    // highlight the first row.
+                    e.preventDefault()
+                    searchInputRef.current?.blur()
+                    setHighlightedIndex(0)
+                  } else if (e.key === 'Enter' && filteredResourceCountRef.current > 0) {
+                    // Select the first (or currently highlighted) resource
+                    e.preventDefault()
+                    searchInputRef.current?.blur()
+                    if (highlightedIndex < 0) setHighlightedIndex(0)
+                    // Defer to next frame so the highlight renders before we open
+                    requestAnimationFrame(() => {
+                      const res = highlightedResourceRef.current ?? filteredResources[0]
+                      selectResource(res)
+                    })
+                  } else if (e.key === 'Escape') {
+                    searchInputRef.current?.blur()
+                  }
+                }}
+                className={clsx(
+                  'w-full pl-10 pr-10 py-2 bg-theme-elevated border rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2',
+                  searchRegex.error
+                    ? 'border-red-500/60 focus:ring-red-500'
+                    : 'border-theme-border-light focus:ring-skyhook-500'
+                )}
+              />
+              <button
+                type="button"
+                onClick={() => setRegexMode((v) => !v)}
+                aria-pressed={regexMode}
+                aria-label={regexMode ? 'Disable regex search' : 'Enable regex search'}
+                title={regexMode ? 'Regex search enabled — click to disable' : 'Enable regex search'}
+                className={clsx(
+                  'absolute right-2 top-1/2 -translate-y-1/2 flex items-center justify-center w-6 h-6 rounded transition-colors',
+                  regexMode
+                    ? 'bg-skyhook-500/20 text-skyhook-400'
+                    : 'text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-hover'
+                )}
+              >
+                <Regex className="w-3.5 h-3.5" />
+              </button>
+              {searchRegex.error && (
+                <div
+                  title={searchRegex.error}
+                  className="absolute left-0 top-full mt-1 z-10 px-2 py-1 rounded bg-theme-elevated border border-red-500/40 text-[11px] text-red-400 shadow-theme-sm"
+                >
+                  Invalid regex pattern
+                </div>
+              )}
+            </div>
           </div>
 
           {/* Problems dropdown (pods only) */}
