@@ -114,6 +114,54 @@ func TestCompose_WarningEventsIncluded(t *testing.T) {
 	}
 }
 
+func TestCompose_PodSchedulingWinsOverProblem(t *testing.T) {
+	// A pod stuck post-bind trips both sources: DetectProblems flags it
+	// Pending>5m and DetectScheduling names the actual CNI/volume blocker.
+	// The scheduling row is richer, so the generic problem row for the SAME
+	// pod must be dropped — without collapsing unrelated rows.
+	p := &fakeProvider{
+		problems: []k8s.Problem{
+			{Kind: "Pod", Namespace: "ns", Name: "stuck", Severity: "high", Reason: "Pending"},
+			{Kind: "Pod", Namespace: "ns", Name: "other", Severity: "high", Reason: "CrashLoopBackOff"},
+			{Kind: "Deployment", Namespace: "ns", Name: "stuck", Severity: "critical", Reason: "down"},
+		},
+		scheduling: []k8s.Problem{
+			{Kind: "Pod", Namespace: "ns", Name: "stuck", Severity: "high", Reason: "VolumeMount"},
+		},
+	}
+	out := Compose(p, Filters{})
+
+	var stuckPodRows []Issue
+	for _, i := range out {
+		if i.Kind == "Pod" && i.Name == "stuck" {
+			stuckPodRows = append(stuckPodRows, i)
+		}
+	}
+	if len(stuckPodRows) != 1 {
+		t.Fatalf("expected exactly 1 row for Pod ns/stuck (scheduling wins), got %d: %+v", len(stuckPodRows), out)
+	}
+	if stuckPodRows[0].Source != SourceScheduling || stuckPodRows[0].Reason != "VolumeMount" {
+		t.Errorf("the surviving Pod row should be the scheduling one, got %+v", stuckPodRows[0])
+	}
+	// The unrelated problem-source pod and the same-name Deployment must
+	// survive — dedup keys on (source=problem, kind=Pod, ns/name) only.
+	var sawOtherPod, sawDeploy bool
+	for _, i := range out {
+		if i.Kind == "Pod" && i.Name == "other" {
+			sawOtherPod = true
+		}
+		if i.Kind == "Deployment" && i.Name == "stuck" {
+			sawDeploy = true
+		}
+	}
+	if !sawOtherPod {
+		t.Errorf("unrelated problem-source Pod must not be dropped: %+v", out)
+	}
+	if !sawDeploy {
+		t.Errorf("same-name Deployment must not be dropped by Pod dedup: %+v", out)
+	}
+}
+
 func TestCompose_EventsExcludedByDefault(t *testing.T) {
 	// The default Compose call must NOT surface warning events. Pins
 	// the opt-in contract so a future refactor doesn't silently

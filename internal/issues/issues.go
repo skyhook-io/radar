@@ -178,6 +178,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	// pushing filters down individually would multiply branching.
 	out = applyFilters(out, f)
 	out = applyClusterScopedAccess(out, f)
+	out = dedupePodSchedulingOverProblem(out)
 
 	// Optional CEL filter — evaluated last so it sees the normalized
 	// row shape. Eval errors count as non-match (matches "missing
@@ -388,7 +389,7 @@ func fromProblem(p k8s.Problem, now time.Time, source Source) Issue {
 		Reason:               p.Reason,
 		Message:              p.Message,
 		FirstSeen:            since,
-		LastSeen:              now,
+		LastSeen:             now,
 		Count:                1,
 		RestartCount:         p.RestartCount,
 		LastTerminatedReason: p.LastTerminatedReason,
@@ -511,6 +512,35 @@ func wantSource(f Filters, s Source) bool {
 		}
 	}
 	return false
+}
+
+// dedupePodSchedulingOverProblem drops the generic problem-source row for a
+// Pod when the scheduling source emitted one for the same Pod. A pod stuck
+// post-bind (ContainerCreating on a CNI/volume stall) trips both: DetectProblems
+// flags it Pending>5m and DetectPostBindProblems names the actual blocker. The
+// scheduling row is strictly richer, so it wins. (Bind-time unschedulable pods
+// are already skipped in DetectProblems, so this only fires on the post-bind
+// overlap.) A plain DetectProblems skip can't replace this — the problem
+// threshold is 5m but the post-bind event window is 10m, so a pod stuck >10m
+// would lose its only row.
+func dedupePodSchedulingOverProblem(in []Issue) []Issue {
+	schedPods := map[string]bool{}
+	for _, i := range in {
+		if i.Source == SourceScheduling && i.Kind == "Pod" {
+			schedPods[i.Namespace+"/"+i.Name] = true
+		}
+	}
+	if len(schedPods) == 0 {
+		return in
+	}
+	out := in[:0]
+	for _, i := range in {
+		if i.Source == SourceProblem && i.Kind == "Pod" && schedPods[i.Namespace+"/"+i.Name] {
+			continue
+		}
+		out = append(out, i)
+	}
+	return out
 }
 
 func applyFilters(in []Issue, f Filters) []Issue {

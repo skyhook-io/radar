@@ -162,6 +162,54 @@ func TestDetectAdmissionProblems_FailedCreateCrossCheck(t *testing.T) {
 	}
 }
 
+// Exercises the post-bind detector's latest-event-wins dedup: a pod stuck
+// scheduled (Pending, PodScheduled!=False) with two kubelet events — an older
+// NetworkNotReady and a newer FailedMount — yields one row carrying the LATEST
+// blocker, not whichever the informer iterated first.
+func TestDetectPostBindProblems_LatestEventWins(t *testing.T) {
+	defer ResetTestState()
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod", CreationTimestamp: metav1.NewTime(time.Now().Add(-8 * time.Minute))},
+		Status:     corev1.PodStatus{Phase: corev1.PodPending}, // scheduled (no PodScheduled=False condition)
+	}
+	nowT := metav1.Now()
+	oldT := metav1.NewTime(nowT.Add(-5 * time.Minute))
+	ev := func(name, reason, msg string, last metav1.Time) *corev1.Event {
+		return &corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: name, Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "web"},
+			Reason:         reason,
+			Type:           corev1.EventTypeWarning,
+			Message:        msg,
+			LastTimestamp:  last,
+		}
+	}
+	if err := InitTestResourceCache(fake.NewClientset(
+		pod,
+		ev("e1", "FailedCreatePodSandBox", "failed to create pod sandbox: network is not ready", oldT),
+		ev("e2", "FailedMount", "Unable to attach or mount volumes: timed out waiting for the condition", nowT),
+	)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	problems := DetectPostBindProblems(GetResourceCache(), "prod")
+
+	if !findProblem(problems, "Pod", "prod", "web", "VolumeMount") {
+		t.Fatalf("expected the LATEST blocker (VolumeMount) to win, got %+v", problems)
+	}
+	rows := 0
+	for _, p := range problems {
+		if p.Name == "web" {
+			rows++
+			if p.Reason == "SandboxCreationFailed" {
+				t.Errorf("stale (older) sandbox event must not win over the newer mount one: %+v", p)
+			}
+		}
+	}
+	if rows != 1 {
+		t.Errorf("expected exactly 1 post-bind row for web (deduped by pod), got %d: %+v", rows, problems)
+	}
+}
+
 // Exercises the cross-check for Job + DaemonSet, whose created-count signals
 // differ from the replica kinds: a Job that created no pod and a partially
 // scheduled DaemonSet are still blocked; a terminally-failed Job (Failed>0) and

@@ -967,8 +967,17 @@ func DetectPostBindProblems(cache *ResourceCache, namespace string) []Problem {
 	}
 
 	now := time.Now()
-	var problems []Problem
-	seen := map[string]bool{} // one row per pod
+	// One row per stuck pod, showing the CURRENT blocker. The kubelet
+	// re-emits a post-bind event per retry and the active cause can change
+	// (NetworkNotReady → FailedMount). Informer List order is arbitrary, so
+	// keep the LATEST event by LastTimestamp per pod rather than whichever was
+	// iterated first — mirrors detectAdmissionFailures.
+	type pbCandidate struct {
+		ev     *corev1.Event
+		reason string
+	}
+	latest := map[string]pbCandidate{}
+	var order []string
 	for _, e := range events {
 		if e.InvolvedObject.Kind != "Pod" {
 			continue
@@ -977,21 +986,28 @@ func DetectPostBindProblems(cache *ResourceCache, namespace string) []Problem {
 		if !ok {
 			continue
 		}
-		last := e.LastTimestamp.Time
-		if last.IsZero() {
-			last = e.EventTime.Time
-		}
-		if !last.IsZero() && now.Sub(last) > postBindFailureWindow {
+		if t := eventLastTime(e); !t.IsZero() && now.Sub(t) > postBindFailureWindow {
 			continue
 		}
 		key := e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
-		pod, isStuck := stuck[key]
-		if !isStuck || seen[key] {
+		if _, isStuck := stuck[key]; !isStuck {
 			continue
 		}
-		seen[key] = true
+		if cur, exists := latest[key]; exists {
+			if eventLastTime(e).After(eventLastTime(cur.ev)) {
+				latest[key] = pbCandidate{ev: e, reason: reason}
+			}
+			continue
+		}
+		latest[key] = pbCandidate{ev: e, reason: reason}
+		order = append(order, key)
+	}
 
-		severity := postBindSeverity[reason]
+	problems := make([]Problem, 0, len(order))
+	for _, key := range order {
+		c := latest[key]
+		pod := stuck[key]
+		severity := postBindSeverity[c.reason]
 		if severity == "" {
 			severity = "high"
 		}
@@ -1001,8 +1017,8 @@ func DetectPostBindProblems(cache *ResourceCache, namespace string) []Problem {
 			Namespace:       pod.Namespace,
 			Name:            pod.Name,
 			Severity:        severity,
-			Reason:          reason,
-			Message:         "stuck creating: " + strings.TrimSpace(e.Message),
+			Reason:          c.reason,
+			Message:         "stuck creating: " + strings.TrimSpace(c.ev.Message),
 			Age:             FormatAge(ageDur),
 			AgeSeconds:      int64(ageDur.Seconds()),
 			Duration:        FormatAge(ageDur),
