@@ -600,8 +600,25 @@ function formatForGitHub(data: DiagnosticsSnapshot, includeRawJson = true): stri
       }
       const pending = getPendingInformers(sync)
       if (pending.length > 0) {
-        const parts = pending.map((i) => `${i.kind}(${i.deferred ? 'deferred' : 'critical'},${i.items.toLocaleString()} items)`)
+        const parts = pending.map((i) => {
+          const flags = [i.deferred ? 'deferred' : 'critical', `${i.items.toLocaleString()} items`]
+          if (i.forbiddenSeen) flags.push('forbidden')
+          if (i.lastError) flags.push(`err: ${i.lastError}`)
+          return `${i.kind}(${flags.join(', ')})`
+        })
         lines.push(`- **Pending:** ${parts.join(', ')}`)
+      }
+      // Synced informers that have since hit a watch error or 403 — a count of 0
+      // from one of these is a stale/forbidden lister, not an empty cluster.
+      const errored = sync.informers.filter((i) => !pending.includes(i) && (i.lastError || i.forbiddenSeen))
+      if (errored.length > 0) {
+        const parts = errored.map((i) => {
+          const flags: string[] = []
+          if (i.forbiddenSeen) flags.push('forbidden')
+          if (i.lastError) flags.push(`err: ${i.lastError}`)
+          return `${i.kind}(${flags.join(', ')})`
+        })
+        lines.push(`- **Informer errors:** ${parts.join(', ')}`)
       }
     }
     if (inf.watchedCRDs && inf.watchedCRDs.length > 0) {

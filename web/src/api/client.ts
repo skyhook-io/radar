@@ -3029,6 +3029,9 @@ export interface DiagInformerSyncStatus {
   synced: boolean
   syncedAt?: string
   items: number
+  lastError?: string
+  lastErrorAt?: string
+  forbiddenSeen?: boolean
 }
 
 export interface DiagCacheSyncStatus {
