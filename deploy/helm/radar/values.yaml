@@ -18,6 +18,16 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
+# Debug feature (terminal "Debug" tab): the image used for ephemeral debug
+# containers attached to pods and for privileged node debug pods. Point this at
+# a reachable mirror in air-gapped / private-registry clusters where the default
+# busybox:latest cannot be pulled. Empty = busybox:latest.
+# Note: ephemeral debug containers cannot carry their own imagePullSecrets — they
+# rely on the target pod's pull secrets / node registry config — so the image
+# must be pullable by the workloads being debugged.
+debug:
+  image: ""
+
 serviceAccount:
   # Specifies whether a service account should be created
   create: true

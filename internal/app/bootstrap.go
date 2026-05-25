@@ -39,6 +39,7 @@ type AppConfig struct {
 	DisableExec          bool
 	DisableLocalTerminal bool
 	PodShellDefault      string
+	DebugImage           string
 	TimelineStorage      string
 	TimelineDBPath       string
 	TimelineRetention    time.Duration
@@ -166,6 +167,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		HistoryLimit:      cfg.HistoryLimit,
 		PrometheusURL:     cfg.PrometheusURL,
 		PrometheusHeaders: cfg.PrometheusHeaders,
+		DebugImage:        cfg.DebugImage,
 		MCP:               &cfg.MCPEnabled,
 	}
 

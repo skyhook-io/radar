@@ -19,7 +19,7 @@ export function TerminalTab({ namespace, podName, containerName, containers, isA
     const response = await fetch(apiUrl(`/pods/${namespace}/${podName}/debug`), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ targetContainer, image: 'busybox:latest' }),
+      body: JSON.stringify({ targetContainer }),
     })
     if (!response.ok) {
       const err = await response.json().catch(() => ({ error: 'Unknown error' }))

@@ -58,6 +58,7 @@ func main() {
 	disableExec := flag.Bool("disable-exec", false, "Simulate restricted exec permissions (disables terminal, debug shell)")
 	disableLocalTerminal := flag.Bool("disable-local-terminal", false, "Disable local terminal feature")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
+	debugImage := flag.String("debug-image", "", "Image for ephemeral debug containers and node debug pods (empty = busybox:latest; point at a mirror for air-gapped/private-registry clusters)")
 	// Timeline storage options
 	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory or sqlite")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
@@ -165,6 +166,7 @@ func main() {
 		DisableExec:          *disableExec,
 		DisableLocalTerminal: *disableLocalTerminal,
 		PodShellDefault:      *podShellDefault,
+		DebugImage:           *debugImage,
 		TimelineStorage:      *timelineStorage,
 		TimelineDBPath:       *timelineDBPath,
 		TimelineRetention:    *timelineRetention,

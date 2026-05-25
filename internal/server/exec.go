@@ -517,6 +517,19 @@ func looksLikeShellNotFound(errMsg string) bool {
 	return false
 }
 
+// resolveDebugImage returns the image to use for a debug container/pod: an
+// explicit per-request override, else the operator-configured --debug-image,
+// else the built-in busybox default.
+func (s *Server) resolveDebugImage(requested string) string {
+	if requested != "" {
+		return requested
+	}
+	if s.effectiveConfig != nil && s.effectiveConfig.DebugImage != "" {
+		return s.effectiveConfig.DebugImage
+	}
+	return k8score.DefaultDebugImage
+}
+
 // NodeDebugRequest is the request body for creating a node debug pod
 type NodeDebugRequest struct {
 	Image string `json:"image,omitempty"`
@@ -554,7 +567,7 @@ func (s *Server) handleNodeDebug(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Create the debug pod
-	result, err := k8score.CreateNodeDebugPod(r.Context(), client, nodeName, req.Image)
+	result, err := k8score.CreateNodeDebugPod(r.Context(), client, nodeName, s.resolveDebugImage(req.Image))
 	if err != nil {
 		if apierrors.IsForbidden(err) {
 			s.writeError(w, http.StatusForbidden, err.Error())
@@ -646,7 +659,7 @@ func (s *Server) handleCreateDebugContainer(w http.ResponseWriter, r *http.Reque
 		Namespace:       namespace,
 		PodName:         podName,
 		TargetContainer: req.TargetContainer,
-		Image:           req.Image,
+		Image:           s.resolveDebugImage(req.Image),
 	}, client)
 	if err != nil {
 		errMsg := err.Error()

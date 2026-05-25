@@ -28,6 +28,10 @@ type Config struct {
 	// Stored in plain text in ~/.radar/config.json — protect the file accordingly.
 	PrometheusHeaders map[string]string `json:"prometheusHeaders,omitempty"`
 	MCP               *bool             `json:"mcp,omitempty"` // nil = default (true), false = disabled
+	// DebugImage is the image used for ephemeral debug containers and node debug
+	// pods. Empty falls back to busybox:latest; set it to a reachable mirror for
+	// air-gapped / private-registry clusters.
+	DebugImage string `json:"debugImage,omitempty"`
 }
 
 // mu serializes Load-mutate-Save cycles to prevent concurrent writes
