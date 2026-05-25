@@ -97,11 +97,14 @@ func TestDetectSchedulingProblems_BindTime(t *testing.T) {
 // same event on a recovered ReplicaSet (all replicas ready) is skipped.
 func TestDetectAdmissionProblems_FailedCreateCrossCheck(t *testing.T) {
 	defer ResetTestState()
-	rs := func(name string, ready int32) *appsv1.ReplicaSet {
+	// replicas = pods actually CREATED. "blocked" = couldn't create (replicas<2);
+	// created-but-not-ready (replicas==2, ready==0, e.g. now unschedulable) is
+	// NOT admission-blocked and must be skipped.
+	rs := func(name string, replicas int32) *appsv1.ReplicaSet {
 		return &appsv1.ReplicaSet{
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod"},
 			Spec:       appsv1.ReplicaSetSpec{Replicas: ptr32(2)},
-			Status:     appsv1.ReplicaSetStatus{ReadyReplicas: ready},
+			Status:     appsv1.ReplicaSetStatus{Replicas: replicas, ReadyReplicas: 0},
 		}
 	}
 	evt := func(name, rsName string) *corev1.Event {
@@ -114,7 +117,9 @@ func TestDetectAdmissionProblems_FailedCreateCrossCheck(t *testing.T) {
 			LastTimestamp:  metav1.Now(),
 		}
 	}
-	if err := InitTestResourceCache(fake.NewClientset(rs("rs-blocked", 0), rs("rs-ok", 2), evt("e1", "rs-blocked"), evt("e2", "rs-ok"))); err != nil {
+	// Two FailedCreate events for rs-blocked (a controller emits one per failed
+	// attempt, each with a different generated pod name) → exactly one row.
+	if err := InitTestResourceCache(fake.NewClientset(rs("rs-blocked", 0), rs("rs-ok", 2), evt("e1", "rs-blocked"), evt("e1b", "rs-blocked"), evt("e2", "rs-ok"))); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
 	problems := DetectAdmissionProblems(GetResourceCache(), "prod")
@@ -122,9 +127,18 @@ func TestDetectAdmissionProblems_FailedCreateCrossCheck(t *testing.T) {
 	if !findProblem(problems, "ReplicaSet", "prod", "rs-blocked", "QuotaExceeded") {
 		t.Errorf("still-blocked ReplicaSet should surface QuotaExceeded, got %+v", problems)
 	}
+	blockedRows := 0
+	for _, p := range problems {
+		if p.Name == "rs-blocked" {
+			blockedRows++
+		}
+	}
+	if blockedRows != 1 {
+		t.Errorf("expected exactly 1 row for rs-blocked (deduped by object), got %d: %+v", blockedRows, problems)
+	}
 	for _, p := range problems {
 		if p.Name == "rs-ok" {
-			t.Errorf("recovered ReplicaSet (all replicas ready) must be skipped by the cross-check: %+v", p)
+			t.Errorf("ReplicaSet with pods created (replicas met) but not ready — e.g. now unschedulable — is not admission-blocked and must be skipped: %+v", p)
 		}
 	}
 }

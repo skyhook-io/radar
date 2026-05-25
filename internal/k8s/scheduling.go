@@ -773,6 +773,10 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Problem {
 
 	now := time.Now()
 	var problems []Problem
+	// One row per blocked controller: a quota-blocked workload emits a
+	// FailedCreate per attempt, each with a different generated pod name in the
+	// message (so they're distinct cached events) — dedup by involved object.
+	seen := map[string]bool{}
 	for _, e := range events {
 		if e.Reason != "FailedCreate" {
 			continue
@@ -789,6 +793,10 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Problem {
 			continue
 		}
 		obj := e.InvolvedObject
+		key := obj.Kind + "/" + obj.Namespace + "/" + obj.Name
+		if seen[key] {
+			continue
+		}
 		// A blocked controller re-emits FailedCreate continuously, but a since-
 		// recovered one's event lingers in the cache for the whole window —
 		// cross-check current state so we don't flag a now-healthy workload as
@@ -796,6 +804,7 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Problem {
 		if !admissionTargetStillBlocked(cache, obj) {
 			continue
 		}
+		seen[key] = true
 		first := e.FirstTimestamp.Time
 		if first.IsZero() {
 			first = e.EventTime.Time
@@ -824,36 +833,43 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Problem {
 // A recovered workload has its replicas, so its lingering event is skipped.
 // Unknown kinds / not-found default to true — never drop genuine coverage.
 func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReference) bool {
+	// "Blocked" means the controller still can't CREATE its pods — measured by
+	// created-count (Status.Replicas / CurrentNumberScheduled) below desired,
+	// NOT readiness. A workload whose pods were created but stay not-ready for
+	// another reason (e.g. unschedulable after a quota was raised) has its pods
+	// and is no longer admission-blocked.
 	switch obj.Kind {
 	case "ReplicaSet":
 		if l := cache.ReplicaSets(); l != nil {
 			if rs, err := l.ReplicaSets(obj.Namespace).Get(obj.Name); err == nil {
-				return rs.Status.ReadyReplicas < schedDesiredReplicas(rs.Spec.Replicas)
+				return rs.Status.Replicas < schedDesiredReplicas(rs.Spec.Replicas)
 			}
 		}
 	case "Deployment":
 		if l := cache.Deployments(); l != nil {
 			if d, err := l.Deployments(obj.Namespace).Get(obj.Name); err == nil {
-				return d.Status.ReadyReplicas < schedDesiredReplicas(d.Spec.Replicas)
+				return d.Status.Replicas < schedDesiredReplicas(d.Spec.Replicas)
 			}
 		}
 	case "StatefulSet":
 		if l := cache.StatefulSets(); l != nil {
 			if ss, err := l.StatefulSets(obj.Namespace).Get(obj.Name); err == nil {
-				return ss.Status.ReadyReplicas < schedDesiredReplicas(ss.Spec.Replicas)
+				return ss.Status.Replicas < schedDesiredReplicas(ss.Spec.Replicas)
 			}
 		}
 	case "DaemonSet":
 		if l := cache.DaemonSets(); l != nil {
 			if ds, err := l.DaemonSets(obj.Namespace).Get(obj.Name); err == nil {
-				return ds.Status.NumberUnavailable > 0
+				return ds.Status.CurrentNumberScheduled < ds.Status.DesiredNumberScheduled
 			}
 		}
 	case "Job":
 		if l := cache.Jobs(); l != nil {
 			if j, err := l.Jobs(obj.Namespace).Get(obj.Name); err == nil {
-				// A running or completed Job no longer needs to create pods.
-				return j.Status.Active == 0 && j.Status.Succeeded == 0
+				// Only "blocked" if it has created nothing yet. A running,
+				// succeeded, OR terminally-failed (backoffLimit) Job no longer
+				// creates pods, so a stale quota event shouldn't surface.
+				return j.Status.Active == 0 && j.Status.Succeeded == 0 && j.Status.Failed == 0
 			}
 		}
 	}

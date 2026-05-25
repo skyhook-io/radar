@@ -244,7 +244,7 @@ func schedulingFindingsForWorkload(cache *k8s.ResourceCache, kind, namespace, na
 			relevant = true
 		case p.Kind == dispKind && p.Name == name:
 			relevant = true // FailedCreate on the workload itself (StatefulSet/DaemonSet)
-		case dispKind == "Deployment" && p.Kind == "ReplicaSet" && strings.HasPrefix(p.Name, name+"-"):
+		case dispKind == "Deployment" && p.Kind == "ReplicaSet" && isReplicaSetOf(p.Name, name):
 			relevant = true // FailedCreate on the Deployment's ReplicaSet
 		}
 		if !relevant {
@@ -259,6 +259,17 @@ func schedulingFindingsForWorkload(cache *k8s.ResourceCache, kind, namespace, na
 		})
 	}
 	return out
+}
+
+// isReplicaSetOf reports whether rsName belongs to the given Deployment.
+// Deployment ReplicaSets are named "<deployment>-<podTemplateHash>" with a
+// single hyphen-free hash segment, so we require exactly one trailing segment
+// after "<deployment>-". This avoids a prefix false-match against a sibling
+// Deployment that merely shares the prefix (diagnosing "api" must not claim
+// "api-gateway-<hash>", which belongs to Deployment "api-gateway").
+func isReplicaSetOf(rsName, deployName string) bool {
+	suffix, ok := strings.CutPrefix(rsName, deployName+"-")
+	return ok && suffix != "" && !strings.Contains(suffix, "-")
 }
 
 // normalizeDiagnoseKind accepts pod/deployment/statefulset/daemonset in any

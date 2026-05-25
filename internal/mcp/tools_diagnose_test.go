@@ -217,3 +217,22 @@ func TestHandleDiagnose_DeploymentNotFound(t *testing.T) {
 		t.Errorf("expected 'not found' error, got %v", err)
 	}
 }
+
+func TestIsReplicaSetOf(t *testing.T) {
+	cases := []struct {
+		rs, deploy string
+		want       bool
+	}{
+		{"api-5d4f8b6c7", "api", true},          // real RS of "api"
+		{"my-app-5d4f8b6c7", "my-app", true},    // hyphenated Deployment name
+		{"api-gateway-5d4f8b6c7", "api", false}, // belongs to "api-gateway", not "api"
+		{"api", "api", false},                   // no hash suffix
+		{"api-", "api", false},                  // empty hash
+		{"other-abc", "api", false},             // unrelated
+	}
+	for _, c := range cases {
+		if got := isReplicaSetOf(c.rs, c.deploy); got != c.want {
+			t.Errorf("isReplicaSetOf(%q, %q) = %v, want %v", c.rs, c.deploy, got, c.want)
+		}
+	}
+}
