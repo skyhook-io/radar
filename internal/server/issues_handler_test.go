@@ -2,7 +2,9 @@ package server
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
+	"strings"
 	"testing"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -123,6 +125,25 @@ func TestIssuesHandler_KyvernoMetaOmittedWhenNotRequested(t *testing.T) {
 	}
 	if _, ok := body["meta"]; ok {
 		t.Errorf("default request should not emit meta.kyverno; got %+v", body["meta"])
+	}
+}
+
+func TestIssuesHandlerRejectsAuditSource(t *testing.T) {
+	resp, err := http.Get(testServer.URL + "/api/issues?source=audit")
+	if err != nil {
+		t.Fatalf("GET /api/issues: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Fatalf("status: got %d want 400", resp.StatusCode)
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+	if !strings.Contains(string(body), "use GET /api/audit") {
+		t.Fatalf("error did not point caller to /api/audit: %q", string(body))
 	}
 }
 

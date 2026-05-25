@@ -36,6 +36,9 @@ func (rc *ResourceCache) Pods() listerscorev1.PodLister {
 	if rc == nil || !rc.isEnabled(Pods) {
 		return nil
 	}
+	if inf := rc.pagedInformers[Pods]; inf != nil {
+		return listerscorev1.NewPodLister(inf.GetIndexer())
+	}
 	return rc.factoryFor(Pods).Core().V1().Pods().Lister()
 }
 
@@ -112,6 +115,9 @@ func (rc *ResourceCache) StatefulSets() listersappsv1.StatefulSetLister {
 func (rc *ResourceCache) ReplicaSets() listersappsv1.ReplicaSetLister {
 	if rc == nil || !rc.isEnabled(ReplicaSets) {
 		return nil
+	}
+	if inf := rc.pagedInformers[ReplicaSets]; inf != nil {
+		return listersappsv1.NewReplicaSetLister(inf.GetIndexer())
 	}
 	return rc.factoryFor(ReplicaSets).Apps().V1().ReplicaSets().Lister()
 }

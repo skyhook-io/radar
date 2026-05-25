@@ -1264,9 +1264,13 @@ export function TrafficGraph({ flows, hotPathThreshold = 0, showNamespaceGroups 
     try {
       const layoutResult = await elk.layout(elkGraph)
 
+      // Index ELK's positioned children by id once — a .find() per node here is
+      // O(nodes²) and bites on dense traffic graphs.
+      const elkPositions = new Map((layoutResult.children ?? []).map(n => [n.id, n]))
+
       // Apply positions from ELK to nodes
       let positionedNodes = rawNodes.map(node => {
-        const elkNode = layoutResult.children?.find(n => n.id === node.id)
+        const elkNode = elkPositions.get(node.id)
         return {
           ...node,
           position: {

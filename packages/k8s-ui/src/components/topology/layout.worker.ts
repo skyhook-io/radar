@@ -116,8 +116,25 @@ self.onmessage = async (e: MessageEvent<LayoutRequest>) => {
     const groupLayouts: GroupLayoutResult[] = []
     const ungroupedNodes: UngroupedNodeResult[] = []
 
-    // Build a set of node IDs in each group for edge filtering
-    const groupNodeIds = new Map<string, Set<string>>()
+    // Map each node to its group once. Serves both the intra-group edge
+    // bucketing here (filtering all edges per group would be O(groups × edges))
+    // and the node→group lookup for Phase 2's inter-group edges. This is the
+    // default (worker) layout path, so the win actually lands here.
+    const nodeToGroup = new Map<string, string>()
+    for (const child of elkGraph.children) {
+      if (child.id.startsWith('group-') && child.children) {
+        for (const c of child.children) nodeToGroup.set(c.id, child.id)
+      }
+    }
+    const intraEdgesByGroup = new Map<string, ElkEdge[]>()
+    for (const e of elkGraph.edges) {
+      const sg = nodeToGroup.get(e.sources[0])
+      if (sg && sg === nodeToGroup.get(e.targets[0])) {
+        const arr = intraEdgesByGroup.get(sg)
+        if (arr) arr.push(e)
+        else intraEdgesByGroup.set(sg, [e])
+      }
+    }
 
     // Phase 1: Layout each group independently
     for (const child of elkGraph.children) {
@@ -127,14 +144,8 @@ self.onmessage = async (e: MessageEvent<LayoutRequest>) => {
         const groupKey = child.id.replace(`group-${groupingMode}-`, '')
         const minWidth = hideGroupHeader ? 300 : Math.max(500, groupKey.length * 16 + 200)
 
-        // Track node IDs in this group
-        const nodeIds = new Set(child.children.map(c => c.id))
-        groupNodeIds.set(child.id, nodeIds)
-
         // Layout this group independently with only intra-group edges
-        const intraGroupEdges = elkGraph.edges.filter(e =>
-          nodeIds.has(e.sources[0]) && nodeIds.has(e.targets[0])
-        )
+        const intraGroupEdges = intraEdgesByGroup.get(child.id) ?? []
 
         const groupGraph: ElkGraph = {
           id: child.id,
@@ -186,14 +197,7 @@ self.onmessage = async (e: MessageEvent<LayoutRequest>) => {
       }
     }
 
-    // Phase 2: Build meta-graph and position groups
-    const nodeToGroup = new Map<string, string>()
-    for (const [groupId, nodeIds] of groupNodeIds) {
-      for (const nodeId of nodeIds) {
-        nodeToGroup.set(nodeId, groupId)
-      }
-    }
-
+    // Phase 2: Build meta-graph and position groups (nodeToGroup built once above).
     // Find inter-group edges
     const interGroupEdges: ElkEdge[] = []
     const seenInterGroupEdges = new Set<string>()

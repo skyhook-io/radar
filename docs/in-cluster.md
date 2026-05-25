@@ -297,6 +297,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `service.port` | Service port | `9280` |
 | `mcp.enabled` | Enable MCP server for AI tools | `true` |
 | `debug.image` | Image for ephemeral debug containers and node debug pods (point at a mirror for air-gapped / private-registry clusters) | `""` (busybox:latest) |
+| `listPageSize` | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) on very large clusters that fail to sync; `0` = off, try `2000`. Only used when the apiserver lacks WatchList streaming. | `0` |
 | `timeline.storage` | Event storage (memory/sqlite) | `memory` |
 | `timeline.dbPath` | SQLite database path | `/data/timeline.db` |
 | `timeline.historyLimit` | Max events to retain (memory only) | `10000` |

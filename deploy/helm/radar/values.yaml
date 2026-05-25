@@ -29,6 +29,14 @@ fullnameOverride: ""
 debug:
   image: ""
 
+# Initial-sync tuning for very large clusters. When > 0, the initial LIST of
+# high-cardinality kinds (Pods, ReplicaSets) is fetched in pages of this size
+# instead of one response — avoids response-read timeouts / memory spikes during
+# startup on clusters with tens of thousands of objects. Only takes effect when
+# the apiserver lacks WatchList streaming (otherwise the initial state streams).
+# 0 = off (single LIST). Try 2000 if a large cluster fails to sync.
+listPageSize: 0
+
 serviceAccount:
   # Specifies whether a service account should be created
   create: true

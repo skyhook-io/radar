@@ -523,57 +523,96 @@ function AppInner() {
   // Query client for cache invalidation
   const queryClient = useQueryClient()
 
-  // SSE-driven cache invalidation for resource lists, counts, and detail views.
-  // Uses a 3-second throttle window: first event starts the timer, all events within the
-  // window accumulate, then fire a single batch invalidation. This keeps max latency at 3s
-  // while coalescing burst events (e.g., 100-pod rollout → ~10 invalidations total).
-  const pendingInvalidationRef = useRef<{
-    kinds: Set<string>
-    hasCountChange: boolean
+  // SSE-driven cache invalidation, split into two cadences so constant status
+  // churn on large clusters doesn't force the *expensive* queries (big resource
+  // lists + dashboard) to refetch every 3s. The core distinction: add/delete
+  // changes what rows/counts exist (membership — keep fast); update is mostly
+  // status/restart/health noise that can fire constantly on a 10k-pod cluster
+  // and shouldn't drag a giant list onto a 3s cadence.
+  //
+  //   FAST (3s): detail drawer for any change (one cheap mounted object), and
+  //     on add/delete: the list, counts, and dashboard. GitOps + cert keep
+  //     their existing every-batch behavior — Phase 2 makes GitOps relevance-aware.
+  //   SLOW (15s): list + dashboard for kinds with update churn. A kind that also
+  //     had an add/delete in the window gets refreshed by both tiers (an extra
+  //     refetch per 15s at most) — that's fine and avoids a stale-list bug:
+  //     deduping by "was structural this window" would wrongly suppress an
+  //     update that arrived *after* the fast structural flush already ran.
+  const fastInvalidationRef = useRef<{
+    changedKinds: Set<string>   // every changed kind (any op) → detail drawer
+    structuralKinds: Set<string> // add/delete kinds → list membership + counts + dashboard
+    secretsChanged: boolean
     timer: number | null
-  }>({ kinds: new Set(), hasCountChange: false, timer: null })
+  }>({ changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null })
+  const slowInvalidationRef = useRef<{
+    updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
+    timer: number | null
+  }>({ updatedKinds: new Set(), timer: null })
 
   const handleK8sEvent = useCallback((event: K8sEvent) => {
     // Skip K8s Event kind — informational, not resource mutations
     if (event.kind === 'Event') return
 
-    const pending = pendingInvalidationRef.current
-    pending.kinds.add(kindToPlural(event.kind))
-    if (event.operation === 'add' || event.operation === 'delete') {
-      pending.hasCountChange = true
+    const kind = kindToPlural(event.kind)
+    const structural = event.operation === 'add' || event.operation === 'delete'
+
+    const fast = fastInvalidationRef.current
+    fast.changedKinds.add(kind)
+    if (structural) fast.structuralKinds.add(kind)
+    if (kind === 'secrets') fast.secretsChanged = true
+
+    const slow = slowInvalidationRef.current
+    if (!structural) slow.updatedKinds.add(kind)
+
+    // FAST tier — membership-sensitive + cheap, bounded 3s latency.
+    if (fast.timer === null) {
+      fast.timer = window.setTimeout(() => {
+        const f = fastInvalidationRef.current
+        for (const k of f.changedKinds) {
+          queryClient.invalidateQueries({ queryKey: ['resource', k] }) // open detail drawer stays live
+        }
+        for (const k of f.structuralKinds) {
+          queryClient.invalidateQueries({ queryKey: ['resources', k] }) // list membership changed
+        }
+        if (f.structuralKinds.size > 0) {
+          queryClient.invalidateQueries({ queryKey: ['resource-counts'] })
+          queryClient.invalidateQueries({ queryKey: ['dashboard'] })
+        }
+        if (f.secretsChanged) {
+          queryClient.invalidateQueries({ queryKey: ['secret-cert-expiry'] })
+        }
+        // GitOps behavior unchanged from before — refreshes every batch when a
+        // GitOps view is mounted (Phase 2 will make this relevance-aware).
+        queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
+        queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
+        fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
+      }, 3000)
     }
 
-    // Start throttle window on first event (don't reset — bounded 3s latency)
-    if (pending.timer !== null) return
-    pending.timer = window.setTimeout(() => {
-      for (const kind of pending.kinds) {
-        // Invalidate list queries (['resources', kind, ...]) and detail queries (['resource', kind, ...])
-        queryClient.invalidateQueries({ queryKey: ['resources', kind] })
-        queryClient.invalidateQueries({ queryKey: ['resource', kind] })
-      }
-      if (pending.hasCountChange) {
-        queryClient.invalidateQueries({ queryKey: ['resource-counts'] })
-      }
-      queryClient.invalidateQueries({ queryKey: ['dashboard'] })
-      if (pending.kinds.has('secrets')) {
-        queryClient.invalidateQueries({ queryKey: ['secret-cert-expiry'] })
-      }
-      // GitOps tree + insights are derived views over the same informer
-      // cache that produced this SSE event — when *anything* changes, the
-      // managed-resource tree and the insights pipeline can have stale
-      // changes/events/drift. Invalidating broadly here is cheap (only the
-      // currently-mounted GitOps view re-fetches; other views have no
-      // matching keys) and is what makes the detail page actually live.
-      // Without this the failure card + topology lag behind the title chips
-      // until window focus or a manual refresh.
-      queryClient.invalidateQueries({ queryKey: ['gitops-tree'] })
-      queryClient.invalidateQueries({ queryKey: ['gitops-insights'] })
-      // Reset accumulator
-      pending.kinds = new Set()
-      pending.hasCountChange = false
-      pending.timer = null
-    }, 3000)
+    // SLOW tier — throttle the expensive queries for status-only churn. Only
+    // updates schedule it; structural changes are fully handled by the fast tier.
+    if (!structural && slow.timer === null) {
+      slow.timer = window.setTimeout(() => {
+        const s = slowInvalidationRef.current
+        for (const k of s.updatedKinds) {
+          queryClient.invalidateQueries({ queryKey: ['resources', k] })
+        }
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }) // health reflects status updates
+        slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
+      }, 15000)
+    }
   }, [queryClient])
+
+  // Clear pending invalidation timers on unmount. Reset the refs (not just
+  // clearTimeout) so a same-instance remount doesn't inherit a non-null timer
+  // id — handleK8sEvent only schedules when timer === null, so a stale id would
+  // silently wedge all further SSE-driven invalidation.
+  useEffect(() => () => {
+    if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
+    if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
+    fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
+    slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
+  }, [])
 
   // SSE connection for real-time updates — no namespace filter for small/medium clusters (frontend filters).
   // forceNamespaceFilter is only set for large clusters that require server-side filtering.
@@ -590,10 +629,10 @@ function AppInner() {
       queryClient.invalidateQueries()
 
       // Cancel any pending SSE-driven invalidation — old cluster's events are irrelevant
-      if (pendingInvalidationRef.current.timer !== null) {
-        clearTimeout(pendingInvalidationRef.current.timer)
-        pendingInvalidationRef.current = { kinds: new Set(), hasCountChange: false, timer: null }
-      }
+      if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
+      if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
+      fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
+      slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
 
       // Close any open drawers/overlays — old cluster's resources don't exist on the new one
       setSelectedResource(null)

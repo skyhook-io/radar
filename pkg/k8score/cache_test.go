@@ -1134,6 +1134,34 @@ func TestDynamicResourceCache_ForcedNamespaceScopesEveryGVR(t *testing.T) {
 	}
 }
 
+// EnsureWatching must surface a probe that's forbidden everywhere it looks
+// (cluster-wide AND the fallback namespace) as an apierrors.IsForbidden-
+// classifiable error through the %w wrap — that's what lets the resources
+// handler map a denied CRD list to 403 instead of 500. Mirrors #768: a user
+// who can read the CRD only in a namespace the cache never probes.
+func TestDynamicResourceCache_EnsureWatching_ForbiddenIsClassifiable(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	dyn := fakeDynamicForListAccess(t, map[schema.GroupVersionResource]string{
+		gvr: "ApplicationList",
+	}, func(schema.GroupVersionResource, string) bool { return false })
+
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{
+		DynamicClient:     dyn,
+		NamespaceFallback: "other-ns",
+	})
+	if err != nil {
+		t.Fatalf("NewDynamicResourceCache failed: %v", err)
+	}
+
+	err = d.EnsureWatching(gvr)
+	if err == nil {
+		t.Fatal("EnsureWatching succeeded, want forbidden error")
+	}
+	if !apierrors.IsForbidden(err) {
+		t.Fatalf("EnsureWatching error not classifiable as forbidden (handler would 500 instead of 403): %v", err)
+	}
+}
+
 func fakeDynamicForListAccess(
 	t *testing.T,
 	listKinds map[schema.GroupVersionResource]string,

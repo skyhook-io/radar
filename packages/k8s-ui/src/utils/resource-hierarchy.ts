@@ -559,13 +559,23 @@ export function buildResourceHierarchy(options: HierarchyOptions): ResourceLane[
           TraefikService: 2, Middleware: 3, MiddlewareTCP: 3,
           HTTPProxy: 1, // Contour
         }
+        // Precompute each child's latest event time once — otherwise the
+        // comparator below reparses every child's event timestamps on every
+        // comparison (O(children log children × events) Date parses).
+        const latestByChildId = new Map<string, number>()
+        for (const c of lane.children) {
+          let latest = 0
+          for (const e of c.events) {
+            const t = new Date(e.timestamp).getTime()
+            if (t > latest) latest = t
+          }
+          latestByChildId.set(c.id, latest)
+        }
         lane.children.sort((a, b) => {
           const aPriority = kindPriority[a.kind] || 10
           const bPriority = kindPriority[b.kind] || 10
           if (aPriority !== bPriority) return aPriority - bPriority
-          const aLatest = a.events.length > 0 ? Math.max(...a.events.map(e => new Date(e.timestamp).getTime())) : 0
-          const bLatest = b.events.length > 0 ? Math.max(...b.events.map(e => new Date(e.timestamp).getTime())) : 0
-          return bLatest - aLatest
+          return (latestByChildId.get(b.id) ?? 0) - (latestByChildId.get(a.id) ?? 0)
         })
       }
 

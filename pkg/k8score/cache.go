@@ -1,6 +1,7 @@
 package k8score
 
 import (
+	"context"
 	"fmt"
 	"log"
 	"maps"
@@ -12,9 +13,15 @@ import (
 	"sync/atomic"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	apiruntime "k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/informers"
+	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/cache"
+	"k8s.io/client-go/tools/pager"
 )
 
 // ResourceCache provides fast, eventually-consistent access to K8s resources
@@ -24,6 +31,7 @@ type ResourceCache struct {
 	factory          informers.SharedInformerFactory            // cluster-wide factory (always present)
 	nsFactories      map[string]informers.SharedInformerFactory // per-namespace factories (for mixed-scope mode)
 	factoryByKind    map[string]informers.SharedInformerFactory // resolved factory per enabled kind — listers MUST go through this
+	pagedInformers   map[string]cache.SharedIndexInformer       // per-kind paginating informers (ListPageSize>0); listers read these instead of the factory's
 	changes          chan ResourceChange
 	stopCh           chan struct{}
 	stopOnce         sync.Once
@@ -87,6 +95,43 @@ type informerSetup struct {
 	setup           func(factory informers.SharedInformerFactory) cache.SharedIndexInformer
 	isEvent         bool
 	isClusterScoped bool // true for nodes, namespaces, PV, storageclasses, ingressclasses
+	// pagedSetup, when non-nil and CacheConfig.ListPageSize > 0, builds a
+	// paginating informer for this kind instead of the factory one. Set only
+	// for high-cardinality kinds whose single-shot initial LIST can fail on
+	// very large clusters.
+	pagedSetup func(client kubernetes.Interface, namespace string, pageSize int64) cache.SharedIndexInformer
+}
+
+// newPagedInformer builds a SharedIndexInformer whose initial LIST is fetched in
+// pages via a consistent (resourceVersion="") read rather than one unpaginated
+// response. The watch is unchanged. On clusters without WatchList streaming, a
+// single giant LIST of a high-cardinality kind can exceed the response-read
+// deadline or spike memory; paging bounds each request. When WatchList IS
+// available, client-go streams the initial state and never calls this ListFunc.
+func newPagedInformer(
+	example apiruntime.Object,
+	pageSize int64,
+	listFn pager.ListPageFunc,
+	watchFn func(ctx context.Context, opts metav1.ListOptions) (watch.Interface, error),
+) cache.SharedIndexInformer {
+	lw := &cache.ListWatch{
+		ListWithContextFunc: func(ctx context.Context, _ metav1.ListOptions) (apiruntime.Object, error) {
+			p := pager.New(listFn)
+			p.PageSize = pageSize
+			// resourceVersion="" forces a consistent read the apiserver will
+			// paginate — RV=0 (watch-cache) reads ignore limit. We deliberately
+			// override the reflector's default RV here.
+			obj, _, err := p.List(ctx, metav1.ListOptions{ResourceVersion: ""})
+			return obj, err
+		},
+		WatchFuncWithContext: watchFn,
+	}
+	inf := cache.NewSharedIndexInformer(lw, example, 0, cache.Indexers{cache.NamespaceIndex: cache.MetaNamespaceIndexFunc})
+	// Factory informers get DropManagedFields via WithTransform; these are built
+	// outside the factory, so apply the same transform directly. SetTransform
+	// only errors once started, which hasn't happened yet.
+	_ = inf.SetTransform(DropManagedFields)
+	return inf
 }
 
 // NewResourceCache creates and starts a ResourceCache from the given config.
@@ -232,6 +277,7 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		factory:          clusterFactory,
 		nsFactories:      nsFactories,
 		factoryByKind:    map[string]informers.SharedInformerFactory{},
+		pagedInformers:   map[string]cache.SharedIndexInformer{},
 		changes:          changes,
 		stopCh:           stopCh,
 		enabledResources: enabled,
@@ -257,7 +303,18 @@ func NewResourceCache(cfg CacheConfig) (*ResourceCache, error) {
 		enabledCount++
 		factory := pickFactory(s)
 		rc.factoryByKind[s.key] = factory
-		inf := s.setup(factory)
+
+		var inf cache.SharedIndexInformer
+		if cfg.ListPageSize > 0 && s.pagedSetup != nil {
+			// scopes[s.key].Namespace is "" for cluster-wide access or the
+			// single namespace a restricted user is scoped to.
+			inf = s.pagedSetup(cfg.Client, scopes[s.key].Namespace, cfg.ListPageSize)
+			// Listers must read this informer's store, not the factory's
+			// (the factory's informer for this kind is never started).
+			rc.pagedInformers[s.key] = inf
+		} else {
+			inf = s.setup(factory)
+		}
 
 		var err error
 		if s.isEvent {
@@ -777,12 +834,26 @@ func buildInformerSetups() []informerSetup {
 	mk := func(key, kind string, isEvent, clusterScoped bool, fn func(f informers.SharedInformerFactory) cache.SharedIndexInformer) entry {
 		return entry{key: key, kind: kind, setup: fn, isEvent: isEvent, isClusterScoped: clusterScoped}
 	}
+	// withPaging marks a high-cardinality kind as paginatable: when
+	// CacheConfig.ListPageSize > 0, its initial LIST is fetched in pages.
+	withPaging := func(e entry, paged func(client kubernetes.Interface, namespace string, pageSize int64) cache.SharedIndexInformer) entry {
+		e.pagedSetup = paged
+		return e
+	}
 	return []informerSetup{
 		mk(Services, "Service", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
 			return f.Core().V1().Services().Informer()
 		}),
-		mk(Pods, "Pod", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+		withPaging(mk(Pods, "Pod", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
 			return f.Core().V1().Pods().Informer()
+		}), func(client kubernetes.Interface, ns string, pageSize int64) cache.SharedIndexInformer {
+			return newPagedInformer(&corev1.Pod{}, pageSize,
+				func(ctx context.Context, o metav1.ListOptions) (apiruntime.Object, error) {
+					return client.CoreV1().Pods(ns).List(ctx, o)
+				},
+				func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
+					return client.CoreV1().Pods(ns).Watch(ctx, o)
+				})
 		}),
 		mk(Nodes, "Node", false, true, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
 			return f.Core().V1().Nodes().Informer()
@@ -814,8 +885,16 @@ func buildInformerSetups() []informerSetup {
 		mk(StatefulSets, "StatefulSet", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
 			return f.Apps().V1().StatefulSets().Informer()
 		}),
-		mk(ReplicaSets, "ReplicaSet", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
+		withPaging(mk(ReplicaSets, "ReplicaSet", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
 			return f.Apps().V1().ReplicaSets().Informer()
+		}), func(client kubernetes.Interface, ns string, pageSize int64) cache.SharedIndexInformer {
+			return newPagedInformer(&appsv1.ReplicaSet{}, pageSize,
+				func(ctx context.Context, o metav1.ListOptions) (apiruntime.Object, error) {
+					return client.AppsV1().ReplicaSets(ns).List(ctx, o)
+				},
+				func(ctx context.Context, o metav1.ListOptions) (watch.Interface, error) {
+					return client.AppsV1().ReplicaSets(ns).Watch(ctx, o)
+				})
 		}),
 		mk(Ingresses, "Ingress", false, false, func(f informers.SharedInformerFactory) cache.SharedIndexInformer {
 			return f.Networking().V1().Ingresses().Informer()
