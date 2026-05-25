@@ -533,10 +533,11 @@ function AppInner() {
   //   FAST (3s): detail drawer for any change (one cheap mounted object), and
   //     on add/delete: the list, counts, and dashboard. GitOps + cert keep
   //     their existing every-batch behavior — Phase 2 makes GitOps relevance-aware.
-  //   SLOW (15s): list + dashboard for kinds that had *update-only* changes.
-  //     Kinds with add/delete are already refreshed by the fast structural pass,
-  //     so the slow tier skips them (no double refetch); dashboard health still
-  //     refreshes on any update.
+  //   SLOW (15s): list + dashboard for kinds with update churn. A kind that also
+  //     had an add/delete in the window gets refreshed by both tiers (an extra
+  //     refetch per 15s at most) — that's fine and avoids a stale-list bug:
+  //     deduping by "was structural this window" would wrongly suppress an
+  //     update that arrived *after* the fast structural flush already ran.
   const fastInvalidationRef = useRef<{
     changedKinds: Set<string>   // every changed kind (any op) → detail drawer
     structuralKinds: Set<string> // add/delete kinds → list membership + counts + dashboard
@@ -545,9 +546,8 @@ function AppInner() {
   }>({ changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null })
   const slowInvalidationRef = useRef<{
     updatedKinds: Set<string>    // update-only churn → throttled list + dashboard
-    structuralKinds: Set<string> // mirror of fast structural, so slow can skip already-refreshed kinds
     timer: number | null
-  }>({ updatedKinds: new Set(), structuralKinds: new Set(), timer: null })
+  }>({ updatedKinds: new Set(), timer: null })
 
   const handleK8sEvent = useCallback((event: K8sEvent) => {
     // Skip K8s Event kind — informational, not resource mutations
@@ -562,8 +562,7 @@ function AppInner() {
     if (kind === 'secrets') fast.secretsChanged = true
 
     const slow = slowInvalidationRef.current
-    if (structural) slow.structuralKinds.add(kind)
-    else slow.updatedKinds.add(kind)
+    if (!structural) slow.updatedKinds.add(kind)
 
     // FAST tier — membership-sensitive + cheap, bounded 3s latency.
     if (fast.timer === null) {
@@ -590,18 +589,16 @@ function AppInner() {
       }, 3000)
     }
 
-    // SLOW tier — throttle the expensive queries for status-only churn.
-    if (slow.timer === null) {
+    // SLOW tier — throttle the expensive queries for status-only churn. Only
+    // updates schedule it; structural changes are fully handled by the fast tier.
+    if (!structural && slow.timer === null) {
       slow.timer = window.setTimeout(() => {
         const s = slowInvalidationRef.current
         for (const k of s.updatedKinds) {
-          if (s.structuralKinds.has(k)) continue // already refreshed by the fast structural pass
           queryClient.invalidateQueries({ queryKey: ['resources', k] })
         }
-        if (s.updatedKinds.size > 0) {
-          queryClient.invalidateQueries({ queryKey: ['dashboard'] }) // health reflects status updates
-        }
-        slowInvalidationRef.current = { updatedKinds: new Set(), structuralKinds: new Set(), timer: null }
+        queryClient.invalidateQueries({ queryKey: ['dashboard'] }) // health reflects status updates
+        slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
       }, 15000)
     }
   }, [queryClient])
@@ -630,7 +627,7 @@ function AppInner() {
       if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
       if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
       fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
-      slowInvalidationRef.current = { updatedKinds: new Set(), structuralKinds: new Set(), timer: null }
+      slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
 
       // Close any open drawers/overlays — old cluster's resources don't exist on the new one
       setSelectedResource(null)
