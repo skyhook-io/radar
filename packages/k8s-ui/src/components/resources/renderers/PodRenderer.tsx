@@ -338,9 +338,12 @@ export function PodRenderer({
         <AlertBanner variant="error" title="Issues Detected">
           <ul className="text-xs space-y-1">
             {podProblems.map((p, i) => (
-              <li key={i} className="flex items-center gap-1.5">
-                <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0', SEVERITY_DOT_COLOR[p.severity])} />
-                <span className="text-red-600 dark:text-red-400">{p.message}</span>
+              <li key={i} className="flex items-start gap-1.5">
+                <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0 mt-1', SEVERITY_DOT_COLOR[p.severity])} />
+                <span className="text-red-600 dark:text-red-400">
+                  {p.message}
+                  {p.detail && <span className="text-theme-text-secondary">: {p.detail}</span>}
+                </span>
               </li>
             ))}
           </ul>

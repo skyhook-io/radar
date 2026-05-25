@@ -48,6 +48,27 @@ export const healthColors: Record<HealthLevel, string> = {
 export interface PodProblem {
   severity: 'critical' | 'high' | 'medium'
   message: string
+  // detail carries extra human context shown after the short message (e.g.
+  // the scheduler's verdict for an Unschedulable pod). message stays the
+  // stable short label so filter-chip matching (podMatchesProblemCategory)
+  // and known-pattern checks keep working on exact strings.
+  detail?: string
+}
+
+/**
+ * Condense a kube-scheduler verdict (the PodScheduled=False / FailedScheduling
+ * message) for display: drop the "0/N nodes are available:" prefix and the
+ * "preemption: …" tail, keeping the per-predicate clause list — which already
+ * names untolerated taints, insufficient resources, and affinity/selector
+ * misses. Presentation-only; the backend `scheduling` issue source does the
+ * structured decomposition + node-label resolution (e.g. naming arm64).
+ */
+export function summarizeSchedulerMessage(message?: string): string {
+  if (!message) return ''
+  let m = message.split('. preemption:')[0].split(' preemption:')[0].trim()
+  const colon = m.indexOf(':')
+  if (colon >= 0) m = m.slice(colon + 1).trim()
+  return m.replace(/\.\s*$/, '').trim()
 }
 
 /** Tailwind classes for severity dot indicators (used in tooltips and alert banners) */
@@ -302,7 +323,7 @@ export function getPodProblems(pod: any): PodProblem[] {
   for (const cond of conditions) {
     if (cond.type === 'PodScheduled' && cond.status === 'False') {
       if (cond.reason === 'Unschedulable') {
-        problems.push({ severity: 'high', message: 'Unschedulable' })
+        problems.push({ severity: 'high', message: 'Unschedulable', detail: summarizeSchedulerMessage(cond.message) || undefined })
       }
     }
     // Readiness/Liveness probe failures

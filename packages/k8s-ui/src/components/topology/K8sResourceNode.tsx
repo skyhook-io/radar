@@ -43,12 +43,62 @@ function getIssueTooltip(issue: string | undefined): React.ReactNode {
     Pending: {
       title: 'Pending',
       description: 'Pod is waiting to be scheduled to a node.',
-      action: 'Check for resource constraints or node availability.',
+      action: 'Open the pod to see the scheduler verdict (taints, resources, affinity).',
     },
     FailedScheduling: {
       title: 'Scheduling Failed',
       description: 'No suitable node found for this pod.',
       action: 'Check node resources, taints, tolerations, and affinity rules.',
+    },
+    Unschedulable: {
+      title: 'Unschedulable',
+      description: 'The scheduler tried every node and none fit.',
+      action: 'Open the pod for the decomposed reason — arch/OS mismatch, untolerated taint, insufficient resources, or affinity.',
+    },
+    QuotaExceeded: {
+      title: 'ResourceQuota Exceeded',
+      description: 'A namespace ResourceQuota is at its hard limit, so new pods are rejected at admission.',
+      action: 'Open the namespace to see quota usage; raise the quota or free usage.',
+    },
+    QuotaNearLimit: {
+      title: 'ResourceQuota Near Limit',
+      description: 'A namespace ResourceQuota is close to its hard limit and will soon block new pods.',
+      action: 'Open the namespace to see quota usage.',
+    },
+    IPExhaustion: {
+      title: 'IP Exhaustion (CNI)',
+      description: 'The pod was scheduled but the CNI could not assign an IP — the node/subnet pool is exhausted.',
+      action: 'Free IPs, scale the subnet/ENI pool, or move the pod to a node with capacity.',
+    },
+    SandboxCreationFailed: {
+      title: 'Sandbox Creation Failed',
+      description: 'The kubelet could not create the pod sandbox.',
+      action: 'Check kubelet/CNI events on the node.',
+    },
+    VolumeMount: {
+      title: 'Volume Mount Failed',
+      description: 'The pod was scheduled but a volume could not be mounted.',
+      action: 'Check the PVC/PV binding and the CSI driver on the node.',
+    },
+    VolumeAttach: {
+      title: 'Volume Attach Failed',
+      description: 'A volume could not be attached to the node.',
+      action: 'Check the CSI driver and cloud-provider attach limits.',
+    },
+    VolumeMultiAttach: {
+      title: 'Volume Multi-Attach',
+      description: 'The volume is still attached to another node — a RWO volume cannot attach in two places.',
+      action: 'Wait for the old pod to terminate, or cordon/drain the stale node.',
+    },
+    PodSecurityViolation: {
+      title: 'Pod Security Violation',
+      description: 'Pod Security Admission rejected the pod template at admission.',
+      action: 'Align the pod securityContext with the namespace PSA level.',
+    },
+    WebhookDenied: {
+      title: 'Admission Webhook Denied',
+      description: 'A validating/mutating admission webhook rejected pod creation.',
+      action: 'Check the webhook policy that denied the request.',
     },
     Evicted: {
       title: 'Pod Evicted',
