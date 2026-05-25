@@ -209,6 +209,16 @@ type CacheConfig struct {
 	// unaffected. Zero means wait indefinitely.
 	DeferredSyncTimeout time.Duration
 
+	// ListPageSize, when > 0, makes high-cardinality informers fetch their
+	// initial LIST in pages of this size via a consistent (resourceVersion="")
+	// read instead of one unpaginated response. This mitigates response-read
+	// timeouts and memory spikes during initial sync on very large clusters
+	// where WatchList streaming isn't available — when it is, client-go streams
+	// the initial state and this path is never exercised. 0 (the default)
+	// keeps the standard factory behavior. Only kinds flagged in
+	// buildInformerSetups (currently Pods, ReplicaSets) paginate.
+	ListPageSize int64
+
 	// DebugEvents enables verbose event debug logging.
 	DebugEvents bool
 

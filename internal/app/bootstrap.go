@@ -40,6 +40,7 @@ type AppConfig struct {
 	DisableLocalTerminal bool
 	PodShellDefault      string
 	DebugImage           string
+	ListPageSize         int64
 	TimelineStorage      string
 	TimelineDBPath       string
 	TimelineRetention    time.Duration
@@ -58,6 +59,7 @@ func SetGlobals(cfg AppConfig) {
 	k8s.ForceDisableHelmWrite = cfg.DisableHelmWrite
 	k8s.ForceDisableExec = cfg.DisableExec
 	k8s.ForceDisableLocalTerminal = cfg.DisableLocalTerminal
+	k8s.ListPageSize = cfg.ListPageSize
 	server.DefaultPodShellCommand = cfg.PodShellDefault
 	versionpkg.SetCurrent(cfg.Version)
 }

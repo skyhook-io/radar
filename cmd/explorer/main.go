@@ -59,6 +59,7 @@ func main() {
 	disableLocalTerminal := flag.Bool("disable-local-terminal", false, "Disable local terminal feature")
 	podShellDefault := flag.String("pod-shell-default", "", "Override the default pod exec shell command (runs as 'sh -c <value>'; empty = built-in bash -il → ash → sh cascade)")
 	debugImage := flag.String("debug-image", fileCfg.DebugImage, "Image for ephemeral debug containers and node debug pods (empty = busybox:latest; point at a mirror for air-gapped/private-registry clusters)")
+	listPageSize := flag.Int64("list-page-size", 0, "Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this page size on clusters without WatchList streaming. 0 = off (single LIST). Try 2000 if a very large cluster fails to sync.")
 	// Timeline storage options
 	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory or sqlite")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
@@ -167,6 +168,7 @@ func main() {
 		DisableLocalTerminal: *disableLocalTerminal,
 		PodShellDefault:      *podShellDefault,
 		DebugImage:           *debugImage,
+		ListPageSize:         *listPageSize,
 		TimelineStorage:      *timelineStorage,
 		TimelineDBPath:       *timelineDBPath,
 		TimelineRetention:    *timelineRetention,

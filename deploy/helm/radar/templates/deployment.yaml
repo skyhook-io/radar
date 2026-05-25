@@ -64,6 +64,9 @@ spec:
             {{- if .Values.debug.image }}
             - --debug-image={{ .Values.debug.image }}
             {{- end }}
+            {{- if .Values.listPageSize }}
+            - --list-page-size={{ .Values.listPageSize }}
+            {{- end }}
             {{- if ne .Values.auth.mode "none" }}
             - --auth-mode={{ .Values.auth.mode }}
             - --auth-cookie-ttl={{ .Values.auth.cookieTTL }}

@@ -28,6 +28,12 @@ import (
 // DebugEvents enables verbose event debugging when true (set via --debug-events flag)
 var DebugEvents bool
 
+// ListPageSize, when > 0, makes high-cardinality informers (Pods, ReplicaSets)
+// paginate their initial LIST instead of pulling it in one response (set via
+// --list-page-size flag). Opt-in hardening for very large clusters where
+// WatchList streaming isn't available; 0 keeps the standard behavior.
+var ListPageSize int64
+
 // TimingLogs enables [startup-timing] log lines when true (set via --dev flag).
 // These are useful for profiling startup but too noisy for production.
 var TimingLogs bool
@@ -156,6 +162,7 @@ func InitResourceCache(ctx context.Context) error {
 			SyncTimeout:         firstPaintBackstop,
 			SyncProgress:        emitSyncProgress,
 			DeferredSyncTimeout: 3 * time.Minute,
+			ListPageSize:        ListPageSize,
 
 			OnReceived: func(kind string) {
 				timeline.IncrementReceived(kind)
