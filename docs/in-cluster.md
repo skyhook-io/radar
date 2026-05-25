@@ -161,7 +161,7 @@ debug:
   image: my-registry.internal/busybox:1.36
 ```
 
-Ephemeral debug containers can't carry their own image-pull secrets — they reuse the target pod's — so the image must be pullable by the workload being debugged.
+Radar doesn't attach image-pull secrets to debug containers or pods — ephemeral containers inherit the target pod's, and node debug pods rely on the `default` namespace's ServiceAccount / node registry config — so the image must be pullable without Radar supplying credentials.
 
 ### CRD Permissions
 

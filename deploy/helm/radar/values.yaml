@@ -22,9 +22,10 @@ fullnameOverride: ""
 # containers attached to pods and for privileged node debug pods. Point this at
 # a reachable mirror in air-gapped / private-registry clusters where the default
 # busybox:latest cannot be pulled. Empty = busybox:latest.
-# Note: ephemeral debug containers cannot carry their own imagePullSecrets — they
-# rely on the target pod's pull secrets / node registry config — so the image
-# must be pullable by the workloads being debugged.
+# Note: Radar does not attach imagePullSecrets to debug containers/pods —
+# ephemeral containers inherit the target pod's, and node debug pods rely on the
+# default namespace's ServiceAccount / node registry config — so the image must
+# be pullable without extra credentials from Radar.
 debug:
   image: ""
 

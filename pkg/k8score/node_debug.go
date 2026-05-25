@@ -56,7 +56,7 @@ func CreateNodeDebugPod(ctx context.Context, client kubernetes.Interface, nodeNa
 	}
 
 	if image == "" {
-		image = "busybox:latest"
+		image = DefaultDebugImage
 	}
 
 	containerName := "debug"
