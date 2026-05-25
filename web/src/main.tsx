@@ -1,5 +1,6 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
+import './monaco-setup'
 import { RadarApp } from './RadarApp'
 import { openExternal } from './utils/navigation'
 import './index.css'
