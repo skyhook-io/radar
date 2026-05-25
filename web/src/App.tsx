@@ -603,10 +603,15 @@ function AppInner() {
     }
   }, [queryClient])
 
-  // Clear pending invalidation timers on unmount.
+  // Clear pending invalidation timers on unmount. Reset the refs (not just
+  // clearTimeout) so a same-instance remount doesn't inherit a non-null timer
+  // id — handleK8sEvent only schedules when timer === null, so a stale id would
+  // silently wedge all further SSE-driven invalidation.
   useEffect(() => () => {
     if (fastInvalidationRef.current.timer !== null) clearTimeout(fastInvalidationRef.current.timer)
     if (slowInvalidationRef.current.timer !== null) clearTimeout(slowInvalidationRef.current.timer)
+    fastInvalidationRef.current = { changedKinds: new Set(), structuralKinds: new Set(), secretsChanged: false, timer: null }
+    slowInvalidationRef.current = { updatedKinds: new Set(), timer: null }
   }, [])
 
   // SSE connection for real-time updates — no namespace filter for small/medium clusters (frontend filters).
