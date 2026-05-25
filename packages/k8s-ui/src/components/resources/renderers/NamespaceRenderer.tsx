@@ -3,6 +3,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ResourceLink } from '../../ui/drawer-components'
 import type { RBACNamespaceResponse, RBACBindingWithSubjects, RBACSubject, ResourceRef } from '../../../types'
 import { rbacKindBadgeClass } from '../../../utils/rbac-badges'
+import { SEVERITY_TEXT, SEVERITY_DOT } from '../../../utils/badge-colors'
 import { parseCPUToNanocores, parseMemoryToBytes } from '../../../utils/format'
 
 interface NamespaceRendererProps {
@@ -128,14 +129,14 @@ function NamespaceQuotaSection({ quotas, error }: { quotas: any[]; error?: Error
                     const ratio = quotaUsageRatio(res, used[res] ?? '0', hard[res])
                     const pct = ratio === null ? null : Math.min(100, Math.round(ratio * 100))
                     const tone =
-                      ratio === null ? 'text-theme-text-secondary'
-                        : ratio >= 1 ? 'text-red-600 dark:text-red-400'
-                          : ratio >= 0.9 ? 'text-orange-600 dark:text-orange-400'
-                            : 'text-theme-text-secondary'
+                      ratio === null ? SEVERITY_TEXT.neutral
+                        : ratio >= 1 ? SEVERITY_TEXT.error
+                          : ratio >= 0.9 ? SEVERITY_TEXT.alert
+                            : SEVERITY_TEXT.neutral
                     const barTone =
                       ratio === null ? 'bg-theme-border'
-                        : ratio >= 1 ? 'bg-red-500'
-                          : ratio >= 0.9 ? 'bg-orange-500'
+                        : ratio >= 1 ? SEVERITY_DOT.error
+                          : ratio >= 0.9 ? SEVERITY_DOT.alert
                             : 'bg-theme-text-tertiary'
                     return (
                       <div key={res} className="text-xs">
