@@ -275,18 +275,21 @@ func registerTools(server *mcp.Server) {
 			"PVCs (problem source), dangling-reference errors like Pod→missing PVC/CM/" +
 			"Secret/SA, HPA→missing scaleTargetRef, Ingress→missing backend Service, " +
 			"RoleBinding→missing Role, webhook→missing Service (missing_ref source), " +
+			"why a Pod can't run — unschedulable (arch/taint/resources/affinity), " +
+			"admission-rejected (quota/PodSecurity/webhook), or stuck post-bind " +
+			"(CNI/volume) (scheduling source), " +
 			"False .status.conditions on CRDs from Argo/Flux/Knative/Crossplane/" +
 			"cert-manager/KEDA (condition source), recent K8s Warning events (event " +
 			"source, opt-in), Kyverno PolicyReport policy violations (kyverno source, " +
 			"opt-in). Severity normalized to critical/warning. Defaults: problem + " +
-			"missing_ref + condition. event and kyverno are opt-in because they run " +
+			"missing_ref + scheduling + condition. event and kyverno are opt-in because they run " +
 			"50–1000+ rows per cluster. For STATIC best-practice / security-posture / " +
 			"compliance findings (runAsRoot, missing PDB, no probes, missing resource " +
 			"limits, etc.), use get_cluster_audit — that's a separate axis and the two " +
 			"should never be conflated (a healthy pod can have many audit findings; a " +
 			"crashing pod can have zero). The `source` param is a FILTER: source=kyverno " +
 			"returns ONLY Kyverno rows. To ADD an opt-in source to the defaults, list " +
-			"everything explicitly — e.g. source=problem,missing_ref,condition,kyverno. " +
+			"everything explicitly — e.g. source=problem,missing_ref,scheduling,condition,kyverno. " +
 			"After identifying a suspect issue, call get_resource (or diagnose for a " +
 			"full debug bundle) for spec/status, or get_neighborhood when the failure " +
 			"likely crosses Services/workloads/Pods/dependencies.",

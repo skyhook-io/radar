@@ -5,7 +5,7 @@ import { fetchJSON } from './client'
 // /api/resources/resourcequotas?namespace=<ns> (a bare array). Backs the
 // NamespaceRenderer quota-usage section — quota saturation is otherwise
 // surfaced nowhere in the UI, yet it's exactly why a namespace stops
-// admitting new pods (the namespace_memory_limit failure mode).
+// admitting new pods.
 export function useNamespaceQuotas(namespace: string, enabled = true) {
   return useQuery<any[]>({
     queryKey: ['resourcequotas', namespace],

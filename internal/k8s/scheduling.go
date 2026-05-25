@@ -26,9 +26,11 @@ import (
 // parseSchedulerMessage turns that into structured, per-predicate reasons
 // so callers (the issues engine, MCP diagnose, the Pod UI banner) can show
 // "why won't this schedule" without the operator re-reading scheduler prose.
-// It is a pure function — the node-fit resolver (resolveUnsatisfiable*) is
-// what later joins NodeAffinitySelector / UntoleratedTaint reasons against
-// the live node cache to name the specific offending label or taint.
+// It is a pure function — the node-fit resolver (resolveUnsatisfiableNodeSelector)
+// later joins NodeAffinitySelector reasons against the live node cache to name
+// the specific offending label (e.g. "no node has kubernetes.io/arch=arm64").
+// Taint key/value come straight from the scheduler message (parseTaintPayload),
+// not from a cache join.
 
 // SchedReasonClass is the predicate family a scheduling failure falls into.
 type SchedReasonClass string
@@ -48,7 +50,11 @@ const (
 	SchedOther                SchedReasonClass = "Other"
 )
 
-// SchedulingReason is one decomposed clause of a scheduler verdict.
+// SchedulingReason is one decomposed clause of a scheduler verdict. The
+// side fields are populated only for their owning Class (Resource for
+// SchedInsufficientResource; TaintKey/TaintValue for SchedUntoleratedTaint);
+// other classes leave them zero. classifyClause is the sole producer and
+// always sets Class + Raw.
 type SchedulingReason struct {
 	Class SchedReasonClass
 	// NodeCount is how many nodes this clause rejected. 0 when the clause
@@ -223,15 +229,8 @@ func isNodeLifecycleTaint(key string) bool {
 
 // NodeFacts is the minimal per-node view the fit resolver needs.
 type NodeFacts struct {
-	Name          string
-	Labels        map[string]string
-	Taints        []TaintFact
-	Unschedulable bool
-}
-
-// TaintFact is one node taint.
-type TaintFact struct {
-	Key, Value, Effect string
+	Name   string
+	Labels map[string]string
 }
 
 // MatchExpr is a node-affinity match expression (key, operator, values).
@@ -550,7 +549,11 @@ func summarizeReasons(reasons []SchedulingReason, skipAffinity bool) string {
 	for _, r := range reasons {
 		switch r.Class {
 		case SchedInsufficientResource:
-			parts = append(parts, fmt.Sprintf("%s insufficient %s", nodesPhrase(r.NodeCount), r.Resource))
+			res := r.Resource
+			if res == "" {
+				res = "resources"
+			}
+			parts = append(parts, fmt.Sprintf("%s insufficient %s", nodesPhrase(r.NodeCount), res))
 		case SchedUntoleratedTaint:
 			t := r.TaintKey
 			if r.TaintValue != "" {
@@ -631,16 +634,7 @@ func schedulingNodeFacts(cache *ResourceCache) []NodeFacts {
 	nodeList, _ := lister.List(labels.Everything())
 	facts := make([]NodeFacts, 0, len(nodeList))
 	for _, n := range nodeList {
-		taints := make([]TaintFact, 0, len(n.Spec.Taints))
-		for _, t := range n.Spec.Taints {
-			taints = append(taints, TaintFact{Key: t.Key, Value: t.Value, Effect: string(t.Effect)})
-		}
-		facts = append(facts, NodeFacts{
-			Name:          n.Name,
-			Labels:        n.Labels,
-			Taints:        taints,
-			Unschedulable: n.Spec.Unschedulable,
-		})
+		facts = append(facts, NodeFacts{Name: n.Name, Labels: n.Labels})
 	}
 	return facts
 }
@@ -649,8 +643,7 @@ func schedulingNodeFacts(cache *ResourceCache) []NodeFacts {
 //
 // The layer where NO pod is ever created: the controller's pod template is
 // rejected at admission, so there's no Pod to inspect — the Deployment just
-// sits at "Progressing". This is where the bench's namespace_memory_limit
-// fault lives. Two complementary signals:
+// sits at "Progressing". Two complementary signals:
 //
 //   - Proactive: a ResourceQuota at/near its hard limit (read from cache) —
 //     it will block the next pod the namespace creates.
@@ -684,10 +677,30 @@ type quotaSaturation struct {
 	ratio            float64
 }
 
-// quotaWorstResource returns the most-saturated resource in a ResourceQuota.
+// isPodAdmissionQuotaResource reports whether a ResourceQuota resource name
+// gates Pod (or Pod-blocking PVC) admission. Object-count quotas on configmaps/
+// services/secrets/etc. also reject creates, but they don't stop a workload's
+// pods from running — surfacing them as "blocks new pods" under the scheduling
+// source would be wrong framing, so the scheduling-source quota check ignores
+// them (they belong to a namespace-health lens, not "why this workload can't run").
+func isPodAdmissionQuotaResource(name string) bool {
+	switch name {
+	case "pods", "cpu", "memory", "ephemeral-storage", "persistentvolumeclaims":
+		return true
+	}
+	// requests.*/limits.* compute + storage (incl. extended resources like
+	// requests.nvidia.com/gpu, requests.storage) all gate pod/PVC admission.
+	return strings.HasPrefix(name, "requests.") || strings.HasPrefix(name, "limits.")
+}
+
+// quotaWorstResource returns the most-saturated pod-admission-relevant resource
+// in a ResourceQuota (object-count quotas like configmaps/services are skipped).
 func quotaWorstResource(q *corev1.ResourceQuota) quotaSaturation {
 	var worst quotaSaturation
 	for res, hard := range q.Status.Hard {
+		if !isPodAdmissionQuotaResource(string(res)) {
+			continue
+		}
 		used, ok := q.Status.Used[res]
 		if !ok {
 			continue
@@ -776,6 +789,13 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Problem {
 			continue
 		}
 		obj := e.InvolvedObject
+		// A blocked controller re-emits FailedCreate continuously, but a since-
+		// recovered one's event lingers in the cache for the whole window —
+		// cross-check current state so we don't flag a now-healthy workload as
+		// critical (the recency guard alone can't tell recovered from active).
+		if !admissionTargetStillBlocked(cache, obj) {
+			continue
+		}
 		first := e.FirstTimestamp.Time
 		if first.IsZero() {
 			first = e.EventTime.Time
@@ -797,6 +817,54 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Problem {
 		})
 	}
 	return problems
+}
+
+// admissionTargetStillBlocked reports whether the controller named by a
+// FailedCreate event still has unmet replicas, i.e. the rejection is active.
+// A recovered workload has its replicas, so its lingering event is skipped.
+// Unknown kinds / not-found default to true — never drop genuine coverage.
+func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReference) bool {
+	switch obj.Kind {
+	case "ReplicaSet":
+		if l := cache.ReplicaSets(); l != nil {
+			if rs, err := l.ReplicaSets(obj.Namespace).Get(obj.Name); err == nil {
+				return rs.Status.ReadyReplicas < schedDesiredReplicas(rs.Spec.Replicas)
+			}
+		}
+	case "Deployment":
+		if l := cache.Deployments(); l != nil {
+			if d, err := l.Deployments(obj.Namespace).Get(obj.Name); err == nil {
+				return d.Status.ReadyReplicas < schedDesiredReplicas(d.Spec.Replicas)
+			}
+		}
+	case "StatefulSet":
+		if l := cache.StatefulSets(); l != nil {
+			if ss, err := l.StatefulSets(obj.Namespace).Get(obj.Name); err == nil {
+				return ss.Status.ReadyReplicas < schedDesiredReplicas(ss.Spec.Replicas)
+			}
+		}
+	case "DaemonSet":
+		if l := cache.DaemonSets(); l != nil {
+			if ds, err := l.DaemonSets(obj.Namespace).Get(obj.Name); err == nil {
+				return ds.Status.NumberUnavailable > 0
+			}
+		}
+	case "Job":
+		if l := cache.Jobs(); l != nil {
+			if j, err := l.Jobs(obj.Namespace).Get(obj.Name); err == nil {
+				// A running or completed Job no longer needs to create pods.
+				return j.Status.Active == 0 && j.Status.Succeeded == 0
+			}
+		}
+	}
+	return true
+}
+
+func schedDesiredReplicas(r *int32) int32 {
+	if r == nil {
+		return 1
+	}
+	return *r
 }
 
 // classifyAdmissionFailure maps a FailedCreate event message to a reason.

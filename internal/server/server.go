@@ -1461,6 +1461,17 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 				return cache.LimitRanges().LimitRanges(ns).List(labels.Everything())
 			},
 		)
+	case "resourcequotas":
+		if cache.ResourceQuotas() == nil {
+			notReadyOrForbidden("resourcequotas")
+			return
+		}
+		result, err = listPerNs(
+			func() (any, error) { return cache.ResourceQuotas().List(labels.Everything()) },
+			func(ns string) (any, error) {
+				return cache.ResourceQuotas().ResourceQuotas(ns).List(labels.Everything())
+			},
+		)
 	case "networkpolicies", "netpol":
 		if cache.NetworkPolicies() == nil {
 			notReadyOrForbidden("networkpolicies")
@@ -1804,6 +1815,12 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		resource, err = cache.LimitRanges().LimitRanges(namespace).Get(name)
+	case "resourcequotas", "resourcequota":
+		if cache.ResourceQuotas() == nil {
+			notReadyOrForbiddenGet("resourcequotas")
+			return
+		}
+		resource, err = cache.ResourceQuotas().ResourceQuotas(namespace).Get(name)
 	case "roles", "role":
 		if cache.Roles() == nil {
 			forbiddenGet("roles")

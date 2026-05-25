@@ -30,6 +30,7 @@ func InitTestResourceCache(client kubernetes.Interface) error {
 		"secrets":                  true,
 		"events":                   true,
 		"persistentvolumeclaims":   true,
+		"resourcequotas":           true,
 		"nodes":                    true,
 		"namespaces":               true,
 		"jobs":                     true,

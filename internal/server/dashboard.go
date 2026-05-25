@@ -566,7 +566,12 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 				health.Healthy++
 			case "warning":
 				health.Warning++
-				collectPodForRollup(pod, "medium", now, ownerGroups, &orphanProblems)
+				// Unschedulable pods are owned by the scheduling rows appended
+				// below (which name the constraint); don't also roll them up
+				// here as a bare "Pending".
+				if !k8s.IsPodUnschedulable(pod) {
+					collectPodForRollup(pod, "medium", now, ownerGroups, &orphanProblems)
+				}
 			case "error":
 				health.Error++
 				collectPodForRollup(pod, "critical", now, ownerGroups, &orphanProblems)
@@ -660,8 +665,8 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 	// constraint named), admission rejections (quota/PodSecurity/webhook — no
 	// Pod exists, so the pod rollup above can't see them), and post-bind
 	// CNI/volume stalls. Appended directly (not through the Missing-ref Pod
-	// filter above) — an Unschedulable row IS the pod's scheduling reason, not
-	// a duplicate of the pod rollup, which only emits error-state pods.
+	// filter above) — an Unschedulable row IS the pod's scheduling reason; the
+	// pod rollup above skips unschedulable pods so they don't double-surface.
 	sched := k8s.DetectSchedulingProblems(cache, namespace)
 	sched = append(sched, k8s.DetectAdmissionProblems(cache, namespace)...)
 	sched = append(sched, k8s.DetectPostBindProblems(cache, namespace)...)

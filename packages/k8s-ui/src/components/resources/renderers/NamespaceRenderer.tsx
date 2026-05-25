@@ -22,10 +22,16 @@ interface NamespaceRendererProps {
    * namespace stops admitting pods, yet it's shown nowhere else.
    */
   quotaData?: any[] | null
+  /**
+   * Non-403 quota fetch error. When set, the quota section renders a note
+   * instead of silently disappearing — so a quota-constrained namespace whose
+   * fetch 500/503s isn't mistaken for quota-free. (403 stays hidden upstream.)
+   */
+  quotaError?: Error | null
   onNavigate?: (ref: ResourceRef) => void
 }
 
-export function NamespaceRenderer({ data, rbacData, rbacLoading, rbacError, quotaData, onNavigate }: NamespaceRendererProps) {
+export function NamespaceRenderer({ data, rbacData, rbacLoading, rbacError, quotaData, quotaError, onNavigate }: NamespaceRendererProps) {
   const metadata = data.metadata || {}
   const status = data.status || {}
   const phase = status.phase
@@ -57,8 +63,8 @@ export function NamespaceRenderer({ data, rbacData, rbacLoading, rbacError, quot
       </Section>
 
       {/* ResourceQuota usage — only when host wired the fetch. */}
-      {quotaData !== undefined && quotaData !== null && quotaData.length > 0 && (
-        <NamespaceQuotaSection quotas={quotaData} />
+      {(quotaError || (quotaData != null && quotaData.length > 0)) && (
+        <NamespaceQuotaSection quotas={quotaData ?? []} error={quotaError ?? null} />
       )}
 
       {/* RBAC summary — only when host wired the fetch. */}
@@ -97,9 +103,14 @@ function quotaUsageRatio(resourceName: string, used: string, hard: string): numb
   return parse(used || '0') / h
 }
 
-function NamespaceQuotaSection({ quotas }: { quotas: any[] }) {
+function NamespaceQuotaSection({ quotas, error }: { quotas: any[]; error?: Error | null }) {
   return (
     <Section title="Resource Quotas" icon={Gauge} defaultExpanded>
+      {error && (
+        <div className="text-xs text-theme-text-secondary">
+          Couldn’t load resource quotas — retry shortly. A quota at its limit blocks new pods in this namespace.
+        </div>
+      )}
       <div className="space-y-3">
         {quotas.map((q: any, qi: number) => {
           const name = q?.metadata?.name ?? `quota-${qi}`
