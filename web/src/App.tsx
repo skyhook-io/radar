@@ -948,22 +948,30 @@ function AppInner() {
     const navigatingToHelm = mainView === 'helm' && prevMainView.current !== 'helm'
     prevMainView.current = mainView
 
-    // Don't clear selectedResource when navigating TO resources view (deep link from Helm)
-    if (!navigatingToResources) {
+    // The URL is the source of truth for what's selected. A deep link
+    // (?resource=, ?release=) seeds the selection on mount; the effects that
+    // run during that same mount must not wipe a selection the URL still
+    // asserts. (On a real view switch the URL no longer carries the param, so
+    // the clear proceeds.) Without this, deep-linking straight to a Helm
+    // release lands on the release list with no drawer.
+    const params = new URLSearchParams(window.location.search)
+    if (!navigatingToResources && !params.has('resource')) {
       setSelectedResource(null)
     }
-    // Don't clear helm release when navigating TO helm (back button restores from URL)
-    if (!navigatingToHelm) {
+    if (!navigatingToHelm && !params.has('release')) {
       setSelectedHelmRelease(null)
     }
     setDrawerExpanded(false)
   }, [mainView])
 
-  // Clear resource selection when namespaces change
+  // Clear resource selection when namespaces change — but keep a selection the
+  // URL still asserts (deep link, or a release/resource the user is viewing
+  // while they adjust the namespace scope filter).
   useEffect(() => {
-    setSelectedResource(null)
+    const params = new URLSearchParams(window.location.search)
+    if (!params.has('resource')) setSelectedResource(null)
+    if (!params.has('release')) setSelectedHelmRelease(null)
     setDrawerExpanded(false)
-    setSelectedHelmRelease(null)
   }, [namespacesKey])
 
   // Filter topology based on visible kinds (uses displayedTopology which respects pause)
