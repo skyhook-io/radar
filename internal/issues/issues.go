@@ -6,13 +6,11 @@ import (
 	"strings"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	bp "github.com/skyhook-io/radar/pkg/audit"
-	"github.com/skyhook-io/radar/pkg/policyreports"
 )
 
 // Provider abstracts the data sources Compose needs. Implementations
@@ -33,23 +31,10 @@ type Provider interface {
 	// Pod exists), and pods stuck post-bind (CNI/volume). Surfaced under
 	// SourceScheduling so agents/UI can isolate "why won't this run".
 	DetectScheduling(namespaces []string) []k8s.Problem
-	WarningEvents(namespaces []string, since time.Duration) []*corev1.Event
 	// CRD-condition fallback inputs.
 	WatchedDynamic() []schema.GroupVersionResource
 	ListDynamic(gvr schema.GroupVersionResource, namespace string) ([]*unstructured.Unstructured, error)
 	KindForGVR(gvr schema.GroupVersionResource) string
-	// KyvernoFindings returns every subject + findings pair currently
-	// indexed from PolicyReport / ClusterPolicyReport documents. Returns
-	// nil when Kyverno is not installed (the common case) — callers
-	// must treat nil as "no findings to surface" rather than an error.
-	KyvernoFindings() []policyreports.SubjectFindings
-	// KyvernoStatus reports the PolicyReport index lifecycle phase so
-	// callers can distinguish "Kyverno not installed" from "warmup
-	// deferred (cluster too large)" from "warmup in flight" from "ready
-	// but empty". See k8s.KyvernoStatus for the enum values. Returned as
-	// a plain string so callers in this package don't need to import
-	// internal/k8s just to read the value.
-	KyvernoStatus() string
 }
 
 type dynamicScopeProvider interface {
@@ -72,8 +57,8 @@ type ComposeStats struct {
 	TotalMatched int
 }
 
-// Compose runs the default sources and merges their output. Backward-
-// compatible signature for callers that don't care about stats.
+// Compose runs the curated operational sources and merges their output.
+// Backward-compatible signature for callers that don't care about stats.
 func Compose(p Provider, f Filters) []Issue {
 	out, _ := ComposeWithStats(p, f)
 	return out
@@ -102,76 +87,41 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	out := make([]Issue, 0, 64)
 	now := time.Now()
 
+	// issues = "what's broken right now" — the curated operational
+	// sources, always composed. Raw Warning events live in get_events /
+	// the timeline; Kyverno / policy posture lives with audit/compliance;
+	// static best-practice findings live in audit. None of those belong in
+	// the live-failure stream, so they are deliberately NOT sources here.
+	// `source` survives only as an output label on each row (+ CEL filter),
+	// not as an input filter — detection provenance is not a triage axis.
+
 	// ---- Source: problem (radar's hardcoded checks) -----------------
-	if wantSource(f, SourceProblem) {
-		for _, p := range p.DetectProblems(f.Namespaces) {
-			out = append(out, fromProblem(p, now, SourceProblem))
-		}
-		for _, p := range p.DetectCAPIProblems(f.Namespaces) {
-			out = append(out, fromProblem(p, now, SourceProblem))
-		}
+	for _, p := range p.DetectProblems(f.Namespaces) {
+		out = append(out, fromProblem(p, now, SourceProblem))
+	}
+	for _, p := range p.DetectCAPIProblems(f.Namespaces) {
+		out = append(out, fromProblem(p, now, SourceProblem))
 	}
 
 	// ---- Source: missing_ref (dangling-ref detection) --------------
 	// Direct by-name reference targets that don't exist (Pod → missing
 	// PVC / CM / Secret / SA, HPA → missing scaleTargetRef, Ingress →
-	// missing backend Service, etc.). Same Problem shape as SourceProblem
-	// rows, separate Source so callers can filter "direct config errors"
-	// from "workload-state problems."
-	if wantSource(f, SourceMissingRef) {
-		for _, p := range p.DetectMissingRefs(f.Namespaces) {
-			out = append(out, fromProblem(p, now, SourceMissingRef))
-		}
+	// missing backend Service, etc.).
+	for _, p := range p.DetectMissingRefs(f.Namespaces) {
+		out = append(out, fromProblem(p, now, SourceMissingRef))
 	}
 
 	// ---- Source: scheduling (placement + admission + post-bind) -----
-	// Why a Pod can't run, decomposed: unschedulable (with the offending
-	// node label/taint named), admission-rejected (quota/PodSecurity/
-	// webhook — no Pod object exists), or stuck post-bind (CNI/volume).
-	// Default-on: high-signal operational state, not event noise.
-	if wantSource(f, SourceScheduling) {
-		for _, p := range p.DetectScheduling(f.Namespaces) {
-			out = append(out, fromProblem(p, now, SourceScheduling))
-		}
+	// Why a Pod can't reach Running, decomposed: unschedulable (with the
+	// offending node label/taint named), admission-rejected (quota/
+	// PodSecurity/webhook — no Pod object exists), or stuck post-bind
+	// (CNI/volume).
+	for _, p := range p.DetectScheduling(f.Namespaces) {
+		out = append(out, fromProblem(p, now, SourceScheduling))
 	}
 
 	// ---- Source: condition (generic CRD .status.conditions fallback) ----
-	if wantSource(f, SourceCondition) {
-		out = append(out, detectGenericCRDIssues(p, f)...)
-	}
-
-	// ---- Source: kyverno (PolicyReport findings) -------------------
-	// Off by default, mirroring audit. Kyverno emits findings per
-	// (policy, rule, subject) tuple and a baseline PSS profile alone
-	// produces 10+ rows per workload — surfacing them in the default
-	// Issue view would drown the operator-actionable signals. Opt in
-	// via IncludeKyverno or source=kyverno.
-	if f.IncludeKyverno && wantSource(f, SourceKyverno) {
-		for _, sf := range p.KyvernoFindings() {
-			if !subjectInNamespaces(sf.Subject, f.Namespaces) {
-				continue
-			}
-			for _, fin := range sf.Findings {
-				if issue, ok := fromKyverno(sf.Subject, fin, now); ok {
-					out = append(out, issue)
-				}
-			}
-		}
-	}
-
-	// ---- Source: event (recent K8s Warning events) -----------------
-	// Gated by IncludeEvents. Events are the noisiest source by far
-	// on real clusters (each broken Pod
-	// emits a Warning Event every few seconds, retained for the cache
-	// window) and almost always duplicate signal already surfaced by
-	// SourceProblem. Default-off keeps the Issue count aligned with
-	// the per-cluster "X problems" intuition; user opts in via
-	// include_events=true or by passing "event" in source=.
-	if f.IncludeEvents && wantSource(f, SourceEvent) {
-		for _, e := range p.WarningEvents(f.Namespaces, f.Since) {
-			out = append(out, fromWarningEvent(e))
-		}
-	}
+	out = append(out, detectGenericCRDIssues(p, f)...)
 
 	// Apply remaining filters (severity, kind, namespace) post-compose
 	// since each source has its own native filtering surface and
@@ -396,123 +346,9 @@ func fromProblem(p k8s.Problem, now time.Time, source Source) Issue {
 	}
 }
 
-// fromKyverno maps a single PolicyReport Finding into an Issue. The
-// second return is false when the finding's result is not a violation
-// we surface (pass / skip / unknown verdicts produce no Issue).
-//
-// Severity mapping is by Kyverno's `result` field — NOT by the report's
-// `severity` field. Rationale: `severity` is a free-form string set by
-// policy authors (e.g. "high", "medium", "low", or empty), inconsistent
-// across policies, and not aligned with the operator-actionable axis we
-// expose to consumers. The `result` enum is authoritative on whether
-// the engine considered the subject in violation, which is what the
-// Issue list represents.
-//
-//	fail  → SeverityCritical  (policy actively rejected the subject)
-//	warn  → SeverityWarning   (policy flagged but did not block)
-//	error → SeverityCritical  (engine could not evaluate; operator needs to know)
-//	pass / skip / other → omitted
-func fromKyverno(subj policyreports.Subject, fin policyreports.Finding, now time.Time) (Issue, bool) {
-	var sev Severity
-	switch strings.ToLower(fin.Result) {
-	case "fail", "error":
-		sev = SeverityCritical
-	case "warn":
-		sev = SeverityWarning
-	default:
-		return Issue{}, false
-	}
-	return Issue{
-		Severity:  sev,
-		Source:    SourceKyverno,
-		Kind:      subj.Kind,
-		Group:     subj.Group,
-		Namespace: subj.Namespace,
-		Name:      subj.Name,
-		Reason:    fin.Policy,
-		Message:   fin.Message,
-		FirstSeen: now,
-		LastSeen:  now,
-		Count:     1,
-	}, true
-}
-
-// subjectInNamespaces reports whether a Kyverno subject should pass the
-// namespace filter. Empty Namespaces means "all namespaces"; cluster-
-// scoped subjects (Namespace == "") always pass — they're gated later
-// by CanReadClusterScoped.
-func subjectInNamespaces(subj policyreports.Subject, namespaces []string) bool {
-	if len(namespaces) == 0 || subj.Namespace == "" {
-		return true
-	}
-	for _, ns := range namespaces {
-		if ns == subj.Namespace {
-			return true
-		}
-	}
-	return false
-}
-
-// fromWarningEvent maps a K8s Warning event to an Issue. Severity is
-// always `warning`; events don't ship a severity scale that maps cleanly
-// to our `critical` tier (a CrashLoopBackOff event coexists with the
-// problem-source `critical` Deployment issue, so we don't double-amplify).
-func fromWarningEvent(e *corev1.Event) Issue {
-	first := e.FirstTimestamp.Time
-	last := e.LastTimestamp.Time
-	if last.IsZero() {
-		last = e.EventTime.Time
-	}
-	if first.IsZero() {
-		first = last
-	}
-	// Event.InvolvedObject carries apiVersion (group/version); split out
-	// the group so cross-group consumers don't collide when a Knative
-	// Service and a core Service share name+ns.
-	group, _, _ := strings.Cut(e.InvolvedObject.APIVersion, "/")
-	if e.InvolvedObject.APIVersion != "" && !strings.Contains(e.InvolvedObject.APIVersion, "/") {
-		// "v1" → core group "".
-		group = ""
-	}
-	return Issue{
-		Severity:  SeverityWarning,
-		Source:    SourceEvent,
-		Kind:      e.InvolvedObject.Kind,
-		Group:     resolveGroup(group, e.InvolvedObject.Kind),
-		Namespace: e.Namespace,
-		Name:      e.InvolvedObject.Name,
-		Reason:    e.Reason,
-		Message:   e.Message,
-		FirstSeen: first,
-		LastSeen:  last,
-		Count:     int(e.Count),
-	}
-}
-
 // ---------------------------------------------------------------------------
 // Filter + sort helpers
 // ---------------------------------------------------------------------------
-
-// wantSource implements the documented `source=` contract: it is a FILTER,
-// not an additive opt-in. When Filters.Sources is empty, every source is
-// allowed (defaults are then narrowed elsewhere — e.g. event / kyverno
-// collection only runs when the matching IncludeX flag is set).
-// When Filters.Sources is non-empty, only the listed sources pass through;
-// passing source=kyverno therefore returns ONLY Kyverno rows, not
-// "defaults plus Kyverno". Callers that want "defaults plus X" should use
-// the include_X flags instead (the HTTP handler translates include_X=true
-// into both IncludeX=true AND leaves Sources empty, so the defaults stay).
-func wantSource(f Filters, s Source) bool {
-	if len(f.Sources) == 0 {
-		return true
-	}
-	for _, want := range f.Sources {
-		if want == s {
-			return true
-		}
-	}
-	return false
-}
 
 // dedupePodSchedulingOverProblem drops the generic problem-source row for a
 // Pod when the scheduling source emitted one for the same Pod. A pod stuck

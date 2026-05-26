@@ -46,18 +46,22 @@ type diagnoseResponse struct {
 	LogsError       string                           `json:"logsError,omitempty"`
 	Events          []aicontext.DeduplicatedEvent    `json:"events,omitempty"`
 	EventsError     string                           `json:"eventsError,omitempty"`
-	// Scheduling carries why the workload can't run when that's the failure
-	// mode: unschedulable pods (offending node constraint named), admission
-	// rejections (quota/PodSecurity/webhook — where no Pod is created), or
-	// post-bind CNI/volume stalls. Empty when the workload schedules fine.
-	Scheduling []schedulingFinding `json:"scheduling,omitempty"`
-	Pods       int                 `json:"pods"`
-	NarrowHint string              `json:"narrowHint,omitempty"`
+	// StartupBlockers carries why the workload can't reach Running when that's
+	// the failure mode, spanning the whole pre-Running path: unschedulable pods
+	// (offending node constraint named), admission rejections (quota/
+	// PodSecurity/webhook — where no Pod is created), or post-bind CNI/volume
+	// stalls. Empty when the workload starts fine. Named for the symptom
+	// ("can't start"), not the subsystem — "scheduling" alone would mislead,
+	// since it also covers admission and post-bind.
+	StartupBlockers []startupBlocker `json:"startupBlockers,omitempty"`
+	Pods            int              `json:"pods"`
+	NarrowHint      string           `json:"narrowHint,omitempty"`
 }
 
-// schedulingFinding is the compact scheduling row diagnose embeds — the same
-// signal the `scheduling` issue source emits, scoped to this workload.
-type schedulingFinding struct {
+// startupBlocker is the compact row diagnose embeds for one reason a workload
+// can't reach Running — the same signal the issues tool emits, scoped here to
+// this workload (bind-time, admission, or post-bind).
+type startupBlocker struct {
 	Kind     string `json:"kind"`
 	Name     string `json:"name"`
 	Reason   string `json:"reason"`
@@ -210,17 +214,17 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 		resp.EventsError = eventsErr.Error()
 	}
 
-	resp.Scheduling = schedulingFindingsForWorkload(cache, kindNorm, input.Namespace, input.Name, pods)
+	resp.StartupBlockers = startupBlockersForWorkload(cache, kindNorm, input.Namespace, input.Name, pods)
 	return toJSONResult(resp)
 }
 
-// schedulingFindingsForWorkload runs the scheduling detectors over the
-// namespace and keeps the rows relevant to this workload: its own pods
-// (bind-time / post-bind), the workload or its ReplicaSet (admission
-// FailedCreate), and any ResourceQuota in the namespace (a saturated quota
-// is exactly why the workload can't create more pods — high-signal context
-// even though it's namespace-scoped).
-func schedulingFindingsForWorkload(cache *k8s.ResourceCache, kind, namespace, name string, pods []*corev1.Pod) []schedulingFinding {
+// startupBlockersForWorkload runs the pre-Running detectors over the namespace
+// and keeps the rows relevant to THIS workload: its own pods (bind-time /
+// post-bind) and admission FailedCreate on the workload or its ReplicaSet.
+// Namespace-scoped findings that aren't tied to this workload (the prior
+// blanket "any ResourceQuota" case) are deliberately excluded — attaching a
+// namespace's quota state to an unrelated workload over-attributes failures.
+func startupBlockersForWorkload(cache *k8s.ResourceCache, kind, namespace, name string, pods []*corev1.Pod) []startupBlocker {
 	all := k8s.DetectSchedulingProblems(cache, namespace)
 	all = append(all, k8s.DetectAdmissionProblems(cache, namespace)...)
 	all = append(all, k8s.DetectPostBindProblems(cache, namespace)...)
@@ -234,13 +238,11 @@ func schedulingFindingsForWorkload(cache *k8s.ResourceCache, kind, namespace, na
 	}
 	dispKind := normalizeDisplayKind(kind)
 
-	var out []schedulingFinding
+	var out []startupBlocker
 	for _, p := range all {
 		relevant := false
 		switch {
 		case p.Kind == "Pod" && podNames[p.Name]:
-			relevant = true
-		case p.Kind == "ResourceQuota":
 			relevant = true
 		case p.Kind == dispKind && p.Name == name:
 			relevant = true // FailedCreate on the workload itself (StatefulSet/DaemonSet)
@@ -250,7 +252,7 @@ func schedulingFindingsForWorkload(cache *k8s.ResourceCache, kind, namespace, na
 		if !relevant {
 			continue
 		}
-		out = append(out, schedulingFinding{
+		out = append(out, startupBlocker{
 			Kind:     p.Kind,
 			Name:     p.Name,
 			Reason:   p.Reason,

@@ -63,9 +63,7 @@ const (
 	SourceProblem    Source = "problem"     // radar's hardcoded per-kind detection
 	SourceMissingRef Source = "missing_ref" // dangling-ref detection (Pod→missing PVC/CM/Secret/SA, HPA→missing target, Ingress→missing backend, etc.)
 	SourceScheduling Source = "scheduling"  // placement/admission/post-bind failures (unschedulable, quota/PodSecurity/webhook, CNI/volume)
-	SourceEvent      Source = "event"       // K8s Warning events (recent)
 	SourceCondition  Source = "condition"   // generic CRD .status.conditions[].status=False fallback
-	SourceKyverno    Source = "kyverno"     // Kyverno PolicyReport findings (opt-in)
 )
 
 // Ref is a lightweight resource reference, used for owner pointers.
@@ -112,33 +110,13 @@ type Issue struct {
 type Filters struct {
 	Namespaces []string
 	Severities []Severity
-	Sources    []Source
 	Kinds      []string
-	// Since restricts event-source issues to this lookback window.
-	// Other sources are always current-snapshot, so this only affects
-	// SourceEvent. Zero means "no time restriction" (all cached events).
-	Since time.Duration
 	// Limit caps the returned slice. Zero means default (200).
 	Limit int
-	// IncludeEvents defaults to false. Warning events are the noisiest
-	// source by an order of magnitude — a single broken Pod emits a
-	// FailedScheduling / BackOff / etc. Event every few seconds, and
-	// the event informer retains them for the cache window (default 1h+).
-	// On a multi-thousand-Pod cluster this floods the Issue list with
-	// rows that mostly duplicate `problem` source (a CrashLoopBackOff
-	// Pod already shows up under SourceProblem). Treat events as opt-in;
-	// when enabled the caller should also pass a Since window (handler
-	// defaults to 1h when events are on and Since is zero).
-	IncludeEvents bool
-	// IncludeKyverno defaults to false. Kyverno PolicyReport findings
-	// are loud (a baseline cluster-pss profile alone emits 10+ findings
-	// per workload) and the default Issue view should not be dominated
-	// by best-practice/policy noise. Opt in via include_kyverno=true
-	// or by passing "kyverno" in the source list.
-	IncludeKyverno bool
 	// Filter is an optional compiled CEL predicate evaluated against
-	// each composed Issue's row bindings. Compile happens in the
-	// handler (and is cached); this layer just runs the program.
+	// each composed Issue's row bindings (source is exposed there, so a
+	// power user can still slice by detection method). Compile happens in
+	// the handler (and is cached); this layer just runs the program.
 	Filter *CELFilter
 	// CanReadClusterScoped authorizes cluster-scoped Issue rows before
 	// they are returned. Handlers provide a per-user SAR-backed predicate;

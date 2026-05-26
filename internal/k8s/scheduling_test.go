@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 )
 
 func TestParseSchedulerMessage_TotalNodesAndPreemptionTail(t *testing.T) {
@@ -311,32 +310,6 @@ func TestClassifyPostBindFailure(t *testing.T) {
 		if ok != c.ok || got != c.want {
 			t.Errorf("classifyPostBindFailure(%q, %.40q) = %q,%v want %q,%v", c.reason, c.msg, got, ok, c.want, c.ok)
 		}
-	}
-}
-
-func TestQuotaWorstResource(t *testing.T) {
-	q := &corev1.ResourceQuota{Status: corev1.ResourceQuotaStatus{
-		Hard: corev1.ResourceList{
-			"limits.memory": resource.MustParse("2Gi"),
-			"limits.cpu":    resource.MustParse("4"),
-		},
-		Used: corev1.ResourceList{
-			"limits.memory": resource.MustParse("2Gi"), // 100%
-			"limits.cpu":    resource.MustParse("1"),   // 25%
-		},
-	}}
-	w := quotaWorstResource(q)
-	if w.resource != "limits.memory" || w.ratio < 0.999 {
-		t.Fatalf("worst = %+v, want limits.memory at ~100%%", w)
-	}
-
-	// A quota with hard=0 for a resource must not divide-by-zero / falsely saturate.
-	q2 := &corev1.ResourceQuota{Status: corev1.ResourceQuotaStatus{
-		Hard: corev1.ResourceList{"pods": resource.MustParse("0")},
-		Used: corev1.ResourceList{"pods": resource.MustParse("0")},
-	}}
-	if w := quotaWorstResource(q2); w.ratio != 0 {
-		t.Errorf("hard=0 should yield ratio 0, got %+v", w)
 	}
 }
 

@@ -2,46 +2,30 @@ package issues
 
 import (
 	"testing"
-	"time"
-
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
 // Filter integration tests — exercise ComposeWithStats with a compiled
-// CEL filter, covering match/drop, eval-error stats, and the source-
+// CEL filter, covering match/drop, eval-error stats, and the
 // post-filter ordering invariant that limit applies last.
 
-func TestCompose_WithCELFilter_FiltersByCount(t *testing.T) {
-	// Mix of low-count problems and high-count events; `count > 5`
-	// should keep only the events.
-	now := time.Now()
+func TestCompose_WithCELFilter_MatchesAndDrops(t *testing.T) {
+	// Two problem rows; a reason predicate should keep only the match.
 	p := &fakeProvider{
 		problems: []k8s.Problem{
-			{Kind: "Pod", Name: "p1", Severity: "critical", Reason: "x"},
-		},
-		events: []*corev1.Event{
-			{
-				ObjectMeta:     metav1.ObjectMeta{Namespace: "ns", Name: "evt-1"},
-				InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "evt-pod"},
-				Reason:         "BackOff",
-				Type:           corev1.EventTypeWarning,
-				FirstTimestamp: metav1.Time{Time: now.Add(-2 * time.Minute)},
-				LastTimestamp:  metav1.Time{Time: now.Add(-1 * time.Minute)},
-				Count:          10,
-			},
+			{Kind: "Pod", Namespace: "ns", Name: "crash", Severity: "critical", Reason: "CrashLoopBackOff"},
+			{Kind: "Pod", Namespace: "ns", Name: "oom", Severity: "critical", Reason: "OOMKilled"},
 		},
 	}
-	f, err := filter.CompileIssueFilter(`count > 5`)
+	f, err := filter.CompileIssueFilter(`reason == "OOMKilled"`)
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, stats := ComposeWithStats(p, Filters{Filter: f, IncludeEvents: true})
-	if len(out) != 1 || out[0].Name != "evt-pod" {
-		t.Fatalf("expected single event-source hit, got %+v", out)
+	out, stats := ComposeWithStats(p, Filters{Filter: f})
+	if len(out) != 1 || out[0].Name != "oom" {
+		t.Fatalf("expected single OOMKilled hit, got %+v", out)
 	}
 	if stats.FilterErrors != 0 {
 		t.Errorf("clean filter, expected no eval errors, got %d", stats.FilterErrors)

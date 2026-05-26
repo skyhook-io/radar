@@ -2,17 +2,13 @@ package issues
 
 import (
 	"sort"
-	"strings"
 	"testing"
 	"time"
 
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
-	"github.com/skyhook-io/radar/pkg/policyreports"
 )
 
 // fakeProvider — minimal Provider for unit testing. Each field
@@ -23,21 +19,15 @@ type fakeProvider struct {
 	missingRefs  []k8s.Problem
 	scheduling   []k8s.Problem
 	capiProblems []k8s.Problem
-	events       []*corev1.Event
 	dynamic      map[schema.GroupVersionResource][]*unstructured.Unstructured
 	kinds        map[schema.GroupVersionResource]string
 	namespaced   map[schema.GroupVersionResource]bool
-	kyverno      []policyreports.SubjectFindings
-	kyvernoStat  string
 }
 
 func (f *fakeProvider) DetectProblems(_ []string) []k8s.Problem     { return f.problems }
 func (f *fakeProvider) DetectMissingRefs(_ []string) []k8s.Problem  { return f.missingRefs }
 func (f *fakeProvider) DetectScheduling(_ []string) []k8s.Problem   { return f.scheduling }
 func (f *fakeProvider) DetectCAPIProblems(_ []string) []k8s.Problem { return f.capiProblems }
-func (f *fakeProvider) WarningEvents(_ []string, _ time.Duration) []*corev1.Event {
-	return f.events
-}
 func (f *fakeProvider) WatchedDynamic() []schema.GroupVersionResource {
 	out := make([]schema.GroupVersionResource, 0, len(f.dynamic))
 	for g := range f.dynamic {
@@ -54,12 +44,6 @@ func (f *fakeProvider) KindForGVR(gvr schema.GroupVersionResource) string {
 func (f *fakeProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool) {
 	namespaced, ok := f.namespaced[gvr]
 	return namespaced, ok
-}
-func (f *fakeProvider) KyvernoFindings() []policyreports.SubjectFindings {
-	return f.kyverno
-}
-func (f *fakeProvider) KyvernoStatus() string {
-	return f.kyvernoStat
 }
 
 func TestCompose_NormalizesProblemSeverity(t *testing.T) {
@@ -80,37 +64,6 @@ func TestCompose_NormalizesProblemSeverity(t *testing.T) {
 	}
 	if bySev[SeverityCritical] != 1 || bySev[SeverityWarning] != 2 {
 		t.Fatalf("severity normalization wrong: %+v", bySev)
-	}
-}
-
-func TestCompose_WarningEventsIncluded(t *testing.T) {
-	now := time.Now()
-	p := &fakeProvider{
-		events: []*corev1.Event{
-			{
-				ObjectMeta:     metav1.ObjectMeta{Namespace: "ns", Name: "evt-1"},
-				InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "p"},
-				Reason:         "FailedMount",
-				Message:        "could not mount volume",
-				Type:           corev1.EventTypeWarning,
-				FirstTimestamp: metav1.Time{Time: now.Add(-2 * time.Minute)},
-				LastTimestamp:  metav1.Time{Time: now.Add(-1 * time.Minute)},
-				Count:          5,
-			},
-		},
-	}
-	// Events are opt-in; IncludeEvents=true is required to surface them
-	// from Compose. The default-off behavior is covered separately by
-	// TestCompose_EventsExcludedByDefault.
-	out := Compose(p, Filters{IncludeEvents: true})
-	if len(out) != 1 {
-		t.Fatalf("got %d issues", len(out))
-	}
-	if out[0].Source != SourceEvent {
-		t.Fatalf("expected source=event, got %s", out[0].Source)
-	}
-	if out[0].Count != 5 {
-		t.Fatalf("count not propagated: %d", out[0].Count)
 	}
 }
 
@@ -162,28 +115,7 @@ func TestCompose_PodSchedulingWinsOverProblem(t *testing.T) {
 	}
 }
 
-func TestCompose_EventsExcludedByDefault(t *testing.T) {
-	// The default Compose call must NOT surface warning events. Pins
-	// the opt-in contract so a future refactor doesn't silently
-	// re-enable the event flood on noisy clusters.
-	now := time.Now()
-	p := &fakeProvider{
-		events: []*corev1.Event{{
-			ObjectMeta:     metav1.ObjectMeta{Namespace: "ns", Name: "evt-1"},
-			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Name: "p"},
-			Reason:         "FailedMount",
-			Type:           corev1.EventTypeWarning,
-			LastTimestamp:  metav1.Time{Time: now},
-			Count:          1,
-		}},
-	}
-	out := Compose(p, Filters{})
-	if len(out) != 0 {
-		t.Fatalf("event leaked through default Compose: %+v", out)
-	}
-}
-
-func TestCompose_SchedulingDefaultAndSourceFilter(t *testing.T) {
+func TestCompose_SchedulingComposedByDefault(t *testing.T) {
 	countSource := func(in []Issue, s Source) int {
 		n := 0
 		for _, i := range in {
@@ -202,20 +134,15 @@ func TestCompose_SchedulingDefaultAndSourceFilter(t *testing.T) {
 		},
 	}
 
-	// scheduling is default-on (no Sources filter).
+	// Both curated sources compose unconditionally; each row carries its
+	// source label for CEL/UI grouping.
 	out := Compose(p, Filters{})
 	if countSource(out, SourceScheduling) != 1 || countSource(out, SourceProblem) != 1 {
-		t.Fatalf("default Compose should include problem + scheduling, got %+v", out)
-	}
-
-	// source=scheduling returns only scheduling rows.
-	out = Compose(p, Filters{Sources: []Source{SourceScheduling}})
-	if len(out) != 1 || out[0].Source != SourceScheduling || out[0].Reason != "Unschedulable" {
-		t.Fatalf("source=scheduling should return only scheduling rows, got %+v", out)
+		t.Fatalf("Compose should include problem + scheduling, got %+v", out)
 	}
 }
 
-func TestCompose_MissingRefsDefaultAndSourceFilter(t *testing.T) {
+func TestCompose_MissingRefsComposedByDefault(t *testing.T) {
 	p := &fakeProvider{
 		problems: []k8s.Problem{
 			{Kind: "Service", Namespace: "prod", Name: "api", Severity: "warning", Reason: "Selector matches no pods"},
@@ -227,17 +154,7 @@ func TestCompose_MissingRefsDefaultAndSourceFilter(t *testing.T) {
 
 	out := Compose(p, Filters{})
 	if !hasIssueSource(out, SourceProblem) || !hasIssueSource(out, SourceMissingRef) {
-		t.Fatalf("default Compose should include problem + missing_ref, got %+v", out)
-	}
-
-	out = Compose(p, Filters{Sources: []Source{SourceMissingRef}})
-	if len(out) != 1 || out[0].Source != SourceMissingRef || out[0].Reason != "Missing PVC" {
-		t.Fatalf("source=missing_ref should return only missing refs, got %+v", out)
-	}
-
-	out = Compose(p, Filters{Sources: []Source{SourceProblem}})
-	if len(out) != 1 || out[0].Source != SourceProblem || out[0].Reason != "Selector matches no pods" {
-		t.Fatalf("source=problem should exclude missing refs, got %+v", out)
+		t.Fatalf("Compose should include problem + missing_ref, got %+v", out)
 	}
 }
 
@@ -298,7 +215,7 @@ func TestCompose_CAPIGroupSkippedByGenericFallback(t *testing.T) {
 		dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {cl}},
 		kinds:   map[schema.GroupVersionResource]string{gvr: "Cluster"},
 	}
-	out := Compose(p, Filters{Sources: []Source{SourceCondition}})
+	out := Compose(p, Filters{})
 	if len(out) != 0 {
 		t.Fatalf("CAPI should be skipped by generic fallback: %+v", out)
 	}
@@ -345,7 +262,6 @@ func TestCompose_DropsUnauthorizedClusterScopedCRDConditions(t *testing.T) {
 		namespaced: map[schema.GroupVersionResource]bool{gvr: false},
 	}
 	out := Compose(p, Filters{
-		Sources: []Source{SourceCondition},
 		CanReadClusterScoped: func(kind, group string) bool {
 			if kind != "NodePool" || group != "karpenter.sh" {
 				t.Fatalf("unexpected cluster-scoped check: kind=%q group=%q", kind, group)
@@ -355,221 +271,6 @@ func TestCompose_DropsUnauthorizedClusterScopedCRDConditions(t *testing.T) {
 	})
 	if len(out) != 0 {
 		t.Fatalf("cluster-scoped CRD condition leaked despite denied access: %+v", out)
-	}
-}
-
-func TestCompose_KyvernoExcludedByDefault(t *testing.T) {
-	p := &fakeProvider{
-		kyverno: []policyreports.SubjectFindings{{
-			Subject: policyreports.Subject{Kind: "Pod", Namespace: "prod", Name: "web"},
-			Findings: []policyreports.Finding{
-				{Policy: "require-resource-limits", Result: "fail", Message: "missing cpu limit"},
-			},
-		}},
-	}
-	out := Compose(p, Filters{})
-	for _, i := range out {
-		if i.Source == SourceKyverno {
-			t.Fatalf("kyverno should be excluded by default, got: %+v", i)
-		}
-	}
-}
-
-func TestCompose_KyvernoIncludedWhenOptedIn(t *testing.T) {
-	p := &fakeProvider{
-		kyverno: []policyreports.SubjectFindings{{
-			Subject: policyreports.Subject{Kind: "Pod", Namespace: "prod", Name: "web"},
-			Findings: []policyreports.Finding{
-				{Policy: "require-resource-limits", Result: "fail", Message: "missing cpu limit"},
-			},
-		}},
-	}
-	out := Compose(p, Filters{IncludeKyverno: true})
-	if len(out) != 1 {
-		t.Fatalf("got %d issues, want 1: %+v", len(out), out)
-	}
-	got := out[0]
-	if got.Source != SourceKyverno {
-		t.Fatalf("source: %s", got.Source)
-	}
-	if got.Severity != SeverityCritical {
-		t.Fatalf("fail should map to critical, got %s", got.Severity)
-	}
-	if got.Kind != "Pod" || got.Namespace != "prod" || got.Name != "web" {
-		t.Fatalf("subject not propagated: %+v", got)
-	}
-	if got.Reason != "require-resource-limits" {
-		t.Fatalf("reason should be policy name, got %q", got.Reason)
-	}
-	if got.Message != "missing cpu limit" {
-		t.Fatalf("message not propagated: %q", got.Message)
-	}
-	if got.Count != 1 {
-		t.Fatalf("count should be 1, got %d", got.Count)
-	}
-}
-
-func TestCompose_KyvernoSeverityMapping(t *testing.T) {
-	// fail/error → critical, warn → warning, pass/skip → omitted.
-	p := &fakeProvider{
-		kyverno: []policyreports.SubjectFindings{{
-			Subject: policyreports.Subject{Kind: "Pod", Namespace: "ns", Name: "p"},
-			Findings: []policyreports.Finding{
-				{Policy: "p1", Rule: "r1", Result: "fail", Message: "fail msg"},
-				{Policy: "p2", Rule: "r2", Result: "warn", Message: "warn msg"},
-				{Policy: "p3", Rule: "r3", Result: "error", Message: "error msg"},
-				{Policy: "p4", Rule: "r4", Result: "pass", Message: "pass msg"},
-				{Policy: "p5", Rule: "r5", Result: "skip", Message: "skip msg"},
-			},
-		}},
-	}
-	out := Compose(p, Filters{IncludeKyverno: true})
-	bySev := map[Severity]int{}
-	for _, i := range out {
-		bySev[i.Severity]++
-	}
-	if bySev[SeverityCritical] != 2 {
-		t.Fatalf("expected 2 critical (fail+error), got %d: %+v", bySev[SeverityCritical], out)
-	}
-	if bySev[SeverityWarning] != 1 {
-		t.Fatalf("expected 1 warning, got %d: %+v", bySev[SeverityWarning], out)
-	}
-	// pass + skip must not appear.
-	for _, i := range out {
-		if strings.Contains(i.Message, "pass msg") || strings.Contains(i.Message, "skip msg") {
-			t.Fatalf("pass/skip leaked into issues: %+v", i)
-		}
-	}
-}
-
-func TestCompose_KyvernoNamespaceFilter(t *testing.T) {
-	p := &fakeProvider{
-		kyverno: []policyreports.SubjectFindings{
-			{
-				Subject:  policyreports.Subject{Kind: "Pod", Namespace: "prod", Name: "web"},
-				Findings: []policyreports.Finding{{Policy: "p1", Result: "fail"}},
-			},
-			{
-				Subject:  policyreports.Subject{Kind: "Pod", Namespace: "dev", Name: "api"},
-				Findings: []policyreports.Finding{{Policy: "p2", Result: "fail"}},
-			},
-			{
-				// Cluster-scoped: namespace filter must NOT drop this.
-				Subject:  policyreports.Subject{Kind: "ClusterRole", Namespace: "", Name: "admin"},
-				Findings: []policyreports.Finding{{Policy: "p3", Result: "warn"}},
-			},
-		},
-	}
-	out := Compose(p, Filters{
-		IncludeKyverno: true,
-		Namespaces:     []string{"prod"},
-	})
-	gotByName := map[string]bool{}
-	for _, i := range out {
-		gotByName[i.Name] = true
-	}
-	if !gotByName["web"] {
-		t.Fatalf("prod/web should appear: %+v", out)
-	}
-	if gotByName["api"] {
-		t.Fatalf("dev/api should be filtered out: %+v", out)
-	}
-	if !gotByName["admin"] {
-		t.Fatalf("cluster-scoped subject should pass namespace filter: %+v", out)
-	}
-}
-
-func TestCompose_KyvernoNilFindingsGraceful(t *testing.T) {
-	// PolicyReport index returns nil when Kyverno is not installed —
-	// that's the common case and must not produce issues or errors.
-	p := &fakeProvider{kyverno: nil}
-	out := Compose(p, Filters{IncludeKyverno: true})
-	for _, i := range out {
-		if i.Source == SourceKyverno {
-			t.Fatalf("nil findings should not produce kyverno issues: %+v", i)
-		}
-	}
-}
-
-// TestCompose_KyvernoGroupPropagated pins that fromKyverno wires the
-// Subject.Group into Issue.Group. Without this, agents and the SPA can't
-// tell which CRD a finding belongs to when the Kind is ambiguous (e.g.
-// argoproj.io/Application vs another vendor's Application), and the
-// SAR-backed CanReadClusterScoped check would query the wrong group.
-func TestCompose_KyvernoGroupPropagated(t *testing.T) {
-	p := &fakeProvider{
-		kyverno: []policyreports.SubjectFindings{
-			{
-				Subject: policyreports.Subject{
-					Group:     "argoproj.io",
-					Kind:      "Application",
-					Namespace: "prod",
-					Name:      "myapp",
-				},
-				Findings: []policyreports.Finding{
-					{Policy: "no-sync-loop", Result: "fail", Message: "sync loop"},
-				},
-			},
-			{
-				// Core kind: empty group must pass through (not silently
-				// replaced with anything else).
-				Subject: policyreports.Subject{
-					Group:     "",
-					Kind:      "Pod",
-					Namespace: "prod",
-					Name:      "web",
-				},
-				Findings: []policyreports.Finding{
-					{Policy: "require-resource-limits", Result: "fail"},
-				},
-			},
-		},
-	}
-	out := Compose(p, Filters{IncludeKyverno: true})
-	if len(out) != 2 {
-		t.Fatalf("expected 2 issues, got %d: %+v", len(out), out)
-	}
-	byKind := map[string]Issue{}
-	for _, i := range out {
-		byKind[i.Kind] = i
-	}
-	if app, ok := byKind["Application"]; !ok || app.Group != "argoproj.io" {
-		t.Errorf("Application Group not propagated: %+v", app)
-	}
-	if pod, ok := byKind["Pod"]; !ok || pod.Group != "" {
-		t.Errorf("Pod Group should be empty: %+v", pod)
-	}
-}
-
-func TestCompose_KyvernoSourceListNarrowsButDoesNotOptIn(t *testing.T) {
-	// Pins the documented contract: `Sources` is a FILTER, not an
-	// additive opt-in. The list narrows the response to the named
-	// sources but does NOT enable collection of noisy sources —
-	// IncludeKyverno (set by the HTTP/MCP handlers) is what gates
-	// kyverno emission. With Sources={kyverno} and IncludeKyverno=false
-	// the response is empty. With IncludeKyverno=true the response is
-	// kyverno-only (problem source is filtered out because it isn't in
-	// Sources) — i.e. source=kyverno returns ONLY kyverno rows, not
-	// "defaults plus kyverno".
-	p := &fakeProvider{
-		kyverno: []policyreports.SubjectFindings{{
-			Subject:  policyreports.Subject{Kind: "Pod", Namespace: "ns", Name: "p"},
-			Findings: []policyreports.Finding{{Policy: "p1", Result: "fail"}},
-		}},
-		problems: []k8s.Problem{
-			{Kind: "Pod", Namespace: "ns", Name: "p", Severity: "critical", Reason: "x"},
-		},
-	}
-	// Sources={kyverno} but IncludeKyverno=false → no kyverno emission,
-	// and problem source filtered out → empty.
-	out := Compose(p, Filters{Sources: []Source{SourceKyverno}})
-	if len(out) != 0 {
-		t.Fatalf("expected 0 issues without IncludeKyverno, got %+v", out)
-	}
-	// With IncludeKyverno=true and Sources={kyverno} → only kyverno.
-	out = Compose(p, Filters{Sources: []Source{SourceKyverno}, IncludeKyverno: true})
-	if len(out) != 1 || out[0].Source != SourceKyverno {
-		t.Fatalf("expected only kyverno, got %+v", out)
 	}
 }
 

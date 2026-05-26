@@ -161,9 +161,9 @@ func registerTools(server *mcp.Server) {
 			"resourceContext (managedBy, exposes, selectedBy, uses, runsOn, " +
 			"issue/audit/policy rollups) + current AND previous container logs across the " +
 			"workload's pods + recent Warning events filtered to this resource + a " +
-			"schedulability section when the workload can't run (unschedulable with the " +
-			"offending node constraint named, admission/quota rejection, or a post-bind " +
-			"CNI/volume stall). Use for " +
+			"startupBlockers section when the workload can't reach Running (unschedulable " +
+			"with the offending node constraint named, admission/quota rejection, or a " +
+			"post-bind CNI/volume stall). Use for " +
 			"CrashLoopBackOff, OOMKills, failed deploys, image-pull errors, readiness " +
 			"flaps, scheduling failures, error-spewing services, or any workload " +
 			"root-causing where you would otherwise call get_resource → events → " +
@@ -273,24 +273,20 @@ func registerTools(server *mcp.Server) {
 		Description: "Use when the agent's decision is 'what's broken right now?' — LIVE " +
 			"OPERATIONAL STATE, not config posture. Returns a ranked list of currently " +
 			"failing resources: failing Deployments/StatefulSets/CronJobs/HPAs/Nodes/Jobs/" +
-			"PVCs (problem source), dangling-reference errors like Pod→missing PVC/CM/" +
-			"Secret/SA, HPA→missing scaleTargetRef, Ingress→missing backend Service, " +
-			"RoleBinding→missing Role, webhook→missing Service (missing_ref source), " +
-			"why a Pod can't run — unschedulable (arch/taint/resources/affinity), " +
-			"admission-rejected (quota/PodSecurity/webhook), or stuck post-bind " +
-			"(CNI/volume) (scheduling source), " +
-			"False .status.conditions on CRDs from Argo/Flux/Knative/Crossplane/" +
-			"cert-manager/KEDA (condition source), recent K8s Warning events (event " +
-			"source, opt-in), Kyverno PolicyReport policy violations (kyverno source, " +
-			"opt-in). Severity normalized to critical/warning. Defaults: problem + " +
-			"missing_ref + scheduling + condition. event and kyverno are opt-in because they run " +
-			"50–1000+ rows per cluster. For STATIC best-practice / security-posture / " +
-			"compliance findings (runAsRoot, missing PDB, no probes, missing resource " +
-			"limits, etc.), use get_cluster_audit — that's a separate axis and the two " +
-			"should never be conflated (a healthy pod can have many audit findings; a " +
-			"crashing pod can have zero). The `source` param is a FILTER: source=kyverno " +
-			"returns ONLY Kyverno rows. To ADD an opt-in source to the defaults, list " +
-			"everything explicitly — e.g. source=problem,missing_ref,scheduling,condition,kyverno. " +
+			"PVCs, dangling-reference errors like Pod→missing PVC/CM/Secret/SA, HPA→missing " +
+			"scaleTargetRef, Ingress→missing backend Service, RoleBinding→missing Role, " +
+			"webhook→missing Service, pod startup blockers — why a Pod can't reach Running: " +
+			"unschedulable (arch/taint/resources/affinity), admission-rejected " +
+			"(quota/PodSecurity/webhook), or stuck post-bind (CNI/volume), and False " +
+			".status.conditions on CRDs from Argo/Flux/Knative/Crossplane/cert-manager/KEDA. " +
+			"Severity normalized to critical/warning. This is one curated stream — there is " +
+			"no source filter; each row carries a `source` label (problem|missing_ref|" +
+			"scheduling|condition) you can slice on via the CEL filter= if needed. " +
+			"For raw Kubernetes Warning events use get_events; for static best-practice / " +
+			"security-posture / compliance findings (runAsRoot, missing PDB, no probes, " +
+			"missing resource limits, Kyverno policy violations) use get_cluster_audit — a " +
+			"separate axis that must never be conflated (a healthy pod can have many audit " +
+			"findings; a crashing pod can have zero). " +
 			"After identifying a suspect issue, call diagnose when the affected resource " +
 			"is a workload (Pod/Deployment/StatefulSet/DaemonSet) — it bundles spec + " +
 			"logs + events + context in one call. For non-workload kinds, call " +
@@ -433,7 +429,7 @@ type getResourceInput struct {
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. cluster.x-k8s.io for CAPI Cluster vs CNPG Cluster)"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
-	Include   string `json:"include,omitempty" jsonschema:"optional sidecar data after narrowing to this object: events, metrics, logs. Separate from context; include may fetch heavier live/derived data."`
+	Include   string `json:"include,omitempty" jsonschema:"optional sidecar data after narrowing to this object: events, metrics. Separate from context. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
 	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches managedBy / exposes / selectedBy / uses / runsOn / issueSummary / auditSummary rollups) or 'none' (bare minified resource). For full diagnostic tier with logs + events bundled, use the diagnose tool instead."`
 }
 
@@ -479,11 +475,9 @@ type searchInput struct {
 type issuesInput struct {
 	Namespace string `json:"namespace,omitempty" jsonschema:"filter to one namespace"`
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical,warning"`
-	Source    string `json:"source,omitempty" jsonschema:"comma-separated list of LIVE operational sources to RETURN: problem,missing_ref,scheduling,event,condition,kyverno. Acts as a FILTER, not an additive opt-in — when set, only the listed sources appear in the response. Default (omitted): problem+missing_ref+scheduling+condition (event + kyverno excluded because each is loud: events flood thousands per cluster and mostly duplicate problem-source rows; Kyverno PolicyReports typically 10+ rows per workload under a baseline PSS profile). missing_ref surfaces dangling-reference errors (Pod→missing PVC/CM/Secret/SA, HPA→missing target, Ingress→missing backend, RoleBinding→missing roleRef, webhook→missing Service). scheduling surfaces why a Pod can't run — unschedulable (insufficient resources, untolerated taint, or node affinity/selector mismatch with the offending node label named, e.g. kubernetes.io/arch=arm64), admission-rejected (ResourceQuota/LimitRange/PodSecurity/webhook, where no Pod is even created), or stuck post-bind (CNI IP exhaustion, volume attach/mount). Examples: source='kyverno' returns ONLY Kyverno rows (no problems, no missing_refs, no scheduling, no conditions); source='problem,missing_ref,scheduling,condition,kyverno' returns the defaults plus Kyverno. Static best-practice/security-posture audit findings are intentionally not a source here; use get_cluster_audit."`
 	Kind      string `json:"kind,omitempty" jsonschema:"comma-separated kind filter (e.g. Deployment,Pod)"`
-	Since     string `json:"since,omitempty" jsonschema:"event lookback window, e.g. 15m or 1h. Only affects the event source; when events are enabled and since is omitted, defaults to 1h to avoid pulling the full event-cache backlog."`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max issues returned (default 200, max 1000)"`
-	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity, source, kind, group, ns (the namespace — note: use 'ns' not 'namespace' because the latter is a CEL reserved word), name, reason, message, count (int), cluster, last_seen (unix seconds). Examples: 'severity == \"critical\" && count > 5', 'source == \"condition\" && ns.startsWith(\"prod-\")'"`
+	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity, source (the detector that found it: problem|missing_ref|scheduling|condition), kind, group, ns (the namespace — note: use 'ns' not 'namespace' because the latter is a CEL reserved word), name, reason, message, count (int), cluster, last_seen (unix seconds). Examples: 'severity == \"critical\" && count > 5', 'source == \"condition\" && ns.startsWith(\"prod-\")'"`
 }
 
 // Tool handlers
@@ -985,31 +979,6 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 		}
 	}
 
-	if includes["logs"] {
-		if isPodKind(kind) {
-			client := k8s.ClientFromContext(ctx)
-			if client == nil {
-				result["logsError"] = "no kube client in request context"
-			} else {
-				tailLines := int64(100)
-				opts := &corev1.PodLogOptions{TailLines: &tailLines}
-				stream, err := client.CoreV1().Pods(namespace).GetLogs(name, opts).Stream(ctx)
-				if err != nil {
-					log.Printf("[mcp] Failed to get logs for %s/%s: %v", namespace, name, err)
-					result["logsError"] = fmt.Sprintf("failed to open log stream: %v", err)
-				} else {
-					defer stream.Close()
-					data, readErr := io.ReadAll(stream)
-					if readErr != nil {
-						log.Printf("[mcp] Failed to read logs for %s/%s: %v", namespace, name, readErr)
-						result["logsError"] = fmt.Sprintf("failed to read log stream: %v", readErr)
-					} else {
-						result["logs"] = aicontext.FilterLogs(string(data))
-					}
-				}
-			}
-		}
-	}
 }
 
 // normalizeDisplayKind converts a lowercase kind to its display form for matching
@@ -2300,13 +2269,8 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	if err != nil {
 		return nil, nil, err
 	}
-	sources, err := issues.ParseSources(input.Source)
-	if err != nil {
-		return nil, nil, err
-	}
 	filters := issues.Filters{
 		Severities: severities,
-		Sources:    sources,
 		Kinds:      splitCSVStr(input.Kind),
 		Limit:      input.Limit,
 		Namespaces: allowedNamespaces,
@@ -2321,38 +2285,6 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 		}
 		filters.Filter = f
 	}
-	if input.Since != "" {
-		d, err := time.ParseDuration(input.Since)
-		if err != nil {
-			return nil, nil, fmt.Errorf("invalid since=%q: %w", input.Since, err)
-		}
-		if d < 0 {
-			return nil, nil, fmt.Errorf("since must be non-negative, got %s", d)
-		}
-		filters.Since = d
-	}
-	// Audit / event / kyverno collection is gated by IncludeX flags
-	// (default off). The MCP input doesn't surface separate include_*
-	// knobs, so listing one of those sources in `source` is the only
-	// way to enable the matching IncludeX. This means source= acts as
-	// BOTH a filter AND the collection trigger for noisy sources:
-	// source=kyverno enables Kyverno collection AND narrows results
-	// to just kyverno rows. To get "defaults plus Kyverno" over MCP,
-	// pass source=problem,missing_ref,scheduling,condition,kyverno. Mirror the HTTP handler's
-	// 1h since-default when events are enabled with no explicit
-	// window, so an MCP caller doesn't silently inherit the full
-	// event-cache backlog.
-	for _, s := range filters.Sources {
-		switch s {
-		case issues.SourceEvent:
-			filters.IncludeEvents = true
-		case issues.SourceKyverno:
-			filters.IncludeKyverno = true
-		}
-	}
-	if filters.IncludeEvents && filters.Since == 0 {
-		filters.Since = time.Hour
-	}
 	out, stats := issues.ComposeWithStats(provider, filters)
 	resp := map[string]any{
 		"issues": out,
@@ -2366,7 +2298,7 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	// Steering hint when the issue list was capped.
 	if stats.TotalMatched > len(out) {
 		resp["narrowHint"] = fmt.Sprintf(
-			"returned %d of %d issues — narrow with namespace=, kind=, severity=critical, source= (e.g. problem,condition), since= (e.g. 15m), add filter= CEL, or raise limit (cap 1000)",
+			"returned %d of %d issues — narrow with namespace=, kind=, severity=critical, add filter= CEL, or raise limit (cap 1000)",
 			len(out), stats.TotalMatched,
 		)
 	}
@@ -2378,20 +2310,6 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	if stats.FilterErrors > 0 {
 		resp["filter_errors"] = stats.FilterErrors
 		resp["filter_error_sample"] = stats.FilterErrorSample
-	}
-	// Surface the Kyverno index lifecycle when the caller asked for it.
-	// Without this an empty kyverno list collapses four states
-	// (not_installed / deferred / warmup / ready-but-empty) into one,
-	// and the agent can't tell whether to fall back to a direct fetch
-	// or report "cluster has no violations" to the operator. Mirrors
-	// the HTTP /api/issues response shape.
-	if filters.IncludeKyverno {
-		meta, _ := resp["meta"].(map[string]any)
-		if meta == nil {
-			meta = map[string]any{}
-		}
-		meta["kyverno"] = provider.KyvernoStatus()
-		resp["meta"] = meta
 	}
 	return toJSONResult(resp)
 }

@@ -8,58 +8,11 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 )
 
 func ptr32(i int32) *int32 { return &i }
-
-func quotaWith(name, ns string, hard, used corev1.ResourceList) *corev1.ResourceQuota {
-	return &corev1.ResourceQuota{
-		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
-		Status:     corev1.ResourceQuotaStatus{Hard: hard, Used: used},
-	}
-}
-
-// Exercises detectQuotaPressure end-to-end through the cache: the >=90%/>=100%
-// severity ramp AND the isPodAdmissionQuotaResource filter that ignores
-// object-count quotas (configmaps) which don't gate pod admission.
-func TestDetectAdmissionProblems_QuotaSaturation(t *testing.T) {
-	defer ResetTestState()
-	near := quotaWith("mem-near", "prod",
-		corev1.ResourceList{"requests.memory": resource.MustParse("300Mi")},
-		corev1.ResourceList{"requests.memory": resource.MustParse("296Mi")}) // 98.6% → QuotaNearLimit
-	full := quotaWith("mem-full", "prod",
-		corev1.ResourceList{"requests.memory": resource.MustParse("300Mi")},
-		corev1.ResourceList{"requests.memory": resource.MustParse("300Mi")}) // 100% → QuotaExceeded
-	cmFull := quotaWith("cm-full", "prod",
-		corev1.ResourceList{"configmaps": resource.MustParse("10")},
-		corev1.ResourceList{"configmaps": resource.MustParse("10")}) // 100% but not pod-admission → no row
-	low := quotaWith("mem-low", "prod",
-		corev1.ResourceList{"requests.memory": resource.MustParse("300Mi")},
-		corev1.ResourceList{"requests.memory": resource.MustParse("150Mi")}) // 50% → below threshold, no row
-
-	if err := InitTestResourceCache(fake.NewClientset(near, full, cmFull, low)); err != nil {
-		t.Fatalf("InitTestResourceCache: %v", err)
-	}
-	problems := DetectAdmissionProblems(GetResourceCache(), "prod")
-
-	if !findProblem(problems, "ResourceQuota", "prod", "mem-near", "QuotaNearLimit") {
-		t.Errorf("expected QuotaNearLimit for mem-near (98.6%%), got %+v", problems)
-	}
-	if !findProblem(problems, "ResourceQuota", "prod", "mem-full", "QuotaExceeded") {
-		t.Errorf("expected QuotaExceeded for mem-full (100%%), got %+v", problems)
-	}
-	for _, p := range problems {
-		if p.Name == "cm-full" {
-			t.Errorf("object-count quota (configmaps) must NOT surface as a scheduling blocker: %+v", p)
-		}
-		if p.Name == "mem-low" {
-			t.Errorf("quota below the warn threshold (50%%) must NOT surface: %+v", p)
-		}
-	}
-}
 
 // Exercises the bind-time detector end-to-end: a Pending pod the scheduler
 // rejected on arch, with the node-fit resolver naming the offending label.
@@ -159,6 +112,37 @@ func TestDetectAdmissionProblems_FailedCreateCrossCheck(t *testing.T) {
 	}
 	if blockedRows != 1 {
 		t.Errorf("expected exactly 1 row for rs-blocked (deduped by object), got %d: %+v", blockedRows, problems)
+	}
+}
+
+// A SchedulingGated pod has PodScheduled=False but reason=SchedulingGated —
+// the scheduler hasn't tried yet because the pod carries scheduling gates.
+// That's an intentional not-yet-scheduled state, not a placement failure, so
+// it must NOT surface as Unschedulable (matching the frontend's reason gate).
+func TestDetectSchedulingProblems_SchedulingGatedIsNotUnschedulable(t *testing.T) {
+	defer ResetTestState()
+	gated := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "gated", Namespace: "prod"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{{
+				Type:    corev1.PodScheduled,
+				Status:  corev1.ConditionFalse,
+				Reason:  corev1.PodReasonSchedulingGated,
+				Message: "Scheduling is blocked due to non-empty scheduling gates",
+			}},
+		},
+	}
+	if err := InitTestResourceCache(fake.NewClientset(gated)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	if IsPodUnschedulable(gated) {
+		t.Errorf("SchedulingGated pod must not be reported unschedulable")
+	}
+	for _, p := range DetectSchedulingProblems(GetResourceCache(), "prod") {
+		if p.Name == "gated" {
+			t.Errorf("SchedulingGated pod must not surface a scheduling problem: %+v", p)
+		}
 	}
 }
 

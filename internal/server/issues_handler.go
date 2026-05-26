@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/filter"
@@ -12,49 +11,22 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 )
 
-// handleIssues serves GET /api/issues — the unified cluster-health
-// endpoint. Composes problems + condition fallback by default. Events
-// and Kyverno are opt-in because both are loud — events flood with
-// thousands of redundant rows on noisy clusters, and Kyverno
-// PolicyReports add 10+ rows per workload under a baseline PSS profile.
-// Static best-practice / posture findings are intentionally not an
-// issues source; use /api/audit or MCP get_cluster_audit.
+// handleIssues serves GET /api/issues — "what's broken right now."
+// Composes the curated operational sources (workload/pod problems,
+// dangling references, pod-startup blockers, and False CRD conditions),
+// severity-ranked. Raw Warning events live at /api/events + the timeline;
+// policy posture (Kyverno) and static best-practice findings live in
+// /api/audit. Those are deliberately NOT issue sources — detection
+// provenance is not a triage axis, so there is no source= filter (the
+// `source` field is still on each returned row, and filter= CEL can slice
+// on it for power users).
 //
 // Query params:
 //
 //	namespace= / namespaces=  one or comma-separated
 //	severity=  critical,warning  (default: all)
-//	source=    Comma-separated list of sources to RETURN. When set,
-//	           only the listed sources appear in the response.
-//	           Allowed: problem, missing_ref, scheduling, event,
-//	           condition, kyverno.
-//	           Default (no source param): problem + missing_ref +
-//	           scheduling + condition (event + kyverno excluded because
-//	           they can flood with noisy rows). missing_ref surfaces
-//	           dangling-reference errors (Pod→missing PVC/CM/Secret/SA,
-//	           HPA→missing target, Ingress→missing backend, RoleBinding→
-//	           missing roleRef, webhook→missing Service). scheduling
-//	           surfaces why a Pod can't run: unschedulable (with the
-//	           offending node constraint named), admission-rejected
-//	           (quota/LimitRange/PodSecurity/webhook), or post-bind
-//	           CNI/volume stalls.
-//	           NOTE: source acts as a filter, not an additive opt-in.
-//	           Passing source=kyverno returns ONLY Kyverno rows, not
-//	           "defaults plus Kyverno". Use include_kyverno=true (or
-//	           include_events) when you want
-//	           "defaults plus X".
-//	include_events/include_kyverno=true
-//	           Add the named source to the DEFAULT set without
-//	           silencing the defaults. Effective filter:
-//	           include_X=true is equivalent to source=problem,
-//	           condition,X. These flags are also implicitly set when
-//	           the matching source appears in source= so the warmup
-//	           / collection path knows to fetch that source's data.
 //	kind=      Pod,Deployment,...  (default: all)
-//	since=     duration like 15m, 1h. Affects event source only;
-//	           when events are enabled and since is omitted, the
-//	           handler defaults to 1h to avoid pulling the full
-//	           cached event backlog.
+//	filter=    optional CEL predicate over each row (bindings include source)
 //	limit=     default 200, max 1000
 func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
@@ -82,34 +54,11 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	sources, err := issues.ParseSources(q.Get("source"))
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-	since, err := parseDuration(q.Get("since"))
-	if err != nil {
-		s.writeError(w, http.StatusBadRequest, err.Error())
-		return
-	}
-
-	includeEvents := q.Get("include_events") == "true" || hasSource(q.Get("source"), "event")
-	// When events are enabled and no explicit window was passed, cap
-	// the lookback at 1h. Without this an opt-in immediately yields
-	// the full cache window (hours of accumulated Warning events,
-	// most of which duplicate problem-source rows already returned).
-	if includeEvents && since == 0 {
-		since = time.Hour
-	}
 	filters := issues.Filters{
-		Namespaces:     namespaces,
-		Severities:     severities,
-		Sources:        sources,
-		Kinds:          splitCSV(q.Get("kind")),
-		Since:          since,
-		Limit:          parseLimit(q.Get("limit")),
-		IncludeEvents:  includeEvents,
-		IncludeKyverno: q.Get("include_kyverno") == "true" || hasSource(q.Get("source"), "kyverno"),
+		Namespaces: namespaces,
+		Severities: severities,
+		Kinds:      splitCSV(q.Get("kind")),
+		Limit:      parseLimit(q.Get("limit")),
 		CanReadClusterScoped: func(kind, group string) bool {
 			if auth.UserFromContext(r.Context()) == nil {
 				return true
@@ -150,22 +99,6 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 		resp["filter_errors"] = stats.FilterErrors
 		resp["filter_error_sample"] = stats.FilterErrorSample
 	}
-	// When the caller asked for Kyverno findings (either via opt-in flag
-	// or source=kyverno), surface the index lifecycle phase under
-	// `meta.kyverno`. Without this, an empty list collapses four distinct
-	// states (not_installed / deferred / warmup / ready-but-empty) into
-	// one and the SPA + agents can't render the right copy. Emitted on
-	// every kyverno-touching request — agents can ignore it, but humans
-	// in the SPA get a clear "Kyverno not installed" vs "Indexing in
-	// progress" vs "No violations" distinction.
-	if filters.IncludeKyverno {
-		meta, _ := resp["meta"].(map[string]any)
-		if meta == nil {
-			meta = map[string]any{}
-		}
-		meta["kyverno"] = provider.KyvernoStatus()
-		resp["meta"] = meta
-	}
 	s.writeJSON(w, resp)
 }
 
@@ -191,19 +124,6 @@ func parseSeverities(v string) ([]issues.Severity, error) {
 	return out, nil
 }
 
-// hasSource reports whether the caller's `?source=` list explicitly
-// names `target`. Used to derive the opt-in flags for event / Kyverno
-// sources — passing them in the source list is more
-// discoverable than the parallel include_* booleans, and we honor both.
-func hasSource(v, target string) bool {
-	for _, p := range strings.Split(v, ",") {
-		if strings.EqualFold(strings.TrimSpace(p), target) {
-			return true
-		}
-	}
-	return false
-}
-
 func splitCSV(v string) []string {
 	if v == "" {
 		return nil
@@ -216,18 +136,4 @@ func splitCSV(v string) []string {
 		}
 	}
 	return out
-}
-
-func parseDuration(v string) (time.Duration, error) {
-	if v == "" {
-		return 0, nil
-	}
-	d, err := time.ParseDuration(v)
-	if err != nil {
-		return 0, fmt.Errorf("invalid since=%q: %w", v, err)
-	}
-	if d < 0 {
-		return 0, fmt.Errorf("since must be non-negative, got %s", d)
-	}
-	return d, nil
 }

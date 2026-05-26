@@ -447,10 +447,13 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Problem 
 				continue
 			}
 			cond := podScheduledCondition(pod)
-			// PodScheduled=False is the scheduler's definitive "I tried and
-			// couldn't place this" — present only after a real scheduling
-			// attempt, so no age grace is needed to filter transients.
-			if cond == nil || cond.Status != corev1.ConditionFalse {
+			// PodScheduled=False with reason=Unschedulable is the scheduler's
+			// definitive "I tried and couldn't place this" — present only after
+			// a real scheduling attempt, so no age grace is needed. reason=
+			// SchedulingGated is NOT a failure: the scheduler hasn't tried yet
+			// because the pod carries scheduling gates (a controller will lift
+			// them), so it must not surface as unschedulable.
+			if cond == nil || cond.Status != corev1.ConditionFalse || cond.Reason != corev1.PodReasonUnschedulable {
 				continue
 			}
 			ageDur := now.Sub(pod.CreationTimestamp.Time)
@@ -490,7 +493,9 @@ func podScheduledCondition(pod *corev1.Pod) *corev1.PodCondition {
 // duplicate bare "Pending" row.
 func IsPodUnschedulable(pod *corev1.Pod) bool {
 	c := podScheduledCondition(pod)
-	return c != nil && c.Status == corev1.ConditionFalse
+	// Only reason=Unschedulable counts; reason=SchedulingGated is an
+	// intentional not-yet-scheduled state, not a placement failure.
+	return c != nil && c.Status == corev1.ConditionFalse && c.Reason == corev1.PodReasonUnschedulable
 }
 
 // schedulingSeverity ramps with how long the pod has been unschedulable: a
@@ -643,16 +648,11 @@ func schedulingNodeFacts(cache *ResourceCache) []NodeFacts {
 //
 // The layer where NO pod is ever created: the controller's pod template is
 // rejected at admission, so there's no Pod to inspect — the Deployment just
-// sits at "Progressing". Two complementary signals:
-//
-//   - Proactive: a ResourceQuota at/near its hard limit (read from cache) —
-//     it will block the next pod the namespace creates.
-//   - Reactive: controller FailedCreate events naming the workload blocked
-//     right now (exceeded quota / LimitRange / PodSecurity / webhook).
-
-// quotaWarnRatio is the ResourceQuota saturation that warrants a heads-up
-// before it starts rejecting pods.
-const quotaWarnRatio = 0.90
+// sits at "Progressing". Detected reactively from controller FailedCreate
+// events naming the workload blocked right now (exceeded quota / LimitRange /
+// PodSecurity / webhook). Proactive "quota near/at limit" is deliberately NOT
+// surfaced here — a saturated quota is namespace capacity context, not a live
+// failure, and belongs in the Namespace quota view, not the issue stream.
 
 // admissionFailureWindow bounds how recently a FailedCreate must have fired
 // to count as "still happening" — a stuck controller re-emits continuously,
@@ -665,99 +665,7 @@ func DetectAdmissionProblems(cache *ResourceCache, namespace string) []Problem {
 	if cache == nil {
 		return nil
 	}
-	var problems []Problem
-	problems = append(problems, detectQuotaPressure(cache, namespace)...)
-	problems = append(problems, detectAdmissionFailures(cache, namespace)...)
-	return problems
-}
-
-type quotaSaturation struct {
-	resource         string
-	usedStr, hardStr string
-	ratio            float64
-}
-
-// isPodAdmissionQuotaResource reports whether a ResourceQuota resource name
-// gates Pod (or Pod-blocking PVC) admission. Object-count quotas on configmaps/
-// services/secrets/etc. also reject creates, but they don't stop a workload's
-// pods from running — surfacing them as "blocks new pods" under the scheduling
-// source would be wrong framing, so the scheduling-source quota check ignores
-// them (they belong to a namespace-health lens, not "why this workload can't run").
-func isPodAdmissionQuotaResource(name string) bool {
-	switch name {
-	case "pods", "cpu", "memory", "ephemeral-storage", "persistentvolumeclaims":
-		return true
-	}
-	// requests.*/limits.* compute + storage (incl. extended resources like
-	// requests.nvidia.com/gpu, requests.storage) all gate pod/PVC admission.
-	return strings.HasPrefix(name, "requests.") || strings.HasPrefix(name, "limits.")
-}
-
-// quotaWorstResource returns the most-saturated pod-admission-relevant resource
-// in a ResourceQuota (object-count quotas like configmaps/services are skipped).
-func quotaWorstResource(q *corev1.ResourceQuota) quotaSaturation {
-	var worst quotaSaturation
-	for res, hard := range q.Status.Hard {
-		if !isPodAdmissionQuotaResource(string(res)) {
-			continue
-		}
-		used, ok := q.Status.Used[res]
-		if !ok {
-			continue
-		}
-		hv := hard.MilliValue()
-		if hv <= 0 {
-			continue
-		}
-		ratio := float64(used.MilliValue()) / float64(hv)
-		if ratio > worst.ratio {
-			worst = quotaSaturation{
-				resource: string(res),
-				usedStr:  used.String(),
-				hardStr:  hard.String(),
-				ratio:    ratio,
-			}
-		}
-	}
-	return worst
-}
-
-func detectQuotaPressure(cache *ResourceCache, namespace string) []Problem {
-	lister := cache.ResourceQuotas()
-	if lister == nil {
-		return nil
-	}
-	var quotas []*corev1.ResourceQuota
-	if namespace != "" {
-		quotas, _ = lister.ResourceQuotas(namespace).List(labels.Everything())
-	} else {
-		quotas, _ = lister.List(labels.Everything())
-	}
-
-	now := time.Now()
-	var problems []Problem
-	for _, q := range quotas {
-		worst := quotaWorstResource(q)
-		if worst.ratio < quotaWarnRatio {
-			continue
-		}
-		severity, reason := "high", "QuotaNearLimit"
-		if worst.ratio >= 1.0 {
-			severity, reason = "critical", "QuotaExceeded"
-		}
-		ageDur := now.Sub(q.CreationTimestamp.Time)
-		problems = append(problems, Problem{
-			Kind:       "ResourceQuota",
-			Namespace:  q.Namespace,
-			Name:       q.Name,
-			Severity:   severity,
-			Reason:     reason,
-			Message:    fmt.Sprintf("%s at %s/%s (%.0f%%) — blocks new pods in namespace %s", worst.resource, worst.usedStr, worst.hardStr, worst.ratio*100, q.Namespace),
-			Age:        FormatAge(ageDur),
-			AgeSeconds: int64(ageDur.Seconds()),
-		})
-	}
-	return problems
+	return detectAdmissionFailures(cache, namespace)
 }
 
 func detectAdmissionFailures(cache *ResourceCache, namespace string) []Problem {

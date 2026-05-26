@@ -11,7 +11,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
 
-	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	pkgauth "github.com/skyhook-io/radar/pkg/auth"
 )
@@ -61,16 +60,6 @@ func setupFakeCacheForFilterTests(t *testing.T) {
 	// checks. (The MCP handlers don't use requireConnected directly, but
 	// downstream code paths do.)
 	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
-}
-
-func TestParseSourceListRejectsAudit(t *testing.T) {
-	_, err := issues.ParseSources("audit")
-	if err == nil {
-		t.Fatal("issues.ParseSources(\"audit\") succeeded; want error")
-	}
-	if !strings.Contains(err.Error(), "get_cluster_audit") {
-		t.Fatalf("error did not point caller to get_cluster_audit: %v", err)
-	}
 }
 
 // withRestrictedUser primes the perm cache for a namespace-restricted user
