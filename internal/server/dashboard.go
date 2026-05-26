@@ -554,6 +554,17 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 			pods, err = podLister.List(labels.Everything())
 		}
 	}
+	// Pods the post-bind layer owns (stuck ContainerCreating on CNI/volume).
+	// Computed up front so the warning rollup below can skip them the same way
+	// it skips unschedulable pods — otherwise a long-Pending stuck pod gets
+	// both a bare "Pending" rollup row and the richer post-bind row. Keyed
+	// "namespace/name"; the slice is reused in the scheduling block below.
+	postBind := k8s.DetectPostBindProblems(cache, namespace)
+	postBindPods := make(map[string]bool, len(postBind))
+	for _, p := range postBind {
+		postBindPods[p.Namespace+"/"+p.Name] = true
+	}
+
 	// Group unhealthy pods by owner workload for rollup
 	ownerGroups := make(map[ownerKey]*ownerGroup)
 	var orphanProblems []DashboardProblem
@@ -566,10 +577,11 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 				health.Healthy++
 			case "warning":
 				health.Warning++
-				// Unschedulable pods are owned by the scheduling rows appended
-				// below (which name the constraint); don't also roll them up
+				// Unschedulable pods (bind-time) and stuck-creating pods
+				// (post-bind) are owned by the scheduling rows appended below,
+				// which name the actual constraint; don't also roll them up
 				// here as a bare "Pending".
-				if !k8s.IsPodUnschedulable(pod) {
+				if !k8s.IsPodUnschedulable(pod) && !postBindPods[pod.Namespace+"/"+pod.Name] {
 					collectPodForRollup(pod, "medium", now, ownerGroups, &orphanProblems)
 				}
 			case "error":
@@ -666,10 +678,11 @@ func (s *Server) getDashboardHealth(cache *k8s.ResourceCache, namespace string) 
 	// Pod exists, so the pod rollup above can't see them), and post-bind
 	// CNI/volume stalls. Appended directly (not through the Missing-ref Pod
 	// filter above) — an Unschedulable row IS the pod's scheduling reason; the
-	// pod rollup above skips unschedulable pods so they don't double-surface.
+	// pod rollup above skips unschedulable + post-bind pods so they don't
+	// double-surface. postBind was computed above for that skip; reuse it.
 	sched := k8s.DetectSchedulingProblems(cache, namespace)
 	sched = append(sched, k8s.DetectAdmissionProblems(cache, namespace)...)
-	sched = append(sched, k8s.DetectPostBindProblems(cache, namespace)...)
+	sched = append(sched, postBind...)
 	for _, p := range sched {
 		problems = append(problems, DashboardProblem{
 			Kind:            p.Kind,
