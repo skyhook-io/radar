@@ -291,6 +291,7 @@ func (s *Server) setupRoutes() {
 			r.Get("/resources/{kind}/{namespace}/{name}/cascade-preview", s.handleCascadeDeletePreview)
 			r.Delete("/resources/{kind}/{namespace}/{name}", s.handleDeleteResource)
 			r.Get("/secrets/certificate-expiry", s.handleSecretCertExpiry)
+			r.Get("/certificates", s.handleCertificates)
 
 			// Cluster audit
 			r.Get("/audit", s.handleAudit)
