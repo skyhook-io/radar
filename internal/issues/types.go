@@ -10,17 +10,16 @@
 //     stuck post-bind (CNI IP exhaustion, volume attach/mount)
 //   - condition  — generic CRD .status.conditions[].status=False fallback
 //     (Argo/Flux/Knative/Crossplane/cert-manager/KEDA)
-//   - event      — recent K8s Warning events (opt-in; noisy)
-//   - kyverno    — PolicyReport findings (opt-in)
 //
-// All six describe LIVE OPERATIONAL STATE — "what is failing right
-// now". Static best-practice/posture findings (runAsRoot, missing
-// probes, no PDB, deprecated APIs, …) are a separate axis and live
-// in pkg/audit + /api/audit + MCP get_cluster_audit. The two are NOT
-// composed here: a healthy pod can have many audit findings, a
-// crashing pod can have zero. Combining them would force consumers
-// to disambiguate "is this critical operational or critical posture?"
-// at every callsite.
+// All four describe LIVE OPERATIONAL STATE — "what is failing right
+// now". Two adjacent signals are deliberately NOT composed here, each
+// with its own home: raw K8s Warning events (get_events + the timeline)
+// and policy/posture — Kyverno PolicyReports + static best-practice
+// findings (runAsRoot, missing probes, no PDB, deprecated APIs, …) which
+// live in pkg/audit + /api/audit + MCP get_cluster_audit. A healthy pod
+// can have many audit findings, a crashing pod can have zero. Combining
+// them would force consumers to disambiguate "is this critical
+// operational or critical posture?" at every callsite.
 //
 // The Issue type is what /api/issues and the hub's fleet_issues MCP
 // tool emit. Severity is normalized to a 3-tier vocabulary
@@ -40,8 +39,8 @@ type CELFilter = filter.Filter
 
 // Severity is the normalized 3-tier severity. Mapping rules:
 //
-//	critical = problem.critical | kyverno.fail|error
-//	warning  = problem.<any non-critical> | event.Warning | CRD-condition False | kyverno.warn
+//	critical = problem.critical
+//	warning  = problem.<any non-critical> | CRD-condition False
 //	info     = reserved (currently unused)
 //
 // problem severities other than "critical" all collapse to warning — see
@@ -54,9 +53,10 @@ const (
 	SeverityWarning  Severity = "warning"
 )
 
-// Source records which underlying detection channel emitted this
-// issue. Useful for filtering ("only show me problems, not events")
-// and for SPA copy that explains why a row appeared.
+// Source records which underlying detection channel emitted this issue.
+// It is an OUTPUT label (for SPA copy that explains why a row appeared,
+// and as a CEL filter binding), not an input filter — issues composes all
+// four sources unconditionally; detection provenance is not a triage axis.
 type Source string
 
 const (
@@ -75,10 +75,8 @@ type Ref struct {
 
 // Issue is the unified cluster-health record.
 //
-// FirstSeen / LastSeen / Count are populated for events (which arrive
-// pre-aggregated from the K8s API). For problems, conditions, and
-// Kyverno findings, FirstSeen and LastSeen are both the snapshot time
-// and Count = 1.
+// All current sources are snapshot-derived: LastSeen is the compose time,
+// FirstSeen backs off by the problem's observed duration, and Count = 1.
 type Issue struct {
 	Severity  Severity  `json:"severity"`
 	Source    Source    `json:"source"`

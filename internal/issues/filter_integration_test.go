@@ -3,6 +3,9 @@ package issues
 import (
 	"testing"
 
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+
 	"github.com/skyhook-io/radar/internal/filter"
 	"github.com/skyhook-io/radar/internal/k8s"
 )
@@ -53,6 +56,35 @@ func TestCompose_FilterAppliedBeforeLimit(t *testing.T) {
 	}
 	if out[0].Name != "critical-one" {
 		t.Errorf("filter dropped the critical one: %+v", out)
+	}
+}
+
+func TestCompose_WithCELFilter_SourceBinding(t *testing.T) {
+	// The `source=` query param was removed; the CEL `source` binding is now
+	// the ONLY way to slice issues by detector (documented migration path in
+	// the HTTP handler + MCP tool schema). Guard that the binding exists and
+	// slices correctly across two distinct sources.
+	gvr := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "applications"}
+	app := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Application",
+		"metadata":   map[string]any{"name": "my-app", "namespace": "argocd"},
+		"status": map[string]any{"conditions": []any{
+			map[string]any{"type": "Synced", "status": "False", "reason": "OutOfSync", "message": "drift"},
+		}},
+	}}
+	p := &fakeProvider{
+		problems: []k8s.Problem{{Kind: "Deployment", Namespace: "argocd", Name: "api", Severity: "critical", Reason: "down"}},
+		dynamic:  map[schema.GroupVersionResource][]*unstructured.Unstructured{gvr: {app}},
+		kinds:    map[schema.GroupVersionResource]string{gvr: "Application"},
+	}
+	f, err := filter.CompileIssueFilter(`source == "condition"`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := ComposeWithStats(p, Filters{Filter: f})
+	if len(out) != 1 || out[0].Source != SourceCondition {
+		t.Fatalf("source==\"condition\" should keep only the condition row, got %+v", out)
 	}
 }
 

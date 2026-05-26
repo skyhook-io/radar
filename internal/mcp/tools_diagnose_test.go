@@ -218,6 +218,64 @@ func TestHandleDiagnose_DeploymentNotFound(t *testing.T) {
 	}
 }
 
+// TestStartupBlockersForWorkload_ScopesToWorkload pins the relevance filter:
+// a namespace-wide detector sweep must attach only rows belonging to the
+// diagnosed workload. This commit changed the contract (dropped the blanket
+// "any ResourceQuota" arm), so the scoping is the load-bearing logic that
+// prevents over-attributing unrelated failures to a healthy workload.
+func TestStartupBlockersForWorkload_ScopesToWorkload(t *testing.T) {
+	defer k8s.ResetTestState()
+	// Diagnosed Deployment "cart": its ReplicaSet is admission-blocked
+	// (created 0 of 2 pods, FailedCreate quota event) → must attach.
+	rs := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "cart-abc123", Namespace: "alpha"},
+		Spec:       appsv1.ReplicaSetSpec{Replicas: ptrInt32(2)},
+		Status:     appsv1.ReplicaSetStatus{Replicas: 0},
+	}
+	rsEvt := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "e1", Namespace: "alpha"},
+		InvolvedObject: corev1.ObjectReference{Kind: "ReplicaSet", Namespace: "alpha", Name: "cart-abc123"},
+		Reason:         "FailedCreate",
+		Type:           corev1.EventTypeWarning,
+		Message:        `Error creating: pods "x" is forbidden: exceeded quota: mem-quota, used: requests.memory=2Gi, limited: requests.memory=2Gi`,
+		LastTimestamp:  metav1.Now(),
+	}
+	// An UNRELATED unschedulable pod in the same namespace → must NOT attach.
+	otherPod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "other-pod", Namespace: "alpha"},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{{
+				Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+				Reason: "Unschedulable", Message: "0/1 nodes are available",
+			}},
+		},
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(rs, rsEvt, otherPod)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	t.Cleanup(func() { k8s.ResetTestState() })
+
+	// pods arg = cart's own pods (none created). The RS attaches via the
+	// ReplicaSet-of-Deployment match, not via pod-name.
+	out := startupBlockersForWorkload(k8s.GetResourceCache(), "deployments", "alpha", "cart", nil)
+
+	var sawRS bool
+	for _, b := range out {
+		if b.Name == "other-pod" {
+			t.Errorf("unrelated unschedulable pod must not attach to cart's startupBlockers: %+v", b)
+		}
+		if b.Kind == "ReplicaSet" && b.Name == "cart-abc123" {
+			sawRS = true
+		}
+	}
+	if !sawRS {
+		t.Errorf("the diagnosed Deployment's blocked ReplicaSet should attach, got %+v", out)
+	}
+}
+
+func ptrInt32(i int32) *int32 { return &i }
+
 func TestIsReplicaSetOf(t *testing.T) {
 	cases := []struct {
 		rs, deploy string

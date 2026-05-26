@@ -878,7 +878,7 @@ Deferred to a future "full Crossplane" pass:
 | PolicyReport | `wgpolicyk8s.io/v1alpha2` | — | Yes | Yes |
 | ClusterPolicyReport | `wgpolicyk8s.io/v1alpha2` | — | Yes | Yes |
 
-PolicyReport findings also surface through the unified `/api/issues` endpoint (and the MCP `issues` tool) when opted in via `source=kyverno` / `include_kyverno=true` — `fail` and `error` results map to `critical`, `warn` maps to `warning`, and `pass` / `skip` are omitted.
+PolicyReport findings are policy posture, not live operational failure, so they are **not** part of the `/api/issues` stream. They surface through the per-resource detail view (above), the resource's `resourceContext` policy rollup, and the cluster audit (`/api/audit` + MCP `get_cluster_audit`).
 
 ---
 

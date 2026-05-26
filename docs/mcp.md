@@ -16,7 +16,7 @@ Radar's MCP server solves these:
 
 - **Token-optimized** — resources are minified, stripping noise (managed fields, internal annotations, redundant status) while preserving what matters
 - **Enriched data** — topology graphs, health assessments, deduplicated events, filtered logs (prioritizing errors/warnings)
-- **Safe operations** — read tools are read-only; write tools (restart, scale, sync) are clearly annotated and non-destructive
+- **Safe operations** — read tools are read-only (`readOnlyHint`); write tools (restart, scale, rollback, sync, apply, cordon/drain) are RBAC-enforced and annotated `destructiveHint` so AI clients can prompt for confirmation
 - **Secret-safe** — Secret data is never exposed, environment values are redacted, log output is scrubbed for API keys and tokens
 - **RBAC-aware** — respects your cluster's RBAC permissions
 - **Vendor-neutral** — works with any MCP-compatible AI tool

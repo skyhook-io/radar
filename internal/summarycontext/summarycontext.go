@@ -171,11 +171,11 @@ func CanonicalSingular(kind string) string {
 // bucketing for a per-resource lookup, not paginating — the caller of
 // the builder never sees the issue list itself.
 //
-// We rely on Filters.IncludeAudit and Filters.IncludeEvents staying
-// false-by-default — that's what keeps the per-row count to "problem"
-// + "condition" only. Audit + Warning events are loud and require
-// explicit opt-in; rolling them into the per-row count would distort
-// "this Pod has 1 issue" for the common case.
+// The per-row count reflects exactly the curated operational sources
+// Compose runs (problem + missing_ref + scheduling + condition). Loud
+// adjacent signals — raw Warning events and policy/audit posture — are
+// not issue sources at all, so they can't distort "this Pod has 1 issue"
+// for the common case.
 //
 // No Kinds filter on Compose: the index buckets every composed row by
 // (group, kind, ns, name), and the per-row lookup keys off

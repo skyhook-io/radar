@@ -979,6 +979,14 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 		}
 	}
 
+	// include=logs was dropped from get_resource (it was Pod-only and lacked
+	// container/previous/since/grep). Signal it explicitly rather than silently
+	// no-op'ing, so a client on a stale schema is redirected instead of seeing
+	// an empty success.
+	if includes["logs"] {
+		result["logsError"] = "include=logs is no longer supported here; use get_pod_logs or get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle"
+	}
+
 }
 
 // normalizeDisplayKind converts a lowercase kind to its display form for matching
