@@ -100,15 +100,20 @@ func (s *Server) handleCertificates(w http.ResponseWriter, r *http.Request) {
 		secFailed = true
 	}
 
-	// Both sources hard-failed → returning an empty list would read as a healthy
-	// "no certs" cluster. Surface it so the fleet view marks the cluster errored
-	// rather than silently green.
-	if cmFailed && secFailed {
+	// An empty result caused by a read error reads as a healthy "no certs"
+	// cluster. Surface it so the fleet view marks the cluster errored rather
+	// than silently green. This matters most on a cluster without cert-manager,
+	// where TLS secrets are the only source: there cmFailed stays false (an
+	// absent CRD is benign), so gating on both legs would miss a failed secret
+	// read. Gate on "no data AND something errored" instead — which still lets
+	// a partial success (one leg returned certs) through.
+	result := certs.Aggregate(src)
+	if len(result) == 0 && (cmFailed || secFailed) {
 		s.writeError(w, http.StatusServiceUnavailable, "certificate inventory temporarily unavailable")
 		return
 	}
 
-	s.writeJSON(w, certs.Aggregate(src))
+	s.writeJSON(w, result)
 }
 
 // secretToCertInput projects a kubernetes.io/tls secret into a certs.Input.
