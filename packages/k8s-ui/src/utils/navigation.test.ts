@@ -25,6 +25,13 @@ describe('kindToPlural', () => {
     expect(kindToPlural('NetworkPolicy')).toBe('networkpolicies')
   })
 
+  test('handles already-plural kind names (Endpoints)', () => {
+    // The Kind "Endpoints" IS its resource name; englishPlural would wrongly
+    // yield "endpointses" (ends in s → +es) without the builtin map entry.
+    expect(kindToPlural('Endpoints')).toBe('endpoints')
+    expect(pluralToKind('endpoints')).toBe('Endpoints')
+  })
+
   test('handles kinds ending in ss (Class-suffix)', () => {
     expect(kindToPlural('StorageClass')).toBe('storageclasses')
     expect(kindToPlural('IngressClass')).toBe('ingressclasses')
