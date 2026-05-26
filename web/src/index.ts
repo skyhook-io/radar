@@ -22,3 +22,12 @@ export { ShortcutHelpOverlay } from './components/ui/ShortcutHelpOverlay';
 // kubeconfig ContextSwitcher without taking a direct dep on k8s-ui internals.
 export { ClusterSwitcher } from '@skyhook-io/k8s-ui';
 export type { ClusterSwitcherProps, ClusterSwitcherItem } from '@skyhook-io/k8s-ui';
+
+// Deep-link builders — so consumers (Radar Hub) construct deep links into a
+// cluster view without hand-rolling Radar's internal URL format, which drifts
+// silently when Radar re-routes. `resourcePath` opens the detail drawer for any
+// kind incl. cluster-scoped; `buildWorkloadPath` is the namespaced-workload
+// full-page view. Both return basename-relative paths; embedders prepend their
+// cluster prefix (e.g. /c/:id).
+export { resourcePath, buildWorkloadPath } from './utils/navigation';
+export type { SelectedResource } from '@skyhook-io/k8s-ui/types/core';
