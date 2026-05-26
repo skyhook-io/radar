@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"log"
 	"net/http"
 	"time"
@@ -33,12 +34,12 @@ type CertExpiry = topology.CertExpiry
 // health-rated by pkg/certs. Backs Radar Hub's fleet Certs view; the merge
 // lives in pkg/certs so the hub stays a thin pivot.
 //
-// Inventory read pattern (mirrors handlePackages): TLS secrets are read with
-// the ServiceAccount, not the caller's impersonated identity, so cert hygiene
-// doesn't vanish for cloud:viewer (whose K8s `view` role excludes secrets).
-// Only public certificate metadata (issuer / domains / expiry) is emitted —
-// never tls.key. A cluster without cert-manager simply contributes no CR rows;
-// that's not an error.
+// Read pattern mirrors handleListPackages: the ServiceAccount-backed cache
+// performs the read (so cert hygiene survives cloud:viewer, whose K8s `view`
+// role excludes secrets), but the response is post-filtered to the caller's
+// RBAC-allowed namespaces. Only public certificate metadata (issuer / domains
+// / expiry) is emitted — never tls.key. A cluster without cert-manager simply
+// contributes no CR rows; that's not an error.
 func (s *Server) handleCertificates(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return
@@ -49,57 +50,103 @@ func (s *Server) handleCertificates(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	namespaces := s.parseNamespacesForUser(r)
+	if noNamespaceAccess(namespaces) {
+		s.writeJSON(w, []certs.Cert{})
+		return
+	}
+
 	src := certs.Sources{Now: time.Now().UTC()}
 
 	// cert-manager Certificate CRs. ?group disambiguates from other ecosystems'
-	// "Certificate" kinds. A CRD-absent / not-yet-discovered cluster errors
-	// here and we ignore it — the TLS-secret leg still answers, so "no
-	// cert-manager" is not a failure.
-	if items, err := cache.ListDynamicWithGroup(r.Context(), "certificates", "", "cert-manager.io"); err == nil {
+	// "Certificate" kinds. An absent CRD (ErrUnknownDynamicKind) just means the
+	// cluster doesn't run cert-manager — not an error; the TLS-secret leg still
+	// answers. Any OTHER error (RBAC denial, discovery not ready, transient)
+	// would silently drop real cert-manager certs, so log it and remember the
+	// failure rather than rendering a misleadingly-empty inventory.
+	cmFailed := false
+	items, err := cache.ListDynamicWithGroup(r.Context(), "certificates", "", "cert-manager.io")
+	switch {
+	case err == nil:
 		for _, it := range items {
-			src.CertManager = append(src.CertManager, projectCertManagerCert(it.Object))
+			if in := projectCertManagerCert(it.Object); topology.MatchesNamespace(namespaces, in.Namespace) {
+				src.CertManager = append(src.CertManager, in)
+			}
 		}
+	case errors.Is(err, k8s.ErrUnknownDynamicKind):
+		// cert-manager not installed — expected.
+	default:
+		log.Printf("[certificate] cert-manager Certificate list failed: %v", err)
+		cmFailed = true
 	}
 
 	// kubernetes.io/tls secrets. We only read tls.crt (the public chain) and
-	// emit metadata; tls.key never leaves the cluster.
+	// emit metadata; tls.key never leaves the cluster. A nil error with no
+	// secrets is a benign deferred-cache state; a non-nil error means we
+	// genuinely couldn't read secrets.
+	secFailed := false
 	provider := k8s.NewTopologyResourceProvider(cache)
 	if secrets, err := provider.Secrets(); err == nil {
 		for _, sec := range secrets {
-			if sec.Type != corev1.SecretTypeTLS {
+			if !topology.MatchesNamespace(namespaces, sec.Namespace) {
 				continue
 			}
-			if _, sealed := sec.Labels[sealedSecretsKeyLabel]; sealed {
-				continue
+			if in, ok := secretToCertInput(sec); ok {
+				src.TLSSecrets = append(src.TLSSecrets, in)
 			}
-			pem, ok := sec.Data["tls.crt"]
-			if !ok || len(pem) == 0 {
-				continue
-			}
-			leaf := topology.ParsePEMCertificates(pem)
-			if len(leaf) == 0 {
-				continue
-			}
-			in := certs.Input{
-				Name:      sec.Name,
-				Namespace: sec.Namespace,
-				Issuer:    leaf[0].Issuer,
-				Domains:   leaf[0].SANs,
-				Source:    certs.SourceTLSSecret,
-			}
-			if t, err := time.Parse(time.RFC3339, leaf[0].NotAfter); err == nil {
-				in.NotAfter = &t
-			}
-			src.TLSSecrets = append(src.TLSSecrets, in)
 		}
+	} else {
+		log.Printf("[certificate] TLS secret list failed: %v", err)
+		secFailed = true
+	}
+
+	// Both sources hard-failed → returning an empty list would read as a healthy
+	// "no certs" cluster. Surface it so the fleet view marks the cluster errored
+	// rather than silently green.
+	if cmFailed && secFailed {
+		s.writeError(w, http.StatusServiceUnavailable, "certificate inventory temporarily unavailable")
+		return
 	}
 
 	s.writeJSON(w, certs.Aggregate(src))
 }
 
+// secretToCertInput projects a kubernetes.io/tls secret into a certs.Input.
+// ok=false for secrets that aren't serving certs: non-TLS types, sealed-secrets
+// controller keypairs (encryption keys, not renew-able certs), and secrets
+// whose tls.crt is missing or unparseable. Reads only tls.crt — never tls.key.
+func secretToCertInput(sec *corev1.Secret) (certs.Input, bool) {
+	if sec.Type != corev1.SecretTypeTLS {
+		return certs.Input{}, false
+	}
+	if _, sealed := sec.Labels[sealedSecretsKeyLabel]; sealed {
+		return certs.Input{}, false
+	}
+	pem, ok := sec.Data["tls.crt"]
+	if !ok || len(pem) == 0 {
+		return certs.Input{}, false
+	}
+	leaf := topology.ParsePEMCertificates(pem)
+	if len(leaf) == 0 {
+		return certs.Input{}, false
+	}
+	in := certs.Input{
+		Name:      sec.Name,
+		Namespace: sec.Namespace,
+		Issuer:    leaf[0].Issuer,
+		Domains:   leaf[0].SANs,
+		Source:    certs.SourceTLSSecret,
+	}
+	if t, err := time.Parse(time.RFC3339, leaf[0].NotAfter); err == nil {
+		in.NotAfter = &t
+	}
+	return in, true
+}
+
 // projectCertManagerCert maps a cert-manager.io Certificate CR (unstructured)
-// to a certs.Input. status.notAfter is absent until the cert is first issued,
-// in which case NotAfter stays nil (pkg/certs renders it as unknown expiry).
+// to a certs.Input. status.notAfter is absent when the cert has no issued
+// secret yet (and during some renewal-failure states), in which case NotAfter
+// stays nil (pkg/certs renders it as unknown expiry).
 func projectCertManagerCert(obj map[string]any) certs.Input {
 	md, _ := obj["metadata"].(map[string]any)
 	spec, _ := obj["spec"].(map[string]any)

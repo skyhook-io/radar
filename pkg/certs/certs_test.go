@@ -122,8 +122,8 @@ func TestAggregate_FormatsDomains(t *testing.T) {
 	}
 }
 
-// A cluster without cert-manager contributes zero CertManager inputs; the TLS
-// secrets must still come through (this is the "certs not showing" regression).
+// A cluster without cert-manager contributes zero CertManager inputs, so its
+// TLS-secret certs must still come through on their own.
 func TestAggregate_NoCertManagerStillReturnsSecretCerts(t *testing.T) {
 	now := time.Now().UTC()
 	got := Aggregate(Sources{
@@ -132,5 +132,59 @@ func TestAggregate_NoCertManagerStillReturnsSecretCerts(t *testing.T) {
 	})
 	if len(got) != 1 || got[0].Name != "raw" || got[0].Source != SourceTLSSecret {
 		t.Fatalf("want the lone TLS-secret cert, got %+v", got)
+	}
+}
+
+// Dedup keys on namespace+secretName, so the same secretName in two namespaces
+// must NOT collapse — a prod/tls Certificate owning prod/tls must not suppress
+// an unrelated staging/tls raw secret.
+func TestAggregate_DedupIsNamespaceScoped(t *testing.T) {
+	now := time.Now().UTC()
+	got := Aggregate(Sources{
+		Now: now,
+		CertManager: []Input{{
+			Name: "cert", Namespace: "prod", NotAfter: at(now, 40),
+			Source: SourceCertManager, SecretName: "tls",
+		}},
+		TLSSecrets: []Input{
+			{Name: "tls", Namespace: "prod", NotAfter: at(now, 40), Source: SourceTLSSecret},    // deduped (owned by prod cert)
+			{Name: "tls", Namespace: "staging", NotAfter: at(now, 12), Source: SourceTLSSecret}, // survives (different ns)
+		},
+	})
+	if find(got, "prod", "tls") != nil {
+		t.Error("prod/tls secret should be deduped against the cert-manager Certificate")
+	}
+	if find(got, "staging", "tls") == nil {
+		t.Error("staging/tls secret must survive — dedup must be namespace-scoped, not by bare secretName")
+	}
+}
+
+// Health thresholds are `< 7` and `< 30`, and DaysLeft truncates Hours()/24.
+// Pin the exact boundaries so a `<`→`<=` or truncation regression is caught.
+func TestAggregate_HealthThresholdBoundaries(t *testing.T) {
+	now := time.Now().UTC()
+	got := Aggregate(Sources{
+		Now: now,
+		TLSSecrets: []Input{
+			{Name: "d6", Namespace: "a", NotAfter: at(now, 6), Source: SourceTLSSecret},
+			{Name: "d7", Namespace: "a", NotAfter: at(now, 7), Source: SourceTLSSecret},
+			{Name: "d29", Namespace: "a", NotAfter: at(now, 29), Source: SourceTLSSecret},
+			{Name: "d30", Namespace: "a", NotAfter: at(now, 30), Source: SourceTLSSecret},
+		},
+	})
+	want := map[string]Health{
+		"d6":  HealthUnhealthy, // 6 < 7
+		"d7":  HealthDegraded,  // 7 is NOT < 7
+		"d29": HealthDegraded,  // 29 < 30
+		"d30": HealthHealthy,   // 30 is NOT < 30
+	}
+	for name, wantHealth := range want {
+		c := find(got, "a", name)
+		if c == nil {
+			t.Fatalf("cert %q missing", name)
+		}
+		if c.Health != wantHealth {
+			t.Errorf("cert %q health = %q, want %q", name, c.Health, wantHealth)
+		}
 	}
 }
