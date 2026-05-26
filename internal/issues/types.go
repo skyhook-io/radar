@@ -75,8 +75,10 @@ type Ref struct {
 
 // Issue is the unified cluster-health record.
 //
-// All current sources are snapshot-derived: LastSeen is the compose time,
-// FirstSeen backs off by the problem's observed duration, and Count = 1.
+// All current sources are snapshot-derived with Count = 1. For problem /
+// missing_ref / scheduling, LastSeen is the compose time and FirstSeen backs
+// off by the observed problem duration; for condition rows, both timestamps
+// are the condition's lastTransitionTime.
 type Issue struct {
 	Severity  Severity  `json:"severity"`
 	Source    Source    `json:"source"`

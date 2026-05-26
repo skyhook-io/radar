@@ -283,10 +283,11 @@ func registerTools(server *mcp.Server) {
 			"no source filter; each row carries a `source` label (problem|missing_ref|" +
 			"scheduling|condition) you can slice on via the CEL filter= if needed. " +
 			"For raw Kubernetes Warning events use get_events; for static best-practice / " +
-			"security-posture / compliance findings (runAsRoot, missing PDB, no probes, " +
-			"missing resource limits, Kyverno policy violations) use get_cluster_audit — a " +
-			"separate axis that must never be conflated (a healthy pod can have many audit " +
-			"findings; a crashing pod can have zero). " +
+			"security-posture findings (runAsRoot, missing PDB, no probes, missing resource " +
+			"limits) use get_cluster_audit — a separate axis that must never be conflated (a " +
+			"healthy pod can have many audit findings; a crashing pod can have zero). Kyverno " +
+			"PolicyReport violations are not in either — they surface per-resource via " +
+			"get_resource's resourceContext policy rollup. " +
 			"After identifying a suspect issue, call diagnose when the affected resource " +
 			"is a workload (Pod/Deployment/StatefulSet/DaemonSet) — it bundles spec + " +
 			"logs + events + context in one call. For non-workload kinds, call " +
@@ -985,6 +986,23 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 	// an empty success.
 	if includes["logs"] {
 		result["logsError"] = "include=logs is no longer supported here; use get_pod_logs or get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle"
+	}
+
+	// Any other token (typo, or a value like "relationships" that moved to
+	// resourceContext) is silently dropped by the branches above. Surface it
+	// so the caller learns the token did nothing rather than seeing an empty
+	// success — the same reason logs gets an explicit error.
+	var unknown []string
+	for tok := range includes {
+		switch tok {
+		case "events", "metrics", "logs":
+		default:
+			unknown = append(unknown, tok)
+		}
+	}
+	if len(unknown) > 0 {
+		sort.Strings(unknown)
+		result["includeError"] = fmt.Sprintf("unknown include value(s): %s (valid: events, metrics)", strings.Join(unknown, ", "))
 	}
 
 }

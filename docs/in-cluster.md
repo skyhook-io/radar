@@ -213,7 +213,7 @@ rules:
   - apiGroups: ["", "apps", "batch", "networking.k8s.io"]
     resources: ["pods", "services", "deployments", "daemonsets", "statefulsets",
                 "replicasets", "jobs", "cronjobs", "configmaps", "events",
-                "ingresses", "persistentvolumeclaims"]
+                "ingresses", "persistentvolumeclaims", "resourcequotas"]
     verbs: ["get", "list", "watch"]
   - apiGroups: [""]
     resources: ["pods/log"]
