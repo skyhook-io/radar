@@ -10,6 +10,7 @@ package certs
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"time"
 )
@@ -116,7 +117,10 @@ func toCert(in Input, now time.Time) Cert {
 	}
 	if in.NotAfter != nil {
 		c.Expiry = in.NotAfter.UTC().Format(time.RFC3339)
-		days := int(in.NotAfter.Sub(now).Hours() / 24)
+		// Floor (not truncate-toward-zero) so a cert that expired an hour ago
+		// reads as -1 ("expired"), not 0 ("expires today"). Matches the floor
+		// semantics in topology.ParsePEMCertificates.
+		days := int(math.Floor(in.NotAfter.Sub(now).Hours() / 24))
 		c.DaysLeft = &days
 		switch {
 		case days < unhealthyWithinDays:

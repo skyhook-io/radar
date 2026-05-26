@@ -135,6 +135,26 @@ func TestAggregate_NoCertManagerStillReturnsSecretCerts(t *testing.T) {
 	}
 }
 
+// A cert that expired an hour ago must floor to -1 day ("expired"), not
+// truncate to 0 ("expires today"). Guards the math.Floor vs int() distinction.
+func TestAggregate_JustExpiredFloorsToNegative(t *testing.T) {
+	now := time.Now().UTC()
+	oneHourAgo := now.Add(-time.Hour)
+	got := Aggregate(Sources{
+		Now:        now,
+		TLSSecrets: []Input{{Name: "expired", Namespace: "a", NotAfter: &oneHourAgo, Source: SourceTLSSecret}},
+	})
+	if len(got) != 1 || got[0].DaysLeft == nil {
+		t.Fatalf("want 1 cert with a daysLeft, got %+v", got)
+	}
+	if *got[0].DaysLeft != -1 {
+		t.Errorf("daysLeft = %d, want -1 (floor — a just-expired cert is expired, not 'today')", *got[0].DaysLeft)
+	}
+	if got[0].Health != HealthUnhealthy {
+		t.Errorf("health = %q, want unhealthy", got[0].Health)
+	}
+}
+
 // Dedup keys on namespace+secretName, so the same secretName in two namespaces
 // must NOT collapse — a prod/tls Certificate owning prod/tls must not suppress
 // an unrelated staging/tls raw secret.
