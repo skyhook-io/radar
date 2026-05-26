@@ -1609,8 +1609,24 @@ export function useUpdateResource() {
       errorMessage: 'Failed to update resource',
       successMessage: 'Resource updated',
     },
-    onSuccess: (_, variables) => {
-      queryClient.invalidateQueries({ queryKey: ['resource', variables.kind, variables.namespace, variables.name] })
+    onSuccess: (updated: any, variables) => {
+      // The PUT goes straight to the apiserver and returns the authoritative
+      // object, but the GET behind this query reads Radar's informer cache,
+      // which lags a write by one watch round-trip. Seed the detail cache with
+      // the PUT response so the edit shows immediately. Invalidating here
+      // instead would trigger a refetch that races the seed and re-reads the
+      // lagging cache — the change appears not to have taken effect.
+      if (updated && typeof updated === 'object' && updated.metadata) {
+        queryClient.setQueriesData(
+          { queryKey: ['resource', variables.kind, variables.namespace, variables.name] },
+          (old: any) =>
+            old && typeof old === 'object' && 'resource' in old
+              ? { ...old, resource: updated }
+              : { resource: updated }
+        )
+      } else {
+        queryClient.invalidateQueries({ queryKey: ['resource', variables.kind, variables.namespace, variables.name] })
+      }
       queryClient.invalidateQueries({ queryKey: ['resources', variables.kind] })
       queryClient.invalidateQueries({ queryKey: ['topology'] })
     },
