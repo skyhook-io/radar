@@ -218,6 +218,8 @@ func (s *Server) setupRoutes() {
 		r.Get("/auth/logout", s.handleLogout)
 	}
 
+	r.Get("/metrics", s.handleMetrics)
+
 	// pprof routes for profiling. Not mounted under cloud-mode — they'd be
 	// reachable via the Cloud tunnel and leak the in-memory K8s cache (every
 	// Secret, ConfigMap, Pod spec) via /debug/pprof/heap. Local/standalone

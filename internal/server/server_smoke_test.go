@@ -3,10 +3,12 @@ package server
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
@@ -23,7 +25,7 @@ import (
 )
 
 var (
-	testServer   *httptest.Server
+	testServer    *httptest.Server
 	testServerSrv *Server
 )
 
@@ -301,6 +303,33 @@ func TestSmokeHealth(t *testing.T) {
 	count, _ := body["resourceCount"].(float64)
 	if count < 1 {
 		t.Errorf("expected resourceCount >= 1, got %v", count)
+	}
+}
+
+func TestSmokeMetricsEndpoint(t *testing.T) {
+	resp := get(t, "/metrics")
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.Contains(ct, "text/plain") {
+		t.Fatalf("expected Prometheus text content type, got %q", ct)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("read body: %v", err)
+	}
+
+	for _, want := range []string{
+		"radar_sse_connected_clients",
+		"radar_sse_topology_broadcasts_total",
+		"radar_sse_dropped_events_total",
+	} {
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("expected %s in metrics output, got:\n%s", want, body)
+		}
 	}
 }
 

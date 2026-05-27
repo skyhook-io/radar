@@ -15,6 +15,7 @@ require (
 	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/hashicorp/yamux v0.1.2
 	github.com/modelcontextprotocol/go-sdk v1.6.0
+	github.com/prometheus/client_golang v1.23.2
 	github.com/skyhook-io/radar/pkg v0.0.0
 	github.com/wailsapp/wails/v2 v2.12.0
 	golang.org/x/net v0.51.0
@@ -45,8 +46,10 @@ require (
 	github.com/Masterminds/squirrel v1.5.4 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.1 // indirect
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
+	github.com/beorn7/perks v1.0.1 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
+	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/chai2010/gettext-go v1.0.3 // indirect
 	github.com/clipperhouse/stringish v0.1.1 // indirect
 	github.com/clipperhouse/uax29/v2 v2.4.0 // indirect
@@ -128,6 +131,9 @@ require (
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
 	github.com/pkg/errors v0.9.1 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
+	github.com/prometheus/client_model v0.6.2 // indirect
+	github.com/prometheus/common v0.67.5 // indirect
+	github.com/prometheus/procfs v0.19.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rubenv/sql-migrate v1.8.1 // indirect
