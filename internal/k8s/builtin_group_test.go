@@ -89,26 +89,3 @@ func TestBuiltinGVR(t *testing.T) {
 		}
 	}
 }
-
-// TestBuiltinGroupForKind spot-checks the kind→group table powering the routing
-// predicate, including the case-insensitive + singular/abbreviation forms the
-// handlers normalize to.
-func TestBuiltinGroupForKind(t *testing.T) {
-	cases := map[string]struct {
-		group string
-		ok    bool
-	}{
-		"Deployments": {"apps", true}, // case-insensitive
-		"pdb":         {"policy", true},
-		"netpol":      {"networking.k8s.io", true},
-		"pvc":         {"", true},
-		"sc":          {"storage.k8s.io", true},
-		"widgets":     {"", false},
-	}
-	for kind, want := range cases {
-		g, ok := BuiltinGroupForKind(kind)
-		if ok != want.ok || (ok && g != want.group) {
-			t.Errorf("BuiltinGroupForKind(%q) = (%q, %v), want (%q, %v)", kind, g, ok, want.group, want.ok)
-		}
-	}
-}

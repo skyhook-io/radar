@@ -673,14 +673,15 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 		listScope = nil
 	}
 
-	// When a group is specified, route straight to the dynamic cache so
-	// CRDs whose plural collides with a core kind (e.g. Knative
-	// serving.knative.dev/Service vs corev1 ""/Service) reach the right
-	// resource. FetchResourceList is group-blind — it would silently
-	// return the core typed list, dropping the caller's group filter on
-	// the floor. Mirrors the group-aware short-circuit in REST
-	// handleAIListResources and handleGetResource (PR #721).
-	if group != "" {
+	// When a group is specified, route to the dynamic cache so CRDs whose
+	// plural collides with a core kind (e.g. Knative serving.knative.dev/Service
+	// vs corev1 ""/Service) reach the right resource. FetchResourceList is
+	// group-blind — it would silently return the core typed list, dropping the
+	// caller's group filter. But a built-in addressed by its own group
+	// (deployments?group=apps) is a typed lookup — the dynamic cache has no
+	// informer for built-ins — so only true CRDs / plural collisions go dynamic.
+	// Mirrors the group-aware dispatch in the REST handlers.
+	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Context)
 	}
 
@@ -828,7 +829,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	// Service would silently leak the wrong object.
 	var resourceData any
 	var rawObj runtime.Object
-	if group != "" {
+	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		u, dynErr := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
 		if dynErr != nil {
 			return nil, nil, fmt.Errorf("resource not found: %w", dynErr)

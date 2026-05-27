@@ -28,9 +28,9 @@ var ErrUnknownKind = fmt.Errorf("unknown typed kind")
 // group/versions every supported cluster serves.
 //
 // One table, two jobs:
-//   - BuiltinGroupForKind / TypedKindOwnsGroup decide typed-vs-dynamic routing
-//     for the resource GET/LIST handlers (a built-in addressed by its own group
-//     must use the typed cache, not the dynamic/CRD cache).
+//   - TypedKindOwnsGroup decides typed-vs-dynamic routing for the resource
+//     GET/LIST handlers (a built-in addressed by its own group must use the
+//     typed cache, not the dynamic/CRD cache).
 //   - BuiltinGVR is a static fallback for live/dynamic fetches when API
 //     discovery can't resolve a built-in's GVR (partial discovery under
 //     restricted RBAC, or a transient refresh miss). The drift/insights live
@@ -84,14 +84,6 @@ var builtinGVRs = func() map[string]schema.GroupVersionResource {
 	}
 	return m
 }()
-
-// BuiltinGroupForKind returns the canonical API group of a built-in kind served
-// by the typed informer cache, and whether kind is such a built-in. kind is
-// matched case-insensitively against plural / singular / abbreviation forms.
-func BuiltinGroupForKind(kind string) (string, bool) {
-	gvr, ok := builtinGVRs[strings.ToLower(kind)]
-	return gvr.Group, ok
-}
 
 // TypedKindOwnsGroup reports whether (kind, group) names a built-in kind
 // addressed by its own API group — i.e. it must resolve via the typed cache,
