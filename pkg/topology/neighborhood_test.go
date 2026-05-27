@@ -804,7 +804,7 @@ func TestBuildNeighborhood_SecretFilteredByAllow(t *testing.T) {
 
 // TestBuildNeighborhood_NodeClassPerVariantSAR pins the per-variant
 // authorization at the topology layer: a single NodeKind (NodeClass) has
-// three discriminated variants (EC2NodeClass / AKSNodeClass / GCPNodeClass)
+// three discriminated variants (EC2NodeClass / AKSNodeClass / GCENodeClass)
 // keyed by apiVersion-group. The caller's Allow predicate must be able to
 // pass one variant while denying another so a user with EC2-only RBAC
 // doesn't see AKS or GCP NodeClass nodes on a multi-provider cluster.

@@ -16,6 +16,7 @@ import {
   rbacKindBadgeClass,
 } from '../../../utils/rbac-badges'
 import { RBAC_BLAST_ESCALATION_VERBS } from '../../../utils/rbac-blast-radius'
+import { RBACErrorSection } from './RBACErrorSection'
 import { BADGE_SEVERITY_COLORS } from '../../ui/Badge'
 
 interface ServiceAccountRendererProps {
@@ -194,13 +195,7 @@ function RBACSections({ rbacData, loading, error, onNavigate }: RBACSectionsProp
     )
   }
   if (error) {
-    return (
-      <Section title="Bindings" icon={Shield}>
-        <div className="text-sm text-red-400">
-          Could not load RBAC data: {error.message}
-        </div>
-      </Section>
-    )
+    return <RBACErrorSection title="Bindings" error={error} errorPrefix="Could not load RBAC data" />
   }
   if (!rbacData) return null
 

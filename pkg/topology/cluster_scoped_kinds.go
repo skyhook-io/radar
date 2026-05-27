@@ -32,7 +32,7 @@ var ClusterScopedKinds = []ClusterScopedKindEntry{
 	{KindNodeClaim, "karpenter.sh", "nodeclaims"},
 	{KindNodeClass, "karpenter.k8s.aws", "ec2nodeclasses"},
 	{KindNodeClass, "karpenter.azure.com", "aksnodeclasses"},
-	{KindNodeClass, "karpenter.k8s.gcp", "gcpnodeclasses"},
+	{KindNodeClass, "karpenter.k8s.gcp", "gcenodeclasses"},
 	{KindGatewayClass, "gateway.networking.k8s.io", "gatewayclasses"},
 	{KindPV, "", "persistentvolumes"},
 	{KindStorageClass, "storage.k8s.io", "storageclasses"},

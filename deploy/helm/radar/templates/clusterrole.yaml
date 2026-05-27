@@ -69,6 +69,7 @@ rules:
   - apiGroups: ["networking.k8s.io"]
     resources:
       - ingresses
+      - ingressclasses
       - networkpolicies
     verbs: ["get", "list", "watch"]
 
@@ -91,11 +92,14 @@ rules:
       - selfsubjectaccessreviews
     verbs: ["create"]
 
-  {{- if .Values.rbac.viewRBAC }}
-  # RBAC objects: opt-in read for the resource browser. Off by default —
-  # cache-served reads are not gated by per-user RBAC, so granting this
-  # exposes the cluster's authorization graph to anyone who can reach
-  # Radar's API regardless of their own permissions.
+  {{- if or .Values.rbac.viewRBAC (ne .Values.auth.mode "none") .Values.cloud.enabled }}
+  # RBAC objects (read): powers the resource browser's RBAC views and the
+  # per-ServiceAccount "blast radius" Permissions panel on Pod/Workload pages.
+  # Auto-enabled when auth is on or in cloud mode — there, every RBAC read is
+  # re-checked against the requesting user's own permissions, so the shared
+  # informer cache cannot leak the cluster's authorization graph. For no-auth
+  # installs it stays opt-in via rbac.viewRBAC, since cache-served reads there
+  # are not gated per-user and would expose the graph to any viewer.
   - apiGroups: ["rbac.authorization.k8s.io"]
     resources:
       - roles
@@ -174,12 +178,19 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.certManager }}
-  - apiGroups: ["cert-manager.io"]
+  # acme.cert-manager.io carries Orders + Challenges — the ACME issuance flow
+  # surfaced when diagnosing a stuck Certificate.
+  - apiGroups: ["cert-manager.io", "acme.cert-manager.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.cilium }}
+  - apiGroups: ["cilium.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.cloudnativePg }}
-  - apiGroups: ["cloudnative-pg.io"]
+  - apiGroups: ["postgresql.cnpg.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
@@ -249,7 +260,7 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.karpenter }}
-  - apiGroups: ["karpenter.sh", "karpenter.k8s.aws", "karpenter.azure.com", "karpenter.gcp.compute.com"]
+  - apiGroups: ["karpenter.sh", "karpenter.k8s.aws", "karpenter.azure.com", "karpenter.k8s.gcp"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}
@@ -280,6 +291,14 @@ rules:
   {{- end }}
   {{- if .Values.rbac.crdGroups.mariadb }}
   - apiGroups: ["mariadb.mmontes.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+  {{- if .Values.rbac.crdGroups.networkPolicyApi }}
+  # SIG-network Network Policy API (out-of-tree CRDs): AdminNetworkPolicy +
+  # BaselineAdminNetworkPolicy (v1alpha1), merged into ClusterNetworkPolicy
+  # (v1alpha2). Cluster-scoped; surfaced in topology.
+  - apiGroups: ["policy.networking.k8s.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]
   {{- end }}

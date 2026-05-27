@@ -62,7 +62,7 @@ func (s *Server) handleAINeighborhood(w http.ResponseWriter, r *http.Request) {
 	// Topology pseudo-kinds (NodeClass, NodePool, NodeClaim, …) FIRST: these
 	// are synthesized labels that ClassifyKindScope doesn't recognize ("nodeclass"
 	// isn't a real K8s kind — the variants are EC2NodeClass / AKSNodeClass /
-	// GCPNodeClass). Without this branch the call falls into the namespaced
+	// GCENodeClass). Without this branch the call falls into the namespaced
 	// arm below and 400s with "namespace is required" even though "_" was
 	// supplied (URL → namespace == ""). topology.RBACTuplesForKind returns the
 	// per-variant SAR tuples — we iterate through s.canRead and allow on any

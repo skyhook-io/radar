@@ -892,7 +892,7 @@ func (b *Builder) buildResourcesTopology(opts BuildOptions) (*Topology, error) {
 	nodeClassIDs := make(map[string]string) // "kind/name" -> nodeClassID (cluster-scoped, keyed by kind to avoid collision)
 
 	// Try common NodeClass kinds across cloud providers
-	nodeClassKinds := []string{"EC2NodeClass", "AKSNodeClass", "GCPNodeClass"}
+	nodeClassKinds := []string{"EC2NodeClass", "AKSNodeClass", "GCENodeClass"}
 	for _, ncKind := range nodeClassKinds {
 		var ncGVR schema.GroupVersionResource
 		var hasKind bool

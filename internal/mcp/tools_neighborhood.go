@@ -53,7 +53,7 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 
 	// RBAC for the root. Topology pseudo-kinds (NodeClass, NodePool, NodeClaim,
 	// …) FIRST: ClassifyKindScope doesn't recognize them ("nodeclass" isn't a
-	// real K8s kind — the variants are EC2NodeClass / AKSNodeClass / GCPNodeClass).
+	// real K8s kind — the variants are EC2NodeClass / AKSNodeClass / GCENodeClass).
 	// Without this branch we fall into the namespaced arm below and reject as
 	// "namespace is required" even though the agent sees these kinds in
 	// get_topology output. topology.RBACTuplesForKind returns the per-variant

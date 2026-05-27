@@ -10,6 +10,7 @@ import {
   rbacApiGroupBadgeClass,
 } from '../../../utils/rbac-badges'
 import { detectBlastRadius, rulePermissivenessScore } from '../../../utils/rbac-blast-radius'
+import { RBACErrorSection } from './RBACErrorSection'
 import type { ResolvedEnvFrom, RBACSubjectResponse, RBACPolicyRule } from '../../../types'
 import { Tooltip } from '../../ui/Tooltip'
 import { MetricsChart } from '../../ui/MetricsChart'
@@ -877,13 +878,7 @@ function PodPermissionsSection({
     )
   }
   if (error) {
-    return (
-      <Section title={title} icon={Shield}>
-        <div className="text-sm text-red-400">
-          Could not load permissions: {error.message}
-        </div>
-      </Section>
-    )
+    return <RBACErrorSection title={title} error={error} />
   }
   if (!rbacData) return null
 

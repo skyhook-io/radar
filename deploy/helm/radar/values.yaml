@@ -66,10 +66,14 @@ rbac:
   secrets: false
 
   # Allow reading RBAC objects (Roles, RoleBindings, ClusterRoles, ClusterRoleBindings)
-  # so the resource browser can list them. Off by default: anyone reaching Radar's
-  # API sees the full RBAC graph through the shared informer cache regardless of
-  # their own K8s permissions, which is reconnaissance value for a low-trust user.
-  # Enable for clusters where Radar's audience is trusted with cluster RBAC visibility.
+  # so the resource browser can list them and the per-ServiceAccount "blast radius"
+  # Permissions panel can render. Auto-enabled when auth is on (auth.mode != none)
+  # or in cloud mode, where every RBAC read is re-checked against the requesting
+  # user's own permissions so the shared cache can't leak the authorization graph.
+  # This flag therefore only matters for no-auth installs: there, cache-served reads
+  # aren't gated per-user, so anyone reaching Radar's API would see the full RBAC
+  # graph — reconnaissance value for a low-trust user. Enable only if that audience
+  # is trusted with cluster RBAC visibility.
   viewRBAC: false
 
   # Allow pod exec (enables terminal feature)
@@ -109,8 +113,9 @@ rbac:
 
     argo: true              # argoproj.io
     awx: true               # awx.ansible.com
-    certManager: true       # cert-manager.io
-    cloudnativePg: true     # cloudnative-pg.io
+    certManager: true       # cert-manager.io, acme.cert-manager.io
+    cilium: true            # cilium.io (CiliumClusterwideNetworkPolicy etc. in topology)
+    cloudnativePg: true     # postgresql.cnpg.io (CloudNativePG: Clusters, Poolers, Backups)
     clusterApi: true        # *.cluster.x-k8s.io (CAPI core + infrastructure / controlplane / bootstrap / addons)
     contour: true           # projectcontour.io
     crossplane: true        # crossplane.io, pkg.crossplane.io, apiextensions.crossplane.io, helm.crossplane.io, kubernetes.crossplane.io. For Upbound provider CRDs (s3.aws.upbound.io, compute.gcp.upbound.io, etc.) list them in additionalCrdGroups — K8s RBAC has no apiGroup wildcards.
@@ -123,13 +128,14 @@ rbac:
     gcpMonitoring: true     # monitoring.googleapis.com
     grafana: true           # monitoring.grafana.com, tempo/loki/grafana.integreatly.org
     istio: true             # networking.istio.io, security.istio.io
-    karpenter: true         # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.gcp.compute.com
+    karpenter: true         # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.k8s.gcp
     keda: true              # keda.sh
     knative: true           # serving.knative.dev, eventing.knative.dev, sources/messaging/flows/networking.internal.knative.dev
     kubeshark: true         # kubeshark.io
     kured: true             # kured.io
     kyverno: true           # kyverno.io, wgpolicyk8s.io, reports.kyverno.io
     mariadb: true           # mariadb.mmontes.io
+    networkPolicyApi: true  # policy.networking.k8s.io (Admin/Baseline/ClusterNetworkPolicy — SIG-network)
     nginx: true             # nginx.org
     openshift: true         # observability.openshift.io
     opentelemetry: true     # opentelemetry.io

@@ -100,7 +100,7 @@ func TestCanReadNeighborhoodNodeMCP_NoAuthPassthrough(t *testing.T) {
 
 // makeNodeClassNode builds a topology pseudo-kind NodeClass node. The Kind is
 // the synthesized topology label ("NodeClass"), not a real K8s resource — the
-// actual variants are EC2NodeClass / AKSNodeClass / GCPNodeClass.
+// actual variants are EC2NodeClass / AKSNodeClass / GCENodeClass.
 func makeNodeClassNode(name string) *topology.Node {
 	return &topology.Node{
 		ID:     "nodeclass/" + name,
@@ -140,7 +140,7 @@ func TestCanReadNeighborhoodNodeMCP_NodeClassDeniedWithoutSAR(t *testing.T) {
 	// — the discovery filter is skip-when-missing).
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 
 	n := makeNodeClassNode("default-class")
 	if canReadNeighborhoodNodeMCP(ctx, n) {
@@ -157,7 +157,7 @@ func TestCanReadNeighborhoodNodeMCP_NodeClassAllowedWithProviderSAR(t *testing.T
 	// Bob has EC2 access only — should still pass for NodeClass.
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 
 	n := makeNodeClassNode("default-class")
 	if !canReadNeighborhoodNodeMCP(ctx, n) {
@@ -173,7 +173,7 @@ func TestCanReadNeighborhoodNodeMCP_NodeClassPerVariantDeniesWrongProvider(t *te
 	perms := getPermCache().Get("bob")
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 
 	aks := &topology.Node{
 		ID:     "nodeclass/aks-default",
@@ -234,7 +234,7 @@ func TestAllowPseudoKindTuplesMCP_NodeClass_DeniedWithoutSAR(t *testing.T) {
 	perms := getPermCache().Get("alice")
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 
 	tuples, fallthroughAllow := pseudoKindTuplesForTestMCP("nodeclass", "")
 	if len(tuples) == 0 {
@@ -251,7 +251,7 @@ func TestAllowPseudoKindTuplesMCP_NodeClass_AllowedWithProviderSAR(t *testing.T)
 	// EC2 only — single-provider grant must be enough for the kind-level gate.
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 
 	tuples, fallthroughAllow := pseudoKindTuplesForTestMCP("nodeclass", "")
 	if !allowPseudoKindTuplesMCP(ctx, tuples, fallthroughAllow) {
@@ -279,7 +279,7 @@ func TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired(t *testing.T
 	denyPerms := getPermCache().Get("alice")
 	denyPerms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
 	denyPerms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	denyPerms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	denyPerms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 	_, _, err := handleGetNeighborhood(ctxDeny, nil, getNeighborhoodInput{
 		Kind: "nodeclass",
 		Name: "foo",
@@ -299,7 +299,7 @@ func TestHandleGetNeighborhoodMCP_NodeClassRootNotNamespaceRequired(t *testing.T
 	allowPerms := getPermCache().Get("bob")
 	allowPerms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	allowPerms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	allowPerms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	allowPerms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 	_, _, err2 := handleGetNeighborhood(ctxAllow, nil, getNeighborhoodInput{
 		Kind: "nodeclass",
 		Name: "foo",

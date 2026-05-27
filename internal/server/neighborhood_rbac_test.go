@@ -104,7 +104,7 @@ func TestCanReadNeighborhoodNode_ConfigMapStaysOnNamespaceGate(t *testing.T) {
 
 // makeNodeClassNode builds a topology pseudo-kind NodeClass node. The Kind is
 // the synthesized topology label ("NodeClass"), not a real K8s resource — the
-// actual variants are EC2NodeClass / AKSNodeClass / GCPNodeClass.
+// actual variants are EC2NodeClass / AKSNodeClass / GCENodeClass.
 func makeNodeClassNode(name string) *topology.Node {
 	return &topology.Node{
 		ID:     "nodeclass/" + name,
@@ -145,7 +145,7 @@ func TestCanReadNeighborhoodNode_NodeClassDeniedWithoutSAR(t *testing.T) {
 	// disc=nil in tests → no entries filtered out → all 3 SARs run.
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 	s.permCache.Set("alice", perms)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "alice"})
@@ -164,7 +164,7 @@ func TestCanReadNeighborhoodNode_NodeClassAllowedWithProviderSAR(t *testing.T) {
 	// Bob has EC2 access only — should still pass for NodeClass.
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 	s.permCache.Set("bob", perms)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "bob"})
@@ -190,7 +190,7 @@ func TestCanReadNeighborhoodNode_NodeClassPerVariantDeniesWrongProvider(t *testi
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 	s.permCache.Set("bob", perms)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "bob"})
@@ -267,7 +267,7 @@ func TestAllowPseudoKindTuples_NodeClass_DeniedWithoutSAR(t *testing.T) {
 	perms := &auth.UserPermissions{AllowedNamespaces: nil}
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 	s.permCache.Set("alice", perms)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "alice"})
@@ -289,7 +289,7 @@ func TestAllowPseudoKindTuples_NodeClass_AllowedWithProviderSAR(t *testing.T) {
 	// grant is sufficient for the kind-level gate.
 	perms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	perms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	perms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	perms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 	s.permCache.Set("bob", perms)
 
 	r := requestWithUser("GET", "/api/ai/neighborhood/nodeclass/_/x", &auth.User{Username: "bob"})
@@ -343,7 +343,7 @@ func TestNeighborhood_NodeClassRootPreflightNotBadRequest(t *testing.T) {
 	denyPerms := &auth.UserPermissions{AllowedNamespaces: nil}
 	denyPerms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", false)
 	denyPerms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	denyPerms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	denyPerms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 	env.srv.permCache.Set("alice", denyPerms)
 
 	resp := env.authGet(t, "/api/ai/neighborhood/nodeclass/_/foo", "alice", "")
@@ -360,7 +360,7 @@ func TestNeighborhood_NodeClassRootPreflightNotBadRequest(t *testing.T) {
 	allowPerms := &auth.UserPermissions{AllowedNamespaces: nil}
 	allowPerms.SetCanI("get", "karpenter.k8s.aws", "ec2nodeclasses", "", true)
 	allowPerms.SetCanI("get", "karpenter.azure.com", "aksnodeclasses", "", false)
-	allowPerms.SetCanI("get", "karpenter.k8s.gcp", "gcpnodeclasses", "", false)
+	allowPerms.SetCanI("get", "karpenter.k8s.gcp", "gcenodeclasses", "", false)
 	env.srv.permCache.Set("bob", allowPerms)
 
 	resp2 := env.authGet(t, "/api/ai/neighborhood/nodeclass/_/foo", "bob", "")

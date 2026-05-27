@@ -662,7 +662,7 @@ func buildNodeID(kind, namespace, name string, dp DynamicProvider) string {
 		"nodeclasses":     "nodeclass",
 		"ec2nodeclasses":  "nodeclass",
 		"aksnodeclasses":  "nodeclass",
-		"gcpnodeclasses":  "nodeclass",
+		"gcenodeclasses":  "nodeclass",
 		"scaledobjects":            "scaledobject",
 		"scaledjobs":               "scaledjob",
 		"gatewayclasses":           "gatewayclass",

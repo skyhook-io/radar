@@ -170,7 +170,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "karpenter.sh", Versions: []string{"v1", "v1beta1"}, Resource: "nodeclaims", Kind: "NodeClaim", Namespaced: false},
 	{Group: "karpenter.k8s.aws", Versions: []string{"v1", "v1beta1"}, Resource: "ec2nodeclasses", Kind: "EC2NodeClass", Namespaced: false},
 	{Group: "karpenter.azure.com", Versions: []string{"v1alpha2", "v1alpha1"}, Resource: "aksnodeclasses", Kind: "AKSNodeClass", Namespaced: false},
-	{Group: "karpenter.gcp.compute.com", Versions: []string{"v1alpha1"}, Resource: "gcpnodeclasses", Kind: "GCPNodeClass", Namespaced: false},
+	{Group: "karpenter.k8s.gcp", Versions: []string{"v1alpha1"}, Resource: "gcenodeclasses", Kind: "GCENodeClass", Namespaced: false},
 	{Group: "keda.sh", Versions: []string{"v1alpha1"}, Resource: "scaledobjects", Kind: "ScaledObject", Namespaced: true},
 	{Group: "keda.sh", Versions: []string{"v1alpha1"}, Resource: "scaledjobs", Kind: "ScaledJob", Namespaced: true},
 	{Group: "keda.sh", Versions: []string{"v1alpha1"}, Resource: "triggerauthentications", Kind: "TriggerAuthentication", Namespaced: true},
