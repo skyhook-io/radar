@@ -26,7 +26,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			Name:      "topology_broadcasts_total",
 			Help:      "Total number of topology broadcast cycles sent over Radar's SSE stream.",
 		}, func() float64 {
-			return float64(perfstats.GetSnapshot().SSE.TotalBroadcasts)
+			return float64(perfstats.GetSSEStats().TotalBroadcasts)
 		}),
 		prometheus.NewCounterFunc(prometheus.CounterOpts{
 			Namespace: "radar",
@@ -34,7 +34,7 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 			Name:      "dropped_events_total",
 			Help:      "Total number of SSE events dropped because a client channel was full.",
 		}, func() float64 {
-			return float64(perfstats.GetSnapshot().SSE.TotalDrops)
+			return float64(perfstats.GetSSEStats().TotalDrops)
 		}),
 	)
 

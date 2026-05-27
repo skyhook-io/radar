@@ -148,6 +148,15 @@ func IncSSEBroadcast() { global.sseBroadcasts.Add(1) }
 // IncSSEDrop increments the silent-drop counter (safeSend default case).
 func IncSSEDrop() { global.sseDrops.Add(1) }
 
+// GetSSEStats returns the current SSE counters without snapshotting topology
+// sample windows.
+func GetSSEStats() SSEStats {
+	return SSEStats{
+		TotalBroadcasts: global.sseBroadcasts.Load(),
+		TotalDrops:      global.sseDrops.Load(),
+	}
+}
+
 // GetSnapshot returns a consistent point-in-time view of all counters
 // and sample windows for inclusion in /api/diagnostics responses.
 func GetSnapshot() Snapshot {
@@ -160,10 +169,7 @@ func GetSnapshot() Snapshot {
 			PayloadBytes:   global.topologyPayloadBytes.snapshot(),
 			EstimatedNodes: global.topologyEstimatedNodes.snapshot(),
 		},
-		SSE: SSEStats{
-			TotalBroadcasts: global.sseBroadcasts.Load(),
-			TotalDrops:      global.sseDrops.Load(),
-		},
+		SSE: GetSSEStats(),
 	}
 }
 

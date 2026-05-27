@@ -77,11 +77,16 @@ func TestSSECounters(t *testing.T) {
 	IncSSEBroadcast()
 	IncSSEBroadcast()
 	IncSSEDrop()
-	snap := GetSnapshot()
-	if snap.SSE.TotalBroadcasts != 3 {
-		t.Errorf("TotalBroadcasts = %d, want 3", snap.SSE.TotalBroadcasts)
+	stats := GetSSEStats()
+	if stats.TotalBroadcasts != 3 {
+		t.Errorf("TotalBroadcasts = %d, want 3", stats.TotalBroadcasts)
 	}
-	if snap.SSE.TotalDrops != 1 {
-		t.Errorf("TotalDrops = %d, want 1", snap.SSE.TotalDrops)
+	if stats.TotalDrops != 1 {
+		t.Errorf("TotalDrops = %d, want 1", stats.TotalDrops)
+	}
+
+	snap := GetSnapshot()
+	if snap.SSE != stats {
+		t.Errorf("GetSnapshot().SSE = %+v, want %+v", snap.SSE, stats)
 	}
 }
