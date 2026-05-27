@@ -1,10 +1,23 @@
 import { describe, expect, it } from 'vitest'
 import { renderToString } from 'react-dom/server'
-import { RBACErrorSection } from './RBACErrorSection'
+import { RBACErrorSection, isRBACUnavailable } from './RBACErrorSection'
 
 function err(message: string, status?: number): Error {
   return Object.assign(new Error(message), status === undefined ? {} : { status })
 }
+
+describe('isRBACUnavailable', () => {
+  it('is true for the RBAC-cache 503 and any 403 (expected, non-actionable)', () => {
+    expect(isRBACUnavailable(err('RBAC cache not available', 503))).toBe(true)
+    expect(isRBACUnavailable(err('forbidden', 403))).toBe(true)
+  })
+
+  it('is false for genuine faults so they still surface', () => {
+    expect(isRBACUnavailable(err('Not connected to cluster', 503))).toBe(false)
+    expect(isRBACUnavailable(err('boom', 500))).toBe(false)
+    expect(isRBACUnavailable(err('Failed to fetch'))).toBe(false)
+  })
+})
 
 describe('RBACErrorSection', () => {
   it('renders 503 (SA cannot read RBAC) as a calm note, not a red error', () => {

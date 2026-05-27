@@ -13,6 +13,17 @@ interface RBACErrorSectionProps {
   errorPrefix?: string
 }
 
+// True for the two expected, non-actionable RBAC states: 503 because Radar's SA
+// can't read RBAC (so the informers never synced — cluster-static, same on every
+// resource), and 403 because the viewer lacks list permission. Surfaces that treat
+// the RBAC section as a bonus (Pod/Workload Permissions) hide it entirely for these.
+// Genuine faults — connectivity 503, 500, network errors — are deliberately NOT
+// included, so they still surface rather than being silently dropped.
+export function isRBACUnavailable(error: Error): boolean {
+  const status = (error as { status?: number }).status
+  return status === 403 || (status === 503 && error.message.includes('RBAC cache'))
+}
+
 // RBAC reverse-lookup fails for two expected, non-alarming reasons that should
 // not render as red errors:
 //   503 with an "RBAC cache not available" message — the identity Radar connects
