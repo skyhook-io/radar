@@ -60,7 +60,7 @@
     "@types/node": "^25.7.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
-    "@vitejs/plugin-react": "^6.0.1",
+    "@vitejs/plugin-react": "^6.0.2",
     "@xyflow/react": "^12.10.2",
     "clsx": "^2.1.1",
     "elkjs": "^0.11.1",
