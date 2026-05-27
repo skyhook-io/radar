@@ -13,35 +13,37 @@ interface RBACErrorSectionProps {
   errorPrefix?: string
 }
 
-// True for the two expected, non-actionable RBAC states: 503 because Radar's SA
-// can't read RBAC (so the informers never synced — cluster-static, same on every
-// resource), and 403 because the viewer lacks list permission. Surfaces that treat
+const errorStatus = (error: Error): number | undefined => (error as { status?: number }).status
+
+// 503 because Radar's SA can't read RBAC, so the informers never synced — a
+// cluster-static config state (same on every resource), not a failure. The message
+// check distinguishes it from a generic connectivity 503 ("Not connected to
+// cluster"), which is a real fault and must stay loud (red).
+const isRBACCacheUnavailable = (error: Error): boolean =>
+  errorStatus(error) === 503 && error.message.includes('RBAC cache')
+
+// 403 because the requesting user lacks list permission on bindings.
+const isRBACForbidden = (error: Error): boolean => errorStatus(error) === 403
+
+// True for the two expected, non-actionable RBAC states above. Surfaces that treat
 // the RBAC section as a bonus (Pod/Workload Permissions) hide it entirely for these.
 // Genuine faults — connectivity 503, 500, network errors — are deliberately NOT
 // included, so they still surface rather than being silently dropped.
 export function isRBACUnavailable(error: Error): boolean {
-  const status = (error as { status?: number }).status
-  return status === 403 || (status === 503 && error.message.includes('RBAC cache'))
+  return isRBACForbidden(error) || isRBACCacheUnavailable(error)
 }
 
-// RBAC reverse-lookup fails for two expected, non-alarming reasons that should
-// not render as red errors:
-//   503 with an "RBAC cache not available" message — the identity Radar connects
-//         with can't read RBAC, so the informers never synced (feature not
-//         granted). A config state, not a failure. (A generic connectivity 503,
-//         "Not connected to cluster", is a real fault and must NOT be downplayed
-//         as an RBAC-grant problem — it falls through to the red branch.)
-//   403 — the requesting user lacks list permission on bindings.
-// Reserve the red treatment for genuine failures (connectivity / network / 500).
+// RBACErrorSection renders each expected state as a calm note (distinct copy per
+// state) and reserves the red treatment for genuine failures. It shares the two
+// sub-predicates with isRBACUnavailable so the "what counts as unavailable" rule
+// has a single source of truth and can't drift.
 export function RBACErrorSection({
   title,
   error,
   icon = Shield,
   errorPrefix = 'Could not load permissions',
 }: RBACErrorSectionProps) {
-  const status = (error as { status?: number }).status
-
-  if (status === 503 && error.message.includes('RBAC cache')) {
+  if (isRBACCacheUnavailable(error)) {
     return (
       <Section title={title} icon={icon}>
         <div className="text-sm text-theme-text-tertiary">
@@ -51,7 +53,7 @@ export function RBACErrorSection({
       </Section>
     )
   }
-  if (status === 403) {
+  if (isRBACForbidden(error)) {
     return (
       <Section title={title} icon={icon}>
         <div className="text-sm text-theme-text-tertiary">
