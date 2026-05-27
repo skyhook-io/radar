@@ -74,6 +74,26 @@ jobs:
         run: npm run build
         working-directory: web
 
+  k8s-ui:
+    name: k8s-ui (shared UI)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '20'
+          cache: 'npm'
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+        working-directory: packages/k8s-ui
+
   helm:
     name: Helm chart
     runs-on: ubuntu-latest
