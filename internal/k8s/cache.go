@@ -723,6 +723,10 @@ func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, n
 	}
 
 	if !ok {
+		gvr, ok = builtinGVRFallback(kind, group)
+	}
+
+	if !ok {
 		if group != "" {
 			return nil, fmt.Errorf("%w: %s (group: %s)", ErrUnknownDynamicKind, kind, group)
 		}
@@ -735,6 +739,17 @@ func (c *ResourceCache) ListDynamicWithGroup(ctx context.Context, kind string, n
 	}
 
 	return dynamicCache.List(gvr, namespace)
+}
+
+// builtinGVRFallback resolves a built-in kind's GVR from the static table when
+// API discovery couldn't (partial discovery under restricted RBAC, or a
+// transient refresh miss). It only resolves built-ins addressed by their own
+// group, so a CRD whose plural shadows a built-in still falls through as
+// unknown. Live/dynamic fetch paths (notably the GitOps drift last-applied GET,
+// which can't use the typed cache) rely on this so they don't silently fail
+// when discovery is incomplete.
+func builtinGVRFallback(kind, group string) (schema.GroupVersionResource, bool) {
+	return BuiltinGVR(kind, group)
 }
 
 // ErrUnknownDynamicKind is returned by ListDynamic / GetDynamicWithGroup when
@@ -773,6 +788,10 @@ func (c *ResourceCache) getDynamicWithGroup(ctx context.Context, kind string, na
 		gvr, ok = discovery.GetGVRWithGroup(kind, group)
 	} else {
 		gvr, ok = discovery.GetGVR(kind)
+	}
+
+	if !ok {
+		gvr, ok = builtinGVRFallback(kind, group)
 	}
 
 	if !ok {

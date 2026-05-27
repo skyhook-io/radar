@@ -1188,11 +1188,14 @@ func (s *Server) handleListResources(w http.ResponseWriter, r *http.Request) {
 		forbiddenMsg(resourceKind)
 	}
 
-	// When a group is specified, skip the typed cache and use the dynamic cache
-	// directly. This handles CRDs whose plural name collides with core resources
-	// (e.g., KNative "services" vs core "services"). Cluster-scoped gating for
-	// these is already done at the top of this handler via k8s.ClassifyKindScope.
-	if group != "" {
+	// A non-empty group routes to the dynamic/CRD cache so CRDs whose plural
+	// collides with a core kind (e.g. KNative "services" vs core "services")
+	// reach the right resource. Built-in workloads addressed by their real group
+	// (e.g. deployments?group=apps) live in the typed cache, so they must fall
+	// through to the typed switch below — TypedKindOwnsGroup keeps them off the
+	// dynamic path (which has no informer for built-ins). Cluster-scoped gating
+	// is already done at the top of this handler via k8s.ClassifyKindScope.
+	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		if len(namespaces) > 0 {
 			var merged []any
 			for _, ns := range namespaces {
@@ -1648,11 +1651,16 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		forbiddenGet(resourceKind)
 	}
 
-	// When a group is specified, skip the typed cache and use the dynamic cache
-	// directly. This handles CRDs whose plural name collides with core resources
-	// (e.g., KNative "services" vs core "services"). Cluster-scoped gating for
-	// these is already done at the top of this handler via k8s.ClassifyKindScope.
-	if group != "" {
+	// A non-empty group routes to the dynamic/CRD cache so CRDs whose plural
+	// collides with a core kind (e.g. KNative serving.knative.dev/services vs
+	// core "services") reach the right resource. But the SPA also threads the
+	// real apiGroup for BUILT-IN workloads (e.g. apps/Deployment), and those
+	// live in the typed cache, not the dynamic one — so a built-in addressed by
+	// its own group must still take the typed path below. Without this guard,
+	// deployments?group=apps fell through to the dynamic cache and 400'd with
+	// "unknown resource kind: deployments (group: apps)". Cluster-scoped gating
+	// is already done at the top of this handler via k8s.ClassifyKindScope.
+	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		resource, err = cache.GetDynamicWithGroup(r.Context(), kind, namespace, name, group)
 		if err != nil {
 			if strings.Contains(err.Error(), "unknown resource kind") {
