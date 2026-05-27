@@ -91,10 +91,18 @@ export function ClusterName({ name, variant = 'inline', noBadge, fallbackBadge, 
   const showFallback = !noBadge && !hasProvider && fallbackBadge != null
   const showRegion = parsed.region !== null && variant === 'stacked'
   const collapsed = parsed.raw !== parsed.clusterName
-  // Tooltip when there's something to disclose — either we collapsed the
-  // raw, or the displayed name is being middle-truncated to fit. Callers
-  // can opt out via `noTooltip` when the raw is already visible elsewhere.
-  const needsTooltip = !noTooltip && (collapsed || truncated)
+  // The styled <Tooltip> wrapper is gated ONLY on `collapsed` — a stable,
+  // string-derived fact. Truncation must NOT gate the wrapper: wrapping
+  // changes the layout box MiddleEllipsis measures, so a truncated↔untruncated
+  // flip oscillates through its ResizeObserver (the exact feedback its
+  // onTruncatedChange note warns against). For the truncation case we disclose
+  // the full name via MiddleEllipsis's native `title` instead — an attribute,
+  // not a layout change — so the measurement can't feed back.
+  const showRawTooltip = !noTooltip && collapsed
+  // Don't also set a native title when the raw is already shown via the
+  // wrapper (collapsed) — that would double up. Only the non-collapsed
+  // truncation path uses it; there raw === clusterName.
+  const truncationTitle = !noTooltip && !collapsed && truncated ? parsed.clusterName : undefined
 
   const body = (
     <span className={['inline-flex items-center gap-1.5 min-w-0', className ?? ''].join(' ')}>
@@ -102,7 +110,7 @@ export function ClusterName({ name, variant = 'inline', noBadge, fallbackBadge, 
       {showFallback && fallbackBadge}
       {variant === 'stacked' ? (
         <span className="flex flex-col min-w-0 flex-1">
-          <MiddleEllipsis text={parsed.clusterName} onTruncatedChange={onTruncatedChange} />
+          <MiddleEllipsis text={parsed.clusterName} title={truncationTitle} onTruncatedChange={onTruncatedChange} />
           {showRegion && (
             <span className="text-[10px] text-theme-text-tertiary truncate">
               {parsed.provider} · {parsed.region}
@@ -110,12 +118,12 @@ export function ClusterName({ name, variant = 'inline', noBadge, fallbackBadge, 
           )}
         </span>
       ) : (
-        <MiddleEllipsis text={parsed.clusterName} onTruncatedChange={onTruncatedChange} />
+        <MiddleEllipsis text={parsed.clusterName} title={truncationTitle} onTruncatedChange={onTruncatedChange} />
       )}
     </span>
   )
 
-  if (!needsTooltip) return body
+  if (!showRawTooltip) return body
 
   return (
     <Tooltip content={parsed.raw} delay={250}>
