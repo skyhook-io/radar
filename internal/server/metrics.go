@@ -8,7 +8,7 @@ import (
 	"github.com/skyhook-io/radar/pkg/perfstats"
 )
 
-func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+func (s *Server) newMetricsHandler() http.Handler {
 	registry := prometheus.NewRegistry()
 
 	registry.MustRegister(
@@ -38,5 +38,5 @@ func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
 		}),
 	)
 
-	promhttp.HandlerFor(registry, promhttp.HandlerOpts{}).ServeHTTP(w, r)
+	return promhttp.HandlerFor(registry, promhttp.HandlerOpts{})
 }

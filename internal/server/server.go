@@ -218,7 +218,8 @@ func (s *Server) setupRoutes() {
 		r.Get("/auth/logout", s.handleLogout)
 	}
 
-	r.Get("/metrics", s.handleMetrics)
+	metricsHandler := s.newMetricsHandler()
+	r.Get("/metrics", metricsHandler.ServeHTTP)
 
 	// pprof routes for profiling. Not mounted under cloud-mode — they'd be
 	// reachable via the Cloud tunnel and leak the in-memory K8s cache (every
