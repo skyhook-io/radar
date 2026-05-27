@@ -15,10 +15,13 @@ interface RBACErrorSectionProps {
 
 // RBAC reverse-lookup fails for two expected, non-alarming reasons that should
 // not render as red errors:
-//   503 — the identity Radar connects with can't read RBAC, so the informers
-//         never synced (feature not granted). A config state, not a failure.
+//   503 with an "RBAC cache not available" message — the identity Radar connects
+//         with can't read RBAC, so the informers never synced (feature not
+//         granted). A config state, not a failure. (A generic connectivity 503,
+//         "Not connected to cluster", is a real fault and must NOT be downplayed
+//         as an RBAC-grant problem — it falls through to the red branch.)
 //   403 — the requesting user lacks list permission on bindings.
-// Reserve the red treatment for genuine failures (network / 500).
+// Reserve the red treatment for genuine failures (connectivity / network / 500).
 export function RBACErrorSection({
   title,
   error,
@@ -27,7 +30,7 @@ export function RBACErrorSection({
 }: RBACErrorSectionProps) {
   const status = (error as { status?: number }).status
 
-  if (status === 503) {
+  if (status === 503 && error.message.includes('RBAC cache')) {
     return (
       <Section title={title} icon={icon}>
         <div className="text-sm text-theme-text-tertiary">

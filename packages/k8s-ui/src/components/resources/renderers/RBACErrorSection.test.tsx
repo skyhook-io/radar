@@ -15,6 +15,14 @@ describe('RBACErrorSection', () => {
     expect(html).not.toContain('text-red-400')
   })
 
+  it('renders a non-RBAC 503 (e.g. cluster disconnect) in red, not the calm RBAC note', () => {
+    const html = renderToString(
+      <RBACErrorSection title="Permissions" error={err('Not connected to cluster', 503)} />,
+    )
+    expect(html).toContain('text-red-400')
+    expect(html).not.toContain('RBAC visibility')
+  })
+
   it('renders 403 (viewer lacks permission) as a calm note, not a red error', () => {
     const html = renderToString(
       <RBACErrorSection title="Permissions" error={err('forbidden', 403)} />,
