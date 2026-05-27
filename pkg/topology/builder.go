@@ -7672,7 +7672,7 @@ func (b *Builder) addGenericCRDNodes(nodes []Node, edges []Edge, opts BuildOptio
 		"helmrelease": true, "gitrepository": true, "certificate": true,
 		"gateway": true, "httproute": true, "grpcroute": true, "tcproute": true, "tlsroute": true,
 		"nodepool": true, "nodeclaim": true, // Karpenter
-		"ec2nodeclass": true, "aksnodeclass": true, "gcpnodeclass": true, // Karpenter NodeClass
+		"ec2nodeclass": true, "aksnodeclass": true, "gcenodeclass": true, // Karpenter NodeClass
 		"scaledobject": true, "scaledjob": true, // KEDA
 		"gatewayclass":   true,                                                // Gateway API
 		"virtualservice": true, "destinationrule": true, "serviceentry": true, // Istio networking

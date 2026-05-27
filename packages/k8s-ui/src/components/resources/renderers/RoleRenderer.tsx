@@ -3,6 +3,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import type { RBACRoleResponse, RBACSubject, ResourceRef } from '../../../types'
 import { rbacKindBadgeClass, rbacVerbBadgeClass } from '../../../utils/rbac-badges'
+import { RBACErrorSection } from './RBACErrorSection'
 
 interface RoleRendererProps {
   data: any
@@ -216,13 +217,7 @@ function RoleBindingsSection({ rbacRoleData, loading, error, onNavigate }: RoleB
     )
   }
   if (error) {
-    return (
-      <Section title="Bindings" icon={Users}>
-        <div className="text-sm text-red-400">
-          Could not load bindings: {error.message}
-        </div>
-      </Section>
-    )
+    return <RBACErrorSection title="Bindings" error={error} icon={Users} errorPrefix="Could not load bindings" />
   }
   if (!rbacRoleData) return null
 

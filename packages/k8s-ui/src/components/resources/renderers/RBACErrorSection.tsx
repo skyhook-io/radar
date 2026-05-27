@@ -1,9 +1,13 @@
 import { Shield } from 'lucide-react'
+import type { ComponentType } from 'react'
 import { Section } from '../../ui/drawer-components'
 
 interface RBACErrorSectionProps {
   title: string
   error: Error
+  // Matches the icon of the section's success/loading state (Shield for most,
+  // Users for the Role bindings section) so the error state isn't jarring.
+  icon?: ComponentType<{ className?: string }>
   // Prefix for the genuine-error line; copy differs slightly across renderers
   // ("permissions" on Pod/Workload, "RBAC data" on ServiceAccount).
   errorPrefix?: string
@@ -18,13 +22,14 @@ interface RBACErrorSectionProps {
 export function RBACErrorSection({
   title,
   error,
+  icon = Shield,
   errorPrefix = 'Could not load permissions',
 }: RBACErrorSectionProps) {
   const status = (error as { status?: number }).status
 
   if (status === 503) {
     return (
-      <Section title={title} icon={Shield}>
+      <Section title={title} icon={icon}>
         <div className="text-sm text-theme-text-tertiary">
           RBAC visibility isn’t available — the identity Radar connects with can’t read
           RBAC resources in this cluster.
@@ -34,7 +39,7 @@ export function RBACErrorSection({
   }
   if (status === 403) {
     return (
-      <Section title={title} icon={Shield}>
+      <Section title={title} icon={icon}>
         <div className="text-sm text-theme-text-tertiary">
           You don’t have permission to view RBAC bindings here.
         </div>
@@ -42,7 +47,7 @@ export function RBACErrorSection({
     )
   }
   return (
-    <Section title={title} icon={Shield}>
+    <Section title={title} icon={icon}>
       <div className="text-sm text-red-400">
         {errorPrefix}: {error.message}
       </div>

@@ -3,6 +3,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ResourceLink } from '../../ui/drawer-components'
 import type { RBACNamespaceResponse, RBACBindingWithSubjects, RBACSubject, ResourceRef } from '../../../types'
 import { rbacKindBadgeClass } from '../../../utils/rbac-badges'
+import { RBACErrorSection } from './RBACErrorSection'
 import { SEVERITY_TEXT, SEVERITY_DOT } from '../../../utils/badge-colors'
 import { parseCPUToNanocores, parseMemoryToBytes } from '../../../utils/format'
 
@@ -197,11 +198,7 @@ function NamespaceRBACSection({
     )
   }
   if (error) {
-    return (
-      <Section title="RBAC" icon={Shield}>
-        <div className="text-sm text-red-400">Could not load RBAC summary: {error.message}</div>
-      </Section>
-    )
+    return <RBACErrorSection title="RBAC" error={error} errorPrefix="Could not load RBAC summary" />
   }
   if (!rbacData) return null
 

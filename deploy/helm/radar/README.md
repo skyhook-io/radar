@@ -165,8 +165,9 @@ This overrides individual settings below. Simpler but broader — some orgs may 
 |--------|------------|
 | `argo` | `argoproj.io` |
 | `awx` | `awx.ansible.com` |
-| `certManager` | `cert-manager.io` |
-| `cloudnativePg` | `cloudnative-pg.io` |
+| `certManager` | `cert-manager.io`, `acme.cert-manager.io` |
+| `cilium` | `cilium.io` |
+| `cloudnativePg` | `postgresql.cnpg.io` |
 | `crossplane` | `crossplane.io`, `pkg.crossplane.io`, `apiextensions.crossplane.io`, `helm.crossplane.io`, `kubernetes.crossplane.io`. For Upbound provider groups (e.g. `s3.aws.upbound.io`, `compute.gcp.upbound.io`) use `additionalCrdGroups` — K8s RBAC has no apiGroup wildcards. |
 | `descheduler` | `descheduler.alpha.kubernetes.io` |
 | `envoyGateway` | `gateway.envoyproxy.io` |
@@ -177,13 +178,14 @@ This overrides individual settings below. Simpler but broader — some orgs may 
 | `gcpMonitoring` | `monitoring.googleapis.com` |
 | `grafana` | `monitoring.grafana.com`, `tempo.grafana.com`, `loki.grafana.com` |
 | `istio` | `networking.istio.io`, `security.istio.io` |
-| `karpenter` | `karpenter.sh`, `karpenter.k8s.aws`, `karpenter.azure.com`, `karpenter.gcp.compute.com` |
+| `karpenter` | `karpenter.sh`, `karpenter.k8s.aws`, `karpenter.azure.com`, `karpenter.k8s.gcp` |
 | `keda` | `keda.sh` |
 | `knative` | `serving.knative.dev`, `eventing.knative.dev`, `sources.knative.dev`, `messaging.knative.dev`, `flows.knative.dev`, `networking.internal.knative.dev` |
 | `kubeshark` | `kubeshark.io` |
 | `kured` | `kured.io` |
-| `kyverno` | `kyverno.io`, `wgpolicyk8s.io`, `reports.kyverno.io` |
+| `kyverno` | `kyverno.io`, `wgpolicyk8s.io`, `reports.kyverno.io`, `openreports.io` |
 | `mariadb` | `mariadb.mmontes.io` |
+| `networkPolicyApi` | `policy.networking.k8s.io` |
 | `nginx` | `nginx.org` |
 | `openshift` | `observability.openshift.io` |
 | `opentelemetry` | `opentelemetry.io` |

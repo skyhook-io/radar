@@ -10,14 +10,12 @@ import (
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
-// TestChartGrantsEveryWatchedCRDGroup guards against the recurring drift where
-// Radar watches an API group the Helm chart never grants. That failure is
-// silent: the informer's list call 403s, the reflector backs off, and the
-// resource simply never appears in the UI — no error, no log most operators
-// would notice. It has bitten us repeatedly (CloudNativePG's dead
-// "cloudnative-pg.io" group, the missing "acme.cert-manager.io", the
-// "karpenter.gcp.compute.com" typo), because the (group, resource, kind) tuples
-// live in several independent places that must agree and nothing enforced it.
+// TestChartGrantsEveryWatchedCRDGroup guards against the drift where Radar
+// watches an API group the Helm chart never grants. That failure is silent: the
+// informer's list call 403s, the reflector backs off, and the resource simply
+// never appears in the UI — no error, no log most operators would notice. The
+// drift recurs because the (group, resource, kind) tuples live in several
+// independent places that must agree and nothing else cross-checks them.
 //
 // Scope: GROUP-level coverage for the CRD / extension watch lists
 // (supportedCRDFallbacks + topology.ClusterScopedKinds), which is exactly where

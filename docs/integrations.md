@@ -59,7 +59,7 @@ Radar automatically discovers and displays **any** Custom Resource Definition (C
 | NodeClaim | `karpenter.sh/v1` | Yes | Yes | Yes |
 | EC2NodeClass | `karpenter.k8s.aws/v1` | Yes | Yes | Yes |
 | AKSNodeClass | `karpenter.azure.com/v1alpha2` | Yes | Generic | Yes |
-| GCPNodeClass | `karpenter.gcp.compute.com/v1alpha1` | Yes | Generic | Yes |
+| GCENodeClass | `karpenter.k8s.gcp/v1alpha1` | Yes | Generic | Yes |
 
 All provider-specific NodeClass variants are automatically detected and supported.
 

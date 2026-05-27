@@ -145,7 +145,7 @@ const KIND_ICON_MAP: Record<string, LucideIcon> = {
   nodeclaim: Server,
   ec2nodeclass: Server,
   aksnodeclass: Server,
-  gcpnodeclass: Server,
+  gcenodeclass: Server,
 
   // KEDA
   scaledobject: Scaling,

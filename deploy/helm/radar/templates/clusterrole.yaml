@@ -295,9 +295,8 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- end }}
   {{- if .Values.rbac.crdGroups.networkPolicyApi }}
-  # SIG-network Network Policy API (out-of-tree CRDs): AdminNetworkPolicy +
-  # BaselineAdminNetworkPolicy (v1alpha1), merged into ClusterNetworkPolicy
-  # (v1alpha2). Cluster-scoped; surfaced in topology.
+  # SIG-network out-of-tree Network Policy API; ClusterNetworkPolicy is
+  # cluster-scoped and surfaced in topology.
   - apiGroups: ["policy.networking.k8s.io"]
     resources: ["*"]
     verbs: ["get", "list", "watch"]

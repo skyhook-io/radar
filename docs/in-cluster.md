@@ -176,7 +176,7 @@ rbac:
     certManager: true   # cert-manager.io
     flux: true          # *.toolkit.fluxcd.io
     istio: true         # networking.istio.io, security.istio.io
-    karpenter: true     # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.gcp.compute.com
+    karpenter: true     # karpenter.sh, karpenter.k8s.aws, karpenter.azure.com, karpenter.k8s.gcp
     keda: true          # keda.sh
     knative: true       # serving, eventing, sources, messaging, flows, networking.internal (.knative.dev)
     prometheus: true    # monitoring.coreos.com
