@@ -34,6 +34,7 @@ func TestTypedKindOwnsGroup(t *testing.T) {
 		{"hpa", "autoscaling", true},
 		{"ingresses", "networking.k8s.io", true},
 		{"networkpolicies", "networking.k8s.io", true},
+		{"netpols", "networking.k8s.io", true},
 		{"poddisruptionbudgets", "policy", true},
 		{"storageclasses", "storage.k8s.io", true},
 		{"clusterroles", "rbac.authorization.k8s.io", true},
@@ -41,6 +42,7 @@ func TestTypedKindOwnsGroup(t *testing.T) {
 		// Core kinds: own group is "" — typed, with or without an explicit "".
 		{"pods", "", true},
 		{"services", "", true},
+		{"sa", "", true},
 		{"secrets", "", true},
 
 		// CRD whose plural shadows a core/built-in kind — must stay dynamic.
@@ -79,6 +81,8 @@ func TestBuiltinGVR(t *testing.T) {
 		{"pdb", "policy", schema.GroupVersionResource{Group: "policy", Version: "v1", Resource: "poddisruptionbudgets"}, true},
 		{"hpa", "autoscaling", schema.GroupVersionResource{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"}, true},
 		{"pods", "", schema.GroupVersionResource{Version: "v1", Resource: "pods"}, true},
+		{"sa", "", schema.GroupVersionResource{Version: "v1", Resource: "serviceaccounts"}, true},
+		{"netpols", "networking.k8s.io", schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}, true},
 		{"services", "serving.knative.dev", schema.GroupVersionResource{}, false}, // CRD collision
 		{"widgets", "example.com", schema.GroupVersionResource{}, false},          // genuine CRD
 	}

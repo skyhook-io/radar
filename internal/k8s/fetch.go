@@ -55,7 +55,7 @@ var builtinGVRs = func() map[string]schema.GroupVersionResource {
 		{[]string{"node", "nodes"}, "", "v1", "nodes"},
 		{[]string{"namespace", "namespaces"}, "", "v1", "namespaces"},
 		{[]string{"persistentvolume", "persistentvolumes", "pv", "pvs"}, "", "v1", "persistentvolumes"},
-		{[]string{"serviceaccount", "serviceaccounts"}, "", "v1", "serviceaccounts"},
+		{[]string{"serviceaccount", "serviceaccounts", "sa"}, "", "v1", "serviceaccounts"},
 		{[]string{"limitrange", "limitranges"}, "", "v1", "limitranges"},
 		{[]string{"resourcequota", "resourcequotas"}, "", "v1", "resourcequotas"},
 		{[]string{"deployment", "deployments"}, "apps", "v1", "deployments"},
@@ -66,7 +66,7 @@ var builtinGVRs = func() map[string]schema.GroupVersionResource {
 		{[]string{"cronjob", "cronjobs"}, "batch", "v1", "cronjobs"},
 		{[]string{"hpa", "hpas", "horizontalpodautoscaler", "horizontalpodautoscalers"}, "autoscaling", "v2", "horizontalpodautoscalers"},
 		{[]string{"ingress", "ingresses"}, "networking.k8s.io", "v1", "ingresses"},
-		{[]string{"networkpolicy", "networkpolicies", "netpol"}, "networking.k8s.io", "v1", "networkpolicies"},
+		{[]string{"networkpolicy", "networkpolicies", "netpol", "netpols"}, "networking.k8s.io", "v1", "networkpolicies"},
 		{[]string{"ingressclass", "ingressclasses"}, "networking.k8s.io", "v1", "ingressclasses"},
 		{[]string{"poddisruptionbudget", "poddisruptionbudgets", "pdb", "pdbs"}, "policy", "v1", "poddisruptionbudgets"},
 		{[]string{"storageclass", "storageclasses", "sc"}, "storage.k8s.io", "v1", "storageclasses"},
@@ -88,8 +88,8 @@ var builtinGVRs = func() map[string]schema.GroupVersionResource {
 // TypedKindOwnsGroup reports whether (kind, group) names a built-in kind
 // addressed by its own API group — i.e. it must resolve via the typed cache,
 // not the dynamic/CRD cache. `deployments`+`apps` is a typed lookup;
-// `services`+`serving.knative.dev` is a CRD (dynamic) lookup; `services`+`` is
-// the core typed Service. Handlers use this to gate the "explicit group ⇒
+// `services`+`serving.knative.dev` is a CRD (dynamic) lookup; `services` with
+// an empty group is the core typed Service. Handlers use this to gate the "explicit group ⇒
 // dynamic cache" dispatch so built-in workloads addressed with their real group
 // don't fall through to the dynamic cache (which has no informer for them).
 func TypedKindOwnsGroup(kind, group string) bool {
