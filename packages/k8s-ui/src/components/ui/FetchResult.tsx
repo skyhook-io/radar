@@ -4,10 +4,11 @@ import { clsx } from 'clsx'
 import { PaneLoader } from './PaneLoader'
 import { isFetchError } from '../../types/fetch-error'
 
-// FetchResult collapses (loading, error, data) into one of three rendered
-// outcomes: loader while loading, a typed error surface when the fetch
-// threw, or null passthrough so the caller's own content (or empty-state
-// fallback) renders.
+// FetchResult collapses (loading, error, no-data) into one rendered outcome:
+// loader while loading, a typed error surface when the fetch threw, or the
+// notFoundMessage when neither — matching the prior plain-text "Resource not
+// found" so a disabled React Query (loading=false, data=undefined, error=null
+// under v5) still renders a sane fallback rather than going blank.
 //
 // Decision tree:
 //   loading                  → <PaneLoader/>
@@ -16,7 +17,7 @@ import { isFetchError } from '../../types/fetch-error'
 //   error (503)              → "Cluster unavailable"      + error.message
 //   error (401)              → "Sign-in required"         (apiFetch redirects; fallback)
 //   error (other / no shape) → "Couldn't load this view"  + error.message
-//   no loading, no error     → null  (caller's fallthrough renders)
+//   no loading, no error     → notFoundMessage            (headline only, no detail)
 //
 // Separate from EmptyState (which conveys "no data here" with
 // healthy/filtered/neutral tones) because HTTP-level fetch failures need
@@ -45,7 +46,14 @@ export function FetchResult({
     return <PaneLoader className={className} />
   }
   if (error === undefined || error === null) {
-    return null
+    // No loading + no error = the query is disabled or returned no data.
+    // Render the headline-only "not found" state so callers gated on `!data`
+    // don't end up with a blank body when React Query v5 leaves isLoading=false.
+    return (
+      <div className={clsx('flex items-center justify-center text-theme-text-tertiary', className)}>
+        {notFoundMessage}
+      </div>
+    )
   }
   return <ErrorSurface error={error} notFoundMessage={notFoundMessage} className={className} />
 }
