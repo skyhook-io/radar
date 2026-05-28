@@ -234,4 +234,64 @@ describe('buildPathBrowseUrl - unknown / no path', () => {
   it('returns null for nullish repo URL', () => {
     expect(buildPathBrowseUrl(undefined, 'src', 'main')).toBe(null)
   })
+
+  // Known host but path too short to identify owner+repo -> downgrade to unknown.
+  // Pins the `pathParts.length < 2` guard across all three slash-providers.
+  it('returns null when github URL has only owner segment', () => {
+    expect(buildPathBrowseUrl('https://github.com/onlyowner', 'src', 'main')).toBe(null)
+  })
+  it('returns null when bitbucket URL has only owner segment', () => {
+    expect(buildPathBrowseUrl('https://bitbucket.org/onlyowner', 'src', 'main')).toBe(null)
+  })
+  it('returns null when gitlab URL has only one segment', () => {
+    expect(buildPathBrowseUrl('https://gitlab.com/onlyone', 'src', 'main')).toBe(null)
+  })
+
+  // Azure DevOps `_git` index arithmetic — high-risk branch.
+  it('returns null when dev.azure.com URL is missing _git', () => {
+    expect(
+      buildPathBrowseUrl('https://dev.azure.com/myorg/MyProject/myrepo', 'src', 'main')
+    ).toBe(null)
+  })
+  it('returns null when dev.azure.com URL ends with _git (no repo segment)', () => {
+    expect(
+      buildPathBrowseUrl('https://dev.azure.com/myorg/MyProject/_git', 'src', 'main')
+    ).toBe(null)
+  })
+  it('returns null when dev.azure.com URL has _git but no project (gitIdx < 2)', () => {
+    expect(
+      buildPathBrowseUrl('https://dev.azure.com/myorg/_git/myrepo', 'src', 'main')
+    ).toBe(null)
+  })
+  it('returns null when visualstudio.com URL is missing _git', () => {
+    expect(
+      buildPathBrowseUrl('https://myorg.visualstudio.com/MyProject/myrepo', 'src', 'main')
+    ).toBe(null)
+  })
+  it('returns null when visualstudio.com URL ends with _git', () => {
+    expect(
+      buildPathBrowseUrl('https://myorg.visualstudio.com/MyProject/_git', 'src', 'main')
+    ).toBe(null)
+  })
+
+  // Pin .toUpperCase() behavior so a refactor to === 'HEAD' would fail loudly.
+  it('treats lowercase "head" the same as "HEAD" (falls back to default branch)', () => {
+    expect(
+      buildPathBrowseUrl('https://github.com/o/r', 'src', 'head')
+    ).toBe('https://github.com/o/r/tree/HEAD/src')
+  })
+
+  // Pin SHA_RE's exact-40-char requirement. Loosening to {7,40} would mis-prefix
+  // short-hex branch names like "abc1234" as Azure commits (GC) instead of branches (GB).
+  it('does not treat 7-char hex as a SHA on Azure (stays GB)', () => {
+    expect(
+      buildPathBrowseUrl(
+        'https://dev.azure.com/myorg/MyProject/_git/myrepo',
+        'src',
+        'abc1234'
+      )
+    ).toBe(
+      'https://dev.azure.com/myorg/MyProject/_git/myrepo?path=/src&version=GBabc1234'
+    )
+  })
 })

@@ -1,16 +1,9 @@
 export type GitProvider = 'github' | 'gitlab' | 'bitbucket' | 'azure-devops' | 'unknown'
 
-interface ParsedRepo {
-  provider: GitProvider
-  browseUrl: string
-  segments?: {
-    owner?: string
-    repo?: string
-    azureOrg?: string
-    azureProject?: string
-    azureRepo?: string
-  }
-}
+type ParsedRepo =
+  | { provider: 'github' | 'gitlab' | 'bitbucket'; browseUrl: string; owner: string; repo: string }
+  | { provider: 'azure-devops'; browseUrl: string; org: string; project: string; repo: string }
+  | { provider: 'unknown'; browseUrl: string }
 
 const SHA_RE = /^[0-9a-f]{40}$/i
 
@@ -63,16 +56,20 @@ function parseRepoUrl(repoURL: string | undefined | null): ParsedRepo | null {
     return {
       provider: hostname === 'github.com' ? 'github' : 'bitbucket',
       browseUrl,
-      segments: { owner: pathParts[0], repo: pathParts[1] },
+      owner: pathParts[0],
+      repo: pathParts[1],
     }
   }
 
   if (hostname === 'gitlab.com') {
     // GitLab supports nested groups: the owner segment may itself be a slash-joined path.
     if (pathParts.length < 2) return { provider: 'unknown', browseUrl }
-    const repo = pathParts[pathParts.length - 1]
-    const owner = pathParts.slice(0, -1).join('/')
-    return { provider: 'gitlab', browseUrl, segments: { owner, repo } }
+    return {
+      provider: 'gitlab',
+      browseUrl,
+      owner: pathParts.slice(0, -1).join('/'),
+      repo: pathParts[pathParts.length - 1],
+    }
   }
 
   // Azure DevOps URL shape: /{org}/{project}/_git/{repo} (dev.azure.com)
@@ -85,16 +82,13 @@ function parseRepoUrl(repoURL: string | undefined | null): ParsedRepo | null {
     return {
       provider: 'azure-devops',
       browseUrl,
-      segments: {
-        azureOrg: pathParts.slice(0, gitIdx - 1).join('/'),
-        azureProject: pathParts[gitIdx - 1],
-        azureRepo: pathParts[gitIdx + 1],
-      },
+      org: pathParts.slice(0, gitIdx - 1).join('/'),
+      project: pathParts[gitIdx - 1],
+      repo: pathParts[gitIdx + 1],
     }
   }
 
   if (hostname.endsWith('.visualstudio.com')) {
-    const org = hostname.slice(0, -'.visualstudio.com'.length)
     const gitIdx = pathParts.indexOf('_git')
     if (gitIdx < 1 || gitIdx + 1 >= pathParts.length) {
       return { provider: 'unknown', browseUrl }
@@ -102,11 +96,9 @@ function parseRepoUrl(repoURL: string | undefined | null): ParsedRepo | null {
     return {
       provider: 'azure-devops',
       browseUrl,
-      segments: {
-        azureOrg: org,
-        azureProject: pathParts.slice(0, gitIdx).join('/'),
-        azureRepo: pathParts[gitIdx + 1],
-      },
+      org: hostname.slice(0, -'.visualstudio.com'.length),
+      project: pathParts.slice(0, gitIdx).join('/'),
+      repo: pathParts[gitIdx + 1],
     }
   }
 
@@ -125,7 +117,7 @@ export function buildPathBrowseUrl(
 ): string | null {
   if (!path || !path.trim()) return null
   const parsed = parseRepoUrl(repoURL)
-  if (!parsed || parsed.provider === 'unknown' || !parsed.segments) return null
+  if (!parsed || parsed.provider === 'unknown') return null
 
   const rawRef = (targetRevision ?? '').trim()
   // GitHub/GitLab/Bitbucket browse URLs accept "HEAD" as a valid ref token that
@@ -137,24 +129,16 @@ export function buildPathBrowseUrl(
   if (!encodedPath) return null
 
   switch (parsed.provider) {
-    case 'github': {
-      const { owner, repo } = parsed.segments
-      return `https://github.com/${owner}/${repo}/tree/${encodeRef(ref)}/${encodedPath}`
-    }
-    case 'gitlab': {
-      const { owner, repo } = parsed.segments
-      return `https://gitlab.com/${owner}/${repo}/-/tree/${encodeRef(ref)}/${encodedPath}`
-    }
-    case 'bitbucket': {
-      const { owner, repo } = parsed.segments
-      return `https://bitbucket.org/${owner}/${repo}/src/${encodeRef(ref)}/${encodedPath}`
-    }
+    case 'github':
+      return `https://github.com/${parsed.owner}/${parsed.repo}/tree/${encodeRef(ref)}/${encodedPath}`
+    case 'gitlab':
+      return `https://gitlab.com/${parsed.owner}/${parsed.repo}/-/tree/${encodeRef(ref)}/${encodedPath}`
+    case 'bitbucket':
+      return `https://bitbucket.org/${parsed.owner}/${parsed.repo}/src/${encodeRef(ref)}/${encodedPath}`
     case 'azure-devops': {
-      const { azureOrg, azureProject, azureRepo } = parsed.segments
       const isSha = hasExplicitRef && SHA_RE.test(rawRef)
       const versionParam = hasExplicitRef ? `&version=${isSha ? 'GC' : 'GB'}${encodeURIComponent(rawRef)}` : ''
-      return `https://dev.azure.com/${encodeURIComponent(azureOrg!)}/${encodeURIComponent(azureProject!)}/_git/${encodeURIComponent(azureRepo!)}?path=/${encodedPath}${versionParam}`
+      return `https://dev.azure.com/${encodeURIComponent(parsed.org)}/${encodeURIComponent(parsed.project)}/_git/${encodeURIComponent(parsed.repo)}?path=/${encodedPath}${versionParam}`
     }
   }
-  return null
 }
