@@ -21,10 +21,11 @@ export function RoleBindingRenderer({ data, onNavigate }: RoleBindingRendererPro
   const namespace = isClusterRole ? '' : (data?.metadata?.namespace ?? '')
   const name = roleRef.name ?? ''
 
-  const { data: role, isLoading } = useResource<any>(kind, namespace, name)
+  const { data: role, isLoading, error } = useResource<any>(kind, namespace, name)
   // `role` is undefined while loading, then the resource, then potentially
-  // null on 404. Pass [] for "loaded but no rules" so the base renderer's
-  // `rules === null` branch fires only on outright fetch failure (orphan).
+  // null on 404 / 403. Pass [] for "loaded but no rules" so the base
+  // renderer's `rules === null` branch fires only on outright fetch failure
+  // (orphan or forbidden); `roleRulesError` then disambiguates the two.
   const rules =
     isLoading
       ? undefined
@@ -38,6 +39,7 @@ export function RoleBindingRenderer({ data, onNavigate }: RoleBindingRendererPro
       onNavigate={onNavigate}
       roleRules={rules ?? null}
       roleRulesLoading={isLoading}
+      roleRulesError={error}
     />
   )
 }
