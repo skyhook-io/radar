@@ -76,6 +76,17 @@ rbac:
   # is trusted with cluster RBAC visibility.
   viewRBAC: false
 
+  # Allow reading admission webhook configurations (MutatingWebhookConfiguration,
+  # ValidatingWebhookConfiguration) so the resource browser can list them.
+  # Auto-enabled when auth is on (auth.mode != none) or in cloud mode, where
+  # every read is re-checked against the requesting user's own permissions.
+  # For no-auth installs this stays opt-in: the configurations reveal which
+  # admission controls are enforced (Gatekeeper / Kyverno policies, image
+  # scanners, DLP, etc.) and where the gaps are — reconnaissance value for a
+  # low-trust viewer. Enable only if that audience is trusted with admission
+  # plane visibility.
+  viewWebhooks: false
+
   # Allow pod exec (enables terminal feature)
   podExec: false
 
