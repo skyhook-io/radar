@@ -227,22 +227,6 @@ export function GitOpsTableView({
   const hasGlobalNamespaceFilter = !!onClearNamespaces && (globalNamespaces?.length ?? 0) > 0
   const hasAnyFilter = hasLocalFilters || hasGlobalNamespaceFilter
 
-  const clearLocalFilters = () => {
-    setSearch('')
-    setSyncFilters(new Set())
-    setHealthFilters(new Set())
-    setProjectFilters(new Set())
-    setNamespaceFilters(new Set())
-    setLabelFilters(new Set())
-    setAutomationFilter('all')
-    setLifecycleFilter('all')
-  }
-
-  const clearAllFilters = () => {
-    clearLocalFilters()
-    onClearNamespaces?.()
-  }
-
   // Optional '/' keyboard shortcut to focus search. Avoided as a default to
   // not collide with other surfaces' keyboard maps; OSS opts in via prop.
   useEffect(() => {
@@ -343,8 +327,9 @@ export function GitOpsTableView({
     setAutomationFilter('all')
     setLifecycleFilter('all')
     setReconcilingOnly(false)
+    onClearNamespaces?.()
     onDestinationFilterChange?.('all')
-  }, [onDestinationFilterChange])
+  }, [onClearNamespaces, onDestinationFilterChange])
 
   const noOtherFiltersActive = useCallback(
     (
