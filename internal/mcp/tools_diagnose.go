@@ -14,6 +14,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
@@ -56,6 +57,10 @@ type diagnoseResponse struct {
 	StartupBlockers []startupBlocker `json:"startupBlockers,omitempty"`
 	Pods            int              `json:"pods"`
 	NarrowHint      string           `json:"narrowHint,omitempty"`
+	// Warnings are state-derived advisories on the diagnosed object — e.g.,
+	// "resource is being deleted", "managed by Helm, edits may revert",
+	// "condition has been False since creation". Empty when nothing notable.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // startupBlocker is the compact row diagnose embeds for one reason a workload
@@ -215,6 +220,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	}
 
 	resp.StartupBlockers = startupBlockersForWorkload(cache, kindNorm, input.Namespace, input.Name, pods)
+	resp.Warnings = k8score.EnrichRuntimeObjectWarnings(obj)
 	return toJSONResult(resp)
 }
 
