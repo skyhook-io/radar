@@ -30,6 +30,10 @@ import (
 	topology "github.com/skyhook-io/radar/pkg/topology"
 )
 
+// registerTools registers every MCP tool exposed at /mcp. The user-facing
+// setup dialog catalog (web/src/components/home/mcpToolCatalog.ts) must list
+// the same set — TestSetupDialogCoversAllTools fails CI when they diverge, so
+// add/remove the catalog entry alongside any change here.
 func registerTools(server *mcp.Server) {
 	boolPtr := func(b bool) *bool { return &b }
 	// All radar tools operate against the connected cluster (closed world),
