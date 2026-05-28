@@ -119,9 +119,9 @@ export function buildPathBrowseUrl(
   if (!parsed || parsed.provider === 'unknown') return null
 
   const rawRef = (targetRevision ?? '').trim()
-  // GitHub/GitLab/Bitbucket browse URLs accept "HEAD" as a valid ref token that
-  // resolves to the repo's default branch, so it's a safe stand-in when the
-  // ArgoCD Application leaves targetRevision empty.
+  // GitHub and GitLab browse URLs accept "HEAD" as a ref token that resolves
+  // to the default branch. Bitbucket Cloud's /src/ path does not — see the
+  // bitbucket case below.
   const hasExplicitRef = rawRef !== '' && rawRef.toUpperCase() !== 'HEAD'
   const ref = hasExplicitRef ? rawRef : 'HEAD'
   const encodedPath = encodePath(path)
@@ -133,6 +133,10 @@ export function buildPathBrowseUrl(
     case 'gitlab':
       return `https://gitlab.com/${parsed.owner}/${parsed.repo}/-/tree/${encodeRef(ref)}/${encodedPath}`
     case 'bitbucket':
+      // Bitbucket Cloud's /src/{ref}/... endpoint requires a real branch name
+      // or commit hash; HEAD 404s. Without an explicit ref we can't build a
+      // working deep link, so fall through to plain text.
+      if (!hasExplicitRef) return null
       return `https://bitbucket.org/${parsed.owner}/${parsed.repo}/src/${encodeRef(ref)}/${encodedPath}`
     case 'azure-devops': {
       const isSha = hasExplicitRef && SHA_RE.test(rawRef)

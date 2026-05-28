@@ -145,10 +145,22 @@ describe('buildPathBrowseUrl - GitLab', () => {
 })
 
 describe('buildPathBrowseUrl - Bitbucket', () => {
-  it('builds /src URL', () => {
+  it('builds /src URL with explicit ref', () => {
     expect(
       buildPathBrowseUrl('https://bitbucket.org/team/proj', 'src/app', 'develop')
     ).toBe('https://bitbucket.org/team/proj/src/develop/src/app')
+  })
+
+  // Bitbucket Cloud /src/ doesn't accept "HEAD" — better no link than a 404 link.
+  it('returns null when ref is empty (HEAD not a valid Bitbucket ref token)', () => {
+    expect(
+      buildPathBrowseUrl('https://bitbucket.org/team/proj', 'src/app', '')
+    ).toBe(null)
+  })
+  it('returns null when ref is literally "HEAD"', () => {
+    expect(
+      buildPathBrowseUrl('https://bitbucket.org/team/proj', 'src/app', 'HEAD')
+    ).toBe(null)
   })
 })
 
