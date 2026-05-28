@@ -1,19 +1,12 @@
 type ParsedRepo =
-  | { provider: 'github' | 'gitlab' | 'bitbucket'; browseUrl: string; owner: string; repo: string }
-  | { provider: 'azure-devops'; browseUrl: string; org: string; project: string; repo: string }
-  | { provider: 'unknown'; browseUrl: string }
+  | { provider: 'github' | 'gitlab' | 'bitbucket'; owner: string; repo: string }
+  | { provider: 'azure-devops'; org: string; project: string; repo: string }
+  | { provider: 'unknown' }
 
 const SHA_RE = /^[0-9a-f]{40}$/i
 
 function stripDotGit(s: string): string {
   return s.replace(/\.git$/i, '')
-}
-
-// `git@host:owner/repo` lacks a scheme that `new URL` accepts; rewrite to https for parsing.
-function sshToHttps(input: string): string {
-  const m = input.match(/^git@([^:]+):(.+)$/)
-  if (!m) return input
-  return `https://${m[1]}/${m[2]}`
 }
 
 function encodePath(path: string): string {
@@ -30,44 +23,43 @@ function encodeRef(ref: string): string {
   return ref.split('/').map(encodeURIComponent).join('/')
 }
 
-function parseRepoUrl(repoURL: string | undefined | null): ParsedRepo | null {
+// Validate `repoURL` is a well-formed http(s) URL and return the URL object.
+// SCP-form (git@host:o/r), ssh://, git+ssh://, oci://, file://, etc. all
+// return null — we don't manipulate user-supplied URLs to make them linkable.
+function parseHttpRepoUrl(repoURL: string | undefined | null): URL | null {
   if (!repoURL) return null
   const trimmed = repoURL.trim()
   if (!trimmed) return null
-
   let url: URL
   try {
-    url = new URL(stripDotGit(sshToHttps(trimmed)))
+    url = new URL(trimmed)
   } catch {
     return null
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
+  return url
+}
 
-  // host includes the port (when non-default) so self-hosted servers on custom ports stay reachable.
-  const host = url.host.toLowerCase()
+function detectProvider(url: URL): ParsedRepo {
   const hostname = url.hostname.toLowerCase()
   const pathParts = url.pathname.replace(/^\/+/, '').replace(/\/+$/, '').split('/')
-  // Preserve the input scheme — self-hosted http-only servers shouldn't be silently upgraded to https.
-  const browseUrl = `${url.protocol}//${host}${url.pathname.replace(/\/+$/, '')}`
 
   if (hostname === 'github.com' || hostname === 'bitbucket.org') {
-    if (pathParts.length < 2) return { provider: 'unknown', browseUrl }
+    if (pathParts.length < 2) return { provider: 'unknown' }
     return {
       provider: hostname === 'github.com' ? 'github' : 'bitbucket',
-      browseUrl,
       owner: pathParts[0],
-      repo: pathParts[1],
+      repo: stripDotGit(pathParts[1]),
     }
   }
 
   if (hostname === 'gitlab.com') {
     // GitLab supports nested groups: the owner segment may itself be a slash-joined path.
-    if (pathParts.length < 2) return { provider: 'unknown', browseUrl }
+    if (pathParts.length < 2) return { provider: 'unknown' }
     return {
       provider: 'gitlab',
-      browseUrl,
       owner: pathParts.slice(0, -1).join('/'),
-      repo: pathParts[pathParts.length - 1],
+      repo: stripDotGit(pathParts[pathParts.length - 1]),
     }
   }
 
@@ -76,11 +68,10 @@ function parseRepoUrl(repoURL: string | undefined | null): ParsedRepo | null {
   if (hostname === 'dev.azure.com') {
     const gitIdx = pathParts.indexOf('_git')
     if (gitIdx < 2 || gitIdx + 1 >= pathParts.length) {
-      return { provider: 'unknown', browseUrl }
+      return { provider: 'unknown' }
     }
     return {
       provider: 'azure-devops',
-      browseUrl,
       org: pathParts.slice(0, gitIdx - 1).join('/'),
       project: pathParts[gitIdx - 1],
       repo: pathParts[gitIdx + 1],
@@ -90,23 +81,23 @@ function parseRepoUrl(repoURL: string | undefined | null): ParsedRepo | null {
   if (hostname.endsWith('.visualstudio.com')) {
     const gitIdx = pathParts.indexOf('_git')
     if (gitIdx < 1 || gitIdx + 1 >= pathParts.length) {
-      return { provider: 'unknown', browseUrl }
+      return { provider: 'unknown' }
     }
     return {
       provider: 'azure-devops',
-      browseUrl,
       org: hostname.slice(0, -'.visualstudio.com'.length),
       project: pathParts.slice(0, gitIdx).join('/'),
       repo: pathParts[gitIdx + 1],
     }
   }
 
-  return { provider: 'unknown', browseUrl }
+  return { provider: 'unknown' }
 }
 
+// Pass-through linkability check: link the user's repoURL as-is iff it parses
+// as http(s); never rewrite SCP/SSH forms.
 export function buildRepoBrowseUrl(repoURL: string | undefined | null): string | null {
-  const parsed = parseRepoUrl(repoURL)
-  return parsed ? parsed.browseUrl : null
+  return parseHttpRepoUrl(repoURL) ? repoURL!.trim() : null
 }
 
 export function buildPathBrowseUrl(
@@ -115,8 +106,10 @@ export function buildPathBrowseUrl(
   targetRevision: string | undefined | null
 ): string | null {
   if (!path || !path.trim()) return null
-  const parsed = parseRepoUrl(repoURL)
-  if (!parsed || parsed.provider === 'unknown') return null
+  const url = parseHttpRepoUrl(repoURL)
+  if (!url) return null
+  const parsed = detectProvider(url)
+  if (parsed.provider === 'unknown') return null
 
   const rawRef = (targetRevision ?? '').trim()
   // GitHub and GitLab browse URLs accept "HEAD" as a ref token that resolves

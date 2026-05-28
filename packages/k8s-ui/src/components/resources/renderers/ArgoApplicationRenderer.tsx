@@ -34,6 +34,7 @@ function SourceProperties({ source }: { source: any }) {
               href={repoHref}
               target="_blank"
               rel="noopener noreferrer"
+              title={source.repoURL}
               className={`${REPO_LINK_CLASS} inline-flex items-center gap-1`}
             >
               {source.repoURL}
@@ -53,6 +54,7 @@ function SourceProperties({ source }: { source: any }) {
                 href={pathHref}
                 target="_blank"
                 rel="noopener noreferrer"
+                title={source.path}
                 className={REPO_LINK_CLASS}
               >
                 {source.path}

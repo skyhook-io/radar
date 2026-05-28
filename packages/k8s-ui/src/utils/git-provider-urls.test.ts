@@ -2,31 +2,32 @@ import { describe, it, expect } from 'vitest'
 import { buildRepoBrowseUrl, buildPathBrowseUrl } from './git-provider-urls'
 
 describe('buildRepoBrowseUrl', () => {
-  it('returns canonical https for github https URL', () => {
+  // Pass-through semantics: link the user's URL exactly as configured, no rewriting.
+  it('returns the input verbatim for https URL', () => {
     expect(buildRepoBrowseUrl('https://github.com/KoalaOps/deployment')).toBe(
       'https://github.com/KoalaOps/deployment'
     )
   })
 
-  it('strips trailing .git', () => {
+  it('preserves trailing .git suffix (no manipulation)', () => {
     expect(buildRepoBrowseUrl('https://github.com/KoalaOps/deployment.git')).toBe(
-      'https://github.com/KoalaOps/deployment'
+      'https://github.com/KoalaOps/deployment.git'
     )
   })
 
-  it('normalises SSH form to https', () => {
-    expect(buildRepoBrowseUrl('git@github.com:KoalaOps/deployment.git')).toBe(
-      'https://github.com/KoalaOps/deployment'
-    )
-  })
-
-  it('handles trailing slash', () => {
+  it('preserves trailing slash (no manipulation)', () => {
     expect(buildRepoBrowseUrl('https://github.com/KoalaOps/deployment/')).toBe(
-      'https://github.com/KoalaOps/deployment'
+      'https://github.com/KoalaOps/deployment/'
     )
   })
 
-  it('keeps unknown hosts (still a valid link)', () => {
+  it('trims surrounding whitespace', () => {
+    expect(buildRepoBrowseUrl('  https://github.com/o/r  ')).toBe(
+      'https://github.com/o/r'
+    )
+  })
+
+  it('keeps unknown hosts (still a valid http(s) link)', () => {
     expect(buildRepoBrowseUrl('https://git.internal.example.com/team/proj')).toBe(
       'https://git.internal.example.com/team/proj'
     )
@@ -44,10 +45,28 @@ describe('buildRepoBrowseUrl', () => {
     )
   })
 
-  it('SSH form normalises to https (sshToHttps adds the scheme)', () => {
-    expect(buildRepoBrowseUrl('git@corp.example.com:team/repo.git')).toBe(
-      'https://corp.example.com/team/repo'
-    )
+  it('returns null for SCP-form (git@host:owner/repo) — not http(s)', () => {
+    expect(buildRepoBrowseUrl('git@github.com:KoalaOps/deployment.git')).toBe(null)
+  })
+
+  it('returns null for ssh:// scheme', () => {
+    expect(buildRepoBrowseUrl('ssh://git@github.com/KoalaOps/deployment.git')).toBe(null)
+  })
+
+  it('returns null for git+ssh:// scheme', () => {
+    expect(buildRepoBrowseUrl('git+ssh://git@github.com/o/r.git')).toBe(null)
+  })
+
+  it('returns null for oci:// scheme (Helm OCI registry)', () => {
+    expect(buildRepoBrowseUrl('oci://registry.example.com/charts/nginx')).toBe(null)
+  })
+
+  it('returns null for file:// scheme', () => {
+    expect(buildRepoBrowseUrl('file:///tmp/repo')).toBe(null)
+  })
+
+  it('returns null for javascript: scheme (XSS-safe)', () => {
+    expect(buildRepoBrowseUrl('javascript:alert(1)')).toBe(null)
   })
 
   it('returns null for empty / nullish input', () => {
@@ -59,10 +78,6 @@ describe('buildRepoBrowseUrl', () => {
 
   it('returns null for non-URL garbage', () => {
     expect(buildRepoBrowseUrl('not a url')).toBe(null)
-  })
-
-  it('rejects non-http(s) schemes after normalisation', () => {
-    expect(buildRepoBrowseUrl('file:///tmp/repo')).toBe(null)
   })
 })
 
