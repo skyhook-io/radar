@@ -12,7 +12,7 @@ interface ParsedRepo {
   }
 }
 
-const SHA_RE = /^[0-9a-f]{40}$/
+const SHA_RE = /^[0-9a-f]{40}$/i
 
 function stripDotGit(s: string): string {
   return s.replace(/\.git$/i, '')
@@ -33,6 +33,12 @@ function encodePath(path: string): string {
     .join('/')
 }
 
+// Refs (branches) can contain slashes — feature/foo — which providers serve as
+// literal path segments. encodeURIComponent would turn those into %2F and 404.
+function encodeRef(ref: string): string {
+  return ref.split('/').map(encodeURIComponent).join('/')
+}
+
 function parseRepoUrl(repoURL: string | undefined | null): ParsedRepo | null {
   if (!repoURL) return null
   const trimmed = repoURL.trim()
@@ -46,20 +52,22 @@ function parseRepoUrl(repoURL: string | undefined | null): ParsedRepo | null {
   }
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return null
 
-  const host = url.hostname.toLowerCase()
+  // host includes the port (when non-default) so self-hosted servers on custom ports stay reachable.
+  const host = url.host.toLowerCase()
+  const hostname = url.hostname.toLowerCase()
   const pathParts = url.pathname.replace(/^\/+/, '').replace(/\/+$/, '').split('/')
   const browseUrl = `https://${host}${url.pathname.replace(/\/+$/, '')}`
 
-  if (host === 'github.com' || host === 'bitbucket.org') {
+  if (hostname === 'github.com' || hostname === 'bitbucket.org') {
     if (pathParts.length < 2) return { provider: 'unknown', browseUrl }
     return {
-      provider: host === 'github.com' ? 'github' : 'bitbucket',
+      provider: hostname === 'github.com' ? 'github' : 'bitbucket',
       browseUrl,
       segments: { owner: pathParts[0], repo: pathParts[1] },
     }
   }
 
-  if (host === 'gitlab.com') {
+  if (hostname === 'gitlab.com') {
     // GitLab supports nested groups: the owner segment may itself be a slash-joined path.
     if (pathParts.length < 2) return { provider: 'unknown', browseUrl }
     const repo = pathParts[pathParts.length - 1]
@@ -69,7 +77,7 @@ function parseRepoUrl(repoURL: string | undefined | null): ParsedRepo | null {
 
   // Azure DevOps URL shape: /{org}/{project}/_git/{repo} (dev.azure.com)
   // or {org}.visualstudio.com/{project}/_git/{repo} (legacy).
-  if (host === 'dev.azure.com') {
+  if (hostname === 'dev.azure.com') {
     const gitIdx = pathParts.indexOf('_git')
     if (gitIdx < 2 || gitIdx + 1 >= pathParts.length) {
       return { provider: 'unknown', browseUrl }
@@ -85,8 +93,8 @@ function parseRepoUrl(repoURL: string | undefined | null): ParsedRepo | null {
     }
   }
 
-  if (host.endsWith('.visualstudio.com')) {
-    const org = host.slice(0, -'.visualstudio.com'.length)
+  if (hostname.endsWith('.visualstudio.com')) {
+    const org = hostname.slice(0, -'.visualstudio.com'.length)
     const gitIdx = pathParts.indexOf('_git')
     if (gitIdx < 1 || gitIdx + 1 >= pathParts.length) {
       return { provider: 'unknown', browseUrl }
@@ -131,15 +139,15 @@ export function buildPathBrowseUrl(
   switch (parsed.provider) {
     case 'github': {
       const { owner, repo } = parsed.segments
-      return `https://github.com/${owner}/${repo}/tree/${encodeURIComponent(ref)}/${encodedPath}`
+      return `https://github.com/${owner}/${repo}/tree/${encodeRef(ref)}/${encodedPath}`
     }
     case 'gitlab': {
       const { owner, repo } = parsed.segments
-      return `https://gitlab.com/${owner}/${repo}/-/tree/${encodeURIComponent(ref)}/${encodedPath}`
+      return `https://gitlab.com/${owner}/${repo}/-/tree/${encodeRef(ref)}/${encodedPath}`
     }
     case 'bitbucket': {
       const { owner, repo } = parsed.segments
-      return `https://bitbucket.org/${owner}/${repo}/src/${encodeURIComponent(ref)}/${encodedPath}`
+      return `https://bitbucket.org/${owner}/${repo}/src/${encodeRef(ref)}/${encodedPath}`
     }
     case 'azure-devops': {
       const { azureOrg, azureProject, azureRepo } = parsed.segments

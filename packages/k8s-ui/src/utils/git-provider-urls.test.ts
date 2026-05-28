@@ -32,6 +32,12 @@ describe('buildRepoBrowseUrl', () => {
     )
   })
 
+  it('preserves non-default port in self-hosted URLs', () => {
+    expect(buildRepoBrowseUrl('https://gitea.internal:3000/team/repo')).toBe(
+      'https://gitea.internal:3000/team/repo'
+    )
+  })
+
   it('returns null for empty / nullish input', () => {
     expect(buildRepoBrowseUrl('')).toBe(null)
     expect(buildRepoBrowseUrl(undefined)).toBe(null)
@@ -97,6 +103,19 @@ describe('buildPathBrowseUrl - GitHub', () => {
       buildPathBrowseUrl('https://github.com/o/r', 'a//b', 'main')
     ).toBe('https://github.com/o/r/tree/main/a/b')
   })
+
+  it('preserves slashes in branch names (feature/foo)', () => {
+    expect(
+      buildPathBrowseUrl('https://github.com/o/r', 'src', 'feature/foo')
+    ).toBe('https://github.com/o/r/tree/feature/foo/src')
+  })
+
+  it('treats uppercase 40-hex as a SHA (no special prefix)', () => {
+    const sha = 'A'.repeat(40)
+    expect(
+      buildPathBrowseUrl('https://github.com/o/r', 'src', sha)
+    ).toBe(`https://github.com/o/r/tree/${sha}/src`)
+  })
 })
 
 describe('buildPathBrowseUrl - GitLab', () => {
@@ -134,7 +153,7 @@ describe('buildPathBrowseUrl - Azure DevOps', () => {
     )
   })
 
-  it('uses GC prefix for SHA refs', () => {
+  it('uses GC prefix for SHA refs (lowercase)', () => {
     const sha = 'a'.repeat(40)
     expect(
       buildPathBrowseUrl(
@@ -144,6 +163,31 @@ describe('buildPathBrowseUrl - Azure DevOps', () => {
       )
     ).toBe(
       `https://dev.azure.com/myorg/MyProject/_git/myrepo?path=/src&version=GC${sha}`
+    )
+  })
+
+  it('uses GC prefix for SHA refs (uppercase)', () => {
+    const sha = 'A'.repeat(40)
+    expect(
+      buildPathBrowseUrl(
+        'https://dev.azure.com/myorg/MyProject/_git/myrepo',
+        'src',
+        sha
+      )
+    ).toBe(
+      `https://dev.azure.com/myorg/MyProject/_git/myrepo?path=/src&version=GC${sha}`
+    )
+  })
+
+  it('percent-encodes slashes in branch names (query-string context)', () => {
+    expect(
+      buildPathBrowseUrl(
+        'https://dev.azure.com/myorg/MyProject/_git/myrepo',
+        'src',
+        'feature/foo'
+      )
+    ).toBe(
+      'https://dev.azure.com/myorg/MyProject/_git/myrepo?path=/src&version=GBfeature%2Ffoo'
     )
   })
 
