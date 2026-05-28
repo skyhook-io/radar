@@ -1,5 +1,3 @@
-export type GitProvider = 'github' | 'gitlab' | 'bitbucket' | 'azure-devops' | 'unknown'
-
 type ParsedRepo =
   | { provider: 'github' | 'gitlab' | 'bitbucket'; browseUrl: string; owner: string; repo: string }
   | { provider: 'azure-devops'; browseUrl: string; org: string; project: string; repo: string }
