@@ -173,7 +173,7 @@ func Aggregate(s Sources) []PackageRow {
 		// silently expose mutation across rows if the literal were
 		// shared.
 		newContribution := func() SourceContribution {
-			return SourceContribution{Source: SourceCRDs, Version: version}
+			return SourceContribution{Source: SourceCRDs, APIVersion: version}
 		}
 		if known {
 			matched := false

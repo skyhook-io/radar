@@ -142,6 +142,7 @@ type SourceContribution struct {
 	Source           SourceCode `json:"source"`
 	Health           Health     `json:"health,omitempty"`
 	Version          string     `json:"version,omitempty"`
+	APIVersion       string     `json:"apiVersion,omitempty"`
 	AppVersion       string     `json:"appVersion,omitempty"`
 	ReleaseName      string     `json:"releaseName,omitempty"`
 	ReleaseNamespace string     `json:"releaseNamespace,omitempty"`
@@ -179,10 +180,11 @@ type PackageRow struct {
 	// cluster-scoped registrations with no namespaced release identity).
 	Namespace   string `json:"namespace,omitempty"`
 	ReleaseName string `json:"releaseName,omitempty"`
-	// Version (Helm chart version > label version > CRD spec.versions[0].name
-	// > GitOps declared version). Empty if no source supplied one. For
-	// per-source values (and to detect same-cluster version disagreement),
-	// read Contributors.
+	// Version (Helm chart version > label version > GitOps declared
+	// version). Empty if no package source supplied one. CRD API
+	// versions are source metadata and live on Contributors.APIVersion.
+	// For per-source values (and to detect same-cluster version
+	// disagreement), read Contributors.
 	Version string `json:"version,omitempty"`
 	// AppVersion if Helm provided one. Optional.
 	AppVersion string `json:"appVersion,omitempty"`
@@ -238,7 +240,7 @@ func (r *PackageRow) MergeHealth(h Health) {
 func (r *PackageRow) AddContribution(c SourceContribution) {
 	r.AddSource(c.Source)
 	r.MergeHealth(c.Health)
-	if r.Version == "" {
+	if r.Version == "" && c.Source != SourceCRDs {
 		r.Version = c.Version
 	}
 	if r.AppVersion == "" {
@@ -252,6 +254,9 @@ func (r *PackageRow) AddContribution(c SourceContribution) {
 		existing.Health = worseHealth(existing.Health, c.Health)
 		if existing.Version == "" {
 			existing.Version = c.Version
+		}
+		if existing.APIVersion == "" {
+			existing.APIVersion = c.APIVersion
 		}
 		if existing.AppVersion == "" {
 			existing.AppVersion = c.AppVersion
