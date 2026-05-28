@@ -16,10 +16,12 @@ import (
 const setupDialogCatalogPath = "../../web/src/components/home/mcpToolCatalog.ts"
 
 // toolNameInCatalog matches the `name: 'tool_name'` entries in the catalog.
-// Tool names use the `name:` key; parameters use `arg:`, so this only catches
-// tools. The TS interface declarations (`name: string`) have no quote after
-// the colon and don't match.
-var toolNameInCatalog = regexp.MustCompile(`name:\s*'([a-z][a-z0-9_]*)'`)
+// Anchored to line start (catalog entries always sit at line-start
+// indentation) so a `name: '...'` substring appearing mid-line inside a
+// description string can't false-match. Tool names use the `name:` key;
+// parameters use `arg:`; the TS interface decl `name: string` has no quote
+// after the colon. None of those match.
+var toolNameInCatalog = regexp.MustCompile(`(?m)^\s*name:\s*'([a-z][a-z0-9_]*)'`)
 
 // TestSetupDialogCoversAllTools fails when the registered MCP tools and the
 // setup-dialog catalog drift apart — a tool added to registerTools without a
