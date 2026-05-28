@@ -47,7 +47,8 @@ function parseRepoUrl(repoURL: string | undefined | null): ParsedRepo | null {
   const host = url.host.toLowerCase()
   const hostname = url.hostname.toLowerCase()
   const pathParts = url.pathname.replace(/^\/+/, '').replace(/\/+$/, '').split('/')
-  const browseUrl = `https://${host}${url.pathname.replace(/\/+$/, '')}`
+  // Preserve the input scheme — self-hosted http-only servers shouldn't be silently upgraded to https.
+  const browseUrl = `${url.protocol}//${host}${url.pathname.replace(/\/+$/, '')}`
 
   if (hostname === 'github.com' || hostname === 'bitbucket.org') {
     if (pathParts.length < 2) return { provider: 'unknown', browseUrl }
@@ -136,7 +137,9 @@ export function buildPathBrowseUrl(
     case 'azure-devops': {
       const isSha = hasExplicitRef && SHA_RE.test(rawRef)
       const versionParam = hasExplicitRef ? `&version=${isSha ? 'GC' : 'GB'}${encodeURIComponent(rawRef)}` : ''
-      return `https://dev.azure.com/${encodeURIComponent(parsed.org)}/${encodeURIComponent(parsed.project)}/_git/${encodeURIComponent(parsed.repo)}?path=/${encodedPath}${versionParam}`
+      // org/project/repo are taken straight from url.pathname segments, which the URL
+      // parser leaves percent-encoded — re-encoding would double-encode (My%20X → My%2520X).
+      return `https://dev.azure.com/${parsed.org}/${parsed.project}/_git/${parsed.repo}?path=/${encodedPath}${versionParam}`
     }
   }
 }

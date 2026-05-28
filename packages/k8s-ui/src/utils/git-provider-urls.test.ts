@@ -38,6 +38,18 @@ describe('buildRepoBrowseUrl', () => {
     )
   })
 
+  it('preserves http:// scheme (does not silently upgrade to https)', () => {
+    expect(buildRepoBrowseUrl('http://corp.example.com/team/repo')).toBe(
+      'http://corp.example.com/team/repo'
+    )
+  })
+
+  it('SSH form normalises to https (sshToHttps adds the scheme)', () => {
+    expect(buildRepoBrowseUrl('git@corp.example.com:team/repo.git')).toBe(
+      'https://corp.example.com/team/repo'
+    )
+  })
+
   it('returns null for empty / nullish input', () => {
     expect(buildRepoBrowseUrl('')).toBe(null)
     expect(buildRepoBrowseUrl(undefined)).toBe(null)
@@ -210,6 +222,18 @@ describe('buildPathBrowseUrl - Azure DevOps', () => {
       )
     ).toBe(
       'https://dev.azure.com/myorg/MyProject/_git/myrepo?path=/src&version=GBmain'
+    )
+  })
+
+  it('does not double-encode project/repo segments that arrived percent-encoded', () => {
+    expect(
+      buildPathBrowseUrl(
+        'https://dev.azure.com/myorg/My%20Project/_git/My%20Repo',
+        'src',
+        'main'
+      )
+    ).toBe(
+      'https://dev.azure.com/myorg/My%20Project/_git/My%20Repo?path=/src&version=GBmain'
     )
   })
 })
