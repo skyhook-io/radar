@@ -268,8 +268,13 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 	// The caller can check if the resource was newly created by other means if needed.
 	result.Created = false
 
+	// Post-apply GET feeds the state-derived warnings (run against what
+	// actually landed) and the field-removal diff. Fetch it for creates too,
+	// not just updates — an SSA apply that creates a resource still wants the
+	// external-manager / terminating-namespace warnings (field-removal stays
+	// gated on pre != nil below).
 	var post *unstructured.Unstructured
-	if !opts.DryRun && pre != nil {
+	if !opts.DryRun {
 		got, getErr := client.Get(ctx, name, metav1.GetOptions{})
 		if getErr == nil {
 			post = got
