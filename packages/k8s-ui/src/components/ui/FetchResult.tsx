@@ -1,0 +1,161 @@
+import { useState } from 'react'
+import { ShieldOff, AlertTriangle, ServerCrash, LogIn, Copy, Check } from 'lucide-react'
+import { clsx } from 'clsx'
+import { PaneLoader } from './PaneLoader'
+import { isFetchError } from '../../types/fetch-error'
+
+// FetchResult collapses (loading, error, data) into one of three rendered
+// outcomes: loader while loading, a typed error surface when the fetch
+// threw, or null passthrough so the caller's own content (or empty-state
+// fallback) renders.
+//
+// Decision tree:
+//   loading                  → <PaneLoader/>
+//   error (403)              → "Access denied"            + error.message
+//   error (404)              → notFoundMessage            + error.message
+//   error (503)              → "Cluster unavailable"      + error.message
+//   error (401)              → "Sign-in required"         (apiFetch redirects; fallback)
+//   error (other / no shape) → "Couldn't load this view"  + error.message
+//   no loading, no error     → null  (caller's fallthrough renders)
+//
+// Separate from EmptyState (which conveys "no data here" with
+// healthy/filtered/neutral tones) because HTTP-level fetch failures need
+// distinct visual and informational semantics — error vs absence.
+//
+// The error contract is duck-typed via FetchErrorShape so this stays in
+// @skyhook-io/k8s-ui without importing ApiError from either web/ (OSS)
+// or radar-hub-web.
+
+interface FetchResultProps {
+  loading: boolean
+  error?: unknown
+  /** Body line for 404 (resource fetched, server says missing). Default "Resource not found". */
+  notFoundMessage?: string
+  /** Pin to parent height. Existing call sites use "h-32" or "h-full". */
+  className?: string
+}
+
+export function FetchResult({
+  loading,
+  error,
+  notFoundMessage = 'Resource not found',
+  className = 'h-32',
+}: FetchResultProps) {
+  if (loading) {
+    return <PaneLoader className={className} />
+  }
+  if (error === undefined || error === null) {
+    return null
+  }
+  return <ErrorSurface error={error} notFoundMessage={notFoundMessage} className={className} />
+}
+
+interface ErrorSurfaceProps {
+  error: unknown
+  notFoundMessage: string
+  className: string
+}
+
+function ErrorSurface({ error, notFoundMessage, className }: ErrorSurfaceProps) {
+  const classified = classify(error, notFoundMessage)
+  const Icon = classified.icon
+
+  return (
+    <div className={clsx('flex flex-col items-center justify-center gap-2 px-6 text-center', className)}>
+      <Icon className={clsx('h-5 w-5', classified.iconClass)} aria-hidden />
+      <div className="text-sm font-medium text-theme-text-secondary">{classified.headline}</div>
+      {classified.detail && (
+        <div className="flex items-center gap-2 max-w-md">
+          <span className="text-xs text-theme-text-tertiary break-words">{classified.detail}</span>
+          <CopyErrorButton text={classified.detail} />
+        </div>
+      )}
+    </div>
+  )
+}
+
+interface Classified {
+  headline: string
+  detail: string | null
+  icon: typeof ShieldOff
+  iconClass: string
+}
+
+function classify(error: unknown, notFoundMessage: string): Classified {
+  if (isFetchError(error)) {
+    switch (error.status) {
+      case 403:
+        return {
+          headline: 'Access denied',
+          detail: error.message,
+          icon: ShieldOff,
+          iconClass: 'text-theme-text-tertiary',
+        }
+      case 404:
+        return {
+          headline: notFoundMessage,
+          detail: error.message,
+          icon: AlertTriangle,
+          iconClass: 'text-theme-text-tertiary',
+        }
+      case 401:
+        return {
+          headline: 'Sign-in required',
+          detail: error.message,
+          icon: LogIn,
+          iconClass: 'text-theme-text-tertiary',
+        }
+      case 503:
+        return {
+          headline: 'Cluster unavailable',
+          detail: error.message,
+          icon: ServerCrash,
+          iconClass: 'text-theme-text-tertiary',
+        }
+      default:
+        return {
+          headline: "Couldn't load this view",
+          detail: error.message,
+          icon: AlertTriangle,
+          iconClass: 'text-theme-text-tertiary',
+        }
+    }
+  }
+  // Network failures (no .status), DOMException for AbortError, anything thrown without our shape.
+  return {
+    headline: "Couldn't load this view",
+    detail: errorMessageOf(error),
+    icon: AlertTriangle,
+    iconClass: 'text-theme-text-tertiary',
+  }
+}
+
+function errorMessageOf(error: unknown): string | null {
+  if (error instanceof Error && error.message) return error.message
+  if (typeof error === 'string') return error
+  return null
+}
+
+function CopyErrorButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false)
+  const onCopy = () => {
+    navigator.clipboard.writeText(text).then(
+      () => {
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1500)
+      },
+      () => { /* best-effort */ },
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onCopy}
+      className="flex-shrink-0 p-1 rounded text-theme-text-tertiary hover:text-theme-text-secondary hover:bg-theme-hover"
+      title={copied ? 'Copied' : 'Copy error'}
+      aria-label={copied ? 'Copied' : 'Copy error'}
+    >
+      {copied ? <Check className="h-3 w-3" aria-hidden /> : <Copy className="h-3 w-3" aria-hidden />}
+    </button>
+  )
+}

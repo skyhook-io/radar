@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef, useCallback, type ReactNode } fro
 import { flushSync } from 'react-dom'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { startViewTransitionSafe } from '../../utils/view-transition'
-import { PaneLoader } from '../ui/PaneLoader'
+import { FetchResult } from '../ui/FetchResult'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { clsx } from 'clsx'
 import {
@@ -80,6 +80,9 @@ interface WorkloadViewProps {
   certificateInfo?: any
   /** Whether the resource is loading */
   isLoading?: boolean
+  /** Fetch error for the resource (preserves status + message so the
+   *  drawer body can distinguish 403/404/503 from "no data"). */
+  resourceError?: unknown
   /** Function to refetch the resource data */
   refetch?: () => void
 
@@ -187,6 +190,7 @@ export function WorkloadView({
   relationships,
   certificateInfo,
   isLoading: resourceLoading = false,
+  resourceError,
   refetch: refetchProp,
   // Timeline
   allEvents,
@@ -480,10 +484,8 @@ export function WorkloadView({
 
         {/* Content — viewTransitionName scopes View Transitions API cross-fade to this element */}
         <div className="flex-1 overflow-y-auto" style={{ viewTransitionName: 'drawer-content' }}>
-          {resourceLoading ? (
-            <PaneLoader className="h-32" />
-          ) : !resource ? (
-            <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Resource not found</div>
+          {!resource ? (
+            <FetchResult loading={resourceLoading} error={resourceError} className="h-32" />
           ) : showYaml ? (
             <EditableYamlView
               resource={selectedResource}
@@ -660,6 +662,7 @@ export function WorkloadView({
               selectedResource={selectedResource}
               relationships={relationships}
               isLoading={resourceLoading}
+              error={resourceError}
               onNavigate={onNavigateToResource}
               onCopy={copyToClipboard}
               copied={copied}
@@ -711,10 +714,8 @@ export function WorkloadView({
         )}
         {activeTab === 'yaml' && (
           <div className="h-full overflow-auto">
-            {resourceLoading ? (
-              <PaneLoader className="h-32" />
-            ) : !resource ? (
-              <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Resource not found</div>
+            {!resource ? (
+              <FetchResult loading={resourceLoading} error={resourceError} className="h-32" />
             ) : (
               <EditableYamlView
                 resource={selectedResource}
@@ -1165,6 +1166,7 @@ function InfoTab({
   selectedResource,
   relationships,
   isLoading,
+  error,
   onNavigate,
   onCopy,
   copied,
@@ -1185,6 +1187,7 @@ function InfoTab({
   selectedResource: SelectedResource
   relationships?: Relationships
   isLoading: boolean
+  error?: unknown
   onNavigate?: NavigateToResource
   onCopy: (text: string, key: string) => void
   copied: string | null
@@ -1201,16 +1204,8 @@ function InfoTab({
   updatesError?: Error | null
   extraContent?: ReactNode
 }) {
-  if (isLoading) {
-    return <PaneLoader className="h-full" />
-  }
-
   if (!resource) {
-    return (
-      <div className="flex items-center justify-center h-full text-theme-text-tertiary">
-        Resource not found
-      </div>
-    )
+    return <FetchResult loading={isLoading} error={error} className="h-full" />
   }
 
   return (

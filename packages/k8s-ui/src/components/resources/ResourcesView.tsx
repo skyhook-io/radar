@@ -28,6 +28,7 @@ import {
 import { clsx } from 'clsx'
 import { ResourceBar } from '../ui/ResourceBar'
 import type { SelectedResource, APIResource } from '../../types'
+import { isForbiddenError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
 import { categorizeResources, CORE_RESOURCES } from '../../utils/api-resources'
 import {
@@ -1680,11 +1681,6 @@ interface ResourcesViewData {
 }
 
 export const ResourcesViewDataContext = React.createContext<ResourcesViewData>({})
-
-// Inline helper replacing ApiError/isForbiddenError from the removed api/client import
-function isForbiddenError(error: any): boolean {
-  return error?.status === 403
-}
 
 export interface ResourceQueryResult {
   data?: any[]

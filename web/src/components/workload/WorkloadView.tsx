@@ -255,7 +255,7 @@ export function WorkloadView({
   }, [searchParams, setSearchParams])
 
   // Fetch resource with relationships
-  const { data: resourceResponse, isLoading: resourceLoading, refetch: refetchResource } = useResourceWithRelationships<any>(kindProp, namespace, name, rest.group)
+  const { data: resourceResponse, isLoading: resourceLoading, error: resourceError, refetch: refetchResource } = useResourceWithRelationships<any>(kindProp, namespace, name, rest.group)
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
   const certificateInfo = resourceResponse?.certificateInfo
@@ -398,6 +398,7 @@ export function WorkloadView({
       relationships={relationships}
       certificateInfo={certificateInfo}
       isLoading={resourceLoading}
+      resourceError={resourceError}
       refetch={refetchResource}
       // Timeline
       allEvents={allEvents}
