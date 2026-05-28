@@ -279,9 +279,14 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 
 // schedulingBlockerWarnings detects when a restart won't accomplish what the
 // agent likely wants: if the workload currently has Pending pods blocked on
-// scheduling/admission/post-bind issues, a rolling restart just creates more
-// Pending pods. The agent should fix the underlying constraint instead
-// (taints/affinity/capacity/quota). Best-effort — never blocks the restart.
+// scheduling or post-bind (CNI/volume) issues, a rolling restart just creates
+// more pods that hit the same wall. The agent should fix the underlying
+// constraint instead (taints/affinity/capacity/CNI/storage). Best-effort —
+// never blocks the restart.
+//
+// Admission failures (quota/PSA/webhook) are intentionally out of scope: they
+// block pod creation entirely, so there are no Pending pods to key on, and the
+// FailedCreate event names the controller rather than a Pod.
 func schedulingBlockerWarnings(kind, namespace, name string) []string {
 	cache := k8s.GetResourceCache()
 	if cache == nil {
@@ -309,7 +314,6 @@ func schedulingBlockerWarnings(kind, namespace, name string) []string {
 	}
 
 	all := k8s.DetectSchedulingProblems(cache, namespace)
-	all = append(all, k8s.DetectAdmissionProblems(cache, namespace)...)
 	all = append(all, k8s.DetectPostBindProblems(cache, namespace)...)
 
 	reasons := map[string]struct{}{}
