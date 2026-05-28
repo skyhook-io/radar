@@ -1,6 +1,6 @@
 import { useState, useCallback, useEffect, useRef } from 'react'
 import { flushSync } from 'react-dom'
-import { PaneLoader, useDockReservedHeight } from '@skyhook-io/k8s-ui'
+import { FetchResult, useDockReservedHeight } from '@skyhook-io/k8s-ui'
 import { startViewTransitionSafe } from '@skyhook-io/k8s-ui/utils/view-transition'
 import { TRANSITION_DRAWER } from '../../utils/animation'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
@@ -60,7 +60,7 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
   const canViewSensitive = canAtLeast('member')
   const helmNamespace = release.storageNamespace || release.namespace
 
-  const { data: releaseDetail, isLoading, refetch: refetchRelease } = useHelmRelease(
+  const { data: releaseDetail, isLoading, error: releaseError, refetch: refetchRelease } = useHelmRelease(
     helmNamespace,
     release.name
   )
@@ -446,10 +446,8 @@ export function HelmReleaseDrawer({ release, onClose, onNavigateToResource, isOp
 
       {/* Content */}
       <div className="flex-1 overflow-y-auto" style={{ viewTransitionName: 'helm-drawer-content' }}>
-        {isLoading ? (
-          <PaneLoader className="h-32" />
-        ) : !releaseDetail ? (
-          <div className="flex items-center justify-center h-32 text-theme-text-tertiary">Release not found</div>
+        {!releaseDetail ? (
+          <FetchResult loading={isLoading} error={releaseError} notFoundMessage="Release not found" className="h-32" />
         ) : (
           <>
             {activeTab === 'overview' && (
