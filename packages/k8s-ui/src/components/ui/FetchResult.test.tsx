@@ -13,9 +13,14 @@ describe('FetchResult', () => {
     expect(html).not.toContain('Access denied')
   })
 
-  it('returns null when neither loading nor error (caller fallthrough wins)', () => {
+  it('renders notFoundMessage when neither loading nor error (disabled-query fallback)', () => {
+    const html = renderToString(<FetchResult loading={false} notFoundMessage="Pod not found" />)
+    expect(html).toContain('Pod not found')
+  })
+
+  it('default notFoundMessage is "Resource not found"', () => {
     const html = renderToString(<FetchResult loading={false} />)
-    expect(html).toBe('')
+    expect(html).toContain('Resource not found')
   })
 
   it('shows "Access denied" headline and the server message on 403', () => {
