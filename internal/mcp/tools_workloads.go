@@ -339,8 +339,8 @@ func schedulingBlockerWarnings(kind, namespace, name string) []string {
 	)}
 }
 
-// computeWorkloadLogsWarnings aggregates the same D/E logs hints that
-// get_pod_logs surfaces, summarized across all pods of the workload.
+// computeWorkloadLogsWarnings aggregates the not-Running and crashloop logs
+// hints that get_pod_logs surfaces, summarized across all pods of the workload.
 func computeWorkloadLogsWarnings(pods []*corev1.Pod, previous bool) []string {
 	var notRunning, crashloop int
 	for _, p := range pods {

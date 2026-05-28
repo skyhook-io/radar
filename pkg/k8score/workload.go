@@ -244,7 +244,7 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 			return nil, fmt.Errorf("failed to create resource: %w", err)
 		}
 		result.Created = true
-		m.populateApplyWarnings(ctx, result, obj, pre, nil, ns, kind, name)
+		m.populateApplyWarnings(ctx, result, obj, pre, nil, ns, kind, name, opts.DryRun)
 		return result, nil
 	}
 
@@ -278,7 +278,7 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 		}
 	}
 
-	m.populateApplyWarnings(ctx, result, obj, pre, post, ns, kind, name)
+	m.populateApplyWarnings(ctx, result, obj, pre, post, ns, kind, name, opts.DryRun)
 	return result, nil
 }
 
@@ -292,7 +292,7 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 //     what landed and so live here.
 //
 // Best-effort throughout — a failed check never fails the apply itself.
-func (m *WorkloadManager) populateApplyWarnings(ctx context.Context, result *ApplyResourceResult, submitted, pre, post *unstructured.Unstructured, namespace, kind, name string) {
+func (m *WorkloadManager) populateApplyWarnings(ctx context.Context, result *ApplyResourceResult, submitted, pre, post *unstructured.Unstructured, namespace, kind, name string, dryRun bool) {
 	// State-derived: prefer post-apply (reflects what the agent just landed),
 	// fall back to pre when post wasn't fetched (dry run or post-GET failed).
 	target := post
@@ -304,9 +304,12 @@ func (m *WorkloadManager) populateApplyWarnings(ctx context.Context, result *App
 	if pre != nil && post != nil {
 		result.Warnings = append(result.Warnings, checkFieldRemoval(submitted, pre, post)...)
 	}
-	if (kind == "ConfigMap" || kind == "Secret") && namespace != "" {
-		consumers := findConfigMapSecretConsumers(ctx, m.dynClient, m.discovery, namespace, kind, name)
-		if w := formatConsumerWarning(kind, name, consumers); w != "" {
+	// The consumer-reload reminder only makes sense for a persisted edit — on a
+	// dry run nothing landed, so the "restart consumers" advice would be
+	// premature (and the namespace-wide LISTs wasted).
+	if !dryRun && (kind == "ConfigMap" || kind == "Secret") && namespace != "" {
+		consumers, partial := findConfigMapSecretConsumers(ctx, m.dynClient, m.discovery, namespace, kind, name)
+		if w := formatConsumerWarning(kind, name, consumers, partial); w != "" {
 			result.Warnings = append(result.Warnings, w)
 		}
 	}

@@ -3,6 +3,7 @@ package k8score
 import (
 	"context"
 	"fmt"
+	"log"
 	"sort"
 	"strings"
 
@@ -149,12 +150,7 @@ func checkFieldRemoval(submitted, pre, post *unstructured.Unstructured) []string
 			if _, in := postC[field]; !in {
 				continue
 			}
-			fieldRef := fmt.Sprintf("spec.template.spec.containers[name=%s].%s", name, field)
-			if specPath[0] == "spec" && len(specPath) == 5 {
-				fieldRef = fmt.Sprintf("spec.jobTemplate.spec.template.spec.containers[name=%s].%s", name, field)
-			} else if len(specPath) == 1 {
-				fieldRef = fmt.Sprintf("spec.containers[name=%s].%s", name, field)
-			}
+			fieldRef := fmt.Sprintf("%s.containers[name=%s].%s", strings.Join(specPath, "."), name, field)
 			warnings = append(warnings, formatFieldRemovalWarning(fieldRef, otherManagers))
 		}
 	}
@@ -231,22 +227,29 @@ func nonRadarManagers(obj *unstructured.Unstructured) []string {
 // findConfigMapSecretConsumers returns the qualified names (Kind/Name) of
 // workloads in the same namespace whose PodSpec references the given
 // ConfigMap or Secret via env, envFrom, volumes, or projected volumes.
-func findConfigMapSecretConsumers(ctx context.Context, dynClient dynamic.Interface, discovery *ResourceDiscovery, namespace, refKind, refName string) []string {
+//
+// partial is true when a workload kind could not be listed (e.g. RBAC denied
+// the user the apply path impersonates, or the kind isn't in discovery). An
+// empty result with partial=true means "scan incomplete", NOT "verified no
+// consumers" — the caller must not present it as the latter.
+func findConfigMapSecretConsumers(ctx context.Context, dynClient dynamic.Interface, discovery *ResourceDiscovery, namespace, refKind, refName string) (consumers []string, partial bool) {
 	if dynClient == nil || discovery == nil || namespace == "" || refName == "" {
-		return nil
+		return nil, false
 	}
 	if refKind != "ConfigMap" && refKind != "Secret" {
-		return nil
+		return nil, false
 	}
 
-	var consumers []string
 	for _, kind := range []string{"Deployment", "StatefulSet", "DaemonSet", "CronJob", "Job"} {
 		gvr, ok := discovery.GetGVR(kind)
 		if !ok {
+			partial = true
 			continue
 		}
 		list, err := dynClient.Resource(gvr).Namespace(namespace).List(ctx, metav1.ListOptions{})
 		if err != nil {
+			log.Printf("[k8s] apply_resource: consumer scan list %s in %s failed: %v", kind, namespace, err)
+			partial = true
 			continue
 		}
 		for i := range list.Items {
@@ -257,7 +260,7 @@ func findConfigMapSecretConsumers(ctx context.Context, dynClient dynamic.Interfa
 		}
 	}
 	sort.Strings(consumers)
-	return consumers
+	return consumers, partial
 }
 
 func podSpecReferences(obj *unstructured.Unstructured, refKind, refName string) bool {
@@ -377,8 +380,11 @@ func volumeReferences(v map[string]any, refKind, refName string) bool {
 	return false
 }
 
-func formatConsumerWarning(refKind, refName string, consumers []string) string {
+func formatConsumerWarning(refKind, refName string, consumers []string, partial bool) string {
 	if len(consumers) == 0 {
+		if partial {
+			return fmt.Sprintf("Could not fully enumerate workloads referencing `%s` (some list calls failed — likely RBAC). If you changed its contents, manually verify which workloads mount it and restart any that don't watch for changes.", refName)
+		}
 		return ""
 	}
 	preview := consumers
@@ -387,5 +393,9 @@ func formatConsumerWarning(refKind, refName string, consumers []string) string {
 		preview = preview[:5]
 		tail = fmt.Sprintf(" (+%d more)", len(consumers)-5)
 	}
-	return fmt.Sprintf("%s changes typically reach pod filesystems within ~60s, but most applications must detect and reload the new contents. %d workload(s) reference `%s`: %s%s. If those apps don't watch for changes, restart them (e.g., `manage_workload restart`) so they pick up the edit.", refKind, len(consumers), refName, strings.Join(preview, ", "), tail)
+	incomplete := ""
+	if partial {
+		incomplete = " (consumer list may be incomplete — some list calls failed)"
+	}
+	return fmt.Sprintf("%s changes typically reach pod filesystems within ~60s, but most applications must detect and reload the new contents. %d workload(s) reference `%s`: %s%s%s. If those apps don't watch for changes, restart them (e.g., `manage_workload restart`) so they pick up the edit.", refKind, len(consumers), refName, strings.Join(preview, ", "), tail, incomplete)
 }

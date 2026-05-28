@@ -867,14 +867,16 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	skipContext := contextMode == "none"
 
 	var resourceCtx *resourcecontext.ResourceContext
+	var warnings []string
 	if !skipContext {
 		resourceCtx = buildMCPResourceContext(ctx, rawObj, kind, namespace, name, resourcecontext.TierBasic)
-	}
 
-	// State-derived advisory warnings (deletionTimestamp, external manager,
-	// terminating namespace, workload health-condition history, PVC stuck
-	// Pending). Cheap — operates on the object we already fetched.
-	warnings := k8score.EnrichRuntimeObjectWarnings(rawObj)
+		// State-derived advisory warnings (deletionTimestamp, external manager,
+		// terminating namespace, workload health-condition history, PVC stuck
+		// Pending). Cheap — operates on the object we already fetched. Skipped
+		// for context=none so that mode stays a bare object for raw jq work.
+		warnings = k8score.EnrichRuntimeObjectWarnings(rawObj)
+	}
 
 	// Three shapes:
 	//   - bare resource: no includes, context=none
@@ -1581,12 +1583,13 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 // computePodLogsWarnings inspects the pod's status to surface common
 // pitfalls in interpreting an empty/short logs response:
 //
-//   - D: when the pod isn't Running, application logs are usually unavailable
+//   - when the pod isn't Running, application logs are usually unavailable
 //     because the container hasn't started yet. The agent thinks the app
 //     isn't writing logs when actually the pod is still scheduling/pulling.
-//   - E: when a container has restarted recently and the caller didn't pass
-//     previous=true, the current container's logs are likely the next-crash
-//     in progress; the error that killed the last container is in previous.
+//   - when a container has restarted (restartCount > 0) and the caller didn't
+//     pass previous=true, the current container's logs are likely the
+//     next-crash in progress; the error that killed the last container is in
+//     previous.
 //
 // Best-effort — if the pod can't be fetched, return no warnings rather than
 // failing the logs call (the caller already has whatever logs we returned).
@@ -1606,7 +1609,6 @@ func computePodLogsWarnings(namespace, name, container string, previous bool, ra
 
 	var out []string
 
-	// D — non-Running phase: app logs likely unavailable
 	if pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodSucceeded {
 		out = append(out, fmt.Sprintf(
 			"Pod is in phase `%s`; application logs are typically unavailable until containers start. Inspect scheduling/pull state via `diagnose` (kind=pod), `get_resource` with include=events, or check pod conditions for the underlying blocker.",
@@ -1638,9 +1640,9 @@ func computePodLogsWarnings(namespace, name, container string, previous bool, ra
 	return out
 }
 
-// pickCrashIndicator returns the most informative ContainerStatus for crashloop
-// warnings: a container with restartCount > 0 whose previous termination has a
-// recorded reason. Returns nil when no container looks crash-loopy.
+// pickCrashIndicator returns the first container with restartCount > 0 that has
+// a recorded previous termination, or nil when no container has crashed. The
+// previous termination may have an empty reason; the caller renders that.
 func pickCrashIndicator(statuses []corev1.ContainerStatus) *corev1.ContainerStatus {
 	for i := range statuses {
 		cs := &statuses[i]
