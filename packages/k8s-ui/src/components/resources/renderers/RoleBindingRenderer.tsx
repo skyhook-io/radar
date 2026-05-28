@@ -167,22 +167,23 @@ function RulesPreviewSection({
   error?: unknown
   roleName?: string
 }) {
-  const forbidden = isForbiddenError(error)
   return (
     <Section title="Rules Granted" icon={Eye} defaultExpanded={false}>
       {loading ? (
         <div className="text-sm text-theme-text-tertiary">Loading rules…</div>
-      ) : forbidden ? (
-        <div className="text-sm text-theme-text-tertiary">
-          Access denied reading referenced role
-          {roleName ? ` "${roleName}"` : ''}.
-        </div>
       ) : !rules ? (
-        <div className="text-sm text-theme-text-tertiary">
-          Could not resolve referenced role
-          {roleName ? ` "${roleName}"` : ''} — it may not exist (orphan binding)
-          or be unavailable.
-        </div>
+        isForbiddenError(error) ? (
+          <div className="text-sm text-theme-text-tertiary">
+            Access denied reading referenced role
+            {roleName ? ` "${roleName}"` : ''}.
+          </div>
+        ) : (
+          <div className="text-sm text-theme-text-tertiary">
+            Could not resolve referenced role
+            {roleName ? ` "${roleName}"` : ''} — it may not exist (orphan binding)
+            or be unavailable.
+          </div>
+        )
       ) : rules.length === 0 ? (
         <div className="text-sm text-theme-text-tertiary">
           The referenced role has no rules.

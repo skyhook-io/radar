@@ -61,4 +61,16 @@ describe('RoleBindingRenderer rules section', () => {
     expect(html).toContain('Could not resolve referenced role')
     expect(html).not.toContain('Access denied')
   })
+
+  it('keeps showing cached rules when a refetch fails with 403 (stale data preserved)', () => {
+    const html = renderToString(
+      <RoleBindingRenderer
+        data={binding}
+        roleRules={[{ verbs: ['get'], resources: ['secrets'], apiGroups: [''] }]}
+        roleRulesError={shaped('forbidden', 403)}
+      />,
+    )
+    expect(html).toContain('secrets')
+    expect(html).not.toContain('Access denied')
+  })
 })
