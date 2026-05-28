@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ShieldOff, AlertTriangle, ServerCrash, LogIn, Copy, Check } from 'lucide-react'
+import { ShieldOff, AlertTriangle, ServerCrash, LogIn, Copy, Check, type LucideIcon } from 'lucide-react'
 import { clsx } from 'clsx'
 import { PaneLoader } from './PaneLoader'
 import { isFetchError } from '../../types/fetch-error'
@@ -69,8 +69,11 @@ function ErrorSurface({ error, notFoundMessage, className }: ErrorSurfaceProps) 
   const Icon = classified.icon
 
   return (
-    <div className={clsx('flex flex-col items-center justify-center gap-2 px-6 text-center', className)}>
-      <Icon className={clsx('h-5 w-5', classified.iconClass)} aria-hidden />
+    <div
+      role="status"
+      className={clsx('flex flex-col items-center justify-center gap-2 px-6 text-center', className)}
+    >
+      <Icon className="h-5 w-5 text-theme-text-tertiary" aria-hidden />
       <div className="text-sm font-medium text-theme-text-secondary">{classified.headline}</div>
       {classified.detail && (
         <div className="flex items-center gap-2 max-w-md">
@@ -85,57 +88,26 @@ function ErrorSurface({ error, notFoundMessage, className }: ErrorSurfaceProps) 
 interface Classified {
   headline: string
   detail: string | null
-  icon: typeof ShieldOff
-  iconClass: string
+  icon: LucideIcon
 }
 
 function classify(error: unknown, notFoundMessage: string): Classified {
   if (isFetchError(error)) {
     switch (error.status) {
       case 403:
-        return {
-          headline: 'Access denied',
-          detail: error.message,
-          icon: ShieldOff,
-          iconClass: 'text-theme-text-tertiary',
-        }
+        return { headline: 'Access denied', detail: error.message, icon: ShieldOff }
       case 404:
-        return {
-          headline: notFoundMessage,
-          detail: error.message,
-          icon: AlertTriangle,
-          iconClass: 'text-theme-text-tertiary',
-        }
+        return { headline: notFoundMessage, detail: error.message, icon: AlertTriangle }
       case 401:
-        return {
-          headline: 'Sign-in required',
-          detail: error.message,
-          icon: LogIn,
-          iconClass: 'text-theme-text-tertiary',
-        }
+        return { headline: 'Sign-in required', detail: error.message, icon: LogIn }
       case 503:
-        return {
-          headline: 'Cluster unavailable',
-          detail: error.message,
-          icon: ServerCrash,
-          iconClass: 'text-theme-text-tertiary',
-        }
+        return { headline: 'Cluster unavailable', detail: error.message, icon: ServerCrash }
       default:
-        return {
-          headline: "Couldn't load this view",
-          detail: error.message,
-          icon: AlertTriangle,
-          iconClass: 'text-theme-text-tertiary',
-        }
+        return { headline: "Couldn't load this view", detail: error.message, icon: AlertTriangle }
     }
   }
   // Network failures (no .status), DOMException for AbortError, anything thrown without our shape.
-  return {
-    headline: "Couldn't load this view",
-    detail: errorMessageOf(error),
-    icon: AlertTriangle,
-    iconClass: 'text-theme-text-tertiary',
-  }
+  return { headline: "Couldn't load this view", detail: errorMessageOf(error), icon: AlertTriangle }
 }
 
 function errorMessageOf(error: unknown): string | null {
