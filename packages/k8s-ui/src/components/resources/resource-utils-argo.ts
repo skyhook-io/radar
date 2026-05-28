@@ -57,6 +57,24 @@ export function getArgoApplicationStatus(app: any): StatusBadge {
   return { text: health || sync || 'Unknown', color: healthColors.unknown, level: 'unknown' }
 }
 
+// Radar suspends an Argo Application by clearing spec.syncPolicy.automated and
+// recording the prior prune/selfHeal flags in annotations so Resume can restore
+// them. The *presence* of any of these annotations marks the app as suspended —
+// independent of health.status, which stays whatever the app's resources report
+// (often Missing/OutOfSync, never literally "Suspended"). Both the current
+// radarhq.io keys and the legacy skyhook.io keys (still on apps suspended by
+// older builds) count. Shared so the fleet table and the detail page can't
+// disagree on whether an app is suspended.
+export function isArgoSuspendedByRadar(app: any): boolean {
+  const a = app?.metadata?.annotations
+  return Boolean(
+    a?.['radarhq.io/suspended-prune'] ||
+      a?.['radarhq.io/suspended-selfheal'] ||
+      a?.['skyhook.io/suspended-prune'] ||
+      a?.['skyhook.io/suspended-selfheal'],
+  )
+}
+
 // ============================================================================
 // ARGOCD TABLE CELL UTILITIES
 // ============================================================================

@@ -237,15 +237,19 @@ export interface DashboardCRDCount {
 }
 
 // Re-export shared types from k8s-ui — single source of truth
-import type { AuditCardData, AuditFinding, ResourceGroup, CheckMeta } from '@skyhook-io/k8s-ui'
+import type { AuditCardData, AuditFinding, ResourceGroup, CheckMeta, Check } from '@skyhook-io/k8s-ui'
 export type DashboardAudit = AuditCardData
-export type { AuditFinding, ResourceGroup, CheckMeta }
+export type { AuditFinding, ResourceGroup, CheckMeta, Check }
 
 export interface AuditResponse {
   summary: DashboardAudit
   findings: AuditFinding[]
   groups: ResourceGroup[]
   checks: Record<string, CheckMeta>
+  // Remediation-queue rollup: findings grouped by check, prioritized. Present
+  // on the non-raw scan (standalone + embedded per-cluster views); the Checks
+  // queue renders this.
+  groupedChecks?: Check[]
 }
 
 export interface DashboardCertificateHealth {

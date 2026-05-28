@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState, type ComponentType, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { clsx } from 'clsx'
 import {
   AlertTriangle,
+  ArrowDownUp,
   CheckCircle2,
   CircleAlert,
   CircleDot,
@@ -10,15 +11,23 @@ import {
   LayoutGrid,
   List,
   Loader2,
+  Pause,
+  Play,
   RefreshCw,
+  RotateCcw,
+  RotateCw,
   Search,
+  Square,
   Tag,
   Trash2,
+  Zap,
 } from 'lucide-react'
 
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { Tooltip } from '../ui/Tooltip'
+import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
 import { getGitOpsResourceStatus } from './detail-helpers'
+import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
 import { toggleSet } from './GitOpsGraphFilterRail'
 import { parseContextName } from '../../utils/context-name'
 
@@ -52,6 +61,21 @@ import { parseContextName } from '../../utils/context-name'
 export type GitOpsMode = 'applications' | 'sources' | 'projects' | 'alerts'
 export type GitOpsViewMode = 'table' | 'tiles'
 export type SortKey = 'name' | 'health' | 'sync' | 'lastSync' | 'project'
+
+// Row-level actions surfaced from the table's three-dot menu. The set
+// mirrors what the detail page exposes today; callers wire the mutations
+// + dialogs and dispatch via `onRowAction`. Argo-only actions (refresh,
+// hard-refresh, terminate) and Flux-only actions (reconcile,
+// sync-with-source) are filtered per-tool inside the table.
+export type GitOpsRowAction =
+  | 'sync'
+  | 'refresh'
+  | 'hard-refresh'
+  | 'terminate'
+  | 'suspend'
+  | 'resume'
+  | 'reconcile'
+  | 'sync-with-source'
 
 // FleetClusterStamp + FleetDestinationStamp — optional fields the hub-side
 // `_cluster` / `_destination` stamping projects into. Keep the types here so
@@ -117,6 +141,17 @@ export interface GitOpsRow {
 
 export type DestinationFilter = 'all' | 'this-cluster' | 'cross-cluster' | 'unmatched'
 
+type SummaryTone = 'neutral' | 'warning' | 'error' | 'info'
+
+interface SummaryTileSpec {
+  key: string
+  label: string
+  value: number
+  tone: SummaryTone
+  active: boolean
+  apply?: () => void
+}
+
 // ----- Component props -------------------------------------------------------
 
 export interface GitOpsTableViewProps {
@@ -129,14 +164,27 @@ export interface GitOpsTableViewProps {
   counts: Record<string, number>
   // Caller refresh — typically invalidates its useQuery + refetches.
   onRefresh?: () => void
-  // Row click — caller routes to its own detail page.
-  onRowClick: (row: GitOpsRow) => void
+  // Row click — caller routes to its own detail page. When the host also
+  // passes `rowHrefFor`, the callback receives the MouseEvent so it can
+  // `preventDefault()` for SPA-local nav (e.g. react-router) or skip the
+  // preventDefault to let the anchor's default full-page navigation run
+  // (required for cross-router-boundary links).
+  onRowClick: (row: GitOpsRow, event?: ReactMouseEvent) => void
+  /** When provided, the Application-name cell renders as a real `<a href>`
+   *  and the `<tr>` drops its row-level click handler. Restores ⌘-click /
+   *  middle-click / "Copy link" / hover URL preview / screen-reader link
+   *  semantics. `onRowClick` still fires on unmodified clicks (event arg
+   *  supplied) for analytics or to take over navigation. */
+  rowHrefFor?: (row: GitOpsRow) => string
 
   // Called when the user clicks the destination cluster chip in the
   // Destination cell. Fleet-only; OSS leaves undefined. Caller routes to
   // the destination cluster's workloads view (filtered by the Argo
   // instance label) — the chip itself stops row-click propagation.
   onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp) => void
+  /** Anchor equivalent of `onDestinationClick`. Same rationale as
+   *  `rowHrefFor` — real `<a href>` for the destination chip. */
+  destinationHrefFor?: (row: GitOpsRow, destination: FleetDestinationStamp) => string
   // Cross-cluster surfaces (Hub-only); OSS leaves these undefined.
   crossClusterCount?: number
   destinationFilter?: DestinationFilter
@@ -153,6 +201,29 @@ export interface GitOpsTableViewProps {
   // detected" copy. Hub passes "No GitOps resources across the fleet".
   emptyStateTitle?: string
   emptyStateBody?: string
+  /**
+   * Global namespace pick from the host's NamespaceSwitcher. Used to
+   * surface "viewing in namespace: X" context and to power the Clear
+   * filters affordance when no rows match. Host owns the state; shared
+   * component is read-only.
+   */
+  globalNamespaces?: string[]
+  /**
+   * Resets the global namespace pick. When wired, the "Clear filters"
+   * button drops it alongside view-local filter state.
+   */
+  onClearNamespaces?: () => void
+
+  // Row-level action dispatcher. When provided, the table renders a
+  // right-most three-dot menu per row with Sync / Refresh / Suspend / etc.
+  // Caller owns the mutation hooks + any options dialogs (e.g. Argo
+  // SyncOptionsDialog). When undefined the actions column is omitted
+  // entirely — keeps Hub and other consumers' layout unchanged until they
+  // opt in.
+  onRowAction?: (row: GitOpsRow, action: GitOpsRowAction) => void
+  // In-flight action state, keyed by `row.id`. Drives the per-item
+  // spinner so the user can tell which Sync/Refresh is still running.
+  pendingRowActions?: Map<string, Set<GitOpsRowAction>>
 }
 
 // ----- Main component --------------------------------------------------------
@@ -164,7 +235,9 @@ export function GitOpsTableView({
   counts,
   onRefresh,
   onRowClick,
+  rowHrefFor,
   onDestinationClick,
+  destinationHrefFor,
   crossClusterCount,
   destinationFilter,
   onDestinationFilterChange,
@@ -172,6 +245,10 @@ export function GitOpsTableView({
   searchHotkey,
   emptyStateTitle,
   emptyStateBody,
+  globalNamespaces,
+  onClearNamespaces,
+  onRowAction,
+  pendingRowActions,
 }: GitOpsTableViewProps) {
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [mode, setMode] = useState<GitOpsMode>('applications')
@@ -186,7 +263,20 @@ export function GitOpsTableView({
   const [labelSearch, setLabelSearch] = useState('')
   const [automationFilter, setAutomationFilter] = useState<'all' | 'auto' | 'manual' | 'suspended'>('all')
   const [lifecycleFilter, setLifecycleFilter] = useState<'all' | 'terminating' | 'active'>('all')
+  const [reconcilingOnly, setReconcilingOnly] = useState(false)
   const [sortKey, setSortKey] = useState<SortKey>('health')
+
+  const hasLocalFilters =
+    !!search ||
+    syncFilters.size > 0 ||
+    healthFilters.size > 0 ||
+    projectFilters.size > 0 ||
+    namespaceFilters.size > 0 ||
+    labelFilters.size > 0 ||
+    automationFilter !== 'all' ||
+    lifecycleFilter !== 'all'
+  const hasGlobalNamespaceFilter = !!onClearNamespaces && (globalNamespaces?.length ?? 0) > 0
+  const hasAnyFilter = hasLocalFilters || hasGlobalNamespaceFilter
 
   // Optional '/' keyboard shortcut to focus search. Avoided as a default to
   // not collide with other surfaces' keyboard maps; OSS opts in via prop.
@@ -260,6 +350,7 @@ export function GitOpsTableView({
       if (automationFilter === 'suspended' && !row.suspended) return false
       if (lifecycleFilter === 'terminating' && !row.terminating) return false
       if (lifecycleFilter === 'active' && row.terminating) return false
+      if (reconcilingOnly && row.sync !== 'Reconciling' && row.health !== 'Progressing') return false
       if (destinationFilter && destinationFilter !== 'all') {
         const match = row._destination?.match
         if (destinationFilter === 'this-cluster' && match !== 'in_cluster') return false
@@ -273,12 +364,60 @@ export function GitOpsTableView({
       return true
     })
     return [...rows].sort((a, b) => compareRows(a, b, sortKey))
-  }, [allRows, automationFilter, healthFilters, labelFilters, lifecycleFilter, mode, namespaceFilters, projectFilters, search, sortKey, syncFilters, destinationFilter])
+  }, [allRows, automationFilter, healthFilters, labelFilters, lifecycleFilter, mode, namespaceFilters, projectFilters, search, sortKey, syncFilters, destinationFilter, reconcilingOnly])
 
   const terminatingCount = useMemo(() => allRows.filter((row) => row.terminating).length, [allRows])
 
+  const clearAllFilters = useCallback(() => {
+    setSearch('')
+    setSyncFilters(new Set())
+    setHealthFilters(new Set())
+    setProjectFilters(new Set())
+    setNamespaceFilters(new Set())
+    setLabelFilters(new Set())
+    setAutomationFilter('all')
+    setLifecycleFilter('all')
+    setReconcilingOnly(false)
+    onClearNamespaces?.()
+    onDestinationFilterChange?.('all')
+  }, [onClearNamespaces, onDestinationFilterChange])
+
+  const noOtherFiltersActive = useCallback(
+    (
+      exclude: 'sync' | 'health' | 'automation' | 'destination' | 'reconciling' | null = null,
+    ) => {
+      if (search !== '') return false
+      if (exclude !== 'sync' && syncFilters.size > 0) return false
+      if (exclude !== 'health' && healthFilters.size > 0) return false
+      if (projectFilters.size > 0) return false
+      if (namespaceFilters.size > 0) return false
+      if (labelFilters.size > 0) return false
+      if (exclude !== 'automation' && automationFilter !== 'all') return false
+      if (lifecycleFilter !== 'all') return false
+      if (exclude !== 'destination' && destinationFilter && destinationFilter !== 'all') return false
+      if (exclude !== 'reconciling' && reconcilingOnly) return false
+      return true
+    },
+    [
+      search,
+      syncFilters,
+      healthFilters,
+      projectFilters,
+      namespaceFilters,
+      labelFilters,
+      automationFilter,
+      lifecycleFilter,
+      destinationFilter,
+      reconcilingOnly,
+    ],
+  )
+
   // Empty-state — when there's truly nothing to show across all kinds.
-  if (totalGitOps === 0 && !loading) {
+  // `counts` is server-filtered by the global namespace pick, so a
+  // namespace-scoped zero is NOT the same as cluster-empty. Fall through
+  // to the actionable empty state below when the host owns a namespace
+  // pick we can clear; otherwise the user lands here with no escape hatch.
+  if (totalGitOps === 0 && !loading && !hasGlobalNamespaceFilter) {
     return (
       <div className="flex h-full min-h-0 flex-1 items-center justify-center bg-theme-base p-4">
         <div className="rounded-lg border border-theme-border bg-theme-surface p-8 text-center">
@@ -295,6 +434,62 @@ export function GitOpsTableView({
   }
 
   const showCrossClusterTile = typeof crossClusterCount === 'number' && mode === 'applications'
+
+  const summaryTiles: SummaryTileSpec[] = [
+    {
+      key: 'total',
+      label: 'Total Applications',
+      value: allRows.length,
+      tone: 'neutral',
+      active: noOtherFiltersActive(),
+    },
+    {
+      key: 'outOfSync',
+      label: 'Out of sync',
+      value: statusSummary.outOfSync,
+      tone: 'warning',
+      active:
+        syncFilters.size === 1 && syncFilters.has('OutOfSync') && noOtherFiltersActive('sync'),
+      apply: () => setSyncFilters(new Set(['OutOfSync'])),
+    },
+    {
+      key: 'degraded',
+      label: 'Degraded',
+      value: statusSummary.degraded,
+      tone: 'error',
+      active:
+        healthFilters.size === 1 && healthFilters.has('Degraded') && noOtherFiltersActive('health'),
+      apply: () => setHealthFilters(new Set(['Degraded'])),
+    },
+    {
+      key: 'suspended',
+      label: 'Suspended',
+      value: statusSummary.suspended,
+      tone: 'warning',
+      active: automationFilter === 'suspended' && noOtherFiltersActive('automation'),
+      apply: () => setAutomationFilter('suspended'),
+    },
+    {
+      key: 'reconciling',
+      label: 'Reconciling',
+      value: statusSummary.reconciling,
+      tone: 'info',
+      active: reconcilingOnly && noOtherFiltersActive('reconciling'),
+      apply: () => setReconcilingOnly(true),
+    },
+    ...(showCrossClusterTile
+      ? [
+          {
+            key: 'crossCluster',
+            label: 'Cross-cluster',
+            value: crossClusterCount!,
+            tone: 'info' as const,
+            active: destinationFilter === 'cross-cluster' && noOtherFiltersActive('destination'),
+            apply: () => onDestinationFilterChange?.('cross-cluster'),
+          },
+        ]
+      : []),
+  ]
 
   return (
     <div className="flex h-full min-w-0 flex-1 overflow-hidden bg-theme-base max-lg:flex-col">
@@ -319,16 +514,7 @@ export function GitOpsTableView({
         namespaces={rowNamespaces}
         namespaceFilters={namespaceFilters}
         onToggleNamespace={(value) => toggleSet(namespaceFilters, setNamespaceFilters, value)}
-        onClear={() => {
-          setSearch('')
-          setSyncFilters(new Set())
-          setHealthFilters(new Set())
-          setProjectFilters(new Set())
-          setNamespaceFilters(new Set())
-          setLabelFilters(new Set())
-          setAutomationFilter('all')
-          setLifecycleFilter('all')
-        }}
+        onClear={clearAllFilters}
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
@@ -341,14 +527,19 @@ export function GitOpsTableView({
               </p>
             </div>
             <div className="flex shrink-0 flex-wrap justify-end gap-2">
-              <SummaryTile label="Applications" value={allRows.length} />
-              <SummaryTile label="Out of sync" value={statusSummary.outOfSync} tone="warning" />
-              <SummaryTile label="Degraded" value={statusSummary.degraded} tone="error" />
-              <SummaryTile label="Suspended" value={statusSummary.suspended} tone="warning" />
-              <SummaryTile label="Reconciling" value={statusSummary.reconciling} tone="info" />
-              {showCrossClusterTile && (
-                <SummaryTile label="Cross-cluster" value={crossClusterCount!} tone="info" />
-              )}
+              {summaryTiles.map((tile) => (
+                <SummaryTile
+                  key={tile.key}
+                  label={tile.label}
+                  value={tile.value}
+                  tone={tile.tone}
+                  active={tile.active}
+                  onClick={() => {
+                    clearAllFilters()
+                    if (!tile.active && tile.apply) tile.apply()
+                  }}
+                />
+              ))}
             </div>
           </div>
         </div>
@@ -426,6 +617,18 @@ export function GitOpsTableView({
                 ))}
               </div>
             )}
+            {hasAnyFilter && (
+              <Tooltip content={hasGlobalNamespaceFilter ? 'Reset all filters and the active namespace' : 'Reset all filters'}>
+                <button
+                  type="button"
+                  onClick={clearAllFilters}
+                  className="inline-flex h-8 items-center gap-1.5 rounded-md border border-theme-border bg-theme-base px-2.5 text-xs text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Clear filters
+                </button>
+              </Tooltip>
+            )}
             <div className="flex shrink-0 items-center gap-0 overflow-hidden rounded-md border border-theme-border">
               <GitOpsIconToggle active={viewMode === 'table'} label="Table view" icon={List} onClick={() => setViewMode('table')} />
               <GitOpsIconToggle active={viewMode === 'tiles'} label="Tiles view" icon={LayoutGrid} onClick={() => setViewMode('tiles')} />
@@ -444,7 +647,12 @@ export function GitOpsTableView({
           </div>
         </div>
 
-        <div className="min-h-0 min-w-0 flex-1 overflow-auto bg-theme-base">
+        {/* pb-20 keeps the last row (and its three-dot menu) scrollable clear
+            of the app's fixed bottom-right overlay buttons; without the slack
+            the bottom row's action trigger sits under them and can't be clicked
+            once the list fills the viewport. Only needed when the actions column
+            is present — consumers without onRowAction (e.g. Hub) skip the slack. */}
+        <div className={clsx('min-h-0 min-w-0 flex-1 overflow-auto bg-theme-base', onRowAction && 'pb-20')}>
           {mode !== 'applications' ? (
             <div className="flex h-full items-center justify-center text-sm text-theme-text-secondary">
               {modeLabel(mode)} view is queued behind the application list.
@@ -456,13 +664,36 @@ export function GitOpsTableView({
           ) : error ? (
             <div className="p-4 text-sm text-red-500">Failed to load GitOps applications: {error.message}</div>
           ) : filteredRows.length === 0 ? (
-            <div className="flex h-full items-center justify-center text-sm text-theme-text-secondary">
-              No applications match the current filters.
+            <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-theme-text-secondary">
+              <p>{allRows.length === 0 && !hasGlobalNamespaceFilter ? 'No applications found.' : 'No applications match the current filters.'}</p>
+              {hasGlobalNamespaceFilter && globalNamespaces && (
+                <p className="text-xs text-theme-text-tertiary">
+                  Viewing {globalNamespaces.length === 1 ? `namespace: ${globalNamespaces[0]}` : `${globalNamespaces.length} namespaces`}
+                </p>
+              )}
+              {(hasGlobalNamespaceFilter || (allRows.length > 0 && hasLocalFilters)) && (
+                <button
+                  type="button"
+                  onClick={clearAllFilters}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-theme-elevated px-3 py-1.5 text-sm text-theme-text-secondary transition-colors hover:bg-theme-border hover:text-theme-text-primary"
+                >
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Clear filters
+                </button>
+              )}
             </div>
           ) : viewMode === 'tiles' ? (
-            <GitOpsTiles rows={filteredRows} onOpen={onRowClick} />
+            <GitOpsTiles rows={filteredRows} onOpen={onRowClick} hrefFor={rowHrefFor} />
           ) : (
-            <GitOpsTable rows={filteredRows} onOpen={onRowClick} onDestinationClick={onDestinationClick} />
+            <GitOpsTable
+              rows={filteredRows}
+              onOpen={onRowClick}
+              hrefFor={rowHrefFor}
+              onDestinationClick={onDestinationClick}
+              destinationHrefFor={destinationHrefFor}
+              onRowAction={onRowAction}
+              pendingRowActions={pendingRowActions}
+            />
           )}
         </div>
       </div>
@@ -850,101 +1081,273 @@ function StatusDistribution({ rows }: { rows: GitOpsRow[] }) {
 function GitOpsTable({
   rows,
   onOpen,
+  hrefFor,
   onDestinationClick,
+  destinationHrefFor,
+  onRowAction,
+  pendingRowActions,
 }: {
   rows: GitOpsRow[]
-  onOpen: (row: GitOpsRow) => void
+  onOpen: (row: GitOpsRow, event?: ReactMouseEvent) => void
+  hrefFor?: (row: GitOpsRow) => string
   onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp) => void
+  destinationHrefFor?: (row: GitOpsRow, destination: FleetDestinationStamp) => string
+  onRowAction?: (row: GitOpsRow, action: GitOpsRowAction) => void
+  pendingRowActions?: Map<string, Set<GitOpsRowAction>>
 }) {
+  const showActions = !!onRowAction
   return (
     <table className="w-full min-w-[1040px] table-fixed border-separate border-spacing-0 text-sm">
       <thead className="sticky top-0 z-10 bg-theme-surface">
         <tr className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
-          <TableHead className="w-[22%]">Application</TableHead>
+          <TableHead className={showActions ? 'w-[16%]' : 'w-[22%]'}>Application</TableHead>
           <TableHead className="w-[9%]">Project</TableHead>
           <TableHead className="w-[9%]">Sync</TableHead>
           <TableHead className="w-[9%]">Health</TableHead>
           <TableHead className="w-[20%]">Source</TableHead>
           <TableHead className="w-[14%]">Destination</TableHead>
           <TableHead className="w-[10%]">Last Sync</TableHead>
+          {showActions && (
+            <TableHead className="w-[6%] text-right">
+              <span className="sr-only">Actions</span>
+            </TableHead>
+          )}
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
-          <tr
-            key={row.id}
-            onClick={() => onOpen(row)}
-            className={clsx(
-              'cursor-pointer border-b border-theme-border bg-theme-base hover:bg-theme-hover',
-              row.terminating && 'opacity-70',
-            )}
-          >
-            <TableCell>
-              <div className="flex min-w-0 items-center gap-2">
-                <span className={`h-8 w-1 shrink-0 rounded-full ${statusStripe(row)}`} />
-                {row.terminating && (
-                  <Tooltip content="Pending deletion — finalizers still running">
-                    <span className="inline-flex shrink-0 items-center gap-1 rounded border border-orange-500/40 bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-400">
-                      <Trash2 className="h-3 w-3" />
-                      Terminating
-                    </span>
-                  </Tooltip>
-                )}
-                <div className="min-w-0">
-                  <div className="truncate font-medium text-theme-text-primary">{row.name}</div>
-                  <div className="truncate text-xs text-theme-text-tertiary">
-                    {row.tool === 'argo' ? 'ArgoCD' : 'FluxCD'} {row.kind}
-                    {row._cluster && (
-                      <span title={row._cluster.name !== shortClusterName(row._cluster.name) ? row._cluster.name : undefined}>
-                        {' · '}{shortClusterName(row._cluster.name)}
+        {rows.map((row) => {
+          const href = hrefFor?.(row)
+          return (
+            <tr
+              key={row.id}
+              onClick={href ? undefined : () => onOpen(row)}
+              className={clsx(
+                'border-b border-theme-border bg-theme-base hover:bg-theme-hover',
+                !href && 'cursor-pointer',
+                row.terminating && 'opacity-70',
+              )}
+            >
+              <TableCell>
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className={`h-8 w-1 shrink-0 rounded-full ${statusStripe(row)}`} />
+                  {row.terminating && (
+                    <Tooltip content="Pending deletion — finalizers still running">
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded border border-orange-500/40 bg-orange-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-400">
+                        <Trash2 className="h-3 w-3" />
+                        Terminating
                       </span>
+                    </Tooltip>
+                  )}
+                  <div className="min-w-0">
+                    {href ? (
+                      <a
+                        href={href}
+                        onClick={(e) => {
+                          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+                          onOpen(row, e)
+                        }}
+                        className="block truncate font-medium text-theme-text-primary hover:underline focus-visible:underline focus-visible:outline-none rounded-sm"
+                      >
+                        {row.name}
+                      </a>
+                    ) : (
+                      <div className="truncate font-medium text-theme-text-primary">{row.name}</div>
                     )}
+                    <div className="truncate text-xs text-theme-text-tertiary">
+                      {row.tool === 'argo' ? 'ArgoCD' : 'FluxCD'} {row.kind}
+                      {row._cluster && (
+                        <span title={row._cluster.name !== shortClusterName(row._cluster.name) ? row._cluster.name : undefined}>
+                          {' · '}{shortClusterName(row._cluster.name)}
+                        </span>
+                      )}
+                    </div>
                   </div>
                 </div>
-              </div>
-            </TableCell>
-            <TableCell>{row.project || '-'}</TableCell>
-            <TableCell>
-              {row.terminating
-                ? <span className="text-[11px] text-theme-text-tertiary">—</span>
-                : <SyncStatusBadge sync={row.sync as any} suspended={row.suspended} />}
-            </TableCell>
-            <TableCell>
-              {row.terminating
-                ? <span className="text-[11px] text-theme-text-tertiary">—</span>
-                : <HealthStatusBadge health={row.health as any} />}
-            </TableCell>
-            <TableCell>
-              <div className="truncate text-theme-text-primary">{row.repository || row.chart || '-'}</div>
-              <div className="truncate text-xs text-theme-text-tertiary">{[row.targetRevision, row.path || row.chart].filter(Boolean).join(' · ') || '-'}</div>
-            </TableCell>
-            <TableCell>
-              <DestinationCell row={row} onDestinationClick={onDestinationClick} />
-              <div className="truncate text-xs text-theme-text-tertiary">{row.destinationNamespace || row.namespace || '-'}</div>
-            </TableCell>
-            <TableCell>
-              {row.terminating
-                ? <span className="text-orange-400/80">Pending {formatRelativeAge(row.terminationStartedAt ?? '') || 'now'}</span>
-                : formatRelativeAge(row.lastSync || row.createdAt)}
-            </TableCell>
-          </tr>
-        ))}
+              </TableCell>
+              <TableCell>{row.project || '-'}</TableCell>
+              <TableCell>
+                {row.terminating
+                  ? <span className="text-[11px] text-theme-text-tertiary">—</span>
+                  : <SyncStatusBadge sync={row.sync as any} suspended={row.suspended} />}
+              </TableCell>
+              <TableCell>
+                {row.terminating
+                  ? <span className="text-[11px] text-theme-text-tertiary">—</span>
+                  : <HealthStatusBadge health={row.health as any} />}
+              </TableCell>
+              <TableCell>
+                <div className="truncate text-theme-text-primary">{row.repository || row.chart || '-'}</div>
+                <div className="truncate text-xs text-theme-text-tertiary">{[row.targetRevision, row.path || row.chart].filter(Boolean).join(' · ') || '-'}</div>
+              </TableCell>
+              <TableCell>
+                <DestinationCell row={row} onDestinationClick={onDestinationClick} destinationHrefFor={destinationHrefFor} />
+                <div className="truncate text-xs text-theme-text-tertiary">{row.destinationNamespace || row.namespace || '-'}</div>
+              </TableCell>
+              <TableCell>
+                {row.terminating
+                  ? <span className="text-orange-400/80">Pending {formatRelativeAge(row.terminationStartedAt ?? '') || 'now'}</span>
+                  : formatRelativeAge(row.lastSync || row.createdAt)}
+              </TableCell>
+              {showActions && onRowAction && (
+                <td
+                  className="overflow-visible border-b border-theme-border px-2 py-2 text-right align-middle"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <RowActionMenu items={buildRowActionItems(row, onRowAction, pendingRowActions)} />
+                </td>
+              )}
+            </tr>
+          )
+        })}
       </tbody>
     </table>
   )
 }
 
+// buildRowActionItems composes the per-row three-dot menu entries based on
+// the row's tool (Argo vs Flux), current suspend state, terminating state,
+// and Argo's operationState.phase (used to gate the Terminate entry — only
+// shown while a sync is mid-flight, mirroring the detail-page condition).
+function buildRowActionItems(
+  row: GitOpsRow,
+  onAction: (row: GitOpsRow, action: GitOpsRowAction) => void,
+  pending?: Map<string, Set<GitOpsRowAction>>,
+): RowActionItem[] {
+  const inFlight = pending?.get(row.id)
+  const isPending = (action: GitOpsRowAction) => inFlight?.has(action) ?? false
+  const terminating = row.terminating
+  const suspended = row.suspended
+  // Disabled-reason copy matches what the detail page already shows so
+  // operators see consistent language whichever surface they use.
+  const terminatingReason = 'Resource is terminating; mutating actions are gated until finalizers complete.'
+  const suspendedReason = 'Cannot sync while suspended. Resume first.'
+  const items: RowActionItem[] = []
+
+  if (row.tool === 'argo') {
+    items.push({
+      key: 'sync',
+      label: 'Sync...',
+      icon: ArrowDownUp,
+      onClick: () => onAction(row, 'sync'),
+      disabled: suspended || terminating,
+      disabledReason: terminating ? terminatingReason : suspended ? suspendedReason : undefined,
+      pending: isPending('sync'),
+    })
+    // Refresh / Hard refresh are read-style verbs — they re-read Git and
+    // recompute status without mutating the cluster, so they stay enabled
+    // during termination (matches the detail page + the backend carve-out).
+    items.push({
+      key: 'refresh',
+      label: 'Refresh',
+      icon: RefreshCw,
+      onClick: () => onAction(row, 'refresh'),
+      pending: isPending('refresh'),
+    })
+    items.push({
+      key: 'hard-refresh',
+      label: 'Hard refresh',
+      icon: Zap,
+      onClick: () => onAction(row, 'hard-refresh'),
+      pending: isPending('hard-refresh'),
+    })
+    if (suspended) {
+      items.push({
+        key: 'resume',
+        label: 'Resume',
+        icon: Play,
+        onClick: () => onAction(row, 'resume'),
+        disabled: terminating,
+        disabledReason: terminating ? terminatingReason : undefined,
+        pending: isPending('resume'),
+        divider: true,
+      })
+    } else {
+      items.push({
+        key: 'suspend',
+        label: 'Suspend',
+        icon: Pause,
+        onClick: () => onAction(row, 'suspend'),
+        disabled: terminating,
+        disabledReason: terminating ? terminatingReason : undefined,
+        pending: isPending('suspend'),
+        divider: true,
+      })
+    }
+    // Argo Terminate only makes sense while a sync is Running — gating
+    // here matches the detail-page conditional (gitops detail mounts the
+    // shortcut only when `isRunning`). For non-running rows we just omit
+    // the entry rather than disabling it, to keep the menu tight.
+    if (row.raw?.status?.operationState?.phase === 'Running') {
+      items.push({
+        key: 'terminate',
+        label: 'Terminate sync',
+        icon: Square,
+        onClick: () => onAction(row, 'terminate'),
+        pending: isPending('terminate'),
+        danger: true,
+      })
+    }
+    return items
+  }
+
+  // Flux (Kustomization / HelmRelease)
+  items.push({
+    key: 'reconcile',
+    label: 'Reconcile',
+    icon: RefreshCw,
+    onClick: () => onAction(row, 'reconcile'),
+    disabled: suspended || terminating,
+    disabledReason: terminating ? terminatingReason : suspended ? suspendedReason : undefined,
+    pending: isPending('reconcile'),
+  })
+  items.push({
+    key: 'sync-with-source',
+    label: 'Reconcile with source',
+    icon: RotateCw,
+    onClick: () => onAction(row, 'sync-with-source'),
+    disabled: suspended || terminating,
+    disabledReason: terminating ? terminatingReason : suspended ? suspendedReason : undefined,
+    pending: isPending('sync-with-source'),
+  })
+  if (suspended) {
+    items.push({
+      key: 'resume',
+      label: 'Resume',
+      icon: Play,
+      onClick: () => onAction(row, 'resume'),
+      disabled: terminating,
+      disabledReason: terminating ? terminatingReason : undefined,
+      pending: isPending('resume'),
+      divider: true,
+    })
+  } else {
+    items.push({
+      key: 'suspend',
+      label: 'Suspend',
+      icon: Pause,
+      onClick: () => onAction(row, 'suspend'),
+      disabled: terminating,
+      disabledReason: terminating ? terminatingReason : undefined,
+      pending: isPending('suspend'),
+      divider: true,
+    })
+  }
+  return items
+}
+
 function GitOpsTiles({
   rows,
   onOpen,
+  hrefFor,
 }: {
   rows: GitOpsRow[]
-  onOpen: (row: GitOpsRow) => void
+  onOpen: (row: GitOpsRow, event?: ReactMouseEvent) => void
+  hrefFor?: (row: GitOpsRow) => string
 }) {
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(300px,1fr))] gap-3 p-4">
       {rows.map((row) => (
-        <GitOpsTile key={row.id} row={row} onOpen={onOpen} />
+        <GitOpsTile key={row.id} row={row} onOpen={onOpen} href={hrefFor?.(row)} />
       ))}
     </div>
   )
@@ -953,9 +1356,11 @@ function GitOpsTiles({
 function GitOpsTile({
   row,
   onOpen,
+  href,
 }: {
   row: GitOpsRow
-  onOpen: (row: GitOpsRow) => void
+  onOpen: (row: GitOpsRow, event?: ReactMouseEvent) => void
+  href?: string
 }) {
   const source = compactRepoSource(row.repository || row.chart, row.path || row.chart)
   const revision = row.targetRevision || ''
@@ -963,15 +1368,12 @@ function GitOpsTile({
   const recencyClass = recencyTone(lastSyncRaw)
   const dest = row.destination ? compactClusterURL(row.destination) : ''
   const ns = row.destinationNamespace || row.namespace
-  return (
-    <button
-      type="button"
-      onClick={() => onOpen(row)}
-      className={clsx(
-        'group relative flex min-w-0 flex-col overflow-hidden rounded-md border border-theme-border bg-theme-surface text-left shadow-theme-sm transition-all hover:border-theme-text-tertiary/40 hover:shadow-theme-md',
-        row.terminating && 'opacity-80',
-      )}
-    >
+  const tileClass = clsx(
+    'group relative flex min-w-0 flex-col overflow-hidden rounded-md border border-theme-border bg-theme-surface text-left shadow-theme-sm transition-all hover:border-theme-text-tertiary/40 hover:shadow-theme-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-theme-text-primary/20',
+    row.terminating && 'opacity-80',
+  )
+  const body = (
+    <>
       <div className={clsx('h-1 w-full', statusStripe(row))} />
       <div className="flex flex-1 flex-col gap-3 px-4 pb-4 pt-3">
         <div className="line-clamp-2 break-all text-[15px] font-semibold leading-tight text-theme-text-primary">
@@ -1017,22 +1419,77 @@ function GitOpsTile({
           </div>
         )}
       </div>
+    </>
+  )
+  if (href) {
+    return (
+      <a
+        href={href}
+        onClick={(e) => {
+          if (e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return
+          onOpen(row, e)
+        }}
+        className={tileClass}
+      >
+        {body}
+      </a>
+    )
+  }
+  return (
+    <button type="button" onClick={() => onOpen(row)} className={tileClass}>
+      {body}
     </button>
   )
 }
 
-function SummaryTile({ label, value, tone = 'neutral' }: { label: string; value: number; tone?: 'neutral' | 'warning' | 'error' | 'info' }) {
+function SummaryTile({
+  label,
+  value,
+  tone = 'neutral',
+  onClick,
+  active = false,
+}: {
+  label: string
+  value: number
+  tone?: SummaryTone
+  onClick?: () => void
+  active?: boolean
+}) {
   const toneClass = {
     neutral: 'text-theme-text-primary',
     warning: 'text-amber-600 dark:text-amber-300',
     error: 'text-red-600 dark:text-red-300',
     info: 'text-sky-600 dark:text-sky-300',
   }[tone]
+  const activeBorderClass = {
+    neutral: 'border-skyhook-500',
+    warning: 'border-amber-500',
+    error: 'border-red-500',
+    info: 'border-sky-500',
+  }[tone]
+  const value$ = <div className={`text-sm font-semibold ${toneClass}`}>{value}</div>
+  const label$ = <div className="text-xs text-theme-text-tertiary">{label}</div>
+  if (!onClick) {
+    return (
+      <div className="rounded-md border border-theme-border bg-theme-base px-3 py-2">
+        {value$}
+        {label$}
+      </div>
+    )
+  }
   return (
-    <div className="rounded-md border border-theme-border bg-theme-base px-3 py-2">
-      <div className={`text-sm font-semibold ${toneClass}`}>{value}</div>
-      <div className="text-xs text-theme-text-tertiary">{label}</div>
-    </div>
+    <button
+      type="button"
+      onClick={onClick}
+      aria-pressed={active}
+      className={clsx(
+        'cursor-pointer rounded-md border bg-theme-base px-3 py-2 text-left transition-colors hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyhook-500',
+        active ? activeBorderClass : 'border-theme-border',
+      )}
+    >
+      {value$}
+      {label$}
+    </button>
   )
 }
 
@@ -1057,9 +1514,11 @@ function TableHead({ children, className = '' }: { children: ReactNode; classNam
 function DestinationCell({
   row,
   onDestinationClick,
+  destinationHrefFor,
 }: {
   row: GitOpsRow
   onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp) => void
+  destinationHrefFor?: (row: GitOpsRow, destination: FleetDestinationStamp) => string
 }) {
   const dest = row._destination
   // Non-fleet (OSS) path — show the raw destination string.
@@ -1070,10 +1529,6 @@ function DestinationCell({
     return <span className="block truncate text-theme-text-tertiary">same cluster</span>
   }
   if ((dest.match === 'exact' || dest.match === 'inferred') && dest.cluster_id && dest.cluster_name) {
-    const handleClick = (e: React.MouseEvent) => {
-      e.stopPropagation()
-      onDestinationClick?.(row, dest)
-    }
     const short = shortClusterName(dest.cluster_name)
     // High-confidence (URL match): solid sky chip with a small ✓ marker.
     // Medium-confidence (name match): same chip styling but no marker, and
@@ -1082,19 +1537,41 @@ function DestinationCell({
     // the human-readable reason from the hub.
     const highConfidence = dest.confidence === 'high'
     const tooltipReason = dest.reason ? ` (${dest.reason})` : ''
+    const chipClass =
+      'block max-w-full truncate rounded px-1.5 py-0.5 text-xs font-medium hover:bg-sky-500/20 dark:text-sky-300 ' +
+      (highConfidence
+        ? 'border border-sky-500/50 bg-sky-500/15 text-sky-700'
+        : 'border border-sky-500/25 bg-sky-500/5 text-sky-600')
+    const title = `Open workloads in ${dest.cluster_name}${tooltipReason}`
+    const chipBody = `${highConfidence ? '✓ ' : ''}${short}`
+    const destHref = destinationHrefFor?.(row, dest)
+    if (destHref) {
+      return (
+        <a
+          href={destHref}
+          // The chip sits inside the row's `<td>`; when a host wires
+          // `destinationHrefFor` without `rowHrefFor`, the `<tr>` retains
+          // its own onClick. Stop the bubble so a click on the chip
+          // doesn't also trigger row navigation.
+          onClick={(e) => e.stopPropagation()}
+          className={chipClass + ' focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-sky-500/40'}
+          title={title}
+        >
+          {chipBody}
+        </a>
+      )
+    }
     return (
       <button
         type="button"
-        onClick={handleClick}
-        className={
-          'block max-w-full truncate rounded px-1.5 py-0.5 text-xs font-medium hover:bg-sky-500/20 dark:text-sky-300 ' +
-          (highConfidence
-            ? 'border border-sky-500/50 bg-sky-500/15 text-sky-700'
-            : 'border border-sky-500/25 bg-sky-500/5 text-sky-600')
-        }
-        title={`Open workloads in ${dest.cluster_name}${tooltipReason}`}
+        onClick={(e) => {
+          e.stopPropagation()
+          onDestinationClick?.(row, dest)
+        }}
+        className={chipClass}
+        title={title}
       >
-        {highConfidence ? '✓ ' : ''}{short}
+        {chipBody}
       </button>
     )
   }
@@ -1315,7 +1792,7 @@ export function normalizeArgoApplication(resource: any): GitOpsRow {
     labels: (resource.metadata?.labels ?? {}) as Record<string, string>,
     sync: status?.sync ?? 'Unknown',
     health: status?.health ?? 'Unknown',
-    suspended: status?.suspended ?? false,
+    suspended: (status?.suspended ?? false) || isArgoSuspendedByRadar(resource),
     repository: resource.spec?.source?.repoURL ?? '',
     targetRevision: resource.spec?.source?.targetRevision ?? '',
     path: resource.spec?.source?.path ?? '',

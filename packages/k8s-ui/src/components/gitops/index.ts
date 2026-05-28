@@ -22,6 +22,7 @@ export {
 export type {
   GitOpsTableViewProps,
   GitOpsRow,
+  GitOpsRowAction,
   GitOpsMode,
   GitOpsViewMode,
   SortKey,

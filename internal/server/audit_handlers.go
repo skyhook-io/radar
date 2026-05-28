@@ -14,6 +14,7 @@ import (
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/settings"
 	bp "github.com/skyhook-io/radar/pkg/audit"
+	chk "github.com/skyhook-io/radar/pkg/checks"
 )
 
 // apiResourceKindMap maps lowercase plural API resource names to Go Kind names
@@ -101,8 +102,37 @@ func (s *Server) handleAudit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	results := getCachedResults(cache, namespaces)
+	// `?raw=true` returns the unfiltered scan, skipping the local
+	// ~/.radar/settings.json audit filters. Radar Cloud's Hub requests raw so
+	// it can own the effective Checks config (org policy) centrally rather than
+	// inheriting each cluster's local settings as if they were team policy.
+	// Standalone Radar and the embedded per-cluster audit view omit the param
+	// and keep applying local settings.
+	if queryTrue(r, "raw") {
+		// Raw fan-out (the Hub): just the findings + catalog. The Hub applies
+		// org policy and builds its own rollup, so computing one here is waste.
+		s.writeJSON(w, results)
+		return
+	}
 	results = applyAuditSettings(results, getAuditConfig())
-	s.writeJSON(w, results)
+	// Attach the remediation-queue rollup for standalone + embedded per-cluster
+	// views. Build on a shallow copy: applyAuditSettings returns the shared
+	// cache object verbatim when no settings filter, so mutating it would race
+	// concurrent readers. clusterID/env are empty — single-cluster, and the web
+	// supplies cluster context from the URL when embedded.
+	resp := *results
+	resp.GroupedChecks = chk.BuildChecks(bp.EffectiveFindings(results.Findings, ""), results.Checks, "", "")
+	s.writeJSON(w, &resp)
+}
+
+// queryTrue reports whether a query param parses as a truthy boolean. Tolerant
+// of the usual forms (true/1/t); anything else (incl. absent) reads false.
+func queryTrue(r *http.Request, key string) bool {
+	switch strings.ToLower(r.URL.Query().Get(key)) {
+	case "true", "1", "t", "yes":
+		return true
+	}
+	return false
 }
 
 // handleAuditResource returns findings for a specific resource.
@@ -127,7 +157,12 @@ func (s *Server) handleAuditResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	results := getCachedResults(cache, namespaces)
-	results = applyAuditSettings(results, getAuditConfig())
+	// Honor ?raw=true here too (mirrors handleAudit), so the per-resource
+	// drill-down and the list endpoint can't drift on the raw contract: Radar
+	// Cloud's Hub owns effective Checks config, standalone keeps local settings.
+	if !queryTrue(r, "raw") {
+		results = applyAuditSettings(results, getAuditConfig())
+	}
 	index := bp.IndexByResource(results.Findings)
 
 	// Try exact kind first, then map API resource name (e.g. "deployments") to Go kind (e.g. "Deployment").

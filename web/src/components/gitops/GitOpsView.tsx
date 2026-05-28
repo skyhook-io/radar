@@ -18,6 +18,7 @@ import {
   formatGitOpsSourceUrl,
   getGitOpsResourceStatus,
   getGitOpsTool,
+  isArgoSuspendedByRadar,
   gitOpsInsightChangeKey,
   initNavigationMap,
   kindToPlural,
@@ -34,6 +35,7 @@ import {
   type GitOpsResourceTree,
   type GitOpsInsightRef,
   type GitOpsRow,
+  type GitOpsRowAction,
   type GitOpsTreeFilters,
   type GitOpsTreeRef,
   type GitOpsTreePreset,
@@ -86,20 +88,49 @@ interface ResourceCountsResponse {
 interface GitOpsViewProps {
   namespaces: string[]
   onOpenResource: (resource: SelectedResource) => void
+  onClearNamespaces?: () => void
 }
 
-export function GitOpsView({ namespaces, onOpenResource }: GitOpsViewProps) {
+export function GitOpsView({ namespaces, onOpenResource, onClearNamespaces }: GitOpsViewProps) {
   const location = useLocation()
   if (location.pathname.startsWith('/gitops/detail/')) {
     return <GitOpsDetailView namespaces={namespaces} onOpenResource={onOpenResource} />
   }
-  return <GitOpsTableView namespaces={namespaces} />
+  return <GitOpsTableView namespaces={namespaces} onClearNamespaces={onClearNamespaces} />
 }
 
-function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
+function GitOpsTableView({ namespaces, onClearNamespaces }: { namespaces: string[]; onClearNamespaces?: () => void }) {
   const navigate = useNavigate()
   const namespacesParam = namespaces.join(',')
   const { data: apiResources, isLoading: apiResourcesLoading } = useAPIResources()
+
+  const argoSync = useArgoSync()
+  const argoRefresh = useArgoRefresh()
+  const argoTerminate = useArgoTerminate()
+  const argoSuspend = useArgoSuspend()
+  const argoResume = useArgoResume()
+  const fluxReconcile = useFluxReconcile()
+  const fluxSyncWithSource = useFluxSyncWithSource()
+  const fluxSuspend = useFluxSuspend()
+  const fluxResume = useFluxResume()
+
+  const [syncDialogRow, setSyncDialogRow] = useState<GitOpsRow | null>(null)
+  const [pendingActions, setPendingActions] = useState<Map<string, Set<GitOpsRowAction>>>(new Map())
+
+  // Mark an action as in-flight (or done) for a given row. Cloning the
+  // outer Map + inner Set keeps the state immutable so React rerenders
+  // and the per-item spinner flips at the right moment.
+  function markAction(rowId: string, action: GitOpsRowAction, on: boolean) {
+    setPendingActions((prev) => {
+      const next = new Map(prev)
+      const current = new Set(next.get(rowId) ?? [])
+      if (on) current.add(action)
+      else current.delete(action)
+      if (current.size === 0) next.delete(rowId)
+      else next.set(rowId, current)
+      return next
+    })
+  }
 
   useEffect(() => {
     initNavigationMap([...(apiResources ?? []), ...GITOPS_KINDS])
@@ -156,21 +187,99 @@ function GitOpsTableView({ namespaces }: { namespaces: string[] }) {
     refetchInterval: 120_000,
   })
 
+  // Row mutations invalidate granular keys (['resource', …], ['gitops-tree', …])
+  // that don't match the table's aggregate gitops-rows-main / counts queries,
+  // so refetch those explicitly — otherwise a row keeps showing the pre-action
+  // state (e.g. "Suspend" after a successful suspend) until the 120s poll,
+  // inviting a duplicate request. Radar serves reads from an informer cache that
+  // lags the write by the watch-propagation delay, so refetch once now (covers
+  // an already-current cache) and once shortly after to catch the propagated
+  // update; refetch() forces a fetch regardless of staleTime.
+  const refetchTable = () => {
+    rowsQuery.refetch()
+    countsQuery.refetch()
+  }
+  const refetchTableAfterMutation = () => {
+    refetchTable()
+    window.setTimeout(refetchTable, 1200)
+  }
+
+  const handleRowAction = (row: GitOpsRow, action: GitOpsRowAction) => {
+    const { kindName: kind, namespace, name, id } = row
+    const settle = { onSuccess: refetchTableAfterMutation, onSettled: () => markAction(id, action, false) }
+    markAction(id, action, true)
+    switch (action) {
+      case 'sync':
+        // Argo Sync is the one action that confirms — same dialog the
+        // detail page uses. The mutation fires from onConfirm; clear the
+        // in-flight flag here since the dialog now owns the lifecycle.
+        markAction(id, action, false)
+        setSyncDialogRow(row)
+        return
+      case 'refresh':
+        argoRefresh.mutate({ namespace, name, hard: false }, settle)
+        return
+      case 'hard-refresh':
+        argoRefresh.mutate({ namespace, name, hard: true }, settle)
+        return
+      case 'terminate':
+        argoTerminate.mutate({ namespace, name }, settle)
+        return
+      case 'suspend':
+        if (row.tool === 'argo') argoSuspend.mutate({ namespace, name }, settle)
+        else fluxSuspend.mutate({ kind, namespace, name }, settle)
+        return
+      case 'resume':
+        if (row.tool === 'argo') argoResume.mutate({ namespace, name }, settle)
+        else fluxResume.mutate({ kind, namespace, name }, settle)
+        return
+      case 'reconcile':
+        fluxReconcile.mutate({ kind, namespace, name }, settle)
+        return
+      case 'sync-with-source':
+        fluxSyncWithSource.mutate({ kind, namespace, name }, settle)
+        return
+    }
+  }
+
   return (
-    <SharedGitOpsTableView
-      rows={rowsQuery.data ?? []}
-      loading={apiResourcesLoading || countsQuery.isLoading || rowsQuery.isLoading}
-      error={(rowsQuery.error as Error | null) ?? null}
-      counts={countsQuery.data?.counts ?? {}}
-      onRefresh={() => rowsQuery.refetch()}
-      onRowClick={(row) => {
-        const ns = row.namespace || '_'
-        const params = new URLSearchParams()
-        params.set('apiGroup', row.group)
-        navigate({ pathname: gitOpsDetailPath(row.kindName, ns, row.name), search: params.toString() })
-      }}
-      searchHotkey
-    />
+    <>
+      <SharedGitOpsTableView
+        rows={rowsQuery.data ?? []}
+        loading={apiResourcesLoading || countsQuery.isLoading || rowsQuery.isLoading}
+        error={(rowsQuery.error as Error | null) ?? null}
+        counts={countsQuery.data?.counts ?? {}}
+        onRefresh={() => rowsQuery.refetch()}
+        onRowClick={(row) => {
+          const ns = row.namespace || '_'
+          const params = new URLSearchParams()
+          params.set('apiGroup', row.group)
+          navigate({ pathname: gitOpsDetailPath(row.kindName, ns, row.name), search: params.toString() })
+        }}
+        onRowAction={handleRowAction}
+        pendingRowActions={pendingActions}
+        searchHotkey
+        globalNamespaces={namespaces}
+        onClearNamespaces={onClearNamespaces}
+      />
+      <SyncOptionsDialog
+        open={!!syncDialogRow}
+        appLabel={syncDialogRow ? `${syncDialogRow.namespace}/${syncDialogRow.name}` : ''}
+        pending={argoSync.isPending}
+        onCancel={() => setSyncDialogRow(null)}
+        onConfirm={(opts) => {
+          if (!syncDialogRow) return
+          const { namespace, name } = syncDialogRow
+          argoSync.mutate(
+            { namespace, name, ...opts },
+            // onSettled so the dialog closes on both success and error —
+            // otherwise the error toast surfaces behind the still-open
+            // modal and the user can't read it.
+            { onSuccess: refetchTableAfterMutation, onSettled: () => setSyncDialogRow(null) },
+          )
+        }}
+      />
+    </>
   )
 }
 
@@ -216,15 +325,9 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
   // pre-suspend prune/selfHeal state for restoration on resume. When present,
   // the app is in a deliberately-paused state (vs. Manual mode, which is a
   // normal operational choice) and should surface a Suspended chip alongside
-  // the other status indicators.
-  const argoSuspendedByRadar =
-    kind === 'applications' &&
-    Boolean(
-      resourceQ.data?.metadata?.annotations?.['radarhq.io/suspended-prune'] ||
-        resourceQ.data?.metadata?.annotations?.['radarhq.io/suspended-selfheal'] ||
-        resourceQ.data?.metadata?.annotations?.['skyhook.io/suspended-prune'] ||
-        resourceQ.data?.metadata?.annotations?.['skyhook.io/suspended-selfheal'],
-    )
+  // the other status indicators. Shared with the fleet table's row normalizer
+  // (isArgoSuspendedByRadar) so both surfaces agree on what "suspended" means.
+  const argoSuspendedByRadar = kind === 'applications' && isArgoSuspendedByRadar(resourceQ.data)
   const effectiveSuspended = (status?.suspended ?? false) || argoSuspendedByRadar
   // Lifecycle gate: when the resource is pending deletion, mutating
   // actions are futile (the controller is processing finalizers and
@@ -605,7 +708,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
             onCancel={() => setSyncDialogOpen(false)}
             onConfirm={(opts) => {
               argoSync.mutate({ namespace, name, ...opts }, {
-                onSuccess: () => setSyncDialogOpen(false),
+                onSettled: () => setSyncDialogOpen(false),
               })
             }}
           />
@@ -624,7 +727,7 @@ function GitOpsDetailView({ namespaces, onOpenResource }: GitOpsViewProps) {
                 return
               }
               argoRollback.mutate({ namespace, name, id, ...opts }, {
-                onSuccess: () => setRollbackTarget(null),
+                onSettled: () => setRollbackTarget(null),
               })
             }}
           />

@@ -73,6 +73,22 @@ rules:
       - networkpolicies
     verbs: ["get", "list", "watch"]
 
+  # Scheduling / runtime / coordination metadata (read-only). PriorityClass
+  # and RuntimeClass are cluster-scoped infra; Leases are namespaced but
+  # surface in the resource browser and feed GitOps controller readiness.
+  - apiGroups: ["scheduling.k8s.io"]
+    resources:
+      - priorityclasses
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["node.k8s.io"]
+    resources:
+      - runtimeclasses
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["coordination.k8s.io"]
+    resources:
+      - leases
+    verbs: ["get", "list", "watch"]
+
   # Batch resources (read-only)
   - apiGroups: ["batch"]
     resources:
@@ -106,6 +122,20 @@ rules:
       - rolebindings
       - clusterroles
       - clusterrolebindings
+    verbs: ["get", "list", "watch"]
+  {{- end }}
+
+  {{- if or .Values.rbac.viewWebhooks (ne .Values.auth.mode "none") .Values.cloud.enabled }}
+  # Admission webhook configurations (read): surfaces the cluster's admission
+  # plane (Gatekeeper, Kyverno, image scanners, DLP, etc.) in the resource
+  # browser. Auto-enabled under auth/cloud for the same reason as viewRBAC —
+  # responses are re-checked per user. For no-auth installs this is opt-in
+  # since the configurations reveal which controls are enforced (and where the
+  # gaps are), which is recon value for a low-trust viewer.
+  - apiGroups: ["admissionregistration.k8s.io"]
+    resources:
+      - mutatingwebhookconfigurations
+      - validatingwebhookconfigurations
     verbs: ["get", "list", "watch"]
   {{- end }}
 

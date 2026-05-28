@@ -273,6 +273,22 @@ function AppInner() {
     navigate({ pathname: path, search: newParams.toString() })
   }, [navigate, searchParams])
 
+  // Cloud (embedded) makes the host's fleet Checks queue the one canonical
+  // surface — owned by the host's left rail — so Radar drops its own Audit
+  // pill (see the nav below) and any route to /audit redirects to the fleet
+  // Checks queue scoped to this cluster. Entry points that still land on
+  // /audit — the Home "Cluster Audit" card, ⌘K, WorkloadView's "view all"
+  // findings, bookmarks/deep links — all funnel through here. `replace` (not
+  // assign) keeps the transient /audit URL out of history so Back doesn't
+  // bounce off the redirect. Standalone OSS (no clusterChecksHref) is
+  // unaffected and renders the in-app audit view as before.
+  const clusterChecksHref = navCustomization.clusterChecksHref
+  useEffect(() => {
+    if (clusterChecksHref && mainView === 'audit') {
+      window.location.replace(clusterChecksHref())
+    }
+  }, [clusterChecksHref, mainView])
+
   const [namespaces, setNamespaces] = useState<string[]>(getInitialState().namespaces)
   // For large clusters: force SSE to reconnect with namespace filter
   const [forceNamespaceFilter, setForceNamespaceFilter] = useState<string[] | undefined>(undefined)
@@ -769,6 +785,25 @@ function AppInner() {
   // lists) stay in lockstep with the picker. The dedicated URL-write effect
   // below propagates the mirrored state to `?namespaces=`.
   const setActiveNamespace = useSetActiveNamespace()
+  // Defer the state flip to onSuccess. Setting namespaces to [] before the
+  // server-side pref has actually been cleared makes React Query refetch
+  // under the new empty key while the server still returns the previous
+  // pick's scope, caching stale data under the new key with no later
+  // invalidation. onSettled would do the same on errors, leaving the UI
+  // showing "All namespaces" while data is still namespace-scoped — onSuccess
+  // keeps state aligned with the server.
+  //
+  // Don't touch the URL here either: setSearchParams on a still-set state
+  // trips the URL→state sync into firing setNamespaces([]) and a duplicate
+  // mutation immediately, which re-introduces the same race. The state→URL
+  // effect propagates state=[] → URL on its own after onSuccess flips state.
+  const clearAllNamespaces = useCallback(() => {
+    if (namespaces.length === 0) return
+    setActiveNamespace.mutate(
+      { namespaces: [] },
+      { onSuccess: () => setNamespaces([]) },
+    )
+  }, [namespaces.length, setActiveNamespace])
   const initialBookmarkReconciledRef = useRef(false)
   const scopeActives = useMemo(() => namespaceScope?.actives ?? [], [namespaceScope?.actives])
   const namespaceScopeKey = useMemo(() => namespaceScope ? [...scopeActives].sort().join(',') : null, [namespaceScope, scopeActives])
@@ -1113,7 +1148,17 @@ function AppInner() {
             // exists and is reachable via /cost, the Home dashboard card, and the
             // command palette (⌘K). Remove this comment to restore it.
             { view: 'audit' as const, icon: ShieldCheck, label: 'Audit' },
-          ] as const).map(({ view, icon: Icon, label }) => (
+          ] as const)
+            // In Cloud, Checks is a fleet-scoped feature owned by the host's
+            // left rail; the per-cluster view is just that fleet queue filtered
+            // to this cluster, so duplicating it as a peer pill here would be a
+            // second "Checks" that teleports out of the cluster shell. Drop the
+            // Audit tab when embedded — cluster-scoped access stays available
+            // via the Home "Cluster Audit" card (→ /audit, redirected to the
+            // scoped fleet Checks by the clusterChecksHref effect above), ⌘K,
+            // and bookmarks. Standalone OSS keeps the Audit tab.
+            .filter(({ view }) => !(view === 'audit' && clusterChecksHref))
+            .map(({ view, icon: Icon, label }) => (
             <Tooltip key={view} content={label} delay={100} position="bottom">
               <button
                 onClick={() => setMainView(view)}
@@ -1490,6 +1535,7 @@ function AppInner() {
             onResourceClick={(res) => res ? navigateToResource(res) : setSelectedResource(null)}
             onResourceClickYaml={(res) => navigateToResource(res, 'yaml')}
             onKindChange={() => setSelectedResource(null)}
+            onClearNamespaces={clearAllNamespaces}
           />
         )}
 
@@ -1538,6 +1584,7 @@ function AppInner() {
             onOpenResource={(resource) => {
               setSelectedResource(resource)
             }}
+            onClearNamespaces={clearAllNamespaces}
           />
         )}
 
@@ -1551,8 +1598,17 @@ function AppInner() {
           <CostView onBack={() => setMainView('home')} />
         )}
 
-        {/* Best practices detail view */}
-        {mainView === 'audit' && (
+        {/* Best practices detail view. In Cloud this redirects to the host's
+            fleet Checks queue (clusterChecksHref effect above) — render a brief
+            splash instead of the single-cluster view while the cross-document
+            nav lands. */}
+        {mainView === 'audit' && clusterChecksHref && (
+          <div className="flex-1 flex flex-col items-center justify-center gap-3 bg-theme-base">
+            <img src={radarLoadingIcon} alt="" aria-hidden className="w-11 h-11" />
+            <p className="text-sm text-theme-text-secondary">Opening Checks…</p>
+          </div>
+        )}
+        {mainView === 'audit' && !clusterChecksHref && (
           <AuditView
             namespaces={namespaces}
             onBack={() => setMainView('home')}

@@ -1,6 +1,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import { X, Copy, Check, Radio, Terminal, MessageSquare, Code2, ChevronRight, Pin } from 'lucide-react'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { MCP_TOOL_CATALOG } from './mcpToolCatalog'
 
 interface MCPSetupDialogProps {
   open: boolean
@@ -208,8 +209,9 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
               verbose YAML output.
             </p>
             <p className="text-sm text-theme-text-secondary leading-relaxed">
-              Read tools are strictly read-only. Write tools (restart, scale, sync) are
-              non-destructive and annotated so your AI client can distinguish them.
+              Read tools are strictly read-only. Write tools (restart, scale, sync, apply,
+              node drain) are annotated as destructive so your AI client can flag them and
+              prompt before running.
             </p>
           </div>
 
@@ -296,95 +298,27 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
 
           {/* Available tools */}
           <div className="space-y-2">
-            <h4 className="text-sm font-semibold text-theme-text-primary">Tools</h4>
+            <div className="flex items-baseline justify-between">
+              <h4 className="text-sm font-semibold text-theme-text-primary">Tools</h4>
+              <span className="text-[11px] text-theme-text-tertiary">{MCP_TOOL_CATALOG.length} tools</span>
+            </div>
             <div className="grid grid-cols-1 gap-1.5">
-              {[
-                { name: 'get_dashboard', desc: 'Get cluster health overview including resource counts, problems (failing pods, unhealthy deployments), recent warning events, and Helm release status. Start here to understand cluster state before drilling into specific resources.', params: [
-                  { name: 'namespace', required: false, desc: 'filter to a specific namespace' },
-                ]},
-                { name: 'list_resources', desc: 'List Kubernetes resources of a given kind with minified summaries. Supports all built-in kinds (pods, deployments, services, etc.) and CRDs. Use to discover what\'s running before inspecting individual resources.', params: [
-                  { name: 'kind', required: true, desc: 'resource kind, e.g. pods, deployments, services' },
-                  { name: 'namespace', required: false, desc: 'filter to a specific namespace' },
-                ]},
-                { name: 'get_resource', desc: 'Get a single Kubernetes resource: minified spec/status/metadata plus default-on resourceContext (managedBy, exposes, selectedBy, uses, runsOn, issue/audit rollups). Optionally include heavier sidecars (events, metrics, logs).', params: [
-                  { name: 'kind', required: true, desc: 'resource kind, e.g. pod, deployment, service' },
-                  { name: 'namespace', required: false, desc: 'omit for cluster-scoped kinds (Node, ClusterRole, IngressClass, etc.)' },
-                  { name: 'name', required: true, desc: 'resource name' },
-                  { name: 'group', required: false, desc: 'API group when the kind is ambiguous (e.g. serving.knative.dev for Knative Service vs core Service)' },
-                  { name: 'include', required: false, desc: 'events, metrics, logs' },
-                  { name: 'context', required: false, desc: 'resourceContext tier: basic (default) or none (bare minified)' },
-                ]},
-                { name: 'get_topology', desc: 'Get the topology graph showing relationships between Kubernetes resources. Returns nodes and edges representing Deployments, Services, Ingresses, Pods, etc. Use \'traffic\' view for network flow or \'resources\' view for ownership hierarchy. Use \'summary\' format for LLM-friendly text descriptions.', params: [
-                  { name: 'namespace', required: false, desc: 'filter to a specific namespace' },
-                  { name: 'view', required: false, desc: 'traffic or resources' },
-                  { name: 'format', required: false, desc: 'graph (default) or summary (text)' },
-                ]},
-                { name: 'get_events', desc: 'Get recent Kubernetes warning events, deduplicated and sorted by recency. Useful for diagnosing issues — shows event reason, message, and occurrence count. Filter by resource kind/name to scope to a specific resource.', params: [
-                  { name: 'namespace', required: false, desc: 'filter to a specific namespace' },
-                  { name: 'limit', required: false, desc: 'max events to return (default 20)' },
-                  { name: 'kind', required: false, desc: 'filter to events for this resource kind' },
-                  { name: 'name', required: false, desc: 'filter to events for this resource name' },
-                ]},
-                { name: 'get_pod_logs', desc: 'Get filtered log lines from a pod, prioritizing errors and warnings. Returns diagnostically relevant lines (errors, panics, stack traces) or falls back to the last 20 lines if no error patterns match.', params: [
-                  { name: 'namespace', required: true, desc: 'pod namespace' },
-                  { name: 'name', required: true, desc: 'pod name' },
-                  { name: 'container', required: false, desc: 'container name (defaults to first)' },
-                  { name: 'tail_lines', required: false, desc: 'lines from end (default 200)' },
-                ]},
-                { name: 'list_namespaces', desc: 'List all Kubernetes namespaces with their status. Use to discover available namespaces before filtering other queries.', params: [] },
-                { name: 'get_changes', desc: 'Get recent resource changes (creates, updates, deletes) from the cluster timeline. Use to investigate what changed before an incident. Filter by namespace, resource kind, or specific resource name.', params: [
-                  { name: 'namespace', required: false, desc: 'filter to a specific namespace' },
-                  { name: 'kind', required: false, desc: 'filter to a resource kind (e.g. Deployment)' },
-                  { name: 'name', required: false, desc: 'filter to a specific resource name' },
-                  { name: 'since', required: false, desc: 'lookback duration, e.g. 1h, 30m (default 1h)' },
-                  { name: 'limit', required: false, desc: 'max changes to return (default 20, max 50)' },
-                ]},
-                { name: 'list_helm_releases', desc: 'List all Helm releases in the cluster with their status and health. Returns release name, namespace, chart, version, status, and resource health.', params: [
-                  { name: 'namespace', required: false, desc: 'filter to a specific namespace' },
-                ]},
-                { name: 'get_helm_release', desc: 'Get detailed information about a specific Helm release including owned resources and their status. Optionally include values, revision history, or manifest diff between revisions.', params: [
-                  { name: 'namespace', required: true, desc: 'release namespace' },
-                  { name: 'name', required: true, desc: 'release name' },
-                  { name: 'include', required: false, desc: 'values, history, diff' },
-                  { name: 'diff_revision_1', required: false, desc: 'first revision for diff' },
-                  { name: 'diff_revision_2', required: false, desc: 'second revision for diff (defaults to current)' },
-                ]},
-                { name: 'get_workload_logs', desc: 'Get aggregated, AI-filtered logs from all pods of a workload (Deployment, StatefulSet, or DaemonSet). Logs are collected from all matching pods, filtered for errors/warnings, and deduplicated.', params: [
-                  { name: 'kind', required: true, desc: 'deployment, statefulset, or daemonset' },
-                  { name: 'namespace', required: true, desc: 'workload namespace' },
-                  { name: 'name', required: true, desc: 'workload name' },
-                  { name: 'container', required: false, desc: 'specific container name' },
-                  { name: 'tail_lines', required: false, desc: 'lines per pod (default 100)' },
-                ]},
-                { name: 'manage_workload', desc: 'Perform operations on a workload. \'restart\' triggers a rolling restart, \'scale\' changes the replica count, \'rollback\' reverts to a previous revision.', params: [
-                  { name: 'action', required: true, desc: 'restart, scale, or rollback' },
-                  { name: 'kind', required: true, desc: 'deployment, statefulset, or daemonset' },
-                  { name: 'namespace', required: true, desc: 'workload namespace' },
-                  { name: 'name', required: true, desc: 'workload name' },
-                  { name: 'replicas', required: false, desc: 'target replica count (for scale)' },
-                  { name: 'revision', required: false, desc: 'target revision (for rollback)' },
-                ]},
-                { name: 'manage_cronjob', desc: 'Perform operations on a CronJob. \'trigger\' creates a manual Job run, \'suspend\' pauses the schedule, \'resume\' re-enables it.', params: [
-                  { name: 'action', required: true, desc: 'trigger, suspend, or resume' },
-                  { name: 'namespace', required: true, desc: 'cronjob namespace' },
-                  { name: 'name', required: true, desc: 'cronjob name' },
-                ]},
-                { name: 'manage_gitops', desc: 'Perform operations on GitOps resources. ArgoCD: sync, suspend, resume. FluxCD: reconcile, suspend, resume.', params: [
-                  { name: 'action', required: true, desc: 'sync/reconcile, suspend, or resume' },
-                  { name: 'tool', required: true, desc: 'argocd or fluxcd' },
-                  { name: 'namespace', required: true, desc: 'resource namespace' },
-                  { name: 'name', required: true, desc: 'resource name' },
-                  { name: 'kind', required: false, desc: 'FluxCD resource kind (e.g. kustomization, helmrelease)' },
-                ]},
-              ].map((tool) => (
+              {MCP_TOOL_CATALOG.map((tool) => (
                 <div key={tool.name} className="card-inner space-y-1.5">
-                  <code className="text-[11px] font-mono text-purple-400">{tool.name}</code>
+                  <div className="flex items-center gap-2">
+                    <code className="text-[11px] font-mono text-purple-400">{tool.name}</code>
+                    {tool.write && (
+                      <span className="badge-sm bg-amber-500/10 text-amber-600 dark:text-amber-400" title="Write tool — annotated as destructive">
+                        write
+                      </span>
+                    )}
+                  </div>
                   <p className="text-[11px] text-theme-text-tertiary leading-relaxed">{tool.desc}</p>
                   {tool.params.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 pt-0.5">
                       {tool.params.map((p) => (
-                        <span key={p.name} className="badge-sm font-mono bg-theme-elevated text-theme-text-secondary" title={p.desc}>
-                          <span className="text-theme-text-secondary">{p.name}</span>
+                        <span key={p.arg} className="badge-sm font-mono bg-theme-elevated text-theme-text-secondary" title={p.desc}>
+                          <span className="text-theme-text-secondary">{p.arg}</span>
                           {p.required && <span className="text-red-400">*</span>}
                         </span>
                       ))}

@@ -1,18 +1,46 @@
 package audit
 
-// CheckMeta provides human-readable context for a best-practice check.
-type CheckMeta struct {
-	ID          string   `json:"id"`
-	Title       string   `json:"title"`
-	Description string   `json:"description"`
-	Remediation string   `json:"remediation"`
-	Frameworks  []string `json:"frameworks,omitempty"`
-}
+import "github.com/skyhook-io/radar/pkg/checks"
+
+// CheckMeta is a check's static definition (human-readable context). Aliased
+// from pkg/checks so the k8s-free Checks rollup and the audit engine share one
+// shape — the Hub imports only pkg/checks; the engine + registry re-export it
+// here. Same fields/JSON, so radar's existing audit.CheckMeta references are
+// unchanged.
+type CheckMeta = checks.CheckMeta
+
+// Reference is an authoritative link shown in the expanded check card.
+type Reference = checks.Reference
 
 // Framework constants
 const (
 	FrameworkNSACISA = "NSA/CISA"
 	FrameworkCIS     = "CIS"
+)
+
+// Authoritative references shared across checks. The inline copy stays brief;
+// these are the "go deeper" links (canonical Kubernetes docs + the hardening
+// guides the Frameworks tags name) rendered in the expanded card.
+var (
+	refSecurityContext = Reference{Label: "K8s: Security Context", URL: "https://kubernetes.io/docs/tasks/configure-pod-container/security-context/"}
+	refPodSecurityStd  = Reference{Label: "K8s: Pod Security Standards", URL: "https://kubernetes.io/docs/concepts/security/pod-security-standards/"}
+	refNSACISA         = Reference{Label: "NSA/CISA Kubernetes Hardening Guide", URL: "https://media.defense.gov/2022/Aug/29/2003066362/-1/-1/0/CTR_KUBERNETES_HARDENING_GUIDANCE_1.2_20220829.PDF"}
+	refResources       = Reference{Label: "K8s: Resource Management", URL: "https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/"}
+	refProbes          = Reference{Label: "K8s: Liveness, Readiness & Startup Probes", URL: "https://kubernetes.io/docs/tasks/configure-pod-container/configure-liveness-readiness-startup-probes/"}
+	refImages          = Reference{Label: "K8s: Container Images", URL: "https://kubernetes.io/docs/concepts/containers/images/"}
+	refDeployments     = Reference{Label: "K8s: Deployments", URL: "https://kubernetes.io/docs/concepts/workloads/controllers/deployment/"}
+	refDisruptions     = Reference{Label: "K8s: Pod Disruption Budgets", URL: "https://kubernetes.io/docs/concepts/workloads/pods/disruptions/"}
+	refTopologySpread  = Reference{Label: "K8s: Topology Spread Constraints", URL: "https://kubernetes.io/docs/concepts/scheduling-eviction/topology-spread-constraints/"}
+	refAffinity        = Reference{Label: "K8s: Affinity and Anti-affinity", URL: "https://kubernetes.io/docs/concepts/scheduling-eviction/assign-pod-node/#affinity-and-anti-affinity"}
+	refSAToken         = Reference{Label: "K8s: Configure Service Accounts for Pods", URL: "https://kubernetes.io/docs/tasks/configure-pod-container/configure-service-account/"}
+	refSecrets         = Reference{Label: "K8s: Secrets", URL: "https://kubernetes.io/docs/concepts/configuration/secret/"}
+	refConfigMaps      = Reference{Label: "K8s: ConfigMaps", URL: "https://kubernetes.io/docs/concepts/configuration/configmap/"}
+	refHostPath        = Reference{Label: "K8s: hostPath Volumes", URL: "https://kubernetes.io/docs/concepts/storage/volumes/#hostpath"}
+	refDeprecatedAPI   = Reference{Label: "K8s: Deprecated API Migration Guide", URL: "https://kubernetes.io/docs/reference/using-api/deprecation-guide/"}
+	refService         = Reference{Label: "K8s: Service", URL: "https://kubernetes.io/docs/concepts/services-networking/service/"}
+	refIngress         = Reference{Label: "K8s: Ingress", URL: "https://kubernetes.io/docs/concepts/services-networking/ingress/"}
+	refFinalizers      = Reference{Label: "K8s: Finalizers", URL: "https://kubernetes.io/docs/concepts/overview/working-with-objects/finalizers/"}
+	refCrossplane      = Reference{Label: "Crossplane: Managed Resources", URL: "https://docs.crossplane.io/latest/concepts/managed-resources/"}
 )
 
 // CheckRegistry maps checkID → metadata for all built-in checks.
@@ -24,6 +52,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Containers running as root have full access to the host filesystem. If compromised, an attacker gains root-level access.",
 		Remediation: "Set securityContext.runAsNonRoot: true and runAsUser: 1000 (or higher) on the container or pod spec.",
 		Frameworks:  []string{FrameworkNSACISA, FrameworkCIS},
+		References:   []Reference{refSecurityContext, refPodSecurityStd, refNSACISA},
 	},
 	"privileged": {
 		ID:          "privileged",
@@ -31,6 +60,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Privileged containers have all host capabilities, bypassing container isolation. An attacker in a privileged container can compromise the entire node.",
 		Remediation: "Set securityContext.privileged: false on the container.",
 		Frameworks:  []string{FrameworkNSACISA, FrameworkCIS},
+		References:   []Reference{refSecurityContext, refPodSecurityStd, refNSACISA},
 	},
 	"privilegeEscalation": {
 		ID:          "privilegeEscalation",
@@ -38,6 +68,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Allows a process to gain more privileges than its parent. Attackers can exploit this to escalate from container to host.",
 		Remediation: "Set securityContext.allowPrivilegeEscalation: false on the container.",
 		Frameworks:  []string{FrameworkNSACISA, FrameworkCIS},
+		References:   []Reference{refSecurityContext, refPodSecurityStd},
 	},
 	"readOnlyRootFs": {
 		ID:          "readOnlyRootFs",
@@ -45,6 +76,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "A writable root filesystem allows attackers to modify binaries, install tools, or tamper with the application.",
 		Remediation: "Set securityContext.readOnlyRootFilesystem: true. Use emptyDir volumes for writable paths.",
 		Frameworks:  []string{FrameworkNSACISA},
+		References:   []Reference{refSecurityContext, refNSACISA},
 	},
 	"dangerousCapabilities": {
 		ID:          "dangerousCapabilities",
@@ -52,6 +84,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Capabilities like SYS_ADMIN, NET_ADMIN, and ALL grant near-root powers and can be used to escape the container.",
 		Remediation: "Remove dangerous capabilities from securityContext.capabilities.add. Drop all and add only what is needed.",
 		Frameworks:  []string{FrameworkNSACISA, FrameworkCIS},
+		References:   []Reference{refSecurityContext, refPodSecurityStd},
 	},
 	"dockerSocketMount": {
 		ID:          "dockerSocketMount",
@@ -59,6 +92,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Mounting the Docker/containerd socket gives the container full control over the host's container runtime — equivalent to root access. This is a documented attack vector used in cryptojacking campaigns.",
 		Remediation: "Remove the hostPath volume mounting the container runtime socket. If CI/CD needs Docker access, use Docker-in-Docker (DinD) or Kaniko instead.",
 		Frameworks:  []string{FrameworkNSACISA, FrameworkCIS},
+		References:   []Reference{refHostPath, refNSACISA},
 	},
 	"sensitiveHostPath": {
 		ID:          "sensitiveHostPath",
@@ -66,6 +100,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Mounting sensitive host directories (/etc, /proc, /sys, /var/run) exposes host configuration, credentials, and runtime state to the container. Attackers can use this to escalate privileges or access other containers.",
 		Remediation: "Remove the hostPath volume or restrict it to a specific, non-sensitive directory. Use emptyDir or PVC for writable storage.",
 		Frameworks:  []string{FrameworkNSACISA, FrameworkCIS},
+		References:   []Reference{refHostPath, refPodSecurityStd},
 	},
 	"secretInConfigMap": {
 		ID:          "secretInConfigMap",
@@ -73,6 +108,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "ConfigMap keys with names suggesting sensitive data (passwords, tokens, keys) should use Kubernetes Secrets instead. ConfigMaps are not encrypted at rest and may appear in logs and kubectl output.",
 		Remediation: "Move sensitive data to a Secret resource. ConfigMaps should only contain non-sensitive configuration.",
 		Frameworks:  []string{FrameworkNSACISA},
+		References:   []Reference{refSecrets},
 	},
 	"insecureCapabilities": {
 		ID:          "insecureCapabilities",
@@ -80,6 +116,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Capabilities like NET_RAW, SYS_PTRACE, and MKNOD can be exploited for packet spoofing, process injection, or device manipulation.",
 		Remediation: "Remove insecure capabilities from securityContext.capabilities.add. Use capabilities.drop: [ALL] and add back only what is strictly needed.",
 		Frameworks:  []string{FrameworkNSACISA, FrameworkCIS},
+		References:   []Reference{refSecurityContext, refPodSecurityStd},
 	},
 	"hostNetwork": {
 		ID:          "hostNetwork",
@@ -87,6 +124,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Sharing the host network namespace lets the container see all network traffic and access host network services.",
 		Remediation: "Remove hostNetwork: true unless the workload genuinely needs host network access.",
 		Frameworks:  []string{FrameworkNSACISA, FrameworkCIS},
+		References:   []Reference{refPodSecurityStd, refNSACISA},
 	},
 	"hostPID": {
 		ID:          "hostPID",
@@ -94,6 +132,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Sharing the host PID namespace lets the container see and signal all host processes, enabling process injection attacks.",
 		Remediation: "Remove hostPID: true from the pod spec.",
 		Frameworks:  []string{FrameworkNSACISA, FrameworkCIS},
+		References:   []Reference{refPodSecurityStd, refNSACISA},
 	},
 	"hostIPC": {
 		ID:          "hostIPC",
@@ -101,6 +140,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Sharing the host IPC namespace allows access to shared memory and inter-process communication with host processes.",
 		Remediation: "Remove hostIPC: true from the pod spec.",
 		Frameworks:  []string{FrameworkNSACISA, FrameworkCIS},
+		References:   []Reference{refPodSecurityStd, refNSACISA},
 	},
 	"automountServiceAccountToken": {
 		ID:          "automountServiceAccountToken",
@@ -108,6 +148,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Auto-mounted tokens can be used by attackers to authenticate to the Kubernetes API server and escalate privileges.",
 		Remediation: "Set automountServiceAccountToken: false on the pod spec. Only enable for pods that need API access.",
 		Frameworks:  []string{FrameworkNSACISA},
+		References:   []Reference{refSAToken, refNSACISA},
 	},
 
 	// ── Reliability ───────────────────────────────────────────────────
@@ -116,48 +157,56 @@ var CheckRegistry = map[string]CheckMeta{
 		Title:       "Missing readiness probe",
 		Description: "Without a readiness probe, Kubernetes sends traffic to pods before they are ready, causing errors for users.",
 		Remediation: "Add a readinessProbe (HTTP GET, TCP, or exec) to each container.",
+		References:   []Reference{refProbes},
 	},
 	"livenessProbeMissing": {
 		ID:          "livenessProbeMissing",
 		Title:       "Missing liveness probe",
 		Description: "Without a liveness probe, Kubernetes cannot detect and restart containers that are stuck or deadlocked.",
 		Remediation: "Add a livenessProbe (HTTP GET, TCP, or exec) to each container.",
+		References:   []Reference{refProbes},
 	},
 	"imageTagLatest": {
 		ID:          "imageTagLatest",
 		Title:       "Image tag latest or missing",
 		Description: "Using 'latest' or no tag means deployments are not reproducible — you cannot tell which version is running, and rollbacks may not work.",
 		Remediation: "Pin images to a specific version tag (e.g., nginx:1.25.3).",
+		References:   []Reference{refImages},
 	},
 	"pullPolicyNotAlways": {
 		ID:          "pullPolicyNotAlways",
 		Title:       "Pull policy not Always",
 		Description: "With a mutable tag and non-Always pull policy, nodes may run stale cached images, causing inconsistency across replicas.",
 		Remediation: "Set imagePullPolicy: Always when using mutable tags, or pin to immutable digests.",
+		References:   []Reference{refImages},
 	},
 	"singleReplica": {
 		ID:          "singleReplica",
 		Title:       "Single replica",
 		Description: "A single-replica deployment has no redundancy — any pod disruption (node drain, OOM, crash) causes downtime.",
 		Remediation: "Set replicas: 2 or higher, or configure an HPA for autoscaling.",
+		References:   []Reference{refDeployments, refDisruptions},
 	},
 	"missingPDB": {
 		ID:          "missingPDB",
 		Title:       "Missing PodDisruptionBudget",
 		Description: "Without a PDB, cluster operations (node drains, upgrades) can take down all replicas simultaneously.",
 		Remediation: "Create a PodDisruptionBudget with minAvailable or maxUnavailable matching your availability requirements.",
+		References:   []Reference{refDisruptions},
 	},
 	"missingTopologySpread": {
 		ID:          "missingTopologySpread",
 		Title:       "Missing topology spread constraints",
 		Description: "Without topology spread constraints, all replicas can land on the same node or availability zone, giving an illusion of HA without real fault tolerance.",
 		Remediation: "Add topologySpreadConstraints to the pod template with topologyKey: kubernetes.io/hostname or topology.kubernetes.io/zone.",
+		References:   []Reference{refTopologySpread},
 	},
 	"podHARisk": {
 		ID:          "podHARisk",
 		Title:       "All replicas on same node",
 		Description: "All pod replicas are scheduled on the same node. If that node fails, all replicas go down simultaneously — no actual high availability.",
 		Remediation: "Add pod anti-affinity or topology spread constraints to distribute replicas across nodes.",
+		References:   []Reference{refAffinity, refTopologySpread},
 	},
 
 	// ── Efficiency ────────────────────────────────────────────────────
@@ -167,6 +216,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Without CPU requests, the scheduler cannot make informed placement decisions, leading to overcommitted nodes and throttling.",
 		Remediation: "Set resources.requests.cpu (e.g., 100m) on each container.",
 		Frameworks:  []string{FrameworkCIS},
+		References:   []Reference{refResources},
 	},
 	"memoryRequestMissing": {
 		ID:          "memoryRequestMissing",
@@ -174,6 +224,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Without memory requests, pods may be scheduled on nodes without enough memory, causing OOM kills.",
 		Remediation: "Set resources.requests.memory (e.g., 128Mi) on each container.",
 		Frameworks:  []string{FrameworkCIS},
+		References:   []Reference{refResources},
 	},
 	"cpuLimitMissing": {
 		ID:          "cpuLimitMissing",
@@ -181,6 +232,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Without CPU limits, a single container can consume all CPU on a node, starving other workloads.",
 		Remediation: "Set resources.limits.cpu (e.g., 500m) on each container.",
 		Frameworks:  []string{FrameworkCIS},
+		References:   []Reference{refResources},
 	},
 	"memoryLimitMissing": {
 		ID:          "memoryLimitMissing",
@@ -188,18 +240,21 @@ var CheckRegistry = map[string]CheckMeta{
 		Description: "Without memory limits, a container can consume unbounded memory, eventually triggering kernel OOM kills on the node.",
 		Remediation: "Set resources.limits.memory (e.g., 512Mi) on each container.",
 		Frameworks:  []string{FrameworkCIS},
+		References:   []Reference{refResources},
 	},
 	"resourceUtilization": {
 		ID:          "resourceUtilization",
 		Title:       "Resource utilization mismatch",
 		Description: "Pod resource usage is significantly different from its requests — either wasting resources (<10% used) or at risk of throttling/OOM (>90% used).",
 		Remediation: "Adjust resources.requests to match actual usage. Use metrics or VPA recommendations to right-size.",
+		References:   []Reference{refResources},
 	},
 	"orphanConfigMapSecret": {
 		ID:          "orphanConfigMapSecret",
 		Title:       "Unused ConfigMap or Secret",
 		Description: "This ConfigMap or Secret is not referenced by any pod (env vars, volumes, or imagePullSecrets). It may be orphaned and safe to remove.",
 		Remediation: "Verify this resource is no longer needed and delete it, or add a reference from a pod spec if it should be in use.",
+		References:   []Reference{refConfigMaps, refSecrets},
 	},
 
 	"deprecatedAPIVersion": {
@@ -207,6 +262,7 @@ var CheckRegistry = map[string]CheckMeta{
 		Title:       "Deprecated API version",
 		Description: "This cluster still serves a deprecated API version. Resources using this API will break after a Kubernetes upgrade that removes it.",
 		Remediation: "Migrate resources to the replacement API version before upgrading the cluster.",
+		References:   []Reference{refDeprecatedAPI},
 	},
 
 	// ── Cross-resource ────────────────────────────────────────────────
@@ -215,12 +271,14 @@ var CheckRegistry = map[string]CheckMeta{
 		Title:       "Service has no matching pods",
 		Description: "The service selector does not match any running pods — traffic sent to this service will fail.",
 		Remediation: "Verify the service selector labels match the pod template labels on the target workload.",
+		References:   []Reference{refService},
 	},
 	"ingressNoMatchingService": {
 		ID:          "ingressNoMatchingService",
 		Title:       "Ingress references missing service",
 		Description: "The ingress backend references a service that does not exist, so incoming traffic will get 503 errors.",
 		Remediation: "Check the ingress spec and correct the service name, or create the missing service.",
+		References:   []Reference{refIngress},
 	},
 
 	// ── Lifecycle ─────────────────────────────────────────────────────
@@ -229,11 +287,13 @@ var CheckRegistry = map[string]CheckMeta{
 		Title:       "Stuck terminating resource",
 		Description: "This resource has metadata.deletionTimestamp set but is still alive past the cleanup window. Most controllers finish cleanup within seconds; minutes-long delays usually mean a finalizer's owning controller is unhealthy or unable to reach a dependent service. Common causes: the controller pod is CrashLoopBackOff, DNS resolution is broken, the finalizer logic depends on a webhook or external API that's unavailable.",
 		Remediation: "Check the controller responsible for each finalizer key (kubectl describe will show finalizers under metadata). For Argo CD, look at argocd-application-controller in the argocd namespace. For Flux, look at the matching controller (kustomize-controller, helm-controller, source-controller) in flux-system. Once the controller is healthy, deletion will resume automatically. If you must remove a stuck resource and accept the orphaned cleanup, manually clear the finalizers field — but only as a last resort.",
+		References:   []Reference{refFinalizers},
 	},
 	"crossplaneStuck": {
 		ID:          "crossplaneStuck",
 		Title:       "Stuck Crossplane resource",
 		Description: "A Crossplane Managed Resource, Composite Resource, or Claim has been reporting Ready=False or Synced=False past the reconciliation window. Synced=False usually means a configuration error (bad ProviderConfig, malformed forProvider spec, missing IAM permissions, quota exceeded, schema mismatch). Ready=False usually means the provider accepted the spec but can't reach a desired state (target cloud API rejected, dependency missing, eventual-consistency lag past the threshold).",
 		Remediation: "Open the resource and read the latest condition's message — Crossplane providers almost always include the upstream cloud error verbatim. Common fixes: (1) check the linked Provider's Healthy condition; the package controller crashlooping starves every MR it manages. (2) verify the ProviderConfig credentials Secret still exists and is current (rotated keys, expired tokens). (3) check IAM/RBAC at the target cloud — Synced=False with auth errors needs a credentials fix, not a Crossplane fix. (4) look at quota/limit errors in the cloud provider console. (5) for paused resources (crossplane.io/paused annotation), this finding is intentionally suppressed — remove the annotation to resume reconciliation.",
+		References:   []Reference{refCrossplane},
 	},
 }

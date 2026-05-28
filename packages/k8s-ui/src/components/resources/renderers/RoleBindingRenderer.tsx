@@ -2,6 +2,7 @@ import { Shield, Users, Eye } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ResourceLink, AlertBanner } from '../../ui/drawer-components'
 import type { ResourceRef, RBACPolicyRule } from '../../../types'
+import { isForbiddenError } from '../../../types/fetch-error'
 import {
   rbacVerbBadgeClass,
   rbacResourceBadgeClass,
@@ -15,9 +16,14 @@ interface RoleBindingRendererProps {
   onNavigate?: (ref: ResourceRef) => void
   /** Rules from the referenced Role/ClusterRole. Undefined means the host
    *  hasn't wired the fetch (inline rules preview is omitted). Null means
-   *  the fetch failed; the section shows a tactful note instead of silence. */
+   *  the fetch finished without a resource (orphan binding); the section
+   *  says so. */
   roleRules?: RBACPolicyRule[] | null
   roleRulesLoading?: boolean
+  /** Error from the role/clusterrole fetch. When present and shaped like
+   *  a FetchErrorShape (status + message), the rules section distinguishes
+   *  a 403 ("Access denied") from the orphan-or-unavailable fallback. */
+  roleRulesError?: unknown
 }
 
 // Wide groups whose membership effectively widens a binding beyond a named
@@ -57,7 +63,7 @@ function getSubjectKindBadgeClass(kind: string): string {
   }
 }
 
-export function RoleBindingRenderer({ data, onNavigate, roleRules, roleRulesLoading }: RoleBindingRendererProps) {
+export function RoleBindingRenderer({ data, onNavigate, roleRules, roleRulesLoading, roleRulesError }: RoleBindingRendererProps) {
   const roleRef = data.roleRef || {}
   const subjects: any[] = data.subjects || []
   const isClusterRoleBinding = data.kind === 'ClusterRoleBinding'
@@ -117,6 +123,7 @@ export function RoleBindingRenderer({ data, onNavigate, roleRules, roleRulesLoad
         <RulesPreviewSection
           rules={roleRules}
           loading={!!roleRulesLoading}
+          error={roleRulesError}
           roleName={roleRef.name}
         />
       )}
@@ -152,10 +159,12 @@ export function RoleBindingRenderer({ data, onNavigate, roleRules, roleRulesLoad
 function RulesPreviewSection({
   rules,
   loading,
+  error,
   roleName,
 }: {
   rules: RBACPolicyRule[] | null
   loading: boolean
+  error?: unknown
   roleName?: string
 }) {
   return (
@@ -163,11 +172,18 @@ function RulesPreviewSection({
       {loading ? (
         <div className="text-sm text-theme-text-tertiary">Loading rules…</div>
       ) : !rules ? (
-        <div className="text-sm text-theme-text-tertiary">
-          Could not resolve referenced role
-          {roleName ? ` "${roleName}"` : ''} — it may not exist (orphan binding)
-          or be unavailable.
-        </div>
+        isForbiddenError(error) ? (
+          <div className="text-sm text-theme-text-tertiary">
+            Access denied reading referenced role
+            {roleName ? ` "${roleName}"` : ''}.
+          </div>
+        ) : (
+          <div className="text-sm text-theme-text-tertiary">
+            Could not resolve referenced role
+            {roleName ? ` "${roleName}"` : ''} — it may not exist (orphan binding)
+            or be unavailable.
+          </div>
+        )
       ) : rules.length === 0 ? (
         <div className="text-sm text-theme-text-tertiary">
           The referenced role has no rules.

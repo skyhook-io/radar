@@ -143,14 +143,15 @@ func (s *Server) handleAIListResources(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// When a group is specified, route straight to the dynamic cache so
-	// CRDs whose plural collides with a core kind (e.g. Knative
-	// serving.knative.dev/Service vs corev1 ""/Service, KEDA's HPA-like
-	// kinds) reach the right resource. FetchResourceList is group-blind
-	// — it would silently return the core typed list, dropping the
-	// query's group filter on the floor. Mirrors the same group-aware
-	// short-circuit in handleGetResource (PR #721).
-	if group != "" {
+	// When a group is specified, route to the dynamic cache so CRDs whose
+	// plural collides with a core kind (e.g. Knative serving.knative.dev/Service
+	// vs corev1 ""/Service, KEDA's HPA-like kinds) reach the right resource.
+	// FetchResourceList is group-blind — it would silently return the core typed
+	// list, dropping the query's group filter. EXCEPT a built-in kind addressed
+	// by its own group (deployments?group=apps) is a typed lookup: the dynamic
+	// cache has no informer for built-ins, so it would 400. Mirrors the
+	// group-aware dispatch in handleGetResource.
+	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		s.aiListDynamic(w, r, cache, kind, namespaces, group, level, skipContext)
 		return
 	}
@@ -338,16 +339,16 @@ func (s *Server) handleAIGetResource(w http.ResponseWriter, r *http.Request) {
 // fetchAIResource resolves the resource from the typed cache or dynamic cache.
 // The bool reports whether the returned object is an unstructured (CRD) value.
 //
-// When a group is provided, the typed cache is skipped entirely and the
-// dynamic cache is consulted with the group qualifier. This prevents kind
-// collisions where a CRD plural shadows a core kind (e.g., Knative
-// serving.knative.dev/Service vs core/v1 Service): without this branch,
-// FetchResource("services", ...) would return the core Service from the
-// typed informer and the requested group would never be consulted, leaking
-// the wrong object via the AI surface. Mirrors handleGetResource's
-// group-first dispatch in server.go.
+// When a group is provided, the typed cache is skipped and the dynamic cache is
+// consulted with the group qualifier. This prevents kind collisions where a CRD
+// plural shadows a core kind (e.g., Knative serving.knative.dev/Service vs
+// core/v1 Service): without this branch, FetchResource("services", ...) would
+// return the core Service and the requested group would never be consulted,
+// leaking the wrong object via the AI surface. The exception is a built-in kind
+// addressed by its OWN group (deployments?group=apps) — that's a typed lookup;
+// the dynamic cache has no informer for built-ins. Mirrors handleGetResource.
 func (s *Server) fetchAIResource(ctx context.Context, cache *k8s.ResourceCache, kind, namespace, name, group string) (runtime.Object, bool, error) {
-	if group != "" {
+	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		u, err := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
 		if err != nil {
 			return nil, false, err

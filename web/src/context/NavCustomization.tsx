@@ -31,6 +31,18 @@ interface NavCustomizationBase {
     name: string;
     group?: string;
   }) => string;
+  /**
+   * When set, Radar treats the host's fleet Checks page as the one canonical
+   * Checks surface in Cloud: it removes its own per-cluster Audit tab and
+   * redirects any route to /audit (the Home "Cluster Audit" card, ⌘K,
+   * bookmarks) to the URL returned here — the host's fleet Checks page scoped
+   * to this cluster. Navigated via window.location.replace (a cross-document
+   * hop into the host's router) so the transient /audit URL stays out of
+   * history. This keeps the per-cluster view and the host's fleet nav from
+   * presenting two diverging Checks surfaces. Standalone Radar omits this and
+   * keeps its single-cluster Audit tab.
+   */
+  clusterChecksHref?: () => string;
 }
 
 /**

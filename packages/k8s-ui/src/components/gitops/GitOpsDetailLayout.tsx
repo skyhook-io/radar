@@ -1,5 +1,5 @@
 import { useEffect, type ComponentType, type ReactNode } from 'react'
-import { ChevronDown, ChevronRight, Clock3, GitBranch, GitCommit, Loader2, Pause, Play, RefreshCw, RotateCw, Settings, Trash2, XCircle } from 'lucide-react'
+import { ArrowDownUp, ChevronDown, ChevronRight, Clock3, GitBranch, GitCommit, Loader2, Pause, Play, RefreshCw, Settings, Trash2, XCircle, Zap } from 'lucide-react'
 
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { GitOpsIssuesBand, GitOpsStatusStrip } from './insights'
@@ -340,7 +340,7 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   <ActionButton
                     label="Sync…"
                     description="Apply manifests from Git to the cluster. Opens an options dialog (prune, dry-run, revision)."
-                    icon={RefreshCw}
+                    icon={ArrowDownUp}
                     loading={argo.syncing}
                     onClick={argo.onSyncRequested}
                     disabled={effectiveSuspended || terminating}
@@ -350,14 +350,14 @@ export function GitOpsDetailLayout(props: GitOpsDetailLayoutProps) {
                   <ActionButton
                     label="Refresh"
                     description="Re-check Git for new commits and recompute sync status. Doesn't apply anything."
-                    icon={RotateCw}
+                    icon={RefreshCw}
                     loading={argo.refreshing && argo.refreshingKind === 'normal'}
                     onClick={() => argo.onRefresh('normal')}
                   />
                   <ActionButton
                     label="Hard refresh"
                     description="Like Refresh, but also bypasses Argo's manifest cache (re-renders Helm/Kustomize)."
-                    icon={RotateCw}
+                    icon={Zap}
                     loading={argo.refreshing && argo.refreshingKind === 'hard'}
                     onClick={() => argo.onRefresh('hard')}
                   />

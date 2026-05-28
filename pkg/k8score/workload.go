@@ -59,6 +59,13 @@ type ApplyResourceResult struct {
 	Namespace string `json:"namespace"`
 	Kind      string `json:"kind"`
 	Created   bool   `json:"created"` // true if newly created, false if updated
+
+	// Warnings are advisory notes derived from the actual state of the cluster
+	// (e.g., "this resource is reconciled by Helm" or "field X you omitted is
+	// still present after apply because manager Y owns it"). They never block
+	// the apply — the apply succeeded if no error was returned. Treat each
+	// entry as a self-contained sentence.
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // WorkloadManager provides workload lifecycle operations using injected clients.
@@ -217,12 +224,27 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 		client = m.dynClient.Resource(gvr)
 	}
 
+	// Pre-apply GET: feeds the external-manager warning and the SSA
+	// field-removal verification. Best-effort — a NotFound just means the
+	// resource is being newly created, and other errors shouldn't block the
+	// apply itself.
+	var pre *unstructured.Unstructured
+	if !opts.DryRun {
+		got, getErr := client.Get(ctx, name, metav1.GetOptions{})
+		if getErr == nil {
+			pre = got
+		} else if !apierrors.IsNotFound(getErr) {
+			log.Printf("[k8s] apply_resource: pre-apply GET %s/%s/%s failed: %v", kind, ns, name, getErr)
+		}
+	}
+
 	if mode == "create" {
 		_, err := client.Create(ctx, obj, metav1.CreateOptions{DryRun: dryRun})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create resource: %w", err)
 		}
 		result.Created = true
+		m.populateApplyWarnings(ctx, result, obj, pre, nil, ns, kind, name, opts.DryRun)
 		return result, nil
 	}
 
@@ -245,7 +267,57 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 	// With server-side apply we can't easily distinguish, so we default to false (updated).
 	// The caller can check if the resource was newly created by other means if needed.
 	result.Created = false
+
+	// Post-apply GET feeds the state-derived warnings (run against what
+	// actually landed) and the field-removal diff. Fetch it for creates too,
+	// not just updates — an SSA apply that creates a resource still wants the
+	// external-manager / terminating-namespace warnings (field-removal stays
+	// gated on pre != nil below).
+	var post *unstructured.Unstructured
+	if !opts.DryRun {
+		got, getErr := client.Get(ctx, name, metav1.GetOptions{})
+		if getErr == nil {
+			post = got
+		} else {
+			log.Printf("[k8s] apply_resource: post-apply GET %s/%s/%s failed: %v", kind, ns, name, getErr)
+		}
+	}
+
+	m.populateApplyWarnings(ctx, result, obj, pre, post, ns, kind, name, opts.DryRun)
 	return result, nil
+}
+
+// populateApplyWarnings appends advisory warnings to result.Warnings.
+//
+//   - State-derived warnings (external manager, deletionTimestamp, etc.) come
+//     from the shared EnrichObjectWarnings; we run it against the post-apply
+//     object so the agent sees the resource the way any read of it would.
+//   - Apply-specific checks (SSA field-removal verification, ConfigMap/Secret
+//     consumer reload reminder) require knowledge of what was submitted vs.
+//     what landed and so live here.
+//
+// Best-effort throughout — a failed check never fails the apply itself.
+func (m *WorkloadManager) populateApplyWarnings(ctx context.Context, result *ApplyResourceResult, submitted, pre, post *unstructured.Unstructured, namespace, kind, name string, dryRun bool) {
+	// State-derived: prefer post-apply (reflects what the agent just landed),
+	// fall back to pre when post wasn't fetched (dry run or post-GET failed).
+	target := post
+	if target == nil {
+		target = pre
+	}
+	result.Warnings = append(result.Warnings, EnrichObjectWarnings(target)...)
+
+	if pre != nil && post != nil {
+		result.Warnings = append(result.Warnings, checkFieldRemoval(submitted, pre, post)...)
+	}
+	// The consumer-reload reminder only makes sense for a persisted edit — on a
+	// dry run nothing landed, so the "restart consumers" advice would be
+	// premature (and the namespace-wide LISTs wasted).
+	if !dryRun && (kind == "ConfigMap" || kind == "Secret") && namespace != "" {
+		consumers, partial := findConfigMapSecretConsumers(ctx, m.dynClient, m.discovery, namespace, kind, name)
+		if w := formatConsumerWarning(kind, name, consumers, partial); w != "" {
+			result.Warnings = append(result.Warnings, w)
+		}
+	}
 }
 
 func boolPtr(b bool) *bool { return &b }

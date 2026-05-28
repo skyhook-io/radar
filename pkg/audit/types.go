@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"github.com/skyhook-io/radar/pkg/checks"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -54,11 +55,22 @@ type PodMetricsInput struct {
 }
 
 // ScanResults is the output of RunChecks.
+//
+// Checks is the catalog (checkID -> definition) — kept under the "checks" JSON
+// tag for back-compat with already-deployed agents/connectors. GroupedChecks is
+// the remediation-queue rollup; it rides under a separate tag rather than
+// renaming the catalog so older consumers don't break.
 type ScanResults struct {
 	Summary  ScanSummary          `json:"summary"`
 	Findings []Finding            `json:"findings"`
 	Groups   []ResourceGroup      `json:"groups"`
 	Checks   map[string]CheckMeta `json:"checks"`
+	// GroupedChecks is the per-check remediation-queue rollup (one Check per
+	// failing check). Populated by the HTTP audit handler post local-settings —
+	// not by RunChecks, which doesn't carry the request context BuildChecks
+	// needs. Omitted from the raw scan the Hub fan-out consumes: the Hub
+	// recomputes the rollup itself after applying org Checks policy.
+	GroupedChecks []checks.Check `json:"groupedChecks,omitempty"`
 }
 
 // ResourceGroup aggregates findings for a single resource.

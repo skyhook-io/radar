@@ -40,6 +40,11 @@ export * from './components/topology'
 // Cluster audit (AuditCard, AuditAlerts, AuditFindingsTable)
 export * from './components/audit'
 
+// Checks remediation queue (ChecksView, shared types + severity vocabulary).
+// Host-agnostic: Hub feeds fleet-resolved data, OSS can feed a single-cluster
+// resolve.
+export * from './components/checks'
+
 // Cluster switcher (shared trigger+dropdown for OSS Radar and Radar Hub)
 export * from './components/cluster-switcher'
 

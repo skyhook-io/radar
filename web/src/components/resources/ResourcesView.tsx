@@ -28,9 +28,10 @@ interface ResourcesViewProps {
   onResourceClick?: (resource: SelectedResource | null) => void
   onResourceClickYaml?: NavigateToResource
   onKindChange?: () => void
+  onClearNamespaces?: () => void
 }
 
-export function ResourcesView({ namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange }: ResourcesViewProps) {
+export function ResourcesView({ namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange, onClearNamespaces }: ResourcesViewProps) {
   const location = useLocation()
   const navigate = useNavigate()
 
@@ -191,6 +192,7 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       onResourceClick={onResourceClick}
       onResourceClickYaml={onResourceClickYaml}
       onKindChange={onKindChange}
+      onClearNamespaces={onClearNamespaces}
       // Injected data
       apiResources={apiResources}
       // Lightweight counts for sidebar (replaces 233 parallel queries)

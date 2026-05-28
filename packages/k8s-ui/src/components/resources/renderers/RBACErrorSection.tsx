@@ -1,6 +1,7 @@
 import { Shield } from 'lucide-react'
 import type { ComponentType } from 'react'
 import { Section } from '../../ui/drawer-components'
+import { isFetchError, isForbiddenError } from '../../../types/fetch-error'
 
 interface RBACErrorSectionProps {
   title: string
@@ -13,24 +14,20 @@ interface RBACErrorSectionProps {
   errorPrefix?: string
 }
 
-const errorStatus = (error: Error): number | undefined => (error as { status?: number }).status
-
 // 503 because Radar's SA can't read RBAC, so the informers never synced — a
 // cluster-static config state (same on every resource), not a failure. The message
 // check distinguishes it from a generic connectivity 503 ("Not connected to
 // cluster"), which is a real fault and must stay loud (red).
 const isRBACCacheUnavailable = (error: Error): boolean =>
-  errorStatus(error) === 503 && error.message.includes('RBAC cache')
+  isFetchError(error) && error.status === 503 && error.message.includes('RBAC cache')
 
-// 403 because the requesting user lacks list permission on bindings.
-const isRBACForbidden = (error: Error): boolean => errorStatus(error) === 403
-
-// True for the two expected, non-actionable RBAC states above. Surfaces that treat
+// True for the two expected, non-actionable RBAC states. isForbiddenError (403)
+// means the requesting user lacks list permission on bindings. Surfaces that treat
 // the RBAC section as a bonus (Pod/Workload Permissions) hide it entirely for these.
 // Genuine faults — connectivity 503, 500, network errors — are deliberately NOT
 // included, so they still surface rather than being silently dropped.
 export function isRBACUnavailable(error: Error): boolean {
-  return isRBACForbidden(error) || isRBACCacheUnavailable(error)
+  return isForbiddenError(error) || isRBACCacheUnavailable(error)
 }
 
 // RBACErrorSection renders each expected state as a calm note (distinct copy per
@@ -53,7 +50,7 @@ export function RBACErrorSection({
       </Section>
     )
   }
-  if (isRBACForbidden(error)) {
+  if (isForbiddenError(error)) {
     return (
       <Section title={title} icon={icon}>
         <div className="text-sm text-theme-text-tertiary">

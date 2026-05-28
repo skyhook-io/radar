@@ -25,10 +25,15 @@ import (
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/internal/timeline"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	topology "github.com/skyhook-io/radar/pkg/topology"
 )
 
+// registerTools registers every MCP tool exposed at /mcp. The user-facing
+// setup dialog catalog (web/src/components/home/mcpToolCatalog.ts) must list
+// the same set — TestSetupDialogCoversAllTools fails CI when they diverge, so
+// add/remove the catalog entry alongside any change here.
 func registerTools(server *mcp.Server) {
 	boolPtr := func(b bool) *bool { return &b }
 	// All radar tools operate against the connected cluster (closed world),
@@ -673,14 +678,15 @@ func handleListResources(ctx context.Context, req *mcp.CallToolRequest, input li
 		listScope = nil
 	}
 
-	// When a group is specified, route straight to the dynamic cache so
-	// CRDs whose plural collides with a core kind (e.g. Knative
-	// serving.knative.dev/Service vs corev1 ""/Service) reach the right
-	// resource. FetchResourceList is group-blind — it would silently
-	// return the core typed list, dropping the caller's group filter on
-	// the floor. Mirrors the group-aware short-circuit in REST
-	// handleAIListResources and handleGetResource (PR #721).
-	if group != "" {
+	// When a group is specified, route to the dynamic cache so CRDs whose
+	// plural collides with a core kind (e.g. Knative serving.knative.dev/Service
+	// vs corev1 ""/Service) reach the right resource. FetchResourceList is
+	// group-blind — it would silently return the core typed list, dropping the
+	// caller's group filter. But a built-in addressed by its own group
+	// (deployments?group=apps) is a typed lookup — the dynamic cache has no
+	// informer for built-ins — so only true CRDs / plural collisions go dynamic.
+	// Mirrors the group-aware dispatch in the REST handlers.
+	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		return listDynamicResources(ctx, cache, kind, group, listScope, clusterScoped, input.Context)
 	}
 
@@ -828,7 +834,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	// Service would silently leak the wrong object.
 	var resourceData any
 	var rawObj runtime.Object
-	if group != "" {
+	if group != "" && !k8s.TypedKindOwnsGroup(kind, group) {
 		u, dynErr := cache.GetDynamicWithGroup(ctx, kind, namespace, name, group)
 		if dynErr != nil {
 			return nil, nil, fmt.Errorf("resource not found: %w", dynErr)
@@ -866,21 +872,31 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	skipContext := contextMode == "none"
 
 	var resourceCtx *resourcecontext.ResourceContext
+	var warnings []string
 	if !skipContext {
 		resourceCtx = buildMCPResourceContext(ctx, rawObj, kind, namespace, name, resourcecontext.TierBasic)
+
+		// State-derived advisory warnings (deletionTimestamp, external manager,
+		// terminating namespace, workload health-condition history, PVC stuck
+		// Pending). Cheap — operates on the object we already fetched. Skipped
+		// for context=none so that mode stays a bare object for raw jq work.
+		warnings = k8score.EnrichRuntimeObjectWarnings(rawObj)
 	}
 
 	// Three shapes:
 	//   - bare resource: no includes, context=none
 	//   - resource + resourceContext: no includes, default context
 	//   - resource + resourceContext + extras: includes set
-	if len(includes) == 0 && resourceCtx == nil {
+	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 {
 		return toJSONResult(resourceData)
 	}
 
 	result := map[string]any{"resource": resourceData}
 	if resourceCtx != nil {
 		result["resourceContext"] = resourceCtx
+	}
+	if len(warnings) > 0 {
+		result["warnings"] = warnings
 	}
 	if len(includes) > 0 {
 		attachResourceExtras(ctx, cache, result, includes, kind, namespace, name)
@@ -1548,18 +1564,118 @@ func handleGetPodLogs(ctx context.Context, req *mcp.CallToolRequest, input podLo
 	if err != nil {
 		return nil, nil, fmt.Errorf("invalid grep regex: %w", err)
 	}
+
+	warnings := computePodLogsWarnings(input.Namespace, input.Name, input.Container, input.Previous, rawLines)
+	var narrowHint string
 	// Heuristic: if we received tailLines or more raw lines, the kubectl
 	// stream was likely capped (there may be older lines we didn't fetch).
 	if int64(rawLines) >= tailLines {
-		return toJSONResult(podLogsResponseMCP{
-			FilteredLogs: filtered,
-			NarrowHint: fmt.Sprintf(
-				"log stream tailed to %d lines (cap reached) — narrow with since= (e.g. 10m), grep= regex, container=, or raise tail_lines",
-				rawLines,
-			),
-		})
+		narrowHint = fmt.Sprintf(
+			"log stream tailed to %d lines (cap reached) — narrow with since= (e.g. 10m), grep= regex, container=, or raise tail_lines",
+			rawLines,
+		)
 	}
-	return toJSONResult(filtered)
+	if narrowHint == "" && len(warnings) == 0 {
+		return toJSONResult(filtered)
+	}
+	return toJSONResult(podLogsResponseMCP{
+		FilteredLogs: filtered,
+		NarrowHint:   narrowHint,
+		Warnings:     warnings,
+	})
+}
+
+// computePodLogsWarnings inspects the pod's status to surface common
+// pitfalls in interpreting an empty/short logs response:
+//
+//   - when the pod isn't Running, application logs are usually unavailable
+//     because the container hasn't started yet. The agent thinks the app
+//     isn't writing logs when actually the pod is still scheduling/pulling.
+//   - when a container has restarted (restartCount > 0) and the caller didn't
+//     pass previous=true, the current container's logs are likely the
+//     next-crash in progress; the error that killed the last container is in
+//     previous.
+//
+// Best-effort — if the pod can't be fetched, return no warnings rather than
+// failing the logs call (the caller already has whatever logs we returned).
+func computePodLogsWarnings(namespace, name, container string, previous bool, rawLines int) []string {
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return nil
+	}
+	obj, err := k8s.FetchResource(cache, "pods", namespace, name)
+	if err != nil {
+		return nil
+	}
+	pod, ok := obj.(*corev1.Pod)
+	if !ok {
+		return nil
+	}
+
+	var out []string
+
+	if pod.Status.Phase != corev1.PodRunning && pod.Status.Phase != corev1.PodSucceeded {
+		out = append(out, fmt.Sprintf(
+			"Pod is in phase `%s`; application logs are typically unavailable until containers start. Inspect scheduling/pull state via `diagnose` (kind=pod), `get_resource` with include=events, or check pod conditions for the underlying blocker.",
+			pod.Status.Phase,
+		))
+	}
+
+	if !previous {
+		statuses := pod.Status.ContainerStatuses
+		if container != "" {
+			statuses = filterContainerStatuses(statuses, container)
+		}
+		if cs := pickCrashIndicator(statuses); cs != nil {
+			reason := cs.LastTerminationState.Terminated.Reason
+			if reason == "" {
+				reason = "(reason unset)"
+			}
+			out = append(out, fmt.Sprintf(
+				"Container `%s` has restarted %d time(s); last termination: `%s` (exit code %d). The error that triggered the previous crash is in the previous container's logs — call again with `previous: true`%s.",
+				cs.Name,
+				cs.RestartCount,
+				reason,
+				cs.LastTerminationState.Terminated.ExitCode,
+				crashloopSuffix(rawLines),
+			))
+		}
+	}
+
+	return out
+}
+
+// pickCrashIndicator returns the first container with restartCount > 0 that has
+// a recorded previous termination, or nil when no container has crashed. The
+// previous termination may have an empty reason; the caller renders that.
+func pickCrashIndicator(statuses []corev1.ContainerStatus) *corev1.ContainerStatus {
+	for i := range statuses {
+		cs := &statuses[i]
+		if cs.RestartCount == 0 {
+			continue
+		}
+		if cs.LastTerminationState.Terminated == nil {
+			continue
+		}
+		return cs
+	}
+	return nil
+}
+
+func filterContainerStatuses(statuses []corev1.ContainerStatus, name string) []corev1.ContainerStatus {
+	for i := range statuses {
+		if statuses[i].Name == name {
+			return statuses[i : i+1]
+		}
+	}
+	return nil
+}
+
+func crashloopSuffix(rawLines int) string {
+	if rawLines == 0 {
+		return " (current logs returned empty — likely captured between restarts)"
+	}
+	return ""
 }
 
 // countLines returns the number of newline-delimited lines in s, treating
@@ -1577,10 +1693,11 @@ func countLines(s string) int {
 }
 
 // podLogsResponseMCP embeds FilteredLogs so the JSON shape stays identical
-// except for the added narrowHint field.
+// except for added narrowHint + warnings fields.
 type podLogsResponseMCP struct {
 	aicontext.FilteredLogs
-	NarrowHint string `json:"narrowHint,omitempty"`
+	NarrowHint string   `json:"narrowHint,omitempty"`
+	Warnings   []string `json:"warnings,omitempty"`
 }
 
 func handleListNamespaces(ctx context.Context, req *mcp.CallToolRequest, input struct{}) (*mcp.CallToolResult, any, error) {

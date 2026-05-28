@@ -84,13 +84,18 @@ func handleManageWorkload(ctx context.Context, req *mcp.CallToolRequest, input m
 
 	switch strings.ToLower(input.Action) {
 	case "restart":
+		warnings := schedulingBlockerWarnings(kind, input.Namespace, input.Name)
 		if err := k8s.RestartWorkloadWithClient(ctx, kind, input.Namespace, input.Name, dynClient); err != nil {
 			return nil, nil, fmt.Errorf("restart failed: %w", err)
 		}
-		return toJSONResult(map[string]string{
+		resp := map[string]any{
 			"status":  "ok",
 			"message": fmt.Sprintf("Rolling restart initiated for %s %s/%s", kind, input.Namespace, input.Name),
-		})
+		}
+		if len(warnings) > 0 {
+			resp["warnings"] = warnings
+		}
+		return toJSONResult(resp)
 
 	case "scale":
 		if input.Replicas == nil {
@@ -266,7 +271,104 @@ func handleGetWorkloadLogs(ctx context.Context, req *mcp.CallToolRequest, input 
 			break
 		}
 	}
+	if w := computeWorkloadLogsWarnings(pods, input.Previous); len(w) > 0 {
+		resp["warnings"] = w
+	}
 	return toJSONResult(resp)
+}
+
+// schedulingBlockerWarnings detects when a restart won't accomplish what the
+// agent likely wants: if the workload currently has Pending pods blocked on
+// scheduling or post-bind (CNI/volume) issues, a rolling restart just creates
+// more pods that hit the same wall. The agent should fix the underlying
+// constraint instead (taints/affinity/capacity/CNI/storage). Best-effort —
+// never blocks the restart.
+//
+// Admission failures (quota/PSA/webhook) are intentionally out of scope: they
+// block pod creation entirely, so there are no Pending pods to key on, and the
+// FailedCreate event names the controller rather than a Pod.
+func schedulingBlockerWarnings(kind, namespace, name string) []string {
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return nil
+	}
+	selector, err := k8s.GetWorkloadSelector(cache, kind, namespace, name)
+	if err != nil {
+		return nil
+	}
+	pods := cache.GetPodsForWorkload(namespace, selector)
+	if len(pods) == 0 {
+		return nil
+	}
+
+	var pendingCount int
+	podNames := make(map[string]bool, len(pods))
+	for _, p := range pods {
+		if p.Status.Phase == corev1.PodPending {
+			pendingCount++
+		}
+		podNames[p.Name] = true
+	}
+	if pendingCount == 0 {
+		return nil
+	}
+
+	all := k8s.DetectSchedulingProblems(cache, namespace)
+	all = append(all, k8s.DetectPostBindProblems(cache, namespace)...)
+
+	reasons := map[string]struct{}{}
+	for _, p := range all {
+		if p.Kind != "Pod" || !podNames[p.Name] {
+			continue
+		}
+		if p.Reason != "" {
+			reasons[p.Reason] = struct{}{}
+		}
+	}
+	if len(reasons) == 0 {
+		// Pending pods exist but with no detected scheduling/admission cause —
+		// could be initial pull or short transient. Skip the warning rather
+		// than surface a generic "pending" note that the agent will ignore.
+		return nil
+	}
+
+	rs := make([]string, 0, len(reasons))
+	for r := range reasons {
+		rs = append(rs, r)
+	}
+	sort.Strings(rs)
+	return []string{fmt.Sprintf(
+		"%d of %d pod(s) are currently `Pending` with cause(s): %s. A rolling restart replaces existing pods with new ones that face the same constraint — fix the underlying issue (taints/affinity/resources/quota/PSA) before restarting.",
+		pendingCount, len(pods), strings.Join(rs, ", "),
+	)}
+}
+
+// computeWorkloadLogsWarnings aggregates the not-Running and crashloop logs
+// hints that get_pod_logs surfaces, summarized across all pods of the workload.
+func computeWorkloadLogsWarnings(pods []*corev1.Pod, previous bool) []string {
+	var notRunning, crashloop int
+	for _, p := range pods {
+		if p.Status.Phase != corev1.PodRunning && p.Status.Phase != corev1.PodSucceeded {
+			notRunning++
+		}
+		if !previous && pickCrashIndicator(p.Status.ContainerStatuses) != nil {
+			crashloop++
+		}
+	}
+	var out []string
+	if notRunning > 0 {
+		out = append(out, fmt.Sprintf(
+			"%d of %d pod(s) are not in `Running` phase; their containers haven't produced application logs yet. Inspect scheduling/pull state via `diagnose` or `get_resource` with include=events.",
+			notRunning, len(pods),
+		))
+	}
+	if crashloop > 0 {
+		out = append(out, fmt.Sprintf(
+			"%d of %d pod(s) have container restarts on record; the error(s) that killed prior containers are in the previous instance's logs — call again with `previous: true` to see them.",
+			crashloop, len(pods),
+		))
+	}
+	return out
 }
 
 // podLogEntry is the per-pod-per-container log row returned by fetchPodLogs.

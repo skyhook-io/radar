@@ -2,6 +2,7 @@ package k8s
 
 import (
 	"fmt"
+	"strings"
 
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -13,11 +14,101 @@ import (
 	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 )
 
 // ErrUnknownKind is returned by FetchResourceList/FetchResource when the kind
 // is not a built-in typed resource. The caller should fall through to the dynamic cache.
 var ErrUnknownKind = fmt.Errorf("unknown typed kind")
+
+// builtinGVRs maps every lowercase kind form the typed informer cache serves
+// (plural, singular, and abbreviations — the union of what
+// FetchResource/FetchResourceList and the REST switch in internal/server
+// accept) to its canonical GroupVersionResource. Versions are the GA
+// group/versions every supported cluster serves.
+//
+// One table, two jobs:
+//   - TypedKindOwnsGroup decides typed-vs-dynamic routing for the resource
+//     GET/LIST handlers (a built-in addressed by its own group must use the
+//     typed cache, not the dynamic/CRD cache).
+//   - BuiltinGVR is a static fallback for live/dynamic fetches when API
+//     discovery can't resolve a built-in's GVR (partial discovery under
+//     restricted RBAC, or a transient refresh miss). The drift/insights live
+//     GET (GetDynamicWithGroupPreserveLastApplied) can't use the typed cache —
+//     it needs last-applied, which the typed cache strips — so without this it
+//     would silently return nil and drop drift for built-in managed resources.
+//
+// Keep in sync with the typed switches in this file and internal/server.
+var builtinGVRs = func() map[string]schema.GroupVersionResource {
+	defs := []struct {
+		forms    []string
+		group    string
+		version  string
+		resource string
+	}{
+		{[]string{"pod", "pods"}, "", "v1", "pods"},
+		{[]string{"service", "services"}, "", "v1", "services"},
+		{[]string{"configmap", "configmaps"}, "", "v1", "configmaps"},
+		{[]string{"secret", "secrets"}, "", "v1", "secrets"},
+		{[]string{"event", "events"}, "", "v1", "events"},
+		{[]string{"persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs"}, "", "v1", "persistentvolumeclaims"},
+		{[]string{"node", "nodes"}, "", "v1", "nodes"},
+		{[]string{"namespace", "namespaces"}, "", "v1", "namespaces"},
+		{[]string{"persistentvolume", "persistentvolumes", "pv", "pvs"}, "", "v1", "persistentvolumes"},
+		{[]string{"serviceaccount", "serviceaccounts", "sa"}, "", "v1", "serviceaccounts"},
+		{[]string{"limitrange", "limitranges"}, "", "v1", "limitranges"},
+		{[]string{"resourcequota", "resourcequotas"}, "", "v1", "resourcequotas"},
+		{[]string{"deployment", "deployments"}, "apps", "v1", "deployments"},
+		{[]string{"daemonset", "daemonsets"}, "apps", "v1", "daemonsets"},
+		{[]string{"statefulset", "statefulsets"}, "apps", "v1", "statefulsets"},
+		{[]string{"replicaset", "replicasets"}, "apps", "v1", "replicasets"},
+		{[]string{"job", "jobs"}, "batch", "v1", "jobs"},
+		{[]string{"cronjob", "cronjobs"}, "batch", "v1", "cronjobs"},
+		{[]string{"hpa", "hpas", "horizontalpodautoscaler", "horizontalpodautoscalers"}, "autoscaling", "v2", "horizontalpodautoscalers"},
+		{[]string{"ingress", "ingresses"}, "networking.k8s.io", "v1", "ingresses"},
+		{[]string{"networkpolicy", "networkpolicies", "netpol", "netpols"}, "networking.k8s.io", "v1", "networkpolicies"},
+		{[]string{"ingressclass", "ingressclasses"}, "networking.k8s.io", "v1", "ingressclasses"},
+		{[]string{"poddisruptionbudget", "poddisruptionbudgets", "pdb", "pdbs"}, "policy", "v1", "poddisruptionbudgets"},
+		{[]string{"storageclass", "storageclasses", "sc"}, "storage.k8s.io", "v1", "storageclasses"},
+		{[]string{"role", "roles"}, "rbac.authorization.k8s.io", "v1", "roles"},
+		{[]string{"clusterrole", "clusterroles"}, "rbac.authorization.k8s.io", "v1", "clusterroles"},
+		{[]string{"rolebinding", "rolebindings"}, "rbac.authorization.k8s.io", "v1", "rolebindings"},
+		{[]string{"clusterrolebinding", "clusterrolebindings"}, "rbac.authorization.k8s.io", "v1", "clusterrolebindings"},
+	}
+	m := make(map[string]schema.GroupVersionResource)
+	for _, d := range defs {
+		gvr := schema.GroupVersionResource{Group: d.group, Version: d.version, Resource: d.resource}
+		for _, f := range d.forms {
+			m[f] = gvr
+		}
+	}
+	return m
+}()
+
+// TypedKindOwnsGroup reports whether (kind, group) names a built-in kind
+// addressed by its own API group — i.e. it must resolve via the typed cache,
+// not the dynamic/CRD cache. `deployments`+`apps` is a typed lookup;
+// `services`+`serving.knative.dev` is a CRD (dynamic) lookup; `services` with
+// an empty group is the core typed Service. Handlers use this to gate the "explicit group ⇒
+// dynamic cache" dispatch so built-in workloads addressed with their real group
+// don't fall through to the dynamic cache (which has no informer for them).
+func TypedKindOwnsGroup(kind, group string) bool {
+	gvr, ok := builtinGVRs[strings.ToLower(kind)]
+	return ok && gvr.Group == group
+}
+
+// BuiltinGVR returns the canonical GroupVersionResource for a built-in kind in
+// the given group, for use as a static fallback when API discovery can't
+// resolve it. group must match the kind's canonical group ("" for core kinds);
+// a mismatch (e.g. a CRD whose plural shadows a built-in) returns ok=false so
+// the caller keeps treating it as unknown rather than mis-resolving.
+func BuiltinGVR(kind, group string) (schema.GroupVersionResource, bool) {
+	gvr, ok := builtinGVRs[strings.ToLower(kind)]
+	if !ok || gvr.Group != group {
+		return schema.GroupVersionResource{}, false
+	}
+	return gvr, true
+}
 
 // ToRuntimeObjects converts a typed slice to []runtime.Object using generics.
 func ToRuntimeObjects[T runtime.Object](items []T) []runtime.Object {

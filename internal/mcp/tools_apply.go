@@ -66,6 +66,9 @@ func handleApplyResource(ctx context.Context, req *mcp.CallToolRequest, input ap
 		if input.DryRun {
 			entry["dry_run"] = true
 		}
+		if len(result.Warnings) > 0 {
+			entry["warnings"] = result.Warnings
+		}
 		results = append(results, entry)
 	}
 

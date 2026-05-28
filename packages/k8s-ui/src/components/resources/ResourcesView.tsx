@@ -28,6 +28,7 @@ import {
 import { clsx } from 'clsx'
 import { ResourceBar } from '../ui/ResourceBar'
 import type { SelectedResource, APIResource } from '../../types'
+import { isForbiddenError } from '../../types/fetch-error'
 import type { NavigateToResource } from '../../utils/navigation'
 import { categorizeResources, CORE_RESOURCES } from '../../utils/api-resources'
 import {
@@ -1681,11 +1682,6 @@ interface ResourcesViewData {
 
 export const ResourcesViewDataContext = React.createContext<ResourcesViewData>({})
 
-// Inline helper replacing ApiError/isForbiddenError from the removed api/client import
-function isForbiddenError(error: any): boolean {
-  return error?.status === 403
-}
-
 export interface ResourceQueryResult {
   data?: any[]
   isLoading: boolean
@@ -1757,6 +1753,15 @@ interface ResourcesViewProps {
    *  case. */
   onRowSelect?: (resource: any) => void
   /**
+   * When provided, the name cell renders as a real `<a href>` instead of
+   * relying on per-cell click handlers for navigation. Restores ⌘-click /
+   * middle-click / "Copy link" / hover URL preview / screen-reader link
+   * semantics. Hosts using full-page navigation should prefer this over
+   * `onRowSelect`; the anchor will own navigation and the rest of the row
+   * remains clickable for selection (drawer open).
+   */
+  rowHrefFor?: (resource: any) => string
+  /**
    * Overrides the default compare-mode submit (which navigates to
    * `/compare?kind=...&a=...&b=...`). Hosts use this to route to a
    * different URL — e.g. Radar Hub's `/fleet/compare` with cluster IDs.
@@ -1776,6 +1781,13 @@ interface ResourcesViewProps {
    * namespace+name only.
    */
   resolveRowCluster?: (resource: any) => { id: string; name: string } | undefined
+  /**
+   * Clears the global namespace selection (the header NamespaceSwitcher state).
+   * When wired, the "Clear filters" button also drops the active namespaces;
+   * otherwise it only resets the view-local filter state. Host-owned because
+   * the switcher lives outside this component and may persist server-side.
+   */
+  onClearNamespaces?: () => void
 }
 
 // Default selected kind
@@ -1920,8 +1932,10 @@ export function ResourcesView({
   defaultKind = DEFAULT_KIND_INFO,
   extraLeadingColumns,
   onRowSelect,
+  rowHrefFor,
   onCompareSubmit,
   resolveRowCluster,
+  onClearNamespaces,
 }: ResourcesViewProps) {
   const initialFilters = getInitialFiltersFromURL()
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath, defaultKind, locationPathname, locationSearch))
@@ -2683,6 +2697,25 @@ export function ResourcesView({
     // updates — they'd still rewrite the address bar through history.
     navigate({ pathname: newPath, search: queryStr }, { replace: !pushHistory })
   }, [navigate, basePath])
+
+  const clearAllFilters = useCallback(() => {
+    setSearchTerm('')
+    setColumnFilters({})
+    setProblemFilters([])
+    setLabelSelector('')
+    setOwnerKind('')
+    setOwnerName('')
+    setShowInactiveReplicaSets(false)
+    // Filter-only URL params. Path + kind + namespace + other cross-view
+    // params are out of scope here; the host's onClearNamespaces (and its
+    // own state→URL sync) owns namespace cleanup.
+    const params = new URLSearchParams(window.location.search)
+    for (const key of ['search', 'filters', 'problems', 'labels', 'ownerKind', 'ownerName', 'showInactive']) {
+      params.delete(key)
+    }
+    navigate({ pathname: window.location.pathname, search: params.toString() }, { replace: true })
+    onClearNamespaces?.()
+  }, [navigate, onClearNamespaces])
 
   // Update URL when any filter changes
   useEffect(() => {
@@ -3505,6 +3538,17 @@ export function ResourcesView({
 
   // Check if any filters are active
   const hasOwnerFilter = ownerKind !== '' && ownerName !== ''
+  // Namespace contribution gated on a host-wired clearer: without it the
+  // Clear filters button can't drop the namespace, so showing it would be
+  // a no-op for that case.
+  const hasAnyFilter =
+    !!searchTerm ||
+    !!labelSelector ||
+    hasOwnerFilter ||
+    problemFilters.length > 0 ||
+    Object.values(columnFilters).some((vals) => vals.length > 0) ||
+    showInactiveReplicaSets ||
+    (!!onClearNamespaces && namespaces.length > 0)
 
 
   // Toggle problem filter
@@ -3799,6 +3843,19 @@ export function ResourcesView({
             </span>
           )}
 
+          {hasAnyFilter && (
+            <Tooltip content={!!onClearNamespaces && namespaces.length > 0 ? 'Reset all filters and the active namespace' : 'Reset all filters'}>
+              <button
+                type="button"
+                onClick={clearAllFilters}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Clear filters</span>
+              </button>
+            </Tooltip>
+          )}
+
           {lastUpdated && <LastUpdatedLabel lastUpdated={lastUpdated} />}
           {/* Column picker */}
           <div className="relative" ref={columnPickerRef}>
@@ -3978,6 +4035,16 @@ export function ResourcesView({
                   </div>
                 )
               })()}
+              {hasAnyFilter && (
+                <button
+                  type="button"
+                  onClick={clearAllFilters}
+                  className="flex items-center gap-1.5 mt-3 px-3 py-1.5 text-sm rounded-md bg-theme-elevated hover:bg-theme-border text-theme-text-secondary hover:text-theme-text-primary transition-colors"
+                >
+                  <RotateCcw className="w-3.5 h-3.5" />
+                  Clear filters
+                </button>
+              )}
             </div>
           ) : (
             <MetricsContext.Provider value={metricsLookup}>
@@ -4195,6 +4262,7 @@ export function ResourcesView({
                     onMouseEnter={() => setHighlightedIndex(-1)}
                     compareMode={compareMode}
                     comparePickIndex={pickIdx}
+                    rowHref={rowHrefFor?.(resource)}
                   />
                 )
               }}
@@ -4240,6 +4308,10 @@ interface ResourceRowCellsProps {
   compareMode?: boolean
   /** -1 when not picked; 0 = pick A; 1 = pick B. */
   comparePickIndex?: number
+  /** When provided, the name cell renders as `<a href>` and the other
+   *  data cells drop their click handlers. The compare-mode chip column
+   *  is unaffected (still toggles picks). */
+  rowHref?: string
 }
 
 function rowHighlightClass(
@@ -4259,9 +4331,13 @@ function rowHighlightClass(
   return 'group-hover/row:bg-theme-surface/50'
 }
 
-function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter, compareMode, comparePickIndex = -1 }: ResourceRowCellsProps) {
+function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, hasSpacerColumn, isSelected, isHighlighted, majorityNodeMinorVersion, onClick, onMouseEnter, compareMode, comparePickIndex = -1, rowHref }: ResourceRowCellsProps) {
   const rowHighlight = rowHighlightClass(compareMode, comparePickIndex, isSelected, isHighlighted)
   const pickedSide = comparePickIndex === 0 ? 'a' : comparePickIndex === 1 ? 'b' : null
+  // When the host supplies an anchor, drop per-cell onClick for the data
+  // columns: the anchor is the only navigation surface. The compare-mode
+  // chip column keeps its onClick so pick toggling still works.
+  const cellsAreClickable = !rowHref
   return (
     <>
       {compareMode && (
@@ -4292,15 +4368,24 @@ function ResourceRowCells({ resource, kind, group, columns, extraColumnsByKey, h
       {columns.map((col) => (
         <td
           key={col.key}
-          onClick={onClick}
+          onClick={cellsAreClickable ? onClick : undefined}
           onMouseEnter={onMouseEnter}
           className={clsx(
-            'px-4 py-3 border-b-subtle cursor-pointer transition-colors',
+            'px-4 py-3 border-b-subtle transition-colors',
+            cellsAreClickable && 'cursor-pointer',
             col.key !== 'status' && 'overflow-hidden truncate',
             rowHighlight,
           )}
         >
-          <CellContent resource={resource} kind={kind} group={group} column={col.key} majorityNodeMinorVersion={majorityNodeMinorVersion} extraColumn={extraColumnsByKey?.get(col.key)} />
+          <CellContent
+            resource={resource}
+            kind={kind}
+            group={group}
+            column={col.key}
+            majorityNodeMinorVersion={majorityNodeMinorVersion}
+            extraColumn={extraColumnsByKey?.get(col.key)}
+            nameHref={col.key === 'name' ? rowHref : undefined}
+          />
         </td>
       ))}
       {hasSpacerColumn && <td className="border-b-subtle p-0" />}
@@ -4344,9 +4429,12 @@ interface CellContentProps {
    *  column key. Render via the extra's render() and short-circuit
    *  the built-in cell logic. */
   extraColumn?: ExtraColumn
+  /** When set on the name column, the resource name renders as `<a href>`
+   *  so ⌘-click / copy-link / hover-URL all work. */
+  nameHref?: string
 }
 
-function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, extraColumn }: CellContentProps) {
+function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, extraColumn, nameHref }: CellContentProps) {
   // Parent-injected extra columns short-circuit the built-in switch.
   // Used by hosts that inject leading columns (e.g. a multi-cluster Cluster column).
   if (extraColumn) {
@@ -4358,12 +4446,22 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
   // Common columns
   if (column === 'name') {
     const isTerminating = !!meta.deletionTimestamp
+    const nameClass = clsx('text-sm font-medium truncate block', isTerminating ? 'text-theme-text-tertiary line-through' : 'text-theme-text-primary')
     return (
       <div className="flex items-center gap-1.5 min-w-0">
         <Tooltip content={meta.name}>
-          <span className={clsx('text-sm font-medium truncate block', isTerminating ? 'text-theme-text-tertiary line-through' : 'text-theme-text-primary')}>
-            {meta.name}
-          </span>
+          {nameHref ? (
+            <a
+              href={nameHref}
+              className={clsx(nameClass, 'hover:underline focus-visible:underline focus-visible:outline-none rounded-sm')}
+            >
+              {meta.name}
+            </a>
+          ) : (
+            <span className={nameClass}>
+              {meta.name}
+            </span>
+          )}
         </Tooltip>
         <CopyNameButton name={meta.name} />
         {isTerminating && (

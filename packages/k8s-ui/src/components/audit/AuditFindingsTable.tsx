@@ -25,6 +25,13 @@ export interface CheckMeta {
   description: string
   remediation: string
   frameworks?: string[]
+  references?: CheckReference[]
+}
+
+/** An authoritative link for a check (K8s docs, CIS, NSA/CISA, …). */
+export interface CheckReference {
+  label: string
+  url: string
 }
 
 export interface AuditFindingsTableProps {

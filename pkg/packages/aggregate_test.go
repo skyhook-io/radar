@@ -72,10 +72,10 @@ func TestAggregate_CertManager_AllThreeSources(t *testing.T) {
 			Health: "healthy",
 		}},
 		CRDs: []CRD{{
-			Name:    "certificates.cert-manager.io",
-			Group:   "cert-manager.io",
-			Kind:    "Certificate",
-			Plural:  "certificates",
+			Name:     "certificates.cert-manager.io",
+			Group:    "cert-manager.io",
+			Kind:     "Certificate",
+			Plural:   "certificates",
 			Versions: []string{"v1"},
 		}},
 	})
@@ -136,10 +136,10 @@ func TestAggregate_Karpenter_NoHelmAccess(t *testing.T) {
 func TestAggregate_RawOperator_KnownGroup(t *testing.T) {
 	rows := Aggregate(Sources{
 		CRDs: []CRD{{
-			Name:    "certificates.cert-manager.io",
-			Group:   "cert-manager.io",
-			Kind:    "Certificate",
-			Plural:  "certificates",
+			Name:     "certificates.cert-manager.io",
+			Group:    "cert-manager.io",
+			Kind:     "Certificate",
+			Plural:   "certificates",
 			Versions: []string{"v1"},
 		}},
 	})
@@ -150,8 +150,15 @@ func TestAggregate_RawOperator_KnownGroup(t *testing.T) {
 	if r.Chart != "cert-manager" || r.Health != "unknown" || r.FromCRDGroup != "" {
 		t.Errorf("bad CRD-only row: %+v", r)
 	}
+	if r.Version != "" {
+		t.Errorf("CRD API version must not populate package Version, got %q", r.Version)
+	}
 	if !equalSources(r.Sources, []SourceCode{SourceCRDs}) {
 		t.Errorf("want sources=[C], got %v", r.Sources)
+	}
+	crd := findContrib(r, SourceCRDs)
+	if crd.APIVersion != "v1" {
+		t.Errorf("CRD contribution APIVersion = %+v, want v1", crd)
 	}
 }
 
@@ -160,10 +167,10 @@ func TestAggregate_RawOperator_KnownGroup(t *testing.T) {
 func TestAggregate_RawOperator_UnknownGroup(t *testing.T) {
 	rows := Aggregate(Sources{
 		CRDs: []CRD{{
-			Name:    "widgets.example.com",
-			Group:   "example.com",
-			Kind:    "Widget",
-			Plural:  "widgets",
+			Name:     "widgets.example.com",
+			Group:    "example.com",
+			Kind:     "Widget",
+			Plural:   "widgets",
 			Versions: []string{"v1alpha1"},
 		}},
 	})
@@ -173,6 +180,13 @@ func TestAggregate_RawOperator_UnknownGroup(t *testing.T) {
 	r := rows[0]
 	if r.Chart != "example.com" || r.FromCRDGroup != "example.com" {
 		t.Errorf("bad unknown-group row: %+v", r)
+	}
+	if r.Version != "" {
+		t.Errorf("CRD API version must not populate package Version, got %q", r.Version)
+	}
+	crd := findContrib(r, SourceCRDs)
+	if crd.APIVersion != "v1alpha1" {
+		t.Errorf("CRD contribution APIVersion = %+v, want v1alpha1", crd)
 	}
 }
 
@@ -274,11 +288,11 @@ func TestWorseHealth_Ranking(t *testing.T) {
 		{HealthHealthy, HealthUnknown, HealthUnknown},
 		{HealthDegraded, HealthUnknown, HealthDegraded},
 		{HealthHealthy, HealthDegraded, HealthDegraded},
-		{"stalled", HealthDegraded, "stalled"},          // stalled ranks with unhealthy
-		{"progressing", HealthHealthy, "progressing"},   // progressing ranks with degraded
-		{"", HealthHealthy, HealthHealthy},              // empty = no opinion
-		{HealthDegraded, "", HealthDegraded},            // empty = no opinion
-		{"weirdo", HealthHealthy, "weirdo"},             // unrecognized → "unknown" rank, beats healthy
+		{"stalled", HealthDegraded, "stalled"},        // stalled ranks with unhealthy
+		{"progressing", HealthHealthy, "progressing"}, // progressing ranks with degraded
+		{"", HealthHealthy, HealthHealthy},            // empty = no opinion
+		{HealthDegraded, "", HealthDegraded},          // empty = no opinion
+		{"weirdo", HealthHealthy, "weirdo"},           // unrecognized → "unknown" rank, beats healthy
 	}
 	for _, c := range cases {
 		if got := worseHealth(c.a, c.b); got != c.want {
@@ -490,8 +504,11 @@ func TestAggregate_CRDOnlyContributionShape(t *testing.T) {
 	if c.Source != SourceCRDs {
 		t.Errorf("Source = %q, want C", c.Source)
 	}
-	if c.Version != "v1" {
-		t.Errorf("Version = %q, want v1", c.Version)
+	if c.Version != "" {
+		t.Errorf("Version = %q, want empty package version", c.Version)
+	}
+	if c.APIVersion != "v1" {
+		t.Errorf("APIVersion = %q, want v1", c.APIVersion)
 	}
 	if c.ReleaseName != "" || c.ReleaseNamespace != "" {
 		t.Errorf("CRD contribution should have no release identity, got name=%q ns=%q",
@@ -503,6 +520,34 @@ func TestAggregate_CRDOnlyContributionShape(t *testing.T) {
 	}
 	if c.Cluster != "" {
 		t.Errorf("single-cluster mode should leave Cluster empty, got %q", c.Cluster)
+	}
+}
+
+func TestAddContribution_NormalizesVersionFieldsBySource(t *testing.T) {
+	var r PackageRow
+	r.AddContribution(SourceContribution{
+		Source:  SourceCRDs,
+		Version: "v1",
+	})
+	crd := findContrib(r, SourceCRDs)
+	if r.Version != "" {
+		t.Errorf("CRD contribution should not populate row Version, got %q", r.Version)
+	}
+	if crd.Version != "" || crd.APIVersion != "v1" {
+		t.Errorf("CRD contribution = %+v, want empty Version + APIVersion v1", crd)
+	}
+
+	r.AddContribution(SourceContribution{
+		Source:     SourceHelm,
+		Version:    "1.2.3",
+		APIVersion: "v1",
+	})
+	helm := findContrib(r, SourceHelm)
+	if r.Version != "1.2.3" {
+		t.Errorf("Helm contribution should populate row Version, got %q", r.Version)
+	}
+	if helm.Version != "1.2.3" || helm.APIVersion != "" {
+		t.Errorf("Helm contribution = %+v, want Version 1.2.3 + empty APIVersion", helm)
 	}
 }
 

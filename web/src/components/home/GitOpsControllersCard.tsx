@@ -41,21 +41,23 @@ export function GitOpsControllersCard({ data, onNavigate }: GitOpsControllersCar
     <button
       type="button"
       onClick={onNavigate}
-      className="flex flex-col gap-3 rounded-xl bg-theme-surface p-4 text-left shadow-theme-sm transition-colors hover:bg-theme-hover"
+      className="group h-[260px] rounded-xl bg-theme-surface shadow-theme-sm hover:-translate-y-1 hover:shadow-theme-md transition-all duration-200 text-left animate-fade-in-up"
     >
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-2">
-          <GitBranch className="h-4 w-4 text-theme-text-tertiary" />
-          <span className="text-xs font-semibold uppercase tracking-wider text-theme-text-secondary">
-            GitOps Controllers
-          </span>
+      <div className="flex flex-col h-full w-full">
+        <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50">
+          <div className="flex items-center gap-2">
+            <GitBranch className={clsx('h-4 w-4', headerTone)} />
+            <span className={clsx('text-xs font-semibold uppercase tracking-wider', headerTone)}>
+              GitOps Controllers
+            </span>
+          </div>
+          <span className={clsx('text-[11px] font-medium', headerTone)}>{headerLabel}</span>
         </div>
-        <span className={clsx('text-[11px] font-medium', headerTone)}>{headerLabel}</span>
-      </div>
 
-      <div className="flex flex-col gap-2">
-        {argo.length > 0 && <ControllerSection label="Argo CD" controllers={argo} />}
-        {flux.length > 0 && <ControllerSection label="Flux CD" controllers={flux} />}
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-3 flex flex-col gap-3">
+          {argo.length > 0 && <ControllerSection label="Argo CD" controllers={argo} />}
+          {flux.length > 0 && <ControllerSection label="Flux CD" controllers={flux} />}
+        </div>
       </div>
     </button>
   )
