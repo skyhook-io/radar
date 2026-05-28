@@ -22,8 +22,10 @@ interface ArgoApplicationRendererProps {
 
 function SourceProperties({ source }: { source: any }) {
   if (!source) return null
-  const repoHref = buildRepoBrowseUrl(source.repoURL)
-  const pathHref = buildPathBrowseUrl(source.repoURL, source.path, source.targetRevision)
+  // Helm chart sources point repoURL at a chart registry, not a browseable git repo.
+  const isHelmSource = !!source.chart
+  const repoHref = isHelmSource ? null : buildRepoBrowseUrl(source.repoURL)
+  const pathHref = isHelmSource ? null : buildPathBrowseUrl(source.repoURL, source.path, source.targetRevision)
   return (
     <>
       <Property
