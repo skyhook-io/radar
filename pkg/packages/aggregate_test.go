@@ -523,6 +523,34 @@ func TestAggregate_CRDOnlyContributionShape(t *testing.T) {
 	}
 }
 
+func TestAddContribution_NormalizesVersionFieldsBySource(t *testing.T) {
+	var r PackageRow
+	r.AddContribution(SourceContribution{
+		Source:  SourceCRDs,
+		Version: "v1",
+	})
+	crd := findContrib(r, SourceCRDs)
+	if r.Version != "" {
+		t.Errorf("CRD contribution should not populate row Version, got %q", r.Version)
+	}
+	if crd.Version != "" || crd.APIVersion != "v1" {
+		t.Errorf("CRD contribution = %+v, want empty Version + APIVersion v1", crd)
+	}
+
+	r.AddContribution(SourceContribution{
+		Source:     SourceHelm,
+		Version:    "1.2.3",
+		APIVersion: "v1",
+	})
+	helm := findContrib(r, SourceHelm)
+	if r.Version != "1.2.3" {
+		t.Errorf("Helm contribution should populate row Version, got %q", r.Version)
+	}
+	if helm.Version != "1.2.3" || helm.APIVersion != "" {
+		t.Errorf("Helm contribution = %+v, want Version 1.2.3 + empty APIVersion", helm)
+	}
+}
+
 // Hub fan-in: contributions from different clusters with the same
 // SourceCode must coexist (not collapse). This is what lets Hub deep-
 // link to per-cluster Argo App identity in the "same chart, two

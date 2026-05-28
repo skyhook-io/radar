@@ -238,6 +238,7 @@ func (r *PackageRow) MergeHealth(h Health) {
 //     first-seen wins) — preserves the existing on-wire semantics
 //     for simple consumers that ignore Contributors.
 func (r *PackageRow) AddContribution(c SourceContribution) {
+	c = normalizeContribution(c)
 	r.AddSource(c.Source)
 	r.MergeHealth(c.Health)
 	if r.Version == "" && c.Source != SourceCRDs {
@@ -277,6 +278,19 @@ func (r *PackageRow) AddContribution(c SourceContribution) {
 	}
 	r.Contributors = append(r.Contributors, c)
 	sortContributors(r.Contributors)
+}
+
+func normalizeContribution(c SourceContribution) SourceContribution {
+	if c.Source == SourceCRDs {
+		if c.APIVersion == "" {
+			c.APIVersion = c.Version
+		}
+		c.Version = ""
+		c.AppVersion = ""
+		return c
+	}
+	c.APIVersion = ""
+	return c
 }
 
 // Contributor returns the first contribution from the given source
