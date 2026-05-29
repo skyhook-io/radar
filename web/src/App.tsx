@@ -323,8 +323,9 @@ function AppInner() {
   // On a history Pop (back/forward) the URL is authoritative. The URL-write
   // effect, running with not-yet-synced state, would otherwise write the stale
   // state back and revert the Pop — and oscillate with the URL→state read
-  // effect (infinite re-render, React #185, blank page). Arm this on each Pop
-  // so the write effect skips exactly that one revert, then resumes normally.
+  // effect (infinite re-render, React #185, blank page). Suppress the writer
+  // for the synchronous reconciliation burst after a Pop, then auto-clear (see
+  // the arming effect) so later user-driven writes are never affected.
   const skipUrlWriteAfterPopRef = useRef(false)
 
   // Close resource drawer when the /resources route no longer matches the
@@ -826,21 +827,28 @@ function AppInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- namespaces and setActiveNamespace are intentionally excluded; we only react to server-side changes.
   }, [namespaceScope, namespaceScopeKey])
 
-  // Arm the one-shot skip on every history Pop (location.key changes per nav).
+  // Arm the skip on every history Pop (location.key changes per nav), then
+  // clear it on the next macrotask. The revert/oscillation is a synchronous
+  // re-render burst, so a macrotask-deferred clear covers it; clearing
+  // afterward means a stale arm can't survive into an unrelated later write
+  // (e.g. a Pop that changes none of the write effect's deps would otherwise
+  // leave the flag set and silently drop the next user-driven URL write).
   useEffect(() => {
-    if (navigationType === NavigationType.Pop) skipUrlWriteAfterPopRef.current = true
+    if (navigationType !== NavigationType.Pop) return
+    skipUrlWriteAfterPopRef.current = true
+    const id = setTimeout(() => { skipUrlWriteAfterPopRef.current = false }, 0)
+    return () => clearTimeout(id)
   }, [location.key, navigationType])
 
   // Update URL query params when state changes (path is handled by setMainView)
   // Read from window.location.search (not React Router's searchParams) to preserve
   // params set by child components via window.history.replaceState (e.g., kind from ResourcesView).
   useEffect(() => {
-    // Don't write (and revert) the URL for the state that's still catching up to
-    // a Pop — the read effect below owns syncing state from the popped URL.
-    if (skipUrlWriteAfterPopRef.current) {
-      skipUrlWriteAfterPopRef.current = false
-      return
-    }
+    // Don't write (and revert) the URL while state is still catching up to a
+    // Pop — the read effect below owns syncing state from the popped URL. The
+    // flag auto-clears on the next macrotask, so this never blocks a later
+    // user-driven write.
+    if (skipUrlWriteAfterPopRef.current) return
     const currentSearch = window.location.search
     const params = new URLSearchParams(currentSearch)
 

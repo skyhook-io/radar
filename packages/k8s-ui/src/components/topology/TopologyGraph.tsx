@@ -1408,8 +1408,9 @@ function ViewportController({
   // Pan/zoom to a single searched node. Gated on focusNonce so the same
   // node can be re-focused, and so this never fires on background updates.
   // If the node is already on the canvas, center now. If it isn't (it's
-  // collapsed inside a group chip), ask the parent to expand that group;
-  // centerNodeAfterLayoutRef then re-centers once the relayout lands.
+  // collapsed inside a group chip), ask the parent to expand that group
+  // (onRequestExpandForNode); the fit-to-group effect then frames the group
+  // once the relayout lands, and the node glows inside it via data.selected.
   useEffect(() => {
     if (focusNonce === prevFocusNonceRef.current) return
     prevFocusNonceRef.current = focusNonce
