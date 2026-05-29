@@ -396,12 +396,12 @@ export const TopologyFilterSidebar = memo(function TopologyFilterSidebar({
           const total = sumKinds(availableKinds)
           const visible = sumKinds(availableKinds.filter(k => visibleKinds.has(k.kind)))
           const hidden = total - visible
-          const hiddenKinds = availableKinds.filter(k => !visibleKinds.has(k.kind) && (kindCounts.get(k.kind) || 0) > 0)
+          const filteredOutKinds = availableKinds.filter(k => !visibleKinds.has(k.kind) && (kindCounts.get(k.kind) || 0) > 0)
           return (
             <div
               className="text-xs text-theme-text-tertiary"
-              title={hiddenKinds.length > 0
-                ? `Hidden by kind filter: ${hiddenKinds.map(k => `${kindCounts.get(k.kind)} ${k.kind}`).join(', ')}`
+              title={filteredOutKinds.length > 0
+                ? `Hidden by kind filter: ${filteredOutKinds.map(k => `${kindCounts.get(k.kind)} ${k.kind}`).join(', ')}`
                 : undefined}
             >
               Showing {visible} of {total} resources
