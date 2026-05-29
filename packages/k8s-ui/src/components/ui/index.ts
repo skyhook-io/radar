@@ -1,4 +1,5 @@
 export { Tooltip } from './Tooltip'
+export { UpdatedAtLabel } from './UpdatedAtLabel'
 export { PaneLoader } from './PaneLoader'
 export { ClusterName } from './ClusterName'
 export { MiddleEllipsis } from './MiddleEllipsis'

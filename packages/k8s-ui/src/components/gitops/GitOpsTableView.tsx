@@ -34,6 +34,7 @@ import { DistributionBar } from '../ui/DistributionBar'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
 import { PaneLoader } from '../ui/PaneLoader'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
+import { UpdatedAtLabel } from '../ui/UpdatedAtLabel'
 import { getGitOpsResourceStatus } from './detail-helpers'
 import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
 import { toggleSet } from './GitOpsGraphFilterRail'
@@ -194,6 +195,13 @@ export interface GitOpsTableViewProps {
   countsUnavailable?: string[]
   // Caller refresh — typically invalidates its useQuery + refetches.
   onRefresh?: () => void
+  // When set, an "Updated N ago" freshness label renders next to the refresh
+  // button (epoch ms of the last successful load — e.g. React Query's
+  // dataUpdatedAt). Keeps freshness in the existing toolbar, no separate band.
+  dataUpdatedAt?: number
+  // Spins the refresh button during background refetches (vs. `loading`, which
+  // only covers the first load). Optional.
+  isFetching?: boolean
   // Row click — caller routes to its own detail page. When the host also
   // passes `rowHrefFor`, the callback receives the MouseEvent so it can
   // `preventDefault()` for same-tree nav (e.g. react-router) or skip the
@@ -276,6 +284,8 @@ export function GitOpsTableView({
   counts,
   countsUnavailable,
   onRefresh,
+  dataUpdatedAt,
+  isFetching,
   onRowClick,
   rowHrefFor,
   onDestinationClick,
@@ -736,6 +746,7 @@ export function GitOpsTableView({
               <GitOpsIconToggle active={viewMode === 'table'} label="Table view" icon={List} onClick={() => setViewMode('table')} />
               <GitOpsIconToggle active={viewMode === 'tiles'} label="Tiles view" icon={LayoutGrid} onClick={() => setViewMode('tiles')} />
             </div>
+            {dataUpdatedAt != null && <UpdatedAtLabel dataUpdatedAt={dataUpdatedAt} />}
             {onRefresh && (
               <Tooltip content="Refresh GitOps resources">
                 <button
@@ -745,7 +756,7 @@ export function GitOpsTableView({
                 >
                   {refreshPhase === 'success'
                     ? <Check className="h-3.5 w-3.5 text-emerald-500" />
-                    : <RefreshCw className={clsx('h-3.5 w-3.5', (refreshPhase === 'spinning' || loading) && 'animate-spin')} />}
+                    : <RefreshCw className={clsx('h-3.5 w-3.5', (refreshPhase === 'spinning' || loading || isFetching) && 'animate-spin')} />}
                 </button>
               </Tooltip>
             )}

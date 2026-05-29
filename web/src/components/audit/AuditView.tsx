@@ -1,8 +1,9 @@
 import { useState, useCallback } from 'react'
 import { useAudit, useAuditSettings, useUpdateAuditSettings, useCloudRole } from '../../api/client'
 import type { SelectedResource } from '../../types'
-import { ChecksView, PaneLoader, PageHeader, type CheckResourceRef } from '@skyhook-io/k8s-ui'
-import { ShieldCheck, Settings } from 'lucide-react'
+import { ChecksView, PaneLoader, PageHeader, UpdatedAtLabel, useRefreshAnimation, type CheckResourceRef } from '@skyhook-io/k8s-ui'
+import { ShieldCheck, Settings, RefreshCw } from 'lucide-react'
+import { clsx } from 'clsx'
 import { AuditSettingsDialog } from './AuditSettingsDialog'
 import { Tooltip } from '../ui/Tooltip'
 
@@ -18,7 +19,7 @@ interface AuditViewProps {
 // ~/.radar settings are this cluster's "policy" and the row hide-menu writes to
 // them.
 export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) {
-  const { data, isLoading, error } = useAudit(namespaces)
+  const { data, isLoading, error, isFetching, dataUpdatedAt, refetch } = useAudit(namespaces)
   const { data: auditSettings } = useAuditSettings()
   const updateSettings = useUpdateAuditSettings()
   // Audit policy is owner-gated (enforced server-side). Withhold the inline
@@ -29,6 +30,9 @@ export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) 
   const [showSettings, setShowSettings] = useState(false)
 
   const ignoredCount = auditSettings?.ignoredNamespaces?.length ?? 0
+
+  const [refresh, isAnimating] = useRefreshAnimation(() => refetch())
+  const spinning = isFetching || isAnimating
 
   // Inline hide actions — persist to local settings immediately.
   const hideCheck = useCallback((checkID: string) => {
@@ -80,6 +84,19 @@ export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) 
         description="Security, reliability, and efficiency best practices (NSA/CISA, CIS, Polaris, Kubescape), grouped into a remediation queue."
         actions={
           <>
+            <div className="flex items-center gap-1.5">
+              <UpdatedAtLabel dataUpdatedAt={dataUpdatedAt} />
+              <Tooltip content="Refresh now">
+                <button
+                  onClick={refresh}
+                  disabled={spinning}
+                  className="p-2 rounded-lg hover:bg-theme-hover text-theme-text-tertiary hover:text-theme-text-secondary transition-colors disabled:opacity-50"
+                  aria-label="Refresh now"
+                >
+                  <RefreshCw className={clsx('w-4 h-4', spinning && 'animate-spin')} />
+                </button>
+              </Tooltip>
+            </div>
             {ignoredCount > 0 && (
               <button onClick={() => setShowSettings(true)} className="text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors">{ignoredCount} {ignoredCount === 1 ? 'namespace' : 'namespaces'} hidden</button>
             )}

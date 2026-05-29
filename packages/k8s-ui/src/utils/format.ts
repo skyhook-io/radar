@@ -192,6 +192,38 @@ export function formatCompactAge(value?: string): string {
   return `${Math.floor(hours / 24)}d`
 }
 
+// Coarse "just now / Xm / Xh / Xd" buckets for freshness labels — finer-grained
+// updates add motion in the periphery without aiding any user decision.
+export function formatLastUpdatedBucket(elapsedMs: number): string {
+  const elapsedSec = Math.max(0, Math.floor(elapsedMs / 1000))
+  if (elapsedSec < 60) return 'just now'
+  const minutes = Math.floor(elapsedSec / 60)
+  if (minutes < 60) return `${minutes}m`
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `${hours}h`
+  return `${Math.floor(hours / 24)}d`
+}
+
+// ms until the bucket produced by formatLastUpdatedBucket would change — lets a
+// ticker re-render exactly on the boundary instead of polling every second.
+export function msToNextBucket(elapsedMs: number): number {
+  const elapsed = Math.max(0, elapsedMs)
+  if (elapsed < 60_000) return 60_000 - elapsed
+  if (elapsed < 3_600_000) return 60_000 - (elapsed % 60_000)
+  if (elapsed < 86_400_000) return 3_600_000 - (elapsed % 3_600_000)
+  return 86_400_000 - (elapsed % 86_400_000)
+}
+
+// Freshness phrasing for "Updated X" indicators: just now / Xm ago / Xh ago /
+// over a day ago. An exact day count is noise for an auto-refresh signal, so
+// anything past 24h collapses to "over a day ago".
+export function formatUpdatedAgo(elapsedMs: number): string {
+  const bucket = formatLastUpdatedBucket(elapsedMs)
+  if (bucket === 'just now') return 'just now'
+  if (bucket.endsWith('d')) return 'over a day ago'
+  return `${bucket} ago`
+}
+
 export function formatRelativeAgeTime(value?: string, fallback = '-'): string {
   if (!value) return fallback
   const time = Date.parse(value)
