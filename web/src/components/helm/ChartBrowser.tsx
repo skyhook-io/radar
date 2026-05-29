@@ -476,7 +476,9 @@ function LocalChartCard({ chart, onSelect }: LocalChartCardProps) {
         )}
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <h4 title={chart.name} className="text-sm font-medium text-theme-text-primary truncate">{chart.name}</h4>
+            <Tooltip content={chart.name} wrapperClassName="min-w-0 flex-1">
+              <h4 className="text-sm font-medium text-theme-text-primary truncate">{chart.name}</h4>
+            </Tooltip>
             {chart.deprecated && (
               <span className={clsx('px-1 py-0.5 text-[10px] rounded', SEVERITY_BADGE.warning)}>
                 deprecated
@@ -540,7 +542,9 @@ function ArtifactHubChartCard({ chart, onSelect }: ArtifactHubChartCardProps) {
 
         {/* Name and org */}
         <div className="flex-1 min-w-0">
-          <h4 title={chart.name} className="text-sm font-medium text-theme-text-primary truncate">{chart.name}</h4>
+          <Tooltip content={chart.name} wrapperClassName="w-full">
+            <h4 className="text-sm font-medium text-theme-text-primary truncate">{chart.name}</h4>
+          </Tooltip>
           <div className="flex items-center gap-2 mt-0.5 text-xs text-theme-text-tertiary">
             <span className="flex items-center gap-1">
               <Building2 className="w-3 h-3" />
