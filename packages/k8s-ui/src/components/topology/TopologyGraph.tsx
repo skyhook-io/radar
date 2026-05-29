@@ -3,7 +3,7 @@ import {
   ReactFlow,
   ReactFlowProvider,
   Background,
-  Controls,
+  Panel,
   useNodesState,
   useEdgesState,
   useReactFlow,
@@ -20,7 +20,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { toCanvas } from 'html-to-image'
 
-import { AlertTriangle, Download, Layers, LayoutGrid, Loader2, Maximize, Minus, Pause, Play, Plus, RotateCw, Shield, Workflow } from 'lucide-react'
+import { AlertTriangle, ChevronsDownUp, ChevronsUpDown, Download, Layers, LayoutGrid, Loader2, Maximize, Minus, Pause, Play, Plus, RotateCw, Shield } from 'lucide-react'
 import { PaneLoader } from '../ui/PaneLoader'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
@@ -175,6 +175,10 @@ interface TopologyGraphProps {
   onClearNamespace?: () => void
   /** Serialized namespace filter — when this changes, reset groupLevels for fresh smart default */
   namespacesKey?: string
+  /** Node to pan/zoom the canvas to. Bump focusNonce to re-trigger for the same id. */
+  focusNodeId?: string
+  /** Increment to request a focus on focusNodeId (lets the same node be re-focused). */
+  focusNonce?: number
 }
 
 export function TopologyGraph({
@@ -191,6 +195,8 @@ export function TopologyGraph({
   namespaceBreadcrumb,
   onClearNamespace,
   namespacesKey = '',
+  focusNodeId,
+  focusNonce,
 }: TopologyGraphProps) {
   const isTrafficView = viewMode === 'traffic'
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([] as Node[])
@@ -234,6 +240,11 @@ export function TopologyGraph({
   // After layout completes for a single-group change, stores the group ID so
   // ViewportController can fitView to it (with correct timing — after setNodes)
   const fitToGroupAfterLayoutRef = useRef<string | null>(null)
+  // Set by the bulk level controls (collapse/cards/expand all); fits the whole
+  // graph once the relayout lands. A flag (not a counter) so the fit is keyed
+  // to the post-relayout nodes update, not the click — the click fires before
+  // the async ELK relayout, which would frame the pre-change layout.
+  const fitAllAfterLayoutRef = useRef(false)
 
   // Reset group display levels when namespace filter changes (instant switching)
   const prevNamespacesKeyRef = useRef(namespacesKey)
@@ -246,6 +257,21 @@ export function TopologyGraph({
       setFitViewCounter(c => c + 1)
     }
   }, [namespacesKey])
+
+  // Changing grouping (By Namespace / By App / No Grouping) reorganizes the
+  // whole graph, so re-frame it. Skip when a namespace change drove it — that
+  // path already fits via the effect above (avoids a double fit).
+  const prevGroupingModeRef = useRef(groupingMode)
+  const prevNsKeyForGroupingRef = useRef(namespacesKey)
+  useEffect(() => {
+    const groupingChanged = groupingMode !== prevGroupingModeRef.current
+    const nsChanged = namespacesKey !== prevNsKeyForGroupingRef.current
+    prevGroupingModeRef.current = groupingMode
+    prevNsKeyForGroupingRef.current = namespacesKey
+    if (groupingChanged && !nsChanged) {
+      fitAllAfterLayoutRef.current = true
+    }
+  }, [groupingMode, namespacesKey])
 
   // Set display level for a single group
   const handleSetLevel = useCallback((groupId: string, level: GroupDisplayLevel) => {
@@ -267,7 +293,9 @@ export function TopologyGraph({
     }
     setGroupLevels(next)
     savedPositionsRef.current.clear()
-    setFitViewCounter(c => c + 1)
+    // Re-frame the whole graph after the relayout — collapse/expand changes the
+    // content bounds enough that the old viewport no longer fits it.
+    fitAllAfterLayoutRef.current = true
   }, [groupingMode])
 
   // Expand pod group to show individual pods
@@ -443,6 +471,30 @@ export function TopologyGraph({
     const topoNode = topology?.nodes.find(n => n.id === nodeId) || workingNodes.find(n => n.id === nodeId)
     if (topoNode) onNodeClick(topoNode)
   }, [topology, workingNodes, onNodeClick])
+
+  // Expand the group containing a searched-but-collapsed node, then fit the
+  // viewport to that group once the relayout lands. We fit to the GROUP (via
+  // the existing fitToGroupAfterLayoutRef path) rather than centering on the
+  // node directly: the node's absolute position isn't settled until ELK
+  // finishes the async relayout, so a per-node center races it and lands on
+  // stale coords. The node still carries data.selected, so it glows inside the
+  // framed group.
+  const expandGroupForNode = useCallback((nodeId: string) => {
+    if (groupingMode === 'none') return
+    const target = workingNodes.find(n => n.id === nodeId)
+    if (!target) return
+    const groupKey = getGroupKey(target, groupingMode)
+    if (!groupKey) return
+    const groupId = `group-${groupingMode}-${groupKey}`
+    fitToGroupAfterLayoutRef.current = groupId
+    savedPositionsRef.current.clear()
+    setGroupLevels(prev => {
+      if (prev.get(groupId) === 'topology') return prev
+      const next = new Map(prev)
+      next.set(groupId, 'topology')
+      return next
+    })
+  }, [groupingMode, workingNodes])
 
   // Structure key for change detection — includes groupLevels so chip↔cardGrid triggers relayout.
   //
@@ -665,10 +717,17 @@ export function TopologyGraph({
       const updated = nds.map(node => {
         const shouldBeSelected = node.id === selectedNodeId
         const isCurrentlySelected = node.data?.selected ?? false
+        // Only act on the select/deselect transition. Don't touch zIndex
+        // otherwise — a blanket compare would fight the layout's group zIndex
+        // (-1) every render and loop (React #185). Groups are never selectable,
+        // so they never enter here and keep their layout zIndex.
         if (shouldBeSelected !== isCurrentlySelected) {
           changed = true
           return {
             ...node,
+            // Lift the selected leaf above its siblings (default z 0) so its
+            // outline+glow isn't painted over; restore default on deselect.
+            zIndex: shouldBeSelected ? 10 : undefined,
             data: {
               ...node.data,
               selected: shouldBeSelected,
@@ -679,7 +738,10 @@ export function TopologyGraph({
       })
       return changed ? updated : nds // Return same array if nothing changed
     })
-  }, [selectedNodeId, setNodes])
+    // `nodes` is a dep so selection re-applies after a relayout introduces the
+    // target node (e.g. search expands a collapsed group). Safe from loops: the
+    // functional update returns the same array ref when nothing changed.
+  }, [selectedNodeId, setNodes, nodes])
 
   if (!topology) {
     return <PaneLoader label="Loading topology…" className="absolute inset-0" />
@@ -831,55 +893,58 @@ export function TopologyGraph({
         onlyRenderVisibleElements={!isExporting}
       >
         <Background variant={BackgroundVariant.Dots} gap={20} size={1} color="#334155" />
-        <Controls
-          className="bg-theme-surface border border-theme-border rounded-lg"
-          showInteractive={false}
-          showZoom={false}
-          showFitView={false}
-        >
-          <CustomControlButtons
-            showExportButton={showExportButton}
-            paused={paused}
-            onTogglePause={onTogglePause}
-            onExportingChange={setIsExporting}
-          />
-        </Controls>
-        {/* Level controls — separate group matching per-node icons */}
-        {groupingMode !== 'none' && (
-          <div className="react-flow__panel react-flow__controls bottom-left bg-theme-surface border border-theme-border rounded-lg" style={{ marginBottom: 0, left: 10, bottom: 'auto', top: namespaceBreadcrumb ? 40 : 10 }}>
-            {!hideGroupHeader && (
-              <Tooltip content="Collapse all" delay={100} position="right">
+        {/* Bottom-left controls. Two distinct pills with a gap rather than one
+            long strip: a viewport group (zoom/fit/export/pause) and, only when
+            grouping is active, a level-of-detail group. */}
+        <Panel position="bottom-left" className="flex flex-col items-start gap-2">
+          {groupingMode !== 'none' && (
+            <div className="react-flow__controls overflow-hidden" style={{ position: 'static', margin: 0 }}>
+              {!hideGroupHeader && (
+                <Tooltip content="Collapse all groups" delay={100} position="right">
+                  <button
+                    className="react-flow__controls-button"
+                    onClick={() => setAllLevels('chip')}
+                  >
+                    <ChevronsDownUp className="w-3.5 h-3.5" />
+                  </button>
+                </Tooltip>
+              )}
+              <Tooltip content="All workload cards" delay={100} position="right">
                 <button
                   className="react-flow__controls-button"
-                  onClick={() => setAllLevels('chip')}
+                  onClick={() => setAllLevels('cardGrid')}
                 >
-                  <Minus className="w-3.5 h-3.5" />
+                  <LayoutGrid className="w-3.5 h-3.5" />
                 </button>
               </Tooltip>
-            )}
-            <Tooltip content="All workload cards" delay={100} position="right">
-              <button
-                className="react-flow__controls-button"
-                onClick={() => setAllLevels('cardGrid')}
-              >
-                <LayoutGrid className="w-3.5 h-3.5" />
-              </button>
-            </Tooltip>
-            <Tooltip content="Expand all" delay={100} position="right">
-              <button
-                className="react-flow__controls-button"
-                onClick={() => setAllLevels('topology')}
-              >
-                <Workflow className="w-3.5 h-3.5" />
-              </button>
-            </Tooltip>
+              <Tooltip content="Expand all groups" delay={100} position="right">
+                <button
+                  className="react-flow__controls-button"
+                  onClick={() => setAllLevels('topology')}
+                >
+                  <ChevronsUpDown className="w-3.5 h-3.5" />
+                </button>
+              </Tooltip>
+            </div>
+          )}
+          <div className="react-flow__controls overflow-hidden" style={{ position: 'static', margin: 0 }}>
+            <CustomControlButtons
+              showExportButton={showExportButton}
+              paused={paused}
+              onTogglePause={onTogglePause}
+              onExportingChange={setIsExporting}
+            />
           </div>
-        )}
+        </Panel>
         <ViewportController
           viewMode={viewMode}
           layoutRetryCount={layoutRetryCount}
           fitViewCounter={fitViewCounter}
           fitToGroupAfterLayoutRef={fitToGroupAfterLayoutRef}
+          fitAllAfterLayoutRef={fitAllAfterLayoutRef}
+          focusNodeId={focusNodeId}
+          focusNonce={focusNonce}
+          onRequestExpandForNode={expandGroupForNode}
         />
       </ReactFlow>
     </ReactFlowProvider>
@@ -1213,17 +1278,37 @@ function ViewportController({
   layoutRetryCount,
   fitViewCounter = 0,
   fitToGroupAfterLayoutRef,
+  fitAllAfterLayoutRef,
+  focusNodeId,
+  focusNonce = 0,
+  onRequestExpandForNode,
 }: {
   viewMode: string
   layoutRetryCount: number
   fitViewCounter?: number
   fitToGroupAfterLayoutRef?: React.MutableRefObject<string | null>
+  fitAllAfterLayoutRef?: React.MutableRefObject<boolean>
+  focusNodeId?: string
+  focusNonce?: number
+  onRequestExpandForNode?: (nodeId: string) => void
 }) {
-  const { fitView, zoomIn, zoomOut, setViewport, getViewport } = useReactFlow()
+  const { fitView, zoomIn, zoomOut, setViewport, getViewport, getInternalNode, setCenter } = useReactFlow()
   const nodes = useNodes() // Reactive hook to watch node changes
+
+  // Pan/zoom the viewport so a single node is centered.
+  const centerOnNode = useCallback((nodeId: string): boolean => {
+    const node = getInternalNode(nodeId)
+    if (!node) return false
+    const { x, y } = node.internals.positionAbsolute
+    const w = node.measured?.width ?? 0
+    const h = node.measured?.height ?? 0
+    setCenter(x + w / 2, y + h / 2, { zoom: 1.2, duration: VIEWPORT_ANIMATION_DURATION })
+    return true
+  }, [getInternalNode, setCenter])
   const prevViewModeRef = useRef<string>(viewMode)
   const prevRetryCountRef = useRef(layoutRetryCount)
   const prevFitViewCounterRef = useRef(fitViewCounter)
+  const prevFocusNonceRef = useRef(focusNonce)
   const prevNodesLengthRef = useRef(0)
 
   // Topology keyboard shortcuts
@@ -1320,25 +1405,55 @@ function ViewportController({
     }
   }, [viewMode, layoutRetryCount, fitViewCounter, nodes.length, fitView])
 
-  // After a single-group expand/collapse, fit the viewport to that group.
-  // This effect fires when nodes update (triggered by setNodes after async layout).
+  // Pan/zoom to a single searched node. Gated on focusNonce so the same
+  // node can be re-focused, and so this never fires on background updates.
+  // If the node is already on the canvas, center now. If it isn't (it's
+  // collapsed inside a group chip), ask the parent to expand that group;
+  // centerNodeAfterLayoutRef then re-centers once the relayout lands.
+  useEffect(() => {
+    if (focusNonce === prevFocusNonceRef.current) return
+    prevFocusNonceRef.current = focusNonce
+    if (!focusNodeId) return
+    if (!centerOnNode(focusNodeId)) {
+      onRequestExpandForNode?.(focusNodeId)
+    }
+  }, [focusNonce, focusNodeId, centerOnNode, onRequestExpandForNode])
+
+  // After a single-group expand/collapse, fit the viewport to that group, once
+  // the relayout has SETTLED. Debounced (reschedules on each nodes update) so
+  // it frames the final positions, not an intermediate layout — and so the
+  // group's nodes are measured when fitView reads their bounds.
   useEffect(() => {
     if (!fitToGroupAfterLayoutRef?.current) return
     const targetGroupId = fitToGroupAfterLayoutRef.current
-    fitToGroupAfterLayoutRef.current = null
-    // Find the group and its children to fit to
-    const targetNodes = nodes.filter(n => n.id === targetGroupId || n.parentId === targetGroupId)
-    if (targetNodes.length > 0) {
-      setTimeout(() => {
+    const id = setTimeout(() => {
+      fitToGroupAfterLayoutRef.current = null
+      const targetNodes = nodes.filter(n => n.id === targetGroupId || n.parentId === targetGroupId)
+      if (targetNodes.length > 0) {
         fitView({
           nodes: targetNodes.map(n => ({ id: n.id })),
           padding: 0.2,
           duration: VIEWPORT_ANIMATION_DURATION,
           maxZoom: 1.5,
         })
-      }, 10)
-    }
+      }
+    }, 250)
+    return () => clearTimeout(id)
   }, [nodes, fitView, fitToGroupAfterLayoutRef])
+
+  // After a bulk level change (collapse/cards/expand all), fit the whole graph
+  // once the relayout has SETTLED. The expand relayout lands in phases, so a
+  // fit on the first nodes update frames an intermediate (compact) layout.
+  // Debounce instead: each nodes update reschedules, so the fit fires only
+  // after nodes stop changing, then clears the flag.
+  useEffect(() => {
+    if (!fitAllAfterLayoutRef?.current) return
+    const id = setTimeout(() => {
+      fitAllAfterLayoutRef.current = false
+      fitView({ padding: 0.15, duration: VIEWPORT_ANIMATION_DURATION })
+    }, 250)
+    return () => clearTimeout(id)
+  }, [nodes, fitView, fitAllAfterLayoutRef])
 
   return null
 }

@@ -15,7 +15,7 @@ interface TopologySearchProps {
    * only shows CAPI kinds), it should still pass the full topology
    * here so the empty-state can tell users "your query matches X
    * resources hidden by the current view" rather than the
-   * misleading "No resources found." (SKY-828 bug 45)
+   * misleading "No resources found."
    */
   allNodes?: TopologyNode[]
   /**
@@ -23,6 +23,12 @@ interface TopologySearchProps {
    * empty-state hint above. Defaults to "current view".
    */
   viewModeLabel?: string
+  /**
+   * Position utilities for the trigger button (default "top-4 left-4").
+   * The host overrides this to avoid colliding with other canvas overlays
+   * (e.g. stacking below the namespace breadcrumb).
+   */
+  triggerClassName?: string
 }
 
 // Icon mapping for different resource kinds
@@ -64,7 +70,7 @@ function getKindColor(kind: string): string {
   }
 }
 
-export function TopologySearch({ nodes, onNodeSelect, onZoomToNode, allNodes, viewModeLabel }: TopologySearchProps) {
+export function TopologySearch({ nodes, onNodeSelect, onZoomToNode, allNodes, viewModeLabel, triggerClassName }: TopologySearchProps) {
   const [isOpen, setIsOpen] = useState(false)
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
@@ -96,9 +102,9 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode, allNodes, vi
   // Count of matches in the unfiltered topology that the current
   // view-mode filter is hiding. We only compute this when there's
   // a query AND the visible set returned zero results, so the cost
-  // is bounded to actual no-result interactions.
-  // (SKY-828 bug 45: Fleet view hides Pods, so searching pod names
-  // returned "No resources found" — misleading.)
+  // is bounded to actual no-result interactions. (Fleet view hides
+  // Pods, so searching a pod name there would otherwise just say
+  // "No resources found".)
   const hiddenMatchCount = useMemo(() => {
     if (!query.trim() || filteredNodes.length > 0 || !allNodes) return 0
     const lowerQuery = query.toLowerCase()
@@ -193,12 +199,15 @@ export function TopologySearch({ nodes, onNodeSelect, onZoomToNode, allNodes, vi
       {/* Search trigger button */}
       <button
         onClick={handleOpen}
-        className="absolute top-4 left-4 z-10 flex items-center gap-2 px-3 py-2 bg-theme-surface/90 backdrop-blur border border-theme-border rounded-lg text-theme-text-secondary hover:text-theme-text-primary hover:border-theme-border-light transition-colors"
+        className={clsx(
+          'absolute z-10 flex items-center gap-2 px-3 py-2 bg-theme-surface/90 backdrop-blur border border-theme-border rounded-lg text-theme-text-secondary hover:text-theme-text-primary hover:border-theme-border-light transition-colors',
+          triggerClassName ?? 'top-4 left-4'
+        )}
       >
         <Search className="w-4 h-4" />
         <span className="text-sm">Search</span>
-        <kbd className="hidden sm:inline-flex items-center gap-0.5 px-1.5 py-0.5 text-xs bg-theme-elevated rounded border border-theme-border-light">
-          <span className="text-[10px]">⌘</span>K
+        <kbd className="hidden sm:inline-flex items-center px-1.5 py-0.5 text-xs bg-theme-elevated rounded border border-theme-border-light">
+          /
         </kbd>
       </button>
 

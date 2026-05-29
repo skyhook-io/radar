@@ -129,70 +129,70 @@ function getIssueTooltip(issue: string | undefined): React.ReactNode {
 }
 
 // Default dimensions for unknown CRD kinds
-export const DEFAULT_NODE_DIMENSIONS = { width: 260, height: 56 }
+export const DEFAULT_NODE_DIMENSIONS = { width: 260, height: 84 }
 
 // Node dimensions for ELK layout - sized for typical K8s resource names
 export const NODE_DIMENSIONS: Record<NodeKind, { width: number; height: number }> = {
   Internet: { width: 120, height: 52 },
-  Ingress: { width: 300, height: 56 },
-  Gateway: { width: 300, height: 56 },
-  HTTPRoute: { width: 300, height: 56 },
-  GRPCRoute: { width: 300, height: 56 },
-  TCPRoute: { width: 300, height: 56 },
-  TLSRoute: { width: 300, height: 56 },
-  Service: { width: 260, height: 56 },
-  Deployment: { width: 280, height: 56 },
-  Rollout: { width: 280, height: 56 },
-  Application: { width: 300, height: 56 }, // ArgoCD Application
-  Kustomization: { width: 300, height: 56 }, // FluxCD Kustomization
-  HelmRelease: { width: 280, height: 56 }, // FluxCD HelmRelease
-  GitRepository: { width: 280, height: 56 }, // FluxCD GitRepository
-  DaemonSet: { width: 280, height: 56 },
-  StatefulSet: { width: 280, height: 56 },
-  ReplicaSet: { width: 280, height: 56 },
-  Pod: { width: 300, height: 56 },
+  Ingress: { width: 300, height: 84 },
+  Gateway: { width: 300, height: 84 },
+  HTTPRoute: { width: 300, height: 84 },
+  GRPCRoute: { width: 300, height: 84 },
+  TCPRoute: { width: 300, height: 84 },
+  TLSRoute: { width: 300, height: 84 },
+  Service: { width: 260, height: 84 },
+  Deployment: { width: 280, height: 84 },
+  Rollout: { width: 280, height: 84 },
+  Application: { width: 300, height: 84 }, // ArgoCD Application
+  Kustomization: { width: 300, height: 84 }, // FluxCD Kustomization
+  HelmRelease: { width: 280, height: 84 }, // FluxCD HelmRelease
+  GitRepository: { width: 280, height: 84 }, // FluxCD GitRepository
+  DaemonSet: { width: 280, height: 84 },
+  StatefulSet: { width: 280, height: 84 },
+  ReplicaSet: { width: 280, height: 84 },
+  Pod: { width: 300, height: 84 },
   PodGroup: { width: 200, height: 64 },
-  ConfigMap: { width: 180, height: 48 },
-  Secret: { width: 180, height: 48 },
-  HorizontalPodAutoscaler: { width: 280, height: 56 },
-  Job: { width: 180, height: 56 },
-  CronJob: { width: 200, height: 56 },
-  PersistentVolumeClaim: { width: 200, height: 48 },
-  Namespace: { width: 180, height: 48 },
-  Node: { width: 280, height: 56 },
-  NodePool: { width: 260, height: 56 },
-  NodeClaim: { width: 260, height: 56 },
-  NodeClass: { width: 260, height: 56 },
-  KnativeService: { width: 280, height: 56 },
-  KnativeConfiguration: { width: 280, height: 56 },
-  KnativeRevision: { width: 280, height: 56 },
-  KnativeRoute: { width: 280, height: 56 },
-  Broker: { width: 280, height: 56 },
-  Channel: { width: 280, height: 56 },
-  Trigger: { width: 280, height: 56 },
-  PingSource: { width: 280, height: 56 },
-  ApiServerSource: { width: 280, height: 56 },
-  ContainerSource: { width: 280, height: 56 },
-  SinkBinding: { width: 280, height: 56 },
-  IngressRoute: { width: 280, height: 56 },
-  IngressRouteTCP: { width: 280, height: 56 },
-  IngressRouteUDP: { width: 280, height: 56 },
-  Middleware: { width: 280, height: 56 },
-  MiddlewareTCP: { width: 280, height: 56 },
-  TraefikService: { width: 280, height: 56 },
-  ServersTransport: { width: 280, height: 56 },
-  ServersTransportTCP: { width: 300, height: 56 },
-  TLSOption: { width: 280, height: 56 },
-  TLSStore: { width: 280, height: 56 },
-  HTTPProxy: { width: 280, height: 56 }, // Contour
-  CAPICluster: { width: 280, height: 56 }, // Cluster API
-  MachineDeployment: { width: 300, height: 56 },
-  MachineSet: { width: 280, height: 56 },
-  Machine: { width: 260, height: 56 },
-  MachinePool: { width: 280, height: 56 },
-  KubeadmControlPlane: { width: 300, height: 56 },
-  ClusterClass: { width: 280, height: 56 },
-  MachineHealthCheck: { width: 300, height: 56 },
+  ConfigMap: { width: 180, height: 84 },
+  Secret: { width: 180, height: 84 },
+  HorizontalPodAutoscaler: { width: 280, height: 84 },
+  Job: { width: 180, height: 84 },
+  CronJob: { width: 200, height: 84 },
+  PersistentVolumeClaim: { width: 200, height: 84 },
+  Namespace: { width: 180, height: 84 },
+  Node: { width: 280, height: 84 },
+  NodePool: { width: 260, height: 84 },
+  NodeClaim: { width: 260, height: 84 },
+  NodeClass: { width: 260, height: 84 },
+  KnativeService: { width: 280, height: 84 },
+  KnativeConfiguration: { width: 280, height: 84 },
+  KnativeRevision: { width: 280, height: 84 },
+  KnativeRoute: { width: 280, height: 84 },
+  Broker: { width: 280, height: 84 },
+  Channel: { width: 280, height: 84 },
+  Trigger: { width: 280, height: 84 },
+  PingSource: { width: 280, height: 84 },
+  ApiServerSource: { width: 280, height: 84 },
+  ContainerSource: { width: 280, height: 84 },
+  SinkBinding: { width: 280, height: 84 },
+  IngressRoute: { width: 280, height: 84 },
+  IngressRouteTCP: { width: 280, height: 84 },
+  IngressRouteUDP: { width: 280, height: 84 },
+  Middleware: { width: 280, height: 84 },
+  MiddlewareTCP: { width: 280, height: 84 },
+  TraefikService: { width: 280, height: 84 },
+  ServersTransport: { width: 280, height: 84 },
+  ServersTransportTCP: { width: 300, height: 84 },
+  TLSOption: { width: 280, height: 84 },
+  TLSStore: { width: 280, height: 84 },
+  HTTPProxy: { width: 280, height: 84 }, // Contour
+  CAPICluster: { width: 280, height: 84 }, // Cluster API
+  MachineDeployment: { width: 300, height: 84 },
+  MachineSet: { width: 280, height: 84 },
+  Machine: { width: 260, height: 84 },
+  MachinePool: { width: 280, height: 84 },
+  KubeadmControlPlane: { width: 300, height: 84 },
+  ClusterClass: { width: 280, height: 84 },
+  MachineHealthCheck: { width: 300, height: 84 },
 }
 
 
@@ -425,7 +425,7 @@ export const K8sResourceNode = memo(function K8sResourceNode({
         className={clsx(
           'relative rounded-lg overflow-hidden',
           'bg-theme-surface topology-node-card',
-          selected && 'ring-2 ring-skyhook-400',
+          selected && 'topology-node-selected',
           isSmallNode && 'opacity-90',
           // Status bar via CSS pseudo-element (defined in index.css)
           (status === 'healthy' || status === 'unknown') && 'topology-node-status-bar',

@@ -40,7 +40,7 @@ function makeNode(id: string, kind: string, name: string, namespace = 'default')
   } as unknown as TopologyNode
 }
 
-describe('TopologySearch hidden-match counting (SKY-828 bug 45)', () => {
+describe('TopologySearch hidden-match counting', () => {
   // The bug: in Fleet topology view (which only shows CAPI kinds),
   // searching pod names returned "No resources found" — misleading
   // when the cluster has 338 pods. We compute a hidden-match count

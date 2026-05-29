@@ -6,7 +6,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams, useNavigationType, NavigationType } from 'react-router-dom'
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
-import { TopologyGraph, TopologyFilterSidebar, TopologyControls, gitOpsRouteForKind } from '@skyhook-io/k8s-ui'
+import { TopologyGraph, TopologySearch, TopologyFilterSidebar, TopologyControls, gitOpsRouteForKind } from '@skyhook-io/k8s-ui'
 import { TimelineView } from './components/timeline/TimelineView'
 import { ResourcesView } from './components/resources/ResourcesView'
 import { serializeColumnFilters } from './components/resources/resource-utils'
@@ -91,32 +91,6 @@ const FLEET_MODE_KINDS = new Set<NodeKind>([
 ])
 
 // Convert API resource name back to topology node ID prefix
-function apiResourceToNodeIdPrefix(apiResource: string): string {
-  const prefixMap: Record<string, string> = {
-    'pods': 'pod',
-    'services': 'service',
-    'deployments': 'deployment',
-    'daemonsets': 'daemonset',
-    'statefulsets': 'statefulset',
-    'replicasets': 'replicaset',
-    'ingresses': 'ingress',
-    'gateways': 'gateway',
-    'httproutes': 'httproute',
-    'grpcroutes': 'grpcroute',
-    'tcproutes': 'tcproute',
-    'tlsroutes': 'tlsroute',
-    'configmaps': 'configmap',
-    'secrets': 'secret',
-    'horizontalpodautoscalers': 'horizontalpodautoscaler',
-    'jobs': 'job',
-    'cronjobs': 'cronjob',
-    'persistentvolumeclaims': 'persistentvolumeclaim',
-    'namespaces': 'namespace',
-    'httpproxies': 'httpproxy', // Contour
-  }
-  return prefixMap[apiResource] || apiResource.replace(/s$/, '')
-}
-
 // Extended MainView type that includes traffic and cost
 type ExtendedMainView = MainView | 'traffic' | 'cost' | 'workload' | 'audit' | 'gitops' | 'compare'
 
@@ -301,6 +275,8 @@ function AppInner() {
   // Topology filter state
   const [visibleKinds, setVisibleKinds] = useState<Set<NodeKind>>(() => new Set(DEFAULT_VISIBLE_KINDS))
   const [filterSidebarCollapsed, setFilterSidebarCollapsed] = useState(false)
+  // Topology node-search → canvas focus request (nonce lets the same node re-focus)
+  const [topologyFocus, setTopologyFocus] = useState<{ id: string; nonce: number } | null>(null)
   // Track CRD kinds that have been auto-added to visibleKinds so we don't override user toggles
   const seededCRDKindsRef = useRef<Set<string>>(new Set())
 
@@ -343,6 +319,13 @@ function AppInner() {
 
   // Suppress the mainView-change clear effect during controlled expand/collapse transitions.
   const suppressViewClearRef = useRef(false)
+
+  // On a history Pop (back/forward) the URL is authoritative. The URL-write
+  // effect, running with not-yet-synced state, would otherwise write the stale
+  // state back and revert the Pop — and oscillate with the URL→state read
+  // effect (infinite re-render, React #185, blank page). Arm this on each Pop
+  // so the write effect skips exactly that one revert, then resumes normally.
+  const skipUrlWriteAfterPopRef = useRef(false)
 
   // Close resource drawer when the /resources route no longer matches the
   // selected drawer resource. This covers both in-view kind switches and
@@ -843,10 +826,21 @@ function AppInner() {
   // eslint-disable-next-line react-hooks/exhaustive-deps -- namespaces and setActiveNamespace are intentionally excluded; we only react to server-side changes.
   }, [namespaceScope, namespaceScopeKey])
 
+  // Arm the one-shot skip on every history Pop (location.key changes per nav).
+  useEffect(() => {
+    if (navigationType === NavigationType.Pop) skipUrlWriteAfterPopRef.current = true
+  }, [location.key, navigationType])
+
   // Update URL query params when state changes (path is handled by setMainView)
   // Read from window.location.search (not React Router's searchParams) to preserve
   // params set by child components via window.history.replaceState (e.g., kind from ResourcesView).
   useEffect(() => {
+    // Don't write (and revert) the URL for the state that's still catching up to
+    // a Pop — the read effect below owns syncing state from the popped URL.
+    if (skipUrlWriteAfterPopRef.current) {
+      skipUrlWriteAfterPopRef.current = false
+      return
+    }
     const currentSearch = window.location.search
     const params = new URLSearchParams(currentSearch)
 
@@ -1044,6 +1038,21 @@ function AppInner() {
       edges: filteredEdges,
     }
   }, [displayedTopology, visibleKinds, namespaces, topologyMode])
+
+  // The graph node id of the currently open resource, used to highlight it on
+  // the canvas. Looked up from the topology (not reconstructed) because node
+  // ids are `<lowercaseKind>/<ns>/<name>` with special prefixes for CRD
+  // collisions — rebuilding the string can't match those reliably.
+  const selectedNodeId = useMemo(() => {
+    if (!selectedResource) return undefined
+    const ns = selectedResource.namespace || ''
+    const match = topology?.nodes.find(n =>
+      ((n.data.namespace as string) || '') === ns &&
+      n.name === selectedResource.name &&
+      (kindToPlural(n.kind) === selectedResource.kind || n.kind === selectedResource.kind)
+    )
+    return match?.id
+  }, [selectedResource, topology])
 
   // Filter handlers
   const handleToggleKind = useCallback((kind: NodeKind) => {
@@ -1497,13 +1506,27 @@ function AppInner() {
                     groupingMode={effectiveGroupingMode}
                     hideGroupHeader={hideGroupHeader}
                     onNodeClick={handleNodeClick}
-                    selectedNodeId={selectedResource ? `${apiResourceToNodeIdPrefix(selectedResource.kind)}-${selectedResource.namespace}-${selectedResource.name}` : undefined}
+                    selectedNodeId={selectedNodeId}
                     paused={topologyPaused}
                     onTogglePause={handleTogglePause}
                     onMaximizeNamespace={(ns) => setActiveNamespace.mutate({ namespaces: [ns] })}
                     namespaceBreadcrumb={namespaces.length === 1 ? namespaces[0] : undefined}
                     onClearNamespace={namespaces.length >= 1 ? () => setActiveNamespace.mutate({ namespaces: [] }) : undefined}
                     namespacesKey={namespaces.join(',')}
+                    focusNodeId={topologyFocus?.id}
+                    focusNonce={topologyFocus?.nonce}
+                  />
+
+                  {/* Topology node search overlay - top left */}
+                  <TopologySearch
+                    nodes={filteredTopology?.nodes ?? []}
+                    allNodes={topology?.nodes}
+                    viewModeLabel={topologyMode === 'fleet' ? 'Fleet' : topologyMode === 'traffic' ? 'Traffic' : 'Resources'}
+                    onNodeSelect={handleNodeClick}
+                    onZoomToNode={(id) => setTopologyFocus((prev) => ({ id, nonce: (prev?.nonce ?? 0) + 1 }))}
+                    // Stack below the namespace breadcrumb (shown only for a single
+                    // namespace) so the two don't overlap in the top-left corner.
+                    triggerClassName={namespaces.length === 1 ? 'top-12 left-3' : 'top-3 left-3'}
                   />
 
                   {/* Topology controls overlay - top right */}

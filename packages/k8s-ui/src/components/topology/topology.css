@@ -18,6 +18,24 @@
   box-shadow: var(--topology-node-shadow);
 }
 
+/*
+ * Selected node (its drawer/detail is open). An outline (not box-shadow) draws
+ * the crisp "outside border" with a gap and isn't clipped by the card's
+ * overflow-hidden; the box-shadow keeps the base elevation and adds a soft
+ * brand glow so the node lifts off the dark canvas. color-mix keeps the glow
+ * on the theme token instead of a hardcoded rgba.
+ */
+.topology-node-selected {
+  /* skyhook-400 (#6A9FE0) — hardcoded like the rest of this file's palette
+     because @theme inline doesn't expose the brand vars at runtime. */
+  outline: 3px solid #6a9fe0;
+  outline-offset: 2px;
+  box-shadow:
+    var(--topology-node-shadow),
+    0 0 0 1px rgba(106, 159, 224, 0.85),
+    0 0 28px 5px rgba(106, 159, 224, 0.7);
+}
+
 /* Status bar via pseudo-element (saves one DOM element per node) */
 .topology-node-status-bar::before {
   content: '';
