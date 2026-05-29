@@ -834,7 +834,14 @@ function AppInner() {
   // (e.g. a Pop that changes none of the write effect's deps would otherwise
   // leave the flag set and silently drop the next user-driven URL write).
   useEffect(() => {
-    if (navigationType !== NavigationType.Pop) return
+    if (navigationType !== NavigationType.Pop) {
+      // Any non-Pop navigation clears the guard. Without this, a Push/Replace
+      // that lands before the macrotask fires would run this cleanup (cancelling
+      // the timeout) and re-run as a no-op, leaving the flag stuck true and
+      // silently suppressing all later URL writes.
+      skipUrlWriteAfterPopRef.current = false
+      return
+    }
     skipUrlWriteAfterPopRef.current = true
     const id = setTimeout(() => { skipUrlWriteAfterPopRef.current = false }, 0)
     return () => clearTimeout(id)
