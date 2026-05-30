@@ -703,7 +703,11 @@ function FindingLine({
           {body}
         </button>
       ) : resourceHref ? (
-        <a href={resourceHref(r)} className={cls}>
+        // Opens in a new tab to match the ExternalLink glyph in `body`. For the
+        // Hub fleet view this href crosses the Hub→Cluster SPA boundary (a full
+        // document nav); a new tab keeps the Checks queue intact and avoids the
+        // cross-tree browser-Back dead-end (SKY-931).
+        <a href={resourceHref(r)} target="_blank" rel="noreferrer" className={cls}>
           {body}
         </a>
       ) : (
