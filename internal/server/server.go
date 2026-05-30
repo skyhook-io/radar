@@ -496,21 +496,31 @@ func (s *Server) setupRoutes() {
 		r.Get("/traffic/flows/stream", s.handleTrafficFlowsStream)
 	})
 
+	// OAuth/OIDC discovery probes from MCP HTTP clients. Without these
+	// explicit 404s, two failure modes appear:
+	//   (a) the SPA fallback below answers root-level /.well-known/* with the
+	//       React index.html (HTTP 200, text/html);
+	//   (b) the /mcp Mount answers /mcp/.well-known/* with 405 because the
+	//       MCP handler only accepts POST.
+	// Both responses trigger claude-code's MCP transport (per upstream issue
+	// anthropics/claude-code#46879) to flip the server status to "needs-auth"
+	// — Claude Code probes /.well-known/oauth-{protected-resource,
+	// authorization-server} and /.well-known/openid-configuration before the
+	// MCP initialize and treats any non-404 as "this server is OAuth-
+	// protected." That leaks synthetic mcp__<server>__authenticate /
+	// complete_authentication tools into the model's tool catalog, which the
+	// agent then invents calls for. Per the MCP spec (RFC 9728 + RFC 8414),
+	// servers that do not implement OAuth should return 404 here so the
+	// client infers no auth is needed. Registered BEFORE the /mcp Mount so
+	// chi's radix tree resolves /mcp/.well-known/* to NotFound instead of
+	// letting the MCP handler answer with 405.
+	r.Handle("/.well-known/*", http.NotFoundHandler())
+	r.Handle("/mcp/.well-known/*", http.NotFoundHandler())
+
 	// MCP server (Model Context Protocol for AI tools)
 	if s.mcpHandler != nil {
 		r.Mount("/mcp", s.mcpHandler)
 	}
-
-	// Discovery probes from MCP HTTP clients. Without this, the SPA
-	// catch-all answers /.well-known/* with HTML 200, which newer claude-code
-	// parses as a broken OAuth flow and either aborts MCP registration or
-	// nudges the model to invent phantom mcp__<server>__authenticate calls.
-	// RFC 9728 / RFC 8414 / OIDC discovery all probe under /.well-known/ at
-	// both bare paths AND the resource-scoped variants (e.g.
-	// /.well-known/oauth-protected-resource/mcp). Radar's MCP endpoint is
-	// unauthenticated when running locally; serve a clean 404 across the
-	// whole /.well-known/* tree so clients infer "no auth needed."
-	r.Handle("/.well-known/*", http.NotFoundHandler())
 
 	// Static files (frontend) - SPA fallback to index.html
 	if s.staticFS != nil {
