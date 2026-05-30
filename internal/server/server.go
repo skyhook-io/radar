@@ -501,6 +501,17 @@ func (s *Server) setupRoutes() {
 		r.Mount("/mcp", s.mcpHandler)
 	}
 
+	// Discovery probes from MCP HTTP clients. Without this, the SPA
+	// catch-all answers /.well-known/* with HTML 200, which newer claude-code
+	// parses as a broken OAuth flow and either aborts MCP registration or
+	// nudges the model to invent phantom mcp__<server>__authenticate calls.
+	// RFC 9728 / RFC 8414 / OIDC discovery all probe under /.well-known/ at
+	// both bare paths AND the resource-scoped variants (e.g.
+	// /.well-known/oauth-protected-resource/mcp). Radar's MCP endpoint is
+	// unauthenticated when running locally; serve a clean 404 across the
+	// whole /.well-known/* tree so clients infer "no auth needed."
+	r.Handle("/.well-known/*", http.NotFoundHandler())
+
 	// Static files (frontend) - SPA fallback to index.html
 	if s.staticFS != nil {
 		r.Handle("/*", spaHandler(http.FS(s.staticFS)))
