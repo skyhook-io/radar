@@ -167,6 +167,10 @@
         "retention": {
           "type": "string",
           "description": "SQLite retention as a Go duration (e.g. 168h). \"0\" disables cleanup."
+        },
+        "maxSize": {
+          "type": "string",
+          "description": "SQLite max storage size before pruning oldest events (e.g. 800Mi, 8Gi). \"0\" disables size pruning."
         }
       }
     },

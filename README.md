@@ -141,6 +141,7 @@ radar
 | `--no-browser` | `false` | Don't auto-open browser |
 | `--timeline-storage` | `memory` | Timeline storage backend: `memory` or `sqlite` |
 | `--timeline-db` | `~/.radar/timeline.db` | Path to SQLite database (when using sqlite storage) |
+| `--timeline-max-size` | `0` | Maximum SQLite DB + WAL size before pruning oldest events (e.g. `800Mi`, `8Gi`; `0` disables) |
 | `--history-limit` | `10000` | Maximum events to retain in timeline |
 | `--disable-exec` | `false` | Disable terminal and debug shell |
 | `--disable-helm-write` | `false` | Disable Helm write operations |

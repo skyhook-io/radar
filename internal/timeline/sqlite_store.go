@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -32,6 +33,7 @@ type SQLiteStore struct {
 
 	cleanupMu     sync.RWMutex
 	retentionAge  time.Duration
+	maxStorage    int64
 	lastCleanupAt time.Time
 	lastCleanupN  int64
 	lastCleanupEr string
@@ -525,9 +527,7 @@ func (s *SQLiteStore) Stats() StoreStats {
 	}
 
 	// Get database file size
-	if info, err := os.Stat(s.path); err == nil {
-		stats.StorageBytes = info.Size()
-	}
+	stats.StorageBytes = s.storageBytes()
 
 	s.seenMu.RLock()
 	stats.SeenResources = len(s.seenResources)
@@ -535,6 +535,7 @@ func (s *SQLiteStore) Stats() StoreStats {
 
 	s.cleanupMu.RLock()
 	stats.RetentionAge = s.retentionAge
+	stats.MaxStorageBytes = s.maxStorage
 	stats.LastCleanupAt = s.lastCleanupAt
 	stats.LastCleanupDeletedRows = s.lastCleanupN
 	stats.LastCleanupError = s.lastCleanupEr
@@ -562,28 +563,111 @@ func (s *SQLiteStore) Cleanup(ctx context.Context, maxAge time.Duration) (int64,
 	return result.RowsAffected()
 }
 
+func (s *SQLiteStore) PruneToMaxSize(ctx context.Context, maxBytes int64) (int64, error) {
+	if maxBytes <= 0 {
+		return 0, nil
+	}
+	if current := s.storageBytes(); current <= maxBytes {
+		return 0, nil
+	}
+	if err := s.checkpointWAL(ctx); err != nil {
+		return 0, err
+	}
+	if current := s.storageBytes(); current <= maxBytes {
+		return 0, nil
+	}
+
+	target := maxBytes * 85 / 100
+	if target <= 0 {
+		target = maxBytes
+	}
+
+	var totalDeleted int64
+	for attempts := 0; attempts < 5; attempts++ {
+		current := s.storageBytes()
+		if current <= maxBytes {
+			return totalDeleted, nil
+		}
+
+		count, err := s.countEvents(ctx)
+		if err != nil {
+			return totalDeleted, err
+		}
+		if count == 0 {
+			if err := s.reclaimStorage(ctx); err != nil {
+				return totalDeleted, err
+			}
+			break
+		}
+		if count == 1 {
+			deleted, err := s.deleteOldestEvents(ctx, 1)
+			totalDeleted += deleted
+			if err != nil {
+				return totalDeleted, err
+			}
+			if err := s.reclaimStorage(ctx); err != nil {
+				return totalDeleted, err
+			}
+			continue
+		}
+
+		avgBytes := current / count
+		if avgBytes < 1 {
+			avgBytes = 1
+		}
+		toDelete := ((current - target) / avgBytes) + 1
+		if toDelete < 1000 && count > 1000 {
+			toDelete = 1000
+		}
+		if toDelete < 1 {
+			toDelete = 1
+		}
+		if toDelete >= count {
+			toDelete = count - 1
+		}
+
+		deleted, err := s.deleteOldestEvents(ctx, toDelete)
+		totalDeleted += deleted
+		if err != nil {
+			return totalDeleted, err
+		}
+		if deleted == 0 {
+			break
+		}
+		if err := s.reclaimStorage(ctx); err != nil {
+			return totalDeleted, err
+		}
+	}
+
+	if current := s.storageBytes(); current > maxBytes {
+		return totalDeleted, fmt.Errorf("timeline storage still above max size after pruning (%d > %d bytes)", current, maxBytes)
+	}
+	return totalDeleted, nil
+}
+
 // StartCleanupLoop spawns a goroutine that periodically deletes events older
-// than retention. Without this, the events table grows unbounded. Runs once
-// immediately so post-upgrade users with bloated DBs don't wait an hour for
-// the first cleanup. The loop exits when Close is called. retention <= 0
-// (or interval <= 0) disables cleanup entirely.
-func (s *SQLiteStore) StartCleanupLoop(retention, interval time.Duration) {
-	if retention <= 0 || interval <= 0 {
+// than retention and prunes oldest events when the DB exceeds maxStorageBytes.
+// Runs once immediately so post-upgrade users with bloated DBs don't wait an
+// hour for the first cleanup. The loop exits when Close is called. Both
+// retention <= 0 and maxStorageBytes <= 0 together disable cleanup entirely.
+func (s *SQLiteStore) StartCleanupLoop(retention, interval time.Duration, maxStorageBytes int64) {
+	if interval <= 0 || (retention <= 0 && maxStorageBytes <= 0) {
 		return
 	}
 	s.cleanupMu.Lock()
 	s.retentionAge = retention
+	s.maxStorage = maxStorageBytes
 	s.cleanupMu.Unlock()
 	s.wg.Go(func() {
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
-		s.runCleanup(retention)
+		s.runCleanup(retention, maxStorageBytes)
 		for {
 			select {
 			case <-s.quit:
 				return
 			case <-ticker.C:
-				s.runCleanup(retention)
+				s.runCleanup(retention, maxStorageBytes)
 			}
 		}
 	})
@@ -627,16 +711,32 @@ func (s *SQLiteStore) hydrateSeenResources() {
 // (timestamp, deleted count, last error) so it's surfaceable via Stats() and
 // /api/diagnostics — operators shouldn't need to tail logs to know retention
 // is working.
-func (s *SQLiteStore) runCleanup(retention time.Duration) {
-	n, err := s.Cleanup(context.Background(), retention)
+func (s *SQLiteStore) runCleanup(retention time.Duration, maxStorageBytes int64) {
+	var n int64
+	var cleanupErr error
+	var checkpointErr error
+	var pruneErr error
+	ctx := context.Background()
+	if retention > 0 {
+		n, cleanupErr = s.Cleanup(ctx, retention)
+		if cleanupErr == nil {
+			checkpointErr = s.checkpointWAL(ctx)
+		}
+	}
+	if maxStorageBytes > 0 {
+		var pruned int64
+		pruned, pruneErr = s.PruneToMaxSize(ctx, maxStorageBytes)
+		n += pruned
+	}
+	err := errors.Join(cleanupErr, checkpointErr, pruneErr)
 	now := time.Now()
 	s.cleanupMu.Lock()
 	s.lastCleanupAt = now
+	s.lastCleanupN = n
 	if err != nil {
 		s.lastCleanupEr = err.Error()
 	} else {
 		s.lastCleanupEr = ""
-		s.lastCleanupN = n
 	}
 	s.cleanupMu.Unlock()
 
@@ -645,11 +745,58 @@ func (s *SQLiteStore) runCleanup(retention time.Duration) {
 		return
 	}
 	if n > 0 {
-		log.Printf("[timeline] cleanup: deleted %d events older than %s from %s", n, retention, s.path)
+		log.Printf("[timeline] cleanup: deleted %d events from %s", n, s.path)
 	}
-	if _, err := s.db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
-		log.Printf("[timeline] wal_checkpoint failed for %s: %v", s.path, err)
+}
+
+func (s *SQLiteStore) storageBytes() int64 {
+	var total int64
+	for _, path := range []string{s.path, s.path + "-wal"} {
+		if info, err := os.Stat(path); err == nil {
+			total += info.Size()
+		}
 	}
+	return total
+}
+
+func (s *SQLiteStore) countEvents(ctx context.Context) (int64, error) {
+	var count int64
+	if err := s.db.QueryRowContext(ctx, "SELECT COUNT(*) FROM events").Scan(&count); err != nil {
+		return 0, err
+	}
+	return count, nil
+}
+
+func (s *SQLiteStore) deleteOldestEvents(ctx context.Context, limit int64) (int64, error) {
+	result, err := s.db.ExecContext(ctx, `
+		DELETE FROM events
+		WHERE id IN (
+			SELECT id FROM events
+			ORDER BY timestamp ASC, created_at ASC
+			LIMIT ?
+		)
+	`, limit)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected()
+}
+
+func (s *SQLiteStore) reclaimStorage(ctx context.Context) error {
+	if err := s.checkpointWAL(ctx); err != nil {
+		return err
+	}
+	if _, err := s.db.ExecContext(ctx, "VACUUM"); err != nil {
+		return fmt.Errorf("vacuum failed: %w", err)
+	}
+	return nil
+}
+
+func (s *SQLiteStore) checkpointWAL(ctx context.Context) error {
+	if _, err := s.db.ExecContext(ctx, "PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		return fmt.Errorf("wal checkpoint failed: %w", err)
+	}
+	return nil
 }
 
 // scanEvent scans a row into a TimelineEvent

@@ -44,6 +44,7 @@ func main() {
 	timelineStorage := flag.String("timeline-storage", fileCfg.TimelineStorageOr("memory"), "Timeline storage backend: memory or sqlite")
 	timelineDBPath := flag.String("timeline-db", fileCfg.TimelineDBPath, "Path to timeline database file (default: ~/.radar/timeline.db)")
 	timelineRetention := flag.Duration("timeline-retention", fileCfg.TimelineRetentionOr(7*24*time.Hour), "How long to retain timeline events when --timeline-storage=sqlite (e.g. 168h, 720h). 0 disables cleanup (unbounded growth).")
+	timelineMaxSize := flag.String("timeline-max-size", fileCfg.TimelineMaxSizeOr("0"), "Maximum SQLite timeline storage size before pruning oldest events (e.g. 800Mi, 8Gi). 0 disables size-based pruning.")
 	prometheusURL := flag.String("prometheus-url", fileCfg.PrometheusURL, "Manual Prometheus/VictoriaMetrics URL (skips auto-discovery)")
 	flag.Parse()
 
@@ -84,6 +85,11 @@ func main() {
 		log.Printf("ERROR: --kubeconfig and --kubeconfig-dir are mutually exclusive")
 		os.Exit(1)
 	}
+	timelineMaxSizeBytes, err := config.ParseByteSize(*timelineMaxSize)
+	if err != nil {
+		log.Printf("ERROR: invalid --timeline-max-size %q: %v", *timelineMaxSize, err)
+		os.Exit(1)
+	}
 	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(fileCfg.PrometheusHeaders, fileCfg.PrometheusHeadersFromEnv)
 	if err != nil {
 		log.Printf("ERROR: invalid Prometheus header configuration: %v", err)
@@ -105,6 +111,7 @@ func main() {
 		TimelineStorage:          *timelineStorage,
 		TimelineDBPath:           *timelineDBPath,
 		TimelineRetention:        *timelineRetention,
+		TimelineMaxSizeBytes:     timelineMaxSizeBytes,
 		PrometheusURL:            *prometheusURL,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: fileCfg.PrometheusHeadersFromEnv,

@@ -141,9 +141,9 @@ func InitStore(cfg StoreConfig) error {
 				return
 			}
 			globalStore = store
-			if cfg.RetentionAge > 0 {
-				store.StartCleanupLoop(cfg.RetentionAge, time.Hour)
-				log.Printf("Initialized SQLite event store at %s (retention: %s)", cfg.Path, cfg.RetentionAge)
+			if cfg.RetentionAge > 0 || cfg.MaxStorageBytes > 0 {
+				store.StartCleanupLoop(cfg.RetentionAge, time.Hour, cfg.MaxStorageBytes)
+				log.Printf("Initialized SQLite event store at %s (retention: %s, max size: %d bytes)", cfg.Path, cfg.RetentionAge, cfg.MaxStorageBytes)
 			} else {
 				log.Printf("Initialized SQLite event store at %s (retention: disabled — events table will grow unbounded)", cfg.Path)
 			}

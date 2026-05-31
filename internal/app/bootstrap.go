@@ -44,6 +44,7 @@ type AppConfig struct {
 	TimelineStorage          string
 	TimelineDBPath           string
 	TimelineRetention        time.Duration
+	TimelineMaxSizeBytes     int64
 	PrometheusURL            string
 	PrometheusHeaders        map[string]string
 	PrometheusHeadersFromEnv map[string]string
@@ -111,6 +112,7 @@ func BuildTimelineStoreConfig(cfg AppConfig) timeline.StoreConfig {
 		}
 		storeCfg.Path = dbPath
 		storeCfg.RetentionAge = cfg.TimelineRetention
+		storeCfg.MaxStorageBytes = cfg.TimelineMaxSizeBytes
 	}
 	return storeCfg
 }
@@ -167,6 +169,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		NoBrowser:                cfg.NoBrowser,
 		TimelineStorage:          cfg.TimelineStorage,
 		TimelineDBPath:           cfg.TimelineDBPath,
+		TimelineMaxSize:          fmt.Sprintf("%d", cfg.TimelineMaxSizeBytes),
 		HistoryLimit:             cfg.HistoryLimit,
 		PrometheusURL:            cfg.PrometheusURL,
 		PrometheusHeaders:        cfg.PrometheusHeaders,

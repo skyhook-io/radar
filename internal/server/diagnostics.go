@@ -117,6 +117,7 @@ type DiagTimeline struct {
 
 	// SQLite-only retention/cleanup state.
 	RetentionAge       string `json:"retentionAge,omitempty"`
+	MaxStorageBytes    int64  `json:"maxStorageBytes,omitempty"`
 	LastCleanupAt      string `json:"lastCleanupAt,omitempty"`
 	LastCleanupDeleted int64  `json:"lastCleanupDeletedRows,omitempty"`
 	LastCleanupError   string `json:"lastCleanupError,omitempty"`
@@ -313,6 +314,7 @@ func (s *Server) handleDiagnostics(w http.ResponseWriter, r *http.Request) {
 		if stats.RetentionAge > 0 {
 			diag.RetentionAge = stats.RetentionAge.String()
 		}
+		diag.MaxStorageBytes = stats.MaxStorageBytes
 		if s.diagConfig != nil {
 			diag.StorageType = s.diagConfig.TimelineStorage
 		}

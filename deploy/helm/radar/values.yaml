@@ -227,9 +227,9 @@ resources:
 #     long-lived deployment. Adds operational concerns: the PVC fills if
 #     retention is unbounded; restart on a multi-GB DB is slower.
 #
-# Sizing rule of thumb: a busy cluster (~5k resources, active controllers)
-# generates ~1.5 MB/min of timeline events. With the default 7d retention,
-# expect ~15 GB at steady state. Tune with `retention` and PVC `size` below.
+# Timeline volume depends on cluster size and controller churn. Keep `maxSize`
+# below the PVC `size` so Radar can prune before the volume fills; tune
+# `retention`, `maxSize`, and PVC `size` together.
 timeline:
   # Storage backend: "memory" or "sqlite"
   storage: memory
@@ -243,6 +243,10 @@ timeline:
   # "0" disables cleanup (events table grows unbounded — not recommended for
   # in-cluster deployments). Cleanup runs hourly + once at startup.
   retention: 168h
+  # SQLite max storage size. When the DB + WAL exceed this value, Radar prunes
+  # oldest events until storage is back under the low-water mark. Set "0" to
+  # disable size-based pruning.
+  maxSize: 800Mi
 
 # Authentication and RBAC configuration
 auth:

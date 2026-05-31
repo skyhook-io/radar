@@ -636,14 +636,13 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		status = "degraded"
 	}
 
-	// Get timeline store stats (informational only - doesn't affect overall status)
+	// Timeline store status is informational only and doesn't affect overall status.
 	var timelineStats map[string]any
 	if store := timeline.GetStore(); store != nil {
-		stats := store.Stats()
 		timelineStats = map[string]any{
-			"total_events": stats.TotalEvents,
-			"store_errors": timeline.GetStoreErrorCount(),
-			"total_drops":  timeline.GetTotalDropCount(),
+			"store_present": true,
+			"store_errors":  timeline.GetStoreErrorCount(),
+			"total_drops":   timeline.GetTotalDropCount(),
 		}
 	}
 

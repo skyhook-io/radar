@@ -304,6 +304,17 @@ func TestSmokeHealth(t *testing.T) {
 	if count < 1 {
 		t.Errorf("expected resourceCount >= 1, got %v", count)
 	}
+
+	timelineStats, ok := body["timeline"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected timeline stats object, got %T", body["timeline"])
+	}
+	if _, ok := timelineStats["total_events"]; ok {
+		t.Error("health endpoint should not run live timeline event counts")
+	}
+	if timelineStats["store_present"] != true {
+		t.Errorf("expected store_present=true, got %v", timelineStats["store_present"])
+	}
 }
 
 func TestSmokeMetricsEndpoint(t *testing.T) {

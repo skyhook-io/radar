@@ -50,6 +50,9 @@ spec:
             {{- if .Values.timeline.retention }}
             - --timeline-retention={{ .Values.timeline.retention }}
             {{- end }}
+            {{- if .Values.timeline.maxSize }}
+            - --timeline-max-size={{ .Values.timeline.maxSize }}
+            {{- end }}
             {{- end }}
             - --history-limit={{ .Values.timeline.historyLimit }}
             {{- if .Values.traffic.prometheusUrl }}

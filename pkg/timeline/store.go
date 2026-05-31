@@ -87,6 +87,7 @@ type StoreStats struct {
 
 	// SQLite-only retention/cleanup state. Zero values for memory store.
 	RetentionAge           time.Duration `json:"retentionAge,omitempty"`
+	MaxStorageBytes        int64         `json:"maxStorageBytes,omitempty"`
 	LastCleanupAt          time.Time     `json:"lastCleanupAt,omitempty"`
 	LastCleanupDeletedRows int64         `json:"lastCleanupDeletedRows,omitempty"`
 	LastCleanupError       string        `json:"lastCleanupError,omitempty"`

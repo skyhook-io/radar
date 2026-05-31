@@ -2,8 +2,10 @@ package timeline
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -30,6 +32,18 @@ func createTestSQLiteStore(t *testing.T) (*SQLiteStore, func()) {
 	}
 
 	return store, cleanup
+}
+
+func sqliteFileSize(t *testing.T, path string) int64 {
+	t.Helper()
+	info, err := os.Stat(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return 0
+		}
+		t.Fatalf("stat %s: %v", path, err)
+	}
+	return info.Size()
 }
 
 func TestSQLiteStore_Append(t *testing.T) {
@@ -551,7 +565,7 @@ func TestSQLiteStore_Stats_RecordsCleanupState(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	store.StartCleanupLoop(time.Hour, time.Hour)
+	store.StartCleanupLoop(time.Hour, time.Hour, 0)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -571,6 +585,165 @@ func TestSQLiteStore_Stats_RecordsCleanupState(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 	t.Fatal("LastCleanupAt remained zero — cleanup state not recorded")
+}
+
+func TestSQLiteStore_PruneToMaxSize_DropsOldestEvents(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	base := time.Now().Add(-time.Hour)
+	events := make([]TimelineEvent, 0, 300)
+	for i := range 300 {
+		events = append(events, TimelineEvent{
+			ID:        fmt.Sprintf("event-%03d", i),
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+			Source:    SourceInformer,
+			Kind:      "TimelineWidget",
+			Namespace: "default",
+			Name:      "noise-check",
+			EventType: EventTypeUpdate,
+			Message:   strings.Repeat("x", 2048),
+		})
+	}
+	if err := store.AppendBatch(ctx, events); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	if err := store.checkpointWAL(ctx); err != nil {
+		t.Fatalf("checkpointWAL: %v", err)
+	}
+	before := store.storageBytes()
+	deleted, err := store.PruneToMaxSize(ctx, before*9/10)
+	if err != nil {
+		t.Fatalf("PruneToMaxSize: %v", err)
+	}
+	if deleted == 0 {
+		t.Fatal("expected size pruning to delete old events")
+	}
+
+	got, err := store.Query(ctx, QueryOptions{Limit: 1000, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) >= len(events) {
+		t.Fatalf("expected fewer than %d events after pruning, got %d", len(events), len(got))
+	}
+	if len(got) == 0 || got[0].ID != "event-299" {
+		t.Fatalf("expected newest event to remain after pruning, got %+v", got)
+	}
+}
+
+func TestSQLiteStore_PruneToMaxSize_CanDeleteLastOversizedEvent(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	maxBytes := store.storageBytes() + 128*1024
+	if err := store.Append(ctx, TimelineEvent{
+		ID:        "oversized",
+		Timestamp: time.Now(),
+		Source:    SourceInformer,
+		Kind:      "TimelineWidget",
+		Namespace: "default",
+		Name:      "noise-check",
+		EventType: EventTypeUpdate,
+		Message:   strings.Repeat("x", 2*1024*1024),
+	}); err != nil {
+		t.Fatalf("Append: %v", err)
+	}
+	if store.storageBytes() <= maxBytes {
+		t.Fatalf("test setup did not exceed max size: storage=%d max=%d", store.storageBytes(), maxBytes)
+	}
+
+	deleted, err := store.PruneToMaxSize(ctx, maxBytes)
+	if err != nil {
+		t.Fatalf("PruneToMaxSize: %v", err)
+	}
+	if deleted != 1 {
+		t.Fatalf("deleted = %d, want 1", deleted)
+	}
+	got, err := store.Query(ctx, QueryOptions{Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("expected oversized event to be pruned, got %+v", got)
+	}
+	if storage := store.storageBytes(); storage > maxBytes {
+		t.Fatalf("storage still above max after pruning: %d > %d", storage, maxBytes)
+	}
+}
+
+func TestSQLiteStore_RunCleanup_CheckpointsWALForRetentionOnly(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	events := make([]TimelineEvent, 0, 300)
+	for i := range 300 {
+		events = append(events, TimelineEvent{
+			ID:        fmt.Sprintf("event-%03d", i),
+			Timestamp: time.Now(),
+			Source:    SourceInformer,
+			Kind:      "TimelineWidget",
+			Namespace: "default",
+			Name:      "noise-check",
+			EventType: EventTypeUpdate,
+			Message:   strings.Repeat("x", 2048),
+		})
+	}
+	if err := store.AppendBatch(ctx, events); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+	walBefore := sqliteFileSize(t, store.path+"-wal")
+	if walBefore == 0 {
+		t.Fatal("test setup did not create a WAL file")
+	}
+
+	store.runCleanup(time.Hour, 0)
+
+	if walAfter := sqliteFileSize(t, store.path+"-wal"); walAfter != 0 {
+		t.Fatalf("expected retention cleanup to truncate WAL, before=%d after=%d", walBefore, walAfter)
+	}
+}
+
+func TestSQLiteStore_StartCleanupLoop_PrunesByMaxSizeWithoutRetention(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	base := time.Now().Add(-time.Hour)
+	events := make([]TimelineEvent, 0, 300)
+	for i := range 300 {
+		events = append(events, TimelineEvent{
+			ID:        fmt.Sprintf("event-%03d", i),
+			Timestamp: base.Add(time.Duration(i) * time.Second),
+			Source:    SourceInformer,
+			Kind:      "TimelineWidget",
+			Namespace: "default",
+			Name:      "noise-check",
+			EventType: EventTypeUpdate,
+			Message:   strings.Repeat("x", 2048),
+		})
+	}
+	if err := store.AppendBatch(ctx, events); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	before := store.storageBytes()
+	store.StartCleanupLoop(0, time.Hour, before*9/10)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		stats := store.Stats()
+		if stats.LastCleanupDeletedRows > 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	t.Fatal("max-size-only cleanup did not prune events")
 }
 
 func TestSQLiteStore_StartCleanupLoop_RunsImmediately(t *testing.T) {
@@ -595,7 +768,7 @@ func TestSQLiteStore_StartCleanupLoop_RunsImmediately(t *testing.T) {
 		t.Fatalf("Append: %v", err)
 	}
 
-	store.StartCleanupLoop(time.Hour, time.Hour)
+	store.StartCleanupLoop(time.Hour, time.Hour, 0)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -639,7 +812,7 @@ func TestSQLiteStore_StartCleanupLoop_RunsAndStopsOnClose(t *testing.T) {
 		t.Fatalf("AppendBatch: %v", err)
 	}
 
-	store.StartCleanupLoop(time.Hour, 20*time.Millisecond)
+	store.StartCleanupLoop(time.Hour, 20*time.Millisecond, 0)
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
@@ -675,10 +848,11 @@ func TestSQLiteStore_StartCleanupLoop_ZeroIsNoop(t *testing.T) {
 		name      string
 		retention time.Duration
 		interval  time.Duration
+		maxBytes  int64
 	}{
-		{"zero retention", 0, time.Hour},
-		{"zero interval", time.Hour, 0},
-		{"both zero", 0, 0},
+		{"zero retention and max size", 0, time.Hour, 0},
+		{"zero interval", time.Hour, 0, 1024},
+		{"both cleanup modes disabled", 0, time.Hour, 0},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -693,7 +867,7 @@ func TestSQLiteStore_StartCleanupLoop_ZeroIsNoop(t *testing.T) {
 				t.Fatalf("NewSQLiteStore: %v", err)
 			}
 
-			store.StartCleanupLoop(tc.retention, tc.interval)
+			store.StartCleanupLoop(tc.retention, tc.interval, tc.maxBytes)
 
 			done := make(chan error, 1)
 			go func() { done <- store.Close() }()
