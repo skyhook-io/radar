@@ -9,7 +9,6 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -276,6 +275,7 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 	now := time.Now()
 	old := metav1.NewTime(now.Add(-10 * time.Minute))
 	recent := metav1.NewTime(now.Add(-1 * time.Minute))
+	timeless := metav1.Time{}
 
 	client := fake.NewClientset(
 		&corev1.Pod{
@@ -310,6 +310,33 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 				}},
 			},
 		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "thrash", Namespace: "prod", CreationTimestamp: old},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:         "app",
+					Ready:        false,
+					RestartCount: highRestartThreshold + 1,
+					State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: old}},
+					LastTerminationState: corev1.ContainerState{
+						Terminated: &corev1.ContainerStateTerminated{Reason: "Completed", FinishedAt: recent},
+					},
+				}},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "stale-probe", Namespace: "prod", CreationTimestamp: old},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "app",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+				}},
+			},
+		},
 		&corev1.Event{
 			ObjectMeta:     metav1.ObjectMeta{Name: "liveness.1", Namespace: "prod"},
 			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "liveness"},
@@ -317,6 +344,22 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 			Reason:         "Unhealthy",
 			Message:        "Liveness probe failed: HTTP probe failed with statuscode: 500",
 			LastTimestamp:  recent,
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "thrash.1", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "thrash"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "Unhealthy",
+			Message:        "Liveness probe failed: HTTP probe failed with statuscode: 500",
+			LastTimestamp:  recent,
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "stale-probe.1", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "stale-probe"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "Unhealthy",
+			Message:        "Liveness probe failed: HTTP probe failed with statuscode: 500",
+			LastTimestamp:  timeless,
 		},
 	)
 
@@ -333,7 +376,9 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 	for time.Now().Before(deadline) {
 		problems = DetectProblems(cache, "prod")
 		if hasProblem(problems, "Pod", "readiness", "ReadinessProbeFailed") &&
-			hasProblem(problems, "Pod", "liveness", "LivenessProbeFailed") {
+			hasProblem(problems, "Pod", "liveness", "LivenessProbeFailed") &&
+			hasProblem(problems, "Pod", "thrash", "HighRestartCount") &&
+			hasProblem(problems, "Pod", "stale-probe", "CrashLoopBackOff") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -341,6 +386,14 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 
 	assertProblem(t, problems, "Pod", "readiness", "ReadinessProbeFailed", "high")
 	assertProblem(t, problems, "Pod", "liveness", "LivenessProbeFailed", "critical")
+	assertProblem(t, problems, "Pod", "thrash", "HighRestartCount", "high")
+	assertProblem(t, problems, "Pod", "stale-probe", "CrashLoopBackOff", "critical")
+	if hasProblem(problems, "Pod", "thrash", "LivenessProbeFailed") {
+		t.Fatalf("liveness event should not mask high restart thrash: %+v", problems)
+	}
+	if hasProblem(problems, "Pod", "stale-probe", "LivenessProbeFailed") {
+		t.Fatalf("timeless probe event should not override the current pod reason: %+v", problems)
+	}
 	if got, ok := lookupProblem(problems, "Pod", "liveness", "LivenessProbeFailed"); !ok || !strings.Contains(got.Message, "HTTP probe failed") {
 		t.Fatalf("liveness probe problem = %+v, want event message detail", got)
 	}
@@ -351,6 +404,7 @@ func TestDetectProblems_InvalidProbeTargetAndStalledInit(t *testing.T) {
 
 	now := time.Now()
 	old := metav1.NewTime(now.Add(-10 * time.Minute))
+	recent := metav1.NewTime(now.Add(-1 * time.Minute))
 
 	client := fake.NewClientset(
 		&corev1.Pod{
@@ -365,7 +419,7 @@ func TestDetectProblems_InvalidProbeTargetAndStalledInit(t *testing.T) {
 				Conditions: []corev1.PodCondition{{
 					Type:               corev1.PodReady,
 					Status:             corev1.ConditionFalse,
-					LastTransitionTime: old,
+					LastTransitionTime: recent,
 				}},
 				ContainerStatuses: []corev1.ContainerStatus{{
 					Name:  "app",
@@ -454,6 +508,7 @@ func TestDetectProblems_DaemonSetSchedulingStatus(t *testing.T) {
 				DesiredNumberScheduled: 4,
 				CurrentNumberScheduled: 4,
 				NumberMisscheduled:     1,
+				NumberUnavailable:      1,
 			},
 		},
 	)
@@ -471,7 +526,8 @@ func TestDetectProblems_DaemonSetSchedulingStatus(t *testing.T) {
 	for time.Now().Before(deadline) {
 		problems = DetectProblems(cache, "prod")
 		if hasProblem(problems, "DaemonSet", "missing", "2 not scheduled") &&
-			hasProblem(problems, "DaemonSet", "wrong-node", "1 misscheduled") {
+			hasProblem(problems, "DaemonSet", "wrong-node", "1 misscheduled") &&
+			hasProblem(problems, "DaemonSet", "wrong-node", "1 unavailable") {
 			break
 		}
 		time.Sleep(20 * time.Millisecond)
@@ -479,6 +535,7 @@ func TestDetectProblems_DaemonSetSchedulingStatus(t *testing.T) {
 
 	assertProblem(t, problems, "DaemonSet", "missing", "2 not scheduled", "critical")
 	assertProblem(t, problems, "DaemonSet", "wrong-node", "1 misscheduled", "high")
+	assertProblem(t, problems, "DaemonSet", "wrong-node", "1 unavailable", "critical")
 }
 
 func TestDetectProblems_DeploymentReplicaFailure(t *testing.T) {
@@ -494,6 +551,12 @@ func TestDetectProblems_DeploymentReplicaFailure(t *testing.T) {
 					Status:             corev1.ConditionTrue,
 					Reason:             "FailedCreate",
 					Message:            "pods is forbidden: exceeded quota",
+					LastTransitionTime: old,
+				}, {
+					Type:               appsv1.DeploymentProgressing,
+					Status:             corev1.ConditionFalse,
+					Reason:             "ProgressDeadlineExceeded",
+					Message:            "ReplicaSet has timed out progressing",
 					LastTransitionTime: old,
 				}},
 			},
@@ -519,6 +582,9 @@ func TestDetectProblems_DeploymentReplicaFailure(t *testing.T) {
 	}
 
 	assertProblem(t, problems, "Deployment", "api", "ReplicaFailure", "critical")
+	if hasProblem(problems, "Deployment", "api", "Rollout stuck") {
+		t.Fatalf("ReplicaFailure should suppress duplicate rollout-stuck row for the same Deployment: %+v", problems)
+	}
 	if p, ok := lookupProblem(problems, "Deployment", "api", "ReplicaFailure"); !ok || !strings.Contains(p.Message, "exceeded quota") {
 		t.Fatalf("replica failure problem = %+v, want controller message", p)
 	}
@@ -553,21 +619,24 @@ func TestDetectProblems_NetworkAndStorageState(t *testing.T) {
 				}},
 			},
 		},
+		&corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "fs-pending", Namespace: "prod", CreationTimestamp: old},
+			Status: corev1.PersistentVolumeClaimStatus{
+				Phase: corev1.ClaimBound,
+				Conditions: []corev1.PersistentVolumeClaimCondition{{
+					Type:               corev1.PersistentVolumeClaimFileSystemResizePending,
+					Status:             corev1.ConditionTrue,
+					Message:            "waiting for filesystem expansion on node",
+					LastTransitionTime: old,
+				}},
+			},
+		},
 		&corev1.PersistentVolume{
 			ObjectMeta: metav1.ObjectMeta{Name: "pv-bad", CreationTimestamp: old},
 			Status: corev1.PersistentVolumeStatus{
 				Phase:   corev1.VolumeFailed,
 				Message: "volume is gone",
 			},
-		},
-		&networkingv1.Ingress{
-			ObjectMeta: metav1.ObjectMeta{Name: "ingress-edge", Namespace: "prod", CreationTimestamp: old},
-		},
-		&networkingv1.Ingress{
-			ObjectMeta: metav1.ObjectMeta{Name: "ingress-assigned", Namespace: "prod", CreationTimestamp: old},
-			Status: networkingv1.IngressStatus{LoadBalancer: networkingv1.IngressLoadBalancerStatus{Ingress: []networkingv1.IngressLoadBalancerIngress{{
-				IP: "203.0.113.11",
-			}}}},
 		},
 	)
 
@@ -584,7 +653,6 @@ func TestDetectProblems_NetworkAndStorageState(t *testing.T) {
 	for time.Now().Before(deadline) {
 		problems = DetectProblems(cache, "")
 		if hasProblem(problems, "Service", "edge", "LoadBalancer pending") &&
-			hasProblem(problems, "Ingress", "ingress-edge", "LoadBalancer pending") &&
 			hasProblem(problems, "PersistentVolumeClaim", "grow", "ControllerResizeError") &&
 			hasProblem(problems, "PersistentVolume", "pv-bad", "Failed") {
 			break
@@ -593,14 +661,13 @@ func TestDetectProblems_NetworkAndStorageState(t *testing.T) {
 	}
 
 	assertProblem(t, problems, "Service", "edge", "LoadBalancer pending", "high")
-	assertProblem(t, problems, "Ingress", "ingress-edge", "LoadBalancer pending", "high")
 	if hasProblem(problems, "Service", "assigned", "LoadBalancer pending") {
 		t.Fatalf("assigned LoadBalancer Service should not be flagged: %+v", problems)
 	}
-	if hasProblem(problems, "Ingress", "ingress-assigned", "LoadBalancer pending") {
-		t.Fatalf("assigned LoadBalancer Ingress should not be flagged: %+v", problems)
-	}
 	assertProblem(t, problems, "PersistentVolumeClaim", "grow", "ControllerResizeError", "critical")
+	if hasProblem(problems, "PersistentVolumeClaim", "fs-pending", string(corev1.PersistentVolumeClaimFileSystemResizePending)) {
+		t.Fatalf("FileSystemResizePending is in-progress, not a resize failure: %+v", problems)
+	}
 	assertProblem(t, problems, "PersistentVolume", "pv-bad", "Failed", "critical")
 }
 

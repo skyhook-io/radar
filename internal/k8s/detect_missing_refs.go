@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/logsafe"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -668,14 +669,14 @@ func DetectMissingGatewayRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 		if namespace != "" {
 			items, err := dynamicCache.List(gvr, namespace)
 			if err != nil {
-				log.Printf("[missing-refs] failed to list %s.gateway.networking.k8s.io in %s: %v", kind, namespace, err)
+				log.Printf("[missing-refs] failed to list %s.gateway.networking.k8s.io in %s: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(err.Error()))
 				continue
 			}
 			routes = items
 		} else {
-			items, err := dynamicCache.List(gvr, "")
+			items, err := dynamicCache.ListWatched(gvr)
 			if err != nil {
-				log.Printf("[missing-refs] failed to list %s.gateway.networking.k8s.io: %v", kind, err)
+				log.Printf("[missing-refs] failed to list %s.gateway.networking.k8s.io: %s", logsafe.Sanitize(kind), logsafe.Sanitize(err.Error()))
 				continue
 			}
 			routes = items

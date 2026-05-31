@@ -129,15 +129,16 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 	}
 	switch in.Kind {
 	case "Pod":
-		// OOM can show as the current Reason or only in the last-terminated
-		// reason of a now-restarting container; check both.
-		if in.Reason == "OOMKilled" || in.LastTerminatedReason == "OOMKilled" {
+		if in.Reason == "OOMKilled" {
 			return issuesapi.CategoryOOMKilled
 		}
 		switch in.Reason {
 		case "ImagePullBackOff", "ErrImagePull", "InvalidImageName", "ImageInspectError":
 			return issuesapi.CategoryImagePullFailed
 		case "CrashLoopBackOff":
+			if in.LastTerminatedReason == "OOMKilled" {
+				return issuesapi.CategoryOOMKilled
+			}
 			return issuesapi.CategoryCrashLoop
 		case "HighRestartCount":
 			return issuesapi.CategoryHighRestart
@@ -150,9 +151,15 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		case "CreateContainerConfigError", "CreateContainerError", "RunContainerError", "Pending", "ContainerCreating":
 			return issuesapi.CategoryContainerWaiting
 		case "Error", "Failed":
+			if in.LastTerminatedReason == "OOMKilled" {
+				return issuesapi.CategoryOOMKilled
+			}
 			// a terminated/failed pod that isn't image-pull/OOM/scheduling —
 			// closest runtime bucket is a crash.
 			return issuesapi.CategoryCrashLoop
+		}
+		if in.LastTerminatedReason == "OOMKilled" {
+			return issuesapi.CategoryOOMKilled
 		}
 		return issuesapi.CategoryUnknown
 
@@ -200,7 +207,7 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		case "Lost":
 			// bound volume gone — a storage failure, not unknown.
 			return issuesapi.CategoryPVCLost
-		case "ControllerResizeError", "NodeResizeError", "ModifyVolumeError", "FileSystemResizePending":
+		case "ControllerResizeError", "NodeResizeError", "ModifyVolumeError":
 			return issuesapi.CategoryPVCResizeFailed
 		}
 		return issuesapi.CategoryUnknown

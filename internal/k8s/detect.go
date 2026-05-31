@@ -10,7 +10,6 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
-	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
 	storagev1 "k8s.io/api/storage/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -111,11 +110,13 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				problems = append(problems, det)
 				continue
 			}
-			if cond := deploymentReplicaFailure(d); cond != nil {
+			replicaFailure := deploymentReplicaFailure(d)
+			stuck := deploymentProgressDeadlineExceeded(d)
+			if replicaFailure != nil {
 				ageDur := now.Sub(d.CreationTimestamp.Time)
 				durDur := ageDur
-				if !cond.LastTransitionTime.IsZero() {
-					durDur = now.Sub(cond.LastTransitionTime.Time)
+				if !replicaFailure.LastTransitionTime.IsZero() {
+					durDur = now.Sub(replicaFailure.LastTransitionTime.Time)
 				}
 				problems = append(problems, Detection{
 					Kind:            "Deployment",
@@ -124,7 +125,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Group:           "apps",
 					Severity:        "critical",
 					Reason:          "ReplicaFailure",
-					Message:         cond.Message,
+					Message:         replicaFailure.Message,
 					Fingerprint:     "deployment:replica-failure",
 					Age:             FormatAge(ageDur),
 					AgeSeconds:      int64(ageDur.Seconds()),
@@ -132,20 +133,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					DurationSeconds: int64(durDur.Seconds()),
 				})
 			}
-			// A ProgressDeadlineExceeded rollout is the more specific, actionable
-			// signal AND it implies unavailable replicas — so when the rollout is
-			// stuck, emit only the rollout row, not a redundant "X/Y available"
-			// degraded row for the same Deployment (one incident, not two).
-			var stuck *appsv1.DeploymentCondition
-			for i := range d.Status.Conditions {
-				c := &d.Status.Conditions[i]
-				if c.Type == appsv1.DeploymentProgressing && c.Status == "False" && c.Reason == "ProgressDeadlineExceeded" {
-					stuck = c
-					break
-				}
-			}
 
-			if d.Status.UnavailableReplicas > 0 && stuck == nil {
+			if d.Status.UnavailableReplicas > 0 && stuck == nil && replicaFailure == nil {
 				ageDur := now.Sub(d.CreationTimestamp.Time)
 				durDur := ageDur // fallback to creation time
 				for _, cond := range d.Status.Conditions {
@@ -173,7 +162,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				})
 			}
 
-			if stuck != nil {
+			if stuck != nil && replicaFailure == nil {
 				durDur := now.Sub(d.CreationTimestamp.Time)
 				if !stuck.LastTransitionTime.IsZero() {
 					durDur = now.Sub(stuck.LastTransitionTime.Time)
@@ -255,19 +244,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				problems = append(problems, det)
 				continue
 			}
-			reason := ""
-			severity := "critical"
-			switch {
-			case ds.Status.NumberMisscheduled > 0:
-				reason = fmt.Sprintf("%d misscheduled", ds.Status.NumberMisscheduled)
-				severity = "high"
-			case ds.Status.DesiredNumberScheduled > ds.Status.CurrentNumberScheduled:
-				reason = fmt.Sprintf("%d not scheduled", ds.Status.DesiredNumberScheduled-ds.Status.CurrentNumberScheduled)
-			case ds.Status.NumberUnavailable > 0:
-				reason = fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable)
-			}
-			if reason != "" {
-				ageDur := now.Sub(ds.CreationTimestamp.Time)
+			ageDur := now.Sub(ds.CreationTimestamp.Time)
+			appendDSProblem := func(reason, severity, fingerprint string) {
 				problems = append(problems, Detection{
 					Kind:            "DaemonSet",
 					Namespace:       ds.Namespace,
@@ -275,11 +253,20 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Group:           "apps",
 					Severity:        severity,
 					Reason:          reason,
+					Fingerprint:     fingerprint,
 					Age:             FormatAge(ageDur),
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(ageDur),
 					DurationSeconds: int64(ageDur.Seconds()),
 				})
+			}
+			if ds.Status.NumberMisscheduled > 0 {
+				appendDSProblem(fmt.Sprintf("%d misscheduled", ds.Status.NumberMisscheduled), "high", "daemonset:misscheduled")
+			}
+			if ds.Status.DesiredNumberScheduled > ds.Status.CurrentNumberScheduled {
+				appendDSProblem(fmt.Sprintf("%d not scheduled", ds.Status.DesiredNumberScheduled-ds.Status.CurrentNumberScheduled), "critical", "daemonset:not-scheduled")
+			} else if ds.Status.NumberUnavailable > 0 {
+				appendDSProblem(fmt.Sprintf("%d unavailable", ds.Status.NumberUnavailable), "critical", "daemonset:unavailable")
 			}
 		}
 	}
@@ -297,7 +284,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				continue
 			}
 			health := ClassifyPodHealth(pod, now)
-			if health == "healthy" {
+			earlyProbeTargetProblem, hasEarlyProbeTargetProblem := activeProbeTargetProblem(pod, "")
+			if health == "healthy" && !hasEarlyProbeTargetProblem {
 				continue
 			}
 			// Unschedulable pods are owned by the scheduling source, which
@@ -323,6 +311,10 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				reason = inv.reason
 				message = inv.message
 				fingerprint = inv.fingerprint
+			} else if hasEarlyProbeTargetProblem {
+				reason = earlyProbeTargetProblem.reason
+				message = earlyProbeTargetProblem.message
+				fingerprint = earlyProbeTargetProblem.fingerprint
 			} else if init, ok := stalledInitContainerProblem(pod, now); ok {
 				reason = init.reason
 				message = init.message
@@ -469,38 +461,6 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					Reason:          fmt.Sprintf("Unresolved named targetPort: %s", strings.Join(missing, ", ")),
 					Message:         "No selected pod declares a container port with this name",
 					Fingerprint:     "svc:unresolved-targetport",
-					Age:             FormatAge(ageDur),
-					AgeSeconds:      int64(ageDur.Seconds()),
-					Duration:        FormatAge(ageDur),
-					DurationSeconds: int64(ageDur.Seconds()),
-				})
-			}
-		}
-	}
-
-	if ingLister := cache.Ingresses(); ingLister != nil {
-		var ingresses []*networkingv1.Ingress
-		if namespace != "" {
-			ingresses, _ = ingLister.Ingresses(namespace).List(labels.Everything())
-		} else {
-			ingresses, _ = ingLister.List(labels.Everything())
-		}
-		for _, ing := range ingresses {
-			if det, ok := terminatingProblem("Ingress", "networking.k8s.io", ing, now); ok {
-				problems = append(problems, det)
-				continue
-			}
-			ageDur := now.Sub(ing.CreationTimestamp.Time)
-			if len(ing.Status.LoadBalancer.Ingress) == 0 && ageDur > 5*time.Minute {
-				problems = append(problems, Detection{
-					Kind:            "Ingress",
-					Namespace:       ing.Namespace,
-					Name:            ing.Name,
-					Group:           "networking.k8s.io",
-					Severity:        "high",
-					Reason:          "LoadBalancer pending",
-					Message:         "Ingress has no assigned external address",
-					Fingerprint:     "ingress:loadbalancer-pending",
 					Age:             FormatAge(ageDur),
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(ageDur),
@@ -848,7 +808,7 @@ type podSpecificProblem struct {
 
 func activeProbeTargetProblem(pod *corev1.Pod, currentReason string) (podSpecificProblem, bool) {
 	for _, c := range pod.Spec.Containers {
-		if currentReason == readinessProbeFailedReason {
+		if currentReason == readinessProbeFailedReason || podCurrentlyNotReady(pod) {
 			if port, ok := missingNamedProbePort(c, c.ReadinessProbe); ok {
 				return podSpecificProblem{
 					reason:      readinessProbeInvalidReason,
@@ -868,6 +828,18 @@ func activeProbeTargetProblem(pod *corev1.Pod, currentReason string) (podSpecifi
 		}
 	}
 	return podSpecificProblem{}, false
+}
+
+func podCurrentlyNotReady(pod *corev1.Pod) bool {
+	if pod.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	for _, cond := range pod.Status.Conditions {
+		if (cond.Type == corev1.PodReady || cond.Type == corev1.ContainersReady) && cond.Status == corev1.ConditionFalse {
+			return true
+		}
+	}
+	return false
 }
 
 func missingNamedProbePort(c corev1.Container, probe *corev1.Probe) (string, bool) {
@@ -957,7 +929,7 @@ func latestProbeFailures(cache *ResourceCache, namespace string, now time.Time) 
 			continue
 		}
 		t := eventLastTime(e)
-		if !t.IsZero() && now.Sub(t) > probeFailureWindow {
+		if t.IsZero() || now.Sub(t) > probeFailureWindow {
 			continue
 		}
 		key := e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
@@ -993,7 +965,7 @@ func shouldUseProbeFailure(pod *corev1.Pod, currentReason, lastTerminatedReason,
 			return false
 		}
 		switch currentReason {
-		case "CrashLoopBackOff", "Error", "Failed", "HighRestartCount", "Running", "Pending", "Unknown", "":
+		case "CrashLoopBackOff", "Error", "Failed", "Running", "Pending", "Unknown", "":
 			return true
 		}
 		return false
@@ -1164,13 +1136,6 @@ func pvcResizeProblem(pvc *corev1.PersistentVolumeClaim) pvcResizeDetection {
 				reason:             string(cond.Type),
 				message:            cond.Message,
 				severity:           "critical",
-				lastTransitionTime: cond.LastTransitionTime,
-			}
-		case string(corev1.PersistentVolumeClaimFileSystemResizePending):
-			return pvcResizeDetection{
-				reason:             string(cond.Type),
-				message:            cond.Message,
-				severity:           "high",
 				lastTransitionTime: cond.LastTransitionTime,
 			}
 		}
@@ -1359,6 +1324,19 @@ func deploymentReplicaFailure(dep *appsv1.Deployment) *appsv1.DeploymentConditio
 	for i := range dep.Status.Conditions {
 		cond := &dep.Status.Conditions[i]
 		if cond.Type == appsv1.DeploymentReplicaFailure && cond.Status == corev1.ConditionTrue {
+			return cond
+		}
+	}
+	return nil
+}
+
+func deploymentProgressDeadlineExceeded(dep *appsv1.Deployment) *appsv1.DeploymentCondition {
+	if dep == nil {
+		return nil
+	}
+	for i := range dep.Status.Conditions {
+		cond := &dep.Status.Conditions[i]
+		if cond.Type == appsv1.DeploymentProgressing && cond.Status == corev1.ConditionFalse && cond.Reason == "ProgressDeadlineExceeded" {
 			return cond
 		}
 	}

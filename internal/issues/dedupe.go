@@ -117,6 +117,37 @@ func dedupeWorkloadDegradedOverChild(in []Issue) []Issue {
 	return out
 }
 
+// dedupeConditionOverMissingRef drops a CRD condition row when a structural
+// missing-reference detector already emitted the same category for the same
+// object. Controller status commonly echoes dangling refs (for example Gateway
+// Route ResolvedRefs=False), but the missing-ref row names the exact broken
+// Service/port and works before controller reconciliation, so it is the richer
+// row.
+func dedupeConditionOverMissingRef(in []Issue) []Issue {
+	structural := map[string]bool{}
+	for _, i := range in {
+		if i.Source != SourceMissingRef {
+			continue
+		}
+		structural[issueResourceCategoryKey(i)] = true
+	}
+	if len(structural) == 0 {
+		return in
+	}
+	out := in[:0]
+	for _, i := range in {
+		if i.Source == SourceCondition && structural[issueResourceCategoryKey(i)] {
+			continue
+		}
+		out = append(out, i)
+	}
+	return out
+}
+
+func issueResourceCategoryKey(i Issue) string {
+	return resourceKey(i.Group, i.Kind, i.Namespace, i.Name) + "\x00" + string(i.Category)
+}
+
 // subjectKeyOf is the canonical string key for a subject Ref — the same
 // group|kind|namespace|name key the ID hash and audit deep-links use, so dedup
 // can't drift from grouping.

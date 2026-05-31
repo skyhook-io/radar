@@ -35,8 +35,10 @@ func TestClassify(t *testing.T) {
 		{"errored pod", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "Error"}, issuesapi.CategoryCrashLoop},
 		{"high restart thrash", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "HighRestartCount"}, issuesapi.CategoryHighRestart},
 		{"liveness probe failed", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "LivenessProbeFailed"}, issuesapi.CategoryLivenessProbeFail},
+		{"liveness probe beats stale oom", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "LivenessProbeFailed", LastTerminatedReason: "OOMKilled"}, issuesapi.CategoryLivenessProbeFail},
 		{"liveness probe invalid", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "LivenessProbeInvalid"}, issuesapi.CategoryLivenessProbeFail},
 		{"readiness probe failed", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "ReadinessProbeFailed"}, issuesapi.CategoryReadinessFailed},
+		{"readiness probe beats stale oom", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "ReadinessProbeFailed", LastTerminatedReason: "OOMKilled"}, issuesapi.CategoryReadinessFailed},
 		{"readiness probe invalid", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "ReadinessProbeInvalid"}, issuesapi.CategoryReadinessFailed},
 		{"init container stalled", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "InitContainerStalled"}, issuesapi.CategoryInitContainerFailed},
 

@@ -1,6 +1,10 @@
 package issues
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/skyhook-io/radar/pkg/issuesapi"
+)
 
 func TestDedupePodSchedulingOverProblem(t *testing.T) {
 	sched := Issue{Source: SourceScheduling, Kind: "Pod", Namespace: "ns", Name: "web-abc"}
@@ -36,4 +40,37 @@ func TestDedupePodSchedulingOverProblem(t *testing.T) {
 			t.Fatalf("expected both rows to survive when no scheduling row exists, got %+v", out)
 		}
 	})
+}
+
+func TestDedupeConditionOverMissingRef(t *testing.T) {
+	missing := Issue{
+		Source:    SourceMissingRef,
+		Group:     "gateway.networking.k8s.io",
+		Kind:      "HTTPRoute",
+		Namespace: "prod",
+		Name:      "broken",
+		Category:  issuesapi.CategoryGatewayRouteInvalid,
+	}
+	conditionSameObject := Issue{
+		Source:    SourceCondition,
+		Group:     "gateway.networking.k8s.io",
+		Kind:      "HTTPRoute",
+		Namespace: "prod",
+		Name:      "broken",
+		Category:  issuesapi.CategoryGatewayRouteInvalid,
+	}
+	conditionOtherCategory := conditionSameObject
+	conditionOtherCategory.Category = issuesapi.CategoryGatewayNotReady
+	conditionOtherObject := conditionSameObject
+	conditionOtherObject.Name = "other"
+
+	out := dedupeConditionOverMissingRef([]Issue{missing, conditionSameObject, conditionOtherCategory, conditionOtherObject})
+	if len(out) != 3 {
+		t.Fatalf("expected only the condition echo to be dropped, got %+v", out)
+	}
+	for _, i := range out {
+		if i.Source == SourceCondition && i.Name == "broken" && i.Category == issuesapi.CategoryGatewayRouteInvalid {
+			t.Fatalf("same-object condition echo survived: %+v", out)
+		}
+	}
 }

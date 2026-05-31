@@ -154,6 +154,7 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	out = applyClusterScopedAccess(out, f)
 	out = dedupePodSchedulingOverProblem(out)
 	out = dedupeWorkloadDegradedOverChild(out)
+	out = dedupeConditionOverMissingRef(out)
 
 	// ---- 3. Shape: fold to the public grouped model ------------------
 	// A grouped row's Kind/Name is the SUBJECT (the owner a 50-pod crashloop
