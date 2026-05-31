@@ -607,7 +607,7 @@ func TestDetectMissingGatewayRefs(t *testing.T) {
 			map[string]any{"name": "shared-granted", "namespace": "platform", "port": int64(8080)},
 			map[string]any{"group": "storage.k8s.io", "kind": "StorageClass", "name": "not-service"},
 		}),
-		gatewayReferenceGrant("allow-shared-granted", "platform", now, "HTTPRoute", "prod", "shared-granted"),
+		gatewayReferenceGrant("allow-shared-granted", "platform", now, "", "HTTPRoute", "prod", "shared-granted"),
 	)
 	if err := InitTestDynamicResourceCache(dynClient, []APIResource{
 		{Group: "gateway.networking.k8s.io", Version: "v1", Kind: "HTTPRoute", Name: "httproutes", Verbs: []string{"list", "watch"}},
@@ -678,7 +678,11 @@ func gatewayRoute(name, namespace string, ts metav1.Time, backendRefs []any) *un
 	}}
 }
 
-func gatewayReferenceGrant(name, namespace string, ts metav1.Time, fromKind, fromNamespace, toService string) *unstructured.Unstructured {
+func gatewayReferenceGrant(name, namespace string, ts metav1.Time, fromGroup, fromKind, fromNamespace, toService string) *unstructured.Unstructured {
+	from := map[string]any{"kind": fromKind, "namespace": fromNamespace}
+	if fromGroup != "" {
+		from["group"] = fromGroup
+	}
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "gateway.networking.k8s.io/v1beta1",
 		"kind":       "ReferenceGrant",
@@ -689,7 +693,7 @@ func gatewayReferenceGrant(name, namespace string, ts metav1.Time, fromKind, fro
 		},
 		"spec": map[string]any{
 			"from": []any{
-				map[string]any{"group": "gateway.networking.k8s.io", "kind": fromKind, "namespace": fromNamespace},
+				from,
 			},
 			"to": []any{
 				map[string]any{"group": "", "kind": "Service", "name": toService},

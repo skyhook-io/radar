@@ -840,6 +840,9 @@ func referenceGrantAllowsFrom(froms []any, routeKind, routeNS string) bool {
 		group, _ := fm["group"].(string)
 		kind, _ := fm["kind"].(string)
 		namespace, _ := fm["namespace"].(string)
+		if group == "" {
+			group = "gateway.networking.k8s.io"
+		}
 		if group == "gateway.networking.k8s.io" && kind == routeKind && namespace == routeNS {
 			return true
 		}
