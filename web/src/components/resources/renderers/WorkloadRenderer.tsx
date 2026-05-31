@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { useScaleWorkload } from '../../../api/client'
 import { useRBACSubject } from '../../../api/rbac'
 import { useQueryClient } from '@tanstack/react-query'
+import type { Relationships, ResourceRef } from '../../../types'
 
 // Map plural lowercase kind to singular PascalCase for ownerReferences matching
 function getOwnerKind(kind: string): string {
@@ -19,10 +20,12 @@ function getOwnerKind(kind: string): string {
 interface WorkloadRendererProps {
   kind: string
   data: any
-  onNavigate?: (ref: { kind: string; namespace: string; name: string }) => void
+  onNavigate?: (ref: ResourceRef) => void
+  relationships?: Relationships
+  scaleBlockedBy?: ResourceRef[]
 }
 
-export function WorkloadRenderer({ kind, data, onNavigate }: WorkloadRendererProps) {
+export function WorkloadRenderer({ kind, data, onNavigate, scaleBlockedBy }: WorkloadRendererProps) {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const scaleMutation = useScaleWorkload()
@@ -47,6 +50,7 @@ export function WorkloadRenderer({ kind, data, onNavigate }: WorkloadRendererPro
       rbacData={rbacData ?? null}
       rbacLoading={rbacLoading}
       rbacError={rbacError as Error | null}
+      scaleBlockedBy={scaleBlockedBy}
       onScale={async (replicas) => {
         await scaleMutation.mutateAsync({
           kind,

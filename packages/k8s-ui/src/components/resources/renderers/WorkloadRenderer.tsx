@@ -3,7 +3,8 @@ import { Server, ExternalLink, Scale, Minus, Plus, Loader2, Shield } from 'lucid
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
 import { DialogPortal } from '../../ui/DialogPortal'
-import type { RBACSubjectResponse, RBACPolicyRule } from '../../../types'
+import { Tooltip } from '../../ui/Tooltip'
+import type { RBACSubjectResponse, RBACPolicyRule, ResourceRef } from '../../../types'
 import { detectBlastRadius, rulePermissivenessScore } from '../../../utils/rbac-blast-radius'
 import { RBACErrorSection, isRBACUnavailable } from './RBACErrorSection'
 import {
@@ -19,6 +20,7 @@ interface WorkloadRendererProps {
   onViewPods?: () => void
   onScale?: (replicas: number) => Promise<void>
   isScalePending?: boolean
+  scaleBlockedBy?: ResourceRef[]
   onRequestRefresh?: () => void
   /**
    * RBAC reverse-lookup for the workload's pod-template ServiceAccount.
@@ -103,14 +105,23 @@ function getWorkloadProgress(status: any, spec: any, kind: string): string | nul
   return null
 }
 
-export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, isScalePending, onRequestRefresh, rbacData, rbacLoading, rbacError }: WorkloadRendererProps) {
+function formatScalerLabel(ref: ResourceRef): string {
+  const prefix = ref.namespace ? `${ref.namespace}/` : ''
+  return `${ref.kind} ${prefix}${ref.name}`
+}
+
+export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, isScalePending, scaleBlockedBy, onRequestRefresh, rbacData, rbacLoading, rbacError }: WorkloadRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
   const metadata = data.metadata || {}
 
   const isDaemonSet = kind === 'daemonsets'
   const isStatefulSet = kind === 'statefulsets'
-  const isScalable = (kind === 'deployments' || kind === 'statefulsets') && !!onScale
+  const isScalableKind = kind === 'deployments' || kind === 'statefulsets'
+  const isScaleBlocked = !!scaleBlockedBy?.length
+  const isScalable = isScalableKind && !!onScale && !isScaleBlocked
+  const scaleBlockedLabel = scaleBlockedBy?.map(formatScalerLabel).join(', ')
+  const scaleBlockedReason = `Manual scaling is disabled because replicas are controlled by ${scaleBlockedLabel}. Manage scaling there instead.`
 
   // Scale dialog state
   const [showScaleDialog, setShowScaleDialog] = useState(false)
@@ -139,8 +150,14 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
     return () => clearInterval(interval)
   }, [isScaling, onRequestRefresh])
 
+  useEffect(() => {
+    if (isScaleBlocked) {
+      setShowScaleDialog(false)
+    }
+  }, [isScaleBlocked])
+
   const handleScale = async () => {
-    if (!onScale) return
+    if (!onScale || isScaleBlocked) return
     try {
       await onScale(targetReplicas)
       setScaledTo(targetReplicas)
@@ -218,7 +235,7 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
               View Managed Pods
             </button>
           )}
-          {isScalable && (
+          {isScalable ? (
             <button
               onClick={openScaleDialog}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-400 hover:text-emerald-300 bg-emerald-500/10 hover:bg-emerald-500/20 border border-emerald-500/30 rounded transition-colors"
@@ -226,7 +243,20 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
               <Scale className="w-3 h-3" />
               Scale
             </button>
-          )}
+          ) : isScalableKind && !!onScale && isScaleBlocked ? (
+            <Tooltip content={scaleBlockedReason}>
+              <button
+                type="button"
+                disabled
+                title={scaleBlockedReason}
+                aria-label={scaleBlockedReason}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-tertiary bg-theme-elevated border border-theme-border rounded cursor-not-allowed"
+              >
+                <Scale className="w-3 h-3" />
+                Scale
+              </button>
+            </Tooltip>
+          ) : null}
         </div>
       </Section>
 

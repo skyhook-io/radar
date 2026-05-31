@@ -245,6 +245,8 @@ export interface RendererOverrides {
   WorkloadRenderer?: React.ComponentType<{
     kind: string; data: any
     onNavigate?: (ref: ResourceRef) => void
+    relationships?: Relationships
+    scaleBlockedBy?: ResourceRef[]
   }>
   // Optional override for Crossplane Composite / Claim — host wraps the
   // package renderer to fan out per-composed-ref status fetches via React Query.
@@ -351,6 +353,14 @@ const KNOWN_KINDS = new Set([
   'compositeresourcedefinitions', 'compositions', 'compositionrevisions',
   'functions', 'configurations',
 ])
+
+function replicaScalers(scalers?: ResourceRef[]): ResourceRef[] | undefined {
+  const result = scalers?.filter((ref) => {
+    const kind = ref.kind.toLowerCase()
+    return kind === 'horizontalpodautoscaler' || kind === 'scaledobject'
+  })
+  return result && result.length > 0 ? result : undefined
+}
 
 // ============================================================================
 // RESOURCE CONTENT - Delegates to specific renderers
@@ -464,6 +474,7 @@ export function ResourceRendererDispatch({
   const NamespaceComp = rendererOverrides?.NamespaceRenderer ?? NamespaceRenderer
   const HPAComp = rendererOverrides?.HPARenderer ?? HPARenderer
   const PVCComp = rendererOverrides?.PVCRenderer ?? PVCRenderer
+  const scaleBlockedBy = replicaScalers(relationships?.scalers)
 
   const sidebarContent = showCommonSections && (
     <>
@@ -480,7 +491,15 @@ export function ResourceRendererDispatch({
       <div className={clsx('p-4 space-y-4', renderSidebar && 'lg:flex-1 lg:min-w-0')}>
         {/* Kind-specific content - delegates to modular renderers */}
         {kind === 'pods' && <PodComp data={data} onCopy={onCopy} copied={copied} onNavigate={onNavigate} onOpenLogs={onOpenLogs} resolvedEnvFrom={resolvedEnvFrom} />}
-        {['deployments', 'statefulsets', 'daemonsets'].includes(kind) && <WorkloadComp kind={kind} data={data} onNavigate={onNavigate} />}
+        {['deployments', 'statefulsets', 'daemonsets'].includes(kind) && (
+          <WorkloadComp
+            kind={kind}
+            data={data}
+            onNavigate={onNavigate}
+            relationships={relationships}
+            scaleBlockedBy={scaleBlockedBy}
+          />
+        )}
         {kind === 'replicasets' && <ReplicaSetRenderer data={data} />}
         {kind === 'services' && !data?.apiVersion?.includes('serving.knative.dev') && <ServiceComp data={data} onCopy={onCopy} copied={copied} />}
         {kind === 'ingresses' && !data?.apiVersion?.includes('networking.internal.knative.dev') && <IngressRenderer data={data} onNavigate={onNavigate} />}
