@@ -58,6 +58,7 @@
           "additionalProperties": { "type": "boolean" },
           "properties": {
             "all": { "type": "boolean", "description": "Grant read access to ALL CRDs (overrides individual flags)." },
+            "apiRegistration": { "type": "boolean" },
             "argo": { "type": "boolean" },
             "awx": { "type": "boolean" },
             "certManager": { "type": "boolean" },

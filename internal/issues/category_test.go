@@ -22,6 +22,7 @@ func TestClassify(t *testing.T) {
 		{"sandbox failed is startup stall", classifyInput{Source: SourceScheduling, Kind: "Pod", Reason: "SandboxCreationFailed"}, issuesapi.CategoryContainerWaiting},
 		{"volume multiattach", classifyInput{Source: SourceScheduling, Kind: "Pod", Reason: "VolumeMultiAttach"}, issuesapi.CategoryVolumeMountFailed},
 		{"volume mount", classifyInput{Source: SourceScheduling, Kind: "Pod", Reason: "VolumeMount"}, issuesapi.CategoryVolumeMountFailed},
+		{"terminating pod", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "Terminating stuck"}, issuesapi.CategoryTerminationStuck},
 
 		// problem / Pod
 		{"image pull backoff", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "ImagePullBackOff"}, issuesapi.CategoryImagePullFailed},
@@ -33,6 +34,8 @@ func TestClassify(t *testing.T) {
 		{"pending pod (non-scheduling)", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "Pending"}, issuesapi.CategoryContainerWaiting},
 		{"errored pod", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "Error"}, issuesapi.CategoryCrashLoop},
 		{"high restart thrash", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "HighRestartCount"}, issuesapi.CategoryHighRestart},
+		{"liveness probe failed", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "LivenessProbeFailed"}, issuesapi.CategoryLivenessProbeFail},
+		{"readiness probe failed", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "ReadinessProbeFailed"}, issuesapi.CategoryReadinessFailed},
 
 		// problem / GitOps reconcilers (DetectGitOpsProblems → SourceProblem)
 		{"argo app degraded", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "HealthDegraded"}, issuesapi.CategoryGitOpsSyncFailed},
@@ -48,12 +51,15 @@ func TestClassify(t *testing.T) {
 		// problem / workloads
 		{"deploy degraded", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "3/5 available"}, issuesapi.CategoryWorkloadDegraded},
 		{"deploy rollout stuck", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Rollout stuck"}, issuesapi.CategoryRolloutStalled},
+		{"deploy replica failure", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "ReplicaFailure"}, issuesapi.CategoryRolloutStalled},
 		{"statefulset degraded", classifyInput{Source: SourceProblem, Kind: "StatefulSet", Reason: "2/3 ready"}, issuesapi.CategoryWorkloadDegraded},
 		{"daemonset degraded", classifyInput{Source: SourceProblem, Kind: "DaemonSet", Reason: "1 unavailable"}, issuesapi.CategoryWorkloadDegraded},
 
 		// problem / service
 		{"service no pods", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "Selector matches no pods"}, issuesapi.CategoryServiceNoEndpoints},
 		{"service 0 ready", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "0/3 selected pods ready"}, issuesapi.CategoryServiceNoEndpoints},
+		{"service load balancer pending", classifyInput{Source: SourceProblem, Kind: "Service", Reason: "LoadBalancer pending"}, issuesapi.CategoryLoadBalancerPending},
+		{"ingress load balancer pending", classifyInput{Source: SourceProblem, Kind: "Ingress", Reason: "LoadBalancer pending"}, issuesapi.CategoryLoadBalancerPending},
 
 		// problem / hpa, node, pvc
 		{"hpa maxed", classifyInput{Source: SourceProblem, Kind: "HorizontalPodAutoscaler", Reason: "maxed"}, issuesapi.CategoryHPALimitedOrFailed},
@@ -62,6 +68,8 @@ func TestClassify(t *testing.T) {
 		{"node cordoned is intentional", classifyInput{Source: SourceProblem, Kind: "Node", Reason: "Cordoned"}, issuesapi.CategoryUnknown},
 		{"pvc pending", classifyInput{Source: SourceProblem, Kind: "PersistentVolumeClaim", Reason: "Pending"}, issuesapi.CategoryPVCPending},
 		{"pvc lost is storage", classifyInput{Source: SourceProblem, Kind: "PersistentVolumeClaim", Reason: "Lost"}, issuesapi.CategoryPVCLost},
+		{"pvc resize failed", classifyInput{Source: SourceProblem, Kind: "PersistentVolumeClaim", Reason: "ControllerResizeError"}, issuesapi.CategoryPVCResizeFailed},
+		{"pv failed", classifyInput{Source: SourceProblem, Kind: "PersistentVolume", Reason: "Failed"}, issuesapi.CategoryPVFailed},
 		{"pdb blocks evictions", classifyInput{Source: SourceProblem, Kind: "PodDisruptionBudget", Reason: "Voluntary evictions blocked"}, issuesapi.CategoryPDBBlocksEvictions},
 
 		// problem / batch (Job/CronJob)
@@ -88,9 +96,15 @@ func TestClassify(t *testing.T) {
 		{"flux-looking helmrelease group is not sync", classifyInput{Source: SourceCondition, Kind: "HelmRelease", APIGroup: "custom-fluxcd.io", Reason: "Ready=False"}, issuesapi.CategoryOperatorConditionFail},
 		{"cert-manager not ready", classifyInput{Source: SourceCondition, Kind: "Certificate", APIGroup: "cert-manager.io", Reason: "Ready: DoesNotExist"}, issuesapi.CategoryCertificateNotReady},
 		{"cert-manager Issuer is NOT certificate_not_ready", classifyInput{Source: SourceCondition, Kind: "ClusterIssuer", APIGroup: "cert-manager.io", Reason: "Ready=False"}, issuesapi.CategoryOperatorConditionFail},
+		{"gateway not programmed", classifyInput{Source: SourceCondition, Kind: "Gateway", APIGroup: "gateway.networking.k8s.io", Reason: "Programmed: AddressNotAssigned"}, issuesapi.CategoryGatewayNotReady},
+		{"gateway route unresolved refs", classifyInput{Source: SourceCondition, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "ResolvedRefs: BackendNotFound"}, issuesapi.CategoryGatewayRouteInvalid},
+		{"aggregated api unavailable", classifyInput{Source: SourceCondition, Kind: "APIService", APIGroup: "apiregistration.k8s.io", Reason: "Available: MissingEndpoints"}, issuesapi.CategoryAPIServiceUnavailable},
+		{"external secret sync failed", classifyInput{Source: SourceCondition, Kind: "ExternalSecret", APIGroup: "external-secrets.io", Reason: "Ready: SecretSyncedError"}, issuesapi.CategorySecretSyncFailed},
+		{"keda scaler failed", classifyInput{Source: SourceCondition, Kind: "ScaledObject", APIGroup: "keda.sh", Reason: "Ready: ScalerNotActive"}, issuesapi.CategoryHPALimitedOrFailed},
+		{"karpenter nodeclaim failed", classifyInput{Source: SourceCondition, Kind: "NodeClaim", APIGroup: "karpenter.sh", Reason: "Ready: LaunchFailed"}, issuesapi.CategoryNodeProvisioningFail},
+		{"crossplane package failed", classifyInput{Source: SourceCondition, Kind: "Provider", APIGroup: "pkg.crossplane.io", Reason: "Healthy: UnhealthyPackageRevision"}, issuesapi.CategoryCrossplaneReconcile},
 		{"generic operator condition", classifyInput{Source: SourceCondition, Kind: "Foo", APIGroup: "example.com", Reason: "Ready=False"}, issuesapi.CategoryOperatorConditionFail},
-		// Flux source CRDs are NOT sync failures — they fall to operator condition.
-		{"flux source repo is not sync", classifyInput{Source: SourceCondition, Kind: "GitRepository", APIGroup: "source.toolkit.fluxcd.io", Reason: "Ready: GitOperationFailed"}, issuesapi.CategoryOperatorConditionFail},
+		{"flux source repo is gitops", classifyInput{Source: SourceCondition, Kind: "GitRepository", APIGroup: "source.toolkit.fluxcd.io", Reason: "Ready: GitOperationFailed"}, issuesapi.CategoryGitOpsSyncFailed},
 		{"argo non-app CRD is not sync", classifyInput{Source: SourceCondition, Kind: "AppProject", APIGroup: "argoproj.io", Reason: "Ready=False"}, issuesapi.CategoryOperatorConditionFail},
 
 		// CAPI: control-plane vs machine layer, gated on the CAPI group.

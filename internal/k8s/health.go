@@ -21,6 +21,8 @@ const crashLoopReason = "CrashLoopBackOff"
 // `unknown` catch-all (see PodProblemReason / category.Classify).
 const highRestartReason = "HighRestartCount"
 
+const readinessProbeFailedReason = "ReadinessProbeFailed"
+
 // highRestartThreshold is the cumulative per-container RestartCount above which
 // a still-unhealthy container is treated as actively thrashing.
 const highRestartThreshold = 3
@@ -151,6 +153,45 @@ func podActiveThrashContainer(pod *corev1.Pod, now time.Time) bool {
 	return false
 }
 
+func podHasReadinessProbeFailure(pod *corev1.Pod, now time.Time) bool {
+	if pod.Status.Phase != corev1.PodRunning {
+		return false
+	}
+	if !podReadyFalseLongEnough(pod, now, 5*time.Minute) {
+		return false
+	}
+	for i := range pod.Status.ContainerStatuses {
+		cs := &pod.Status.ContainerStatuses[i]
+		if cs.Ready || cs.State.Running == nil {
+			continue
+		}
+		if containerHasReadinessProbe(pod.Spec.Containers, cs.Name) {
+			return true
+		}
+	}
+	return false
+}
+
+func podReadyFalseLongEnough(pod *corev1.Pod, now time.Time, minAge time.Duration) bool {
+	for i := range pod.Status.Conditions {
+		cond := &pod.Status.Conditions[i]
+		if cond.Type != corev1.PodReady && cond.Type != corev1.ContainersReady {
+			continue
+		}
+		if cond.Status != corev1.ConditionFalse {
+			continue
+		}
+		if !cond.LastTransitionTime.IsZero() {
+			return now.Sub(cond.LastTransitionTime.Time) >= minAge
+		}
+		if !pod.CreationTimestamp.IsZero() {
+			return now.Sub(pod.CreationTimestamp.Time) >= minAge
+		}
+		return true
+	}
+	return false
+}
+
 // ClassifyPodHealth determines if a pod is "healthy", "warning", or "error".
 // This is the canonical implementation used by both MCP and REST dashboards.
 func ClassifyPodHealth(pod *corev1.Pod, now time.Time) string {
@@ -197,6 +238,10 @@ func ClassifyPodHealth(pod *corev1.Pod, now time.Time) string {
 			return "warning"
 		}
 		return "healthy"
+	}
+
+	if podHasReadinessProbeFailure(pod, now) {
+		return "warning"
 	}
 
 	// Warning: a container actively thrashing — high cumulative restarts AND
@@ -336,6 +381,9 @@ func podProblemReasonRaw(pod *corev1.Pod) string {
 		if cs.State.Terminated != nil && cs.State.Terminated.Reason != "" {
 			return cs.State.Terminated.Reason
 		}
+	}
+	if podHasReadinessProbeFailure(pod, time.Now()) {
+		return readinessProbeFailedReason
 	}
 	return string(pod.Status.Phase)
 }

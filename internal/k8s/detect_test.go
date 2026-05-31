@@ -9,7 +9,9 @@ import (
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/kubernetes/fake"
@@ -266,6 +268,318 @@ func TestDetectProblems_OperationalSignals(t *testing.T) {
 	assertProblem(t, problems, "Service", "api", "Unresolved named targetPort: http", "high")
 	assertProblem(t, problems, "PersistentVolumeClaim", "data", "Lost", "critical")
 	assertProblem(t, problems, "Job", "migrate", "BackoffLimitExceeded", "critical")
+}
+
+func TestDetectProblems_ProbeFailures(t *testing.T) {
+	defer ResetTestState()
+
+	now := time.Now()
+	old := metav1.NewTime(now.Add(-10 * time.Minute))
+	recent := metav1.NewTime(now.Add(-1 * time.Minute))
+
+	client := fake.NewClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "readiness", Namespace: "prod", CreationTimestamp: old},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{
+				Name:           "app",
+				ReadinessProbe: &corev1.Probe{},
+			}}},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{
+					Type:               corev1.PodReady,
+					Status:             corev1.ConditionFalse,
+					LastTransitionTime: old,
+				}},
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:  "app",
+					Ready: false,
+					State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: old}},
+				}},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "liveness", Namespace: "prod", CreationTimestamp: old},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "app",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+				}},
+			},
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "liveness.1", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "liveness"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "Unhealthy",
+			Message:        "Liveness probe failed: HTTP probe failed with statuscode: 500",
+			LastTimestamp:  recent,
+		},
+	)
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	if cache == nil {
+		t.Fatal("cache nil after init")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "prod")
+		if hasProblem(problems, "Pod", "readiness", "ReadinessProbeFailed") &&
+			hasProblem(problems, "Pod", "liveness", "LivenessProbeFailed") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	assertProblem(t, problems, "Pod", "readiness", "ReadinessProbeFailed", "high")
+	assertProblem(t, problems, "Pod", "liveness", "LivenessProbeFailed", "critical")
+	if got, ok := lookupProblem(problems, "Pod", "liveness", "LivenessProbeFailed"); !ok || !strings.Contains(got.Message, "HTTP probe failed") {
+		t.Fatalf("liveness probe problem = %+v, want event message detail", got)
+	}
+}
+
+func TestDetectProblems_DaemonSetSchedulingStatus(t *testing.T) {
+	defer ResetTestState()
+
+	old := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	client := fake.NewClientset(
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "missing", Namespace: "prod", CreationTimestamp: old},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 4,
+				CurrentNumberScheduled: 2,
+				NumberUnavailable:      2,
+			},
+		},
+		&appsv1.DaemonSet{
+			ObjectMeta: metav1.ObjectMeta{Name: "wrong-node", Namespace: "prod", CreationTimestamp: old},
+			Status: appsv1.DaemonSetStatus{
+				DesiredNumberScheduled: 4,
+				CurrentNumberScheduled: 4,
+				NumberMisscheduled:     1,
+			},
+		},
+	)
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	if cache == nil {
+		t.Fatal("cache nil after init")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "prod")
+		if hasProblem(problems, "DaemonSet", "missing", "2 not scheduled") &&
+			hasProblem(problems, "DaemonSet", "wrong-node", "1 misscheduled") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	assertProblem(t, problems, "DaemonSet", "missing", "2 not scheduled", "critical")
+	assertProblem(t, problems, "DaemonSet", "wrong-node", "1 misscheduled", "high")
+}
+
+func TestDetectProblems_DeploymentReplicaFailure(t *testing.T) {
+	defer ResetTestState()
+
+	old := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	client := fake.NewClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod", CreationTimestamp: old},
+			Status: appsv1.DeploymentStatus{
+				Conditions: []appsv1.DeploymentCondition{{
+					Type:               appsv1.DeploymentReplicaFailure,
+					Status:             corev1.ConditionTrue,
+					Reason:             "FailedCreate",
+					Message:            "pods is forbidden: exceeded quota",
+					LastTransitionTime: old,
+				}},
+			},
+		},
+	)
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	if cache == nil {
+		t.Fatal("cache nil after init")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "prod")
+		if hasProblem(problems, "Deployment", "api", "ReplicaFailure") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	assertProblem(t, problems, "Deployment", "api", "ReplicaFailure", "critical")
+	if p, ok := lookupProblem(problems, "Deployment", "api", "ReplicaFailure"); !ok || !strings.Contains(p.Message, "exceeded quota") {
+		t.Fatalf("replica failure problem = %+v, want controller message", p)
+	}
+}
+
+func TestDetectProblems_NetworkAndStorageState(t *testing.T) {
+	defer ResetTestState()
+
+	old := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	client := fake.NewClientset(
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "edge", Namespace: "prod", CreationTimestamp: old},
+			Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+		},
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{Name: "assigned", Namespace: "prod", CreationTimestamp: old},
+			Spec:       corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+			Status: corev1.ServiceStatus{LoadBalancer: corev1.LoadBalancerStatus{Ingress: []corev1.LoadBalancerIngress{{
+				IP: "203.0.113.10",
+			}}}},
+		},
+		&corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "grow", Namespace: "prod", CreationTimestamp: old},
+			Status: corev1.PersistentVolumeClaimStatus{
+				Phase:    corev1.ClaimBound,
+				Capacity: corev1.ResourceList{corev1.ResourceStorage: resource.MustParse("1Gi")},
+				Conditions: []corev1.PersistentVolumeClaimCondition{{
+					Type:               corev1.PersistentVolumeClaimConditionType("ControllerResizeError"),
+					Status:             corev1.ConditionTrue,
+					Message:            "resize rejected by storage backend",
+					LastTransitionTime: old,
+				}},
+			},
+		},
+		&corev1.PersistentVolume{
+			ObjectMeta: metav1.ObjectMeta{Name: "pv-bad", CreationTimestamp: old},
+			Status: corev1.PersistentVolumeStatus{
+				Phase:   corev1.VolumeFailed,
+				Message: "volume is gone",
+			},
+		},
+		&networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Name: "ingress-edge", Namespace: "prod", CreationTimestamp: old},
+		},
+		&networkingv1.Ingress{
+			ObjectMeta: metav1.ObjectMeta{Name: "ingress-assigned", Namespace: "prod", CreationTimestamp: old},
+			Status: networkingv1.IngressStatus{LoadBalancer: networkingv1.IngressLoadBalancerStatus{Ingress: []networkingv1.IngressLoadBalancerIngress{{
+				IP: "203.0.113.11",
+			}}}},
+		},
+	)
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	if cache == nil {
+		t.Fatal("cache nil after init")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "")
+		if hasProblem(problems, "Service", "edge", "LoadBalancer pending") &&
+			hasProblem(problems, "Ingress", "ingress-edge", "LoadBalancer pending") &&
+			hasProblem(problems, "PersistentVolumeClaim", "grow", "ControllerResizeError") &&
+			hasProblem(problems, "PersistentVolume", "pv-bad", "Failed") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	assertProblem(t, problems, "Service", "edge", "LoadBalancer pending", "high")
+	assertProblem(t, problems, "Ingress", "ingress-edge", "LoadBalancer pending", "high")
+	if hasProblem(problems, "Service", "assigned", "LoadBalancer pending") {
+		t.Fatalf("assigned LoadBalancer Service should not be flagged: %+v", problems)
+	}
+	if hasProblem(problems, "Ingress", "ingress-assigned", "LoadBalancer pending") {
+		t.Fatalf("assigned LoadBalancer Ingress should not be flagged: %+v", problems)
+	}
+	assertProblem(t, problems, "PersistentVolumeClaim", "grow", "ControllerResizeError", "critical")
+	assertProblem(t, problems, "PersistentVolume", "pv-bad", "Failed", "critical")
+}
+
+func TestDetectProblems_TerminatingResources(t *testing.T) {
+	defer ResetTestState()
+
+	now := time.Now()
+	oldCreated := metav1.NewTime(now.Add(-2 * time.Hour))
+	oldDelete := metav1.NewTime(now.Add(-35 * time.Minute))
+	recentDelete := metav1.NewTime(now.Add(-2 * time.Minute))
+
+	client := fake.NewClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "pod-stuck",
+				Namespace:         "prod",
+				CreationTimestamp: oldCreated,
+				DeletionTimestamp: &oldDelete,
+				Finalizers:        []string{"example.com/finalizer"},
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		},
+		&corev1.Service{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "svc-recent",
+				Namespace:         "prod",
+				CreationTimestamp: oldCreated,
+				DeletionTimestamp: &recentDelete,
+			},
+			Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeLoadBalancer},
+		},
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "deploy-stuck",
+				Namespace:         "prod",
+				CreationTimestamp: oldCreated,
+				DeletionTimestamp: &oldDelete,
+			},
+		},
+	)
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	if cache == nil {
+		t.Fatal("cache nil after init")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "prod")
+		if hasProblem(problems, "Pod", "pod-stuck", "Terminating stuck") &&
+			hasProblem(problems, "Deployment", "deploy-stuck", "Terminating stuck") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	assertProblem(t, problems, "Pod", "pod-stuck", "Terminating stuck", "critical")
+	if p, ok := lookupProblem(problems, "Pod", "pod-stuck", "Terminating stuck"); !ok || !strings.Contains(p.Message, "example.com/finalizer") {
+		t.Fatalf("terminating pod problem = %+v, want finalizer context", p)
+	}
+	assertProblem(t, problems, "Deployment", "deploy-stuck", "Terminating stuck", "critical")
+	if hasProblem(problems, "Service", "svc-recent", "Terminating stuck") {
+		t.Fatalf("recently deleting Service should not be flagged: %+v", problems)
+	}
 }
 
 func hasProblem(problems []Detection, kind, name, reason string) bool {

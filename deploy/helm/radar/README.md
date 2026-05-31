@@ -166,6 +166,7 @@ This overrides individual settings below. Simpler but broader — some orgs may 
 
 | Option | API Groups |
 |--------|------------|
+| `apiRegistration` | `apiregistration.k8s.io` |
 | `argo` | `argoproj.io` |
 | `awx` | `awx.ansible.com` |
 | `certManager` | `cert-manager.io`, `acme.cert-manager.io` |

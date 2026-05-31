@@ -122,6 +122,7 @@ rbac:
     # Simpler but broader permissions - some orgs may not allow this
     all: false
 
+    apiRegistration: true   # apiregistration.k8s.io (APIService health for aggregated APIs)
     argo: true              # argoproj.io
     awx: true               # awx.ansible.com
     certManager: true       # cert-manager.io, acme.cert-manager.io

@@ -2,6 +2,7 @@ package issues
 
 import (
 	"log"
+	"strconv"
 	"strings"
 	"time"
 
@@ -94,6 +95,10 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 			items = its
 		}
 		for _, u := range items {
+			if curated := detectCuratedConditionIssues(gvr, kind, u); len(curated) > 0 {
+				out = append(out, curated...)
+				continue
+			}
 			condType, reason, msg, since, ok := conditions.FindFalseCondition(u)
 			if !ok {
 				continue
@@ -139,6 +144,170 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 		}
 	}
 	return out
+}
+
+func detectCuratedConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
+	switch gvr.Group {
+	case "gateway.networking.k8s.io":
+		return detectGatewayConditionIssues(gvr, kind, u)
+	case "apiregistration.k8s.io":
+		if kind == "APIService" {
+			return detectObjectConditionIssues(gvr, kind, u, SeverityCritical, "Available")
+		}
+	case "apiextensions.k8s.io":
+		if kind == "CustomResourceDefinition" {
+			return detectObjectConditionIssues(gvr, kind, u, SeverityCritical, "Established", "NamesAccepted")
+		}
+	}
+	return nil
+}
+
+func detectGatewayConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
+	switch kind {
+	case "GatewayClass", "Gateway":
+		return detectObjectConditionIssues(gvr, kind, u, SeverityWarning, "Accepted", "Programmed")
+	case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
+		return detectGatewayRouteParentIssues(gvr, kind, u)
+	default:
+		return nil
+	}
+}
+
+func detectObjectConditionIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured, severity Severity, condTypes ...string) []Issue {
+	condType, reason, msg, since, ok := conditions.FindFalseCondition(u, condTypes...)
+	if !ok || isTransientCRDCondition(u, reason) {
+		return nil
+	}
+	return []Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, condTypeReason(condType, reason), msg, since, "")}
+}
+
+func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
+	parents, found, _ := unstructured.NestedSlice(u.Object, "status", "parents")
+	if !found {
+		return nil
+	}
+	var out []Issue
+	for _, parent := range parents {
+		pm, ok := parent.(map[string]any)
+		if !ok {
+			continue
+		}
+		parentLabel, parentKey := gatewayParentRefLabel(pm)
+		conds, _ := pm["conditions"].([]any)
+		for _, c := range conds {
+			cm, ok := c.(map[string]any)
+			if !ok {
+				continue
+			}
+			condType, _ := cm["type"].(string)
+			if condType != "Accepted" && condType != "ResolvedRefs" && condType != "Programmed" {
+				continue
+			}
+			if status, _ := cm["status"].(string); status != "False" {
+				continue
+			}
+			reason, _ := cm["reason"].(string)
+			if conditions.IsInProgressForIssues(reason) {
+				continue
+			}
+			msg, _ := cm["message"].(string)
+			if parentLabel != "" {
+				if msg != "" {
+					msg = parentLabel + ": " + msg
+				} else {
+					msg = parentLabel
+				}
+			}
+			since := conditionSince(cm)
+			fp := condType + ":" + parentKey
+			out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning, condTypeReason(condType, reason), msg, since, fp))
+		}
+	}
+	return out
+}
+
+func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name string, severity Severity, reason, message string, since time.Duration, fingerprint string) Issue {
+	lastSeen := time.Now().Add(-since)
+	iss := Issue{
+		Severity:    severity,
+		Source:      SourceCondition,
+		Kind:        kind,
+		Group:       gvr.Group,
+		Namespace:   namespace,
+		Name:        name,
+		Reason:      reason,
+		Message:     message,
+		FirstSeen:   lastSeen,
+		LastSeen:    lastSeen,
+		Count:       1,
+		Fingerprint: fingerprint,
+	}
+	classifyIssue(&iss)
+	enrichIdentity(&iss)
+	return iss
+}
+
+func conditionSince(cond map[string]any) time.Duration {
+	ts, _ := cond["lastTransitionTime"].(string)
+	if ts == "" {
+		return 0
+	}
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return 0
+	}
+	return time.Since(t)
+}
+
+func gatewayParentRefLabel(parent map[string]any) (label, key string) {
+	ref, _ := parent["parentRef"].(map[string]any)
+	if len(ref) == 0 {
+		return "", "unknown"
+	}
+	group, _ := ref["group"].(string)
+	kind, _ := ref["kind"].(string)
+	namespace, _ := ref["namespace"].(string)
+	name, _ := ref["name"].(string)
+	sectionName, _ := ref["sectionName"].(string)
+	port := ""
+	if p, ok := ref["port"]; ok {
+		port = toString(p)
+	}
+	if group == "" {
+		group = "gateway.networking.k8s.io"
+	}
+	if kind == "" {
+		kind = "Gateway"
+	}
+	parts := []string{group, kind, namespace, name, sectionName, port}
+	key = strings.Join(parts, "/")
+	displayName := name
+	if namespace != "" {
+		displayName = namespace + "/" + name
+	}
+	label = kind + " " + displayName
+	if sectionName != "" {
+		label += " listener " + sectionName
+	}
+	if port != "" {
+		label += " port " + port
+	}
+	return label, key
+}
+
+func toString(v any) string {
+	switch t := v.(type) {
+	case string:
+		return t
+	case int64:
+		return strconv.FormatInt(t, 10)
+	case int:
+		return strconv.Itoa(t)
+	case float64:
+		return strconv.FormatFloat(t, 'f', -1, 64)
+	default:
+		return ""
+	}
 }
 
 // isTransientCRDCondition reports whether a False Ready/Available condition on

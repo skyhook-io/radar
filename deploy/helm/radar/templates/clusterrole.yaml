@@ -197,6 +197,11 @@ rules:
     verbs: ["get", "list", "watch"]
   {{- else }}
   # Per-group CRD access
+  {{- if .Values.rbac.crdGroups.apiRegistration }}
+  - apiGroups: ["apiregistration.k8s.io"]
+    resources: ["*"]
+    verbs: ["get", "list", "watch"]
+  {{- end }}
   {{- if .Values.rbac.crdGroups.argo }}
   - apiGroups: ["argoproj.io"]
     resources: ["*"]

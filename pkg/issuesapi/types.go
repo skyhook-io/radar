@@ -52,12 +52,18 @@ const (
 
 	CategoryMissingConfigRef         Category = "missing_config_ref"
 	CategoryPDBBlocksEvictions       Category = "pdb_blocks_evictions"
+	CategorySecretSyncFailed         Category = "secret_sync_failed"
 	CategoryServiceNoEndpoints       Category = "service_no_endpoints"
 	CategoryIngressBackendMissing    Category = "ingress_backend_missing"
+	CategoryLoadBalancerPending      Category = "load_balancer_pending"
+	CategoryGatewayNotReady          Category = "gateway_not_ready"
+	CategoryGatewayRouteInvalid      Category = "gateway_route_invalid"
 	CategoryDNSFailure               Category = "dns_failure"
 	CategoryNetworkPolicyBlock       Category = "network_policy_block"
 	CategoryPVCPending               Category = "pvc_pending"
 	CategoryPVCLost                  Category = "pvc_lost"
+	CategoryPVFailed                 Category = "pv_failed"
+	CategoryPVCResizeFailed          Category = "pvc_resize_failed"
 	CategoryVolumeMountFailed        Category = "volume_mount_failed"
 	CategoryVolumeAccessModeConflict Category = "volume_access_mode_conflict"
 	CategoryRolloutStalled           Category = "rollout_stalled"
@@ -65,7 +71,11 @@ const (
 	CategoryRBACForbidden            Category = "rbac_forbidden"
 	CategoryCertificateNotReady      Category = "certificate_not_ready"
 	CategoryPodSecurityViolation     Category = "pod_security_violation"
+	CategoryTerminationStuck         Category = "termination_stuck"
 	CategoryNodeNotReady             Category = "node_not_ready"
+	CategoryAPIServiceUnavailable    Category = "apiservice_unavailable"
+	CategoryNodeProvisioningFail     Category = "node_provisioning_failed"
+	CategoryCrossplaneReconcile      Category = "crossplane_reconcile_failed"
 	CategoryOperatorConditionFail    Category = "operator_condition_failed"
 	CategoryGitOpsSyncFailed         Category = "gitops_sync_failed"
 	CategoryWebhookBackendDown       Category = "webhook_backend_down"
@@ -105,12 +115,18 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryCronJobFailed:            GroupRuntime,
 	CategoryMissingConfigRef:         GroupConfiguration,
 	CategoryPDBBlocksEvictions:       GroupConfiguration,
+	CategorySecretSyncFailed:         GroupConfiguration,
 	CategoryServiceNoEndpoints:       GroupNetworking,
 	CategoryIngressBackendMissing:    GroupNetworking,
+	CategoryLoadBalancerPending:      GroupNetworking,
+	CategoryGatewayNotReady:          GroupNetworking,
+	CategoryGatewayRouteInvalid:      GroupNetworking,
 	CategoryDNSFailure:               GroupNetworking,
 	CategoryNetworkPolicyBlock:       GroupNetworking,
 	CategoryPVCPending:               GroupStorage,
 	CategoryPVCLost:                  GroupStorage,
+	CategoryPVFailed:                 GroupStorage,
+	CategoryPVCResizeFailed:          GroupStorage,
 	CategoryVolumeMountFailed:        GroupStorage,
 	CategoryVolumeAccessModeConflict: GroupStorage,
 	CategoryRolloutStalled:           GroupScaling,
@@ -118,7 +134,11 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryRBACForbidden:            GroupSecurity,
 	CategoryCertificateNotReady:      GroupSecurity,
 	CategoryPodSecurityViolation:     GroupSecurity,
+	CategoryTerminationStuck:         GroupControlPlane,
 	CategoryNodeNotReady:             GroupControlPlane,
+	CategoryAPIServiceUnavailable:    GroupControlPlane,
+	CategoryNodeProvisioningFail:     GroupControlPlane,
+	CategoryCrossplaneReconcile:      GroupControlPlane,
 	CategoryOperatorConditionFail:    GroupControlPlane,
 	CategoryGitOpsSyncFailed:         GroupControlPlane,
 	CategoryWebhookBackendDown:       GroupControlPlane,

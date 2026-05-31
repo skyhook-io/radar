@@ -112,6 +112,54 @@ func TestClassifyPodHealth(t *testing.T) {
 			want: "healthy",
 		},
 		{
+			name: "readiness probe failed long enough",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: oldTime},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{
+					Name:           "app",
+					ReadinessProbe: &corev1.Probe{},
+				}}},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{{
+						Type:               corev1.PodReady,
+						Status:             corev1.ConditionFalse,
+						LastTransitionTime: oldTime,
+					}},
+					ContainerStatuses: []corev1.ContainerStatus{{
+						Name:  "app",
+						Ready: false,
+						State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: oldTime}},
+					}},
+				},
+			},
+			want: "warning",
+		},
+		{
+			name: "recent readiness probe failure is still starting",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: recentTime},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{
+					Name:           "app",
+					ReadinessProbe: &corev1.Probe{},
+				}}},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{{
+						Type:               corev1.PodReady,
+						Status:             corev1.ConditionFalse,
+						LastTransitionTime: recentTime,
+					}},
+					ContainerStatuses: []corev1.ContainerStatus{{
+						Name:  "app",
+						Ready: false,
+						State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: recentTime}},
+					}},
+				},
+			},
+			want: "healthy",
+		},
+		{
 			name: "recovered: high restart count but now ready and stable is healthy",
 			pod: &corev1.Pod{
 				Status: corev1.PodStatus{
@@ -493,6 +541,30 @@ func TestPodProblemReason(t *testing.T) {
 				Status: corev1.PodStatus{Phase: corev1.PodPending},
 			},
 			want: "Pending",
+		},
+		{
+			name: "readiness probe failure beats running phase",
+			pod: &corev1.Pod{
+				ObjectMeta: metav1.ObjectMeta{CreationTimestamp: metav1.NewTime(time.Now().Add(-10 * time.Minute))},
+				Spec: corev1.PodSpec{Containers: []corev1.Container{{
+					Name:           "app",
+					ReadinessProbe: &corev1.Probe{},
+				}}},
+				Status: corev1.PodStatus{
+					Phase: corev1.PodRunning,
+					Conditions: []corev1.PodCondition{{
+						Type:               corev1.PodReady,
+						Status:             corev1.ConditionFalse,
+						LastTransitionTime: metav1.NewTime(time.Now().Add(-10 * time.Minute)),
+					}},
+					ContainerStatuses: []corev1.ContainerStatus{{
+						Name:  "app",
+						Ready: false,
+						State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(time.Now().Add(-10 * time.Minute))}},
+					}},
+				},
+			},
+			want: "ReadinessProbeFailed",
 		},
 		{
 			// Init-container failure: main ContainerStatuses haven't been

@@ -89,6 +89,26 @@ func Classify(in classifyInput) issuesapi.Category {
 			}
 			// AppProject/ApplicationSet/etc. are control-plane CRDs, not a sync.
 			return issuesapi.CategoryOperatorConditionFail
+		case g == "gateway.networking.k8s.io":
+			switch in.Kind {
+			case "GatewayClass", "Gateway":
+				return issuesapi.CategoryGatewayNotReady
+			case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
+				return issuesapi.CategoryGatewayRouteInvalid
+			}
+			return issuesapi.CategoryOperatorConditionFail
+		case g == "apiregistration.k8s.io" && in.Kind == "APIService":
+			return issuesapi.CategoryAPIServiceUnavailable
+		case g == "external-secrets.io":
+			return issuesapi.CategorySecretSyncFailed
+		case g == "keda.sh":
+			return issuesapi.CategoryHPALimitedOrFailed
+		case strings.Contains(g, "karpenter"):
+			return issuesapi.CategoryNodeProvisioningFail
+		case strings.Contains(g, "crossplane.io"):
+			return issuesapi.CategoryCrossplaneReconcile
+		case g == "source.toolkit.fluxcd.io" || g == "image.toolkit.fluxcd.io" || g == "notification.toolkit.fluxcd.io":
+			return issuesapi.CategoryGitOpsSyncFailed
 		default:
 			return issuesapi.CategoryOperatorConditionFail
 		}
@@ -102,6 +122,9 @@ func Classify(in classifyInput) issuesapi.Category {
 // classifyProblem handles the broad source=problem channel (radar's per-kind
 // detection). Split out to keep Classify readable.
 func classifyProblem(in classifyInput) issuesapi.Category {
+	if in.Reason == "Terminating stuck" {
+		return issuesapi.CategoryTerminationStuck
+	}
 	switch in.Kind {
 	case "Pod":
 		// OOM can show as the current Reason or only in the last-terminated
@@ -116,6 +139,10 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryCrashLoop
 		case "HighRestartCount":
 			return issuesapi.CategoryHighRestart
+		case "LivenessProbeFailed":
+			return issuesapi.CategoryLivenessProbeFail
+		case "ReadinessProbeFailed":
+			return issuesapi.CategoryReadinessFailed
 		case "CreateContainerConfigError", "CreateContainerError", "RunContainerError", "Pending", "ContainerCreating":
 			return issuesapi.CategoryContainerWaiting
 		case "Error", "Failed":
@@ -125,13 +152,19 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		}
 		return issuesapi.CategoryUnknown
 
-	case "Service":
+	case "Service", "Ingress":
+		if in.Reason == "LoadBalancer pending" {
+			return issuesapi.CategoryLoadBalancerPending
+		}
+		if in.Kind == "Ingress" {
+			return issuesapi.CategoryUnknown
+		}
 		// "Selector matches no pods" / "0/N selected pods ready" /
 		// "Unresolved named targetPort" all mean: no healthy endpoints.
 		return issuesapi.CategoryServiceNoEndpoints
 
 	case "Deployment", "StatefulSet", "DaemonSet":
-		if in.Reason == "Rollout stuck" {
+		if in.Reason == "Rollout stuck" || in.Reason == "ReplicaFailure" {
 			return issuesapi.CategoryRolloutStalled
 		}
 		// Stable reason literal emitted by sharedRWOVolumeConflicts —
@@ -163,6 +196,14 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		case "Lost":
 			// bound volume gone — a storage failure, not unknown.
 			return issuesapi.CategoryPVCLost
+		case "ControllerResizeError", "NodeResizeError", "ModifyVolumeError", "FileSystemResizePending":
+			return issuesapi.CategoryPVCResizeFailed
+		}
+		return issuesapi.CategoryUnknown
+
+	case "PersistentVolume":
+		if in.Reason == "Failed" {
+			return issuesapi.CategoryPVFailed
 		}
 		return issuesapi.CategoryUnknown
 
