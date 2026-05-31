@@ -58,6 +58,9 @@ spec:
             {{- range $k, $v := .Values.traffic.prometheusHeaders }}
             - {{ printf "--prometheus-header=%s=%s" $k $v | quote }}
             {{- end }}
+            {{- range $k, $v := .Values.traffic.prometheusHeadersFromEnv }}
+            - {{ printf "--prometheus-header-from-env=%s=%s" $k $v | quote }}
+            {{- end }}
             {{- if not .Values.mcp.enabled }}
             - --no-mcp
             {{- end }}

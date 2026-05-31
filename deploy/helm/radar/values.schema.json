@@ -252,6 +252,10 @@
         "prometheusHeaders": {
           "type": "object",
           "additionalProperties": { "type": "string" }
+        },
+        "prometheusHeadersFromEnv": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
         }
       }
     },

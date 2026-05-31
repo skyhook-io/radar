@@ -149,6 +149,7 @@ radar
 | `--list-page-size` | `0` (off) | Paginate the initial LIST of high-cardinality kinds (Pods, ReplicaSets) at this size. Helps very large clusters that fail to sync; only used when WatchList streaming is unavailable. Try `2000`. |
 | `--prometheus-url` | (auto-discover) | Manual Prometheus/VictoriaMetrics URL (skips auto-discovery) |
 | `--prometheus-header` | | HTTP header sent with every Prometheus request, format `Key=Value` (repeatable). Required for auth-protected backends. |
+| `--prometheus-header-from-env` | | HTTP header sent with every Prometheus request, sourced from an environment variable, format `Key=ENV_VAR` (repeatable). |
 | `--auth-mode` | `none` | Authentication mode: `none`, `proxy`, or `oidc` ([details](docs/authentication.md)) |
 | `--no-mcp` | `false` | Disable MCP server for AI tool integration |
 | `--version` | | Show version and exit |

@@ -303,6 +303,7 @@ See [Helm Chart README](../deploy/helm/radar/README.md) for all available values
 | `timeline.historyLimit` | Max events to retain (memory only) | `10000` |
 | `timeline.retention` | SQLite retention (Go duration; `0` disables) | `168h` |
 | `traffic.prometheusUrl` | Manual Prometheus/VictoriaMetrics URL | `""` (auto-discover) |
+| `traffic.prometheusHeadersFromEnv` | Prometheus headers sourced from environment variables, for secret-backed auth headers | `{}` |
 | `persistence.enabled` | Enable PVC for SQLite storage | `false` |
 | `persistence.size` | PVC size | `1Gi` |
 | `rbac.podLogs` | Enable log viewer | `true` |

@@ -84,25 +84,32 @@ func main() {
 		log.Printf("ERROR: --kubeconfig and --kubeconfig-dir are mutually exclusive")
 		os.Exit(1)
 	}
+	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(fileCfg.PrometheusHeaders, fileCfg.PrometheusHeadersFromEnv)
+	if err != nil {
+		log.Printf("ERROR: invalid Prometheus header configuration: %v", err)
+		os.Exit(1)
+	}
 
 	cfg := app.AppConfig{
-		Kubeconfig:        *kubeconfig,
-		KubeconfigDirs:    app.ParseKubeconfigDirs(*kubeconfigDir),
-		Namespace:         *namespace,
-		Port:              fileCfg.PortOr(0), // Configured port, or random to avoid conflicts with CLI
-		DevMode:           false,
-		HistoryLimit:      *historyLimit,
-		DebugEvents:       *debugEvents,
-		FakeInCluster:     *fakeInCluster,
-		DisableHelmWrite:  *disableHelmWrite,
-		DisableExec:       *disableExec,
-		PodShellDefault:   *podShellDefault,
-		TimelineStorage:   *timelineStorage,
-		TimelineDBPath:    *timelineDBPath,
-		TimelineRetention: *timelineRetention,
-		PrometheusURL:     *prometheusURL,
-		Version:           version,
-		MCPEnabled:        fileCfg.MCPEnabledOr(true),
+		Kubeconfig:               *kubeconfig,
+		KubeconfigDirs:           app.ParseKubeconfigDirs(*kubeconfigDir),
+		Namespace:                *namespace,
+		Port:                     fileCfg.PortOr(0), // Configured port, or random to avoid conflicts with CLI
+		DevMode:                  false,
+		HistoryLimit:             *historyLimit,
+		DebugEvents:              *debugEvents,
+		FakeInCluster:            *fakeInCluster,
+		DisableHelmWrite:         *disableHelmWrite,
+		DisableExec:              *disableExec,
+		PodShellDefault:          *podShellDefault,
+		TimelineStorage:          *timelineStorage,
+		TimelineDBPath:           *timelineDBPath,
+		TimelineRetention:        *timelineRetention,
+		PrometheusURL:            *prometheusURL,
+		PrometheusHeaders:        resolvedPrometheusHeaders,
+		PrometheusHeadersFromEnv: fileCfg.PrometheusHeadersFromEnv,
+		Version:                  version,
+		MCPEnabled:               fileCfg.MCPEnabledOr(true),
 	}
 
 	app.SetGlobals(cfg)
@@ -157,7 +164,7 @@ func main() {
 	desktopApp := NewDesktopApp(srv, timelineStoreCfg)
 
 	// Run Wails application
-	err := wails.Run(&options.App{
+	err = wails.Run(&options.App{
 		Title:            windowTitle,
 		Width:            1440,
 		Height:           900,

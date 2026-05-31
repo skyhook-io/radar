@@ -26,29 +26,30 @@ import (
 
 // AppConfig holds all parsed configuration for the Radar application.
 type AppConfig struct {
-	Kubeconfig           string
-	KubeconfigDirs       []string
-	Namespace            string
-	Port                 int
-	NoBrowser            bool
-	DevMode              bool
-	HistoryLimit         int
-	DebugEvents          bool
-	FakeInCluster        bool
-	DisableHelmWrite     bool
-	DisableExec          bool
-	DisableLocalTerminal bool
-	PodShellDefault      string
-	DebugImage           string
-	ListPageSize         int64
-	TimelineStorage      string
-	TimelineDBPath       string
-	TimelineRetention    time.Duration
-	PrometheusURL        string
-	PrometheusHeaders    map[string]string
-	Version              string
-	MCPEnabled           bool
-	AuthConfig           auth.Config
+	Kubeconfig               string
+	KubeconfigDirs           []string
+	Namespace                string
+	Port                     int
+	NoBrowser                bool
+	DevMode                  bool
+	HistoryLimit             int
+	DebugEvents              bool
+	FakeInCluster            bool
+	DisableHelmWrite         bool
+	DisableExec              bool
+	DisableLocalTerminal     bool
+	PodShellDefault          string
+	DebugImage               string
+	ListPageSize             int64
+	TimelineStorage          string
+	TimelineDBPath           string
+	TimelineRetention        time.Duration
+	PrometheusURL            string
+	PrometheusHeaders        map[string]string
+	PrometheusHeadersFromEnv map[string]string
+	Version                  string
+	MCPEnabled               bool
+	AuthConfig               auth.Config
 }
 
 // SetGlobals applies debug/test flags to global state.
@@ -159,18 +160,19 @@ func RegisterCallbacks(cfg AppConfig, timelineStoreCfg timeline.StoreConfig) {
 // CreateServer creates the HTTP server with the given configuration.
 func CreateServer(cfg AppConfig) *server.Server {
 	effectiveCfg := &config.Config{
-		Kubeconfig:        cfg.Kubeconfig,
-		KubeconfigDirs:    cfg.KubeconfigDirs,
-		Namespace:         cfg.Namespace,
-		Port:              cfg.Port,
-		NoBrowser:         cfg.NoBrowser,
-		TimelineStorage:   cfg.TimelineStorage,
-		TimelineDBPath:    cfg.TimelineDBPath,
-		HistoryLimit:      cfg.HistoryLimit,
-		PrometheusURL:     cfg.PrometheusURL,
-		PrometheusHeaders: cfg.PrometheusHeaders,
-		DebugImage:        cfg.DebugImage,
-		MCP:               &cfg.MCPEnabled,
+		Kubeconfig:               cfg.Kubeconfig,
+		KubeconfigDirs:           cfg.KubeconfigDirs,
+		Namespace:                cfg.Namespace,
+		Port:                     cfg.Port,
+		NoBrowser:                cfg.NoBrowser,
+		TimelineStorage:          cfg.TimelineStorage,
+		TimelineDBPath:           cfg.TimelineDBPath,
+		HistoryLimit:             cfg.HistoryLimit,
+		PrometheusURL:            cfg.PrometheusURL,
+		PrometheusHeaders:        cfg.PrometheusHeaders,
+		PrometheusHeadersFromEnv: cfg.PrometheusHeadersFromEnv,
+		DebugImage:               cfg.DebugImage,
+		MCP:                      &cfg.MCPEnabled,
 	}
 
 	serverCfg := server.Config{

@@ -26,8 +26,9 @@ type Config struct {
 	// PrometheusHeaders are sent with every request to the Prometheus API.
 	// Required for auth-protected backends (Bearer tokens, X-Scope-OrgID, etc.).
 	// Stored in plain text in ~/.radar/config.json — protect the file accordingly.
-	PrometheusHeaders map[string]string `json:"prometheusHeaders,omitempty"`
-	MCP               *bool             `json:"mcp,omitempty"` // nil = default (true), false = disabled
+	PrometheusHeaders        map[string]string `json:"prometheusHeaders,omitempty"`
+	PrometheusHeadersFromEnv map[string]string `json:"prometheusHeadersFromEnv,omitempty"`
+	MCP                      *bool             `json:"mcp,omitempty"` // nil = default (true), false = disabled
 	// DebugImage is the image used for ephemeral debug containers and node debug
 	// pods. Empty falls back to busybox:latest; set it to a reachable mirror for
 	// air-gapped / private-registry clusters.

@@ -71,6 +71,8 @@ func main() {
 	// than merging — matches kubectl semantics (file is the default, CLI wins).
 	promHeaders := newHeaderFlag(fileCfg.PrometheusHeaders)
 	flag.Var(promHeaders, "prometheus-header", "HTTP header to send with Prometheus requests, e.g. 'Authorization=Bearer <token>' (repeatable). Required for auth-protected backends.")
+	promHeadersFromEnv := newHeaderFromEnvFlag(fileCfg.PrometheusHeadersFromEnv)
+	flag.Var(promHeadersFromEnv, "prometheus-header-from-env", "HTTP header to send with Prometheus requests, sourced from an env var, e.g. 'Authorization=PROMETHEUS_TOKEN' (repeatable).")
 	// MCP server
 	noMCP := flag.Bool("no-mcp", !fileCfg.MCPEnabledOr(true), "Disable MCP (Model Context Protocol) server for AI tools")
 	// Auth flags
@@ -152,30 +154,35 @@ func main() {
 	if *kubeconfig != "" && *kubeconfigDir != "" {
 		log.Fatalf("--kubeconfig and --kubeconfig-dir are mutually exclusive")
 	}
+	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(promHeaders.value(), promHeadersFromEnv.value())
+	if err != nil {
+		log.Fatalf("Invalid Prometheus header configuration: %v", err)
+	}
 
 	cfg := app.AppConfig{
-		Kubeconfig:           *kubeconfig,
-		KubeconfigDirs:       app.ParseKubeconfigDirs(*kubeconfigDir),
-		Namespace:            *namespace,
-		Port:                 *port,
-		NoBrowser:            *noBrowser,
-		DevMode:              *devMode,
-		HistoryLimit:         *historyLimit,
-		DebugEvents:          *debugEvents,
-		FakeInCluster:        *fakeInCluster,
-		DisableHelmWrite:     *disableHelmWrite,
-		DisableExec:          *disableExec,
-		DisableLocalTerminal: *disableLocalTerminal,
-		PodShellDefault:      *podShellDefault,
-		DebugImage:           *debugImage,
-		ListPageSize:         *listPageSize,
-		TimelineStorage:      *timelineStorage,
-		TimelineDBPath:       *timelineDBPath,
-		TimelineRetention:    *timelineRetention,
-		PrometheusURL:        *prometheusURL,
-		PrometheusHeaders:    promHeaders.value(),
-		MCPEnabled:           !*noMCP,
-		Version:              version,
+		Kubeconfig:               *kubeconfig,
+		KubeconfigDirs:           app.ParseKubeconfigDirs(*kubeconfigDir),
+		Namespace:                *namespace,
+		Port:                     *port,
+		NoBrowser:                *noBrowser,
+		DevMode:                  *devMode,
+		HistoryLimit:             *historyLimit,
+		DebugEvents:              *debugEvents,
+		FakeInCluster:            *fakeInCluster,
+		DisableHelmWrite:         *disableHelmWrite,
+		DisableExec:              *disableExec,
+		DisableLocalTerminal:     *disableLocalTerminal,
+		PodShellDefault:          *podShellDefault,
+		DebugImage:               *debugImage,
+		ListPageSize:             *listPageSize,
+		TimelineStorage:          *timelineStorage,
+		TimelineDBPath:           *timelineDBPath,
+		TimelineRetention:        *timelineRetention,
+		PrometheusURL:            *prometheusURL,
+		PrometheusHeaders:        resolvedPrometheusHeaders,
+		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
+		MCPEnabled:               !*noMCP,
+		Version:                  version,
 		AuthConfig: auth.Config{
 			Mode:                      *authMode,
 			Secret:                    *authSecret,
@@ -396,5 +403,77 @@ func (h *headerFlag) Set(raw string) error {
 		h.overrides = true
 	}
 	h.m[key] = val
+	return nil
+}
+
+type headerFromEnvFlag struct {
+	m         map[string]string
+	overrides bool
+}
+
+func newHeaderFromEnvFlag(defaults map[string]string) *headerFromEnvFlag {
+	out := make(map[string]string, len(defaults))
+	for k, v := range defaults {
+		k = strings.TrimSpace(k)
+		v = strings.TrimSpace(v)
+		if !httpguts.ValidHeaderFieldName(k) {
+			log.Printf("[config] Dropping invalid prometheus header-from-env name %q (must be RFC 7230 tokens)", k)
+			continue
+		}
+		if !app.ValidEnvVarName(v) {
+			log.Printf("[config] Dropping prometheus header-from-env %q: invalid env var name %q", k, v)
+			continue
+		}
+		out[k] = v
+	}
+	return &headerFromEnvFlag{m: out}
+}
+
+func (h *headerFromEnvFlag) value() map[string]string {
+	if len(h.m) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(h.m))
+	maps.Copy(out, h.m)
+	return out
+}
+
+func (h *headerFromEnvFlag) String() string {
+	if len(h.m) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(h.m))
+	for k := range h.m {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys))
+	for _, k := range keys {
+		parts = append(parts, k+"="+h.m[k])
+	}
+	return strings.Join(parts, ",")
+}
+
+func (h *headerFromEnvFlag) Set(raw string) error {
+	idx := strings.IndexByte(raw, '=')
+	if idx <= 0 {
+		return fmt.Errorf("expected Key=ENV_VAR, got %q", raw)
+	}
+	key := strings.TrimSpace(raw[:idx])
+	envName := strings.TrimSpace(raw[idx+1:])
+	if key == "" {
+		return fmt.Errorf("empty header key in %q", raw)
+	}
+	if !httpguts.ValidHeaderFieldName(key) {
+		return fmt.Errorf("invalid header name %q (must be RFC 7230 tokens)", key)
+	}
+	if !app.ValidEnvVarName(envName) {
+		return fmt.Errorf("invalid env var name %q for header %q", envName, key)
+	}
+	if !h.overrides {
+		h.m = make(map[string]string)
+		h.overrides = true
+	}
+	h.m[key] = envName
 	return nil
 }

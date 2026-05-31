@@ -146,3 +146,110 @@ func TestHeaderFlagValueCopies(t *testing.T) {
 		t.Error("value() must return a defensive copy — caller mutation leaked into headerFlag state")
 	}
 }
+
+func TestHeaderFromEnvFlagSet(t *testing.T) {
+	cases := []struct {
+		name    string
+		inputs  []string
+		want    map[string]string
+		wantErr bool
+	}{
+		{
+			name:   "simple key=env",
+			inputs: []string{"Authorization=PROMETHEUS_TOKEN"},
+			want:   map[string]string{"Authorization": "PROMETHEUS_TOKEN"},
+		},
+		{
+			name:   "two flags accumulate",
+			inputs: []string{"Authorization=PROMETHEUS_TOKEN", "X-Scope-OrgID=PROMETHEUS_TENANT"},
+			want: map[string]string{
+				"Authorization": "PROMETHEUS_TOKEN",
+				"X-Scope-OrgID": "PROMETHEUS_TENANT",
+			},
+		},
+		{
+			name:   "key and env trimmed",
+			inputs: []string{"  Authorization  =  PROMETHEUS_TOKEN  "},
+			want:   map[string]string{"Authorization": "PROMETHEUS_TOKEN"},
+		},
+		{
+			name:    "no equals",
+			inputs:  []string{"Authorization"},
+			wantErr: true,
+		},
+		{
+			name:    "empty key",
+			inputs:  []string{"=PROMETHEUS_TOKEN"},
+			wantErr: true,
+		},
+		{
+			name:    "invalid header name",
+			inputs:  []string{"Bad Header=PROMETHEUS_TOKEN"},
+			wantErr: true,
+		},
+		{
+			name:    "invalid env var name",
+			inputs:  []string{"Authorization=prometheus-token"},
+			wantErr: true,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHeaderFromEnvFlag(nil)
+			var lastErr error
+			for _, in := range tc.inputs {
+				lastErr = h.Set(in)
+				if lastErr != nil {
+					break
+				}
+			}
+			if tc.wantErr {
+				if lastErr == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				return
+			}
+			if lastErr != nil {
+				t.Fatalf("unexpected error: %v", lastErr)
+			}
+			if !reflect.DeepEqual(h.value(), tc.want) {
+				t.Errorf("got %v, want %v", h.value(), tc.want)
+			}
+		})
+	}
+}
+
+func TestHeaderFromEnvFlagOverridesFileDefaults(t *testing.T) {
+	defaults := map[string]string{
+		"Authorization": "PROMETHEUS_TOKEN",
+		"X-Tenant":      "PROMETHEUS_TENANT",
+	}
+
+	t.Run("no CLI flags keeps defaults", func(t *testing.T) {
+		h := newHeaderFromEnvFlag(defaults)
+		if !reflect.DeepEqual(h.value(), defaults) {
+			t.Errorf("got %v, want %v", h.value(), defaults)
+		}
+	})
+
+	t.Run("one CLI flag wipes defaults", func(t *testing.T) {
+		h := newHeaderFromEnvFlag(defaults)
+		if err := h.Set("X-New=PROMETHEUS_NEW"); err != nil {
+			t.Fatalf("Set failed: %v", err)
+		}
+		want := map[string]string{"X-New": "PROMETHEUS_NEW"}
+		if !reflect.DeepEqual(h.value(), want) {
+			t.Errorf("got %v, want %v", h.value(), want)
+		}
+	})
+}
+
+func TestHeaderFromEnvFlagValueCopies(t *testing.T) {
+	h := newHeaderFromEnvFlag(map[string]string{"A": "PROMETHEUS_TOKEN"})
+	got := h.value()
+	got["A"] = "MUTATED"
+	if h.value()["A"] != "PROMETHEUS_TOKEN" {
+		t.Error("value() must return a defensive copy — caller mutation leaked into headerFromEnvFlag state")
+	}
+}

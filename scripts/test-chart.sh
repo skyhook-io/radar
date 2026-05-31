@@ -25,13 +25,13 @@ pass() {
 
 assert_contains() {
   local pattern="$1" label="$2"
-  if echo "$OUT" | grep -Eq "$pattern"; then pass "$label"
+  if echo "$OUT" | grep -Eq -- "$pattern"; then pass "$label"
   else fail "$label — no match for: $pattern"; fi
 }
 
 assert_not_contains() {
   local pattern="$1" label="$2"
-  if echo "$OUT" | grep -Eq "$pattern"; then fail "$label — unexpected match for: $pattern"
+  if echo "$OUT" | grep -Eq -- "$pattern"; then fail "$label — unexpected match for: $pattern"
   else pass "$label"; fi
 }
 
@@ -54,6 +54,21 @@ assert_not_contains '^kind: RoleBinding$'           "no namespaced RoleBinding"
 assert_not_contains 'MY_POD_NAMESPACE'              "no downward-API env var"
 assert_not_contains 'MY_DEPLOYMENT_NAME'            "no deployment-name env var"
 assert_not_contains 'self-upgrade'                  "no self-upgrade references anywhere"
+echo
+
+render "prometheusHeadersFromEnv — flag and secret env stay separate" \
+  --set traffic.prometheusHeaders.X-Scope-OrgID=tenant-1 \
+  --set traffic.prometheusHeadersFromEnv.Authorization=PROMETHEUS_TOKEN \
+  --set 'env[0].name=PROMETHEUS_TOKEN' \
+  --set 'env[0].valueFrom.secretKeyRef.name=prometheus-auth' \
+  --set 'env[0].valueFrom.secretKeyRef.key=token'
+assert_contains '--prometheus-header=X-Scope-OrgID=tenant-1'           "literal Prometheus header rendered"
+assert_contains '--prometheus-header-from-env=Authorization=PROMETHEUS_TOKEN' "env-sourced Prometheus header flag rendered"
+assert_contains 'name: PROMETHEUS_TOKEN'                              "custom env var rendered"
+assert_contains 'secretKeyRef:'                                       "secretKeyRef rendered"
+assert_contains 'name: prometheus-auth'                               "secret name rendered"
+assert_contains 'key: token'                                          "secret key rendered"
+assert_not_contains '--prometheus-header=Authorization='               "secret value not rendered as a literal header"
 echo
 
 render "rbac.selfUpgrade=true — full feature wiring" --set rbac.selfUpgrade=true

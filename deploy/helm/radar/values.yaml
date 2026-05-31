@@ -361,14 +361,25 @@ traffic:
   prometheusUrl: ""
   # HTTP headers sent with every Prometheus request. Required for
   # auth-protected backends (Bearer tokens, X-Scope-OrgID multi-tenancy, etc.).
-  # Values are rendered into the pod spec — for secrets, mount them via env
-  # and reference the env var in your own values file, or template these
-  # values from an external secret store (sealed-secrets, external-secrets).
+  # Values are rendered into the pod spec; use prometheusHeadersFromEnv for
+  # secrets.
   # Example:
   #   prometheusHeaders:
-  #     Authorization: "Bearer <token>"
   #     X-Scope-OrgID: "my-org"
   prometheusHeaders: {}
+  # HTTP headers sourced from environment variables at Radar startup. Use with
+  # env[].valueFrom.secretKeyRef to keep tokens out of container args and pod
+  # specs.
+  # Example:
+  #   prometheusHeadersFromEnv:
+  #     Authorization: PROMETHEUS_TOKEN
+  #   env:
+  #     - name: PROMETHEUS_TOKEN
+  #       valueFrom:
+  #         secretKeyRef:
+  #           name: prometheus-auth
+  #           key: token
+  prometheusHeadersFromEnv: {}
 
 # Persistence for SQLite timeline storage
 # Required when timeline.storage is "sqlite" (readOnlyRootFilesystem prevents local writes)

@@ -41,6 +41,9 @@ func TestSaveAndLoad(t *testing.T) {
 			"Authorization": "Bearer abc",
 			"X-Scope-OrgID": "tenant-1",
 		},
+		PrometheusHeadersFromEnv: map[string]string{
+			"X-Api-Key": "PROMETHEUS_API_KEY",
+		},
 		MCP: &mcp,
 	}
 
@@ -83,6 +86,10 @@ func TestSaveAndLoad(t *testing.T) {
 		got.PrometheusHeaders["Authorization"] != "Bearer abc" ||
 		got.PrometheusHeaders["X-Scope-OrgID"] != "tenant-1" {
 		t.Errorf("PrometheusHeaders = %v, want %v", got.PrometheusHeaders, want.PrometheusHeaders)
+	}
+	if len(got.PrometheusHeadersFromEnv) != 1 ||
+		got.PrometheusHeadersFromEnv["X-Api-Key"] != "PROMETHEUS_API_KEY" {
+		t.Errorf("PrometheusHeadersFromEnv = %v, want %v", got.PrometheusHeadersFromEnv, want.PrometheusHeadersFromEnv)
 	}
 }
 
