@@ -34,6 +34,10 @@ var DebugEvents bool
 // WatchList streaming isn't available; 0 keeps the standard behavior.
 var ListPageSize int64
 
+// ForceNamespaceScope pins all namespaced informer caches to one namespace.
+// Cluster-scoped resources still use cluster-wide informers.
+var ForceNamespaceScope bool
+
 // TimingLogs enables [startup-timing] log lines when true (set via --dev flag).
 // These are useful for profiling startup but too noisy for production.
 var TimingLogs bool

@@ -137,6 +137,7 @@ radar
 | `--kubeconfig` | `~/.kube/config` | Path to kubeconfig file |
 | `--kubeconfig-dir` | | Comma-separated directories containing kubeconfig files |
 | `--namespace` | (all) | Initial namespace filter (supports multi-select in the UI; also used as RBAC fallback for namespace-scoped users) |
+| `--namespace-scope` | `false` | Pin namespaced informer caches to one namespace for large clusters. Requires `--namespace`, a kubeconfig context namespace, or a saved local single-namespace pick. Local mode can rebuild the cache when switching namespaces; auth/cloud mode locks the shared cache to the startup namespace. |
 | `--port` | `9280` | Server port |
 | `--no-browser` | `false` | Don't auto-open browser |
 | `--browser` | | Browser to use when opening the UI, e.g. `firefox`, `google-chrome`, or `Google Chrome` on macOS |

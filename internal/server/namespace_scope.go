@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -43,6 +44,9 @@ type NamespaceScopeResponse struct {
 	AccessibleNamespaces []string           `json:"accessibleNamespaces"`
 	Authoritative        bool               `json:"authoritative"`
 	CanClearNamespace    bool               `json:"canClearNamespace"`
+	CacheScoped          bool               `json:"cacheScoped"`
+	CacheScopeNamespace  string             `json:"cacheScopeNamespace,omitempty"`
+	NamespaceRescope     bool               `json:"namespaceRescope"`
 }
 
 // nsPreferenceKey builds the per-user, per-context key for nsPreferences.
@@ -175,6 +179,7 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	s.loadSavedNamespacePreference(r)
 	actives := s.getActiveNamespaceForUser(r)
 	kubeNs := k8s.GetContextNamespace()
+	cacheScopeNs := k8s.GetNamespaceScopeTarget()
 
 	// What the SA / kubeconfig identity sees — used as the input set for
 	// per-user filtering below. authoritative=true means "we got a real
@@ -210,6 +215,16 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	if k8s.ForceNamespaceScope {
+		if cacheScopeNs != "" {
+			actives = []string{cacheScopeNs}
+		}
+		if s.authConfig.Enabled() {
+			namespaces = actives
+			authoritative = true
+		}
+	}
+
 	mode := NamespaceScopeClusterWide
 	switch {
 	case len(actives) > 0:
@@ -223,6 +238,9 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 	// require a kubeconfig or --namespace fallback so the UI has something
 	// to fall back to.
 	canClear := authoritative || k8s.HasNamespaceFallback()
+	if k8s.ForceNamespaceScope {
+		canClear = false
+	}
 
 	// Force non-nil slices so the wire shape matches the TS contract
 	// (`string[]`, never `null`). A nil []string marshals to JSON null,
@@ -241,6 +259,9 @@ func (s *Server) handleGetNamespaceScope(w http.ResponseWriter, r *http.Request)
 		AccessibleNamespaces: namespaces,
 		Authoritative:        authoritative,
 		CanClearNamespace:    canClear,
+		CacheScoped:          k8s.ForceNamespaceScope,
+		CacheScopeNamespace:  cacheScopeNs,
+		NamespaceRescope:     k8s.ForceNamespaceScope && !s.authConfig.Enabled(),
 	})
 }
 
@@ -313,6 +334,29 @@ func (s *Server) handleSetActiveNamespace(w http.ResponseWriter, r *http.Request
 					return
 				}
 			}
+		}
+	}
+
+	if k8s.ForceNamespaceScope {
+		if len(cleaned) != 1 {
+			s.writeError(w, http.StatusBadRequest, "--namespace-scope requires exactly one active namespace")
+			return
+		}
+		currentScope := k8s.GetNamespaceScopeTarget()
+		if s.authConfig.Enabled() {
+			if cleaned[0] != currentScope {
+				s.writeError(w, http.StatusForbidden, "--namespace-scope locks the shared cache to namespace "+currentScope)
+				return
+			}
+		} else if cleaned[0] != currentScope {
+			if err := k8s.PerformNamespaceRescope(cleaned[0]); err != nil {
+				safeNamespace := strings.ReplaceAll(strings.ReplaceAll(cleaned[0], "\n", ""), "\r", "")
+				safeErr := strings.ReplaceAll(strings.ReplaceAll(err.Error(), "\n", ""), "\r", "")
+				log.Printf("[namespace] failed to rescope cache to namespace %q: %s", safeNamespace, safeErr)
+				s.writeError(w, http.StatusServiceUnavailable, "failed to rescope namespace cache: "+err.Error())
+				return
+			}
+			s.finalizePostContextSwitch()
 		}
 	}
 

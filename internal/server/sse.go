@@ -290,10 +290,7 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 		})
 	})
 
-	// Register for context switch completion
-	k8s.OnContextSwitch(func(newContext string) {
-		log.Printf("SSE broadcaster: context switched to %q, clearing cached topology", newContext)
-
+	resetCacheView := func() {
 		// Clear cached topology and dirty flag for the old context
 		b.cachedTopologyMu.Lock()
 		b.cachedTopology = nil
@@ -308,6 +305,12 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 
 		// Restart the resource change watcher for the new cache
 		b.restartResourceWatcher()
+	}
+
+	// Register for context switch completion
+	k8s.OnContextSwitch(func(newContext string) {
+		log.Printf("SSE broadcaster: context switched to %q, clearing cached topology", newContext)
+		resetCacheView()
 
 		// Broadcast context_changed event to all clients
 		b.mu.RLock()
@@ -324,6 +327,13 @@ func (b *SSEBroadcaster) registerContextSwitchCallback() {
 
 		// Broadcast the new topology so clients can complete the switch
 		// Run in goroutine to not block the context switch
+		log.Printf("SSE broadcaster: scheduling topology broadcast")
+		go b.broadcastTopologyUpdate()
+	})
+
+	k8s.OnNamespaceRescope(func(namespace string) {
+		log.Printf("SSE broadcaster: namespace cache rescoped to %q, clearing cached topology", k8s.SanitizeForLog(namespace))
+		resetCacheView()
 		log.Printf("SSE broadcaster: scheduling topology broadcast")
 		go b.broadcastTopologyUpdate()
 	})

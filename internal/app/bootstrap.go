@@ -18,6 +18,7 @@ import (
 	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	prometheuspkg "github.com/skyhook-io/radar/internal/prometheus"
 	"github.com/skyhook-io/radar/internal/server"
+	"github.com/skyhook-io/radar/internal/settings"
 	"github.com/skyhook-io/radar/internal/static"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/traffic"
@@ -42,6 +43,7 @@ type AppConfig struct {
 	PodShellDefault          string
 	DebugImage               string
 	ListPageSize             int64
+	NamespaceScope           bool
 	TimelineStorage          string
 	TimelineDBPath           string
 	TimelineRetention        time.Duration
@@ -63,6 +65,7 @@ func SetGlobals(cfg AppConfig) {
 	k8s.ForceDisableExec = cfg.DisableExec
 	k8s.ForceDisableLocalTerminal = cfg.DisableLocalTerminal
 	k8s.ListPageSize = cfg.ListPageSize
+	k8s.ForceNamespaceScope = cfg.NamespaceScope
 	server.DefaultPodShellCommand = cfg.PodShellDefault
 	versionpkg.SetCurrent(cfg.Version)
 }
@@ -80,6 +83,10 @@ func InitializeK8s(cfg AppConfig) error {
 	if cfg.Namespace != "" {
 		k8s.SetFallbackNamespace(cfg.Namespace)
 	}
+	configureNamespaceScopePreferenceResolver(cfg)
+	if cfg.NamespaceScope && k8s.GetNamespaceScopeTarget() == "" {
+		return fmt.Errorf("--namespace-scope requires --namespace or a namespace on the current kubeconfig context")
+	}
 
 	if len(cfg.KubeconfigDirs) > 0 {
 		log.Printf("Using kubeconfigs from directories: %v", cfg.KubeconfigDirs)
@@ -96,6 +103,21 @@ func InitializeK8s(cfg AppConfig) error {
 	})
 
 	return nil
+}
+
+func configureNamespaceScopePreferenceResolver(cfg AppConfig) {
+	k8s.SetNamespaceScopePreferenceResolver(nil)
+	if !cfg.NamespaceScope || cfg.Namespace != "" || cfg.AuthConfig.Enabled() {
+		return
+	}
+	k8s.SetNamespaceScopePreferenceResolver(func(ctxName string) (string, bool) {
+		activeNamespaces := settings.Load().ActiveNamespaces
+		if len(activeNamespaces[ctxName]) == 1 && activeNamespaces[ctxName][0] != "" {
+			return activeNamespaces[ctxName][0], true
+		}
+		return "", false
+	})
+	k8s.RestoreNamespaceScopePreference(k8s.GetContextName())
 }
 
 // BuildTimelineStoreConfig creates the timeline store configuration from app config.

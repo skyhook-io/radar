@@ -986,12 +986,13 @@ function AppInner() {
   // mutation immediately, which re-introduces the same race. The state→URL
   // effect propagates state=[] → URL on its own after onSuccess flips state.
   const clearAllNamespaces = useCallback(() => {
+    if (namespaceScope?.cacheScoped) return
     if (namespaces.length === 0) return
     setActiveNamespace.mutate(
       { namespaces: [] },
       { onSuccess: () => setNamespaces([]) },
     )
-  }, [namespaces.length, setActiveNamespace])
+  }, [namespaceScope?.cacheScoped, namespaces.length, setActiveNamespace])
   const initialBookmarkReconciledRef = useRef(false)
   const scopeActives = useMemo(() => namespaceScope?.actives ?? [], [namespaceScope?.actives])
   const namespaceScopeKey = useMemo(() => namespaceScope ? [...scopeActives].sort().join(',') : null, [namespaceScope, scopeActives])
@@ -1015,6 +1016,14 @@ function AppInner() {
     if (!initialBookmarkReconciledRef.current) {
       initialBookmarkReconciledRef.current = true
       if (!sameAsState && sortedState.length > 0) {
+        if (namespaceScope.cacheScoped && (!namespaceScope.namespaceRescope || sortedState.length !== 1)) {
+          debugNamespaceLog('app:scope-mirror-cache-scope-preserve', {
+            stateNamespaces: sortedState,
+            scopeActives: sortedScope,
+          })
+          setNamespaces(scopeActives)
+          return
+        }
         debugNamespaceLog('app:scope-mirror-bookmark-to-server', {
           stateNamespaces: sortedState,
           scopeActives: sortedScope,
@@ -1117,6 +1126,12 @@ function AppInner() {
     })
 
     if (urlNamespaces.join(',') !== namespacesKey) {
+      if (namespaceScope?.cacheScoped && (!namespaceScope.namespaceRescope || urlNamespaces.length !== 1)) {
+        const scopedNamespaces = namespaceScope.actives ?? []
+        debugNamespaceLog('app:url-sync-cache-scope-preserve', { scopedNamespaces })
+        setNamespaces(scopedNamespaces)
+        return
+      }
       debugNamespaceLog('app:url-sync-set-namespaces', { nextNamespaces: urlNamespaces })
       setNamespaces(urlNamespaces)
       if (namespaceScope) {
@@ -2081,6 +2096,7 @@ function AppInner() {
             { onSettled: () => setNamespaces([]) },
           )}
           onSetNamespaces={(ns) => {
+            if (namespaceScope?.cacheScoped && ns.length !== 1) return
             setNamespaces(ns)
             setActiveNamespace.mutate({ namespaces: ns })
           }}

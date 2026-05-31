@@ -171,6 +171,10 @@ func ResetTestState() {
 	resourcePermsMu.Lock()
 	cachedPermResult = nil
 	resourcePermsMu.Unlock()
+	ForceNamespaceScope = false
+	SetFallbackNamespace("")
+	ClearNamespaceScopeOverride()
+	SetNamespaceScopePreferenceResolver(nil)
 
 	// Reset operation context so stale cancellations don't leak between tests
 	CancelOngoingOperations()

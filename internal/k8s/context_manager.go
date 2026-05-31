@@ -24,6 +24,10 @@ const ConnectionTestTimeout = 5 * time.Second
 // ContextSwitchCallback is called when the context is switched
 type ContextSwitchCallback func(newContext string)
 
+// NamespaceRescopeCallback is called when the active cache namespace changes
+// without switching kubeconfig contexts.
+type NamespaceRescopeCallback func(namespace string)
+
 // ContextSwitchProgressCallback is called with progress updates during context switch
 type ContextSwitchProgressCallback func(message string)
 
@@ -55,6 +59,7 @@ type PrometheusReinitFunc func() error
 
 var (
 	contextSwitchCallbacks         []ContextSwitchCallback
+	namespaceRescopeCallbacks      []NamespaceRescopeCallback
 	contextSwitchProgressCallbacks []ContextSwitchProgressCallback
 	contextSwitchMu                sync.RWMutex
 	helmResetFunc                  HelmResetFunc
@@ -112,6 +117,14 @@ func OnContextSwitch(callback ContextSwitchCallback) {
 	contextSwitchMu.Lock()
 	defer contextSwitchMu.Unlock()
 	contextSwitchCallbacks = append(contextSwitchCallbacks, callback)
+}
+
+// OnNamespaceRescope registers a callback for local --namespace-scope cache
+// rescope completion.
+func OnNamespaceRescope(callback NamespaceRescopeCallback) {
+	contextSwitchMu.Lock()
+	defer contextSwitchMu.Unlock()
+	namespaceRescopeCallbacks = append(namespaceRescopeCallbacks, callback)
 }
 
 // OnContextSwitchProgress registers a callback for progress updates during context switch
@@ -245,6 +258,11 @@ func PerformContextSwitch(newContext string) error {
 		return fmt.Errorf("failed to switch context: %w", err)
 	}
 	logTiming("   [ops] SwitchContext: %v", time.Since(t))
+	ClearNamespaceScopeOverride()
+	RestoreNamespaceScopePreference(GetContextName())
+	if err := requireNamespaceScopeTarget(newContext); err != nil {
+		return err
+	}
 
 	// Invalidate caches - permissions and cluster info may differ between clusters
 	InvalidateCapabilitiesCache()
@@ -296,4 +314,97 @@ func PerformContextSwitch(newContext string) error {
 	}
 
 	return nil
+}
+
+func requireNamespaceScopeTarget(contextName string) error {
+	if !ForceNamespaceScope || GetNamespaceScopeTarget() != "" {
+		return nil
+	}
+	return fmt.Errorf("--namespace-scope requires --namespace, a namespace on context %q, or a saved namespace pick", contextName)
+}
+
+// PerformNamespaceRescope rebuilds all cache-backed subsystems for a new
+// namespace while keeping the current kubeconfig context. It is intended for
+// local --namespace-scope sessions only; multi-user deployments must not let
+// one user's namespace pick reshape the process-wide cache for everyone.
+func PerformNamespaceRescope(namespace string) error {
+	if namespace == "" {
+		return fmt.Errorf("namespace is required")
+	}
+	previousNamespace := GetNamespaceScopeTarget()
+	if namespace == previousNamespace {
+		return nil
+	}
+
+	rescopeStart := time.Now()
+	safeNamespace := SanitizeForLog(namespace)
+	safePreviousNamespace := SanitizeForLog(previousNamespace)
+	log.Printf("[ops] Namespace rescope START → %q", safeNamespace)
+
+	CancelOngoingOperations()
+	reportProgress("Testing cluster connectivity...")
+	t := time.Now()
+	connCtx, connCancel := NewOperationContext(ConnectionTestTimeout)
+	defer connCancel()
+	if err := TestClusterConnection(connCtx); err != nil {
+		elapsed := time.Since(rescopeStart).Truncate(time.Millisecond)
+		log.Printf("[ops] Namespace rescope FAILED at connectivity test: %v (%v since rescope start)", err, elapsed)
+		errorlog.Record("namespace-rescope", "error",
+			"stage=TestClusterConnection namespace=%q elapsed=%v: %v", safeNamespace, elapsed, err)
+		return fmt.Errorf("cluster connection failed: %w", err)
+	}
+	log.Printf("[ops] Cluster connectivity verified (%v)", time.Since(t))
+
+	if err := reinitializeNamespaceScope(namespace, "Stopping caches..."); err != nil {
+		elapsed := time.Since(rescopeStart).Truncate(time.Millisecond)
+		log.Printf("[ops] Namespace rescope FAILED at subsystem init: %v (%v since rescope start)", err, elapsed)
+		errorlog.Record("namespace-rescope", "error",
+			"stage=InitAllSubsystems namespace=%q elapsed=%v: %v", safeNamespace, elapsed, err)
+		if rollbackErr := reinitializeNamespaceScope(previousNamespace, "Restoring previous namespace..."); rollbackErr != nil {
+			log.Printf("[ops] Namespace rescope rollback to %q FAILED: %v", safePreviousNamespace, rollbackErr)
+			errorlog.Record("namespace-rescope", "error",
+				"stage=Rollback namespace=%q elapsed=%v: %v", safePreviousNamespace, time.Since(rescopeStart).Truncate(time.Millisecond), rollbackErr)
+			return fmt.Errorf("subsystem init failed: %w; rollback to previous namespace %q failed: %v", err, previousNamespace, rollbackErr)
+		}
+		notifyNamespaceRescopeCallbacks(previousNamespace)
+		return fmt.Errorf("subsystem init failed: %w; restored previous namespace %q", err, previousNamespace)
+	}
+
+	reportProgress("Building topology...")
+	log.Printf("[ops] Namespace rescope to %q COMPLETE (%v total)", safeNamespace, time.Since(rescopeStart))
+	notifyNamespaceRescopeCallbacks(namespace)
+
+	return nil
+}
+
+func reinitializeNamespaceScope(namespace, resetMessage string) error {
+	reportProgress(resetMessage)
+	t := time.Now()
+	ResetAllSubsystems()
+	logTiming("   [ops] ResetAllSubsystems: %v", time.Since(t))
+
+	SetNamespaceScopeOverride(namespace)
+	InvalidateCapabilitiesCache()
+	InvalidateResourcePermissionsCache()
+	InvalidateServerVersionCache()
+
+	t = time.Now()
+	initCtx, initCancel := NewOperationContext(ContextSwitchTimeout)
+	defer initCancel()
+	if err := InitAllSubsystems(initCtx, reportProgress); err != nil {
+		return err
+	}
+	logTiming("   [ops] InitAllSubsystems: %v", time.Since(t))
+	return nil
+}
+
+func notifyNamespaceRescopeCallbacks(namespace string) {
+	contextSwitchMu.RLock()
+	callbacks := make([]NamespaceRescopeCallback, len(namespaceRescopeCallbacks))
+	copy(callbacks, namespaceRescopeCallbacks)
+	contextSwitchMu.RUnlock()
+
+	for _, callback := range callbacks {
+		callback(namespace)
+	}
 }

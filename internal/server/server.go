@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"reflect"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -816,6 +817,19 @@ func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
 func (s *Server) parseNamespacesForUser(r *http.Request) []string {
 	namespaces := parseNamespaces(r.URL.Query())
 	pickFallback := false
+	if k8s.ForceNamespaceScope {
+		target := k8s.GetNamespaceScopeTarget()
+		if target == "" {
+			return []string{}
+		}
+		if namespaces == nil {
+			namespaces = []string{target}
+		} else if slices.Contains(namespaces, target) {
+			namespaces = []string{target}
+		} else {
+			return []string{}
+		}
+	}
 	if namespaces == nil {
 		// No explicit filter — use the user's saved picks if any.
 		s.loadSavedNamespacePreference(r)

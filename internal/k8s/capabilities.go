@@ -900,9 +900,17 @@ func CheckResourcePermissions(ctx context.Context) *PermissionCheckResult {
 		return &PermissionCheckResult{Perms: &ResourcePermissions{}, Scopes: map[string]k8score.ResourceScope{}}
 	}
 
+	forceNamespace := ForceNamespaceScope
 	scopeNamespaces := buildScopeCandidates(ctx)
+	if forceNamespace {
+		if target := GetNamespaceScopeTarget(); target != "" {
+			scopeNamespaces = mergeForcedScopeCandidate(target, scopeNamespaces)
+		} else {
+			log.Printf("Warning: --namespace-scope enabled but no namespace target is configured")
+		}
+	}
 
-	result, hadErrors := probeResourceAccess(ctx, GetDynamicClient(), scopeNamespaces, false)
+	result, hadErrors := probeResourceAccess(ctx, GetDynamicClient(), scopeNamespaces, forceNamespace)
 
 	resourcePermsMu.Lock()
 	cachedPermResult = result
@@ -951,6 +959,20 @@ func buildScopeCandidates(ctx context.Context) []string {
 		// the kubeconfig context) so it sits ahead of the alphabetical
 		// accessible list and survives truncation.
 		log.Printf("RBAC: candidate namespaces truncated (cap=%d, %d dropped); kinds reachable only in dropped namespaces will be marked denied", MaxScopeCandidates, dropped)
+	}
+	return out
+}
+
+func mergeForcedScopeCandidate(target string, candidates []string) []string {
+	if target == "" {
+		return candidates
+	}
+	out := []string{target}
+	for _, ns := range candidates {
+		if ns == "" || ns == target {
+			continue
+		}
+		out = append(out, ns)
 	}
 	return out
 }
@@ -1036,9 +1058,8 @@ func pickPrimaryNs(scopeNamespaces []string, scopes map[string]k8score.ResourceS
 //     internal/server/namespace_scope.go), so the cache preferentially boots
 //     cluster-wide.
 //   - true: probe namespaced kinds ONLY in the first scopeNamespaces entry.
-//     Reserved for tests / a hypothetical future per-cache pin; not reachable
-//     from CheckResourcePermissions today. Cluster-only kinds (nodes,
-//     namespaces, PV, storageclasses, ingressclasses) are still probed
+//     Used by --namespace-scope to pin the informer cache. Cluster-only kinds
+//     (nodes, namespaces, PV, storageclasses, ingressclasses) are still probed
 //     cluster-wide since they have no namespace dimension to pin to.
 func probeResourceAccess(ctx context.Context, dyn dynamic.Interface, scopeNamespaces []string, forceNamespace bool) (*PermissionCheckResult, bool) {
 	perms := &ResourcePermissions{}

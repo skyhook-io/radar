@@ -15,10 +15,9 @@ interface NamespaceSwitcherProps {
 }
 
 /**
- * NamespaceSwitcher is a per-user multi-select view filter for the cluster
- * view. It does NOT reshape the shared informer cache — picks are saved
- * server-side per user and intersected with the user's RBAC-allowed
- * namespaces on each read.
+ * NamespaceSwitcher is normally a per-user multi-select view filter. When the
+ * backend reports cacheScoped=true, it becomes a single-namespace cache scope
+ * control; local sessions may rebuild the cache for a different namespace.
  *
  * Three states reflect what the backend reports:
  *   - cluster-wide: empty trigger label "All namespaces", picker lets the
@@ -71,6 +70,7 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
   const applySelection = useCallback((next: Set<string>) => {
     if (!scope) return
     const nextArr = Array.from(next).sort()
+    if (scope.cacheScoped && nextArr.length !== 1) return
     if (nextArr.join(',') === activesKey) return
     setActive.mutate({ namespaces: nextArr })
   }, [activesKey, scope, setActive])
@@ -120,6 +120,10 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
   if (!scope) return null
 
   const toggle = (ns: string) => {
+    if (scope.cacheScoped) {
+      setDraft(new Set([ns]))
+      return
+    }
     const next = new Set(draft)
     if (next.has(ns)) next.delete(ns)
     else next.add(ns)
@@ -127,6 +131,7 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
   }
 
   const clearAll = () => {
+    if (scope.cacheScoped) return
     setDraft(new Set())
     setIsOpen(false)
     setSearch('')
@@ -150,11 +155,16 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
     activeCount === 0 ? 'All namespaces' : activeCount === 1 ? scopeActives[0] : `${activeCount} namespaces`
   const isClusterWide = activeCount === 0
   const restrictedHint = scope.mode === 'restricted'
-  const isDisabled = disabled || isLoading || setActive.isPending
+  const cacheScopeLocked = scope.cacheScoped && !scope.namespaceRescope
+  const isDisabled = disabled || isLoading || setActive.isPending || cacheScopeLocked
   const canClearAll = scope.canClearNamespace || activeCount === 0
   const tooltipContent = disabled && disabledTooltip
     ? disabledTooltip
-    : restrictedHint
+    : scope.cacheScoped
+      ? scope.namespaceRescope
+        ? 'Cache is scoped to one namespace. Switching rebuilds the local cache.'
+        : `Cache is scoped to namespace ${scope.cacheScopeNamespace || triggerLabel}.`
+      : restrictedHint
       ? 'Limited namespace visibility — only namespaces granted by your RBAC are shown.'
       : isClusterWide
         ? 'Currently viewing all namespaces. Click to narrow the view.'
@@ -213,28 +223,34 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
               </div>
             )}
 
-            <div className="flex items-center justify-between px-2 py-1.5 border-b border-theme-border text-xs text-theme-text-secondary">
-              <button
-                onClick={canClearAll ? clearAll : undefined}
-                disabled={!canClearAll || activeCount === 0}
-                className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-theme-hover disabled:opacity-50 disabled:hover:bg-transparent"
-                aria-label="Clear namespace selection"
-              >
-                <X className="w-3 h-3" />
-                Clear all
-              </button>
-              <button
-                onClick={allVisibleSelected ? clearVisible : selectAllVisible}
-                disabled={filteredItems.length === 0}
-                className="px-1.5 py-0.5 rounded hover:bg-theme-hover disabled:opacity-50 disabled:hover:bg-transparent"
-              >
-                {allVisibleSelected
-                  ? `Clear ${filteredItems.length} visible`
-                  : search.trim()
-                    ? `Select ${filteredItems.length} visible`
-                    : 'Select all'}
-              </button>
-            </div>
+            {scope.cacheScoped ? (
+              <div className="px-3 py-1.5 border-b border-theme-border text-xs text-theme-text-secondary">
+                Cache scope
+              </div>
+            ) : (
+              <div className="flex items-center justify-between px-2 py-1.5 border-b border-theme-border text-xs text-theme-text-secondary">
+                <button
+                  onClick={canClearAll ? clearAll : undefined}
+                  disabled={!canClearAll || activeCount === 0}
+                  className="flex items-center gap-1 px-1.5 py-0.5 rounded hover:bg-theme-hover disabled:opacity-50 disabled:hover:bg-transparent"
+                  aria-label="Clear namespace selection"
+                >
+                  <X className="w-3 h-3" />
+                  Clear all
+                </button>
+                <button
+                  onClick={allVisibleSelected ? clearVisible : selectAllVisible}
+                  disabled={filteredItems.length === 0}
+                  className="px-1.5 py-0.5 rounded hover:bg-theme-hover disabled:opacity-50 disabled:hover:bg-transparent"
+                >
+                  {allVisibleSelected
+                    ? `Clear ${filteredItems.length} visible`
+                    : search.trim()
+                      ? `Select ${filteredItems.length} visible`
+                      : 'Select all'}
+                </button>
+              </div>
+            )}
 
             <ul className="max-h-80 overflow-y-auto py-1">
               {filteredItems.length === 0 && (
@@ -253,7 +269,8 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
                     >
                       <span className="flex items-center gap-2 min-w-0">
                         <input
-                          type="checkbox"
+                          type={scope.cacheScoped ? 'radio' : 'checkbox'}
+                          name={scope.cacheScoped ? 'namespace-cache-scope' : undefined}
                           checked={isChecked}
                           onChange={() => toggle(ns)}
                           className="shrink-0 accent-current"
@@ -273,7 +290,9 @@ export const NamespaceSwitcher = forwardRef<NamespaceSwitcherHandle, NamespaceSw
 
             <div className="flex items-center justify-between px-3 py-1.5 border-t border-theme-border text-[11px] text-theme-text-tertiary">
               <span>
-                {draft.size === 0 ? 'All namespaces' : `${draft.size} selected`}
+                {scope.cacheScoped
+                  ? (draft.size === 1 ? Array.from(draft)[0] : 'Select a namespace')
+                  : draft.size === 0 ? 'All namespaces' : `${draft.size} selected`}
               </span>
               <button
                 onClick={closeAndApply}

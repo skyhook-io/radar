@@ -54,12 +54,14 @@ var (
 	// destroyed clusters / removed contexts linger in the dropdown
 	// (they only error out when the user tries to switch to them).
 	// Same lifecycle / lock as perFileConfigs.
-	perFileMtimes     map[string]time.Time
-	contextName       string
-	clusterName       string
-	contextNamespace  string // Default namespace from kubeconfig context
-	fallbackNamespace string // Explicit namespace from --namespace flag
-	contextUsesExec   bool   // True when the current context uses an exec credential plugin
+	perFileMtimes          map[string]time.Time
+	contextName            string
+	clusterName            string
+	contextNamespace       string // Default namespace from kubeconfig context
+	fallbackNamespace      string // Explicit namespace from --namespace flag
+	namespaceScopeOverride string // Runtime namespace selected by local --namespace-scope rescope
+	namespaceScopeResolver func(contextName string) (string, bool)
+	contextUsesExec        bool // True when the current context uses an exec credential plugin
 	// execPluginCommands is the set of unique exec-auth plugin command basenames
 	// referenced by any context in the merged kubeconfig. Populated from
 	// rawConfig.AuthInfos at load time and refreshed on SwitchContext. Stored
@@ -669,6 +671,55 @@ func SetFallbackNamespace(ns string) {
 	clientMu.Lock()
 	defer clientMu.Unlock()
 	fallbackNamespace = ns
+}
+
+// SetNamespaceScopeOverride sets the runtime namespace used by local
+// --namespace-scope rescope. It is separate from fallbackNamespace so a real
+// kubeconfig context switch can drop the runtime pick without losing the
+// explicit --namespace startup flag.
+func SetNamespaceScopeOverride(ns string) {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	namespaceScopeOverride = ns
+}
+
+func ClearNamespaceScopeOverride() {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	namespaceScopeOverride = ""
+}
+
+func SetNamespaceScopePreferenceResolver(resolver func(contextName string) (string, bool)) {
+	clientMu.Lock()
+	defer clientMu.Unlock()
+	namespaceScopeResolver = resolver
+}
+
+func RestoreNamespaceScopePreference(contextName string) {
+	clientMu.RLock()
+	resolver := namespaceScopeResolver
+	clientMu.RUnlock()
+	if resolver == nil {
+		return
+	}
+	if namespace, ok := resolver(contextName); ok && namespace != "" {
+		SetNamespaceScopeOverride(namespace)
+	}
+}
+
+// GetNamespaceScopeTarget returns the namespace used when informer caches are
+// explicitly namespace-scoped. A local runtime rescope wins first, then the
+// explicit CLI namespace, then the kubeconfig context namespace.
+func GetNamespaceScopeTarget() string {
+	clientMu.RLock()
+	defer clientMu.RUnlock()
+	if namespaceScopeOverride != "" {
+		return namespaceScopeOverride
+	}
+	if fallbackNamespace != "" {
+		return fallbackNamespace
+	}
+	return contextNamespace
 }
 
 // GetEffectiveNamespace returns the namespace to use for RBAC fallback checks.

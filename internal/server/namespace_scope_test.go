@@ -304,3 +304,32 @@ func restoreHelmNamespaceFallbackState(t *testing.T) {
 	k8s.SetFallbackNamespace("backend-fallback")
 	t.Cleanup(func() { k8s.SetFallbackNamespace("") })
 }
+
+func TestParseNamespacesForUser_ForcedCacheScope(t *testing.T) {
+	s := newTestServer(t)
+	k8s.ForceNamespaceScope = true
+	k8s.SetFallbackNamespace("prod")
+	t.Cleanup(func() {
+		k8s.ForceNamespaceScope = false
+		k8s.SetFallbackNamespace("")
+	})
+
+	cases := []struct {
+		name string
+		url  string
+		want []string
+	}{
+		{name: "no query uses cache scope", url: "/api/resources/pods", want: []string{"prod"}},
+		{name: "query including cache scope narrows to cache scope", url: "/api/resources/pods?namespaces=prod,staging", want: []string{"prod"}},
+		{name: "query outside cache scope returns no access", url: "/api/resources/pods?namespace=staging", want: []string{}},
+	}
+
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tt.url, nil)
+			if got := s.parseNamespacesForUser(req); !slices.Equal(got, tt.want) {
+				t.Fatalf("parseNamespacesForUser(%q) = %v, want %v", tt.url, got, tt.want)
+			}
+		})
+	}
+}

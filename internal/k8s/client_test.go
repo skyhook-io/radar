@@ -169,6 +169,56 @@ func TestCollectExecPluginCommands(t *testing.T) {
 	}
 }
 
+func TestNamespaceScopeOverrideClearsBackToStartupFallback(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	clientMu.Lock()
+	prevContextNamespace := contextNamespace
+	contextNamespace = "ctx-ns"
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		contextNamespace = prevContextNamespace
+		clientMu.Unlock()
+	})
+
+	SetFallbackNamespace("cli-ns")
+	SetNamespaceScopeOverride("runtime-ns")
+	if got := GetNamespaceScopeTarget(); got != "runtime-ns" {
+		t.Fatalf("GetNamespaceScopeTarget() = %q, want runtime-ns", got)
+	}
+
+	ClearNamespaceScopeOverride()
+	if got := GetNamespaceScopeTarget(); got != "cli-ns" {
+		t.Fatalf("GetNamespaceScopeTarget() after clearing override = %q, want cli-ns", got)
+	}
+
+	SetFallbackNamespace("")
+	if got := GetNamespaceScopeTarget(); got != "ctx-ns" {
+		t.Fatalf("GetNamespaceScopeTarget() after clearing fallback = %q, want ctx-ns", got)
+	}
+}
+
+func TestRequireNamespaceScopeTarget(t *testing.T) {
+	ResetTestState()
+	t.Cleanup(ResetTestState)
+
+	if err := requireNamespaceScopeTarget("ctx-a"); err != nil {
+		t.Fatalf("requireNamespaceScopeTarget without ForceNamespaceScope = %v, want nil", err)
+	}
+
+	ForceNamespaceScope = true
+	if err := requireNamespaceScopeTarget("ctx-a"); err == nil {
+		t.Fatal("requireNamespaceScopeTarget with empty target = nil, want error")
+	}
+
+	SetNamespaceScopeOverride("saved-ns")
+	if err := requireNamespaceScopeTarget("ctx-a"); err != nil {
+		t.Fatalf("requireNamespaceScopeTarget with saved target = %v, want nil", err)
+	}
+}
+
 func TestScrubPathError(t *testing.T) {
 	// Simulate the shape os.ReadDir returns: a *PathError with the path
 	// and an underlying syscall error. We want the path stripped and only

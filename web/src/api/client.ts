@@ -3147,6 +3147,11 @@ export interface NamespaceScope {
   authoritative: boolean
   /** false when clearing would leave no usable namespace fallback. */
   canClearNamespace: boolean
+  /** true when the backend informer cache is pinned to a namespace. */
+  cacheScoped: boolean
+  cacheScopeNamespace?: string
+  /** true when this client may rebuild the local cache for another namespace. */
+  namespaceRescope: boolean
 }
 
 export function useNamespaceScope() {
@@ -3158,6 +3163,7 @@ export function useNamespaceScope() {
 }
 
 const NAMESPACE_SWITCH_TIMEOUT = 5000
+const NAMESPACE_RESCOPE_TIMEOUT = 120000
 
 export function debugNamespaceLog(label: string, payload?: Record<string, unknown>) {
   if (typeof window === 'undefined') return
@@ -3184,7 +3190,9 @@ export function useSetActiveNamespace() {
     mutationFn: async ({ namespaces }) => {
       debugNamespaceLog('mutation:start', { namespaces })
       const controller = new AbortController()
-      const timeoutId = setTimeout(() => controller.abort(), NAMESPACE_SWITCH_TIMEOUT)
+      const currentScope = queryClient.getQueryData<NamespaceScope>(['namespace-scope'])
+      const timeoutMs = currentScope?.cacheScoped ? NAMESPACE_RESCOPE_TIMEOUT : NAMESPACE_SWITCH_TIMEOUT
+      const timeoutId = setTimeout(() => controller.abort(), timeoutMs)
       const startedAt = performance.now()
       try {
         const response = await apiFetch(`${getApiBase()}/cluster/namespace`, {
@@ -3212,7 +3220,9 @@ export function useSetActiveNamespace() {
           error: error instanceof Error ? error.message : String(error),
         })
         if (error instanceof Error && error.name === 'AbortError') {
-          throw new Error('Namespace switch timed out. The cluster may be unreachable.', { cause: error })
+          throw new Error(currentScope?.cacheScoped
+            ? 'Namespace rescope timed out. The cluster may still be loading.'
+            : 'Namespace switch timed out. The cluster may be unreachable.')
         }
         throw error
       }
@@ -3223,7 +3233,13 @@ export function useSetActiveNamespace() {
         mode: scope.mode,
         accessibleCount: scope.accessibleNamespaces.length,
       })
+      if (scope.cacheScoped) {
+        queryClient.removeQueries({ predicate: query => query.queryKey[0] !== 'namespace-scope' })
+      }
       queryClient.setQueryData<NamespaceScope>(['namespace-scope'], scope)
+      if (scope.cacheScoped) {
+        queryClient.invalidateQueries()
+      }
       debugNamespaceLog('mutation:success-after-scope-cache-write')
     },
     onError: () => {
