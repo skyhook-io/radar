@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { createPortal } from 'react-dom'
-import { Settings, X, RotateCcw, Loader2, Copy, Check, Pin } from 'lucide-react'
+import { Settings, X, RotateCcw, Loader2, Copy, Check, Pin, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
@@ -28,9 +28,10 @@ interface ConfigResponse {
 interface SettingsDialogProps {
   open: boolean
   onClose: () => void
+  onShowMyPermissions?: () => void
 }
 
-export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
+export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
@@ -165,6 +166,25 @@ export function SettingsDialog({ open, onClose }: SettingsDialogProps) {
           {loadError && (
             <div className="mb-3 px-3 py-2 text-xs text-amber-700 dark:text-amber-300 bg-amber-500/10 border border-amber-500/20 rounded-md">
               {loadError}
+            </div>
+          )}
+          {onShowMyPermissions && (
+            <div className="mb-4 rounded-md border border-theme-border bg-theme-elevated/50 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <h3 className="text-sm font-medium text-theme-text-primary">My permissions</h3>
+                  <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                    View what your current identity can do in this cluster.
+                  </p>
+                </div>
+                <button
+                  onClick={onShowMyPermissions}
+                  className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover rounded-md transition-colors"
+                >
+                  <Shield className="w-3.5 h-3.5" />
+                  Open
+                </button>
+              </div>
             </div>
           )}
           <StartupConfigTab
