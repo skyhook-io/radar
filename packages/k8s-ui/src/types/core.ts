@@ -411,7 +411,8 @@ export interface ResolvedEnvFromEntry {
   values: Record<string, string>
   isSecret: boolean
 }
-export type ResolvedEnvFrom = Record<string, ResolvedEnvFromEntry>
+export type ResolvedEnvFromKey = `configmap:${string}` | `secret:${string}`
+export type ResolvedEnvFrom = Partial<Record<ResolvedEnvFromKey, ResolvedEnvFromEntry>>
 
 // Resource reference (for relationships)
 export interface ResourceRef {

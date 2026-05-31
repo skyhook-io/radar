@@ -8,6 +8,7 @@ import {
   type RendererOverrides,
   type GitOpsOwnerRef,
   gitOpsRouteForOwner,
+  resolvedEnvFromKey,
 } from '@skyhook-io/k8s-ui'
 import type { SelectedResource, ResourceRef, ResolvedEnvFrom } from '../../types'
 import { kindToPlural, buildWorkloadPath, type NavigateToResource } from '../../utils/navigation'
@@ -300,7 +301,7 @@ export function WorkloadView({
     envFromConfigMapNames.forEach((n, i) => {
       // Single-resource endpoint returns { resource, relationships } wrapper
       const cm = configMapQueries[i]?.data?.resource ?? configMapQueries[i]?.data
-      if (cm) result[n] = { keys: Object.keys(cm.data || {}), values: cm.data || {}, isSecret: false }
+      if (cm) result[resolvedEnvFromKey('configmap', n)] = { keys: Object.keys(cm.data || {}), values: cm.data || {}, isSecret: false }
     })
     envFromSecretNames.forEach((n, i) => {
       const secret = secretQueries[i]?.data?.resource ?? secretQueries[i]?.data
@@ -309,7 +310,7 @@ export function WorkloadView({
         for (const [k, v] of Object.entries(secret.data || {})) {
           try { decodedValues[k] = atob(v as string) } catch { decodedValues[k] = v as string }
         }
-        result[n] = { keys: Object.keys(decodedValues), values: decodedValues, isSecret: true }
+        result[resolvedEnvFromKey('secret', n)] = { keys: Object.keys(decodedValues), values: decodedValues, isSecret: true }
       }
     })
     return Object.keys(result).length > 0 ? result : undefined

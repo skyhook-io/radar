@@ -9,6 +9,7 @@ import {
   rbacResourceBadgeClass,
   rbacApiGroupBadgeClass,
 } from '../../../utils/rbac-badges'
+import { resolvedEnvFromKey } from '../../../utils/env-from'
 import { detectBlastRadius, rulePermissivenessScore } from '../../../utils/rbac-blast-radius'
 import { RBACErrorSection, isRBACUnavailable } from './RBACErrorSection'
 import type { ResolvedEnvFrom, RBACSubjectResponse, RBACPolicyRule } from '../../../types'
@@ -195,7 +196,12 @@ function EnvVarsSection({
                   const isSecret = !!ef.secretRef
                   const sourceName = ef.configMapRef?.name ?? ef.secretRef?.name ?? 'unknown'
                   const prefix = ef.configMapRef ? 'ConfigMap' : ef.secretRef ? 'Secret' : 'Source'
-                  const resolved = resolvedEnvFrom?.[sourceName]
+                  const sourceKey = ef.configMapRef
+                    ? resolvedEnvFromKey('configmap', sourceName)
+                    : ef.secretRef
+                      ? resolvedEnvFromKey('secret', sourceName)
+                      : undefined
+                  const resolved = sourceKey ? resolvedEnvFrom?.[sourceKey] : undefined
                   return (
                     <div key={i} className="mb-1">
                       <div className="flex items-center gap-1.5 text-xs font-mono py-0.5">
