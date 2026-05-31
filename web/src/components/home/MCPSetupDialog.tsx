@@ -221,7 +221,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
             <div className="relative">
               <div className="flex items-center gap-3 bg-theme-base rounded-md px-3 py-2.5">
                 <span className="badge text-purple-400 bg-purple-500/10">HTTP</span>
-                <code className="text-sm font-mono text-theme-text-primary">{mcpUrl}</code>
+                <code className="inline-code text-sm">{mcpUrl}</code>
               </div>
               <CopyButton text={mcpUrl} />
             </div>
@@ -306,7 +306,7 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
               {MCP_TOOL_CATALOG.map((tool) => (
                 <div key={tool.name} className="card-inner space-y-1.5">
                   <div className="flex items-center gap-2">
-                    <code className="text-[11px] font-mono text-purple-400">{tool.name}</code>
+                    <code className="inline-code text-[11px]">{tool.name}</code>
                     {tool.write && (
                       <span className="badge-sm bg-amber-500/10 text-amber-600 dark:text-amber-400" title="Write tool — annotated as destructive">
                         write

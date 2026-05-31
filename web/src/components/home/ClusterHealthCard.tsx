@@ -52,7 +52,7 @@ function MetricsUnavailableHint({ platform, metricsServerAvailable }: { platform
       content={
         <div className="space-y-1">
           <div className="font-medium">How to fix</div>
-          <div>{isPreInstalled ? hint : <>Install by running:<br /><code className="text-[10px] opacity-80">{hint}</code></>}</div>
+          <div>{isPreInstalled ? hint : <>Install by running:<br /><code className="inline-code text-[10px] opacity-80">{hint}</code></>}</div>
         </div>
       }
       position="bottom"

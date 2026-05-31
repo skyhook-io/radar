@@ -51,7 +51,7 @@ export function Markdown({ children, className }: MarkdownProps) {
           const isInline = !className
           if (isInline) {
             return (
-              <code className="px-1.5 py-0.5 bg-theme-elevated rounded text-theme-text-primary font-mono text-[0.9em]">
+              <code className="inline-code">
                 {children}
               </code>
             )

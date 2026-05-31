@@ -7,10 +7,14 @@ import {
   WorkloadView as BaseWorkloadView,
   type RendererOverrides,
   type GitOpsOwnerRef,
+  type GitOpsStatus,
+  type HelmOwnerRef,
   gitOpsRouteForOwner,
+  gitOpsOwnerFromRelationships,
+  getGitOpsResourceStatus,
   resolvedEnvFromKey,
 } from '@skyhook-io/k8s-ui'
-import type { SelectedResource, ResourceRef, ResolvedEnvFrom } from '../../types'
+import type { SelectedResource, ResourceRef, Relationships, ResolvedEnvFrom } from '../../types'
 import { kindToPlural, buildWorkloadPath, type NavigateToResource } from '../../utils/navigation'
 import {
   useChanges, useResourceWithRelationships, usePodLogs, useTopology, useUpdateResource,
@@ -21,6 +25,7 @@ import {
   useCordonNode, useUncordonNode, useDrainNode,
   useCascadeDeletePreview,
   useResourceEvents,
+  useResource,
   fetchJSON,
 } from '../../api/client'
 import { PrometheusCharts, isPrometheusSupported } from '../resource/PrometheusCharts'
@@ -260,6 +265,61 @@ export function WorkloadView({
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
   const certificateInfo = resourceResponse?.certificateInfo
+  const relationshipGitopsOwner = useMemo(() => gitOpsOwnerFromRelationships(relationships), [relationships])
+  const inheritedGitOpsLookupRef = useMemo(
+    () => findInheritedGitOpsLookupRef(relationships, relationshipGitopsOwner, { kind: kindProp, namespace, name, group: rest.group }),
+    [relationships, relationshipGitopsOwner, kindProp, namespace, name, rest.group],
+  )
+  const inheritedGitOpsResponse = useResourceWithRelationships<any>(
+    inheritedGitOpsLookupRef ? kindToPlural(inheritedGitOpsLookupRef.kind) : '',
+    inheritedGitOpsLookupRef?.namespace ?? '',
+    inheritedGitOpsLookupRef?.name ?? '',
+    inheritedGitOpsLookupRef?.group,
+  )
+  const inheritedGitopsOwner = useMemo(
+    () => gitOpsOwnerFromRelationships(inheritedGitOpsResponse.data?.relationships),
+    [inheritedGitOpsResponse.data?.relationships],
+  )
+  const relationshipHelmOwner = useMemo(
+    () => nativeHelmOwnerFromRelationships(relationships, resource?.metadata?.namespace ?? namespace),
+    [relationships, resource?.metadata?.namespace, namespace],
+  )
+  const inheritedHelmOwner = useMemo(
+    () => nativeHelmOwnerFromRelationships(inheritedGitOpsResponse.data?.relationships, inheritedGitOpsResponse.data?.resource?.metadata?.namespace ?? namespace),
+    [inheritedGitOpsResponse.data?.relationships, inheritedGitOpsResponse.data?.resource?.metadata?.namespace, namespace],
+  )
+  const rawGitopsOwner = relationshipGitopsOwner ?? inheritedGitopsOwner
+  const gitOpsSourceResource = relationshipGitopsOwner ? resource : inheritedGitOpsResponse.data?.resource
+  const helmOwner = relationshipHelmOwner ?? inheritedHelmOwner
+  const helmSourceResource = relationshipHelmOwner ? resource : inheritedGitOpsResponse.data?.resource
+  const shouldResolveArgoOwner = rawGitopsOwner?.tool === 'argocd' && !rawGitopsOwner.namespace
+  const { data: argoApplications } = useResources<any>('applications', undefined, 'argoproj.io', { enabled: shouldResolveArgoOwner })
+  const gitopsOwner = useMemo(
+    () => resolveGitOpsOwner(rawGitopsOwner, argoApplications),
+    [rawGitopsOwner, argoApplications],
+  )
+  const gitopsOwnerGroup = gitopsOwner ? gitOpsOwnerGroup(gitopsOwner) : ''
+  const shouldFetchGitOpsOwner = Boolean(gitopsOwner?.namespace)
+  const gitopsOwnerQuery = useResource<any>(
+    shouldFetchGitOpsOwner ? gitopsOwner!.kind : '',
+    gitopsOwner?.namespace ?? '',
+    gitopsOwner?.name ?? '',
+    gitopsOwnerGroup,
+  )
+  const gitOpsOwnerStatus = useMemo(
+    () => deriveGitOpsOwnerStatus(gitopsOwner, gitopsOwnerQuery.data),
+    [gitopsOwner, gitopsOwnerQuery.data],
+  )
+  const gitOpsOwnerVerified = Boolean(gitopsOwner?.namespace && gitopsOwnerQuery.data)
+  const gitOpsOwnerPending = Boolean(gitopsOwner?.namespace && gitopsOwnerQuery.isLoading && !gitopsOwnerQuery.data)
+  const gitOpsOwnerSource = useMemo(
+    () => describeGitOpsOwnerSource(rawGitopsOwner, gitOpsSourceResource),
+    [rawGitopsOwner, gitOpsSourceResource],
+  )
+  const helmOwnerSource = useMemo(
+    () => describeHelmOwnerSource(helmOwner, helmSourceResource),
+    [helmOwner, helmSourceResource],
+  )
 
   // For pods: extract envFrom ConfigMap/Secret names and resolve their keys
   const isPod = kindProp.toLowerCase() === 'pods'
@@ -369,12 +429,27 @@ export function WorkloadView({
 
   const navigateRouter = useNavigate()
   const handleOpenGitOpsResource = useCallback(
-    (ref: GitOpsOwnerRef) => navigateRouter(gitOpsRouteForOwner(ref)),
-    [navigateRouter],
+    (ref: GitOpsOwnerRef) => {
+      const params = new URLSearchParams()
+      const namespaces = searchParams.get('namespaces')
+      if (namespaces) params.set('namespaces', namespaces)
+      navigateRouter({ pathname: gitOpsRouteForOwner(ref), search: params.toString() })
+    },
+    [navigateRouter, searchParams],
   )
   const handleNavigateGitOpsPath = useCallback(
     (path: string) => navigateRouter(path),
     [navigateRouter],
+  )
+  const handleOpenHelmRelease = useCallback(
+    (ref: HelmOwnerRef) => {
+      const params = new URLSearchParams()
+      const namespaces = searchParams.get('namespaces')
+      if (namespaces) params.set('namespaces', namespaces)
+      params.set('release', `${ref.namespace}/${ref.name}`)
+      navigateRouter({ pathname: '/helm', search: params.toString() })
+    },
+    [navigateRouter, searchParams],
   )
 
   // Duplicate dialog
@@ -438,7 +513,15 @@ export function WorkloadView({
           <FluxSourceConsumersSection kind={k} namespace={ns} name={n} />
         </>
       )}
-      onOpenGitOpsResource={handleOpenGitOpsResource}
+      onOpenGitOpsResource={gitopsOwnerQuery.data ? handleOpenGitOpsResource : undefined}
+      resolvedGitOpsOwner={gitopsOwner}
+      gitOpsOwnerVerified={gitOpsOwnerVerified}
+      gitOpsOwnerPending={gitOpsOwnerPending}
+      gitOpsOwnerSource={gitOpsOwnerSource}
+      gitOpsOwnerStatus={gitOpsOwnerStatus}
+      helmOwner={helmOwner}
+      helmOwnerSource={helmOwnerSource}
+      onOpenHelmRelease={handleOpenHelmRelease}
       onNavigateGitOpsPath={handleNavigateGitOpsPath}
     />
     <CreateResourceDialog
@@ -453,6 +536,104 @@ export function WorkloadView({
     {comparePicker}
     </>
   )
+}
+
+function resolveGitOpsOwner(owner: GitOpsOwnerRef | null, argoApplications: any[] | undefined): GitOpsOwnerRef | null {
+  if (!owner || owner.namespace || owner.tool !== 'argocd') return owner
+  const matches = (argoApplications ?? []).filter((app) => app?.metadata?.name === owner.name)
+  if (matches.length !== 1) return owner
+  const namespace = matches[0]?.metadata?.namespace
+  return namespace ? { ...owner, namespace } : owner
+}
+
+function findInheritedGitOpsLookupRef(
+  relationships: Relationships | undefined,
+  directOwner: GitOpsOwnerRef | null,
+  current: ResourceRef,
+): ResourceRef | null {
+  if (directOwner) return null
+  const inheritedManagerRefs = (relationships?.managedBy ?? []).filter((ref) =>
+    !gitOpsOwnerFromRelationships({ managedBy: [ref] })
+    && !isNativeHelmManager(ref)
+  )
+  const candidates = [
+    relationships?.deployment,
+    ...inheritedManagerRefs,
+    relationships?.owner,
+  ].filter(Boolean) as ResourceRef[]
+
+  return candidates.find((ref) => !isCurrentResource(ref, current)) ?? null
+}
+
+function nativeHelmOwnerFromRelationships(relationships: Relationships | undefined, fallbackNamespace: string): HelmOwnerRef | null {
+  const ref = relationships?.managedBy?.[0]
+  if (!ref || !isNativeHelmManager(ref)) return null
+  return {
+    namespace: ref.namespace || fallbackNamespace,
+    name: ref.name,
+  }
+}
+
+function isCurrentResource(ref: ResourceRef, current: ResourceRef): boolean {
+  return kindToPlural(ref.kind) === kindToPlural(current.kind)
+    && ref.namespace === current.namespace
+    && ref.name === current.name
+    && (ref.group ?? '') === (current.group ?? '')
+}
+
+function isNativeHelmManager(ref: ResourceRef): boolean {
+  return ref.kind === 'HelmRelease' && ref.group !== 'helm.toolkit.fluxcd.io'
+}
+
+function describeGitOpsOwnerSource(owner: GitOpsOwnerRef | null, resource: any): string | null {
+  if (!owner || !resource) return null
+  const labels = resource.metadata?.labels ?? {}
+  const annotations = resource.metadata?.annotations ?? {}
+
+  if (owner.tool === 'fluxcd') {
+    const nameKey = owner.kind === 'helmreleases' ? 'helm.toolkit.fluxcd.io/name' : 'kustomize.toolkit.fluxcd.io/name'
+    const nsKey = owner.kind === 'helmreleases' ? 'helm.toolkit.fluxcd.io/namespace' : 'kustomize.toolkit.fluxcd.io/namespace'
+    if (labels[nameKey] || labels[nsKey]) {
+      return `${nameKey}=${labels[nameKey] ?? ''}, ${nsKey}=${labels[nsKey] ?? ''}`
+    }
+  }
+
+  const trackingID = annotations['argocd.argoproj.io/tracking-id']
+  if (trackingID) return `argocd.argoproj.io/tracking-id=${trackingID}`
+  const argoInstance = labels['argocd.argoproj.io/instance']
+  if (argoInstance) return `argocd.argoproj.io/instance=${argoInstance}`
+  return null
+}
+
+function describeHelmOwnerSource(owner: HelmOwnerRef | null, resource: any): string | null {
+  if (!owner || !resource) return null
+  const annotations = resource.metadata?.annotations ?? {}
+  const releaseName = annotations['meta.helm.sh/release-name']
+  const releaseNamespace = annotations['meta.helm.sh/release-namespace']
+  if (releaseName || releaseNamespace) {
+    return `meta.helm.sh/release-name=${releaseName ?? ''}, meta.helm.sh/release-namespace=${releaseNamespace ?? ''}`
+  }
+  return null
+}
+
+function gitOpsOwnerGroup(owner: GitOpsOwnerRef): string {
+  if (owner.tool === 'argocd') return 'argoproj.io'
+  if (owner.kind === 'kustomizations') return 'kustomize.toolkit.fluxcd.io'
+  return 'helm.toolkit.fluxcd.io'
+}
+
+function deriveGitOpsOwnerStatus(owner: GitOpsOwnerRef | null, resource: any): GitOpsStatus | null {
+  if (!owner || !resource || !hasGitOpsStatusPayload(owner, resource)) return null
+  return getGitOpsResourceStatus(owner.kind, resource)
+}
+
+function hasGitOpsStatusPayload(owner: GitOpsOwnerRef, resource: any): boolean {
+  if (owner.kind === 'applications') {
+    const status = resource.status ?? {}
+    return Boolean(status.sync?.status || status.health?.status || status.operationState?.phase)
+  }
+  if (resource.spec?.suspend === true) return true
+  return Array.isArray(resource.status?.conditions) && resource.status.conditions.length > 0
 }
 
 // ============================================================================

@@ -893,7 +893,7 @@ function ReviewStep({
           <div>
             <p className="text-sm font-medium text-amber-400">Installing from ArtifactHub</p>
             <p className="text-xs text-theme-text-secondary mt-1">
-              This chart will be installed from: <code className="bg-theme-elevated px-1 rounded">{artifactHubRepoUrl || repo}</code>
+              This chart will be installed from: <code className="inline-code">{artifactHubRepoUrl || repo}</code>
             </p>
           </div>
         </div>

@@ -109,7 +109,7 @@ export function MyPermissionsDialog({ open, onClose }: MyPermissionsDialogProps)
 
           <p className="text-xs text-theme-text-tertiary">
             Computed by the Kubernetes API via{' '}
-            <code className="bg-theme-elevated px-1 rounded">SelfSubjectRulesReview</code>.
+            <code className="inline-code">SelfSubjectRulesReview</code>.
             Shows what you can do in <span className="text-theme-text-secondary">{namespace}</span>,
             plus any cluster-scoped rules that apply everywhere.
           </p>

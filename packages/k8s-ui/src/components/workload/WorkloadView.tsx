@@ -21,6 +21,7 @@ import {
   BarChart3,
 } from 'lucide-react'
 import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom } from '../../types'
+import type { GitOpsStatus } from '../../types/gitops'
 import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource, pluralToKind } from '../../utils/navigation'
 import { gitOpsOwnerFromRelationships, type GitOpsOwnerRef } from '../../utils/gitops-owner'
@@ -44,7 +45,7 @@ import {
 import { ResourceActionsBar } from '../shared/ResourceActionsBar'
 import { EditableYamlView, SaveSuccessAnimation } from '../shared/EditableYamlView'
 import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from '../shared/ResourceRendererDispatch'
-import { ManagedByChip } from '../shared/ManagedByChip'
+import { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/ManagedByChip'
 import { getKindColorOutline, formatKindName } from '../ui/drawer-components'
 
 type TabType = 'overview' | 'timeline' | 'logs' | 'metrics' | 'yaml'
@@ -126,6 +127,22 @@ interface WorkloadViewProps {
    * visible (useful for hosts that haven't routed the GitOps tab yet).
    */
   onOpenGitOpsResource?: (ref: GitOpsOwnerRef) => void
+  /** Owner ref resolved by the host when relationships lack enough detail, e.g. Argo labels without namespace. */
+  resolvedGitOpsOwner?: GitOpsOwnerRef | null
+  /** True when the owner exists locally and can be opened as a GitOps detail page. */
+  gitOpsOwnerVerified?: boolean
+  /** True while the host is still resolving whether the owner exists locally. */
+  gitOpsOwnerPending?: boolean
+  /** Metadata key/value that caused GitOps ownership inference, when known. */
+  gitOpsOwnerSource?: string | null
+  /** Sync/health status for the GitOps owner, when the host can resolve it. */
+  gitOpsOwnerStatus?: GitOpsStatus | null
+  /** Native Helm release that manages this resource, when detected. */
+  helmOwner?: HelmOwnerRef | null
+  /** Metadata key/value that caused native Helm ownership inference, when known. */
+  helmOwnerSource?: string | null
+  /** Open the native Helm release drawer. */
+  onOpenHelmRelease?: (ref: HelmOwnerRef) => void
   /**
    * Open the GitOps detail page for the resource itself, when the resource
    * is a portal-classified GitOps CR (Argo Application/ApplicationSet/
@@ -226,6 +243,14 @@ export function WorkloadView({
   resolvedEnvFrom,
   // GitOps
   onOpenGitOpsResource,
+  resolvedGitOpsOwner,
+  gitOpsOwnerVerified = true,
+  gitOpsOwnerPending = false,
+  gitOpsOwnerSource,
+  gitOpsOwnerStatus,
+  helmOwner,
+  helmOwnerSource,
+  onOpenHelmRelease,
   onNavigateGitOpsPath,
 }: WorkloadViewProps) {
   // Normalize kind: URL has plural lowercase, internal logic uses singular PascalCase
@@ -315,7 +340,8 @@ export function WorkloadView({
 
   // Metadata
   const metadata = useMemo(() => extractMetadata(kind, resource), [kind, resource])
-  const gitopsOwner = useMemo(() => gitOpsOwnerFromRelationships(relationships), [relationships])
+  const relationshipGitOpsOwner = useMemo(() => gitOpsOwnerFromRelationships(relationships), [relationships])
+  const gitopsOwner = resolvedGitOpsOwner ?? relationshipGitOpsOwner
   // When the resource itself is a portal GitOps CR (Application, Kustomization,
   // HelmRelease, etc.), surface a link to its dedicated GitOps detail page —
   // the drawer's renderer is thorough but the tab has the tree + insights +
@@ -465,9 +491,10 @@ export function WorkloadView({
               </button>
             </div>
             <p className="text-sm text-theme-text-tertiary">{namespace}</p>
-            {(gitopsOwner || (gitOpsResourcePath && onNavigateGitOpsPath)) && (
+            {(gitopsOwner || helmOwner || (gitOpsResourcePath && onNavigateGitOpsPath)) && (
               <div className="mt-1 flex flex-wrap items-center gap-1.5">
-                {gitopsOwner && <ManagedByChip owner={gitopsOwner} onOpen={onOpenGitOpsResource} />}
+                {gitopsOwner && <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} />}
+                {helmOwner && <HelmManagedByChip owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} />}
                 {gitOpsResourcePath && onNavigateGitOpsPath && (
                   <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
                 )}
@@ -575,7 +602,10 @@ export function WorkloadView({
                 <span className="truncate max-w-md font-mono text-xs">{metadata.find(m => m.label === 'Image')?.value}</span>
               )}
               {gitopsOwner && (
-                <ManagedByChip owner={gitopsOwner} onOpen={onOpenGitOpsResource} variant="block" />
+                <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} variant="block" />
+              )}
+              {helmOwner && (
+                <HelmManagedByChip owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} variant="block" />
               )}
               {gitOpsResourcePath && onNavigateGitOpsPath && (
                 <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />

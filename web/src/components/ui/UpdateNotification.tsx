@@ -147,7 +147,7 @@ export function UpdateNotification() {
                   onClick={handleCopyCommand}
                   className="flex items-center gap-2 mt-2 px-2 py-1.5 bg-theme-elevated rounded font-mono text-theme-text-primary hover:bg-theme-surface-hover transition-colors w-full"
                 >
-                  <code className="flex-1 text-left truncate text-[11px]">{versionInfo.updateCommand}</code>
+                  <code className="inline-code flex-1 truncate text-left text-[11px]">{versionInfo.updateCommand}</code>
                   <CopyIcon copied={copied} failed={copyFailed} />
                 </button>
               </WithTooltip>

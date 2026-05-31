@@ -50,7 +50,7 @@ export function CNPGPoolerRenderer({ data, onNavigate }: CNPGPoolerRendererProps
           <PropertyList>
             {authQuery && (
               <Property label="Auth Query" value={
-                <code className="text-xs font-mono bg-theme-elevated px-1.5 py-0.5 rounded break-all">{authQuery}</code>
+                <code className="inline-code text-xs break-all">{authQuery}</code>
               } />
             )}
             {authQuerySecret && (

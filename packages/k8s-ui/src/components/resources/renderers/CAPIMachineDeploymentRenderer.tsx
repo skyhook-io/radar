@@ -119,7 +119,7 @@ export function CAPIMachineDeploymentRenderer({ data, onNavigate }: Props) {
 
       {/* Owned Machines hint */}
       <div className="px-3 py-1.5 text-xs text-theme-text-tertiary">
-        Machines with label <code className="bg-theme-surface px-1 py-0.5 rounded text-[10px] font-mono select-all">cluster.x-k8s.io/deployment-name={data.metadata?.name}</code>
+        Machines with label <code className="inline-code text-[10px] select-all">cluster.x-k8s.io/deployment-name={data.metadata?.name}</code>
       </div>
 
       <ConditionsSection conditions={conditions} />

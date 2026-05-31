@@ -65,6 +65,22 @@
     box-shadow: var(--shadow-lg);
   }
 
+  /* ── INLINE CODE ── */
+
+  .inline-code {
+    -webkit-box-decoration-break: clone;
+    box-decoration-break: clone;
+    border: 0.5px solid color-mix(in srgb, var(--color-brand) 24%, var(--border-default));
+    border-radius: 0.25rem;
+    background-color: color-mix(in srgb, var(--color-brand) 8%, var(--bg-elevated));
+    padding: 0.0625rem 0.3125rem;
+    font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace);
+    font-size: 0.9em;
+    font-weight: 500;
+    line-height: 1.5;
+    color: var(--text-primary);
+  }
+
   /* ── BADGES ── */
 
   .badge {

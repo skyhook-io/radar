@@ -307,7 +307,7 @@ export function ChartBrowser({ onChartSelect }: ChartBrowserProps) {
                   <div className="text-sm mt-1">
                     <p>No Helm repositories configured.</p>
                     <p className="mt-1">
-                      Add repositories using <code className="bg-theme-elevated px-1 rounded">helm repo add</code>
+                      Add repositories using <code className="inline-code">helm repo add</code>
                     </p>
                     <p className="mt-2">
                       Or try searching on <button onClick={() => setChartSource('artifacthub')} className="text-accent-text hover:underline">ArtifactHub</button>

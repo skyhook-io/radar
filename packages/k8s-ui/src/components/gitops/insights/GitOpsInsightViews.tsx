@@ -818,12 +818,12 @@ export function GitOpsChangesView({ insight, error, onOpenResource, focusKey, tr
           <div className="border-b border-theme-border bg-theme-base/40 px-4 py-2 text-[11px] text-theme-text-tertiary">
             Radar reads each resource's drift status from the controller. For a line-by-line diff, {insight.summary.tool === 'fluxcd' ? (
               insight.summary.kind === 'HelmRelease' ? (
-                <>run <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono text-[10px]">helm diff upgrade {insight.summary.name} &lt;chart&gt;</code> (requires the helm-diff plugin).</>
+                <>run <code className="inline-code text-[10px]">helm diff upgrade {insight.summary.name} &lt;chart&gt;</code> (requires the helm-diff plugin).</>
               ) : (
-                <>run <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono text-[10px]">flux diff kustomization {insight.summary.name} --path &lt;local-manifests&gt;</code>.</>
+                <>run <code className="inline-code text-[10px]">flux diff kustomization {insight.summary.name} --path &lt;local-manifests&gt;</code>.</>
               )
             ) : (
-              <>use the Argo CD UI or run <code className="rounded bg-theme-elevated px-1 py-0.5 font-mono text-[10px]">argocd app diff {insight.summary.name}</code>.</>
+              <>use the Argo CD UI or run <code className="inline-code text-[10px]">argocd app diff {insight.summary.name}</code>.</>
             )}
           </div>
         )}

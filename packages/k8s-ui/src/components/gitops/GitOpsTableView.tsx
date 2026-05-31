@@ -552,7 +552,7 @@ export function GitOpsTableView({
           // understand why some destinations show as unmatched.
           <div className="shrink-0 border-b border-amber-500/30 bg-amber-500/10 px-4 py-2 text-xs text-amber-700 dark:text-amber-300">
             <span className="font-medium">Cross-cluster mapping limited for {forbiddenSecretsClusters.join(', ')}.</span>{' '}
-            Owner needs <code>get secrets</code> in the <code>argocd</code> namespace there; destination
+            Owner needs <code className="inline-code">get secrets</code> in the <code className="inline-code">argocd</code> namespace there; destination
             correlation falls back to name-only resolution.
           </div>
         )}
@@ -1915,4 +1915,3 @@ function newestConditionTime(resource: any): string {
     .sort()
   return times[times.length - 1] ?? ''
 }
-
