@@ -54,7 +54,7 @@ export function CrossplanePackageRenderer({ data, kindLabel, onNavigate }: Cross
 
       <Section title={kindLabel} icon={Package} defaultExpanded>
         <PropertyList>
-          <Property label="Package" value={<span className="font-mono break-all">{pkg}</span>} />
+          <Property label="Package" value={<span className="inline-code break-all">{pkg}</span>} />
           {pullPolicy && <Property label="Pull Policy" value={pullPolicy} />}
           {data?.spec?.revisionActivationPolicy && (
             <Property label="Revision Activation" value={data.spec.revisionActivationPolicy} />
@@ -73,12 +73,12 @@ export function CrossplanePackageRenderer({ data, kindLabel, onNavigate }: Cross
         <Section title="Revision" icon={ScrollText} defaultExpanded>
           <PropertyList>
             {currentRevision && (
-              <Property label="Current Revision" value={<span className="font-mono break-all">{currentRevision}</span>} />
+              <Property label="Current Revision" value={<span className="inline-code break-all">{currentRevision}</span>} />
             )}
             {data?.status?.currentIdentifier && (
               <Property
                 label="Current Identifier"
-                value={<span className="font-mono break-all">{data.status.currentIdentifier}</span>}
+                value={<span className="inline-code break-all">{data.status.currentIdentifier}</span>}
               />
             )}
           </PropertyList>
@@ -112,7 +112,7 @@ export function CrossplanePackageRenderer({ data, kindLabel, onNavigate }: Cross
               return (
                 <div key={i} className="card-inner text-sm flex items-center gap-2 flex-wrap">
                   <span className="badge-sm status-neutral">{depKind}</span>
-                  <span className="font-mono text-theme-text-secondary break-all">{ref || '-'}</span>
+                  <span className="inline-code break-all">{ref || '-'}</span>
                   {dep.version && (
                     <span className="text-theme-text-tertiary text-xs">version: {dep.version}</span>
                   )}
@@ -129,7 +129,7 @@ export function CrossplanePackageRenderer({ data, kindLabel, onNavigate }: Cross
             {objectRefs.map((ref: any, i: number) => (
               <div key={i} className="card-inner text-sm flex items-center gap-2 flex-wrap">
                 <span className="badge-sm status-neutral">{ref.kind || 'Unknown'}</span>
-                <span className="font-mono text-theme-text-secondary break-all">{ref.name}</span>
+                <span className="inline-code break-all">{ref.name}</span>
                 {ref.apiVersion && (
                   <span className="text-theme-text-tertiary text-xs">{ref.apiVersion}</span>
                 )}

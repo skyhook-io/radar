@@ -57,13 +57,13 @@ function CompositionBody({ data, onNavigate, revision }: CompositionRendererProp
           {xrdKind && (
             <Property
               label="Composite Kind"
-              value={<span className="font-mono text-theme-text-secondary">{xrdKind}</span>}
+              value={<span className="inline-code">{xrdKind}</span>}
             />
           )}
           {compositeTypeRef.apiVersion && (
             <Property
               label="API Version"
-              value={<span className="font-mono text-theme-text-tertiary text-xs">{compositeTypeRef.apiVersion}</span>}
+              value={<span className="inline-code text-xs">{compositeTypeRef.apiVersion}</span>}
             />
           )}
           {writeConnNs && <Property label="Connection Secret Namespace" value={writeConnNs} />}
@@ -149,7 +149,7 @@ function CompositionBody({ data, onNavigate, revision }: CompositionRendererProp
               return (
                 <div key={i} className="card-inner text-sm flex items-center gap-2 flex-wrap">
                   <span className="badge-sm status-neutral">{baseKind || 'Unknown'}</span>
-                  <span className="font-mono text-theme-text-secondary break-all">{res.name || `resource-${i}`}</span>
+                  <span className="inline-code break-all">{res.name || `resource-${i}`}</span>
                   {baseApiVersion && (
                     <span className="text-theme-text-tertiary text-xs">{baseApiVersion}</span>
                   )}

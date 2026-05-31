@@ -197,13 +197,13 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
             Context: {connection.context ? (
               <ClusterName name={connection.context} />
             ) : (
-              <span className="font-mono text-theme-text-primary">(none)</span>
+              <span className="inline-code">(none)</span>
             )}
           </p>
 
           {connection.clusterName && (
             <p className="text-sm text-theme-text-secondary mb-4">
-              Cluster: <span className="font-mono text-theme-text-primary">{connection.clusterName}</span>
+              Cluster: <span className="inline-code">{connection.clusterName}</span>
             </p>
           )}
 

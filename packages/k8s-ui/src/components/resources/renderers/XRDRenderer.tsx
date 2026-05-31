@@ -51,9 +51,9 @@ export function XRDRenderer({ data, onNavigate }: XRDRendererProps) {
             <Property label="Singular" value={<span className="font-mono">{names.singular}</span>} />
           )}
           {names.listKind && (
-            <Property label="List Kind" value={<span className="font-mono">{names.listKind}</span>} />
+            <Property label="List Kind" value={<span className="inline-code">{names.listKind}</span>} />
           )}
-          <Property label="Group" value={<span className="font-mono break-all">{group}</span>} />
+          <Property label="Group" value={<span className="inline-code break-all">{group}</span>} />
           {scope && (
             <Property
               label="Scope"

@@ -317,8 +317,8 @@ export function MCPSetupDialog({ open, onClose, mcpUrl }: MCPSetupDialogProps) {
                   {tool.params.length > 0 && (
                     <div className="flex flex-wrap gap-1.5 pt-0.5">
                       {tool.params.map((p) => (
-                        <span key={p.arg} className="badge-sm font-mono bg-theme-elevated text-theme-text-secondary" title={p.desc}>
-                          <span className="text-theme-text-secondary">{p.arg}</span>
+                        <span key={p.arg} className="inline-code text-[11px]" title={p.desc}>
+                          <span>{p.arg}</span>
                           {p.required && <span className="text-red-400">*</span>}
                         </span>
                       ))}

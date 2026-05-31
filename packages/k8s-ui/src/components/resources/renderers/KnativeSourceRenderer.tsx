@@ -58,7 +58,7 @@ export function PingSourceRenderer({ data, onNavigate }: RendererProps) {
           <Property label="Timezone" value={spec.timezone} />
           <Property label="Content Type" value={spec.contentType} />
           <Property label="Data" value={spec.data ? (
-            <span className="font-mono text-xs break-all">{spec.data.length > 200 ? spec.data.slice(0, 200) + '...' : spec.data}</span>
+            <span className="inline-code text-xs break-all">{spec.data.length > 200 ? spec.data.slice(0, 200) + '...' : spec.data}</span>
           ) : undefined} />
           <SinkProperty sink={spec.sink} ns={ns} onNavigate={onNavigate} />
         </PropertyList>

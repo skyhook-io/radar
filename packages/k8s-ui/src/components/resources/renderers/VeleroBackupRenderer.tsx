@@ -161,7 +161,7 @@ export function VeleroBackupRenderer({ data }: VeleroBackupRendererProps) {
             )}
             {data.spec?.labelSelector && (
               <Property label="Label Selector" value={
-                <span className="text-sm font-mono text-theme-text-secondary break-all">
+                <span className="inline-code break-all">
                   {JSON.stringify(data.spec.labelSelector)}
                 </span>
               } />

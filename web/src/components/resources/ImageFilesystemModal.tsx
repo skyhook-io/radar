@@ -444,7 +444,7 @@ function AuthenticationHelp({ image, registryType, onRetry }: AuthenticationHelp
       </p>
 
       <p className="text-xs text-theme-text-tertiary text-center max-w-md mb-6">
-        Registry: <span className="font-mono text-theme-text-secondary">{registry}</span>
+        Registry: <span className="inline-code">{registry}</span>
         {registryType && registryType !== 'generic' && (
           <> ({formatAuthMethod(registryType)})</>
         )}
@@ -743,4 +743,3 @@ function FileTreeNode({ node, depth, defaultExpanded = true, image, namespace, p
     </div>
   )
 }
-

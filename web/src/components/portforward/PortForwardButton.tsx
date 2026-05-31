@@ -308,7 +308,7 @@ export function PortForwardButton({
                 className="w-full px-3 py-2 text-left text-sm text-theme-text-primary hover:bg-theme-elevated flex items-center justify-between"
               >
                 <span className="flex items-center gap-2 shrink-0">
-                  <code className="text-accent-text">{port.port}</code>
+                  <code className="inline-code">{port.port}</code>
                   <span className="text-theme-text-disabled">/{port.protocol || 'TCP'}</span>
                 </span>
                 {port.name && (

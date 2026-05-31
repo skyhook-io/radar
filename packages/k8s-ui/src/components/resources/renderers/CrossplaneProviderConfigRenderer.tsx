@@ -56,7 +56,7 @@ export function CrossplaneProviderConfigRenderer({ data, onNavigate }: Crossplan
               }
             />
             {secretRef.namespace && <Property label="Namespace" value={secretRef.namespace} />}
-            {secretRef.key && <Property label="Key" value={<span className="font-mono">{secretRef.key}</span>} />}
+            {secretRef.key && <Property label="Key" value={<span className="inline-code">{secretRef.key}</span>} />}
           </PropertyList>
         </Section>
       )}

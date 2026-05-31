@@ -794,7 +794,7 @@ export function PortForwardPanel() {
                           <Tooltip content="Click to change local port" delay={300} position="bottom" disabled={!isPanelOpen}>
                           <code
                             className={clsx(
-                              'group/port text-xs bg-theme-base px-2 py-1 rounded text-accent-text transition-all inline-flex items-center gap-1',
+                              'inline-code group/port text-xs transition-all inline-flex items-center gap-1',
                               changingPortId === session.id
                                 ? 'opacity-50'
                                 : 'cursor-pointer hover:ring-1 hover:ring-blue-500/50'
