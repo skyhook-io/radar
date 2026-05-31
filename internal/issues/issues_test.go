@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
 // fakeProvider — minimal Provider for unit testing. Each field
@@ -86,12 +87,12 @@ func TestCompose_PopulatesCategoryAndGroup(t *testing.T) {
 	}
 	checks := []struct {
 		name     string
-		category Category
-		group    CategoryGroup
+		category issuesapi.Category
+		group    issuesapi.CategoryGroup
 	}{
-		{"img", CategoryImagePullFailed, GroupStartup},
-		{"sched", CategoryUnschedulable, GroupScheduling},
-		{"ref", CategoryMissingConfigRef, GroupConfiguration},
+		{"img", issuesapi.CategoryImagePullFailed, issuesapi.GroupStartup},
+		{"sched", issuesapi.CategoryUnschedulable, issuesapi.GroupScheduling},
+		{"ref", issuesapi.CategoryMissingConfigRef, issuesapi.GroupConfiguration},
 	}
 	for _, c := range checks {
 		if got[c.name].Category != c.category || got[c.name].CategoryGroup != c.group {
@@ -125,7 +126,7 @@ func TestCompose_GroupsMemberPodsUnderOwner(t *testing.T) {
 	if want := (Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}); got["web-a"].Owner != want {
 		t.Errorf("owner not propagated: got %+v, want %+v", got["web-a"].Owner, want)
 	}
-	if got["web-a"].GroupingScope != ScopeWorkload {
+	if got["web-a"].GroupingScope != issuesapi.ScopeWorkload {
 		t.Errorf("scope = %q, want workload", got["web-a"].GroupingScope)
 	}
 }
@@ -237,10 +238,10 @@ func TestCompose_SuppressesWorkloadDegradedWhenChildSymptomExists(t *testing.T) 
 
 	var sawDegraded, sawCrashloop bool
 	for _, i := range out {
-		if i.Category == CategoryWorkloadDegraded {
+		if i.Category == issuesapi.CategoryWorkloadDegraded {
 			sawDegraded = true
 		}
-		if i.Category == CategoryCrashLoop {
+		if i.Category == issuesapi.CategoryCrashLoop {
 			sawCrashloop = true
 		}
 	}
@@ -270,11 +271,11 @@ func TestCompose_KeepsCriticalParentWhenOnlyChildIsWarning(t *testing.T) {
 	var sawDegraded, sawChild bool
 	var degradedSev Severity
 	for _, i := range out {
-		if i.Category == CategoryWorkloadDegraded {
+		if i.Category == issuesapi.CategoryWorkloadDegraded {
 			sawDegraded = true
 			degradedSev = i.Severity
 		}
-		if i.Category == CategoryContainerWaiting {
+		if i.Category == issuesapi.CategoryContainerWaiting {
 			sawChild = true
 		}
 	}
@@ -303,7 +304,7 @@ func TestCompose_KeepsWorkloadDegradedWhenNoChildSymptom(t *testing.T) {
 	out := Compose(p, Filters{})
 	var sawDegraded bool
 	for _, i := range out {
-		if i.Kind == "Deployment" && i.Name == "web" && i.Category == CategoryWorkloadDegraded {
+		if i.Kind == "Deployment" && i.Name == "web" && i.Category == issuesapi.CategoryWorkloadDegraded {
 			sawDegraded = true
 		}
 	}
@@ -322,7 +323,7 @@ func TestCompose_SuppressesRolloutStalledWhenChildSymptomExists(t *testing.T) {
 	}
 	out := Compose(p, Filters{})
 	for _, i := range out {
-		if i.Category == CategoryRolloutStalled {
+		if i.Category == issuesapi.CategoryRolloutStalled {
 			t.Errorf("rollout_stalled must be suppressed when a child symptom exists: %+v", out)
 		}
 	}

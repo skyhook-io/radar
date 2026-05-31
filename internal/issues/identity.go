@@ -1,22 +1,9 @@
 package issues
 
 import (
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 	"github.com/skyhook-io/radar/pkg/subject"
-)
-
-// Scope aliases the shared subject.Scope — issues consumes the unified resolver's
-// scope enum so issues, topology, and checks can't drift on it. The constants are
-// re-exported so existing issues.Scope* references keep working.
-type Scope = subject.Scope
-
-const (
-	ScopeUnknown  = subject.ScopeUnknown
-	ScopeWorkload = subject.ScopeWorkload
-	ScopeService  = subject.ScopeService
-	ScopeIngress  = subject.ScopeIngress
-	ScopePVC      = subject.ScopePVC
-	ScopeNode     = subject.ScopeNode
 )
 
 // resourceKey is the canonical group|kind|namespace|name key, shared with
@@ -37,8 +24,9 @@ func enrichIdentity(i *Issue) {
 	if i.Owner.Kind != "" {
 		subjRef = i.Owner
 	}
-	i.GroupingScope = subject.ScopeForKind(subjRef.Kind)
-	i.ID = subject.StableID(i.GroupingScope, resourceKey(subjRef.Group, subjRef.Kind, subjRef.Namespace, subjRef.Name), discriminator(i))
+	scope := subject.ScopeForKind(subjRef.Kind)
+	i.GroupingScope = issuesapi.Scope(scope)
+	i.ID = subject.StableID(scope, resourceKey(subjRef.Group, subjRef.Kind, subjRef.Namespace, subjRef.Name), discriminator(i))
 }
 
 // discriminator is the cause portion of the issue ID. Category alone is the
@@ -54,7 +42,7 @@ func discriminator(i *Issue) string {
 	switch {
 	case i.Fingerprint != "":
 		return string(i.Category) + "\x00" + i.Fingerprint
-	case i.Category == CategoryUnknown:
+	case i.Category == issuesapi.CategoryUnknown:
 		return string(i.Category) + "\x00" + string(i.Source) + "\x00" + i.Reason
 	default:
 		return string(i.Category)

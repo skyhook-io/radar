@@ -33,6 +33,7 @@ import (
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
 // Filter is a compiled boolean predicate.
@@ -94,34 +95,20 @@ var envObject = mustNewEnv(
 // short form rather than fight cel-go's reservation list; `ns:` is
 // also the short modifier in the search query parser, so the two
 // surfaces stay parallel.
-var envIssue = mustNewEnv(
-	cel.Variable("severity", cel.StringType),
-	cel.Variable("source", cel.StringType),
-	cel.Variable("category", cel.StringType),
-	cel.Variable("category_group", cel.StringType),
-	cel.Variable("kind", cel.StringType),
-	cel.Variable("group", cel.StringType),
-	cel.Variable("ns", cel.StringType),
-	cel.Variable("name", cel.StringType),
-	cel.Variable("reason", cel.StringType),
-	cel.Variable("message", cel.StringType),
-	cel.Variable("count", cel.IntType),
-	// No `cluster` binding: a single Radar is one cluster. Cross-cluster scoping
-	// is the hub's `clusters=`/target mechanism (applied at fan-out), not a
-	// per-issue CEL predicate — Issue.Cluster was always empty here, so a
-	// forwarded `cluster == "x"` matched nothing.
-	// first_seen/last_seen are int unix-second timestamps so the agent can
-	// write `first_seen > timestamp("2025-01-01T00:00:00Z")` or compare
-	// against a "now - 1h" delta. Prefer first_seen for "issues older
-	// than…": last_seen churns to compose-time on every poll.
-	cel.Variable("first_seen", cel.IntType),
-	cel.Variable("last_seen", cel.IntType),
-	// grouping_scope (node|workload|…) slices node-level vs workload issues;
-	// restart_count + last_terminated_reason are the chronic-vs-acute fields.
-	cel.Variable("grouping_scope", cel.StringType),
-	cel.Variable("restart_count", cel.IntType),
-	cel.Variable("last_terminated_reason", cel.StringType),
-)
+var envIssue = mustNewEnv(issueCELVariables()...)
+
+func issueCELVariables() []cel.EnvOption {
+	out := make([]cel.EnvOption, 0, len(issuesapi.CELBindings))
+	for _, b := range issuesapi.CELBindings {
+		switch b.Type {
+		case issuesapi.BindingString:
+			out = append(out, cel.Variable(b.Name, cel.StringType))
+		case issuesapi.BindingInt:
+			out = append(out, cel.Variable(b.Name, cel.IntType))
+		}
+	}
+	return out
+}
 
 func mustNewEnv(opts ...cel.EnvOption) *cel.Env {
 	env, err := cel.NewEnv(opts...)

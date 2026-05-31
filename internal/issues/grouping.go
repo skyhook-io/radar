@@ -3,6 +3,8 @@ package issues
 import (
 	"sort"
 	"strings"
+
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
 // RelatedIssues returns the grouped issues whose subject OR an affected member
@@ -49,13 +51,7 @@ const maxInlineMembers = 10
 // Affected counts the underlying resources folded into a grouped issue, by
 // kind bucket. Empty for single-resource issues (no fan-out) — there the
 // subject row already says everything.
-type Affected struct {
-	Pods      int `json:"pods,omitempty"`
-	Workloads int `json:"workloads,omitempty"`
-	Services  int `json:"services,omitempty"`
-	PVCs      int `json:"pvcs,omitempty"`
-	Nodes     int `json:"nodes,omitempty"`
-}
+type Affected = issuesapi.Affected
 
 // GroupIssues folds flat issue rows into the public grouped model: one row
 // per shared ID (subject + category). The flat rows are the evidence; a

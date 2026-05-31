@@ -1,5 +1,7 @@
 package issues
 
+import "github.com/skyhook-io/radar/pkg/issuesapi"
+
 // dedupePodSchedulingOverProblem drops the generic problem-source row for a
 // Pod when the scheduling source emitted one for the same Pod. A pod stuck
 // post-bind (ContainerCreating on a CNI/volume stall) trips both: DetectProblems
@@ -45,27 +47,27 @@ func subjectRef(i Issue) Ref {
 // rollout_stalled) redundant. A degraded Deployment with crashlooping pods is
 // ONE incident — the crashloop — not two; keeping both is the inverse of
 // "50 pods = 1 row".
-var childCategories = map[Category]bool{
-	CategoryCrashLoop:           true,
-	CategoryHighRestart:         true,
-	CategoryImagePullFailed:     true,
-	CategoryOOMKilled:           true,
-	CategoryContainerWaiting:    true,
-	CategoryInitContainerFailed: true,
-	CategoryLivenessProbeFail:   true,
-	CategoryReadinessFailed:     true,
-	CategoryUnschedulable:       true,
-	CategoryQuotaExceeded:       true,
-	CategoryMissingConfigRef:    true,
-	CategoryVolumeMountFailed:   true,
-	CategoryPVCPending:          true,
+var childCategories = map[issuesapi.Category]bool{
+	issuesapi.CategoryCrashLoop:           true,
+	issuesapi.CategoryHighRestart:         true,
+	issuesapi.CategoryImagePullFailed:     true,
+	issuesapi.CategoryOOMKilled:           true,
+	issuesapi.CategoryContainerWaiting:    true,
+	issuesapi.CategoryInitContainerFailed: true,
+	issuesapi.CategoryLivenessProbeFail:   true,
+	issuesapi.CategoryReadinessFailed:     true,
+	issuesapi.CategoryUnschedulable:       true,
+	issuesapi.CategoryQuotaExceeded:       true,
+	issuesapi.CategoryMissingConfigRef:    true,
+	issuesapi.CategoryVolumeMountFailed:   true,
+	issuesapi.CategoryPVCPending:          true,
 }
 
 // parentRollupCategories are the workload-level summaries that should be
 // suppressed when a more-specific child symptom exists for the same subject.
-var parentRollupCategories = map[Category]bool{
-	CategoryWorkloadDegraded: true,
-	CategoryRolloutStalled:   true,
+var parentRollupCategories = map[issuesapi.Category]bool{
+	issuesapi.CategoryWorkloadDegraded: true,
+	issuesapi.CategoryRolloutStalled:   true,
 }
 
 // dedupeWorkloadDegradedOverChild drops the parent workload rollup row

@@ -9,6 +9,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
 // Provider abstracts the data sources Compose needs. Implementations
@@ -71,15 +72,7 @@ type ComposeStats struct {
 // them (and the hub mirrors one shape). Visibility and NarrowHint are set by the
 // caller — visibility is server-side RBAC data; NarrowHint is the MCP steering
 // string for a capped result.
-type ListResponse struct {
-	Issues            []Issue `json:"issues"`
-	Total             int     `json:"total"`
-	TotalMatched      int     `json:"total_matched"`
-	FilterErrors      int     `json:"filter_errors,omitempty"`
-	FilterErrorSample string  `json:"filter_error_sample,omitempty"`
-	Visibility        any     `json:"visibility,omitempty"`
-	NarrowHint        string  `json:"narrowHint,omitempty"`
-}
+type ListResponse = issuesapi.Response
 
 // NewListResponse fills the shared fields from a Compose result. out==nil
 // becomes [] so the wire always carries a JSON array, never null.

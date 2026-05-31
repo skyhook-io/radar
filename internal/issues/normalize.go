@@ -4,6 +4,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/resourceid"
 )
 
@@ -83,7 +84,7 @@ func classifyIssue(i *Issue) {
 		Reason:               i.Reason,
 		LastTerminatedReason: i.LastTerminatedReason,
 	})
-	i.CategoryGroup = GroupOf(i.Category)
+	i.CategoryGroup = issuesapi.GroupOf(i.Category)
 }
 
 // ---------------------------------------------------------------------------

@@ -29,9 +29,7 @@
 // compose.go) — the issue stream is "what's broken now", not an audit.
 package issues
 
-import (
-	"time"
-)
+import "github.com/skyhook-io/radar/pkg/issuesapi"
 
 // Severity is the normalized issue severity. The public Issues contract is
 // critical|warning only:
@@ -45,35 +43,30 @@ import (
 // singleton-StatefulSet headless-DNS trivia) are DROPPED at the Problem→Issue
 // boundary in Compose and never become Issues — they belong to audit/posture,
 // not the live "what's broken now" stream.
-type Severity string
+type Severity = issuesapi.Severity
 
 const (
-	SeverityCritical Severity = "critical"
-	SeverityWarning  Severity = "warning"
+	SeverityCritical = issuesapi.SeverityCritical
+	SeverityWarning  = issuesapi.SeverityWarning
 )
 
 // Source records which underlying detection channel emitted this issue.
 // It is an OUTPUT label (for SPA copy that explains why a row appeared,
 // and as a CEL filter binding), not an input filter — issues composes all
 // four sources unconditionally; detection provenance is not a triage axis.
-type Source string
+type Source = issuesapi.Source
 
 const (
-	SourceProblem    Source = "problem"     // radar's hardcoded per-kind detection
-	SourceMissingRef Source = "missing_ref" // dangling-ref detection (Pod→missing PVC/CM/Secret/SA, HPA→missing target, Ingress→missing backend, etc.)
-	SourceScheduling Source = "scheduling"  // placement/admission/post-bind failures (unschedulable, quota/PodSecurity/webhook, CNI/volume)
-	SourceCondition  Source = "condition"   // generic CRD .status.conditions[].status=False fallback
+	SourceProblem    = issuesapi.SourceProblem
+	SourceMissingRef = issuesapi.SourceMissingRef
+	SourceScheduling = issuesapi.SourceScheduling
+	SourceCondition  = issuesapi.SourceCondition
 )
 
 // Ref is a lightweight resource reference for the grouping subject and
 // owner pointers. Group is the API group (empty for core) — carried so
 // owner/affected deep-links can disambiguate CRDs from core kinds.
-type Ref struct {
-	Group     string `json:"group,omitempty"`
-	Kind      string `json:"kind"`
-	Namespace string `json:"namespace,omitempty"`
-	Name      string `json:"name"`
-}
+type Ref = issuesapi.Ref
 
 // Issue is the unified cluster-health record.
 //
@@ -84,63 +77,4 @@ type Ref struct {
 // has Count = 50. For problem / missing_ref / scheduling, LastSeen is the
 // compose time and FirstSeen backs off by the observed problem duration; for
 // condition rows, both timestamps are the condition's lastTransitionTime.
-type Issue struct {
-	Severity Severity `json:"severity"`
-	Source   Source   `json:"source"`
-	// Category is the user-facing symptom taxonomy (image_pull_failed,
-	// crashloop, …), derived from Source+Kind+Reason by Classify;
-	// CategoryGroup is its coarse rollup (GroupOf). Both are server-emitted
-	// labels so the UI renders them without its own category→group map.
-	// Distinct from Group below, which is the resource's API group.
-	Category      Category      `json:"category,omitempty"`
-	CategoryGroup CategoryGroup `json:"category_group,omitempty"`
-	// ID is the deterministic, cluster-local issue identity —
-	// hash(grouping_scope, subject key, category). Shared by every row that
-	// rolls up to the same subject+category, so consumers can group on it;
-	// the hub namespaces it by cluster_id for global uniqueness.
-	ID string `json:"id,omitempty"`
-	// GroupingScope is the kind of subject this issue groups under
-	// (workload|service|pvc|ingress|node|unknown) — drives the UI section
-	// and is part of ID.
-	GroupingScope Scope     `json:"grouping_scope,omitempty"`
-	Kind          string    `json:"kind"`
-	Group         string    `json:"group,omitempty"`
-	Namespace     string    `json:"namespace,omitempty"`
-	Name          string    `json:"name"`
-	Reason        string    `json:"reason"`
-	Message       string    `json:"message,omitempty"`
-	FirstSeen     time.Time `json:"first_seen,omitzero"`
-	LastSeen      time.Time `json:"last_seen,omitzero"`
-	Count         int       `json:"count,omitempty"`
-	// Owner is flat-only: it's present on ?view=flat / pre-fold MCP rows so a
-	// consumer can see the resolved top-owner. Grouped rows hoist the owner
-	// into the subject (Kind/Group/Namespace/Name) and leave Owner zero, so
-	// the TS Issue type (which only consumes grouped output) doesn't model it.
-	Owner Ref `json:"owner,omitzero"`
-	// Fingerprint is an internal, stable per-cause key (NOT on the wire): it
-	// feeds the ID discriminator so distinct causes on the same subject+category
-	// (e.g. two different missing refs) don't collapse into one row. Empty for
-	// single-cause categories, which fold by category as before.
-	Fingerprint string `json:"-"`
-	// RestartCount + LastTerminatedReason carry Pod crash-debugging
-	// context from k8s.Problem through to issues consumers (MCP `issues`
-	// tool + /api/issues + hub fleet_issues). Populated only for Pod
-	// problem rows where the kubelet has recorded crash data. Together
-	// they answer "is this chronic or acute?" (RestartCount) and "what
-	// kind of failure?" (LastTerminatedReason: OOMKilled / Error /
-	// Completed) without the agent needing a follow-up get_resource call.
-	RestartCount         int32  `json:"restart_count,omitempty"`
-	LastTerminatedReason string `json:"last_terminated_reason,omitempty"`
-	// Affected, Members, and MembersTruncated are populated only on grouped
-	// rows (GroupIssues). Affected counts the folded underlying resources by
-	// kind; Members lists them (bounded by maxInlineMembers, with
-	// MembersTruncated set past the cap). Empty on flat rows and on
-	// single-resource grouped issues (no fan-out).
-	Affected         Affected `json:"affected,omitzero"`
-	Members          []Ref    `json:"members,omitempty"`
-	MembersTruncated bool     `json:"members_truncated,omitempty"`
-	// Cluster identity is NOT an OSS-issue concept (a Radar is one cluster). The
-	// hub adds cluster_id/cluster_name in its own fleet DTO post-fan-out; cross-
-	// cluster scoping is the hub's clusters=/target mechanism, not a per-issue
-	// field or CEL predicate.
-}
+type Issue = issuesapi.Issue

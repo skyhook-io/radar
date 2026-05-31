@@ -3,6 +3,7 @@ package issues
 import (
 	"testing"
 
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/subject"
 )
 
@@ -20,10 +21,10 @@ func TestEnrichIdentity_SubjectIsOwnerElseSelf(t *testing.T) {
 	}
 	classifyIssue(&pod)
 	enrichIdentity(&pod)
-	if pod.GroupingScope != ScopeWorkload {
+	if pod.GroupingScope != issuesapi.ScopeWorkload {
 		t.Errorf("scope = %q, want workload", pod.GroupingScope)
 	}
-	if want := subject.StableID(ScopeWorkload, resourceKey("apps", "Deployment", "ns", "web"), string(CategoryImagePullFailed)); pod.ID != want {
+	if want := subject.StableID(subject.Scope(issuesapi.ScopeWorkload), resourceKey("apps", "Deployment", "ns", "web"), string(issuesapi.CategoryImagePullFailed)); pod.ID != want {
 		t.Errorf("ID = %q, want owner-keyed %q", pod.ID, want)
 	}
 
@@ -31,7 +32,7 @@ func TestEnrichIdentity_SubjectIsOwnerElseSelf(t *testing.T) {
 	solo := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "solo", Reason: "CrashLoopBackOff"}
 	classifyIssue(&solo)
 	enrichIdentity(&solo)
-	if want := subject.StableID(ScopeWorkload, resourceKey("", "Pod", "ns", "solo"), string(CategoryCrashLoop)); solo.ID != want {
+	if want := subject.StableID(subject.Scope(issuesapi.ScopeWorkload), resourceKey("", "Pod", "ns", "solo"), string(issuesapi.CategoryCrashLoop)); solo.ID != want {
 		t.Errorf("standalone pod ID = %q, want self-keyed %q", solo.ID, want)
 	}
 }
@@ -51,7 +52,7 @@ func TestEnrichIdentity_DistinctCausesDoNotCollapse(t *testing.T) {
 	}
 	cm := mk("Missing ConfigMap", `Missing ConfigMap|references ConfigMap "foo"`)
 	sec := mk("Missing Secret", `Missing Secret|references Secret "bar"`)
-	if cm.Category != CategoryMissingConfigRef || sec.Category != CategoryMissingConfigRef {
+	if cm.Category != issuesapi.CategoryMissingConfigRef || sec.Category != issuesapi.CategoryMissingConfigRef {
 		t.Fatalf("precondition: both should classify missing_config_ref, got %q/%q", cm.Category, sec.Category)
 	}
 	if cm.ID == sec.ID {
@@ -66,7 +67,7 @@ func TestEnrichIdentity_DistinctCausesDoNotCollapse(t *testing.T) {
 	cl := Issue{Source: SourceProblem, Kind: "Pod", Namespace: "ns", Name: "web-x", Reason: "CrashLoopBackOff", Owner: owner}
 	classifyIssue(&cl)
 	enrichIdentity(&cl)
-	if want := subject.StableID(ScopeWorkload, resourceKey("apps", "Deployment", "ns", "web"), string(CategoryCrashLoop)); cl.ID != want {
+	if want := subject.StableID(subject.Scope(issuesapi.ScopeWorkload), resourceKey("apps", "Deployment", "ns", "web"), string(issuesapi.CategoryCrashLoop)); cl.ID != want {
 		t.Errorf("single-cause category must stay category-keyed (no re-key): %q want %q", cl.ID, want)
 	}
 }
