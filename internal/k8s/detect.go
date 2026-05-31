@@ -318,6 +318,16 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				reason = pf.reason
 				message = pf.message
 			}
+			fingerprint := ""
+			if inv, ok := activeProbeTargetProblem(pod, reason); ok {
+				reason = inv.reason
+				message = inv.message
+				fingerprint = inv.fingerprint
+			} else if init, ok := stalledInitContainerProblem(pod, now); ok {
+				reason = init.reason
+				message = init.message
+				fingerprint = init.fingerprint
+			}
 			problems = append(problems, Detection{
 				Kind:                 "Pod",
 				Namespace:            pod.Namespace,
@@ -325,6 +335,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Severity:             severity,
 				Reason:               reason,
 				Message:              message,
+				Fingerprint:          fingerprint,
 				Age:                  FormatAge(ageDur),
 				AgeSeconds:           int64(ageDur.Seconds()),
 				Duration:             FormatAge(ageDur),
@@ -827,6 +838,103 @@ type probeFailure struct {
 	reason  string
 	message string
 	at      time.Time
+}
+
+type podSpecificProblem struct {
+	reason      string
+	message     string
+	fingerprint string
+}
+
+func activeProbeTargetProblem(pod *corev1.Pod, currentReason string) (podSpecificProblem, bool) {
+	for _, c := range pod.Spec.Containers {
+		if currentReason == readinessProbeFailedReason {
+			if port, ok := missingNamedProbePort(c, c.ReadinessProbe); ok {
+				return podSpecificProblem{
+					reason:      readinessProbeInvalidReason,
+					message:     fmt.Sprintf("readiness probe for container %q references named port %q, but the container declares no port with that name", c.Name, port),
+					fingerprint: "probe:readiness:" + c.Name + ":" + port,
+				}, true
+			}
+		}
+		if currentReason == livenessProbeFailedReason || currentReason == crashLoopReason || currentReason == highRestartReason {
+			if port, ok := missingNamedProbePort(c, c.LivenessProbe); ok {
+				return podSpecificProblem{
+					reason:      livenessProbeInvalidReason,
+					message:     fmt.Sprintf("liveness probe for container %q references named port %q, but the container declares no port with that name", c.Name, port),
+					fingerprint: "probe:liveness:" + c.Name + ":" + port,
+				}, true
+			}
+		}
+	}
+	return podSpecificProblem{}, false
+}
+
+func missingNamedProbePort(c corev1.Container, probe *corev1.Probe) (string, bool) {
+	if probe == nil {
+		return "", false
+	}
+	var port intstr.IntOrString
+	switch {
+	case probe.HTTPGet != nil:
+		port = probe.HTTPGet.Port
+	case probe.TCPSocket != nil:
+		port = probe.TCPSocket.Port
+	default:
+		return "", false
+	}
+	if port.Type != intstr.String || port.StrVal == "" {
+		return "", false
+	}
+	for _, declared := range c.Ports {
+		if declared.Name == port.StrVal {
+			return "", false
+		}
+	}
+	return port.StrVal, true
+}
+
+func stalledInitContainerProblem(pod *corev1.Pod, now time.Time) (podSpecificProblem, bool) {
+	if pod.Status.Phase != corev1.PodPending {
+		return podSpecificProblem{}, false
+	}
+	for _, cs := range pod.Status.InitContainerStatuses {
+		if cs.State.Running == nil || cs.State.Running.StartedAt.IsZero() {
+			continue
+		}
+		if now.Sub(cs.State.Running.StartedAt.Time) < 5*time.Minute {
+			continue
+		}
+		msg := fmt.Sprintf("init container %q has been running for %s and is blocking the pod from starting", cs.Name, FormatAge(now.Sub(cs.State.Running.StartedAt.Time)))
+		if detail := initContainerSpecSummary(pod, cs.Name); detail != "" {
+			msg += "; " + detail
+		}
+		return podSpecificProblem{
+			reason:      initContainerStalledReason,
+			message:     msg,
+			fingerprint: "init-stalled:" + cs.Name,
+		}, true
+	}
+	return podSpecificProblem{}, false
+}
+
+func initContainerSpecSummary(pod *corev1.Pod, name string) string {
+	for _, c := range pod.Spec.InitContainers {
+		if c.Name != name {
+			continue
+		}
+		parts := make([]string, 0, 2)
+		if c.Image != "" {
+			parts = append(parts, "image "+c.Image)
+		}
+		if len(c.Command) > 0 {
+			parts = append(parts, "command "+strings.Join(c.Command, " "))
+		} else if len(c.Args) > 0 {
+			parts = append(parts, "args "+strings.Join(c.Args, " "))
+		}
+		return strings.Join(parts, ", ")
+	}
+	return ""
 }
 
 func latestProbeFailures(cache *ResourceCache, namespace string, now time.Time) map[string]probeFailure {

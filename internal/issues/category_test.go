@@ -35,7 +35,10 @@ func TestClassify(t *testing.T) {
 		{"errored pod", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "Error"}, issuesapi.CategoryCrashLoop},
 		{"high restart thrash", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "HighRestartCount"}, issuesapi.CategoryHighRestart},
 		{"liveness probe failed", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "LivenessProbeFailed"}, issuesapi.CategoryLivenessProbeFail},
+		{"liveness probe invalid", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "LivenessProbeInvalid"}, issuesapi.CategoryLivenessProbeFail},
 		{"readiness probe failed", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "ReadinessProbeFailed"}, issuesapi.CategoryReadinessFailed},
+		{"readiness probe invalid", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "ReadinessProbeInvalid"}, issuesapi.CategoryReadinessFailed},
+		{"init container stalled", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "InitContainerStalled"}, issuesapi.CategoryInitContainerFailed},
 
 		// problem / GitOps reconcilers (DetectGitOpsProblems → SourceProblem)
 		{"argo app degraded", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "HealthDegraded"}, issuesapi.CategoryGitOpsSyncFailed},
@@ -85,6 +88,7 @@ func TestClassify(t *testing.T) {
 		{"missing pvc", classifyInput{Source: SourceMissingRef, Kind: "Pod", Reason: "Missing PVC"}, issuesapi.CategoryMissingConfigRef},
 		{"missing sa", classifyInput{Source: SourceMissingRef, Kind: "Pod", Reason: "Missing ServiceAccount"}, issuesapi.CategoryMissingConfigRef},
 		{"ingress backend missing", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing backend Service"}, issuesapi.CategoryIngressBackendMissing},
+		{"gateway backend missing", classifyInput{Source: SourceMissingRef, Kind: "HTTPRoute", APIGroup: "gateway.networking.k8s.io", Reason: "Missing Gateway backend Service"}, issuesapi.CategoryGatewayRouteInvalid},
 		{"ingress tls secret is config", classifyInput{Source: SourceMissingRef, Kind: "Ingress", APIGroup: "networking.k8s.io", Reason: "Missing TLS Secret"}, issuesapi.CategoryMissingConfigRef},
 		{"webhook backend down", classifyInput{Source: SourceMissingRef, Kind: "ValidatingWebhookConfiguration", APIGroup: "admissionregistration.k8s.io", Reason: "Missing webhook backend Service"}, issuesapi.CategoryWebhookBackendDown},
 		{"missing storageclass is pvc pending", classifyInput{Source: SourceMissingRef, Kind: "PersistentVolumeClaim", Reason: "Missing StorageClass"}, issuesapi.CategoryPVCPending},

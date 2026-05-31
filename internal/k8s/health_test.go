@@ -68,7 +68,7 @@ func TestClassifyPodHealth(t *testing.T) {
 			want: "error",
 		},
 		{
-			name: "LastTerminationState OOMKilled",
+			name: "recovered LastTerminationState OOMKilled",
 			pod: &corev1.Pod{
 				Status: corev1.PodStatus{
 					Phase: corev1.PodRunning,
@@ -80,7 +80,7 @@ func TestClassifyPodHealth(t *testing.T) {
 					},
 				},
 			},
-			want: "error",
+			want: "healthy",
 		},
 		{
 			name: "init container error",
@@ -367,6 +367,45 @@ func TestClassifyPodHealth_RecoveredAfterCrashIsHealthy(t *testing.T) {
 	}}
 	if got := ClassifyPodHealth(completedInit, now); got != "healthy" {
 		t.Errorf("retried-then-completed init + healthy main = %q, want healthy", got)
+	}
+}
+
+func TestClassifyPodHealth_RecoveredAfterOOMIsHealthy(t *testing.T) {
+	now := time.Now()
+	oom := corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+		Reason:     "OOMKilled",
+		ExitCode:   137,
+		FinishedAt: metav1.NewTime(now.Add(-30 * time.Minute)),
+	}}
+
+	recovered := &corev1.Pod{
+		Spec: corev1.PodSpec{Containers: []corev1.Container{{
+			Name:           "app",
+			ReadinessProbe: &corev1.Probe{},
+		}}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:                 "app",
+				Ready:                true,
+				RestartCount:         1,
+				State:                corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-20 * time.Minute))}},
+				LastTerminationState: oom,
+			}},
+		},
+	}
+	if got := ClassifyPodHealth(recovered, now); got != "healthy" {
+		t.Errorf("recovered-after-OOM pod = %q, want healthy", got)
+	}
+
+	active := recovered.DeepCopy()
+	active.Status.ContainerStatuses[0].Ready = false
+	active.Status.ContainerStatuses[0].State.Running.StartedAt = metav1.NewTime(now.Add(-30 * time.Second))
+	if got := ClassifyPodHealth(active, now); got != "error" {
+		t.Errorf("recent OOM restart = %q, want error", got)
+	}
+	if got := PodProblemReason(active); got != "OOMKilled" {
+		t.Errorf("recent OOM reason = %q, want OOMKilled", got)
 	}
 }
 

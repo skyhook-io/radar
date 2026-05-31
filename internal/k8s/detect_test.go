@@ -346,6 +346,95 @@ func TestDetectProblems_ProbeFailures(t *testing.T) {
 	}
 }
 
+func TestDetectProblems_InvalidProbeTargetAndStalledInit(t *testing.T) {
+	defer ResetTestState()
+
+	now := time.Now()
+	old := metav1.NewTime(now.Add(-10 * time.Minute))
+
+	client := fake.NewClientset(
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "bad-readiness", Namespace: "prod", CreationTimestamp: old},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{
+				Name:           "app",
+				Ports:          []corev1.ContainerPort{{Name: "admin", ContainerPort: 9090}},
+				ReadinessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Port: intstr.FromString("http")}}},
+			}}},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{
+					Type:               corev1.PodReady,
+					Status:             corev1.ConditionFalse,
+					LastTransitionTime: old,
+				}},
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:  "app",
+					Ready: false,
+					State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: old}},
+				}},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "bad-liveness", Namespace: "prod", CreationTimestamp: old},
+			Spec: corev1.PodSpec{Containers: []corev1.Container{{
+				Name:          "app",
+				Ports:         []corev1.ContainerPort{{Name: "http", ContainerPort: 8080}},
+				LivenessProbe: &corev1.Probe{ProbeHandler: corev1.ProbeHandler{TCPSocket: &corev1.TCPSocketAction{Port: intstr.FromString("admin")}}},
+			}}},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name: "app",
+					State: corev1.ContainerState{
+						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
+					},
+				}},
+			},
+		},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "stuck-init", Namespace: "prod", CreationTimestamp: old},
+			Spec: corev1.PodSpec{InitContainers: []corev1.Container{{
+				Name:    "wait",
+				Image:   "busybox",
+				Command: []string{"sh", "-c", "while true; do sleep 5; done"},
+			}}},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodPending,
+				InitContainerStatuses: []corev1.ContainerStatus{{
+					Name:  "wait",
+					State: corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: old}},
+				}},
+			},
+		},
+	)
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "prod")
+		if hasProblem(problems, "Pod", "bad-readiness", "ReadinessProbeInvalid") &&
+			hasProblem(problems, "Pod", "bad-liveness", "LivenessProbeInvalid") &&
+			hasProblem(problems, "Pod", "stuck-init", "InitContainerStalled") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	assertProblem(t, problems, "Pod", "bad-readiness", "ReadinessProbeInvalid", "high")
+	assertProblem(t, problems, "Pod", "bad-liveness", "LivenessProbeInvalid", "critical")
+	assertProblem(t, problems, "Pod", "stuck-init", "InitContainerStalled", "high")
+	if got, ok := lookupProblem(problems, "Pod", "bad-readiness", "ReadinessProbeInvalid"); !ok || !strings.Contains(got.Message, "named port \"http\"") {
+		t.Fatalf("readiness invalid problem = %+v, want named port detail", got)
+	}
+	if got, ok := lookupProblem(problems, "Pod", "stuck-init", "InitContainerStalled"); !ok || !strings.Contains(got.Message, "init container \"wait\"") {
+		t.Fatalf("stalled init problem = %+v, want init container detail", got)
+	}
+}
+
 func TestDetectProblems_DaemonSetSchedulingStatus(t *testing.T) {
 	defer ResetTestState()
 

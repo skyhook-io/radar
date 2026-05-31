@@ -54,6 +54,8 @@ func Classify(in classifyInput) issuesapi.Category {
 		switch in.Reason {
 		case "Missing backend Service", "Missing backend Service port":
 			return issuesapi.CategoryIngressBackendMissing
+		case "Missing Gateway backend Service", "Missing Gateway backend Service port":
+			return issuesapi.CategoryGatewayRouteInvalid
 		case "Missing webhook backend Service":
 			return issuesapi.CategoryWebhookBackendDown
 		case "Missing StorageClass":
@@ -139,10 +141,12 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryCrashLoop
 		case "HighRestartCount":
 			return issuesapi.CategoryHighRestart
-		case "LivenessProbeFailed":
+		case "LivenessProbeFailed", "LivenessProbeInvalid":
 			return issuesapi.CategoryLivenessProbeFail
-		case "ReadinessProbeFailed":
+		case "ReadinessProbeFailed", "ReadinessProbeInvalid":
 			return issuesapi.CategoryReadinessFailed
+		case "InitContainerStalled":
+			return issuesapi.CategoryInitContainerFailed
 		case "CreateContainerConfigError", "CreateContainerError", "RunContainerError", "Pending", "ContainerCreating":
 			return issuesapi.CategoryContainerWaiting
 		case "Error", "Failed":

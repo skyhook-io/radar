@@ -42,18 +42,21 @@ func (p *CacheProvider) DetectProblems(namespaces []string) []k8s.Detection {
 }
 
 // DetectMissingRefs returns dangling-reference problems for all enabled
-// source kinds in DetectMissingRefs + DetectMissingWebhookRefs. Same
+// source kinds in DetectMissingRefs plus dynamic webhook/Gateway checks. Same
 // flattenNamespacedProblems shape as DetectProblems: cluster-scoped
 // rows (ClusterRoleBinding etc.) only come back when namespaces==nil.
 func (p *CacheProvider) DetectMissingRefs(namespaces []string) []k8s.Detection {
 	if len(namespaces) == 0 {
 		out := k8s.DetectMissingRefs(p.cache, "")
 		out = append(out, k8s.DetectMissingWebhookRefs(p.cache, p.dynamic, p.discovery, "")...)
+		out = append(out, k8s.DetectMissingGatewayRefs(p.cache, p.dynamic, p.discovery, "")...)
 		return out
 	}
 	perNs := make([][]k8s.Detection, 0, len(namespaces))
 	for _, ns := range namespaces {
-		perNs = append(perNs, k8s.DetectMissingRefs(p.cache, ns))
+		out := k8s.DetectMissingRefs(p.cache, ns)
+		out = append(out, k8s.DetectMissingGatewayRefs(p.cache, p.dynamic, p.discovery, ns)...)
+		perNs = append(perNs, out)
 	}
 	// Webhook configs are cluster-scoped — namespace-bounded callers do
 	// not see them, same convention DetectProblems uses for Node rows.

@@ -14,6 +14,7 @@ import (
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
+	corev1listers "k8s.io/client-go/listers/core/v1"
 )
 
 // DetectMissingRefs scans cache for resources whose by-name references point at
@@ -641,6 +642,138 @@ func DetectMissingWebhookRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 		"MutatingWebhookConfiguration", "admissionregistration.k8s.io", "webhooks",
 	)...)
 	return out
+}
+
+// DetectMissingGatewayRefs scans Gateway API Routes for backend Service refs
+// that point at missing Services or missing Service ports. Controller status
+// usually reports these via ResolvedRefs=False, but this structural check still
+// works before a controller reconciles and on clusters where route status is
+// sparse.
+func DetectMissingGatewayRefs(cache *ResourceCache, dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, namespace string) []Detection {
+	if cache == nil || dynamicCache == nil || discovery == nil {
+		return nil
+	}
+	svcLister := cache.Services()
+	if svcLister == nil {
+		return nil
+	}
+	now := time.Now()
+	var out []Detection
+	for _, kind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
+		gvr, ok := discovery.GetGVRWithGroup(kind, "gateway.networking.k8s.io")
+		if !ok {
+			continue
+		}
+		var routes []*unstructured.Unstructured
+		if namespace != "" {
+			items, err := dynamicCache.List(gvr, namespace)
+			if err != nil {
+				log.Printf("[missing-refs] failed to list %s.gateway.networking.k8s.io in %s: %v", kind, namespace, err)
+				continue
+			}
+			routes = items
+		} else {
+			items, err := dynamicCache.List(gvr, "")
+			if err != nil {
+				log.Printf("[missing-refs] failed to list %s.gateway.networking.k8s.io: %v", kind, err)
+				continue
+			}
+			routes = items
+		}
+		for _, route := range routes {
+			out = append(out, detectGatewayRouteMissingBackends(svcLister, kind, route, now)...)
+		}
+	}
+	return out
+}
+
+func detectGatewayRouteMissingBackends(svcLister corev1listers.ServiceLister, kind string, route *unstructured.Unstructured, now time.Time) []Detection {
+	rules, found, err := unstructured.NestedSlice(route.Object, "spec", "rules")
+	if err != nil || !found {
+		return nil
+	}
+	age := now.Sub(route.GetCreationTimestamp().Time)
+	seen := map[string]bool{}
+	var out []Detection
+	for ri, r := range rules {
+		rm, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		refs, _ := rm["backendRefs"].([]any)
+		for bi, ref := range refs {
+			refm, ok := ref.(map[string]any)
+			if !ok {
+				continue
+			}
+			name, _ := refm["name"].(string)
+			if name == "" || !gatewayBackendRefIsService(refm) {
+				continue
+			}
+			svcNS := route.GetNamespace()
+			if ns, _ := refm["namespace"].(string); ns != "" {
+				svcNS = ns
+			}
+			port := gatewayBackendPort(refm)
+			key := svcNS + "/" + name + "/" + port
+			if seen[key] {
+				continue
+			}
+			seen[key] = true
+			svc, err := svcLister.Services(svcNS).Get(name)
+			source := fmt.Sprintf("spec.rules[%d].backendRefs[%d]", ri, bi)
+			if err != nil {
+				out = append(out, missingRefProblem(kind, "gateway.networking.k8s.io", route.GetNamespace(), route.GetName(),
+					"Missing Gateway backend Service",
+					fmt.Sprintf("%s references Service %q in namespace %q which does not exist (route backend cannot receive traffic)", source, name, svcNS),
+					age))
+				continue
+			}
+			if port == "" {
+				continue
+			}
+			if !serviceHasPort(svc, port) {
+				out = append(out, missingRefProblem(kind, "gateway.networking.k8s.io", route.GetNamespace(), route.GetName(),
+					"Missing Gateway backend Service port",
+					fmt.Sprintf("%s targets Service %q in namespace %q port %q which does not exist on the Service (route backend cannot receive traffic)", source, name, svcNS, port),
+					age))
+			}
+		}
+	}
+	return out
+}
+
+func gatewayBackendRefIsService(ref map[string]any) bool {
+	group, _ := ref["group"].(string)
+	kind, _ := ref["kind"].(string)
+	return group == "" && (kind == "" || kind == "Service")
+}
+
+func gatewayBackendPort(ref map[string]any) string {
+	switch v := ref["port"].(type) {
+	case int64:
+		return fmt.Sprintf("%d", v)
+	case int32:
+		return fmt.Sprintf("%d", v)
+	case int:
+		return fmt.Sprintf("%d", v)
+	case float64:
+		if v == float64(int64(v)) {
+			return fmt.Sprintf("%d", int64(v))
+		}
+	case string:
+		return v
+	}
+	return ""
+}
+
+func serviceHasPort(svc *corev1.Service, port string) bool {
+	for _, sp := range svc.Spec.Ports {
+		if sp.Name == port || fmt.Sprintf("%d", sp.Port) == port {
+			return true
+		}
+	}
+	return false
 }
 
 func detectPVCMissingStorageClass(cache *ResourceCache, namespace string, now time.Time) []Detection {
