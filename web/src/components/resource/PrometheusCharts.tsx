@@ -1,10 +1,7 @@
 import { useState, useMemo } from 'react'
-import { clsx } from 'clsx'
-import { BarChart3, Wifi, WifiOff, Loader2 } from 'lucide-react'
 import {
-  AreaChart,
+  PrometheusChartsView,
   MetricsSummary as BaseMetricsSummary,
-  SeriesLegend,
   type TimeSeries,
   type ReferenceLine,
 } from '@skyhook-io/k8s-ui/components/charts'
@@ -95,7 +92,6 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
   const { data: status, isLoading: statusLoading } = usePrometheusStatus()
   const connectMutation = usePrometheusConnect()
 
-  const categories = kind === 'Node' ? NODE_CATEGORIES : WORKLOAD_CATEGORIES
   const [activeCategory, setActiveCategory] = useState<PrometheusMetricCategory>('cpu')
   const [timeRange, setTimeRange] = useState<PrometheusTimeRange>('1h')
 
@@ -116,161 +112,24 @@ export function PrometheusCharts({ kind, namespace, name, showEmptyState = false
     return computeRequestLimitLines(resource, kind, activeCategory)
   }, [resource, kind, activeCategory])
 
-  if (!isSupported) {
-    return null
-  }
-
-  // Loading state — checking Prometheus availability (only show when explicitly requested)
-  if (statusLoading) {
-    if (!showEmptyState) return null
-    return (
-      <div className="flex items-center justify-center py-12 text-theme-text-tertiary">
-        <Loader2 className="w-5 h-5 animate-spin mr-2" />
-        Checking Prometheus availability...
-      </div>
-    )
-  }
-
-  // When embedded in Overview (showEmptyState=false), hide when not connected or no data
-  if (!showEmptyState) {
-    if (!isConnected) return null
-    if (!metricsLoading && !metricsError && !metrics?.result?.series?.length) return null
-  }
-
-  if (!isConnected) {
-    return (
-      <div className="flex flex-col items-center justify-center py-12 gap-4">
-        <WifiOff className="w-10 h-10 text-theme-text-quaternary" />
-        <div className="text-center">
-          <p className="text-sm text-theme-text-secondary mb-1">Prometheus not connected</p>
-          <p className="text-xs text-theme-text-tertiary mb-4">
-            {status?.error || 'Connect to view historical CPU, memory, and network metrics'}
-          </p>
-          <button
-            onClick={() => connectMutation.mutate()}
-            disabled={connectMutation.isPending}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg btn-brand"
-          >
-            {connectMutation.isPending ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Wifi className="w-4 h-4" />
-            )}
-            Discover Prometheus
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  const activeCategoryDef = categories.find(c => c.key === activeCategory) || categories[0]
-
   return (
-    <div className="flex flex-col h-full">
-      {/* Toolbar */}
-      <div className="shrink-0 flex items-center justify-between px-4 py-2.5 border-b border-theme-border bg-theme-surface/50">
-        {/* Category tabs */}
-        <div className="flex items-center gap-1">
-          <BarChart3 className="w-4 h-4 text-theme-text-tertiary mr-2" />
-          {categories.map(cat => (
-            <button
-              key={cat.key}
-              onClick={() => setActiveCategory(cat.key)}
-              className={clsx(
-                'px-2.5 py-1 text-xs font-medium rounded-md transition-colors',
-                activeCategory === cat.key
-                  ? 'bg-theme-elevated text-theme-text-primary shadow-sm'
-                  : 'text-theme-text-tertiary hover:text-theme-text-secondary hover:bg-theme-elevated/50'
-              )}
-            >
-              {cat.label}
-            </button>
-          ))}
-        </div>
-
-        {/* Time range selector */}
-        <select
-          value={timeRange}
-          onChange={e => {
-            const next = e.target.value as PrometheusTimeRange
-            setTimeRange(next)
-            onTimeRangeChange?.(next)
-          }}
-          className="px-2 py-1 text-xs rounded-md bg-theme-elevated border border-theme-border text-theme-text-secondary focus:outline-none focus:ring-1 focus:ring-blue-500/50"
-        >
-          {TIME_RANGES.map(tr => (
-            <option key={tr.value} value={tr.value}>{tr.label}</option>
-          ))}
-        </select>
-      </div>
-
-      {/* Chart area — fixed min-height prevents layout shift while loading */}
-      <div className="min-h-[280px] p-4">
-        {metricsLoading ? (
-          <div className="flex items-center justify-center min-h-[240px] text-theme-text-tertiary">
-            <Loader2 className="w-5 h-5 animate-spin mr-2" />
-            Loading metrics...
-          </div>
-        ) : metricsError ? (
-          <div className="flex items-center justify-center h-full text-red-400 text-sm">
-            Failed to load metrics: {(metricsError as Error).message}
-          </div>
-        ) : metrics?.result?.series?.length ? (
-          <div className="h-full flex flex-col gap-4">
-            {/* Summary stats */}
-            <MetricsSummary
-              series={metrics.result.series}
-              category={activeCategoryDef}
-              unit={metrics.unit}
-            />
-
-            {/* Main chart */}
-            <div className="flex-1 min-h-0">
-              <AreaChart
-                series={metrics.result.series}
-                color={activeCategoryDef.chartColor}
-                fillColor={activeCategoryDef.fillColor}
-                unit={metrics.unit}
-                referenceLines={referenceLines}
-              />
-            </div>
-
-            {/* Per-pod legend for workload-level queries */}
-            {metrics.result.series.length > 1 && (
-              <SeriesLegend series={metrics.result.series} color={activeCategoryDef.chartColor} />
-            )}
-          </div>
-        ) : (
-          <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
-            <BarChart3 className="w-8 h-8 mb-2 opacity-40" />
-            <p className="text-sm">No data for this time range</p>
-            <p className="text-xs text-theme-text-quaternary mt-1">
-              Try a different time range or check that metrics are being collected
-            </p>
-            {metrics?.hint && (
-              <p className="mt-3 px-3 py-2 w-full max-w-lg text-xs text-yellow-700 dark:text-yellow-400 bg-yellow-500/10 border border-yellow-500/30 rounded">
-                {metrics.hint}
-              </p>
-            )}
-            {metrics?.query && (
-              <details className="mt-3 w-full max-w-lg text-left">
-                <summary className="text-xs text-theme-text-quaternary cursor-pointer hover:text-theme-text-tertiary">
-                  Diagnostics: show PromQL query
-                </summary>
-                <div className="mt-2 p-2 bg-theme-base border border-theme-border rounded text-xs font-mono text-theme-text-secondary break-all">
-                  {metrics.query}
-                </div>
-                <p className="mt-1.5 text-xs text-theme-text-quaternary">
-                  This query returned no results. Verify in your Prometheus UI that the metric names and labels
-                  ({activeCategoryDef.key === 'cpu' ? 'pod, namespace, container' : 'pod, namespace'}) exist.
-                  Custom label relabeling in your Prometheus configuration may require adjustments.
-                </p>
-              </details>
-            )}
-          </div>
-        )}
-      </div>
-    </div>
+    <PrometheusChartsView
+      kind={kind}
+      showEmptyState={showEmptyState}
+      statusLoading={statusLoading}
+      isConnected={isConnected}
+      statusError={status?.error}
+      onConnect={() => connectMutation.mutate()}
+      connecting={connectMutation.isPending}
+      category={activeCategory}
+      onCategoryChange={setActiveCategory}
+      range={timeRange}
+      onRangeChange={(r) => { setTimeRange(r); onTimeRangeChange?.(r) }}
+      metrics={metrics}
+      metricsLoading={metricsLoading}
+      metricsError={(metricsError as Error) ?? null}
+      referenceLines={referenceLines}
+    />
   )
 }
 
