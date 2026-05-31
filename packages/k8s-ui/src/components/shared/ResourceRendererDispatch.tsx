@@ -220,6 +220,7 @@ import {
 import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo, ResolvedEnvFrom, TimelineEvent } from '../../types'
 import type { CopyHandler } from '../ui/drawer-components'
 import { AlertBanner } from '../ui/drawer-components'
+import { replicaScalers } from '../../utils/replica-scalers'
 
 /**
  * Override map letting each platform consumer swap in its own renderer components.
@@ -353,14 +354,6 @@ const KNOWN_KINDS = new Set([
   'compositeresourcedefinitions', 'compositions', 'compositionrevisions',
   'functions', 'configurations',
 ])
-
-function replicaScalers(scalers?: ResourceRef[]): ResourceRef[] | undefined {
-  const result = scalers?.filter((ref) => {
-    const kind = ref.kind.toLowerCase()
-    return kind === 'horizontalpodautoscaler' || kind === 'scaledobject'
-  })
-  return result && result.length > 0 ? result : undefined
-}
 
 // ============================================================================
 // RESOURCE CONTENT - Delegates to specific renderers

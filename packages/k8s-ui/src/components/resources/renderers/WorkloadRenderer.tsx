@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { Server, ExternalLink, Scale, Minus, Plus, Loader2, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
-import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection, AlertBanner, ResourceLink } from '../../ui/drawer-components'
+import { Section, PropertyList, Property, ConditionsSection, PodTemplateSection, AlertBanner, ResourceLink, ResourceRefBadge } from '../../ui/drawer-components'
 import { DialogPortal } from '../../ui/DialogPortal'
 import { Tooltip } from '../../ui/Tooltip'
 import type { RBACSubjectResponse, RBACPolicyRule, ResourceRef } from '../../../types'
@@ -219,6 +219,18 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
           ) : (
             <>
               <Property label="Replicas" value={`${status.readyReplicas || 0}/${spec.replicas || 0}`} />
+              {scaleBlockedBy && scaleBlockedBy.length > 0 && (
+                <Property
+                  label="Controlled by"
+                  value={
+                    <div className="flex flex-wrap gap-1">
+                      {scaleBlockedBy.map((ref) => (
+                        <ResourceRefBadge key={`${ref.kind}/${ref.namespace}/${ref.name}`} resourceRef={ref} onClick={onNavigate} />
+                      ))}
+                    </div>
+                  }
+                />
+              )}
               <Property label="Updated" value={status.updatedReplicas} />
               <Property label="Available" value={status.availableReplicas} />
               <Property label="Unavailable" value={status.unavailableReplicas} />

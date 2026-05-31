@@ -34,6 +34,7 @@ describe('WorkloadRenderer', () => {
 
     expect(html).toContain('disabled=""')
     expect(html).toContain('Manual scaling is disabled')
+    expect(html).toContain('Controlled by')
     expect(html).toContain('HorizontalPodAutoscaler prod/api')
     expect(html).toContain('ScaledObject prod/api-queue')
   })
