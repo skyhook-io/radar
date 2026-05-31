@@ -256,7 +256,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
   pods: [
     { key: 'name', label: 'Name' },
     { key: 'namespace', label: 'Namespace', width: 'w-48' },
-    { key: 'containers', label: 'Containers', width: 'w-32' },
+    { key: 'containers', label: 'Containers', width: 'w-32', tooltip: 'Container readiness; hover each square for name and state' },
     { key: 'status', label: 'Status', width: 'w-40' },
     { key: 'cpu', label: 'CPU', width: 'w-40', tooltip: 'CPU usage / limit (marker = request)' },
     { key: 'memory', label: 'Memory', width: 'w-40', tooltip: 'Memory usage / limit (marker = request)' },
@@ -4916,7 +4916,7 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
       const squares = getContainerSquareStates(resource)
       const hasInit = squares.some(s => s.isInit)
       return (
-        <div className="flex items-center gap-1">
+        <div className="flex w-full items-center justify-center gap-1">
           {squares.map((sq, i) => {
             const showSeparator = hasInit && i > 0 && sq.isInit !== squares[i - 1].isInit
             const bgClass =
