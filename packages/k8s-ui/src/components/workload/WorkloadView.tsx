@@ -45,6 +45,7 @@ import {
 import { ResourceActionsBar } from '../shared/ResourceActionsBar'
 import { EditableYamlView, SaveSuccessAnimation } from '../shared/EditableYamlView'
 import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from '../shared/ResourceRendererDispatch'
+import { DetailShell, type DetailShellTab } from '../shared/DetailShell'
 import { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/ManagedByChip'
 import { getKindColorOutline, formatKindName } from '../ui/drawer-components'
 
@@ -71,6 +72,20 @@ interface WorkloadViewProps {
   initialTab?: 'detail' | 'yaml'
   /** API group for CRD resources */
   group?: string
+
+  // ── Hosted chrome (expanded mode) ────────────────────────────────────────
+  /**
+   * A breadcrumb rendered above the identity header — e.g. when a larger
+   * surface (Radar Cloud's app page) hosts this view inside its own navigation.
+   * When set, the standalone back button is not rendered; `onBack` still backs
+   * the Escape shortcut.
+   */
+  breadcrumb?: ReactNode
+  /**
+   * Controls injected into the shell's tab-row scope slot — e.g. a cluster /
+   * workload picker in Radar Cloud. Absent in standalone Radar.
+   */
+  scopeControls?: ReactNode
 
   // ── Data (injected by wrapper) ──────────────────────────────────────────
   /** The resource data object */
@@ -202,6 +217,8 @@ export function WorkloadView({
   onExpand,
   initialTab,
   group,
+  breadcrumb,
+  scopeControls,
   // Data
   resource,
   relationships,
@@ -427,6 +444,18 @@ export function WorkloadView({
   const status = getResourceStatus(apiKind, resource)
 
   const showMetricsTab = isMetricsAvailable ? isMetricsAvailable(kind, resource) : false
+  const tabs: DetailShellTab<TabType>[] = [
+    { id: 'overview', label: 'Overview', icon: <Layers className="w-4 h-4" /> },
+    {
+      id: 'timeline',
+      label: 'Timeline',
+      icon: <Activity className="w-4 h-4" />,
+      badge: resourceEvents.length > 0 ? <span className="ml-1 badge-sm bg-theme-elevated">{resourceEvents.length}</span> : undefined,
+    },
+    { id: 'logs', label: 'Logs', icon: <Terminal className="w-4 h-4" />, hidden: !(allPods.length > 0 && renderLogsTab) },
+    { id: 'metrics', label: 'Metrics', icon: <BarChart3 className="w-4 h-4" />, hidden: !(showMetricsTab && renderMetricsTab) },
+    { id: 'yaml', label: 'YAML', icon: <FileText className="w-4 h-4" /> },
+  ]
 
   // ── Collapsed (drawer) mode ──────────────────────────────────────────────
   if (!expanded) {
@@ -561,11 +590,10 @@ export function WorkloadView({
 
   // ── Expanded (full) mode ─────────────────────────────────────────────────
   return (
-    <div className="flex flex-col h-full w-full bg-theme-surface">
-      {/* Header */}
-      <div className="shrink-0 border-b border-theme-border bg-theme-surface">
-        <div className="px-6 py-3 flex items-start gap-4">
-          {/* Back button */}
+    <DetailShell
+      breadcrumb={breadcrumb}
+      nav={
+        breadcrumb ? undefined : (
           <button
             onClick={onBack}
             className="p-1.5 mt-0.5 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg transition-colors"
@@ -573,50 +601,52 @@ export function WorkloadView({
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-
-          {/* Resource identity */}
-          <div className="flex-1 min-w-0">
-            <div className="flex items-center gap-3 mb-1">
-              <h1 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
-              <button
-                onClick={() => copyToClipboard(name, 'name')}
-                className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
-                title="Copy name"
-              >
-                {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
-              </button>
-            </div>
-            <div className="flex items-center gap-3 text-sm text-theme-text-secondary">
-              <span className={clsx('badge', getKindColorOutline(apiKind))}>
-                {formatKindName(apiKind)}
-              </span>
-              {status && (
-                <span className={clsx('badge', status.color)}>
-                  {status.text}
-                </span>
-              )}
-              {namespace && namespace !== '_' && (
-                <span>Namespace: <span className="text-theme-text-primary">{namespace}</span></span>
-              )}
-              {metadata.find(m => m.label === 'Image') && (
-                <span className="truncate max-w-md font-mono text-xs">{metadata.find(m => m.label === 'Image')?.value}</span>
-              )}
-              {gitopsOwner && (
-                <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} variant="block" />
-              )}
-              {helmOwner && (
-                <HelmManagedByChip owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} variant="block" />
-              )}
-              {gitOpsResourcePath && onNavigateGitOpsPath && (
-                <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
-              )}
-              {relationships?.owner && (
-                <span>Owner: <button onClick={() => onNavigateToResource?.(refToSelectedResource(relationships.owner!))} className="text-blue-500 hover:underline">{relationships.owner.name}</button></span>
-              )}
-            </div>
+        )
+      }
+      identity={
+        <>
+          <div className="flex items-center gap-3 mb-1">
+            <h1 className="text-lg font-semibold text-theme-text-primary truncate">{name}</h1>
+            <button
+              onClick={() => copyToClipboard(name, 'name')}
+              className="p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded shrink-0"
+              title="Copy name"
+            >
+              {copied === 'name' ? <Check className="w-3.5 h-3.5 text-green-400" /> : <Copy className="w-3.5 h-3.5" />}
+            </button>
           </div>
-
-          {/* Refresh */}
+          <div className="flex items-center gap-3 text-sm text-theme-text-secondary">
+            <span className={clsx('badge', getKindColorOutline(apiKind))}>
+              {formatKindName(apiKind)}
+            </span>
+            {status && (
+              <span className={clsx('badge', status.color)}>
+                {status.text}
+              </span>
+            )}
+            {namespace && namespace !== '_' && (
+              <span>Namespace: <span className="text-theme-text-primary">{namespace}</span></span>
+            )}
+            {metadata.find(m => m.label === 'Image') && (
+              <span className="truncate max-w-md font-mono text-xs">{metadata.find(m => m.label === 'Image')?.value}</span>
+            )}
+            {gitopsOwner && (
+              <ManagedByChip owner={gitopsOwner} status={gitOpsOwnerStatus} verified={gitOpsOwnerVerified} pending={gitOpsOwnerPending} source={gitOpsOwnerSource} onOpen={onOpenGitOpsResource} variant="block" />
+            )}
+            {helmOwner && (
+              <HelmManagedByChip owner={helmOwner} source={helmOwnerSource} onOpen={onOpenHelmRelease} variant="block" />
+            )}
+            {gitOpsResourcePath && onNavigateGitOpsPath && (
+              <OpenInGitOpsChip onClick={() => onNavigateGitOpsPath(gitOpsResourcePath)} />
+            )}
+            {relationships?.owner && (
+              <span>Owner: <button onClick={() => onNavigateToResource?.(refToSelectedResource(relationships.owner!))} className="text-blue-500 hover:underline">{relationships.owner.name}</button></span>
+            )}
+          </div>
+        </>
+      }
+      headerActions={
+        <>
           <button
             onClick={() => refetch()}
             disabled={isRefreshAnimating}
@@ -631,8 +661,6 @@ export function WorkloadView({
               : <RefreshCw className={clsx('w-5 h-5', refreshPhase === 'spinning' && 'animate-spin')} />
             }
           </button>
-
-          {/* Collapse back to drawer */}
           {onCollapseToDrawer && (
             <button
               onClick={onCollapseToDrawer}
@@ -642,50 +670,15 @@ export function WorkloadView({
               <Minimize2 className="w-5 h-5" />
             </button>
           )}
-        </div>
-
-        {/* Tabs (left) + Actions (right) */}
-        <div className="px-6 flex items-center border-t border-theme-border">
-          <div className="flex gap-1">
-            <TabButton active={activeTab === 'overview'} onClick={() => handleSetTab('overview')}>
-              <Layers className="w-4 h-4" />
-              Overview
-            </TabButton>
-            <TabButton active={activeTab === 'timeline'} onClick={() => handleSetTab('timeline')}>
-              <Activity className="w-4 h-4" />
-              Timeline
-              {resourceEvents.length > 0 && (
-                <span className="ml-1 badge-sm bg-theme-elevated">{resourceEvents.length}</span>
-              )}
-            </TabButton>
-            {allPods.length > 0 && renderLogsTab && (
-              <TabButton active={activeTab === 'logs'} onClick={() => handleSetTab('logs')}>
-                <Terminal className="w-4 h-4" />
-                Logs
-              </TabButton>
-            )}
-            {showMetricsTab && renderMetricsTab && (
-              <TabButton active={activeTab === 'metrics'} onClick={() => handleSetTab('metrics')}>
-                <BarChart3 className="w-4 h-4" />
-                Metrics
-              </TabButton>
-            )}
-            <TabButton active={activeTab === 'yaml'} onClick={() => handleSetTab('yaml')}>
-              <FileText className="w-4 h-4" />
-              YAML
-            </TabButton>
-          </div>
-          <div className="ml-auto">
-            <ResourceActionsBar resource={selectedResource} data={resource} hideLogs {...actionsBarProps} />
-          </div>
-        </div>
-      </div>
-
-      {/* Success animation overlay */}
-      {saveSuccess && <SaveSuccessAnimation />}
-
-      {/* Tab Content */}
-      <div className="flex-1 overflow-hidden relative">
+        </>
+      }
+      tabs={tabs}
+      activeTab={activeTab}
+      onTabChange={handleSetTab}
+      scopeControls={scopeControls}
+      tabStripEnd={<ResourceActionsBar resource={selectedResource} data={resource} hideLogs {...actionsBarProps} />}
+      overlay={saveSuccess ? <SaveSuccessAnimation /> : null}
+    >
         {activeTab === 'overview' && (
             <InfoTab
               resource={resource}
@@ -762,8 +755,7 @@ export function WorkloadView({
             )}
           </div>
         )}
-      </div>
-    </div>
+    </DetailShell>
   )
 }
 
@@ -818,22 +810,6 @@ function OpenInGitOpsChip({ onClick }: { onClick: () => void }) {
     >
       Open in GitOps
       <ArrowRight className="h-3 w-3 shrink-0" />
-    </button>
-  )
-}
-
-function TabButton({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
-  return (
-    <button
-      onClick={onClick}
-      className={clsx(
-        'flex items-center gap-1.5 px-3 py-2 text-sm font-medium border-b-2 transition-colors',
-        active
-          ? 'text-theme-text-primary border-skyhook-500'
-          : 'text-theme-text-secondary border-transparent hover:text-theme-text-primary hover:border-theme-border-light'
-      )}
-    >
-      {children}
     </button>
   )
 }
