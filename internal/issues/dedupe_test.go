@@ -51,26 +51,36 @@ func TestDedupeConditionOverMissingRef(t *testing.T) {
 		Name:      "broken",
 		Category:  issuesapi.CategoryGatewayRouteInvalid,
 	}
-	conditionSameObject := Issue{
+	conditionEcho := Issue{
 		Source:    SourceCondition,
 		Group:     "gateway.networking.k8s.io",
 		Kind:      "HTTPRoute",
 		Namespace: "prod",
 		Name:      "broken",
+		Reason:    "ResolvedRefs: BackendNotFound",
 		Category:  issuesapi.CategoryGatewayRouteInvalid,
 	}
-	conditionOtherCategory := conditionSameObject
+	conditionAccepted := conditionEcho
+	conditionAccepted.Reason = "Accepted: NoMatchingParent"
+	conditionOtherCategory := conditionEcho
 	conditionOtherCategory.Category = issuesapi.CategoryGatewayNotReady
-	conditionOtherObject := conditionSameObject
+	conditionOtherObject := conditionEcho
 	conditionOtherObject.Name = "other"
 
-	out := dedupeConditionOverMissingRef([]Issue{missing, conditionSameObject, conditionOtherCategory, conditionOtherObject})
-	if len(out) != 3 {
-		t.Fatalf("expected only the condition echo to be dropped, got %+v", out)
+	out := dedupeConditionOverMissingRef([]Issue{missing, conditionEcho, conditionAccepted, conditionOtherCategory, conditionOtherObject})
+	if len(out) != 4 {
+		t.Fatalf("expected only the ResolvedRefs echo to be dropped, got %+v", out)
 	}
+	var keptAccepted bool
 	for _, i := range out {
-		if i.Source == SourceCondition && i.Name == "broken" && i.Category == issuesapi.CategoryGatewayRouteInvalid {
-			t.Fatalf("same-object condition echo survived: %+v", out)
+		if i.Source == SourceCondition && i.Name == "broken" && i.Category == issuesapi.CategoryGatewayRouteInvalid && i.Reason == "ResolvedRefs: BackendNotFound" {
+			t.Fatalf("same-object ResolvedRefs echo survived: %+v", out)
 		}
+		if i.Source == SourceCondition && i.Name == "broken" && i.Reason == "Accepted: NoMatchingParent" {
+			keptAccepted = true
+		}
+	}
+	if !keptAccepted {
+		t.Fatalf("non-ResolvedRefs route condition was incorrectly dropped: %+v", out)
 	}
 }

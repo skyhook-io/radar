@@ -659,6 +659,7 @@ func DetectMissingGatewayRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 		return nil
 	}
 	now := time.Now()
+	getReferenceGrants := gatewayReferenceGrantGetter(dynamicCache, discovery)
 	var out []Detection
 	for _, kind := range []string{"HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute"} {
 		gvr, ok := discovery.GetGVRWithGroup(kind, "gateway.networking.k8s.io")
@@ -682,13 +683,37 @@ func DetectMissingGatewayRefs(cache *ResourceCache, dynamicCache *DynamicResourc
 			routes = items
 		}
 		for _, route := range routes {
-			out = append(out, detectGatewayRouteMissingBackends(svcLister, kind, route, now)...)
+			out = append(out, detectGatewayRouteMissingBackends(svcLister, getReferenceGrants, kind, route, now)...)
 		}
 	}
 	return out
 }
 
-func detectGatewayRouteMissingBackends(svcLister corev1listers.ServiceLister, kind string, route *unstructured.Unstructured, now time.Time) []Detection {
+type referenceGrantGetter func(namespace string) ([]*unstructured.Unstructured, bool)
+
+func gatewayReferenceGrantGetter(dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery) referenceGrantGetter {
+	refGrantGVR, ok := discovery.GetGVRWithGroup("ReferenceGrant", "gateway.networking.k8s.io")
+	if !ok {
+		return nil
+	}
+	grantsByNS := map[string][]*unstructured.Unstructured{}
+	knownByNS := map[string]bool{}
+	return func(namespace string) ([]*unstructured.Unstructured, bool) {
+		if knownByNS[namespace] {
+			return grantsByNS[namespace], true
+		}
+		items, err := dynamicCache.List(refGrantGVR, namespace)
+		if err != nil {
+			log.Printf("[missing-refs] failed to list ReferenceGrant.gateway.networking.k8s.io in %s: %s", logsafe.Sanitize(namespace), logsafe.Sanitize(err.Error()))
+			return nil, false
+		}
+		grantsByNS[namespace] = items
+		knownByNS[namespace] = true
+		return items, true
+	}
+}
+
+func detectGatewayRouteMissingBackends(svcLister corev1listers.ServiceLister, getReferenceGrants referenceGrantGetter, kind string, route *unstructured.Unstructured, now time.Time) []Detection {
 	rules, found, err := unstructured.NestedSlice(route.Object, "spec", "rules")
 	if err != nil || !found {
 		return nil
@@ -731,6 +756,10 @@ func detectGatewayRouteMissingBackends(svcLister corev1listers.ServiceLister, ki
 				continue
 			}
 			if port == "" {
+				out = append(out, missingRefProblem(kind, "gateway.networking.k8s.io", route.GetNamespace(), route.GetName(),
+					"Missing Gateway backend Service port",
+					fmt.Sprintf("%s references Service %q in namespace %q but does not specify the required Service port (route backend cannot receive traffic)", source, name, svcNS),
+					age))
 				continue
 			}
 			if !serviceHasPort(svc, port) {
@@ -738,6 +767,14 @@ func detectGatewayRouteMissingBackends(svcLister corev1listers.ServiceLister, ki
 					"Missing Gateway backend Service port",
 					fmt.Sprintf("%s targets Service %q in namespace %q port %q which does not exist on the Service (route backend cannot receive traffic)", source, name, svcNS, port),
 					age))
+			}
+			if svcNS != route.GetNamespace() && getReferenceGrants != nil {
+				if grants, ok := getReferenceGrants(svcNS); ok && !gatewayReferenceGranted(grants, kind, route.GetNamespace(), name) {
+					out = append(out, missingRefProblem(kind, "gateway.networking.k8s.io", route.GetNamespace(), route.GetName(),
+						"Missing Gateway ReferenceGrant",
+						fmt.Sprintf("%s references Service %q in namespace %q, but that namespace has no ReferenceGrant allowing %s from namespace %q", source, name, svcNS, kind, route.GetNamespace()),
+						age))
+				}
 			}
 		}
 	}
@@ -771,6 +808,55 @@ func gatewayBackendPort(ref map[string]any) string {
 func serviceHasPort(svc *corev1.Service, port string) bool {
 	for _, sp := range svc.Spec.Ports {
 		if sp.Name == port || fmt.Sprintf("%d", sp.Port) == port {
+			return true
+		}
+	}
+	return false
+}
+
+func gatewayReferenceGranted(grants []*unstructured.Unstructured, routeKind, routeNS, svcName string) bool {
+	for _, grant := range grants {
+		froms, foundFrom, _ := unstructured.NestedSlice(grant.Object, "spec", "from")
+		tos, foundTo, _ := unstructured.NestedSlice(grant.Object, "spec", "to")
+		if !foundFrom || !foundTo {
+			continue
+		}
+		if !referenceGrantAllowsFrom(froms, routeKind, routeNS) {
+			continue
+		}
+		if referenceGrantAllowsToService(tos, svcName) {
+			return true
+		}
+	}
+	return false
+}
+
+func referenceGrantAllowsFrom(froms []any, routeKind, routeNS string) bool {
+	for _, from := range froms {
+		fm, ok := from.(map[string]any)
+		if !ok {
+			continue
+		}
+		group, _ := fm["group"].(string)
+		kind, _ := fm["kind"].(string)
+		namespace, _ := fm["namespace"].(string)
+		if group == "gateway.networking.k8s.io" && kind == routeKind && namespace == routeNS {
+			return true
+		}
+	}
+	return false
+}
+
+func referenceGrantAllowsToService(tos []any, svcName string) bool {
+	for _, to := range tos {
+		tm, ok := to.(map[string]any)
+		if !ok {
+			continue
+		}
+		group, _ := tm["group"].(string)
+		kind, _ := tm["kind"].(string)
+		name, _ := tm["name"].(string)
+		if group == "" && kind == "Service" && (name == "" || name == svcName) {
 			return true
 		}
 	}

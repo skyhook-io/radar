@@ -1,6 +1,10 @@
 package issues
 
-import "github.com/skyhook-io/radar/pkg/issuesapi"
+import (
+	"strings"
+
+	"github.com/skyhook-io/radar/pkg/issuesapi"
+)
 
 // dedupePodSchedulingOverProblem drops the generic problem-source row for a
 // Pod when the scheduling source emitted one for the same Pod. A pod stuck
@@ -136,12 +140,24 @@ func dedupeConditionOverMissingRef(in []Issue) []Issue {
 	}
 	out := in[:0]
 	for _, i := range in {
-		if i.Source == SourceCondition && structural[issueResourceCategoryKey(i)] {
+		if i.Source == SourceCondition && structural[issueResourceCategoryKey(i)] && isMissingRefEchoCondition(i) {
 			continue
 		}
 		out = append(out, i)
 	}
 	return out
+}
+
+func isMissingRefEchoCondition(i Issue) bool {
+	if i.Group != "gateway.networking.k8s.io" {
+		return false
+	}
+	switch i.Kind {
+	case "HTTPRoute", "GRPCRoute", "TCPRoute", "TLSRoute":
+		return strings.HasPrefix(i.Reason, "ResolvedRefs:")
+	default:
+		return false
+	}
 }
 
 func issueResourceCategoryKey(i Issue) string {

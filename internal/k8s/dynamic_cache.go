@@ -164,6 +164,7 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1", "v1beta1"}, Resource: "grpcroutes", Kind: "GRPCRoute", Namespaced: true},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1alpha2"}, Resource: "tcproutes", Kind: "TCPRoute", Namespaced: true},
 	{Group: "gateway.networking.k8s.io", Versions: []string{"v1alpha2"}, Resource: "tlsroutes", Kind: "TLSRoute", Namespaced: true},
+	{Group: "gateway.networking.k8s.io", Versions: []string{"v1beta1", "v1alpha2"}, Resource: "referencegrants", Kind: "ReferenceGrant", Namespaced: true},
 	{Group: "external-secrets.io", Versions: []string{"v1", "v1beta1"}, Resource: "externalsecrets", Kind: "ExternalSecret", Namespaced: true},
 	{Group: "external-secrets.io", Versions: []string{"v1", "v1beta1"}, Resource: "clusterexternalsecrets", Kind: "ClusterExternalSecret", Namespaced: false},
 	{Group: "external-secrets.io", Versions: []string{"v1", "v1beta1"}, Resource: "secretstores", Kind: "SecretStore", Namespaced: true},
