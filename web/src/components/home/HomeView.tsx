@@ -194,6 +194,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
           {hasProblems && (
             <ProblemsPanel
               problems={data.problems}
+              onNavigateToIssues={() => onNavigateToView('issues')}
               onResourceClick={onNavigateToResource}
             />
           )}
@@ -216,19 +217,29 @@ function BandItem({ children }: { children: ReactNode }) {
 
 interface ProblemsPanelProps {
   problems: DashboardResponse['problems']
+  onNavigateToIssues: () => void
   onResourceClick: (resource: SelectedResource) => void
 }
 
 
-function ProblemsPanel({ problems, onResourceClick }: ProblemsPanelProps) {
+function ProblemsPanel({ problems, onNavigateToIssues, onResourceClick }: ProblemsPanelProps) {
   return (
     <div className="rounded-xl bg-theme-surface shadow-theme-sm flex flex-col lg:max-h-[calc(100vh-280px)] lg:sticky lg:top-0">
       <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50 shrink-0">
         <div className="flex items-center gap-2">
           <AlertTriangle className="w-4 h-4 text-red-500" />
-          <span className="text-xs font-semibold uppercase tracking-wider text-red-500">Unhealthy Workloads</span>
+          <span className="text-xs font-semibold uppercase tracking-wider text-red-500">Active Issues</span>
         </div>
-        <span className="badge status-unhealthy rounded-full">{problems.length}</span>
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="rounded-md px-2 py-1 text-xs font-medium text-accent-text transition-colors hover:bg-accent-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent)]/40"
+            onClick={onNavigateToIssues}
+          >
+            View all
+          </button>
+          <span className="badge status-unhealthy rounded-full">{problems.length}</span>
+        </div>
       </div>
       <div className="overflow-y-auto flex-1 min-h-0">
         <div className="divide-y divide-theme-border">

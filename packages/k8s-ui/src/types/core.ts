@@ -940,7 +940,7 @@ export interface TrafficFilters {
 // Library consumers (Radar Hub) get all GitOps surfaces — the package
 // IS the public surface, so adding new top-level views must extend
 // this type rather than rely on app-local extensions.
-export type ExtendedMainView = MainView | 'traffic' | 'cost' | 'audit' | 'gitops'
+export type ExtendedMainView = MainView | 'traffic' | 'cost' | 'audit' | 'gitops' | 'issues'
 
 // ============================================================================
 // Image Filesystem Types
