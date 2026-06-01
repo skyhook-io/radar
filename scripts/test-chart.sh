@@ -71,6 +71,23 @@ assert_contains 'key: token'                                          "secret ke
 assert_not_contains '--prometheus-header=Authorization='               "secret value not rendered as a literal header"
 echo
 
+render "OIDC prefixes ending in colon stay string args" \
+  --set auth.mode=oidc \
+  --set auth.oidc.issuerURL=https://issuer.example \
+  --set auth.oidc.clientID=radar \
+  --set auth.oidc.redirectURL=https://radar.example/auth/callback \
+  --set auth.oidc.clientSecret=secret \
+  --set auth.oidc.usernamePrefix=oidc-user: \
+  --set auth.oidc.groupsPrefix=oidc-groups:
+if echo "$OUT" | yq 'select(.kind == "Deployment") | .spec.template.spec.containers[0].args[] | select(type != "!!str")' | grep -q .; then
+  fail "OIDC prefix args parse as non-string YAML values"
+else
+  pass "OIDC prefix args parse as strings"
+fi
+assert_contains '"--auth-oidc-username-prefix=oidc-user:"' "username prefix arg rendered quoted"
+assert_contains '"--auth-oidc-groups-prefix=oidc-groups:"' "groups prefix arg rendered quoted"
+echo
+
 render "rbac.selfUpgrade=true — full feature wiring" --set rbac.selfUpgrade=true
 assert_contains '^kind: Role$'                      "namespaced Role emitted"
 assert_contains '^kind: RoleBinding$'               "namespaced RoleBinding emitted"
@@ -157,13 +174,13 @@ assert_contains 'name: radar-cloud-owner-helm-admin$'     "owner-helm-admin bind
 assert_not_contains 'name: radar-cloud-member-helm$'      "no member-helm binding when member disabled"
 echo
 
-render "rbac.helm=true + cloud.enabled=true + auth.mode=none — no cloud-helm bindings" \
+render "rbac.helm=true + cloud.enabled=true + auth.mode=none — cloud helm bindings still emit" \
   --set rbac.helm=true --set cloud.enabled=true \
   --set cloud.url=wss://x --set cloud.token=t --set cloud.clusterName=c
 assert_contains 'name: radar-helm$'                  "helm add-on ClusterRole still emitted (cloud.enabled satisfies the OR-clause)"
 assert_contains 'name: radar-helm-admin$'            "helm-admin ClusterRole still emitted (same gate)"
-assert_not_contains 'name: radar-cloud-owner-helm$'  "cloud-helm bindings require auth.mode != none"
-assert_not_contains 'name: radar-cloud-member-helm$' "cloud-helm bindings require auth.mode != none"
+assert_contains 'name: radar-cloud-owner-helm$'      "cloud-owner-helm binding emits in cloud mode"
+assert_contains 'name: radar-cloud-member-helm$'     "cloud-member-helm binding emits in cloud mode"
 echo
 
 render "defaults — no RBAC reads (viewRBAC=false)"

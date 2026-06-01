@@ -74,41 +74,41 @@ spec:
             - --list-page-size={{ .Values.listPageSize }}
             {{- end }}
             {{- if ne .Values.auth.mode "none" }}
-            - --auth-mode={{ .Values.auth.mode }}
-            - --auth-cookie-ttl={{ .Values.auth.cookieTTL }}
+            - {{ printf "--auth-mode=%s" .Values.auth.mode | quote }}
+            - {{ printf "--auth-cookie-ttl=%s" .Values.auth.cookieTTL | quote }}
             {{- if .Values.auth.proxy.userHeader }}
-            - --auth-user-header={{ .Values.auth.proxy.userHeader }}
+            - {{ printf "--auth-user-header=%s" .Values.auth.proxy.userHeader | quote }}
             {{- end }}
             {{- if .Values.auth.proxy.groupsHeader }}
-            - --auth-groups-header={{ .Values.auth.proxy.groupsHeader }}
+            - {{ printf "--auth-groups-header=%s" .Values.auth.proxy.groupsHeader | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.issuerURL }}
-            - --auth-oidc-issuer={{ .Values.auth.oidc.issuerURL }}
+            - {{ printf "--auth-oidc-issuer=%s" .Values.auth.oidc.issuerURL | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.clientID }}
-            - --auth-oidc-client-id={{ .Values.auth.oidc.clientID }}
+            - {{ printf "--auth-oidc-client-id=%s" .Values.auth.oidc.clientID | quote }}
             {{- end }}
             {{- /* clientSecret is injected via RADAR_OIDC_CLIENT_SECRET env var below */}}
             {{- if .Values.auth.oidc.redirectURL }}
-            - --auth-oidc-redirect-url={{ .Values.auth.oidc.redirectURL }}
+            - {{ printf "--auth-oidc-redirect-url=%s" .Values.auth.oidc.redirectURL | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.groupsClaim }}
-            - --auth-oidc-groups-claim={{ .Values.auth.oidc.groupsClaim }}
+            - {{ printf "--auth-oidc-groups-claim=%s" .Values.auth.oidc.groupsClaim | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.scopes }}
-            - --auth-oidc-scopes={{ join "," .Values.auth.oidc.scopes }}
+            - {{ printf "--auth-oidc-scopes=%s" (join "," .Values.auth.oidc.scopes) | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.postLogoutRedirectURL }}
-            - --auth-oidc-post-logout-redirect-url={{ .Values.auth.oidc.postLogoutRedirectURL }}
+            - {{ printf "--auth-oidc-post-logout-redirect-url=%s" .Values.auth.oidc.postLogoutRedirectURL | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.usernamePrefix }}
-            - --auth-oidc-username-prefix={{ .Values.auth.oidc.usernamePrefix }}
+            - {{ printf "--auth-oidc-username-prefix=%s" .Values.auth.oidc.usernamePrefix | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.groupsPrefix }}
-            - --auth-oidc-groups-prefix={{ .Values.auth.oidc.groupsPrefix }}
+            - {{ printf "--auth-oidc-groups-prefix=%s" .Values.auth.oidc.groupsPrefix | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.caCert }}
-            - --auth-oidc-ca-cert={{ .Values.auth.oidc.caCert }}
+            - {{ printf "--auth-oidc-ca-cert=%s" .Values.auth.oidc.caCert | quote }}
             {{- end }}
             {{- if .Values.auth.oidc.insecureSkipVerify }}
             - --auth-oidc-insecure-skip-verify
