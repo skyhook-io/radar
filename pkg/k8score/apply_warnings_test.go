@@ -1,6 +1,7 @@
 package k8score
 
 import (
+	"context"
 	"strings"
 	"testing"
 
@@ -251,6 +252,68 @@ func TestCheckFieldRemoval(t *testing.T) {
 		}
 	})
 
+	t.Run("omitted sidecar survives", func(t *testing.T) {
+		pre := mkWorkload(t, "Deployment", map[string]any{"containers": []any{ctr("app"), ctr("sidecar")}})
+		subm := mkWorkload(t, "Deployment", map[string]any{"containers": []any{ctr("app")}})
+		post := mkWorkload(t, "Deployment", map[string]any{"containers": []any{ctr("app"), ctr("sidecar")}})
+
+		w := checkFieldRemoval(subm, pre, post)
+		if len(w) != 1 {
+			t.Fatalf("want 1 warning, got %d: %v", len(w), w)
+		}
+		if !strings.Contains(w[0], "spec.template.spec.containers[name=sidecar]") {
+			t.Errorf("sidecar fieldRef wrong: %s", w[0])
+		}
+	})
+
+	t.Run("pod dns policy survives", func(t *testing.T) {
+		pre := mkWorkload(t, "Deployment", map[string]any{"dnsPolicy": "None", "containers": []any{ctr("app")}})
+		subm := mkWorkload(t, "Deployment", map[string]any{"containers": []any{ctr("app")}})
+		post := mkWorkload(t, "Deployment", map[string]any{"dnsPolicy": "None", "containers": []any{ctr("app")}})
+
+		w := checkFieldRemoval(subm, pre, post)
+		if len(w) != 1 {
+			t.Fatalf("want 1 warning, got %d: %v", len(w), w)
+		}
+		if !strings.Contains(w[0], "spec.template.spec.dnsPolicy") {
+			t.Errorf("dnsPolicy fieldRef wrong: %s", w[0])
+		}
+	})
+
+	t.Run("container env survives", func(t *testing.T) {
+		withEnv := func() map[string]any {
+			return map[string]any{"name": "app", "env": []any{map[string]any{"name": "API_URL", "value": "api:8080"}}}
+		}
+		pre := mkWorkload(t, "Deployment", map[string]any{"containers": []any{withEnv()}})
+		subm := mkWorkload(t, "Deployment", map[string]any{"containers": []any{ctr("app")}})
+		post := mkWorkload(t, "Deployment", map[string]any{"containers": []any{withEnv()}})
+
+		w := checkFieldRemoval(subm, pre, post)
+		if len(w) != 1 {
+			t.Fatalf("want 1 warning, got %d: %v", len(w), w)
+		}
+		if !strings.Contains(w[0], "spec.template.spec.containers[name=app].env") {
+			t.Errorf("env fieldRef wrong: %s", w[0])
+		}
+	})
+
+	t.Run("container hostPort survives", func(t *testing.T) {
+		withHostPort := func() map[string]any {
+			return map[string]any{"name": "app", "ports": []any{map[string]any{"containerPort": int64(8080), "hostPort": int64(18080)}}}
+		}
+		pre := mkWorkload(t, "Deployment", map[string]any{"containers": []any{withHostPort()}})
+		subm := mkWorkload(t, "Deployment", map[string]any{"containers": []any{ctr("app")}})
+		post := mkWorkload(t, "Deployment", map[string]any{"containers": []any{withHostPort()}})
+
+		w := checkFieldRemoval(subm, pre, post)
+		if len(w) != 1 {
+			t.Fatalf("want 1 warning, got %d: %v", len(w), w)
+		}
+		if !strings.Contains(w[0], "spec.template.spec.containers[name=app].ports[containerPort=8080].hostPort") {
+			t.Errorf("hostPort fieldRef wrong: %s", w[0])
+		}
+	})
+
 	t.Run("nil inputs", func(t *testing.T) {
 		ok := mkWorkload(t, "Deployment", map[string]any{"containers": []any{ctr("app")}})
 		if w := checkFieldRemoval(nil, ok, ok); w != nil {
@@ -260,6 +323,19 @@ func TestCheckFieldRemoval(t *testing.T) {
 			t.Errorf("nil pre should yield nil, got %v", w)
 		}
 	})
+}
+
+func TestPopulateApplyWarningsPostGetFailure(t *testing.T) {
+	result := &ApplyResourceResult{}
+	submitted := mkWorkload(t, "Deployment", map[string]any{"containers": []any{ctr("app")}})
+	pre := submitted.DeepCopy()
+	m := &WorkloadManager{}
+
+	m.populateApplyWarnings(context.Background(), result, submitted, pre, nil, "ns", "Deployment", "w", false)
+
+	if len(result.Warnings) != 1 || !strings.Contains(result.Warnings[0], "Post-apply verification GET failed") {
+		t.Fatalf("warnings = %+v, want post-apply verification warning", result.Warnings)
+	}
 }
 
 func TestPodSpecReferences(t *testing.T) {

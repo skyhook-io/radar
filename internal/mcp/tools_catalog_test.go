@@ -76,6 +76,7 @@ func TestRegisteredToolAnnotations(t *testing.T) {
 		"manage_cronjob":  true,
 		"manage_gitops":   true,
 		"apply_resource":  true,
+		"patch_resource":  true,
 		"manage_node":     true,
 	}
 

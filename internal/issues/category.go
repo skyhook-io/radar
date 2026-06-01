@@ -127,6 +127,14 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 	if in.Reason == "Terminating stuck" {
 		return issuesapi.CategoryTerminationStuck
 	}
+	switch in.Reason {
+	case "CoreDNS NXDOMAIN override", "CoreDNS service DNS rewrite":
+		return issuesapi.CategoryDNSFailure
+	case "Missing referenced Service":
+		return issuesapi.CategoryMissingConfigRef
+	case "Service port mismatch":
+		return issuesapi.CategoryServiceNoEndpoints
+	}
 	switch in.Kind {
 	case "Pod":
 		if in.Reason == "OOMKilled" {

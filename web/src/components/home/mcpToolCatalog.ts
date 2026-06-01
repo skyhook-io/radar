@@ -259,6 +259,22 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'mode', desc: 'apply (default) or create' },
       { arg: 'dry_run', desc: 'validate without persisting' },
       { arg: 'namespace', desc: 'override namespace for the resource' },
+      { arg: 'verify', desc: 'return post-mutation state, workload rollout/pods, and related issues (default true)' },
+    ],
+  },
+  {
+    name: 'patch_resource',
+    write: true,
+    desc: 'Patch one existing resource with JSON Patch or JSON Merge Patch for precise field/list edits without rewriting the full manifest.',
+    params: [
+      { arg: 'kind', required: true, desc: 'resource kind, e.g. Deployment, Service, ConfigMap' },
+      { arg: 'name', required: true, desc: 'resource name' },
+      { arg: 'namespace', desc: 'resource namespace; omit for cluster-scoped resources' },
+      { arg: 'group', desc: 'API group when the kind is ambiguous' },
+      { arg: 'patch_type', desc: 'json (default) or merge' },
+      { arg: 'patch', required: true, desc: 'JSON patch body' },
+      { arg: 'dry_run', desc: 'validate without persisting' },
+      { arg: 'verify', desc: 'return compact post-patch state and JSON Patch field checks (default true)' },
     ],
   },
   {

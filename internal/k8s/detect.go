@@ -96,6 +96,7 @@ func podOwnerKindName(cache *ResourceCache, pod *corev1.Pod) (group, kind, name 
 func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 	var problems []Detection
 	now := time.Now()
+	problems = append(problems, detectConfigProblems(cache, namespace, now)...)
 
 	// Deployment problems: unavailableReplicas > 0
 	if depLister := cache.Deployments(); depLister != nil {

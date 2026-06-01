@@ -1,0 +1,221 @@
+package k8s
+
+import (
+	"fmt"
+	"log"
+	"strings"
+	"time"
+
+	"github.com/skyhook-io/radar/internal/logsafe"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+)
+
+// DetectMissingCRDRefs scans curated CRDs for explicit by-name references that
+// point at missing targets. Keep this list conservative: only refs where the
+// source spec directly names an object and the controller cannot perform its
+// job without that object belong in the live issue stream. Selector-based or
+// lifecycle-created targets should stay in resource-context enrichment.
+func DetectMissingCRDRefs(cache *ResourceCache, dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, namespace string) []Detection {
+	if cache == nil || dynamicCache == nil || discovery == nil {
+		return nil
+	}
+	now := time.Now()
+	var out []Detection
+	out = append(out, detectRolloutMissingServices(cache, dynamicCache, discovery, namespace, now)...)
+	out = append(out, detectKEDAMissingScaleTargets(cache, dynamicCache, discovery, namespace, now)...)
+	return out
+}
+
+func detectRolloutMissingServices(cache *ResourceCache, dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, namespace string, now time.Time) []Detection {
+	svcLister := cache.Services()
+	if svcLister == nil {
+		return nil
+	}
+	gvr, ok := discovery.GetGVRWithGroup("Rollout", "argoproj.io")
+	if !ok {
+		return nil
+	}
+	rollouts := listDynamicForMissingRefs(dynamicCache, gvr, namespace, "Rollout")
+	var out []Detection
+	for _, ro := range rollouts {
+		age := now.Sub(ro.GetCreationTimestamp().Time)
+		seen := map[string]bool{}
+		for _, ref := range rolloutServiceRefs(ro) {
+			if ref.name == "" || seen[ref.name] {
+				continue
+			}
+			seen[ref.name] = true
+			if _, err := svcLister.Services(ro.GetNamespace()).Get(ref.name); err == nil {
+				continue
+			}
+			out = append(out, missingRefProblemSev("Rollout", "argoproj.io", ro.GetNamespace(), ro.GetName(),
+				"warning", "Missing Rollout Service",
+				fmt.Sprintf("%s references Service %q which does not exist; the Rollout controller cannot update traffic through that Service", ref.path, ref.name),
+				age))
+		}
+	}
+	return out
+}
+
+type namedRef struct {
+	path string
+	name string
+}
+
+func rolloutServiceRefs(ro *unstructured.Unstructured) []namedRef {
+	var refs []namedRef
+	for _, item := range []struct {
+		path []string
+		name string
+	}{
+		{[]string{"spec", "strategy", "canary", "stableService"}, "spec.strategy.canary.stableService"},
+		{[]string{"spec", "strategy", "canary", "canaryService"}, "spec.strategy.canary.canaryService"},
+		{[]string{"spec", "strategy", "blueGreen", "activeService"}, "spec.strategy.blueGreen.activeService"},
+		{[]string{"spec", "strategy", "blueGreen", "previewService"}, "spec.strategy.blueGreen.previewService"},
+	} {
+		name, found, _ := unstructured.NestedString(ro.Object, item.path...)
+		if found && name != "" {
+			refs = append(refs, namedRef{path: item.name, name: name})
+		}
+	}
+	return refs
+}
+
+func detectKEDAMissingScaleTargets(cache *ResourceCache, dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, namespace string, now time.Time) []Detection {
+	gvr, ok := discovery.GetGVRWithGroup("ScaledObject", "keda.sh")
+	if !ok {
+		return nil
+	}
+	scaledObjects := listDynamicForMissingRefs(dynamicCache, gvr, namespace, "ScaledObject")
+	var out []Detection
+	for _, so := range scaledObjects {
+		ref, ok := kedaScaleTargetRef(so)
+		if !ok {
+			continue
+		}
+		checked, exists := scaleTargetExists(cache, dynamicCache, discovery, so.GetNamespace(), ref)
+		if !checked || exists {
+			continue
+		}
+		age := now.Sub(so.GetCreationTimestamp().Time)
+		out = append(out, missingRefProblemSev("ScaledObject", "keda.sh", so.GetNamespace(), so.GetName(),
+			"warning", "Missing scaleTargetRef",
+			fmt.Sprintf("spec.scaleTargetRef references %s %q which does not exist; KEDA cannot scale the target", ref.kind, ref.name),
+			age))
+	}
+	return out
+}
+
+type scaleTargetRef struct {
+	apiGroup string
+	kind     string
+	name     string
+}
+
+func kedaScaleTargetRef(so *unstructured.Unstructured) (scaleTargetRef, bool) {
+	name, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "name")
+	kind, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "kind")
+	apiVersion, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "apiVersion")
+	if name == "" || kind == "" {
+		return scaleTargetRef{}, false
+	}
+	return scaleTargetRef{
+		apiGroup: apiGroupFromVersion(apiVersion),
+		kind:     kind,
+		name:     name,
+	}, true
+}
+
+func scaleTargetExists(cache *ResourceCache, dynamicCache *DynamicResourceCache, discovery *ResourceDiscovery, namespace string, ref scaleTargetRef) (checked bool, exists bool) {
+	switch ref.kind {
+	case "Deployment":
+		if ref.apiGroup != "" && ref.apiGroup != "apps" {
+			return false, false
+		}
+		l := cache.Deployments()
+		if l == nil {
+			return false, false
+		}
+		_, err := l.Deployments(namespace).Get(ref.name)
+		return scaleTargetLookupResult("Deployment", namespace, ref.name, err)
+	case "StatefulSet":
+		if ref.apiGroup != "" && ref.apiGroup != "apps" {
+			return false, false
+		}
+		l := cache.StatefulSets()
+		if l == nil {
+			return false, false
+		}
+		_, err := l.StatefulSets(namespace).Get(ref.name)
+		return scaleTargetLookupResult("StatefulSet", namespace, ref.name, err)
+	case "DaemonSet":
+		if ref.apiGroup != "" && ref.apiGroup != "apps" {
+			return false, false
+		}
+		l := cache.DaemonSets()
+		if l == nil {
+			return false, false
+		}
+		_, err := l.DaemonSets(namespace).Get(ref.name)
+		return scaleTargetLookupResult("DaemonSet", namespace, ref.name, err)
+	case "Rollout":
+		if ref.apiGroup != "" && ref.apiGroup != "argoproj.io" {
+			return false, false
+		}
+		gvr, ok := discovery.GetGVRWithGroup("Rollout", "argoproj.io")
+		if !ok {
+			return false, false
+		}
+		_, err := dynamicCache.Get(gvr, namespace, ref.name)
+		return dynamicScaleTargetLookupResult("Rollout", namespace, ref.name, err)
+	default:
+		return false, false
+	}
+}
+
+func scaleTargetLookupResult(kind, namespace, name string, err error) (checked bool, exists bool) {
+	if err == nil {
+		return true, true
+	}
+	if apierrors.IsNotFound(err) {
+		return true, false
+	}
+	log.Printf("[missing-refs] failed to verify %s %s/%s scaleTargetRef: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(name), logsafe.Sanitize(err.Error()))
+	return false, false
+}
+
+func dynamicScaleTargetLookupResult(kind, namespace, name string, err error) (checked bool, exists bool) {
+	if err == nil {
+		return true, true
+	}
+	if strings.Contains(err.Error(), "resource not found:") {
+		return true, false
+	}
+	log.Printf("[missing-refs] failed to verify %s %s/%s scaleTargetRef: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(name), logsafe.Sanitize(err.Error()))
+	return false, false
+}
+
+func listDynamicForMissingRefs(dynamicCache *DynamicResourceCache, gvr schema.GroupVersionResource, namespace, kind string) []*unstructured.Unstructured {
+	var items []*unstructured.Unstructured
+	var err error
+	if namespace == "" {
+		items, err = dynamicCache.ListWatched(gvr)
+	} else {
+		items, err = dynamicCache.List(gvr, namespace)
+	}
+	if err != nil {
+		log.Printf("[missing-refs] failed to list %s.%s: %s", logsafe.Sanitize(kind), logsafe.Sanitize(gvr.Group), logsafe.Sanitize(err.Error()))
+		return nil
+	}
+	return items
+}
+
+func apiGroupFromVersion(apiVersion string) string {
+	if apiVersion == "" || !strings.Contains(apiVersion, "/") {
+		return ""
+	}
+	group, _, _ := strings.Cut(apiVersion, "/")
+	return group
+}

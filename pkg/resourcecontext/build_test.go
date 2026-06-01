@@ -753,6 +753,39 @@ func TestBuild_RBACDenied_AppendsOmitted(t *testing.T) {
 	}
 }
 
+func TestBuild_RBACDenied_AppReferences(t *testing.T) {
+	dep := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "prod"},
+	}
+	rc := Build(context.Background(), dep, Options{
+		Tier:          TierBasic,
+		AccessChecker: denyChecker{group: "", kind: "Service", namespace: "shared"},
+		AppReferences: &AppReferences{ServiceEnv: []ServiceEnvReference{{
+			Status: "port_mismatch",
+			Service: ContextRef{
+				Kind:      "Service",
+				Namespace: "shared",
+				Name:      "product-catalog",
+			},
+			ReferencedPort: 8082,
+			ServicePorts:   []string{"8080"},
+		}}},
+	})
+	if rc.AppReferences != nil {
+		t.Fatalf("AppReferences should be omitted after Service RBAC deny; got %+v", rc.AppReferences)
+	}
+	gotOmitted := false
+	for _, o := range rc.Omitted {
+		if o.Field == "appReferences.serviceEnv" && o.Reason == OmittedRBACDenied {
+			gotOmitted = true
+			break
+		}
+	}
+	if !gotOmitted {
+		t.Fatalf("expected omitted [appReferences.serviceEnv, rbac_denied]; got %+v", rc.Omitted)
+	}
+}
+
 func TestBuild_NilObj(t *testing.T) {
 	if rc := Build(context.Background(), nil, Options{}); rc != nil {
 		t.Errorf("Build(nil) = %+v, want nil", rc)

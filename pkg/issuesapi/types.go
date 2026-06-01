@@ -179,29 +179,58 @@ type Affected struct {
 	Nodes     int `json:"nodes,omitempty"`
 }
 
+type DiagnosticRole string
+
+const (
+	DiagnosticRoleCandidate DiagnosticRole = "candidate"
+	DiagnosticRoleRollup    DiagnosticRole = "rollup"
+	DiagnosticRoleAffected  DiagnosticRole = "affected"
+	DiagnosticRoleContext   DiagnosticRole = "context"
+)
+
+type DiagnosticContext struct {
+	Role  DiagnosticRole   `json:"role,omitempty"`
+	Facts []DiagnosticFact `json:"facts,omitempty"`
+}
+
+type DiagnosticFact struct {
+	Type          string     `json:"type"`
+	Message       string     `json:"message,omitempty"`
+	Refs          []Ref      `json:"refs,omitempty"`
+	RelatedIssues []IssueRef `json:"related_issues,omitempty"`
+}
+
+type IssueRef struct {
+	Ref      Ref      `json:"ref"`
+	Reason   string   `json:"reason,omitempty"`
+	Category Category `json:"category,omitempty"`
+	Severity Severity `json:"severity,omitempty"`
+}
+
 type Issue struct {
-	Severity             Severity      `json:"severity"`
-	Source               Source        `json:"source"`
-	Category             Category      `json:"category,omitempty"`
-	CategoryGroup        CategoryGroup `json:"category_group,omitempty"`
-	ID                   string        `json:"id,omitempty"`
-	GroupingScope        Scope         `json:"grouping_scope,omitempty"`
-	Kind                 string        `json:"kind"`
-	Group                string        `json:"group,omitempty"`
-	Namespace            string        `json:"namespace,omitempty"`
-	Name                 string        `json:"name"`
-	Reason               string        `json:"reason"`
-	Message              string        `json:"message,omitempty"`
-	FirstSeen            time.Time     `json:"first_seen,omitzero"`
-	LastSeen             time.Time     `json:"last_seen,omitzero"`
-	Count                int           `json:"count,omitempty"`
-	Owner                Ref           `json:"owner,omitzero"`
-	Fingerprint          string        `json:"-"`
-	RestartCount         int32         `json:"restart_count,omitempty"`
-	LastTerminatedReason string        `json:"last_terminated_reason,omitempty"`
-	Affected             Affected      `json:"affected,omitzero"`
-	Members              []Ref         `json:"members,omitempty"`
-	MembersTruncated     bool          `json:"members_truncated,omitempty"`
+	Severity             Severity           `json:"severity"`
+	Source               Source             `json:"source"`
+	Category             Category           `json:"category,omitempty"`
+	CategoryGroup        CategoryGroup      `json:"category_group,omitempty"`
+	ID                   string             `json:"id,omitempty"`
+	GroupingScope        Scope              `json:"grouping_scope,omitempty"`
+	Kind                 string             `json:"kind"`
+	Group                string             `json:"group,omitempty"`
+	Namespace            string             `json:"namespace,omitempty"`
+	Name                 string             `json:"name"`
+	Reason               string             `json:"reason"`
+	Message              string             `json:"message,omitempty"`
+	FirstSeen            time.Time          `json:"first_seen,omitzero"`
+	LastSeen             time.Time          `json:"last_seen,omitzero"`
+	Count                int                `json:"count,omitempty"`
+	Owner                Ref                `json:"owner,omitzero"`
+	Fingerprint          string             `json:"-"`
+	RestartCount         int32              `json:"restart_count,omitempty"`
+	LastTerminatedReason string             `json:"last_terminated_reason,omitempty"`
+	Affected             Affected           `json:"affected,omitzero"`
+	Members              []Ref              `json:"members,omitempty"`
+	MembersTruncated     bool               `json:"members_truncated,omitempty"`
+	DiagnosticContext    *DiagnosticContext `json:"diagnostic_context,omitempty"`
 }
 
 type Response struct {

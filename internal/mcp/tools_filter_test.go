@@ -208,6 +208,31 @@ func TestHandleListResources_RestrictedUser(t *testing.T) {
 	}
 }
 
+func TestHandleListResources_CommonAliases(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	ctx := withRestrictedUser(t, "alice", []string{"alpha"})
+
+	result, _, err := handleListResources(ctx, nil, listResourcesInput{Kind: "po"})
+	if err != nil {
+		t.Fatalf("handleListResources po: %v", err)
+	}
+	body := extractText(t, result)
+	if !containsName(body, "alpha-pod") {
+		t.Errorf("expected alpha-pod via po alias; got: %s", body)
+	}
+	if containsName(body, "beta-pod") || containsName(body, "gamma-pod") {
+		t.Errorf("po alias leaked other-namespace pods: %s", body)
+	}
+
+	result, _, err = handleListResources(ctx, nil, listResourcesInput{Kind: "no"})
+	if err != nil {
+		t.Fatalf("handleListResources no: %v", err)
+	}
+	if body := extractText(t, result); body != "[]" {
+		t.Errorf("node alias must still respect cluster-scoped RBAC, got: %s", body)
+	}
+}
+
 func TestHandleListResources_DeniedNamespace(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withRestrictedUser(t, "alice", []string{"alpha"})

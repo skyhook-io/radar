@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"errors"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	storagev1 "k8s.io/api/storage/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -300,6 +302,30 @@ func TestDetectMissingRefs(t *testing.T) {
 		if p.Severity != wantSev {
 			t.Errorf("reason %q: severity = %q, want %q: %+v", p.Reason, p.Severity, wantSev, p)
 		}
+	}
+}
+
+func TestScaleTargetLookupResultDistinguishesErrors(t *testing.T) {
+	gr := schema.GroupResource{Group: "apps", Resource: "deployments"}
+
+	checked, exists := scaleTargetLookupResult("Deployment", "prod", "missing", apierrors.NewNotFound(gr, "missing"))
+	if !checked || exists {
+		t.Fatalf("not found result = (%v, %v), want checked missing", checked, exists)
+	}
+
+	checked, exists = scaleTargetLookupResult("Deployment", "prod", "blocked", apierrors.NewForbidden(gr, "blocked", errors.New("denied")))
+	if checked || exists {
+		t.Fatalf("forbidden result = (%v, %v), want unchecked", checked, exists)
+	}
+
+	checked, exists = dynamicScaleTargetLookupResult("Rollout", "prod", "missing", errors.New("resource not found: prod/missing"))
+	if !checked || exists {
+		t.Fatalf("dynamic not found result = (%v, %v), want checked missing", checked, exists)
+	}
+
+	checked, exists = dynamicScaleTargetLookupResult("Rollout", "prod", "blocked", errors.New("informer not found for rollouts"))
+	if checked || exists {
+		t.Fatalf("dynamic cache error result = (%v, %v), want unchecked", checked, exists)
 	}
 }
 
@@ -649,6 +675,91 @@ func TestDetectMissingGatewayRefs(t *testing.T) {
 	}
 }
 
+func TestDetectMissingCRDRefs(t *testing.T) {
+	defer ResetTestState()
+	defer ResetTestDynamicState()
+
+	now := metav1.NewTime(time.Now().Add(-5 * time.Minute))
+	replicas := int32(1)
+	client := fake.NewClientset(
+		&corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: "stable", Namespace: "prod", CreationTimestamp: now}},
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "prod", CreationTimestamp: now},
+			Spec:       appsv1.DeploymentSpec{Replicas: &replicas},
+		},
+	)
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	rolloutGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	scaledObjectGVR := schema.GroupVersionResource{Group: "keda.sh", Version: "v1alpha1", Resource: "scaledobjects"}
+	scheme := runtime.NewScheme()
+	dynClient := dynamicfake.NewSimpleDynamicClientWithCustomListKinds(
+		scheme,
+		map[schema.GroupVersionResource]string{
+			rolloutGVR:      "RolloutList",
+			scaledObjectGVR: "ScaledObjectList",
+		},
+		argoRollout("checkout", "prod", now, map[string]any{
+			"canary": map[string]any{
+				"stableService": "stable",
+				"canaryService": "missing-canary",
+			},
+		}),
+		argoRollout("preview", "prod", now, map[string]any{
+			"blueGreen": map[string]any{
+				"previewService": "missing-preview",
+			},
+		}),
+		kedaScaledObject("ok", "prod", now, "apps/v1", "Deployment", "web"),
+		kedaScaledObject("missing-target", "prod", now, "apps/v1", "Deployment", "ghost"),
+		kedaScaledObject("unsupported-target", "prod", now, "example.com/v1", "Widget", "ghost"),
+	)
+	if err := InitTestDynamicResourceCache(dynClient, []APIResource{
+		{Group: "argoproj.io", Version: "v1alpha1", Kind: "Rollout", Name: "rollouts", Verbs: []string{"list", "watch"}},
+		{Group: "keda.sh", Version: "v1alpha1", Kind: "ScaledObject", Name: "scaledobjects", Verbs: []string{"list", "watch"}},
+	}); err != nil {
+		t.Fatalf("InitTestDynamicResourceCache: %v", err)
+	}
+	dynCache := GetDynamicResourceCache()
+	for _, gvr := range []schema.GroupVersionResource{rolloutGVR, scaledObjectGVR} {
+		if err := dynCache.EnsureWatching(gvr); err != nil {
+			t.Fatalf("EnsureWatching %s: %v", gvr.String(), err)
+		}
+		if !dynCache.WaitForSync(gvr, 2*time.Second) {
+			t.Fatalf("%s dynamic cache did not sync", gvr.String())
+		}
+	}
+
+	problems := DetectMissingCRDRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "")
+	if !findProblem(problems, "Rollout", "prod", "checkout", "Missing Rollout Service") {
+		t.Fatalf("missing Rollout canary Service not detected: %+v", problems)
+	}
+	if !findProblem(problems, "Rollout", "prod", "preview", "Missing Rollout Service") {
+		t.Fatalf("missing Rollout preview Service not detected: %+v", problems)
+	}
+	if !findProblem(problems, "ScaledObject", "prod", "missing-target", "Missing scaleTargetRef") {
+		t.Fatalf("missing KEDA scaleTargetRef not detected: %+v", problems)
+	}
+	if len(problems) != 3 {
+		t.Fatalf("expected exactly 3 curated CRD missing refs, got %+v", problems)
+	}
+	for _, p := range problems {
+		if p.Severity != "warning" {
+			t.Errorf("curated CRD missing refs should be warning-level, got %+v", p)
+		}
+		if hasSubstr(p.Message, "unsupported-target") || hasSubstr(p.Message, "stable") || hasSubstr(p.Message, "web") {
+			t.Errorf("existing or unsupported refs should not flag: %+v", p)
+		}
+	}
+
+	scoped := DetectMissingCRDRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "prod")
+	if len(scoped) != 3 {
+		t.Fatalf("namespace-scoped CRD refs should include prod problems, got %+v", scoped)
+	}
+}
+
 func webhookConfig(kind, name string, ts metav1.Time, webhooks []any) *unstructured.Unstructured {
 	return &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "admissionregistration.k8s.io/v1",
@@ -673,6 +784,40 @@ func gatewayRoute(name, namespace string, ts metav1.Time, backendRefs []any) *un
 		"spec": map[string]any{
 			"rules": []any{
 				map[string]any{"backendRefs": backendRefs},
+			},
+		},
+	}}
+}
+
+func argoRollout(name, namespace string, ts metav1.Time, strategy map[string]any) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Rollout",
+		"metadata": map[string]any{
+			"name":              name,
+			"namespace":         namespace,
+			"creationTimestamp": ts.Format(time.RFC3339),
+		},
+		"spec": map[string]any{
+			"strategy": strategy,
+		},
+	}}
+}
+
+func kedaScaledObject(name, namespace string, ts metav1.Time, apiVersion, kind, targetName string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "keda.sh/v1alpha1",
+		"kind":       "ScaledObject",
+		"metadata": map[string]any{
+			"name":              name,
+			"namespace":         namespace,
+			"creationTimestamp": ts.Format(time.RFC3339),
+		},
+		"spec": map[string]any{
+			"scaleTargetRef": map[string]any{
+				"apiVersion": apiVersion,
+				"kind":       kind,
+				"name":       targetName,
 			},
 		},
 	}}

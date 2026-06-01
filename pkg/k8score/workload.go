@@ -337,6 +337,8 @@ func (m *WorkloadManager) populateApplyWarnings(ctx context.Context, result *App
 
 	if pre != nil && post != nil {
 		result.Warnings = append(result.Warnings, checkFieldRemoval(submitted, pre, post)...)
+	} else if !dryRun && pre != nil && post == nil {
+		result.Warnings = append(result.Warnings, "Post-apply verification GET failed; Radar could not compute field-retention warnings from the live object.")
 	}
 	// The consumer-reload reminder only makes sense for a persisted edit — on a
 	// dry run nothing landed, so the "restart consumers" advice would be

@@ -20,11 +20,13 @@ type ClusterOnlyKindInfo struct {
 var clusterOnlyKinds = map[string]ClusterOnlyKindInfo{
 	"nodes":                           {"", "nodes"},
 	"node":                            {"", "nodes"},
+	"no":                              {"", "nodes"},
 	"persistentvolumes":               {"", "persistentvolumes"},
 	"persistentvolume":                {"", "persistentvolumes"},
 	"pv":                              {"", "persistentvolumes"},
 	"namespaces":                      {"", "namespaces"},
 	"namespace":                       {"", "namespaces"},
+	"ns":                              {"", "namespaces"},
 	"storageclasses":                  {"storage.k8s.io", "storageclasses"},
 	"storageclass":                    {"storage.k8s.io", "storageclasses"},
 	"sc":                              {"storage.k8s.io", "storageclasses"},

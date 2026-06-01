@@ -148,6 +148,283 @@ func hasAllProblemTypes(problems []Detection) bool {
 	return seen["Deployment"] && seen["StatefulSet"] && seen["DaemonSet"] && seen["HorizontalPodAutoscaler"] && seen["Job"]
 }
 
+func TestDetectProblems_ConfigSignals(t *testing.T) {
+	t.Run("coredns service nxdomain override", func(t *testing.T) {
+		defer ResetTestState()
+
+		client := fake.NewClientset(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "kube-system", CreationTimestamp: metav1.NewTime(time.Now().Add(-10 * time.Minute))},
+			Data: map[string]string{
+				"Corefile": `template IN A product-catalog.astronomy-shop.svc.cluster.local {
+  rcode NXDOMAIN
+}`,
+			},
+		})
+		if err := InitTestResourceCache(client); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+
+		for _, p := range DetectProblems(GetResourceCache(), "astronomy-shop") {
+			if p.Reason == "CoreDNS NXDOMAIN override" {
+				t.Fatalf("namespace-scoped DetectProblems leaked CoreDNS issue: %+v", p)
+			}
+		}
+
+		p := waitForProblem(t, "", "CoreDNS NXDOMAIN override")
+		if p.Kind != "ConfigMap" || p.Namespace != "kube-system" || p.Name != "coredns" {
+			t.Fatalf("CoreDNS problem subject = %s/%s/%s, want ConfigMap/kube-system/coredns: %+v", p.Kind, p.Namespace, p.Name, p)
+		}
+		if p.Severity != "warning" {
+			t.Fatalf("CoreDNS severity = %q, want warning", p.Severity)
+		}
+	})
+
+	t.Run("env service port mismatch is context when workload is healthy", func(t *testing.T) {
+		defer ResetTestState()
+
+		replicas := int32(1)
+		client := fake.NewClientset(
+			&appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "prod", CreationTimestamp: metav1.NewTime(time.Now().Add(-5 * time.Minute))},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+					Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name: "app",
+						Env: []corev1.EnvVar{{
+							Name:  "PRODUCT_CATALOG_ADDR",
+							Value: "redis://product-catalog:8082/cache?token=super-secret",
+						}},
+					}}}},
+				},
+				Status: appsv1.DeploymentStatus{
+					AvailableReplicas: 1,
+					Conditions: []appsv1.DeploymentCondition{{
+						Type:   appsv1.DeploymentAvailable,
+						Status: corev1.ConditionTrue,
+					}},
+				},
+			},
+			&corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "product-catalog", Namespace: "prod"},
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{{Port: 8080}},
+				},
+			},
+		)
+		if err := InitTestResourceCache(client); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+
+		check := waitForEnvServiceCheck(t, "prod", "port_mismatch")
+		if check.WorkloadKind != "Deployment" || check.WorkloadName != "frontend" || !strings.Contains(check.Message, "product-catalog:8082") || !strings.Contains(check.Message, "8080") {
+			t.Fatalf("env Service mismatch context = %+v", check)
+		}
+		if check.Value != "product-catalog:8082" || strings.Contains(check.Value, "super-secret") {
+			t.Fatalf("env Service check value = %q, want parsed host:port without query secret", check.Value)
+		}
+		for _, p := range DetectProblems(GetResourceCache(), "prod") {
+			if p.Reason == "Service port mismatch" {
+				t.Fatalf("healthy workload should not promote env Service mismatch to Issue: %+v", p)
+			}
+		}
+	})
+
+	t.Run("env service port mismatch becomes issue when workload is degraded", func(t *testing.T) {
+		defer ResetTestState()
+
+		replicas := int32(1)
+		client := fake.NewClientset(
+			&appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "prod", CreationTimestamp: metav1.NewTime(time.Now().Add(-5 * time.Minute))},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+					Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name: "app",
+						Env: []corev1.EnvVar{{
+							Name:  "PRODUCT_CATALOG_ADDR",
+							Value: "product-catalog:8082",
+						}},
+					}}}},
+				},
+				Status: appsv1.DeploymentStatus{
+					UnavailableReplicas: 1,
+					Conditions: []appsv1.DeploymentCondition{{
+						Type:   appsv1.DeploymentAvailable,
+						Status: corev1.ConditionFalse,
+					}},
+				},
+			},
+			&corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "product-catalog", Namespace: "prod"},
+				Spec: corev1.ServiceSpec{
+					Ports: []corev1.ServicePort{{Port: 8080}},
+				},
+			},
+		)
+		if err := InitTestResourceCache(client); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+
+		p := waitForProblem(t, "prod", "Service port mismatch")
+		if p.Kind != "Deployment" || p.Name != "frontend" || !strings.Contains(p.Message, "product-catalog:8082") || !strings.Contains(p.Message, "8080") {
+			t.Fatalf("env Service mismatch problem = %+v", p)
+		}
+	})
+
+	t.Run("cross namespace env service ref is not promoted to issue", func(t *testing.T) {
+		defer ResetTestState()
+
+		replicas := int32(1)
+		client := fake.NewClientset(&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "prod", CreationTimestamp: metav1.NewTime(time.Now().Add(-5 * time.Minute))},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &replicas,
+				Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+					Name: "app",
+					Env: []corev1.EnvVar{{
+						Name:  "PRODUCT_CATALOG_ADDR",
+						Value: "product-catalog.shared.svc.cluster.local:8082",
+					}},
+				}}}},
+			},
+			Status: appsv1.DeploymentStatus{
+				UnavailableReplicas: 1,
+				Conditions: []appsv1.DeploymentCondition{{
+					Type:   appsv1.DeploymentAvailable,
+					Status: corev1.ConditionFalse,
+				}},
+			},
+		})
+		if err := InitTestResourceCache(client); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+
+		check := waitForEnvServiceCheck(t, "prod", "cross_namespace_unverified")
+		if check.ServiceNamespace != "shared" || check.ServiceName != "product-catalog" || check.ServicePorts != nil {
+			t.Fatalf("cross-namespace env Service check leaked target details: %+v", check)
+		}
+		for _, p := range DetectProblems(GetResourceCache(), "prod") {
+			if p.Reason == "Service port mismatch" || p.Reason == "Missing referenced Service" {
+				t.Fatalf("cross-namespace env Service check should not promote to Issue: %+v", p)
+			}
+		}
+	})
+}
+
+func waitForEnvServiceCheck(t *testing.T, namespace, status string) EnvServiceRefCheck {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var checks []EnvServiceRefCheck
+	for time.Now().Before(deadline) {
+		checks = FindEnvServiceRefChecks(GetResourceCache(), namespace)
+		for _, c := range checks {
+			if c.Status == status {
+				return c
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("env Service check status %q not found in namespace %q; got %+v", status, namespace, checks)
+	return EnvServiceRefCheck{}
+}
+
+func waitForProblem(t *testing.T, namespace, reason string) Detection {
+	t.Helper()
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(GetResourceCache(), namespace)
+		for _, p := range problems {
+			if p.Reason == reason {
+				return p
+			}
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	t.Fatalf("problem reason %q not found in namespace %q; got %+v", reason, namespace, problems)
+	return Detection{}
+}
+
+func TestParseEnvServiceRefTrimsSuffixes(t *testing.T) {
+	cases := []struct {
+		name      string
+		value     string
+		wantName  string
+		wantNS    string
+		wantPort  int32
+		wantFound bool
+	}{
+		{
+			name:      "plain path",
+			value:     "product-catalog:8080/health",
+			wantName:  "product-catalog",
+			wantNS:    "prod",
+			wantPort:  8080,
+			wantFound: true,
+		},
+		{
+			name:      "query before path",
+			value:     "product-catalog:8080?ready=true/extra",
+			wantName:  "product-catalog",
+			wantNS:    "prod",
+			wantPort:  8080,
+			wantFound: true,
+		},
+		{
+			name:      "fragment",
+			value:     "product-catalog.prod.svc.cluster.local:8080#main",
+			wantName:  "product-catalog",
+			wantNS:    "prod",
+			wantPort:  8080,
+			wantFound: true,
+		},
+		{
+			name:      "two part same namespace",
+			value:     "product-catalog.prod:8080",
+			wantName:  "product-catalog",
+			wantNS:    "prod",
+			wantPort:  8080,
+			wantFound: true,
+		},
+		{
+			name:      "two part other namespace",
+			value:     "product-catalog.shared:8080",
+			wantName:  "product-catalog",
+			wantNS:    "shared",
+			wantPort:  8080,
+			wantFound: true,
+		},
+		{
+			name:      "url scheme uses host",
+			value:     "http://product-catalog.prod.svc.cluster.local:8080/health?ready=true",
+			wantName:  "product-catalog",
+			wantNS:    "prod",
+			wantPort:  8080,
+			wantFound: true,
+		},
+		{
+			name:      "bad port",
+			value:     "product-catalog:abc/health",
+			wantFound: false,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got, ok := parseEnvServiceRef(tc.value, "prod")
+			if ok != tc.wantFound {
+				t.Fatalf("parseEnvServiceRef(%q) ok = %v, want %v; got %+v", tc.value, ok, tc.wantFound, got)
+			}
+			if !tc.wantFound {
+				return
+			}
+			if got.name != tc.wantName || got.namespace != tc.wantNS || got.port != tc.wantPort {
+				t.Fatalf("parseEnvServiceRef(%q) = %+v, want name=%q namespace=%q port=%d", tc.value, got, tc.wantName, tc.wantNS, tc.wantPort)
+			}
+		})
+	}
+}
+
 func TestDetectProblems_OperationalSignals(t *testing.T) {
 	defer ResetTestState()
 

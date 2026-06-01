@@ -2,6 +2,7 @@ package issues
 
 import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -50,12 +51,14 @@ func (p *CacheProvider) DetectMissingRefs(namespaces []string) []k8s.Detection {
 		out := k8s.DetectMissingRefs(p.cache, "")
 		out = append(out, k8s.DetectMissingWebhookRefs(p.cache, p.dynamic, p.discovery, "")...)
 		out = append(out, k8s.DetectMissingGatewayRefs(p.cache, p.dynamic, p.discovery, "")...)
+		out = append(out, k8s.DetectMissingCRDRefs(p.cache, p.dynamic, p.discovery, "")...)
 		return out
 	}
 	perNs := make([][]k8s.Detection, 0, len(namespaces))
 	for _, ns := range namespaces {
 		out := k8s.DetectMissingRefs(p.cache, ns)
 		out = append(out, k8s.DetectMissingGatewayRefs(p.cache, p.dynamic, p.discovery, ns)...)
+		out = append(out, k8s.DetectMissingCRDRefs(p.cache, p.dynamic, p.discovery, ns)...)
 		perNs = append(perNs, out)
 	}
 	// Webhook configs are cluster-scoped — namespace-bounded callers do
@@ -109,6 +112,26 @@ func (p *CacheProvider) DetectGitOpsProblems(namespaces []string) []k8s.Detectio
 		perNs = append(perNs, k8s.DetectGitOpsProblems(p.dynamic, p.discovery, ns))
 	}
 	return flattenNamespacedProblems(perNs)
+}
+
+func (p *CacheProvider) SelectedPodsForService(namespace, name string) []Ref {
+	if p == nil || p.cache == nil || p.cache.Services() == nil || p.cache.Pods() == nil {
+		return nil
+	}
+	svc, err := p.cache.Services().Services(namespace).Get(name)
+	if err != nil || svc == nil || len(svc.Spec.Selector) == 0 {
+		return nil
+	}
+	pods, err := p.cache.Pods().Pods(namespace).List(labels.SelectorFromSet(labels.Set(svc.Spec.Selector)))
+	if err != nil {
+		return nil
+	}
+	refs := make([]Ref, 0, len(pods))
+	for _, pod := range pods {
+		refs = append(refs, Ref{Kind: "Pod", Namespace: pod.Namespace, Name: pod.Name})
+	}
+	sortRefs(refs)
+	return refs
 }
 
 // flattenNamespacedProblems concatenates per-namespace problem lists

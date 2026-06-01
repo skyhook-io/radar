@@ -24,6 +24,7 @@ type fakeProvider struct {
 	dynamic        map[schema.GroupVersionResource][]*unstructured.Unstructured
 	kinds          map[schema.GroupVersionResource]string
 	namespaced     map[schema.GroupVersionResource]bool
+	selectedPods   map[string][]Ref
 }
 
 func (f *fakeProvider) DetectProblems(_ []string) []k8s.Detection       { return f.problems }
@@ -50,6 +51,9 @@ func (f *fakeProvider) KindForGVR(gvr schema.GroupVersionResource) string {
 func (f *fakeProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool, bool) {
 	namespaced, ok := f.namespaced[gvr]
 	return namespaced, ok
+}
+func (f *fakeProvider) SelectedPodsForService(namespace, name string) []Ref {
+	return f.selectedPods[namespace+"/"+name]
 }
 
 func TestCompose_NormalizesProblemSeverity(t *testing.T) {
@@ -369,6 +373,143 @@ func TestCompose_MissingRefsComposedByDefault(t *testing.T) {
 	out := Compose(p, Filters{})
 	if !hasIssueSource(out, SourceProblem) || !hasIssueSource(out, SourceMissingRef) {
 		t.Fatalf("Compose should include problem + missing_ref, got %+v", out)
+	}
+}
+
+func TestCompose_DiagnosticContextMissingRefCandidate(t *testing.T) {
+	p := &fakeProvider{
+		missingRefs: []k8s.Detection{
+			{Kind: "Pod", Namespace: "prod", Name: "web", Severity: "critical", Reason: "Missing ConfigMap"},
+		},
+	}
+
+	out := Compose(p, Filters{})
+	if len(out) != 1 {
+		t.Fatalf("got %d issues, want 1: %+v", len(out), out)
+	}
+	ctx := out[0].DiagnosticContext
+	if ctx == nil || ctx.Role != issuesapi.DiagnosticRoleCandidate {
+		t.Fatalf("diagnostic context = %+v, want candidate", ctx)
+	}
+	if len(ctx.Facts) != 1 || ctx.Facts[0].Type != factExplicitReference {
+		t.Fatalf("facts = %+v, want explicit_reference", ctx.Facts)
+	}
+}
+
+func TestCompose_DiagnosticContextGroupedOwnerRollup(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{Kind: "Pod", Namespace: "prod", Name: "web-a", Severity: "critical", Reason: "ImagePullBackOff", OwnerKind: "Deployment", OwnerName: "web"},
+			{Kind: "Pod", Namespace: "prod", Name: "web-b", Severity: "critical", Reason: "ImagePullBackOff", OwnerKind: "Deployment", OwnerName: "web"},
+		},
+	}
+
+	out := Compose(p, Filters{Grouped: true})
+	if len(out) != 1 {
+		t.Fatalf("got %d issues, want 1: %+v", len(out), out)
+	}
+	ctx := out[0].DiagnosticContext
+	if out[0].Kind != "Deployment" || ctx == nil || ctx.Role != issuesapi.DiagnosticRoleRollup {
+		t.Fatalf("issue/context = %+v / %+v, want Deployment rollup", out[0], ctx)
+	}
+	if len(ctx.Facts) != 1 || ctx.Facts[0].Type != factOwnerRollup || len(ctx.Facts[0].Refs) != 2 {
+		t.Fatalf("facts = %+v, want owner_rollup with pod refs", ctx.Facts)
+	}
+}
+
+func TestCompose_DiagnosticContextServiceAffectedByBackendIssues(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{Kind: "Service", Namespace: "prod", Name: "api", Severity: "critical", Reason: "0/1 selected pods ready"},
+			{Kind: "Pod", Namespace: "prod", Name: "api-abc", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "api"},
+		},
+		selectedPods: map[string][]Ref{
+			"prod/api": {{Kind: "Pod", Namespace: "prod", Name: "api-abc"}},
+		},
+	}
+
+	out := Compose(p, Filters{Grouped: true})
+	var svc Issue
+	for _, issue := range out {
+		if issue.Kind == "Service" && issue.Name == "api" {
+			svc = issue
+		}
+	}
+	if svc.Kind == "" {
+		t.Fatalf("service issue not found: %+v", out)
+	}
+	ctx := svc.DiagnosticContext
+	if ctx == nil || ctx.Role != issuesapi.DiagnosticRoleAffected {
+		t.Fatalf("diagnostic context = %+v, want affected", ctx)
+	}
+	if len(ctx.Facts) != 1 || ctx.Facts[0].Type != factSelectedBackend || len(ctx.Facts[0].RelatedIssues) != 1 {
+		t.Fatalf("facts = %+v, want selected backend related issue", ctx.Facts)
+	}
+	if got := ctx.Facts[0].RelatedIssues[0].Ref; got.Kind != "Deployment" || got.Name != "api" {
+		t.Fatalf("related issue ref = %+v, want Deployment/api", got)
+	}
+}
+
+func TestCompose_DiagnosticContextServiceConfigCandidate(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{Kind: "Service", Namespace: "prod", Name: "api", Severity: "warning", Reason: "Selector matches no pods"},
+		},
+	}
+
+	out := Compose(p, Filters{})
+	if len(out) != 1 {
+		t.Fatalf("got %d issues, want 1: %+v", len(out), out)
+	}
+	ctx := out[0].DiagnosticContext
+	if ctx == nil || ctx.Role != issuesapi.DiagnosticRoleCandidate {
+		t.Fatalf("diagnostic context = %+v, want candidate", ctx)
+	}
+	if len(ctx.Facts) != 1 || ctx.Facts[0].Type != factServiceConfig {
+		t.Fatalf("facts = %+v, want service_config_mismatch", ctx.Facts)
+	}
+}
+
+func TestCompose_DiagnosticContextServiceEnvCandidate(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{Kind: "Deployment", Namespace: "prod", Name: "checkout", Severity: "critical", Reason: "Service port mismatch", Message: "CHECKOUT_ADDR points at cart:8080, but cart exposes 80"},
+		},
+	}
+
+	out := Compose(p, Filters{})
+	if len(out) != 1 {
+		t.Fatalf("got %d issues, want 1: %+v", len(out), out)
+	}
+	ctx := out[0].DiagnosticContext
+	if ctx == nil || ctx.Role != issuesapi.DiagnosticRoleCandidate {
+		t.Fatalf("diagnostic context = %+v, want candidate", ctx)
+	}
+	if len(ctx.Facts) != 1 || ctx.Facts[0].Type != factServiceEnvReference || ctx.Facts[0].Message == "" {
+		t.Fatalf("facts = %+v, want service_env_reference with message", ctx.Facts)
+	}
+}
+
+func TestCompose_DiagnosticContextProbeAndInitCandidates(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{Kind: "Pod", Namespace: "prod", Name: "probe", Severity: "critical", Reason: "ReadinessProbeInvalid", Message: "readiness probe references named port \"http\""},
+			{Kind: "Pod", Namespace: "prod", Name: "init", Severity: "high", Reason: "InitContainerStalled", Message: "init container \"wait\" has been running for 10m"},
+		},
+	}
+
+	out := Compose(p, Filters{})
+	byName := map[string]Issue{}
+	for _, issue := range out {
+		byName[issue.Name] = issue
+	}
+	probeCtx := byName["probe"].DiagnosticContext
+	if probeCtx == nil || probeCtx.Role != issuesapi.DiagnosticRoleCandidate || len(probeCtx.Facts) != 1 || probeCtx.Facts[0].Type != factProbeTarget {
+		t.Fatalf("probe diagnostic context = %+v, want probe target candidate", probeCtx)
+	}
+	initCtx := byName["init"].DiagnosticContext
+	if initCtx == nil || initCtx.Role != issuesapi.DiagnosticRoleCandidate || len(initCtx.Facts) != 1 || initCtx.Facts[0].Type != factBlockedInit {
+		t.Fatalf("init diagnostic context = %+v, want blocked init candidate", initCtx)
 	}
 }
 

@@ -44,6 +44,7 @@ import (
 	"github.com/skyhook-io/radar/internal/audit"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/resourcecontextrefs"
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	bpaudit "github.com/skyhook-io/radar/pkg/audit"
@@ -429,6 +430,7 @@ func (s *Server) buildAIResourceContext(r *http.Request, obj runtime.Object, kin
 		AccessChecker:   s.newRequestScopedChecker(r),
 		IssueSummary:    issueSum,
 		AuditSummary:    auditSum,
+		AppReferences:   resourcecontextrefs.AppReferencesFromEnvServiceChecks(k8s.FindEnvServiceRefChecksForObject(cache, obj)),
 		ServiceBackends: serviceBackendLookup{cache: cache},
 	}
 

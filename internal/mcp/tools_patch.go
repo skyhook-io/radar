@@ -1,0 +1,277 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"reflect"
+	"strconv"
+	"strings"
+
+	"github.com/modelcontextprotocol/go-sdk/mcp"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/dynamic"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+)
+
+type patchResourceInput struct {
+	Kind      string `json:"kind" jsonschema:"resource kind, e.g. Deployment, Service, ConfigMap"`
+	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous, e.g. apps for Deployment or serving.knative.dev for Knative Service"`
+	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced resources; omit for cluster-scoped resources"`
+	Name      string `json:"name" jsonschema:"resource name"`
+	PatchType string `json:"patch_type,omitempty" jsonschema:"json (default, RFC 6902 JSON Patch array) or merge (JSON Merge Patch object)"`
+	Patch     string `json:"patch" jsonschema:"JSON patch body. For patch_type=json, pass an array like [{\"op\":\"remove\",\"path\":\"/spec/template/spec/dnsConfig\"}]. For merge, pass an object."`
+	DryRun    bool   `json:"dry_run,omitempty" jsonschema:"validate without persisting changes"`
+	Verify    *bool  `json:"verify,omitempty" jsonschema:"return compact post-patch state and JSON Patch field checks. Default true; set false for a terse write result."`
+}
+
+type jsonPatchOperation struct {
+	Op    string          `json:"op"`
+	Path  string          `json:"path"`
+	Value json.RawMessage `json:"value,omitempty"`
+}
+
+func handlePatchResource(ctx context.Context, req *mcp.CallToolRequest, input patchResourceInput) (*mcp.CallToolResult, any, error) {
+	kind := strings.TrimSpace(input.Kind)
+	name := strings.TrimSpace(input.Name)
+	namespace := strings.TrimSpace(input.Namespace)
+	group := strings.TrimSpace(input.Group)
+	if kind == "" {
+		return nil, nil, fmt.Errorf("kind is required")
+	}
+	if name == "" {
+		return nil, nil, fmt.Errorf("name is required")
+	}
+
+	patchBody := strings.TrimSpace(input.Patch)
+	if patchBody == "" {
+		return nil, nil, fmt.Errorf("patch is required")
+	}
+	if !json.Valid([]byte(patchBody)) {
+		return nil, nil, fmt.Errorf("patch must be valid JSON")
+	}
+
+	gvr, namespaced, err := resolveMutationGVR(kind, group)
+	if err != nil {
+		return nil, nil, err
+	}
+	if namespaced && namespace == "" {
+		return nil, nil, fmt.Errorf("namespace is required for namespaced kind %q", kind)
+	}
+	if !namespaced && namespace != "" {
+		return nil, nil, fmt.Errorf("namespace must be empty for cluster-scoped kind %q", kind)
+	}
+
+	dynClient := k8s.DynamicClientFromContext(ctx)
+	if dynClient == nil {
+		return nil, nil, fmt.Errorf("not connected to cluster")
+	}
+
+	patchType, err := parsePatchType(input.PatchType)
+	if err != nil {
+		return nil, nil, err
+	}
+
+	var resClient = dynClient.Resource(gvr)
+	var client dynamic.ResourceInterface = resClient
+	if namespace != "" {
+		client = resClient.Namespace(namespace)
+	}
+
+	verify := input.Verify == nil || *input.Verify
+
+	var before *unstructured.Unstructured
+	var beforeErr string
+	if verify {
+		got, err := client.Get(ctx, name, metav1.GetOptions{})
+		if err != nil {
+			beforeErr = err.Error()
+		} else {
+			before = got
+		}
+	}
+
+	opts := metav1.PatchOptions{}
+	if input.DryRun {
+		opts.DryRun = []string{metav1.DryRunAll}
+	}
+	patched, err := client.Patch(ctx, name, patchType, []byte(patchBody), opts)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to patch resource: %w", err)
+	}
+
+	result := map[string]any{
+		"status":     "ok",
+		"message":    fmt.Sprintf("Successfully patched %s %s/%s", kind, namespace, name),
+		"kind":       kind,
+		"group":      gvr.Group,
+		"namespace":  namespace,
+		"name":       name,
+		"patch_type": patchTypeName(patchType),
+		"dry_run":    input.DryRun,
+	}
+	if rv := patched.GetResourceVersion(); rv != "" {
+		result["resourceVersion"] = rv
+	}
+	if gen := patched.GetGeneration(); gen != 0 {
+		result["generation"] = gen
+	}
+
+	if verify {
+		var ops []jsonPatchOperation
+		if patchType == types.JSONPatchType {
+			ops = parseJSONPatchOperations([]byte(patchBody))
+		}
+		result["verification"] = buildMutationVerification(ctx, dynClient, mutationVerificationOptions{
+			Kind:         kind,
+			Group:        group,
+			Namespace:    namespace,
+			Name:         name,
+			GVR:          gvr,
+			Post:         patched,
+			Before:       before,
+			BeforeErr:    beforeErr,
+			JSONPatchOps: ops,
+		})
+	}
+
+	return toJSONResult(result)
+}
+
+func parsePatchType(input string) (types.PatchType, error) {
+	switch strings.ToLower(strings.TrimSpace(input)) {
+	case "", "json", "jsonpatch", "json_patch":
+		return types.JSONPatchType, nil
+	case "merge", "jsonmerge", "merge_patch", "json_merge":
+		return types.MergePatchType, nil
+	default:
+		return "", fmt.Errorf("patch_type must be 'json' or 'merge', got %q", input)
+	}
+}
+
+func patchTypeName(patchType types.PatchType) string {
+	switch patchType {
+	case types.JSONPatchType:
+		return "json"
+	case types.MergePatchType:
+		return "merge"
+	default:
+		return string(patchType)
+	}
+}
+
+func parseJSONPatchOperations(raw []byte) []jsonPatchOperation {
+	var ops []jsonPatchOperation
+	if err := json.Unmarshal(raw, &ops); err != nil {
+		return nil
+	}
+	return ops
+}
+
+func verifyJSONPatchOperations(before, after *unstructured.Unstructured, ops []jsonPatchOperation, beforeErr string) []map[string]any {
+	results := make([]map[string]any, 0, len(ops))
+	for _, op := range ops {
+		entry := map[string]any{
+			"op":   op.Op,
+			"path": op.Path,
+		}
+		beforeVal, beforeFound := getJSONPointerValue(before, op.Path)
+		afterVal, afterFound := getJSONPointerValue(after, op.Path)
+		entry["before_found"] = beforeFound
+		entry["after_found"] = afterFound
+
+		switch strings.ToLower(op.Op) {
+		case "remove":
+			switch {
+			case beforeErr != "":
+				entry["status"] = "unknown_before"
+				entry["before_error"] = beforeErr
+			case beforeFound && !afterFound:
+				entry["status"] = "removed"
+			case beforeFound && afterFound && !reflect.DeepEqual(beforeVal, afterVal):
+				entry["status"] = "changed_at_path"
+			case beforeFound:
+				entry["status"] = "unchanged"
+			default:
+				entry["status"] = "missing_before"
+			}
+		case "replace", "add":
+			if strings.ToLower(op.Op) == "add" && strings.HasSuffix(op.Path, "/-") {
+				entry["status"] = "array_append_not_checked"
+				entry["note"] = "JSON Patch append paths ending in /- cannot be resolved as a stable post-mutation JSON pointer"
+				break
+			}
+			var want any
+			if len(op.Value) > 0 && json.Unmarshal(op.Value, &want) == nil {
+				entry["value_matched"] = afterFound && reflect.DeepEqual(normalizeJSONNumber(afterVal), normalizeJSONNumber(want))
+			}
+			if afterFound {
+				entry["status"] = "present"
+			} else {
+				entry["status"] = "missing_after"
+			}
+		default:
+			entry["status"] = "not_checked"
+		}
+		results = append(results, entry)
+	}
+	return results
+}
+
+func getJSONPointerValue(obj *unstructured.Unstructured, pointer string) (any, bool) {
+	if obj == nil || pointer == "" || pointer[0] != '/' {
+		return nil, false
+	}
+	var cur any = obj.Object
+	for _, rawPart := range strings.Split(pointer[1:], "/") {
+		part := strings.ReplaceAll(strings.ReplaceAll(rawPart, "~1", "/"), "~0", "~")
+		switch typed := cur.(type) {
+		case map[string]any:
+			next, ok := typed[part]
+			if !ok {
+				return nil, false
+			}
+			cur = next
+		case []any:
+			if part == "-" {
+				return nil, false
+			}
+			idx, err := strconv.Atoi(part)
+			if err != nil || idx < 0 || idx >= len(typed) {
+				return nil, false
+			}
+			cur = typed[idx]
+		default:
+			return nil, false
+		}
+	}
+	return cur, true
+}
+
+func normalizeJSONNumber(v any) any {
+	switch n := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(n))
+		for k, v := range n {
+			out[k] = normalizeJSONNumber(v)
+		}
+		return out
+	case []any:
+		out := make([]any, len(n))
+		for i, v := range n {
+			out[i] = normalizeJSONNumber(v)
+		}
+		return out
+	case int:
+		return float64(n)
+	case int32:
+		return float64(n)
+	case int64:
+		return float64(n)
+	default:
+		return v
+	}
+}

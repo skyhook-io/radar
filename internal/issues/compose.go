@@ -163,9 +163,13 @@ func ComposeWithStats(p Provider, f Filters) ([]Issue, ComposeStats) {
 	// subject and count> match the fan-out — filtering the flat evidence first
 	// would drop a pod-evidenced Deployment issue under kind=Deployment and
 	// never see a fan-out count.
+	flatForContext := out
+	groupedForContext := []Issue(nil)
 	if f.Grouped {
 		out = GroupIssues(out)
+		groupedForContext = out
 	}
+	out = enrichDiagnosticContext(out, flatForContext, groupedForContext, p)
 
 	// ---- 4. Public filters on the shaped rows ------------------------
 	out = applyFilters(out, f) // severity + kind, against subject (grouped) or evidence (flat)

@@ -49,12 +49,13 @@ type ResourceContext struct {
 	IssueSummary    *IssueSummary    `json:"issueSummary,omitempty"`
 	AuditSummary    *AuditSummary    `json:"auditSummary,omitempty"`
 	PolicySummary   *PolicySummary   `json:"policySummary,omitempty"`
+	AppReferences   *AppReferences   `json:"appReferences,omitempty"`
 	Omitted         []OmittedField   `json:"omitted,omitempty"`
 }
 
 // ContextTier signals how much enrichment is included. "basic" is the
-// always-on tier; "diagnostic" carries extra signals (added in a later
-// phase) and is only produced when explicitly requested.
+// always-on tier; "diagnostic" carries extra signals and is only produced when
+// explicitly requested.
 type ContextTier string
 
 const (
@@ -104,6 +105,21 @@ type UsesBlock struct {
 	Secrets        []ContextRef `json:"secrets,omitempty"`
 	ServiceAccount *ContextRef  `json:"serviceAccount,omitempty"`
 	PVCs           []ContextRef `json:"pvcs,omitempty"`
+}
+
+type AppReferences struct {
+	ServiceEnv []ServiceEnvReference `json:"serviceEnv,omitempty"`
+}
+
+type ServiceEnvReference struct {
+	Status         string     `json:"status"`
+	Container      string     `json:"container"`
+	Env            string     `json:"env"`
+	Value          string     `json:"value"`
+	Service        ContextRef `json:"service"`
+	ReferencedPort int32      `json:"referencedPort,omitempty"`
+	ServicePorts   []string   `json:"servicePorts,omitempty"`
+	Message        string     `json:"message,omitempty"`
 }
 
 // ReferencedBy lists workload specs that directly reference the subject

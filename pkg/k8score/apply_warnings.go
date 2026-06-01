@@ -109,7 +109,7 @@ func checkFieldRemoval(submitted, pre, post *unstructured.Unstructured) []string
 
 	var warnings []string
 
-	for _, field := range []string{"nodeSelector", "affinity", "tolerations", "nodeName", "topologySpreadConstraints"} {
+	for _, field := range []string{"nodeSelector", "affinity", "tolerations", "nodeName", "topologySpreadConstraints", "dnsPolicy", "dnsConfig", "hostAliases"} {
 		path := append(append([]string{}, specPath...), field)
 		if !hasPath(pre, path) || hasPath(submitted, path) {
 			continue
@@ -120,12 +120,20 @@ func checkFieldRemoval(submitted, pre, post *unstructured.Unstructured) []string
 		warnings = append(warnings, formatFieldRemovalWarning(strings.Join(path, "."), otherManagers))
 	}
 
-	preCs, _, _ := unstructured.NestedSlice(pre.Object, append(specPath, "containers")...)
-	submCs, _, _ := unstructured.NestedSlice(submitted.Object, append(specPath, "containers")...)
-	postCs, _, _ := unstructured.NestedSlice(post.Object, append(specPath, "containers")...)
+	warnings = append(warnings, checkContainerListRemoval("containers", specPath, submitted, pre, post, otherManagers)...)
+	warnings = append(warnings, checkContainerListRemoval("initContainers", specPath, submitted, pre, post, otherManagers)...)
+
+	return warnings
+}
+
+func checkContainerListRemoval(listField string, specPath []string, submitted, pre, post *unstructured.Unstructured, otherManagers []string) []string {
+	preCs, _, _ := unstructured.NestedSlice(pre.Object, append(specPath, listField)...)
+	submCs, _, _ := unstructured.NestedSlice(submitted.Object, append(specPath, listField)...)
+	postCs, _, _ := unstructured.NestedSlice(post.Object, append(specPath, listField)...)
 	submByName := containersByName(submCs)
 	postByName := containersByName(postCs)
 
+	var warnings []string
 	for _, raw := range preCs {
 		preC, ok := raw.(map[string]any)
 		if !ok {
@@ -137,10 +145,15 @@ func checkFieldRemoval(submitted, pre, post *unstructured.Unstructured) []string
 		}
 		submC, hasSubm := submByName[name]
 		postC, hasPost := postByName[name]
-		if !hasSubm || !hasPost {
+		if !hasPost {
 			continue
 		}
-		for _, field := range []string{"readinessProbe", "livenessProbe", "startupProbe", "resources"} {
+		if !hasSubm {
+			fieldRef := fmt.Sprintf("%s.%s[name=%s]", strings.Join(specPath, "."), listField, name)
+			warnings = append(warnings, formatFieldRemovalWarning(fieldRef, otherManagers))
+			continue
+		}
+		for _, field := range []string{"readinessProbe", "livenessProbe", "startupProbe", "resources", "env", "envFrom"} {
 			if _, in := preC[field]; !in {
 				continue
 			}
@@ -150,12 +163,76 @@ func checkFieldRemoval(submitted, pre, post *unstructured.Unstructured) []string
 			if _, in := postC[field]; !in {
 				continue
 			}
-			fieldRef := fmt.Sprintf("%s.containers[name=%s].%s", strings.Join(specPath, "."), name, field)
+			fieldRef := fmt.Sprintf("%s.%s[name=%s].%s", strings.Join(specPath, "."), listField, name, field)
+			warnings = append(warnings, formatFieldRemovalWarning(fieldRef, otherManagers))
+		}
+		for _, fieldRef := range retainedHostPortRefs(specPath, listField, name, preC, submC, postC) {
 			warnings = append(warnings, formatFieldRemovalWarning(fieldRef, otherManagers))
 		}
 	}
 
 	return warnings
+}
+
+func retainedHostPortRefs(specPath []string, listField, containerName string, preC, submC, postC map[string]any) []string {
+	prePorts := hostPortByPort(preC)
+	if len(prePorts) == 0 {
+		return nil
+	}
+	submPorts := hostPortByPort(submC)
+	postPorts := hostPortByPort(postC)
+	var refs []string
+	for key := range prePorts {
+		if submPorts[key] {
+			continue
+		}
+		if !postPorts[key] {
+			continue
+		}
+		refs = append(refs, fmt.Sprintf("%s.%s[name=%s].ports[containerPort=%s].hostPort", strings.Join(specPath, "."), listField, containerName, key))
+	}
+	sort.Strings(refs)
+	return refs
+}
+
+func hostPortByPort(container map[string]any) map[string]bool {
+	rawPorts, ok := container["ports"].([]any)
+	if !ok {
+		return nil
+	}
+	out := map[string]bool{}
+	for _, raw := range rawPorts {
+		p, ok := raw.(map[string]any)
+		if !ok {
+			continue
+		}
+		if _, ok := p["hostPort"]; !ok {
+			continue
+		}
+		containerPort, ok := scalarString(p["containerPort"])
+		if !ok || containerPort == "" {
+			continue
+		}
+		out[containerPort] = true
+	}
+	return out
+}
+
+func scalarString(v any) (string, bool) {
+	switch t := v.(type) {
+	case int:
+		return fmt.Sprint(t), true
+	case int32:
+		return fmt.Sprint(t), true
+	case int64:
+		return fmt.Sprint(t), true
+	case float64:
+		return fmt.Sprintf("%.0f", t), true
+	case string:
+		return t, true
+	default:
+		return "", false
+	}
 }
 
 func formatFieldRemovalWarning(field string, otherManagers []string) string {

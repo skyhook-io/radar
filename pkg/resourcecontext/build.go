@@ -60,6 +60,7 @@ type Options struct {
 	IssueSummary  *IssueSummary
 	AuditSummary  *AuditSummary
 	PolicyReports PolicyReportLookup // nil = Kyverno not installed / no findings
+	AppReferences *AppReferences
 
 	// Optional kind-specific lookups. ServiceBackends is used only for
 	// Service resources to attach realized pod-selection state. The raw
@@ -274,6 +275,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	// 4. Pre-computed summaries — pass-through.
 	rc.IssueSummary = opts.IssueSummary
 	rc.AuditSummary = opts.AuditSummary
+	rc.AppReferences = filterAppReferences(ctx, opts.AppReferences, opts.AccessChecker, omitted)
 
 	// 5. PolicyReports — Kyverno findings rolled up. Basic tier emits
 	// counts only (fail/warn/pass); diagnostic tier adds the top[]
@@ -1351,6 +1353,28 @@ func filterRefs(ctx context.Context, ac RefAccessChecker, refs []ContextRef, fie
 		omitted.add(fieldPath, OmittedRBACDenied)
 	}
 	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+func filterAppReferences(ctx context.Context, refs *AppReferences, ac RefAccessChecker, omitted *omittedTracker) *AppReferences {
+	if refs == nil {
+		return nil
+	}
+	out := &AppReferences{}
+	deniedAny := false
+	for _, ref := range refs.ServiceEnv {
+		if !checkRef(ctx, ac, &ref.Service) {
+			deniedAny = true
+			continue
+		}
+		out.ServiceEnv = append(out.ServiceEnv, ref)
+	}
+	if deniedAny {
+		omitted.add("appReferences.serviceEnv", OmittedRBACDenied)
+	}
+	if len(out.ServiceEnv) == 0 {
 		return nil
 	}
 	return out

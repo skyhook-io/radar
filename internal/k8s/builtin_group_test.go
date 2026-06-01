@@ -82,9 +82,17 @@ func TestBuiltinGVR(t *testing.T) {
 	}{
 		{"deployment", "apps", schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, true},
 		{"Deployment", "apps", schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, true},
+		{"deploy", "apps", schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, true},
+		{"sts", "apps", schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}, true},
+		{"ds", "apps", schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "daemonsets"}, true},
 		{"pdb", "policy", schema.GroupVersionResource{Group: "policy", Version: "v1", Resource: "poddisruptionbudgets"}, true},
 		{"hpa", "autoscaling", schema.GroupVersionResource{Group: "autoscaling", Version: "v2", Resource: "horizontalpodautoscalers"}, true},
+		{"po", "", schema.GroupVersionResource{Version: "v1", Resource: "pods"}, true},
 		{"pods", "", schema.GroupVersionResource{Version: "v1", Resource: "pods"}, true},
+		{"svc", "", schema.GroupVersionResource{Version: "v1", Resource: "services"}, true},
+		{"cm", "", schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}, true},
+		{"ns", "", schema.GroupVersionResource{Version: "v1", Resource: "namespaces"}, true},
+		{"no", "", schema.GroupVersionResource{Version: "v1", Resource: "nodes"}, true},
 		{"sa", "", schema.GroupVersionResource{Version: "v1", Resource: "serviceaccounts"}, true},
 		{"netpols", "networking.k8s.io", schema.GroupVersionResource{Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"}, true},
 		{"endpointslice", "discovery.k8s.io", schema.GroupVersionResource{Group: "discovery.k8s.io", Version: "v1", Resource: "endpointslices"}, true},
@@ -95,6 +103,48 @@ func TestBuiltinGVR(t *testing.T) {
 		got, ok := BuiltinGVR(tc.kind, tc.group)
 		if ok != tc.ok || got != tc.want {
 			t.Errorf("BuiltinGVR(%q, %q) = (%v, %v), want (%v, %v)", tc.kind, tc.group, got, ok, tc.want, tc.ok)
+		}
+	}
+}
+
+func TestCanonicalBuiltinKind(t *testing.T) {
+	cases := map[string]string{
+		"po":       "pods",
+		"svc":      "services",
+		"deploy":   "deployments",
+		"deploys":  "deployments",
+		"cm":       "configmaps",
+		"ns":       "namespaces",
+		"no":       "nodes",
+		"sts":      "statefulsets",
+		"ds":       "daemonsets",
+		"rs":       "replicasets",
+		"cj":       "cronjobs",
+		"widgets":  "widgets",
+		"Workflow": "workflow",
+	}
+	for in, want := range cases {
+		if got := CanonicalBuiltinKind(in); got != want {
+			t.Errorf("CanonicalBuiltinKind(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestBuiltinGVRAnyGroup(t *testing.T) {
+	cases := []struct {
+		kind string
+		want schema.GroupVersionResource
+		ok   bool
+	}{
+		{"deploy", schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}, true},
+		{"sts", schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "statefulsets"}, true},
+		{"svc", schema.GroupVersionResource{Version: "v1", Resource: "services"}, true},
+		{"widgets", schema.GroupVersionResource{}, false},
+	}
+	for _, tc := range cases {
+		got, ok := BuiltinGVRAnyGroup(tc.kind)
+		if ok != tc.ok || got != tc.want {
+			t.Errorf("BuiltinGVRAnyGroup(%q) = (%v, %v), want (%v, %v)", tc.kind, got, ok, tc.want, tc.ok)
 		}
 	}
 }

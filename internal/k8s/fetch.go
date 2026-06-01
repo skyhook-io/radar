@@ -46,24 +46,24 @@ var builtinGVRs = func() map[string]schema.GroupVersionResource {
 		version  string
 		resource string
 	}{
-		{[]string{"pod", "pods"}, "", "v1", "pods"},
-		{[]string{"service", "services"}, "", "v1", "services"},
-		{[]string{"configmap", "configmaps"}, "", "v1", "configmaps"},
+		{[]string{"pod", "pods", "po"}, "", "v1", "pods"},
+		{[]string{"service", "services", "svc"}, "", "v1", "services"},
+		{[]string{"configmap", "configmaps", "cm"}, "", "v1", "configmaps"},
 		{[]string{"secret", "secrets"}, "", "v1", "secrets"},
 		{[]string{"event", "events"}, "", "v1", "events"},
 		{[]string{"persistentvolumeclaim", "persistentvolumeclaims", "pvc", "pvcs"}, "", "v1", "persistentvolumeclaims"},
-		{[]string{"node", "nodes"}, "", "v1", "nodes"},
-		{[]string{"namespace", "namespaces"}, "", "v1", "namespaces"},
+		{[]string{"node", "nodes", "no"}, "", "v1", "nodes"},
+		{[]string{"namespace", "namespaces", "ns"}, "", "v1", "namespaces"},
 		{[]string{"persistentvolume", "persistentvolumes", "pv", "pvs"}, "", "v1", "persistentvolumes"},
 		{[]string{"serviceaccount", "serviceaccounts", "sa"}, "", "v1", "serviceaccounts"},
 		{[]string{"limitrange", "limitranges"}, "", "v1", "limitranges"},
 		{[]string{"resourcequota", "resourcequotas"}, "", "v1", "resourcequotas"},
-		{[]string{"deployment", "deployments"}, "apps", "v1", "deployments"},
-		{[]string{"daemonset", "daemonsets"}, "apps", "v1", "daemonsets"},
-		{[]string{"statefulset", "statefulsets"}, "apps", "v1", "statefulsets"},
-		{[]string{"replicaset", "replicasets"}, "apps", "v1", "replicasets"},
+		{[]string{"deployment", "deployments", "deploy", "deploys"}, "apps", "v1", "deployments"},
+		{[]string{"daemonset", "daemonsets", "ds"}, "apps", "v1", "daemonsets"},
+		{[]string{"statefulset", "statefulsets", "sts"}, "apps", "v1", "statefulsets"},
+		{[]string{"replicaset", "replicasets", "rs"}, "apps", "v1", "replicasets"},
 		{[]string{"job", "jobs"}, "batch", "v1", "jobs"},
-		{[]string{"cronjob", "cronjobs"}, "batch", "v1", "cronjobs"},
+		{[]string{"cronjob", "cronjobs", "cj"}, "batch", "v1", "cronjobs"},
 		{[]string{"hpa", "hpas", "horizontalpodautoscaler", "horizontalpodautoscalers"}, "autoscaling", "v2", "horizontalpodautoscalers"},
 		{[]string{"ingress", "ingresses"}, "networking.k8s.io", "v1", "ingresses"},
 		{[]string{"networkpolicy", "networkpolicies", "netpol", "netpols"}, "networking.k8s.io", "v1", "networkpolicies"},
@@ -101,6 +101,17 @@ func TypedKindOwnsGroup(kind, group string) bool {
 	return ok && gvr.Group == group
 }
 
+// CanonicalBuiltinKind returns the canonical plural resource name for a built-in
+// kind or kubectl-style alias. Unknown kinds are returned lowercased so CRD
+// lookups keep their original dynamic-cache behavior.
+func CanonicalBuiltinKind(kind string) string {
+	k := strings.ToLower(kind)
+	if gvr, ok := builtinGVRs[k]; ok {
+		return gvr.Resource
+	}
+	return k
+}
+
 // BuiltinGVR returns the canonical GroupVersionResource for a built-in kind in
 // the given group, for use as a static fallback when API discovery can't
 // resolve it. group must match the kind's canonical group ("" for core kinds);
@@ -109,6 +120,19 @@ func TypedKindOwnsGroup(kind, group string) bool {
 func BuiltinGVR(kind, group string) (schema.GroupVersionResource, bool) {
 	gvr, ok := builtinGVRs[strings.ToLower(kind)]
 	if !ok || gvr.Group != group {
+		return schema.GroupVersionResource{}, false
+	}
+	return gvr, true
+}
+
+// BuiltinGVRAnyGroup returns the canonical GroupVersionResource for a built-in
+// kind or kubectl-style alias without requiring the caller to know its API
+// group. Use this only where an omitted group intentionally means "the built-in
+// resource if this name is built-in"; CRD-collision-safe paths should keep using
+// BuiltinGVR with an explicit group check.
+func BuiltinGVRAnyGroup(kind string) (schema.GroupVersionResource, bool) {
+	gvr, ok := builtinGVRs[strings.ToLower(kind)]
+	if !ok {
 		return schema.GroupVersionResource{}, false
 	}
 	return gvr, true
@@ -127,6 +151,8 @@ func ToRuntimeObjects[T runtime.Object](items []T) []runtime.Object {
 // Returns ErrUnknownKind when the kind should fall through to dynamic cache.
 // Returns a "forbidden:" prefixed error string when RBAC forbids access.
 func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) ([]runtime.Object, error) {
+	kind = CanonicalBuiltinKind(kind)
+
 	// listPerNs merges results across namespaces using generic conversion.
 	listPerNs := func(listAll func() ([]runtime.Object, error), listNs func(string) ([]runtime.Object, error)) ([]runtime.Object, error) {
 		if namespaces == nil {
@@ -347,7 +373,7 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 				return ToRuntimeObjects(items), nil
 			},
 		)
-	case "persistentvolumeclaims", "pvcs":
+	case "persistentvolumeclaims":
 		if cache.PersistentVolumeClaims() == nil {
 			return nil, fmt.Errorf("forbidden: persistentvolumeclaims")
 		}
@@ -407,7 +433,7 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 				return ToRuntimeObjects(items), nil
 			},
 		)
-	case "hpas", "horizontalpodautoscalers":
+	case "horizontalpodautoscalers":
 		if cache.HorizontalPodAutoscalers() == nil {
 			return nil, fmt.Errorf("forbidden: horizontalpodautoscalers")
 		}
@@ -445,7 +471,7 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 			return nil, err
 		}
 		return ToRuntimeObjects(items), nil
-	case "persistentvolumes", "pvs":
+	case "persistentvolumes":
 		if cache.PersistentVolumes() == nil {
 			return nil, fmt.Errorf("forbidden: persistentvolumes")
 		}
@@ -454,7 +480,7 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 			return nil, err
 		}
 		return ToRuntimeObjects(items), nil
-	case "storageclasses", "sc":
+	case "storageclasses":
 		if cache.StorageClasses() == nil {
 			return nil, fmt.Errorf("forbidden: storageclasses")
 		}
@@ -463,7 +489,7 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 			return nil, err
 		}
 		return ToRuntimeObjects(items), nil
-	case "poddisruptionbudgets", "pdbs":
+	case "poddisruptionbudgets":
 		if cache.PodDisruptionBudgets() == nil {
 			return nil, fmt.Errorf("forbidden: poddisruptionbudgets")
 		}
@@ -483,7 +509,7 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 				return ToRuntimeObjects(items), nil
 			},
 		)
-	case "networkpolicies", "networkpolicy", "netpols", "netpol":
+	case "networkpolicies":
 		if cache.NetworkPolicies() == nil {
 			return nil, fmt.Errorf("forbidden: networkpolicies")
 		}
@@ -503,7 +529,7 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 				return ToRuntimeObjects(items), nil
 			},
 		)
-	case "serviceaccounts", "serviceaccount", "sa":
+	case "serviceaccounts":
 		if cache.ServiceAccounts() == nil {
 			return nil, fmt.Errorf("forbidden: serviceaccounts")
 		}
@@ -523,7 +549,7 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 				return ToRuntimeObjects(items), nil
 			},
 		)
-	case "limitranges", "limitrange":
+	case "limitranges":
 		if cache.LimitRanges() == nil {
 			return nil, fmt.Errorf("forbidden: limitranges")
 		}
@@ -543,7 +569,7 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 				return ToRuntimeObjects(items), nil
 			},
 		)
-	case "resourcequotas", "resourcequota":
+	case "resourcequotas":
 		if cache.ResourceQuotas() == nil {
 			return nil, fmt.Errorf("forbidden: resourcequotas")
 		}
@@ -563,7 +589,7 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 				return ToRuntimeObjects(items), nil
 			},
 		)
-	case "roles", "role":
+	case "roles":
 		if cache.Roles() == nil {
 			return nil, fmt.Errorf("forbidden: roles")
 		}
@@ -583,7 +609,7 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 				return ToRuntimeObjects(items), nil
 			},
 		)
-	case "clusterroles", "clusterrole":
+	case "clusterroles":
 		if cache.ClusterRoles() == nil {
 			return nil, fmt.Errorf("forbidden: clusterroles")
 		}
@@ -592,7 +618,7 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 			return nil, err
 		}
 		return ToRuntimeObjects(items), nil
-	case "rolebindings", "rolebinding":
+	case "rolebindings":
 		if cache.RoleBindings() == nil {
 			return nil, fmt.Errorf("forbidden: rolebindings")
 		}
@@ -612,7 +638,7 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 				return ToRuntimeObjects(items), nil
 			},
 		)
-	case "clusterrolebindings", "clusterrolebinding":
+	case "clusterrolebindings":
 		if cache.ClusterRoleBindings() == nil {
 			return nil, fmt.Errorf("forbidden: clusterrolebindings")
 		}
@@ -629,138 +655,140 @@ func FetchResourceList(cache *ResourceCache, kind string, namespaces []string) (
 // FetchResource returns a single typed resource as runtime.Object.
 // Returns ErrUnknownKind when the kind should fall through to dynamic cache.
 func FetchResource(cache *ResourceCache, kind, namespace, name string) (runtime.Object, error) {
+	kind = CanonicalBuiltinKind(kind)
+
 	switch kind {
-	case "pods", "pod":
+	case "pods":
 		if cache.Pods() == nil {
 			return nil, fmt.Errorf("forbidden: pods")
 		}
 		return cache.Pods().Pods(namespace).Get(name)
-	case "services", "service":
+	case "services":
 		if cache.Services() == nil {
 			return nil, fmt.Errorf("forbidden: services")
 		}
 		return cache.Services().Services(namespace).Get(name)
-	case "deployments", "deployment":
+	case "deployments":
 		if cache.Deployments() == nil {
 			return nil, fmt.Errorf("forbidden: deployments")
 		}
 		return cache.Deployments().Deployments(namespace).Get(name)
-	case "daemonsets", "daemonset":
+	case "daemonsets":
 		if cache.DaemonSets() == nil {
 			return nil, fmt.Errorf("forbidden: daemonsets")
 		}
 		return cache.DaemonSets().DaemonSets(namespace).Get(name)
-	case "statefulsets", "statefulset":
+	case "statefulsets":
 		if cache.StatefulSets() == nil {
 			return nil, fmt.Errorf("forbidden: statefulsets")
 		}
 		return cache.StatefulSets().StatefulSets(namespace).Get(name)
-	case "replicasets", "replicaset":
+	case "replicasets":
 		if cache.ReplicaSets() == nil {
 			return nil, fmt.Errorf("forbidden: replicasets")
 		}
 		return cache.ReplicaSets().ReplicaSets(namespace).Get(name)
-	case "ingresses", "ingress":
+	case "ingresses":
 		if cache.Ingresses() == nil {
 			return nil, fmt.Errorf("forbidden: ingresses")
 		}
 		return cache.Ingresses().Ingresses(namespace).Get(name)
-	case "configmaps", "configmap":
+	case "configmaps":
 		if cache.ConfigMaps() == nil {
 			return nil, fmt.Errorf("forbidden: configmaps")
 		}
 		return cache.ConfigMaps().ConfigMaps(namespace).Get(name)
-	case "secrets", "secret":
+	case "secrets":
 		if cache.Secrets() == nil {
 			return nil, fmt.Errorf("forbidden: secrets")
 		}
 		return cache.Secrets().Secrets(namespace).Get(name)
-	case "events", "event":
+	case "events":
 		if cache.Events() == nil {
 			return nil, fmt.Errorf("forbidden: events")
 		}
 		return cache.Events().Events(namespace).Get(name)
-	case "persistentvolumeclaims", "persistentvolumeclaim", "pvcs", "pvc":
+	case "persistentvolumeclaims":
 		if cache.PersistentVolumeClaims() == nil {
 			return nil, fmt.Errorf("forbidden: persistentvolumeclaims")
 		}
 		return cache.PersistentVolumeClaims().PersistentVolumeClaims(namespace).Get(name)
-	case "hpas", "hpa", "horizontalpodautoscaler", "horizontalpodautoscalers":
+	case "horizontalpodautoscalers":
 		if cache.HorizontalPodAutoscalers() == nil {
 			return nil, fmt.Errorf("forbidden: horizontalpodautoscalers")
 		}
 		return cache.HorizontalPodAutoscalers().HorizontalPodAutoscalers(namespace).Get(name)
-	case "jobs", "job":
+	case "jobs":
 		if cache.Jobs() == nil {
 			return nil, fmt.Errorf("forbidden: jobs")
 		}
 		return cache.Jobs().Jobs(namespace).Get(name)
-	case "cronjobs", "cronjob":
+	case "cronjobs":
 		if cache.CronJobs() == nil {
 			return nil, fmt.Errorf("forbidden: cronjobs")
 		}
 		return cache.CronJobs().CronJobs(namespace).Get(name)
-	case "nodes", "node":
+	case "nodes":
 		if cache.Nodes() == nil {
 			return nil, fmt.Errorf("forbidden: nodes")
 		}
 		return cache.Nodes().Get(name)
-	case "namespaces", "namespace":
+	case "namespaces":
 		if cache.Namespaces() == nil {
 			return nil, fmt.Errorf("forbidden: namespaces")
 		}
 		return cache.Namespaces().Get(name)
-	case "persistentvolumes", "persistentvolume", "pvs", "pv":
+	case "persistentvolumes":
 		if cache.PersistentVolumes() == nil {
 			return nil, fmt.Errorf("forbidden: persistentvolumes")
 		}
 		return cache.PersistentVolumes().Get(name)
-	case "storageclasses", "storageclass", "sc":
+	case "storageclasses":
 		if cache.StorageClasses() == nil {
 			return nil, fmt.Errorf("forbidden: storageclasses")
 		}
 		return cache.StorageClasses().Get(name)
-	case "poddisruptionbudgets", "poddisruptionbudget", "pdbs", "pdb":
+	case "poddisruptionbudgets":
 		if cache.PodDisruptionBudgets() == nil {
 			return nil, fmt.Errorf("forbidden: poddisruptionbudgets")
 		}
 		return cache.PodDisruptionBudgets().PodDisruptionBudgets(namespace).Get(name)
-	case "networkpolicies", "networkpolicy", "netpols", "netpol":
+	case "networkpolicies":
 		if cache.NetworkPolicies() == nil {
 			return nil, fmt.Errorf("forbidden: networkpolicies")
 		}
 		return cache.NetworkPolicies().NetworkPolicies(namespace).Get(name)
-	case "serviceaccounts", "serviceaccount", "sa":
+	case "serviceaccounts":
 		if cache.ServiceAccounts() == nil {
 			return nil, fmt.Errorf("forbidden: serviceaccounts")
 		}
 		return cache.ServiceAccounts().ServiceAccounts(namespace).Get(name)
-	case "limitranges", "limitrange":
+	case "limitranges":
 		if cache.LimitRanges() == nil {
 			return nil, fmt.Errorf("forbidden: limitranges")
 		}
 		return cache.LimitRanges().LimitRanges(namespace).Get(name)
-	case "resourcequotas", "resourcequota":
+	case "resourcequotas":
 		if cache.ResourceQuotas() == nil {
 			return nil, fmt.Errorf("forbidden: resourcequotas")
 		}
 		return cache.ResourceQuotas().ResourceQuotas(namespace).Get(name)
-	case "roles", "role":
+	case "roles":
 		if cache.Roles() == nil {
 			return nil, fmt.Errorf("forbidden: roles")
 		}
 		return cache.Roles().Roles(namespace).Get(name)
-	case "clusterroles", "clusterrole":
+	case "clusterroles":
 		if cache.ClusterRoles() == nil {
 			return nil, fmt.Errorf("forbidden: clusterroles")
 		}
 		return cache.ClusterRoles().Get(name)
-	case "rolebindings", "rolebinding":
+	case "rolebindings":
 		if cache.RoleBindings() == nil {
 			return nil, fmt.Errorf("forbidden: rolebindings")
 		}
 		return cache.RoleBindings().RoleBindings(namespace).Get(name)
-	case "clusterrolebindings", "clusterrolebinding":
+	case "clusterrolebindings":
 		if cache.ClusterRoleBindings() == nil {
 			return nil, fmt.Errorf("forbidden: clusterrolebindings")
 		}

@@ -23,6 +23,10 @@ func TestClassify(t *testing.T) {
 		{"volume multiattach", classifyInput{Source: SourceScheduling, Kind: "Pod", Reason: "VolumeMultiAttach"}, issuesapi.CategoryVolumeMountFailed},
 		{"volume mount", classifyInput{Source: SourceScheduling, Kind: "Pod", Reason: "VolumeMount"}, issuesapi.CategoryVolumeMountFailed},
 		{"terminating pod", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "Terminating stuck"}, issuesapi.CategoryTerminationStuck},
+		{"coredns nxdomain override", classifyInput{Source: SourceProblem, Kind: "ConfigMap", Reason: "CoreDNS NXDOMAIN override"}, issuesapi.CategoryDNSFailure},
+		{"coredns service rewrite", classifyInput{Source: SourceProblem, Kind: "ConfigMap", Reason: "CoreDNS service DNS rewrite"}, issuesapi.CategoryDNSFailure},
+		{"env missing service", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Missing referenced Service"}, issuesapi.CategoryMissingConfigRef},
+		{"env service port mismatch", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Service port mismatch"}, issuesapi.CategoryServiceNoEndpoints},
 
 		// problem / Pod
 		{"image pull backoff", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "ImagePullBackOff"}, issuesapi.CategoryImagePullFailed},
