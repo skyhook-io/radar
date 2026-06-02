@@ -54,7 +54,7 @@ var clusterOnlyKinds = map[string]ClusterOnlyKindInfo{
 // at the K8s level but is exposed as a filtered list, so it returns false.
 func IsClusterOnlyKind(kind string) bool {
 	k := strings.ToLower(kind)
-	if k == "namespaces" || k == "namespace" {
+	if k == "namespaces" || k == "namespace" || k == "ns" {
 		return false
 	}
 	_, ok := clusterOnlyKinds[k]

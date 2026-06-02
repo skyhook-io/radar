@@ -25,8 +25,8 @@ type patchResourceInput struct {
 	Name      string `json:"name" jsonschema:"resource name"`
 	PatchType string `json:"patch_type,omitempty" jsonschema:"json (default, RFC 6902 JSON Patch array), merge (JSON Merge Patch object), or strategic (built-in Kubernetes kinds only)"`
 	Patch     string `json:"patch" jsonschema:"JSON patch body. For patch_type=json, pass an array like [{\"op\":\"remove\",\"path\":\"/spec/template/spec/dnsConfig\"}]. For merge/strategic, pass an object."`
-	DryRun    bool   `json:"dry_run,omitempty" jsonschema:"validate without persisting changes"`
-	Verify    *bool  `json:"verify,omitempty" jsonschema:"return compact post-patch state and JSON Patch field checks. Default true; set false for a terse write result."`
+	DryRun    bool   `json:"dry_run,omitempty" jsonschema:"validate and preview the server-side result without persisting changes"`
+	Verify    *bool  `json:"verify,omitempty" jsonschema:"return compact post-patch state; on dry_run return a preview diff. JSON Patch calls also include field checks. Default true; set false for a terse write result."`
 }
 
 type jsonPatchOperation struct {

@@ -36,6 +36,9 @@ type mutationVerificationOptions struct {
 
 func buildMutationVerification(ctx context.Context, dynClient dynamic.Interface, opts mutationVerificationOptions) map[string]any {
 	out := map[string]any{"mode": "post_mutation_state"}
+	if opts.PreviewDiff {
+		out["mode"] = "dry_run_preview"
+	}
 
 	post := opts.Post
 	if post == nil {
@@ -82,6 +85,9 @@ func buildMutationVerification(ctx context.Context, dynClient dynamic.Interface,
 	out["resource"] = aicontext.MinifyUnstructured(post, aicontext.LevelDetail)
 	if warnings := k8score.EnrichRuntimeObjectWarnings(post); len(warnings) > 0 {
 		out["warnings"] = warnings
+	}
+	if opts.PreviewDiff {
+		return out
 	}
 	if rollout := summarizeWorkloadRollout(post); len(rollout) > 0 {
 		out["rollout"] = rollout

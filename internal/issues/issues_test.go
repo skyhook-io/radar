@@ -471,22 +471,42 @@ func TestCompose_DiagnosticContextServiceConfigCandidate(t *testing.T) {
 }
 
 func TestCompose_DiagnosticContextServiceEnvCandidate(t *testing.T) {
-	p := &fakeProvider{
-		problems: []k8s.Detection{
-			{Kind: "Deployment", Namespace: "prod", Name: "checkout", Severity: "critical", Reason: "Service port mismatch", Message: "CHECKOUT_ADDR points at cart:8080, but cart exposes 80"},
+	cases := []struct {
+		name    string
+		reason  string
+		message string
+	}{
+		{
+			name:    "port mismatch",
+			reason:  "Service port mismatch",
+			message: "CHECKOUT_ADDR points at cart:8080, but cart exposes 80",
+		},
+		{
+			name:    "missing service",
+			reason:  "Missing referenced Service",
+			message: "AD_SERVICE_ADDR points at missing Service ad:8080",
 		},
 	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			p := &fakeProvider{
+				problems: []k8s.Detection{
+					{Kind: "Deployment", Namespace: "prod", Name: "checkout", Severity: "critical", Reason: tc.reason, Message: tc.message},
+				},
+			}
 
-	out := Compose(p, Filters{})
-	if len(out) != 1 {
-		t.Fatalf("got %d issues, want 1: %+v", len(out), out)
-	}
-	ctx := out[0].DiagnosticContext
-	if ctx == nil || ctx.Role != issuesapi.DiagnosticRoleCandidate {
-		t.Fatalf("diagnostic context = %+v, want candidate", ctx)
-	}
-	if len(ctx.Facts) != 1 || ctx.Facts[0].Type != factServiceEnvReference || ctx.Facts[0].Message == "" {
-		t.Fatalf("facts = %+v, want service_env_reference with message", ctx.Facts)
+			out := Compose(p, Filters{})
+			if len(out) != 1 {
+				t.Fatalf("got %d issues, want 1: %+v", len(out), out)
+			}
+			ctx := out[0].DiagnosticContext
+			if ctx == nil || ctx.Role != issuesapi.DiagnosticRoleCandidate {
+				t.Fatalf("diagnostic context = %+v, want candidate", ctx)
+			}
+			if len(ctx.Facts) != 1 || ctx.Facts[0].Type != factServiceEnvReference || ctx.Facts[0].Message == "" {
+				t.Fatalf("facts = %+v, want service_env_reference with message", ctx.Facts)
+			}
+		})
 	}
 }
 

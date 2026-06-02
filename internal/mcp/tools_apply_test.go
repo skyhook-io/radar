@@ -165,6 +165,15 @@ data:
 	if !ok {
 		t.Fatalf("verification = %#v, want object", got["verification"])
 	}
+	if verification["mode"] != "dry_run_preview" {
+		t.Fatalf("verification mode = %v, want dry_run_preview", verification["mode"])
+	}
+	if _, ok := verification["pods"]; ok {
+		t.Fatalf("dry-run verification should not include live pod snapshots: %#v", verification["pods"])
+	}
+	if _, ok := verification["currentIssues"]; ok {
+		t.Fatalf("dry-run verification should not include current issues snapshots: %#v", verification["currentIssues"])
+	}
 	preview, ok := verification["previewDiff"].(map[string]any)
 	if !ok || preview["mode"] != "before_after" {
 		t.Fatalf("previewDiff = %#v, want before_after", verification["previewDiff"])

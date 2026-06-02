@@ -20,9 +20,9 @@ import (
 type applyResourceInput struct {
 	YAML      string `json:"yaml" jsonschema:"YAML manifest to apply (supports multi-document with --- separator)"`
 	Mode      string `json:"mode,omitempty" jsonschema:"'apply' (default, create-or-update) or 'create' (fail if exists)"`
-	DryRun    bool   `json:"dry_run,omitempty" jsonschema:"validate without persisting changes"`
+	DryRun    bool   `json:"dry_run,omitempty" jsonschema:"validate and preview the server-side result without persisting changes"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"override namespace for the resource"`
-	Verify    *bool  `json:"verify,omitempty" jsonschema:"return compact post-mutation state, rollout/pod status for workloads, and current related issues. Default true; set false for a terse write result."`
+	Verify    *bool  `json:"verify,omitempty" jsonschema:"return compact post-mutation state, rollout/pod status, and related issues; on dry_run return a preview diff. Default true; set false for a terse write result."`
 }
 
 type applyMutationTarget struct {

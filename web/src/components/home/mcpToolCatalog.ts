@@ -259,7 +259,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'mode', desc: 'apply (default) or create' },
       { arg: 'dry_run', desc: 'validate and preview without persisting' },
       { arg: 'namespace', desc: 'override namespace for the resource' },
-      { arg: 'verify', desc: 'return post-mutation state, workload rollout/pods, and related issues (default true)' },
+      { arg: 'verify', desc: 'return post-mutation state; on dry_run return preview diff (default true)' },
     ],
   },
   {
@@ -273,8 +273,8 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
       { arg: 'group', desc: 'API group when the kind is ambiguous' },
       { arg: 'patch_type', desc: 'json (default), merge, or strategic' },
       { arg: 'patch', required: true, desc: 'JSON patch body' },
-      { arg: 'dry_run', desc: 'validate without persisting' },
-      { arg: 'verify', desc: 'return compact post-patch state and JSON Patch field checks (default true)' },
+      { arg: 'dry_run', desc: 'validate and preview without persisting' },
+      { arg: 'verify', desc: 'return post-patch state; on dry_run return preview diff (default true)' },
     ],
   },
   {

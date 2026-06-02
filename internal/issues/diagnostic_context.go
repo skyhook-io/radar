@@ -183,7 +183,7 @@ func isServiceConfigMismatch(i Issue) bool {
 }
 
 func isServiceEnvReferenceMismatch(i Issue) bool {
-	return i.Reason == "Service port mismatch"
+	return i.Reason == "Service port mismatch" || i.Reason == "Missing referenced Service"
 }
 
 func isProbeTargetMismatch(i Issue) bool {

@@ -25,7 +25,7 @@ func TestIsClusterOnlyKind(t *testing.T) {
 	notClusterOnly := []string{
 		// Namespaces is cluster-scoped at the K8s level but exposed as a
 		// filtered list to restricted users — must NOT be blocked here.
-		"namespaces", "namespace", "Namespace",
+		"namespaces", "namespace", "Namespace", "ns",
 		// Namespaced kinds.
 		"pods", "deployments", "secrets", "configmaps", "services",
 		// Unknown.
@@ -49,6 +49,7 @@ func TestClusterOnlyKindGVR(t *testing.T) {
 		{"node", "", "nodes", true},
 		{"pv", "", "persistentvolumes", true},
 		{"namespaces", "", "namespaces", true}, // GVR exists even though IsClusterOnlyKind=false
+		{"ns", "", "namespaces", true},
 		{"clusterroles", "rbac.authorization.k8s.io", "clusterroles", true},
 		{"crd", "apiextensions.k8s.io", "customresourcedefinitions", true},
 		{"NODES", "", "nodes", true}, // case-insensitive
