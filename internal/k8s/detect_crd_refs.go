@@ -47,7 +47,9 @@ func detectRolloutMissingServices(cache *ResourceCache, dynamicCache *DynamicRes
 				continue
 			}
 			seen[ref.name] = true
-			if _, err := svcLister.Services(ro.GetNamespace()).Get(ref.name); err == nil {
+			_, err := svcLister.Services(ro.GetNamespace()).Get(ref.name)
+			checked, exists := rolloutServiceLookupResult(ro.GetNamespace(), ro.GetName(), ref.name, err)
+			if !checked || exists {
 				continue
 			}
 			out = append(out, missingRefProblemSev("Rollout", "argoproj.io", ro.GetNamespace(), ro.GetName(),
@@ -57,6 +59,17 @@ func detectRolloutMissingServices(cache *ResourceCache, dynamicCache *DynamicRes
 		}
 	}
 	return out
+}
+
+func rolloutServiceLookupResult(namespace, rolloutName, serviceName string, err error) (checked bool, exists bool) {
+	if err == nil {
+		return true, true
+	}
+	if apierrors.IsNotFound(err) {
+		return true, false
+	}
+	log.Printf("[missing-refs] failed to verify Rollout %s/%s service ref %s: %s", logsafe.Sanitize(namespace), logsafe.Sanitize(rolloutName), logsafe.Sanitize(serviceName), logsafe.Sanitize(err.Error()))
+	return false, false
 }
 
 type namedRef struct {
@@ -190,6 +203,8 @@ func dynamicScaleTargetLookupResult(kind, namespace, name string, err error) (ch
 	if err == nil {
 		return true, true
 	}
+	// DynamicResourceCache.Get currently returns a plain error for cache
+	// misses, unlike typed informers that surface apierrors.IsNotFound.
 	if strings.Contains(err.Error(), "resource not found:") {
 		return true, false
 	}

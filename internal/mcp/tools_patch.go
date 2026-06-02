@@ -11,6 +11,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/dynamic"
 
@@ -22,8 +23,8 @@ type patchResourceInput struct {
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous, e.g. apps for Deployment or serving.knative.dev for Knative Service"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced resources; omit for cluster-scoped resources"`
 	Name      string `json:"name" jsonschema:"resource name"`
-	PatchType string `json:"patch_type,omitempty" jsonschema:"json (default, RFC 6902 JSON Patch array) or merge (JSON Merge Patch object)"`
-	Patch     string `json:"patch" jsonschema:"JSON patch body. For patch_type=json, pass an array like [{\"op\":\"remove\",\"path\":\"/spec/template/spec/dnsConfig\"}]. For merge, pass an object."`
+	PatchType string `json:"patch_type,omitempty" jsonschema:"json (default, RFC 6902 JSON Patch array), merge (JSON Merge Patch object), or strategic (built-in Kubernetes kinds only)"`
+	Patch     string `json:"patch" jsonschema:"JSON patch body. For patch_type=json, pass an array like [{\"op\":\"remove\",\"path\":\"/spec/template/spec/dnsConfig\"}]. For merge/strategic, pass an object."`
 	DryRun    bool   `json:"dry_run,omitempty" jsonschema:"validate without persisting changes"`
 	Verify    *bool  `json:"verify,omitempty" jsonschema:"return compact post-patch state and JSON Patch field checks. Default true; set false for a terse write result."`
 }
@@ -74,6 +75,9 @@ func handlePatchResource(ctx context.Context, req *mcp.CallToolRequest, input pa
 	if err != nil {
 		return nil, nil, err
 	}
+	if patchType == types.StrategicMergePatchType && !strategicPatchSupported(kind, group, gvr) {
+		return nil, nil, fmt.Errorf("patch_type=strategic is only supported for built-in Kubernetes resources; use patch_type=merge or patch_type=json for CRDs")
+	}
 
 	var resClient = dynClient.Resource(gvr)
 	var client dynamic.ResourceInterface = resClient
@@ -105,7 +109,7 @@ func handlePatchResource(ctx context.Context, req *mcp.CallToolRequest, input pa
 
 	result := map[string]any{
 		"status":     "ok",
-		"message":    fmt.Sprintf("Successfully patched %s %s/%s", kind, namespace, name),
+		"message":    fmt.Sprintf("Successfully patched %s %s", kind, resourceDisplayName(namespace, name)),
 		"kind":       kind,
 		"group":      gvr.Group,
 		"namespace":  namespace,
@@ -135,10 +139,18 @@ func handlePatchResource(ctx context.Context, req *mcp.CallToolRequest, input pa
 			Before:       before,
 			BeforeErr:    beforeErr,
 			JSONPatchOps: ops,
+			PreviewDiff:  input.DryRun,
 		})
 	}
 
 	return toJSONResult(result)
+}
+
+func resourceDisplayName(namespace, name string) string {
+	if namespace == "" {
+		return name
+	}
+	return namespace + "/" + name
 }
 
 func parsePatchType(input string) (types.PatchType, error) {
@@ -147,8 +159,10 @@ func parsePatchType(input string) (types.PatchType, error) {
 		return types.JSONPatchType, nil
 	case "merge", "jsonmerge", "merge_patch", "json_merge":
 		return types.MergePatchType, nil
+	case "strategic", "strategicmerge", "strategic_merge", "strategic-merge":
+		return types.StrategicMergePatchType, nil
 	default:
-		return "", fmt.Errorf("patch_type must be 'json' or 'merge', got %q", input)
+		return "", fmt.Errorf("patch_type must be 'json', 'merge', or 'strategic', got %q", input)
 	}
 }
 
@@ -158,9 +172,23 @@ func patchTypeName(patchType types.PatchType) string {
 		return "json"
 	case types.MergePatchType:
 		return "merge"
+	case types.StrategicMergePatchType:
+		return "strategic"
 	default:
 		return string(patchType)
 	}
+}
+
+func strategicPatchSupported(kind, group string, gvr schema.GroupVersionResource) bool {
+	if _, ok := k8s.BuiltinGVR(kind, group); ok {
+		return true
+	}
+	if group == "" {
+		if builtin, ok := k8s.BuiltinGVRAnyGroup(kind); ok {
+			return builtin.Group == gvr.Group && builtin.Resource == gvr.Resource
+		}
+	}
+	return false
 }
 
 func parseJSONPatchOperations(raw []byte) []jsonPatchOperation {

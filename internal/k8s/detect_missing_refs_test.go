@@ -308,7 +308,17 @@ func TestDetectMissingRefs(t *testing.T) {
 func TestScaleTargetLookupResultDistinguishesErrors(t *testing.T) {
 	gr := schema.GroupResource{Group: "apps", Resource: "deployments"}
 
-	checked, exists := scaleTargetLookupResult("Deployment", "prod", "missing", apierrors.NewNotFound(gr, "missing"))
+	checked, exists := rolloutServiceLookupResult("prod", "checkout", "missing", apierrors.NewNotFound(schema.GroupResource{Resource: "services"}, "missing"))
+	if !checked || exists {
+		t.Fatalf("rollout service not found result = (%v, %v), want checked missing", checked, exists)
+	}
+
+	checked, exists = rolloutServiceLookupResult("prod", "checkout", "blocked", apierrors.NewForbidden(schema.GroupResource{Resource: "services"}, "blocked", errors.New("denied")))
+	if checked || exists {
+		t.Fatalf("rollout service forbidden result = (%v, %v), want unchecked", checked, exists)
+	}
+
+	checked, exists = scaleTargetLookupResult("Deployment", "prod", "missing", apierrors.NewNotFound(gr, "missing"))
 	if !checked || exists {
 		t.Fatalf("not found result = (%v, %v), want checked missing", checked, exists)
 	}
@@ -714,6 +724,7 @@ func TestDetectMissingCRDRefs(t *testing.T) {
 		}),
 		kedaScaledObject("ok", "prod", now, "apps/v1", "Deployment", "web"),
 		kedaScaledObject("missing-target", "prod", now, "apps/v1", "Deployment", "ghost"),
+		kedaScaledObject("wrong-group-target", "prod", now, "example.com/v1", "Deployment", "ghost"),
 		kedaScaledObject("unsupported-target", "prod", now, "example.com/v1", "Widget", "ghost"),
 	)
 	if err := InitTestDynamicResourceCache(dynClient, []APIResource{
@@ -749,7 +760,7 @@ func TestDetectMissingCRDRefs(t *testing.T) {
 		if p.Severity != "warning" {
 			t.Errorf("curated CRD missing refs should be warning-level, got %+v", p)
 		}
-		if hasSubstr(p.Message, "unsupported-target") || hasSubstr(p.Message, "stable") || hasSubstr(p.Message, "web") {
+		if hasSubstr(p.Message, "unsupported-target") || hasSubstr(p.Message, "wrong-group-target") || hasSubstr(p.Message, "stable") || hasSubstr(p.Message, "web") {
 			t.Errorf("existing or unsupported refs should not flag: %+v", p)
 		}
 	}

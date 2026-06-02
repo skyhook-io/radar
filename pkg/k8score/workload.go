@@ -55,10 +55,11 @@ type ApplyResourceOptions struct {
 
 // ApplyResourceResult contains the result of a create/apply operation.
 type ApplyResourceResult struct {
-	Name      string `json:"name"`
-	Namespace string `json:"namespace"`
-	Kind      string `json:"kind"`
-	Created   bool   `json:"created"` // true if newly created, false if updated
+	Name      string                     `json:"name"`
+	Namespace string                     `json:"namespace"`
+	Kind      string                     `json:"kind"`
+	Created   bool                       `json:"created"` // true if newly created, false if updated
+	Object    *unstructured.Unstructured `json:"-"`
 
 	// Warnings are advisory notes derived from the actual state of the cluster
 	// (e.g., "this resource is reconciled by Helm" or "field X you omitted is
@@ -268,12 +269,13 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 	}
 
 	if mode == "create" {
-		_, err := client.Create(ctx, obj, metav1.CreateOptions{DryRun: dryRun})
+		created, err := client.Create(ctx, obj, metav1.CreateOptions{DryRun: dryRun})
 		if err != nil {
 			return nil, fmt.Errorf("failed to create resource: %w", err)
 		}
 		result.Created = true
-		m.populateApplyWarnings(ctx, result, obj, pre, nil, ns, kind, name, opts.DryRun)
+		result.Object = created
+		m.populateApplyWarnings(ctx, result, obj, pre, created, ns, kind, name, opts.DryRun)
 		return result, nil
 	}
 
@@ -283,7 +285,7 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 		return nil, fmt.Errorf("failed to marshal resource: %w", err)
 	}
 
-	_, err = client.Patch(ctx, name, types.ApplyPatchType, objJSON, metav1.PatchOptions{
+	applied, err := client.Patch(ctx, name, types.ApplyPatchType, objJSON, metav1.PatchOptions{
 		FieldManager: "radar",
 		Force:        boolPtr(true),
 		DryRun:       dryRun,
@@ -296,6 +298,7 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 	// With server-side apply we can't easily distinguish, so we default to false (updated).
 	// The caller can check if the resource was newly created by other means if needed.
 	result.Created = false
+	result.Object = applied
 
 	// Post-apply GET feeds the state-derived warnings (run against what
 	// actually landed) and the field-removal diff. Fetch it for creates too,
@@ -307,6 +310,7 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 		got, getErr := client.Get(ctx, name, metav1.GetOptions{})
 		if getErr == nil {
 			post = got
+			result.Object = got
 		} else {
 			log.Printf("[k8s] apply_resource: post-apply GET %s/%s/%s failed: %v", kind, ns, name, getErr)
 		}

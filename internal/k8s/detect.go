@@ -44,7 +44,7 @@ type Detection struct {
 	Namespace       string
 	Name            string
 	Group           string // API group for CRD disambiguation (e.g., "cluster.x-k8s.io")
-	Severity        string // "critical", "high", or "medium"
+	Severity        string // "critical", "high", "medium", "warning", or "info"
 	Reason          string
 	Message         string
 	Age             string // human-readable
@@ -97,6 +97,17 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 	var problems []Detection
 	now := time.Now()
 	problems = append(problems, detectConfigProblems(cache, namespace, now)...)
+
+	if namespace == "" {
+		if nsLister := cache.Namespaces(); nsLister != nil {
+			namespaces, _ := nsLister.List(labels.Everything())
+			for _, ns := range namespaces {
+				if det, ok := namespaceTerminatingProblem(ns, now); ok {
+					problems = append(problems, det)
+				}
+			}
+		}
+	}
 
 	// Deployment problems: unavailableReplicas > 0
 	if depLister := cache.Deployments(); depLister != nil {
@@ -1005,6 +1016,46 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 		Duration:        FormatAge(duration),
 		DurationSeconds: int64(duration.Seconds()),
 	}, true
+}
+
+func namespaceTerminatingProblem(ns *corev1.Namespace, now time.Time) (Detection, bool) {
+	if ns == nil || ns.DeletionTimestamp == nil {
+		return Detection{}, false
+	}
+	if ns.Status.Phase != "" && ns.Status.Phase != corev1.NamespaceTerminating {
+		return Detection{}, false
+	}
+	det, ok := terminatingProblem("Namespace", "", ns, now)
+	if !ok {
+		return Detection{}, false
+	}
+	det.Reason = "Namespace terminating stuck"
+	det.Fingerprint = "lifecycle:namespace-terminating"
+	if msg := namespaceTerminationConditionMessage(ns); msg != "" {
+		det.Message = msg
+	}
+	return det, true
+}
+
+func namespaceTerminationConditionMessage(ns *corev1.Namespace) string {
+	var parts []string
+	for _, cond := range ns.Status.Conditions {
+		if cond.Status != corev1.ConditionTrue {
+			continue
+		}
+		part := string(cond.Type)
+		if cond.Reason != "" {
+			part += ": " + cond.Reason
+		}
+		if cond.Message != "" {
+			part += " - " + cond.Message
+		}
+		parts = append(parts, part)
+		if len(parts) >= 3 {
+			break
+		}
+	}
+	return strings.Join(parts, "; ")
 }
 
 func pdbStructurallyBlocksEvictions(pdb *policyv1.PodDisruptionBudget) bool {

@@ -210,10 +210,10 @@ type IssueRef struct {
 type Issue struct {
 	Severity             Severity           `json:"severity"`
 	Source               Source             `json:"source"`
-	Category             Category           `json:"category,omitempty"`
-	CategoryGroup        CategoryGroup      `json:"category_group,omitempty"`
-	ID                   string             `json:"id,omitempty"`
-	GroupingScope        Scope              `json:"grouping_scope,omitempty"`
+	Category             Category           `json:"category"`
+	CategoryGroup        CategoryGroup      `json:"category_group"`
+	ID                   string             `json:"id"`
+	GroupingScope        Scope              `json:"grouping_scope"`
 	Kind                 string             `json:"kind"`
 	Group                string             `json:"group,omitempty"`
 	Namespace            string             `json:"namespace,omitempty"`

@@ -23,8 +23,8 @@ type classifyInput struct {
 // CRD-condition source in internal/issues.
 //
 // Coverage is intentionally partial: signals without a clean mapping (and
-// categories whose detectors don't exist yet — probes, DNS, network policy,
-// real RBAC-forbidden) fall to unknown rather than being force-fit.
+// categories whose detectors don't exist yet — network policy, broad DNS)
+// fall to unknown rather than being force-fit.
 func Classify(in classifyInput) issuesapi.Category {
 	switch in.Source {
 	case SourceScheduling:
@@ -39,6 +39,8 @@ func Classify(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryPodSecurityViolation
 		case "WebhookDenied":
 			return issuesapi.CategoryAdmissionWebhookBlocking
+		case "RBACForbidden":
+			return issuesapi.CategoryRBACForbidden
 		case "IPExhaustion", "SandboxCreationFailed":
 			// scheduled but stuck creating the sandbox — a startup-stage stall
 			return issuesapi.CategoryContainerWaiting
@@ -124,7 +126,7 @@ func Classify(in classifyInput) issuesapi.Category {
 // classifyProblem handles the broad source=problem channel (radar's per-kind
 // detection). Split out to keep Classify readable.
 func classifyProblem(in classifyInput) issuesapi.Category {
-	if in.Reason == "Terminating stuck" {
+	if in.Reason == "Terminating stuck" || in.Reason == "Namespace terminating stuck" {
 		return issuesapi.CategoryTerminationStuck
 	}
 	switch in.Reason {

@@ -31,6 +31,7 @@ type mutationVerificationOptions struct {
 	BeforeErr    string
 	Desired      *unstructured.Unstructured
 	JSONPatchOps []jsonPatchOperation
+	PreviewDiff  bool
 }
 
 func buildMutationVerification(ctx context.Context, dynClient dynamic.Interface, opts mutationVerificationOptions) map[string]any {
@@ -69,6 +70,11 @@ func buildMutationVerification(ctx context.Context, dynClient dynamic.Interface,
 			"error":  opts.BeforeErr,
 		}
 	}
+	if opts.PreviewDiff {
+		if diff := beforeAfterPreviewDiff(opts.Before, post); len(diff) > 0 {
+			out["previewDiff"] = diff
+		}
+	}
 	if diff := submittedVsLiveDiff(opts.Desired, opts.Before, post); len(diff) > 0 {
 		out["desiredLiveDiff"] = diff
 	}
@@ -101,6 +107,155 @@ func buildMutationVerification(ctx context.Context, dynClient dynamic.Interface,
 	return out
 }
 
+func beforeAfterPreviewDiff(before, after *unstructured.Unstructured) map[string]any {
+	if after == nil {
+		return nil
+	}
+	beforeObj := mutationPreviewObject(before)
+	afterObj := mutationPreviewObject(after)
+	var differences []map[string]any
+	collectValueDiffs("", beforeObj, afterObj, &differences, 12)
+	if len(differences) == 0 {
+		return nil
+	}
+	return map[string]any{
+		"mode":        "before_after",
+		"differences": differences,
+	}
+}
+
+func mutationPreviewObject(obj *unstructured.Unstructured) any {
+	if obj == nil {
+		return nil
+	}
+	out := map[string]any{}
+	for _, path := range [][]string{
+		{"metadata", "labels"},
+		{"metadata", "annotations"},
+		{"data"},
+		{"spec"},
+	} {
+		if val, ok := nestedValue(obj, path...); ok {
+			setNestedPreviewValue(out, val, path...)
+		}
+	}
+	return out
+}
+
+func setNestedPreviewValue(root map[string]any, val any, fields ...string) {
+	cur := root
+	for i, field := range fields {
+		if i == len(fields)-1 {
+			cur[field] = val
+			return
+		}
+		next, ok := cur[field].(map[string]any)
+		if !ok {
+			next = map[string]any{}
+			cur[field] = next
+		}
+		cur = next
+	}
+}
+
+func collectValueDiffs(path string, before, after any, differences *[]map[string]any, limit int) {
+	if len(*differences) >= limit {
+		return
+	}
+	if reflect.DeepEqual(normalizeJSONNumber(before), normalizeJSONNumber(after)) {
+		return
+	}
+	switch a := after.(type) {
+	case map[string]any:
+		b, _ := before.(map[string]any)
+		keys := make([]string, 0, len(a)+len(b))
+		seen := map[string]bool{}
+		for key := range a {
+			keys = append(keys, key)
+			seen[key] = true
+		}
+		for key := range b {
+			if !seen[key] {
+				keys = append(keys, key)
+			}
+		}
+		sort.Strings(keys)
+		for _, key := range keys {
+			collectValueDiffs(jsonPathAppend(path, key), b[key], a[key], differences, limit)
+			if len(*differences) >= limit {
+				return
+			}
+		}
+		return
+	case []any:
+		b, _ := before.([]any)
+		if len(a) == len(b) {
+			for i := range a {
+				collectValueDiffs(jsonPathAppend(path, fmt.Sprintf("%d", i)), b[i], a[i], differences, limit)
+				if len(*differences) >= limit {
+					return
+				}
+			}
+			return
+		}
+	}
+
+	entry := map[string]any{
+		"type": "changed",
+		"path": path,
+	}
+	switch {
+	case before == nil:
+		entry["type"] = "added"
+	case after == nil:
+		entry["type"] = "removed"
+	}
+	if before != nil {
+		entry["before"] = previewValue(path, before)
+	}
+	if after != nil {
+		entry["after"] = previewValue(path, after)
+	}
+	*differences = append(*differences, entry)
+}
+
+func jsonPathAppend(path, key string) string {
+	escaped := strings.ReplaceAll(strings.ReplaceAll(key, "~", "~0"), "/", "~1")
+	if path == "" {
+		return "/" + escaped
+	}
+	return path + "/" + escaped
+}
+
+func previewValue(path string, val any) any {
+	switch v := val.(type) {
+	case string:
+		redacted := aicontext.RedactSecrets(v)
+		if isSensitivePreviewPath(path) && redacted == v {
+			return "[redacted]"
+		}
+		if len(redacted) > 160 {
+			return redacted[:160] + "..."
+		}
+		return redacted
+	case map[string]any:
+		return fmt.Sprintf("object(%d keys)", len(v))
+	case []any:
+		return fmt.Sprintf("array(%d items)", len(v))
+	default:
+		return normalizeJSONNumber(v)
+	}
+}
+
+func isSensitivePreviewPath(path string) bool {
+	lower := strings.ToLower(path)
+	return strings.Contains(lower, "secret") ||
+		strings.Contains(lower, "token") ||
+		strings.Contains(lower, "password") ||
+		strings.Contains(lower, "credential") ||
+		strings.Contains(lower, "/data/")
+}
+
 func submittedVsLiveDiff(desired, before, live *unstructured.Unstructured) map[string]any {
 	if desired == nil || live == nil {
 		return nil
@@ -123,11 +278,13 @@ func submittedVsLiveDiff(desired, before, live *unstructured.Unstructured) map[s
 		beforeVal, beforeFound := nestedValue(before, path...)
 		ptr := "/" + strings.Join(path, "/")
 		switch {
-		case desiredFound && liveFound && !reflect.DeepEqual(normalizeJSONNumber(liveVal), normalizeJSONNumber(desiredVal)):
+		case desiredFound && liveFound && !submittedValueMatchesLive(desiredVal, liveVal):
 			add("submitted_value_differs", ptr, "live value differs from the submitted manifest after apply")
 		case desiredFound && !liveFound:
 			add("submitted_value_missing", ptr, "submitted field is absent from the live object after apply")
 		case !desiredFound && beforeFound && liveFound && reflect.DeepEqual(normalizeJSONNumber(liveVal), normalizeJSONNumber(beforeVal)) && parentPathPresent(desired, path):
+			// Server-side apply does not remove fields just because a later
+			// partial manifest omitted them; surface likely retained ownership.
 			add("omitted_field_retained", ptr, "field was omitted from the submitted manifest but remains live; use patch_resource or an explicit null/remove if removal was intended")
 		}
 	}
@@ -280,10 +437,44 @@ func compareNamedList(desired, live *unstructured.Unstructured, path []string, f
 				add("submitted_field_missing", jsonPath(append(append([]string(nil), path...), name, field)), "submitted field is absent from the live object after apply")
 				continue
 			}
-			if !reflect.DeepEqual(normalizeJSONNumber(liveVal), normalizeJSONNumber(desiredVal)) {
+			if !submittedValueMatchesLive(desiredVal, liveVal) {
 				add("submitted_field_differs", jsonPath(append(append([]string(nil), path...), name, field)), "live field differs from the submitted manifest after apply")
 			}
 		}
+	}
+}
+
+func submittedValueMatchesLive(desired, live any) bool {
+	return desiredSubsetOfLive(normalizeJSONNumber(desired), normalizeJSONNumber(live))
+}
+
+func desiredSubsetOfLive(desired, live any) bool {
+	switch d := desired.(type) {
+	case map[string]any:
+		l, ok := live.(map[string]any)
+		if !ok {
+			return false
+		}
+		for key, desiredVal := range d {
+			liveVal, ok := l[key]
+			if !ok || !desiredSubsetOfLive(desiredVal, liveVal) {
+				return false
+			}
+		}
+		return true
+	case []any:
+		l, ok := live.([]any)
+		if !ok || len(d) != len(l) {
+			return false
+		}
+		for i := range d {
+			if !desiredSubsetOfLive(d[i], l[i]) {
+				return false
+			}
+		}
+		return true
+	default:
+		return reflect.DeepEqual(live, desired)
 	}
 }
 

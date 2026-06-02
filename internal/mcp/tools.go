@@ -399,7 +399,9 @@ func registerTools(server *mcp.Server) {
 			"succeed but may conflict with the upstream reconciler on the next sync. " +
 			"In 'create' mode, performs a strict create that fails if the resource already exists. " +
 			"Supports multi-document YAML separated by '---'. " +
-			"Use dry_run to validate without persisting changes. By default returns compact " +
+			"Use dry_run to validate without persisting changes and preview the server-side result. " +
+			"Multi-document failures return per-document status because earlier documents may already be applied. " +
+			"By default returns compact " +
 			"post-mutation state, submitted-vs-live spec differences, rollout/pod status " +
 			"for workloads, and current related issues; " +
 			"set verify=false only when you need a terse write result.",
@@ -408,14 +410,16 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "patch_resource",
-		Description: "Patch one existing Kubernetes resource with JSON Patch or JSON Merge Patch. " +
+		Description: "Patch one existing Kubernetes resource with JSON Patch, JSON Merge Patch, or strategic merge patch. " +
 			"Use this for precise field/list mutations such as removing a bad dnsConfig, hostPort, " +
 			"initContainers field, sidecar container, nodeSelector, or replacing one scalar value. " +
 			"Prefer this over apply_resource when you know the exact field to mutate and do not want " +
 			"to rewrite the full manifest or take broad server-side-apply ownership. " +
 			"For patch_type=json, patch must be an RFC 6902 JSON Patch array. For patch_type=merge, " +
-			"patch must be a JSON object. By default returns compact post-patch state and " +
-			"per-operation field checks showing whether targeted JSON Patch paths changed; set " +
+			"patch must be a JSON object. For patch_type=strategic, use a JSON object against built-in " +
+			"Kubernetes kinds when you need name-keyed list merging, such as editing one container. " +
+			"By default returns compact post-patch state and " +
+			"dry-run preview diffs; JSON Patch calls also include per-operation field checks. Set " +
 			"verify=false only when you need a terse write result.",
 		Annotations: writeTool,
 	}, logToolCall("patch_resource", handlePatchResource))

@@ -868,6 +868,10 @@ func classifyAdmissionFailure(msg string) (string, bool) {
 	case strings.Contains(lower, "forbidden") && (strings.Contains(lower, "limitrange") ||
 		strings.Contains(lower, "maximum") || strings.Contains(lower, "minimum")):
 		return "LimitRangeViolation", true
+	case strings.Contains(lower, "forbidden") &&
+		strings.Contains(lower, "cannot create resource") &&
+		strings.Contains(lower, `"pods"`):
+		return "RBACForbidden", true
 	default:
 		return "", false
 	}

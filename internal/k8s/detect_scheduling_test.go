@@ -297,6 +297,7 @@ func TestClassifyAdmissionFailure(t *testing.T) {
 		{`Error creating: pods "x" is forbidden: violates PodSecurity "restricted:latest"`, "PodSecurityViolation", true},
 		{`Error creating: admission webhook "vpod.example.com" denied the request: nope`, "WebhookDenied", true},
 		{`Error creating: pods "x" is forbidden: maximum cpu usage per Container is 1, but limit is 2`, "LimitRangeViolation", true},
+		{`Error creating: pods "web-abc" is forbidden: User "system:serviceaccount:prod:web" cannot create resource "pods" in API group "" in the namespace "prod"`, "RBACForbidden", true},
 		{`Error creating: object is being deleted: pods "x" already exists`, "", false},
 		{`some unrelated message`, "", false},
 	}

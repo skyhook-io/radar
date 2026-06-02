@@ -88,12 +88,65 @@ func TestHandlePatchResourceJSONPatchMutatesObject(t *testing.T) {
 	if got["status"] != "ok" || got["patch_type"] != "json" {
 		t.Fatalf("patch result = %+v, want ok json", got)
 	}
+	verification, ok := got["verification"].(map[string]any)
+	if !ok || verification["mode"] != "post_mutation_state" {
+		t.Fatalf("verification = %#v, want post_mutation_state envelope", got["verification"])
+	}
+	ops, ok := verification["operations"].([]any)
+	if !ok || len(ops) != 1 {
+		t.Fatalf("verification operations = %#v, want one operation", verification["operations"])
+	}
 	live, err := dyn.Resource(gvr).Namespace("prod").Get(context.Background(), "cfg", metav1.GetOptions{})
 	if err != nil {
 		t.Fatalf("get patched configmap: %v", err)
 	}
 	if val, ok, _ := unstructured.NestedString(live.Object, "data", "key"); !ok || val != "new" {
 		t.Fatalf("live data.key = (%q, %v), want new true", val, ok)
+	}
+}
+
+func TestHandlePatchResourceDryRunIncludesPreviewDiff(t *testing.T) {
+	gvr := schema.GroupVersionResource{Version: "v1", Resource: "configmaps"}
+	cfg := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "v1",
+		"kind":       "ConfigMap",
+		"metadata":   map[string]any{"name": "cfg", "namespace": "prod"},
+		"data":       map[string]any{"key": "old"},
+	}}
+	setupMCPDynamicResource(t, gvr, "ConfigMapList", k8s.APIResource{
+		Version:    "v1",
+		Kind:       "ConfigMap",
+		Name:       "configmaps",
+		Namespaced: true,
+		Verbs:      []string{"get", "list", "patch"},
+	}, cfg)
+
+	res, _, err := handlePatchResource(context.Background(), nil, patchResourceInput{
+		Kind:      "ConfigMap",
+		Namespace: "prod",
+		Name:      "cfg",
+		PatchType: "merge",
+		Patch:     `{"data":{"key":"new"}}`,
+		DryRun:    true,
+	})
+	if err != nil {
+		t.Fatalf("handlePatchResource: %v", err)
+	}
+	got := decodeToolResult(t, res)
+	if got["status"] != "ok" || got["dry_run"] != true {
+		t.Fatalf("patch result = %+v, want ok dry_run", got)
+	}
+	verification, ok := got["verification"].(map[string]any)
+	if !ok {
+		t.Fatalf("verification = %#v, want object", got["verification"])
+	}
+	preview, ok := verification["previewDiff"].(map[string]any)
+	if !ok || preview["mode"] != "before_after" {
+		t.Fatalf("previewDiff = %#v, want before_after", verification["previewDiff"])
+	}
+	differences, ok := preview["differences"].([]any)
+	if !ok || len(differences) == 0 {
+		t.Fatalf("previewDiff differences = %#v, want non-empty", preview["differences"])
 	}
 }
 
@@ -241,7 +294,30 @@ func TestParsePatchType(t *testing.T) {
 	if _, err := parsePatchType("merge"); err != nil {
 		t.Fatalf("merge patch type: %v", err)
 	}
-	if _, err := parsePatchType("strategic"); err == nil {
-		t.Fatal("strategic patch type should be rejected")
+	if _, err := parsePatchType("strategic"); err != nil {
+		t.Fatalf("strategic patch type: %v", err)
+	}
+	if _, err := parsePatchType("bogus"); err == nil {
+		t.Fatal("unknown patch type should be rejected")
+	}
+}
+
+func TestStrategicPatchSupportedOnlyForBuiltins(t *testing.T) {
+	deployGVR := schema.GroupVersionResource{Group: "apps", Version: "v1", Resource: "deployments"}
+	if !strategicPatchSupported("Deployment", "apps", deployGVR) {
+		t.Fatal("Deployment/apps should support strategic patch")
+	}
+	crdGVR := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	if strategicPatchSupported("Widget", "example.com", crdGVR) {
+		t.Fatal("CRD should not support strategic patch")
+	}
+}
+
+func TestResourceDisplayName(t *testing.T) {
+	if got := resourceDisplayName("prod", "cfg"); got != "prod/cfg" {
+		t.Fatalf("namespaced display = %q, want prod/cfg", got)
+	}
+	if got := resourceDisplayName("", "node-1"); got != "node-1" {
+		t.Fatalf("cluster-scoped display = %q, want node-1", got)
 	}
 }

@@ -105,6 +105,8 @@ type envServiceWorkload struct {
 	degraded  bool
 }
 
+// EnvServiceRefCheck is a conservative validation result for an environment
+// variable that names a Service host:port.
 type EnvServiceRefCheck struct {
 	WorkloadGroup    string
 	WorkloadKind     string
@@ -144,10 +146,14 @@ func detectEnvServiceRefs(cache *ResourceCache, namespace string, now time.Time)
 	return out
 }
 
+// FindEnvServiceRefChecks returns env-to-Service validation facts for workloads
+// in namespace, including informational facts that are not promoted to Issues.
 func FindEnvServiceRefChecks(cache *ResourceCache, namespace string) []EnvServiceRefCheck {
 	return findEnvServiceRefChecks(cache, envServiceWorkloads(cache, namespace), time.Now())
 }
 
+// FindEnvServiceRefChecksForObject validates env-to-Service references for a
+// single workload object, for resource-context diagnostic enrichment.
 func FindEnvServiceRefChecksForObject(cache *ResourceCache, obj runtime.Object) []EnvServiceRefCheck {
 	wl, ok := envServiceWorkloadForObject(obj)
 	if !ok {
@@ -253,6 +259,8 @@ func envServiceRefHasCausalEvidence(cache *ResourceCache, check EnvServiceRefChe
 	if check.Status != "missing_service" && check.Status != "port_mismatch" {
 		return false
 	}
+	// Env refs are noisy as standalone facts in healthy apps. Promote them to
+	// live Issues only when the owning workload is already degraded.
 	wl, ok := envServiceWorkloadByName(cache, check.WorkloadKind, check.Namespace, check.WorkloadName)
 	return ok && wl.degraded
 }

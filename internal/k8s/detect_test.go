@@ -179,6 +179,25 @@ func TestDetectProblems_ConfigSignals(t *testing.T) {
 		}
 	})
 
+	t.Run("coredns service rewrite", func(t *testing.T) {
+		defer ResetTestState()
+
+		client := fake.NewClientset(&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "kube-system", CreationTimestamp: metav1.NewTime(time.Now().Add(-10 * time.Minute))},
+			Data: map[string]string{
+				"Corefile": `rewrite name product-catalog.astronomy-shop.svc.cluster.local blackhole.svc.cluster.local`,
+			},
+		})
+		if err := InitTestResourceCache(client); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+
+		p := waitForProblem(t, "", "CoreDNS service DNS rewrite")
+		if p.Kind != "ConfigMap" || p.Namespace != "kube-system" || p.Name != "coredns" {
+			t.Fatalf("CoreDNS rewrite problem subject = %s/%s/%s, want ConfigMap/kube-system/coredns: %+v", p.Kind, p.Namespace, p.Name, p)
+		}
+	})
+
 	t.Run("env service port mismatch is context when workload is healthy", func(t *testing.T) {
 		defer ResetTestState()
 
@@ -405,6 +424,16 @@ func TestParseEnvServiceRefTrimsSuffixes(t *testing.T) {
 		{
 			name:      "bad port",
 			value:     "product-catalog:abc/health",
+			wantFound: false,
+		},
+		{
+			name:      "ip literal",
+			value:     "10.0.0.5:8080",
+			wantFound: false,
+		},
+		{
+			name:      "three part non service dns",
+			value:     "product-catalog.prod.example:8080",
 			wantFound: false,
 		},
 	}
@@ -1012,6 +1041,58 @@ func TestDetectProblems_TerminatingResources(t *testing.T) {
 	assertProblem(t, problems, "Deployment", "deploy-stuck", "Terminating stuck", "critical")
 	if hasProblem(problems, "Service", "svc-recent", "Terminating stuck") {
 		t.Fatalf("recently deleting Service should not be flagged: %+v", problems)
+	}
+}
+
+func TestDetectProblems_TerminatingNamespaceClusterScoped(t *testing.T) {
+	defer ResetTestState()
+
+	now := time.Now()
+	oldCreated := metav1.NewTime(now.Add(-2 * time.Hour))
+	oldDelete := metav1.NewTime(now.Add(-35 * time.Minute))
+
+	client := fake.NewClientset(&corev1.Namespace{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "stuck",
+			CreationTimestamp: oldCreated,
+			DeletionTimestamp: &oldDelete,
+			Finalizers:        []string{"kubernetes"},
+		},
+		Status: corev1.NamespaceStatus{
+			Phase: corev1.NamespaceTerminating,
+			Conditions: []corev1.NamespaceCondition{{
+				Type:    corev1.NamespaceFinalizersRemaining,
+				Status:  corev1.ConditionTrue,
+				Reason:  "SomeFinalizersRemain",
+				Message: "example.com/finalizer remains",
+			}},
+		},
+	})
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	if cache == nil {
+		t.Fatal("cache nil after init")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "")
+		if hasProblem(problems, "Namespace", "stuck", "Namespace terminating stuck") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	assertProblem(t, problems, "Namespace", "stuck", "Namespace terminating stuck", "critical")
+	if p, ok := lookupProblem(problems, "Namespace", "stuck", "Namespace terminating stuck"); !ok || !strings.Contains(p.Message, "NamespaceFinalizersRemaining") {
+		t.Fatalf("terminating namespace problem = %+v, want status condition context", p)
+	}
+	if scoped := DetectProblems(cache, "prod"); hasProblem(scoped, "Namespace", "stuck", "Namespace terminating stuck") {
+		t.Fatalf("namespace-scoped scan should not include cluster-scoped namespace issue: %+v", scoped)
 	}
 }
 

@@ -119,6 +119,7 @@ export interface Issue {
   count?: number;
 
   affected?: IssueAffected;
+  owner?: IssueResourceRef;
   members?: IssueResourceRef[];
   members_truncated?: boolean;
   diagnostic_context?: IssueDiagnosticContext;
