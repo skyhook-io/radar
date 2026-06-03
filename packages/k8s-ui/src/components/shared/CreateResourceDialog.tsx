@@ -18,7 +18,7 @@ export interface CreateResourceDialogProps {
   initialYaml?: string
   title?: string
   // Injected by platform (decouples from data-fetching hooks)
-  onApply: (params: { yaml: string; mode: 'apply' | 'create'; dryRun: boolean }) => Promise<ApplyResult[]>
+  onApply: (params: { yaml: string; mode: 'apply' | 'create'; dryRun: boolean; force: boolean }) => Promise<ApplyResult[]>
   isApplying: boolean
   /** Called after a successful non-dry-run apply with the first created resource */
   onCreated?: (result: ApplyResult) => void
@@ -28,6 +28,7 @@ export function CreateResourceDialog({ open, onClose, initialYaml = '', title, o
   const [yaml, setYaml] = useState(initialYaml)
   const [mode, setMode] = useState<'apply' | 'create'>('apply')
   const [dryRun, setDryRun] = useState(false)
+  const [force, setForce] = useState(false)
   const [yamlValid, setYamlValid] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [success, setSuccess] = useState<string | null>(null)
@@ -38,6 +39,7 @@ export function CreateResourceDialog({ open, onClose, initialYaml = '', title, o
       setYaml(initialYaml)
       setMode('apply')
       setDryRun(false)
+      setForce(false)
       setError(null)
       setSuccess(null)
     }
@@ -64,7 +66,7 @@ export function CreateResourceDialog({ open, onClose, initialYaml = '', title, o
     setSuccess(null)
 
     try {
-      const results = await onApply({ yaml, mode, dryRun })
+      const results = await onApply({ yaml, mode, dryRun, force: mode === 'apply' && force })
       const action = mode === 'create' ? 'Created' : 'Applied'
       const dryRunLabel = dryRun ? ' (dry run)' : ''
 
@@ -87,7 +89,7 @@ export function CreateResourceDialog({ open, onClose, initialYaml = '', title, o
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unknown error')
     }
-  }, [yaml, mode, dryRun, onApply, onCreated, handleClose])
+  }, [yaml, mode, dryRun, force, onApply, onCreated, handleClose])
 
   const dialogTitle = title || 'Create Resource'
   const submitLabel = mode === 'create' ? 'Create' : 'Apply'
@@ -169,6 +171,33 @@ export function CreateResourceDialog({ open, onClose, initialYaml = '', title, o
               className="w-3.5 h-3.5 rounded border-theme-border bg-theme-base"
             />
             Dry run
+          </label>
+          </Tooltip>
+
+          {/* Force checkbox — only meaningful for server-side apply */}
+          <Tooltip
+            content={
+              <div className="space-y-1.5 max-w-[19rem]">
+                <p>Override field ownership (server-side apply).</p>
+                <p>
+                  <span className="font-medium text-theme-text-primary">Off (default):</span> if a field is owned by Helm/Flux/Argo/kubectl, the whole apply is rejected with a conflict instead of overwriting.
+                </p>
+                <p>
+                  <span className="font-medium text-theme-text-primary">On:</span> your manifest overwrites those fields — but an active controller may reconcile them back on its next sync.
+                </p>
+              </div>
+            }
+            position="bottom"
+          >
+            <label className={`flex items-center gap-1.5 text-xs cursor-pointer ${mode === 'apply' ? 'text-theme-text-secondary' : 'text-theme-text-tertiary cursor-not-allowed'}`}>
+            <input
+              type="checkbox"
+              checked={mode === 'apply' && force}
+              disabled={mode !== 'apply'}
+              onChange={(e) => setForce(e.target.checked)}
+              className="w-3.5 h-3.5 rounded border-theme-border bg-theme-base"
+            />
+            Force
           </label>
           </Tooltip>
         </div>

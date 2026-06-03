@@ -2,11 +2,9 @@ package k8s
 
 import (
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
-	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -328,16 +326,6 @@ func TestScaleTargetLookupResultDistinguishesErrors(t *testing.T) {
 	checked, exists = scaleTargetLookupResult("Deployment", "prod", "blocked", apierrors.NewForbidden(gr, "blocked", errors.New("denied")))
 	if checked || exists {
 		t.Fatalf("forbidden result = (%v, %v), want unchecked", checked, exists)
-	}
-
-	checked, exists = dynamicScaleTargetLookupResult("Rollout", "prod", "missing", fmt.Errorf("%w: prod/missing", k8score.ErrResourceNotFound))
-	if !checked || exists {
-		t.Fatalf("dynamic not found result = (%v, %v), want checked missing", checked, exists)
-	}
-
-	checked, exists = dynamicScaleTargetLookupResult("Rollout", "prod", "blocked", errors.New("informer not found for rollouts"))
-	if checked || exists {
-		t.Fatalf("dynamic cache error result = (%v, %v), want unchecked", checked, exists)
 	}
 }
 

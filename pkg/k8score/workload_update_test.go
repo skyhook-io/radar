@@ -72,9 +72,10 @@ func TestUpdateResource_UsesServerSideApply(t *testing.T) {
 	})
 
 	_, err := mgr.UpdateResource(context.Background(), UpdateResourceOptions{
-		Kind: "clusterpolicies",
-		Name: "restrict-image-registries",
-		YAML: clusterPolicyYAML,
+		Kind:  "clusterpolicies",
+		Name:  "restrict-image-registries",
+		YAML:  clusterPolicyYAML,
+		Force: true,
 	})
 	if err != nil {
 		t.Fatalf("UpdateResource failed: %v", err)
@@ -113,6 +114,37 @@ func TestUpdateResource_UsesServerSideApply(t *testing.T) {
 	// For subresourced kinds, the apiserver ignores status on /apply anyway.
 	if _, present := body["status"]; !present {
 		t.Error("status was stripped from the patch body; CRDs without status subresource need it preserved")
+	}
+}
+
+// TestUpdateResource_ForcePlumbedToPatchOptions verifies the caller's Force
+// choice reaches the SSA PatchOptions (the editor's Force checkbox opts out).
+func TestUpdateResource_ForcePlumbedToPatchOptions(t *testing.T) {
+	dyn, gvr := newFakeDynamicWithClusterPolicy(t)
+	disc := stubDiscovery(t, "ClusterPolicy", gvr)
+	mgr := NewWorkloadManager(dyn, disc)
+
+	var captured clienttesting.PatchAction
+	dyn.PrependReactor("patch", "clusterpolicies", func(a clienttesting.Action) (bool, runtime.Object, error) {
+		captured = a.(clienttesting.PatchAction)
+		return true, nil, nil
+	})
+
+	_, err := mgr.UpdateResource(context.Background(), UpdateResourceOptions{
+		Kind:  "ClusterPolicy",
+		Name:  "restrict-image-registries",
+		YAML:  clusterPolicyYAML,
+		Force: false,
+	})
+	if err != nil {
+		t.Fatalf("UpdateResource failed: %v", err)
+	}
+	impl, ok := captured.(clienttesting.PatchActionImpl)
+	if !ok {
+		t.Fatalf("captured action is %T, want clienttesting.PatchActionImpl", captured)
+	}
+	if impl.PatchOptions.Force == nil || *impl.PatchOptions.Force {
+		t.Errorf("Force = %v, want *false", impl.PatchOptions.Force)
 	}
 }
 

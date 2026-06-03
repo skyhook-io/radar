@@ -237,9 +237,10 @@ func (p *CacheProvider) clusterDNSSignals(namespaces []string, access coreDNSAcc
 		out = append(out, s)
 	}
 	if access.deployments && access.replicaSets {
-		for _, s := range p.coreDNSControlPlaneChangeSignals() {
-			add(s)
-		}
+		add(p.coreDNSDeploymentRolloutSignal())
+	}
+	if access.configMaps {
+		add(observedCoreDNSConfigMapChangeSignal())
 	}
 	for _, s := range p.namespaceDNSSymptomSignals(namespaces) {
 		add(s)
@@ -247,26 +248,23 @@ func (p *CacheProvider) clusterDNSSignals(namespaces []string, access coreDNSAcc
 	return out
 }
 
-func (p *CacheProvider) coreDNSControlPlaneChangeSignals() []string {
-	var out []string
-	if p.cache != nil && p.cache.Deployments() != nil && p.cache.ReplicaSets() != nil {
-		deps, err := p.cache.Deployments().Deployments("kube-system").List(labels.Everything())
-		if err == nil {
-			for _, d := range deps {
-				if d == nil || !isCoreDNSNameOrLabels(d.Name, d.Labels) {
-					continue
-				}
-				if sig := deploymentRolloutSignal(p.cache, d, clusterDNSContextRecentWindow); sig != "" {
-					out = append(out, sig)
-					break
-				}
-			}
+func (p *CacheProvider) coreDNSDeploymentRolloutSignal() string {
+	if p.cache == nil || p.cache.Deployments() == nil || p.cache.ReplicaSets() == nil {
+		return ""
+	}
+	deps, err := p.cache.Deployments().Deployments("kube-system").List(labels.Everything())
+	if err != nil {
+		return ""
+	}
+	for _, d := range deps {
+		if d == nil || !isCoreDNSNameOrLabels(d.Name, d.Labels) {
+			continue
+		}
+		if sig := deploymentRolloutSignal(p.cache, d, clusterDNSContextRecentWindow); sig != "" {
+			return sig
 		}
 	}
-	if sig := observedCoreDNSConfigMapChangeSignal(); sig != "" {
-		out = append(out, sig)
-	}
-	return out
+	return ""
 }
 
 func (p *CacheProvider) namespaceDNSSymptomSignals(namespaces []string) []string {

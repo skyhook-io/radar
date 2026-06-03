@@ -114,7 +114,7 @@ interface EditableYamlViewProps {
   /** Called after a successful save so the parent can refetch */
   onSaved?: () => void
   /** Save handler — injected by the platform wrapper */
-  onSave?: (params: { kind: string; namespace: string; name: string; yaml: string }) => Promise<void>
+  onSave?: (params: { kind: string; namespace: string; name: string; yaml: string; force: boolean }) => Promise<void>
   /** Whether a save is in progress */
   isSaving?: boolean
   /** Error message from the last save attempt */
@@ -139,6 +139,9 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
   const [editedYaml, setEditedYaml] = useState(savedDraft.current ?? '')
   const [yamlErrors, setYamlErrors] = useState<string[]>([])
   const [showErrorDetails, setShowErrorDetails] = useState(false)
+  // Default on: the editor resubmits the full live manifest, so an unforced
+  // save would conflict on every field owned by Helm/Flux/Argo/a controller.
+  const [force, setForce] = useState(true)
 
   // Clean up restored draft flag
   useEffect(() => {
@@ -187,6 +190,7 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
         namespace: resource.namespace,
         name: resource.name,
         yaml: editedYaml,
+        force,
       })
       setIsEditing(false)
       setEditedYaml('')
@@ -194,7 +198,7 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
     } catch {
       // Error handled by caller via saveError prop
     }
-  }, [onSave, resource, editedYaml, yamlErrors, onSaved])
+  }, [onSave, resource, editedYaml, yamlErrors, onSaved, force])
 
   const handleYamlValidate = useCallback((_isValid: boolean, errors: string[]) => {
     setYamlErrors(errors)
@@ -222,6 +226,31 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
               <XCircle className="w-3.5 h-3.5" />
               Cancel
             </button>
+            <Tooltip
+              content={
+                <div className="space-y-1.5 max-w-[19rem]">
+                  <p>Override field ownership (server-side apply).</p>
+                  <p>
+                    <span className="font-medium text-theme-text-primary">On (default):</span> your edits overwrite fields owned by Helm/Flux/Argo/kubectl — but an active controller may reconcile them back on its next sync.
+                  </p>
+                  <p>
+                    <span className="font-medium text-theme-text-primary">Off:</span> if another manager owns a field you changed, the whole save is rejected with a conflict (nothing is applied).
+                  </p>
+                </div>
+              }
+              position="bottom"
+            >
+              <label className="flex items-center gap-1.5 text-xs text-theme-text-secondary cursor-pointer select-none">
+                <input
+                  type="checkbox"
+                  checked={force}
+                  disabled={isPending}
+                  onChange={(e) => setForce(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded border-theme-border bg-theme-base"
+                />
+                Force
+              </label>
+            </Tooltip>
             <button
               onClick={handleSaveEdit}
               disabled={isPending || yamlErrors.length > 0}

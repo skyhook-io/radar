@@ -1,13 +1,11 @@
 package k8s
 
 import (
-	"errors"
 	"fmt"
 	"log"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/logsafe"
-	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/topology"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -230,15 +228,4 @@ func listDynamicForMissingRefs(dynamicCache *DynamicResourceCache, gvr schema.Gr
 		return nil
 	}
 	return items
-}
-
-func dynamicScaleTargetLookupResult(kind, namespace, name string, err error) (checked bool, exists bool) {
-	if err == nil {
-		return true, true
-	}
-	if errors.Is(err, k8score.ErrResourceNotFound) {
-		return true, false
-	}
-	log.Printf("[missing-refs] failed to verify %s %s/%s scaleTargetRef: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(name), logsafe.Sanitize(err.Error()))
-	return false, false
 }

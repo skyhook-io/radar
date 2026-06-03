@@ -2468,6 +2468,7 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	dryRun := r.URL.Query().Get("dryRun") == "true"
+	force := r.URL.Query().Get("force") == "true"
 
 	client := s.getDynamicClientForRequest(r)
 	if client == nil {
@@ -2489,6 +2490,7 @@ func (s *Server) handleApplyResource(w http.ResponseWriter, r *http.Request) {
 			YAML:   doc,
 			Mode:   mode,
 			DryRun: dryRun,
+			Force:  force,
 		}, client)
 		if err != nil {
 			errMsg := err.Error()
@@ -2552,11 +2554,16 @@ func (s *Server) handleUpdateResource(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusServiceUnavailable, "cluster client not available — check cluster connection")
 		return
 	}
+	// The editor resubmits the full live manifest, so an unforced apply would
+	// conflict on every field owned by Helm/Flux/Argo/a controller. Default to
+	// force; the editor's checkbox sends force=false to opt out.
+	force := r.URL.Query().Get("force") != "false"
 	result, err := k8s.UpdateResourceWithClient(r.Context(), k8s.UpdateResourceOptions{
 		Kind:      kind,
 		Namespace: namespace,
 		Name:      name,
 		YAML:      string(body),
+		Force:     force,
 	}, client)
 	if err != nil {
 		if apierrors.IsNotFound(err) {

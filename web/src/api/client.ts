@@ -1631,8 +1631,12 @@ export function useUpdateResource() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ kind, namespace, name, yaml }: { kind: string; namespace: string; name: string; yaml: string }) => {
-      const response = await apiFetch(`${getApiBase()}/resources/${kind}/${namespace}/${name}`, {
+    mutationFn: async ({ kind, namespace, name, yaml, force = true }: { kind: string; namespace: string; name: string; yaml: string; force?: boolean }) => {
+      const url = new URL(`${getApiBase()}/resources/${kind}/${namespace}/${name}`, window.location.origin)
+      if (!force) {
+        url.searchParams.set('force', 'false')
+      }
+      const response = await apiFetch(url.toString(), {
         method: 'PUT',
         headers: { 'Content-Type': 'text/plain' },
         body: yaml,
@@ -1729,11 +1733,14 @@ export function useApplyResource() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ yaml, mode = 'apply', dryRun = false }: { yaml: string; mode?: 'apply' | 'create'; dryRun?: boolean }) => {
+    mutationFn: async ({ yaml, mode = 'apply', dryRun = false, force = false }: { yaml: string; mode?: 'apply' | 'create'; dryRun?: boolean; force?: boolean }) => {
       const url = new URL(`${getApiBase()}/resources/apply`, window.location.origin)
       url.searchParams.set('mode', mode)
       if (dryRun) {
         url.searchParams.set('dryRun', 'true')
+      }
+      if (force) {
+        url.searchParams.set('force', 'true')
       }
       const response = await apiFetch(url.toString(), {
         method: 'POST',

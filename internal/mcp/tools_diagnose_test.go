@@ -149,7 +149,7 @@ func TestHandleDiagnose_PodHappyPath(t *testing.T) {
 	}
 }
 
-func TestHandleDiagnose_AttachesDNSContextWhenResourceHasDNSSignal(t *testing.T) {
+func TestHandleDiagnose_AttachesPodDNSSignalButRBACGatesCoreDNSFinding(t *testing.T) {
 	defer k8s.ResetTestState()
 	fakeClient := fake.NewClientset(
 		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},

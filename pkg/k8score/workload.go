@@ -35,6 +35,7 @@ type UpdateResourceOptions struct {
 	Namespace string
 	Name      string
 	YAML      string // YAML content to apply
+	Force     bool   // Force SSA field ownership conflicts (override Helm/Flux/Argo/kubectl)
 }
 
 // DeleteResourceOptions contains options for deleting a resource.
@@ -154,7 +155,7 @@ func (m *WorkloadManager) UpdateResource(ctx context.Context, opts UpdateResourc
 	}
 	result, err := ri.Patch(ctx, opts.Name, types.ApplyPatchType, body, metav1.PatchOptions{
 		FieldManager: "radar",
-		Force:        boolPtr(true),
+		Force:        boolPtr(opts.Force),
 	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to update resource: %w", err)
