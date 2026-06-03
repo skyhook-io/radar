@@ -357,6 +357,8 @@ function diagnosticFactLabel(type: string): string {
       return 'Probe target';
     case 'blocked_init_container':
       return 'Init container';
+    case 'restart_cause':
+      return 'Restart cause';
     default:
       return type.replace(/_/g, ' ');
   }

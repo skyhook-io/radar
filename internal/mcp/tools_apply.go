@@ -23,6 +23,7 @@ type applyResourceInput struct {
 	DryRun    bool   `json:"dry_run,omitempty" jsonschema:"validate and preview the server-side result without persisting changes"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"override namespace for the resource"`
 	Verify    *bool  `json:"verify,omitempty" jsonschema:"return compact post-mutation state, rollout/pod status, and related issues; on dry_run return a preview diff. Default true; set false for a terse write result."`
+	Force     bool   `json:"force,omitempty" jsonschema:"apply mode only: force server-side apply field ownership conflicts and take ownership from other managers. Default false; use only when you intend to override Helm/Flux/GitOps/kubectl ownership."`
 }
 
 type applyMutationTarget struct {
@@ -73,6 +74,7 @@ func handleApplyResource(ctx context.Context, req *mcp.CallToolRequest, input ap
 			Mode:              mode,
 			DryRun:            input.DryRun,
 			NamespaceOverride: input.Namespace,
+			Force:             input.Force,
 		}, dynClient)
 		if err != nil {
 			if len(docs) > 1 {
@@ -165,15 +167,15 @@ func applyFailureEntry(document int, err error) map[string]any {
 		"status":   "failed",
 		"error":    formatApplyResourceError(err).Error(),
 	}
-	if conflict, ok := applyConflictDetails(err); ok {
-		entry["error_type"] = "ssa_field_ownership_conflict"
+	if conflict, conflictType, ok := applyConflictDetails(err); ok {
+		entry["error_type"] = conflictType
 		entry["conflict"] = conflict
 	}
 	return entry
 }
 
 func formatApplyResourceError(err error) error {
-	if conflict, ok := applyConflictDetails(err); ok {
+	if conflict, conflictType, ok := applyConflictDetails(err); ok && conflictType == "ssa_field_ownership_conflict" {
 		if msg, _ := conflict["message"].(string); msg != "" {
 			return fmt.Errorf("server-side apply field ownership conflict: %s", msg)
 		}
@@ -182,13 +184,14 @@ func formatApplyResourceError(err error) error {
 	return err
 }
 
-func applyConflictDetails(err error) (map[string]any, bool) {
+func applyConflictDetails(err error) (map[string]any, string, bool) {
 	if !apierrors.IsConflict(err) {
-		return nil, false
+		return nil, "", false
 	}
 	out := map[string]any{
-		"kind": "server_side_apply_field_ownership",
+		"kind": "conflict",
 	}
+	conflictType := "conflict"
 	var statusErr *apierrors.StatusError
 	if errors.As(err, &statusErr) {
 		out["message"] = statusErr.ErrStatus.Message
@@ -211,6 +214,10 @@ func applyConflictDetails(err error) (map[string]any, bool) {
 					entry := map[string]any{}
 					if cause.Type != "" {
 						entry["type"] = string(cause.Type)
+						if cause.Type == metav1.CauseTypeFieldManagerConflict {
+							conflictType = "ssa_field_ownership_conflict"
+							out["kind"] = "server_side_apply_field_ownership"
+						}
 					}
 					if cause.Field != "" {
 						entry["field"] = cause.Field
@@ -230,7 +237,7 @@ func applyConflictDetails(err error) (map[string]any, bool) {
 	} else {
 		out["message"] = err.Error()
 	}
-	return out, true
+	return out, conflictType, true
 }
 
 func applyDocDesiredObject(doc string) *unstructured.Unstructured {

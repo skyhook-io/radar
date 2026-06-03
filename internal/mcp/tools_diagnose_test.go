@@ -190,8 +190,8 @@ func TestHandleDiagnose_AttachesDNSContextWhenResourceHasDNSSignal(t *testing.T)
 	if !strings.Contains(body, `"dnsContext"`) || !strings.Contains(body, "dnsPolicy=None") {
 		t.Fatalf("expected dnsContext with pod DNS signal: %s", body)
 	}
-	if !strings.Contains(body, "CoreDNS NXDOMAIN override") {
-		t.Fatalf("expected CoreDNS finding in dnsContext: %s", body)
+	if strings.Contains(body, "CoreDNS NXDOMAIN override") {
+		t.Fatalf("expected CoreDNS finding to be RBAC-gated from dnsContext: %s", body)
 	}
 }
 

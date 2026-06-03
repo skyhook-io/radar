@@ -526,8 +526,28 @@ func TestParseEnvServiceRefTrimsSuffixes(t *testing.T) {
 			wantFound: false,
 		},
 		{
+			name:      "localhost rejected",
+			value:     "localhost:8080",
+			wantFound: false,
+		},
+		{
+			name:      "localhost url rejected",
+			value:     "http://localhost:3000/health",
+			wantFound: false,
+		},
+		{
+			name:      "localhost trailing dot rejected",
+			value:     "LOCALHOST.:9090",
+			wantFound: false,
+		},
+		{
 			name:      "three part non service dns",
 			value:     "product-catalog.prod.example:8080",
+			wantFound: false,
+		},
+		{
+			name:      "external svc tld rejected",
+			value:     "foo.bar.svc.example.com:8080",
 			wantFound: false,
 		},
 	}

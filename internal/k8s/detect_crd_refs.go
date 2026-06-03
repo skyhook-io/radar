@@ -1,12 +1,14 @@
 package k8s
 
 import (
+	"errors"
 	"fmt"
 	"log"
-	"strings"
 	"time"
 
 	"github.com/skyhook-io/radar/internal/logsafe"
+	"github.com/skyhook-io/radar/pkg/k8score"
+	"github.com/skyhook-io/radar/pkg/topology"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -131,11 +133,14 @@ func kedaScaleTargetRef(so *unstructured.Unstructured) (scaleTargetRef, bool) {
 	name, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "name")
 	kind, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "kind")
 	apiVersion, _, _ := unstructured.NestedString(so.Object, "spec", "scaleTargetRef", "apiVersion")
-	if name == "" || kind == "" {
+	if name == "" {
 		return scaleTargetRef{}, false
 	}
+	if kind == "" {
+		kind = "Deployment"
+	}
 	return scaleTargetRef{
-		apiGroup: apiGroupFromVersion(apiVersion),
+		apiGroup: topology.APIVersionGroup(apiVersion),
 		kind:     kind,
 		name:     name,
 	}, true
@@ -181,8 +186,7 @@ func scaleTargetExists(cache *ResourceCache, dynamicCache *DynamicResourceCache,
 		if !ok {
 			return false, false
 		}
-		_, err := dynamicCache.Get(gvr, namespace, ref.name)
-		return dynamicScaleTargetLookupResult("Rollout", namespace, ref.name, err)
+		return dynamicScaleTargetExists(dynamicCache, gvr, namespace, "Rollout", ref.name)
 	default:
 		return false, false
 	}
@@ -199,17 +203,18 @@ func scaleTargetLookupResult(kind, namespace, name string, err error) (checked b
 	return false, false
 }
 
-func dynamicScaleTargetLookupResult(kind, namespace, name string, err error) (checked bool, exists bool) {
-	if err == nil {
-		return true, true
+func dynamicScaleTargetExists(dynamicCache *DynamicResourceCache, gvr schema.GroupVersionResource, namespace, kind, name string) (checked bool, exists bool) {
+	items, err := dynamicCache.ListWatched(gvr)
+	if err != nil {
+		log.Printf("[missing-refs] failed to verify %s %s/%s scaleTargetRef: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(name), logsafe.Sanitize(err.Error()))
+		return false, false
 	}
-	// DynamicResourceCache.Get currently returns a plain error for cache
-	// misses, unlike typed informers that surface apierrors.IsNotFound.
-	if strings.Contains(err.Error(), "resource not found:") {
-		return true, false
+	for _, item := range items {
+		if item.GetNamespace() == namespace && item.GetName() == name {
+			return true, true
+		}
 	}
-	log.Printf("[missing-refs] failed to verify %s %s/%s scaleTargetRef: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(name), logsafe.Sanitize(err.Error()))
-	return false, false
+	return true, false
 }
 
 func listDynamicForMissingRefs(dynamicCache *DynamicResourceCache, gvr schema.GroupVersionResource, namespace, kind string) []*unstructured.Unstructured {
@@ -227,10 +232,13 @@ func listDynamicForMissingRefs(dynamicCache *DynamicResourceCache, gvr schema.Gr
 	return items
 }
 
-func apiGroupFromVersion(apiVersion string) string {
-	if apiVersion == "" || !strings.Contains(apiVersion, "/") {
-		return ""
+func dynamicScaleTargetLookupResult(kind, namespace, name string, err error) (checked bool, exists bool) {
+	if err == nil {
+		return true, true
 	}
-	group, _, _ := strings.Cut(apiVersion, "/")
-	return group
+	if errors.Is(err, k8score.ErrResourceNotFound) {
+		return true, false
+	}
+	log.Printf("[missing-refs] failed to verify %s %s/%s scaleTargetRef: %s", logsafe.Sanitize(kind), logsafe.Sanitize(namespace), logsafe.Sanitize(name), logsafe.Sanitize(err.Error()))
+	return false, false
 }

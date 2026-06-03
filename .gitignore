@@ -42,3 +42,6 @@ dist/
 # Visual-test + scratch artifacts
 .playwright-mcp/
 tmp/
+/radar-amd64
+/*.png
+/AGENTS.md

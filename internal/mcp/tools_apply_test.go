@@ -3,6 +3,7 @@ package mcp
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -253,9 +254,14 @@ func TestHandleApplyResourceMultiDocSurfacesSSAConflict(t *testing.T) {
 		Verbs:      []string{"get", "list", "patch"},
 	})
 	fakeDyn := dyn.(*dynamicfake.FakeDynamicClient)
+	var sawDefaultForce bool
 	fakeDyn.PrependReactor("patch", "configmaps", func(action clienttesting.Action) (bool, runtime.Object, error) {
 		patch := action.(clienttesting.PatchAction)
 		if patch.GetName() == "conflict" {
+			if patchImpl, ok := action.(clienttesting.PatchActionImpl); ok {
+				opts := patchImpl.GetPatchOptions()
+				sawDefaultForce = opts.Force != nil && !*opts.Force
+			}
 			return true, nil, &apierrors.StatusError{ErrStatus: metav1.Status{
 				Status:  metav1.StatusFailure,
 				Reason:  metav1.StatusReasonConflict,
@@ -301,6 +307,9 @@ metadata:
 	if err != nil {
 		t.Fatalf("handleApplyResource returned hard error for multi-doc conflict: %v", err)
 	}
+	if !sawDefaultForce {
+		t.Fatal("apply_resource default must send Force=false so SSA ownership conflicts are surfaced")
+	}
 	got := decodeToolResult(t, res)
 	if got["status"] != "partial_failure" {
 		t.Fatalf("status = %v, want partial_failure; result=%+v", got["status"], got)
@@ -319,6 +328,22 @@ metadata:
 	second := resources[1].(map[string]any)
 	if second["name"] != "ok" || second["status"] != "applied" {
 		t.Fatalf("second resource = %+v, want continued applied ok", second)
+	}
+}
+
+func TestApplyConflictDetailsKeepsGenericConflictsGeneric(t *testing.T) {
+	gr := schema.GroupResource{Group: "", Resource: "configmaps"}
+	err := apierrors.NewConflict(gr, "cfg", errors.New("resourceVersion changed"))
+
+	conflict, conflictType, ok := applyConflictDetails(err)
+	if !ok {
+		t.Fatal("applyConflictDetails did not recognize generic conflict")
+	}
+	if conflictType != "conflict" || conflict["kind"] != "conflict" {
+		t.Fatalf("conflict = %+v type=%s, want generic conflict", conflict, conflictType)
+	}
+	if strings.Contains(formatApplyResourceError(err).Error(), "field ownership") {
+		t.Fatalf("generic conflict was mislabeled as SSA ownership: %v", formatApplyResourceError(err))
 	}
 }
 

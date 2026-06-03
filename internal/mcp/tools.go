@@ -45,8 +45,7 @@ func registerTools(server *mcp.Server) {
 		OpenWorldHint: boolPtr(false),
 	}
 	// writeTool reflects worst-case action across the tools that share it:
-	// apply_resource uses SSA with Force=true (rips ownership from other
-	// field managers); manage_node drains evict pods; manage_workload
+	// apply_resource can force SSA ownership; manage_node drains evict pods; manage_workload
 	// rollback/restart overwrites desired state or terminates pods;
 	// manage_gitops terminate/rollback aborts or overwrites; manage_cronjob
 	// suspend mutates schedule state (not additive).
@@ -394,9 +393,9 @@ func registerTools(server *mcp.Server) {
 		Name: "apply_resource",
 		Description: "Create or update a Kubernetes resource from a YAML manifest. " +
 			"In 'apply' mode (default), performs a server-side apply with FieldManager=radar " +
-			"and Force=true — this can take field ownership from other managers (Helm, Flux, " +
-			"GitOps controllers, kubectl), so applies against Helm/Flux-owned objects will " +
-			"succeed but may conflict with the upstream reconciler on the next sync. " +
+			"and reports field ownership conflicts instead of taking ownership by default. " +
+			"Set force=true only when you intend to take field ownership from other managers " +
+			"(Helm, Flux, GitOps controllers, kubectl). " +
 			"In 'create' mode, performs a strict create that fails if the resource already exists. " +
 			"Supports multi-document YAML separated by '---'. " +
 			"Use dry_run to validate without persisting changes and preview the server-side result. " +
@@ -2463,8 +2462,8 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	// Shared response shape (issues.ListResponse) — identical to /api/issues so
 	// HTTP and MCP can't drift.
 	resp := issues.NewListResponse(out, stats)
-	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces, func() bool {
-		return canReadInNamespace(ctx, "", "configmaps", "kube-system", "list")
+	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces, func(group, resource string) bool {
+		return canReadInNamespace(ctx, group, resource, "kube-system", "list")
 	})
 	// Steering hint when the issue list was capped (MCP-only).
 	if stats.TotalMatched > len(out) {

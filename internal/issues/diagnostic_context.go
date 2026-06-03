@@ -240,18 +240,37 @@ func issueRef(i Issue) issuesapi.IssueRef {
 }
 
 type diagnosticContextBuilder struct {
-	role  issuesapi.DiagnosticRole
-	facts []issuesapi.DiagnosticFact
+	role      issuesapi.DiagnosticRole
+	facts     []issuesapi.DiagnosticFact
+	factRanks []int
 }
 
 func (b *diagnosticContextBuilder) add(role issuesapi.DiagnosticRole, fact issuesapi.DiagnosticFact) {
-	if fact.Type == "" || len(b.facts) >= maxDiagnosticFacts {
+	if fact.Type == "" {
 		return
 	}
-	if diagnosticRoleRank(role) > diagnosticRoleRank(b.role) {
+	rank := diagnosticRoleRank(role)
+	if rank > diagnosticRoleRank(b.role) {
 		b.role = role
 	}
+	if len(b.facts) >= maxDiagnosticFacts {
+		replace := -1
+		lowest := rank
+		for idx, existing := range b.factRanks {
+			if existing < lowest {
+				lowest = existing
+				replace = idx
+			}
+		}
+		if replace < 0 {
+			return
+		}
+		b.facts[replace] = fact
+		b.factRanks[replace] = rank
+		return
+	}
 	b.facts = append(b.facts, fact)
+	b.factRanks = append(b.factRanks, rank)
 }
 
 func (b diagnosticContextBuilder) build() *issuesapi.DiagnosticContext {

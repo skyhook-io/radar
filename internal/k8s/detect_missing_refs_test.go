@@ -2,9 +2,11 @@ package k8s
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
@@ -328,7 +330,7 @@ func TestScaleTargetLookupResultDistinguishesErrors(t *testing.T) {
 		t.Fatalf("forbidden result = (%v, %v), want unchecked", checked, exists)
 	}
 
-	checked, exists = dynamicScaleTargetLookupResult("Rollout", "prod", "missing", errors.New("resource not found: prod/missing"))
+	checked, exists = dynamicScaleTargetLookupResult("Rollout", "prod", "missing", fmt.Errorf("%w: prod/missing", k8score.ErrResourceNotFound))
 	if !checked || exists {
 		t.Fatalf("dynamic not found result = (%v, %v), want checked missing", checked, exists)
 	}
@@ -724,6 +726,7 @@ func TestDetectMissingCRDRefs(t *testing.T) {
 		}),
 		kedaScaledObject("ok", "prod", now, "apps/v1", "Deployment", "web"),
 		kedaScaledObject("missing-target", "prod", now, "apps/v1", "Deployment", "ghost"),
+		kedaScaledObject("missing-default-deployment-target", "prod", now, "apps/v1", "", "also-ghost"),
 		kedaScaledObject("wrong-group-target", "prod", now, "example.com/v1", "Deployment", "ghost"),
 		kedaScaledObject("unsupported-target", "prod", now, "example.com/v1", "Widget", "ghost"),
 	)
@@ -753,8 +756,11 @@ func TestDetectMissingCRDRefs(t *testing.T) {
 	if !findProblem(problems, "ScaledObject", "prod", "missing-target", "Missing scaleTargetRef") {
 		t.Fatalf("missing KEDA scaleTargetRef not detected: %+v", problems)
 	}
-	if len(problems) != 3 {
-		t.Fatalf("expected exactly 3 curated CRD missing refs, got %+v", problems)
+	if !findProblem(problems, "ScaledObject", "prod", "missing-default-deployment-target", "Missing scaleTargetRef") {
+		t.Fatalf("KEDA scaleTargetRef with omitted kind should default to Deployment: %+v", problems)
+	}
+	if len(problems) != 4 {
+		t.Fatalf("expected exactly 4 curated CRD missing refs, got %+v", problems)
 	}
 	for _, p := range problems {
 		if p.Severity != "warning" {
@@ -766,7 +772,7 @@ func TestDetectMissingCRDRefs(t *testing.T) {
 	}
 
 	scoped := DetectMissingCRDRefs(GetResourceCache(), dynCache, GetResourceDiscovery(), "prod")
-	if len(scoped) != 3 {
+	if len(scoped) != 4 {
 		t.Fatalf("namespace-scoped CRD refs should include prod problems, got %+v", scoped)
 	}
 }

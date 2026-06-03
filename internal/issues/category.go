@@ -135,7 +135,7 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 	case "Missing referenced Service":
 		return issuesapi.CategoryMissingConfigRef
 	case "Service port mismatch":
-		return issuesapi.CategoryServiceNoEndpoints
+		return issuesapi.CategoryMissingConfigRef
 	}
 	switch in.Kind {
 	case "Pod":

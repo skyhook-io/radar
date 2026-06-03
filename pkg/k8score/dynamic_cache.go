@@ -2,6 +2,7 @@ package k8score
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"runtime"
@@ -17,6 +18,8 @@ import (
 	"k8s.io/client-go/dynamic/dynamicinformer"
 	"k8s.io/client-go/tools/cache"
 )
+
+var ErrResourceNotFound = errors.New("resource not found")
 
 // informerKey identifies one informer. ns == "" means a cluster-wide watch;
 // a non-empty ns is a namespace-scoped watch. A GVR can have one cluster-wide
@@ -908,7 +911,7 @@ func (d *DynamicResourceCache) get(gvr schema.GroupVersionResource, namespace, n
 	}
 
 	if !found {
-		return nil, fmt.Errorf("resource not found: %s", key)
+		return nil, fmt.Errorf("%w: %s", ErrResourceNotFound, key)
 	}
 
 	u, ok := item.(*unstructured.Unstructured)

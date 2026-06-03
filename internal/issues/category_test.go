@@ -28,7 +28,7 @@ func TestClassify(t *testing.T) {
 		{"coredns nxdomain override", classifyInput{Source: SourceProblem, Kind: "ConfigMap", Reason: "CoreDNS NXDOMAIN override"}, issuesapi.CategoryDNSFailure},
 		{"coredns service rewrite", classifyInput{Source: SourceProblem, Kind: "ConfigMap", Reason: "CoreDNS service DNS rewrite"}, issuesapi.CategoryDNSFailure},
 		{"env missing service", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Missing referenced Service"}, issuesapi.CategoryMissingConfigRef},
-		{"env service port mismatch", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Service port mismatch"}, issuesapi.CategoryServiceNoEndpoints},
+		{"env service port mismatch", classifyInput{Source: SourceProblem, Kind: "Deployment", Reason: "Service port mismatch"}, issuesapi.CategoryMissingConfigRef},
 
 		// problem / Pod
 		{"image pull backoff", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "ImagePullBackOff"}, issuesapi.CategoryImagePullFailed},

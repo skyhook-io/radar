@@ -76,7 +76,7 @@ func handlePatchResource(ctx context.Context, req *mcp.CallToolRequest, input pa
 		return nil, nil, err
 	}
 	if patchType == types.StrategicMergePatchType && !strategicPatchSupported(kind, group, gvr) {
-		return nil, nil, fmt.Errorf("patch_type=strategic is only supported for built-in Kubernetes resources; use patch_type=merge or patch_type=json for CRDs")
+		return nil, nil, fmt.Errorf("patch_type=strategic is only supported for Kubernetes built-in resources discovered as non-CRD; use patch_type=merge or patch_type=json for CRDs or unknown resources")
 	}
 
 	var resClient = dynClient.Resource(gvr)
@@ -180,6 +180,11 @@ func patchTypeName(patchType types.PatchType) string {
 }
 
 func strategicPatchSupported(kind, group string, gvr schema.GroupVersionResource) bool {
+	if discovery := k8s.GetResourceDiscovery(); discovery != nil {
+		if res, ok := discovery.GetResourceWithGroup(kind, gvr.Group); ok && res.Name == gvr.Resource {
+			return !res.IsCRD
+		}
+	}
 	if _, ok := k8s.BuiltinGVR(kind, group); ok {
 		return true
 	}

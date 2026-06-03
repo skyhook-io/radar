@@ -578,13 +578,22 @@ func parseEnvServiceRef(value, defaultNamespace string) (envServiceRef, bool) {
 	if net.ParseIP(host) != nil {
 		return envServiceRef{}, false
 	}
+	// localhost is a loopback name, never a cluster Service — treating it as a
+	// missing Service produces noise (e.g. sidecars/exporters that POST to
+	// localhost) that drowns the real missing-Service findings.
+	if strings.EqualFold(host, "localhost") {
+		return envServiceRef{}, false
+	}
 
 	parts := strings.Split(host, ".")
 	ref := envServiceRef{namespace: defaultNamespace, port: int32(port64), display: fmt.Sprintf("%s:%d", host, port64)}
 	switch {
 	case len(parts) == 1:
 		ref.name = parts[0]
-	case len(parts) >= 3 && parts[2] == "svc":
+	case len(parts) == 3 && parts[2] == "svc":
+		ref.name = parts[0]
+		ref.namespace = parts[1]
+	case len(parts) == 5 && parts[2] == "svc" && parts[3] == "cluster" && parts[4] == "local":
 		ref.name = parts[0]
 		ref.namespace = parts[1]
 	default:

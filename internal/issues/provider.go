@@ -23,6 +23,12 @@ const (
 	maxDNSNamespaceSymptomScans   = 50
 )
 
+type coreDNSAccess struct {
+	configMaps  bool
+	deployments bool
+	replicaSets bool
+}
+
 // CacheProvider adapts radar's in-process caches to the Provider
 // interface. Uses the package-level singletons (k8s.GetResourceCache,
 // k8s.GetDynamicResourceCache, k8s.GetResourceDiscovery).
@@ -161,22 +167,29 @@ func (p *CacheProvider) ChangeContextForIssue(i Issue) *issuesapi.ChangeContext 
 
 // ClusterContextForIssues surfaces cross-namespace cluster context (today: the
 // CoreDNS DNS hint) alongside a namespace-scoped issue query. canReadCoreDNS
-// gates that disclosure: the CoreDNS findings reference kube-system resources, so
-// a caller scoped to other namespaces must not learn kube-system/CoreDNS state
-// it can't read directly. A nil predicate means no auth gate (local/no-auth),
-// matching s.canRead / canReadInNamespace passthrough semantics.
-func (p *CacheProvider) ClusterContextForIssues(namespaces []string, canReadCoreDNS func() bool) *issuesapi.ClusterContext {
-	if canReadCoreDNS != nil && !canReadCoreDNS() {
+// gates kube-system disclosure by the concrete resource being read. A nil
+// predicate means no auth gate (local/no-auth), matching s.canRead /
+// canReadInNamespace passthrough semantics.
+func (p *CacheProvider) ClusterContextForIssues(namespaces []string, canReadCoreDNS func(group, resource string) bool) *issuesapi.ClusterContext {
+	access := coreDNSAccess{configMaps: true, deployments: true, replicaSets: true}
+	if canReadCoreDNS != nil {
+		access = coreDNSAccess{
+			configMaps:  canReadCoreDNS("", "configmaps"),
+			deployments: canReadCoreDNS("apps", "deployments"),
+			replicaSets: canReadCoreDNS("apps", "replicasets"),
+		}
+	}
+	if !access.configMaps {
 		return nil
 	}
-	dns := p.clusterDNSContext(namespaces)
+	dns := p.clusterDNSContext(namespaces, access)
 	if dns == nil {
 		return nil
 	}
 	return &issuesapi.ClusterContext{DNS: dns}
 }
 
-func (p *CacheProvider) clusterDNSContext(namespaces []string) *issuesapi.ClusterDNSContext {
+func (p *CacheProvider) clusterDNSContext(namespaces []string, access coreDNSAccess) *issuesapi.ClusterDNSContext {
 	if p == nil || p.cache == nil {
 		return nil
 	}
@@ -184,7 +197,7 @@ func (p *CacheProvider) clusterDNSContext(namespaces []string) *issuesapi.Cluste
 	if len(findings) == 0 {
 		return nil
 	}
-	signals := p.clusterDNSSignals(namespaces)
+	signals := p.clusterDNSSignals(namespaces, access)
 	if len(signals) == 0 {
 		return nil
 	}
@@ -213,7 +226,7 @@ func (p *CacheProvider) clusterDNSContext(namespaces []string) *issuesapi.Cluste
 	return out
 }
 
-func (p *CacheProvider) clusterDNSSignals(namespaces []string) []string {
+func (p *CacheProvider) clusterDNSSignals(namespaces []string, access coreDNSAccess) []string {
 	seen := map[string]bool{}
 	var out []string
 	add := func(s string) {
@@ -223,8 +236,10 @@ func (p *CacheProvider) clusterDNSSignals(namespaces []string) []string {
 		seen[s] = true
 		out = append(out, s)
 	}
-	for _, s := range p.coreDNSControlPlaneChangeSignals() {
-		add(s)
+	if access.deployments && access.replicaSets {
+		for _, s := range p.coreDNSControlPlaneChangeSignals() {
+			add(s)
+		}
 	}
 	for _, s := range p.namespaceDNSSymptomSignals(namespaces) {
 		add(s)

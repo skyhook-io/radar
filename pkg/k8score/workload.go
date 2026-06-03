@@ -51,6 +51,7 @@ type ApplyResourceOptions struct {
 	Mode              string // "apply" (server-side apply, default) or "create" (strict create)
 	DryRun            bool   // Validate without persisting
 	NamespaceOverride string // If set, overrides the namespace in the YAML
+	Force             bool   // Force SSA field ownership conflicts
 }
 
 // ApplyResourceResult contains the result of a create/apply operation.
@@ -289,7 +290,7 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 
 	applied, err := client.Patch(ctx, name, types.ApplyPatchType, objJSON, metav1.PatchOptions{
 		FieldManager: "radar",
-		Force:        boolPtr(true),
+		Force:        boolPtr(opts.Force),
 		DryRun:       dryRun,
 	})
 	if err != nil {

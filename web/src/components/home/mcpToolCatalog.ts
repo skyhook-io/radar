@@ -253,13 +253,14 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   {
     name: 'apply_resource',
     write: true,
-    desc: 'Create or update a resource from YAML. apply mode is server-side apply with Force=true; create mode fails if it exists. Multi-document YAML returns per-document status on partial failure.',
+    desc: 'Create or update a resource from YAML. apply mode is server-side apply and reports field ownership conflicts by default; create mode fails if it exists. Multi-document YAML returns per-document status on partial failure.',
     params: [
       { arg: 'yaml', required: true, desc: 'YAML manifest (multi-document with --- supported)' },
       { arg: 'mode', desc: 'apply (default) or create' },
       { arg: 'dry_run', desc: 'validate and preview without persisting' },
       { arg: 'namespace', desc: 'override namespace for the resource' },
       { arg: 'verify', desc: 'return post-mutation state; on dry_run return preview diff (default true)' },
+      { arg: 'force', desc: 'force SSA field ownership conflicts and take ownership from other managers (default false)' },
     ],
   },
   {

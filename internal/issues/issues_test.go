@@ -816,8 +816,15 @@ func TestClusterDNSContextFiresOnSuspiciousCoreDNSAndRecentRollout(t *testing.T)
 
 	// A caller that can't read kube-system CoreDNS sources must not learn its
 	// suspicious state via the cluster-context side channel.
-	if denied := provider.ClusterContextForIssues([]string{"prod"}, func() bool { return false }); denied != nil {
+	if denied := provider.ClusterContextForIssues([]string{"prod"}, func(string, string) bool { return false }); denied != nil {
 		t.Fatalf("cluster DNS context must be suppressed when caller can't read CoreDNS: %+v", denied)
+	}
+
+	configMapOnly := provider.ClusterContextForIssues([]string{"prod"}, func(group, resource string) bool {
+		return group == "" && resource == "configmaps"
+	})
+	if configMapOnly != nil {
+		t.Fatalf("rollout-only DNS context must be suppressed without Deployment/ReplicaSet access: %+v", configMapOnly)
 	}
 }
 

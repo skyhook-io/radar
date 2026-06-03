@@ -269,29 +269,31 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 			})
 		}
 	}
-	resp.DNSContext = dnsContextForDiagnose(cache, obj, pods, resp.LogsCurrent, resp.LogsPrevious, resp.Events)
+	resp.DNSContext = dnsContextForDiagnose(ctx, cache, obj, pods, resp.LogsCurrent, resp.LogsPrevious, resp.Events)
 	resp.Warnings = k8score.EnrichRuntimeObjectWarnings(obj)
 	return toJSONResult(resp)
 }
 
-func dnsContextForDiagnose(cache *k8s.ResourceCache, obj any, pods []*corev1.Pod, current, previous []podLogEntry, events []aicontext.DeduplicatedEvent) *diagnoseDNSContext {
+func dnsContextForDiagnose(ctx context.Context, cache *k8s.ResourceCache, obj any, pods []*corev1.Pod, current, previous []podLogEntry, events []aicontext.DeduplicatedEvent) *diagnoseDNSContext {
 	signals := diagnoseDNSSignals(obj, pods, current, previous, events)
 	if len(signals) == 0 {
 		return nil
 	}
-	findings := k8s.DetectSuspiciousCoreDNS(cache, time.Now())
 	out := &diagnoseDNSContext{Signals: signals}
-	for _, f := range findings {
-		out.CoreDNSFindings = append(out.CoreDNSFindings, diagnoseDNSFinding{
-			Kind:      f.Kind,
-			Namespace: f.Namespace,
-			Name:      f.Name,
-			Severity:  f.Severity,
-			Reason:    f.Reason,
-			Message:   f.Message,
-		})
-		if len(out.CoreDNSFindings) >= 5 {
-			break
+	if canReadInNamespace(ctx, "", "configmaps", "kube-system", "list") {
+		findings := k8s.DetectSuspiciousCoreDNS(cache, time.Now())
+		for _, f := range findings {
+			out.CoreDNSFindings = append(out.CoreDNSFindings, diagnoseDNSFinding{
+				Kind:      f.Kind,
+				Namespace: f.Namespace,
+				Name:      f.Name,
+				Severity:  f.Severity,
+				Reason:    f.Reason,
+				Message:   f.Message,
+			})
+			if len(out.CoreDNSFindings) >= 5 {
+				break
+			}
 		}
 	}
 	return out
