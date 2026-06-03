@@ -18,7 +18,10 @@ import (
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
-const clusterDNSContextRecentWindow = 30 * time.Minute
+const (
+	clusterDNSContextRecentWindow = 30 * time.Minute
+	maxDNSNamespaceSymptomScans   = 50
+)
 
 // CacheProvider adapts radar's in-process caches to the Provider
 // interface. Uses the package-level singletons (k8s.GetResourceCache,
@@ -156,7 +159,16 @@ func (p *CacheProvider) ChangeContextForIssue(i Issue) *issuesapi.ChangeContext 
 	return deploymentChangeContext(p.cache, i.Namespace, i.Name)
 }
 
-func (p *CacheProvider) ClusterContextForIssues(namespaces []string) *issuesapi.ClusterContext {
+// ClusterContextForIssues surfaces cross-namespace cluster context (today: the
+// CoreDNS DNS hint) alongside a namespace-scoped issue query. canReadCoreDNS
+// gates that disclosure: the CoreDNS findings reference kube-system resources, so
+// a caller scoped to other namespaces must not learn kube-system/CoreDNS state
+// it can't read directly. A nil predicate means no auth gate (local/no-auth),
+// matching s.canRead / canReadInNamespace passthrough semantics.
+func (p *CacheProvider) ClusterContextForIssues(namespaces []string, canReadCoreDNS func() bool) *issuesapi.ClusterContext {
+	if canReadCoreDNS != nil && !canReadCoreDNS() {
+		return nil
+	}
 	dns := p.clusterDNSContext(namespaces)
 	if dns == nil {
 		return nil
@@ -246,6 +258,9 @@ func (p *CacheProvider) namespaceDNSSymptomSignals(namespaces []string) []string
 	if p == nil || p.cache == nil || p.cache.Events() == nil {
 		return nil
 	}
+	if len(namespaces) == 0 {
+		namespaces = p.namespacesForDNSSymptomScan()
+	}
 	var out []string
 	checkNamespace := func(ns string) {
 		events, err := p.cache.Events().Events(ns).List(labels.Everything())
@@ -271,6 +286,37 @@ func (p *CacheProvider) namespaceDNSSymptomSignals(namespaces []string) []string
 		}
 	}
 	return out
+}
+
+func (p *CacheProvider) namespacesForDNSSymptomScan() []string {
+	if p == nil || p.cache == nil || p.cache.Namespaces() == nil {
+		return nil
+	}
+	items, err := p.cache.Namespaces().List(labels.Everything())
+	if err != nil {
+		return nil
+	}
+	names := make([]string, 0, len(items))
+	for _, ns := range items {
+		if ns == nil || !dnsSymptomNamespace(ns.Name) {
+			continue
+		}
+		names = append(names, ns.Name)
+	}
+	sort.Strings(names)
+	if len(names) > maxDNSNamespaceSymptomScans {
+		names = names[:maxDNSNamespaceSymptomScans]
+	}
+	return names
+}
+
+func dnsSymptomNamespace(namespace string) bool {
+	switch namespace {
+	case "", "kube-system", "kube-public", "kube-node-lease":
+		return false
+	default:
+		return true
+	}
 }
 
 func observedCoreDNSConfigMapChangeSignal() string {

@@ -95,7 +95,9 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	// Shared response shape (issues.ListResponse) so /api/issues and the MCP
 	// issues tool can't drift; the hub mirrors one shape.
 	resp := issues.NewListResponse(out, stats)
-	resp.ClusterContext = provider.ClusterContextForIssues(namespaces)
+	resp.ClusterContext = provider.ClusterContextForIssues(namespaces, func() bool {
+		return s.canRead(r, "", "configmaps", "kube-system", "list")
+	})
 	if result := k8s.GetCachedPermissionResult(); result != nil {
 		if visibility := k8s.BuildVisibilitySummary(result, k8s.VisibilityNamespace(namespaces)); visibility != nil {
 			resp.Visibility = visibility

@@ -711,8 +711,40 @@ func TestClusterDNSContextRequiresTriggerSignal(t *testing.T) {
 	}
 	provider := &CacheProvider{cache: k8s.GetResourceCache()}
 
-	if got := provider.ClusterContextForIssues([]string{"prod"}); got != nil {
+	if got := provider.ClusterContextForIssues([]string{"prod"}, nil); got != nil {
 		t.Fatalf("static suspicious CoreDNS config should not produce cluster context without symptoms/change evidence: %+v", got)
+	}
+}
+
+func TestClusterDNSContextScansAllNamespacesForSymptoms(t *testing.T) {
+	defer k8s.ResetTestState()
+
+	client := fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "prod"}},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "kube-system"},
+			Data: map[string]string{
+				"Corefile": ".:53 {\n  template ANY svc.cluster.local {\n    rcode NXDOMAIN\n  }\n}\n",
+			},
+		},
+		&corev1.Event{
+			ObjectMeta: metav1.ObjectMeta{Name: "dns-failure", Namespace: "prod"},
+			Type:       corev1.EventTypeWarning,
+			Reason:     "Failed",
+			Message:    "lookup checkout.prod.svc.cluster.local: no such host",
+		},
+	)
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	provider := &CacheProvider{cache: k8s.GetResourceCache()}
+
+	got := provider.ClusterContextForIssues(nil, nil)
+	if got == nil || got.DNS == nil || len(got.DNS.Signals) == 0 {
+		t.Fatalf("cluster DNS context = %+v, want namespace DNS symptom signal", got)
+	}
+	if !strings.Contains(strings.Join(got.DNS.Signals, " "), "namespace prod") {
+		t.Fatalf("cluster DNS signals = %+v, want prod namespace symptom", got.DNS.Signals)
 	}
 }
 
@@ -774,12 +806,18 @@ func TestClusterDNSContextFiresOnSuspiciousCoreDNSAndRecentRollout(t *testing.T)
 	}
 	provider := &CacheProvider{cache: k8s.GetResourceCache()}
 
-	got := provider.ClusterContextForIssues([]string{"prod"})
+	got := provider.ClusterContextForIssues([]string{"prod"}, nil)
 	if got == nil || got.DNS == nil || len(got.DNS.Findings) != 1 || len(got.DNS.Signals) == 0 {
 		t.Fatalf("cluster DNS context = %+v, want DNS finding with rollout signal", got)
 	}
 	if !strings.Contains(got.DNS.Signals[0], "CoreDNS Deployment") || !strings.Contains(got.DNS.Hint, "CoreDNS NXDOMAIN override") {
 		t.Fatalf("cluster DNS context = %+v, want directive CoreDNS rollout hint", got.DNS)
+	}
+
+	// A caller that can't read kube-system CoreDNS sources must not learn its
+	// suspicious state via the cluster-context side channel.
+	if denied := provider.ClusterContextForIssues([]string{"prod"}, func() bool { return false }); denied != nil {
+		t.Fatalf("cluster DNS context must be suppressed when caller can't read CoreDNS: %+v", denied)
 	}
 }
 

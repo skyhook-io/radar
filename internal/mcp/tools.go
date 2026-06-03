@@ -2463,7 +2463,9 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	// Shared response shape (issues.ListResponse) — identical to /api/issues so
 	// HTTP and MCP can't drift.
 	resp := issues.NewListResponse(out, stats)
-	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces)
+	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces, func() bool {
+		return canReadInNamespace(ctx, "", "configmaps", "kube-system", "list")
+	})
 	// Steering hint when the issue list was capped (MCP-only).
 	if stats.TotalMatched > len(out) {
 		resp.NarrowHint = fmt.Sprintf(
