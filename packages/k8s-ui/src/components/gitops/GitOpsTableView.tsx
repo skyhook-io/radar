@@ -202,6 +202,14 @@ export interface GitOpsTableViewProps {
   emptyStateTitle?: string
   emptyStateBody?: string
   /**
+   * Which side the filter rail sits on. Default 'left' (OSS Radar, which
+   * has no app sidebar). A host with its own left navigation rail (the
+   * Cloud hub) passes 'right' so the GitOps filters don't stack a second
+   * column against that nav and instead match the host's other faceted
+   * pages. Mobile stacking (filters above the table) is unaffected.
+   */
+  filtersSide?: 'left' | 'right'
+  /**
    * Global namespace pick from the host's NamespaceSwitcher. Used to
    * surface "viewing in namespace: X" context and to power the Clear
    * filters affordance when no rows match. Host owns the state; shared
@@ -249,6 +257,7 @@ export function GitOpsTableView({
   onClearNamespaces,
   onRowAction,
   pendingRowActions,
+  filtersSide = 'left',
 }: GitOpsTableViewProps) {
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [mode, setMode] = useState<GitOpsMode>('applications')
@@ -492,8 +501,13 @@ export function GitOpsTableView({
   ]
 
   return (
-    <div className="flex h-full min-w-0 flex-1 overflow-hidden bg-theme-base max-lg:flex-col">
+    <div
+      className={`flex h-full min-w-0 flex-1 overflow-hidden bg-theme-base max-lg:flex-col ${
+        filtersSide === 'right' ? 'lg:flex-row-reverse' : ''
+      }`}
+    >
       <GitOpsFilterSidebar
+        side={filtersSide}
         mode={mode}
         onModeChange={setMode}
         modeCounts={modeCounts}
@@ -707,6 +721,7 @@ export function GitOpsTableView({
 // =============================================================================
 
 function GitOpsFilterSidebar({
+  side,
   mode,
   onModeChange,
   modeCounts,
@@ -729,6 +744,7 @@ function GitOpsFilterSidebar({
   onToggleNamespace,
   onClear,
 }: {
+  side: 'left' | 'right'
   mode: GitOpsMode
   onModeChange: (mode: GitOpsMode) => void
   modeCounts: Record<GitOpsMode, number>
@@ -752,7 +768,11 @@ function GitOpsFilterSidebar({
   onClear: () => void
 }) {
   return (
-    <aside className="flex w-72 shrink-0 flex-col overflow-hidden border-r border-theme-border bg-theme-surface/90 max-lg:max-h-72 max-lg:w-full max-lg:border-b max-lg:border-r-0">
+    <aside
+      className={`flex w-72 shrink-0 flex-col overflow-hidden border-theme-border bg-theme-surface/90 max-lg:max-h-72 max-lg:w-full max-lg:border-b ${
+        side === 'right' ? 'border-l max-lg:border-l-0' : 'border-r max-lg:border-r-0'
+      }`}
+    >
       <div className="flex items-center justify-between border-b border-theme-border px-3 py-2">
         <span className="text-sm font-medium text-theme-text-secondary">GitOps Filters</span>
         <button type="button" onClick={onClear} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">
