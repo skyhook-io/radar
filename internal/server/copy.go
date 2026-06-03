@@ -528,7 +528,7 @@ func classifyExecError(findErr, lsErr string) string {
 
 // shellQuote wraps a string in single quotes for safe use in sh -c commands.
 // Single quotes inside the string are escaped by ending the quote, adding an
-// escaped single quote, and re-opening the quote: ' → '\''
+// escaped single quote, and re-opening the quote.
 func shellQuote(s string) string {
 	return "'" + strings.ReplaceAll(s, "'", "'\\''") + "'"
 }

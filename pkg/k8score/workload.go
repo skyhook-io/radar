@@ -259,11 +259,13 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 	// resource is being newly created, and other errors shouldn't block the
 	// apply itself.
 	var pre *unstructured.Unstructured
+	var preGetErr error
 	if !opts.DryRun {
 		got, getErr := client.Get(ctx, name, metav1.GetOptions{})
 		if getErr == nil {
 			pre = got
 		} else if !apierrors.IsNotFound(getErr) {
+			preGetErr = getErr
 			log.Printf("[k8s] apply_resource: pre-apply GET %s/%s/%s failed: %v", kind, ns, name, getErr)
 		}
 	}
@@ -314,6 +316,14 @@ func (m *WorkloadManager) ApplyResource(ctx context.Context, opts ApplyResourceO
 		} else {
 			log.Printf("[k8s] apply_resource: post-apply GET %s/%s/%s failed: %v", kind, ns, name, getErr)
 		}
+	}
+
+	// A non-NotFound pre-apply GET error means the object likely existed but we
+	// couldn't read it, so field-retention can't be diffed (pre is nil). Tell the
+	// agent the verification was skipped rather than letting silence imply a clean
+	// apply — a partial manifest may have dropped fields without warning.
+	if !opts.DryRun && pre == nil && preGetErr != nil {
+		result.Warnings = append(result.Warnings, "Pre-apply GET failed; Radar could not compute field-retention warnings — a partial manifest may have silently dropped fields.")
 	}
 
 	m.populateApplyWarnings(ctx, result, obj, pre, post, ns, kind, name, opts.DryRun)

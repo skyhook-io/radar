@@ -233,13 +233,21 @@ func verifyJSONPatchOperations(before, after *unstructured.Unstructured, ops []j
 				break
 			}
 			var want any
-			if len(op.Value) > 0 && json.Unmarshal(op.Value, &want) == nil {
-				entry["value_matched"] = afterFound && reflect.DeepEqual(normalizeJSONNumber(afterVal), normalizeJSONNumber(want))
+			haveWant := len(op.Value) > 0 && json.Unmarshal(op.Value, &want) == nil
+			matched := afterFound && haveWant && reflect.DeepEqual(normalizeJSONNumber(afterVal), normalizeJSONNumber(want))
+			if haveWant {
+				entry["value_matched"] = matched
 			}
-			if afterFound {
-				entry["status"] = "present"
-			} else {
+			switch {
+			case !afterFound:
 				entry["status"] = "missing_after"
+			case haveWant && !matched:
+				// Path exists but the live value differs from what we set
+				// (defaulting webhook, another field manager, etc.) — don't let
+				// "present" read as a confirmed apply.
+				entry["status"] = "present_value_mismatch"
+			default:
+				entry["status"] = "present"
 			}
 		default:
 			entry["status"] = "not_checked"

@@ -278,6 +278,22 @@ func TestVerifyJSONPatchOperationsNestedNumbers(t *testing.T) {
 	}
 }
 
+func TestVerifyJSONPatchOperationsPresentValueMismatch(t *testing.T) {
+	after := &unstructured.Unstructured{Object: map[string]any{
+		"spec": map[string]any{"dnsPolicy": "None"},
+	}}
+	ops := []jsonPatchOperation{{
+		Op:    "replace",
+		Path:  "/spec/dnsPolicy",
+		Value: json.RawMessage(`"ClusterFirst"`),
+	}}
+
+	got := verifyJSONPatchOperations(nil, after, ops, "")
+	if got[0]["status"] != "present_value_mismatch" || got[0]["value_matched"] != false {
+		t.Fatalf("replace verification = %#v, want present_value_mismatch + value_matched=false", got[0])
+	}
+}
+
 func TestGetJSONPointerValueEscaping(t *testing.T) {
 	obj := &unstructured.Unstructured{Object: map[string]any{
 		"metadata": map[string]any{
