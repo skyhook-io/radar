@@ -290,6 +290,67 @@ func TestDetectProblems_ConfigSignals(t *testing.T) {
 		}
 	})
 
+	t.Run("cronjob env service port mismatch becomes issue when owned job failed", func(t *testing.T) {
+		defer ResetTestState()
+
+		controller := true
+		blockOwnerDeletion := true
+		client := fake.NewClientset(
+			&batchv1.CronJob{
+				ObjectMeta: metav1.ObjectMeta{Name: "sync", Namespace: "prod", UID: "cronjob-1", CreationTimestamp: metav1.NewTime(time.Now().Add(-5 * time.Minute))},
+				Spec: batchv1.CronJobSpec{
+					JobTemplate: batchv1.JobTemplateSpec{
+						Spec: batchv1.JobSpec{
+							Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+								RestartPolicy: corev1.RestartPolicyNever,
+								Containers: []corev1.Container{{
+									Name: "app",
+									Env: []corev1.EnvVar{{
+										Name:  "PRODUCT_CATALOG_ADDR",
+										Value: "product-catalog:8082",
+									}},
+								}},
+							}},
+						},
+					},
+				},
+			},
+			&batchv1.Job{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "sync-123",
+					Namespace: "prod",
+					OwnerReferences: []metav1.OwnerReference{{
+						APIVersion:         "batch/v1",
+						Kind:               "CronJob",
+						Name:               "sync",
+						UID:                "cronjob-1",
+						Controller:         &controller,
+						BlockOwnerDeletion: &blockOwnerDeletion,
+					}},
+				},
+				Status: batchv1.JobStatus{
+					Failed: 1,
+					Conditions: []batchv1.JobCondition{{
+						Type:   batchv1.JobFailed,
+						Status: corev1.ConditionTrue,
+					}},
+				},
+			},
+			&corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "product-catalog", Namespace: "prod"},
+				Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 8080}}},
+			},
+		)
+		if err := InitTestResourceCache(client); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+
+		p := waitForProblem(t, "prod", "Service port mismatch")
+		if p.Kind != "CronJob" || p.Name != "sync" || !strings.Contains(p.Message, "product-catalog:8082") {
+			t.Fatalf("CronJob env Service mismatch problem = %+v", p)
+		}
+	})
+
 	t.Run("missing env service ref becomes warning issue even when caller is healthy", func(t *testing.T) {
 		defer ResetTestState()
 

@@ -318,7 +318,9 @@ func envServiceWorkloadByName(cache *ResourceCache, kind, namespace, name string
 	case "CronJob":
 		if l := cache.CronJobs(); l != nil {
 			if cj, err := l.CronJobs(namespace).Get(name); err == nil {
-				return envServiceWorkloadForCronJob(cj), true
+				wl := envServiceWorkloadForCronJob(cj)
+				wl.degraded = cronJobEnvServiceRefsDegraded(cache, cj)
+				return wl, true
 			}
 		}
 	}
@@ -410,6 +412,27 @@ func jobEnvServiceRefsDegraded(j *batchv1.Job) bool {
 	}
 	for _, cond := range j.Status.Conditions {
 		if cond.Type == batchv1.JobFailed && cond.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
+}
+
+func cronJobEnvServiceRefsDegraded(cache *ResourceCache, cj *batchv1.CronJob) bool {
+	if cache == nil || cj == nil || cache.Jobs() == nil {
+		return false
+	}
+	jobs, err := cache.Jobs().Jobs(cj.Namespace).List(labels.Everything())
+	if err != nil {
+		logConfigListError("Job", cj.Namespace, err)
+		return false
+	}
+	for _, job := range jobs {
+		controller := metav1.GetControllerOf(job)
+		if controller == nil || controller.Kind != "CronJob" || controller.Name != cj.Name {
+			continue
+		}
+		if jobEnvServiceRefsDegraded(job) {
 			return true
 		}
 	}
