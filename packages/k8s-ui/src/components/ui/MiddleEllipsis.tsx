@@ -64,8 +64,21 @@ export function MiddleEllipsis({ text, className, title, onTruncatedChange }: Mi
       // ctx.measureText says 173.4px and clientWidth rounds to 173 — the
       // integer comparison decides we don't fit and middle-truncates a
       // name that visually would have rendered fine.
-      const width = node.getBoundingClientRect().width
-      if (width <= 0) return
+      const rawWidth = node.getBoundingClientRect().width
+      if (rawWidth <= 0) return
+      // getBoundingClientRect() returns the *rendered* width, which a CSS
+      // transform on this node or any ancestor scales — e.g. the `scale()` in a
+      // menu/popup/dialog entry animation. Measuring during that animation
+      // compares a visually-shrunk container against unscaled canvas text
+      // (measureText is transform-independent) and middle-truncates a name that
+      // actually fits. Worse, a transform never changes the layout box, so the
+      // ResizeObserver below doesn't fire to re-measure once the animation
+      // settles — the wrong truncation then sticks. Divide out the cumulative
+      // ancestor scaleX to recover the unscaled (still subpixel) layout width.
+      // With no transform the scale is 1 and this is a no-op, so the just-fits
+      // subpixel precision noted above is preserved.
+      const scaleX = cumulativeScaleX(node)
+      const width = scaleX > 0 ? rawWidth / scaleX : rawWidth
       const cs = window.getComputedStyle(node)
       // Include fontStyle in the shorthand so italic faces measure correctly.
       // If the assignment ever silently fails (malformed family quoting,
@@ -126,6 +139,29 @@ export function MiddleEllipsis({ text, className, title, onTruncatedChange }: Mi
       </span>
     </span>
   )
+}
+
+// Cumulative horizontal scale applied to `el` by CSS transforms on it and its
+// ancestors. Used to convert a transform-scaled getBoundingClientRect() width
+// back to the unscaled layout width, so a `scale()` entry animation on an
+// ancestor (menu/popup/dialog) can't make text middle-truncate when it would
+// otherwise fit. Reads the computed transform matrix's scaleX (`a`) at each
+// level — exact for the scale()/translate() animations this guards against
+// (no rotation, where `a` would fold in cos θ). Returns 1 when nothing in the
+// chain is transformed, making the caller a no-op in the common case.
+function cumulativeScaleX(el: HTMLElement | null): number {
+  let scale = 1
+  for (let cur: HTMLElement | null = el; cur; cur = cur.parentElement) {
+    const t = window.getComputedStyle(cur).transform
+    if (t && t !== 'none') {
+      try {
+        scale *= new DOMMatrixReadOnly(t).a
+      } catch {
+        // Unparseable transform value — skip this level rather than throw.
+      }
+    }
+  }
+  return scale
 }
 
 // Binary-search the largest `n` such that `prefix(n) + … + suffix(n)` fits
