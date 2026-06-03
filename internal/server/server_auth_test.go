@@ -117,9 +117,9 @@ func TestHandleAuthMe_CloudUser_ExposesCloudRole(t *testing.T) {
 
 func TestParseNamespaces(t *testing.T) {
 	tests := []struct {
-		name   string
-		query  string
-		want   []string
+		name    string
+		query   string
+		want    []string
 		wantNil bool
 	}{
 		{"no params", "", nil, true},

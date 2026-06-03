@@ -39,12 +39,12 @@ func TestSummarizeControllerForDashboard(t *testing.T) {
 	probe := gitopsControllerProbe{Name: "argocd-application-controller", Tool: ctrlToolArgoCD, Namespace: "argocd"}
 
 	tests := []struct {
-		name        string
-		pods        []*corev1.Pod
-		wantStatus  string
-		wantReady   int
-		wantTotal   int
-		wantCrash   string
+		name       string
+		pods       []*corev1.Pod
+		wantStatus string
+		wantReady  int
+		wantTotal  int
+		wantCrash  string
 	}{
 		{
 			name:       "single ready pod is healthy",

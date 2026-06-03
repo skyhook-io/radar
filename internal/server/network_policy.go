@@ -24,7 +24,7 @@ type PolicyEvaluation struct {
 type PolicyMatch struct {
 	Name      string `json:"name"`
 	Namespace string `json:"namespace,omitempty"`
-	Kind      string `json:"kind"` // "NetworkPolicy", "CiliumNetworkPolicy", etc.
+	Kind      string `json:"kind"`   // "NetworkPolicy", "CiliumNetworkPolicy", etc.
 	Effect    string `json:"effect"` // "allow", "deny"
 	Reason    string `json:"reason"` // human-readable explanation
 }

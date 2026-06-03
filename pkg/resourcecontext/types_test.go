@@ -270,4 +270,3 @@ func TestManagedByRefDistinguishesFluxKinds(t *testing.T) {
 		t.Errorf("HelmRelease JSON missing kind: %s", hJSON)
 	}
 }
-

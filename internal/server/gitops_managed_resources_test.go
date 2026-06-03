@@ -12,12 +12,12 @@ import "testing"
 // The list answers "which Kinds does Argo NEVER stamp with the tracking
 // annotation, so they'd never match anyway and just slow down the scan?"
 // Two categories:
-//   1. Descendants — owned by Argo-managed resources, walked from owners
-//      by the tree builder (Pod, ReplicaSet, ControllerRevision,
-//      Endpoints, EndpointSlice).
-//   2. Platform-internal noise — never user-managed (Event, Lease,
-//      FlowSchema, PriorityLevelConfiguration, TokenRequest, the *Review
-//      subject-action stubs, Binding).
+//  1. Descendants — owned by Argo-managed resources, walked from owners
+//     by the tree builder (Pod, ReplicaSet, ControllerRevision,
+//     Endpoints, EndpointSlice).
+//  2. Platform-internal noise — never user-managed (Event, Lease,
+//     FlowSchema, PriorityLevelConfiguration, TokenRequest, the *Review
+//     subject-action stubs, Binding).
 //
 // NOT a security boundary — filterGitOpsTreeForUser is what gates what
 // each caller sees per-resource.

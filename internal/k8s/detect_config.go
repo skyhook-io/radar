@@ -180,11 +180,23 @@ func findEnvServiceRefChecks(cache *ResourceCache, workloads []envServiceWorkloa
 		containers = append(containers, wl.spec.InitContainers...)
 		containers = append(containers, wl.spec.Containers...)
 		for _, c := range containers {
+			portByPrefix := containerPortIndex(c.Env)
 			for _, env := range c.Env {
 				if !serviceRefEnvName(env.Name) || env.Value == "" {
 					continue
 				}
-				ref, ok := parseEnvServiceRef(env.Value, wl.namespace)
+				value := env.Value
+				// Split _HOST + _PORT pattern: FLAGD_HOST=flagd + FLAGD_PORT=8013
+				// parseEnvServiceRef requires host:port, so synthesize when the host
+				// value has no port of its own and a matching _PORT sibling exists.
+				// Skip when the value already carries a port/scheme (contains ':'),
+				// otherwise we'd produce host:port:port and drop a valid reference.
+				if strings.HasSuffix(strings.ToUpper(env.Name), "_HOST") && !strings.Contains(value, ":") {
+					if port, ok := portByPrefix[hostEnvPrefix(env.Name)]; ok {
+						value = value + ":" + port
+					}
+				}
+				ref, ok := parseEnvServiceRef(value, wl.namespace)
 				if !ok {
 					continue
 				}
@@ -553,6 +565,35 @@ func logConfigListError(kind, namespace string, err error) {
 func serviceRefEnvName(name string) bool {
 	n := strings.ToUpper(name)
 	return strings.HasSuffix(n, "_ADDR") || strings.HasSuffix(n, "_URL") || strings.HasSuffix(n, "_HOST") || strings.HasSuffix(n, "_ENDPOINT")
+}
+
+// hostEnvPrefix returns the prefix before the "_HOST" suffix, preserving original case.
+// e.g. "FLAGD_HOST" → "FLAGD", "MyService_HOST" → "MyService"
+func hostEnvPrefix(name string) string {
+	return name[:len(name)-len("_HOST")]
+}
+
+// containerPortIndex builds a map from env-name-prefix → port-string for all
+// _PORT vars in a container whose value is a valid port number. Used to pair
+// FOO_HOST + FOO_PORT into a single host:port reference.
+func containerPortIndex(envs []corev1.EnvVar) map[string]string {
+	m := make(map[string]string)
+	for _, e := range envs {
+		if e.Value == "" {
+			continue
+		}
+		upper := strings.ToUpper(e.Name)
+		if !strings.HasSuffix(upper, "_PORT") {
+			continue
+		}
+		port, err := strconv.ParseInt(strings.TrimSpace(e.Value), 10, 32)
+		if err != nil || port <= 0 || port > 65535 {
+			continue
+		}
+		prefix := e.Name[:len(e.Name)-len("_PORT")]
+		m[prefix] = e.Value
+	}
+	return m
 }
 
 func parseEnvServiceRef(value, defaultNamespace string) (envServiceRef, bool) {

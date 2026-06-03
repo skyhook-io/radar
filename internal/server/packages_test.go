@@ -402,4 +402,3 @@ func sourceCodesEqual(a, b []packages.SourceCode) bool {
 	}
 	return true
 }
-

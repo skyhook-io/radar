@@ -54,7 +54,7 @@ var (
 	// destroyed clusters / removed contexts linger in the dropdown
 	// (they only error out when the user tries to switch to them).
 	// Same lifecycle / lock as perFileConfigs.
-	perFileMtimes           map[string]time.Time
+	perFileMtimes     map[string]time.Time
 	contextName       string
 	clusterName       string
 	contextNamespace  string // Default namespace from kubeconfig context

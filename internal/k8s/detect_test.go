@@ -568,6 +568,215 @@ func TestParseEnvServiceRefTrimsSuffixes(t *testing.T) {
 	}
 }
 
+func TestFindEnvServiceRefChecks_SplitHostPort(t *testing.T) {
+	// findEnvServiceRefChecks only emits checks for broken references
+	// (missing_service, port_mismatch, cross_namespace_unverified). Valid
+	// connections are silent. These sub-tests confirm that the _HOST + _PORT
+	// pairing correctly synthesises host:port before the resolution step, so
+	// broken split-config patterns surface the same way broken combined ones do.
+
+	t.Run("missing service detected via split host+port", func(t *testing.T) {
+		defer ResetTestState()
+		replicas := int32(1)
+		// flagd Service does NOT exist — expect missing_service on FLAGD_HOST.
+		client := fake.NewClientset(&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:              "frontend",
+				Namespace:         "prod",
+				CreationTimestamp: metav1.NewTime(time.Now().Add(-5 * time.Minute)),
+			},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &replicas,
+				Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+					Name: "app",
+					Env: []corev1.EnvVar{
+						{Name: "FLAGD_HOST", Value: "flagd"},
+						{Name: "FLAGD_PORT", Value: "8013"},
+						// unpaired _HOST with no port — must not produce a check
+						{Name: "ORPHAN_HOST", Value: "some-host"},
+					},
+				}}}},
+			},
+			Status: appsv1.DeploymentStatus{
+				UnavailableReplicas: 1,
+				Conditions:          []appsv1.DeploymentCondition{{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse}},
+			},
+		})
+		if err := InitTestResourceCache(client); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+		c := waitForEnvServiceCheck(t, "prod", "missing_service")
+		if c.EnvName != "FLAGD_HOST" {
+			t.Errorf("EnvName = %q, want FLAGD_HOST", c.EnvName)
+		}
+		if c.ServiceName != "flagd" {
+			t.Errorf("ServiceName = %q, want flagd", c.ServiceName)
+		}
+		if c.ReferencedPort != 8013 {
+			t.Errorf("ReferencedPort = %d, want 8013", c.ReferencedPort)
+		}
+	})
+
+	t.Run("port mismatch detected via split host+port", func(t *testing.T) {
+		defer ResetTestState()
+		replicas := int32(1)
+		// flagd Service exists but on port 9090, not 8013 — expect port_mismatch.
+		client := fake.NewClientset(
+			&appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "frontend",
+					Namespace:         "prod",
+					CreationTimestamp: metav1.NewTime(time.Now().Add(-5 * time.Minute)),
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+					Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name: "app",
+						Env: []corev1.EnvVar{
+							{Name: "FLAGD_HOST", Value: "flagd"},
+							{Name: "FLAGD_PORT", Value: "8013"},
+						},
+					}}}},
+				},
+				Status: appsv1.DeploymentStatus{
+					UnavailableReplicas: 1,
+					Conditions:          []appsv1.DeploymentCondition{{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse}},
+				},
+			},
+			&corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "flagd", Namespace: "prod"},
+				Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 9090}}},
+			},
+		)
+		if err := InitTestResourceCache(client); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+		c := waitForEnvServiceCheck(t, "prod", "port_mismatch")
+		if c.EnvName != "FLAGD_HOST" {
+			t.Errorf("EnvName = %q, want FLAGD_HOST", c.EnvName)
+		}
+		if c.ReferencedPort != 8013 {
+			t.Errorf("ReferencedPort = %d, want 8013", c.ReferencedPort)
+		}
+	})
+
+	t.Run("valid split host+port produces no check", func(t *testing.T) {
+		defer ResetTestState()
+		replicas := int32(1)
+		// flagd Service exists on correct port — no check emitted.
+		client := fake.NewClientset(
+			&appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "frontend",
+					Namespace:         "prod",
+					CreationTimestamp: metav1.NewTime(time.Now().Add(-5 * time.Minute)),
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+					Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name: "app",
+						Env: []corev1.EnvVar{
+							{Name: "FLAGD_HOST", Value: "flagd"},
+							{Name: "FLAGD_PORT", Value: "8013"},
+						},
+					}}}},
+				},
+			},
+			&corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "flagd", Namespace: "prod"},
+				Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 8013}}},
+			},
+		)
+		if err := InitTestResourceCache(client); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+		// Give cache time to sync, then assert no checks.
+		time.Sleep(200 * time.Millisecond)
+		checks := FindEnvServiceRefChecks(GetResourceCache(), "prod")
+		if len(checks) != 0 {
+			t.Errorf("expected no checks for valid split host+port, got %+v", checks)
+		}
+	})
+
+	t.Run("host with embedded port is not double-suffixed by _PORT sibling", func(t *testing.T) {
+		defer ResetTestState()
+		replicas := int32(1)
+		// FLAGD_HOST already carries :9090; a FLAGD_PORT sibling must NOT turn it
+		// into flagd:9090:8013 (which parses as an invalid multi-colon host and
+		// would silently drop the reference). The embedded port wins, so the
+		// mismatch against the Service's 7000 surfaces on port 9090.
+		client := fake.NewClientset(
+			&appsv1.Deployment{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:              "frontend",
+					Namespace:         "prod",
+					CreationTimestamp: metav1.NewTime(time.Now().Add(-5 * time.Minute)),
+				},
+				Spec: appsv1.DeploymentSpec{
+					Replicas: &replicas,
+					Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+						Name: "app",
+						Env: []corev1.EnvVar{
+							{Name: "FLAGD_HOST", Value: "flagd:9090"},
+							{Name: "FLAGD_PORT", Value: "8013"},
+						},
+					}}}},
+				},
+				Status: appsv1.DeploymentStatus{
+					UnavailableReplicas: 1,
+					Conditions:          []appsv1.DeploymentCondition{{Type: appsv1.DeploymentAvailable, Status: corev1.ConditionFalse}},
+				},
+			},
+			&corev1.Service{
+				ObjectMeta: metav1.ObjectMeta{Name: "flagd", Namespace: "prod"},
+				Spec:       corev1.ServiceSpec{Ports: []corev1.ServicePort{{Port: 7000}}},
+			},
+		)
+		if err := InitTestResourceCache(client); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+		c := waitForEnvServiceCheck(t, "prod", "port_mismatch")
+		if c.EnvName != "FLAGD_HOST" {
+			t.Errorf("EnvName = %q, want FLAGD_HOST", c.EnvName)
+		}
+		if c.ReferencedPort != 9090 {
+			t.Errorf("ReferencedPort = %d, want 9090 (embedded port, not the _PORT sibling)", c.ReferencedPort)
+		}
+	})
+}
+
+func TestContainerPortIndex(t *testing.T) {
+	envs := []corev1.EnvVar{
+		{Name: "FLAGD_HOST", Value: "flagd"},
+		{Name: "FLAGD_PORT", Value: "8013"},
+		{Name: "OTEL_COLLECTOR_HOST", Value: "otel-collector"},
+		{Name: "OTEL_COLLECTOR_PORT", Value: "4317"},
+		{Name: "BAD_PORT", Value: "notanumber"},
+		{Name: "ZERO_PORT", Value: "0"},
+		{Name: "HIGH_PORT", Value: "99999"},
+		{Name: "EMPTY_PORT", Value: ""},
+	}
+	idx := containerPortIndex(envs)
+	cases := []struct {
+		prefix string
+		want   string
+		found  bool
+	}{
+		{"FLAGD", "8013", true},
+		{"OTEL_COLLECTOR", "4317", true},
+		{"BAD", "", false},
+		{"ZERO", "", false},
+		{"HIGH", "", false},
+		{"EMPTY", "", false},
+	}
+	for _, tc := range cases {
+		got, ok := idx[tc.prefix]
+		if ok != tc.found || got != tc.want {
+			t.Errorf("containerPortIndex[%q] = (%q, %v), want (%q, %v)", tc.prefix, got, ok, tc.want, tc.found)
+		}
+	}
+}
+
 func TestDetectProblems_OperationalSignals(t *testing.T) {
 	defer ResetTestState()
 

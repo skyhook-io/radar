@@ -35,7 +35,7 @@ type PortForwardSession struct {
 	PodName       string    `json:"podName"`
 	PodPort       int       `json:"podPort"`
 	LocalPort     int       `json:"localPort"`
-	ListenAddress string    `json:"listenAddress"` // "127.0.0.1" or "0.0.0.0"
+	ListenAddress string    `json:"listenAddress"`         // "127.0.0.1" or "0.0.0.0"
 	ServiceName   string    `json:"serviceName,omitempty"` // If forwarding to a service
 	ServicePort   int       `json:"servicePort,omitempty"` // Original service port the user picked, when service-resolved (PodPort holds the resolved container port)
 	Scheme        string    `json:"scheme,omitempty"`      // "https", "http", or "" if unknown
@@ -45,8 +45,8 @@ type PortForwardSession struct {
 
 	cancel     context.CancelFunc
 	stopCh     chan struct{}
-	restConfig *rest.Config          // impersonated or shared config
-	k8sClient  kubernetes.Interface  // impersonated or shared client
+	restConfig *rest.Config         // impersonated or shared config
+	k8sClient  kubernetes.Interface // impersonated or shared client
 }
 
 // PortForwardManager manages active port forward sessions
@@ -514,13 +514,12 @@ func findFreePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-
 // AvailablePort represents a port that can be forwarded
 type AvailablePort struct {
 	Port          int    `json:"port"`
 	Protocol      string `json:"protocol"`
 	ContainerName string `json:"containerName"`
-	Name          string `json:"name,omitempty"` // Named port
+	Name          string `json:"name,omitempty"`   // Named port
 	Scheme        string `json:"scheme,omitempty"` // "https", "http", or "" if unknown
 }
 

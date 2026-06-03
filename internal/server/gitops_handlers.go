@@ -300,10 +300,10 @@ func managedScanKindsFromDiscovery() []managedScanKind {
 //
 // Query params:
 //   - app       (required): Argo Application name. Resources are matched
-//               when annotation argocd.argoproj.io/tracking-id starts with
-//               "<app>:" OR label app.kubernetes.io/instance=<app>.
+//     when annotation argocd.argoproj.io/tracking-id starts with
+//     "<app>:" OR label app.kubernetes.io/instance=<app>.
 //   - namespace (optional): restrict the synthetic root's display ns +
-//               filter matched resources to this namespace.
+//     filter matched resources to this namespace.
 func (s *Server) handleGitOpsManagedResources(w http.ResponseWriter, r *http.Request) {
 	if !s.requireConnected(w) {
 		return

@@ -68,7 +68,7 @@ type BindingRulesJSON struct {
 
 // RoleResponse is the wire shape returned by /api/rbac/role/...
 type RoleResponse struct {
-	Role     rbac.RoleRef       `json:"role"`
+	Role     rbac.RoleRef          `json:"role"`
 	Bindings []BindingWithSubjects `json:"bindings"`
 }
 
@@ -83,20 +83,20 @@ type BindingWithSubjects struct {
 // namespace. Used by NamespaceRenderer to answer "what RBAC is configured
 // here" without forcing the operator to pivot through individual SAs.
 type NamespaceRBACResponse struct {
-	Namespace                            string                `json:"namespace"`
-	RoleBindings                         []BindingWithSubjects `json:"roleBindings"`
-	ClusterRoleBindingsWithLocalSubject  []BindingWithSubjects `json:"clusterRoleBindingsWithLocalSubject"`
-	ServiceAccountCount                  int                   `json:"serviceAccountCount"`
+	Namespace                           string                `json:"namespace"`
+	RoleBindings                        []BindingWithSubjects `json:"roleBindings"`
+	ClusterRoleBindingsWithLocalSubject []BindingWithSubjects `json:"clusterRoleBindingsWithLocalSubject"`
+	ServiceAccountCount                 int                   `json:"serviceAccountCount"`
 }
 
 // WhoamiResponse is a minimal projection of SelfSubjectRulesReview.
 // We don't pass through the full Status because the K8s types include
 // fields the UI doesn't need and would bloat the payload.
 type WhoamiResponse struct {
-	Namespace        string                       `json:"namespace"`
-	ResourceRules    []authv1.ResourceRule        `json:"resourceRules"`
-	NonResourceRules []authv1.NonResourceRule     `json:"nonResourceRules"`
-	Incomplete       bool                         `json:"incomplete"`
+	Namespace        string                   `json:"namespace"`
+	ResourceRules    []authv1.ResourceRule    `json:"resourceRules"`
+	NonResourceRules []authv1.NonResourceRule `json:"nonResourceRules"`
+	Incomplete       bool                     `json:"incomplete"`
 	// EvaluationError is set when the apiserver could compute only a
 	// partial rule set (e.g. a webhook authorizer timed out). Surface it
 	// honestly — the UI shouldn't pretend the list is exhaustive.
@@ -164,8 +164,8 @@ func (s *Server) requireRBACReadable(w http.ResponseWriter, r *http.Request) boo
 // handleRBACSubject returns the reverse-lookup graph for a single
 // subject. Two URL shapes:
 //
-//   GET /api/rbac/subject/ServiceAccount/{namespace}/{name}
-//   GET /api/rbac/subject/{User|Group}/{name}            (no namespace)
+//	GET /api/rbac/subject/ServiceAccount/{namespace}/{name}
+//	GET /api/rbac/subject/{User|Group}/{name}            (no namespace)
 //
 // chi sees these as separate routes — see RegisterRoutes for the wiring.
 func (s *Server) handleRBACSubject(w http.ResponseWriter, r *http.Request) {
@@ -281,7 +281,7 @@ func (s *Server) handleRBACSubject(w http.ResponseWriter, r *http.Request) {
 // handleRBACRole returns the list of bindings that reference a given
 // Role or ClusterRole, with subjects inlined.
 //
-//   GET /api/rbac/role/{kind}/{namespace}/{name}
+//	GET /api/rbac/role/{kind}/{namespace}/{name}
 //
 // For ClusterRole, namespace must be passed as "_" by the client (chi
 // requires a literal segment).
@@ -464,7 +464,7 @@ func withSubjects(cache *k8s.ResourceCache, b rbac.BindingRef) BindingWithSubjec
 // the calling user. Always permitted by Kubernetes for the caller's own
 // identity, so no SAR gating needed here.
 //
-//   GET /api/rbac/whoami?namespace=<ns>
+//	GET /api/rbac/whoami?namespace=<ns>
 //
 // namespace defaults to "default" if not supplied. SSRR is namespace-scoped;
 // the rules returned cover only the requested namespace (cluster-scoped
