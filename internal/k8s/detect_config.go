@@ -561,9 +561,6 @@ func parseEnvServiceRef(value, defaultNamespace string) (envServiceRef, bool) {
 	switch {
 	case len(parts) == 1:
 		ref.name = parts[0]
-	case len(parts) == 2:
-		ref.name = parts[0]
-		ref.namespace = parts[1]
 	case len(parts) >= 3 && parts[2] == "svc":
 		ref.name = parts[0]
 		ref.namespace = parts[1]

@@ -45,6 +45,31 @@ func TestSummarizeWorkloadRolloutDeployment(t *testing.T) {
 	}
 }
 
+func TestSummarizeWorkloadRolloutRequiresObservedGeneration(t *testing.T) {
+	dep := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "apps/v1",
+		"kind":       "Deployment",
+		"metadata": map[string]any{
+			"name":       "frontend",
+			"namespace":  "prod",
+			"generation": int64(3),
+		},
+		"spec": map[string]any{"replicas": int64(2)},
+		"status": map[string]any{
+			"updatedReplicas":   int64(2),
+			"availableReplicas": int64(2),
+		},
+	}}
+
+	got := summarizeWorkloadRollout(dep)
+	if got["complete"] != false {
+		t.Fatalf("complete = %v, want false without observedGeneration; got %#v", got["complete"], got)
+	}
+	if _, ok := got["observedCurrentGeneration"]; ok {
+		t.Fatalf("observedCurrentGeneration should be absent when controller has not reported observedGeneration: %#v", got)
+	}
+}
+
 func TestSummarizeWorkloadRolloutStatefulSetAndDaemonSet(t *testing.T) {
 	sts := &unstructured.Unstructured{Object: map[string]any{
 		"apiVersion": "apps/v1",
@@ -264,6 +289,17 @@ func TestBuildMutationVerificationFetchesPostState(t *testing.T) {
 	}
 }
 
+func TestBuildMutationVerificationReportsMissingPostClient(t *testing.T) {
+	got := buildMutationVerification(context.Background(), nil, mutationVerificationOptions{
+		Kind:      "ConfigMap",
+		Namespace: "prod",
+		Name:      "cfg",
+	})
+	if got["error"] != "post-mutation object unavailable and dynamic client is nil" {
+		t.Fatalf("error = %v, want missing dynamic client", got["error"])
+	}
+}
+
 func TestBuildMutationVerificationIncludesPodAndIssueSnapshots(t *testing.T) {
 	defer k8s.ResetTestState()
 
@@ -307,6 +343,9 @@ func TestBuildMutationVerificationIncludesPodAndIssueSnapshots(t *testing.T) {
 	pods, ok := got["pods"].(map[string]any)
 	if !ok || pods["total"] != 1 || pods["ready"] != 0 {
 		t.Fatalf("pods summary = %#v, want total=1 ready=0", got["pods"])
+	}
+	if pods["restarts"] != int64(3) {
+		t.Fatalf("pods restarts = %#v, want int64(3)", pods["restarts"])
 	}
 	if pods["source"] != "informer_cache" || got["cacheSnapshot"] == nil {
 		t.Fatalf("cache snapshot metadata missing: %+v", got)

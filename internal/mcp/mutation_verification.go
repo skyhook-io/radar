@@ -42,6 +42,10 @@ func buildMutationVerification(ctx context.Context, dynClient dynamic.Interface,
 
 	post := opts.Post
 	if post == nil {
+		if dynClient == nil {
+			out["error"] = "post-mutation object unavailable and dynamic client is nil"
+			return out
+		}
 		gvr := opts.GVR
 		if gvr.Empty() {
 			resolved, _, err := resolveMutationGVR(opts.Kind, opts.Group)
@@ -622,7 +626,7 @@ func summarizeWorkloadRollout(obj *unstructured.Unstructured) map[string]any {
 
 func generationObserved(out map[string]any) bool {
 	v, ok := out["observedCurrentGeneration"].(bool)
-	return !ok || v
+	return ok && v
 }
 
 func nestedInt64Default(obj *unstructured.Unstructured, fallback int64, fields ...string) int64 {
@@ -682,20 +686,22 @@ func summarizeSelectedPods(obj *unstructured.Unstructured) map[string]any {
 	pods := cache.GetPodsForWorkload(obj.GetNamespace(), &selector)
 	sort.Slice(pods, func(i, j int) bool { return pods[i].Name < pods[j].Name })
 
+	readyCount := 0
+	restartTotal := int64(0)
+	phases := map[string]int{}
 	summary := map[string]any{
 		"total":    len(pods),
-		"ready":    0,
-		"restarts": int32(0),
-		"phases":   map[string]int{},
+		"ready":    readyCount,
+		"restarts": restartTotal,
+		"phases":   phases,
 	}
 	rows := make([]map[string]any, 0, min(len(pods), 10))
 	for _, pod := range pods {
 		ready, restarts, waiting := podContainerStatus(pod)
 		if ready {
-			summary["ready"] = summary["ready"].(int) + 1
+			readyCount++
 		}
-		summary["restarts"] = summary["restarts"].(int32) + restarts
-		phases := summary["phases"].(map[string]int)
+		restartTotal += int64(restarts)
 		phases[string(pod.Status.Phase)]++
 		if len(rows) < 10 {
 			row := map[string]any{
@@ -710,6 +716,8 @@ func summarizeSelectedPods(obj *unstructured.Unstructured) map[string]any {
 			rows = append(rows, row)
 		}
 	}
+	summary["ready"] = readyCount
+	summary["restarts"] = restartTotal
 	summary["items"] = rows
 	if len(pods) > len(rows) {
 		summary["truncated"] = true
