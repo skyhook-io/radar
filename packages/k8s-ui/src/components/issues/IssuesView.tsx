@@ -250,6 +250,11 @@ function Diagnosis({ issue }: { issue: Issue }) {
           error) — so the precise message is never lost, just de-emphasized. */}
       {detail ? <p className="break-words font-mono text-xs leading-relaxed text-theme-text-tertiary">{detail}</p> : null}
       {crash ? <p className="text-xs text-theme-text-tertiary tabular-nums">{crash}</p> : null}
+      {issue.change_context ? (
+        <p className="text-xs text-theme-text-tertiary">
+          {changeContextText(issue.change_context)}
+        </p>
+      ) : null}
       {issue.first_seen ? (
         <p className="text-xs text-theme-text-tertiary tabular-nums">
           Started {formatRelativeAgeTime(issue.first_seen)}
@@ -258,6 +263,11 @@ function Diagnosis({ issue }: { issue: Issue }) {
       ) : null}
     </section>
   );
+}
+
+function changeContextText(change: NonNullable<Issue['change_context']>): string {
+  const parts = [change.when ? `Changed ${change.when} ago` : 'Changed', change.what ? change.what.replace(/_/g, ' ') : null, change.evidence].filter(Boolean);
+  return parts.join(' · ');
 }
 
 function DiagnosticContext({

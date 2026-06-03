@@ -19,10 +19,15 @@ const (
 	factServiceEnvReference = "service_env_reference"
 	factProbeTarget         = "probe_target_mismatch"
 	factBlockedInit         = "blocked_init_container"
+	factRestartCause        = "restart_cause"
 )
 
 type serviceBackendIssueProvider interface {
 	SelectedPodsForService(namespace, name string) []Ref
+}
+
+type changeContextProvider interface {
+	ChangeContextForIssue(Issue) *issuesapi.ChangeContext
 }
 
 func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue {
@@ -55,11 +60,18 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 	if sp, ok := p.(serviceBackendIssueProvider); ok {
 		serviceProvider = sp
 	}
+	var changeProvider changeContextProvider
+	if cp, ok := p.(changeContextProvider); ok {
+		changeProvider = cp
+	}
 
 	out := append([]Issue(nil), shaped...)
 	for idx := range out {
 		var b diagnosticContextBuilder
 		i := &out[idx]
+		if changeProvider != nil {
+			i.ChangeContext = changeProvider.ChangeContextForIssue(*i)
+		}
 
 		if i.Source == SourceMissingRef {
 			b.add(issuesapi.DiagnosticRoleCandidate, issuesapi.DiagnosticFact{
@@ -94,6 +106,10 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 				Type:    factBlockedInit,
 				Message: diagnosticMessage(*i),
 			})
+		}
+
+		if fact, ok := restartCauseFact(*i); ok {
+			b.add(issuesapi.DiagnosticRoleContext, fact)
 		}
 
 		if i.GroupingScope == issuesapi.ScopeWorkload && len(i.Members) > 0 {
@@ -192,6 +208,26 @@ func isProbeTargetMismatch(i Issue) bool {
 
 func isBlockedInitContainer(i Issue) bool {
 	return i.Reason == "InitContainerStalled"
+}
+
+func restartCauseFact(i Issue) (issuesapi.DiagnosticFact, bool) {
+	if i.RestartCount <= 0 && i.LastTerminatedReason == "" {
+		return issuesapi.DiagnosticFact{}, false
+	}
+	var parts []string
+	if i.RestartCount > 0 {
+		parts = append(parts, fmt.Sprintf("restartCount=%d", i.RestartCount))
+	}
+	if i.LastTerminatedReason != "" {
+		parts = append(parts, fmt.Sprintf("lastTerminatedReason=%s", i.LastTerminatedReason))
+	}
+	if i.Reason == "LivenessProbeFailed" || i.Reason == "ReadinessProbeFailed" {
+		parts = append(parts, fmt.Sprintf("probeFailure=%s", i.Reason))
+	}
+	return issuesapi.DiagnosticFact{
+		Type:    factRestartCause,
+		Message: "Container restart evidence: " + strings.Join(parts, ", ") + ".",
+	}, true
 }
 
 func diagnosticMessage(i Issue) string {

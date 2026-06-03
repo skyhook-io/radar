@@ -2463,12 +2463,19 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	// Shared response shape (issues.ListResponse) — identical to /api/issues so
 	// HTTP and MCP can't drift.
 	resp := issues.NewListResponse(out, stats)
+	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces)
 	// Steering hint when the issue list was capped (MCP-only).
 	if stats.TotalMatched > len(out) {
 		resp.NarrowHint = fmt.Sprintf(
 			"returned %d of %d issues — narrow with namespace=, kind=, severity=critical, add filter= CEL, or raise limit (cap 1000)",
 			len(out), stats.TotalMatched,
 		)
+	}
+	if resp.ClusterContext != nil && resp.ClusterContext.DNS != nil && resp.ClusterContext.DNS.Hint != "" {
+		if resp.NarrowHint != "" {
+			resp.NarrowHint += "; "
+		}
+		resp.NarrowHint += resp.ClusterContext.DNS.Hint
 	}
 	if result := k8s.GetCachedPermissionResult(); result != nil {
 		if visibility := k8s.BuildVisibilitySummary(result, k8s.VisibilityNamespace(allowedNamespaces)); visibility != nil {

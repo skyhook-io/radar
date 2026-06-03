@@ -207,6 +207,33 @@ type IssueRef struct {
 	Severity Severity `json:"severity,omitempty"`
 }
 
+type ChangeContext struct {
+	Changed  bool   `json:"changed"`
+	What     string `json:"what,omitempty"`
+	When     string `json:"when,omitempty"`
+	Evidence string `json:"evidence,omitempty"`
+}
+
+type ClusterContext struct {
+	DNS *ClusterDNSContext `json:"dns,omitempty"`
+}
+
+type ClusterDNSContext struct {
+	Signals  []string            `json:"signals,omitempty"`
+	Findings []ClusterDNSFinding `json:"findings,omitempty"`
+	Hint     string              `json:"hint,omitempty"`
+}
+
+type ClusterDNSFinding struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Severity  string `json:"severity"`
+	Reason    string `json:"reason"`
+	Message   string `json:"message,omitempty"`
+	Evidence  string `json:"evidence,omitempty"`
+}
+
 type Issue struct {
 	Severity             Severity           `json:"severity"`
 	Source               Source             `json:"source"`
@@ -231,16 +258,18 @@ type Issue struct {
 	Members              []Ref              `json:"members,omitempty"`
 	MembersTruncated     bool               `json:"members_truncated,omitempty"`
 	DiagnosticContext    *DiagnosticContext `json:"diagnostic_context,omitempty"`
+	ChangeContext        *ChangeContext     `json:"change_context,omitempty"`
 }
 
 type Response struct {
-	Issues            []Issue `json:"issues"`
-	Total             int     `json:"total"`
-	TotalMatched      int     `json:"total_matched"`
-	FilterErrors      int     `json:"filter_errors,omitempty"`
-	FilterErrorSample string  `json:"filter_error_sample,omitempty"`
-	Visibility        any     `json:"visibility,omitempty"`
-	NarrowHint        string  `json:"narrowHint,omitempty"`
+	Issues            []Issue         `json:"issues"`
+	Total             int             `json:"total"`
+	TotalMatched      int             `json:"total_matched"`
+	FilterErrors      int             `json:"filter_errors,omitempty"`
+	FilterErrorSample string          `json:"filter_error_sample,omitempty"`
+	Visibility        any             `json:"visibility,omitempty"`
+	NarrowHint        string          `json:"narrowHint,omitempty"`
+	ClusterContext    *ClusterContext `json:"cluster_context,omitempty"`
 }
 
 type BindingType string

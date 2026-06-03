@@ -290,6 +290,40 @@ func TestDetectProblems_ConfigSignals(t *testing.T) {
 		}
 	})
 
+	t.Run("missing env service ref becomes warning issue even when caller is healthy", func(t *testing.T) {
+		defer ResetTestState()
+
+		replicas := int32(1)
+		client := fake.NewClientset(&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "prod", CreationTimestamp: metav1.NewTime(time.Now().Add(-5 * time.Minute))},
+			Spec: appsv1.DeploymentSpec{
+				Replicas: &replicas,
+				Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+					Name: "app",
+					Env: []corev1.EnvVar{{
+						Name:  "AD_SERVICE_ADDR",
+						Value: "ad:8080",
+					}},
+				}}}},
+			},
+			Status: appsv1.DeploymentStatus{
+				AvailableReplicas: 1,
+				Conditions: []appsv1.DeploymentCondition{{
+					Type:   appsv1.DeploymentAvailable,
+					Status: corev1.ConditionTrue,
+				}},
+			},
+		})
+		if err := InitTestResourceCache(client); err != nil {
+			t.Fatalf("InitTestResourceCache: %v", err)
+		}
+
+		p := waitForProblem(t, "prod", "Missing referenced Service")
+		if p.Kind != "Deployment" || p.Name != "frontend" || p.Severity != "warning" || !strings.Contains(p.Message, "Service/ad does not exist") {
+			t.Fatalf("missing env Service problem = %+v", p)
+		}
+	})
+
 	t.Run("cross namespace env service ref is not promoted to issue", func(t *testing.T) {
 		defer ResetTestState()
 

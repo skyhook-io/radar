@@ -7,14 +7,17 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
@@ -61,9 +64,14 @@ type diagnoseResponse struct {
 	// diagnosed resource (crashloop, missing refs, HPA can't-scale, GitOps
 	// failure, …). Saves the agent re-deriving from raw logs/events what the
 	// issue engine knows. Empty when nothing is wrong.
-	RelatedIssues []issues.Issue `json:"relatedIssues,omitempty"`
-	Pods          int            `json:"pods"`
-	NarrowHint    string         `json:"narrowHint,omitempty"`
+	RelatedIssues []issues.Issue           `json:"relatedIssues,omitempty"`
+	ChangeContext *issuesapi.ChangeContext `json:"changeContext,omitempty"`
+	// DNSContext is attached only when this diagnosed resource shows DNS
+	// symptoms or has non-default DNS settings. It includes cluster DNS facts
+	// without adding one kube-system issue to every namespaced issue list.
+	DNSContext *diagnoseDNSContext `json:"dnsContext,omitempty"`
+	Pods       int                 `json:"pods"`
+	NarrowHint string              `json:"narrowHint,omitempty"`
 	// Warnings are state-derived advisories on the diagnosed object — e.g.,
 	// "resource is being deleted", "managed by Helm, edits may revert",
 	// "condition has been False since creation". Empty when nothing notable.
@@ -79,6 +87,20 @@ type startupBlocker struct {
 	Reason   string `json:"reason"`
 	Severity string `json:"severity"`
 	Message  string `json:"message"`
+}
+
+type diagnoseDNSContext struct {
+	Signals         []string             `json:"signals,omitempty"`
+	CoreDNSFindings []diagnoseDNSFinding `json:"coreDNSFindings,omitempty"`
+}
+
+type diagnoseDNSFinding struct {
+	Kind      string `json:"kind"`
+	Namespace string `json:"namespace"`
+	Name      string `json:"name"`
+	Severity  string `json:"severity"`
+	Reason    string `json:"reason"`
+	Message   string `json:"message,omitempty"`
 }
 
 // maxDiagnosePods caps the log fan-out so large DaemonSets / Deployments
@@ -237,8 +259,133 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	}
 
 	resp.StartupBlockers = startupBlockersForWorkload(cache, kindNorm, input.Namespace, input.Name, pods)
+	if len(resp.RelatedIssues) > 0 || len(resp.StartupBlockers) > 0 {
+		if p := issues.NewCacheProvider(); p != nil {
+			resp.ChangeContext = p.ChangeContextForIssue(issues.Issue{
+				Group:     canonicalGroup,
+				Kind:      canonicalKind,
+				Namespace: input.Namespace,
+				Name:      input.Name,
+			})
+		}
+	}
+	resp.DNSContext = dnsContextForDiagnose(cache, obj, pods, resp.LogsCurrent, resp.LogsPrevious, resp.Events)
 	resp.Warnings = k8score.EnrichRuntimeObjectWarnings(obj)
 	return toJSONResult(resp)
+}
+
+func dnsContextForDiagnose(cache *k8s.ResourceCache, obj any, pods []*corev1.Pod, current, previous []podLogEntry, events []aicontext.DeduplicatedEvent) *diagnoseDNSContext {
+	signals := diagnoseDNSSignals(obj, pods, current, previous, events)
+	if len(signals) == 0 {
+		return nil
+	}
+	findings := k8s.DetectSuspiciousCoreDNS(cache, time.Now())
+	out := &diagnoseDNSContext{Signals: signals}
+	for _, f := range findings {
+		out.CoreDNSFindings = append(out.CoreDNSFindings, diagnoseDNSFinding{
+			Kind:      f.Kind,
+			Namespace: f.Namespace,
+			Name:      f.Name,
+			Severity:  f.Severity,
+			Reason:    f.Reason,
+			Message:   f.Message,
+		})
+		if len(out.CoreDNSFindings) >= 5 {
+			break
+		}
+	}
+	return out
+}
+
+func diagnoseDNSSignals(obj any, pods []*corev1.Pod, current, previous []podLogEntry, events []aicontext.DeduplicatedEvent) []string {
+	seen := map[string]bool{}
+	var signals []string
+	add := func(s string) {
+		if s == "" || seen[s] || len(signals) >= 8 {
+			return
+		}
+		seen[s] = true
+		signals = append(signals, s)
+	}
+	for _, s := range dnsConfigSignalsForObject(obj) {
+		add(s)
+	}
+	for _, p := range pods {
+		for _, s := range dnsConfigSignalsForPodSpec(p.Name, p.Spec) {
+			add(s)
+		}
+	}
+	if logEntriesContainDNSSymptoms(current) || logEntriesContainDNSSymptoms(previous) {
+		add("pod logs contain DNS resolution errors")
+	}
+	for _, e := range events {
+		if textContainsDNSSymptom(e.Reason + " " + e.Message) {
+			add("warning events contain DNS resolution errors")
+			break
+		}
+	}
+	return signals
+}
+
+func dnsConfigSignalsForObject(obj any) []string {
+	switch o := obj.(type) {
+	case *corev1.Pod:
+		return dnsConfigSignalsForPodSpec(o.Name, o.Spec)
+	case *appsv1.Deployment:
+		return dnsConfigSignalsForPodSpec(o.Name, o.Spec.Template.Spec)
+	case *appsv1.StatefulSet:
+		return dnsConfigSignalsForPodSpec(o.Name, o.Spec.Template.Spec)
+	case *appsv1.DaemonSet:
+		return dnsConfigSignalsForPodSpec(o.Name, o.Spec.Template.Spec)
+	default:
+		return nil
+	}
+}
+
+func dnsConfigSignalsForPodSpec(name string, spec corev1.PodSpec) []string {
+	var out []string
+	policy := spec.DNSPolicy
+	if policy != "" && policy != corev1.DNSClusterFirst {
+		if !(spec.HostNetwork && policy == corev1.DNSClusterFirstWithHostNet) {
+			out = append(out, fmt.Sprintf("%s uses dnsPolicy=%s", name, policy))
+		}
+	}
+	if spec.DNSConfig != nil {
+		if len(spec.DNSConfig.Nameservers) > 0 {
+			out = append(out, fmt.Sprintf("%s sets dnsConfig.nameservers", name))
+		}
+		if len(spec.DNSConfig.Searches) > 0 {
+			out = append(out, fmt.Sprintf("%s sets dnsConfig.searches", name))
+		}
+		if len(spec.DNSConfig.Options) > 0 {
+			out = append(out, fmt.Sprintf("%s sets dnsConfig.options", name))
+		}
+	}
+	return out
+}
+
+func logEntriesContainDNSSymptoms(entries []podLogEntry) bool {
+	for _, e := range entries {
+		for _, line := range e.Logs.Lines {
+			if textContainsDNSSymptom(line) {
+				return true
+			}
+		}
+		if textContainsDNSSymptom(e.Error) {
+			return true
+		}
+	}
+	return false
+}
+
+func textContainsDNSSymptom(text string) bool {
+	low := strings.ToLower(text)
+	return strings.Contains(low, "no such host") ||
+		strings.Contains(low, "nxdomain") ||
+		strings.Contains(low, "temporary failure in name resolution") ||
+		strings.Contains(low, "name or service not known") ||
+		strings.Contains(low, "server misbehaving") ||
+		strings.Contains(low, "lookup ") && strings.Contains(low, ".svc")
 }
 
 // startupBlockersForWorkload runs the pre-Running detectors over the namespace

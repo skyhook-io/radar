@@ -149,6 +149,52 @@ func TestHandleDiagnose_PodHappyPath(t *testing.T) {
 	}
 }
 
+func TestHandleDiagnose_AttachesDNSContextWhenResourceHasDNSSignal(t *testing.T) {
+	defer k8s.ResetTestState()
+	fakeClient := fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "alpha"}, Status: corev1.NamespaceStatus{Phase: corev1.NamespaceActive}},
+		&corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: "frontend", Namespace: "alpha"},
+			Spec: corev1.PodSpec{
+				DNSPolicy: corev1.DNSNone,
+				DNSConfig: &corev1.PodDNSConfig{
+					Nameservers: []string{"8.8.8.8"},
+				},
+				Containers: []corev1.Container{{Name: "frontend"}},
+			},
+			Status: corev1.PodStatus{Phase: corev1.PodRunning},
+		},
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "kube-system"},
+			Data: map[string]string{
+				"Corefile": ".:53 {\n  template ANY svc.cluster.local {\n    rcode NXDOMAIN\n  }\n}\n",
+			},
+		},
+	)
+	if err := k8s.InitTestResourceCache(fakeClient); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	t.Cleanup(func() { getPermCache().Invalidate() })
+	k8s.SetConnectionStatus(k8s.ConnectionStatus{State: k8s.StateConnected, Context: "fake-test"})
+	ctx := withClusterAdmin(t, "admin")
+
+	result, _, err := handleDiagnose(ctx, nil, diagnoseInput{
+		Kind:      "pod",
+		Namespace: "alpha",
+		Name:      "frontend",
+	})
+	if err != nil {
+		t.Fatalf("handleDiagnose: %v", err)
+	}
+	body := extractText(t, result)
+	if !strings.Contains(body, `"dnsContext"`) || !strings.Contains(body, "dnsPolicy=None") {
+		t.Fatalf("expected dnsContext with pod DNS signal: %s", body)
+	}
+	if !strings.Contains(body, "CoreDNS NXDOMAIN override") {
+		t.Fatalf("expected CoreDNS finding in dnsContext: %s", body)
+	}
+}
+
 func TestHandleDiagnose_PodNotFound(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")

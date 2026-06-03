@@ -34,6 +34,14 @@ func detectConfigProblems(cache *ResourceCache, namespace string, now time.Time)
 	return out
 }
 
+// DetectSuspiciousCoreDNS returns conservative CoreDNS Corefile findings for
+// callers that are already in a DNS diagnostic context. General namespaced
+// issue sweeps keep this out of their main list to avoid repeating one
+// cluster-scoped finding for every namespace.
+func DetectSuspiciousCoreDNS(cache *ResourceCache, now time.Time) []Detection {
+	return detectSuspiciousCoreDNS(cache, now)
+}
+
 func detectSuspiciousCoreDNS(cache *ResourceCache, now time.Time) []Detection {
 	if cache == nil || cache.ConfigMaps() == nil {
 		return nil
@@ -135,7 +143,7 @@ func detectEnvServiceRefs(cache *ResourceCache, namespace string, now time.Time)
 			Group:       check.WorkloadGroup,
 			Namespace:   check.Namespace,
 			Name:        check.WorkloadName,
-			Severity:    "high",
+			Severity:    envServiceRefSeverity(check.Status),
 			Reason:      envServiceRefReason(check.Status),
 			Message:     check.Message,
 			Age:         FormatAge(time.Duration(check.AgeSeconds) * time.Second),
@@ -255,12 +263,25 @@ func envServiceRefReason(status string) string {
 	}
 }
 
+func envServiceRefSeverity(status string) string {
+	if status == "missing_service" {
+		return "warning"
+	}
+	return "high"
+}
+
 func envServiceRefHasCausalEvidence(cache *ResourceCache, check EnvServiceRefCheck) bool {
-	if check.Status != "missing_service" && check.Status != "port_mismatch" {
+	switch check.Status {
+	case "missing_service":
+		return true
+	case "port_mismatch":
+	default:
 		return false
 	}
 	// Env refs are noisy as standalone facts in healthy apps. Promote them to
-	// live Issues only when the owning workload is already degraded.
+	// live Issues only when the owning workload is already degraded. Missing
+	// Service is handled above because an explicit same-namespace reference
+	// with no target is stronger evidence than a port mismatch.
 	wl, ok := envServiceWorkloadByName(cache, check.WorkloadKind, check.Namespace, check.WorkloadName)
 	return ok && wl.degraded
 }

@@ -2,11 +2,16 @@ package issues
 
 import (
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
@@ -25,6 +30,7 @@ type fakeProvider struct {
 	kinds          map[schema.GroupVersionResource]string
 	namespaced     map[schema.GroupVersionResource]bool
 	selectedPods   map[string][]Ref
+	change         map[string]*issuesapi.ChangeContext
 }
 
 func (f *fakeProvider) DetectProblems(_ []string) []k8s.Detection       { return f.problems }
@@ -54,6 +60,13 @@ func (f *fakeProvider) NamespacedForGVR(gvr schema.GroupVersionResource) (bool, 
 }
 func (f *fakeProvider) SelectedPodsForService(namespace, name string) []Ref {
 	return f.selectedPods[namespace+"/"+name]
+}
+
+func (f *fakeProvider) ChangeContextForIssue(i Issue) *issuesapi.ChangeContext {
+	if f.change == nil {
+		return nil
+	}
+	return f.change[resourceKey(i.Group, i.Kind, i.Namespace, i.Name)]
 }
 
 func TestCompose_NormalizesProblemSeverity(t *testing.T) {
@@ -530,6 +543,213 @@ func TestCompose_DiagnosticContextProbeAndInitCandidates(t *testing.T) {
 	initCtx := byName["init"].DiagnosticContext
 	if initCtx == nil || initCtx.Role != issuesapi.DiagnosticRoleCandidate || len(initCtx.Facts) != 1 || initCtx.Facts[0].Type != factBlockedInit {
 		t.Fatalf("init diagnostic context = %+v, want blocked init candidate", initCtx)
+	}
+}
+
+func TestCompose_DiagnosticContextRestartCauseFact(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{
+				Kind:                 "Pod",
+				Namespace:            "prod",
+				Name:                 "frontend-abc",
+				Severity:             "critical",
+				Reason:               "LivenessProbeFailed",
+				RestartCount:         4,
+				LastTerminatedReason: "Error",
+			},
+		},
+	}
+
+	out := Compose(p, Filters{})
+	if len(out) != 1 {
+		t.Fatalf("got %d issues, want 1: %+v", len(out), out)
+	}
+	ctx := out[0].DiagnosticContext
+	if ctx == nil {
+		t.Fatalf("diagnostic context missing")
+	}
+	var saw bool
+	for _, fact := range ctx.Facts {
+		if fact.Type == factRestartCause && strings.Contains(fact.Message, "restartCount=4") && strings.Contains(fact.Message, "probeFailure=LivenessProbeFailed") {
+			saw = true
+		}
+	}
+	if !saw {
+		t.Fatalf("facts = %+v, want restart_cause evidence", ctx.Facts)
+	}
+}
+
+func TestCompose_AttachesPositiveChangeContext(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{Kind: "Deployment", Group: "apps", Namespace: "prod", Name: "checkout", Severity: "critical", Reason: "Deployment unavailable"},
+			{Kind: "Deployment", Group: "apps", Namespace: "prod", Name: "cart", Severity: "critical", Reason: "Deployment unavailable"},
+		},
+		change: map[string]*issuesapi.ChangeContext{
+			resourceKey("apps", "Deployment", "prod", "checkout"): {
+				Changed:  true,
+				What:     "pod_template",
+				When:     "2m",
+				Evidence: "generation=3, 2 owned ReplicaSets",
+			},
+		},
+	}
+
+	out := Compose(p, Filters{})
+	byName := map[string]Issue{}
+	for _, issue := range out {
+		byName[issue.Name] = issue
+	}
+	if ctx := byName["checkout"].ChangeContext; ctx == nil || !ctx.Changed || ctx.What != "pod_template" || ctx.Evidence == "" {
+		t.Fatalf("checkout change context = %+v, want positive pod_template evidence", ctx)
+	}
+	if ctx := byName["cart"].ChangeContext; ctx != nil {
+		t.Fatalf("cart change context = %+v, want nil when provider has no positive evidence", ctx)
+	}
+}
+
+func TestDeploymentChangeContextUsesReplicaSetHistory(t *testing.T) {
+	defer k8s.ResetTestState()
+
+	trueVal := true
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "checkout",
+			Namespace:  "prod",
+			UID:        "deploy-uid",
+			Generation: 3,
+		},
+		Status: appsv1.DeploymentStatus{ObservedGeneration: 3},
+	}
+	oldRS := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "checkout-old",
+			Namespace:         "prod",
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-20 * time.Minute)),
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       "checkout",
+				UID:        "deploy-uid",
+				Controller: &trueVal,
+			}},
+		},
+	}
+	newRS := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "checkout-new",
+			Namespace:         "prod",
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-2 * time.Minute)),
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       "checkout",
+				UID:        "deploy-uid",
+				Controller: &trueVal,
+			}},
+		},
+	}
+	if err := k8s.InitTestResourceCache(fake.NewClientset(
+		&corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: "prod"}},
+		deploy,
+		oldRS,
+		newRS,
+	)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	ctx := deploymentChangeContext(k8s.GetResourceCache(), "prod", "checkout")
+	if ctx == nil || !ctx.Changed || ctx.What != "pod_template" || !strings.Contains(ctx.Evidence, "2 owned ReplicaSets") || !strings.Contains(ctx.Evidence, "checkout-new") {
+		t.Fatalf("deployment change context = %+v, want newest ReplicaSet evidence", ctx)
+	}
+}
+
+func TestClusterDNSContextRequiresTriggerSignal(t *testing.T) {
+	defer k8s.ResetTestState()
+
+	client := fake.NewClientset(
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "kube-system"},
+			Data: map[string]string{
+				"Corefile": ".:53 {\n  template ANY svc.cluster.local {\n    rcode NXDOMAIN\n  }\n}\n",
+			},
+		},
+	)
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	provider := &CacheProvider{cache: k8s.GetResourceCache()}
+
+	if got := provider.ClusterContextForIssues([]string{"prod"}); got != nil {
+		t.Fatalf("static suspicious CoreDNS config should not produce cluster context without symptoms/change evidence: %+v", got)
+	}
+}
+
+func TestClusterDNSContextFiresOnSuspiciousCoreDNSAndRecentRollout(t *testing.T) {
+	defer k8s.ResetTestState()
+
+	trueVal := true
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "coredns",
+			Namespace:  "kube-system",
+			UID:        "coredns-uid",
+			Generation: 3,
+			Labels:     map[string]string{"k8s-app": "kube-dns"},
+		},
+		Status: appsv1.DeploymentStatus{ObservedGeneration: 3},
+	}
+	oldRS := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "coredns-old",
+			Namespace:         "kube-system",
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-20 * time.Minute)),
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       "coredns",
+				UID:        "coredns-uid",
+				Controller: &trueVal,
+			}},
+		},
+	}
+	newRS := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:              "coredns-new",
+			Namespace:         "kube-system",
+			CreationTimestamp: metav1.NewTime(time.Now().Add(-2 * time.Minute)),
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       "coredns",
+				UID:        "coredns-uid",
+				Controller: &trueVal,
+			}},
+		},
+	}
+	client := fake.NewClientset(
+		&corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{Name: "coredns", Namespace: "kube-system"},
+			Data: map[string]string{
+				"Corefile": ".:53 {\n  template ANY svc.cluster.local {\n    rcode NXDOMAIN\n  }\n}\n",
+			},
+		},
+		deploy,
+		oldRS,
+		newRS,
+	)
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	provider := &CacheProvider{cache: k8s.GetResourceCache()}
+
+	got := provider.ClusterContextForIssues([]string{"prod"})
+	if got == nil || got.DNS == nil || len(got.DNS.Findings) != 1 || len(got.DNS.Signals) == 0 {
+		t.Fatalf("cluster DNS context = %+v, want DNS finding with rollout signal", got)
+	}
+	if !strings.Contains(got.DNS.Signals[0], "CoreDNS Deployment") || !strings.Contains(got.DNS.Hint, "CoreDNS NXDOMAIN override") {
+		t.Fatalf("cluster DNS context = %+v, want directive CoreDNS rollout hint", got.DNS)
 	}
 }
 
