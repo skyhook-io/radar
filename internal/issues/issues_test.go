@@ -463,6 +463,36 @@ func TestCompose_DiagnosticContextServiceAffectedByBackendIssues(t *testing.T) {
 	}
 }
 
+func TestCompose_DiagnosticContextServiceAffectedByBackendIssuesFlatMode(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{Kind: "Service", Namespace: "prod", Name: "api", Severity: "critical", Reason: "0/1 selected pods ready"},
+			{Kind: "Pod", Namespace: "prod", Name: "api-abc", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "api"},
+		},
+		selectedPods: map[string][]Ref{
+			"prod/api": {{Kind: "Pod", Namespace: "prod", Name: "api-abc"}},
+		},
+	}
+
+	out := Compose(p, Filters{})
+	var svc Issue
+	for _, issue := range out {
+		if issue.Kind == "Service" && issue.Name == "api" {
+			svc = issue
+		}
+	}
+	if svc.Kind == "" {
+		t.Fatalf("service issue not found: %+v", out)
+	}
+	ctx := svc.DiagnosticContext
+	if ctx == nil || len(ctx.Facts) != 1 || len(ctx.Facts[0].RelatedIssues) != 1 {
+		t.Fatalf("diagnostic context = %+v, want selected backend related issue", ctx)
+	}
+	if got := ctx.Facts[0].RelatedIssues[0].Ref; got.Kind != "Pod" || got.Name != "api-abc" {
+		t.Fatalf("related issue ref = %+v, want flat Pod/api-abc", got)
+	}
+}
+
 func TestCompose_DiagnosticContextServiceConfigCandidate(t *testing.T) {
 	p := &fakeProvider{
 		problems: []k8s.Detection{

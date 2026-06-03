@@ -35,19 +35,12 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 		return shaped
 	}
 
-	var groupedByID map[string]Issue
-	groupedByIDForServiceBackend := func() map[string]Issue {
-		if groupedByID != nil {
-			return groupedByID
-		}
-		if grouped == nil {
-			grouped = GroupIssues(flat)
-		}
+	groupedByID := map[string]Issue(nil)
+	if len(grouped) > 0 {
 		groupedByID = make(map[string]Issue, len(grouped))
 		for _, g := range grouped {
 			groupedByID[g.ID] = g
 		}
-		return groupedByID
 	}
 
 	flatByResource := make(map[string][]Issue, len(flat))
@@ -126,7 +119,7 @@ func enrichDiagnosticContext(shaped, flat, grouped []Issue, p Provider) []Issue 
 		}
 
 		if serviceProvider != nil && isServiceBackendContextCandidate(*i) {
-			addServiceBackendContext(&b, *i, serviceProvider, flatByResource, groupedByIDForServiceBackend())
+			addServiceBackendContext(&b, *i, serviceProvider, flatByResource, groupedByID)
 		}
 
 		if ctx := b.build(); ctx != nil {
