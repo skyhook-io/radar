@@ -314,7 +314,7 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 	if overrideShell == "" || container == "" {
 		pod, err := client.CoreV1().Pods(namespace).Get(r.Context(), podName, metav1.GetOptions{})
 		if err != nil {
-			log.Printf("[exec] pod fetch failed for %s/%s (OS detection + container defaulting skipped): %v", namespace, podName, err)
+			log.Printf("[exec] pod fetch failed for %s/%s (OS detection + container defaulting skipped): %v", k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(podName), err)
 		} else {
 			if overrideShell == "" {
 				podOS = detectPodOS(r.Context(), pod, nodeLabelsLookupFor(client))
@@ -324,7 +324,7 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 				execManager.mu.Lock()
 				session.Container = container
 				execManager.mu.Unlock()
-				log.Printf("[exec] session %s defaulted to container %q for %s/%s", sessionID, container, namespace, podName)
+				log.Printf("[exec] session %s defaulted to container %q for %s/%s", sessionID, container, k8s.SanitizeForLog(namespace), k8s.SanitizeForLog(podName))
 			}
 		}
 	}
