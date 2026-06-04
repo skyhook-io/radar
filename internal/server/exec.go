@@ -93,6 +93,31 @@ func defaultExecCommand(override, fallback, podOS string) []string {
 	return []string{"sh", "-c", defaultShellScript}
 }
 
+// defaultContainerAnnotation is the client-side convention kubectl, k9s, and
+// Lens use to mark the "main" container of a multi-container pod. Service
+// meshes (Istio, Linkerd, ASM) set it during injection to point past their
+// sidecar — without it, an unspecified container defaults to containers[0],
+// which on a mesh pod is the distroless proxy with no shell.
+const defaultContainerAnnotation = "kubectl.kubernetes.io/default-container"
+
+// defaultExecContainer picks the container to target when the request doesn't
+// name one. It honors defaultContainerAnnotation (matching kubectl exec
+// behavior), falling back to the first container. Returns "" only for a pod
+// with no containers.
+func defaultExecContainer(pod *corev1.Pod) string {
+	if name := pod.Annotations[defaultContainerAnnotation]; name != "" {
+		for _, c := range pod.Spec.Containers {
+			if c.Name == name {
+				return name
+			}
+		}
+	}
+	if len(pod.Spec.Containers) > 0 {
+		return pod.Spec.Containers[0].Name
+	}
+	return ""
+}
+
 // osNodeLabelsLookup is injected so detectPodOS is unit-testable without a
 // fake client.
 type osNodeLabelsLookup func(ctx context.Context, nodeName string) (map[string]string, error)
@@ -279,17 +304,28 @@ func (s *Server) handlePodExec(w http.ResponseWriter, r *http.Request) {
 	}
 	auth.AuditLog(r, namespace, podName)
 
-	// OS detection runs whenever ?shell= isn't explicit. --pod-shell-default
-	// must NOT short-circuit — it's POSIX-only, and a Windows pod still has
-	// to be routed to the Windows script ahead of the fallback. Pod-fetch
-	// failure is non-fatal: log and assume Linux.
+	// Fetch the pod when we need it for OS detection (?shell= not explicit) or
+	// to default an unspecified container. Defaulting to containers[0] without
+	// consulting kubectl.kubernetes.io/default-container lands mesh-injected
+	// pods in their distroless sidecar (no shell); honor the annotation like
+	// kubectl does. Pod-fetch failure is non-fatal: log, assume Linux, and let
+	// the apiserver apply its own containers[0] default.
 	var podOS string
-	if overrideShell == "" {
+	if overrideShell == "" || container == "" {
 		pod, err := client.CoreV1().Pods(namespace).Get(r.Context(), podName, metav1.GetOptions{})
 		if err != nil {
-			log.Printf("[exec] OS detection skipped for %s/%s (assuming Linux): %v", namespace, podName, err)
+			log.Printf("[exec] pod fetch failed for %s/%s (OS detection + container defaulting skipped): %v", namespace, podName, err)
 		} else {
-			podOS = detectPodOS(r.Context(), pod, nodeLabelsLookupFor(client))
+			if overrideShell == "" {
+				podOS = detectPodOS(r.Context(), pod, nodeLabelsLookupFor(client))
+			}
+			if container == "" {
+				container = defaultExecContainer(pod)
+				execManager.mu.Lock()
+				session.Container = container
+				execManager.mu.Unlock()
+				log.Printf("[exec] session %s defaulted to container %q for %s/%s", sessionID, container, namespace, podName)
+			}
 		}
 	}
 	command := defaultExecCommand(overrideShell, DefaultPodShellCommand, podOS)

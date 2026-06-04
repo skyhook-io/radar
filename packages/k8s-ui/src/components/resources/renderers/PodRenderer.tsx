@@ -2,7 +2,7 @@ import { useState, type ReactNode, type JSX } from 'react'
 import { Server, HardDrive, Terminal as TerminalIcon, FileText, Activity, CirclePlay, FolderOpen, List, Eye, EyeOff, Shield } from 'lucide-react'
 import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, CopyHandler, AlertBanner, ResourceLink } from '../../ui/drawer-components'
-import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR } from '../resource-utils'
+import { formatResources, formatDuration, getPodProblems, getPodPhaseDisplay, healthColors, SEVERITY_DOT_COLOR, getDefaultContainerName } from '../resource-utils'
 import { getResourceStatusColor, SEVERITY_BADGE_BORDERED } from '../../../utils/badge-colors'
 import {
   rbacVerbBadgeClass,
@@ -286,7 +286,7 @@ export function PodRenderer({
   const [podFilesContainer, setPodFilesContainer] = useState<string | null>(null)
 
   const handleOpenTerminal = (containerName?: string) => {
-    const container = containerName || containers[0]?.name
+    const container = containerName || getDefaultContainerName(data)
     if (namespace && podName && container) {
       onOpenTerminal?.({
         namespace,

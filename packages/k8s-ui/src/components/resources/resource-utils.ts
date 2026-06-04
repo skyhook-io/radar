@@ -418,6 +418,23 @@ export interface ContainerSquareState {
   }
 }
 
+/**
+ * The container to default to for exec / logs on a multi-container pod. Honors
+ * the kubectl.kubernetes.io/default-container annotation (the convention
+ * kubectl, k9s, and Lens follow, and what service meshes like Istio set to
+ * point past their injected sidecar), falling back to the first container.
+ * Without this, mesh-injected pods default to their distroless sidecar — which
+ * has no shell — making the terminal appear broken.
+ */
+export function getDefaultContainerName(pod: any): string | undefined {
+  const containers = pod?.spec?.containers || []
+  const annotated = pod?.metadata?.annotations?.['kubectl.kubernetes.io/default-container']
+  if (annotated && containers.some((c: any) => c.name === annotated)) {
+    return annotated
+  }
+  return containers[0]?.name
+}
+
 export function getContainerSquareStates(pod: any): ContainerSquareState[] {
   const result: ContainerSquareState[] = []
   const initStatuses = pod.status?.initContainerStatuses || []

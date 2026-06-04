@@ -285,8 +285,10 @@ export function TerminalTab({
             <>
               <div className="text-amber-400 mb-2 text-sm">Shell not available</div>
               <div className="text-xs text-theme-text-tertiary mb-4 max-w-md">
-                This container doesn&apos;t have a shell (/bin/sh). This is common with distroless
-                or minimal container images. You can create a debug container to troubleshoot.
+                Container <span className="font-mono text-theme-text-secondary">{selectedContainer}</span> doesn&apos;t
+                have a shell (/bin/sh). This is common with distroless or minimal container images
+                {containers.length > 1 ? ' — try another container above, or' : '. You can'} create a
+                debug container to troubleshoot.
               </div>
               <div className="flex gap-2">
                 {createDebugContainerRef.current && (

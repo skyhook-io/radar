@@ -24,6 +24,7 @@ import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
 import { formatKindName } from '../ui/drawer-components'
+import { getDefaultContainerName } from '../resources/resource-utils'
 
 // ============================================================================
 // ACTIONS BAR - Interactive buttons that change based on resource kind
@@ -183,7 +184,7 @@ export function ResourceActionsBar({
       onOpenTerminal?.({
         namespace: resource.namespace,
         podName: resource.name,
-        containerName: containers[0],
+        containerName: getDefaultContainerName(data) || containers[0],
         containers,
       })
     }
@@ -195,7 +196,7 @@ export function ResourceActionsBar({
         namespace: resource.namespace,
         podName: resource.name,
         containers,
-        containerName,
+        containerName: containerName || getDefaultContainerName(data),
       })
     }
   }

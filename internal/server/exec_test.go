@@ -85,6 +85,42 @@ func TestDefaultExecCommand(t *testing.T) {
 // TestWindowsDefaultShellScript is a tripwire — if you edit the script,
 // manually verify against both Nano Server (no PowerShell) and Server Core
 // (PowerShell present) before merging.
+// TestDefaultExecContainer pins the container-selection precedence: a valid
+// kubectl.kubernetes.io/default-container annotation wins, otherwise the first
+// container. This is what keeps mesh-injected pods (sidecar at containers[0])
+// from execing into a shell-less proxy.
+func TestDefaultExecContainer(t *testing.T) {
+	podWith := func(annotation string, containers ...string) *corev1.Pod {
+		pod := &corev1.Pod{}
+		if annotation != "" {
+			pod.Annotations = map[string]string{defaultContainerAnnotation: annotation}
+		}
+		for _, name := range containers {
+			pod.Spec.Containers = append(pod.Spec.Containers, corev1.Container{Name: name})
+		}
+		return pod
+	}
+
+	tests := []struct {
+		name string
+		pod  *corev1.Pod
+		want string
+	}{
+		{"annotation honored over first container", podWith("app", "istio-proxy", "app"), "app"},
+		{"no annotation falls back to first", podWith("", "istio-proxy", "app"), "istio-proxy"},
+		{"annotation naming missing container ignored", podWith("ghost", "istio-proxy", "app"), "istio-proxy"},
+		{"single container", podWith("", "app"), "app"},
+		{"no containers", podWith(""), ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := defaultExecContainer(tt.pod); got != tt.want {
+				t.Errorf("defaultExecContainer() = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestWindowsDefaultShellScript(t *testing.T) {
 	const expected = `where powershell >nul 2>&1 && powershell || cmd`
 	if windowsDefaultShellScript != expected {
