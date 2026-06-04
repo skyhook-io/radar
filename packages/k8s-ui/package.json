@@ -97,7 +97,7 @@
     "elkjs": "^0.11.1",
     "lucide-react": "^1.16.0",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6",
+    "react-dom": "^19.2.7",
     "typescript": "^6.0.2",
     "vitest": "^4.1.5",
     "yaml": "^2.9.0"

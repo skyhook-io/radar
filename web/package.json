@@ -68,7 +68,7 @@
     "postcss": "^8.5.14",
     "prettier": "^3.8.1",
     "react": "^19.2.6",
-    "react-dom": "^19.2.6",
+    "react-dom": "^19.2.7",
     "react-router-dom": "^7.15.0",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.2.4",
