@@ -127,9 +127,12 @@ func foldGroup(members []Issue) Issue {
 
 	// Onset: keep only if all members with onset agree; any mix of "initial"
 	// and "runtime" → omit. Members without onset don't contribute (they're
-	// simply unknown). The representative must not donate onset independently
-	// because the representative drives Reason/Message while FirstSeen comes
-	// from the oldest member — a single member's onset would be mismatched.
+	// simply unknown). Onset is computed by this agreement scan, never copied
+	// from the representative's own field — the representative drives
+	// Reason/Message, but its onset alone could disagree with other members.
+	// Basis follows the same rule: agreeing onsets with mixed bases (e.g.
+	// "condition" + "owner_condition") keep the onset but drop the basis
+	// rather than crediting one member's evidence for the whole group.
 	var groupOnset, groupBasis string
 	for _, m := range members {
 		if m.Onset == "" {
@@ -140,6 +143,8 @@ func foldGroup(members []Issue) Issue {
 		} else if groupOnset != m.Onset {
 			groupOnset, groupBasis = "", "" // disagreement → omit
 			break
+		} else if groupBasis != m.OnsetBasis {
+			groupBasis = ""
 		}
 	}
 	g.Onset = groupOnset

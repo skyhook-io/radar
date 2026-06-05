@@ -100,4 +100,19 @@ func TestFoldGroupOnsetMerge(t *testing.T) {
 			t.Errorf("OnsetBasis = %q, want phase", g.OnsetBasis)
 		}
 	})
+
+	t.Run("agreeing onset with mixed bases → keep onset, drop basis", func(t *testing.T) {
+		m1 := withID(base, "pod-1")
+		m1.Onset, m1.OnsetBasis = "runtime", "condition"
+		m2 := withID(base, "pod-2")
+		m2.Onset, m2.OnsetBasis = "runtime", "owner_condition"
+
+		g := foldGroup([]Issue{m1, m2})
+		if g.Onset != "runtime" {
+			t.Errorf("Onset = %q, want runtime (bases differ but onsets agree)", g.Onset)
+		}
+		if g.OnsetBasis != "" {
+			t.Errorf("OnsetBasis = %q, want empty — one member's evidence must not be credited for the whole group", g.OnsetBasis)
+		}
+	})
 }

@@ -50,12 +50,14 @@ func TestOnsetFromConditionLTT(t *testing.T) {
 			wantBasis:       "",
 		},
 		{
-			name:            "gray zone: just over slop but under 10min — omit",
+			// 1min healthy out of 1h (ratio 1.7%) — crashed right after deploy,
+			// the ratio rule classifies initial regardless of current age.
+			name:            "initial: ratio rule — 1min healthy out of 1h",
 			failingSince:    now.Add(-59 * time.Minute),
 			resourceCreated: now.Add(-1 * time.Hour),
 			basis:           "condition",
-			wantOnset:       "",
-			wantBasis:       "",
+			wantOnset:       "initial",
+			wantBasis:       "condition",
 		},
 		{
 			// ratio rule: product-catalog case — crashes 1min after 7min-old deploy
@@ -167,5 +169,17 @@ func TestOnsetFromConditionLTT(t *testing.T) {
 				t.Errorf("Basis = %q, want %q", got.Basis, tt.wantBasis)
 			}
 		})
+	}
+}
+
+// capiOnset wraps OnsetFromConditionLTT behind a dur==0 guard: CAPI condition
+// readers fall back to resource age when no LTT exists, and that fallback
+// duration must never reach the classifier.
+func TestCapiOnset_ZeroDurationGuard(t *testing.T) {
+	if onset, basis := capiOnset(0, time.Now().Add(-3*time.Hour)); onset != "" || basis != "" {
+		t.Errorf("dur=0 must omit onset, got (%q, %q)", onset, basis)
+	}
+	if onset, basis := capiOnset(time.Hour, time.Now().Add(-3*time.Hour)); onset != "runtime" || basis != "condition" {
+		t.Errorf("2h healthy then failing 1h must be runtime/condition, got (%q, %q)", onset, basis)
 	}
 }

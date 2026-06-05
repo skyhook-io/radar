@@ -1664,3 +1664,58 @@ func TestDetectProblems_RolloutStuckExplainsRWORollingUpdate(t *testing.T) {
 		t.Fatalf("recreate rollout should not get RWO/RollingUpdate hint; got %q", recreate.Message)
 	}
 }
+
+// Pins the observedGeneration==1 onset rule for stuck rollouts: gen 1 rescues
+// only the no-verdict (gray zone / missing LTT) case. A timestamp-backed
+// "runtime" verdict must survive — generation only bumps on spec changes, so
+// a gen-1 Deployment that ran healthy then broke is still gen 1.
+func TestDetectProblems_RolloutStuckOnsetGen1(t *testing.T) {
+	defer ResetTestState()
+
+	now := time.Now()
+	stuckCond := func(ltt time.Time) []appsv1.DeploymentCondition {
+		return []appsv1.DeploymentCondition{{
+			Type:               appsv1.DeploymentProgressing,
+			Status:             corev1.ConditionFalse,
+			Reason:             "ProgressDeadlineExceeded",
+			Message:            "ReplicaSet has timed out progressing",
+			LastTransitionTime: metav1.NewTime(ltt),
+		}}
+	}
+	client := fake.NewClientset(
+		// Healthy ~2h, then stuck 10m ago → runtime; gen==1 must not override.
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "gen1-runtime", Namespace: "prod", CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour))},
+			Status:     appsv1.DeploymentStatus{ObservedGeneration: 1, Conditions: stuckCond(now.Add(-10 * time.Minute))},
+		},
+		// Gray zone (healthy ~4m of an 8m life) → no LTT verdict → gen==1 rescue.
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "gen1-gray", Namespace: "prod", CreationTimestamp: metav1.NewTime(now.Add(-8 * time.Minute))},
+			Status:     appsv1.DeploymentStatus{ObservedGeneration: 1, Conditions: stuckCond(now.Add(-4 * time.Minute))},
+		},
+	)
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "prod")
+		if hasProblem(problems, "Deployment", "gen1-runtime", "Rollout stuck") && hasProblem(problems, "Deployment", "gen1-gray", "Rollout stuck") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	rt, ok := lookupProblem(problems, "Deployment", "gen1-runtime", "Rollout stuck")
+	if !ok || rt.Onset != "runtime" || rt.OnsetBasis != "condition" {
+		t.Errorf("gen1-runtime onset = (%q, %q), want (runtime, condition); ok=%v", rt.Onset, rt.OnsetBasis, ok)
+	}
+	gray, ok := lookupProblem(problems, "Deployment", "gen1-gray", "Rollout stuck")
+	if !ok || gray.Onset != "initial" || gray.OnsetBasis != "spec" {
+		t.Errorf("gen1-gray onset = (%q, %q), want (initial, spec); ok=%v", gray.Onset, gray.OnsetBasis, ok)
+	}
+}

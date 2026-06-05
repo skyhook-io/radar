@@ -448,10 +448,12 @@ func argoRolloutFailure(u *unstructured.Unstructured) (reason, message string, s
 		if ltt == "" {
 			return 0
 		}
-		if t, err := time.Parse(time.RFC3339, ltt); err == nil {
-			return time.Since(t)
+		t, err := time.Parse(time.RFC3339, ltt)
+		if err != nil {
+			log.Printf("[issues] Failed to parse Rollout condition lastTransitionTime %q: %v", ltt, err)
+			return 0
 		}
-		return 0
+		return time.Since(t)
 	}
 	if c := lookup("InvalidSpec"); c.status == "True" {
 		rolloutReason := "InvalidSpec"

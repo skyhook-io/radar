@@ -278,7 +278,6 @@ type Issue struct {
 	//                       reflects workload-level health onset, not cause-specific onset
 	//                       (a new image error on an already-degraded Deployment inherits
 	//                       the Deployment's onset, not the image error's onset)
-	//   "event"           — K8s Event firstTimestamp
 	//   "deletion"        — deletionTimestamp (always runtime)
 	//   "phase"           — resource Phase field (e.g. PVC Pending)
 	//   "spec"            — structural spec invariant (no timestamp required)

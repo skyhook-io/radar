@@ -84,8 +84,7 @@ type Detection struct {
 	//
 	// Onset values: "initial" (failing since the resource was created) |
 	//               "runtime" (resource was previously healthy then broke).
-	// Basis values: "condition" | "owner_condition" | "event" |
-	//               "deletion" | "phase" | "spec".
+	// Basis values: "condition" | "owner_condition" | "deletion" | "phase" | "spec".
 	Onset      string
 	OnsetBasis string
 }
@@ -207,13 +206,14 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						message = detail
 					}
 				}
-				// observedGeneration==1 → first-ever rollout stalled → initial regardless
-				// of timing (slow clusters can exceed progressDeadlineSeconds on gen 1).
-				var onsetR OnsetResult
-				if d.Status.ObservedGeneration == 1 {
-					onsetR = OnsetResult{Onset: "initial", Basis: "condition"}
-				} else {
-					onsetR = OnsetFromConditionLTT(stuck.LastTransitionTime.Time, d.CreationTimestamp.Time, "condition")
+				// observedGeneration==1 rescues only the no-verdict case for first-ever
+				// rollouts (slow clusters can exceed progressDeadlineSeconds on gen 1).
+				// It must not override a timestamp-backed verdict: generation only
+				// bumps on spec changes, so a gen-1 Deployment that ran healthy for
+				// months and then broke (image gone, node loss) is still gen 1.
+				onsetR := OnsetFromConditionLTT(stuck.LastTransitionTime.Time, d.CreationTimestamp.Time, "condition")
+				if onsetR.Onset == "" && d.Status.ObservedGeneration == 1 {
+					onsetR = OnsetResult{Onset: "initial", Basis: "spec"}
 				}
 				problems = append(problems, Detection{
 					Kind:            "Deployment",
@@ -365,8 +365,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			// Onset: use the owner Deployment's Available condition as the stable
 			// signal — pod timestamps churn on rollouts/evictions/restarts, but
 			// Deployment.Available.lastTransitionTime captures when the workload as
-			// a whole last changed health state. Only applies to Deployment owners;
-			// StatefulSet/DaemonSet owners are deferred to v2.
+			// a whole last changed health state. Only applies to Deployment owners —
+			// StatefulSet/DaemonSet don't expose an equivalent Available condition.
 			var podOnset OnsetResult
 			if ownerKind == "Deployment" && ownerName != "" {
 				if depLister := cache.Deployments(); depLister != nil {
@@ -551,8 +551,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 			ageDur := resourceAge(now, hpas, hp.Namespace, hp.Name)
 			// Onset for cannot-scale only: use ScalingActive condition LTT.
-			// Maxed-out is excluded from v1 onset (capacity concerns don't
-			// cleanly map to initial vs runtime).
+			// "maxed" carries no onset — hitting the replica ceiling is a
+			// capacity concern that doesn't cleanly map to initial vs runtime.
 			var hpaOnset OnsetResult
 			var hpaCondDur time.Duration
 			if hp.Problem == "cannot-scale" {
@@ -762,11 +762,20 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					// Onset omitted: Phase=Lost is semantically runtime but there is
 					// no condition LTT or event timestamp available at this site, so
 					// first_seen would show resource age — inconsistent with a runtime
-					// classification. Omit until an event-based timestamp is available.
+					// classification.
 				})
 				continue
 			}
 			if resize := pvcResizeProblem(pvc); resize.reason != "" {
+				// Resize operations are semantically runtime — the PVC existed before
+				// a resize was attempted — but only claim it when the error condition
+				// carries a real LTT. Without one, Duration falls back to resource age
+				// and first_seen would contradict a runtime label (same rule as the
+				// Lost/Failed sites).
+				var resizeOnset OnsetResult
+				if !resize.lastTransitionTime.IsZero() {
+					resizeOnset = OnsetResult{Onset: "runtime", Basis: "condition"}
+				}
 				problems = append(problems, Detection{
 					Kind:            "PersistentVolumeClaim",
 					Namespace:       pvc.Namespace,
@@ -779,10 +788,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(resize.duration(now, ageDur)),
 					DurationSeconds: int64(resize.duration(now, ageDur).Seconds()),
-					// Resize operations are always runtime — the PVC existed and was
-					// running before a resize was attempted.
-					Onset:      "runtime",
-					OnsetBasis: "condition",
+					Onset:           resizeOnset.Onset,
+					OnsetBasis:      resizeOnset.Basis,
 				})
 			}
 			if pvc.Status.Phase == corev1.ClaimPending {
@@ -808,7 +815,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						Duration:        FormatAge(ageDur),
 						DurationSeconds: int64(ageDur.Seconds()),
 						// Phase=Pending since creation means the PVC has never been bound —
-						// always an initial misconfiguration (wrong StorageClass, missing provisioner).
+						// present since creation (wrong StorageClass, missing or failing provisioner).
 						Onset:      "initial",
 						OnsetBasis: "phase",
 					})

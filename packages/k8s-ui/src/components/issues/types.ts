@@ -148,11 +148,8 @@ export interface Issue {
    *              as active incident root cause candidates.
    */
   onset?: 'initial' | 'runtime';
-  /**
-   * The evidence that determined onset (for auditability).
-   * "condition" | "owner_condition" | "event" | "deletion" | "phase" | "spec"
-   */
-  onset_basis?: string;
+  /** The evidence that determined onset (for auditability). */
+  onset_basis?: 'condition' | 'owner_condition' | 'deletion' | 'phase' | 'spec';
 }
 
 /** subjectRef builds a deep-linkable ref for an issue's subject — the row's

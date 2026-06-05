@@ -52,6 +52,44 @@ func TestArgoRolloutFailure(t *testing.T) {
 	if _, _, _, ok := argoRolloutFailure(progressing); ok {
 		t.Error("a mid-progress rollout must not be flagged as a definitive failure")
 	}
+
+	// The override condition's lastTransitionTime drives first_seen and onset —
+	// a valid LTT must round-trip into the returned since.
+	withLTT := rolloutWithConditions([]map[string]any{
+		{"type": "Healthy", "status": "False", "reason": "RolloutHealthy"},
+		{"type": "InvalidSpec", "status": "True", "reason": "InvalidSpec", "message": "bad", "lastTransitionTime": time.Now().Add(-5 * time.Minute).Format(time.RFC3339)},
+	})
+	if _, _, since, ok := argoRolloutFailure(withLTT); !ok || since < 4*time.Minute || since > 6*time.Minute {
+		t.Errorf("valid LTT must produce since ≈ 5m, got (%v, %v)", since, ok)
+	}
+
+	// Malformed or missing LTT → since=0, which downstream means "omit onset"
+	// rather than falling back to a wrong timestamp.
+	badLTT := rolloutWithConditions([]map[string]any{
+		{"type": "InvalidSpec", "status": "True", "reason": "InvalidSpec", "lastTransitionTime": "not-a-timestamp"},
+	})
+	if _, _, since, ok := argoRolloutFailure(badLTT); !ok || since != 0 {
+		t.Errorf("malformed LTT must produce since=0, got (%v, %v)", since, ok)
+	}
+}
+
+// TestNewConditionIssue_OnsetSinceGuard pins the since=0 guard: a condition
+// with no lastTransitionTime must not produce an onset. Without the guard,
+// lastSeen=now makes failingFor≈0 and any old resource looks like it was
+// "healthy for ages then broke" — a false runtime classification.
+func TestNewConditionIssue_OnsetSinceGuard(t *testing.T) {
+	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
+	createdAt := time.Now().Add(-2 * time.Hour)
+
+	noLTT := newConditionIssue(gvr, "Widget", "ns", "w", SeverityWarning, "Ready: Bad", "msg", 0, "fp", createdAt)
+	if noLTT.Onset != "" || noLTT.OnsetBasis != "" {
+		t.Errorf("since=0 must omit onset, got (%q, %q)", noLTT.Onset, noLTT.OnsetBasis)
+	}
+
+	withLTT := newConditionIssue(gvr, "Widget", "ns", "w", SeverityWarning, "Ready: Bad", "msg", 30*time.Minute, "fp", createdAt)
+	if withLTT.Onset != "runtime" || withLTT.OnsetBasis != "condition" {
+		t.Errorf("90m healthy then failing 30m must be runtime/condition, got (%q, %q)", withLTT.Onset, withLTT.OnsetBasis)
+	}
 }
 
 func TestDetectGenericCRDIssues_GatewayRouteParentConditions(t *testing.T) {
