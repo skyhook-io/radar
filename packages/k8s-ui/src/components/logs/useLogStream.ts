@@ -89,10 +89,14 @@ export function useLogStream() {
     })
 
     es.addEventListener('error', (event) => {
-      handleSSEError(event, errorContext, () => { setIsStreaming(false); es.close() })
+      setIsStreaming(false)
       setConnecting(false)
-      // Don't report the close that normally follows a clean 'end' as a failure.
-      if (!endedRef.current) setStreamError(errorContext)
+      es.close()
+      // The browser fires 'error' on the normal close that follows a clean
+      // 'end'; that's not a failure, so don't log it or surface it.
+      if (endedRef.current) return
+      handleSSEError(event, errorContext, () => {})
+      setStreamError(errorContext)
     })
 
     eventSourceRef.current = es

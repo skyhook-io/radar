@@ -118,9 +118,21 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
 
   // When auto-streaming the stream supplies the initial tail, so the static
   // snapshot fetch is skipped to avoid a redundant request and a flash of
-  // snapshot content before the stream takes over.
-  useEffect(() => { if (!willAutoStream) loadLogs() }, [loadLogs, willAutoStream])
+  // snapshot content before the stream takes over. If the user has Stopped we
+  // won't auto-start, so fall back to the snapshot — otherwise a container
+  // switch would keep showing the previous selection's lines.
+  useEffect(() => {
+    if (!willAutoStream || userStoppedRef.current) loadLogs()
+  }, [loadLogs, willAutoStream])
   useEffect(() => { stopStreaming() }, [selectedContainer, stopStreaming])
+
+  // If auto-stream turns off while a stream is open, stop following so live
+  // appends don't race the snapshot.
+  const prevWillAutoStreamRef = useRef(willAutoStream)
+  useEffect(() => {
+    if (prevWillAutoStreamRef.current && !willAutoStream && isStreaming) stopStreaming()
+    prevWillAutoStreamRef.current = willAutoStream
+  }, [willAutoStream, isStreaming, stopStreaming])
 
   const handleStartStreaming = useCallback(() => {
     if (!createStream) return
