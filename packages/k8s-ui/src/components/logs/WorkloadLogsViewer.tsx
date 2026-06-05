@@ -67,7 +67,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
 
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
   const { entries, append, set, clear } = useLogBuffer()
-  const { isStreaming, streamError, startStreaming, stopStreaming } = useLogStream()
+  const { isStreaming, streamError, connecting, startStreaming, stopStreaming } = useLogStream()
 
   const willAutoStream = autoStream && !!createStream
   // null sentinel so the initial selectedContainer ('' = all) still arms once.
@@ -125,7 +125,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const handleStartStreaming = useCallback(() => {
     if (!createStream) return
     // The stream replays the last N lines per pod (TailLines + Follow); clear
-    // first so they don't duplicate whatever the snapshot already loaded.
+    // first so they don't duplicate lines already in the buffer (the snapshot on
+    // the manual path, or an earlier stream on restart).
     clear()
     startStreaming(
       () => createStream({ container: selectedContainer || undefined, tailLines: 50, sinceSeconds }),
@@ -314,10 +315,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     </>
   )
 
-  // While the auto-stream is opening (before the first 'connected'/log event),
-  // show the loading state rather than the empty-logs placeholder. A stream
-  // error settles the connecting state so it can't spin forever.
-  const isConnecting = willAutoStream && !isStreaming && entries.length === 0 && !userStoppedRef.current && !streamError
+  // While the auto-stream is opening (before it first settles), show the
+  // loading state rather than the empty-logs placeholder.
+  const isConnecting = willAutoStream && connecting && entries.length === 0
 
   return (
     <LogCore

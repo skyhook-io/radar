@@ -58,7 +58,7 @@ export function LogsViewer({
 
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
   const { entries, append, set, clear } = useLogBuffer()
-  const { isStreaming, streamError, startStreaming, stopStreaming } = useLogStream()
+  const { isStreaming, streamError, connecting, startStreaming, stopStreaming } = useLogStream()
 
   const willAutoStream = autoStream && !!createStream
   // Tracks the container we've already auto-started for, so re-renders don't
@@ -95,7 +95,8 @@ export function LogsViewer({
   const handleStartStreaming = useCallback(() => {
     if (!createStream) return
     // The stream replays the last N lines (TailLines + Follow); clear first so
-    // they don't duplicate whatever the snapshot already loaded.
+    // they don't duplicate lines already in the buffer (the snapshot on the
+    // manual path, or an earlier stream on restart).
     clear()
     startStreaming(
       () => createStream({ container: selectedContainer, tailLines: 100, sinceSeconds }),
@@ -172,10 +173,9 @@ export function LogsViewer({
     </>
   )
 
-  // While the auto-stream is opening (before the first 'connected'/log event),
-  // show the loading state rather than the empty-logs placeholder. A stream
-  // error settles the connecting state so it can't spin forever.
-  const isConnecting = willAutoStream && !isStreaming && entries.length === 0 && !userStoppedRef.current && !streamError
+  // While the auto-stream is opening (before it first settles), show the
+  // loading state rather than the empty-logs placeholder.
+  const isConnecting = willAutoStream && connecting && entries.length === 0
 
   return (
     <LogCore
