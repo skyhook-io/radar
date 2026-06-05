@@ -4054,8 +4054,8 @@ export function ResourcesView({
               <Columns3 className="w-4 h-4" />
             </button>
             {showColumnPicker && (
-              <div className="absolute right-0 top-full mt-1 z-50 bg-theme-surface border border-theme-border rounded-lg shadow-lg py-1 min-w-[200px] max-h-[400px] overflow-auto">
-                <div className="px-3 py-2 border-b border-theme-border flex items-center justify-between">
+              <div className="absolute right-0 top-full mt-1 z-50 bg-theme-surface border border-theme-border rounded-lg shadow-lg py-1 min-w-[200px] max-h-[400px] flex flex-col">
+                <div className="shrink-0 px-3 py-2 border-b border-theme-border flex items-center justify-between">
                   <span className="text-xs font-medium text-theme-text-secondary uppercase">Columns</span>
                   <button
                     onClick={resetColumnSettings}
@@ -4066,6 +4066,9 @@ export function ResourcesView({
                     Reset
                   </button>
                 </div>
+                {/* Column list scrolls; the add-column footer stays pinned so
+                    its input isn't pushed below the fold on kinds with many columns. */}
+                <div className="overflow-y-auto flex-1 min-h-0">
                 {allColumns.map(col => {
                   const isCustom = customColumnKeySet.has(col.key)
                   return (
@@ -4101,8 +4104,9 @@ export function ResourcesView({
                     </div>
                   )
                 })}
+                </div>
                 {/* Add a label/annotation column */}
-                <div className="border-t border-theme-border mt-1 pt-2 px-3 pb-1">
+                <div className="shrink-0 border-t border-theme-border pt-2 px-3 pb-1">
                   <div className="flex items-center gap-1 mb-1.5">
                     {(['label', 'annotation'] as CustomColumnSource[]).map(src => (
                       <button
