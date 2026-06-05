@@ -128,6 +128,7 @@ import {
 } from './resource-utils'
 import { SEVERITY_BADGE, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
 import { pluralize } from '../../utils/pluralize'
+import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCustomColumnValue, sanitizeCustomColumnDefs } from '../../utils/custom-columns'
 import { Tooltip } from '../ui/Tooltip'
 // CRD-specific cell components (extracted)
 import { GitRepositoryCell, OCIRepositoryCell, HelmRepositoryCell, KustomizationCell, FluxHelmReleaseCell, FluxAlertCell } from './renderers/flux-cells'
@@ -224,26 +225,10 @@ export interface ExtraColumn extends Column {
   getFilterValue?: (resource: any) => string
 }
 
-// User-defined column sourcing a metadata.labels[path] or
-// metadata.annotations[path] value. Persisted per-kind in localStorage and
-// materialized into a self-contained ExtraColumn so it rides the existing
-// render/sort/filter override rails (extraColumnsByKey).
-type CustomColumnSource = 'label' | 'annotation'
-interface CustomColumnDef {
-  source: CustomColumnSource
-  path: string
-}
-
-function customColumnKey(d: CustomColumnDef): string {
-  return `${d.source}:${d.path}`
-}
-
-function readCustomColumnValue(resource: any, d: CustomColumnDef): string {
-  const bag = d.source === 'label' ? resource?.metadata?.labels : resource?.metadata?.annotations
-  const v = bag?.[d.path]
-  return typeof v === 'string' ? v : v == null ? '' : String(v)
-}
-
+// Materializes a custom-column def into a self-contained ExtraColumn so it
+// rides the existing render/sort/filter override rails (extraColumnsByKey).
+// The pure parts (key encoding, value read, load-boundary sanitizer) live in
+// utils/custom-columns so they're unit-tested; only the JSX render stays here.
 function buildCustomColumn(d: CustomColumnDef): ExtraColumn {
   return {
     key: customColumnKey(d),
@@ -2168,13 +2153,24 @@ export function ResourcesView({
     return m
   }, [extraLeadingColumns, builtCustomColumns])
 
+  // Guards the save effect from persisting on the initial load of each kind
+  // (set false by the load effect, flipped true on its first skipped save).
+  const isColumnSettingsLoaded = useRef(false)
   useEffect(() => {
+    // Re-arm the skip-initial-save guard per kind: this effect repopulates
+    // visible/widths/custom for the new kind via async setState, but the save
+    // effect (keyed to selectedKind too) would otherwise fire first in this
+    // same commit and persist the PREVIOUS kind's columns into the new kind's
+    // storage key. Skipping the first save after each load prevents that.
+    isColumnSettingsLoaded.current = false
     const saved = loadColumnSettings(selectedKind.name, selectedKind.group)
     // Reconstruct the effective column list locally rather than reading
     // `allColumns` — keying this effect to the kind (not allColumns) keeps
     // runtime custom-column add/remove from re-running it and clobbering the
     // in-session edit (and avoids a setCustomColumns → allColumns → re-run loop).
-    const savedCustom = saved?.custom ?? []
+    // sanitize guards the localStorage boundary: a malformed/legacy blob (non-
+    // array, blank path, bad source) must not crash the later .map or add dead columns.
+    const savedCustom = sanitizeCustomColumnDefs(saved?.custom)
     setCustomColumns(savedCustom)
     const kindColumns = getColumnsForKind(selectedKind.name, selectedKind.group)
     const builtinKeys = new Set(kindColumns.map(c => c.key))
@@ -2210,8 +2206,7 @@ export function ResourcesView({
     }
   }, [selectedKind.name, selectedKind.group, extraLeadingColumns])
 
-  // Save column settings when they change (skip initial load)
-  const isColumnSettingsLoaded = useRef(false)
+  // Save column settings when they change (skip the initial load of each kind)
   useEffect(() => {
     if (visibleColumns.size === 0) return // not loaded yet
     if (!isColumnSettingsLoaded.current) {
