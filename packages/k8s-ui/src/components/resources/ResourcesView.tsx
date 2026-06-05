@@ -224,6 +224,47 @@ export interface ExtraColumn extends Column {
   getFilterValue?: (resource: any) => string
 }
 
+// User-defined column sourcing a metadata.labels[path] or
+// metadata.annotations[path] value. Persisted per-kind in localStorage and
+// materialized into a self-contained ExtraColumn so it rides the existing
+// render/sort/filter override rails (extraColumnsByKey).
+type CustomColumnSource = 'label' | 'annotation'
+interface CustomColumnDef {
+  source: CustomColumnSource
+  path: string
+}
+
+function customColumnKey(d: CustomColumnDef): string {
+  return `${d.source}:${d.path}`
+}
+
+function readCustomColumnValue(resource: any, d: CustomColumnDef): string {
+  const bag = d.source === 'label' ? resource?.metadata?.labels : resource?.metadata?.annotations
+  const v = bag?.[d.path]
+  return typeof v === 'string' ? v : v == null ? '' : String(v)
+}
+
+function buildCustomColumn(d: CustomColumnDef): ExtraColumn {
+  return {
+    key: customColumnKey(d),
+    label: d.path,
+    width: 'w-40',
+    defaultVisible: true,
+    tooltip: d.source === 'label' ? `Label: ${d.path}` : `Annotation: ${d.path}`,
+    render: (resource: any) => {
+      const v = readCustomColumnValue(resource, d)
+      if (!v) return <span className="text-sm text-theme-text-secondary">-</span>
+      return (
+        <Tooltip content={v}>
+          <span className="text-sm text-theme-text-secondary truncate block">{v}</span>
+        </Tooltip>
+      )
+    },
+    getSortValue: (resource: any) => readCustomColumnValue(resource, d),
+    getFilterValue: (resource: any) => readCustomColumnValue(resource, d),
+  }
+}
+
 // Tailwind width class → pixel minimum mapping for CSS Grid column sizing
 const TAILWIND_WIDTH_TO_PX: Record<string, number> = {
   'w-12': 48, 'w-14': 56, 'w-16': 64, 'w-20': 80, 'w-24': 96,
@@ -1657,6 +1698,7 @@ const COLUMN_SETTINGS_PREFIX = 'radar-columns-'
 interface ColumnSettings {
   visible: string[]
   widths: Record<string, number>
+  custom?: CustomColumnDef[]
 }
 
 function loadColumnSettings(kind: string, group?: string): ColumnSettings | null {
@@ -2002,6 +2044,8 @@ export function ResourcesView({
   const [visibleColumns, setVisibleColumns] = useState<Set<string>>(new Set())
   const [columnWidths, setColumnWidths] = useState<Record<string, number>>({})
   const [showColumnPicker, setShowColumnPicker] = useState(false)
+  const [customColumns, setCustomColumns] = useState<CustomColumnDef[]>([])
+  const [customColumnDraft, setCustomColumnDraft] = useState<CustomColumnDef>({ source: 'label', path: '' })
   const columnPickerRef = useRef<HTMLDivElement>(null)
   // Label/owner filtering for deep-linking from workload details
   const [labelSelector, setLabelSelector] = useState<string>(initialFilters.labelSelector)
@@ -2086,6 +2130,12 @@ export function ResourcesView({
     return { pods, nodes }
   }, [topPodMetrics, topNodeMetrics])
 
+  // User-defined label/annotation columns materialized as self-contained
+  // ExtraColumns — appended after the built-ins and wired through the same
+  // render/sort/filter override rails (extraColumnsByKey).
+  const builtCustomColumns = useMemo(() => customColumns.map(buildCustomColumn), [customColumns])
+  const customColumnKeySet = useMemo(() => new Set(builtCustomColumns.map(c => c.key)), [builtCustomColumns])
+
   // Prepend extraLeadingColumns (host-injected leading columns) before
   // the kind-specific KNOWN_COLUMNS entries. When extras are undefined,
   // this collapses to single-cluster behavior. Built-in keys win on
@@ -2094,9 +2144,9 @@ export function ResourcesView({
   // duplicate React keys and corrupt visibleColumns / columnWidths state.
   const allColumns = useMemo(() => {
     const kindColumns = getColumnsForKind(selectedKind.name, selectedKind.group)
-    if (!extraLeadingColumns?.length) return kindColumns
+    if (!extraLeadingColumns?.length && !builtCustomColumns.length) return kindColumns
     const builtinKeys = new Set(kindColumns.map(c => c.key))
-    const filteredExtras = extraLeadingColumns.filter(c => {
+    const filteredExtras = (extraLeadingColumns ?? []).filter(c => {
       if (builtinKeys.has(c.key)) {
         if (import.meta.env?.DEV) {
           // eslint-disable-next-line no-console
@@ -2106,36 +2156,47 @@ export function ResourcesView({
       }
       return true
     })
-    return [...filteredExtras, ...kindColumns]
-  }, [selectedKind.name, selectedKind.group, extraLeadingColumns])
+    return [...filteredExtras, ...kindColumns, ...builtCustomColumns]
+  }, [selectedKind.name, selectedKind.group, extraLeadingColumns, builtCustomColumns])
 
   // Map of extra column keys for fast O(1) lookup on each render path
   // (cell render, sort, column-filter unique-values).
   const extraColumnsByKey = useMemo(() => {
     const m = new Map<string, ExtraColumn>()
     extraLeadingColumns?.forEach(c => m.set(c.key, c))
+    builtCustomColumns.forEach(c => m.set(c.key, c))
     return m
-  }, [extraLeadingColumns])
+  }, [extraLeadingColumns, builtCustomColumns])
 
   useEffect(() => {
     const saved = loadColumnSettings(selectedKind.name, selectedKind.group)
+    // Reconstruct the effective column list locally rather than reading
+    // `allColumns` — keying this effect to the kind (not allColumns) keeps
+    // runtime custom-column add/remove from re-running it and clobbering the
+    // in-session edit (and avoids a setCustomColumns → allColumns → re-run loop).
+    const savedCustom = saved?.custom ?? []
+    setCustomColumns(savedCustom)
+    const kindColumns = getColumnsForKind(selectedKind.name, selectedKind.group)
+    const builtinKeys = new Set(kindColumns.map(c => c.key))
+    const extras = (extraLeadingColumns ?? []).filter(c => !builtinKeys.has(c.key))
+    const effective = [...extras, ...kindColumns, ...savedCustom.map(buildCustomColumn)]
     // Host-injected extra columns (e.g. fleet Cluster) default to visible
     // even when the saved column-visibility blob predates them — a naive
     // Set(saved.visible) would silently hide host columns the user has
     // never been shown. Trade-off: a user can't permanently hide a host
     // extra column via the column picker — next mount re-adds it. Track
     // a sibling "hidden-extras" set if this becomes a real complaint.
-    const extraKeys = extraLeadingColumns?.map(c => c.key) ?? []
+    const extraKeys = extras.map(c => c.key)
     if (saved) {
       // If saved columns are just the defaults but this kind has specialized columns,
       // discard the stale save and use the specialized columns instead
       const defaultKeys = DEFAULT_COLUMNS.map(c => c.key)
-      const isStaleDefaults = allColumns !== DEFAULT_COLUMNS &&
+      const isStaleDefaults = kindColumns !== DEFAULT_COLUMNS &&
         saved.visible.length === defaultKeys.length &&
         saved.visible.every(v => defaultKeys.includes(v))
       if (isStaleDefaults) {
         clearColumnSettings(selectedKind.name, selectedKind.group)
-        setVisibleColumns(getDefaultVisibleColumns(allColumns))
+        setVisibleColumns(getDefaultVisibleColumns(effective))
         setColumnWidths({})
       } else {
         const merged = new Set(saved.visible)
@@ -2144,10 +2205,10 @@ export function ResourcesView({
         setColumnWidths(saved.widths || {})
       }
     } else {
-      setVisibleColumns(getDefaultVisibleColumns(allColumns))
+      setVisibleColumns(getDefaultVisibleColumns(effective))
       setColumnWidths({})
     }
-  }, [selectedKind.name, selectedKind.group, allColumns, extraLeadingColumns])
+  }, [selectedKind.name, selectedKind.group, extraLeadingColumns])
 
   // Save column settings when they change (skip initial load)
   const isColumnSettingsLoaded = useRef(false)
@@ -2160,8 +2221,9 @@ export function ResourcesView({
     saveColumnSettings(selectedKind.name, selectedKind.group, {
       visible: Array.from(visibleColumns),
       widths: columnWidths,
+      custom: customColumns,
     })
-  }, [visibleColumns, columnWidths, selectedKind.name, selectedKind.group])
+  }, [visibleColumns, columnWidths, customColumns, selectedKind.name, selectedKind.group])
 
   // Close column picker on outside click or Escape
   useEffect(() => {
@@ -2261,13 +2323,40 @@ export function ResourcesView({
     })
   }, [])
 
-  // Reset column settings to defaults
+  // Reset column settings to defaults (also drops user-added custom columns)
   const resetColumnSettings = useCallback(() => {
     clearColumnSettings(selectedKind.name, selectedKind.group)
-    setVisibleColumns(getDefaultVisibleColumns(allColumns))
+    setCustomColumns([])
+    const customKeys = new Set(builtCustomColumns.map(c => c.key))
+    setVisibleColumns(getDefaultVisibleColumns(allColumns.filter(c => !customKeys.has(c.key))))
     setColumnWidths({})
     isColumnSettingsLoaded.current = false
-  }, [selectedKind.name, selectedKind.group, allColumns])
+  }, [selectedKind.name, selectedKind.group, allColumns, builtCustomColumns])
+
+  // Add a user-defined label/annotation column (dedupe by key) and show it.
+  const addCustomColumn = useCallback((def: CustomColumnDef) => {
+    const path = def.path.trim()
+    if (!path) return
+    const key = customColumnKey({ ...def, path })
+    setCustomColumns(prev => prev.some(c => customColumnKey(c) === key) ? prev : [...prev, { ...def, path }])
+    setVisibleColumns(prev => {
+      if (prev.has(key)) return prev
+      const next = new Set(prev)
+      next.add(key)
+      return next
+    })
+  }, [])
+
+  // Remove a user-defined column entirely (not just hide it).
+  const removeCustomColumn = useCallback((key: string) => {
+    setCustomColumns(prev => prev.filter(c => customColumnKey(c) !== key))
+    setVisibleColumns(prev => {
+      if (!prev.has(key)) return prev
+      const next = new Set(prev)
+      next.delete(key)
+      return next
+    })
+  }, [])
 
   // Keyboard shortcut: / to focus search
   useRegisterShortcut({
@@ -2957,6 +3046,24 @@ export function ResourcesView({
 
   const selectedQuery = selectedKindQueryProp ?? resourceQueries[selectedQueryIndex]
   const resources = selectedQuery?.data
+
+  // Label/annotation keys present on the loaded rows — powers the
+  // add-custom-column autocomplete so users don't type keys blind. Sampled
+  // to bound cost on large lists; keys converge fast across rows of one kind.
+  const customColumnKeySuggestions = useMemo(() => {
+    const labels = new Set<string>()
+    const annotations = new Set<string>()
+    const rows = (resources as any[] | undefined) ?? []
+    for (let i = 0; i < rows.length && i < 500; i++) {
+      const meta = rows[i]?.metadata
+      if (meta?.labels) for (const k of Object.keys(meta.labels)) labels.add(k)
+      if (meta?.annotations) for (const k of Object.keys(meta.annotations)) annotations.add(k)
+    }
+    return {
+      label: Array.from(labels).sort(),
+      annotation: Array.from(annotations).sort(),
+    }
+  }, [resources])
   const isLoading = selectedQuery?.isLoading ?? true
   const selectedQueryError = selectedQuery?.error
   const isSelectedForbidden = isForbiddenError(selectedQueryError)
@@ -3964,26 +4071,91 @@ export function ResourcesView({
                     Reset
                   </button>
                 </div>
-                {allColumns.map(col => (
-                  <label
-                    key={col.key}
-                    className="flex items-center gap-2 px-3 py-1.5 hover:bg-theme-elevated"
+                {allColumns.map(col => {
+                  const isCustom = customColumnKeySet.has(col.key)
+                  return (
+                    <div
+                      key={col.key}
+                      className="group flex items-center gap-2 px-3 py-1.5 hover:bg-theme-elevated"
+                    >
+                      <label className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={visibleColumns.has(col.key)}
+                          onChange={() => toggleColumnVisibility(col.key)}
+                          disabled={col.key === 'name'}
+                          className="rounded border-theme-border"
+                        />
+                        <span className={clsx(
+                          'text-sm truncate',
+                          col.key === 'name' ? 'text-theme-text-tertiary' : 'text-theme-text-primary'
+                        )} title={col.tooltip || col.label}>
+                          {col.label}
+                        </span>
+                      </label>
+                      {isCustom && (
+                        <button
+                          type="button"
+                          onClick={() => removeCustomColumn(col.key)}
+                          className="shrink-0 p-0.5 text-theme-text-tertiary hover:text-red-500 opacity-0 group-hover:opacity-100 focus:opacity-100"
+                          title="Remove column"
+                        >
+                          <X className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
+                  )
+                })}
+                {/* Add a label/annotation column */}
+                <div className="border-t border-theme-border mt-1 pt-2 px-3 pb-1">
+                  <div className="flex items-center gap-1 mb-1.5">
+                    {(['label', 'annotation'] as CustomColumnSource[]).map(src => (
+                      <button
+                        key={src}
+                        type="button"
+                        onClick={() => setCustomColumnDraft(d => ({ ...d, source: src }))}
+                        className={clsx(
+                          'px-2 py-0.5 text-xs rounded capitalize',
+                          customColumnDraft.source === src
+                            ? 'bg-skyhook-500/20 text-skyhook-400'
+                            : 'text-theme-text-tertiary hover:text-theme-text-primary hover:bg-theme-elevated'
+                        )}
+                      >
+                        {src}
+                      </button>
+                    ))}
+                  </div>
+                  <form
+                    className="flex items-center gap-1"
+                    onSubmit={e => {
+                      e.preventDefault()
+                      addCustomColumn(customColumnDraft)
+                      setCustomColumnDraft(d => ({ ...d, path: '' }))
+                    }}
                   >
                     <input
-                      type="checkbox"
-                      checked={visibleColumns.has(col.key)}
-                      onChange={() => toggleColumnVisibility(col.key)}
-                      disabled={col.key === 'name'}
-                      className="rounded border-theme-border"
+                      type="text"
+                      list="radar-custom-col-keys"
+                      value={customColumnDraft.path}
+                      onChange={e => setCustomColumnDraft(d => ({ ...d, path: e.target.value }))}
+                      placeholder={`Add ${customColumnDraft.source} key…`}
+                      className="flex-1 min-w-0 px-2 py-1 text-xs rounded bg-theme-base border border-theme-border text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
                     />
-                    <span className={clsx(
-                      'text-sm',
-                      col.key === 'name' ? 'text-theme-text-tertiary' : 'text-theme-text-primary'
-                    )}>
-                      {col.label}
-                    </span>
-                  </label>
-                ))}
+                    <datalist id="radar-custom-col-keys">
+                      {customColumnKeySuggestions[customColumnDraft.source].map(k => (
+                        <option key={k} value={k} />
+                      ))}
+                    </datalist>
+                    <button
+                      type="submit"
+                      disabled={!customColumnDraft.path.trim()}
+                      className="shrink-0 p-1 text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded disabled:opacity-40 disabled:hover:bg-transparent"
+                      title="Add column"
+                    >
+                      <Plus className="w-4 h-4" />
+                    </button>
+                  </form>
+                </div>
               </div>
             )}
           </div>
