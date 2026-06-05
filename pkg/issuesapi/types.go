@@ -259,6 +259,27 @@ type Issue struct {
 	MembersTruncated     bool               `json:"members_truncated,omitempty"`
 	DiagnosticContext    *DiagnosticContext `json:"diagnostic_context,omitempty"`
 	ChangeContext        *ChangeContext     `json:"change_context,omitempty"`
+	// Onset is a best-effort classification of when this issue began, derived
+	// from K8s-native signals (condition lastTransitionTime, resource phase,
+	// deletion timestamp) at detection time. Absent when the signal is
+	// ambiguous — treat absence as "unknown", not "initial" or "runtime".
+	//
+	// "initial"  — evidence shows this issue was present during the resource's
+	//              creation or first reconciliation. Treat as baseline behavior
+	//              unless no runtime issue explains the active incident.
+	// "runtime"  — evidence shows this resource was previously past its initial
+	//              state and then entered the failing condition. Prioritise these
+	//              as active incident root cause candidates.
+	Onset      string `json:"onset,omitempty"`
+	// OnsetBasis documents the evidence used to derive Onset so the
+	// classification is auditable, not magic.
+	//   "condition"       — condition.lastTransitionTime on the resource itself
+	//   "owner_condition" — condition on the parent workload (e.g. Deployment)
+	//   "event"           — K8s Event firstTimestamp
+	//   "deletion"        — deletionTimestamp (always runtime)
+	//   "phase"           — resource Phase field (e.g. PVC Lost/Pending)
+	//   "spec"            — structural spec invariant (no timestamp required)
+	OnsetBasis string `json:"onset_basis,omitempty"`
 }
 
 type Response struct {
@@ -301,4 +322,10 @@ var CELBindings = []CELBinding{
 	{Name: "grouping_scope", Type: BindingString},
 	{Name: "restart_count", Type: BindingInt},
 	{Name: "last_terminated_reason", Type: BindingString},
+	// onset / onset_basis: filter to issues with a specific onset classification.
+	// onset == "initial"  — failing since the resource was first created/reconciled.
+	// onset == "runtime"  — resource was previously healthy and then broke.
+	// onset == ""         — no confident signal (omit from filter to include all).
+	{Name: "onset", Type: BindingString},
+	{Name: "onset_basis", Type: BindingString},
 }

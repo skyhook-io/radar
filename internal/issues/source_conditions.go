@@ -124,19 +124,26 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 					issReason, issMsg, severity = r, m, SeverityCritical
 				}
 			}
-			lastSeen := time.Now().Add(-since)
+			now := time.Now()
+			lastSeen := now.Add(-since)
+			// Onset: condition.lastTransitionTime (= lastSeen) vs resource
+			// creationTimestamp. High-confidence signal: both come from the
+			// K8s control plane, independent of Radar's timeline state.
+			onsetR := k8s.OnsetFromConditionLTT(lastSeen, u.GetCreationTimestamp().Time, "condition")
 			iss := Issue{
-				Severity:  severity,
-				Source:    SourceCondition,
-				Kind:      kind,
-				Group:     gvr.Group,
-				Namespace: u.GetNamespace(),
-				Name:      u.GetName(),
-				Reason:    issReason,
-				Message:   issMsg,
-				FirstSeen: lastSeen,
-				LastSeen:  lastSeen,
-				Count:     1,
+				Severity:   severity,
+				Source:     SourceCondition,
+				Kind:       kind,
+				Group:      gvr.Group,
+				Namespace:  u.GetNamespace(),
+				Name:       u.GetName(),
+				Reason:     issReason,
+				Message:    issMsg,
+				FirstSeen:  lastSeen,
+				LastSeen:   lastSeen,
+				Count:      1,
+				Onset:      onsetR.Onset,
+				OnsetBasis: onsetR.Basis,
 			}
 			classifyIssue(&iss)
 			enrichIdentity(&iss)
@@ -178,7 +185,7 @@ func detectObjectConditionIssues(gvr schema.GroupVersionResource, kind string, u
 	if !ok || isTransientCRDCondition(u, reason) {
 		return nil
 	}
-	return []Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, condTypeReason(condType, reason), msg, since, "")}
+	return []Issue{newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), severity, condTypeReason(condType, reason), msg, since, "", u.GetCreationTimestamp().Time)}
 }
 
 func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string, u *unstructured.Unstructured) []Issue {
@@ -220,14 +227,15 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 			}
 			since := conditionSince(cm)
 			fp := condType + ":" + parentKey
-			out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning, condTypeReason(condType, reason), msg, since, fp))
+			out = append(out, newConditionIssue(gvr, kind, u.GetNamespace(), u.GetName(), SeverityWarning, condTypeReason(condType, reason), msg, since, fp, u.GetCreationTimestamp().Time))
 		}
 	}
 	return out
 }
 
-func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name string, severity Severity, reason, message string, since time.Duration, fingerprint string) Issue {
+func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name string, severity Severity, reason, message string, since time.Duration, fingerprint string, createdAt time.Time) Issue {
 	lastSeen := time.Now().Add(-since)
+	onsetR := k8s.OnsetFromConditionLTT(lastSeen, createdAt, "condition")
 	iss := Issue{
 		Severity:    severity,
 		Source:      SourceCondition,
@@ -241,6 +249,8 @@ func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name st
 		LastSeen:    lastSeen,
 		Count:       1,
 		Fingerprint: fingerprint,
+		Onset:       onsetR.Onset,
+		OnsetBasis:  onsetR.Basis,
 	}
 	classifyIssue(&iss)
 	enrichIdentity(&iss)

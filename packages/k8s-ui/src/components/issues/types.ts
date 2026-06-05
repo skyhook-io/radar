@@ -135,6 +135,24 @@ export interface Issue {
   // Pod crash context carried from the representative member.
   restart_count?: number;
   last_terminated_reason?: string;
+
+  /**
+   * Best-effort onset classification from K8s-native signals. Absent when
+   * Radar has no confident signal — treat absence as "unknown", not initial/runtime.
+   *
+   * "initial"  — evidence shows this issue was present during the resource's
+   *              creation or first reconciliation. Treat as baseline unless no
+   *              runtime issue explains the active incident.
+   * "runtime"  — evidence shows this resource was previously past its initial
+   *              state and then entered the failing condition. Prioritise these
+   *              as active incident root cause candidates.
+   */
+  onset?: 'initial' | 'runtime';
+  /**
+   * The evidence that determined onset (for auditability).
+   * "condition" | "owner_condition" | "event" | "deletion" | "phase" | "spec"
+   */
+  onset_basis?: string;
 }
 
 /** subjectRef builds a deep-linkable ref for an issue's subject — the row's

@@ -76,6 +76,18 @@ type Detection struct {
 	// cause is its own row. MUST be stable across polls (don't use a flapping
 	// reason or a count); empty means "fold by category" (the common case).
 	Fingerprint string
+	// Onset + OnsetBasis carry the best-effort onset classification derived at
+	// detection time, where typed K8s objects are in hand. Empty = no confident
+	// signal; the issues layer copies them to the Issue and the API omits them
+	// (omitempty). Do NOT set these unless the signal is clean; an absent onset
+	// is honest while a wrong one misleads agents.
+	//
+	// Onset values: "initial" (failing since the resource was created) |
+	//               "runtime" (resource was previously healthy then broke).
+	// Basis values: "condition" | "owner_condition" | "event" |
+	//               "deletion" | "phase" | "spec".
+	Onset      string
+	OnsetBasis string
 }
 
 // podOwnerKindName resolves a Pod's topmost stable controller for issue
@@ -130,6 +142,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				if !replicaFailure.LastTransitionTime.IsZero() {
 					durDur = now.Sub(replicaFailure.LastTransitionTime.Time)
 				}
+				onsetR := OnsetFromConditionLTT(replicaFailure.LastTransitionTime.Time, d.CreationTimestamp.Time, "condition")
 				problems = append(problems, Detection{
 					Kind:            "Deployment",
 					Namespace:       d.Namespace,
@@ -143,18 +156,23 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(durDur),
 					DurationSeconds: int64(durDur.Seconds()),
+					Onset:           onsetR.Onset,
+					OnsetBasis:      onsetR.Basis,
 				})
 			}
 
 			if d.Status.UnavailableReplicas > 0 && stuck == nil && replicaFailure == nil {
 				ageDur := now.Sub(d.CreationTimestamp.Time)
 				durDur := ageDur // fallback to creation time
+				var availCondLTT time.Time
 				for _, cond := range d.Status.Conditions {
 					if cond.Type == appsv1.DeploymentAvailable && cond.Status == "False" && !cond.LastTransitionTime.IsZero() {
 						durDur = now.Sub(cond.LastTransitionTime.Time)
+						availCondLTT = cond.LastTransitionTime.Time
 						break
 					}
 				}
+				onsetR := OnsetFromConditionLTT(availCondLTT, d.CreationTimestamp.Time, "condition")
 				// Report available/DESIRED: spec.replicas is the authoritative goal
 				// (nil defaults to 1; a scale-down's terminating pods inflate
 				// status.replicas above the target). schedDesiredReplicas encodes
@@ -171,6 +189,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(durDur),
 					DurationSeconds: int64(durDur.Seconds()),
+					Onset:           onsetR.Onset,
+					OnsetBasis:      onsetR.Basis,
 				})
 			}
 
@@ -187,6 +207,14 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						message = detail
 					}
 				}
+				// observedGeneration==1 → first-ever rollout stalled → initial regardless
+				// of timing (slow clusters can exceed progressDeadlineSeconds on gen 1).
+				var onsetR OnsetResult
+				if d.Status.ObservedGeneration == 1 {
+					onsetR = OnsetResult{Onset: "initial", Basis: "condition"}
+				} else {
+					onsetR = OnsetFromConditionLTT(stuck.LastTransitionTime.Time, d.CreationTimestamp.Time, "condition")
+				}
 				problems = append(problems, Detection{
 					Kind:            "Deployment",
 					Namespace:       d.Namespace,
@@ -199,6 +227,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					AgeSeconds:      int64(now.Sub(d.CreationTimestamp.Time).Seconds()),
 					Duration:        FormatAge(durDur),
 					DurationSeconds: int64(durDur.Seconds()),
+					Onset:           onsetR.Onset,
+					OnsetBasis:      onsetR.Basis,
 				})
 			}
 		}
@@ -332,6 +362,22 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				message = init.message
 				fingerprint = init.fingerprint
 			}
+			// Onset: use the owner Deployment's Available condition as the stable
+			// signal — pod timestamps churn on rollouts/evictions/restarts, but
+			// Deployment.Available.lastTransitionTime captures when the workload as
+			// a whole last changed health state. Only applies to Deployment owners;
+			// StatefulSet/DaemonSet owners are deferred to v2.
+			var podOnset OnsetResult
+			if ownerKind == "Deployment" && ownerName != "" {
+				if dep, err := cache.Deployments().Deployments(pod.Namespace).Get(ownerName); err == nil {
+					for _, cond := range dep.Status.Conditions {
+						if cond.Type == appsv1.DeploymentAvailable && cond.Status == "False" && !cond.LastTransitionTime.IsZero() {
+							podOnset = OnsetFromConditionLTT(cond.LastTransitionTime.Time, dep.CreationTimestamp.Time, "owner_condition")
+							break
+						}
+					}
+				}
+			}
 			problems = append(problems, Detection{
 				Kind:                 "Pod",
 				Namespace:            pod.Namespace,
@@ -349,6 +395,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				OwnerGroup:           ownerGroup,
 				OwnerKind:            ownerKind,
 				OwnerName:            ownerName,
+				Onset:                podOnset.Onset,
+				OnsetBasis:           podOnset.Basis,
 			})
 		}
 	}
@@ -500,6 +548,24 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				severity = "critical"
 			}
 			ageDur := resourceAge(now, hpas, hp.Namespace, hp.Name)
+			// Onset for cannot-scale only: use ScalingActive condition LTT.
+			// Maxed-out is excluded from v1 onset (capacity concerns don't
+			// cleanly map to initial vs runtime).
+			var hpaOnset OnsetResult
+			if hp.Problem == "cannot-scale" {
+				for _, hpa := range hpas {
+					if hpa.Name != hp.Name || hpa.Namespace != hp.Namespace {
+						continue
+					}
+					for _, cond := range hpa.Status.Conditions {
+						if cond.Type == autoscalingv2.ScalingActive && cond.Status == corev1.ConditionFalse && !cond.LastTransitionTime.IsZero() {
+							hpaOnset = OnsetFromConditionLTT(cond.LastTransitionTime.Time, hpa.CreationTimestamp.Time, "condition")
+							break
+						}
+					}
+					break
+				}
+			}
 			problems = append(problems, Detection{
 				Kind:      "HorizontalPodAutoscaler",
 				Namespace: hp.Namespace,
@@ -514,6 +580,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Fingerprint: "hpa:" + hp.Problem,
 				Age:         FormatAge(ageDur),
 				AgeSeconds:  int64(ageDur.Seconds()),
+				Onset:       hpaOnset.Onset,
+				OnsetBasis:  hpaOnset.Basis,
 			})
 		}
 	}
@@ -591,11 +659,22 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 		nodes, _ := nodeLister.List(labels.Everything())
 		for _, np := range DetectNodeProblems(nodes) {
 			ageDur := time.Duration(0)
+			var nodeOnset OnsetResult
 			for _, n := range nodes {
-				if n.Name == np.NodeName {
-					ageDur = now.Sub(n.CreationTimestamp.Time)
-					break
+				if n.Name != np.NodeName {
+					continue
 				}
+				ageDur = now.Sub(n.CreationTimestamp.Time)
+				// Compute onset from the Ready condition's lastTransitionTime.
+				// NotReady since creation → initial (bootstrap/CNI failure).
+				// NotReady recently on an old node → runtime (hardware/network fault).
+				for _, cond := range n.Status.Conditions {
+					if cond.Type == corev1.NodeReady && cond.Status != corev1.ConditionTrue && !cond.LastTransitionTime.IsZero() {
+						nodeOnset = OnsetFromConditionLTT(cond.LastTransitionTime.Time, n.CreationTimestamp.Time, "condition")
+						break
+					}
+				}
+				break
 			}
 			problems = append(problems, Detection{
 				Kind:       "Node",
@@ -605,6 +684,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				Message:    np.Reason,
 				Age:        FormatAge(ageDur),
 				AgeSeconds: int64(ageDur.Seconds()),
+				Onset:      nodeOnset.Onset,
+				OnsetBasis: nodeOnset.Basis,
 			})
 		}
 	}
@@ -635,6 +716,10 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(ageDur),
 					DurationSeconds: int64(ageDur.Seconds()),
+					// Phase=Lost means the PVC was bound and then the backing PV
+					// disappeared — always a runtime event, never present at creation.
+					Onset:      "runtime",
+					OnsetBasis: "phase",
 				})
 				continue
 			}
@@ -651,6 +736,10 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(resize.duration(now, ageDur)),
 					DurationSeconds: int64(resize.duration(now, ageDur).Seconds()),
+					// Resize operations are always runtime — the PVC existed and was
+					// running before a resize was attempted.
+					Onset:      "runtime",
+					OnsetBasis: "condition",
 				})
 			}
 			if pvc.Status.Phase == corev1.ClaimPending {
@@ -675,6 +764,10 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						AgeSeconds:      int64(ageDur.Seconds()),
 						Duration:        FormatAge(ageDur),
 						DurationSeconds: int64(ageDur.Seconds()),
+						// Phase=Pending since creation means the PVC has never been bound —
+						// always an initial misconfiguration (wrong StorageClass, missing provisioner).
+						Onset:      "initial",
+						OnsetBasis: "phase",
 					})
 				}
 			}
@@ -702,6 +795,10 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				AgeSeconds:      int64(ageDur.Seconds()),
 				Duration:        FormatAge(ageDur),
 				DurationSeconds: int64(ageDur.Seconds()),
+				// Phase=Failed means the PV was functional and then the storage
+				// backend failed — always a runtime event.
+				Onset:      "runtime",
+				OnsetBasis: "phase",
 			})
 		}
 	}
@@ -1015,6 +1112,10 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 		AgeSeconds:      int64(now.Sub(obj.GetCreationTimestamp().Time).Seconds()),
 		Duration:        FormatAge(duration),
 		DurationSeconds: int64(duration.Seconds()),
+		// Deletion in progress means the resource existed and is now being
+		// removed — always a runtime state, never present at creation.
+		Onset:      "runtime",
+		OnsetBasis: "deletion",
 	}, true
 }
 

@@ -36,5 +36,11 @@ func issueToActivation(i Issue) map[string]any {
 		"grouping_scope":         string(i.GroupingScope),
 		"restart_count":          int64(i.RestartCount),
 		"last_terminated_reason": i.LastTerminatedReason,
+		// onset + onset_basis: use onset == "runtime" to narrow to active
+		// incident candidates; onset == "initial" to surface chronic baseline.
+		// An absent onset (empty string) means no confident signal — do NOT
+		// treat it as "initial" or "runtime".
+		"onset":       i.Onset,
+		"onset_basis": i.OnsetBasis,
 	}
 }

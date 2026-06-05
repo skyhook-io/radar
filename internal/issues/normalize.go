@@ -51,6 +51,8 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		Count:                1,
 		RestartCount:         p.RestartCount,
 		LastTerminatedReason: p.LastTerminatedReason,
+		Onset:                p.Onset,
+		OnsetBasis:           p.OnsetBasis,
 	}
 	if p.OwnerKind != "" {
 		// Prefer the owner group resolved at detection (carries the real group

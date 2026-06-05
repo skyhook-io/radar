@@ -124,6 +124,27 @@ func foldGroup(members []Issue) Issue {
 		}
 	}
 	sortRefs(refs)
+
+	// Onset: keep only if all members with onset agree; any mix of "initial"
+	// and "runtime" → omit. Members without onset don't contribute (they're
+	// simply unknown). The representative must not donate onset independently
+	// because the representative drives Reason/Message while FirstSeen comes
+	// from the oldest member — a single member's onset would be mismatched.
+	var groupOnset, groupBasis string
+	for _, m := range members {
+		if m.Onset == "" {
+			continue
+		}
+		if groupOnset == "" {
+			groupOnset, groupBasis = m.Onset, m.OnsetBasis
+		} else if groupOnset != m.Onset {
+			groupOnset, groupBasis = "", "" // disagreement → omit
+			break
+		}
+	}
+	g.Onset = groupOnset
+	g.OnsetBasis = groupBasis
+
 	// Count is the affected-resource fan-out — the non-subject members under
 	// this subject (the subject is shown separately as the header, not under
 	// "Affected resources"). Matches the UI/TS contract; captured before the
