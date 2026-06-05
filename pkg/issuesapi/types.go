@@ -270,7 +270,7 @@ type Issue struct {
 	// "runtime"  — evidence shows this resource was previously past its initial
 	//              state and then entered the failing condition. Prioritise these
 	//              as active incident root cause candidates.
-	Onset      string `json:"onset,omitempty"`
+	Onset string `json:"onset,omitempty"`
 	// OnsetBasis documents the evidence used to derive Onset so the
 	// classification is auditable, not magic.
 	//   "condition"       — condition.lastTransitionTime on the resource itself

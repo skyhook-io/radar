@@ -9,12 +9,12 @@ func TestOnsetFromConditionLTT(t *testing.T) {
 	now := time.Now()
 
 	tests := []struct {
-		name          string
-		failingSince  time.Time
+		name            string
+		failingSince    time.Time
 		resourceCreated time.Time
-		basis         string
-		wantOnset     string
-		wantBasis     string
+		basis           string
+		wantOnset       string
+		wantBasis       string
 	}{
 		{
 			name:            "initial: condition failed at creation (0s healthy)",
@@ -25,7 +25,7 @@ func TestOnsetFromConditionLTT(t *testing.T) {
 			wantBasis:       "condition",
 		},
 		{
-			name:            "initial: condition failed within slop window (10s healthy)",
+			name: "initial: condition failed within slop window (10s healthy)",
 			// Resource created 2h ago; condition failed 10s after creation (healthyFor=10s < 30s slop).
 			failingSince:    now.Add(-2*time.Hour + 10*time.Second),
 			resourceCreated: now.Add(-2 * time.Hour),

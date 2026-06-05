@@ -115,29 +115,32 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 			severity := SeverityWarning
 			issReason := condTypeReason(condType, reason)
 			issMsg := msg
-			// onsetSince is the since-duration for the condition that will be used
-			// for onset classification. Starts as FindFalseCondition's result.
-			onsetSince := since
+			// issueSince is the since-duration used for both FirstSeen/LastSeen
+			// and onset. Starts as FindFalseCondition's result; may be overridden
+			// by a curated condition override below.
+			issueSince := since
 			// Argo Rollout: FindFalseCondition picks Healthy=False/RolloutHealthy
 			// first (Healthy precedes Available in the Rollout's condition list),
 			// which reads as "healthy" and buries the real cause. When a
 			// definitive failure condition is present, surface it as critical and
-			// use that specific condition's LTT for onset — not the generic one.
+			// use that specific condition's LTT for BOTH first_seen and onset —
+			// not the generic Healthy condition. If the override has no LTT
+			// (since=0), use zero and omit onset rather than silently falling
+			// back to the Healthy timestamp.
 			if kind == "Rollout" && strings.Contains(strings.ToLower(gvr.Group), "argoproj.io") {
 				if r, m, s, found := argoRolloutFailure(u); found {
-					issReason, issMsg, severity = r, m, SeverityCritical
-					onsetSince = s // may be 0 if the Argo condition has no LTT
+					issReason, issMsg, severity, issueSince = r, m, SeverityCritical, s
 				}
 			}
 			now := time.Now()
-			lastSeen := now.Add(-since)
+			lastSeen := now.Add(-issueSince)
 			// Onset: only compute when we have a real condition timestamp.
-			// since=0 means no lastTransitionTime was found; computing onset
+			// issueSince=0 means no lastTransitionTime was found; computing onset
 			// from now-based arithmetic would falsely classify old resources
 			// as "runtime" (failingFor≈0, resourceAge large → healthyFor large).
 			var onsetR k8s.OnsetResult
-			if onsetSince > 0 {
-				onsetR = k8s.OnsetFromConditionLTT(now.Add(-onsetSince), u.GetCreationTimestamp().Time, "condition")
+			if issueSince > 0 {
+				onsetR = k8s.OnsetFromConditionLTT(lastSeen, u.GetCreationTimestamp().Time, "condition")
 			}
 			iss := Issue{
 				Severity:   severity,
