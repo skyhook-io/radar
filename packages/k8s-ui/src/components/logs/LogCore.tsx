@@ -286,7 +286,7 @@ export function LogCore({
       }
       if (e.key === 's' && !e.ctrlKey && !e.metaKey && !e.altKey && onStartStream) {
         const target = e.target as HTMLElement | null
-        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.tagName === 'SELECT' || target.isContentEditable)) return
         e.preventDefault()
         if (isStreaming) onStopStream()
         else onStartStream()

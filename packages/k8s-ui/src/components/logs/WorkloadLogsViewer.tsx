@@ -67,7 +67,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
 
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
   const { entries, append, set, clear } = useLogBuffer()
-  const { isStreaming, startStreaming, stopStreaming } = useLogStream()
+  const { isStreaming, streamError, startStreaming, stopStreaming } = useLogStream()
 
   const willAutoStream = autoStream && !!createStream
   // null sentinel so the initial selectedContainer ('' = all) still arms once.
@@ -173,7 +173,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
           }
         },
       },
-      'Workload log stream error',
+      'Workload log stream connection failed',
     )
   }, [createStream, startStreaming, selectedContainer, sinceSeconds, append, podColorIndex, selectedPods.size, clear])
 
@@ -315,8 +315,9 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   )
 
   // While the auto-stream is opening (before the first 'connected'/log event),
-  // show the loading state rather than the empty-logs placeholder.
-  const isConnecting = willAutoStream && !isStreaming && entries.length === 0 && !userStoppedRef.current
+  // show the loading state rather than the empty-logs placeholder. A stream
+  // error settles the connecting state so it can't spin forever.
+  const isConnecting = willAutoStream && !isStreaming && entries.length === 0 && !userStoppedRef.current && !streamError
 
   return (
     <LogCore
@@ -331,7 +332,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       toolbarExtra={renderToolbarExtra}
       showPodName
       emptyMessage={pods.length === 0 ? 'No pods found' : 'No logs available'}
-      errorMessage={fetchError}
+      errorMessage={fetchError || (entries.length === 0 ? streamError : null)}
       forceDark={forceDark}
     />
   )

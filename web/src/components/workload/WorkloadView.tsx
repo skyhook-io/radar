@@ -747,6 +747,13 @@ function MultiPodLogsTab({ pods, namespace, selectedPod, onSelectPod, initialCon
   const { data: logsData } = usePodLogs(podNamespace, selectedPod || '', { tailLines: 1 })
   const containers = logsData?.containers || []
 
+  // A terminated pod (common for Job/CronJob children) has nothing to follow —
+  // only stream live ones. Wait for the pod to load before deciding so we don't
+  // briefly auto-stream a completed pod while its phase is still unknown.
+  const { data: selectedPodResource } = useResource<any>('Pod', podNamespace, selectedPod || '')
+  const phase = selectedPodResource?.status?.phase
+  const autoStream = !!phase && phase !== 'Succeeded' && phase !== 'Failed'
+
   if (pods.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-theme-text-tertiary">
@@ -784,6 +791,7 @@ function MultiPodLogsTab({ pods, namespace, selectedPod, onSelectPod, initialCon
             podName={selectedPod}
             containers={containers}
             initialContainer={initialContainer || undefined}
+            autoStream={autoStream}
           />
         </div>
       )}

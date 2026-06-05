@@ -18,6 +18,9 @@ export interface LogStreamHandlers {
  */
 export function useLogStream() {
   const [isStreaming, setIsStreaming] = useState(false)
+  // Set when the SSE connection errors so callers can stop showing a
+  // "connecting…" state forever if the stream never reaches `connected`.
+  const [streamError, setStreamError] = useState<string | null>(null)
   const eventSourceRef = useRef<EventSource | null>(null)
 
   const stopStreaming = useCallback(() => {
@@ -32,6 +35,7 @@ export function useLogStream() {
     errorContext = 'Log stream error',
   ) => {
     eventSourceRef.current?.close()
+    setStreamError(null)
     const es = create()
 
     es.addEventListener('connected', (event) => {
@@ -69,6 +73,7 @@ export function useLogStream() {
 
     es.addEventListener('error', (event) => {
       handleSSEError(event, errorContext, () => { setIsStreaming(false); es.close() })
+      setStreamError(errorContext)
     })
 
     eventSourceRef.current = es
@@ -77,5 +82,5 @@ export function useLogStream() {
   // Cleanup on unmount
   useEffect(() => () => { eventSourceRef.current?.close() }, [])
 
-  return { isStreaming, startStreaming, stopStreaming }
+  return { isStreaming, streamError, startStreaming, stopStreaming }
 }
