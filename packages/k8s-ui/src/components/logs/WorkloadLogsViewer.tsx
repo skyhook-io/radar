@@ -201,6 +201,10 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     if (autoStartedForRef.current === selectedContainer) return
     autoStartedForRef.current = selectedContainer
     handleStartStreaming()
+    // Reset the arm latch on teardown so a re-run re-streams — without this,
+    // React Strict Mode's mount→unmount→mount closes the stream but the latch
+    // stays set, leaving the viewer static.
+    return () => { autoStartedForRef.current = null }
   }, [willAutoStream, selectedContainer, handleStartStreaming])
 
   const allContainers = useMemo(() => {

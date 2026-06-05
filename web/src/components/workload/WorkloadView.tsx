@@ -705,9 +705,11 @@ function PodLogsTab({ namespace, name, resource, initialContainer, onConsumeInit
     return names
   }, [resource])
 
-  // A terminated pod has nothing to follow — only stream live ones.
+  // A terminated pod has nothing to follow — only stream live ones. Wait for
+  // the phase to be known so a completed pod isn't briefly streamed while the
+  // resource is still loading.
   const phase = resource?.status?.phase
-  const autoStream = phase !== 'Succeeded' && phase !== 'Failed'
+  const autoStream = !!phase && phase !== 'Succeeded' && phase !== 'Failed'
 
   useEffect(() => {
     if (initialContainer && containers.includes(initialContainer)) {
