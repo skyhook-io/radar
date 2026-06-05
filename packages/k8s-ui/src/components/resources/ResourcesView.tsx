@@ -2203,9 +2203,12 @@ export function ResourcesView({
     const extraKeys = extras.map(c => c.key)
     if (saved) {
       // If saved columns are just the defaults but this kind has specialized columns,
-      // discard the stale save and use the specialized columns instead
+      // discard the stale save and use the specialized columns instead. User-added
+      // custom columns mean the blob isn't a stale pure-defaults save — keep it, or
+      // the migration would clear them from storage (and un-hide hidden ones).
       const defaultKeys = DEFAULT_COLUMNS.map(c => c.key)
       const isStaleDefaults = kindColumns !== DEFAULT_COLUMNS &&
+        !savedCustom.length &&
         saved.visible.length === defaultKeys.length &&
         saved.visible.every(v => defaultKeys.includes(v))
       if (isStaleDefaults) {
@@ -2369,7 +2372,20 @@ export function ResourcesView({
       next.delete(key)
       return next
     })
-  }, [])
+    // Drop any filter/sort that targeted the removed column — otherwise the
+    // table keeps filtering (and syncing to the URL) on a key with no column
+    // and no UI to clear it, and sort silently references a gone column.
+    setColumnFilters(prev => {
+      if (!(key in prev)) return prev
+      const next = { ...prev }
+      delete next[key]
+      return next
+    })
+    if (sortColumn === key) {
+      setSortColumn(null)
+      setSortDirection(null)
+    }
+  }, [sortColumn])
 
   // Keyboard shortcut: / to focus search
   useRegisterShortcut({
@@ -3458,7 +3474,7 @@ export function ResourcesView({
     }
 
     return result
-  }, [resources, searchTerm, regexMode, searchRegex, columnFilters, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, sortColumn, sortDirection, getSortValue, podMatchesProblemFilter])
+  }, [resources, searchTerm, regexMode, searchRegex, columnFilters, problemFilters, showInactiveReplicaSets, labelSelector, ownerKind, ownerName, selectedKind.name, sortColumn, sortDirection, getSortValue, extraColumnsByKey, podMatchesProblemFilter])
 
   // For nodes table: compute the majority minor version so outliers can be highlighted
   const majorityNodeMinorVersion = useMemo(() => {
@@ -4383,7 +4399,9 @@ export function ResourcesView({
                     </th>
                   )}
                   {columns.map((col, colIdx) => {
+                    // Built-in sortable keys, plus any extra/custom column that carries its own getSortValue.
                     const isSortable = ['name', 'namespace', 'age', 'status', 'ready', 'restarts', 'type', 'version', 'desired', 'available', 'upToDate', 'lastSeen', 'count', 'reason', 'object', 'cpu', 'memory', 'containers'].includes(col.key)
+                      || !!extraColumnsByKey.get(col.key)?.getSortValue
                     const isSorted = sortColumn === col.key
                     const isLastCol = colIdx === columns.length - 1
                     const filterCol = filterableColumnMap.get(col.key)
