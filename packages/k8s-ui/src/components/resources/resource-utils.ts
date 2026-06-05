@@ -1648,8 +1648,12 @@ export function parseColumnFilters(filtersParam: string | null): Record<string, 
   for (const pair of filtersParam.split('|')) {
     const colonIdx = pair.indexOf(':')
     if (colonIdx > 0) {
-      const key = pair.slice(0, colonIdx).trim()
+      const rawKey = pair.slice(0, colonIdx).trim()
       const valStr = pair.slice(colonIdx + 1).trim()
+      // Keys are URI-encoded so a custom-column key's own colon (e.g.
+      // "label:tier") doesn't collide with the key:value delimiter.
+      let key: string
+      try { key = decodeURIComponent(rawKey) } catch { key = rawKey }
       if (key && valStr) {
         filters[key] = valStr.split(',').map(v => {
           try { return decodeURIComponent(v.trim()) } catch { return v.trim() }
@@ -1660,12 +1664,13 @@ export function parseColumnFilters(filtersParam: string | null): Record<string, 
   return filters
 }
 
-// Serialize column filters to URL param format
-// Values are URI-encoded so commas inside values (e.g. "Ready,SchedulingDisabled") survive the round-trip.
+// Serialize column filters to URL param format. Keys and values are both
+// URI-encoded so a colon inside a custom-column key (e.g. "label:tier") or a
+// comma inside a value (e.g. "Ready,SchedulingDisabled") survives the round-trip.
 export function serializeColumnFilters(filters: Record<string, string[]>): string {
   const result = Object.entries(filters)
     .filter(([, v]) => v.length > 0)
-    .map(([k, vals]) => `${k}:${vals.map(v => encodeURIComponent(v)).join(',')}`)
+    .map(([k, vals]) => `${encodeURIComponent(k)}:${vals.map(v => encodeURIComponent(v)).join(',')}`)
     .join('|')
   return result
 }
