@@ -42,7 +42,7 @@ func TestOnsetFromConditionLTT(t *testing.T) {
 			wantBasis:       "owner_condition",
 		},
 		{
-			name:            "gray zone: 5 min healthy — omit",
+			name:            "gray zone: 5 min healthy on old resource — omit",
 			failingSince:    now.Add(-55 * time.Minute),
 			resourceCreated: now.Add(-1 * time.Hour),
 			basis:           "condition",
@@ -52,6 +52,54 @@ func TestOnsetFromConditionLTT(t *testing.T) {
 		{
 			name:            "gray zone: just over slop but under 10min — omit",
 			failingSince:    now.Add(-59 * time.Minute),
+			resourceCreated: now.Add(-1 * time.Hour),
+			basis:           "condition",
+			wantOnset:       "",
+			wantBasis:       "",
+		},
+		{
+			// ratio rule: product-catalog case — crashes 1min after 7min-old deploy
+			// healthyFor=1min (14% of 7min) < 25% AND < 5min → initial
+			name:            "initial: ratio rule — crash within 1min of 7min-old deploy",
+			failingSince:    now.Add(-6 * time.Minute),
+			resourceCreated: now.Add(-7 * time.Minute),
+			basis:           "owner_condition",
+			wantOnset:       "initial",
+			wantBasis:       "owner_condition",
+		},
+		{
+			// ratio rule: 2min healthy out of 10min → 20% < 25%, under 5min → initial
+			name:            "initial: ratio rule — 2min healthy out of 10min total",
+			failingSince:    now.Add(-8 * time.Minute),
+			resourceCreated: now.Add(-10 * time.Minute),
+			basis:           "condition",
+			wantOnset:       "initial",
+			wantBasis:       "condition",
+		},
+		{
+			// ratio rule doesn't fire: healthyFor=7min (35% of 20min), above 25% ratio
+			// AND above 5min cap → falls to gray zone (between 5min and 10min healthy)
+			name:            "gray zone: 7min healthy out of 20min — ratio 35% above threshold",
+			failingSince:    now.Add(-13 * time.Minute),
+			resourceCreated: now.Add(-20 * time.Minute),
+			basis:           "condition",
+			wantOnset:       "",
+			wantBasis:       "",
+		},
+		{
+			// ratio rule cap: healthyFor=4min, resourceAge=15min (27%) but healthyFor
+			// < 5min check only — wait, 4/15=26.7%>25% so no ratio rule → gray zone
+			name:            "gray zone: ratio rule doesn't apply when ratio >= 25%",
+			failingSince:    now.Add(-11 * time.Minute),
+			resourceCreated: now.Add(-15 * time.Minute),
+			basis:           "condition",
+			wantOnset:       "",
+			wantBasis:       "",
+		},
+		{
+			// ratio rule doesn't fire when healthyFor >= 5min even with low ratio
+			name:            "gray zone: ratio rule capped at 5min healthyFor",
+			failingSince:    now.Add(-55 * time.Minute),
 			resourceCreated: now.Add(-1 * time.Hour),
 			basis:           "condition",
 			wantOnset:       "",
