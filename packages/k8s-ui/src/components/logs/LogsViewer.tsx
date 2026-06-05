@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { parseLogLine, parseLogRange } from '../../utils/log-format'
 import { triggerDownload } from '../../utils/download'
 import { useLogBuffer } from './useLogBuffer'
@@ -30,6 +30,12 @@ export interface LogsViewerProps {
   overrideDownload?: (content: string, mime: string, filename: string) => void
   /** Force dark mode on the logs container (default: true) */
   forceDark?: boolean
+  /**
+   * Open the stream automatically on mount (and on container switch) instead of
+   * loading a static snapshot. The user can still Stop, and a manual Stop is not
+   * re-armed. Requires `createStream`. Default: false.
+   */
+  autoStream?: boolean
 }
 
 export function LogsViewer({
@@ -41,6 +47,7 @@ export function LogsViewer({
   createStream,
   overrideDownload,
   forceDark,
+  autoStream = false,
 }: LogsViewerProps) {
   const [selectedContainer, setSelectedContainer] = useState(initialContainer || containers[0] || '')
   const [isLoading, setIsLoading] = useState(false)
@@ -52,6 +59,13 @@ export function LogsViewer({
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
   const { entries, append, set, clear } = useLogBuffer()
   const { isStreaming, startStreaming, stopStreaming } = useLogStream()
+
+  const willAutoStream = autoStream && !!createStream
+  // Tracks the container we've already auto-started for, so re-renders don't
+  // re-open the stream, and a container switch arms a fresh auto-start.
+  const autoStartedForRef = useRef<string | null>(null)
+  // Once the user explicitly Stops, don't auto-resume for this viewer's lifetime.
+  const userStoppedRef = useRef(false)
 
   const loadLogs = useCallback(async () => {
     if (!selectedContainer) return
@@ -72,11 +86,17 @@ export function LogsViewer({
     }
   }, [selectedContainer, tailLines, sinceSeconds, showPrevious, fetchLogs, set])
 
-  useEffect(() => { loadLogs() }, [loadLogs])
+  // When auto-streaming the stream supplies the initial tail, so the static
+  // snapshot fetch is skipped to avoid a redundant request and a flash of
+  // snapshot content before the stream takes over.
+  useEffect(() => { if (!willAutoStream) loadLogs() }, [loadLogs, willAutoStream])
   useEffect(() => { stopStreaming() }, [selectedContainer, stopStreaming])
 
   const handleStartStreaming = useCallback(() => {
     if (!createStream) return
+    // The stream replays the last N lines (TailLines + Follow); clear first so
+    // they don't duplicate whatever the snapshot already loaded.
+    clear()
     startStreaming(
       () => createStream({ container: selectedContainer, tailLines: 100, sinceSeconds }),
       {
@@ -87,7 +107,20 @@ export function LogsViewer({
         }),
       },
     )
-  }, [createStream, startStreaming, selectedContainer, sinceSeconds, append])
+  }, [createStream, startStreaming, selectedContainer, sinceSeconds, append, clear])
+
+  const handleStopStreaming = useCallback(() => {
+    userStoppedRef.current = true
+    stopStreaming()
+  }, [stopStreaming])
+
+  useEffect(() => {
+    if (!willAutoStream || !selectedContainer) return
+    if (userStoppedRef.current) return
+    if (autoStartedForRef.current === selectedContainer) return
+    autoStartedForRef.current = selectedContainer
+    handleStartStreaming()
+  }, [willAutoStream, selectedContainer, handleStartStreaming])
 
   const downloadLogs = useCallback((format: DownloadFormat) => {
     let content: string
@@ -138,14 +171,18 @@ export function LogsViewer({
     </>
   )
 
+  // While the auto-stream is opening (before the first 'connected'/log event),
+  // show the loading state rather than the empty-logs placeholder.
+  const isConnecting = willAutoStream && !isStreaming && entries.length === 0 && !userStoppedRef.current
+
   return (
     <LogCore
       entries={entries}
-      isLoading={isLoading}
+      isLoading={isLoading || isConnecting}
       errorMessage={fetchError}
       isStreaming={isStreaming}
       onStartStream={createStream ? handleStartStreaming : undefined}
-      onStopStream={stopStreaming}
+      onStopStream={handleStopStreaming}
       onRefresh={loadLogs}
       onDownload={downloadLogs}
       onClear={clear}

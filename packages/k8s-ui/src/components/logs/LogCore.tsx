@@ -274,17 +274,27 @@ export function LogCore({
     })
   }, [])
 
-  // Keyboard shortcut: Ctrl+F to open search
+  // Keyboard shortcuts: Ctrl+F opens search; bare 's' toggles streaming
+  // (matches k9s). 's' is ignored while typing in a field so it doesn't
+  // hijack search input or other text entry.
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
         e.preventDefault()
         search.open()
+        return
+      }
+      if (e.key === 's' && !e.ctrlKey && !e.metaKey && !e.altKey && onStartStream) {
+        const target = e.target as HTMLElement | null
+        if (target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable)) return
+        e.preventDefault()
+        if (isStreaming) onStopStream()
+        else onStartStream()
       }
     }
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [search.open])
+  }, [search.open, onStartStream, onStopStream, isStreaming])
 
   const handleFollowOutput = useCallback((isAtBottom: boolean) => {
     if (isAtBottom) return 'smooth' as const
@@ -846,6 +856,7 @@ export function LogCore({
 
       {/* Keyboard shortcut hints */}
       <div className={`flex items-center gap-4 px-3 py-1 border-t ${palette.border} ${palette.toolbarBg} text-[10px] ${palette.textDisabled}`}>
+        {onStartStream && <Shortcut keys="S" label={isStreaming ? 'Stop stream' : 'Stream'} palette={palette} />}
         <Shortcut keys="Ctrl+F" label="Search" palette={palette} />
         <Shortcut keys="Enter" label="Next match" palette={palette} />
         <Shortcut keys="Shift+Enter" label="Prev match" palette={palette} />

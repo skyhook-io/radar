@@ -47,9 +47,15 @@ export interface WorkloadLogsViewerProps {
   overrideDownload?: (content: string, mime: string, filename: string) => void
   /** Force dark mode on the logs container (default: true) */
   forceDark?: boolean
+  /**
+   * Open the stream automatically on mount (and on container switch) instead of
+   * loading a static snapshot. The user can still Stop, and a manual Stop is not
+   * re-armed. Requires `createStream`. Default: false.
+   */
+  autoStream?: boolean
 }
 
-export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark }: WorkloadLogsViewerProps) {
+export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownload, forceDark, autoStream = false }: WorkloadLogsViewerProps) {
   const [selectedContainer, setSelectedContainer] = useState<string>('')
   const [pods, setPods] = useState<WorkloadPodInfo[]>([])
   const [selectedPods, setSelectedPods] = useState<Set<string>>(new Set())
@@ -62,6 +68,11 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
   const { tailLines, sinceSeconds } = parseLogRange(logRange)
   const { entries, append, set, clear } = useLogBuffer()
   const { isStreaming, startStreaming, stopStreaming } = useLogStream()
+
+  const willAutoStream = autoStream && !!createStream
+  // null sentinel so the initial selectedContainer ('' = all) still arms once.
+  const autoStartedForRef = useRef<string | null>(null)
+  const userStoppedRef = useRef(false)
 
   // Map pod.name → index. Color classes are resolved at render time from the
   // current palette (see LogCore / pod-filter dropdown below) so toggling
@@ -105,11 +116,17 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     }
   }, [fetchAll, selectedContainer, tailLines, sinceSeconds, set])
 
-  useEffect(() => { loadLogs() }, [loadLogs])
+  // When auto-streaming the stream supplies the initial tail, so the static
+  // snapshot fetch is skipped to avoid a redundant request and a flash of
+  // snapshot content before the stream takes over.
+  useEffect(() => { if (!willAutoStream) loadLogs() }, [loadLogs, willAutoStream])
   useEffect(() => { stopStreaming() }, [selectedContainer, stopStreaming])
 
   const handleStartStreaming = useCallback(() => {
     if (!createStream) return
+    // The stream replays the last N lines per pod (TailLines + Follow); clear
+    // first so they don't duplicate whatever the snapshot already loaded.
+    clear()
     startStreaming(
       () => createStream({ container: selectedContainer || undefined, tailLines: 50, sinceSeconds }),
       {
@@ -158,7 +175,20 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       },
       'Workload log stream error',
     )
-  }, [createStream, startStreaming, selectedContainer, sinceSeconds, append, podColorIndex, selectedPods.size])
+  }, [createStream, startStreaming, selectedContainer, sinceSeconds, append, podColorIndex, selectedPods.size, clear])
+
+  const handleStopStreaming = useCallback(() => {
+    userStoppedRef.current = true
+    stopStreaming()
+  }, [stopStreaming])
+
+  useEffect(() => {
+    if (!willAutoStream) return
+    if (userStoppedRef.current) return
+    if (autoStartedForRef.current === selectedContainer) return
+    autoStartedForRef.current = selectedContainer
+    handleStartStreaming()
+  }, [willAutoStream, selectedContainer, handleStartStreaming])
 
   const allContainers = useMemo(() => {
     const s = new Set<string>()
@@ -284,13 +314,17 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     </>
   )
 
+  // While the auto-stream is opening (before the first 'connected'/log event),
+  // show the loading state rather than the empty-logs placeholder.
+  const isConnecting = willAutoStream && !isStreaming && entries.length === 0 && !userStoppedRef.current
+
   return (
     <LogCore
       entries={filteredEntries}
-      isLoading={isLoading}
+      isLoading={isLoading || isConnecting}
       isStreaming={isStreaming}
       onStartStream={createStream ? handleStartStreaming : undefined}
-      onStopStream={stopStreaming}
+      onStopStream={handleStopStreaming}
       onRefresh={loadLogs}
       onDownload={downloadLogs}
       onClear={clear}
