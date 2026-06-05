@@ -107,16 +107,42 @@ func dedupeWorkloadDegradedOverChild(in []Issue) []Issue {
 	if len(maxChildSev) == 0 {
 		return in
 	}
+	// A suppressed parent may be the subject's only onset carrier: pod rows
+	// derive onset solely from the owner's Available condition, but a surge
+	// rollout can stall with Available still True. Record each dropped
+	// parent's onset and donate it to onset-less children of the same
+	// subject — as "owner_condition", since from the child's perspective the
+	// evidence is workload-level. Disagreeing suppressed parents donate
+	// nothing, mirroring the group-fold agreement rule.
+	suppressedOnset := map[string]string{}
 	out := in[:0]
 	for _, i := range in {
 		if parentRollupCategories[i.Category] {
 			// Suppress only when a child at least as severe exists — never
 			// downgrade a critical rollup to a warning child.
-			if r, ok := maxChildSev[subjectKeyOf(subjectRef(i))]; ok && r >= SeverityRank(i.Severity) {
+			k := subjectKeyOf(subjectRef(i))
+			if r, ok := maxChildSev[k]; ok && r >= SeverityRank(i.Severity) {
+				if i.Onset != "" {
+					if prev, seen := suppressedOnset[k]; seen && prev != i.Onset {
+						suppressedOnset[k] = ""
+					} else if !seen {
+						suppressedOnset[k] = i.Onset
+					}
+				}
 				continue
 			}
 		}
 		out = append(out, i)
+	}
+	for idx := range out {
+		i := &out[idx]
+		if i.Onset != "" || !childCategories[i.Category] {
+			continue
+		}
+		if onset := suppressedOnset[subjectKeyOf(subjectRef(*i))]; onset != "" {
+			i.Onset = onset
+			i.OnsetBasis = "owner_condition"
+		}
 	}
 	return out
 }

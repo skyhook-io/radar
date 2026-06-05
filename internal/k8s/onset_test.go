@@ -140,6 +140,17 @@ func TestOnsetFromConditionLTT(t *testing.T) {
 			wantBasis:       "",
 		},
 		{
+			// LTT predating creation = failing for this object's entire
+			// lifetime — deliberately "initial", not omitted (adopted or
+			// recreated resources whose condition survived).
+			name:            "initial: LTT predates creation (negative healthyFor)",
+			failingSince:    now.Add(-3 * time.Hour),
+			resourceCreated: now.Add(-1 * time.Hour),
+			basis:           "condition",
+			wantOnset:       "initial",
+			wantBasis:       "condition",
+		},
+		{
 			name:            "initial: deletion basis preserved",
 			failingSince:    now.Add(-3 * time.Hour),
 			resourceCreated: now.Add(-3 * time.Hour),

@@ -38,6 +38,10 @@ func OnsetFromConditionLTT(failingSince, resourceCreated time.Time, basis string
 	if failingFor <= 0 || resourceAge <= 0 {
 		return OnsetResult{}
 	}
+	// Negative healthyFor (LTT predates creation — adopted or recreated
+	// resources whose condition survived) means failing for this object's
+	// entire lifetime, which is exactly what "initial" asserts. Deliberately
+	// classified, not omitted.
 	healthyFor := resourceAge - failingFor
 
 	// Rule 1: absolute slop — condition propagation takes a moment after creation.

@@ -270,6 +270,31 @@ func TestCompose_SuppressesWorkloadDegradedWhenChildSymptomExists(t *testing.T) 
 	}
 }
 
+func TestCompose_SuppressedParentDonatesOnsetToChildren(t *testing.T) {
+	// A suppressed parent rollup may be the subject's only onset carrier
+	// (e.g. surge rollout stalls with Available still True, so pods derive
+	// no owner-condition onset). Its onset must survive on the child rows,
+	// re-based as owner_condition; a child with its own onset keeps it.
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", Onset: "runtime", OnsetBasis: "condition"},
+			{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "web"},
+		},
+	}
+	out := Compose(p, Filters{})
+
+	for _, i := range out {
+		if i.Category == issuesapi.CategoryWorkloadDegraded {
+			t.Fatalf("parent must still be suppressed: %+v", out)
+		}
+		if i.Category == issuesapi.CategoryCrashLoop {
+			if i.Onset != "runtime" || i.OnsetBasis != "owner_condition" {
+				t.Errorf("child must inherit suppressed parent's onset as owner_condition, got (%q, %q)", i.Onset, i.OnsetBasis)
+			}
+		}
+	}
+}
+
 func TestCompose_KeepsCriticalParentWhenOnlyChildIsWarning(t *testing.T) {
 	// Suppression must never DOWNGRADE severity. A critical "0/5 available"
 	// Deployment whose only child symptom is a warning (pods stuck waiting)
