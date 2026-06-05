@@ -48,6 +48,8 @@ interface LogRangeSelectProps {
   tooltip?: string
   /** Dark/light palette selector. Defaults to `true` (dark viewer). */
   isDark?: boolean
+  /** When true, the control is greyed out and non-interactive. */
+  disabled?: boolean
 }
 
 export function LogRangeSelect({
@@ -56,14 +58,16 @@ export function LogRangeSelect({
   lineOptions = [100, 500, 1000, 5000],
   tooltip = 'How many logs to load — by line count or time range',
   isDark = true,
+  disabled = false,
 }: LogRangeSelectProps) {
   const palette = getLogPalette(isDark)
   return (
-    <Tooltip content={tooltip} position="bottom">
+    <Tooltip content={disabled ? 'Stop streaming to change the log range' : tooltip} position="bottom">
       <select
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className={`${selectClass(palette)} pr-5`}
+        disabled={disabled}
+        className={`${selectClass(palette)} pr-5 ${disabled ? 'opacity-50 cursor-not-allowed' : ''}`}
       >
         <optgroup label="Lines">
           {lineOptions.map(n => (

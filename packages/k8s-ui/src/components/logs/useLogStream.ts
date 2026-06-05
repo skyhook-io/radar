@@ -48,8 +48,13 @@ export function useLogStream() {
     setStreamError(null)
     setConnecting(true)
     const es = create()
+    // Ignore events from a superseded source: closing/replacing an EventSource
+    // (Stop, container switch, restart) can fire a late, async 'error' that
+    // would otherwise corrupt the new stream's state or show a false failure.
+    const isCurrent = () => eventSourceRef.current === es
 
     es.addEventListener('connected', (event) => {
+      if (!isCurrent()) return
       setIsStreaming(true)
       setConnecting(false)
       if (handlers.onConnected) {
@@ -60,6 +65,7 @@ export function useLogStream() {
     })
 
     es.addEventListener('log', (event) => {
+      if (!isCurrent()) return
       setConnecting(false)
       try { handlers.onLog(JSON.parse((event as MessageEvent).data)) } catch (e) {
         console.error('Failed to parse log event:', e)
@@ -67,6 +73,7 @@ export function useLogStream() {
     })
 
     es.addEventListener('pod_added', (event) => {
+      if (!isCurrent()) return
       if (handlers.onPodAdded) {
         try { handlers.onPodAdded(JSON.parse((event as MessageEvent).data)) } catch (e) {
           console.error('Failed to parse pod_added event:', e)
@@ -75,6 +82,7 @@ export function useLogStream() {
     })
 
     es.addEventListener('pod_removed', (event) => {
+      if (!isCurrent()) return
       if (handlers.onPodRemoved) {
         try { handlers.onPodRemoved(JSON.parse((event as MessageEvent).data)) } catch (e) {
           console.error('Failed to parse pod_removed event:', e)
@@ -83,12 +91,14 @@ export function useLogStream() {
     })
 
     es.addEventListener('end', () => {
+      if (!isCurrent()) return
       endedRef.current = true
       setIsStreaming(false)
       setConnecting(false)
     })
 
     es.addEventListener('error', (event) => {
+      if (!isCurrent()) { es.close(); return }
       setIsStreaming(false)
       setConnecting(false)
       es.close()

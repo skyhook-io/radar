@@ -169,19 +169,20 @@ export function LogsViewer({
     <>
       <ContainerSelect containers={containers} value={selectedContainer} onChange={setSelectedContainer} isDark={isDark} />
 
-      <Tooltip content="Show logs from the pod's previous instance (if it was restarted). Useful for troubleshooting crashed containers." position="bottom">
-        <label className={`flex items-center gap-1.5 text-xs ${palette.textSecondary}`}>
+      <Tooltip content={isStreaming ? 'Stop streaming to view the previous instance' : "Show logs from the pod's previous instance (if it was restarted). Useful for troubleshooting crashed containers."} position="bottom">
+        <label className={`flex items-center gap-1.5 text-xs ${palette.textSecondary} ${isStreaming ? 'opacity-50 cursor-not-allowed' : ''}`}>
           <input
             type="checkbox"
             checked={showPrevious}
             onChange={(e) => setShowPrevious(e.target.checked)}
+            disabled={isStreaming}
             className={`w-3 h-3 rounded ${palette.borderLight} ${palette.elevatedBg} text-blue-500 focus:ring-blue-500 focus:ring-offset-0`}
           />
           <span className={`border-b border-dotted ${isDark ? 'border-slate-500' : 'border-slate-400'}`}>Previous</span>
         </label>
       </Tooltip>
 
-      <LogRangeSelect value={logRange} onChange={setLogRange} isDark={isDark} />
+      <LogRangeSelect value={logRange} onChange={setLogRange} isDark={isDark} disabled={isStreaming} />
     </>
   )
 
