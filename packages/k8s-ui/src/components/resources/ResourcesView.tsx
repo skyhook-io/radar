@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useEffect, useCallback, useRef, useContext } from 'react'
+import React, { useState, useMemo, useEffect, useCallback, useRef, useContext, useId } from 'react'
 import { TableVirtuoso, type TableVirtuosoHandle } from 'react-virtuoso'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { PaneLoader } from '../ui/PaneLoader'
@@ -1677,6 +1677,29 @@ function getDefaultVisibleColumns(columns: Column[]): Set<string> {
   return new Set(columns.filter(c => c.defaultVisible !== false).map(c => c.key))
 }
 
+// Host-injected leading columns minus any whose key collides with a built-in.
+// Rendering two columns under one key duplicates React keys and corrupts the
+// visibleColumns / columnWidths maps, so a colliding extra is dropped (dev-warn).
+// Shared by the allColumns memo and the settings-load effect so the collision
+// rule can't drift between them.
+function filterHostExtras(
+  extraLeadingColumns: ExtraColumn[] | undefined,
+  builtinKeys: Set<string>,
+  kindName: string,
+): ExtraColumn[] {
+  if (!extraLeadingColumns?.length) return []
+  return extraLeadingColumns.filter(c => {
+    if (builtinKeys.has(c.key)) {
+      if (import.meta.env?.DEV) {
+        // eslint-disable-next-line no-console
+        console.warn(`[ResourcesView] extraLeadingColumns key "${c.key}" collides with a built-in column for kind "${kindName}" — extra ignored`)
+      }
+      return false
+    }
+    return true
+  })
+}
+
 // localStorage helpers for column settings
 const COLUMN_SETTINGS_PREFIX = 'radar-columns-'
 
@@ -2031,6 +2054,9 @@ export function ResourcesView({
   const [showColumnPicker, setShowColumnPicker] = useState(false)
   const [customColumns, setCustomColumns] = useState<CustomColumnDef[]>([])
   const [customColumnDraft, setCustomColumnDraft] = useState<CustomColumnDef>({ source: 'label', path: '' })
+  // Per-instance so two ResourcesView tables on one page (e.g. fleet compare)
+  // don't share a datalist id and cross-suggest each other's keys.
+  const customColKeysListId = useId()
   const columnPickerRef = useRef<HTMLDivElement>(null)
   // Label/owner filtering for deep-linking from workload details
   const [labelSelector, setLabelSelector] = useState<string>(initialFilters.labelSelector)
@@ -2131,16 +2157,7 @@ export function ResourcesView({
     const kindColumns = getColumnsForKind(selectedKind.name, selectedKind.group)
     if (!extraLeadingColumns?.length && !builtCustomColumns.length) return kindColumns
     const builtinKeys = new Set(kindColumns.map(c => c.key))
-    const filteredExtras = (extraLeadingColumns ?? []).filter(c => {
-      if (builtinKeys.has(c.key)) {
-        if (import.meta.env?.DEV) {
-          // eslint-disable-next-line no-console
-          console.warn(`[ResourcesView] extraLeadingColumns key "${c.key}" collides with a built-in column for kind "${selectedKind.name}" — extra ignored`)
-        }
-        return false
-      }
-      return true
-    })
+    const filteredExtras = filterHostExtras(extraLeadingColumns, builtinKeys, selectedKind.name)
     return [...filteredExtras, ...kindColumns, ...builtCustomColumns]
   }, [selectedKind.name, selectedKind.group, extraLeadingColumns, builtCustomColumns])
 
@@ -2157,24 +2174,25 @@ export function ResourcesView({
   // (set false by the load effect, flipped true on its first skipped save).
   const isColumnSettingsLoaded = useRef(false)
   useEffect(() => {
-    // Re-arm the skip-initial-save guard per kind: this effect repopulates
-    // visible/widths/custom for the new kind via async setState, but the save
-    // effect (keyed to selectedKind too) would otherwise fire first in this
-    // same commit and persist the PREVIOUS kind's columns into the new kind's
-    // storage key. Skipping the first save after each load prevents that.
+    // Re-arm the skip-initial-save guard per kind. This effect repopulates
+    // visible/widths/custom for the new kind via async setState, so the save
+    // effect (also keyed to selectedKind) that runs in this same commit still
+    // sees the PREVIOUS kind's columns in state and would persist them under
+    // the new kind's storage key. Skipping the first save after each load
+    // prevents that cross-kind write.
     isColumnSettingsLoaded.current = false
     const saved = loadColumnSettings(selectedKind.name, selectedKind.group)
     // Reconstruct the effective column list locally rather than reading
     // `allColumns` — keying this effect to the kind (not allColumns) keeps
     // runtime custom-column add/remove from re-running it and clobbering the
     // in-session edit (and avoids a setCustomColumns → allColumns → re-run loop).
-    // sanitize guards the localStorage boundary: a malformed/legacy blob (non-
-    // array, blank path, bad source) must not crash the later .map or add dead columns.
+    // sanitize guards the localStorage boundary: a corrupted/hand-edited blob
+    // (non-array, blank path, bad source) must not crash the later .map or add dead columns.
     const savedCustom = sanitizeCustomColumnDefs(saved?.custom)
     setCustomColumns(savedCustom)
     const kindColumns = getColumnsForKind(selectedKind.name, selectedKind.group)
     const builtinKeys = new Set(kindColumns.map(c => c.key))
-    const extras = (extraLeadingColumns ?? []).filter(c => !builtinKeys.has(c.key))
+    const extras = filterHostExtras(extraLeadingColumns, builtinKeys, selectedKind.name)
     const effective = [...extras, ...kindColumns, ...savedCustom.map(buildCustomColumn)]
     // Host-injected extra columns (e.g. fleet Cluster) default to visible
     // even when the saved column-visibility blob predates them — a naive
@@ -4134,13 +4152,13 @@ export function ResourcesView({
                   >
                     <input
                       type="text"
-                      list="radar-custom-col-keys"
+                      list={customColKeysListId}
                       value={customColumnDraft.path}
                       onChange={e => setCustomColumnDraft(d => ({ ...d, path: e.target.value }))}
                       placeholder={`Add ${customColumnDraft.source} key…`}
                       className="flex-1 min-w-0 px-2 py-1 text-xs rounded bg-theme-base border border-theme-border text-theme-text-primary placeholder:text-theme-text-tertiary focus:outline-none focus:border-skyhook-500"
                     />
-                    <datalist id="radar-custom-col-keys">
+                    <datalist id={customColKeysListId}>
                       {customColumnKeySuggestions[customColumnDraft.source].map(k => (
                         <option key={k} value={k} />
                       ))}

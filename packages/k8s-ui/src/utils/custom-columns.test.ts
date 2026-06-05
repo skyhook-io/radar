@@ -80,4 +80,32 @@ describe('sanitizeCustomColumnDefs', () => {
     ]
     expect(sanitizeCustomColumnDefs(raw)).toEqual([{ source: 'label', path: 'good' }])
   })
+
+  it('drops a non-string path without throwing (predicate short-circuits before trim)', () => {
+    const raw = [
+      { source: 'label', path: 42 },
+      { source: 'label', path: { nested: true } },
+      { source: 'annotation', path: 'ok' },
+    ]
+    expect(() => sanitizeCustomColumnDefs(raw)).not.toThrow()
+    expect(sanitizeCustomColumnDefs(raw)).toEqual([{ source: 'annotation', path: 'ok' }])
+  })
+
+  it('trims paths so the load path matches the add path', () => {
+    expect(sanitizeCustomColumnDefs([{ source: 'label', path: '  zone  ' }]))
+      .toEqual([{ source: 'label', path: 'zone' }])
+  })
+
+  it('dedupes by key, keeping the first occurrence', () => {
+    const raw = [
+      { source: 'label', path: 'zone' },
+      { source: 'label', path: 'zone' },
+      { source: 'label', path: ' zone ' },
+      { source: 'annotation', path: 'zone' },
+    ]
+    expect(sanitizeCustomColumnDefs(raw)).toEqual([
+      { source: 'label', path: 'zone' },
+      { source: 'annotation', path: 'zone' },
+    ])
+  })
 })
