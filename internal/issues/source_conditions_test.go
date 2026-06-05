@@ -30,7 +30,7 @@ func TestArgoRolloutFailure(t *testing.T) {
 		{"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded", "message": "deadline"},
 		{"type": "InvalidSpec", "status": "True", "reason": "InvalidSpec", "message": "bad stableService"},
 	})
-	if r, m, ok := argoRolloutFailure(ro); !ok || r != "InvalidSpec" || m != "bad stableService" {
+	if r, m, _, ok := argoRolloutFailure(ro); !ok || r != "InvalidSpec" || m != "bad stableService" {
 		t.Errorf("InvalidSpec must win: got (%q,%q,%v)", r, m, ok)
 	}
 
@@ -39,7 +39,7 @@ func TestArgoRolloutFailure(t *testing.T) {
 		{"type": "Healthy", "status": "False", "reason": "RolloutHealthy"},
 		{"type": "Progressing", "status": "False", "reason": "ProgressDeadlineExceeded", "message": "timed out"},
 	})
-	if r, _, ok := argoRolloutFailure(stalled); !ok || r != "Progressing: ProgressDeadlineExceeded" {
+	if r, _, _, ok := argoRolloutFailure(stalled); !ok || r != "Progressing: ProgressDeadlineExceeded" {
 		t.Errorf("ProgressDeadlineExceeded fallback: got (%q,%v)", r, ok)
 	}
 
@@ -49,7 +49,7 @@ func TestArgoRolloutFailure(t *testing.T) {
 		{"type": "Healthy", "status": "False", "reason": "RolloutHealthy"},
 		{"type": "Progressing", "status": "True", "reason": "ReplicaSetUpdated"},
 	})
-	if _, _, ok := argoRolloutFailure(progressing); ok {
+	if _, _, _, ok := argoRolloutFailure(progressing); ok {
 		t.Error("a mid-progress rollout must not be flagged as a definitive failure")
 	}
 }

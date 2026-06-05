@@ -115,21 +115,30 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 			severity := SeverityWarning
 			issReason := condTypeReason(condType, reason)
 			issMsg := msg
+			// onsetSince is the since-duration for the condition that will be used
+			// for onset classification. Starts as FindFalseCondition's result.
+			onsetSince := since
 			// Argo Rollout: FindFalseCondition picks Healthy=False/RolloutHealthy
 			// first (Healthy precedes Available in the Rollout's condition list),
 			// which reads as "healthy" and buries the real cause. When a
-			// definitive failure condition is present, surface it as critical.
+			// definitive failure condition is present, surface it as critical and
+			// use that specific condition's LTT for onset — not the generic one.
 			if kind == "Rollout" && strings.Contains(strings.ToLower(gvr.Group), "argoproj.io") {
-				if r, m, found := argoRolloutFailure(u); found {
+				if r, m, s, found := argoRolloutFailure(u); found {
 					issReason, issMsg, severity = r, m, SeverityCritical
+					onsetSince = s // may be 0 if the Argo condition has no LTT
 				}
 			}
 			now := time.Now()
 			lastSeen := now.Add(-since)
-			// Onset: condition.lastTransitionTime (= lastSeen) vs resource
-			// creationTimestamp. High-confidence signal: both come from the
-			// K8s control plane, independent of Radar's timeline state.
-			onsetR := k8s.OnsetFromConditionLTT(lastSeen, u.GetCreationTimestamp().Time, "condition")
+			// Onset: only compute when we have a real condition timestamp.
+			// since=0 means no lastTransitionTime was found; computing onset
+			// from now-based arithmetic would falsely classify old resources
+			// as "runtime" (failingFor≈0, resourceAge large → healthyFor large).
+			var onsetR k8s.OnsetResult
+			if onsetSince > 0 {
+				onsetR = k8s.OnsetFromConditionLTT(now.Add(-onsetSince), u.GetCreationTimestamp().Time, "condition")
+			}
 			iss := Issue{
 				Severity:   severity,
 				Source:     SourceCondition,
@@ -234,8 +243,14 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 }
 
 func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name string, severity Severity, reason, message string, since time.Duration, fingerprint string, createdAt time.Time) Issue {
-	lastSeen := time.Now().Add(-since)
-	onsetR := k8s.OnsetFromConditionLTT(lastSeen, createdAt, "condition")
+	now := time.Now()
+	lastSeen := now.Add(-since)
+	// Only compute onset when we have a real condition timestamp (since > 0).
+	// since=0 means the condition has no lastTransitionTime; onset would be wrong.
+	var onsetR k8s.OnsetResult
+	if since > 0 {
+		onsetR = k8s.OnsetFromConditionLTT(lastSeen, createdAt, "condition")
+	}
 	iss := Issue{
 		Severity:    severity,
 		Source:      SourceCondition,
@@ -402,39 +417,50 @@ func condTypeReason(condType, reason string) string {
 // caller promotes them to critical and uses their reason instead of the generic
 // Healthy=False/RolloutHealthy the condition reader would otherwise surface.
 // ok=false leaves the generic reason untouched.
-func argoRolloutFailure(u *unstructured.Unstructured) (reason, message string, ok bool) {
+func argoRolloutFailure(u *unstructured.Unstructured) (reason, message string, since time.Duration, ok bool) {
 	conds, found, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
 	if !found {
-		return "", "", false
+		return "", "", 0, false
 	}
-	cond := func(condType string) (status, reason, message string) {
+	type condResult struct {
+		status, reason, message, ltt string
+	}
+	lookup := func(condType string) (res condResult) {
 		for _, c := range conds {
 			cm, isMap := c.(map[string]any)
 			if !isMap {
 				continue
 			}
 			if ct, _ := cm["type"].(string); ct == condType {
-				status, _ = cm["status"].(string)
-				reason, _ = cm["reason"].(string)
-				message, _ = cm["message"].(string)
+				res.status, _ = cm["status"].(string)
+				res.reason, _ = cm["reason"].(string)
+				res.message, _ = cm["message"].(string)
+				res.ltt, _ = cm["lastTransitionTime"].(string)
 				return
 			}
 		}
 		return
 	}
-	if s, r, m := cond("InvalidSpec"); s == "True" {
-		// Match the "CondType: reason" shape every other condition row uses; keep
-		// the bare condType when reason is empty or just restates it.
-		rolloutReason := "InvalidSpec"
-		if r != "" && r != "InvalidSpec" {
-			rolloutReason = condTypeReason("InvalidSpec", r)
+	parseSince := func(ltt string) time.Duration {
+		if ltt == "" {
+			return 0
 		}
-		return rolloutReason, m, true
+		if t, err := time.Parse(time.RFC3339, ltt); err == nil {
+			return time.Since(t)
+		}
+		return 0
 	}
-	if s, r, m := cond("Progressing"); s == "False" && r == "ProgressDeadlineExceeded" {
-		return condTypeReason("Progressing", r), m, true
+	if c := lookup("InvalidSpec"); c.status == "True" {
+		rolloutReason := "InvalidSpec"
+		if c.reason != "" && c.reason != "InvalidSpec" {
+			rolloutReason = condTypeReason("InvalidSpec", c.reason)
+		}
+		return rolloutReason, c.message, parseSince(c.ltt), true
 	}
-	return "", "", false
+	if c := lookup("Progressing"); c.status == "False" && c.reason == "ProgressDeadlineExceeded" {
+		return condTypeReason("Progressing", c.reason), c.message, parseSince(c.ltt), true
+	}
+	return "", "", 0, false
 }
 
 // ---------------------------------------------------------------------------

@@ -369,11 +369,13 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			// StatefulSet/DaemonSet owners are deferred to v2.
 			var podOnset OnsetResult
 			if ownerKind == "Deployment" && ownerName != "" {
-				if dep, err := cache.Deployments().Deployments(pod.Namespace).Get(ownerName); err == nil {
-					for _, cond := range dep.Status.Conditions {
-						if cond.Type == appsv1.DeploymentAvailable && cond.Status == "False" && !cond.LastTransitionTime.IsZero() {
-							podOnset = OnsetFromConditionLTT(cond.LastTransitionTime.Time, dep.CreationTimestamp.Time, "owner_condition")
-							break
+				if depLister := cache.Deployments(); depLister != nil {
+					if dep, err := depLister.Deployments(pod.Namespace).Get(ownerName); err == nil {
+						for _, cond := range dep.Status.Conditions {
+							if cond.Type == appsv1.DeploymentAvailable && cond.Status == "False" && !cond.LastTransitionTime.IsZero() {
+								podOnset = OnsetFromConditionLTT(cond.LastTransitionTime.Time, dep.CreationTimestamp.Time, "owner_condition")
+								break
+							}
 						}
 					}
 				}
