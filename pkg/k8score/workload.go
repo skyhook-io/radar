@@ -41,6 +41,7 @@ type UpdateResourceOptions struct {
 // DeleteResourceOptions contains options for deleting a resource.
 type DeleteResourceOptions struct {
 	Kind      string
+	Group     string // API group, disambiguates kinds that collide across groups (e.g. Knative vs core Service)
 	Namespace string
 	Name      string
 	Force     bool // Force delete with grace period 0
@@ -378,7 +379,7 @@ func (m *WorkloadManager) DeleteResource(ctx context.Context, opts DeleteResourc
 		return fmt.Errorf("dynamic client not initialized")
 	}
 
-	gvr, ok := m.discovery.GetGVR(opts.Kind)
+	gvr, ok := m.discovery.GetGVRWithGroup(opts.Kind, opts.Group)
 	if !ok {
 		return fmt.Errorf("unknown resource kind: %s", opts.Kind)
 	}

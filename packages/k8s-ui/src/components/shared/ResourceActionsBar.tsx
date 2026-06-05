@@ -65,7 +65,7 @@ interface ResourceActionsBarProps {
   renderPortForward?: (props: { type: 'pod' | 'service'; namespace: string; name: string; className?: string }) => React.ReactNode
 
   // Delete
-  onDelete?: (params: { kind: string; namespace: string; name: string; force: boolean }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
+  onDelete?: (params: { kind: string; group?: string; namespace: string; name: string; force: boolean }, callbacks?: { onSuccess?: () => void; onError?: (err: unknown) => void }) => void
   isDeleting?: boolean
   cascadeDependents?: CascadeDependent[]
   cascadeLoading?: boolean
@@ -166,7 +166,7 @@ export function ResourceActionsBar({
 
   function handleDeleteConfirm(force: boolean) {
     onDelete?.(
-      { kind: resource.kind, namespace: resource.namespace, name: resource.name, force },
+      { kind: resource.kind, group: resource.group, namespace: resource.namespace, name: resource.name, force },
       {
         onSuccess: () => {
           setShowDeleteConfirm(false)

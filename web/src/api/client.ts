@@ -1699,8 +1699,11 @@ export function useDeleteResource() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ kind, namespace, name, force }: { kind: string; namespace: string; name: string; force?: boolean }) => {
+    mutationFn: async ({ kind, group, namespace, name, force }: { kind: string; group?: string; namespace: string; name: string; force?: boolean }) => {
       const url = new URL(`${getApiBase()}/resources/${kind}/${namespace}/${name}`, window.location.origin)
+      if (group) {
+        url.searchParams.set('group', group)
+      }
       if (force) {
         url.searchParams.set('force', 'true')
       }
@@ -1729,10 +1732,11 @@ export function useBulkDeleteResources() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ items, force }: { items: Array<{ kind: string; namespace: string; name: string }>; force?: boolean }) => {
+    mutationFn: async ({ items, force }: { items: Array<{ kind: string; group?: string; namespace: string; name: string }>; force?: boolean }) => {
       const results = await Promise.allSettled(
-        items.map(async ({ kind, namespace, name }) => {
+        items.map(async ({ kind, group, namespace, name }) => {
           const url = new URL(`${getApiBase()}/resources/${kind}/${namespace}/${name}`, window.location.origin)
+          if (group) url.searchParams.set('group', group)
           if (force) url.searchParams.set('force', 'true')
           const response = await apiFetch(url.toString(), { method: 'DELETE' })
           if (!response.ok) {
@@ -1752,7 +1756,9 @@ export function useBulkDeleteResources() {
       errorMessage: 'Failed to delete some resources',
       successMessage: 'Resources deleted',
     },
-    onSuccess: () => {
+    // onSettled, not onSuccess — a partial failure still deleted some
+    // resources, and the table must refetch to drop them.
+    onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['resources'] })
       queryClient.invalidateQueries({ queryKey: ['resource-counts'] })
       queryClient.invalidateQueries({ queryKey: ['topology'] })

@@ -2595,6 +2595,7 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	namespace := chi.URLParam(r, "namespace")
 	name := chi.URLParam(r, "name")
 	force := r.URL.Query().Get("force") == "true"
+	group := r.URL.Query().Get("group")
 
 	auth.AuditLog(r, namespace, name)
 	client := s.getDynamicClientForRequest(r)
@@ -2604,6 +2605,7 @@ func (s *Server) handleDeleteResource(w http.ResponseWriter, r *http.Request) {
 	}
 	err := k8s.DeleteResourceWithClient(r.Context(), k8s.DeleteResourceOptions{
 		Kind:      kind,
+		Group:     group,
 		Namespace: namespace,
 		Name:      name,
 		Force:     force,

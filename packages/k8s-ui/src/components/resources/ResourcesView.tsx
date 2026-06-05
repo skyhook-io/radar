@@ -1808,7 +1808,7 @@ interface ResourcesViewProps {
    */
   onClearNamespaces?: () => void
   // Bulk operations
-  onBulkDelete?: (items: Array<{ kind: string; namespace: string; name: string }>, options?: { force?: boolean; onSuccess?: () => void }) => void
+  onBulkDelete?: (items: Array<{ kind: string; group?: string; namespace: string; name: string }>, options?: { force?: boolean; onSuccess?: () => void }) => void
   isBulkDeleting?: boolean
 }
 
@@ -3416,17 +3416,21 @@ export function ResourcesView({
     })
   }, [getResourceKey])
 
-  const toggleCheckAll = useCallback(() => {
-    setCheckedResources(prev => {
-      if (prev.size > 0 && prev.size === filteredResources.length) return new Set()
-      return new Set(filteredResources.map(getResourceKey))
-    })
-  }, [filteredResources, getResourceKey])
-
+  // Selection state is keyed by resource, but everything user-facing
+  // (count, select-all, the delete payload) derives from checkedItems —
+  // the checked ∩ currently-visible intersection. Rows checked and then
+  // hidden by a filter are excluded, so the bar never promises more
+  // deletions than the confirm dialog will perform.
   const checkedItems = useMemo(() => {
     if (checkedResources.size === 0) return []
     return filteredResources.filter(r => checkedResources.has(getResourceKey(r)))
   }, [filteredResources, checkedResources, getResourceKey])
+
+  const allVisibleChecked = filteredResources.length > 0 && checkedItems.length === filteredResources.length
+
+  const toggleCheckAll = useCallback(() => {
+    setCheckedResources(allVisibleChecked ? new Set() : new Set(filteredResources.map(getResourceKey)))
+  }, [allVisibleChecked, filteredResources, getResourceKey])
 
   const isCheckboxMode = onBulkDelete != null && bulkMode
 
@@ -4057,11 +4061,11 @@ export function ResourcesView({
         {isCheckboxMode && (
           <div className="flex items-center gap-3 px-4 py-2 bg-skyhook-500/10 border-b border-skyhook-400/20 shrink-0">
             <span className="text-sm font-medium text-theme-text-primary">
-              {checkedResources.size} selected
+              {checkedItems.length} selected
             </span>
             <button
               onClick={() => setShowBulkDeleteConfirm(true)}
-              disabled={checkedResources.size === 0}
+              disabled={checkedItems.length === 0}
               className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:pointer-events-none text-white rounded-lg transition-colors"
             >
               <Trash2 className="w-3.5 h-3.5" />
@@ -4185,11 +4189,11 @@ export function ResourcesView({
                     <th className="bg-theme-surface border-b border-theme-border w-10 text-center px-0 py-3">
                       <input
                         type="checkbox"
-                        checked={filteredResources.length > 0 && checkedResources.size === filteredResources.length}
-                        ref={(el) => { if (el) el.indeterminate = checkedResources.size > 0 && checkedResources.size < filteredResources.length }}
+                        checked={allVisibleChecked}
+                        ref={(el) => { if (el) el.indeterminate = checkedItems.length > 0 && checkedItems.length < filteredResources.length }}
                         onChange={toggleCheckAll}
                         className="w-3.5 h-3.5 rounded border-theme-border accent-skyhook-500 cursor-pointer"
-                        title={checkedResources.size > 0 ? 'Deselect all' : 'Select all'}
+                        title={checkedItems.length > 0 ? 'Deselect all' : 'Select all'}
                       />
                     </th>
                   )}
@@ -4425,6 +4429,7 @@ export function ResourcesView({
       onConfirm={() => {
         const items = checkedItems.map(r => ({
           kind: selectedKind.name,
+          group: selectedKind.group,
           namespace: r.metadata?.namespace || '',
           name: r.metadata?.name || '',
         }))
