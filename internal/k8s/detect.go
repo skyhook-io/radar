@@ -554,6 +554,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			// Maxed-out is excluded from v1 onset (capacity concerns don't
 			// cleanly map to initial vs runtime).
 			var hpaOnset OnsetResult
+			var hpaCondDur time.Duration
 			if hp.Problem == "cannot-scale" {
 				for _, hpa := range hpas {
 					if hpa.Name != hp.Name || hpa.Namespace != hp.Namespace {
@@ -561,12 +562,19 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					}
 					for _, cond := range hpa.Status.Conditions {
 						if cond.Type == autoscalingv2.ScalingActive && cond.Status == corev1.ConditionFalse && !cond.LastTransitionTime.IsZero() {
+							hpaCondDur = now.Sub(cond.LastTransitionTime.Time)
 							hpaOnset = OnsetFromConditionLTT(cond.LastTransitionTime.Time, hpa.CreationTimestamp.Time, "condition")
 							break
 						}
 					}
 					break
 				}
+			}
+			// Use the condition LTT for Duration when available so first_seen
+			// stays coherent with onset instead of falling back to resource age.
+			hpaDur := hpaCondDur
+			if hpaDur == 0 {
+				hpaDur = ageDur
 			}
 			problems = append(problems, Detection{
 				Kind:      "HorizontalPodAutoscaler",
@@ -579,11 +587,13 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				// One HPA can be BOTH maxed and unable-to-scale at once — distinct
 				// problems with distinct fixes. Fingerprint on the problem kind so
 				// they don't collapse into one hpa_limited_or_failed row.
-				Fingerprint: "hpa:" + hp.Problem,
-				Age:         FormatAge(ageDur),
-				AgeSeconds:  int64(ageDur.Seconds()),
-				Onset:       hpaOnset.Onset,
-				OnsetBasis:  hpaOnset.Basis,
+				Fingerprint:     "hpa:" + hp.Problem,
+				Age:             FormatAge(ageDur),
+				AgeSeconds:      int64(ageDur.Seconds()),
+				Duration:        FormatAge(hpaDur),
+				DurationSeconds: int64(hpaDur.Seconds()),
+				Onset:           hpaOnset.Onset,
+				OnsetBasis:      hpaOnset.Basis,
 			})
 		}
 	}
@@ -662,32 +672,63 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 		for _, np := range DetectNodeProblems(nodes) {
 			ageDur := time.Duration(0)
 			var nodeOnset OnsetResult
+			var nodeCondDur time.Duration
 			for _, n := range nodes {
 				if n.Name != np.NodeName {
 					continue
 				}
 				ageDur = now.Sub(n.CreationTimestamp.Time)
-				// Compute onset from the Ready condition's lastTransitionTime.
-				// NotReady since creation → initial (bootstrap/CNI failure).
-				// NotReady recently on an old node → runtime (hardware/network fault).
-				for _, cond := range n.Status.Conditions {
-					if cond.Type == corev1.NodeReady && cond.Status != corev1.ConditionTrue && !cond.LastTransitionTime.IsZero() {
+				// Map each problem type to its own condition so onset and
+				// DurationSeconds reflect the right LTT:
+				//   NotReady      → NodeReady condition
+				//   *Pressure     → matching pressure condition
+				//   Cordoned      → no condition, omit onset
+				var targetCondType corev1.NodeConditionType
+				switch np.Problem {
+				case "NotReady":
+					targetCondType = corev1.NodeReady
+				case "MemoryPressure":
+					targetCondType = corev1.NodeMemoryPressure
+				case "DiskPressure":
+					targetCondType = corev1.NodeDiskPressure
+				case "PIDPressure":
+					targetCondType = corev1.NodePIDPressure
+				}
+				if targetCondType != "" {
+					for _, cond := range n.Status.Conditions {
+						if cond.Type != targetCondType || cond.LastTransitionTime.IsZero() {
+							continue
+						}
+						// Ready=False or pressure=True both mean the condition is active.
+						if targetCondType == corev1.NodeReady && cond.Status == corev1.ConditionTrue {
+							continue
+						}
+						if targetCondType != corev1.NodeReady && cond.Status != corev1.ConditionTrue {
+							continue
+						}
+						nodeCondDur = now.Sub(cond.LastTransitionTime.Time)
 						nodeOnset = OnsetFromConditionLTT(cond.LastTransitionTime.Time, n.CreationTimestamp.Time, "condition")
 						break
 					}
 				}
 				break
 			}
+			nodeDur := nodeCondDur
+			if nodeDur == 0 {
+				nodeDur = ageDur
+			}
 			problems = append(problems, Detection{
-				Kind:       "Node",
-				Name:       np.NodeName,
-				Severity:   np.Severity,
-				Reason:     np.Problem,
-				Message:    np.Reason,
-				Age:        FormatAge(ageDur),
-				AgeSeconds: int64(ageDur.Seconds()),
-				Onset:      nodeOnset.Onset,
-				OnsetBasis: nodeOnset.Basis,
+				Kind:            "Node",
+				Name:            np.NodeName,
+				Severity:        np.Severity,
+				Reason:          np.Problem,
+				Message:         np.Reason,
+				Age:             FormatAge(ageDur),
+				AgeSeconds:      int64(ageDur.Seconds()),
+				Duration:        FormatAge(nodeDur),
+				DurationSeconds: int64(nodeDur.Seconds()),
+				Onset:           nodeOnset.Onset,
+				OnsetBasis:      nodeOnset.Basis,
 			})
 		}
 	}
@@ -718,10 +759,10 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					AgeSeconds:      int64(ageDur.Seconds()),
 					Duration:        FormatAge(ageDur),
 					DurationSeconds: int64(ageDur.Seconds()),
-					// Phase=Lost means the PVC was bound and then the backing PV
-					// disappeared — always a runtime event, never present at creation.
-					Onset:      "runtime",
-					OnsetBasis: "phase",
+					// Onset omitted: Phase=Lost is semantically runtime but there is
+					// no condition LTT or event timestamp available at this site, so
+					// first_seen would show resource age — inconsistent with a runtime
+					// classification. Omit until an event-based timestamp is available.
 				})
 				continue
 			}
@@ -797,10 +838,9 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				AgeSeconds:      int64(ageDur.Seconds()),
 				Duration:        FormatAge(ageDur),
 				DurationSeconds: int64(ageDur.Seconds()),
-				// Phase=Failed means the PV was functional and then the storage
-				// backend failed — always a runtime event.
-				Onset:      "runtime",
-				OnsetBasis: "phase",
+				// Onset omitted: Phase=Failed is semantically runtime but no
+				// condition LTT or event timestamp is available here; first_seen
+				// would show resource age, contradicting a runtime label.
 			})
 		}
 	}

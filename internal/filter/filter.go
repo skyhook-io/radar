@@ -17,7 +17,8 @@
 //	CompileIssueFilter — bindings shaped to an issues.Issue:
 //	  severity, source, category, category_group, kind, group, ns,
 //	  name, reason, message, count, first_seen, last_seen, grouping_scope,
-//	  restart_count, last_terminated_reason
+//	  restart_count, last_terminated_reason, onset, onset_basis
+//	  (full list is authoritative in pkg/issuesapi.CELBindings)
 //
 // Both return a Filter whose Match(activation) yields (bool, error).
 // Compile errors are returned verbatim (CEL's parser produces

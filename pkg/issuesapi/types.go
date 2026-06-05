@@ -274,10 +274,13 @@ type Issue struct {
 	// OnsetBasis documents the evidence used to derive Onset so the
 	// classification is auditable, not magic.
 	//   "condition"       — condition.lastTransitionTime on the resource itself
-	//   "owner_condition" — condition on the parent workload (e.g. Deployment)
+	//   "owner_condition" — condition on the parent workload (e.g. Deployment.Available);
+	//                       reflects workload-level health onset, not cause-specific onset
+	//                       (a new image error on an already-degraded Deployment inherits
+	//                       the Deployment's onset, not the image error's onset)
 	//   "event"           — K8s Event firstTimestamp
 	//   "deletion"        — deletionTimestamp (always runtime)
-	//   "phase"           — resource Phase field (e.g. PVC Lost/Pending)
+	//   "phase"           — resource Phase field (e.g. PVC Pending)
 	//   "spec"            — structural spec invariant (no timestamp required)
 	OnsetBasis string `json:"onset_basis,omitempty"`
 }
