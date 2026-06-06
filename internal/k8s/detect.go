@@ -392,16 +392,23 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						depAge := now.Sub(dep.CreationTimestamp.Time)
 						podAge := now.Sub(pod.CreationTimestamp.Time)
 						podCreatedWithDeploy := depAge > 0 && (depAge-podAge) < 60*time.Second
-						if podCreatedWithDeploy && depAge <= maxDeployAgeForProximityIssueTiming {
-							// Young deployment + original pod: use creation timestamps as
-							// the failingSince proxy. The pod crashed within seconds of
-							// being scheduled; healthyFor ≈ depAge-podAge (< 60s) which
-							// the slop/ratio rule in IssueTimingFromConditionLTT classifies as
-							// started_at_resource_creation.
-							podIssueTiming = IssueTimingFromConditionLTT(pod.CreationTimestamp.Time, dep.CreationTimestamp.Time, "pod_creation")
-						} else {
-							// Old deployment, or pod replaced after initial rollout — use
-							// Available condition only when it currently signals degraded.
+						if depAge <= maxDeployAgeForProximityIssueTiming && (podCreatedWithDeploy || restartCount > 0) {
+							// Young deployment (<15min): this pod has been crashing since
+							// near creation. Two sub-cases:
+							//   - Original pod (created within 60s of dep): use pod
+							//     creation as the failingSince proxy.
+							//   - Replacement pod (restartCount>0, created later due to
+							//     backoff): the original pod crashed near dep creation but
+							//     the current pod was recreated minutes later — use dep
+							//     creation as failingSince so healthyFor≈0, which the slop
+							//     rule classifies as started_at_resource_creation.
+							failingSince := pod.CreationTimestamp.Time
+							if restartCount > 0 && !podCreatedWithDeploy {
+								failingSince = dep.CreationTimestamp.Time
+							}
+							podIssueTiming = IssueTimingFromConditionLTT(failingSince, dep.CreationTimestamp.Time, "pod_creation")
+						} else if depAge > maxDeployAgeForProximityIssueTiming {
+							// Old deployment — use Available=False condition when degraded.
 							for _, cond := range dep.Status.Conditions {
 								if cond.Type == appsv1.DeploymentAvailable && cond.Status == "False" && !cond.LastTransitionTime.IsZero() {
 									podIssueTiming = IssueTimingFromConditionLTT(cond.LastTransitionTime.Time, dep.CreationTimestamp.Time, "owner_condition")
