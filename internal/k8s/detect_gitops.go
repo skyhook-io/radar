@@ -222,8 +222,8 @@ func detectFluxProblems(items []*unstructured.Unstructured, kind, group string, 
 		p.DurationSeconds = int64(d.Seconds())
 		p.Duration = FormatAge(d)
 		if since > 0 {
-			onsetR := OnsetFromConditionLTT(now.Add(-since), obj.GetCreationTimestamp().Time, "condition")
-			p.Onset, p.OnsetBasis = onsetR.Onset, onsetR.Basis
+			timingR := IssueTimingFromConditionLTT(now.Add(-since), obj.GetCreationTimestamp().Time, "condition")
+			p.IssueTiming, p.IssueTimingBasis = timingR.IssueTiming, timingR.Basis
 		}
 		out = append(out, p)
 	}

@@ -248,14 +248,17 @@ func registerTools(server *mcp.Server) {
 	// (Argo Applications + Flux HelmReleases/Kustomizations) into a
 	// unified "what's installed in this cluster" view with source
 	// provenance. Each row's `sources` field shows which detection
-	// channels voted "this is installed" — H, L, C, A, F.
+	// channels voted "this is installed" — H, L, C, A, F — and the
+	// MCP response includes sourceLegend so those terse stable codes
+	// are interpretable without external docs.
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "list_packages",
 		Description: "List installed packages (Helm releases, label-managed workloads, CRDs, " +
 			"Argo Applications, Flux HelmReleases + Kustomizations) with their sources, " +
 			"versions, and health. Each row carries a `sources` array (H=Helm API, " +
 			"L=workload labels, C=CRD registrations, A=Argo declaration, F=Flux declaration) " +
-			"so the caller can see WHY this package is detected, plus a `contributors` " +
+			"so the caller can see WHY this package is detected; the MCP response also includes " +
+			"`sourceLegend` mapping those stable codes to readable meanings, plus a `contributors` " +
 			"array with per-source detail (each source's view of health/version, plus the " +
 			"GitOps controller resource identity in declarationName/declarationNamespace " +
 			"for sources A and F). Aggregated row-level health is worst-of contributors; " +
@@ -508,7 +511,7 @@ type issuesInput struct {
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical,warning"`
 	Kind      string `json:"kind,omitempty" jsonschema:"comma-separated kind filter (e.g. Deployment,Pod)"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max issues returned (default 200, max 1000)"`
-	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity (critical|warning), category (e.g. crashloop, image_pull_failed, missing_config_ref, gitops_sync_failed), category_group (startup|runtime|scheduling|configuration|networking|storage|scaling|security|control_plane), source (problem|missing_ref|scheduling|condition), kind, group, ns (the namespace — use 'ns', not 'namespace' which is a CEL reserved word), name, reason, message, count (int, the affected-resource fan-out), grouping_scope (workload|service|node|…), restart_count (int), last_terminated_reason, first_seen + last_seen (unix seconds — prefer first_seen for onset/age; last_seen churns to compose-time), onset (string: 'initial' = failing since resource was created/first reconciled — treat as baseline unless no runtime issue explains the incident; 'runtime' = resource was previously healthy and then broke — prioritise these as active incident root cause; absent = Radar has no clean signal, do NOT infer onset from age alone), onset_basis (string: evidence used — 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec'). For cross-cluster scoping use clusters= (not a CEL predicate). Examples: 'severity == \"critical\" && count > 5', 'category_group == \"startup\"', 'restart_count > 10', 'onset == \"runtime\"', 'onset == \"initial\"'"`
+	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity (critical|warning), category (e.g. crashloop, image_pull_failed, missing_config_ref, gitops_sync_failed), category_group (startup|runtime|scheduling|configuration|networking|storage|scaling|security|control_plane; runtime here is an issue taxonomy group, not issue_timing), source (problem=built-in Radar detector, missing_ref=dangling by-name reference, scheduling=pod startup blocker, condition=False controller/CRD condition), kind, group, ns (the namespace — use 'ns', not 'namespace' which is a CEL reserved word), name, reason, message, count (int, the affected-resource fan-out), grouping_scope (workload|service|node|…), restart_count (int), last_terminated_reason, first_seen + last_seen (unix seconds; last_seen churns to compose-time), issue_timing (string timing evidence: 'started_at_resource_creation' = evidence places the failing state during resource creation or first reconciliation; 'started_after_resource_was_healthy' = evidence shows a meaningful healthy window before the failing condition appeared; absent = Radar has no clean signal, do NOT infer timing from age alone; this is timing evidence, not a root-cause verdict), issue_timing_basis (string: evidence used — 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec'). For cross-cluster scoping use clusters= (not a CEL predicate). Examples: 'severity == \"critical\" && count > 5', 'category_group == \"startup\"', 'restart_count > 10', 'issue_timing == \"started_after_resource_was_healthy\"', 'issue_timing == \"started_at_resource_creation\"'"`
 }
 
 // Tool handlers

@@ -16,27 +16,27 @@ const base: Issue = {
 const mk = (o: Partial<Issue>): Issue => ({ ...base, ...o })
 
 describe('compareIssues', () => {
-  it('orders critical before warning regardless of onset', () => {
+  it('orders critical before warning regardless of observed age', () => {
     const warn = mk({ id: 'w', severity: 'warning', first_seen: '2026-05-01T00:00:00Z' }) // newer
     const crit = mk({ id: 'c', severity: 'critical', first_seen: '2026-01-01T00:00:00Z' }) // older
     expect([warn, crit].sort(compareIssues).map((i) => i.id)).toEqual(['c', 'w'])
   })
 
-  it('breaks same-severity ties by first_seen DESC (newest onset first)', () => {
+  it('breaks same-severity ties by first_seen DESC (newest observed issue first)', () => {
     const older = mk({ id: 'o', first_seen: '2026-01-01T00:00:00Z' })
     const newer = mk({ id: 'n', first_seen: '2026-05-01T00:00:00Z' })
     expect([older, newer].sort(compareIssues).map((i) => i.id)).toEqual(['n', 'o'])
   })
 
   it('does NOT reshuffle same-severity rows when only last_seen changes (anti-churn)', () => {
-    // Two same-severity rows, same onset — order is the deterministic name tiebreak.
+    // Two same-severity rows, same first_seen — order is the deterministic name tiebreak.
     const a = mk({ id: 'id-a', name: 'a', first_seen: '2026-01-01T00:00:00Z', last_seen: '2026-05-01T00:00:00Z' })
     const b = mk({ id: 'id-b', name: 'b', first_seen: '2026-01-01T00:00:00Z', last_seen: '2026-05-30T00:00:00Z' })
     const before = [a, b].sort(compareIssues).map((i) => i.id)
     expect(before).toEqual(['id-a', 'id-b'])
     // A refetch bumps a's last_seen to "now". Sorting on last_seen would flip the
     // order; keying on first_seen + identity must NOT — this is the whole point
-    // of the onset-based sort.
+    // of the first_seen-based sort.
     const aRefetched = mk({ ...a, last_seen: '2026-06-01T00:00:00Z' })
     const after = [aRefetched, b].sort(compareIssues).map((i) => i.id)
     expect(after).toEqual(before)

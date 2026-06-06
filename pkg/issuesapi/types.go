@@ -259,32 +259,36 @@ type Issue struct {
 	MembersTruncated     bool               `json:"members_truncated,omitempty"`
 	DiagnosticContext    *DiagnosticContext `json:"diagnostic_context,omitempty"`
 	ChangeContext        *ChangeContext     `json:"change_context,omitempty"`
-	// Onset is a best-effort classification of when this issue began, derived
-	// from K8s-native signals (condition lastTransitionTime, resource phase,
-	// deletion timestamp) at detection time. Absent when the signal is
-	// ambiguous — treat absence as "unknown", not "initial" or "runtime".
+	// IssueTiming is best-effort timing evidence for when this issue entered
+	// the failing state, derived from K8s-native signals (condition
+	// lastTransitionTime, resource phase, deletion timestamp) at detection
+	// time. Absent when the signal is ambiguous — treat absence as "unknown",
+	// not "started_at_resource_creation" or "started_after_resource_was_healthy".
 	//
-	// "initial"  — evidence shows this issue was present during the resource's
-	//              creation or first reconciliation. Treat as baseline behavior
-	//              unless no runtime issue explains the active incident.
-	// "runtime"  — evidence shows this resource was previously past its initial
-	//              state and then entered the failing condition. Prioritise these
-	//              as active incident root cause candidates.
-	Onset string `json:"onset,omitempty"`
-	// OnsetBasis documents the evidence used to derive Onset so the
+	// "started_at_resource_creation"        — evidence places the failing state
+	//                                        during resource creation or first
+	//                                        reconciliation.
+	// "started_after_resource_was_healthy"  — evidence shows a meaningful
+	//                                        healthy window before the failing
+	//                                        condition appeared.
+	//
+	// This is timing evidence, not a root-cause verdict. A bad rollout or bad
+	// config change can legitimately fail at resource creation.
+	IssueTiming string `json:"issue_timing,omitempty"`
+	// IssueTimingBasis documents the evidence used to derive IssueTiming so the
 	// classification is auditable, not magic.
 	//   "condition"       — condition.lastTransitionTime on the resource itself
 	//   "owner_condition" — condition on the parent workload (e.g. Deployment.Available);
-	//                       reflects workload-level health onset, not cause-specific onset
+	//                       reflects workload-level health timing, not cause-specific timing
 	//                       (a new image error on an already-degraded Deployment inherits
-	//                       the Deployment's onset, not the image error's onset)
+	//                       the Deployment's timing, not the image error's timing)
 	//   "pod_creation"    — pod and Deployment creation timestamps compared; used for
 	//                       crashloop pods on young Deployments where the Available
 	//                       condition races with CrashLoopBackOff's brief ready windows
-	//   "deletion"        — deletionTimestamp (always runtime)
+	//   "deletion"        — deletionTimestamp (always appeared after creation)
 	//   "phase"           — resource Phase field (e.g. PVC Pending)
 	//   "spec"            — structural spec invariant (no timestamp required)
-	OnsetBasis string `json:"onset_basis,omitempty"`
+	IssueTimingBasis string `json:"issue_timing_basis,omitempty"`
 }
 
 type Response struct {
@@ -327,10 +331,10 @@ var CELBindings = []CELBinding{
 	{Name: "grouping_scope", Type: BindingString},
 	{Name: "restart_count", Type: BindingInt},
 	{Name: "last_terminated_reason", Type: BindingString},
-	// onset / onset_basis: filter to issues with a specific onset classification.
-	// onset == "initial"  — failing since the resource was first created/reconciled.
-	// onset == "runtime"  — resource was previously healthy and then broke.
-	// onset == ""         — no confident signal (omit from filter to include all).
-	{Name: "onset", Type: BindingString},
-	{Name: "onset_basis", Type: BindingString},
+	// issue_timing / issue_timing_basis: filter to issues with specific timing evidence.
+	// issue_timing == "started_at_resource_creation"        — failing state began during creation/first reconciliation.
+	// issue_timing == "started_after_resource_was_healthy"  — a meaningful healthy window preceded the failing state.
+	// issue_timing == ""                                    — no confident timing signal.
+	{Name: "issue_timing", Type: BindingString},
+	{Name: "issue_timing_basis", Type: BindingString},
 }

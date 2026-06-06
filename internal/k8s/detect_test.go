@@ -1665,11 +1665,11 @@ func TestDetectProblems_RolloutStuckExplainsRWORollingUpdate(t *testing.T) {
 	}
 }
 
-// Pins the observedGeneration==1 onset rule for stuck rollouts: gen 1 rescues
+// Pins the observedGeneration==1 issue_timing rule for stuck rollouts: gen 1 rescues
 // only the no-verdict (gray zone / missing LTT) case. A timestamp-backed
-// "runtime" verdict must survive — generation only bumps on spec changes, so
+// "started_after_resource_was_healthy" verdict must survive — generation only bumps on spec changes, so
 // a gen-1 Deployment that ran healthy then broke is still gen 1.
-func TestDetectProblems_RolloutStuckOnsetGen1(t *testing.T) {
+func TestDetectProblems_RolloutStuckIssueTimingGen1(t *testing.T) {
 	defer ResetTestState()
 
 	now := time.Now()
@@ -1683,7 +1683,7 @@ func TestDetectProblems_RolloutStuckOnsetGen1(t *testing.T) {
 		}}
 	}
 	client := fake.NewClientset(
-		// Healthy ~2h, then stuck 10m ago → runtime; gen==1 must not override.
+		// Healthy ~2h, then stuck 10m ago → started_after_resource_was_healthy; gen==1 must not override.
 		&appsv1.Deployment{
 			ObjectMeta: metav1.ObjectMeta{Name: "gen1-runtime", Namespace: "prod", CreationTimestamp: metav1.NewTime(now.Add(-2 * time.Hour))},
 			Status:     appsv1.DeploymentStatus{ObservedGeneration: 1, Conditions: stuckCond(now.Add(-10 * time.Minute))},
@@ -1711,21 +1711,21 @@ func TestDetectProblems_RolloutStuckOnsetGen1(t *testing.T) {
 	}
 
 	rt, ok := lookupProblem(problems, "Deployment", "gen1-runtime", "Rollout stuck")
-	if !ok || rt.Onset != "runtime" || rt.OnsetBasis != "condition" {
-		t.Errorf("gen1-runtime onset = (%q, %q), want (runtime, condition); ok=%v", rt.Onset, rt.OnsetBasis, ok)
+	if !ok || rt.IssueTiming != "started_after_resource_was_healthy" || rt.IssueTimingBasis != "condition" {
+		t.Errorf("gen1-runtime issue_timing = (%q, %q), want (started_after_resource_was_healthy, condition); ok=%v", rt.IssueTiming, rt.IssueTimingBasis, ok)
 	}
 	gray, ok := lookupProblem(problems, "Deployment", "gen1-gray", "Rollout stuck")
-	if !ok || gray.Onset != "initial" || gray.OnsetBasis != "spec" {
-		t.Errorf("gen1-gray onset = (%q, %q), want (initial, spec); ok=%v", gray.Onset, gray.OnsetBasis, ok)
+	if !ok || gray.IssueTiming != "started_at_resource_creation" || gray.IssueTimingBasis != "spec" {
+		t.Errorf("gen1-gray issue_timing = (%q, %q), want (started_at_resource_creation, spec); ok=%v", gray.IssueTiming, gray.IssueTimingBasis, ok)
 	}
 }
 
-// Pins the two pod-onset paths: a crashloop pod created alongside a young
-// Deployment classifies initial via creation-timestamp proximity
+// Pins the two pod-issue_timing paths: a crashloop pod created alongside a young
+// Deployment classifies started_at_resource_creation via creation-timestamp proximity
 // (pod_creation basis — the Available condition races with CrashLoopBackOff's
 // brief ready windows), while the same shape on an old Deployment with no
-// Available=False condition must omit onset rather than guess.
-func TestDetectProblems_PodOnsetCreationProximity(t *testing.T) {
+// Available=False condition must omit issue_timing rather than guess.
+func TestDetectProblems_PodIssueTimingCreationProximity(t *testing.T) {
 	defer ResetTestState()
 
 	now := time.Now()
@@ -1755,7 +1755,7 @@ func TestDetectProblems_PodOnsetCreationProximity(t *testing.T) {
 	youngCreated := now.Add(-5 * time.Minute)
 	veteranCreated := now.Add(-2 * time.Hour)
 	client := fake.NewClientset(
-		// Young Deployment, pod created 40s after it → pod_creation initial.
+		// Young Deployment, pod created 40s after it → pod_creation started_at_resource_creation.
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "young", Namespace: "prod", CreationTimestamp: metav1.NewTime(youngCreated)}},
 		rs("young-1", "young", youngCreated),
 		crashloopPod("young-1-abc", "young-1", youngCreated.Add(40*time.Second)),
@@ -1781,11 +1781,11 @@ func TestDetectProblems_PodOnsetCreationProximity(t *testing.T) {
 	}
 
 	young, ok := lookupProblem(problems, "Pod", "young-1-abc", "CrashLoopBackOff")
-	if !ok || young.Onset != "initial" || young.OnsetBasis != "pod_creation" {
-		t.Errorf("young pod onset = (%q, %q), want (initial, pod_creation); ok=%v", young.Onset, young.OnsetBasis, ok)
+	if !ok || young.IssueTiming != "started_at_resource_creation" || young.IssueTimingBasis != "pod_creation" {
+		t.Errorf("young pod issue_timing = (%q, %q), want (started_at_resource_creation, pod_creation); ok=%v", young.IssueTiming, young.IssueTimingBasis, ok)
 	}
 	veteran, ok := lookupProblem(problems, "Pod", "veteran-1-abc", "CrashLoopBackOff")
-	if !ok || veteran.Onset != "" || veteran.OnsetBasis != "" {
-		t.Errorf("veteran pod onset = (%q, %q), want omitted; ok=%v", veteran.Onset, veteran.OnsetBasis, ok)
+	if !ok || veteran.IssueTiming != "" || veteran.IssueTimingBasis != "" {
+		t.Errorf("veteran pod issue_timing = (%q, %q), want omitted; ok=%v", veteran.IssueTiming, veteran.IssueTimingBasis, ok)
 	}
 }

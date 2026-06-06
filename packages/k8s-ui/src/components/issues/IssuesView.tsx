@@ -49,7 +49,7 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
   // queue stays scannable and you never lose your place to a wall of expansions.
   const [openId, setOpenId] = useState<string | null>(null);
 
-  // Stable order keyed on severity → onset → identity (see compareIssues), so
+  // Stable order keyed on severity → observed age → identity (see compareIssues), so
   // the queue doesn't reshuffle under the host's auto-refresh.
   const sorted = useMemo(() => [...issues].sort(compareIssues), [issues]);
 
@@ -183,7 +183,7 @@ function IssueRow({
           </div>
         </div>
 
-        {/* Onset age (first_seen, fixed for the issue's life) is the chronic-vs-
+        {/* IssueTiming age (first_seen, fixed for the issue's life) is the chronic-vs-
             acute signal — "broken 2m" reads very differently from "broken 5d".
             Keyed on first_seen, not last_seen, so it doesn't churn on refresh. */}
         {issue.first_seen ? (
@@ -364,7 +364,7 @@ function diagnosticFactLabel(type: string): string {
   }
 }
 
-// Native-tooltip detail for the collapsed-row age chip: absolute onset + last-seen
+// Native-tooltip detail for the collapsed-row age chip: absolute first-seen + last-seen
 // freshness, the two facts the compact "2h" hides.
 function ageTitle(issue: Issue): string {
   const parts: string[] = [];

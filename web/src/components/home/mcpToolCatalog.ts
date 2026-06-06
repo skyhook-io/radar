@@ -163,10 +163,10 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'list_packages',
-    desc: 'Unified "what\'s installed" view across Helm releases, workload labels, CRD registrations, and GitOps declarations (Argo + Flux), with sources, versions, and health.',
+    desc: 'Unified "what\'s installed" view across Helm releases, workload labels, CRD registrations, and GitOps declarations (Argo + Flux), with sources, versions, health, and a sourceLegend for the stable source codes.',
     params: [
       { arg: 'namespace', desc: 'filter to a specific namespace' },
-      { arg: 'source', desc: 'H (Helm), L (labels), C (CRDs), A (Argo), F (Flux)' },
+      { arg: 'source', desc: 'H/helm, L/labels, C/crds, A/argocd, F/fluxcd' },
       { arg: 'chart', desc: 'case-insensitive chart-name substring' },
     ],
   },

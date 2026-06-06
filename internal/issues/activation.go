@@ -28,16 +28,16 @@ func issueToActivation(i Issue) map[string]any {
 		"reason":  i.Reason,
 		"message": i.Message,
 		"count":   int64(i.Count),
-		// first_seen is the onset (the axis the queue sorts on); last_seen
-		// churns to compose-time every poll, so `last_seen > X` ("older
+		// first_seen is the observed issue age anchor (the axis the queue sorts on);
+		// last_seen churns to compose-time every poll, so `last_seen > X` ("older
 		// than…") is near-useless. Both are int unix seconds.
 		"first_seen":             firstSeen,
 		"last_seen":              lastSeen,
 		"grouping_scope":         string(i.GroupingScope),
 		"restart_count":          int64(i.RestartCount),
 		"last_terminated_reason": i.LastTerminatedReason,
-		// Semantics documented on issuesapi.Issue.Onset / OnsetBasis.
-		"onset":       i.Onset,
-		"onset_basis": i.OnsetBasis,
+		// Semantics documented on issuesapi.Issue.IssueTiming / IssueTimingBasis.
+		"issue_timing":       i.IssueTiming,
+		"issue_timing_basis": i.IssueTimingBasis,
 	}
 }

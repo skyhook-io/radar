@@ -24,7 +24,7 @@ func flatPod(name, reason string, sev Severity, owner Ref, first, last time.Time
 func TestGroupIssues_FoldsMembersUnderOwner(t *testing.T) {
 	dep := Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}
 	t0, t1, t2 := time.Unix(1000, 0), time.Unix(2000, 0), time.Unix(3000, 0)
-	// web-b is the worst member: critical, oldest onset, newest last_seen,
+	// web-b is the worst member: critical, oldest first_seen, newest last_seen,
 	// and a distinct (same-category) reason — it must drive the rep fields.
 	flat := []Issue{
 		flatPod("web-a", "ImagePullBackOff", SeverityWarning, dep, t1, t1),

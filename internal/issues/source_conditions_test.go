@@ -53,7 +53,7 @@ func TestArgoRolloutFailure(t *testing.T) {
 		t.Error("a mid-progress rollout must not be flagged as a definitive failure")
 	}
 
-	// The override condition's lastTransitionTime drives first_seen and onset —
+	// The override condition's lastTransitionTime drives first_seen and issue_timing —
 	// a valid LTT must round-trip into the returned since.
 	withLTT := rolloutWithConditions([]map[string]any{
 		{"type": "Healthy", "status": "False", "reason": "RolloutHealthy"},
@@ -63,7 +63,7 @@ func TestArgoRolloutFailure(t *testing.T) {
 		t.Errorf("valid LTT must produce since ≈ 5m, got (%v, %v)", since, ok)
 	}
 
-	// Malformed or missing LTT → since=0, which downstream means "omit onset"
+	// Malformed or missing LTT → since=0, which downstream means "omit issue_timing"
 	// rather than falling back to a wrong timestamp.
 	badLTT := rolloutWithConditions([]map[string]any{
 		{"type": "InvalidSpec", "status": "True", "reason": "InvalidSpec", "lastTransitionTime": "not-a-timestamp"},
@@ -73,22 +73,22 @@ func TestArgoRolloutFailure(t *testing.T) {
 	}
 }
 
-// TestNewConditionIssue_OnsetSinceGuard pins the since=0 guard: a condition
-// with no lastTransitionTime must not produce an onset. Without the guard,
+// TestNewConditionIssue_IssueTimingSinceGuard pins the since=0 guard: a condition
+// with no lastTransitionTime must not produce an issue_timing. Without the guard,
 // lastSeen=now makes failingFor≈0 and any old resource looks like it was
 // "healthy for ages then broke" — a false runtime classification.
-func TestNewConditionIssue_OnsetSinceGuard(t *testing.T) {
+func TestNewConditionIssue_IssueTimingSinceGuard(t *testing.T) {
 	gvr := schema.GroupVersionResource{Group: "example.io", Version: "v1", Resource: "widgets"}
 	createdAt := time.Now().Add(-2 * time.Hour)
 
 	noLTT := newConditionIssue(gvr, "Widget", "ns", "w", SeverityWarning, "Ready: Bad", "msg", 0, "fp", createdAt)
-	if noLTT.Onset != "" || noLTT.OnsetBasis != "" {
-		t.Errorf("since=0 must omit onset, got (%q, %q)", noLTT.Onset, noLTT.OnsetBasis)
+	if noLTT.IssueTiming != "" || noLTT.IssueTimingBasis != "" {
+		t.Errorf("since=0 must omit issue_timing, got (%q, %q)", noLTT.IssueTiming, noLTT.IssueTimingBasis)
 	}
 
 	withLTT := newConditionIssue(gvr, "Widget", "ns", "w", SeverityWarning, "Ready: Bad", "msg", 30*time.Minute, "fp", createdAt)
-	if withLTT.Onset != "runtime" || withLTT.OnsetBasis != "condition" {
-		t.Errorf("90m healthy then failing 30m must be runtime/condition, got (%q, %q)", withLTT.Onset, withLTT.OnsetBasis)
+	if withLTT.IssueTiming != "started_after_resource_was_healthy" || withLTT.IssueTimingBasis != "condition" {
+		t.Errorf("90m healthy then failing 30m must be started_after_resource_was_healthy/condition, got (%q, %q)", withLTT.IssueTiming, withLTT.IssueTimingBasis)
 	}
 }
 

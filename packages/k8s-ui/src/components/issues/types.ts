@@ -137,19 +137,17 @@ export interface Issue {
   last_terminated_reason?: string;
 
   /**
-   * Best-effort onset classification from K8s-native signals. Absent when
-   * Radar has no confident signal — treat absence as "unknown", not initial/runtime.
+   * Best-effort timing evidence from K8s-native signals. Absent when Radar has
+   * no confident signal. This is not a root-cause verdict.
    *
-   * "initial"  — evidence shows this issue was present during the resource's
-   *              creation or first reconciliation. Treat as baseline unless no
-   *              runtime issue explains the active incident.
-   * "runtime"  — evidence shows this resource was previously past its initial
-   *              state and then entered the failing condition. Prioritise these
-   *              as active incident root cause candidates.
+   * "started_at_resource_creation"        — failing state began during resource
+   *                                        creation or first reconciliation.
+   * "started_after_resource_was_healthy"  — a meaningful healthy window preceded
+   *                                        the failing state.
    */
-  onset?: 'initial' | 'runtime';
-  /** The evidence that determined onset (for auditability). */
-  onset_basis?: 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec';
+  issue_timing?: 'started_at_resource_creation' | 'started_after_resource_was_healthy';
+  /** The evidence that determined issue_timing (for auditability). */
+  issue_timing_basis?: 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec';
 }
 
 /** subjectRef builds a deep-linkable ref for an issue's subject — the row's

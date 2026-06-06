@@ -270,14 +270,14 @@ func TestCompose_SuppressesWorkloadDegradedWhenChildSymptomExists(t *testing.T) 
 	}
 }
 
-func TestCompose_SuppressedParentDonatesOnsetToChildren(t *testing.T) {
-	// A suppressed parent rollup may be the subject's only onset carrier
+func TestCompose_SuppressedParentDonatesIssueTimingToChildren(t *testing.T) {
+	// A suppressed parent rollup may be the subject's only issue_timing carrier
 	// (e.g. surge rollout stalls with Available still True, so pods derive
-	// no owner-condition onset). Its onset must survive on the child rows,
-	// re-based as owner_condition; a child with its own onset keeps it.
+	// no owner-condition issue_timing). Its issue_timing must survive on the child rows,
+	// re-based as owner_condition; a child with its own issue_timing keeps it.
 	p := &fakeProvider{
 		problems: []k8s.Detection{
-			{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", Onset: "runtime", OnsetBasis: "condition"},
+			{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", IssueTiming: "started_after_resource_was_healthy", IssueTimingBasis: "condition"},
 			{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "web"},
 		},
 	}
@@ -288,8 +288,8 @@ func TestCompose_SuppressedParentDonatesOnsetToChildren(t *testing.T) {
 			t.Fatalf("parent must still be suppressed: %+v", out)
 		}
 		if i.Category == issuesapi.CategoryCrashLoop {
-			if i.Onset != "runtime" || i.OnsetBasis != "owner_condition" {
-				t.Errorf("child must inherit suppressed parent's onset as owner_condition, got (%q, %q)", i.Onset, i.OnsetBasis)
+			if i.IssueTiming != "started_after_resource_was_healthy" || i.IssueTimingBasis != "owner_condition" {
+				t.Errorf("child must inherit suppressed parent's issue_timing as owner_condition, got (%q, %q)", i.IssueTiming, i.IssueTimingBasis)
 			}
 		}
 	}
@@ -1190,7 +1190,7 @@ func TestCompose_LimitTruncates(t *testing.T) {
 }
 
 func TestCompose_DeterministicOrderForTies(t *testing.T) {
-	// Same severity + same onset → tiebreak on (namespace, name, id), matching
+	// Same severity + same issue_timing → tiebreak on (namespace, name, id), matching
 	// the UI comparator. All hits are critical, all DurationSeconds=0, so
 	// FirstSeen ties; here same-ns rows order by name (a, b, z).
 	p := &fakeProvider{

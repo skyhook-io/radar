@@ -116,16 +116,16 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 			issReason := condTypeReason(condType, reason)
 			issMsg := msg
 			// issueSince is the since-duration used for both FirstSeen/LastSeen
-			// and onset. Starts as FindFalseCondition's result; may be overridden
+			// and issue_timing. Starts as FindFalseCondition's result; may be overridden
 			// by a curated condition override below.
 			issueSince := since
 			// Argo Rollout: FindFalseCondition picks Healthy=False/RolloutHealthy
 			// first (Healthy precedes Available in the Rollout's condition list),
 			// which reads as "healthy" and buries the real cause. When a
 			// definitive failure condition is present, surface it as critical and
-			// use that specific condition's LTT for BOTH first_seen and onset —
+			// use that specific condition's LTT for BOTH first_seen and issue_timing —
 			// not the generic Healthy condition. If the override has no LTT
-			// (since=0), use zero and omit onset rather than silently falling
+			// (since=0), use zero and omit issue_timing rather than silently falling
 			// back to the Healthy timestamp.
 			if kind == "Rollout" && strings.Contains(strings.ToLower(gvr.Group), "argoproj.io") {
 				if r, m, s, found := argoRolloutFailure(u); found {
@@ -134,28 +134,28 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 			}
 			now := time.Now()
 			lastSeen := now.Add(-issueSince)
-			// Onset: only compute when we have a real condition timestamp.
-			// issueSince=0 means no lastTransitionTime was found; computing onset
-			// from now-based arithmetic would falsely classify old resources
-			// as "runtime" (failingFor≈0, resourceAge large → healthyFor large).
-			var onsetR k8s.OnsetResult
+			// IssueTiming: only compute when we have a real condition timestamp.
+			// issueSince=0 means no lastTransitionTime was found; computing issue_timing
+			// from now-based arithmetic would falsely classify old resources as
+			// "started_after_resource_was_healthy" (failingFor≈0, resourceAge large → healthyFor large).
+			var timingR k8s.IssueTimingResult
 			if issueSince > 0 {
-				onsetR = k8s.OnsetFromConditionLTT(lastSeen, u.GetCreationTimestamp().Time, "condition")
+				timingR = k8s.IssueTimingFromConditionLTT(lastSeen, u.GetCreationTimestamp().Time, "condition")
 			}
 			iss := Issue{
-				Severity:   severity,
-				Source:     SourceCondition,
-				Kind:       kind,
-				Group:      gvr.Group,
-				Namespace:  u.GetNamespace(),
-				Name:       u.GetName(),
-				Reason:     issReason,
-				Message:    issMsg,
-				FirstSeen:  lastSeen,
-				LastSeen:   lastSeen,
-				Count:      1,
-				Onset:      onsetR.Onset,
-				OnsetBasis: onsetR.Basis,
+				Severity:         severity,
+				Source:           SourceCondition,
+				Kind:             kind,
+				Group:            gvr.Group,
+				Namespace:        u.GetNamespace(),
+				Name:             u.GetName(),
+				Reason:           issReason,
+				Message:          issMsg,
+				FirstSeen:        lastSeen,
+				LastSeen:         lastSeen,
+				Count:            1,
+				IssueTiming:      timingR.IssueTiming,
+				IssueTimingBasis: timingR.Basis,
 			}
 			classifyIssue(&iss)
 			enrichIdentity(&iss)
@@ -248,27 +248,27 @@ func detectGatewayRouteParentIssues(gvr schema.GroupVersionResource, kind string
 func newConditionIssue(gvr schema.GroupVersionResource, kind, namespace, name string, severity Severity, reason, message string, since time.Duration, fingerprint string, createdAt time.Time) Issue {
 	now := time.Now()
 	lastSeen := now.Add(-since)
-	// Only compute onset when we have a real condition timestamp (since > 0).
-	// since=0 means the condition has no lastTransitionTime; onset would be wrong.
-	var onsetR k8s.OnsetResult
+	// Only compute issue_timing when we have a real condition timestamp (since > 0).
+	// since=0 means the condition has no lastTransitionTime; issue_timing would be wrong.
+	var timingR k8s.IssueTimingResult
 	if since > 0 {
-		onsetR = k8s.OnsetFromConditionLTT(lastSeen, createdAt, "condition")
+		timingR = k8s.IssueTimingFromConditionLTT(lastSeen, createdAt, "condition")
 	}
 	iss := Issue{
-		Severity:    severity,
-		Source:      SourceCondition,
-		Kind:        kind,
-		Group:       gvr.Group,
-		Namespace:   namespace,
-		Name:        name,
-		Reason:      reason,
-		Message:     message,
-		FirstSeen:   lastSeen,
-		LastSeen:    lastSeen,
-		Count:       1,
-		Fingerprint: fingerprint,
-		Onset:       onsetR.Onset,
-		OnsetBasis:  onsetR.Basis,
+		Severity:         severity,
+		Source:           SourceCondition,
+		Kind:             kind,
+		Group:            gvr.Group,
+		Namespace:        namespace,
+		Name:             name,
+		Reason:           reason,
+		Message:          message,
+		FirstSeen:        lastSeen,
+		LastSeen:         lastSeen,
+		Count:            1,
+		Fingerprint:      fingerprint,
+		IssueTiming:      timingR.IssueTiming,
+		IssueTimingBasis: timingR.Basis,
 	}
 	classifyIssue(&iss)
 	enrichIdentity(&iss)

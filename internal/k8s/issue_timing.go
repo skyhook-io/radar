@@ -2,51 +2,49 @@ package k8s
 
 import "time"
 
-// OnsetResult is the outcome of an onset classification attempt.
+// IssueTimingResult is the outcome of a timing classification attempt.
 // The zero value means "no confident signal; omit from the Issue."
-type OnsetResult struct {
-	Onset string // "initial" | "runtime" | ""
-	Basis string // "condition" | "owner_condition" | "pod_creation" | "deletion" | "phase" | "spec" | ""
+type IssueTimingResult struct {
+	IssueTiming string // "started_at_resource_creation" | "started_after_resource_was_healthy" | ""
+	Basis       string // "condition" | "owner_condition" | "pod_creation" | "deletion" | "phase" | "spec" | ""
 }
 
-// OnsetFromConditionLTT classifies issue onset by comparing a condition's
+// IssueTimingFromConditionLTT classifies issue timing by comparing a condition's
 // lastTransitionTime against the resource's creationTimestamp.
 //
-//   - "initial"  evidence shows the resource has been failing since shortly
-//     after creation — it was never meaningfully healthy.
-//     "This was broken when it was first applied."
-//   - "runtime"  the resource was clearly healthy before the condition flipped —
-//     at least 10 min of healthy operation before the failure.
-//     "This was working and then broke."
+//   - "started_at_resource_creation" means evidence places the failing state
+//     during resource creation or first reconciliation.
+//   - "started_after_resource_was_healthy" means evidence shows a meaningful
+//     healthy window before the failing condition appeared.
 //   - zero value the gap is in the gray zone, or timestamps are missing.
-//     Caller must omit onset; do not infer from age alone.
+//     Caller must omit issue_timing; do not infer timing from age alone.
 //
-// Two "initial" rules:
+// Two started-at-resource-creation rules:
 //  1. Absolute slop (30s): conditions take a moment to be written after creation.
 //  2. Ratio rule: healthyFor < 5min AND resource was failing for ≥75% of its
 //     lifetime. Catches misconfigured workloads that crash within ~1-2 min of
 //     deploy — the Kubernetes controller reconciliation loop means Available=False
 //     is set 60-120s after the first crash, which exceeds the 30s slop but is
 //     still clearly a deploy-time misconfiguration.
-func OnsetFromConditionLTT(failingSince, resourceCreated time.Time, basis string) OnsetResult {
+func IssueTimingFromConditionLTT(failingSince, resourceCreated time.Time, basis string) IssueTimingResult {
 	if failingSince.IsZero() || resourceCreated.IsZero() {
-		return OnsetResult{}
+		return IssueTimingResult{}
 	}
 	now := time.Now()
 	failingFor := now.Sub(failingSince)
 	resourceAge := now.Sub(resourceCreated)
 	if failingFor <= 0 || resourceAge <= 0 {
-		return OnsetResult{}
+		return IssueTimingResult{}
 	}
 	// Negative healthyFor (LTT predates creation — adopted or recreated
 	// resources whose condition survived) means failing for this object's
-	// entire lifetime, which is exactly what "initial" asserts. Deliberately
-	// classified, not omitted.
+	// entire lifetime, which is exactly what "started_at_resource_creation" asserts.
+	// Deliberately classified, not omitted.
 	healthyFor := resourceAge - failingFor
 
 	// Rule 1: absolute slop — condition propagation takes a moment after creation.
 	if healthyFor < 30*time.Second {
-		return OnsetResult{Onset: "initial", Basis: basis}
+		return IssueTimingResult{IssueTiming: "started_at_resource_creation", Basis: basis}
 	}
 	// Rule 2: ratio — if the resource was healthy for < 25% of its lifetime and
 	// that window is under 5 minutes, the healthy period is noise not a clean bill
@@ -56,12 +54,12 @@ func OnsetFromConditionLTT(failingSince, resourceCreated time.Time, basis string
 	if healthyFor < 5*time.Minute && resourceAge > 0 {
 		ratio := float64(healthyFor) / float64(resourceAge)
 		if ratio < 0.25 {
-			return OnsetResult{Onset: "initial", Basis: basis}
+			return IssueTimingResult{IssueTiming: "started_at_resource_creation", Basis: basis}
 		}
 	}
 	// Rule 3: confirmed healthy — at least 10 minutes of healthy operation.
 	if healthyFor > 10*time.Minute {
-		return OnsetResult{Onset: "runtime", Basis: basis}
+		return IssueTimingResult{IssueTiming: "started_after_resource_was_healthy", Basis: basis}
 	}
-	return OnsetResult{} // gray zone: omit
+	return IssueTimingResult{} // gray zone: omit
 }

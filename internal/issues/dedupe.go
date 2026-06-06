@@ -107,14 +107,14 @@ func dedupeWorkloadDegradedOverChild(in []Issue) []Issue {
 	if len(maxChildSev) == 0 {
 		return in
 	}
-	// A suppressed parent may be the subject's only onset carrier: pod rows
-	// derive onset solely from the owner's Available condition, but a surge
-	// rollout can stall with Available still True. Record each dropped
-	// parent's onset and donate it to onset-less children of the same
-	// subject — as "owner_condition", since from the child's perspective the
+	// A suppressed parent may have the only timing evidence for a subject: pod
+	// rows derive issue_timing solely from the owner's Available condition, but a
+	// surge rollout can stall with Available still True. Record each dropped
+	// parent's issue_timing and donate it to children of the same subject as
+	// "owner_condition", since from the child's perspective the
 	// evidence is workload-level. Disagreeing suppressed parents donate
 	// nothing, mirroring the group-fold agreement rule.
-	suppressedOnset := map[string]string{}
+	suppressedIssueTiming := map[string]string{}
 	out := in[:0]
 	for _, i := range in {
 		if parentRollupCategories[i.Category] {
@@ -122,11 +122,11 @@ func dedupeWorkloadDegradedOverChild(in []Issue) []Issue {
 			// downgrade a critical rollup to a warning child.
 			k := subjectKeyOf(subjectRef(i))
 			if r, ok := maxChildSev[k]; ok && r >= SeverityRank(i.Severity) {
-				if i.Onset != "" {
-					if prev, seen := suppressedOnset[k]; seen && prev != i.Onset {
-						suppressedOnset[k] = ""
+				if i.IssueTiming != "" {
+					if prev, seen := suppressedIssueTiming[k]; seen && prev != i.IssueTiming {
+						suppressedIssueTiming[k] = ""
 					} else if !seen {
-						suppressedOnset[k] = i.Onset
+						suppressedIssueTiming[k] = i.IssueTiming
 					}
 				}
 				continue
@@ -136,12 +136,12 @@ func dedupeWorkloadDegradedOverChild(in []Issue) []Issue {
 	}
 	for idx := range out {
 		i := &out[idx]
-		if i.Onset != "" || !childCategories[i.Category] {
+		if i.IssueTiming != "" || !childCategories[i.Category] {
 			continue
 		}
-		if onset := suppressedOnset[subjectKeyOf(subjectRef(*i))]; onset != "" {
-			i.Onset = onset
-			i.OnsetBasis = "owner_condition"
+		if timing := suppressedIssueTiming[subjectKeyOf(subjectRef(*i))]; timing != "" {
+			i.IssueTiming = timing
+			i.IssueTimingBasis = "owner_condition"
 		}
 	}
 	return out

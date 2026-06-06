@@ -75,7 +75,7 @@ func GroupIssues(flat []Issue) []Issue {
 
 // foldGroup collapses one group's member rows into a single grouped issue,
 // applying the representative rules: the worst member drives severity +
-// reason/message/crash context; age is the oldest onset; last_seen the
+// reason/message/crash context; age is the oldest first_seen; last_seen the
 // newest. members are the folded underlying resources (the fan-out),
 // excluding the subject itself.
 func foldGroup(members []Issue) Issue {
@@ -125,30 +125,31 @@ func foldGroup(members []Issue) Issue {
 	}
 	sortRefs(refs)
 
-	// Onset: keep only if all members with onset agree; any mix of "initial"
-	// and "runtime" → omit. Members without onset don't contribute (they're
-	// simply unknown). Onset is computed by this agreement scan, never copied
-	// from the representative's own field — the representative drives
-	// Reason/Message, but its onset alone could disagree with other members.
-	// Basis follows the same rule: agreeing onsets with mixed bases (e.g.
-	// "condition" + "owner_condition") keep the onset but drop the basis
+	// IssueTiming: keep only if all members with issue_timing agree; any mix of
+	// "started_at_resource_creation" and "started_after_resource_was_healthy" → omit. Members
+	// without issue_timing don't contribute (they're simply unknown). IssueTiming is
+	// computed by this agreement scan, never copied from the representative's
+	// own field — the representative drives Reason/Message, but its issue_timing
+	// alone could disagree with other members.
+	// Basis follows the same rule: agreeing issue_timings with mixed bases (e.g.
+	// "condition" + "owner_condition") keep the issue_timing but drop the basis
 	// rather than crediting one member's evidence for the whole group.
-	var groupOnset, groupBasis string
+	var groupIssueTiming, groupBasis string
 	for _, m := range members {
-		if m.Onset == "" {
+		if m.IssueTiming == "" {
 			continue
 		}
-		if groupOnset == "" {
-			groupOnset, groupBasis = m.Onset, m.OnsetBasis
-		} else if groupOnset != m.Onset {
-			groupOnset, groupBasis = "", "" // disagreement → omit
+		if groupIssueTiming == "" {
+			groupIssueTiming, groupBasis = m.IssueTiming, m.IssueTimingBasis
+		} else if groupIssueTiming != m.IssueTiming {
+			groupIssueTiming, groupBasis = "", "" // disagreement → omit
 			break
-		} else if groupBasis != m.OnsetBasis {
+		} else if groupBasis != m.IssueTimingBasis {
 			groupBasis = ""
 		}
 	}
-	g.Onset = groupOnset
-	g.OnsetBasis = groupBasis
+	g.IssueTiming = groupIssueTiming
+	g.IssueTimingBasis = groupBasis
 
 	// Count is the affected-resource fan-out — the non-subject members under
 	// this subject (the subject is shown separately as the header, not under
