@@ -115,32 +115,39 @@ func detectGenericCRDIssues(p Provider, f Filters) []Issue {
 			severity := SeverityWarning
 			issReason := condTypeReason(condType, reason)
 			issMsg := msg
-			// issueSince is the since-duration used for both FirstSeen/LastSeen
-			// and issue_timing. Starts as FindFalseCondition's result; may be overridden
-			// by a curated condition override below.
+			// issueSince anchors FirstSeen/LastSeen; timingSince gates issue_timing.
+			// They start identical (FindFalseCondition's result) and only diverge
+			// when a curated override below carries no usable timestamp.
 			issueSince := since
+			timingSince := since
 			// Argo Rollout: FindFalseCondition picks Healthy=False/RolloutHealthy
 			// first (Healthy precedes Available in the Rollout's condition list),
 			// which reads as "healthy" and buries the real cause. When a
 			// definitive failure condition is present, surface it as critical and
 			// use that specific condition's LTT for BOTH first_seen and issue_timing —
 			// not the generic Healthy condition. If the override has no LTT
-			// (since=0), use zero and omit issue_timing rather than silently falling
-			// back to the Healthy timestamp.
+			// (s==0), omit issue_timing rather than borrowing the Healthy timestamp —
+			// but KEEP the generic condition's age anchor for FirstSeen: resetting
+			// it to compose-time would make a long-broken rollout look newly broken
+			// and jump the queue on every poll.
 			if kind == "Rollout" && strings.Contains(strings.ToLower(gvr.Group), "argoproj.io") {
 				if r, m, s, found := argoRolloutFailure(u); found {
-					issReason, issMsg, severity, issueSince = r, m, SeverityCritical, s
+					issReason, issMsg, severity = r, m, SeverityCritical
+					timingSince = s
+					if s > 0 {
+						issueSince = s
+					}
 				}
 			}
 			now := time.Now()
 			lastSeen := now.Add(-issueSince)
 			// IssueTiming: only compute when we have a real condition timestamp.
-			// issueSince=0 means no lastTransitionTime was found; computing issue_timing
+			// timingSince=0 means no lastTransitionTime was found; computing issue_timing
 			// from now-based arithmetic would falsely classify old resources as
 			// "started_after_resource_was_healthy" (failingFor≈0, resourceAge large → healthyFor large).
 			var timingR k8s.IssueTimingResult
-			if issueSince > 0 {
-				timingR = k8s.IssueTimingFromConditionLTT(lastSeen, u.GetCreationTimestamp().Time, "condition")
+			if timingSince > 0 {
+				timingR = k8s.IssueTimingFromConditionLTT(now.Add(-timingSince), u.GetCreationTimestamp().Time, "condition")
 			}
 			iss := Issue{
 				Severity:         severity,

@@ -92,6 +92,47 @@ func TestNewConditionIssue_IssueTimingSinceGuard(t *testing.T) {
 	}
 }
 
+// A Rollout override (InvalidSpec) without a parseable LTT must omit
+// issue_timing but KEEP the generic Healthy condition's age anchor for
+// FirstSeen — resetting it to compose-time would make a long-broken rollout
+// look newly broken and jump the queue on every poll.
+func TestDetectGenericCRDIssues_RolloutOverrideWithoutLTTKeepsAnchor(t *testing.T) {
+	rolloutGVR := schema.GroupVersionResource{Group: "argoproj.io", Version: "v1alpha1", Resource: "rollouts"}
+	healthyLTT := time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339)
+	p := &fakeProvider{
+		dynamic: map[schema.GroupVersionResource][]*unstructured.Unstructured{
+			rolloutGVR: {{
+				Object: map[string]any{
+					"metadata": map[string]any{"name": "checkout", "namespace": "prod"},
+					"status": map[string]any{
+						"conditions": []any{
+							map[string]any{"type": "Healthy", "status": "False", "reason": "RolloutHealthy", "lastTransitionTime": healthyLTT},
+							map[string]any{"type": "InvalidSpec", "status": "True", "reason": "InvalidSpec", "message": "bad stableService"},
+						},
+					},
+				},
+			}},
+		},
+		kinds:      map[schema.GroupVersionResource]string{rolloutGVR: "Rollout"},
+		namespaced: map[schema.GroupVersionResource]bool{rolloutGVR: true},
+	}
+
+	got := Compose(p, Filters{})
+	if len(got) != 1 {
+		t.Fatalf("Compose() issues = %d, want 1: %+v", len(got), got)
+	}
+	iss := got[0]
+	if iss.Reason != "InvalidSpec" || iss.Severity != SeverityCritical {
+		t.Errorf("override must still win: reason=%q severity=%q", iss.Reason, iss.Severity)
+	}
+	if iss.IssueTiming != "" || iss.IssueTimingBasis != "" {
+		t.Errorf("no override LTT → issue_timing must be omitted, got (%q, %q)", iss.IssueTiming, iss.IssueTimingBasis)
+	}
+	if age := time.Since(iss.FirstSeen); age < 90*time.Minute {
+		t.Errorf("FirstSeen must keep the Healthy condition's 2h anchor, got %v ago", age)
+	}
+}
+
 func TestDetectGenericCRDIssues_GatewayRouteParentConditions(t *testing.T) {
 	routeGVR := schema.GroupVersionResource{Group: "gateway.networking.k8s.io", Version: "v1", Resource: "httproutes"}
 	now := time.Now().Add(-10 * time.Minute).UTC().Format(time.RFC3339)
