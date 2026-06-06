@@ -6,7 +6,7 @@ import "time"
 // The zero value means "no confident signal; omit from the Issue."
 type OnsetResult struct {
 	Onset string // "initial" | "runtime" | ""
-	Basis string // "condition" | "owner_condition" | "deletion" | "phase" | "spec" | ""
+	Basis string // "condition" | "owner_condition" | "pod_creation" | "deletion" | "phase" | "spec" | ""
 }
 
 // OnsetFromConditionLTT classifies issue onset by comparing a condition's

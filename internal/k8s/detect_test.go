@@ -1719,3 +1719,73 @@ func TestDetectProblems_RolloutStuckOnsetGen1(t *testing.T) {
 		t.Errorf("gen1-gray onset = (%q, %q), want (initial, spec); ok=%v", gray.Onset, gray.OnsetBasis, ok)
 	}
 }
+
+// Pins the two pod-onset paths: a crashloop pod created alongside a young
+// Deployment classifies initial via creation-timestamp proximity
+// (pod_creation basis — the Available condition races with CrashLoopBackOff's
+// brief ready windows), while the same shape on an old Deployment with no
+// Available=False condition must omit onset rather than guess.
+func TestDetectProblems_PodOnsetCreationProximity(t *testing.T) {
+	defer ResetTestState()
+
+	now := time.Now()
+	controller := true
+	crashloopPod := func(name, rsName string, created time.Time) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: name, Namespace: "prod", CreationTimestamp: metav1.NewTime(created),
+				OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "ReplicaSet", Name: rsName, Controller: &controller}},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:  "app",
+					State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+				}},
+			},
+		}
+	}
+	rs := func(name, depName string, created time.Time) *appsv1.ReplicaSet {
+		return &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
+			Name: name, Namespace: "prod", CreationTimestamp: metav1.NewTime(created),
+			OwnerReferences: []metav1.OwnerReference{{APIVersion: "apps/v1", Kind: "Deployment", Name: depName, Controller: &controller}},
+		}}
+	}
+
+	youngCreated := now.Add(-5 * time.Minute)
+	veteranCreated := now.Add(-2 * time.Hour)
+	client := fake.NewClientset(
+		// Young Deployment, pod created 40s after it → pod_creation initial.
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "young", Namespace: "prod", CreationTimestamp: metav1.NewTime(youngCreated)}},
+		rs("young-1", "young", youngCreated),
+		crashloopPod("young-1-abc", "young-1", youngCreated.Add(40*time.Second)),
+		// Old Deployment, original pod crashing now, no Available=False → omit.
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "veteran", Namespace: "prod", CreationTimestamp: metav1.NewTime(veteranCreated)}},
+		rs("veteran-1", "veteran", veteranCreated),
+		crashloopPod("veteran-1-abc", "veteran-1", veteranCreated.Add(30*time.Second)),
+	)
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "prod")
+		if hasProblem(problems, "Pod", "young-1-abc", "CrashLoopBackOff") && hasProblem(problems, "Pod", "veteran-1-abc", "CrashLoopBackOff") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	young, ok := lookupProblem(problems, "Pod", "young-1-abc", "CrashLoopBackOff")
+	if !ok || young.Onset != "initial" || young.OnsetBasis != "pod_creation" {
+		t.Errorf("young pod onset = (%q, %q), want (initial, pod_creation); ok=%v", young.Onset, young.OnsetBasis, ok)
+	}
+	veteran, ok := lookupProblem(problems, "Pod", "veteran-1-abc", "CrashLoopBackOff")
+	if !ok || veteran.Onset != "" || veteran.OnsetBasis != "" {
+		t.Errorf("veteran pod onset = (%q, %q), want omitted; ok=%v", veteran.Onset, veteran.OnsetBasis, ok)
+	}
+}

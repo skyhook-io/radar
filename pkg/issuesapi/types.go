@@ -278,6 +278,9 @@ type Issue struct {
 	//                       reflects workload-level health onset, not cause-specific onset
 	//                       (a new image error on an already-degraded Deployment inherits
 	//                       the Deployment's onset, not the image error's onset)
+	//   "pod_creation"    — pod and Deployment creation timestamps compared; used for
+	//                       crashloop pods on young Deployments where the Available
+	//                       condition races with CrashLoopBackOff's brief ready windows
 	//   "deletion"        — deletionTimestamp (always runtime)
 	//   "phase"           — resource Phase field (e.g. PVC Pending)
 	//   "spec"            — structural spec invariant (no timestamp required)

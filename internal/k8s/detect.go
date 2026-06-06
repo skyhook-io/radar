@@ -84,7 +84,7 @@ type Detection struct {
 	//
 	// Onset values: "initial" (failing since the resource was created) |
 	//               "runtime" (resource was previously healthy then broke).
-	// Basis values: "condition" | "owner_condition" | "deletion" | "phase" | "spec".
+	// Basis values: "condition" | "owner_condition" | "pod_creation" | "deletion" | "phase" | "spec".
 	Onset      string
 	OnsetBasis string
 }
@@ -362,19 +362,48 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				message = init.message
 				fingerprint = init.fingerprint
 			}
-			// Onset: use the owner Deployment's Available condition as the stable
-			// signal — pod timestamps churn on rollouts/evictions/restarts, but
-			// Deployment.Available.lastTransitionTime captures when the workload as
-			// a whole last changed health state. Only applies to Deployment owners —
-			// StatefulSet/DaemonSet don't expose an equivalent Available condition.
+			// Onset: classify whether this pod has been failing since the Deployment
+			// was first created (initial) or broke after a period of healthy operation
+			// (runtime). Two complementary paths handle the CrashLoopBackOff race
+			// where pods briefly become Available=True between crashes, suppressing the
+			// Available=False condition that the normal onset path depends on.
+			//
+			// Path 1 — pod creation proximity (young deployments only): if the pod was
+			// created within 60s of the Deployment AND the Deployment is < 15 minutes
+			// old, the pod has existed since the initial rollout and any crashloop is
+			// plausibly a deploy-time misconfiguration. The 15-minute cap prevents
+			// false "initial" on long-running Deployments whose original pod starts
+			// crashing hours later due to a runtime regression (memory leak, config
+			// reload, etc.) — those cases are ambiguous and must not be asserted.
+			// Basis is "pod_creation" to document that evidence is creation timestamps,
+			// not a condition lastTransitionTime.
+			//
+			// Path 2 — Available=False condition: for pods created well after the
+			// Deployment, or when the Deployment is old, fall back to the condition LTT
+			// when the Deployment is currently marked degraded.
+			const maxDeployAgeForProximityOnset = 15 * time.Minute
 			var podOnset OnsetResult
 			if ownerKind == "Deployment" && ownerName != "" {
 				if depLister := cache.Deployments(); depLister != nil {
 					if dep, err := depLister.Deployments(pod.Namespace).Get(ownerName); err == nil {
-						for _, cond := range dep.Status.Conditions {
-							if cond.Type == appsv1.DeploymentAvailable && cond.Status == "False" && !cond.LastTransitionTime.IsZero() {
-								podOnset = OnsetFromConditionLTT(cond.LastTransitionTime.Time, dep.CreationTimestamp.Time, "owner_condition")
-								break
+						depAge := now.Sub(dep.CreationTimestamp.Time)
+						podAge := now.Sub(pod.CreationTimestamp.Time)
+						podCreatedWithDeploy := depAge > 0 && (depAge-podAge) < 60*time.Second
+						if podCreatedWithDeploy && depAge <= maxDeployAgeForProximityOnset {
+							// Young deployment + original pod: use creation timestamps as
+							// the failingSince proxy. The pod crashed within seconds of
+							// being scheduled; healthyFor ≈ depAge-podAge (< 60s) which
+							// the slop/ratio rule in OnsetFromConditionLTT classifies as
+							// initial.
+							podOnset = OnsetFromConditionLTT(pod.CreationTimestamp.Time, dep.CreationTimestamp.Time, "pod_creation")
+						} else {
+							// Old deployment, or pod replaced after initial rollout — use
+							// Available condition only when it currently signals degraded.
+							for _, cond := range dep.Status.Conditions {
+								if cond.Type == appsv1.DeploymentAvailable && cond.Status == "False" && !cond.LastTransitionTime.IsZero() {
+									podOnset = OnsetFromConditionLTT(cond.LastTransitionTime.Time, dep.CreationTimestamp.Time, "owner_condition")
+									break
+								}
 							}
 						}
 					}

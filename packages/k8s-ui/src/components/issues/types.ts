@@ -149,7 +149,7 @@ export interface Issue {
    */
   onset?: 'initial' | 'runtime';
   /** The evidence that determined onset (for auditability). */
-  onset_basis?: 'condition' | 'owner_condition' | 'deletion' | 'phase' | 'spec';
+  onset_basis?: 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec';
 }
 
 /** subjectRef builds a deep-linkable ref for an issue's subject — the row's
