@@ -186,6 +186,7 @@ Table-based resource browser with smart columns per resource kind.
 
 - Browse all resource types including CRDs
 - Search by name, filter by status or problems (CrashLoopBackOff, ImagePullBackOff, etc.)
+- Add custom columns from any label or annotation — sortable, filterable, and resizable
 - Click any resource for YAML manifest, related resources, logs, and events
 
 ### Image Filesystem Viewer
