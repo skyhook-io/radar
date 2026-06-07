@@ -2533,9 +2533,11 @@ func normalizedProbe(p *corev1.Probe) any {
 		"failureThreshold":    p.FailureThreshold,
 	}
 	if p.HTTPGet != nil {
-		out["handler"] = fmt.Sprintf("httpGet:%s:%d%s", p.HTTPGet.Scheme, p.HTTPGet.Port.IntVal, p.HTTPGet.Path)
+		// Port.String() handles both numeric and named ports — IntVal renders
+		// every named port as 0, hiding real edits and conflating distinct names.
+		out["handler"] = fmt.Sprintf("httpGet:%s:%s%s", p.HTTPGet.Scheme, p.HTTPGet.Port.String(), p.HTTPGet.Path)
 	} else if p.TCPSocket != nil {
-		out["handler"] = fmt.Sprintf("tcpSocket:%d", p.TCPSocket.Port.IntVal)
+		out["handler"] = fmt.Sprintf("tcpSocket:%s", p.TCPSocket.Port.String())
 	} else if p.GRPC != nil {
 		service := ""
 		if p.GRPC.Service != nil {

@@ -1188,6 +1188,13 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 	if finalizers := obj.GetFinalizers(); len(finalizers) > 0 {
 		msg = "Waiting on finalizers: " + strings.Join(finalizers, ", ")
 	}
+	// The stuck-termination issue began when deletion was requested — run the
+	// classifier against the deletionTimestamp like any other timing site. A
+	// resource deleted right after creation classifies at-creation; one that
+	// existed for a real window before deletion classifies post-healthy. A
+	// hardcoded post-healthy label would overstate the evidence for
+	// create-then-delete churn.
+	timingR := IssueTimingFromConditionLTT(obj.GetDeletionTimestamp().Time, obj.GetCreationTimestamp().Time, "deletion")
 	return Detection{
 		Kind:            kind,
 		Group:           group,
@@ -1201,10 +1208,8 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 		AgeSeconds:      int64(now.Sub(obj.GetCreationTimestamp().Time).Seconds()),
 		Duration:        FormatAge(duration),
 		DurationSeconds: int64(duration.Seconds()),
-		// Deletion in progress means the resource existed and is now being
-		// removed — always appeared after creation, never present at creation.
-		IssueTiming:      "started_after_resource_was_healthy",
-		IssueTimingBasis: "deletion",
+		IssueTiming:      timingR.IssueTiming,
+		IssueTimingBasis: timingR.Basis,
 	}, true
 }
 

@@ -1,10 +1,12 @@
 package k8s
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
 // Added/removed containers must surface as a single row naming the container
@@ -34,5 +36,22 @@ func TestDiffPodTemplateConfig_ContainerAddRemove(t *testing.T) {
 	// Unchanged shared container must not produce noise.
 	if strings.Contains(joined, "app") {
 		t.Errorf("unchanged container must not appear in summary: %q", joined)
+	}
+}
+
+// Named probe ports must round-trip through the diff — IntVal renders them all
+// as 0, hiding edits and conflating distinct names.
+func TestNormalizedProbe_NamedPorts(t *testing.T) {
+	httpNamed := func(port intstr.IntOrString) *corev1.Probe {
+		return &corev1.Probe{ProbeHandler: corev1.ProbeHandler{HTTPGet: &corev1.HTTPGetAction{Port: port, Path: "/healthz"}}}
+	}
+	a := normalizedProbe(httpNamed(intstr.FromString("admin")))
+	b := normalizedProbe(httpNamed(intstr.FromString("metrics")))
+	c := normalizedProbe(httpNamed(intstr.FromInt32(9090)))
+	if reflect.DeepEqual(a, b) {
+		t.Errorf("distinct named ports must not normalize identically: %v", a)
+	}
+	if reflect.DeepEqual(a, c) {
+		t.Errorf("named vs numeric port must differ: %v vs %v", a, c)
 	}
 }

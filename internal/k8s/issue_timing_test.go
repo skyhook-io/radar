@@ -3,6 +3,8 @@ package k8s
 import (
 	"testing"
 	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestIssueTimingFromConditionLTT(t *testing.T) {
@@ -192,5 +194,29 @@ func TestCapiIssueTiming_ZeroDurationGuard(t *testing.T) {
 	}
 	if timing, basis := capiIssueTiming(time.Hour, time.Now().Add(-3*time.Hour)); timing != "started_after_resource_was_healthy" || basis != "condition" {
 		t.Errorf("2h healthy then failing 1h must be started_after_resource_was_healthy/condition, got (%q, %q)", timing, basis)
+	}
+}
+
+// terminatingProblem runs the classifier against deletionTimestamp: deletion
+// right after creation is at-creation (create-then-delete churn), deletion
+// after a real existence window is post-healthy. A hardcoded post-healthy
+// label would overstate the evidence for the former.
+func TestTerminatingProblemIssueTiming(t *testing.T) {
+	now := time.Now()
+	obj := func(created, deleted time.Time) metav1.Object {
+		dt := metav1.NewTime(deleted)
+		return &metav1.ObjectMeta{Name: "x", Namespace: "ns", CreationTimestamp: metav1.NewTime(created), DeletionTimestamp: &dt}
+	}
+
+	healthyThenDeleted, ok := terminatingProblem("ConfigMap", "", obj(now.Add(-2*time.Hour), now.Add(-30*time.Minute)), now)
+	if !ok || healthyThenDeleted.IssueTiming != "started_after_resource_was_healthy" || healthyThenDeleted.IssueTimingBasis != "deletion" {
+		t.Errorf("2h-old resource stuck 30m = (%q, %q), want (started_after_resource_was_healthy, deletion); ok=%v",
+			healthyThenDeleted.IssueTiming, healthyThenDeleted.IssueTimingBasis, ok)
+	}
+
+	createdThenDeleted, ok := terminatingProblem("ConfigMap", "", obj(now.Add(-1*time.Hour), now.Add(-1*time.Hour).Add(15*time.Second)), now)
+	if !ok || createdThenDeleted.IssueTiming != "started_at_resource_creation" {
+		t.Errorf("deleted 15s after creation = (%q, %q), want started_at_resource_creation; ok=%v",
+			createdThenDeleted.IssueTiming, createdThenDeleted.IssueTimingBasis, ok)
 	}
 }
