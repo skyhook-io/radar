@@ -3,6 +3,7 @@ import { clsx } from 'clsx'
 import { Section, PropertyList, Property, ConditionsSection, AlertBanner } from '../../ui/drawer-components'
 import { MetricsChart } from '../../ui/MetricsChart'
 import { formatMemoryString } from '../../../utils/format'
+import { getExtendedCapacityRows } from '../../../utils/extended-resources'
 import type { MetricsDataPoint } from '../../../types/core'
 
 interface NodeRendererProps {
@@ -132,6 +133,12 @@ export function NodeRenderer({ data, relationships, onViewPods, metrics, metrics
               allocatable: formatStorage(allocatable['ephemeral-storage']),
               inUse: undefined,
             },
+            ...getExtendedCapacityRows(capacity, allocatable).map((row) => ({
+              label: row.key,
+              capacity: row.capacity,
+              allocatable: row.allocatable,
+              inUse: undefined,
+            })),
           ].map((row) => (
             <div key={row.label} className="card-inner">
               <div className="text-xs font-medium text-theme-text-secondary mb-1">{row.label}</div>

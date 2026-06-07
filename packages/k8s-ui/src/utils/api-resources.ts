@@ -170,6 +170,23 @@ export function formatGroupName(group: string): string {
     'sparkoperator.k8s.io': 'Spark',
     'kubeflow.org': 'Kubeflow',
     'snapshot.storage.k8s.io': 'Snapshots',
+    'resource.k8s.io': 'Dynamic Resource Allocation',
+    'kueue.x-k8s.io': 'Kueue',
+    'autoscaling.x-k8s.io': 'Cluster Autoscaler',
+    'serving.kserve.io': 'KServe',
+    'ray.io': 'KubeRay',
+    'leaderworkerset.x-k8s.io': 'LeaderWorkerSet',
+    'jobset.x-k8s.io': 'JobSet',
+    'inference.networking.k8s.io': 'Inference Gateway',
+    'inference.networking.x-k8s.io': 'Inference Gateway',
+    'nvidia.com': 'NVIDIA GPU Operator',
+    'scheduling.run.ai': 'KAI Scheduler',
+    'kai.scheduler': 'KAI Scheduler',
+    'kaito.sh': 'KAITO',
+    'batch.volcano.sh': 'Volcano',
+    'scheduling.volcano.sh': 'Volcano',
+    'flow.volcano.sh': 'Volcano',
+    'bus.volcano.sh': 'Volcano',
   }
   if (knownGroups[group]) return knownGroups[group]
   // Suffix rules — for unbounded provider group sets (Crossplane providers ship

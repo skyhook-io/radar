@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { ChevronRight, Copy, Check, Tag, AlertTriangle, CheckCircle, ExternalLink, Layers, X, Minus } from 'lucide-react'
 import { clsx } from 'clsx'
-import { formatAge, formatDuration } from '../resources/resource-utils'
+import { formatAge, formatDuration, formatResources } from '../resources/resource-utils'
+import { getEffectiveResources } from '../../utils/extended-resources'
 import { Tooltip } from './Tooltip'
 import { getKindColorClass } from '../ui/Badge'
 
@@ -489,6 +490,18 @@ export function MetadataSection({ data }: { data: any }) {
   )
 }
 
+// Templates never get apiserver request-defaulting, so render the effective
+// view (requests, falling back to limits) — limits-only GPU specs included.
+function ContainerResourcesLine({ resources }: { resources: any }) {
+  const effective = getEffectiveResources(resources)
+  if (Object.keys(effective).length === 0) return null
+  return (
+    <div className="text-xs text-theme-text-tertiary mt-1" title="Effective requests (requests, falling back to limits)">
+      Resources: {formatResources(effective)}
+    </div>
+  )
+}
+
 export function PodTemplateSection({ template }: { template: any }) {
   if (!template) return null
   const initContainers = template.spec?.initContainers || []
@@ -508,6 +521,7 @@ export function PodTemplateSection({ template }: { template: any }) {
                   $ {[...(c.command || []), ...(c.args || [])].join(' ')}
                 </div>
               )}
+              <ContainerResourcesLine resources={c.resources} />
             </div>
           ))}
           <div className="text-xs text-theme-text-tertiary font-medium uppercase tracking-wide mt-3">Containers</div>
@@ -522,6 +536,7 @@ export function PodTemplateSection({ template }: { template: any }) {
               Ports: {c.ports.map((p: any) => `${p.name ? `${p.name}: ` : ''}${p.containerPort}/${p.protocol || 'TCP'}`).join(', ')}
             </div>
           )}
+          <ContainerResourcesLine resources={c.resources} />
         </div>
       ))}
     </div>

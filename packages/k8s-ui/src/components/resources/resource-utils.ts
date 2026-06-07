@@ -1627,6 +1627,10 @@ export function formatResources(resources: any): string {
   if (resources.memory) {
     parts.push(`Mem: ${formatMemoryString(resources.memory)}`)
   }
+  for (const [key, value] of Object.entries(resources)) {
+    if (key === 'cpu' || key === 'memory') continue
+    parts.push(`${key}: ${value}`)
+  }
   return parts.join(', ') || '-'
 }
 

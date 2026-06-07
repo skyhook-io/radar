@@ -128,6 +128,7 @@ import {
 } from './resource-utils'
 import { SEVERITY_BADGE, EVENT_TYPE_COLORS } from '../../utils/badge-colors'
 import { pluralize } from '../../utils/pluralize'
+import { getPodGpuCount, getNodeGpuCount } from '../../utils/extended-resources'
 import { type CustomColumnDef, type CustomColumnSource, customColumnKey, readCustomColumnValue, sanitizeCustomColumnDefs } from '../../utils/custom-columns'
 import { Tooltip } from '../ui/Tooltip'
 // CRD-specific cell components (extracted)
@@ -289,6 +290,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'cpu', label: 'CPU', width: 'w-40', tooltip: 'CPU usage / limit (marker = request)' },
     { key: 'memory', label: 'Memory', width: 'w-40', tooltip: 'Memory usage / limit (marker = request)' },
     { key: 'restarts', label: 'Restarts', width: 'w-28' },
+    { key: 'gpu', label: 'GPU', width: 'w-20', tooltip: 'Effective GPU request (requests, falling back to limits) summed across containers', defaultVisible: false },
     { key: 'podIP', label: 'Pod IP', width: 'w-32', defaultVisible: false },
     { key: 'node', label: 'Node', width: 'w-44', hideOnMobile: true },
     { key: 'age', label: 'Age', width: 'w-24' },
@@ -365,6 +367,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'cpu', label: 'CPU', width: 'w-40', tooltip: 'Current CPU usage / allocatable' },
     { key: 'memory', label: 'Memory', width: 'w-40', tooltip: 'Current memory usage / allocatable' },
     { key: 'pods', label: 'Pods', width: 'w-28', tooltip: 'Pods running / allocatable' },
+    { key: 'gpu', label: 'GPUs', width: 'w-20', tooltip: 'Allocatable GPUs', defaultVisible: false },
     { key: 'conditions', label: 'Conditions', width: 'w-40', hideOnMobile: true },
     { key: 'taints', label: 'Taints', width: 'w-24', hideOnMobile: true },
     { key: 'version', label: 'Version', width: 'w-28' },
@@ -2173,6 +2176,13 @@ export function ResourcesView({
   // Guards the save effect from persisting on the initial load of each kind
   // (set false by the load effect, flipped true on its first skipped save).
   const isColumnSettingsLoaded = useRef(false)
+  // Whether the user has a persisted column blob for this kind — data-driven
+  // column defaults (GPU auto-show) must never override explicit user choices.
+  const hadSavedColumnSettings = useRef(false)
+  // Kinds where GPU auto-show already fired this mount. Firing is one-shot:
+  // without this, hiding the auto-shown column re-triggers the effect (it
+  // depends on visibleColumns) and instantly reverts the user's hide.
+  const gpuAutoShownKinds = useRef<Set<string>>(new Set())
   useEffect(() => {
     // Re-arm the skip-initial-save guard per kind. This effect repopulates
     // visible/widths/custom for the new kind via async setState, so the save
@@ -2182,6 +2192,7 @@ export function ResourcesView({
     // prevents that cross-kind write.
     isColumnSettingsLoaded.current = false
     const saved = loadColumnSettings(selectedKind.name, selectedKind.group)
+    hadSavedColumnSettings.current = !!saved
     // Reconstruct the effective column list locally rather than reading
     // `allColumns` — keying this effect to the kind (not allColumns) keeps
     // runtime custom-column add/remove from re-running it and clobbering the
@@ -2213,6 +2224,7 @@ export function ResourcesView({
         saved.visible.every(v => defaultKeys.includes(v))
       if (isStaleDefaults) {
         clearColumnSettings(selectedKind.name, selectedKind.group)
+        hadSavedColumnSettings.current = false
         setVisibleColumns(getDefaultVisibleColumns(effective))
         setColumnWidths({})
       } else {
@@ -2239,6 +2251,9 @@ export function ResourcesView({
       widths: columnWidths,
       custom: customColumns,
     })
+    // A persisted blob blocks GPU auto-show from here on — same rule in-session
+    // as across sessions, so a later data refresh can't override user choices.
+    hadSavedColumnSettings.current = true
   }, [visibleColumns, columnWidths, customColumns, selectedKind.name, selectedKind.group])
 
   // Close column picker on outside click or Escape
@@ -2347,6 +2362,9 @@ export function ResourcesView({
     setVisibleColumns(getDefaultVisibleColumns(allColumns.filter(c => !customKeys.has(c.key))))
     setColumnWidths({})
     isColumnSettingsLoaded.current = false
+    // Back to data-driven defaults: re-arm GPU auto-show for this kind.
+    hadSavedColumnSettings.current = false
+    gpuAutoShownKinds.current.delete(selectedKind.name.toLowerCase())
   }, [selectedKind.name, selectedKind.group, allColumns, builtCustomColumns])
 
   // Add a user-defined label/annotation column (dedupe by key) and show it.
@@ -3076,6 +3094,28 @@ export function ResourcesView({
   const selectedQuery = selectedKindQueryProp ?? resourceQueries[selectedQueryIndex]
   const resources = selectedQuery?.data
 
+  // Auto-surface the GPU column the first time GPU-bearing rows load for a kind
+  // the user has never customized — a static default can't know whether the
+  // cluster has GPUs, and hiding the signal on GPU clusters buries the point.
+  // The resulting save persists it; explicit user hides are never overridden
+  // (hadSavedColumnSettings guard).
+  useEffect(() => {
+    if (hadSavedColumnSettings.current) return
+    const kindLower = selectedKind.name.toLowerCase()
+    if (kindLower !== 'pods' && kindLower !== 'nodes') return
+    if (gpuAutoShownKinds.current.has(kindLower)) return
+    if (visibleColumns.size === 0 || visibleColumns.has('gpu')) return
+    const rows = (resources as any[] | undefined) ?? []
+    if (rows.length === 0) return
+    const hasGpu = kindLower === 'pods'
+      ? rows.some(r => getPodGpuCount(r) > 0)
+      : rows.some(r => getNodeGpuCount(r) > 0)
+    if (hasGpu) {
+      gpuAutoShownKinds.current.add(kindLower)
+      setVisibleColumns(prev => new Set([...prev, 'gpu']))
+    }
+  }, [resources, selectedKind.name, visibleColumns])
+
   // Label/annotation keys present on the loaded rows — powers the
   // add-custom-column autocomplete so users don't type keys blind. Sampled
   // to bound cost on large lists; keys converge fast across rows of one kind.
@@ -3268,6 +3308,11 @@ export function ResourcesView({
         if (kindLower === 'nodes') {
           return metricsLookup.nodes.get(meta.name)?.podCount ?? 0
         }
+        return 0
+      }
+      case 'gpu': {
+        if (kindLower === 'pods') return getPodGpuCount(resource)
+        if (kindLower === 'nodes') return getNodeGpuCount(resource)
         return 0
       }
       default:
@@ -5501,6 +5546,11 @@ function PodCell({ resource, column }: { resource: any; column: string }) {
       const tip = buildResourceTooltip('Memory', m.memory, m.memoryRequest, m.memoryLimit, formatMemoryShort)
       return <ResourceBar used={formatMemoryShort(m.memory)} total={formatMemoryShort(denom)} percent={pct} colorScheme={getBulletBarScheme(pct, marker)} markerPercent={marker} tooltip={tip} />
     }
+    case 'gpu': {
+      const count = getPodGpuCount(resource)
+      if (!count) return <span className="text-sm text-theme-text-tertiary">-</span>
+      return <span className="text-sm text-theme-text-secondary font-mono">{count}</span>
+    }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
   }
@@ -6142,6 +6192,11 @@ function NodeCell({ resource, column, majorityNodeMinorVersion }: { resource: an
       if (isNaN(max) || max <= 0) return <span className="text-sm text-theme-text-tertiary font-mono">{podCount || '-'}</span>
       const pct = (podCount / max) * 100
       return <ResourceBar used={String(podCount)} total={String(max)} percent={pct} colorScheme="count" />
+    }
+    case 'gpu': {
+      const count = getNodeGpuCount(resource)
+      if (!count) return <span className="text-sm text-theme-text-tertiary">-</span>
+      return <span className="text-sm text-theme-text-secondary font-mono">{count}</span>
     }
     default:
       return <span className="text-sm text-theme-text-tertiary">-</span>
