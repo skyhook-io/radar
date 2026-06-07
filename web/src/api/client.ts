@@ -35,7 +35,7 @@ import { pluralToKind } from '../utils/navigation'
 // and handles 401 responses globally. Merges caller-provided headers with
 // auth headers from the config module so library consumers (Radar Hub) can
 // inject Authorization bearer tokens without each call site knowing.
-function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+export function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
   const headers = new Headers(init?.headers)
   for (const [k, v] of Object.entries(getAuthHeaders())) {
     if (!headers.has(k)) headers.set(k, v)

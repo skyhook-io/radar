@@ -1,7 +1,8 @@
 import { createContext, useContext, useState, useCallback, useEffect, useRef, ReactNode } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import type { ContextInfo } from '../types'
-import { getApiBase, getAuthHeaders, getCredentialsMode } from '../api/config'
+import { getApiBase } from '../api/config'
+import { apiFetch } from '../api/client'
 
 export type ConnectionStateType = 'connected' | 'disconnected' | 'connecting'
 
@@ -29,10 +30,11 @@ interface ConnectionContextValue {
 const ConnectionContext = createContext<ConnectionContextValue | null>(null)
 
 async function fetchConnectionStatus(): Promise<ConnectionStatusResponse> {
-  const response = await fetch(`${getApiBase()}/connection`, {
-    credentials: getCredentialsMode(),
-    headers: getAuthHeaders(),
-  })
+  // apiFetch handles a 401 globally (re-auth redirect). These endpoints are
+  // no longer auth-exempt, so a session that expires while the connection-
+  // error screen is parked open must route through that path rather than
+  // surfacing as a misleading "cannot connect to cluster" error.
+  const response = await apiFetch(`${getApiBase()}/connection`)
   if (!response.ok) {
     throw new Error('Failed to fetch connection status')
   }
@@ -40,10 +42,8 @@ async function fetchConnectionStatus(): Promise<ConnectionStatusResponse> {
 }
 
 async function retryConnection(): Promise<ConnectionState> {
-  const response = await fetch(`${getApiBase()}/connection/retry`, {
+  const response = await apiFetch(`${getApiBase()}/connection/retry`, {
     method: 'POST',
-    credentials: getCredentialsMode(),
-    headers: getAuthHeaders(),
   })
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: 'Unknown error' }))

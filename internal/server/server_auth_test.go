@@ -346,7 +346,11 @@ func TestProxyAuth_UnauthenticatedBlocked(t *testing.T) {
 		"/api/events",
 		"/api/changes",
 		"/api/dashboard",
+		"/api/connection",
 		"/mcp",
+		// pprof is mounted on non-cloud builds; the auth middleware must
+		// still gate it (leaks the in-memory K8s cache otherwise).
+		"/debug/pprof/heap",
 	}
 
 	for _, path := range endpoints {
@@ -361,6 +365,19 @@ func TestProxyAuth_UnauthenticatedBlocked(t *testing.T) {
 			}
 		})
 	}
+
+	// POST /api/connection/retry is the reported state-changing endpoint —
+	// assert the mutating verb is gated, not just the GET surface.
+	t.Run("POST /api/connection/retry", func(t *testing.T) {
+		resp, err := http.Post(env.ts.URL+"/api/connection/retry", "application/json", nil)
+		if err != nil {
+			t.Fatalf("POST /api/connection/retry: %v", err)
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode != http.StatusUnauthorized {
+			t.Errorf("expected 401, got %d", resp.StatusCode)
+		}
+	})
 }
 
 func TestProxyAuth_ExemptPaths(t *testing.T) {

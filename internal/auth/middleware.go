@@ -135,9 +135,8 @@ func isExemptPath(path string) bool {
 	// /api/connection is deliberately NOT exempt: POST /api/connection/retry
 	// is state-changing (kills all exec/port-forward sessions, reinitializes
 	// the informer cache) and GET /api/connection leaks kubeconfig context
-	// names. The terminal re-auth flow that relied on an unauthenticated
-	// retry curl only applies to local no-auth installs, where this
-	// middleware isn't mounted at all.
+	// names. The terminal re-auth flow chains a retry curl only on no-auth
+	// installs, where this middleware isn't mounted at all.
 	exemptPrefixes := []string{
 		"/api/health",
 		"/auth/",
@@ -147,8 +146,13 @@ func isExemptPath(path string) bool {
 			return true
 		}
 	}
-	// Static assets don't require auth
-	if !strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/mcp") {
+	// Static assets don't require auth. /debug/* (pprof) is excluded: it's
+	// mounted on every non-cloud build, and the fallthrough would otherwise
+	// expose it unauthenticated whenever auth is enabled — /debug/pprof/heap
+	// leaks the entire in-memory K8s cache (every Secret, ConfigMap, Pod
+	// spec). /metrics stays open by this fallthrough: operational counters
+	// only, scraped by Prometheus.
+	if !strings.HasPrefix(path, "/api/") && !strings.HasPrefix(path, "/mcp") && !strings.HasPrefix(path, "/debug/") {
 		return true
 	}
 	return false

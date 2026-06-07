@@ -168,16 +168,18 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const openLocalTerminal = useOpenLocalTerminal()
   const { data: authMe } = useAuthMe()
 
-  // Auto-retry after successful auth. Only chained when Radar auth is
-  // disabled — with auth enabled the unauthenticated curl would 401 (and
-  // the local-terminal flow can't fix a remote server's credentials anyway).
+  // Auto-retry after successful auth. The terminal shell runs on the server
+  // host, so the auth command itself fixes the server's credentials in every
+  // mode — but the chained retry curl carries no session cookie, so it 401s
+  // once /api/connection is auth-gated. Only chain it when auth is *known*
+  // disabled (authMe still loading → don't chain a doomed call).
   const retryCmd = `curl -s -X POST http://${window.location.host}/api/connection/retry > /dev/null`
 
   const handleAuthInTerminal = () => {
     if (!authInfo?.authCommand) return
-    const cmd = authMe?.authEnabled
-      ? authInfo.authCommand.command
-      : `${authInfo.authCommand.command} && ${retryCmd}`
+    const cmd = authMe?.authEnabled === false
+      ? `${authInfo.authCommand.command} && ${retryCmd}`
+      : authInfo.authCommand.command
     openLocalTerminal({
       initialCommand: cmd,
       title: 'Auth',

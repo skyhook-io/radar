@@ -284,13 +284,18 @@ func TestIsExemptPath(t *testing.T) {
 	}{
 		{"/api/health", true},
 		{"/api/health/detailed", true},
-		{"/api/connection", false},
-		{"/api/connection/retry", false},
 		{"/auth/login", true},
 		{"/auth/callback", true},
+		// Static assets are exempt; /debug/* (pprof) is not — it leaks the
+		// in-memory K8s cache and must require auth whenever auth is on.
 		{"/", true},
 		{"/index.html", true},
 		{"/assets/main.js", true},
+		{"/debug/pprof/heap", false},
+		// API paths require auth. /api/connection is non-exempt in both
+		// modes (state-changing retry + kubeconfig context leak).
+		{"/api/connection", false},
+		{"/api/connection/retry", false},
 		{"/api/resources/pods", false},
 		{"/api/topology", false},
 		{"/api/auth/me", false},
@@ -308,10 +313,11 @@ func TestIsExemptPath(t *testing.T) {
 }
 
 // TestIsExemptPath_CloudMode verifies that cloud-mode narrows the exempt
-// set to /api/health + /auth/*. Under cloud-mode, static assets,
-// /api/connection, and /debug/pprof/* must all require auth — a regression
-// that silently re-added them would let an unauthenticated request through
-// the Cloud tunnel reach those paths.
+// set to /api/health + /auth/*. The cloud-mode-specific narrowing is that
+// static assets must also require auth — a regression that silently re-added
+// them would let an unauthenticated request through the Cloud tunnel reach
+// those paths. (/api/connection and /debug/pprof/* require auth in both
+// modes; see TestIsExemptPath.)
 func TestIsExemptPath_CloudMode(t *testing.T) {
 	t.Setenv("RADAR_CLOUD_MODE", "true")
 
@@ -322,10 +328,10 @@ func TestIsExemptPath_CloudMode(t *testing.T) {
 		{"/api/health", true},
 		{"/auth/login", true},
 		{"/auth/callback", true},
-		// Under non-cloud mode static assets would be exempt. Under
-		// cloud-mode they must require auth.
 		{"/api/connection", false},
 		{"/api/connection/retry", false},
+		// Under non-cloud mode static assets would be exempt. Under
+		// cloud-mode they must require auth.
 		{"/", false},
 		{"/index.html", false},
 		{"/assets/main.js", false},
