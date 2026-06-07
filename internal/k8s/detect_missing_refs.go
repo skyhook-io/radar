@@ -893,10 +893,20 @@ func detectPVCMissingStorageClass(cache *ResourceCache, namespace string, now ti
 		scName := *pvc.Spec.StorageClassName
 		if _, err := scLister.Get(scName); err != nil {
 			age := now.Sub(pvc.CreationTimestamp.Time)
-			out = append(out, missingRefProblem("PersistentVolumeClaim", "", pvc.Namespace, pvc.Name,
+			det := missingRefProblem("PersistentVolumeClaim", "", pvc.Namespace, pvc.Name,
 				"Missing StorageClass",
 				fmt.Sprintf("references StorageClass %q which does not exist (PVC will stay Pending)", scName),
-				age))
+				age)
+			// Same invariant as the phase detector: a Pending PVC has never
+			// been bound, so the missing class has been breaking it since
+			// creation. Stamp timing here because this row wins the dedupe
+			// against the phase row (it names the cause) and must not lose
+			// the timing the phase row carried.
+			if pvc.Status.Phase == corev1.ClaimPending {
+				det.IssueTiming = "started_at_resource_creation"
+				det.IssueTimingBasis = "phase"
+			}
+			out = append(out, det)
 		}
 	}
 	return out

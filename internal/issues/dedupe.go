@@ -134,17 +134,46 @@ func dedupeWorkloadDegradedOverChild(in []Issue) []Issue {
 		}
 		out = append(out, i)
 	}
+	// Subjects with at least one at-creation row: an after-healthy donation
+	// onto a sibling would contradict that direct evidence.
+	hasAtCreationRow := map[string]bool{}
+	for _, i := range out {
+		if i.IssueTiming == "started_at_resource_creation" {
+			hasAtCreationRow[subjectKeyOf(subjectRef(i))] = true
+		}
+	}
 	for idx := range out {
 		i := &out[idx]
 		if i.IssueTiming != "" || !childCategories[i.Category] {
 			continue
 		}
-		if timing := suppressedIssueTiming[subjectKeyOf(subjectRef(*i))]; timing != "" {
-			i.IssueTiming = timing
-			i.IssueTimingBasis = "owner_condition"
+		timing := suppressedIssueTiming[subjectKeyOf(subjectRef(*i))]
+		if timing == "" {
+			continue
 		}
+		if timing == "started_after_resource_was_healthy" {
+			// Restart-cycling children flip the owner's Available condition on
+			// every crash, so a parent verdict derived from it is flap-poisoned
+			// for exactly these rows — the same reason the pod detector omits
+			// timing for them. And if any sibling proved at-creation directly,
+			// an after-healthy donation would contradict it.
+			if i.RestartCount >= 3 || restartCycleCategories[i.Category] || hasAtCreationRow[subjectKeyOf(subjectRef(*i))] {
+				continue
+			}
+		}
+		i.IssueTiming = timing
+		i.IssueTimingBasis = "owner_condition"
 	}
 	return out
+}
+
+// restartCycleCategories are symptom categories whose pods restart-cycle and
+// therefore flap the owner's readiness-derived conditions.
+var restartCycleCategories = map[issuesapi.Category]bool{
+	issuesapi.CategoryCrashLoop:         true,
+	issuesapi.CategoryHighRestart:       true,
+	issuesapi.CategoryOOMKilled:         true,
+	issuesapi.CategoryLivenessProbeFail: true,
 }
 
 // dedupeConditionOverMissingRef drops a CRD condition row when a structural
@@ -167,6 +196,30 @@ func dedupeConditionOverMissingRef(in []Issue) []Issue {
 	out := in[:0]
 	for _, i := range in {
 		if i.Source == SourceCondition && structural[issueResourceCategoryKey(i)] && isMissingRefEchoCondition(i) {
+			continue
+		}
+		out = append(out, i)
+	}
+	return out
+}
+
+// dedupePVCPendingOverMissingRef drops the generic phase-Pending PVC row when
+// the missing-StorageClass detector emitted a row for the same PVC. Both
+// classify as pvc_pending but carry different fingerprints (so distinct IDs);
+// the missing-ref row names the actual broken reference and is the richer one.
+func dedupePVCPendingOverMissingRef(in []Issue) []Issue {
+	structural := map[string]bool{}
+	for _, i := range in {
+		if i.Source == SourceMissingRef && i.Kind == "PersistentVolumeClaim" && i.Category == issuesapi.CategoryPVCPending {
+			structural[issueResourceCategoryKey(i)] = true
+		}
+	}
+	if len(structural) == 0 {
+		return in
+	}
+	out := in[:0]
+	for _, i := range in {
+		if i.Source == SourceProblem && i.Kind == "PersistentVolumeClaim" && i.Category == issuesapi.CategoryPVCPending && structural[issueResourceCategoryKey(i)] {
 			continue
 		}
 		out = append(out, i)

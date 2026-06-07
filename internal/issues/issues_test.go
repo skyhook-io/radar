@@ -272,26 +272,93 @@ func TestCompose_SuppressesWorkloadDegradedWhenChildSymptomExists(t *testing.T) 
 
 func TestCompose_SuppressedParentDonatesIssueTimingToChildren(t *testing.T) {
 	// A suppressed parent rollup may be the subject's only issue_timing carrier
-	// (e.g. surge rollout stalls with Available still True, so pods derive
-	// no owner-condition issue_timing). Its issue_timing must survive on the child rows,
-	// re-based as owner_condition; a child with its own issue_timing keeps it.
+	// (e.g. surge rollout stalls with Available still True, so pods derive no
+	// owner-condition issue_timing). Its issue_timing survives on child rows as
+	// owner_condition — EXCEPT after-healthy onto restart-cycling children:
+	// their crashes flap the very Available condition the parent's verdict came
+	// from, so that donation would launder flap-poisoned evidence.
+
+	t.Run("after-healthy donates to non-cycling child", func(t *testing.T) {
+		p := &fakeProvider{
+			problems: []k8s.Detection{
+				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", IssueTiming: "started_after_resource_was_healthy", IssueTimingBasis: "condition"},
+				{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "ImagePullBackOff", OwnerKind: "Deployment", OwnerName: "web"},
+			},
+		}
+		for _, i := range Compose(p, Filters{}) {
+			if i.Category == issuesapi.CategoryWorkloadDegraded {
+				t.Fatalf("parent must still be suppressed: %+v", i)
+			}
+			if i.Category == issuesapi.CategoryImagePullFailed {
+				if i.IssueTiming != "started_after_resource_was_healthy" || i.IssueTimingBasis != "owner_condition" {
+					t.Errorf("image-pull child must inherit after-healthy as owner_condition, got (%q, %q)", i.IssueTiming, i.IssueTimingBasis)
+				}
+			}
+		}
+	})
+
+	t.Run("after-healthy blocked for crashloop child", func(t *testing.T) {
+		p := &fakeProvider{
+			problems: []k8s.Detection{
+				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", IssueTiming: "started_after_resource_was_healthy", IssueTimingBasis: "condition"},
+				{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "web"},
+			},
+		}
+		for _, i := range Compose(p, Filters{}) {
+			if i.Category == issuesapi.CategoryCrashLoop && i.IssueTiming != "" {
+				t.Errorf("crashloop child must not inherit flap-derived after-healthy, got (%q, %q)", i.IssueTiming, i.IssueTimingBasis)
+			}
+		}
+	})
+
+	t.Run("at-creation donates to crashloop child", func(t *testing.T) {
+		// at-creation comes from the never-healthy guard (Available LTT pinned
+		// at creation), which a flap would have destroyed — so it's safe for
+		// restart-cycling children.
+		p := &fakeProvider{
+			problems: []k8s.Detection{
+				{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", IssueTiming: "started_at_resource_creation", IssueTimingBasis: "condition"},
+				{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "web"},
+			},
+		}
+		for _, i := range Compose(p, Filters{}) {
+			if i.Category == issuesapi.CategoryCrashLoop {
+				if i.IssueTiming != "started_at_resource_creation" || i.IssueTimingBasis != "owner_condition" {
+					t.Errorf("crashloop child must inherit at-creation as owner_condition, got (%q, %q)", i.IssueTiming, i.IssueTimingBasis)
+				}
+			}
+		}
+	})
+}
+
+func TestCompose_PVCPendingDedupesOverMissingStorageClass(t *testing.T) {
+	// A PVC referencing a missing StorageClass trips two detectors — the
+	// phase-Pending problem and the missing-StorageClass ref — which both
+	// classify pvc_pending but carry different fingerprints (distinct IDs).
+	// One incident, one row: the missing-ref row names the cause and wins.
 	p := &fakeProvider{
 		problems: []k8s.Detection{
-			{Kind: "Deployment", Namespace: "ns", Name: "web", Group: "apps", Severity: "critical", Reason: "1/3 available", IssueTiming: "started_after_resource_was_healthy", IssueTimingBasis: "condition"},
-			{Kind: "Pod", Namespace: "ns", Name: "web-abc", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "web"},
+			{Kind: "PersistentVolumeClaim", Namespace: "ns", Name: "stuck-pvc", Severity: "high", Reason: "Pending", IssueTiming: "started_at_resource_creation", IssueTimingBasis: "phase"},
+		},
+		missingRefs: []k8s.Detection{
+			{Kind: "PersistentVolumeClaim", Namespace: "ns", Name: "stuck-pvc", Severity: "critical", Reason: "Missing StorageClass", Fingerprint: "Missing StorageClass|abc", IssueTiming: "started_at_resource_creation", IssueTimingBasis: "phase"},
 		},
 	}
 	out := Compose(p, Filters{})
-
+	var pvcRows []Issue
 	for _, i := range out {
-		if i.Category == issuesapi.CategoryWorkloadDegraded {
-			t.Fatalf("parent must still be suppressed: %+v", out)
+		if i.Category == issuesapi.CategoryPVCPending {
+			pvcRows = append(pvcRows, i)
 		}
-		if i.Category == issuesapi.CategoryCrashLoop {
-			if i.IssueTiming != "started_after_resource_was_healthy" || i.IssueTimingBasis != "owner_condition" {
-				t.Errorf("child must inherit suppressed parent's issue_timing as owner_condition, got (%q, %q)", i.IssueTiming, i.IssueTimingBasis)
-			}
-		}
+	}
+	if len(pvcRows) != 1 {
+		t.Fatalf("want exactly 1 pvc_pending row, got %d: %+v", len(pvcRows), pvcRows)
+	}
+	if pvcRows[0].Reason != "Missing StorageClass" {
+		t.Errorf("the cause-naming missing-ref row must win, got reason %q", pvcRows[0].Reason)
+	}
+	if pvcRows[0].IssueTiming != "started_at_resource_creation" || pvcRows[0].IssueTimingBasis != "phase" {
+		t.Errorf("surviving row must keep at-creation/phase timing, got (%q, %q)", pvcRows[0].IssueTiming, pvcRows[0].IssueTimingBasis)
 	}
 }
 

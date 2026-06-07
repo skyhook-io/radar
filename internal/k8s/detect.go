@@ -143,6 +143,9 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					durDur = now.Sub(replicaFailure.LastTransitionTime.Time)
 				}
 				timingR := IssueTimingFromConditionLTT(replicaFailure.LastTransitionTime.Time, d.CreationTimestamp.Time, "condition")
+				if deploymentNeverHealthy(d) {
+					timingR = IssueTimingResult{IssueTiming: "started_at_resource_creation", Basis: "condition"}
+				}
 				problems = append(problems, Detection{
 					Kind:             "Deployment",
 					Namespace:        d.Namespace,
@@ -207,13 +210,22 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						message = detail
 					}
 				}
-				// observedGeneration==1 rescues only the no-verdict case for first-ever
-				// rollouts (slow clusters can exceed progressDeadlineSeconds on gen 1).
-				// It must not override a timestamp-backed verdict: generation only
-				// bumps on spec changes, so a gen-1 Deployment that ran healthy for
-				// months and then broke (image gone, node loss) is still gen 1.
+				// Progressing's LTT re-triggers on every rollout retry, so on a
+				// never-healthy Deployment it reads as a recent transition and the
+				// classifier would claim a healthy window that never existed. The
+				// Available condition is the authority on "was it ever healthy":
+				// Available=False whose LTT sits at creation means it never went
+				// True — override to at-creation before trusting Progressing.
 				timingR := IssueTimingFromConditionLTT(stuck.LastTransitionTime.Time, d.CreationTimestamp.Time, "condition")
-				if timingR.IssueTiming == "" && d.Status.ObservedGeneration == 1 {
+				if deploymentNeverHealthy(d) {
+					timingR = IssueTimingResult{IssueTiming: "started_at_resource_creation", Basis: "condition"}
+				} else if timingR.IssueTiming == "" && d.Status.ObservedGeneration == 1 {
+					// observedGeneration==1 rescues only the no-verdict case for
+					// first-ever rollouts (slow clusters can exceed
+					// progressDeadlineSeconds on gen 1). It must not override a
+					// timestamp-backed verdict: generation only bumps on spec
+					// changes, so a gen-1 Deployment that ran healthy for months
+					// and then broke (image gone, node loss) is still gen 1.
 					timingR = IssueTimingResult{IssueTiming: "started_at_resource_creation", Basis: "spec"}
 				}
 				problems = append(problems, Detection{
@@ -365,26 +377,39 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 			}
 			// IssueTiming: classify whether this pod has been failing since the Deployment
 			// was first created (started_at_resource_creation) or broke after a period of
-			// healthy operation (started_after_resource_was_healthy). Two complementary paths
-			// handle the CrashLoopBackOff race where pods briefly become
-			// Available=True between crashes, suppressing the Available=False
-			// condition that the normal issue_timing path depends on.
+			// healthy operation (started_after_resource_was_healthy).
 			//
-			// Path 1 — pod creation proximity (young deployments only): if the pod was
-			// created within 60s of the Deployment AND the Deployment is < 15 minutes
-			// old, the pod has existed since the initial rollout and any crashloop is
-			// plausibly a deploy-time misconfiguration. The 15-minute cap prevents
-			// false "started_at_resource_creation" on long-running Deployments whose
-			// original pod starts crashing hours later due to a later regression
-			// (memory leak, config reload, etc.) — those cases are ambiguous and
-			// must not be asserted.
-			// Basis is "pod_creation" to document that evidence is creation timestamps,
-			// not a condition lastTransitionTime.
+			// The central hazard: restart-driven readiness cycling (CrashLoopBackOff,
+			// OOM loops, liveness kills) flips the owner's Available condition
+			// True↔False on every crash, so its lastTransitionTime stops marking
+			// when the problem started. Every branch below is chosen to be
+			// flap-immune; when no flap-immune evidence exists, timing is omitted —
+			// an absent answer is honest, a flap-derived one actively misleads.
 			//
-			// Path 2 — Available=False condition: for pods created well after the
-			// Deployment, or when the Deployment is old, fall back to the condition LTT
-			// when the Deployment is currently marked degraded.
+			//  1. Never-healthy proof: Available=False whose LTT sits at creation
+			//     never went True — it cannot have flapped. At-creation, any age.
+			//  2. Young original rollout (<15min, pod or its RS created with the
+			//     Deployment): creation-timestamp proximity. The 15-minute cap
+			//     keeps month-old original pods that crash later (memory leak)
+			//     from being misread as deploy-time faults.
+			//  3. Surge-rollout regression: the pod belongs to a NEW ReplicaSet
+			//     while Available is still True (old RS pods serving) — the
+			//     workload was demonstrably healthy and this rollout brought the
+			//     failure. failingSince = RS creation. Available=False new-RS
+			//     cases are deliberately NOT classified: a broken→broken rollout
+			//     (never-healthy workload, failed fix attempt) is
+			//     indistinguishable from a regression there.
+			//  4. Restart-cycling pods (restartCount ≥ 3) past those branches:
+			//     omit — the Available LTT is flap-poisoned.
+			//  5. Otherwise (old deployment, stable pods — e.g. ImagePullBackOff
+			//     pods that never start, so readiness never cycles): the
+			//     Available=False LTT is trustworthy; classify from it.
+			//
+			// Basis "pod_creation" documents creation-timestamp evidence (pod or
+			// ReplicaSet vs Deployment); "owner_condition" documents owner
+			// condition LTT evidence.
 			const maxDeployAgeForProximityIssueTiming = 15 * time.Minute
+			const establishedRestartLoop = 3
 			var podIssueTiming IssueTimingResult
 			if ownerKind == "Deployment" && ownerName != "" {
 				if depLister := cache.Deployments(); depLister != nil {
@@ -392,48 +417,49 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						depAge := now.Sub(dep.CreationTimestamp.Time)
 						podAge := now.Sub(pod.CreationTimestamp.Time)
 						podCreatedWithDeploy := depAge > 0 && (depAge-podAge) < 60*time.Second
-						// Replacement detection anchors on the pod's owning ReplicaSet,
-						// not restartCount: backoff recreations stay in the original RS
-						// (created with the Deployment), while a mid-life rollout or
-						// scale-up creates a NEW RS — its crashing pods are a later
-						// regression and must not be backdated to deploy time.
-						rsCreatedWithDeploy := false
-						if !podCreatedWithDeploy && restartCount > 0 {
-							if rsLister := cache.ReplicaSets(); rsLister != nil {
-								for _, ref := range pod.OwnerReferences {
-									if ref.Kind != "ReplicaSet" {
-										continue
-									}
-									if rs, rsErr := rsLister.ReplicaSets(pod.Namespace).Get(ref.Name); rsErr == nil {
-										rsCreatedWithDeploy = rs.CreationTimestamp.Time.Sub(dep.CreationTimestamp.Time) < 60*time.Second
-									}
-									break
+						// The owning ReplicaSet anchors rollout identity: backoff
+						// recreations stay in the original RS, while a mid-life
+						// rollout or scale-up creates a NEW RS.
+						var ownRS *appsv1.ReplicaSet
+						if rsLister := cache.ReplicaSets(); rsLister != nil {
+							for _, ref := range pod.OwnerReferences {
+								if ref.Kind != "ReplicaSet" {
+									continue
 								}
+								if rs, rsErr := rsLister.ReplicaSets(pod.Namespace).Get(ref.Name); rsErr == nil {
+									ownRS = rs
+								}
+								break
 							}
 						}
-						if depAge <= maxDeployAgeForProximityIssueTiming && (podCreatedWithDeploy || rsCreatedWithDeploy) {
-							// Young deployment (<15min): this pod has been crashing since
-							// near creation. Two sub-cases:
-							//   - Original pod (created within 60s of dep): use pod
-							//     creation as the failingSince proxy.
-							//   - Backoff replacement (restartCount>0 in the original RS,
-							//     recreated minutes later): the original pod crashed near
-							//     dep creation — use dep creation as failingSince so
-							//     healthyFor≈0, which the slop rule classifies as
-							//     started_at_resource_creation.
+						rsCreatedWithDeploy := ownRS != nil && ownRS.CreationTimestamp.Time.Sub(dep.CreationTimestamp.Time) < 60*time.Second
+						rsIsNewRollout := ownRS != nil && !rsCreatedWithDeploy
+						var availCond *appsv1.DeploymentCondition
+						for i := range dep.Status.Conditions {
+							if dep.Status.Conditions[i].Type == appsv1.DeploymentAvailable {
+								availCond = &dep.Status.Conditions[i]
+								break
+							}
+						}
+						switch {
+						case deploymentNeverHealthy(dep):
+							podIssueTiming = IssueTimingResult{IssueTiming: "started_at_resource_creation", Basis: "owner_condition"}
+						case depAge <= maxDeployAgeForProximityIssueTiming && (podCreatedWithDeploy || rsCreatedWithDeploy):
+							// Original pod uses its own creation as the failingSince
+							// proxy; a backoff replacement (recreated minutes later in
+							// the original RS) backdates to Deployment creation so
+							// healthyFor≈0 lands in the at-creation slop.
 							failingSince := pod.CreationTimestamp.Time
 							if !podCreatedWithDeploy {
 								failingSince = dep.CreationTimestamp.Time
 							}
 							podIssueTiming = IssueTimingFromConditionLTT(failingSince, dep.CreationTimestamp.Time, "pod_creation")
-						} else if depAge > maxDeployAgeForProximityIssueTiming {
-							// Old deployment — use Available=False condition when degraded.
-							for _, cond := range dep.Status.Conditions {
-								if cond.Type == appsv1.DeploymentAvailable && cond.Status == "False" && !cond.LastTransitionTime.IsZero() {
-									podIssueTiming = IssueTimingFromConditionLTT(cond.LastTransitionTime.Time, dep.CreationTimestamp.Time, "owner_condition")
-									break
-								}
-							}
+						case rsIsNewRollout && availCond != nil && availCond.Status == corev1.ConditionTrue:
+							podIssueTiming = IssueTimingFromConditionLTT(ownRS.CreationTimestamp.Time, dep.CreationTimestamp.Time, "pod_creation")
+						case restartCount >= establishedRestartLoop:
+							// flap-poisoned Available LTT — omit
+						case availCond != nil && availCond.Status == corev1.ConditionFalse && !availCond.LastTransitionTime.IsZero():
+							podIssueTiming = IssueTimingFromConditionLTT(availCond.LastTransitionTime.Time, dep.CreationTimestamp.Time, "owner_condition")
 						}
 					}
 				}
@@ -1594,6 +1620,25 @@ func deploymentReplicaFailure(dep *appsv1.Deployment) *appsv1.DeploymentConditio
 		}
 	}
 	return nil
+}
+
+// deploymentNeverHealthy reports whether the Deployment's Available condition
+// proves it was never healthy: Available=False with a lastTransitionTime still
+// sitting at creation means it never once went True. This is flap-immune
+// evidence — a condition that never transitioned can't have had its LTT reset —
+// and outranks Progressing/ReplicaFailure timestamps, which re-trigger on
+// retries. The 30s slop mirrors the classifier's condition-propagation slop.
+func deploymentNeverHealthy(dep *appsv1.Deployment) bool {
+	if dep == nil {
+		return false
+	}
+	for i := range dep.Status.Conditions {
+		cond := &dep.Status.Conditions[i]
+		if cond.Type == appsv1.DeploymentAvailable && cond.Status == corev1.ConditionFalse && !cond.LastTransitionTime.IsZero() {
+			return cond.LastTransitionTime.Time.Sub(dep.CreationTimestamp.Time) < 30*time.Second
+		}
+	}
+	return false
 }
 
 func deploymentProgressDeadlineExceeded(dep *appsv1.Deployment) *appsv1.DeploymentCondition {
