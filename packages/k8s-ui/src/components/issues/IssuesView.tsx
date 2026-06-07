@@ -183,9 +183,10 @@ function IssueRow({
           </div>
         </div>
 
-        {/* IssueTiming age (first_seen, fixed for the issue's life) is the chronic-vs-
-            acute signal — "broken 2m" reads very differently from "broken 5d".
-            Keyed on first_seen, not last_seen, so it doesn't churn on refresh. */}
+        {/* Age chip: chronic-vs-acute signal. When issue_timing is
+            started_at_resource_creation, swap the raw age for "since deploy" —
+            the raw age is misleading (it reads as urgency, but this issue has
+            been present since the resource was first created). */}
         {issue.first_seen ? (
           <time
             dateTime={issue.first_seen}
@@ -193,7 +194,9 @@ function IssueRow({
             className="flex shrink-0 items-center gap-1 text-xs tabular-nums text-theme-text-tertiary"
           >
             <Clock className="h-3 w-3" aria-hidden />
-            {formatCompactAge(issue.first_seen)}
+            {issue.issue_timing === 'started_at_resource_creation'
+              ? 'since deploy'
+              : formatCompactAge(issue.first_seen)}
           </time>
         ) : null}
 
@@ -257,8 +260,14 @@ function Diagnosis({ issue }: { issue: Issue }) {
       ) : null}
       {issue.first_seen ? (
         <p className="text-xs text-theme-text-tertiary tabular-nums">
-          Started {formatRelativeAgeTime(issue.first_seen)}
-          {issue.last_seen ? ` · last seen ${formatRelativeAgeTime(issue.last_seen)}` : ''}
+          {issue.issue_timing === 'started_at_resource_creation'
+            ? 'Present since deployment'
+            : issue.issue_timing === 'started_after_resource_was_healthy'
+              ? `Started ${formatRelativeAgeTime(issue.first_seen)} · was previously healthy`
+              : `Started ${formatRelativeAgeTime(issue.first_seen)}`}
+          {issue.last_seen && issue.issue_timing !== 'started_at_resource_creation'
+            ? ` · last seen ${formatRelativeAgeTime(issue.last_seen)}`
+            : ''}
         </p>
       ) : null}
     </section>
@@ -368,7 +377,12 @@ function diagnosticFactLabel(type: string): string {
 // freshness, the two facts the compact "2h" hides.
 function ageTitle(issue: Issue): string {
   const parts: string[] = [];
-  if (issue.first_seen) parts.push(`Started ${new Date(issue.first_seen).toLocaleString()}`);
+  if (issue.issue_timing === 'started_at_resource_creation') {
+    parts.push('Present since deployment — treat as baseline');
+  } else if (issue.issue_timing === 'started_after_resource_was_healthy') {
+    parts.push('Resource was previously healthy');
+  }
+  if (issue.first_seen) parts.push(`First seen ${new Date(issue.first_seen).toLocaleString()}`);
   if (issue.last_seen) parts.push(`Last seen ${formatRelativeAgeTime(issue.last_seen)}`);
   return parts.join('\n');
 }
