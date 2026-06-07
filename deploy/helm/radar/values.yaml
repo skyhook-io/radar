@@ -132,6 +132,7 @@ rbac:
     contour: true           # projectcontour.io
     crossplane: true        # crossplane.io, pkg.crossplane.io, apiextensions.crossplane.io, helm.crossplane.io, kubernetes.crossplane.io. For Upbound provider CRDs (s3.aws.upbound.io, compute.gcp.upbound.io, etc.) list them in additionalCrdGroups — K8s RBAC has no apiGroup wildcards.
     descheduler: true       # descheduler.alpha.kubernetes.io
+    dra: true               # resource.k8s.io (Dynamic Resource Allocation — ResourceClaims, DeviceClasses, ResourceSlices)
     envoyGateway: true      # gateway.envoyproxy.io
     externalDns: true       # externaldns.k8s.io
     externalSecrets: true   # external-secrets.io
@@ -149,6 +150,7 @@ rbac:
     mariadb: true           # mariadb.mmontes.io
     networkPolicyApi: true  # policy.networking.k8s.io (Admin/Baseline/ClusterNetworkPolicy — SIG-network)
     nginx: true             # nginx.org
+    nvidia: true            # nvidia.com (GPU Operator: ClusterPolicy, NVIDIADriver)
     openshift: true         # observability.openshift.io
     opentelemetry: true     # opentelemetry.io
     prometheus: true        # monitoring.coreos.com

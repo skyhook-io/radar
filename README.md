@@ -389,6 +389,8 @@ Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integ
 | **Crossplane** | Managed Resources (any provider), Composite Resources, Claims, Provider, ProviderConfig, Function, Configuration, Composition, CompositionRevision, XRD |
 | **Kyverno** | Policy, ClusterPolicy, PolicyReport, ClusterPolicyReport |
 | **Sealed Secrets** | SealedSecret |
+| **Dynamic Resource Allocation** | ResourceClaim, ResourceClaimTemplate, DeviceClass, ResourceSlice (resource.k8s.io, K8s 1.32+) |
+| **NVIDIA GPU Operator** | ClusterPolicy, NVIDIADriver |
 | **Cost (OpenCost)** | Namespace/workload/node cost breakdown via Prometheus (no CRDs) |
 | **CRDs** | Any Custom Resource Definition in your cluster (auto-discovered) |
 

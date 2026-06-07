@@ -5,6 +5,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // RelationshipsIndex is a precomputed map from node ID to the edges touching
@@ -443,6 +444,75 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 			enrichRef(&nodeRef, dp)
 			rel.Node = &nodeRef
 		}
+		for _, pc := range pod.Spec.ResourceClaims {
+			claimName := ""
+			if pc.ResourceClaimName != nil {
+				claimName = *pc.ResourceClaimName
+			} else {
+				// Template-generated claims: the actual claim name only exists in status
+				for _, st := range pod.Status.ResourceClaimStatuses {
+					if st.Name == pc.Name && st.ResourceClaimName != nil {
+						claimName = *st.ResourceClaimName
+						break
+					}
+				}
+			}
+			if claimName != "" {
+				rel.ResourceClaims = append(rel.ResourceClaims, ResourceRef{
+					Kind: "ResourceClaim", Namespace: namespace, Name: claimName, Group: "resource.k8s.io",
+				})
+			}
+		}
+	}
+	// ResourceClaim → DeviceClass (what it requests) + reservedFor Pods (who holds it).
+	if kindLower == "resourceclaim" || kindLower == "resourceclaims" {
+		if u, ok := queriedObj.(*unstructured.Unstructured); ok && u.GroupVersionKind().Group == "resource.k8s.io" {
+			seenClasses := map[string]bool{}
+			requests, _, _ := unstructured.NestedSlice(u.Object, "spec", "devices", "requests")
+			for _, r := range requests {
+				req, ok := r.(map[string]any)
+				if !ok {
+					continue
+				}
+				// v1/v1beta2 nest the class under "exactly" (or firstAvailable
+				// subrequests); v1beta1 had deviceClassName at the request level.
+				var classNames []string
+				if dc, _, _ := unstructured.NestedString(req, "exactly", "deviceClassName"); dc != "" {
+					classNames = append(classNames, dc)
+				} else if dc, _, _ := unstructured.NestedString(req, "deviceClassName"); dc != "" {
+					classNames = append(classNames, dc)
+				}
+				if subs, _, _ := unstructured.NestedSlice(req, "firstAvailable"); len(subs) > 0 {
+					for _, s := range subs {
+						if sub, ok := s.(map[string]any); ok {
+							if dc, _, _ := unstructured.NestedString(sub, "deviceClassName"); dc != "" {
+								classNames = append(classNames, dc)
+							}
+						}
+					}
+				}
+				for _, dc := range classNames {
+					if !seenClasses[dc] {
+						seenClasses[dc] = true
+						rel.ConfigRefs = append(rel.ConfigRefs, ResourceRef{Kind: "DeviceClass", Name: dc, Group: "resource.k8s.io"})
+					}
+				}
+			}
+			reserved, _, _ := unstructured.NestedSlice(u.Object, "status", "reservedFor")
+			for _, r := range reserved {
+				ref, ok := r.(map[string]any)
+				if !ok {
+					continue
+				}
+				resource, _, _ := unstructured.NestedString(ref, "resource")
+				holderName, _, _ := unstructured.NestedString(ref, "name")
+				if resource == "pods" && holderName != "" {
+					podRef := ResourceRef{Kind: "Pod", Namespace: namespace, Name: holderName}
+					enrichRef(&podRef, dp)
+					rel.Consumers = append(rel.Consumers, podRef)
+				}
+			}
+		}
 	}
 	var managedByMeta metav1.Object
 	if m, ok := queriedObj.(metav1.Object); ok {
@@ -458,7 +528,7 @@ func GetRelationshipsWithObject(kind, namespace, name string, obj any, topo *Top
 		len(rel.ConfigRefs) == 0 && len(rel.Consumers) == 0 && len(rel.Scalers) == 0 &&
 		len(rel.PDBs) == 0 && len(rel.NetworkPolicies) == 0 &&
 		rel.ScaleTarget == nil && len(rel.Pods) == 0 &&
-		rel.ServiceAccount == nil && rel.Node == nil && len(rel.ManagedBy) == 0 {
+		rel.ServiceAccount == nil && rel.Node == nil && len(rel.ResourceClaims) == 0 && len(rel.ManagedBy) == 0 {
 		return nil
 	}
 
@@ -714,6 +784,10 @@ func buildNodeID(kind, namespace, name string, dp DynamicProvider) string {
 		"machinepools":             "machinepool",          // Cluster API
 		"kubeadmcontrolplanes":     "kubeadmcontrolplane",  // Cluster API
 		"machinehealthchecks":      "machinehealthcheck",   // Cluster API
+		"resourceclaims":           "resourceclaim",        // DRA
+		"resourceclaimtemplates":   "resourceclaimtemplate",
+		"deviceclasses":            "deviceclass",
+		"resourceslices":           "resourceslice",
 	}
 
 	if singular, ok := kindMap[k]; ok {
@@ -848,6 +922,10 @@ func normalizeKind(kind string, dp DynamicProvider) string {
 		"machinepool":                        "MachinePool",          // Cluster API
 		"kubeadmcontrolplane":                "KubeadmControlPlane",  // Cluster API
 		"machinehealthcheck":                 "MachineHealthCheck",   // Cluster API
+		"resourceclaim":                      "ResourceClaim",        // DRA
+		"resourceclaimtemplate":              "ResourceClaimTemplate",
+		"deviceclass":                        "DeviceClass",
+		"resourceslice":                      "ResourceSlice",
 	}
 
 	if normalized, ok := kindMap[strings.ToLower(kind)]; ok {

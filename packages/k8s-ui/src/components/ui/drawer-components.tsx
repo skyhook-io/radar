@@ -679,6 +679,9 @@ export function formatKindName(kind: string): string {
     horizontalpodautoscalers: 'HPA', nodes: 'Node', namespaces: 'Namespace',
     persistentvolumeclaims: 'PVC', persistentvolumes: 'PV',
     httpproxies: 'HTTPProxy',
+    resourceclaims: 'ResourceClaim', resourceclaimtemplates: 'ResourceClaimTemplate',
+    deviceclasses: 'DeviceClass', resourceslices: 'ResourceSlice',
+    clusterpolicies: 'ClusterPolicy', nvidiadrivers: 'NVIDIADriver',
   }
   if (names[k]) return names[k]
 
@@ -741,6 +744,7 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
     (relationships.scalers && relationships.scalers.length > 0) ||
     (relationships.pdbs && relationships.pdbs.length > 0) ||
     (relationships.networkPolicies && relationships.networkPolicies.length > 0) ||
+    (relationships.resourceClaims && relationships.resourceClaims.length > 0) ||
     relationships.scaleTarget
 
   if (!hasRelationships) return null
@@ -786,6 +790,9 @@ export function RelatedResourcesSection({ relationships, onNavigate }: RelatedRe
         )}
         {relationships.networkPolicies && relationships.networkPolicies.length > 0 && (
           <RelationshipGroup label="Network Policies" refs={dedupeRefs(relationships.networkPolicies)} onNavigate={onNavigate} />
+        )}
+        {relationships.resourceClaims && relationships.resourceClaims.length > 0 && (
+          <RelationshipGroup label="Resource Claims" refs={dedupeRefs(relationships.resourceClaims)} onNavigate={onNavigate} />
         )}
         {relationships.scaleTarget && (
           <RelationshipGroup label="Scale Target" refs={[relationships.scaleTarget]} onNavigate={onNavigate} />

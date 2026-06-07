@@ -138,6 +138,8 @@ import { VulnerabilityReportCell, ConfigAuditReportCell, ExposedSecretReportCell
 import { CertificateCell, CertificateRequestCell, ClusterIssuerCell, IssuerCell, OrderCell, ChallengeCell } from './renderers/certmanager-cells'
 import { NodePoolCell, NodeClaimCell, EC2NodeClassCell } from './renderers/karpenter-cells'
 import { ScaledObjectCell, ScaledJobCell, TriggerAuthenticationCell, ClusterTriggerAuthenticationCell } from './renderers/keda-cells'
+import { ResourceClaimCell, ResourceClaimTemplateCell, DeviceClassCell, ResourceSliceCell } from './renderers/dra-cells'
+import { NvidiaClusterPolicyCell, NvidiaDriverCell } from './renderers/nvidia-cells'
 import { ServiceMonitorCell, PrometheusRuleCell, PodMonitorCell } from './renderers/prometheus-cells'
 import { PolicyReportCell, ClusterPolicyReportCell, KyvernoPolicyCell, ClusterPolicyCell } from './renderers/kyverno-cells'
 import { ExternalSecretCell, ClusterExternalSecretCell, SecretStoreCell, ClusterSecretStoreCell } from './renderers/eso-cells'
@@ -577,6 +579,48 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
     { key: 'target', label: 'Target', width: 'w-48', tooltip: 'Scale target workload' },
     { key: 'replicas', label: 'Replicas', width: 'w-28', tooltip: 'Min-Max replica range' },
     { key: 'triggerTypes', label: 'Trigger Types', width: 'w-40' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  resourceclaims: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'status', label: 'Status', width: 'w-28', tooltip: 'Allocated + reserved, allocated-but-unreserved, or pending' },
+    { key: 'deviceClass', label: 'Device Class', width: 'w-44' },
+    { key: 'allocated', label: 'Allocated Driver', width: 'w-44' },
+    { key: 'reservedFor', label: 'Reserved For', width: 'w-44' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  resourceclaimtemplates: [
+    { key: 'name', label: 'Name' },
+    { key: 'namespace', label: 'Namespace', width: 'w-36' },
+    { key: 'deviceClass', label: 'Device Class', width: 'w-44' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  deviceclasses: [
+    { key: 'name', label: 'Name' },
+    { key: 'selectors', label: 'Selectors', width: 'w-28', tooltip: 'CEL device selector count' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  resourceslices: [
+    { key: 'name', label: 'Name' },
+    { key: 'driver', label: 'Driver', width: 'w-44' },
+    { key: 'pool', label: 'Pool', width: 'w-36' },
+    { key: 'node', label: 'Node', width: 'w-44' },
+    { key: 'devices', label: 'Devices', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  nvidiaclusterpolicies: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'components', label: 'Components', width: 'w-64', tooltip: 'Enabled GPU Operator components' },
+    { key: 'mig', label: 'MIG', width: 'w-24' },
+    { key: 'age', label: 'Age', width: 'w-24' },
+  ],
+  nvidiadrivers: [
+    { key: 'name', label: 'Name' },
+    { key: 'status', label: 'Status', width: 'w-28' },
+    { key: 'driverType', label: 'Type', width: 'w-28' },
+    { key: 'version', label: 'Version', width: 'w-32' },
     { key: 'age', label: 'Age', width: 'w-24' },
   ],
   scaledjobs: [
@@ -1620,6 +1664,7 @@ const KNOWN_COLUMNS: Record<string, Column[]> = {
 // Map (plural, group) → KNOWN_COLUMNS key for kinds that collide with core K8s
 const GROUP_QUALIFIED_COLUMN_KEYS: Record<string, Record<string, string>> = {
   clusters: { 'postgresql.cnpg.io': 'cnpgclusters', 'cluster.x-k8s.io': 'capiclusters' },
+  clusterpolicies: { 'nvidia.com': 'nvidiaclusterpolicies' },
   services: { 'serving.knative.dev': 'knativeservices' },
   configurations: { 'serving.knative.dev': 'knativeconfigurations' },
   revisions: { 'serving.knative.dev': 'knativerevisions' },
@@ -5065,6 +5110,20 @@ function CellContent({ resource, kind, column, group, majorityNodeMinorVersion, 
       return <TriggerAuthenticationCell resource={resource} column={column} />
     case 'clustertriggerauthentications':
       return <ClusterTriggerAuthenticationCell resource={resource} column={column} />
+    // DRA (resource.k8s.io)
+    case 'resourceclaims':
+      return <ResourceClaimCell resource={resource} column={column} />
+    case 'resourceclaimtemplates':
+      return <ResourceClaimTemplateCell resource={resource} column={column} />
+    case 'deviceclasses':
+      return <DeviceClassCell resource={resource} column={column} />
+    case 'resourceslices':
+      return <ResourceSliceCell resource={resource} column={column} />
+    // NVIDIA GPU Operator (nvidiaclusterpolicies is the group-qualified key for nvidia.com clusterpolicies)
+    case 'nvidiaclusterpolicies':
+      return <NvidiaClusterPolicyCell resource={resource} column={column} />
+    case 'nvidiadrivers':
+      return <NvidiaDriverCell resource={resource} column={column} />
     // ArgoCD GitOps resources
     case 'applications':
       return <ArgoApplicationCell resource={resource} column={column} />

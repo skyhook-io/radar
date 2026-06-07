@@ -50,6 +50,8 @@ import { getNodePoolStatus, getNodeClaimStatus, getEC2NodeClassStatus } from '..
 import { getScaledObjectStatus, getScaledJobStatus } from '../resources/resource-utils-keda'
 import { getServiceMonitorStatus, getPrometheusRuleStatus, getPodMonitorStatus } from '../resources/resource-utils-prometheus'
 import { getPolicyReportStatus, getKyvernoPolicyStatus } from '../resources/resource-utils-kyverno'
+import { getResourceClaimStatus, getResourceClaimTemplateStatus, getDeviceClassStatus, getResourceSliceStatus } from '../resources/resource-utils-dra'
+import { getNvidiaClusterPolicyStatus, getNvidiaDriverStatus } from '../resources/resource-utils-nvidia'
 import { getBackupStatus, getRestoreStatus, getScheduleStatus, getBSLStatus } from '../resources/resource-utils-velero'
 import {
   getVirtualServiceStatus,
@@ -208,6 +210,12 @@ import {
   CompositionRenderer,
   CompositionRevisionRenderer,
   XRDRenderer,
+  ResourceClaimRenderer,
+  ResourceClaimTemplateRenderer,
+  DeviceClassRenderer,
+  ResourceSliceRenderer,
+  NvidiaClusterPolicyRenderer,
+  NvidiaDriverRenderer,
 } from '../resources/renderers'
 import type { ComposedRefStatus } from '../resources/renderers/CompositeRenderer'
 import {
@@ -318,6 +326,8 @@ const KNOWN_KINDS = new Set([
   'triggerauthentications', 'clustertriggerauthentications',
   'servicemonitors', 'prometheusrules', 'podmonitors',
   'policyreports', 'clusterpolicyreports', 'kyvernopolicies', 'clusterpolicies',
+  'resourceclaims', 'resourceclaimtemplates', 'deviceclasses', 'resourceslices',
+  'nvidiadrivers',
   'vulnerabilityreports', 'configauditreports', 'exposedsecretreports',
   'rbacassessmentreports', 'clusterrbacassessmentreports',
   'clustercompliancereports', 'sbomreports', 'clustersbomreports',
@@ -557,7 +567,14 @@ export function ResourceRendererDispatch({
         {kind === 'prometheusrules' && <PrometheusRuleRenderer data={data} />}
         {kind === 'podmonitors' && <PodMonitorRenderer data={data} />}
         {(kind === 'policyreports' || kind === 'clusterpolicyreports') && <PolicyReportRenderer data={data} />}
-        {(kind === 'kyvernopolicies' || kind === 'clusterpolicies') && <KyvernoPolicyRenderer data={data} />}
+        {(kind === 'kyvernopolicies' || (kind === 'clusterpolicies' && !data?.apiVersion?.startsWith('nvidia.com/'))) && <KyvernoPolicyRenderer data={data} />}
+        {(kind === 'clusterpolicies' && data?.apiVersion?.startsWith('nvidia.com/')) && <NvidiaClusterPolicyRenderer data={data} />}
+        {kind === 'nvidiadrivers' && <NvidiaDriverRenderer data={data} />}
+        {/* DRA (resource.k8s.io) */}
+        {kind === 'resourceclaims' && <ResourceClaimRenderer data={data} onNavigate={onNavigate} />}
+        {kind === 'resourceclaimtemplates' && <ResourceClaimTemplateRenderer data={data} />}
+        {kind === 'deviceclasses' && <DeviceClassRenderer data={data} />}
+        {kind === 'resourceslices' && <ResourceSliceRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'backups' && data.apiVersion?.includes('cnpg.io') && <CNPGBackupRenderer data={data} onNavigate={onNavigate} />}
         {kind === 'backups' && !data.apiVersion?.includes('cnpg.io') && <VeleroBackupRenderer data={data} />}
         {kind === 'restores' && <VeleroRestoreRenderer data={data} />}
@@ -760,7 +777,15 @@ export function getResourceStatus(kind: string, data: any): { text: string; colo
   if (k === 'clustercompliancereports') return getClusterComplianceReportStatus(data)
   if (k === 'sbomreports' || k === 'clustersbomreports') return getSbomReportStatus(data)
   if (k === 'policyreports' || k === 'clusterpolicyreports') return getPolicyReportStatus(data)
-  if (k === 'kyvernopolicies' || k === 'clusterpolicies') return getKyvernoPolicyStatus(data)
+  if (k === 'kyvernopolicies' || k === 'clusterpolicies') {
+    if (data?.apiVersion?.startsWith('nvidia.com/')) return getNvidiaClusterPolicyStatus(data)
+    return getKyvernoPolicyStatus(data)
+  }
+  if (k === 'nvidiadrivers') return getNvidiaDriverStatus(data)
+  if (k === 'resourceclaims') return getResourceClaimStatus(data)
+  if (k === 'resourceclaimtemplates') return getResourceClaimTemplateStatus(data)
+  if (k === 'deviceclasses') return getDeviceClassStatus(data)
+  if (k === 'resourceslices') return getResourceSliceStatus(data)
   if (k === 'backups') {
     if (data.apiVersion?.includes('cnpg.io')) return getCNPGBackupStatus(data)
     return getBackupStatus(data)

@@ -441,6 +441,7 @@ export interface Relationships {
   pods?: ResourceRef[]
   serviceAccount?: ResourceRef      // For Pods: derived from pod.spec.serviceAccountName
   node?: ResourceRef                // For scheduled Pods: derived from pod.spec.nodeName
+  resourceClaims?: ResourceRef[]    // For Pods: DRA ResourceClaims (direct + template-generated)
 }
 
 // Parsed X.509 certificate metadata (from backend cert parsing)

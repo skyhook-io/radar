@@ -261,6 +261,17 @@ var supportedCRDFallbacks = []supportedCRDResource{
 	// presence of these in discovery is the signal that the cluster runs Kyverno.
 	{Group: "kyverno.io", Versions: []string{"v1", "v2", "v2beta1"}, Resource: "policies", Kind: "Policy", Namespaced: true},
 	{Group: "kyverno.io", Versions: []string{"v1", "v2", "v2beta1"}, Resource: "clusterpolicies", Kind: "ClusterPolicy", Namespaced: false},
+	// DRA (built-in resource.k8s.io, GA in K8s 1.34). Normal discovery flags
+	// these IsCRD (group not in coreAPIGroups) and watches them; the fallback
+	// entries cover partial-discovery clusters. v1beta2 serves 1.32-1.33.
+	{Group: "resource.k8s.io", Versions: []string{"v1", "v1beta2"}, Resource: "resourceclaims", Kind: "ResourceClaim", Namespaced: true},
+	{Group: "resource.k8s.io", Versions: []string{"v1", "v1beta2"}, Resource: "resourceclaimtemplates", Kind: "ResourceClaimTemplate", Namespaced: true},
+	{Group: "resource.k8s.io", Versions: []string{"v1", "v1beta2"}, Resource: "deviceclasses", Kind: "DeviceClass", Namespaced: false},
+	{Group: "resource.k8s.io", Versions: []string{"v1", "v1beta2"}, Resource: "resourceslices", Kind: "ResourceSlice", Namespaced: false},
+	// NVIDIA GPU Operator. ClusterPolicy collides with Kyverno's — group
+	// disambiguates everywhere downstream.
+	{Group: "nvidia.com", Versions: []string{"v1"}, Resource: "clusterpolicies", Kind: "ClusterPolicy", Namespaced: false},
+	{Group: "nvidia.com", Versions: []string{"v1alpha1"}, Resource: "nvidiadrivers", Kind: "NVIDIADriver", Namespaced: false},
 	// NOTE: the wgpolicyk8s.io PolicyReport CRDs are intentionally NOT in
 	// this list. They are warmed up conditionally — only when Kyverno is
 	// detected — via WarmupKyvernoPolicyReports in policy_reports.go. Adding

@@ -315,6 +315,10 @@ type Relationships struct {
 	// Node is the Node this Pod is scheduled on (Pod-only field, derived from
 	// pod.Spec.NodeName). Omitted when the Pod is unscheduled.
 	Node *ResourceRef `json:"node,omitempty"`
+	// ResourceClaims are the DRA ResourceClaims this Pod references (Pod-only
+	// field). Direct claims come from pod.Spec.ResourceClaims; template-generated
+	// claim names resolve via pod.Status.ResourceClaimStatuses.
+	ResourceClaims []ResourceRef `json:"resourceClaims,omitempty"`
 	// ManagedBy walks the owner-ref chain up to the topmost meaningful manager
 	// — ArgoCD Application > Flux Kustomization/HelmRelease > Helm release >
 	// topmost K8s owner (Deployment > ReplicaSet > Pod). Empty when no

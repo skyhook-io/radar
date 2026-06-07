@@ -1011,6 +1011,48 @@ OpenCost cost data is not CRD-based — no custom resources are required. Cost v
 
 ---
 
+## Dynamic Resource Allocation (DRA)
+
+[Dynamic Resource Allocation](https://kubernetes.io/docs/concepts/scheduling-eviction/dynamic-resource-allocation/) is Kubernetes' structured device-allocation API (GA in 1.34), replacing opaque extended-resource integers for GPUs and other accelerators. These are built-in `resource.k8s.io` APIs, not CRDs — Radar discovers them automatically when the cluster serves the group.
+
+### What Radar Shows
+
+**ResourceClaim Detail View:** Allocation lifecycle status (Pending → Allocated → reserved), device requests with their DeviceClass (handles v1 `exactly`/`firstAvailable` and v1beta1 request shapes), allocated driver/pool/device results, reserved-for consumers with Pod links, and per-device health conditions when drivers report them. An allocated-but-unreserved claim is flagged — long-lived, it leaks a device.
+
+**Related Resources:** Pods show their ResourceClaims (direct and template-generated); ResourceClaims link back to their DeviceClasses and the Pods holding the reservation.
+
+**Resource Browser:** Claims list with allocation status, device class, allocated driver, and reservation columns. ResourceSlices list the per-node device inventory each driver publishes (driver, pool, node, device count).
+
+### Supported Kinds
+
+| Kind | Group | Topology | Detail View | AI Summary |
+|------|-------|----------|-------------|------------|
+| ResourceClaim | `resource.k8s.io` (v1, v1beta2) | Relationships | Yes | Yes |
+| ResourceClaimTemplate | `resource.k8s.io` (v1, v1beta2) | — | Yes | Yes |
+| DeviceClass | `resource.k8s.io` (v1, v1beta2) | Relationships | Yes | Yes |
+| ResourceSlice | `resource.k8s.io` (v1, v1beta2) | — | Yes | Yes |
+
+---
+
+## NVIDIA GPU Operator
+
+The [NVIDIA GPU Operator](https://docs.nvidia.com/datacenter/cloud-native/gpu-operator/latest/) manages the GPU software stack (driver, container toolkit, device plugin, DCGM) on Kubernetes.
+
+### What Radar Shows
+
+**ClusterPolicy Detail View:** Operator state (ready / notReady / disabled), enabled components (driver, toolkit, device plugin, DCGM exporter, GFD, MIG manager, …), and MIG strategy. NVIDIA's ClusterPolicy shares its kind name with Kyverno's — Radar disambiguates by API group everywhere.
+
+**NVIDIADriver Detail View:** Driver rollout state, type, version, image/repository, precompiled flag, and node selector.
+
+### Supported CRDs
+
+| CRD | Group | Topology | Detail View | AI Summary |
+|-----|-------|----------|-------------|------------|
+| ClusterPolicy | `nvidia.com/v1` | — | Yes | Yes |
+| NVIDIADriver | `nvidia.com/v1alpha1` | — | Yes | Yes |
+
+---
+
 ## Network Policies
 
 [Network Policies](https://kubernetes.io/docs/concepts/services-networking/network-policies/) control pod-to-pod and pod-to-external traffic at the network level. Radar supports standard Kubernetes NetworkPolicy as well as Cilium's CiliumNetworkPolicy and CiliumClusterwideNetworkPolicy CRDs, providing visibility into what traffic is allowed, denied, and which workloads are unprotected.

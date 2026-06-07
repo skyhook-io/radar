@@ -10,6 +10,8 @@ import { getScaledObjectStatus, getScaledJobStatus } from './resource-utils-keda
 import { getGitRepositoryStatus, getOCIRepositoryStatus, getHelmRepositoryStatus, getHelmRepositoryType, getKustomizationStatus, getFluxHelmReleaseStatus, getFluxAlertStatus } from './resource-utils-flux'
 import { getArgoApplicationStatus, getArgoApplicationSetStatus, getArgoApplicationSync, getArgoApplicationHealth, getArgoApplicationProject } from './resource-utils-argo'
 import { getPolicyReportStatus as _getPolicyReportStatus, getKyvernoPolicyStatus as _getKyvernoPolicyStatus } from './resource-utils-kyverno'
+import { getResourceClaimStatus as _getResourceClaimStatus, getResourceClaimDeviceClasses as _getResourceClaimDeviceClasses, getResourceClaimTemplateDeviceClasses as _getResourceClaimTemplateDeviceClasses, getResourceClaimAllocation as _getResourceClaimAllocation, getResourceClaimReservedFor as _getResourceClaimReservedFor } from './resource-utils-dra'
+import { getNvidiaClusterPolicyStatus as _getNvidiaClusterPolicyStatus, getNvidiaClusterPolicyEnabledComponents as _getNvidiaClusterPolicyEnabledComponents, getNvidiaDriverStatus as _getNvidiaDriverStatus } from './resource-utils-nvidia'
 import { getBackupStatus as _getBackupStatus, getRestoreStatus as _getRestoreStatus, getScheduleStatus as _getScheduleStatus, getBSLStatus as _getBSLStatus } from './resource-utils-velero'
 import { getExternalSecretStatus as _getExternalSecretStatus, getClusterExternalSecretStatus as _getClusterExternalSecretStatus, getSecretStoreStatus as _getSecretStoreStatus, getClusterSecretStoreStatus as _getClusterSecretStoreStatus, getSecretStoreProviderType as _getSecretStoreProviderType } from './resource-utils-eso'
 
@@ -1732,6 +1734,9 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
       if (kindLower === 'scaledjobs') return getScaledJobStatus(resource).text
       if (kindLower === 'policyreports' || kindLower === 'clusterpolicyreports') return _getPolicyReportStatus(resource).text
       if (kindLower === 'kyvernopolicies' || kindLower === 'clusterpolicies') return _getKyvernoPolicyStatus(resource).text
+      if (kindLower === 'nvidiaclusterpolicies') return _getNvidiaClusterPolicyStatus(resource).text
+      if (kindLower === 'nvidiadrivers') return _getNvidiaDriverStatus(resource).text
+      if (kindLower === 'resourceclaims') return _getResourceClaimStatus(resource).text
       if (kindLower === 'backups') return _getBackupStatus(resource).text
       if (kindLower === 'restores') return _getRestoreStatus(resource).text
       if (kindLower === 'schedules') return _getScheduleStatus(resource).text
@@ -1792,6 +1797,33 @@ export function getCellFilterValue(resource: any, column: string, kind: string):
     case 'provider':
       if (kindLower === 'secretstores' || kindLower === 'clustersecretstores') return _getSecretStoreProviderType(resource)
       return resource.spec?.provider || ''
+    // DRA + NVIDIA columns. Unmatched kinds break to the generic fallback —
+    // these keys are shared (e.g. 'components' is also a Trivy SBOM column).
+    case 'deviceClass':
+      if (kindLower === 'resourceclaims') return _getResourceClaimDeviceClasses(resource).join(', ')
+      if (kindLower === 'resourceclaimtemplates') return _getResourceClaimTemplateDeviceClasses(resource).join(', ')
+      break
+    case 'allocated':
+      if (kindLower === 'resourceclaims') return _getResourceClaimAllocation(resource).map(r => r.driver).join(', ')
+      break
+    case 'reservedFor':
+      if (kindLower === 'resourceclaims') return _getResourceClaimReservedFor(resource).map(r => r.name).join(', ')
+      break
+    case 'pool':
+      if (kindLower === 'resourceslices') return resource.spec?.pool?.name || ''
+      break
+    case 'devices':
+      if (kindLower === 'resourceslices') return String((resource.spec?.devices || []).length)
+      break
+    case 'selectors':
+      if (kindLower === 'deviceclasses') return String((resource.spec?.selectors || []).length)
+      break
+    case 'components':
+      if (kindLower === 'nvidiaclusterpolicies') return _getNvidiaClusterPolicyEnabledComponents(resource).filter(c => c.enabled).map(c => c.label).join(', ')
+      break
+    case 'mig':
+      if (kindLower === 'nvidiaclusterpolicies') return resource.spec?.mig?.strategy || ''
+      break
   }
 
   // Fallback: try common paths
