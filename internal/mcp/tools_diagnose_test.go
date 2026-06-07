@@ -89,25 +89,25 @@ func TestNormalizeDiagnoseKind(t *testing.T) {
 
 func TestGitopsDiagnoseTarget(t *testing.T) {
 	cases := []struct {
-		in                            string
-		wantKind, wantGroup, wantTool string
-		wantOK                        bool
+		in                                          string
+		wantKind, wantGroup, wantResource, wantTool string
+		wantOK                                      bool
 	}{
-		{"application", "Application", "argoproj.io", "argocd", true},
-		{"applications", "Application", "argoproj.io", "argocd", true},
-		{"app", "Application", "argoproj.io", "argocd", true},
-		{"kustomization", "Kustomization", "kustomize.toolkit.fluxcd.io", "flux", true},
-		{"helmrelease", "HelmRelease", "helm.toolkit.fluxcd.io", "flux", true},
-		{"HR", "HelmRelease", "helm.toolkit.fluxcd.io", "flux", true},
-		{"pod", "", "", "", false},
-		{"deployment", "", "", "", false},
-		{"", "", "", "", false},
+		{"application", "Application", "argoproj.io", "applications", "argocd", true},
+		{"applications", "Application", "argoproj.io", "applications", "argocd", true},
+		{"app", "Application", "argoproj.io", "applications", "argocd", true},
+		{"kustomization", "Kustomization", "kustomize.toolkit.fluxcd.io", "kustomizations", "flux", true},
+		{"helmrelease", "HelmRelease", "helm.toolkit.fluxcd.io", "helmreleases", "flux", true},
+		{"HR", "HelmRelease", "helm.toolkit.fluxcd.io", "helmreleases", "flux", true},
+		{"pod", "", "", "", "", false},
+		{"deployment", "", "", "", "", false},
+		{"", "", "", "", "", false},
 	}
 	for _, c := range cases {
-		k, g, tool, ok := gitopsDiagnoseTarget(c.in)
-		if k != c.wantKind || g != c.wantGroup || tool != c.wantTool || ok != c.wantOK {
-			t.Errorf("gitopsDiagnoseTarget(%q) = (%q,%q,%q,%v), want (%q,%q,%q,%v)",
-				c.in, k, g, tool, ok, c.wantKind, c.wantGroup, c.wantTool, c.wantOK)
+		k, g, resource, tool, ok := gitopsDiagnoseTarget(c.in)
+		if k != c.wantKind || g != c.wantGroup || resource != c.wantResource || tool != c.wantTool || ok != c.wantOK {
+			t.Errorf("gitopsDiagnoseTarget(%q) = (%q,%q,%q,%q,%v), want (%q,%q,%q,%q,%v)",
+				c.in, k, g, resource, tool, ok, c.wantKind, c.wantGroup, c.wantResource, c.wantTool, c.wantOK)
 		}
 	}
 }
@@ -119,6 +119,9 @@ func TestGitopsDiagnoseTarget(t *testing.T) {
 func TestHandleDiagnose_GitOpsKindDispatch(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")
+	// The GitOps read is gated on a per-kind get SAR; grant it so the test
+	// exercises the dispatch fork (not the RBAC gate, covered separately).
+	getPermCache().Get("admin").SetCanI("get", "argoproj.io", "applications", "alpha", true)
 
 	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "alpha", Name: "whatever"})
 	if err == nil {
@@ -126,6 +129,28 @@ func TestHandleDiagnose_GitOpsKindDispatch(t *testing.T) {
 	}
 	if strings.Contains(err.Error(), "invalid kind") {
 		t.Errorf("GitOps kind must route to the GitOps path, not the workload invalid-kind error; got %v", err)
+	}
+}
+
+// TestHandleGitOpsDiagnose_PerKindRBAC pins that the GitOps read is gated on a
+// per-kind get SAR, not just namespace access — the object is served from the
+// shared (connector-identity) cache, so a user who can reach the namespace but
+// lacks get on applications.argoproj.io must not receive it.
+func TestHandleGitOpsDiagnose_PerKindRBAC(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	// Namespace access to argocd, but no get on applications.argoproj.io.
+	ctx := withRestrictedUser(t, "limited", []string{"argocd"})
+
+	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "argocd", Name: "guestbook"})
+	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("expected forbidden without get on applications.argoproj.io, got %v", err)
+	}
+
+	// Granting the per-kind get lets the read through (then fails for not-found,
+	// not forbidden) — proving the gate is the only thing blocking it.
+	getPermCache().Get("limited").SetCanI("get", "argoproj.io", "applications", "argocd", true)
+	if _, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "argocd", Name: "guestbook"}); err == nil || strings.Contains(err.Error(), "forbidden") {
+		t.Errorf("with get granted, expected a non-forbidden (not-found) error, got %v", err)
 	}
 }
 

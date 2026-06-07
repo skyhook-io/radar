@@ -91,6 +91,12 @@ type gitopsDiagnosis struct {
 	Sync           string `json:"sync,omitempty"`           // Argo status.sync.status
 	Health         string `json:"health,omitempty"`         // Argo status.health.status
 	OperationPhase string `json:"operationPhase,omitempty"` // Argo status.operationState.phase
+	// Flux equivalents — a Kustomization/HelmRelease has no Argo sync/health
+	// rollup, so summarize from the Ready condition, suspend flag, and the last
+	// successfully applied revision instead.
+	Suspended bool   `json:"suspended,omitempty"`       // Flux spec.suspend
+	Ready     string `json:"ready,omitempty"`           // Flux Ready condition: "<status>: <reason>"
+	Revision  string `json:"appliedRevision,omitempty"` // Flux status.lastAppliedRevision
 }
 
 // startupBlocker is the compact row diagnose embeds for one reason a workload
@@ -165,8 +171,8 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	// GitOps reconcilers (Argo Application / Flux Kustomization / HelmRelease)
 	// have no pods, so they take a dedicated path: reconciler status summary +
 	// the parsed failure issue (via RelatedIssues), no log/pod fan-out.
-	if gk, group, tool, ok := gitopsDiagnoseTarget(input.Kind); ok {
-		return handleGitOpsDiagnose(ctx, input, gk, group, tool)
+	if gk, group, resource, tool, ok := gitopsDiagnoseTarget(input.Kind); ok {
+		return handleGitOpsDiagnose(ctx, input, gk, group, resource, tool)
 	}
 	kindNorm := normalizeDiagnoseKind(input.Kind)
 	if kindNorm == "" {
@@ -299,17 +305,40 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 }
 
 // gitopsDiagnoseTarget recognizes the GitOps reconciler kinds diagnose handles
-// without a pod set, returning the canonical Kind, API group, and tool label.
-func gitopsDiagnoseTarget(kind string) (canonicalKind, group, tool string, ok bool) {
+// without a pod set, returning the canonical Kind, API group, resource plural,
+// and tool label. The plural feeds the per-kind SAR gate before the cached read.
+func gitopsDiagnoseTarget(kind string) (canonicalKind, group, resource, tool string, ok bool) {
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "application", "applications", "app":
-		return "Application", "argoproj.io", "argocd", true
+		return "Application", "argoproj.io", "applications", "argocd", true
 	case "kustomization", "kustomizations":
-		return "Kustomization", "kustomize.toolkit.fluxcd.io", "flux", true
+		return "Kustomization", "kustomize.toolkit.fluxcd.io", "kustomizations", "flux", true
 	case "helmrelease", "helmreleases", "hr":
-		return "HelmRelease", "helm.toolkit.fluxcd.io", "flux", true
+		return "HelmRelease", "helm.toolkit.fluxcd.io", "helmreleases", "flux", true
 	}
-	return "", "", "", false
+	return "", "", "", "", false
+}
+
+// fluxReadySummary renders a Flux object's Ready condition as "<status>: <reason>"
+// (e.g. "False: ReconciliationFailed"), or just "<status>" when no reason is set.
+// Empty when there's no Ready condition.
+func fluxReadySummary(u *unstructured.Unstructured) string {
+	conds, _, _ := unstructured.NestedSlice(u.Object, "status", "conditions")
+	for _, c := range conds {
+		cm, ok := c.(map[string]any)
+		if !ok {
+			continue
+		}
+		if t, _ := cm["type"].(string); t != "Ready" {
+			continue
+		}
+		status, _ := cm["status"].(string)
+		if reason, _ := cm["reason"].(string); reason != "" {
+			return status + ": " + reason
+		}
+		return status
+	}
+	return ""
 }
 
 // handleGitOpsDiagnose is the no-pods diagnose path for GitOps reconcilers:
@@ -317,9 +346,13 @@ func gitopsDiagnoseTarget(kind string) (canonicalKind, group, tool string, ok bo
 // NOT reimplement the insights builder — the issues engine already classifies
 // and parses the reconciler's failure (cause/action/remediation), so this stays
 // a thin status read.
-func handleGitOpsDiagnose(ctx context.Context, input diagnoseInput, canonicalKind, group, tool string) (*mcp.CallToolResult, any, error) {
-	if !checkNamespaceAccess(ctx, input.Namespace) {
-		return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
+func handleGitOpsDiagnose(ctx context.Context, input diagnoseInput, canonicalKind, group, resource, tool string) (*mcp.CallToolResult, any, error) {
+	// Per-kind RBAC: the object is read from the shared cache (connector
+	// identity), so namespace access alone is not enough — a user who can read
+	// ordinary resources in the namespace but not the GitOps CR must not receive
+	// it. Gate on the exact (group, resource, get) the read performs.
+	if !canReadInNamespace(ctx, group, resource, input.Namespace, "get") {
+		return nil, nil, fmt.Errorf("forbidden: cannot get %s.%s in namespace %q", resource, group, input.Namespace)
 	}
 	cache := k8s.GetResourceCache()
 	if cache == nil {
@@ -341,9 +374,15 @@ func handleGitOpsDiagnose(ctx context.Context, input diagnoseInput, canonicalKin
 		return nil, nil, fmt.Errorf("failed to minify: %w", err)
 	}
 	gd := &gitopsDiagnosis{Tool: tool}
-	gd.Sync, _, _ = unstructured.NestedString(u.Object, "status", "sync", "status")
-	gd.Health, _, _ = unstructured.NestedString(u.Object, "status", "health", "status")
-	gd.OperationPhase, _, _ = unstructured.NestedString(u.Object, "status", "operationState", "phase")
+	if tool == "flux" {
+		gd.Suspended, _, _ = unstructured.NestedBool(u.Object, "spec", "suspend")
+		gd.Revision, _, _ = unstructured.NestedString(u.Object, "status", "lastAppliedRevision")
+		gd.Ready = fluxReadySummary(u)
+	} else {
+		gd.Sync, _, _ = unstructured.NestedString(u.Object, "status", "sync", "status")
+		gd.Health, _, _ = unstructured.NestedString(u.Object, "status", "health", "status")
+		gd.OperationPhase, _, _ = unstructured.NestedString(u.Object, "status", "operationState", "phase")
+	}
 	resp := diagnoseResponse{
 		Resource:        minified,
 		GitOpsDiagnosis: gd,

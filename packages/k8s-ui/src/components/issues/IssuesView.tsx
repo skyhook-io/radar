@@ -257,6 +257,12 @@ function Diagnosis({ issue }: { issue: Issue }) {
           {headline ? <span className="text-theme-text-secondary"> — {headline}</span> : null}
         </p>
       )}
+      {/* For non-cause issues whose message was normalized to a short headline
+          (e.g. image-pull), keep the precise raw kubelet/containerd detail. The
+          cause branch shows its own raw block below. */}
+      {!issue.cause && detail ? (
+        <p className="break-words font-mono text-xs leading-relaxed text-theme-text-tertiary">{detail}</p>
+      ) : null}
       {issue.action ? (
         <p className="text-sm leading-relaxed text-theme-text-secondary">
           <span className="font-medium text-theme-text-primary">Next step: </span>
