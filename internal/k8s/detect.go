@@ -807,14 +807,14 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				continue
 			}
 			if resize := pvcResizeProblem(pvc); resize.reason != "" {
-				// Resize operations happen after the PVC existed, but only claim
-				// started_after_resource_was_healthy when the error condition carries a real
-				// LTT. Without one, Duration falls back to resource age and
-				// first_seen would contradict the label (same rule as the
-				// Lost/Failed sites).
+				// Timing requires a real condition LTT — without one, Duration
+				// falls back to resource age and first_seen would contradict the
+				// label (same rule as the Lost/Failed sites). With one, run the
+				// classifier like every other site: a resize error moments after
+				// PVC creation is at-creation/gray, not a post-healthy regression.
 				var resizeIssueTiming IssueTimingResult
 				if !resize.lastTransitionTime.IsZero() {
-					resizeIssueTiming = IssueTimingResult{IssueTiming: "started_after_resource_was_healthy", Basis: "condition"}
+					resizeIssueTiming = IssueTimingFromConditionLTT(resize.lastTransitionTime.Time, pvc.CreationTimestamp.Time, "condition")
 				}
 				problems = append(problems, Detection{
 					Kind:             "PersistentVolumeClaim",
