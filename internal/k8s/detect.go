@@ -392,18 +392,37 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 						depAge := now.Sub(dep.CreationTimestamp.Time)
 						podAge := now.Sub(pod.CreationTimestamp.Time)
 						podCreatedWithDeploy := depAge > 0 && (depAge-podAge) < 60*time.Second
-						if depAge <= maxDeployAgeForProximityIssueTiming && (podCreatedWithDeploy || restartCount > 0) {
+						// Replacement detection anchors on the pod's owning ReplicaSet,
+						// not restartCount: backoff recreations stay in the original RS
+						// (created with the Deployment), while a mid-life rollout or
+						// scale-up creates a NEW RS — its crashing pods are a later
+						// regression and must not be backdated to deploy time.
+						rsCreatedWithDeploy := false
+						if !podCreatedWithDeploy && restartCount > 0 {
+							if rsLister := cache.ReplicaSets(); rsLister != nil {
+								for _, ref := range pod.OwnerReferences {
+									if ref.Kind != "ReplicaSet" {
+										continue
+									}
+									if rs, rsErr := rsLister.ReplicaSets(pod.Namespace).Get(ref.Name); rsErr == nil {
+										rsCreatedWithDeploy = rs.CreationTimestamp.Time.Sub(dep.CreationTimestamp.Time) < 60*time.Second
+									}
+									break
+								}
+							}
+						}
+						if depAge <= maxDeployAgeForProximityIssueTiming && (podCreatedWithDeploy || rsCreatedWithDeploy) {
 							// Young deployment (<15min): this pod has been crashing since
 							// near creation. Two sub-cases:
 							//   - Original pod (created within 60s of dep): use pod
 							//     creation as the failingSince proxy.
-							//   - Replacement pod (restartCount>0, created later due to
-							//     backoff): the original pod crashed near dep creation but
-							//     the current pod was recreated minutes later — use dep
-							//     creation as failingSince so healthyFor≈0, which the slop
-							//     rule classifies as started_at_resource_creation.
+							//   - Backoff replacement (restartCount>0 in the original RS,
+							//     recreated minutes later): the original pod crashed near
+							//     dep creation — use dep creation as failingSince so
+							//     healthyFor≈0, which the slop rule classifies as
+							//     started_at_resource_creation.
 							failingSince := pod.CreationTimestamp.Time
-							if restartCount > 0 && !podCreatedWithDeploy {
+							if !podCreatedWithDeploy {
 								failingSince = dep.CreationTimestamp.Time
 							}
 							podIssueTiming = IssueTimingFromConditionLTT(failingSince, dep.CreationTimestamp.Time, "pod_creation")
@@ -1196,18 +1215,18 @@ func terminatingProblem(kind, group string, obj metav1.Object, now time.Time) (D
 	// create-then-delete churn.
 	timingR := IssueTimingFromConditionLTT(obj.GetDeletionTimestamp().Time, obj.GetCreationTimestamp().Time, "deletion")
 	return Detection{
-		Kind:            kind,
-		Group:           group,
-		Namespace:       obj.GetNamespace(),
-		Name:            obj.GetName(),
-		Severity:        severity,
-		Reason:          "Terminating stuck",
-		Message:         msg,
-		Fingerprint:     "lifecycle:terminating",
-		Age:             FormatAge(now.Sub(obj.GetCreationTimestamp().Time)),
-		AgeSeconds:      int64(now.Sub(obj.GetCreationTimestamp().Time).Seconds()),
-		Duration:        FormatAge(duration),
-		DurationSeconds: int64(duration.Seconds()),
+		Kind:             kind,
+		Group:            group,
+		Namespace:        obj.GetNamespace(),
+		Name:             obj.GetName(),
+		Severity:         severity,
+		Reason:           "Terminating stuck",
+		Message:          msg,
+		Fingerprint:      "lifecycle:terminating",
+		Age:              FormatAge(now.Sub(obj.GetCreationTimestamp().Time)),
+		AgeSeconds:       int64(now.Sub(obj.GetCreationTimestamp().Time).Seconds()),
+		Duration:         FormatAge(duration),
+		DurationSeconds:  int64(duration.Seconds()),
 		IssueTiming:      timingR.IssueTiming,
 		IssueTimingBasis: timingR.Basis,
 	}, true

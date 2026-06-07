@@ -1730,7 +1730,7 @@ func TestDetectProblems_PodIssueTimingCreationProximity(t *testing.T) {
 
 	now := time.Now()
 	controller := true
-	crashloopPod := func(name, rsName string, created time.Time) *corev1.Pod {
+	crashloopPodR := func(name, rsName string, created time.Time, restarts int32) *corev1.Pod {
 		return &corev1.Pod{
 			ObjectMeta: metav1.ObjectMeta{
 				Name: name, Namespace: "prod", CreationTimestamp: metav1.NewTime(created),
@@ -1739,11 +1739,15 @@ func TestDetectProblems_PodIssueTimingCreationProximity(t *testing.T) {
 			Status: corev1.PodStatus{
 				Phase: corev1.PodRunning,
 				ContainerStatuses: []corev1.ContainerStatus{{
-					Name:  "app",
-					State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+					Name:         "app",
+					RestartCount: restarts,
+					State:        corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
 				}},
 			},
 		}
+	}
+	crashloopPod := func(name, rsName string, created time.Time) *corev1.Pod {
+		return crashloopPodR(name, rsName, created, 0)
 	}
 	rs := func(name, depName string, created time.Time) *appsv1.ReplicaSet {
 		return &appsv1.ReplicaSet{ObjectMeta: metav1.ObjectMeta{
@@ -1763,6 +1767,17 @@ func TestDetectProblems_PodIssueTimingCreationProximity(t *testing.T) {
 		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "veteran", Namespace: "prod", CreationTimestamp: metav1.NewTime(veteranCreated)}},
 		rs("veteran-1", "veteran", veteranCreated),
 		crashloopPod("veteran-1-abc", "veteran-1", veteranCreated.Add(30*time.Second)),
+		// Backoff replacement: pod recreated 4m after the dep, but in the
+		// ORIGINAL RS (created with the dep) with restarts → backdate to deploy.
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "replaced", Namespace: "prod", CreationTimestamp: metav1.NewTime(now.Add(-10 * time.Minute))}},
+		rs("replaced-1", "replaced", now.Add(-10*time.Minute)),
+		crashloopPodR("replaced-1-abc", "replaced-1", now.Add(-6*time.Minute), 4),
+		// Mid-life rollout regression: NEW RS created 2m ago on a 10m-old dep;
+		// its crashing pod must NOT be backdated to deploy time.
+		&appsv1.Deployment{ObjectMeta: metav1.ObjectMeta{Name: "midroll", Namespace: "prod", CreationTimestamp: metav1.NewTime(now.Add(-10 * time.Minute))}},
+		rs("midroll-1", "midroll", now.Add(-10*time.Minute)),
+		rs("midroll-2", "midroll", now.Add(-2*time.Minute)),
+		crashloopPodR("midroll-2-abc", "midroll-2", now.Add(-90*time.Second), 3),
 	)
 
 	if err := InitTestResourceCache(client); err != nil {
@@ -1787,5 +1802,13 @@ func TestDetectProblems_PodIssueTimingCreationProximity(t *testing.T) {
 	veteran, ok := lookupProblem(problems, "Pod", "veteran-1-abc", "CrashLoopBackOff")
 	if !ok || veteran.IssueTiming != "" || veteran.IssueTimingBasis != "" {
 		t.Errorf("veteran pod issue_timing = (%q, %q), want omitted; ok=%v", veteran.IssueTiming, veteran.IssueTimingBasis, ok)
+	}
+	replaced, ok := lookupProblem(problems, "Pod", "replaced-1-abc", "CrashLoopBackOff")
+	if !ok || replaced.IssueTiming != "started_at_resource_creation" || replaced.IssueTimingBasis != "pod_creation" {
+		t.Errorf("backoff-replacement pod issue_timing = (%q, %q), want (started_at_resource_creation, pod_creation); ok=%v", replaced.IssueTiming, replaced.IssueTimingBasis, ok)
+	}
+	midroll, ok := lookupProblem(problems, "Pod", "midroll-2-abc", "CrashLoopBackOff")
+	if !ok || midroll.IssueTiming == "started_at_resource_creation" {
+		t.Errorf("mid-rollout pod in a new RS must not be backdated to deploy time, got (%q, %q); ok=%v", midroll.IssueTiming, midroll.IssueTimingBasis, ok)
 	}
 }
