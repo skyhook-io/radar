@@ -2358,7 +2358,17 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 	for _, name := range names {
 		oldC, oldOK := oldContainers[name]
 		newC, newOK := newContainers[name]
-		if !oldOK || !newOK {
+		// An added or removed container is itself the meaningful change — one
+		// row naming it (with its image), not a per-field fan-out of its
+		// entire config against nothing.
+		if !oldOK {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s]", name), OldValue: nil, NewValue: newC.Image})
+			summary = append(summary, fmt.Sprintf("container %s added (%s)", name, truncateImage(newC.Image)))
+			continue
+		}
+		if !newOK {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s]", name), OldValue: oldC.Image, NewValue: nil})
+			summary = append(summary, fmt.Sprintf("container %s removed", name))
 			continue
 		}
 		for _, change := range diffContainerEnv(name, oldC.Env, newC.Env) {

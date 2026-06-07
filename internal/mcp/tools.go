@@ -1055,7 +1055,12 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 	}
 
 	if includes["changes"] {
-		if _, ok := result["recentMeaningfulChanges"]; !ok {
+		// The handler may have already attempted changes (data OR error key set).
+		// Gate on both — retrying after a recorded failure could attach a fresh
+		// payload next to the stale error, handing clients a contradictory result.
+		_, hasChanges := result["recentMeaningfulChanges"]
+		_, hasChangesErr := result["recentMeaningfulChangesError"]
+		if !hasChanges && !hasChangesErr {
 			if changes, err := meaningfulchanges.RecentForResource(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit); err == nil {
 				result["recentMeaningfulChanges"] = changes
 			} else {
