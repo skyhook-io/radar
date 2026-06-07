@@ -441,6 +441,15 @@ func isWorkloadKind(kind string) bool {
 }
 
 func canonicalKind(kind string) string {
+	// Discovery is the authority: lowercase-keyed by kind AND plural, yields
+	// the exact PascalCase Kind for everything on the cluster, CRDs included.
+	// The static table below only covers the window before discovery exists
+	// (cold start, context switch) and kinds not installed on this cluster.
+	if d := k8s.GetResourceDiscovery(); d != nil {
+		if res, ok := d.GetResource(strings.TrimSpace(kind)); ok && res.Kind != "" {
+			return res.Kind
+		}
+	}
 	switch strings.ToLower(strings.TrimSpace(kind)) {
 	case "cm", "configmap", "configmaps":
 		return "ConfigMap"
