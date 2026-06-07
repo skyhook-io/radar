@@ -75,18 +75,22 @@ func TestCompose_NormalizesProblemSeverity(t *testing.T) {
 			{Kind: "Deployment", Namespace: "ns", Name: "a", Severity: "critical", Reason: "down"},
 			{Kind: "Deployment", Namespace: "ns", Name: "b", Severity: "high", Reason: "slow"},
 			{Kind: "Deployment", Namespace: "ns", Name: "c", Severity: "medium", Reason: "warn"},
+			// "alert" is the intermediate insights tier; it must map UP to
+			// critical, not down to warning (a future alert-emitting detector
+			// must not be silently downgraded).
+			{Kind: "Deployment", Namespace: "ns", Name: "d", Severity: "alert", Reason: "stuck"},
 		},
 	}
 	out := Compose(p, Filters{})
-	if len(out) != 3 {
+	if len(out) != 4 {
 		t.Fatalf("got %d issues", len(out))
 	}
 	bySev := map[Severity]int{}
 	for _, i := range out {
 		bySev[i.Severity]++
 	}
-	if bySev[SeverityCritical] != 1 || bySev[SeverityWarning] != 2 {
-		t.Fatalf("severity normalization wrong: %+v", bySev)
+	if bySev[SeverityCritical] != 2 || bySev[SeverityWarning] != 2 {
+		t.Fatalf("severity normalization wrong (alert→critical, high/medium→warning): %+v", bySev)
 	}
 }
 

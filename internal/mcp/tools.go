@@ -163,9 +163,9 @@ func registerTools(server *mcp.Server) {
 
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "diagnose",
-		Description: "Use when the agent's decision is 'this workload is broken — find the " +
-			"root cause / localize the failure'. Bundles for a single Pod/Deployment/" +
-			"StatefulSet/DaemonSet: the resource (Kubernetes-shaped detail) + diagnostic " +
+		Description: "Use when the agent's decision is 'this workload or GitOps reconciler " +
+			"is broken — find the root cause / localize the failure'. For a single " +
+			"Pod/Deployment/StatefulSet/DaemonSet, bundles: the resource (Kubernetes-shaped detail) + diagnostic " +
 			"resourceContext (managedBy, exposes, selectedBy, uses, runsOn, " +
 			"issue/audit/policy rollups) + current AND previous container logs across the " +
 			"workload's pods + recent Warning events filtered to this resource + a " +
@@ -173,14 +173,16 @@ func registerTools(server *mcp.Server) {
 			"ConfigMaps (no Secret content) + a " +
 			"startupBlockers section when the workload can't reach Running (unschedulable " +
 			"with the offending node constraint named, admission/quota rejection, or a " +
-			"post-bind CNI/volume stall). Use for " +
+			"post-bind CNI/volume stall). For Application/Kustomization/HelmRelease, returns " +
+			"the reconciler resource + GitOps status summary + related parsed issues " +
+			"(cause/action/remediation), without pod-log fan-out. Use for " +
 			"CrashLoopBackOff, OOMKills, failed deploys, image-pull errors, readiness " +
-			"flaps, scheduling failures, error-spewing services, or any workload " +
+			"flaps, scheduling failures, error-spewing services, GitOps sync/health failures, or any workload " +
 			"root-causing where you would otherwise call get_resource → events → " +
 			"get_pod_logs → get_pod_logs(previous=true) in sequence — this returns the " +
 			"same data in one round-trip. If you only need ONE facet (e.g. just spec, " +
-			"just logs), prefer the targeted tool. Not for CRDs or non-workload kinds; " +
-			"use get_resource (with optional include=events) for those.",
+			"just logs), prefer the targeted tool. For other CRDs or non-workload kinds, " +
+			"use get_resource (with optional include=events).",
 		Annotations: readOnly,
 	}, logToolCall("diagnose", handleDiagnose))
 
@@ -312,8 +314,8 @@ func registerTools(server *mcp.Server) {
 			"PolicyReport violations are not in either — they surface per-resource via " +
 			"get_resource's resourceContext policy rollup. " +
 			"After identifying a suspect issue, call diagnose when the affected resource " +
-			"is a workload (Pod/Deployment/StatefulSet/DaemonSet) — it bundles spec + " +
-			"logs + events + context in one call. For non-workload kinds, call " +
+			"is a workload (Pod/Deployment/StatefulSet/DaemonSet) or GitOps reconciler " +
+			"(Application/Kustomization/HelmRelease). For other non-workload kinds, call " +
 			"get_resource. Use get_neighborhood when the failure likely crosses " +
 			"Services/workloads/Pods/dependencies. Use namespace for app-local triage; " +
 			"omit it when the root may be cluster-scoped or outside the app namespace.",
@@ -521,7 +523,7 @@ type issuesInput struct {
 	Severity  string `json:"severity,omitempty" jsonschema:"comma-separated: critical,warning"`
 	Kind      string `json:"kind,omitempty" jsonschema:"comma-separated kind filter (e.g. Deployment,Pod)"`
 	Limit     int    `json:"limit,omitempty" jsonschema:"max issues returned (default 200, max 1000)"`
-	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity (critical|warning), category (e.g. crashloop, image_pull_failed, missing_config_ref, gitops_sync_failed), category_group (startup|runtime|scheduling|configuration|networking|storage|scaling|security|control_plane; runtime here is an issue taxonomy group, not issue_timing), source (problem=built-in Radar detector, missing_ref=dangling by-name reference, scheduling=pod startup blocker, condition=False controller/CRD condition), kind, group, ns (the namespace — use 'ns', not 'namespace' which is a CEL reserved word), name, reason, message, count (int, the affected-resource fan-out), grouping_scope (workload|service|node|…), restart_count (int), last_terminated_reason, first_seen + last_seen (unix seconds; last_seen churns to compose-time), issue_timing (string timing evidence: 'started_at_resource_creation' = evidence places the failing state during resource creation or first reconciliation; 'started_after_resource_was_healthy' = evidence shows a meaningful healthy window before the failing condition appeared; absent = Radar has no clean signal, do NOT infer timing from age alone; this is timing evidence, not a root-cause verdict), issue_timing_basis (string: evidence used — 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec'). For cross-cluster scoping use clusters= (not a CEL predicate). Examples: 'severity == \"critical\" && count > 5', 'category_group == \"startup\"', 'restart_count > 10', 'issue_timing == \"started_after_resource_was_healthy\"', 'issue_timing == \"started_at_resource_creation\"'"`
+	Filter    string `json:"filter,omitempty" jsonschema:"optional CEL boolean expression run against each composed Issue. Bindings: severity (critical|warning), category (e.g. crashloop, image_pull_failed, missing_config_ref, gitops_sync_failed), category_group (startup|runtime|scheduling|configuration|networking|storage|scaling|security|control_plane; runtime here is an issue taxonomy group, not issue_timing), source (problem=built-in Radar detector, missing_ref=dangling by-name reference, scheduling=pod startup blocker, condition=False controller/CRD condition), kind, group, ns (the namespace — use 'ns', not 'namespace' which is a CEL reserved word), name, reason, message, cause, action, remediation_kind, remediation_target, count (int, the affected-resource fan-out), grouping_scope (workload|service|node|…), restart_count (int), last_terminated_reason, operation_retry_count (int, a GitOps controller's sync-operation retries — distinct from restart_count), stuck (bool, issue not expected to self-recover), issue_timing (string timing evidence: 'started_at_resource_creation' = evidence places the failing state during resource creation or first reconciliation; 'started_after_resource_was_healthy' = evidence shows a meaningful healthy window before the failing condition appeared; absent = Radar has no clean signal, do NOT infer timing from age alone; this is timing evidence, not a root-cause verdict), issue_timing_basis (string: evidence used — 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec'), first_seen + last_seen (unix seconds — prefer first_seen for onset/age; last_seen churns to compose-time). For cross-cluster scoping use clusters= (not a CEL predicate). Examples: 'severity == \"critical\" && count > 5', 'category_group == \"startup\"', 'restart_count > 10', 'remediation_kind == \"create-namespace\"', 'stuck && operation_retry_count >= 5', 'issue_timing == \"started_after_resource_was_healthy\"', 'first_seen < timestamp(\"2026-05-01T00:00:00Z\").getSeconds()'"`
 }
 
 // Tool handlers

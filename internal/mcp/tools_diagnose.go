@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sort"
@@ -12,6 +13,7 @@ import (
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/issues"
@@ -23,13 +25,11 @@ import (
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
-// diagnoseInput is the one-shot debug bundle request. Kind is restricted
-// to pod / deployment / statefulset / daemonset because diagnose resolves
-// a pod set (workload→selector→pods) for log fan-out; CRDs have no
-// comparable pod resolution.
+// diagnoseInput is the one-shot debug bundle request. Workloads resolve to a
+// pod set for log fan-out; GitOps reconcilers take a no-pods status path.
 type diagnoseInput struct {
-	Kind      string `json:"kind" jsonschema:"workload kind: pod, deployment, statefulset, or daemonset"`
-	Namespace string `json:"namespace" jsonschema:"workload namespace"`
+	Kind      string `json:"kind" jsonschema:"kind to diagnose: a workload (pod, deployment, statefulset, daemonset) for logs+events+startup blockers, or a GitOps reconciler (application, kustomization, helmrelease) for sync/health summary + parsed failure cause"`
+	Namespace string `json:"namespace" jsonschema:"resource namespace"`
 	Name      string `json:"name" jsonschema:"resource name"`
 	Container string `json:"container,omitempty" jsonschema:"specific container; defaults to all containers across the workload's pods"`
 	TailLines int    `json:"tail_lines,omitempty" jsonschema:"lines per pod/container per stream (current AND previous), default 100"`
@@ -78,6 +78,19 @@ type diagnoseResponse struct {
 	// "resource is being deleted", "managed by Helm, edits may revert",
 	// "condition has been False since creation". Empty when nothing notable.
 	Warnings []string `json:"warnings,omitempty"`
+	// GitOpsDiagnosis is set only for GitOps reconcilers (Argo Application /
+	// Flux Kustomization / HelmRelease), which have no pods — see gitopsDiagnosis.
+	GitOpsDiagnosis *gitopsDiagnosis `json:"gitopsDiagnosis,omitempty"`
+}
+
+// gitopsDiagnosis is the status summary for a GitOps reconciler. The actionable
+// cause/remediation is NOT duplicated here — it flows via diagnoseResponse.
+// RelatedIssues, which carries the parsed gitops_* issue for the same object.
+type gitopsDiagnosis struct {
+	Tool           string `json:"tool"`                     // argocd | flux
+	Sync           string `json:"sync,omitempty"`           // Argo status.sync.status
+	Health         string `json:"health,omitempty"`         // Argo status.health.status
+	OperationPhase string `json:"operationPhase,omitempty"` // Argo status.operationState.phase
 }
 
 // startupBlocker is the compact row diagnose embeds for one reason a workload
@@ -143,15 +156,21 @@ func podTotalRestarts(p *corev1.Pod) int32 {
 }
 
 func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseInput) (*mcp.CallToolResult, any, error) {
-	kindNorm := normalizeDiagnoseKind(input.Kind)
-	if kindNorm == "" {
-		return nil, nil, fmt.Errorf("invalid kind %q: must be pod, deployment, statefulset, or daemonset", input.Kind)
-	}
 	if input.Namespace == "" {
 		return nil, nil, fmt.Errorf("namespace is required")
 	}
 	if input.Name == "" {
 		return nil, nil, fmt.Errorf("name is required")
+	}
+	// GitOps reconcilers (Argo Application / Flux Kustomization / HelmRelease)
+	// have no pods, so they take a dedicated path: reconciler status summary +
+	// the parsed failure issue (via RelatedIssues), no log/pod fan-out.
+	if gk, group, tool, ok := gitopsDiagnoseTarget(input.Kind); ok {
+		return handleGitOpsDiagnose(ctx, input, gk, group, tool)
+	}
+	kindNorm := normalizeDiagnoseKind(input.Kind)
+	if kindNorm == "" {
+		return nil, nil, fmt.Errorf("invalid kind %q: must be pod, deployment, statefulset, daemonset, application, kustomization, or helmrelease", input.Kind)
 	}
 
 	if !checkNamespaceAccess(ctx, input.Namespace) {
@@ -276,6 +295,61 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 	}
 	resp.DNSContext = dnsContextForDiagnose(ctx, cache, obj, pods, resp.LogsCurrent, resp.LogsPrevious, resp.Events)
 	resp.Warnings = k8score.EnrichRuntimeObjectWarnings(obj)
+	return toJSONResult(resp)
+}
+
+// gitopsDiagnoseTarget recognizes the GitOps reconciler kinds diagnose handles
+// without a pod set, returning the canonical Kind, API group, and tool label.
+func gitopsDiagnoseTarget(kind string) (canonicalKind, group, tool string, ok bool) {
+	switch strings.ToLower(strings.TrimSpace(kind)) {
+	case "application", "applications", "app":
+		return "Application", "argoproj.io", "argocd", true
+	case "kustomization", "kustomizations":
+		return "Kustomization", "kustomize.toolkit.fluxcd.io", "flux", true
+	case "helmrelease", "helmreleases", "hr":
+		return "HelmRelease", "helm.toolkit.fluxcd.io", "flux", true
+	}
+	return "", "", "", false
+}
+
+// handleGitOpsDiagnose is the no-pods diagnose path for GitOps reconcilers:
+// reconciler status summary + the parsed failure issue (RelatedIssues). It does
+// NOT reimplement the insights builder — the issues engine already classifies
+// and parses the reconciler's failure (cause/action/remediation), so this stays
+// a thin status read.
+func handleGitOpsDiagnose(ctx context.Context, input diagnoseInput, canonicalKind, group, tool string) (*mcp.CallToolResult, any, error) {
+	if !checkNamespaceAccess(ctx, input.Namespace) {
+		return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
+	}
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return nil, nil, fmt.Errorf("not connected to cluster")
+	}
+	u, err := cache.GetDynamicWithGroup(ctx, canonicalKind, input.Namespace, input.Name, group)
+	if err != nil {
+		// Distinguish "the CRD isn't installed / not yet discovered" from a
+		// genuinely absent object — telling an agent "resource not found" when
+		// the GitOps controller isn't even installed sends it debugging the
+		// wrong thing.
+		if errors.Is(err, k8s.ErrUnknownDynamicKind) {
+			return nil, nil, fmt.Errorf("%s (%s) is not installed or not yet discovered in this cluster — is %s running?", canonicalKind, group, tool)
+		}
+		return nil, nil, fmt.Errorf("resource not found: %w", err)
+	}
+	minified, err := aicontext.Minify(u, aicontext.LevelDetail)
+	if err != nil {
+		return nil, nil, fmt.Errorf("failed to minify: %w", err)
+	}
+	gd := &gitopsDiagnosis{Tool: tool}
+	gd.Sync, _, _ = unstructured.NestedString(u.Object, "status", "sync", "status")
+	gd.Health, _, _ = unstructured.NestedString(u.Object, "status", "health", "status")
+	gd.OperationPhase, _, _ = unstructured.NestedString(u.Object, "status", "operationState", "phase")
+	resp := diagnoseResponse{
+		Resource:        minified,
+		GitOpsDiagnosis: gd,
+		RelatedIssues:   issues.RelatedIssues(issues.NewCacheProvider(), []string{input.Namespace}, group, canonicalKind, input.Namespace, input.Name),
+		Warnings:        k8score.EnrichRuntimeObjectWarnings(u),
+	}
 	return toJSONResult(resp)
 }
 

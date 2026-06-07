@@ -136,6 +136,49 @@ func TestCompileIssueFilter_SeverityCount(t *testing.T) {
 	}
 }
 
+// TestCompileIssueFilter_StuckAndRetryCount pins that the GitOps operation
+// signals are CEL-filterable for agents (e.g. find stuck, high-retry failures).
+// stuck is a bool — exercises the BindingBool env type.
+func TestCompileIssueFilter_StuckAndRetryCount(t *testing.T) {
+	f, err := CompileIssueFilter(`stuck && operation_retry_count >= 5`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	ok, err := f.Match(map[string]any{"stuck": true, "operation_retry_count": int64(5)})
+	if err != nil || !ok {
+		t.Fatalf("expected match, ok=%v err=%v", ok, err)
+	}
+	ok, _ = f.Match(map[string]any{"stuck": false, "operation_retry_count": int64(9)})
+	if ok {
+		t.Fatal("expected no match when not stuck")
+	}
+}
+
+func TestCompileIssueFilter_DiagnosisFields(t *testing.T) {
+	f, err := CompileIssueFilter(`remediation_kind == "create-namespace" && remediation_target == "demo" && cause.contains("namespace") && action == ""`)
+	if err != nil {
+		t.Fatalf("compile: %v", err)
+	}
+	ok, err := f.Match(map[string]any{
+		"remediation_kind":   "create-namespace",
+		"remediation_target": "demo",
+		"cause":              "The destination namespace does not exist.",
+		"action":             "",
+	})
+	if err != nil || !ok {
+		t.Fatalf("expected match, ok=%v err=%v", ok, err)
+	}
+	ok, _ = f.Match(map[string]any{
+		"remediation_kind":   "",
+		"remediation_target": "",
+		"cause":              "The destination namespace does not exist.",
+		"action":             "",
+	})
+	if ok {
+		t.Fatal("expected no match without structured remediation")
+	}
+}
+
 func TestCachedObjectFilter_HitsCache(t *testing.T) {
 	expr := `kind == "Service"`
 	f1, err := CachedObjectFilter(expr)

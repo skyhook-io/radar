@@ -23,11 +23,23 @@ func resolveGroup(group, kind string) string {
 	return resourceid.GroupForBuiltinKind(kind)
 }
 
-func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
-	sev := SeverityWarning
-	if p.Severity == "critical" {
-		sev = SeverityCritical
+// issuesSeverity maps a detector/insights severity token onto the issuesapi
+// two-tier wire vocabulary. The live-issues stream is critical|warning only
+// (info-tier detections are dropped upstream in Compose). "alert" — the
+// intermediate insights tier — collapses to critical so a GitOps detector
+// that emits alert (e.g. a stuck-drift loop) is NOT silently downgraded to
+// warning; every other token (high, medium, warning, "") maps to warning.
+func issuesSeverity(token string) Severity {
+	switch token {
+	case "critical", "alert":
+		return SeverityCritical
+	default:
+		return SeverityWarning
 	}
+}
+
+func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
+	sev := issuesSeverity(p.Severity)
 	since := now.Add(-time.Duration(p.DurationSeconds) * time.Second)
 	if p.DurationSeconds == 0 && p.AgeSeconds > 0 {
 		// Detectors that don't track how long the problem has persisted leave
@@ -45,6 +57,12 @@ func fromProblem(p k8s.Detection, now time.Time, source Source) Issue {
 		Name:                 p.Name,
 		Reason:               p.Reason,
 		Message:              p.Message,
+		Cause:                p.Cause,
+		Action:               p.Action,
+		RemediationKind:      p.RemediationKind,
+		RemediationTarget:    p.RemediationTarget,
+		OperationRetryCount:  p.OperationRetryCount,
+		Stuck:                p.Stuck,
 		Fingerprint:          p.Fingerprint,
 		FirstSeen:            since,
 		LastSeen:             now,

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -18,6 +19,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 
 	"github.com/skyhook-io/radar/internal/auth"
+	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	gitopsinsights "github.com/skyhook-io/radar/pkg/gitops/insights"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
@@ -632,6 +634,14 @@ type insightsResolver struct {
 	cache             *k8s.ResourceCache
 	allowedNamespaces []string
 	canAccess         func(group, kind, namespace, name string) bool
+
+	// The cluster-wide issue set is composed at most once per insights request
+	// (lazily, only if a degraded managed resource asks for it) and reused
+	// across every ResourceProblems lookup — a full Compose per managed
+	// resource on a 2s-polling detail page would be O(resources × cluster).
+	composeOnce     sync.Once
+	composedFlat    []issues.Issue
+	composedGrouped []issues.Issue
 }
 
 func newInsightsResolver(ctx context.Context, cache *k8s.ResourceCache, allowed []string, canAccess func(group, kind, namespace, name string) bool) *insightsResolver {
@@ -661,6 +671,40 @@ func (r *insightsResolver) GetLive(group, kind, namespace, name string) *unstruc
 		return nil
 	}
 	return obj
+}
+
+// ResourceProblems implements gitopsinsights.Resolver. It returns the workload
+// "why" (crashloop / oom / image-pull / unschedulable / pvc-pending) the
+// cluster-wide issues engine already classified for a managed resource, so the
+// detail page can show it inline behind Argo's coarse Degraded/Missing. Scoped
+// to the same namespace allowlist + per-resource access gate as GetLive; an
+// RBAC-blocked lookup returns empty, which the caller renders as generic
+// "go inspect" guidance rather than implying the resource is healthy.
+func (r *insightsResolver) ResourceProblems(group, kind, namespace, name string) []gitopsinsights.ResourceProblem {
+	if r == nil || r.cache == nil {
+		return nil
+	}
+	if !r.namespaceAllowed(namespace) {
+		return nil
+	}
+	if r.canAccess != nil && !r.canAccess(group, kind, namespace, name) {
+		return nil
+	}
+	r.composeOnce.Do(func() {
+		r.composedFlat = issues.Compose(issues.NewCacheProvider(), issues.Filters{Namespaces: r.allowedNamespaces, Limit: issues.NoLimit})
+		r.composedGrouped = issues.GroupIssues(r.composedFlat)
+	})
+	related := issues.RelatedIssuesFrom(r.composedFlat, r.composedGrouped, group, kind, namespace, name)
+	out := make([]gitopsinsights.ResourceProblem, 0, len(related))
+	for _, iss := range related {
+		out = append(out, gitopsinsights.ResourceProblem{
+			Reason:   iss.Reason,
+			Message:  iss.Message,
+			Category: string(iss.Category),
+			Severity: string(iss.Severity),
+		})
+	}
+	return out
 }
 
 func (r *insightsResolver) RecentEvents(group, kind, namespace, name string) []gitopsinsights.EventSummary {

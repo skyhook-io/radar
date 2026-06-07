@@ -626,6 +626,7 @@ function GitOpsCompactIssueStack({ issues, onSelectIssue }: { issues: GitOpsIssu
                     <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{issue.scope}</span>
                   </div>
                   <p className="mt-0.5 text-theme-text-secondary">{issue.message}</p>
+                  {issue.cause && <p className="mt-0.5 text-[11px] text-theme-text-tertiary">{issue.cause}</p>}
                   {issue.action && <p className="mt-0.5 text-[11px] text-theme-text-tertiary">{issue.action}</p>}
                 </div>
                 {actionable && ref && (

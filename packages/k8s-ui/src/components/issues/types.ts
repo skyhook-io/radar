@@ -136,6 +136,18 @@ export interface Issue {
 
   reason: string;
   message?: string;
+  /** Parsed domain diagnosis (today GitOps controller errors): plain-English
+   *  cause, suggested next step, and an optional structured one-click fix.
+   *  Server-emitted (omitempty); empty for issues without a parser. */
+  cause?: string;
+  action?: string;
+  remediation_kind?: string;
+  remediation_target?: string;
+  /** Controller-operation retry count (e.g. Argo's "(retried N times)") —
+   *  distinct from restart_count (pod restarts). stuck = not expected to
+   *  self-recover. */
+  operation_retry_count?: number;
+  stuck?: boolean;
   first_seen?: string;
   last_seen?: string;
   /** Affected-resource fan-out, EXCLUDING the subject (the row header).

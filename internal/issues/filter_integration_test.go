@@ -144,6 +144,27 @@ func TestCompose_WithCELFilter_CategoryBinding(t *testing.T) {
 	}
 }
 
+func TestCompose_WithCELFilter_DiagnosisBindings(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{
+				Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "broken-sync",
+				Severity: "critical", Reason: "OperationFailed",
+				Cause: "The destination namespace does not exist.", RemediationKind: "create-namespace", RemediationTarget: "demo",
+			},
+			{Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "other", Severity: "critical", Reason: "OperationFailed"},
+		},
+	}
+	f, err := filter.CompileIssueFilter(`remediation_kind == "create-namespace" && remediation_target == "demo" && cause.contains("namespace")`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, _ := ComposeWithStats(p, Filters{Filter: f})
+	if len(out) != 1 || out[0].Name != "broken-sync" {
+		t.Fatalf("diagnosis filter should keep only the structured-remediation row, got %+v", out)
+	}
+}
+
 func TestCompose_FilterEvalError_StatsPopulated(t *testing.T) {
 	// Reference an unbound-but-syntactically-valid path that won't
 	// resolve on any actual issue row — the dyn-typed env declares

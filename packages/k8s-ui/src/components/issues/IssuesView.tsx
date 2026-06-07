@@ -241,17 +241,44 @@ function Diagnosis({ issue }: { issue: Issue }) {
           .join(' · ')
       : null;
   const { headline, detail } = issueMessageParts(issue);
+  // When the issue carries a parsed plain-English cause (GitOps controller
+  // errors), lead with it — the raw controller message is long and buries the
+  // useful part, and the detector reason ("OperationFailed") just repeats the
+  // category chip. The raw message is kept below as de-emphasized detail.
+  const rawMessage = [headline, detail].filter(Boolean).join(' ');
   return (
     <section className="flex flex-col gap-1">
       <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">What's wrong</h4>
-      <p className="text-sm leading-relaxed text-theme-text-primary">
-        <span className="font-medium">{issue.reason}</span>
-        {headline ? <span className="text-theme-text-secondary"> — {headline}</span> : null}
-      </p>
-      {/* Raw source string kept as secondary detail only when we showed a
-          normalized headline above (e.g. the verbose containerd image-pull
-          error) — so the precise message is never lost, just de-emphasized. */}
-      {detail ? <p className="break-words font-mono text-xs leading-relaxed text-theme-text-tertiary">{detail}</p> : null}
+      {issue.cause ? (
+        <p className="text-sm leading-relaxed text-theme-text-primary">{issue.cause}</p>
+      ) : (
+        <p className="text-sm leading-relaxed text-theme-text-primary">
+          <span className="font-medium">{issue.reason}</span>
+          {headline ? <span className="text-theme-text-secondary"> — {headline}</span> : null}
+        </p>
+      )}
+      {issue.action ? (
+        <p className="text-sm leading-relaxed text-theme-text-secondary">
+          <span className="font-medium text-theme-text-primary">Next step: </span>
+          {issue.action}
+        </p>
+      ) : null}
+      {issue.remediation_kind === 'create-namespace' && issue.remediation_target ? (
+        <p className="text-xs text-theme-text-tertiary">
+          Suggested fix: create namespace <code className="rounded bg-theme-elevated px-1 font-mono">{issue.remediation_target}</code> — apply it from the GitOps detail page.
+        </p>
+      ) : null}
+      {issue.stuck || issue.operation_retry_count ? (
+        <p className="text-xs text-theme-text-tertiary tabular-nums">
+          {issue.stuck ? 'Stuck' : 'Retrying'}
+          {issue.operation_retry_count ? ` · retried ${issue.operation_retry_count}×` : ''}
+        </p>
+      ) : null}
+      {/* Raw controller message, de-emphasized — shown below the parsed cause so
+          the precise error (URLs, resource names) is available without leading. */}
+      {issue.cause && rawMessage ? (
+        <p className="break-words font-mono text-[11px] leading-relaxed text-theme-text-tertiary">{rawMessage}</p>
+      ) : null}
       {crash ? <p className="text-xs text-theme-text-tertiary tabular-nums">{crash}</p> : null}
       {issue.change_context ? (
         <p className="text-xs text-theme-text-tertiary">

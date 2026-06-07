@@ -416,6 +416,19 @@ function AppInner() {
     navigate({ pathname: `/resources/${pluralKind}`, search: newParams.toString() })
   }, [searchParams, navigate])
 
+  // From the Issues queue: a GitOps reconciler subject (Argo Application / Flux
+  // Kustomization / HelmRelease) routes to its rich detail page (tree + insights
+  // + ops), not the generic resource drawer that's a dead-end for it. Member
+  // resources (Pods, Services, …) fall through to the standard resource view.
+  const navigateFromIssue = useCallback((resource: SelectedResource) => {
+    const gitOpsPath = gitOpsRouteForKind(resource.kind, resource.namespace ?? '', resource.name)
+    if (gitOpsPath) {
+      navigate(gitOpsPath)
+      return
+    }
+    navigateToResourceList(resource)
+  }, [navigate, navigateToResourceList])
+
   // Collapse from expanded WorkloadView back to drawer
   const handleCollapseFromExpanded = useCallback(() => {
     suppressViewClearRef.current = true
@@ -1667,12 +1680,13 @@ function AppInner() {
 
         {/* Issues — per-cluster live triage queue (hidden route: not yet in the
             nav `views` list; reachable at /issues). Same shared <IssuesView> the
-            Hub fleet uses; resource clicks open the standard resource drawer. */}
+            Hub fleet uses; a GitOps reconciler subject routes to its detail page,
+            other resources open the standard resource view. */}
         {mainView === 'issues' && (
           <IssuesPane
             namespaces={namespaces}
             onBack={() => setMainView('home')}
-            onNavigateToResource={navigateToResourceList}
+            onNavigateToResource={navigateFromIssue}
           />
         )}
 

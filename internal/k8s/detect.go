@@ -88,6 +88,23 @@ type Detection struct {
 	// Basis values: "condition" | "owner_condition" | "pod_creation" | "deletion" | "phase" | "spec".
 	IssueTiming      string
 	IssueTimingBasis string
+	// Cause / Action / Remediation* carry parsed domain diagnosis (today only
+	// GitOps controller errors, via pkg/gitops/diagnose) so the issues stream
+	// surfaces the same plain-English cause + next-step the GitOps detail page
+	// shows. Empty for detectors without a parser. RemediationKind names a
+	// structured one-click fix (e.g. "create-namespace") and RemediationTarget
+	// the resource it acts on.
+	Cause             string
+	Action            string
+	RemediationKind   string
+	RemediationTarget string
+	// OperationRetryCount / Stuck describe a controller operation that keeps
+	// failing: the retry count parsed from a GitOps controller's message and
+	// whether it has crossed the "no longer transient" threshold. Named
+	// "operation" to distinguish from pod RestartCount above. Stuck is also set
+	// for self-perpetuating states like a stuck-drift loop.
+	OperationRetryCount int
+	Stuck               bool
 }
 
 // podOwnerKindName resolves a Pod's topmost stable controller for issue

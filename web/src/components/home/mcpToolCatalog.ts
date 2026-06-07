@@ -109,10 +109,10 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'diagnose',
-    desc: 'One-call workload root-cause bundle: spec + resourceContext + current AND previous logs across all pods + warning events + startup-blocker analysis. For Pod/Deployment/StatefulSet/DaemonSet.',
+    desc: 'One-call root-cause bundle. Workloads get spec + resourceContext + current AND previous logs across pods + warning events + startup blockers; GitOps reconcilers get status summary + parsed related issues.',
     params: [
-      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, or daemonset' },
-      { arg: 'namespace', required: true, desc: 'workload namespace' },
+      { arg: 'kind', required: true, desc: 'pod, deployment, statefulset, daemonset, application, kustomization, or helmrelease' },
+      { arg: 'namespace', required: true, desc: 'resource namespace' },
       { arg: 'name', required: true, desc: 'resource name' },
       { arg: 'container', desc: 'specific container (defaults to all)' },
       { arg: 'tail_lines', desc: 'lines per pod/stream (default 100)' },

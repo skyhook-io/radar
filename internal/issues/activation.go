@@ -23,11 +23,15 @@ func issueToActivation(i Issue) map[string]any {
 		// `ns` rather than `namespace` — `namespace` is a CEL reserved
 		// identifier and bare references fail at parse time. See
 		// internal/filter.envIssue for the rationale.
-		"ns":      i.Namespace,
-		"name":    i.Name,
-		"reason":  i.Reason,
-		"message": i.Message,
-		"count":   int64(i.Count),
+		"ns":                 i.Namespace,
+		"name":               i.Name,
+		"reason":             i.Reason,
+		"message":            i.Message,
+		"cause":              i.Cause,
+		"action":             i.Action,
+		"remediation_kind":   i.RemediationKind,
+		"remediation_target": i.RemediationTarget,
+		"count":              int64(i.Count),
 		// first_seen is the observed issue age anchor (the axis the queue sorts on);
 		// last_seen churns to compose-time every poll, so `last_seen > X` ("older
 		// than…") is near-useless. Both are int unix seconds.
@@ -37,7 +41,9 @@ func issueToActivation(i Issue) map[string]any {
 		"restart_count":          int64(i.RestartCount),
 		"last_terminated_reason": i.LastTerminatedReason,
 		// Semantics documented on issuesapi.Issue.IssueTiming / IssueTimingBasis.
-		"issue_timing":       i.IssueTiming,
-		"issue_timing_basis": i.IssueTimingBasis,
+		"issue_timing":          i.IssueTiming,
+		"issue_timing_basis":    i.IssueTimingBasis,
+		"operation_retry_count": int64(i.OperationRetryCount),
+		"stuck":                 i.Stuck,
 	}
 }

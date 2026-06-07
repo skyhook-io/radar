@@ -78,9 +78,18 @@ const (
 	CategoryCrossplaneReconcile      Category = "crossplane_reconcile_failed"
 	CategoryOperatorConditionFail    Category = "operator_condition_failed"
 	CategoryGitOpsSyncFailed         Category = "gitops_sync_failed"
-	CategoryWebhookBackendDown       Category = "webhook_backend_down"
-	CategoryControlPlaneNotReady     Category = "control_plane_not_ready"
-	CategoryMachineNotReady          Category = "machine_not_ready"
+	// Specific GitOps failure modes — split out from the gitops_sync_failed
+	// catch-all so the Issues page + MCP can distinguish "couldn't render from
+	// Git" from "applied but a resource failed" from "drifted". gitops_sync_failed
+	// remains the fallback for reasons none of these match.
+	CategoryGitOpsRenderFailed    Category = "gitops_render_failed"    // ComparisonError / Flux build/artifact/source fetch
+	CategoryGitOpsSpecInvalid     Category = "gitops_spec_invalid"     // InvalidSpecError (bad destination/source/project)
+	CategoryGitOpsOperationFailed Category = "gitops_operation_failed" // sync apply failed (operationState / Flux install/upgrade)
+	CategoryGitOpsOutOfSync       Category = "gitops_out_of_sync"      // live state drifted from desired
+	CategoryGitOpsHealthDegraded  Category = "gitops_health_degraded"  // managed resources unhealthy/missing
+	CategoryWebhookBackendDown    Category = "webhook_backend_down"
+	CategoryControlPlaneNotReady  Category = "control_plane_not_ready"
+	CategoryMachineNotReady       Category = "machine_not_ready"
 )
 
 type CategoryGroup string
@@ -141,6 +150,11 @@ var categoryGroup = map[Category]CategoryGroup{
 	CategoryCrossplaneReconcile:      GroupControlPlane,
 	CategoryOperatorConditionFail:    GroupControlPlane,
 	CategoryGitOpsSyncFailed:         GroupControlPlane,
+	CategoryGitOpsRenderFailed:       GroupControlPlane,
+	CategoryGitOpsSpecInvalid:        GroupControlPlane,
+	CategoryGitOpsOperationFailed:    GroupControlPlane,
+	CategoryGitOpsOutOfSync:          GroupControlPlane,
+	CategoryGitOpsHealthDegraded:     GroupControlPlane,
 	CategoryWebhookBackendDown:       GroupControlPlane,
 	CategoryControlPlaneNotReady:     GroupControlPlane,
 	CategoryMachineNotReady:          GroupControlPlane,
@@ -253,18 +267,33 @@ type ClusterDNSFinding struct {
 }
 
 type Issue struct {
-	Severity             Severity           `json:"severity"`
-	Source               Source             `json:"source"`
-	Category             Category           `json:"category"`
-	CategoryGroup        CategoryGroup      `json:"category_group"`
-	ID                   string             `json:"id"`
-	GroupingScope        Scope              `json:"grouping_scope"`
-	Kind                 string             `json:"kind"`
-	Group                string             `json:"group,omitempty"`
-	Namespace            string             `json:"namespace,omitempty"`
-	Name                 string             `json:"name"`
-	Reason               string             `json:"reason"`
-	Message              string             `json:"message,omitempty"`
+	Severity      Severity      `json:"severity"`
+	Source        Source        `json:"source"`
+	Category      Category      `json:"category"`
+	CategoryGroup CategoryGroup `json:"category_group"`
+	ID            string        `json:"id"`
+	GroupingScope Scope         `json:"grouping_scope"`
+	Kind          string        `json:"kind"`
+	Group         string        `json:"group,omitempty"`
+	Namespace     string        `json:"namespace,omitempty"`
+	Name          string        `json:"name"`
+	Reason        string        `json:"reason"`
+	Message       string        `json:"message,omitempty"`
+	// Cause / Action / Remediation* carry parsed domain diagnosis (today GitOps
+	// controller errors). They give the Issues page + MCP the same plain-English
+	// cause + next-step the GitOps detail page shows. All optional — empty for
+	// issues without a parser. RemediationKind names a structured one-click fix
+	// (e.g. "create-namespace"); RemediationTarget is the resource it acts on.
+	Cause             string `json:"cause,omitempty"`
+	Action            string `json:"action,omitempty"`
+	RemediationKind   string `json:"remediation_kind,omitempty"`
+	RemediationTarget string `json:"remediation_target,omitempty"`
+	// OperationRetryCount is the controller-operation retry count (e.g. Argo's
+	// "(retried N times)") — distinct from RestartCount, which is pod/container
+	// restarts. Stuck means the issue is not expected to self-recover (retries
+	// exhausted, or a self-perpetuating drift loop).
+	OperationRetryCount  int                `json:"operation_retry_count,omitempty"`
+	Stuck                bool               `json:"stuck,omitempty"`
 	FirstSeen            time.Time          `json:"first_seen,omitzero"`
 	LastSeen             time.Time          `json:"last_seen,omitzero"`
 	Count                int                `json:"count,omitempty"`
@@ -327,6 +356,7 @@ type BindingType string
 const (
 	BindingString BindingType = "string"
 	BindingInt    BindingType = "int"
+	BindingBool   BindingType = "bool"
 )
 
 type CELBinding struct {
@@ -345,6 +375,10 @@ var CELBindings = []CELBinding{
 	{Name: "name", Type: BindingString},
 	{Name: "reason", Type: BindingString},
 	{Name: "message", Type: BindingString},
+	{Name: "cause", Type: BindingString},
+	{Name: "action", Type: BindingString},
+	{Name: "remediation_kind", Type: BindingString},
+	{Name: "remediation_target", Type: BindingString},
 	{Name: "count", Type: BindingInt},
 	{Name: "first_seen", Type: BindingInt},
 	{Name: "last_seen", Type: BindingInt},
@@ -357,4 +391,6 @@ var CELBindings = []CELBinding{
 	// issue_timing == ""                                    — no confident timing signal.
 	{Name: "issue_timing", Type: BindingString},
 	{Name: "issue_timing_basis", Type: BindingString},
+	{Name: "operation_retry_count", Type: BindingInt},
+	{Name: "stuck", Type: BindingBool},
 }

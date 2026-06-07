@@ -19,8 +19,23 @@ func RelatedIssues(p Provider, namespaces []string, group, kind, namespace, name
 	// what makes member #11..#N in a large fan-out resolve correctly.
 	flat := Compose(p, Filters{Namespaces: namespaces, Limit: NoLimit})
 	grouped := GroupIssues(flat)
+	return RelatedIssuesFrom(flat, grouped, group, kind, namespace, name)
+}
+
+// RelatedIssuesFrom is the matching half of RelatedIssues over an
+// already-composed (flat, grouped) pair. Split out so a caller that needs the
+// related issues for MANY resources in one request (e.g. the GitOps insights
+// resolver enriching every degraded managed resource) can Compose once and
+// match repeatedly, instead of running a full cluster Compose per resource.
+func RelatedIssuesFrom(flat, grouped []Issue, group, kind, namespace, name string) []Issue {
+	// Normalize the query group so a caller passing a raw API group — e.g. the
+	// GitOps L4 bridge forwarding Argo's status.resources[].group, which is ""
+	// for core kinds and "apps" for Deployments — matches composed issues, whose
+	// group was already run through resolveGroup. Comparing raw "" against a
+	// resolved "apps" would silently return nothing for typical workloads.
+	wantGroup := resolveGroup(group, kind)
 	match := func(g, k, ns, n string) bool {
-		return strings.EqualFold(k, kind) && ns == namespace && n == name && g == group
+		return strings.EqualFold(k, kind) && ns == namespace && n == name && resolveGroup(g, k) == wantGroup
 	}
 	matched := make(map[string]bool) // grouped issue IDs the resource touches
 	for _, g := range grouped {      // as the grouped SUBJECT (owner-collapsed)
@@ -109,6 +124,20 @@ func foldGroup(members []Issue) Issue {
 		FirstSeen:            rep.FirstSeen,
 		LastSeen:             rep.LastSeen,
 	}
+	// A parsed diagnosis (cause/action/remediation) describes ONE resource's
+	// failure. Carry it onto the grouped row only when every member that has
+	// one agrees: a single-member group (a GitOps Application is its own
+	// subject) always carries it, but a workload rollup whose members fail for
+	// different reasons (OOMKilled vs ImagePullBackOff) must not present one
+	// member's cause as the whole group's.
+	if dg, ok := agreedDiagnosis(members); ok {
+		g.Cause = dg.Cause
+		g.Action = dg.Action
+		g.RemediationKind = dg.RemediationKind
+		g.RemediationTarget = dg.RemediationTarget
+		g.OperationRetryCount = dg.OperationRetryCount
+		g.Stuck = dg.Stuck
+	}
 
 	var refs []Ref
 	for _, m := range members {
@@ -163,6 +192,33 @@ func foldGroup(members []Issue) Issue {
 	}
 	g.Members = refs
 	return g
+}
+
+// agreedDiagnosis returns the parsed diagnosis shared by a group's members, or
+// ok=false when members carry conflicting diagnoses. Members with no parsed
+// diagnosis (the common case for workload problems today) are ignored — they
+// don't count as disagreement. The full (cause, action, remediation) tuple
+// must match across every member that has one, so a mixed-cause rollup omits
+// the diagnosis rather than misattributing one member's fix to the group.
+func agreedDiagnosis(members []Issue) (Issue, bool) {
+	var picked Issue
+	have := false
+	for _, m := range members {
+		if m.Cause == "" && m.Action == "" && m.RemediationKind == "" && m.RemediationTarget == "" &&
+			m.OperationRetryCount == 0 && !m.Stuck {
+			continue
+		}
+		if !have {
+			picked, have = m, true
+			continue
+		}
+		if m.Cause != picked.Cause || m.Action != picked.Action ||
+			m.RemediationKind != picked.RemediationKind || m.RemediationTarget != picked.RemediationTarget ||
+			m.OperationRetryCount != picked.OperationRetryCount || m.Stuck != picked.Stuck {
+			return Issue{}, false
+		}
+	}
+	return picked, have
 }
 
 // betterRepresentative reports whether cand should replace cur as a group's

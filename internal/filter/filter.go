@@ -17,7 +17,9 @@
 //	CompileIssueFilter — bindings shaped to an issues.Issue:
 //	  severity, source, category, category_group, kind, group, ns,
 //	  name, reason, message, count, first_seen, last_seen, grouping_scope,
-//	  restart_count, last_terminated_reason, issue_timing, issue_timing_basis
+//	  restart_count, last_terminated_reason, cause, action,
+//	  remediation_kind, remediation_target, operation_retry_count, stuck,
+//	  issue_timing, issue_timing_basis
 //	  (full list is authoritative in pkg/issuesapi.CELBindings)
 //
 // Both return a Filter whose Match(activation) yields (bool, error).
@@ -106,6 +108,8 @@ func issueCELVariables() []cel.EnvOption {
 			out = append(out, cel.Variable(b.Name, cel.StringType))
 		case issuesapi.BindingInt:
 			out = append(out, cel.Variable(b.Name, cel.IntType))
+		case issuesapi.BindingBool:
+			out = append(out, cel.Variable(b.Name, cel.BoolType))
 		}
 	}
 	return out

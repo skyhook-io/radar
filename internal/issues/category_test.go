@@ -49,10 +49,17 @@ func TestClassify(t *testing.T) {
 		{"init container stalled", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "InitContainerStalled"}, issuesapi.CategoryInitContainerFailed},
 
 		// problem / GitOps reconcilers (DetectGitOpsProblems → SourceProblem)
-		{"argo app degraded", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "HealthDegraded"}, issuesapi.CategoryGitOpsSyncFailed},
-		{"argo app outofsync", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "OutOfSync"}, issuesapi.CategoryGitOpsSyncFailed},
-		{"flux kustomization problem", classifyInput{Source: SourceProblem, Kind: "Kustomization", APIGroup: "kustomize.toolkit.fluxcd.io", Reason: "ReconciliationFailed"}, issuesapi.CategoryGitOpsSyncFailed},
-		{"flux helmrelease problem", classifyInput{Source: SourceProblem, Kind: "HelmRelease", APIGroup: "helm.toolkit.fluxcd.io", Reason: "InstallFailed"}, issuesapi.CategoryGitOpsSyncFailed},
+		{"argo app degraded", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "HealthDegraded"}, issuesapi.CategoryGitOpsHealthDegraded},
+		{"argo app missing", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "HealthMissing"}, issuesapi.CategoryGitOpsHealthDegraded},
+		{"argo app outofsync", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "OutOfSync"}, issuesapi.CategoryGitOpsOutOfSync},
+		{"argo operation failed", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "OperationFailed"}, issuesapi.CategoryGitOpsOperationFailed},
+		{"argo comparison error is render", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "ComparisonError"}, issuesapi.CategoryGitOpsRenderFailed},
+		{"argo invalid spec", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "InvalidSpecError"}, issuesapi.CategoryGitOpsSpecInvalid},
+		{"argo unknown reason falls back to sync_failed", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "argoproj.io", Reason: "SomethingNovel"}, issuesapi.CategoryGitOpsSyncFailed},
+		{"flux kustomization problem", classifyInput{Source: SourceProblem, Kind: "Kustomization", APIGroup: "kustomize.toolkit.fluxcd.io", Reason: "ReconciliationFailed"}, issuesapi.CategoryGitOpsOperationFailed},
+		{"flux helmrelease problem", classifyInput{Source: SourceProblem, Kind: "HelmRelease", APIGroup: "helm.toolkit.fluxcd.io", Reason: "InstallFailed"}, issuesapi.CategoryGitOpsOperationFailed},
+		{"flux artifact failed is render", classifyInput{Source: SourceProblem, Kind: "Kustomization", APIGroup: "kustomize.toolkit.fluxcd.io", Reason: "ArtifactFailed"}, issuesapi.CategoryGitOpsRenderFailed},
+		{"flux chart not ready is render", classifyInput{Source: SourceProblem, Kind: "HelmRelease", APIGroup: "helm.toolkit.fluxcd.io", Reason: "ChartNotReady"}, issuesapi.CategoryGitOpsRenderFailed},
 		{"flux-looking kustomization group is not gitops", classifyInput{Source: SourceProblem, Kind: "Kustomization", APIGroup: "custom-fluxcd.io", Reason: "ReconciliationFailed"}, issuesapi.CategoryUnknown},
 		{"non-argo Application kind is not gitops", classifyInput{Source: SourceProblem, Kind: "Application", APIGroup: "other.example.com", Reason: "whatever"}, issuesapi.CategoryUnknown},
 
@@ -117,7 +124,7 @@ func TestClassify(t *testing.T) {
 		{"karpenter nodeclaim failed", classifyInput{Source: SourceCondition, Kind: "NodeClaim", APIGroup: "karpenter.sh", Reason: "Ready: LaunchFailed"}, issuesapi.CategoryNodeProvisioningFail},
 		{"crossplane package failed", classifyInput{Source: SourceCondition, Kind: "Provider", APIGroup: "pkg.crossplane.io", Reason: "Healthy: UnhealthyPackageRevision"}, issuesapi.CategoryCrossplaneReconcile},
 		{"generic operator condition", classifyInput{Source: SourceCondition, Kind: "Foo", APIGroup: "example.com", Reason: "Ready=False"}, issuesapi.CategoryOperatorConditionFail},
-		{"flux source repo is gitops", classifyInput{Source: SourceCondition, Kind: "GitRepository", APIGroup: "source.toolkit.fluxcd.io", Reason: "Ready: GitOperationFailed"}, issuesapi.CategoryGitOpsSyncFailed},
+		{"flux source repo is render_failed", classifyInput{Source: SourceCondition, Kind: "GitRepository", APIGroup: "source.toolkit.fluxcd.io", Reason: "Ready: GitOperationFailed"}, issuesapi.CategoryGitOpsRenderFailed},
 		{"argo non-app CRD is not sync", classifyInput{Source: SourceCondition, Kind: "AppProject", APIGroup: "argoproj.io", Reason: "Ready=False"}, issuesapi.CategoryOperatorConditionFail},
 
 		// CAPI: control-plane vs machine layer, gated on the CAPI group.

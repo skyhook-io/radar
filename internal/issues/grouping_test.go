@@ -62,6 +62,69 @@ func TestGroupIssues_FoldsMembersUnderOwner(t *testing.T) {
 	}
 }
 
+// TestGroupIssues_CarriesAgreedDiagnosis pins that a single-member group (e.g.
+// a GitOps Application, which is its own subject) carries the parsed
+// cause/remediation onto the grouped row — without this foldGroup would emit
+// the issue with an empty cause.
+func TestGroupIssues_CarriesAgreedDiagnosis(t *testing.T) {
+	app := Issue{
+		Source: SourceProblem, Kind: "Application", Group: "argoproj.io", Namespace: "argocd", Name: "broken-sync",
+		Reason: "OperationFailed", Severity: SeverityCritical,
+		Cause: "The destination namespace does not exist.", RemediationKind: "create-namespace", RemediationTarget: "demo-broken-sync",
+		Count: 1,
+	}
+	classifyIssue(&app)
+	enrichIdentity(&app)
+	got := GroupIssues([]Issue{app})
+	if len(got) != 1 {
+		t.Fatalf("want 1 grouped row, got %d", len(got))
+	}
+	g := got[0]
+	if g.Cause != app.Cause || g.RemediationKind != "create-namespace" || g.RemediationTarget != "demo-broken-sync" {
+		t.Errorf("grouped row dropped diagnosis: cause=%q kind=%q target=%q", g.Cause, g.RemediationKind, g.RemediationTarget)
+	}
+}
+
+// TestGroupIssues_CarriesLoneDiagnosis pins the "no opinion ≠ disagreement"
+// rule: when one member of a group has a parsed diagnosis and another has none,
+// the lone diagnosis still carries (a blank member is not treated as a
+// conflict). A naive "omit whenever any member lacks a diagnosis" would strip
+// the cause off every mixed workload+GitOps rollup.
+func TestGroupIssues_CarriesLoneDiagnosis(t *testing.T) {
+	dep := Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}
+	t0 := time.Unix(1000, 0)
+	a := flatPod("web-a", "CrashLoopBackOff", SeverityCritical, dep, t0, t0)
+	a.Cause = "Application exited with a config error."
+	b := flatPod("web-b", "CrashLoopBackOff", SeverityCritical, dep, t0, t0) // no cause
+	got := GroupIssues([]Issue{a, b})
+	if len(got) != 1 {
+		t.Fatalf("want 1 grouped row, got %d", len(got))
+	}
+	if got[0].Cause != a.Cause {
+		t.Errorf("lone diagnosis should carry; got cause %q, want %q", got[0].Cause, a.Cause)
+	}
+}
+
+// TestGroupIssues_OmitsConflictingDiagnosis pins the safety rule: when members
+// of one group carry different parsed causes, the grouped row presents none
+// rather than misattributing one member's fix to the whole group.
+func TestGroupIssues_OmitsConflictingDiagnosis(t *testing.T) {
+	dep := Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}
+	t0 := time.Unix(1000, 0)
+	// Same reason → same category → one group; differing parsed causes within it.
+	a := flatPod("web-a", "CrashLoopBackOff", SeverityCritical, dep, t0, t0)
+	a.Cause = "Container ran out of memory."
+	b := flatPod("web-b", "CrashLoopBackOff", SeverityCritical, dep, t0, t0)
+	b.Cause = "Application exited with a config error."
+	got := GroupIssues([]Issue{a, b})
+	if len(got) != 1 {
+		t.Fatalf("want 1 grouped row, got %d", len(got))
+	}
+	if got[0].Cause != "" {
+		t.Errorf("conflicting member causes must yield empty group cause, got %q", got[0].Cause)
+	}
+}
+
 func TestGroupIssues_StandalonePodIsOwnSubject(t *testing.T) {
 	flat := []Issue{flatPod("solo", "CrashLoopBackOff", SeverityCritical, Ref{}, time.Unix(1, 0), time.Unix(1, 0))}
 	got := GroupIssues(flat)
@@ -177,6 +240,42 @@ func TestRelatedIssues_SubjectAndMember(t *testing.T) {
 	}
 	if got := RelatedIssues(p, nil, "apps", "Deployment", "prod", "other"); len(got) != 0 {
 		t.Errorf("RelatedIssues(unrelated) = %d, want 0", len(got))
+	}
+}
+
+// TestRelatedIssuesFrom_MatchesPrecomposed pins that the compose-once helper
+// returns the same matches as RelatedIssues when handed an already-composed
+// (flat, grouped) pair — the path the GitOps insights resolver uses to avoid a
+// full Compose per managed resource.
+func TestRelatedIssuesFrom_MatchesPrecomposed(t *testing.T) {
+	p := &fakeProvider{problems: []k8s.Detection{
+		{Kind: "Pod", Namespace: "prod", Name: "web-abc-1", Reason: "CrashLoopBackOff", Severity: "critical",
+			OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "web"},
+	}}
+	flat := Compose(p, Filters{Limit: NoLimit})
+	grouped := GroupIssues(flat)
+	if got := RelatedIssuesFrom(flat, grouped, "apps", "Deployment", "prod", "web"); len(got) != 1 {
+		t.Errorf("RelatedIssuesFrom(owning Deployment) = %d, want 1", len(got))
+	}
+	if got := RelatedIssuesFrom(flat, grouped, "apps", "Deployment", "prod", "other"); len(got) != 0 {
+		t.Errorf("RelatedIssuesFrom(unrelated) = %d, want 0", len(got))
+	}
+}
+
+// TestRelatedIssuesFrom_NormalizesGroup pins that a caller passing a raw,
+// unnormalized group (as the GitOps L4 bridge forwards from Argo's
+// status.resources — "" for built-ins) still matches the resolved subject
+// ("apps" for a Deployment). Without group normalization the bridge silently
+// returned nothing for typical workloads.
+func TestRelatedIssuesFrom_NormalizesGroup(t *testing.T) {
+	p := &fakeProvider{problems: []k8s.Detection{
+		{Kind: "Pod", Namespace: "prod", Name: "web-abc-1", Reason: "CrashLoopBackOff", Severity: "critical",
+			OwnerGroup: "apps", OwnerKind: "Deployment", OwnerName: "web"},
+	}}
+	flat := Compose(p, Filters{Limit: NoLimit})
+	grouped := GroupIssues(flat)
+	if got := RelatedIssuesFrom(flat, grouped, "", "Deployment", "prod", "web"); len(got) != 1 {
+		t.Errorf("raw empty query group should normalize to apps and match, got %d", len(got))
 	}
 }
 

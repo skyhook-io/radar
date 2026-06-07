@@ -86,7 +86,7 @@ func Classify(in classifyInput) issuesapi.Category {
 		case strings.Contains(g, "argoproj.io"):
 			switch in.Kind {
 			case "Application":
-				return issuesapi.CategoryGitOpsSyncFailed
+				return classifyGitOpsReason(in.Reason, issuesapi.CategoryGitOpsSyncFailed)
 			case "Rollout":
 				// Progressive-delivery workload, not a sync operation.
 				return issuesapi.CategoryRolloutStalled
@@ -112,7 +112,15 @@ func Classify(in classifyInput) issuesapi.Category {
 		case strings.Contains(g, "crossplane.io"):
 			return issuesapi.CategoryCrossplaneReconcile
 		case g == "source.toolkit.fluxcd.io" || g == "image.toolkit.fluxcd.io" || g == "notification.toolkit.fluxcd.io":
-			return issuesapi.CategoryGitOpsSyncFailed
+			// Source objects (GitRepository/OCIRepository/HelmRepository/…) fail
+			// at the fetch/render stage, so render_failed is the right default.
+			// Reasons here arrive as condTypeReason display strings ("Ready:
+			// GitOperationFailed"), which deliberately don't match the bare-token
+			// cases in classifyGitOpsReason — and shouldn't: sources have no
+			// apply/install/upgrade phase, so falling through to render_failed is
+			// correct. Don't "fix" this by stripping the prefix; that would
+			// mislabel a source's fetch failure as an operation failure.
+			return classifyGitOpsReason(in.Reason, issuesapi.CategoryGitOpsRenderFailed)
 		default:
 			return issuesapi.CategoryOperatorConditionFail
 		}
@@ -256,7 +264,7 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		// Gate on group so a same-named CRD from another controller can't be
 		// force-fit into the GitOps bucket.
 		if strings.Contains(strings.ToLower(in.APIGroup), "argoproj.io") {
-			return issuesapi.CategoryGitOpsSyncFailed
+			return classifyGitOpsReason(in.Reason, issuesapi.CategoryGitOpsSyncFailed)
 		}
 		return issuesapi.CategoryUnknown
 
@@ -264,7 +272,7 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 		// Flux reconciler failure from DetectGitOpsProblems.
 		g := strings.ToLower(in.APIGroup)
 		if g == "kustomize.toolkit.fluxcd.io" || g == "helm.toolkit.fluxcd.io" {
-			return issuesapi.CategoryGitOpsSyncFailed
+			return classifyGitOpsReason(in.Reason, issuesapi.CategoryGitOpsSyncFailed)
 		}
 		return issuesapi.CategoryUnknown
 
@@ -287,4 +295,34 @@ func classifyProblem(in classifyInput) issuesapi.Category {
 	}
 
 	return issuesapi.CategoryUnknown
+}
+
+// classifyGitOpsReason maps a GitOps detector/condition reason to a specific
+// GitOps failure category. Shared by the Argo + Flux arms of both Classify
+// (conditions) and classifyProblem (DetectGitOpsProblems) so the two paths
+// can't drift. The reason vocabulary spans Argo health/sync/spec/operation
+// states and Flux source-vs-apply reasons (the case labels below are the
+// authoritative list). Unrecognized reasons return the caller's fallback so a
+// novel controller reason still lands in a GitOps bucket rather than "unknown".
+func classifyGitOpsReason(reason string, fallback issuesapi.Category) issuesapi.Category {
+	switch reason {
+	case "HealthDegraded", "HealthMissing", "HealthCheckFailed":
+		return issuesapi.CategoryGitOpsHealthDegraded
+	case "ComparisonError":
+		return issuesapi.CategoryGitOpsRenderFailed
+	case "InvalidSpecError":
+		return issuesapi.CategoryGitOpsSpecInvalid
+	case "OperationFailed", "SyncError", "StuckDriftLoop":
+		return issuesapi.CategoryGitOpsOperationFailed
+	case "OutOfSync":
+		return issuesapi.CategoryGitOpsOutOfSync
+	// Flux: couldn't fetch/build the source or render manifests.
+	case "BuildFailed", "ArtifactFailed", "ArtifactFetchFailed", "SourceNotReady", "GitOperationFailed", "ChartNotReady", "ChartPullFailed", "ChartPullError":
+		return issuesapi.CategoryGitOpsRenderFailed
+	// Flux: source rendered but applying/installing failed.
+	case "InstallFailed", "UpgradeFailed", "TestFailed", "ReconciliationFailed":
+		return issuesapi.CategoryGitOpsOperationFailed
+	default:
+		return fallback
+	}
 }

@@ -87,6 +87,48 @@ func TestNormalizeDiagnoseKind(t *testing.T) {
 	}
 }
 
+func TestGitopsDiagnoseTarget(t *testing.T) {
+	cases := []struct {
+		in                            string
+		wantKind, wantGroup, wantTool string
+		wantOK                        bool
+	}{
+		{"application", "Application", "argoproj.io", "argocd", true},
+		{"applications", "Application", "argoproj.io", "argocd", true},
+		{"app", "Application", "argoproj.io", "argocd", true},
+		{"kustomization", "Kustomization", "kustomize.toolkit.fluxcd.io", "flux", true},
+		{"helmrelease", "HelmRelease", "helm.toolkit.fluxcd.io", "flux", true},
+		{"HR", "HelmRelease", "helm.toolkit.fluxcd.io", "flux", true},
+		{"pod", "", "", "", false},
+		{"deployment", "", "", "", false},
+		{"", "", "", "", false},
+	}
+	for _, c := range cases {
+		k, g, tool, ok := gitopsDiagnoseTarget(c.in)
+		if k != c.wantKind || g != c.wantGroup || tool != c.wantTool || ok != c.wantOK {
+			t.Errorf("gitopsDiagnoseTarget(%q) = (%q,%q,%q,%v), want (%q,%q,%q,%v)",
+				c.in, k, g, tool, ok, c.wantKind, c.wantGroup, c.wantTool, c.wantOK)
+		}
+	}
+}
+
+// TestHandleDiagnose_GitOpsKindDispatch confirms a GitOps kind routes to the
+// no-pods GitOps path (not the workload "invalid kind" error). With no Argo CRD
+// in the fake cache the fetch fails, but the error must come from the GitOps
+// branch — proving the dispatch fork before pod resolution.
+func TestHandleDiagnose_GitOpsKindDispatch(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	ctx := withClusterAdmin(t, "admin")
+
+	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "alpha", Name: "whatever"})
+	if err == nil {
+		t.Fatalf("expected an error (no Application in fake cache), got nil")
+	}
+	if strings.Contains(err.Error(), "invalid kind") {
+		t.Errorf("GitOps kind must route to the GitOps path, not the workload invalid-kind error; got %v", err)
+	}
+}
+
 func TestHandleDiagnose_InvalidKind(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")

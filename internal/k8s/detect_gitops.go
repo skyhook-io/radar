@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/skyhook-io/radar/pkg/conditions"
+	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 )
@@ -82,12 +83,14 @@ func gitopsProblem(kind, group, ns, name, severity, reason, message string, age 
 
 // detectArgoAppProblems reads ArgoCD Application health/sync. Precision gates,
 // all load-bearing (a manual or suspended app legitimately sits OutOfSync/Missing
-// and must NOT flag): skip Suspended/Progressing health and an in-flight sync
-// (operationState.phase=Running); flag Degraded regardless of policy (critical —
-// live resources are unhealthy, checked first so it outranks an error condition);
-// then flag a ComparisonError/InvalidSpecError/SyncError condition (the sync=
-// Unknown app-path-not-found case the generic path can't see); flag Missing/
-// OutOfSync only for auto-synced apps. One row per app, most-severe cause first.
+// and must NOT flag): skip an in-flight sync (operationState.phase=Running);
+// flag failed operations before health rollups because the operation message is
+// the actionable root cause; skip Suspended/Progressing health for non-failed
+// apps; flag Degraded regardless of policy (critical — live resources are
+// unhealthy); then flag a ComparisonError/InvalidSpecError/SyncError condition
+// (the sync=Unknown app-path-not-found case the generic path can't see); flag
+// Missing/OutOfSync only for auto-synced apps. One row per app, most-severe
+// cause first.
 func detectArgoAppProblems(apps []*unstructured.Unstructured, now time.Time) []Detection {
 	var out []Detection
 	for _, app := range apps {
@@ -97,6 +100,7 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, now time.Time) []D
 		healthMsg, _, _ := unstructured.NestedString(app.Object, "status", "health", "message")
 		sync, _, _ := unstructured.NestedString(app.Object, "status", "sync", "status")
 		phase, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
+		opMsg, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "message")
 		// Argo's own per-app health message ("Deployment X has 0/3 replicas…")
 		// is far more decisive than a generic string; fall back when empty.
 		orMsg := func(fallback string) string {
@@ -106,24 +110,76 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, now time.Time) []D
 			return fallback
 		}
 
-		if strings.EqualFold(health, "Suspended") || strings.EqualFold(health, "Progressing") || strings.EqualFold(phase, "Running") {
+		if strings.EqualFold(phase, "Running") {
 			continue
 		}
 
-		// Degraded (live resources unhealthy) is the most severe state and is
-		// checked first: an app that is BOTH Degraded and carrying an error
-		// condition must stay critical, not be downgraded to the high-severity
-		// error branch below.
+		// A failed sync operation is the most actionable signal and outranks a
+		// Degraded health rollup. status.operationState.message names the failing
+		// resource + reason, which we parse into a plain-English cause + one-click
+		// remediation. When an app is BOTH Degraded and carries a failed
+		// operation, the failed apply is the root cause while the degraded health
+		// is a downstream symptom (already surfaced as the managed resources'
+		// own issues, grouped by their owner). Emitting gitops_operation_failed
+		// keeps the category honest so a consumer filtering for operation
+		// failures (MCP / Issues) doesn't miss it under a health bucket. Also
+		// checked before the condition branch: Argo's SyncError condition
+		// parallel-encodes this same message, so emitting both would
+		// double-report one failure.
+		if strings.EqualFold(phase, "Failed") || strings.EqualFold(phase, "Error") {
+			// An empty operation message carries no detail. If a specific error
+			// condition (ComparisonError / InvalidSpecError / SyncError) is
+			// present, it holds the actionable guidance — prefer it over a
+			// generic "operation failed" row rather than masking it.
+			if strings.TrimSpace(opMsg) == "" {
+				if ct, cmsg, since, hasSince, ok := argoErrorCondition(app, now); ok {
+					d := gitopsProblem("Application", argoGroup, ns, name, "critical", ct, cmsg, fallbackDuration(since, hasSince, age))
+					if ct == "SyncError" {
+						applyArgoOperationDiagnosis(&d, cmsg)
+					}
+					if d.RemediationKind == "" {
+						d.Action = diagnose.ActionForCondition(ct)
+					}
+					out = append(out, d)
+					continue
+				}
+			}
+			msg := opMsg
+			if strings.TrimSpace(msg) == "" {
+				msg = "Last sync operation failed"
+			}
+			d := gitopsProblem("Application", argoGroup, ns, name, "critical", "OperationFailed", msg, argoOperationIssueAge(app, now, age))
+			applyArgoOperationDiagnosis(&d, opMsg)
+			// When there's a structured remediation, that one-click fix IS the
+			// next step. Otherwise (RBAC / webhook / immutable field, or an
+			// unrecognized message) point the operator at the operation details
+			// so every failure has a next step, not just a diagnosis.
+			if d.RemediationKind == "" {
+				d.Action = "Open the application's sync operation details for the full error and history."
+			}
+			out = append(out, d)
+			continue
+		}
+		if strings.EqualFold(health, "Suspended") || strings.EqualFold(health, "Progressing") {
+			continue
+		}
+		// Degraded (live resources unhealthy) without a failed operation — the
+		// managed resources are unhealthy on their own. Outranks the error
+		// conditions below so a Degraded app stays critical-Degraded rather than
+		// reframed as a lower-information condition row.
 		if strings.EqualFold(health, "Degraded") {
 			out = append(out, gitopsProblem("Application", argoGroup, ns, name, "critical",
 				"HealthDegraded", orMsg("Application health is Degraded (managed resources are unhealthy)"), age))
 			continue
 		}
-		// A failed sync (ComparisonError/SyncError/InvalidSpecError) is a genuine
-		// reconciliation failure, not drift — critical, matching the GitOps detail
-		// view rather than under-ranking it as a warning.
-		if ct, msg, ok := argoErrorCondition(app); ok {
-			out = append(out, gitopsProblem("Application", argoGroup, ns, name, "critical", ct, msg, age))
+		// ComparisonError / InvalidSpecError are source/spec failures that occur
+		// without a sync operation (so operationState above won't catch them) —
+		// genuine reconciliation failures, critical, with the same condition-
+		// specific guidance the detail page shows.
+		if ct, msg, since, hasSince, ok := argoErrorCondition(app, now); ok {
+			d := gitopsProblem("Application", argoGroup, ns, name, "critical", ct, msg, fallbackDuration(since, hasSince, age))
+			d.Action = diagnose.ActionForCondition(ct)
+			out = append(out, d)
 			continue
 		}
 		automated := argoIsAutomated(app)
@@ -135,11 +191,89 @@ func detectArgoAppProblems(apps []*unstructured.Unstructured, now time.Time) []D
 			continue
 		}
 		if strings.EqualFold(sync, "OutOfSync") && automated {
-			out = append(out, gitopsProblem("Application", argoGroup, ns, name, "high",
-				"OutOfSync", "auto-synced Application has drifted from the desired manifests", age))
+			// Stuck-drift loop: the last sync Succeeded yet the app is still
+			// OutOfSync and reconciled recently — something is mutating resources
+			// after each apply (mutating webhook, sibling controller, conversion
+			// webhook). Critical and distinct from ordinary drift, where the apply
+			// simply hasn't run.
+			if isArgoStuckDriftLoop(app, now) {
+				d := gitopsProblem("Application", argoGroup, ns, name, "critical",
+					"StuckDriftLoop", "Sync succeeded but the application is still OutOfSync — a controller or admission webhook is likely mutating resources after each apply.", age)
+				d.Stuck = true
+				d.Cause = "Auto-sync applied cleanly and reconciled recently, yet live state keeps diverging from Git. Common causes: a mutating admission webhook adds defaults Argo isn't told to ignore; a sibling controller (Karpenter, Istio, cert-manager) writes back into spec; or a conversion webhook rewrites a deprecated API schema."
+				d.Action = "Open Changes to see the per-resource drift, then match it against your Git manifest, the resource's controller, and any mutating webhooks."
+				out = append(out, d)
+			} else {
+				out = append(out, gitopsProblem("Application", argoGroup, ns, name, "high",
+					"OutOfSync", "auto-synced Application has drifted from the desired manifests", age))
+			}
 		}
 	}
 	return out
+}
+
+func applyArgoOperationDiagnosis(d *Detection, msg string) {
+	parsed := diagnose.ParseArgoOperationError(msg)
+	d.Cause = parsed.Cause
+	d.RemediationKind = parsed.RemediationKind
+	d.RemediationTarget = parsed.RemediationTarget
+	d.OperationRetryCount = parsed.RetryCount
+	d.Stuck = parsed.Stuck
+}
+
+func argoOperationIssueAge(app *unstructured.Unstructured, now time.Time, fallback time.Duration) time.Duration {
+	if finishedAt, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "finishedAt"); finishedAt != "" {
+		if d, ok := durationFromTimestamp(now, finishedAt); ok {
+			return d
+		}
+	}
+	if startedAt, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "startedAt"); startedAt != "" {
+		if d, ok := durationFromTimestamp(now, startedAt); ok {
+			return d
+		}
+	}
+	return fallback
+}
+
+func durationFromTimestamp(now time.Time, ts string) (time.Duration, bool) {
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil || t.After(now) {
+		return 0, false
+	}
+	return now.Sub(t), true
+}
+
+func fallbackDuration(d time.Duration, ok bool, fallback time.Duration) time.Duration {
+	if ok {
+		return d
+	}
+	return fallback
+}
+
+// isArgoStuckDriftLoop reports the "applied but still drifting" case: the last
+// sync operation Succeeded, yet the app is still OutOfSync and reconciled
+// recently. Caller has already gated on sync=OutOfSync + auto-sync on. Uses the
+// same 30-minute reconciledAt window as the GitOps detail-page detector so the
+// two surfaces agree on severity. An unparseable reconciledAt yields false (the
+// app stays an ordinary OutOfSync row) — Argo writes RFC3339, so this is a
+// shouldn't-happen guard, not a swallowed error.
+func isArgoStuckDriftLoop(app *unstructured.Unstructured, now time.Time) bool {
+	phase, _, _ := unstructured.NestedString(app.Object, "status", "operationState", "phase")
+	if !strings.EqualFold(phase, "Succeeded") {
+		return false
+	}
+	reconciledAt, _, _ := unstructured.NestedString(app.Object, "status", "reconciledAt")
+	if reconciledAt == "" {
+		return false
+	}
+	t, err := time.Parse(time.RFC3339, reconciledAt)
+	if err != nil {
+		return false
+	}
+	// 30-minute window mirrors the detail-page detector: long enough for a
+	// slow-converging resource to settle, short enough that "stale for an hour"
+	// (a different problem — controller down) doesn't trip the stuck signal.
+	return now.Sub(t) <= 30*time.Minute
 }
 
 // argoIsAutomated reports whether spec.syncPolicy.automated is present — i.e. the
@@ -163,10 +297,10 @@ func argoIsAutomated(app *unstructured.Unstructured) bool {
 // an error (ComparisonError / InvalidSpecError / SyncError). Argo writes these
 // as {type, message} without a status field, so FindFalseCondition can't match
 // them.
-func argoErrorCondition(app *unstructured.Unstructured) (condType, message string, found bool) {
+func argoErrorCondition(app *unstructured.Unstructured, now time.Time) (condType, message string, since time.Duration, hasSince bool, found bool) {
 	conds, ok, _ := unstructured.NestedSlice(app.Object, "status", "conditions")
 	if !ok {
-		return "", "", false
+		return "", "", 0, false, false
 	}
 	for _, c := range conds {
 		cm, ok := c.(map[string]any)
@@ -177,10 +311,12 @@ func argoErrorCondition(app *unstructured.Unstructured) (condType, message strin
 		switch ct {
 		case "ComparisonError", "InvalidSpecError", "SyncError":
 			msg, _ := cm["message"].(string)
-			return ct, msg, true
+			ts, _ := cm["lastTransitionTime"].(string)
+			since, hasSince := durationFromTimestamp(now, ts)
+			return ct, msg, since, hasSince, true
 		}
 	}
-	return "", "", false
+	return "", "", 0, false, false
 }
 
 // detectFluxProblems flags Flux Kustomizations/HelmReleases whose Ready condition
@@ -225,6 +361,7 @@ func detectFluxProblems(items []*unstructured.Unstructured, kind, group string, 
 			timingR := IssueTimingFromConditionLTT(now.Add(-since), obj.GetCreationTimestamp().Time, "condition")
 			p.IssueTiming, p.IssueTimingBasis = timingR.IssueTiming, timingR.Basis
 		}
+		p.Action = diagnose.ActionForFluxReason(reason)
 		out = append(out, p)
 	}
 	return out

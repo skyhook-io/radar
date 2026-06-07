@@ -3,7 +3,6 @@ package insights
 import (
 	"fmt"
 	"log"
-	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
 	"github.com/skyhook-io/radar/pkg/gitops"
+	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 	"github.com/skyhook-io/radar/pkg/timeutil"
 )
@@ -266,6 +266,25 @@ type Resolver interface {
 	// Issue can say "argocd-application-controller is CrashLoopBackOff
 	// — start there".
 	FinalizerOwnerStatus(finalizer string, root *unstructured.Unstructured) string
+	// ResourceProblems returns the problems the cluster-wide issues engine has
+	// already classified for one managed resource — the concrete workload "why"
+	// (crashloop / oom / image-pull / unschedulable / pvc-pending) behind an
+	// Argo "Degraded"/"Missing" rollup, so the detail page can answer it inline
+	// instead of sending the operator to the drawer. Empty when nothing is
+	// classified OR the lookup is unavailable; callers must NOT treat empty as
+	// "healthy" (they keep the generic "go inspect" guidance in that case).
+	ResourceProblems(group, kind, namespace, name string) []ResourceProblem
+}
+
+// ResourceProblem is a flat, vocabulary-neutral projection of one issue the
+// cluster-wide issues engine classified for a managed resource. The insights
+// package stays free of the issuesapi wire model — the host (which owns the
+// issues engine) maps issuesapi.Issue onto these plain strings.
+type ResourceProblem struct {
+	Reason   string // e.g. CrashLoopBackOff
+	Message  string // human-readable detail
+	Category string // e.g. crashloop, oom_killed
+	Severity string // critical | warning
 }
 
 // EventSummary is a compact projection of a corev1.Event for UI display.
@@ -412,7 +431,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 		if phase, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "phase"); phase == "Failed" || phase == "Error" {
 			operationFailed = true
 			msg, _, _ := unstructured.NestedString(root.Object, "status", "operationState", "message")
-			parsed := parseArgoOperationError(msg)
+			parsed := diagnose.ParseArgoOperationError(msg)
 			issue := Issue{
 				Severity:    SeverityCritical,
 				Scope:       ScopeOperation,
@@ -422,7 +441,7 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 				Cause:       parsed.Cause,
 				RetryCount:  parsed.RetryCount,
 				Stuck:       parsed.Stuck,
-				Remediation: parsed.Remediation,
+				Remediation: remediationFromParsed(parsed),
 			}
 			if parsed.AffectedKind != "" && parsed.AffectedName != "" {
 				ref := Ref{Kind: parsed.AffectedKind, Name: parsed.AffectedName}
@@ -437,8 +456,8 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 			// When the remediation pins the root cause to a single missing
 			// namespace, every resource targeting that namespace is just a
 			// downstream symptom — suppress them in the per-resource pass.
-			if parsed.Remediation != nil && parsed.Remediation.Kind == RemediationCreateNamespace {
-				suppressedNamespaces[parsed.Remediation.Target] = true
+			if parsed.RemediationKind == diagnose.RemediationCreateNamespace {
+				suppressedNamespaces[parsed.RemediationTarget] = true
 			}
 			out = append(out, issue)
 		} else if phase == "Running" {
@@ -489,7 +508,18 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 				continue
 			}
 			if change.Health == "Degraded" || change.Health == "Missing" {
-				out = append(out, Issue{Severity: SeverityCritical, Scope: ScopeResource, Reason: change.Health, Message: fmt.Sprintf("%s %s is %s", change.Ref.Kind, change.Ref.Name, change.Health), Refs: []Ref{change.Ref}, Action: "Open the resource drawer for events, logs, and YAML."})
+				iss := Issue{Severity: SeverityCritical, Scope: ScopeResource, Reason: change.Health, Message: fmt.Sprintf("%s %s is %s", change.Ref.Kind, change.Ref.Name, change.Health), Refs: []Ref{change.Ref}, Action: "Open the resource drawer for events, logs, and YAML."}
+				// Bridge to the cluster-wide issues engine for the concrete
+				// workload cause (crashloop / oom / image-pull / unschedulable …)
+				// behind Argo's coarse "Degraded"/"Missing". Empty result keeps
+				// the generic guidance above — it never implies the resource is
+				// healthy.
+				if resolver != nil {
+					if cause := resourceProblemCause(resolver.ResourceProblems(change.Ref.Group, change.Ref.Kind, change.Ref.Namespace, change.Ref.Name)); cause != "" {
+						iss.Cause = cause
+					}
+				}
+				out = append(out, iss)
 			} else if change.Sync == "OutOfSync" {
 				out = append(out, Issue{Severity: SeverityWarning, Scope: ScopeResource, Reason: "OutOfSync", Message: fmt.Sprintf("%s %s is out of sync", change.Ref.Kind, change.Ref.Name), Refs: []Ref{change.Ref}, Action: "Review Changes or run sync."})
 			}
@@ -497,10 +527,10 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 	} else {
 		for _, c := range conditions(root) {
 			if c.status == "False" && (c.typ == "Ready" || c.typ == "Healthy" || c.typ == "Released" || c.typ == "TestSuccess") {
-				out = append(out, Issue{Severity: SeverityCritical, Scope: ScopeCondition, Reason: fallback(c.reason, c.typ), Message: fallback(c.message, c.typ+" is false"), Action: fluxActionForReason(c.reason)})
+				out = append(out, Issue{Severity: SeverityCritical, Scope: ScopeCondition, Reason: fallback(c.reason, c.typ), Message: fallback(c.message, c.typ+" is false"), Action: diagnose.ActionForFluxReason(c.reason)})
 			}
 			if c.status == "True" && c.typ == "Stalled" {
-				out = append(out, Issue{Severity: SeverityCritical, Scope: ScopeCondition, Reason: fallback(c.reason, "Stalled"), Message: fallback(c.message, "Reconciliation is stalled"), Action: fluxActionForReason(c.reason)})
+				out = append(out, Issue{Severity: SeverityCritical, Scope: ScopeCondition, Reason: fallback(c.reason, "Stalled"), Message: fallback(c.message, "Reconciliation is stalled"), Action: diagnose.ActionForFluxReason(c.reason)})
 			}
 			if c.status == "True" && c.typ == "Reconciling" {
 				out = append(out, Issue{Severity: SeverityInfo, Scope: ScopeCondition, Reason: fallback(c.reason, "Reconciling"), Message: fallback(c.message, "Reconciliation is in progress")})
@@ -520,6 +550,23 @@ func buildIssues(root *unstructured.Unstructured, resourceTree *gitopstree.Resou
 	out = dedupeIssues(out)
 	sort.SliceStable(out, func(i, j int) bool { return severityRank(out[i].Severity) < severityRank(out[j].Severity) })
 	return out
+}
+
+// resourceProblemCause renders a single cause line from the workload problems
+// the issues engine classified for a managed resource — the worst (critical
+// over warning, else first) one's detail. Returns "" for no problems so the
+// caller keeps its generic guidance.
+func resourceProblemCause(problems []ResourceProblem) string {
+	if len(problems) == 0 {
+		return ""
+	}
+	best := problems[0]
+	for _, p := range problems[1:] {
+		if best.Severity != "critical" && p.Severity == "critical" {
+			best = p
+		}
+	}
+	return fallback(best.Message, best.Reason)
 }
 
 // dedupeIssues removes Issues that share the same (scope, reason, message,
@@ -1166,23 +1213,6 @@ func phaseFromHook(hook string) string {
 	return hook
 }
 
-func fluxActionForReason(reason string) string {
-	switch reason {
-	case "DependencyNotReady":
-		return "Inspect the dependency chain in the graph."
-	case "ArtifactFailed":
-		return "Inspect the Flux source and reconcile it."
-	case "BuildFailed":
-		return "Check the source path and rendered manifests."
-	case "HealthCheckFailed":
-		return "Open unhealthy managed resources for events and status."
-	case "InstallFailed", "UpgradeFailed", "TestFailed":
-		return "Inspect HelmRelease conditions and controller events."
-	default:
-		return "Review conditions and reconcile after fixing the source of failure."
-	}
-}
-
 func parseWave(value string) (int, bool) {
 	if value == "" {
 		return 0, false
@@ -1319,114 +1349,18 @@ func suppressionKey(r Ref) string {
 	return r.Kind + "/" + r.Name
 }
 
-// parsedFailure carries fields extracted from an Argo operationState.message.
-// Unparsed parts of the original message remain available to the UI as the
-// raw error — the parser only adds structure, never replaces or hides text.
-type parsedFailure struct {
-	Cause        string // plain-English root cause; empty if unrecognized
-	AffectedKind string
-	AffectedName string
-	RetryCount   int
-	Stuck        bool
-	// Remediation, when set, exposes a structured fix the UI can render as
-	// a contextual button. Only populated for patterns where the next step
-	// is unambiguous and safe (e.g. create a missing namespace).
-	Remediation *Remediation
+// remediationFromParsed adapts the vocabulary-neutral remediation primitives
+// from pkg/gitops/diagnose onto the insights Remediation wire type. Returns nil
+// when no structured remediation was parsed (the common case) or when the
+// target is empty (NewCreateNamespaceRemediation enforces that invariant).
+func remediationFromParsed(p diagnose.ParsedFailure) *Remediation {
+	switch p.RemediationKind {
+	case diagnose.RemediationCreateNamespace:
+		return NewCreateNamespaceRemediation(p.RemediationTarget, p.RemediationHint)
+	default:
+		return nil
+	}
 }
-
-// stuckRetryThreshold is the retry count at which we stop calling a failure
-// "transient" and start calling it stuck. Argo retries with backoff up to 5
-// times by default; reaching that ceiling means the controller has given up
-// hoping for self-recovery, which is exactly when the user needs the
-// stronger visual.
-const stuckRetryThreshold = 5
-
-// Capture group: <Kind>(.<group>...)? "<name>". Examples this matches:
-//
-//	CustomResourceDefinition.apiextensions.k8s.io "scaledjobs.keda.sh"
-//	Deployment.apps "billing"
-//	Service "billing"
-//
-// We don't need the group; the leading kind + quoted name is what users read.
-var argoAffectedRefRE = regexp.MustCompile(`([A-Z][A-Za-z0-9]+)(?:\.[A-Za-z0-9.\-]+)?\s+"([^"]+)"`)
-
-// "(retried N times)" suffix Argo appends when its retry policy has fired.
-var argoRetryRE = regexp.MustCompile(`\(retried (\d+) times?\)`)
-
-// `namespaces "<name>" not found` — fires when the Application targets a
-// namespace that doesn't exist and CreateNamespace=false. The most common
-// "why won't this sync" case for new environments. Captured separately so
-// the parser can populate a structured Remediation (Create namespace button)
-// rather than relying on the generic affected-ref regex.
-var argoMissingNamespaceRE = regexp.MustCompile(`namespaces "([^"]+)" not found`)
-
-// Pattern table: ordered list of (matcher, plain-English cause). First match
-// wins. Keep patterns specific — generic catch-alls would mask more useful
-// matches. Cases below cover the failure modes operators see most: validation
-// limits, admission rejection, RBAC, conflicts, registration, connectivity.
-var argoErrorPatterns = []struct {
-	match *regexp.Regexp
-	cause string
-}{
-	// Missing namespace pattern: keep this first so a more specific
-	// match wins over the generic "not found" message.
-	{regexp.MustCompile(`namespaces "[^"]+" not found`), "The destination namespace does not exist. Create it, or enable CreateNamespace=true in the Application's syncOptions so Argo creates it on sync."},
-	{regexp.MustCompile(`metadata\.annotations:\s*Too long`), "An annotation on the desired manifest exceeds Kubernetes' 256 KB metadata limit. Switch to server-side apply (Sync options → Server-side apply) or shrink the offending annotation."},
-	{regexp.MustCompile(`metadata\.labels:\s*Too long`), "Labels exceed Kubernetes' 64-character-per-key limit. Shorten label keys or values."},
-	// Hook patterns come BEFORE webhook patterns: Argo's hook failure
-	// messages can include the substring "webhook" coincidentally (e.g.
-	// "validating-webhook-hook"), and the more-specific hook framing is
-	// what the operator needs first.
-	{regexp.MustCompile(`(?i)\b(presync|postsync|sync(?:fail)?|postdelete|skipdryrun)\b.*?(?:hook|phase).*?(?:failed|error)`), "A sync hook failed. Inspect the hook resource (Job/Pod) for events and logs to see why it errored."},
-	{regexp.MustCompile(`(?i)hook .*? failed`), "A sync hook failed. Open Activity for the hook's exit reason; the failed hook resource itself usually has events that explain it."},
-	{regexp.MustCompile(`admission webhook ".*?" denied the request`), "An admission webhook rejected the apply. Check the webhook's policy or its target server."},
-	{regexp.MustCompile(`is forbidden:\s*User`), "RBAC denied this operation. The Argo controller's ServiceAccount lacks the required permissions."},
-	{regexp.MustCompile(`already exists`), "A resource with this name already exists in the cluster. It may have been created outside of GitOps or owned by a different application."},
-	{regexp.MustCompile(`no matches for kind`), "The CustomResourceDefinition for this kind isn't registered in the cluster. Install or wait for the operator that owns this CRD."},
-	{regexp.MustCompile(`(?i)dial tcp.*(?:i/o timeout|connection refused|no route to host)`), "Cluster unreachable from the Argo controller. Check API server connectivity and network policies."},
-	{regexp.MustCompile(`field is immutable`), "Tried to change a field Kubernetes treats as immutable. Recreate the resource (delete + reapply) or revert the change."},
-	{regexp.MustCompile(`unable to recognize`), "The manifest references an API version the cluster doesn't recognize. Check apiVersion against the installed CRDs."},
-	{regexp.MustCompile(`Operation cannot be fulfilled.*the object has been modified`), "The resource was modified concurrently between Argo's read and write. The next sync attempt should resolve it; investigate if it persists."},
-}
-
-func parseArgoOperationError(msg string) parsedFailure {
-	if msg == "" {
-		return parsedFailure{}
-	}
-	out := parsedFailure{}
-	for _, p := range argoErrorPatterns {
-		if p.match.MatchString(msg) {
-			out.Cause = p.cause
-			break
-		}
-	}
-	if m := argoAffectedRefRE.FindStringSubmatch(msg); len(m) == 3 {
-		out.AffectedKind = m[1]
-		out.AffectedName = m[2]
-	}
-	if m := argoRetryRE.FindStringSubmatch(msg); len(m) == 2 {
-		if n, err := strconv.Atoi(m[1]); err == nil {
-			out.RetryCount = n
-			out.Stuck = n >= stuckRetryThreshold
-		}
-	}
-	// Structured remediation: only the missing-namespace pattern offers a
-	// one-click fix in v1. Other patterns surface diagnosis-only via Cause.
-	if m := argoMissingNamespaceRE.FindStringSubmatch(msg); len(m) == 2 {
-		out.Remediation = NewCreateNamespaceRemediation(m[1], "Creates the missing namespace and re-triggers reconciliation.")
-	}
-	// Telemetry: when nothing matched (no Cause, no AffectedRef), log once
-	// so operators can grep server logs for "operation errors that escaped
-	// the recognizer" and tune the pattern table. The dedup is necessary
-	// because the GitOps detail page polls every 2s during a running op —
-	// a single unrecognized failure would otherwise spam the log.
-	if out.Cause == "" && out.AffectedKind == "" {
-		logUnrecognizedOpError(msg)
-	}
-	return out
-}
-
-var unrecognizedOpErrorLogged sync.Map
 
 // jqIgnoreLogged deduplicates the "jq-only ignoreDifferences" warning so it
 // fires once per (group, kind) over the process lifetime — Argo Application
@@ -1440,19 +1374,6 @@ func logJQIgnoreOnce(group, kind string) {
 		return
 	}
 	log.Printf("[gitops/drift] ignoreDifferences rule for %s/%s uses jqPathExpressions which Radar doesn't evaluate; some drift entries Argo's UI suppresses may appear here", group, kind)
-}
-
-func logUnrecognizedOpError(msg string) {
-	// Truncate at 200 chars: typical Argo error messages are short; outlier
-	// stack-trace dumps would otherwise flood the log line.
-	key := msg
-	if len(key) > 200 {
-		key = key[:200]
-	}
-	if _, loaded := unrecognizedOpErrorLogged.LoadOrStore(key, struct{}{}); loaded {
-		return
-	}
-	log.Printf("[gitops/insights] unrecognized argo operation error (no pattern matched): %q", key)
 }
 
 // detectPendingDeletion returns an Issue when the GitOps root resource has
@@ -1692,33 +1613,18 @@ func argoApplicationConditions(root *unstructured.Unstructured) []Issue {
 			continue
 		}
 		severity := SeverityInfo
-		switch {
-		case strings.HasSuffix(typ, "Error"):
+		switch tok, _ := diagnose.SeverityForConditionType(typ); tok {
+		case "critical":
 			severity = SeverityCritical
-		case strings.HasSuffix(typ, "Warning"):
+		case "warning":
 			severity = SeverityWarning
-		}
-		action := ""
-		switch typ {
-		case "ComparisonError":
-			action = "Verify the repo URL, branch/tag, and credentials. Check argocd-repo-server logs for fetch errors."
-		case "InvalidSpecError":
-			action = "Fix the Application spec — check destination, source, and project references."
-		case "OrphanedResourceWarning":
-			action = "Resources exist in the destination namespace that aren't part of any application. Add to an app or label them as ignored."
-		case "RepeatedResourceWarning":
-			action = "The same resource is declared by multiple Argo Applications. Remove the duplicate declaration."
-		case "ExcludedResourceWarning":
-			action = "A managed resource is excluded by the Argo controller's resource.exclusions. Adjust controller config or remove the resource."
-		case "SharedResourceWarning":
-			action = "This resource is also tracked by another Application. Move it to a single owner."
 		}
 		out = append(out, Issue{
 			Severity: severity,
 			Scope:    ScopeCondition,
 			Reason:   fallback(typ, "Condition"),
 			Message:  fallback(msg, typ),
-			Action:   action,
+			Action:   diagnose.ActionForCondition(typ),
 		})
 	}
 	return out

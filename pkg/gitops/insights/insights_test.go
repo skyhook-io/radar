@@ -7,6 +7,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 
+	"github.com/skyhook-io/radar/pkg/gitops/diagnose"
 	gitopstree "github.com/skyhook-io/radar/pkg/gitops/tree"
 )
 
@@ -212,158 +213,35 @@ func TestArgoResourceChangesSyncResultGating(t *testing.T) {
 	}
 }
 
-func TestParseArgoOperationError(t *testing.T) {
-	cases := []struct {
-		name      string
-		msg       string
-		wantCause string // substring match — full text is brittle to copy edits
-		wantKind  string
-		wantName  string
-		wantRetry int
-		wantStuck bool
-	}{
-		{
-			name:      "annotation too long with affected CRD and retry suffix",
-			msg:       `one or more objects failed to apply, reason: error when patching "/dev/shm/foo": CustomResourceDefinition.apiextensions.k8s.io "scaledjobs.keda.sh" is invalid: metadata.annotations: Too long: may not be more than 262144 bytes (retried 5 times)`,
-			wantCause: "256 KB metadata limit",
-			wantKind:  "CustomResourceDefinition",
-			wantName:  "scaledjobs.keda.sh",
-			wantRetry: 5,
-			wantStuck: true,
-		},
-		{
-			name:      "admission webhook rejection",
-			msg:       `admission webhook "validation.gatekeeper.sh" denied the request: missing required label "owner"`,
-			wantCause: "admission webhook rejected",
-			wantRetry: 0,
-			wantStuck: false,
-		},
-		{
-			name:      "rbac forbidden with resource extracted",
-			msg:       `Deployment.apps "billing" is forbidden: User "system:serviceaccount:argocd:argocd-controller" cannot patch resource`,
-			wantCause: "RBAC denied",
-			wantKind:  "Deployment",
-			wantName:  "billing",
-		},
-		{
-			name:      "unrecognized message → no cause but raw still preserved by caller",
-			msg:       "something completely novel went wrong",
-			wantCause: "",
-		},
-		{
-			name:      "single retry → not stuck",
-			msg:       `whatever (retried 1 times)`,
-			wantRetry: 1,
-			wantStuck: false,
-		},
-		{
-			name: "empty input → all zero values",
-			msg:  "",
-		},
-		// Patterns below extend coverage to the rest of argoErrorPatterns —
-		// each table row pins a regex that was previously untested. A
-		// reorder of argoErrorPatterns or a regex regression would surface
-		// here as a substring miss.
-		{
-			name:      "namespace not found populates Remediation",
-			msg:       `failed to apply: namespaces "demo-broken-sync" not found`,
-			wantCause: "destination namespace does not exist",
-		},
-		{
-			name:      "labels too long",
-			msg:       `Service "foo" is invalid: metadata.labels: Too long: must have at most 63 chars per key`,
-			wantCause: "64-character-per-key limit",
-			// argoAffectedRefRE happens to also capture from this fixture —
-			// pin the values so a regex change is visible. Functionally these
-			// flow into Issue.Refs and add a same-row ref to the failure card.
-			wantKind: "Service",
-			wantName: "foo",
-		},
-		{
-			name:      "resource already exists outside GitOps",
-			msg:       `Job.batch "migrate" already exists`,
-			wantCause: "already exists",
-			wantKind:  "Job",
-			wantName:  "migrate",
-		},
-		{
-			name:      "CRD not registered",
-			msg:       `no matches for kind "Tenant" in version "capsule.clastix.io/v1beta1"`,
-			wantCause: "CustomResourceDefinition for this kind isn't registered",
-		},
-		{
-			name:      "cluster unreachable (i/o timeout)",
-			msg:       `dial tcp 10.0.0.1:443: i/o timeout`,
-			wantCause: "Cluster unreachable",
-		},
-		{
-			name:      "cluster unreachable (connection refused)",
-			msg:       `dial tcp 10.0.0.1:443: connect: connection refused`,
-			wantCause: "Cluster unreachable",
-		},
-		{
-			name:      "immutable field changed",
-			msg:       `Service.spec.clusterIP: field is immutable`,
-			wantCause: "Kubernetes treats as immutable",
-		},
-		{
-			name: "unknown apiVersion (no 'no matches' clause)",
-			// argoErrorPatterns intentionally matches 'no matches for kind'
-			// first because it's the more actionable diagnosis; pin a fixture
-			// that only triggers 'unable to recognize' so the more-generic
-			// pattern is exercised on its own.
-			msg:       `unable to recognize the resource: invalid manifest "foo.yaml"`,
-			wantCause: "API version the cluster doesn't recognize",
-		},
-		{
-			name:      "concurrent modification",
-			msg:       `Operation cannot be fulfilled on deployments.apps "x": the object has been modified; please apply your changes to the latest version`,
-			wantCause: "modified concurrently",
-		},
+// TestRemediationFromParsed_CreateNamespace pins the adapter that maps the
+// vocabulary-neutral remediation primitives from pkg/gitops/diagnose onto the
+// insights Remediation wire type. The pure parse-table coverage lives in
+// pkg/gitops/diagnose; this asserts the one-click fix still reaches the
+// failure card after the boundary crossing.
+func TestRemediationFromParsed_CreateNamespace(t *testing.T) {
+	parsed := diagnose.ParseArgoOperationError(`failed to create resource: namespaces "demo-broken-sync" not found`)
+	got := remediationFromParsed(parsed)
+	if got == nil {
+		t.Fatalf("expected Remediation, got nil")
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := parseArgoOperationError(tc.msg)
-			if tc.wantCause != "" && !strings.Contains(got.Cause, tc.wantCause) {
-				t.Errorf("Cause = %q, want substring %q", got.Cause, tc.wantCause)
-			}
-			if tc.wantCause == "" && got.Cause != "" {
-				t.Errorf("Cause = %q, want empty (unrecognized pattern)", got.Cause)
-			}
-			if got.AffectedKind != tc.wantKind {
-				t.Errorf("AffectedKind = %q, want %q", got.AffectedKind, tc.wantKind)
-			}
-			if got.AffectedName != tc.wantName {
-				t.Errorf("AffectedName = %q, want %q", got.AffectedName, tc.wantName)
-			}
-			if got.RetryCount != tc.wantRetry {
-				t.Errorf("RetryCount = %d, want %d", got.RetryCount, tc.wantRetry)
-			}
-			if got.Stuck != tc.wantStuck {
-				t.Errorf("Stuck = %v, want %v", got.Stuck, tc.wantStuck)
-			}
-		})
+	if got.Kind != RemediationCreateNamespace {
+		t.Errorf("Kind = %q, want %q", got.Kind, RemediationCreateNamespace)
+	}
+	if got.Target != "demo-broken-sync" {
+		t.Errorf("Target = %q, want %q", got.Target, "demo-broken-sync")
+	}
+	if err := got.Validate(); err != nil {
+		t.Errorf("Validate() = %v, want nil", err)
 	}
 }
 
-// TestParseArgoOperationError_PopulatesNamespaceRemediation pins the
-// structured-Remediation path. The missing-namespace pattern is the only
-// pattern that drives a one-click fix; a regex regression that loses the
-// capture group would silently downgrade the failure-card UX to
-// diagnosis-only.
-func TestParseArgoOperationError_PopulatesNamespaceRemediation(t *testing.T) {
-	got := parseArgoOperationError(`failed to create resource: namespaces "demo-broken-sync" not found`)
-	if got.Remediation == nil {
-		t.Fatalf("expected Remediation, got nil")
-	}
-	if got.Remediation.Kind != RemediationCreateNamespace {
-		t.Errorf("Kind = %q, want %q", got.Remediation.Kind, RemediationCreateNamespace)
-	}
-	if got.Remediation.Target != "demo-broken-sync" {
-		t.Errorf("Target = %q, want %q", got.Remediation.Target, "demo-broken-sync")
-	}
-	if err := got.Remediation.Validate(); err != nil {
-		t.Errorf("Validate() = %v, want nil", err)
+// TestRemediationFromParsed_NoRemediation confirms a parsed failure without a
+// structured fix yields a nil Remediation (the common case) rather than a
+// broken button.
+func TestRemediationFromParsed_NoRemediation(t *testing.T) {
+	parsed := diagnose.ParseArgoOperationError(`Deployment.apps "billing" is forbidden: User "x" cannot patch resource`)
+	if got := remediationFromParsed(parsed); got != nil {
+		t.Errorf("remediationFromParsed = %+v, want nil for non-remediable failure", got)
 	}
 }
 
@@ -386,8 +264,8 @@ func TestFluxPhaseLabel(t *testing.T) {
 		{"True", "Reconciling", "Reconciling"},
 		{"True", "Suspended", "Suspended"},
 		{"True", "WeirdNovelReason", "WeirdNovelReason"}, // unknown → raw reason
-		{"True", "", "True"},                              // empty reason → status
-		{"", "", ""},                                      // both empty → empty
+		{"True", "", "True"},                             // empty reason → status
+		{"", "", ""},                                     // both empty → empty
 	}
 	for _, tc := range cases {
 		if got := fluxPhaseLabel(tc.status, tc.reason); got != tc.want {
@@ -400,6 +278,18 @@ func TestRemediationValidate_RejectsEmptyTarget(t *testing.T) {
 	r := &Remediation{Kind: RemediationCreateNamespace}
 	if err := r.Validate(); err == nil {
 		t.Errorf("Validate() on create-namespace with empty Target = nil, want error")
+	}
+}
+
+// TestRemediationConstantMatchesDiagnose pins the cross-package contract: the
+// issues-engine path ships diagnose.RemediationCreateNamespace while the
+// insights path ships insights.RemediationCreateNamespace, and both must equal
+// the literal the frontend dispatches on. This is the only package that can
+// import both, so the equality assertion lives here.
+func TestRemediationConstantMatchesDiagnose(t *testing.T) {
+	if diagnose.RemediationCreateNamespace != string(RemediationCreateNamespace) {
+		t.Errorf("diagnose.RemediationCreateNamespace=%q != insights.RemediationCreateNamespace=%q — one-click fix wiring would silently break",
+			diagnose.RemediationCreateNamespace, string(RemediationCreateNamespace))
 	}
 }
 
@@ -650,33 +540,6 @@ func TestDetectManualDriftWithoutAutoSync(t *testing.T) {
 	}
 }
 
-func TestParseArgoOperationError_HookFailures(t *testing.T) {
-	cases := []struct {
-		name      string
-		msg       string
-		wantCause string
-	}{
-		{
-			name:      "PreSync hook failed",
-			msg:       `PreSync phase failed: hook "db-migration" exited with status 1`,
-			wantCause: "sync hook failed",
-		},
-		{
-			name:      "generic hook failed wording",
-			msg:       `hook "drain-cache" failed: timed out after 5m`,
-			wantCause: "sync hook failed",
-		},
-	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := parseArgoOperationError(tc.msg)
-			if !strings.Contains(strings.ToLower(got.Cause), tc.wantCause) {
-				t.Errorf("Cause = %q, want substring %q", got.Cause, tc.wantCause)
-			}
-		})
-	}
-}
-
 func TestArgoApplicationConditions_MapsTypesToSeverity(t *testing.T) {
 	root := argoApp(map[string]any{
 		"conditions": []any{
@@ -864,8 +727,9 @@ func TestBuildIssues_TerminatingFiresFirst(t *testing.T) {
 // through to FinalizerOwnerStatus and surfaces the returned text in
 // Issue.Cause.
 type fakeResolver struct {
-	statuses map[string]string // finalizer → status string
-	calls    []string          // finalizers passed (in order)
+	statuses map[string]string            // finalizer → status string
+	calls    []string                     // finalizers passed (in order)
+	problems map[string][]ResourceProblem // resource name → workload problems
 }
 
 func (f *fakeResolver) GetLive(string, string, string, string) *unstructured.Unstructured {
@@ -874,9 +738,72 @@ func (f *fakeResolver) GetLive(string, string, string, string) *unstructured.Uns
 func (f *fakeResolver) RecentEvents(string, string, string, string) []EventSummary {
 	return nil
 }
+func (f *fakeResolver) ResourceProblems(_, _, _, name string) []ResourceProblem {
+	return f.problems[name]
+}
 func (f *fakeResolver) FinalizerOwnerStatus(finalizer string, _ *unstructured.Unstructured) string {
 	f.calls = append(f.calls, finalizer)
 	return f.statuses[finalizer]
+}
+
+// TestBuildIssues_EnrichesDegradedResourceWithWorkloadCause pins the L4 bridge:
+// a managed resource Argo reports as Degraded gets the concrete workload "why"
+// (from the issues engine, via the resolver) attached as Issue.Cause — instead
+// of only "open the resource drawer". A nil resolver keeps the generic guidance.
+func TestBuildIssues_EnrichesDegradedResourceWithWorkloadCause(t *testing.T) {
+	root := argoApp(map[string]any{
+		"resources": []any{
+			map[string]any{
+				"group": "apps", "kind": "Deployment", "namespace": "argocd", "name": "billing",
+				"health": map[string]any{"status": "Degraded"},
+				"status": "Synced",
+			},
+		},
+	})
+	resourceIssue := func(out []Issue) *Issue {
+		for i := range out {
+			if out[i].Scope == ScopeResource {
+				return &out[i]
+			}
+		}
+		return nil
+	}
+
+	// With a resolver that classifies the Deployment, the cause is attached.
+	r := &fakeResolver{problems: map[string][]ResourceProblem{
+		"billing": {{Reason: "CrashLoopBackOff", Message: "1/1 pods crashlooping (last exit OOMKilled)", Category: "crashloop", Severity: "critical"}},
+	}}
+	got := resourceIssue(buildIssues(root, nil, "argocd", r))
+	if got == nil {
+		t.Fatalf("expected a resource-scope issue for the Degraded Deployment")
+	}
+	if got.Cause != "1/1 pods crashlooping (last exit OOMKilled)" {
+		t.Errorf("Cause = %q, want the workload reason from the issues engine", got.Cause)
+	}
+
+	// With a nil resolver, the issue still emits but carries no fabricated cause.
+	plain := resourceIssue(buildIssues(root, nil, "argocd", nil))
+	if plain == nil || plain.Cause != "" {
+		t.Errorf("nil resolver should yield a resource issue with empty Cause, got %+v", plain)
+	}
+}
+
+func TestResourceProblemCause(t *testing.T) {
+	if got := resourceProblemCause(nil); got != "" {
+		t.Errorf("no problems → %q, want empty", got)
+	}
+	// Critical wins over a warning regardless of order.
+	got := resourceProblemCause([]ResourceProblem{
+		{Reason: "OutOfSync", Message: "drifted", Severity: "warning"},
+		{Reason: "OOMKilled", Message: "out of memory", Severity: "critical"},
+	})
+	if got != "out of memory" {
+		t.Errorf("critical should win, got %q", got)
+	}
+	// Falls back to Reason when Message is empty.
+	if got := resourceProblemCause([]ResourceProblem{{Reason: "ImagePullBackOff", Severity: "critical"}}); got != "ImagePullBackOff" {
+		t.Errorf("empty message → reason, got %q", got)
+	}
 }
 
 // TestDetectPendingDeletion_EnrichesWithControllerHealth pins the contract
