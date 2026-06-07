@@ -11,7 +11,7 @@ export {
   subjectRef,
   memberRef,
 } from './types';
-export type { Issue, IssueSeverity, IssueAffected, IssueResourceRef, IssueDiagnosticContext, IssueDiagnosticFact, IssueDiagnosticIssueRef, IssueDiagnosticRole, IssueChangeContext } from './types';
+export type { Issue, IssueSeverity, IssueAffected, IssueResourceRef, IssueDiagnosticContext, IssueDiagnosticFact, IssueDiagnosticIssueRef, IssueDiagnosticRole, IssueChangeContext, IssueMeaningfulChange, IssueMeaningfulChangeField } from './types';
 export {
   ISSUE_SEVERITY_LABEL,
   ISSUE_SEVERITY_BADGE_CLASS,

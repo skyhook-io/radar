@@ -16,6 +16,7 @@ import (
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
@@ -64,8 +65,9 @@ type diagnoseResponse struct {
 	// diagnosed resource (crashloop, missing refs, HPA can't-scale, GitOps
 	// failure, …). Saves the agent re-deriving from raw logs/events what the
 	// issue engine knows. Empty when nothing is wrong.
-	RelatedIssues []issues.Issue           `json:"relatedIssues,omitempty"`
-	ChangeContext *issuesapi.ChangeContext `json:"changeContext,omitempty"`
+	RelatedIssues           []issues.Issue               `json:"relatedIssues,omitempty"`
+	ChangeContext           *issuesapi.ChangeContext     `json:"changeContext,omitempty"`
+	RecentMeaningfulChanges []issuesapi.MeaningfulChange `json:"recentMeaningfulChanges,omitempty"`
 	// DNSContext is attached only when this diagnosed resource shows DNS
 	// symptoms or has non-default DNS settings. It includes cluster DNS facts
 	// without adding one kube-system issue to every namespaced issue list.
@@ -268,6 +270,9 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 				Name:      input.Name,
 			})
 		}
+	}
+	if changes, err := meaningfulchanges.RecentForWorkloadAndConfigMaps(ctx, obj, kindNorm, input.Namespace, input.Name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit); err == nil && len(changes) > 0 {
+		resp.RecentMeaningfulChanges = changes
 	}
 	resp.DNSContext = dnsContextForDiagnose(ctx, cache, obj, pods, resp.LogsCurrent, resp.LogsPrevious, resp.Events)
 	resp.Warnings = k8score.EnrichRuntimeObjectWarnings(obj)

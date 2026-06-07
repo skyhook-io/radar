@@ -31,6 +31,7 @@ require (
 	k8s.io/client-go v0.36.1
 	k8s.io/klog/v2 v2.140.0
 	modernc.org/sqlite v1.50.1
+	sigs.k8s.io/yaml v1.6.0
 )
 
 require (
@@ -185,7 +186,6 @@ require (
 	sigs.k8s.io/kustomize/kyaml v0.21.1 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
 	sigs.k8s.io/structured-merge-diff/v6 v6.3.2 // indirect
-	sigs.k8s.io/yaml v1.6.0 // indirect
 )
 
 replace github.com/skyhook-io/radar/pkg => ./pkg

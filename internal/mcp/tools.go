@@ -21,11 +21,13 @@ import (
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/resourcecontextrefs"
 	"github.com/skyhook-io/radar/internal/search"
 	"github.com/skyhook-io/radar/internal/summarycontext"
 	"github.com/skyhook-io/radar/internal/timeline"
 	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
+	"github.com/skyhook-io/radar/pkg/issuesapi"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 	topology "github.com/skyhook-io/radar/pkg/topology"
@@ -167,6 +169,8 @@ func registerTools(server *mcp.Server) {
 			"resourceContext (managedBy, exposes, selectedBy, uses, runsOn, " +
 			"issue/audit/policy rollups) + current AND previous container logs across the " +
 			"workload's pods + recent Warning events filtered to this resource + a " +
+			"recentMeaningfulChanges section for the workload and directly referenced " +
+			"ConfigMaps (no Secret content) + a " +
 			"startupBlockers section when the workload can't reach Running (unschedulable " +
 			"with the offending node constraint named, admission/quota rejection, or a " +
 			"post-bind CNI/volume stall). Use for " +
@@ -190,12 +194,13 @@ func registerTools(server *mcp.Server) {
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_changes",
 		Description: "Use when the symptom is 'this worked earlier' or 'something broke " +
-			"after a deploy/config change.' Returns a chronological feed of resource " +
-			"creates, updates, and deletes such as image changes, ConfigMap edits, scale " +
-			"events, label edits, and rollout churn. This is often faster than reading " +
-			"ReplicaSet histories or individual audit/log streams. Pair with since to " +
-			"bound the window; filter by namespace, kind, or name when you know the scope. " +
-			"Omit namespace when the relevant change may be outside the app namespace.",
+			"after a deploy/config change.' Returns recent meaningful changes ranked with " +
+			"spec/config changes first, including field-level diffs for Deployment env/probes " +
+			"and structured ConfigMap data when available. This is often faster than reading " +
+			"ReplicaSet histories or individual audit/log streams, especially when issues " +
+			"are empty or dominated by baseline failures. Pair with since to bound the window; " +
+			"filter by namespace, kind, or name when you know the scope. Omit namespace when " +
+			"the relevant change may be outside the app namespace.",
 		Annotations: readOnly,
 	}, logToolCall("get_changes", handleGetChanges))
 
@@ -463,7 +468,7 @@ type getResourceInput struct {
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. cluster.x-k8s.io for CAPI Cluster vs CNPG Cluster)"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
-	Include   string `json:"include,omitempty" jsonschema:"optional sidecar data after narrowing to this object: events, metrics. Separate from context. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
+	Include   string `json:"include,omitempty" jsonschema:"optional sidecar data after narrowing to this object: events, metrics, changes. include=changes follows the existing comma-separated include pattern. Separate from context. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
 	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches managedBy / exposes / selectedBy / uses / runsOn / issueSummary / auditSummary rollups) or 'none' (bare minified resource). For full diagnostic tier with logs + events bundled, use the diagnose tool instead."`
 }
 
@@ -911,11 +916,24 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		warnings = k8score.EnrichRuntimeObjectWarnings(rawObj)
 	}
 
+	defaultConfigMapChanges := meaningfulchanges.ConfigMapKind(kind)
+	includeChanges := includes["changes"] || defaultConfigMapChanges
+	var recentChanges []issuesapi.MeaningfulChange
+	var changesErr string
+	if includeChanges {
+		changes, err := meaningfulchanges.RecentForResource(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit)
+		if err != nil {
+			changesErr = err.Error()
+		} else {
+			recentChanges = changes
+		}
+	}
+
 	// Three shapes:
 	//   - bare resource: no includes, context=none
 	//   - resource + resourceContext: no includes, default context
 	//   - resource + resourceContext + extras: includes set
-	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 {
+	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 && !defaultConfigMapChanges {
 		return toJSONResult(resourceData)
 	}
 
@@ -925,6 +943,13 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	}
 	if len(warnings) > 0 {
 		result["warnings"] = warnings
+	}
+	if includeChanges {
+		if changesErr != "" {
+			result["recentMeaningfulChangesError"] = changesErr
+		} else if includes["changes"] || len(recentChanges) > 0 {
+			result["recentMeaningfulChanges"] = recentChanges
+		}
 	}
 	if len(includes) > 0 {
 		attachResourceExtras(ctx, cache, result, includes, kind, namespace, name)
@@ -1025,6 +1050,16 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 		}
 	}
 
+	if includes["changes"] {
+		if _, ok := result["recentMeaningfulChanges"]; !ok {
+			if changes, err := meaningfulchanges.RecentForResource(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit); err == nil {
+				result["recentMeaningfulChanges"] = changes
+			} else {
+				result["recentMeaningfulChangesError"] = err.Error()
+			}
+		}
+	}
+
 	// include=logs was dropped from get_resource (it was Pod-only and lacked
 	// container/previous/since/grep). Signal it explicitly rather than silently
 	// no-op'ing, so a client on a stale schema is redirected instead of seeing
@@ -1040,14 +1075,14 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 	var unknown []string
 	for tok := range includes {
 		switch tok {
-		case "events", "metrics", "logs":
+		case "events", "metrics", "logs", "changes":
 		default:
 			unknown = append(unknown, tok)
 		}
 	}
 	if len(unknown) > 0 {
 		sort.Strings(unknown)
-		result["includeError"] = fmt.Sprintf("unknown include value(s): %s (valid: events, metrics)", strings.Join(unknown, ", "))
+		result["includeError"] = fmt.Sprintf("unknown include value(s): %s (valid: events, metrics, changes)", strings.Join(unknown, ", "))
 	}
 
 }
@@ -1097,11 +1132,6 @@ func isPodKind(kind string) bool {
 }
 
 func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getChangesInput) (*mcp.CallToolResult, any, error) {
-	store := timeline.GetStore()
-	if store == nil {
-		return nil, nil, fmt.Errorf("timeline store not initialized")
-	}
-
 	since := 1 * time.Hour
 	if input.Since != "" {
 		parsed, err := time.ParseDuration(input.Since)
@@ -1129,76 +1159,33 @@ func handleGetChanges(ctx context.Context, req *mcp.CallToolRequest, input getCh
 		return toJSONResult(getChangesResponseMCP{Changes: []mcpChange{}})
 	}
 
-	queryOpts := timeline.QueryOptions{
-		Since:        time.Now().Add(-since),
-		FilterPreset: "default",
+	query := meaningfulchanges.Query{
+		Since:      since,
+		Limit:      limit,
+		FieldLimit: meaningfulchanges.DefaultFieldLimit,
+		Name:       input.Name,
 	}
 	switch {
 	case input.Namespace != "":
-		queryOpts.Namespaces = []string{input.Namespace}
+		query.Namespaces = []string{input.Namespace}
 	case allowed != nil:
-		queryOpts.Namespaces = allowed
+		query.Namespaces = allowed
 	}
 	if input.Kind != "" {
-		queryOpts.Kinds = []string{input.Kind}
-	}
-	// When name filtering is needed client-side, fetch more to compensate for post-filter reduction
-	if input.Name != "" {
-		queryOpts.Limit = limit * 10
-	} else {
-		queryOpts.Limit = limit
+		query.Kinds = []string{input.Kind}
 	}
 
-	events, err := store.Query(ctx, queryOpts)
+	changes, capped, err := meaningfulchanges.Recent(ctx, query)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to query timeline: %w", err)
-	}
-	// Track whether the upstream store query hit its cap — if so there may
-	// be more changes outside the window even after client-side filtering.
-	upstreamCapped := len(events) >= queryOpts.Limit
-
-	// Client-side name filter (QueryOptions doesn't support name filtering)
-	if input.Name != "" {
-		filtered := events[:0]
-		for _, e := range events {
-			if e.Name == input.Name {
-				filtered = append(filtered, e)
-			}
-		}
-		events = filtered
-		if len(events) > limit {
-			events = events[:limit]
-		}
-	}
-
-	changes := make([]mcpChange, 0, len(events))
-	for _, e := range events {
-		summary := ""
-		if e.Diff != nil && e.Diff.Summary != "" {
-			summary = e.Diff.Summary
-		} else if e.Message != "" {
-			summary = k8s.Truncate(e.Message, 100)
-		}
-		changes = append(changes, mcpChange{
-			Kind:       e.Kind,
-			Namespace:  e.Namespace,
-			Name:       e.Name,
-			ChangeType: string(e.EventType),
-			Summary:    summary,
-			Timestamp:  e.Timestamp.Format(time.RFC3339),
-		})
 	}
 
 	// Always wrap so capped + uncapped agree on wire shape
 	// ({changes: [...], narrowHint?: "..."}).
 	resp := getChangesResponseMCP{Changes: changes}
-	if upstreamCapped {
-		// queryOpts.Limit is the actual store-side cap (10x when a name
-		// filter triggered fetch-extra). Citing `limit` would mislead
-		// the agent on the name-filter path where the real cap is higher.
+	if capped {
 		resp.NarrowHint = fmt.Sprintf(
-			"upstream feed capped at %d entries — narrow with namespace=, kind=, name=, shorten since= (e.g. 15m), or raise limit (cap 50)",
-			queryOpts.Limit,
+			"meaningful change candidates were capped before ranking — narrow with namespace=, kind=, name=, shorten since= (e.g. 15m), or raise limit (cap 50)",
 		)
 	}
 	return toJSONResult(resp)
@@ -1798,14 +1785,7 @@ type mcpDashboard struct {
 	Visibility         *k8s.VisibilitySummary `json:"visibility,omitempty"`
 }
 
-type mcpChange struct {
-	Kind       string `json:"kind"`
-	Namespace  string `json:"namespace,omitempty"`
-	Name       string `json:"name"`
-	ChangeType string `json:"changeType"`
-	Summary    string `json:"summary,omitempty"`
-	Timestamp  string `json:"timestamp"`
-}
+type mcpChange = issuesapi.MeaningfulChange
 
 type mcpMetrics struct {
 	CPUUsagePercent   int `json:"cpuUsagePercent,omitempty"`
@@ -2468,6 +2448,16 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces, func(group, resource string) bool {
 		return canReadInNamespace(ctx, group, resource, "kube-system", "list")
 	})
+	if len(allowedNamespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.ShouldAttachIssueSidecar(out) {
+		if changes, _, err := meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
+			Namespaces: []string{allowedNamespaces[0]},
+			Since:      meaningfulchanges.DefaultSince,
+			Limit:      meaningfulchanges.SidecarLimit,
+			FieldLimit: meaningfulchanges.DefaultFieldLimit,
+		}); err == nil && len(changes) > 0 {
+			resp.RecentMeaningfulChanges = changes
+		}
+	}
 	// Steering hint when the issue list was capped (MCP-only).
 	if stats.TotalMatched > len(out) {
 		resp.NarrowHint = fmt.Sprintf(

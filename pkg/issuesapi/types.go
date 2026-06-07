@@ -214,6 +214,24 @@ type ChangeContext struct {
 	Evidence string `json:"evidence,omitempty"`
 }
 
+type ChangeField struct {
+	Path     string `json:"path"`
+	OldValue any    `json:"oldValue,omitempty"`
+	NewValue any    `json:"newValue,omitempty"`
+}
+
+type MeaningfulChange struct {
+	Kind           string        `json:"kind"`
+	Namespace      string        `json:"namespace,omitempty"`
+	Name           string        `json:"name"`
+	ChangeType     string        `json:"changeType"`
+	Summary        string        `json:"summary,omitempty"`
+	Timestamp      string        `json:"timestamp"`
+	ChangeCategory string        `json:"changeCategory,omitempty"`
+	RankReason     string        `json:"rankReason,omitempty"`
+	Fields         []ChangeField `json:"fields,omitempty"`
+}
+
 type ClusterContext struct {
 	DNS *ClusterDNSContext `json:"dns,omitempty"`
 }
@@ -292,14 +310,15 @@ type Issue struct {
 }
 
 type Response struct {
-	Issues            []Issue         `json:"issues"`
-	Total             int             `json:"total"`
-	TotalMatched      int             `json:"total_matched"`
-	FilterErrors      int             `json:"filter_errors,omitempty"`
-	FilterErrorSample string          `json:"filter_error_sample,omitempty"`
-	Visibility        any             `json:"visibility,omitempty"`
-	NarrowHint        string          `json:"narrowHint,omitempty"`
-	ClusterContext    *ClusterContext `json:"cluster_context,omitempty"`
+	Issues                  []Issue            `json:"issues"`
+	Total                   int                `json:"total"`
+	TotalMatched            int                `json:"total_matched"`
+	FilterErrors            int                `json:"filter_errors,omitempty"`
+	FilterErrorSample       string             `json:"filter_error_sample,omitempty"`
+	Visibility              any                `json:"visibility,omitempty"`
+	NarrowHint              string             `json:"narrowHint,omitempty"`
+	ClusterContext          *ClusterContext    `json:"cluster_context,omitempty"`
+	RecentMeaningfulChanges []MeaningfulChange `json:"recent_meaningful_changes,omitempty"`
 }
 
 type BindingType string

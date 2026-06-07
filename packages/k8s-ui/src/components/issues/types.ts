@@ -85,6 +85,24 @@ export interface IssueChangeContext {
   evidence?: string;
 }
 
+export interface IssueMeaningfulChangeField {
+  path: string;
+  oldValue?: unknown;
+  newValue?: unknown;
+}
+
+export interface IssueMeaningfulChange {
+  kind: string;
+  namespace?: string;
+  name: string;
+  changeType: string;
+  summary?: string;
+  timestamp: string;
+  changeCategory?: 'spec_config' | 'lifecycle' | 'runtime_status' | string;
+  rankReason?: string;
+  fields?: IssueMeaningfulChangeField[];
+}
+
 /**
  * A grouped live issue — one row of the triage queue. Subject (kind/group/
  * namespace/name) is the topmost owner when the rows folded under a workload,

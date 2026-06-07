@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"log"
 	"reflect"
+	"sort"
 	"strings"
 	"sync"
 
+	aicontext "github.com/skyhook-io/radar/pkg/ai/context"
 	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
@@ -15,6 +17,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"sigs.k8s.io/yaml"
 )
 
 // Type aliases — canonical definitions live in pkg/k8score.
@@ -304,6 +307,10 @@ func diffDeployment(oldObj, newObj any) ([]FieldChange, []string) {
 		})
 		summary = append(summary, "resources changed")
 	}
+
+	podTemplateChanges, podTemplateSummary := diffPodTemplateConfig(oldDep.Spec.Template.Spec, newDep.Spec.Template.Spec)
+	changes = append(changes, podTemplateChanges...)
+	summary = append(summary, podTemplateSummary...)
 
 	// Check paused state
 	if oldDep.Spec.Paused != newDep.Spec.Paused {
@@ -648,12 +655,17 @@ func diffConfigMap(oldObj, newObj any) ([]FieldChange, []string) {
 		summary = append(summary, fmt.Sprintf("removed keys: %v", removedKeys))
 	}
 	if len(modifiedKeys) > 0 {
-		changes = append(changes, FieldChange{
-			Path:     "data (modified keys)",
-			OldValue: modifiedKeys,
-			NewValue: modifiedKeys,
-		})
-		summary = append(summary, fmt.Sprintf("modified keys: %v", modifiedKeys))
+		structured, structuredSummary, fallback := diffConfigMapModifiedKeys(oldCM.Data, newCM.Data, modifiedKeys)
+		changes = append(changes, structured...)
+		summary = append(summary, structuredSummary...)
+		if len(fallback) > 0 {
+			changes = append(changes, FieldChange{
+				Path:     "data (modified keys)",
+				OldValue: fallback,
+				NewValue: fallback,
+			})
+			summary = append(summary, fmt.Sprintf("modified keys: %v", fallback))
+		}
 	}
 
 	// binaryData (separate field for non-UTF-8 payloads). Same key-only semantic.
@@ -683,6 +695,224 @@ func diffConfigMap(oldObj, newObj any) ([]FieldChange, []string) {
 	}
 
 	return changes, summary
+}
+
+const (
+	configMapStructuredValueBytes = 64 * 1024
+	configMapStructuredFieldCap   = 50
+	configMapStructuredDepthCap   = 8
+	configMapStructuredNodeCap    = 1000
+)
+
+func diffConfigMapModifiedKeys(oldData, newData map[string]string, keys []string) ([]FieldChange, []string, []string) {
+	var changes []FieldChange
+	var summary []string
+	var fallback []string
+	for _, key := range keys {
+		structured, ok := structuredConfigValueDiff(key, oldData[key], newData[key])
+		if !ok || len(structured) == 0 {
+			fallback = append(fallback, key)
+			continue
+		}
+		changes = append(changes, structured...)
+		if len(structured) == 1 {
+			summary = append(summary, fmt.Sprintf("%s changed", structured[0].Path))
+		} else {
+			summary = append(summary, fmt.Sprintf("%s: %d structured fields changed", key, len(structured)))
+		}
+	}
+	return changes, summary, fallback
+}
+
+func structuredConfigValueDiff(key, oldVal, newVal string) ([]FieldChange, bool) {
+	if len(oldVal) > configMapStructuredValueBytes || len(newVal) > configMapStructuredValueBytes {
+		return nil, false
+	}
+	oldParsed, okOld := parseStructuredConfigValue(oldVal)
+	newParsed, okNew := parseStructuredConfigValue(newVal)
+	if !okOld || !okNew {
+		return nil, false
+	}
+	state := structuredDiffState{fieldCap: configMapStructuredFieldCap, nodeCap: configMapStructuredNodeCap}
+	state.diff(fmt.Sprintf("data.%s", key), oldParsed, newParsed, 0)
+	if state.capped {
+		return nil, false
+	}
+	return state.changes, true
+}
+
+func parseStructuredConfigValue(value string) (any, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return nil, false
+	}
+	var parsed any
+	if json.Unmarshal([]byte(trimmed), &parsed) == nil && structuredRoot(parsed) {
+		return normalizeStructuredValue(parsed), true
+	}
+	if yaml.Unmarshal([]byte(trimmed), &parsed) == nil && structuredRoot(parsed) {
+		return normalizeStructuredValue(parsed), true
+	}
+	return nil, false
+}
+
+func structuredRoot(value any) bool {
+	switch value.(type) {
+	case map[string]any, map[any]any, []any:
+		return true
+	default:
+		return false
+	}
+}
+
+func normalizeStructuredValue(v any) any {
+	switch typed := v.(type) {
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for k, child := range typed {
+			out[k] = normalizeStructuredValue(child)
+		}
+		return out
+	case map[any]any:
+		out := make(map[string]any, len(typed))
+		for k, child := range typed {
+			out[fmt.Sprint(k)] = normalizeStructuredValue(child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, child := range typed {
+			out[i] = normalizeStructuredValue(child)
+		}
+		return out
+	default:
+		return typed
+	}
+}
+
+type structuredDiffState struct {
+	changes  []FieldChange
+	fields   int
+	nodes    int
+	fieldCap int
+	nodeCap  int
+	capped   bool
+}
+
+func (s *structuredDiffState) diff(path string, oldVal, newVal any, depth int) {
+	if s.capped {
+		return
+	}
+	s.nodes++
+	if s.nodes > s.nodeCap || depth > configMapStructuredDepthCap {
+		s.capped = true
+		return
+	}
+
+	oldMap, oldIsMap := oldVal.(map[string]any)
+	newMap, newIsMap := newVal.(map[string]any)
+	if oldIsMap && newIsMap {
+		keys := make(map[string]struct{}, len(oldMap)+len(newMap))
+		for k := range oldMap {
+			keys[k] = struct{}{}
+		}
+		for k := range newMap {
+			keys[k] = struct{}{}
+		}
+		sorted := make([]string, 0, len(keys))
+		for k := range keys {
+			sorted = append(sorted, k)
+		}
+		sort.Strings(sorted)
+		for _, k := range sorted {
+			s.diff(path+"."+k, oldMap[k], newMap[k], depth+1)
+		}
+		return
+	}
+
+	oldSlice, oldIsSlice := oldVal.([]any)
+	newSlice, newIsSlice := newVal.([]any)
+	if oldIsSlice && newIsSlice {
+		if len(oldSlice) != len(newSlice) {
+			s.add(path, oldVal, newVal)
+			return
+		}
+		for i := range oldSlice {
+			s.diff(fmt.Sprintf("%s[%d]", path, i), oldSlice[i], newSlice[i], depth+1)
+		}
+		return
+	}
+
+	if !reflect.DeepEqual(oldVal, newVal) {
+		s.add(path, oldVal, newVal)
+	}
+}
+
+func (s *structuredDiffState) add(path string, oldVal, newVal any) {
+	if s.fields >= s.fieldCap {
+		s.capped = true
+		return
+	}
+	s.fields++
+	s.changes = append(s.changes, FieldChange{
+		Path:     path,
+		OldValue: sanitizeConfigValue(path, oldVal),
+		NewValue: sanitizeConfigValue(path, newVal),
+	})
+}
+
+func sanitizeConfigValue(path string, value any) any {
+	if sensitivePath(path) {
+		return "[REDACTED]"
+	}
+	switch typed := value.(type) {
+	case string:
+		return truncateConfigScalar(aicontext.RedactSecrets(typed), 200)
+	case map[string]any:
+		out := make(map[string]any, len(typed))
+		for k, child := range typed {
+			out[k] = sanitizeConfigValue(path+"."+k, child)
+		}
+		return out
+	case []any:
+		out := make([]any, len(typed))
+		for i, child := range typed {
+			out[i] = sanitizeConfigValue(fmt.Sprintf("%s[%d]", path, i), child)
+		}
+		return out
+	case nil:
+		return nil
+	default:
+		return typed
+	}
+}
+
+func sensitivePath(path string) bool {
+	if sensitivePathSegment(strings.ToLower(path)) {
+		return true
+	}
+	for _, part := range strings.FieldsFunc(path, func(r rune) bool { return r == '.' || r == '[' || r == ']' || r == '/' || r == '-' || r == '_' }) {
+		if sensitivePathSegment(part) {
+			return true
+		}
+	}
+	return false
+}
+
+func sensitivePathSegment(segment string) bool {
+	segment = strings.ToLower(segment)
+	return strings.Contains(segment, "password") || strings.Contains(segment, "passwd") ||
+		strings.Contains(segment, "token") || strings.Contains(segment, "secret") ||
+		strings.Contains(segment, "api_key") || strings.Contains(segment, "apikey") ||
+		strings.Contains(segment, "accesskey") || strings.Contains(segment, "privatekey") ||
+		strings.Contains(segment, "private_key")
+}
+
+func truncateConfigScalar(value string, max int) string {
+	if len(value) <= max {
+		return value
+	}
+	return value[:max-1] + "…"
 }
 
 // diffIngress computes diff for Ingress resources
@@ -2099,6 +2329,217 @@ func getContainerResources(containers []corev1.Container) map[string]any {
 	return resources
 }
 
+func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []string) {
+	oldContainers := containerConfigMap(oldSpec)
+	newContainers := containerConfigMap(newSpec)
+	keys := make(map[string]struct{}, len(oldContainers)+len(newContainers))
+	for name := range oldContainers {
+		keys[name] = struct{}{}
+	}
+	for name := range newContainers {
+		keys[name] = struct{}{}
+	}
+	names := make([]string, 0, len(keys))
+	for name := range keys {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var changes []FieldChange
+	var summary []string
+	for _, name := range names {
+		oldC, oldOK := oldContainers[name]
+		newC, newOK := newContainers[name]
+		if !oldOK || !newOK {
+			continue
+		}
+		for _, change := range diffContainerEnv(name, oldC.Env, newC.Env) {
+			changes = append(changes, change)
+			summary = append(summary, envChangeSummary(change, name))
+		}
+		if oldEnvFrom, newEnvFrom := envFromRefs(oldC.EnvFrom), envFromRefs(newC.EnvFrom); !equalStringSlices(oldEnvFrom, newEnvFrom) {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].envFrom", name), OldValue: oldEnvFrom, NewValue: newEnvFrom})
+			summary = append(summary, fmt.Sprintf("envFrom(%s) changed", name))
+		}
+		for _, probeName := range []string{"readinessProbe", "livenessProbe", "startupProbe"} {
+			oldProbe := normalizedProbe(probeForName(oldC, probeName))
+			newProbe := normalizedProbe(probeForName(newC, probeName))
+			if !reflect.DeepEqual(oldProbe, newProbe) {
+				changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].%s", name, probeName), OldValue: oldProbe, NewValue: newProbe})
+				summary = append(summary, fmt.Sprintf("%s(%s) changed", probeName, name))
+			}
+		}
+		if !equalStringSlices(oldC.Command, newC.Command) {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].command", name), OldValue: oldC.Command, NewValue: newC.Command})
+			summary = append(summary, fmt.Sprintf("command(%s) changed", name))
+		}
+		if !equalStringSlices(oldC.Args, newC.Args) {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].args", name), OldValue: oldC.Args, NewValue: newC.Args})
+			summary = append(summary, fmt.Sprintf("args(%s) changed", name))
+		}
+	}
+	return changes, summary
+}
+
+func containerConfigMap(spec corev1.PodSpec) map[string]corev1.Container {
+	out := make(map[string]corev1.Container, len(spec.InitContainers)+len(spec.Containers))
+	for _, c := range spec.InitContainers {
+		out[c.Name] = c
+	}
+	for _, c := range spec.Containers {
+		out[c.Name] = c
+	}
+	return out
+}
+
+func diffContainerEnv(container string, oldEnv, newEnv []corev1.EnvVar) []FieldChange {
+	oldMap := envVarMap(oldEnv)
+	newMap := envVarMap(newEnv)
+	keys := make(map[string]struct{}, len(oldMap)+len(newMap))
+	for name := range oldMap {
+		keys[name] = struct{}{}
+	}
+	for name := range newMap {
+		keys[name] = struct{}{}
+	}
+	names := make([]string, 0, len(keys))
+	for name := range keys {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	var changes []FieldChange
+	for _, name := range names {
+		oldVal, oldOK := oldMap[name]
+		newVal, newOK := newMap[name]
+		if oldOK && newOK && oldVal == newVal {
+			continue
+		}
+		changes = append(changes, FieldChange{
+			Path:     fmt.Sprintf("spec.template.spec.containers[%s].env[%s]", container, name),
+			OldValue: valueOrNil(oldVal, oldOK),
+			NewValue: valueOrNil(newVal, newOK),
+		})
+	}
+	return changes
+}
+
+func envVarMap(env []corev1.EnvVar) map[string]string {
+	out := make(map[string]string, len(env))
+	for _, item := range env {
+		out[item.Name] = envVarDisplayValue(item)
+	}
+	return out
+}
+
+func envVarDisplayValue(env corev1.EnvVar) string {
+	if env.ValueFrom != nil {
+		return envValueFromDisplay(env.ValueFrom)
+	}
+	if envNameLooksSecret(env.Name) {
+		return "[REDACTED]"
+	}
+	return truncateConfigScalar(aicontext.RedactSecrets(env.Value), 200)
+}
+
+func envValueFromDisplay(from *corev1.EnvVarSource) string {
+	switch {
+	case from == nil:
+		return ""
+	case from.ConfigMapKeyRef != nil:
+		return fmt.Sprintf("configMapKeyRef:%s/%s", from.ConfigMapKeyRef.Name, from.ConfigMapKeyRef.Key)
+	case from.SecretKeyRef != nil:
+		return fmt.Sprintf("secretKeyRef:%s/%s", from.SecretKeyRef.Name, from.SecretKeyRef.Key)
+	case from.FieldRef != nil:
+		return fmt.Sprintf("fieldRef:%s", from.FieldRef.FieldPath)
+	case from.ResourceFieldRef != nil:
+		return fmt.Sprintf("resourceFieldRef:%s", from.ResourceFieldRef.Resource)
+	default:
+		return "valueFrom"
+	}
+}
+
+func envFromRefs(refs []corev1.EnvFromSource) []string {
+	out := make([]string, 0, len(refs))
+	for _, ref := range refs {
+		prefix := ref.Prefix
+		switch {
+		case ref.ConfigMapRef != nil:
+			out = append(out, fmt.Sprintf("configMap:%s prefix=%s", ref.ConfigMapRef.Name, prefix))
+		case ref.SecretRef != nil:
+			out = append(out, fmt.Sprintf("secret:%s prefix=%s", ref.SecretRef.Name, prefix))
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
+func probeForName(c corev1.Container, name string) *corev1.Probe {
+	switch name {
+	case "readinessProbe":
+		return c.ReadinessProbe
+	case "livenessProbe":
+		return c.LivenessProbe
+	case "startupProbe":
+		return c.StartupProbe
+	default:
+		return nil
+	}
+}
+
+func normalizedProbe(p *corev1.Probe) any {
+	if p == nil {
+		return nil
+	}
+	out := map[string]any{
+		"initialDelaySeconds": p.InitialDelaySeconds,
+		"timeoutSeconds":      p.TimeoutSeconds,
+		"periodSeconds":       p.PeriodSeconds,
+		"successThreshold":    p.SuccessThreshold,
+		"failureThreshold":    p.FailureThreshold,
+	}
+	if p.HTTPGet != nil {
+		out["handler"] = fmt.Sprintf("httpGet:%s:%d%s", p.HTTPGet.Scheme, p.HTTPGet.Port.IntVal, p.HTTPGet.Path)
+	} else if p.TCPSocket != nil {
+		out["handler"] = fmt.Sprintf("tcpSocket:%d", p.TCPSocket.Port.IntVal)
+	} else if p.GRPC != nil {
+		service := ""
+		if p.GRPC.Service != nil {
+			service = *p.GRPC.Service
+		}
+		out["handler"] = fmt.Sprintf("grpc:%d/%s", p.GRPC.Port, service)
+	} else if p.Exec != nil {
+		out["handler"] = map[string]any{"exec": p.Exec.Command}
+	}
+	return out
+}
+
+func envChangeSummary(change FieldChange, container string) string {
+	name := change.Path
+	if idx := strings.LastIndex(name, ".env["); idx >= 0 {
+		name = strings.TrimSuffix(strings.TrimPrefix(name[idx+5:], "["), "]")
+	}
+	switch {
+	case change.OldValue == nil:
+		return fmt.Sprintf("env(%s/%s) added", container, name)
+	case change.NewValue == nil:
+		return fmt.Sprintf("env(%s/%s) removed", container, name)
+	default:
+		return fmt.Sprintf("env(%s/%s) changed", container, name)
+	}
+}
+
+func valueOrNil(v string, ok bool) any {
+	if !ok {
+		return nil
+	}
+	return v
+}
+
+func envNameLooksSecret(name string) bool {
+	return sensitivePathSegment(name)
+}
+
 func getTotalRestarts(statuses []corev1.ContainerStatus) int32 {
 	var total int32
 	for _, s := range statuses {
@@ -2120,6 +2561,7 @@ func getMapKeys(m map[string]string) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 	return keys
 }
 
@@ -2128,6 +2570,7 @@ func getBinaryMapKeys(m map[string][]byte) []string {
 	for k := range m {
 		keys = append(keys, k)
 	}
+	sort.Strings(keys)
 	return keys
 }
 
@@ -2152,6 +2595,7 @@ func diffStringSlices(a, b []string) []string {
 			diff = append(diff, s)
 		}
 	}
+	sort.Strings(diff)
 	return diff
 }
 
