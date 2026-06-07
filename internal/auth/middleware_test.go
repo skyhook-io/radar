@@ -42,7 +42,8 @@ func TestMiddleware_ExemptPaths(t *testing.T) {
 		want int
 	}{
 		{"/api/health", http.StatusNoContent},      // exempt
-		{"/api/connection", http.StatusNoContent},   // exempt
+		{"/api/connection", http.StatusUnauthorized},       // requires auth
+		{"/api/connection/retry", http.StatusUnauthorized}, // requires auth — state-changing
 		{"/auth/login", http.StatusNoContent},       // exempt
 		{"/auth/callback", http.StatusNoContent},    // exempt
 		{"/", http.StatusNoContent},                 // static asset — exempt
@@ -283,8 +284,8 @@ func TestIsExemptPath(t *testing.T) {
 	}{
 		{"/api/health", true},
 		{"/api/health/detailed", true},
-		{"/api/connection", true},
-		{"/api/connection/retry", true},
+		{"/api/connection", false},
+		{"/api/connection/retry", false},
 		{"/auth/login", true},
 		{"/auth/callback", true},
 		{"/", true},
@@ -321,8 +322,8 @@ func TestIsExemptPath_CloudMode(t *testing.T) {
 		{"/api/health", true},
 		{"/auth/login", true},
 		{"/auth/callback", true},
-		// Under non-cloud mode these would be exempt. Under cloud-mode
-		// they must require auth.
+		// Under non-cloud mode static assets would be exempt. Under
+		// cloud-mode they must require auth.
 		{"/api/connection", false},
 		{"/api/connection/retry", false},
 		{"/", false},

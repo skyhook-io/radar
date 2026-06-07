@@ -4,6 +4,7 @@ import type { ConnectionState } from '../context/ConnectionContext'
 import { ContextSwitcher } from './ContextSwitcher'
 import { parseContextName } from '../utils/context-name'
 import { useOpenLocalTerminal, ClusterName } from '@skyhook-io/k8s-ui'
+import { useAuthMe } from '../api/client'
 
 interface ConnectionErrorViewProps {
   connection: ConnectionState
@@ -165,14 +166,20 @@ export function ConnectionErrorView({ connection, onRetry, isRetrying }: Connect
   const authInfo = isAuth ? getAuthHints(connection.context || '') : null
   const errorInfo = authInfo || errorHints[connection.errorType || 'unknown'] || errorHints.unknown
   const openLocalTerminal = useOpenLocalTerminal()
+  const { data: authMe } = useAuthMe()
 
-  // Build a command that auto-retries connection after successful auth
+  // Auto-retry after successful auth. Only chained when Radar auth is
+  // disabled — with auth enabled the unauthenticated curl would 401 (and
+  // the local-terminal flow can't fix a remote server's credentials anyway).
   const retryCmd = `curl -s -X POST http://${window.location.host}/api/connection/retry > /dev/null`
 
   const handleAuthInTerminal = () => {
     if (!authInfo?.authCommand) return
+    const cmd = authMe?.authEnabled
+      ? authInfo.authCommand.command
+      : `${authInfo.authCommand.command} && ${retryCmd}`
     openLocalTerminal({
-      initialCommand: `${authInfo.authCommand.command} && ${retryCmd}`,
+      initialCommand: cmd,
       title: 'Auth',
     })
   }

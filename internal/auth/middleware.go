@@ -132,9 +132,14 @@ func isExemptPath(path string) bool {
 		return false
 	}
 
+	// /api/connection is deliberately NOT exempt: POST /api/connection/retry
+	// is state-changing (kills all exec/port-forward sessions, reinitializes
+	// the informer cache) and GET /api/connection leaks kubeconfig context
+	// names. The terminal re-auth flow that relied on an unauthenticated
+	// retry curl only applies to local no-auth installs, where this
+	// middleware isn't mounted at all.
 	exemptPrefixes := []string{
 		"/api/health",
-		"/api/connection",
 		"/auth/",
 	}
 	for _, prefix := range exemptPrefixes {
