@@ -154,6 +154,21 @@ func TestHandleGitOpsDiagnose_PerKindRBAC(t *testing.T) {
 	}
 }
 
+// TestHandleGitOpsDiagnose_NamespaceGate pins that the GitOps path honors
+// Radar's namespace allow-list like the workload path: a namespace outside the
+// user's scope is forbidden even when cluster RBAC would permit the get.
+func TestHandleGitOpsDiagnose_NamespaceGate(t *testing.T) {
+	setupFakeCacheForFilterTests(t)
+	// User scoped to team-a; cluster RBAC grants get on applications in argocd.
+	ctx := withRestrictedUser(t, "scoped", []string{"team-a"})
+	getPermCache().Get("scoped").SetCanI("get", "argoproj.io", "applications", "argocd", true)
+
+	_, _, err := handleDiagnose(ctx, nil, diagnoseInput{Kind: "application", Namespace: "argocd", Name: "guestbook"})
+	if err == nil || !strings.Contains(err.Error(), "forbidden") {
+		t.Fatalf("namespace outside the allow-list must be forbidden, got %v", err)
+	}
+}
+
 func TestHandleDiagnose_InvalidKind(t *testing.T) {
 	setupFakeCacheForFilterTests(t)
 	ctx := withClusterAdmin(t, "admin")

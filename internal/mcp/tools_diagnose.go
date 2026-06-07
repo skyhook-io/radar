@@ -347,7 +347,13 @@ func fluxReadySummary(u *unstructured.Unstructured) string {
 // and parses the reconciler's failure (cause/action/remediation), so this stays
 // a thin status read.
 func handleGitOpsDiagnose(ctx context.Context, input diagnoseInput, canonicalKind, group, resource, tool string) (*mcp.CallToolResult, any, error) {
-	// Per-kind RBAC: the object is read from the shared cache (connector
+	// Two distinct gates, both required — same as the workload path above.
+	// (1) Radar's namespace allow-list: the user only sees their scoped
+	// namespaces, even when cluster RBAC would permit a read outside them.
+	if !checkNamespaceAccess(ctx, input.Namespace) {
+		return nil, nil, fmt.Errorf("forbidden: no access to namespace %q", input.Namespace)
+	}
+	// (2) Per-kind K8s RBAC: the object is read from the shared cache (connector
 	// identity), so namespace access alone is not enough — a user who can read
 	// ordinary resources in the namespace but not the GitOps CR must not receive
 	// it. Gate on the exact (group, resource, get) the read performs.
