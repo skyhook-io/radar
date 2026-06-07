@@ -278,6 +278,7 @@ func recordK8sEventToTimeline(obj any) {
 	}
 
 	timelineEvent := timeline.NewK8sEventTimelineEvent(event, owner)
+	timelineEvent.ClusterContext = ActiveClusterContext()
 
 	ctx := context.Background()
 	if err := timeline.RecordEventWithBroadcast(ctx, timelineEvent); err != nil {
@@ -456,10 +457,14 @@ func recordToTimelineStore(kind, namespace, name, uid, op string, oldObj, newObj
 		labels,
 		createdAt,
 	)
+	event.ClusterContext = ActiveClusterContext()
 
 	var events []timeline.TimelineEvent
 	if op == "add" && newObj != nil {
 		historicalEvents := extractTimelineHistoricalEvents(kind, apiVersion, namespace, name, newObj, owner, labels)
+		for i := range historicalEvents {
+			historicalEvents[i].ClusterContext = event.ClusterContext
+		}
 		events = append(events, historicalEvents...)
 	}
 

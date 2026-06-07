@@ -74,6 +74,11 @@ type TimelineEvent struct {
 	ID        string      `json:"id"`
 	Timestamp time.Time   `json:"timestamp"`
 	Source    EventSource `json:"source"`
+	// ClusterContext is the kubeconfig context the event was observed on
+	// ("in-cluster" when no context name exists). Persistent stores outlive
+	// context switches, so reads MUST scope to the active context or events
+	// from a previously-connected cluster leak into answers about this one.
+	ClusterContext string `json:"clusterContext,omitempty"`
 
 	// Resource identity
 	Kind       string `json:"kind"`

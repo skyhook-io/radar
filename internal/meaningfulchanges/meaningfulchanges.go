@@ -10,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
@@ -237,10 +238,14 @@ func candidateLimit(finalLimit int, nameFiltered bool) int {
 
 func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, limit int) ([]timeline.TimelineEvent, error) {
 	opts := timeline.QueryOptions{
-		Namespaces:       q.Namespaces,
-		Kinds:            compactKinds(kinds),
-		Since:            time.Now().Add(-q.Since),
-		Sources:          []timeline.EventSource{timeline.SourceInformer},
+		Namespaces: q.Namespaces,
+		Kinds:      compactKinds(kinds),
+		Since:      time.Now().Add(-q.Since),
+		Sources:    []timeline.EventSource{timeline.SourceInformer},
+		// Changes are root-cause evidence for the CURRENT cluster — the
+		// persistent store retains other contexts' events across switches,
+		// and serving those here hands agents phantom changes.
+		ClusterContext:   k8s.ActiveClusterContext(),
 		Limit:            limit,
 		IncludeManaged:   false,
 		IncludeK8sEvents: false,

@@ -2373,6 +2373,9 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		IncludeManaged:   includeManaged,
 		IncludeK8sEvents: includeK8sEvents,
 		FilterPreset:     filterPreset,
+		// The persistent store retains events from previously-connected
+		// clusters; the timeline view answers for the current one only.
+		ClusterContext: k8s.ActiveClusterContext(),
 	}
 	if kind != "" {
 		opts.Kinds = []string{kind}

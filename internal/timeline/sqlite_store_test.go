@@ -879,3 +879,106 @@ func TestSQLiteStore_StartCleanupLoop_ZeroIsNoop(t *testing.T) {
 		})
 	}
 }
+
+// The persistent store outlives kubeconfig context switches, so a scoped
+// query must return only the active cluster's events — and must exclude
+// legacy rows recorded before provenance was tracked (cluster_context=”).
+func TestSQLiteStore_Query_ClusterContextScoping(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+	ctx := context.Background()
+
+	mk := func(id, cluster string) TimelineEvent {
+		return TimelineEvent{
+			ID: id, Timestamp: time.Now(), Source: SourceInformer,
+			Kind: "Deployment", Namespace: "prod", Name: "web",
+			EventType: EventTypeUpdate, ClusterContext: cluster,
+		}
+	}
+	if err := store.AppendBatch(ctx, []TimelineEvent{
+		mk("a1", "cluster-a"), mk("a2", "cluster-a"),
+		mk("b1", "cluster-b"),
+		mk("legacy", ""),
+	}); err != nil {
+		t.Fatalf("AppendBatch: %v", err)
+	}
+
+	scoped, err := store.Query(ctx, QueryOptions{ClusterContext: "cluster-a", IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	if len(scoped) != 2 {
+		t.Fatalf("cluster-a scoped query = %d events, want 2: %+v", len(scoped), scoped)
+	}
+	for _, e := range scoped {
+		if e.ClusterContext != "cluster-a" {
+			t.Errorf("leaked event %s from %q", e.ID, e.ClusterContext)
+		}
+	}
+
+	all, err := store.Query(ctx, QueryOptions{IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("Query all: %v", err)
+	}
+	if len(all) != 4 {
+		t.Errorf("unscoped query = %d events, want 4 (cross-cluster reads stay possible)", len(all))
+	}
+}
+
+// Opening a pre-cluster_context database must migrate it in place: the column
+// is added, old rows read back with empty provenance, and scoped queries
+// exclude them rather than guess their cluster.
+func TestSQLiteStore_Migration_AddsClusterContext(t *testing.T) {
+	tmpDir, err := os.MkdirTemp("", "timeline-migrate-*")
+	if err != nil {
+		t.Fatalf("mkdtemp: %v", err)
+	}
+	defer os.RemoveAll(tmpDir)
+	dbPath := filepath.Join(tmpDir, "old.db")
+
+	// Build an old-schema DB by hand (no cluster_context, no api_version).
+	store, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := store.db.Exec(`DROP TABLE events`); err != nil {
+		t.Fatalf("drop: %v", err)
+	}
+	if _, err := store.db.Exec(`CREATE TABLE events (
+		id TEXT PRIMARY KEY, timestamp TEXT NOT NULL, source TEXT NOT NULL,
+		kind TEXT NOT NULL, namespace TEXT, name TEXT NOT NULL, uid TEXT,
+		event_type TEXT NOT NULL, reason TEXT, message TEXT, diff_json TEXT,
+		health_state TEXT, owner_kind TEXT, owner_name TEXT, labels_json TEXT,
+		count INTEGER DEFAULT 0, correlation_id TEXT,
+		created_at TEXT DEFAULT (datetime('now')))`); err != nil {
+		t.Fatalf("recreate old schema: %v", err)
+	}
+	if _, err := store.db.Exec(`INSERT INTO events (id, timestamp, source, kind, namespace, name, event_type, health_state)
+		VALUES ('old1', ?, 'informer', 'Deployment', 'prod', 'web', 'update', '')`,
+		time.Now().Format(time.RFC3339Nano)); err != nil {
+		t.Fatalf("seed old row: %v", err)
+	}
+	store.Close()
+
+	migrated, err := NewSQLiteStore(dbPath)
+	if err != nil {
+		t.Fatalf("reopen (migration): %v", err)
+	}
+	defer migrated.Close()
+	ctx := context.Background()
+
+	all, err := migrated.Query(ctx, QueryOptions{IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("query migrated: %v", err)
+	}
+	if len(all) != 1 || all[0].ClusterContext != "" {
+		t.Fatalf("legacy row must survive with empty provenance, got %+v", all)
+	}
+	scoped, err := migrated.Query(ctx, QueryOptions{ClusterContext: "cluster-a", IncludeManaged: true, IncludeK8sEvents: true})
+	if err != nil {
+		t.Fatalf("scoped query: %v", err)
+	}
+	if len(scoped) != 0 {
+		t.Errorf("scoped query must exclude unknowable-provenance legacy rows, got %d", len(scoped))
+	}
+}

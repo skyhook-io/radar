@@ -1241,10 +1241,11 @@ func (s *Server) getDashboardRecentChanges(ctx context.Context, namespaces []str
 	}
 
 	opts := timeline.QueryOptions{
-		Namespaces:   namespaces,
-		Since:        time.Now().Add(-1 * time.Hour),
-		Limit:        5,
-		FilterPreset: "workloads",
+		Namespaces:     namespaces,
+		Since:          time.Now().Add(-1 * time.Hour),
+		Limit:          5,
+		FilterPreset:   "workloads",
+		ClusterContext: k8s.ActiveClusterContext(),
 	}
 
 	events, err := store.Query(ctx, opts)

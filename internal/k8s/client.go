@@ -627,6 +627,17 @@ func GetContextName() string {
 	return contextName
 }
 
+// ActiveClusterContext is the cluster-identity stamp for timeline events and
+// the filter value for cluster-scoped timeline reads. In-cluster mode has no
+// kubeconfig context name; the sentinel keeps those events distinguishable
+// from legacy rows recorded before provenance was tracked (empty string).
+func ActiveClusterContext() string {
+	if name := GetContextName(); name != "" {
+		return name
+	}
+	return "in-cluster"
+}
+
 // GetClusterName returns the current cluster name from kubeconfig
 func GetClusterName() string {
 	clientMu.RLock()

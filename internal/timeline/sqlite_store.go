@@ -116,7 +116,8 @@ func (s *SQLiteStore) initSchema() error {
 		labels_json TEXT,
 		count INTEGER DEFAULT 0,
 		correlation_id TEXT,
-		created_at TEXT DEFAULT (datetime('now'))
+		created_at TEXT DEFAULT (datetime('now')),
+		cluster_context TEXT NOT NULL DEFAULT ''
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_events_timestamp ON events(timestamp DESC);
@@ -145,6 +146,7 @@ func (s *SQLiteStore) initSchema() error {
 	}
 	defer rows.Close()
 	hasAPIVersion := false
+	hasClusterContext := false
 	for rows.Next() {
 		var cid int
 		var name, ctype string
@@ -153,15 +155,31 @@ func (s *SQLiteStore) initSchema() error {
 		if err := rows.Scan(&cid, &name, &ctype, &notnull, &dfltValue, &pk); err != nil {
 			return err
 		}
-		if name == "api_version" {
+		switch name {
+		case "api_version":
 			hasAPIVersion = true
-			break
+		case "cluster_context":
+			hasClusterContext = true
 		}
+	}
+	if err := rows.Err(); err != nil {
+		return err
 	}
 	if !hasAPIVersion {
 		if _, err := s.db.Exec("ALTER TABLE events ADD COLUMN api_version TEXT"); err != nil {
 			return err
 		}
+	}
+	if !hasClusterContext {
+		// Pre-existing rows keep '' — their cluster is unknowable (recorded
+		// before provenance was tracked), and context-scoped queries
+		// deliberately exclude them rather than guess.
+		if _, err := s.db.Exec("ALTER TABLE events ADD COLUMN cluster_context TEXT NOT NULL DEFAULT ''"); err != nil {
+			return err
+		}
+	}
+	if _, err := s.db.Exec("CREATE INDEX IF NOT EXISTS idx_events_cluster_ts ON events(cluster_context, timestamp DESC)"); err != nil {
+		return err
 	}
 
 	return nil
@@ -188,8 +206,8 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 		INSERT OR IGNORE INTO events (
 			id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
 			reason, message, diff_json, health_state, owner_kind, owner_name,
-			labels_json, count, correlation_id
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			labels_json, count, correlation_id, cluster_context
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`)
 	if err != nil {
 		return fmt.Errorf("failed to prepare statement: %w", err)
@@ -241,6 +259,7 @@ func (s *SQLiteStore) AppendBatch(ctx context.Context, events []TimelineEvent) e
 			string(labelsJSON),
 			event.Count,
 			event.CorrelationID,
+			event.ClusterContext,
 		)
 		if err != nil {
 			return fmt.Errorf("failed to insert event: %w", err)
@@ -256,7 +275,7 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 	query := strings.Builder{}
 	query.WriteString("SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type, ")
 	query.WriteString("reason, message, diff_json, health_state, owner_kind, owner_name, ")
-	query.WriteString("labels_json, count, correlation_id FROM events WHERE 1=1")
+	query.WriteString("labels_json, count, correlation_id, cluster_context FROM events WHERE 1=1")
 
 	var args []any
 
@@ -305,6 +324,11 @@ func (s *SQLiteStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 			args = append(args, string(src))
 		}
 		query.WriteString(")")
+	}
+
+	if opts.ClusterContext != "" {
+		query.WriteString(" AND cluster_context = ?")
+		args = append(args, opts.ClusterContext)
 	}
 
 	// Order by timestamp descending
@@ -425,7 +449,7 @@ func (s *SQLiteStore) QueryGrouped(ctx context.Context, opts QueryOptions) (*Tim
 func (s *SQLiteStore) GetEvent(ctx context.Context, id string) (*TimelineEvent, error) {
 	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
 		reason, message, diff_json, health_state, owner_kind, owner_name,
-		labels_json, count, correlation_id FROM events WHERE id = ?`
+		labels_json, count, correlation_id, cluster_context FROM events WHERE id = ?`
 
 	row := s.db.QueryRowContext(ctx, query, id)
 	event, err := s.scanEventRow(row)
@@ -446,7 +470,7 @@ func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 
 	query := `SELECT id, timestamp, source, kind, api_version, namespace, name, uid, event_type,
 		reason, message, diff_json, health_state, owner_kind, owner_name,
-		labels_json, count, correlation_id FROM events
+		labels_json, count, correlation_id, cluster_context FROM events
 		WHERE owner_kind = ? AND owner_name = ? AND namespace = ?`
 
 	args := []any{ownerKind, ownerName, ownerNamespace}
@@ -805,7 +829,7 @@ func (s *SQLiteStore) scanEvent(rows *sql.Rows) (TimelineEvent, error) {
 	var timestamp string
 	var source, eventType, healthState string
 	var apiVersion, uid, reason, message, diffJSON, labelsJSON sql.NullString
-	var ownerKind, ownerName, correlationID sql.NullString
+	var ownerKind, ownerName, correlationID, clusterContext sql.NullString
 
 	err := rows.Scan(
 		&event.ID,
@@ -826,10 +850,12 @@ func (s *SQLiteStore) scanEvent(rows *sql.Rows) (TimelineEvent, error) {
 		&labelsJSON,
 		&event.Count,
 		&correlationID,
+		&clusterContext,
 	)
 	if err != nil {
 		return event, err
 	}
+	event.ClusterContext = clusterContext.String
 
 	event.Timestamp, _ = time.Parse(time.RFC3339Nano, timestamp)
 	event.Source = EventSource(source)
@@ -879,7 +905,7 @@ func (s *SQLiteStore) scanEventRow(row *sql.Row) (TimelineEvent, error) {
 	var timestamp string
 	var source, eventType, healthState string
 	var apiVersion, uid, reason, message, diffJSON, labelsJSON sql.NullString
-	var ownerKind, ownerName, correlationID sql.NullString
+	var ownerKind, ownerName, correlationID, clusterContext sql.NullString
 
 	err := row.Scan(
 		&event.ID,
@@ -900,10 +926,12 @@ func (s *SQLiteStore) scanEventRow(row *sql.Row) (TimelineEvent, error) {
 		&labelsJSON,
 		&event.Count,
 		&correlationID,
+		&clusterContext,
 	)
 	if err != nil {
 		return event, err
 	}
+	event.ClusterContext = clusterContext.String
 
 	event.Timestamp, _ = time.Parse(time.RFC3339Nano, timestamp)
 	event.Source = EventSource(source)

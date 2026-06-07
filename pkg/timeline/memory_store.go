@@ -289,6 +289,10 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 	}
 
 	// Apply individual filters (these override preset if both specified)
+	if opts.ClusterContext != "" && event.ClusterContext != opts.ClusterContext {
+		return false
+	}
+
 	if !opts.Since.IsZero() && event.Timestamp.Before(opts.Since) {
 		return false
 	}

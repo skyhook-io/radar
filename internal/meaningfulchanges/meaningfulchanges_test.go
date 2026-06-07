@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
@@ -72,26 +73,28 @@ func TestRecentRanksSpecConfigAboveStatusChurn(t *testing.T) {
 	store := timeline.GetStore()
 	now := time.Now()
 	if err := store.Append(context.Background(), timeline.TimelineEvent{
-		ID:        "status",
-		Timestamp: now,
-		Source:    timeline.SourceInformer,
-		Kind:      "Deployment",
-		Namespace: "shop",
-		Name:      "frontend",
-		EventType: timeline.EventTypeUpdate,
-		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "status.readyReplicas", OldValue: int32(1), NewValue: int32(0)}}, Summary: "ready: 1→0"},
+		ID:             "status",
+		Timestamp:      now,
+		Source:         timeline.SourceInformer,
+		ClusterContext: k8s.ActiveClusterContext(),
+		Kind:           "Deployment",
+		Namespace:      "shop",
+		Name:           "frontend",
+		EventType:      timeline.EventTypeUpdate,
+		Diff:           &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "status.readyReplicas", OldValue: int32(1), NewValue: int32(0)}}, Summary: "ready: 1→0"},
 	}); err != nil {
 		t.Fatalf("append status: %v", err)
 	}
 	if err := store.Append(context.Background(), timeline.TimelineEvent{
-		ID:        "config",
-		Timestamp: now.Add(-time.Minute),
-		Source:    timeline.SourceInformer,
-		Kind:      "ConfigMap",
-		Namespace: "shop",
-		Name:      "flagd-config",
-		EventType: timeline.EventTypeUpdate,
-		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data.flags.paymentFailure.defaultVariant", OldValue: "off", NewValue: "on"}}, Summary: "flag changed"},
+		ID:             "config",
+		Timestamp:      now.Add(-time.Minute),
+		Source:         timeline.SourceInformer,
+		ClusterContext: k8s.ActiveClusterContext(),
+		Kind:           "ConfigMap",
+		Namespace:      "shop",
+		Name:           "flagd-config",
+		EventType:      timeline.EventTypeUpdate,
+		Diff:           &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data.flags.paymentFailure.defaultVariant", OldValue: "off", NewValue: "on"}}, Summary: "flag changed"},
 	}); err != nil {
 		t.Fatalf("append config: %v", err)
 	}
@@ -105,5 +108,32 @@ func TestRecentRanksSpecConfigAboveStatusChurn(t *testing.T) {
 	}
 	if changes[0].Kind != "ConfigMap" || changes[0].ChangeCategory != "spec_config" {
 		t.Fatalf("first change = %+v, want ConfigMap spec_config", changes[0])
+	}
+}
+
+// The persistent timeline outlives context switches; Recent must never serve
+// another cluster's events as this cluster's changes.
+func TestRecentExcludesOtherClusterEvents(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "foreign", Timestamp: time.Now(), Source: timeline.SourceInformer,
+		Kind: "Deployment", Namespace: "shop", Name: "frontend",
+		EventType:      timeline.EventTypeUpdate,
+		ClusterContext: "some-other-cluster",
+		Diff:           &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "spec.replicas", OldValue: int32(1), NewValue: int32(3)}}, Summary: "replicas: 1→3"},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}, Since: time.Hour, Limit: 5, FieldLimit: 5})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(changes) != 0 {
+		t.Fatalf("another cluster's events leaked into Recent: %+v", changes)
 	}
 }
