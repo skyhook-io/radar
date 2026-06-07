@@ -190,7 +190,7 @@ func (m *MemoryStore) GetEvent(ctx context.Context, id string) (*TimelineEvent, 
 }
 
 // GetChangesForOwner retrieves changes for resources owned by the given owner
-func (m *MemoryStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName string, since time.Time, limit int) ([]TimelineEvent, error) {
+func (m *MemoryStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName, clusterContext string, since time.Time, limit int) ([]TimelineEvent, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 
@@ -209,6 +209,10 @@ func (m *MemoryStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 		}
 
 		if !since.IsZero() && event.Timestamp.Before(since) {
+			continue
+		}
+
+		if clusterContext != "" && event.ClusterContext != clusterContext {
 			continue
 		}
 

@@ -2431,7 +2431,7 @@ func (s *Server) handleChangeChildren(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	children, err := store.GetChangesForOwner(r.Context(), ownerKind, namespace, ownerName, since, 100)
+	children, err := store.GetChangesForOwner(r.Context(), ownerKind, namespace, ownerName, k8s.ActiveClusterContext(), since, 100)
 	if err != nil {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return

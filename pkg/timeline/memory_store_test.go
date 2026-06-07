@@ -287,7 +287,7 @@ func TestMemoryStore_GetChangesForOwner(t *testing.T) {
 	_ = store.AppendBatch(ctx, events)
 
 	// Query for pods owned by my-deploy
-	result, err := store.GetChangesForOwner(ctx, "Deployment", "default", "my-deploy", time.Time{}, 10)
+	result, err := store.GetChangesForOwner(ctx, "Deployment", "default", "my-deploy", "", time.Time{}, 10)
 	if err != nil {
 		t.Fatalf("GetChangesForOwner failed: %v", err)
 	}

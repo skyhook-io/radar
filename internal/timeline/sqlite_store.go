@@ -463,7 +463,7 @@ func (s *SQLiteStore) GetEvent(ctx context.Context, id string) (*TimelineEvent, 
 }
 
 // GetChangesForOwner retrieves changes for resources owned by the given owner
-func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName string, since time.Time, limit int) ([]TimelineEvent, error) {
+func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNamespace, ownerName, clusterContext string, since time.Time, limit int) ([]TimelineEvent, error) {
 	if limit <= 0 {
 		limit = 100
 	}
@@ -474,6 +474,11 @@ func (s *SQLiteStore) GetChangesForOwner(ctx context.Context, ownerKind, ownerNa
 		WHERE owner_kind = ? AND owner_name = ? AND namespace = ?`
 
 	args := []any{ownerKind, ownerName, ownerNamespace}
+
+	if clusterContext != "" {
+		query += " AND cluster_context = ?"
+		args = append(args, clusterContext)
+	}
 
 	if !since.IsZero() {
 		query += " AND timestamp >= ?"

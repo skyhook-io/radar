@@ -384,7 +384,7 @@ func TestSQLiteStore_GetChangesForOwner(t *testing.T) {
 	_ = store.AppendBatch(ctx, events)
 
 	// Query for pods owned by my-deploy
-	result, err := store.GetChangesForOwner(ctx, "Deployment", "default", "my-deploy", time.Time{}, 10)
+	result, err := store.GetChangesForOwner(ctx, "Deployment", "default", "my-deploy", "", time.Time{}, 10)
 	if err != nil {
 		t.Fatalf("GetChangesForOwner failed: %v", err)
 	}
@@ -922,6 +922,23 @@ func TestSQLiteStore_Query_ClusterContextScoping(t *testing.T) {
 	}
 	if len(all) != 4 {
 		t.Errorf("unscoped query = %d events, want 4 (cross-cluster reads stay possible)", len(all))
+	}
+
+	// Owner-scoped reads share the same hazard: owner identity collides
+	// across clusters, so the cluster filter must apply there too.
+	withOwner := mk("o1", "cluster-a")
+	withOwner.Owner = &OwnerInfo{Kind: "Deployment", Name: "web"}
+	foreignOwner := mk("o2", "cluster-b")
+	foreignOwner.Owner = &OwnerInfo{Kind: "Deployment", Name: "web"}
+	if err := store.AppendBatch(ctx, []TimelineEvent{withOwner, foreignOwner}); err != nil {
+		t.Fatalf("AppendBatch owners: %v", err)
+	}
+	owned, err := store.GetChangesForOwner(ctx, "Deployment", "prod", "web", "cluster-a", time.Time{}, 10)
+	if err != nil {
+		t.Fatalf("GetChangesForOwner: %v", err)
+	}
+	if len(owned) != 1 || owned[0].ClusterContext != "cluster-a" {
+		t.Errorf("owner query must scope to cluster-a, got %+v", owned)
 	}
 }
 
