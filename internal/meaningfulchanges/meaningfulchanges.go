@@ -470,9 +470,40 @@ func canonicalKind(kind string) string {
 		return "OCIRepository"
 	case "helmrepository", "helmrepositories":
 		return "HelmRepository"
+	case "cronjob", "cronjobs":
+		return "CronJob"
+	case "job", "jobs":
+		return "Job"
+	case "replicaset", "replicasets", "rs":
+		return "ReplicaSet"
+	case "secret", "secrets":
+		return "Secret"
+	case "pvc", "persistentvolumeclaim", "persistentvolumeclaims":
+		return "PersistentVolumeClaim"
+	case "pv", "persistentvolume", "persistentvolumes":
+		return "PersistentVolume"
+	case "serviceaccount", "serviceaccounts", "sa":
+		return "ServiceAccount"
+	case "networkpolicy", "networkpolicies":
+		return "NetworkPolicy"
+	case "poddisruptionbudget", "poddisruptionbudgets", "pdb":
+		return "PodDisruptionBudget"
+	case "httproute", "httproutes":
+		return "HTTPRoute"
+	case "grpcroute", "grpcroutes":
+		return "GRPCRoute"
+	case "gateway", "gateways":
+		return "Gateway"
 	default:
 		if kind == "" {
 			return ""
+		}
+		// Mixed-case input is an exact kind (CRDs the table can't know) —
+		// pass it through. Only best-effort capitalize all-lowercase input;
+		// timeline events store Kubernetes PascalCase, so "Cronjob"-style
+		// guesses on multi-word kinds would silently match nothing.
+		if strings.ToLower(kind) != kind {
+			return kind
 		}
 		return strings.ToUpper(kind[:1]) + kind[1:]
 	}

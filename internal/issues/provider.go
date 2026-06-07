@@ -338,10 +338,11 @@ func observedCoreDNSConfigMapChangeSignal() string {
 		return ""
 	}
 	events, err := store.Query(context.Background(), timeline.QueryOptions{
-		Namespaces: []string{"kube-system"},
-		Kinds:      []string{"ConfigMap"},
-		Since:      time.Now().Add(-clusterDNSContextRecentWindow),
-		Limit:      20,
+		Namespaces:     []string{"kube-system"},
+		Kinds:          []string{"ConfigMap"},
+		Since:          time.Now().Add(-clusterDNSContextRecentWindow),
+		Limit:          20,
+		ClusterContext: k8s.ActiveClusterContext(),
 	})
 	if err != nil {
 		return ""

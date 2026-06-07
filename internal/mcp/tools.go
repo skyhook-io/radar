@@ -2300,9 +2300,10 @@ func buildDashboard(ctx context.Context, cache *k8s.ResourceCache, namespace str
 		}
 
 		queryOpts := timeline.QueryOptions{
-			Since:        now.Add(-1 * time.Hour),
-			Limit:        20,
-			FilterPreset: "workloads",
+			Since:          now.Add(-1 * time.Hour),
+			Limit:          20,
+			FilterPreset:   "workloads",
+			ClusterContext: k8s.ActiveClusterContext(),
 		}
 		if namespace != "" {
 			queryOpts.Namespaces = []string{namespace}
