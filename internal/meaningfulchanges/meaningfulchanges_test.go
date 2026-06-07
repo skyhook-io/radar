@@ -13,17 +13,53 @@ func TestShouldAttachIssueSidecar(t *testing.T) {
 	if !ShouldAttachIssueSidecar(nil) {
 		t.Fatalf("zero critical issues should allow the sidecar")
 	}
+	if got := IssueSidecarReason(nil); got != SidecarReasonNoCriticalIssues {
+		t.Fatalf("IssueSidecarReason(nil) = %q, want %q", got, SidecarReasonNoCriticalIssues)
+	}
 	baseline := []issuesapi.Issue{{Severity: issuesapi.SeverityCritical, IssueTiming: "started_at_resource_creation"}}
 	if !ShouldAttachIssueSidecar(baseline) {
 		t.Fatalf("baseline-dominated critical issues should allow the sidecar")
+	}
+	if got := IssueSidecarReason(baseline); got != SidecarReasonAllCriticalIssuesStartedAtResourceCreation {
+		t.Fatalf("IssueSidecarReason(baseline) = %q, want %q", got, SidecarReasonAllCriticalIssuesStartedAtResourceCreation)
 	}
 	runtime := []issuesapi.Issue{{Severity: issuesapi.SeverityCritical, IssueTiming: "started_after_resource_was_healthy"}}
 	if ShouldAttachIssueSidecar(runtime) {
 		t.Fatalf("runtime critical issue should suppress the sidecar")
 	}
+	if got := IssueSidecarReason(runtime); got != "" {
+		t.Fatalf("IssueSidecarReason(runtime) = %q, want empty", got)
+	}
 	unknown := []issuesapi.Issue{{Severity: issuesapi.SeverityCritical}}
 	if ShouldAttachIssueSidecar(unknown) {
 		t.Fatalf("critical issue with unknown timing should suppress the sidecar")
+	}
+	if got := IssueSidecarReason(unknown); got != "" {
+		t.Fatalf("IssueSidecarReason(unknown) = %q, want empty", got)
+	}
+}
+
+func TestIssueSidecarQueryEligible(t *testing.T) {
+	cases := []struct {
+		name     string
+		kind     string
+		filter   string
+		severity string
+		want     bool
+	}{
+		{name: "default query", want: true},
+		{name: "critical only", severity: "critical", want: true},
+		{name: "critical and warning", severity: "critical,warning", want: true},
+		{name: "warning only", severity: "warning", want: false},
+		{name: "kind filtered", kind: "Deployment", want: false},
+		{name: "cel filtered", filter: `category == "crashloop"`, want: false},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := IssueSidecarQueryEligible(tt.kind, tt.filter, tt.severity); got != tt.want {
+				t.Fatalf("IssueSidecarQueryEligible() = %v, want %v", got, tt.want)
+			}
+		})
 	}
 }
 

@@ -621,6 +621,43 @@ func TestComputeDiff_ConfigMapStructuredJSON_RedactsAddedSubtree(t *testing.T) {
 	}
 }
 
+func TestComputeDiff_ConfigMapStructuredJSONByContent(t *testing.T) {
+	old := &corev1.ConfigMap{Data: map[string]string{
+		"flags": `{"cartFailure":{"defaultVariant":"off"}}`,
+	}}
+	updated := &corev1.ConfigMap{Data: map[string]string{
+		"flags": `{"cartFailure":{"defaultVariant":"on"}}`,
+	}}
+
+	diff := ComputeDiff("ConfigMap", old, updated)
+	if diff == nil {
+		t.Fatalf("ComputeDiff returned nil")
+	}
+	if !diffHasPath(diff, "data.flags.cartFailure.defaultVariant") {
+		t.Fatalf("expected structured flag field diff, got %+v", diff.Fields)
+	}
+}
+
+func TestComputeDiff_ConfigMapYAMLRequiresStructuredKey(t *testing.T) {
+	old := &corev1.ConfigMap{Data: map[string]string{
+		"plain": "enabled: false\n",
+	}}
+	updated := &corev1.ConfigMap{Data: map[string]string{
+		"plain": "enabled: true\n",
+	}}
+
+	diff := ComputeDiff("ConfigMap", old, updated)
+	if diff == nil {
+		t.Fatalf("ComputeDiff returned nil")
+	}
+	if diffHasPath(diff, "data.plain.enabled") {
+		t.Fatalf("unexpected structured YAML diff for untyped key, got %+v", diff.Fields)
+	}
+	if !diffHasPath(diff, "data (modified keys)") {
+		t.Fatalf("expected key-level fallback diff, got %+v", diff.Fields)
+	}
+}
+
 func diffHasPath(diff *DiffInfo, path string) bool {
 	for _, f := range diff.Fields {
 		if f.Path == path {

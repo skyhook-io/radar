@@ -21,7 +21,7 @@ type Config struct {
 	NoBrowser         bool     `json:"noBrowser,omitempty"`
 	TimelineStorage   string   `json:"timelineStorage,omitempty"`
 	TimelineDBPath    string   `json:"timelineDbPath,omitempty"`
-	TimelineRetention string   `json:"timelineRetention,omitempty"` // Go duration (e.g. "168h" for 7d); "0" disables
+	TimelineRetention string   `json:"timelineRetention,omitempty"` // Go duration (e.g. "168h" for 7d); "0" disables age cleanup
 	TimelineMaxSize   string   `json:"timelineMaxSize,omitempty"`   // Byte size (e.g. "800Mi", "8Gi"); "0" disables
 	HistoryLimit      int      `json:"historyLimit,omitempty"`
 	PrometheusURL     string   `json:"prometheusUrl,omitempty"`

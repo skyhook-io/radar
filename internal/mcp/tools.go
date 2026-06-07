@@ -169,7 +169,7 @@ func registerTools(server *mcp.Server) {
 			"resourceContext (managedBy, exposes, selectedBy, uses, runsOn, " +
 			"issue/audit/policy rollups) + current AND previous container logs across the " +
 			"workload's pods + recent Warning events filtered to this resource + a " +
-			"recentMeaningfulChanges section for the workload and directly referenced " +
+			"recentChanges section for the workload and directly referenced " +
 			"ConfigMaps (no Secret content) + a " +
 			"startupBlockers section when the workload can't reach Running (unschedulable " +
 			"with the offending node constraint named, admission/quota rejection, or a " +
@@ -300,10 +300,11 @@ func registerTools(server *mcp.Server) {
 			"rows include `diagnostic_context`: deterministic facts such as explicit " +
 			"missing refs, selected backend issues, or workload rollups; treat these as " +
 			"triage context, not proof of root cause. " +
-			"When `recent_meaningful_changes` is present in the response, inspect it " +
-			"before drilling into the top issue; it lists recent spec/config changes " +
-			"that may explain failures not yet visible as runtime issues, or help " +
-			"demote creation-time baseline failures. " +
+			"When `recent_changes` is present, consider it if the issue list does not " +
+			"explain the reported symptom; `recent_changes_reason` says why Radar " +
+			"attached it. It lists recent spec/config changes that may explain failures " +
+			"not yet visible as runtime issues, or help distinguish creation-time " +
+			"baseline failures from the active incident. " +
 			"For raw Kubernetes Warning events use get_events; for static best-practice / " +
 			"security-posture findings (runAsRoot, missing PDB, no probes, missing resource " +
 			"limits) use get_cluster_audit — a separate axis that must never be conflated (a " +
@@ -922,7 +923,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 
 	defaultConfigMapChanges := meaningfulchanges.ConfigMapKind(kind)
 	includeChanges := includes["changes"] || defaultConfigMapChanges
-	var recentChanges []issuesapi.MeaningfulChange
+	var recentChanges []issuesapi.RecentChange
 	var changesErr string
 	if includeChanges {
 		changes, err := meaningfulchanges.RecentForResource(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit)
@@ -950,9 +951,9 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	}
 	if includeChanges {
 		if changesErr != "" {
-			result["recentMeaningfulChangesError"] = changesErr
+			result["recentChangesError"] = changesErr
 		} else if includes["changes"] || len(recentChanges) > 0 {
-			result["recentMeaningfulChanges"] = recentChanges
+			result["recentChanges"] = recentChanges
 		}
 	}
 	if len(includes) > 0 {
@@ -1058,13 +1059,13 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 		// The handler may have already attempted changes (data OR error key set).
 		// Gate on both — retrying after a recorded failure could attach a fresh
 		// payload next to the stale error, handing clients a contradictory result.
-		_, hasChanges := result["recentMeaningfulChanges"]
-		_, hasChangesErr := result["recentMeaningfulChangesError"]
+		_, hasChanges := result["recentChanges"]
+		_, hasChangesErr := result["recentChangesError"]
 		if !hasChanges && !hasChangesErr {
 			if changes, err := meaningfulchanges.RecentForResource(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit); err == nil {
-				result["recentMeaningfulChanges"] = changes
+				result["recentChanges"] = changes
 			} else {
-				result["recentMeaningfulChangesError"] = err.Error()
+				result["recentChangesError"] = err.Error()
 			}
 		}
 	}
@@ -1794,7 +1795,7 @@ type mcpDashboard struct {
 	Visibility         *k8s.VisibilitySummary `json:"visibility,omitempty"`
 }
 
-type mcpChange = issuesapi.MeaningfulChange
+type mcpChange = issuesapi.RecentChange
 
 type mcpMetrics struct {
 	CPUUsagePercent   int `json:"cpuUsagePercent,omitempty"`
@@ -2457,14 +2458,17 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces, func(group, resource string) bool {
 		return canReadInNamespace(ctx, group, resource, "kube-system", "list")
 	})
-	if len(allowedNamespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.ShouldAttachIssueSidecar(out) {
-		if changes, _, err := meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
-			Namespaces: []string{allowedNamespaces[0]},
-			Since:      meaningfulchanges.DefaultSince,
-			Limit:      meaningfulchanges.SidecarLimit,
-			FieldLimit: meaningfulchanges.DefaultFieldLimit,
-		}); err == nil && len(changes) > 0 {
-			resp.RecentMeaningfulChanges = changes
+	if len(allowedNamespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.IssueSidecarQueryEligible(input.Kind, input.Filter, input.Severity) {
+		if recentChangesReason := meaningfulchanges.IssueSidecarReason(out); recentChangesReason != "" {
+			if changes, _, err := meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
+				Namespaces: []string{allowedNamespaces[0]},
+				Since:      meaningfulchanges.DefaultSince,
+				Limit:      meaningfulchanges.SidecarLimit,
+				FieldLimit: meaningfulchanges.DefaultFieldLimit,
+			}); err == nil && len(changes) > 0 {
+				resp.RecentChanges = changes
+				resp.RecentChangesReason = recentChangesReason
+			}
 		}
 	}
 	// Steering hint when the issue list was capped (MCP-only).

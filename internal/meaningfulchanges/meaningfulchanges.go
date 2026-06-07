@@ -23,6 +23,11 @@ const (
 	maxCandidateLimit = 100
 )
 
+const (
+	SidecarReasonNoCriticalIssues                           = "no_critical_issues"
+	SidecarReasonAllCriticalIssuesStartedAtResourceCreation = "all_critical_issues_started_at_resource_creation"
+)
+
 var (
 	configKinds = []string{"ConfigMap"}
 	specKinds   = []string{
@@ -41,7 +46,7 @@ type Query struct {
 	FieldLimit int
 }
 
-func Recent(ctx context.Context, q Query) ([]issuesapi.MeaningfulChange, bool, error) {
+func Recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, error) {
 	store := timeline.GetStore()
 	if store == nil {
 		return nil, false, fmt.Errorf("timeline store not initialized")
@@ -71,7 +76,7 @@ func Recent(ctx context.Context, q Query) ([]issuesapi.MeaningfulChange, bool, e
 	return changes, capped || len(configEvents) >= perQueryLimit || len(specEvents) >= perQueryLimit, err
 }
 
-func RecentForResource(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.MeaningfulChange, error) {
+func RecentForResource(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, error) {
 	changes, _, err := Recent(ctx, Query{
 		Namespaces: []string{namespace},
 		Kinds:      []string{canonicalKind(kind)},
@@ -83,8 +88,8 @@ func RecentForResource(ctx context.Context, kind, namespace, name string, since 
 	return changes, err
 }
 
-func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.MeaningfulChange, error) {
-	var all []issuesapi.MeaningfulChange
+func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, error) {
+	var all []issuesapi.RecentChange
 	if isWorkloadKind(kind) {
 		changes, err := RecentForResource(ctx, kind, namespace, name, since, limit, fieldLimit)
 		if err != nil {
@@ -104,15 +109,40 @@ func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespac
 }
 
 func ShouldAttachIssueSidecar(issues []issuesapi.Issue) bool {
+	return IssueSidecarReason(issues) != ""
+}
+
+func IssueSidecarQueryEligible(kindFilter, celFilter, severityFilter string) bool {
+	if strings.TrimSpace(kindFilter) != "" || strings.TrimSpace(celFilter) != "" {
+		return false
+	}
+	severityFilter = strings.TrimSpace(severityFilter)
+	if severityFilter == "" {
+		return true
+	}
+	for _, part := range strings.Split(severityFilter, ",") {
+		if strings.ToLower(strings.TrimSpace(part)) == "critical" {
+			return true
+		}
+	}
+	return false
+}
+
+func IssueSidecarReason(issues []issuesapi.Issue) string {
+	criticalCount := 0
 	for _, issue := range issues {
 		if issue.Severity != issuesapi.SeverityCritical {
 			continue
 		}
+		criticalCount++
 		if issue.IssueTiming != "started_at_resource_creation" {
-			return false
+			return ""
 		}
 	}
-	return true
+	if criticalCount == 0 {
+		return SidecarReasonNoCriticalIssues
+	}
+	return SidecarReasonAllCriticalIssuesStartedAtResourceCreation
 }
 
 func ConfigMapKind(kind string) bool {
@@ -218,8 +248,8 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 	return store.Query(ctx, opts)
 }
 
-func rankedChanges(events []timeline.TimelineEvent, name string, limit, fieldLimit int) ([]issuesapi.MeaningfulChange, bool, error) {
-	out := make([]issuesapi.MeaningfulChange, 0, len(events))
+func rankedChanges(events []timeline.TimelineEvent, name string, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
+	out := make([]issuesapi.RecentChange, 0, len(events))
 	for _, e := range events {
 		if name != "" && e.Name != name {
 			continue
@@ -235,7 +265,7 @@ func rankedChanges(events []timeline.TimelineEvent, name string, limit, fieldLim
 	return out, capped, nil
 }
 
-func RankAndCap(changes *[]issuesapi.MeaningfulChange, limit int) {
+func RankAndCap(changes *[]issuesapi.RecentChange, limit int) {
 	if changes == nil {
 		return
 	}
@@ -256,12 +286,12 @@ func RankAndCap(changes *[]issuesapi.MeaningfulChange, limit int) {
 	}
 }
 
-func fromEvent(e timeline.TimelineEvent, fieldLimit int) issuesapi.MeaningfulChange {
+func fromEvent(e timeline.TimelineEvent, fieldLimit int) issuesapi.RecentChange {
 	category, reason := classify(e)
 	if category == "" {
-		return issuesapi.MeaningfulChange{}
+		return issuesapi.RecentChange{}
 	}
-	change := issuesapi.MeaningfulChange{
+	change := issuesapi.RecentChange{
 		Kind:           e.Kind,
 		Namespace:      e.Namespace,
 		Name:           e.Name,
@@ -331,7 +361,7 @@ func hasRuntimeStatusField(e timeline.TimelineEvent) bool {
 	return false
 }
 
-func score(c issuesapi.MeaningfulChange) int {
+func score(c issuesapi.RecentChange) int {
 	switch c.ChangeCategory {
 	case "spec_config":
 		return 100
@@ -465,7 +495,7 @@ func allContainers(spec corev1.PodSpec) []corev1.Container {
 	return out
 }
 
-func changeKey(c issuesapi.MeaningfulChange) string {
+func changeKey(c issuesapi.RecentChange) string {
 	return c.Kind + "/" + c.Namespace + "/" + c.Name + "/" + c.ChangeType
 }
 

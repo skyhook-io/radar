@@ -85,13 +85,13 @@ export interface IssueChangeContext {
   evidence?: string;
 }
 
-export interface IssueMeaningfulChangeField {
+export interface IssueRecentChangeField {
   path: string;
   oldValue?: unknown;
   newValue?: unknown;
 }
 
-export interface IssueMeaningfulChange {
+export interface IssueRecentChange {
   kind: string;
   namespace?: string;
   name: string;
@@ -100,7 +100,7 @@ export interface IssueMeaningfulChange {
   timestamp: string;
   change_category?: 'spec_config' | 'lifecycle' | 'runtime_status' | string;
   rank_reason?: string;
-  fields?: IssueMeaningfulChangeField[];
+  fields?: IssueRecentChangeField[];
 }
 
 /**

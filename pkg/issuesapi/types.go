@@ -220,7 +220,7 @@ type ChangeField struct {
 	NewValue any    `json:"newValue,omitempty"`
 }
 
-type MeaningfulChange struct {
+type RecentChange struct {
 	Kind           string        `json:"kind"`
 	Namespace      string        `json:"namespace,omitempty"`
 	Name           string        `json:"name"`
@@ -310,15 +310,16 @@ type Issue struct {
 }
 
 type Response struct {
-	Issues                  []Issue            `json:"issues"`
-	Total                   int                `json:"total"`
-	TotalMatched            int                `json:"total_matched"`
-	FilterErrors            int                `json:"filter_errors,omitempty"`
-	FilterErrorSample       string             `json:"filter_error_sample,omitempty"`
-	Visibility              any                `json:"visibility,omitempty"`
-	NarrowHint              string             `json:"narrowHint,omitempty"`
-	ClusterContext          *ClusterContext    `json:"cluster_context,omitempty"`
-	RecentMeaningfulChanges []MeaningfulChange `json:"recent_meaningful_changes,omitempty"`
+	Issues              []Issue         `json:"issues"`
+	Total               int             `json:"total"`
+	TotalMatched        int             `json:"total_matched"`
+	FilterErrors        int             `json:"filter_errors,omitempty"`
+	FilterErrorSample   string          `json:"filter_error_sample,omitempty"`
+	Visibility          any             `json:"visibility,omitempty"`
+	NarrowHint          string          `json:"narrowHint,omitempty"`
+	ClusterContext      *ClusterContext `json:"cluster_context,omitempty"`
+	RecentChanges       []RecentChange  `json:"recent_changes,omitempty"`
+	RecentChangesReason string          `json:"recent_changes_reason,omitempty"`
 }
 
 type BindingType string

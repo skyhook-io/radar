@@ -728,6 +728,9 @@ func structuredConfigValueDiff(key, oldVal, newVal string) ([]FieldChange, bool)
 	if len(oldVal) > configMapStructuredValueBytes || len(newVal) > configMapStructuredValueBytes {
 		return nil, false
 	}
+	if !shouldParseStructuredConfigValue(key, oldVal, newVal) {
+		return nil, false
+	}
 	oldParsed, okOld := parseStructuredConfigValue(oldVal)
 	newParsed, okNew := parseStructuredConfigValue(newVal)
 	if !okOld || !okNew {
@@ -739,6 +742,19 @@ func structuredConfigValueDiff(key, oldVal, newVal string) ([]FieldChange, bool)
 		return nil, false
 	}
 	return state.changes, true
+}
+
+func shouldParseStructuredConfigValue(key, oldVal, newVal string) bool {
+	lowerKey := strings.ToLower(strings.TrimSpace(key))
+	if strings.HasSuffix(lowerKey, ".json") || strings.HasSuffix(lowerKey, ".yaml") || strings.HasSuffix(lowerKey, ".yml") {
+		return true
+	}
+	return looksLikeStructuredConfigValue(oldVal) && looksLikeStructuredConfigValue(newVal)
+}
+
+func looksLikeStructuredConfigValue(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	return strings.HasPrefix(trimmed, "{") || strings.HasPrefix(trimmed, "[")
 }
 
 func parseStructuredConfigValue(value string) (any, bool) {

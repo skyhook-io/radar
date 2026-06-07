@@ -237,7 +237,7 @@ export interface DashboardCRDCount {
 }
 
 // Re-export shared types from k8s-ui — single source of truth
-import type { AuditCardData, AuditFinding, ResourceGroup, CheckMeta, Check, Issue, IssueMeaningfulChange } from '@skyhook-io/k8s-ui'
+import type { AuditCardData, AuditFinding, ResourceGroup, CheckMeta, Check, Issue, IssueRecentChange } from '@skyhook-io/k8s-ui'
 export type DashboardAudit = AuditCardData
 export type { AuditFinding, ResourceGroup, CheckMeta, Check }
 
@@ -349,7 +349,8 @@ export interface IssuesResponse {
   issues: Issue[]
   total?: number
   total_matched?: number
-  recent_meaningful_changes?: IssueMeaningfulChange[]
+  recent_changes?: IssueRecentChange[]
+  recent_changes_reason?: string
   // Present only when RBAC visibility is incomplete (absent = full access).
   // state 'degraded' means core workload reads are denied, so an empty list may
   // mean "can't see" rather than "nothing broken" — the UI must say so.

@@ -99,14 +99,17 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	resp.ClusterContext = provider.ClusterContextForIssues(namespaces, func(group, resource string) bool {
 		return s.canRead(r, group, resource, "kube-system", "list")
 	})
-	if len(namespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.ShouldAttachIssueSidecar(out) {
-		if changes, _, err := meaningfulchanges.Recent(r.Context(), meaningfulchanges.Query{
-			Namespaces: []string{namespaces[0]},
-			Since:      meaningfulchanges.DefaultSince,
-			Limit:      meaningfulchanges.SidecarLimit,
-			FieldLimit: meaningfulchanges.DefaultFieldLimit,
-		}); err == nil && len(changes) > 0 {
-			resp.RecentMeaningfulChanges = changes
+	if len(namespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.IssueSidecarQueryEligible(q.Get("kind"), q.Get("filter"), q.Get("severity")) {
+		if recentChangesReason := meaningfulchanges.IssueSidecarReason(out); recentChangesReason != "" {
+			if changes, _, err := meaningfulchanges.Recent(r.Context(), meaningfulchanges.Query{
+				Namespaces: []string{namespaces[0]},
+				Since:      meaningfulchanges.DefaultSince,
+				Limit:      meaningfulchanges.SidecarLimit,
+				FieldLimit: meaningfulchanges.DefaultFieldLimit,
+			}); err == nil && len(changes) > 0 {
+				resp.RecentChanges = changes
+				resp.RecentChangesReason = recentChangesReason
+			}
 		}
 	}
 	if result := k8s.GetCachedPermissionResult(); result != nil {
