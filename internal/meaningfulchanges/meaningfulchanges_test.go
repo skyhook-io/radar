@@ -9,37 +9,37 @@ import (
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
-func TestShouldAttachIssueSidecar(t *testing.T) {
-	if !ShouldAttachIssueSidecar(nil) {
-		t.Fatalf("zero critical issues should allow the sidecar")
+func TestShouldAttachIssueChanges(t *testing.T) {
+	if !ShouldAttachIssueChanges(nil) {
+		t.Fatalf("zero critical issues should allow the recent-changes attachment")
 	}
-	if got := IssueSidecarReason(nil); got != SidecarReasonNoCriticalIssues {
-		t.Fatalf("IssueSidecarReason(nil) = %q, want %q", got, SidecarReasonNoCriticalIssues)
+	if got := IssueChangesReason(nil); got != ChangesReasonNoCriticalIssues {
+		t.Fatalf("IssueChangesReason(nil) = %q, want %q", got, ChangesReasonNoCriticalIssues)
 	}
 	baseline := []issuesapi.Issue{{Severity: issuesapi.SeverityCritical, IssueTiming: "started_at_resource_creation"}}
-	if !ShouldAttachIssueSidecar(baseline) {
-		t.Fatalf("baseline-dominated critical issues should allow the sidecar")
+	if !ShouldAttachIssueChanges(baseline) {
+		t.Fatalf("baseline-dominated critical issues should allow the recent-changes attachment")
 	}
-	if got := IssueSidecarReason(baseline); got != SidecarReasonAllCriticalIssuesStartedAtResourceCreation {
-		t.Fatalf("IssueSidecarReason(baseline) = %q, want %q", got, SidecarReasonAllCriticalIssuesStartedAtResourceCreation)
+	if got := IssueChangesReason(baseline); got != ChangesReasonAllCriticalStartedAtCreation {
+		t.Fatalf("IssueChangesReason(baseline) = %q, want %q", got, ChangesReasonAllCriticalStartedAtCreation)
 	}
 	runtime := []issuesapi.Issue{{Severity: issuesapi.SeverityCritical, IssueTiming: "started_after_resource_was_healthy"}}
-	if ShouldAttachIssueSidecar(runtime) {
-		t.Fatalf("runtime critical issue should suppress the sidecar")
+	if ShouldAttachIssueChanges(runtime) {
+		t.Fatalf("runtime critical issue should suppress the recent-changes attachment")
 	}
-	if got := IssueSidecarReason(runtime); got != "" {
-		t.Fatalf("IssueSidecarReason(runtime) = %q, want empty", got)
+	if got := IssueChangesReason(runtime); got != "" {
+		t.Fatalf("IssueChangesReason(runtime) = %q, want empty", got)
 	}
 	unknown := []issuesapi.Issue{{Severity: issuesapi.SeverityCritical}}
-	if ShouldAttachIssueSidecar(unknown) {
-		t.Fatalf("critical issue with unknown timing should suppress the sidecar")
+	if ShouldAttachIssueChanges(unknown) {
+		t.Fatalf("critical issue with unknown timing should suppress the recent-changes attachment")
 	}
-	if got := IssueSidecarReason(unknown); got != "" {
-		t.Fatalf("IssueSidecarReason(unknown) = %q, want empty", got)
+	if got := IssueChangesReason(unknown); got != "" {
+		t.Fatalf("IssueChangesReason(unknown) = %q, want empty", got)
 	}
 }
 
-func TestIssueSidecarQueryEligible(t *testing.T) {
+func TestIssueChangesQueryEligible(t *testing.T) {
 	cases := []struct {
 		name     string
 		kind     string
@@ -56,8 +56,8 @@ func TestIssueSidecarQueryEligible(t *testing.T) {
 	}
 	for _, tt := range cases {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := IssueSidecarQueryEligible(tt.kind, tt.filter, tt.severity); got != tt.want {
-				t.Fatalf("IssueSidecarQueryEligible() = %v, want %v", got, tt.want)
+			if got := IssueChangesQueryEligible(tt.kind, tt.filter, tt.severity); got != tt.want {
+				t.Fatalf("IssueChangesQueryEligible() = %v, want %v", got, tt.want)
 			}
 		})
 	}

@@ -473,7 +473,7 @@ type getResourceInput struct {
 	Group     string `json:"group,omitempty" jsonschema:"API group when the kind is ambiguous (e.g. cluster.x-k8s.io for CAPI Cluster vs CNPG Cluster)"`
 	Namespace string `json:"namespace,omitempty" jsonschema:"namespace for namespaced kinds. Leave empty for cluster-scoped kinds (Node, ClusterRole, ClusterRoleBinding, IngressClass, PriorityClass, StorageClass, etc.)."`
 	Name      string `json:"name" jsonschema:"resource name"`
-	Include   string `json:"include,omitempty" jsonschema:"optional sidecar data after narrowing to this object: events, metrics, changes. include=changes follows the existing comma-separated include pattern. Separate from context. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
+	Include   string `json:"include,omitempty" jsonschema:"optional supplemental data after narrowing to this object: events, metrics, changes. include=changes follows the existing comma-separated include pattern. Separate from context. For logs use get_pod_logs / get_workload_logs (container, previous, since, grep) or diagnose for the full workload bundle."`
 	Context   string `json:"context,omitempty" jsonschema:"resourceContext tier: 'basic' (default; attaches managedBy / exposes / selectedBy / uses / runsOn / issueSummary / auditSummary rollups) or 'none' (bare minified resource). For full diagnostic tier with logs + events bundled, use the diagnose tool instead."`
 }
 
@@ -901,7 +901,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		}
 	}
 
-	// Build the resourceContext sidecar unless the caller opted out. Basic
+	// Build the resourceContext section unless the caller opted out. Basic
 	// tier is the default: cheap managedBy / exposes / selectedBy /
 	// runsOn / uses / issueSummary / auditSummary / policySummary. Pass
 	// context=none for a bare minified resource (bulk scans, raw jq work).
@@ -962,7 +962,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	return toJSONResult(result)
 }
 
-// buildMCPResourceContext assembles the resourceContext sidecar for MCP
+// buildMCPResourceContext assembles the resourceContext section for MCP
 // get_resource. Mirrors the REST handler's buildAIResourceContext: pre-
 // computes IssueSummary + AuditSummary in the caller, threads the
 // PolicyReport index when Kyverno is installed, hands a request-scoped
@@ -1025,10 +1025,10 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 				log.Printf("[mcp] Failed to list events for %s/%s/%s: %v", kind, namespace, name, listErr)
 				result["eventsError"] = listErr.Error()
 			} else {
-				// Sidecar include — controller-level events only. Pod-level
+				// Supplemental include — controller-level events only. Pod-level
 				// events on a workload's pods (CrashLoopBackOff, etc.) require
 				// resolving the pod set; that's the diagnose tool's job, not
-				// this sidecar's. nil podNames intentionally restricts to
+				// this include's. nil podNames intentionally restricts to
 				// InvolvedObject == this kind+name.
 				matched := filterEventsByInvolvedObject(events, normalizeDisplayKind(kind), name, nil)
 				if len(matched) > 0 {
@@ -2458,12 +2458,12 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces, func(group, resource string) bool {
 		return canReadInNamespace(ctx, group, resource, "kube-system", "list")
 	})
-	if len(allowedNamespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.IssueSidecarQueryEligible(input.Kind, input.Filter, input.Severity) {
-		if recentChangesReason := meaningfulchanges.IssueSidecarReason(out); recentChangesReason != "" {
+	if len(allowedNamespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.IssueChangesQueryEligible(input.Kind, input.Filter, input.Severity) {
+		if recentChangesReason := meaningfulchanges.IssueChangesReason(out); recentChangesReason != "" {
 			if changes, _, err := meaningfulchanges.Recent(ctx, meaningfulchanges.Query{
 				Namespaces: []string{allowedNamespaces[0]},
 				Since:      meaningfulchanges.DefaultSince,
-				Limit:      meaningfulchanges.SidecarLimit,
+				Limit:      meaningfulchanges.IssueChangesLimit,
 				FieldLimit: meaningfulchanges.DefaultFieldLimit,
 			}); err == nil && len(changes) > 0 {
 				resp.RecentChanges = changes

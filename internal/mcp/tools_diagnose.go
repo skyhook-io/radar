@@ -533,7 +533,7 @@ func fetchEventsForResource(cache *k8s.ResourceCache, kind, namespace, name stri
 //
 // Shared between diagnose (passes resolved pod names for full workload
 // coverage) and attachResourceExtras / get_resource include=events
-// (passes nil — sidecar fetch; callers wanting pod-level events should
+// (passes nil — supplemental fetch; callers wanting pod-level events should
 // use the diagnose tool which does the workload→pods resolution).
 func filterEventsByInvolvedObject(events []*corev1.Event, displayKind, name string, podNames map[string]bool) []corev1.Event {
 	var matched []corev1.Event

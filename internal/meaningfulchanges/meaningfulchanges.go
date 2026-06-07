@@ -18,14 +18,14 @@ const (
 	DefaultSince      = time.Hour
 	DefaultLimit      = 20
 	DefaultFieldLimit = 10
-	SidecarLimit      = 5
+	IssueChangesLimit      = 5
 	ResourceLimit     = 3
 	maxCandidateLimit = 100
 )
 
 const (
-	SidecarReasonNoCriticalIssues                           = "no_critical_issues"
-	SidecarReasonAllCriticalIssuesStartedAtResourceCreation = "all_critical_issues_started_at_resource_creation"
+	ChangesReasonNoCriticalIssues                           = "no_critical_issues"
+	ChangesReasonAllCriticalStartedAtCreation = "all_critical_issues_started_at_resource_creation"
 )
 
 var (
@@ -108,11 +108,11 @@ func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespac
 	return all, nil
 }
 
-func ShouldAttachIssueSidecar(issues []issuesapi.Issue) bool {
-	return IssueSidecarReason(issues) != ""
+func ShouldAttachIssueChanges(issues []issuesapi.Issue) bool {
+	return IssueChangesReason(issues) != ""
 }
 
-func IssueSidecarQueryEligible(kindFilter, celFilter, severityFilter string) bool {
+func IssueChangesQueryEligible(kindFilter, celFilter, severityFilter string) bool {
 	if strings.TrimSpace(kindFilter) != "" || strings.TrimSpace(celFilter) != "" {
 		return false
 	}
@@ -128,7 +128,7 @@ func IssueSidecarQueryEligible(kindFilter, celFilter, severityFilter string) boo
 	return false
 }
 
-func IssueSidecarReason(issues []issuesapi.Issue) string {
+func IssueChangesReason(issues []issuesapi.Issue) string {
 	criticalCount := 0
 	for _, issue := range issues {
 		if issue.Severity != issuesapi.SeverityCritical {
@@ -140,9 +140,9 @@ func IssueSidecarReason(issues []issuesapi.Issue) string {
 		}
 	}
 	if criticalCount == 0 {
-		return SidecarReasonNoCriticalIssues
+		return ChangesReasonNoCriticalIssues
 	}
-	return SidecarReasonAllCriticalIssuesStartedAtResourceCreation
+	return ChangesReasonAllCriticalStartedAtCreation
 }
 
 func ConfigMapKind(kind string) bool {

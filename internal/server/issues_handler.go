@@ -99,12 +99,12 @@ func (s *Server) handleIssues(w http.ResponseWriter, r *http.Request) {
 	resp.ClusterContext = provider.ClusterContextForIssues(namespaces, func(group, resource string) bool {
 		return s.canRead(r, group, resource, "kube-system", "list")
 	})
-	if len(namespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.IssueSidecarQueryEligible(q.Get("kind"), q.Get("filter"), q.Get("severity")) {
-		if recentChangesReason := meaningfulchanges.IssueSidecarReason(out); recentChangesReason != "" {
+	if len(namespaces) == 1 && stats.TotalMatched == len(out) && meaningfulchanges.IssueChangesQueryEligible(q.Get("kind"), q.Get("filter"), q.Get("severity")) {
+		if recentChangesReason := meaningfulchanges.IssueChangesReason(out); recentChangesReason != "" {
 			if changes, _, err := meaningfulchanges.Recent(r.Context(), meaningfulchanges.Query{
 				Namespaces: []string{namespaces[0]},
 				Since:      meaningfulchanges.DefaultSince,
-				Limit:      meaningfulchanges.SidecarLimit,
+				Limit:      meaningfulchanges.IssueChangesLimit,
 				FieldLimit: meaningfulchanges.DefaultFieldLimit,
 			}); err == nil && len(changes) > 0 {
 				resp.RecentChanges = changes

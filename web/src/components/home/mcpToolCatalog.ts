@@ -52,7 +52,7 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
   },
   {
     name: 'get_resource',
-    desc: 'A single resource: minified spec/status/metadata plus resourceContext (relationships, refs, issue/audit/policy rollups). Optionally include heavier event/metrics sidecars.',
+    desc: 'A single resource: minified spec/status/metadata plus resourceContext (relationships, refs, issue/audit/policy rollups). Optionally include heavier event/metrics data.',
     params: [
       { arg: 'kind', required: true, desc: 'resource kind, e.g. pod, deployment, service' },
       { arg: 'name', required: true, desc: 'resource name' },
