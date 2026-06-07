@@ -1107,6 +1107,10 @@ func diffDaemonSet(oldObj, newObj any) ([]FieldChange, []string) {
 		}
 	}
 
+	podTemplateChanges, podTemplateSummary := diffPodTemplateConfig(oldDS.Spec.Template.Spec, newDS.Spec.Template.Spec)
+	changes = append(changes, podTemplateChanges...)
+	summary = append(summary, podTemplateSummary...)
+
 	// Check desired/ready
 	if oldDS.Status.DesiredNumberScheduled != newDS.Status.DesiredNumberScheduled {
 		changes = append(changes, FieldChange{
@@ -1209,6 +1213,10 @@ func diffStatefulSet(oldObj, newObj any) ([]FieldChange, []string) {
 			}
 		}
 	}
+
+	podTemplateChanges, podTemplateSummary := diffPodTemplateConfig(oldSTS.Spec.Template.Spec, newSTS.Spec.Template.Spec)
+	changes = append(changes, podTemplateChanges...)
+	summary = append(summary, podTemplateSummary...)
 
 	// Check ready replicas
 	if oldSTS.Status.ReadyReplicas != newSTS.Status.ReadyReplicas {

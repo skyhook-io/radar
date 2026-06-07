@@ -98,8 +98,8 @@ export interface IssueMeaningfulChange {
   changeType: string;
   summary?: string;
   timestamp: string;
-  changeCategory?: 'spec_config' | 'lifecycle' | 'runtime_status' | string;
-  rankReason?: string;
+  change_category?: 'spec_config' | 'lifecycle' | 'runtime_status' | string;
+  rank_reason?: string;
   fields?: IssueMeaningfulChangeField[];
 }
 

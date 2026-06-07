@@ -342,6 +342,33 @@ func TestComputeDiff_DaemonSetMisscheduled_Detected(t *testing.T) {
 	}
 }
 
+func TestComputeDiff_DaemonSetProbeConfig_Detected(t *testing.T) {
+	base := &appsv1.DaemonSet{Spec: appsv1.DaemonSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Name: "agent", Image: "agent:v1",
+		ReadinessProbe: &corev1.Probe{PeriodSeconds: 10, TimeoutSeconds: 1},
+	}}}}}}
+	updated := base.DeepCopy()
+	updated.Spec.Template.Spec.Containers[0].ReadinessProbe.TimeoutSeconds = 5
+
+	diff := ComputeDiff("DaemonSet", base, updated)
+	if diff == nil || !containsPath(diff, "spec.template.spec.containers[agent].readinessProbe") {
+		t.Fatalf("expected DaemonSet readinessProbe change detected, got %+v", diff)
+	}
+}
+
+func TestComputeDiff_StatefulSetEnvRemoval_Detected(t *testing.T) {
+	base := &appsv1.StatefulSet{Spec: appsv1.StatefulSetSpec{Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{Containers: []corev1.Container{{
+		Name: "db", Image: "db:v1", Env: []corev1.EnvVar{{Name: "DATABASE_URL", Value: "postgres://db"}},
+	}}}}}}
+	updated := base.DeepCopy()
+	updated.Spec.Template.Spec.Containers[0].Env = nil
+
+	diff := ComputeDiff("StatefulSet", base, updated)
+	if diff == nil || !containsPath(diff, "spec.template.spec.containers[db].env[DATABASE_URL]") {
+		t.Fatalf("expected StatefulSet env removal detected, got %+v", diff)
+	}
+}
+
 func TestComputeDiff_FluxKustomizationStalled_Detected(t *testing.T) {
 	mk := func(stalledStatus string) *unstructured.Unstructured {
 		return &unstructured.Unstructured{Object: map[string]any{

@@ -300,6 +300,10 @@ func registerTools(server *mcp.Server) {
 			"rows include `diagnostic_context`: deterministic facts such as explicit " +
 			"missing refs, selected backend issues, or workload rollups; treat these as " +
 			"triage context, not proof of root cause. " +
+			"When `recent_meaningful_changes` is present in the response, inspect it " +
+			"before drilling into the top issue; it lists recent spec/config changes " +
+			"that may explain failures not yet visible as runtime issues, or help " +
+			"demote creation-time baseline failures. " +
 			"For raw Kubernetes Warning events use get_events; for static best-practice / " +
 			"security-posture findings (runAsRoot, missing PDB, no probes, missing resource " +
 			"limits) use get_cluster_audit — a separate axis that must never be conflated (a " +

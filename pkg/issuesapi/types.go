@@ -227,8 +227,8 @@ type MeaningfulChange struct {
 	ChangeType     string        `json:"changeType"`
 	Summary        string        `json:"summary,omitempty"`
 	Timestamp      string        `json:"timestamp"`
-	ChangeCategory string        `json:"changeCategory,omitempty"`
-	RankReason     string        `json:"rankReason,omitempty"`
+	ChangeCategory string        `json:"change_category,omitempty"`
+	RankReason     string        `json:"rank_reason,omitempty"`
 	Fields         []ChangeField `json:"fields,omitempty"`
 }
 
