@@ -6,7 +6,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useNavigate, useLocation, useSearchParams, useNavigationType, NavigationType } from 'react-router-dom'
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
-import { TopologyGraph, TopologySearch, TopologyFilterSidebar, TopologyControls, gitOpsRouteForKind } from '@skyhook-io/k8s-ui'
+import { TopologyGraph, TopologySearch, TopologyFilterSidebar, TopologyControls, gitOpsRouteForKind, gitOpsRouteForResource } from '@skyhook-io/k8s-ui'
 import { TimelineView } from './components/timeline/TimelineView'
 import { ResourcesView } from './components/resources/ResourcesView'
 import { serializeColumnFilters } from './components/resources/resource-utils'
@@ -421,7 +421,11 @@ function AppInner() {
   // + ops), not the generic resource drawer that's a dead-end for it. Member
   // resources (Pods, Services, …) fall through to the standard resource view.
   const navigateFromIssue = useCallback((resource: SelectedResource) => {
-    const gitOpsPath = gitOpsRouteForKind(resource.kind, resource.namespace ?? '', resource.name)
+    const gitOpsPath = gitOpsRouteForResource({
+      apiVersion: resource.group ? `${resource.group}/v1` : 'v1',
+      kind: resource.kind,
+      metadata: { namespace: resource.namespace ?? '', name: resource.name },
+    })
     if (gitOpsPath) {
       navigate(gitOpsPath)
       return
