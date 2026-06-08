@@ -255,11 +255,11 @@ export function ChecksView({ checks, catalog, anyData, resourceHref, onResourceC
           </div>
         </div>
 
-        <SeverityBar totals={totals} />
+        <CheckSeverityBar totals={totals} />
 
         <div className="flex flex-wrap items-center gap-1.5">
           {CHECK_SEVERITIES.map((s) => (
-            <SeverityChip key={s} severity={s} count={totals[s]} active={severityFilter.has(s)} onClick={() => toggle(setSeverityFilter, s)} />
+            <CheckSeverityChip key={s} severity={s} count={totals[s]} active={severityFilter.has(s)} onClick={() => toggle(setSeverityFilter, s)} />
           ))}
           <span className="mx-1.5 h-5 w-px bg-theme-border" />
           {CATEGORIES.map((c) => (
@@ -366,7 +366,7 @@ export function ChecksView({ checks, catalog, anyData, resourceHref, onResourceC
   )
 }
 
-function SeverityBar({ totals }: { totals: Record<CheckSeverity, number> }) {
+export function CheckSeverityBar({ totals }: { totals: Record<CheckSeverity, number> }) {
   const sum = CHECK_SEVERITIES.reduce((n, s) => n + totals[s], 0)
   return (
     <div className="flex h-1.5 overflow-hidden rounded-full bg-theme-elevated" role="img" aria-label="Severity distribution">
@@ -381,7 +381,7 @@ function SeverityBar({ totals }: { totals: Record<CheckSeverity, number> }) {
   )
 }
 
-function SeverityChip({ severity, count, active, onClick }: { severity: CheckSeverity; count: number; active: boolean; onClick: () => void }) {
+export function CheckSeverityChip({ severity, count, active, onClick }: { severity: CheckSeverity; count: number; active: boolean; onClick: () => void }) {
   return (
     <button
       type="button"
@@ -396,6 +396,242 @@ function SeverityChip({ severity, count, active, onClick }: { severity: CheckSev
       <span className={`font-semibold tabular-nums ${count > 0 ? SEVERITY_TEXT_CLASS[severity] : 'text-theme-text-tertiary'}`}>{count}</span>
       <span>{SEVERITY_LABEL[severity]}</span>
     </button>
+  )
+}
+
+export interface CheckReference {
+  label: string
+  url: string
+}
+
+export interface CheckRemediationBlockProps {
+  description?: string
+  remediation?: string
+  references?: CheckReference[]
+  layout?: 'columns' | 'stack'
+}
+
+export function CheckRemediationBlock({ description, remediation, references, layout = 'columns' }: CheckRemediationBlockProps) {
+  if (!description && !remediation && (!references || references.length === 0)) return null
+
+  if (layout === 'stack') {
+    return (
+      <div className="flex flex-col gap-2">
+        {description && <p className="text-[13px] leading-relaxed text-theme-text-secondary">{description}</p>}
+        {remediation && (
+          <div>
+            <div className="text-[11px] uppercase tracking-wider text-theme-text-tertiary">How to fix</div>
+            <p className="mt-0.5 text-[13px] leading-relaxed text-theme-text-secondary">{remediation}</p>
+          </div>
+        )}
+        {references && references.length > 0 && <CheckReferenceLinks references={references} />}
+      </div>
+    )
+  }
+
+  return (
+    <>
+      <div className="flex flex-col gap-4 md:flex-row md:gap-8">
+        {remediation && (
+          <section className="md:flex-1">
+            <h4 className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-radar-accent)]">
+              <Wrench className="h-3.5 w-3.5" /> How to fix
+            </h4>
+            <p className="text-sm leading-relaxed text-theme-text-primary">{remediation}</p>
+          </section>
+        )}
+        {description && (
+          <section className="md:flex-1">
+            <h4 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">What this checks</h4>
+            <p className="text-sm leading-relaxed text-theme-text-secondary">{description}</p>
+          </section>
+        )}
+      </div>
+      {references && references.length > 0 && <CheckReferenceLinks references={references} />}
+    </>
+  )
+}
+
+function CheckReferenceLinks({ references }: { references: CheckReference[] }) {
+  return (
+    <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
+      {references.map((r) => (
+        <a
+          key={r.url}
+          href={r.url}
+          target="_blank"
+          rel="noreferrer"
+          className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-radar-accent)] hover:underline"
+        >
+          {r.label}
+          <ExternalLink className="h-3 w-3" />
+        </a>
+      ))}
+    </div>
+  )
+}
+
+export interface CheckCardShellProps {
+  title: ReactNode
+  category: string
+  severity: CheckSeverity
+  open: boolean
+  onToggle: () => void
+  summary?: ReactNode
+  description?: ReactNode
+  renderActions?: () => ReactNode
+  children?: ReactNode
+  as?: 'li' | 'div'
+  className?: string
+  dimmed?: boolean
+}
+
+export function CheckCardShell({
+  title,
+  category,
+  severity,
+  open,
+  onToggle,
+  summary,
+  description,
+  renderActions,
+  children,
+  as = 'li',
+  className,
+  dimmed,
+}: CheckCardShellProps) {
+  const Container = as
+  return (
+    <Container
+      className={[
+        'overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm',
+        dimmed ? 'opacity-60' : '',
+        className ?? '',
+      ]
+        .filter(Boolean)
+        .join(' ')}
+    >
+      <div
+        role="button"
+        tabIndex={0}
+        aria-expanded={open}
+        onClick={onToggle}
+        onKeyDown={(e) => {
+          if (e.target !== e.currentTarget) return
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault()
+            onToggle()
+          }
+        }}
+        className={`group flex cursor-pointer items-start gap-3 border-l-2 py-3 pl-3 pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent)]/40 ${SEVERITY_RAIL_CLASS[severity]}`}
+      >
+        <ChevronRight className={`mt-0.5 h-4 w-4 shrink-0 text-theme-text-tertiary transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
+
+        <div className="flex min-w-0 flex-1 flex-col gap-1.5">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="truncate text-sm font-semibold text-theme-text-primary">{title}</span>
+            <span className={`badge-sm shrink-0 text-[10px] ${categoryBadgeClass(category)}`}>{category}</span>
+          </div>
+          {description}
+          {summary}
+        </div>
+
+        <span className={`badge-sm mt-0.5 shrink-0 text-[10px] font-semibold ${SEVERITY_BADGE_CLASS[severity]}`}>
+          {SEVERITY_LABEL[severity]}
+        </span>
+        {renderActions?.()}
+      </div>
+
+      {open && (
+        <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: '1fr' }}>
+          <div className="overflow-hidden">
+            <div className="flex flex-col gap-4 border-t border-theme-border bg-theme-base/40 px-4 py-4 pl-11">{children}</div>
+          </div>
+        </div>
+      )}
+    </Container>
+  )
+}
+
+export interface CheckClusterBreakdownGroup {
+  id: string
+  label: ReactNode
+  environment?: string
+  count: ReactNode
+}
+
+export interface CheckClusterBreakdownShellProps<T extends CheckClusterBreakdownGroup> {
+  heading: ReactNode
+  groups: T[]
+  renderGroupBody: (group: T) => ReactNode
+  clusterCap?: number
+  autoExpandLimit?: number
+}
+
+export function CheckClusterBreakdownShell<T extends CheckClusterBreakdownGroup>({
+  heading,
+  groups,
+  renderGroupBody,
+  clusterCap = CLUSTER_CAP,
+  autoExpandLimit = AUTO_EXPAND_CLUSTERS,
+}: CheckClusterBreakdownShellProps<T>) {
+  const [openClusters, setOpenClusters] = useState<Set<string>>(
+    () => new Set(groups.length <= autoExpandLimit ? groups.map((g) => g.id) : []),
+  )
+  const [showAllClusters, setShowAllClusters] = useState(false)
+  const shown = showAllClusters ? groups : groups.slice(0, clusterCap)
+  const hiddenClusters = groups.length - shown.length
+
+  return (
+    <section className="flex flex-col gap-1.5">
+      <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">{heading}</h4>
+      <ul className="flex flex-col gap-1">
+        {shown.map((group) => {
+          const isOpen = openClusters.has(group.id)
+          return (
+            <li key={group.id} className="rounded-lg border border-theme-border/70 bg-theme-surface">
+              <button
+                type="button"
+                aria-expanded={isOpen}
+                onClick={() =>
+                  setOpenClusters((prev) => {
+                    const next = new Set(prev)
+                    if (next.has(group.id)) next.delete(group.id)
+                    else next.add(group.id)
+                    return next
+                  })
+                }
+                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-theme-hover/50"
+              >
+                <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform duration-200 ${isOpen ? '' : '-rotate-90'}`} />
+                <span className="min-w-0 max-w-[260px] truncate text-sm font-medium text-theme-text-primary">{group.label}</span>
+                {group.environment && (
+                  <span className="shrink-0 rounded bg-theme-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-theme-text-secondary ring-1 ring-theme-border">
+                    {group.environment}
+                  </span>
+                )}
+                <span className="flex-1" />
+                <span className="shrink-0 text-xs tabular-nums text-theme-text-secondary">{group.count}</span>
+              </button>
+              <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: isOpen ? '1fr' : '0fr' }}>
+                <div className="overflow-hidden" inert={!isOpen || undefined}>
+                  <div className="px-2.5 pb-2 pl-7">{renderGroupBody(group)}</div>
+                </div>
+              </div>
+            </li>
+          )
+        })}
+      </ul>
+      {hiddenClusters > 0 && (
+        <button
+          type="button"
+          onClick={() => setShowAllClusters(true)}
+          className="mt-0.5 inline-flex w-fit items-center gap-1 rounded px-2 py-1 text-xs font-medium text-[var(--color-radar-accent)] hover:underline"
+        >
+          View all {groups.length} clusters →
+        </button>
+      )}
+    </section>
   )
 }
 
@@ -428,102 +664,42 @@ function FleetCheckRow({
   if (onHideCategory) menuItems.push({ label: `Hide all ${fc.category} checks`, onClick: () => onHideCategory(fc.category) })
 
   return (
-    <li className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm">
-      <div
-        role="button"
-        tabIndex={0}
-        aria-expanded={open}
-        onClick={onToggle}
-        onKeyDown={(e) => {
-          if (e.target !== e.currentTarget) return
-          if (e.key === 'Enter' || e.key === ' ') {
-            e.preventDefault()
-            onToggle()
-          }
-        }}
-        className={`group flex cursor-pointer items-center gap-3 border-l-2 py-3 pl-3 pr-4 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--color-radar-accent)]/40 ${SEVERITY_RAIL_CLASS[fc.severity]}`}
-      >
-        <ChevronRight className={`h-4 w-4 shrink-0 text-theme-text-tertiary transition-transform duration-200 ${open ? 'rotate-90' : ''}`} />
-
-        <div className="flex min-w-0 flex-1 flex-col gap-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium text-theme-text-primary">{fc.title}</span>
-            <span className={`badge-sm shrink-0 text-[10px] ${categoryBadgeClass(fc.category)}`}>{fc.category}</span>
-          </div>
-          <div className="flex min-w-0 items-center gap-1.5 text-xs text-theme-text-tertiary">
-            <span className="shrink-0 font-medium text-theme-text-secondary tabular-nums">
-              {fc.totalResources} {fc.totalResources === 1 ? 'resource' : 'resources'}
-            </span>
-            {clusterCount > 1 && (
-              <>
-                <span aria-hidden>·</span>
-                <span className="shrink-0 tabular-nums">{clusterCount} clusters</span>
-              </>
-            )}
-          </div>
+    <CheckCardShell
+      title={fc.title}
+      category={fc.category}
+      severity={fc.severity}
+      open={open}
+      onToggle={onToggle}
+      summary={
+        <div className="flex min-w-0 items-center gap-1.5 text-xs text-theme-text-tertiary">
+          <span className="shrink-0 font-medium text-theme-text-secondary tabular-nums">
+            {fc.totalResources} {fc.totalResources === 1 ? 'resource' : 'resources'}
+          </span>
+          {clusterCount > 1 && (
+            <>
+              <span aria-hidden>·</span>
+              <span className="shrink-0 tabular-nums">{clusterCount} clusters</span>
+            </>
+          )}
         </div>
+      }
+      renderActions={() => (menuItems.length > 0 ? <RowMenu items={menuItems} /> : null)}
+    >
+      <CheckRemediationBlock description={meta?.description} remediation={meta?.remediation} references={meta?.references} />
 
-        <span className={`badge-sm shrink-0 text-[10px] font-semibold ${SEVERITY_BADGE_CLASS[fc.severity]}`}>{SEVERITY_LABEL[fc.severity]}</span>
-        {menuItems.length > 0 && <RowMenu items={menuItems} />}
+      <div className="border-t border-theme-border/70 pt-3">
+        {single ? (
+          <ResourceList
+            label={`Affected resources (${fc.totalResources})`}
+            check={fc.clusters[0]}
+            resourceHref={resourceHref}
+            onResourceClick={onResourceClick}
+          />
+        ) : (
+          <ClusterBreakdown fc={fc} clusterLabel={clusterLabel} resourceHref={resourceHref} onResourceClick={onResourceClick} />
+        )}
       </div>
-
-      {/* Kept mounted (not `open &&`) so the grid-rows transition animates the
-          collapse too; inert when closed so SR + tab skip the clipped content. */}
-      <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: open ? '1fr' : '0fr' }}>
-        <div className="overflow-hidden" inert={!open || undefined}>
-          <div className="border-t border-theme-border bg-theme-base/40 px-4 py-4 pl-11">
-            <div className="flex flex-col gap-4">
-              <div className="flex flex-col gap-4 md:flex-row md:gap-8">
-                {meta?.remediation && (
-                  <section className="md:flex-1">
-                    <h4 className="mb-1 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-[var(--color-radar-accent)]">
-                      <Wrench className="h-3.5 w-3.5" /> How to fix
-                    </h4>
-                    <p className="text-sm leading-relaxed text-theme-text-primary">{meta.remediation}</p>
-                  </section>
-                )}
-                {meta?.description && (
-                  <section className="md:flex-1">
-                    <h4 className="mb-1 text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">What this checks</h4>
-                    <p className="text-sm leading-relaxed text-theme-text-secondary">{meta.description}</p>
-                  </section>
-                )}
-              </div>
-
-              {meta?.references && meta.references.length > 0 && (
-                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5">
-                  {meta.references.map((r) => (
-                    <a
-                      key={r.url}
-                      href={r.url}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="inline-flex items-center gap-1 text-xs font-medium text-[var(--color-radar-accent)] hover:underline"
-                    >
-                      {r.label}
-                      <ExternalLink className="h-3 w-3" />
-                    </a>
-                  ))}
-                </div>
-              )}
-
-              <div className="border-t border-theme-border/70 pt-3">
-                {single ? (
-                  <ResourceList
-                    label={`Affected resources (${fc.totalResources})`}
-                    check={fc.clusters[0]}
-                    resourceHref={resourceHref}
-                    onResourceClick={onResourceClick}
-                  />
-                ) : (
-                  <ClusterBreakdown fc={fc} clusterLabel={clusterLabel} resourceHref={resourceHref} onResourceClick={onResourceClick} />
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </li>
+    </CheckCardShell>
   )
 }
 
@@ -542,73 +718,24 @@ function ClusterBreakdown({
   resourceHref?: (ref: CheckResourceRef) => string
   onResourceClick?: (ref: CheckResourceRef) => void
 }) {
-  const [openClusters, setOpenClusters] = useState<Set<string>>(
-    () => new Set(fc.clusters.length <= AUTO_EXPAND_CLUSTERS ? fc.clusters.map((c) => c.subject.cluster_id) : []),
-  )
-  const [showAllClusters, setShowAllClusters] = useState(false)
-  const shown = showAllClusters ? fc.clusters : fc.clusters.slice(0, CLUSTER_CAP)
-  const hiddenClusters = fc.clusters.length - shown.length
-
   return (
-    <section className="flex flex-col gap-1.5">
-      <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
-        Affected resources <span className="tabular-nums">({fc.totalResources})</span> · {fc.clusters.length} clusters
-      </h4>
-      <ul className="flex flex-col gap-1">
-        {shown.map((c) => {
-          const id = c.subject.cluster_id
-          const isOpen = openClusters.has(id)
-          const env = c.environment
-          return (
-            <li key={id} className="rounded-lg border border-theme-border/70 bg-theme-surface">
-              <button
-                type="button"
-                aria-expanded={isOpen}
-                onClick={() =>
-                  setOpenClusters((prev) => {
-                    const next = new Set(prev)
-                    if (next.has(id)) next.delete(id)
-                    else next.add(id)
-                    return next
-                  })
-                }
-                className="flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors hover:bg-theme-hover/50"
-              >
-                <ChevronDown className={`h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform duration-200 ${isOpen ? '' : '-rotate-90'}`} />
-                <span className="min-w-0 max-w-[260px] truncate text-sm font-medium text-theme-text-primary">
-                  <ClusterName name={clusterLabel?.(c) || id} />
-                </span>
-                {env && (
-                  <span className="shrink-0 rounded bg-theme-elevated px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-theme-text-secondary ring-1 ring-theme-border">
-                    {env}
-                  </span>
-                )}
-                <span className="flex-1" />
-                <span className="shrink-0 text-xs tabular-nums text-theme-text-secondary">
-                  {c.affectedResources} {c.affectedResources === 1 ? 'resource' : 'resources'}
-                </span>
-              </button>
-              <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: isOpen ? '1fr' : '0fr' }}>
-                <div className="overflow-hidden" inert={!isOpen || undefined}>
-                  <div className="px-2.5 pb-2 pl-7">
-                    <ResourceList check={c} resourceHref={resourceHref} onResourceClick={onResourceClick} />
-                  </div>
-                </div>
-              </div>
-            </li>
-          )
-        })}
-      </ul>
-      {hiddenClusters > 0 && (
-        <button
-          type="button"
-          onClick={() => setShowAllClusters(true)}
-          className="mt-0.5 inline-flex w-fit items-center gap-1 rounded px-2 py-1 text-xs font-medium text-[var(--color-radar-accent)] hover:underline"
-        >
-          View all {fc.clusters.length} clusters →
-        </button>
+    <CheckClusterBreakdownShell
+      heading={
+        <>
+          Affected resources <span className="tabular-nums">({fc.totalResources})</span> · {fc.clusters.length} clusters
+        </>
+      }
+      groups={fc.clusters.map((c) => ({
+        id: c.subject.cluster_id,
+        label: <ClusterName name={clusterLabel?.(c) || c.subject.cluster_id} />,
+        environment: c.environment,
+        count: `${c.affectedResources} ${c.affectedResources === 1 ? 'resource' : 'resources'}`,
+        check: c,
+      }))}
+      renderGroupBody={(group) => (
+        <ResourceList check={group.check} resourceHref={resourceHref} onResourceClick={onResourceClick} />
       )}
-    </section>
+    />
   )
 }
 

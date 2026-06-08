@@ -2,8 +2,8 @@
 // module-internal and don't collide at the top-level barrel with the Checks
 // queue's identically-named helpers when both land. Issue-prefixed public
 // names are safe to surface.
-export { IssuesView } from './IssuesView';
-export type { IssuesViewProps } from './IssuesView';
+export { IssueRow, IssuesView } from './IssuesView';
+export type { IssueRowProps, IssueRowSlotContext, IssuesViewProps } from './IssuesView';
 export {
   ISSUE_SEVERITIES,
   ISSUE_SEVERITY_RANK,

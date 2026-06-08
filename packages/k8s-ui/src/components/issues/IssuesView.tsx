@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ComponentType, type ReactNode } from 'react';
 import { ChevronRight, CircleCheck, Clock, ExternalLink } from 'lucide-react';
 import { ClusterName, EmptyState } from '../ui';
 import { formatCompactAge, formatRelativeAgeTime } from '../../utils/format';
@@ -90,25 +90,48 @@ export function IssuesView({ issues, anyData, resourceHref, onResourceClick, clu
   );
 }
 
-function IssueRow({
-  issue,
-  clusterLabel,
-  open,
-  onToggle,
-  resourceHref,
-  onResourceClick,
-}: {
+export interface IssueRowSlotContext {
+  issue: Issue;
+  open: boolean;
+}
+
+export interface IssueRowProps {
   issue: Issue;
   clusterLabel?: (issue: Issue) => string | undefined;
   open: boolean;
   onToggle: () => void;
   resourceHref?: (ref: IssueResourceRef) => string;
   onResourceClick?: (ref: IssueResourceRef) => void;
-}) {
+  as?: 'li' | 'div';
+  className?: string;
+  dimmed?: boolean;
+  renderBadges?: (ctx: IssueRowSlotContext) => ReactNode;
+  renderMeta?: (ctx: IssueRowSlotContext) => ReactNode;
+  renderActions?: (ctx: IssueRowSlotContext) => ReactNode;
+  ResourceLinkIcon?: ComponentType<{ className?: string }>;
+}
+
+export function IssueRow({
+  issue,
+  clusterLabel,
+  open,
+  onToggle,
+  resourceHref,
+  onResourceClick,
+  as = 'li',
+  className,
+  dimmed,
+  renderBadges,
+  renderMeta,
+  renderActions,
+  ResourceLinkIcon = ExternalLink,
+}: IssueRowProps) {
   const cluster = clusterLabel?.(issue);
   const affected = affectedSummary(issue.affected);
   const { headline } = issueMessageParts(issue);
   const [renderDetails, setRenderDetails] = useState(open);
+  const Container = as;
+  const slotCtx = { issue, open };
 
   useEffect(() => {
     if (open) {
@@ -122,8 +145,12 @@ function IssueRow({
   }, [open, renderDetails]);
 
   return (
-    <li
-      className="overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm"
+    <Container
+      className={[
+        'overflow-hidden rounded-xl border border-theme-border bg-theme-surface shadow-theme-sm',
+        dimmed ? 'opacity-60' : '',
+        className ?? '',
+      ].filter(Boolean).join(' ')}
       style={{ contentVisibility: 'auto', containIntrinsicSize: 'auto 72px' }}
     >
       {/* The whole header is the single toggle target — chevron is just the
@@ -149,6 +176,7 @@ function IssueRow({
           <div className="flex min-w-0 items-baseline gap-2">
             <span className="shrink-0 text-sm font-medium text-theme-text-primary">{categoryLabel(issue.category)}</span>
             <span className={`badge-sm shrink-0 self-center text-[10px] ${groupBadgeClass(issue.category_group)}`}>{groupLabel(issue.category_group)}</span>
+            {renderBadges?.(slotCtx)}
             {/* The detector reason/message rides the title row so the most
                 useful triage signal is visible without expanding — it fills
                 the otherwise-empty band between the title and the severity
@@ -180,6 +208,7 @@ function IssueRow({
                 <span className="shrink-0 tabular-nums">{affected}</span>
               </>
             ) : null}
+            {renderMeta?.(slotCtx)}
           </div>
         </div>
 
@@ -203,6 +232,7 @@ function IssueRow({
         <span className={`badge-sm shrink-0 text-[10px] font-semibold ${ISSUE_SEVERITY_BADGE_CLASS[issue.severity]}`}>
           {ISSUE_SEVERITY_LABEL[issue.severity]}
         </span>
+        {renderActions?.(slotCtx)}
       </div>
 
       {renderDetails ? (
@@ -218,16 +248,16 @@ function IssueRow({
             <div className="border-t border-theme-border bg-theme-base/40 px-4 py-4 pl-11">
               <div className="flex flex-col gap-4">
                 <Diagnosis issue={issue} />
-                <DiagnosticContext issue={issue} resourceHref={resourceHref} onResourceClick={onResourceClick} />
+                <DiagnosticContext issue={issue} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
                 <div className="border-t border-theme-border/70 pt-3">
-                  <AffectedResources issue={issue} resourceHref={resourceHref} onResourceClick={onResourceClick} />
+                  <AffectedResources issue={issue} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
                 </div>
               </div>
             </div>
           </div>
         </div>
       ) : null}
-    </li>
+    </Container>
   );
 }
 
@@ -316,10 +346,12 @@ function DiagnosticContext({
   issue,
   resourceHref,
   onResourceClick,
+  ResourceLinkIcon,
 }: {
   issue: Issue;
   resourceHref?: (ref: IssueResourceRef) => string;
   onResourceClick?: (ref: IssueResourceRef) => void;
+  ResourceLinkIcon: ComponentType<{ className?: string }>;
 }) {
   const ctx = issue.diagnostic_context;
   const facts = ctx?.facts?.filter((fact) => fact.message || fact.refs?.length || fact.related_issues?.length) ?? [];
@@ -347,6 +379,7 @@ function DiagnosticContext({
                     refForLink={memberRef(issue, related.ref)}
                     resourceHref={resourceHref}
                     onResourceClick={onResourceClick}
+                    ResourceLinkIcon={ResourceLinkIcon}
                   />
                 ))}
               </ul>
@@ -359,6 +392,7 @@ function DiagnosticContext({
                     refForLink={memberRef(issue, ref)}
                     resourceHref={resourceHref}
                     onResourceClick={onResourceClick}
+                    ResourceLinkIcon={ResourceLinkIcon}
                   />
                 ))}
               </ul>
@@ -424,10 +458,12 @@ function AffectedResources({
   issue,
   resourceHref,
   onResourceClick,
+  ResourceLinkIcon,
 }: {
   issue: Issue;
   resourceHref?: (ref: IssueResourceRef) => string;
   onResourceClick?: (ref: IssueResourceRef) => void;
+  ResourceLinkIcon: ComponentType<{ className?: string }>;
 }) {
   const members = issue.members ?? [];
   // count is the backend fan-out size (members, subject excluded — see
@@ -439,7 +475,7 @@ function AffectedResources({
           first deep-link; members (the folded pods) follow. ResourceLine emits
           an <li>, so it needs a list parent of its own. */}
       <ul className="flex flex-col gap-px">
-        <ResourceLine label="Subject" refForLink={subjectRef(issue)} resourceHref={resourceHref} onResourceClick={onResourceClick} />
+        <ResourceLine label="Subject" refForLink={subjectRef(issue)} resourceHref={resourceHref} onResourceClick={onResourceClick} ResourceLinkIcon={ResourceLinkIcon} />
       </ul>
       {members.length > 0 && (
         <>
@@ -453,6 +489,7 @@ function AffectedResources({
                 refForLink={memberRef(issue, m)}
                 resourceHref={resourceHref}
                 onResourceClick={onResourceClick}
+                ResourceLinkIcon={ResourceLinkIcon}
               />
             ))}
           </ul>
@@ -472,11 +509,13 @@ function ResourceLine({
   refForLink,
   resourceHref,
   onResourceClick,
+  ResourceLinkIcon,
 }: {
   label?: string;
   refForLink: IssueResourceRef;
   resourceHref?: (ref: IssueResourceRef) => string;
   onResourceClick?: (ref: IssueResourceRef) => void;
+  ResourceLinkIcon: ComponentType<{ className?: string }>;
 }) {
   const r = refForLink;
   const linkable = !!(onResourceClick || resourceHref);
@@ -488,7 +527,7 @@ function ResourceLine({
         {r.namespace ? `${r.namespace} / ` : ''}
         {r.name}
       </span>
-      {linkable && <ExternalLink className="h-3 w-3 shrink-0 text-theme-text-tertiary opacity-0 transition-opacity group-hover/r:opacity-100" />}
+      {linkable && <ResourceLinkIcon className="h-3 w-3 shrink-0 text-theme-text-tertiary opacity-0 transition-opacity group-hover/r:opacity-100" />}
     </>
   );
   const cls = 'group/r flex w-full items-center gap-2 rounded-md px-2 py-1 text-left text-sm transition-colors hover:bg-theme-hover/60';
