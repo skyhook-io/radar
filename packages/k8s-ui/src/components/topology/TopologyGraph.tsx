@@ -20,7 +20,7 @@ import {
 import '@xyflow/react/dist/style.css'
 import { toCanvas } from 'html-to-image'
 
-import { AlertTriangle, ChevronsDownUp, ChevronsUpDown, Download, Layers, LayoutGrid, Loader2, Maximize, Minus, Pause, Play, Plus, RotateCw, Shield } from 'lucide-react'
+import { AlertTriangle, ChevronsDownUp, ChevronsUpDown, Download, Info, Layers, LayoutGrid, Loader2, Maximize, Minus, Pause, Play, Plus, RotateCw, Shield } from 'lucide-react'
 import { PaneLoader } from '../ui/PaneLoader'
 import { Tooltip } from '../ui/Tooltip'
 import { useToast } from '../ui/Toast'
@@ -28,6 +28,8 @@ import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 
 import { K8sResourceNode } from './K8sResourceNode'
 import { GroupNode } from './GroupNode'
+import { NEUTRAL_OWNER, type WorkloadFocus } from '../../utils/workload-colors'
+import { ownershipOf } from '../../utils/topology-neighborhood'
 import { buildHierarchicalElkGraph, applyHierarchicalLayout, getGroupKey, type GroupDisplayLevel } from './layout'
 import type { Topology, TopologyNode, TopologyEdge, ViewMode, GroupingMode } from '../../types'
 import { pluralize } from '../../utils/pluralize'
@@ -50,6 +52,15 @@ function getEdgeColor(type: string, isTrafficView: boolean): string {
   }
   return EDGE_COLORS[type as keyof typeof EDGE_COLORS] || '#64748b'
 }
+
+// Human-readable edge legend for the resources view (traffic view is all-green).
+const EDGE_LEGEND: { label: string; color: string }[] = [
+  { label: 'owns', color: EDGE_COLORS['manages'] },
+  { label: 'exposes', color: EDGE_COLORS['exposes'] },
+  { label: 'configures', color: EDGE_COLORS['configures'] },
+  { label: 'scales', color: EDGE_COLORS['uses'] },
+  { label: 'routes to', color: EDGE_COLORS['routes-to'] },
+]
 
 // Memoized edge style cache to avoid creating new objects on every render
 const edgeStyleCache = new Map<string, React.CSSProperties>()
@@ -179,6 +190,13 @@ interface TopologyGraphProps {
   focusNodeId?: string
   /** Increment to request a focus on focusNodeId (lets the same node be re-focused). */
   focusNonce?: number
+  /** Application graph hover-focus (see WorkloadFocus): when set, nodes outside
+   *  the focused workload's neighborhood dim. Cheap node-data toggle — never
+   *  re-layouts. */
+  focusedOwnerId?: WorkloadFocus
+  /** Hover a node → reports its TopologyNode (null on leave). Drives the rail's
+   *  reciprocal highlight. */
+  onNodeHover?: (node: TopologyNode | null) => void
 }
 
 export function TopologyGraph({
@@ -197,6 +215,8 @@ export function TopologyGraph({
   namespacesKey = '',
   focusNodeId,
   focusNonce,
+  focusedOwnerId,
+  onNodeHover,
 }: TopologyGraphProps) {
   const isTrafficView = viewMode === 'traffic'
   const [nodes, setNodes, onNodesChangeBase] = useNodesState([] as Node[])
@@ -227,6 +247,7 @@ export function TopologyGraph({
   const [layoutRetryCount, setLayoutRetryCount] = useState(0)
   const [fitViewCounter, setFitViewCounter] = useState(0)
   const [isExporting, setIsExporting] = useState(false)
+  const [showLegend, setShowLegend] = useState(false)
   const prevStructureRef = useRef<string>('')
   const layoutVersionRef = useRef(0) // Used to invalidate stale layout results
   // Saved node positions for preservation across topology updates.
@@ -298,18 +319,26 @@ export function TopologyGraph({
     fitAllAfterLayoutRef.current = true
   }, [groupingMode])
 
-  // Expand pod group to show individual pods
+  // Expand pod group to show individual pods. Clear saved positions so ELK
+  // re-lays out the whole graph from scratch — otherwise existing nodes snap
+  // back to their saved spots while the newly-added pods get fresh ELK
+  // coordinates, and the two coordinate spaces collide (overlapping nodes).
+  // Re-fit afterwards since the expanded pods enlarge the content bounds.
   const handleExpandPodGroup = useCallback((podGroupId: string) => {
     setExpandedPodGroups(prev => new Set(prev).add(podGroupId))
+    savedPositionsRef.current.clear()
+    fitAllAfterLayoutRef.current = true
   }, [])
 
-  // Collapse pod group back
+  // Collapse pod group back — same full relayout + re-fit (the graph shrinks).
   const handleCollapsePodGroup = useCallback((podGroupId: string) => {
     setExpandedPodGroups(prev => {
       const next = new Set(prev)
       next.delete(podGroupId)
       return next
     })
+    savedPositionsRef.current.clear()
+    fitAllAfterLayoutRef.current = true
   }, [])
 
   // Expand PodGroup to individual pods
@@ -348,6 +377,7 @@ export function TopologyGraph({
         name: pod.name,
         status: pod.phase === 'Running' ? 'healthy' : pod.phase === 'Pending' ? 'degraded' : 'unhealthy',
         data: {
+          ...podGroupNode.data,
           namespace: pod.namespace,
           phase: pod.phase,
           restarts: pod.restarts,
@@ -625,6 +655,12 @@ export function TopologyGraph({
             return saved ? { ...node, position: saved } : node
           })
 
+      // The ReactFlow fitView prop fires against the pre-layout canvas; once
+      // the first ELK layout lands the content can sit off-center. Re-frame it.
+      if (isInitialLayout) {
+        fitAllAfterLayoutRef.current = true
+      }
+
       // Update saved positions: add/overwrite with positions from this layout run.
       // Remove stale entries for nodes no longer in the topology.
       const currentIds = new Set(positionedNodes.map(n => n.id))
@@ -710,6 +746,17 @@ export function TopologyGraph({
     [topology, workingNodes, onNodeClick]
   )
 
+  const handleNodeMouseEnter = useCallback(
+    (_e: React.MouseEvent, node: Node) => {
+      if (!onNodeHover || node.type === 'group') return
+      const topologyNode =
+        topology?.nodes.find(n => n.id === node.id) ?? workingNodes.find(n => n.id === node.id)
+      if (topologyNode) onNodeHover(topologyNode)
+    },
+    [topology, workingNodes, onNodeHover]
+  )
+  const handleNodeMouseLeave = useCallback(() => onNodeHover?.(null), [onNodeHover])
+
   // Update selected state - only update nodes that actually changed
   useEffect(() => {
     setNodes(nds => {
@@ -742,6 +789,32 @@ export function TopologyGraph({
     // target node (e.g. search expands a collapsed group). Safe from loops: the
     // functional update returns the same array ref when nothing changed.
   }, [selectedNodeId, setNodes, nodes])
+
+  // Hover-focus dim (application graph): when a workload is focused, dim every
+  // resource node not owned by it. A pure data toggle on the existing nodes —
+  // positions are untouched, so it never re-runs the (expensive) ELK layout.
+  useEffect(() => {
+    setNodes(nds => {
+      let changed = false
+      const updated = nds.map(node => {
+        if (node.type === 'group') return node
+        const stamp = ownershipOf(node.data?.nodeData as Record<string, unknown> | undefined)
+        // A focused workload lights its whole neighborhood (focusWorkloadIds);
+        // the "Shared / unscoped" focus lights every neutral node.
+        const inFocus =
+          focusedOwnerId == null
+            ? true
+            : focusedOwnerId === NEUTRAL_OWNER
+              ? stamp.ownerWorkloadId == null
+              : stamp.focusWorkloadIds.includes(focusedOwnerId)
+        const shouldDim = focusedOwnerId != null && !inFocus
+        if (!!node.data?.dimmed === shouldDim) return node
+        changed = true
+        return { ...node, data: { ...node.data, dimmed: shouldDim } }
+      })
+      return changed ? updated : nds
+    })
+  }, [focusedOwnerId, setNodes, nodes])
 
   if (!topology) {
     return <PaneLoader label="Loading topology…" className="absolute inset-0" />
@@ -884,6 +957,8 @@ export function TopologyGraph({
         onNodesChange={onNodesChange}
         onEdgesChange={onEdgesChange}
         onNodeClick={handleNodeClick}
+        onNodeMouseEnter={handleNodeMouseEnter}
+        onNodeMouseLeave={handleNodeMouseLeave}
         nodeTypes={nodeTypes}
         fitView
         fitViewOptions={{ padding: 0.2 }}
@@ -935,6 +1010,30 @@ export function TopologyGraph({
               onExportingChange={setIsExporting}
             />
           </div>
+          {!isTrafficView && (
+            <>
+              {showLegend && (
+                <div className="rounded-md border border-theme-border bg-theme-surface/95 px-3 py-2 shadow-theme-md backdrop-blur">
+                  <div className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">Edge colors</div>
+                  <div className="flex flex-col gap-1">
+                    {EDGE_LEGEND.map((e) => (
+                      <div key={e.label} className="flex items-center gap-2 text-[11px] text-theme-text-secondary">
+                        <span className="inline-block h-0.5 w-5 rounded-full" style={{ background: e.color }} />
+                        {e.label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="react-flow__controls overflow-hidden" style={{ position: 'static', margin: 0 }}>
+                <Tooltip content="Edge color legend" delay={100} position="right">
+                  <button className="react-flow__controls-button" onClick={() => setShowLegend((v) => !v)}>
+                    <Info className="w-3.5 h-3.5" />
+                  </button>
+                </Tooltip>
+              </div>
+            </>
+          )}
         </Panel>
         <ViewportController
           viewMode={viewMode}

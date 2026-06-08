@@ -5,6 +5,9 @@ import { clsx } from 'clsx'
 import { Terminal } from 'lucide-react'
 import {
   WorkloadView as BaseWorkloadView,
+  EditableYamlView,
+  FetchResult,
+  type WorkloadTabType,
   type RendererOverrides,
   type GitOpsOwnerRef,
   type GitOpsStatus,
@@ -57,7 +60,7 @@ import { useDesktopDownload } from '../../hooks/useDesktopDownload'
 import { useCompareLauncher } from '../compare/useCompareLauncher'
 import { apiVersionToGroup } from '../../utils/navigation'
 
-type TabType = 'overview' | 'timeline' | 'logs' | 'metrics' | 'yaml'
+type TabType = WorkloadTabType
 
 // Stable reference — web renderer wrappers inject platform hooks internally
 const rendererOverrides: RendererOverrides = {
@@ -136,6 +139,8 @@ interface WorkloadViewProps {
   namespace: string
   name: string
   onBack: () => void
+  hideBackButton?: boolean
+  compactHeader?: boolean
   onNavigateToResource?: NavigateToResource
   onCollapseToDrawer?: () => void
   expanded?: boolean
@@ -496,6 +501,7 @@ export function WorkloadView({
       onTabChange={handleTabChange}
       // Render props
       renderLogsTab={(props) => <LogsTabContent {...props} />}
+      renderRelatedYaml={(ref) => <RelatedResourceYaml key={`${ref.kind}/${ref.namespace}/${ref.name}`} target={ref} />}
       renderMetricsTab={({ kind, namespace: ns, name: n }) => (
         <MetricsTabContent kind={kind} namespace={ns} name={n} resource={resource} expanded={expanded} />
       )}
@@ -964,3 +970,26 @@ const FLUX_SOURCE_KIND_BY_LOWER = new Map<string, string>([
   ['ocirepository', 'OCIRepository'],
   ['bucket', 'Bucket'],
 ])
+
+// Read-only manifest view for an object in the workload's neighborhood (the
+// YAML tab's object rail). Read-only by design — editing an arbitrary related
+// object belongs on that resource's own page.
+function RelatedResourceYaml({ target }: { target: { kind: string; namespace: string; name: string; group?: string } }) {
+  const { data, isLoading, error } = useResource<any>(kindToPlural(target.kind), target.namespace, target.name, target.group)
+  const [copied, setCopied] = useState(false)
+  const handleCopy = useCallback((text: string) => {
+    navigator.clipboard.writeText(text)
+    setCopied(true)
+    setTimeout(() => setCopied(false), 1500)
+  }, [])
+  if (!data) return <FetchResult loading={isLoading} error={error as Error | null} className="h-32" />
+  return (
+    <EditableYamlView
+      resource={{ kind: kindToPlural(target.kind), namespace: target.namespace, name: target.name, group: target.group }}
+      data={data}
+      onCopy={handleCopy}
+      copied={copied}
+      readOnly
+    />
+  )
+}

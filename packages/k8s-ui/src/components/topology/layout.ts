@@ -109,6 +109,17 @@ const pendingRequests = new Map<number, {
   reject: (error: Error) => void
 }>()
 
+const WORKER_UNAVAILABLE = 'Worker unavailable'
+
+function rejectPendingWorkerRequests() {
+  for (const [, pending] of pendingRequests) {
+    pending.reject(new Error(WORKER_UNAVAILABLE))
+  }
+  pendingRequests.clear()
+  layoutWorker?.terminate()
+  layoutWorker = null
+}
+
 function getOrCreateWorker(): Worker {
   if (!layoutWorker) {
     layoutWorker = new Worker(new URL('./layout.worker.ts', import.meta.url), { type: 'module' })
@@ -126,10 +137,7 @@ function getOrCreateWorker(): Worker {
     }
     layoutWorker.onerror = (e) => {
       console.error('[TopologyLayout] Worker error:', e)
-      for (const [, pending] of pendingRequests) {
-        pending.reject(new Error('Worker error'))
-      }
-      pendingRequests.clear()
+      rejectPendingWorkerRequests()
     }
   }
   return layoutWorker
@@ -142,10 +150,16 @@ function runLayoutViaWorker(
   padding: typeof GROUP_PADDING
 ): Promise<LayoutResult> {
   return new Promise((resolve, reject) => {
-    const worker = getOrCreateWorker()
-    const requestId = ++requestIdCounter
-    pendingRequests.set(requestId, { resolve, reject })
-    worker.postMessage({ type: 'layout', requestId, elkGraph, groupingMode, hideGroupHeader, padding })
+    try {
+      const worker = getOrCreateWorker()
+      const requestId = ++requestIdCounter
+      pendingRequests.set(requestId, { resolve, reject })
+      worker.postMessage({ type: 'layout', requestId, elkGraph, groupingMode, hideGroupHeader, padding })
+    } catch (err) {
+      console.error('[TopologyLayout] Worker unavailable:', err)
+      rejectPendingWorkerRequests()
+      reject(new Error(WORKER_UNAVAILABLE))
+    }
   })
 }
 
@@ -273,7 +287,18 @@ function runLayout(
   if (layoutEngine === 'main-thread') {
     return runLayoutOnMainThread(elkGraph, groupingMode, hideGroupHeader, padding)
   }
-  return runLayoutViaWorker(elkGraph, groupingMode, hideGroupHeader, padding)
+  return runLayoutViaWorker(elkGraph, groupingMode, hideGroupHeader, padding).catch((err) => {
+    // A worker failure before a layout result arrives usually means the
+    // consumer's bundler/CSP couldn't serve or run the worker chunk.
+    // Fall back to the inline engine permanently rather than rendering a dead
+    // "Layout Error" pane.
+    if (err instanceof Error && err.message === WORKER_UNAVAILABLE) {
+      console.warn('[TopologyLayout] layout worker unavailable — falling back to main-thread ELK')
+      layoutEngine = 'main-thread'
+      return runLayoutOnMainThread(elkGraph, groupingMode, hideGroupHeader, padding)
+    }
+    throw err
+  })
 }
 
 interface ElkNode {
@@ -798,7 +823,7 @@ function computeGridDimensions(cardCount: number, groupKey: string): { width: nu
 }
 
 // Two-phase layout: first layout groups internally, then position groups based on connections
-// Layout is performed in a Web Worker to avoid blocking the main thread
+// Layout runs via the active engine — a Web Worker when available, else inline
 export async function applyHierarchicalLayout(
   elkGraph: ElkGraph,
   topologyNodes: TopologyNode[],
@@ -817,7 +842,7 @@ export async function applyHierarchicalLayout(
   try {
     const padding = hideGroupHeader ? GROUP_PADDING_NO_HEADER : GROUP_PADDING
 
-    // Run layout in worker (off main thread)
+    // Run layout via the active engine
     const workerResult = await runLayout(elkGraph, groupingMode, hideGroupHeader, padding)
 
     if (workerResult.error) {

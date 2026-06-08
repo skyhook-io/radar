@@ -1,4 +1,5 @@
 import { useEffect, useRef } from 'react'
+import type { AppRow } from '@skyhook-io/k8s-ui'
 import { useQuery, useMutation, useQueryClient, skipToken } from '@tanstack/react-query'
 import { showApiError, showApiSuccess } from '../components/ui/Toast'
 import { useCanHelmWrite } from '../contexts/CapabilitiesContext'
@@ -850,6 +851,19 @@ export function useTopology(namespaces: string[], viewMode: string = 'resources'
     queryFn: () => fetchJSON(`/topology${queryString ? `?${queryString}` : ''}`),
     staleTime: 5000, // 5 seconds
     enabled: options?.enabled !== false,
+  })
+}
+
+export function useApplications(namespaces: string[]) {
+  const params = new URLSearchParams()
+  if (namespaces.length > 0) params.set('namespaces', namespaces.join(','))
+  const queryString = params.toString()
+
+  return useQuery<{ applications: AppRow[] }>({
+    queryKey: ['applications', namespaces],
+    queryFn: () => fetchJSON(`/applications${queryString ? `?${queryString}` : ''}`),
+    staleTime: 30_000,
+    refetchInterval: 60_000,
   })
 }
 

@@ -305,6 +305,11 @@ func (s *Server) setupRoutes() {
 			// declarations. See pkg/packages for merge semantics.
 			r.Get("/packages", s.handleListPackages)
 
+			// Applications — the workload-centric twin of /packages: the
+			// cluster's own services grouped by pkg/subject app-overlay,
+			// anchored on container image:tag. See applications.go.
+			r.Get("/applications", s.handleListApplications)
+
 			// Free-text resource search (name + namespace + labels +
 			// annotations + container images). Used by the hub fan-out
 			// for cross-cluster search; safe to call directly per-cluster.

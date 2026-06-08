@@ -1,6 +1,6 @@
 import { createContext, useContext, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 
-export type ShortcutScope = 'global' | 'topology' | 'resources' | 'timeline' | 'helm' | 'gitops' | 'traffic' | 'drawer'
+export type ShortcutScope = 'global' | 'topology' | 'resources' | 'timeline' | 'helm' | 'gitops' | 'traffic' | 'applications' | 'audit' | 'drawer'
 
 // Scope priority: higher number = higher priority (wins when multiple scopes active)
 const SCOPE_PRIORITY: Record<ShortcutScope, number> = {
@@ -11,6 +11,8 @@ const SCOPE_PRIORITY: Record<ShortcutScope, number> = {
   helm: 1,
   gitops: 1,
   traffic: 1,
+  applications: 1,
+  audit: 1,
   drawer: 2,
 }
 

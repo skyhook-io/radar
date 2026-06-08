@@ -8,6 +8,9 @@ import { clsx } from 'clsx'
 import type { NodeKind, HealthStatus, PodSummary } from '../../types'
 import { displayKind } from '../../types'
 import { healthToSeverity, SEVERITY_DOT } from '../../utils/badge-colors'
+import { workloadHue } from '../../utils/workload-colors'
+import { ownershipOf } from '../../utils/topology-neighborhood'
+import { midTruncate } from '../../utils/format'
 import { Tooltip } from '../ui/Tooltip'
 
 // Get actionable tooltip content for health issues
@@ -359,6 +362,8 @@ interface K8sResourceNodeProps {
     status: HealthStatus
     nodeData: Record<string, unknown>
     selected?: boolean
+    /** Hover-focus: when a sibling workload is focused, non-members dim. */
+    dimmed?: boolean
     onExpand?: (nodeId: string) => void
     onCollapse?: (nodeId: string) => void
     isExpanded?: boolean
@@ -370,7 +375,14 @@ export const K8sResourceNode = memo(function K8sResourceNode({
   data,
   id,
 }: K8sResourceNodeProps) {
-  const { kind, name, status, nodeData, selected, onExpand, onCollapse, isExpanded } = data
+  const { kind, name, status, nodeData, selected, dimmed, onExpand, onCollapse, isExpanded } = data
+  // Workload tint (application graph): a node owned by exactly one workload
+  // carries that workload's hue. Only on healthy/unknown cards — degraded/
+  // unhealthy already own the card background for health, which must win.
+  const { ownerColorIndex } = ownershipOf(nodeData)
+  const hue = ownerColorIndex !== null && (status === 'healthy' || status === 'unknown')
+    ? workloadHue(ownerColorIndex)
+    : undefined
   const subtitle = getSubtitle(kind, nodeData)
   const isInternet = kind === 'Internet'
   const isPodGroup = kind === 'PodGroup'
@@ -423,10 +435,11 @@ export const K8sResourceNode = memo(function K8sResourceNode({
 
       <div
         className={clsx(
-          'relative rounded-lg overflow-hidden',
+          'relative rounded-lg overflow-hidden transition-opacity duration-150',
           'bg-theme-surface topology-node-card',
           selected && 'topology-node-selected',
-          isSmallNode && 'opacity-90',
+          !selected && dimmed && 'opacity-30',
+          isSmallNode && !dimmed && 'opacity-90',
           // Status bar via CSS pseudo-element (defined in index.css)
           (status === 'healthy' || status === 'unknown') && 'topology-node-status-bar',
           status === 'healthy' && 'topology-node-status-healthy',
@@ -437,6 +450,13 @@ export const K8sResourceNode = memo(function K8sResourceNode({
           ...getStatusStyle(status),
         }}
       >
+        {/* Workload tint — layered over the surface, inset past the 4px status bar */}
+        {hue && (
+          <div
+            className="pointer-events-none absolute inset-y-0 right-0 rounded-r-lg"
+            style={{ left: 4, background: hue.wash }}
+          />
+        )}
 
         {/* Content */}
         <div className={clsx(
@@ -496,9 +516,10 @@ export const K8sResourceNode = memo(function K8sResourceNode({
             </div>
           </div>
 
-          {/* Name */}
+          {/* Name — middle-ellipsis so the differentiating suffix survives
+              (a column of pods sharing a long prefix must stay tellable apart). */}
           <div className="text-sm font-medium text-theme-text-primary truncate pr-1">
-            {name}
+            {midTruncate(name, 34)}
           </div>
 
           {/* Subtitle */}

@@ -21,9 +21,10 @@ const (
 	helmReleaseNameAnno      = "meta.helm.sh/release-name"
 	helmReleaseNSAnno        = "meta.helm.sh/release-namespace"
 
-	partOfLabel  = "app.kubernetes.io/part-of"
-	appNameLabel = "app.kubernetes.io/name"
-	bareAppLabel = "app"
+	appInstanceLabel = "app.kubernetes.io/instance"
+	partOfLabel      = "app.kubernetes.io/part-of"
+	appNameLabel     = "app.kubernetes.io/name"
+	bareAppLabel     = "app"
 )
 
 // API groups for the synthesized manager refs (tiers 1-5). The
@@ -35,10 +36,10 @@ const (
 	fluxHelmGroup        = "helm.toolkit.fluxcd.io"
 )
 
-// Tier is the 8-tier precedence rank of the winning app signal. Tiers 1-5 are
+// Tier is the 9-tier precedence rank of the winning app signal. Tiers 1-5 are
 // the CONSOLIDATED managedby.go precedence, in its native order (argo-instance
 // #4, Helm-release #5 — matching managedby.go). The locked rule is "Helm ranks
-// above the app.kubernetes.io label tiers (6-8)", NOT above Argo. Tiers 6-8 are
+// above the app.kubernetes.io label tiers (6-9)", NOT above Argo. Tiers 6-9 are
 // NET-NEW.
 type Tier int
 
@@ -48,10 +49,16 @@ const (
 	TierFluxKustomize   Tier = 2 // kustomize.toolkit.fluxcd.io/{name,namespace}
 	TierArgoTrackingID  Tier = 3 // argocd.argoproj.io/tracking-id
 	TierArgoInstance    Tier = 4 // argocd.argoproj.io/instance (legacy Argo app label)
-	TierHelmRelease     Tier = 5 // meta.helm.sh/release-name — above the label tiers (6-8)
-	TierPartOf          Tier = 6 // app.kubernetes.io/part-of   NET-NEW
-	TierAppName         Tier = 7 // app.kubernetes.io/name      NET-NEW
-	TierBareApp         Tier = 8 // bare `app` / name heuristic NET-NEW
+	TierHelmRelease     Tier = 5 // meta.helm.sh/release-name — above the label tiers (6-9)
+	// TierInstance is Argo CD's DEFAULT resource-tracking label and Helm's
+	// standard installation-identity label. It disambiguates installations the
+	// way the semantic name/part-of labels cannot (two releases of one chart
+	// share app.kubernetes.io/name but differ on /instance), so it ranks above
+	// them — but below the explicit Helm-release annotation. NET-NEW.
+	TierInstance Tier = 6 // app.kubernetes.io/instance  NET-NEW
+	TierPartOf   Tier = 7 // app.kubernetes.io/part-of   NET-NEW
+	TierAppName  Tier = 8 // app.kubernetes.io/name      NET-NEW
+	TierBareApp  Tier = 9 // bare `app` / name heuristic NET-NEW
 )
 
 // Confidence is the rendered trust tier.
@@ -59,8 +66,8 @@ type Confidence string
 
 const (
 	ConfidenceHigh   Confidence = "high"   // tiers 1-4 (Flux / Argo) — core GitOps
-	ConfidenceMedium Confidence = "medium" // tiers 5-7 (Helm-release / part-of / name) — badge
-	ConfidenceLow    Confidence = "low"    // tier 8 (bare app) — opt-in, never silent
+	ConfidenceMedium Confidence = "medium" // tiers 5-8 (Helm-release / instance / part-of / name) — badge
+	ConfidenceLow    Confidence = "low"    // tier 9 (bare app) — opt-in, never silent
 )
 
 func confidenceForTier(t Tier) Confidence {
@@ -86,7 +93,8 @@ type Signal struct {
 }
 
 // AppOverlay is the OPTIONAL Tier-2 key ABOVE the Subject. Absent (nil) when no
-// signal at/above tier 7 exists -> raw-always: surface degrades to Subject-only.
+// signal at/above tier 8 (TierAppName) exists -> raw-always: surface degrades to
+// Subject-only.
 type AppOverlay struct {
 	Winner    Signal   // highest-precedence signal (provenance: which tier won)
 	Conflicts []Signal // retained runner-ups (NET-NEW: collection + retention)
@@ -94,7 +102,7 @@ type AppOverlay struct {
 
 // ResolveOverlay is the Tier-2 entrypoint. It COLLECTS ALL matching signals from
 // obj's labels/annotations, sorts by Tier, returns the winner + retained
-// conflicts, or nil when nothing reaches tier 7 (TierBareApp alone is opt-in via
+// conflicts, or nil when nothing reaches TierAppName (TierBareApp alone is opt-in via
 // allowBareApp; default off => never silent). SUBSUMES detectManagedByFromMeta
 // (tiers 1-5, first-hit-return REPLACED by collect-all). The native-Helm
 // sentinel {Kind:"HelmRelease",Group:""} the Source classifier keys on is set
@@ -149,6 +157,18 @@ func ResolveOverlay(obj metav1.Object, allowBareApp bool) *AppOverlay {
 			Ref:  Ref{Kind: "Application", Group: argoApplicationGroup, Namespace: "", Name: n},
 		})
 	}
+	if n := labels[appInstanceLabel]; n != "" {
+		// Same "/app/" key shape as part-of/name: an instance value unifies with
+		// matching name/part-of values (same app). Argo's default tracking writes
+		// the app name here; Helm writes the release name — both are the grouping
+		// we want. Env-specific by nature, so this is excluded as a CROSS-cluster
+		// join key in the Hub (single-cluster overlay only).
+		signals = append(signals, Signal{
+			Tier: TierInstance,
+			Key:  ns + "/app/" + n,
+			Ref:  Ref{Kind: "app", Name: n, Namespace: ns},
+		})
+	}
 	if n := labels[partOfLabel]; n != "" {
 		signals = append(signals, Signal{
 			Tier: TierPartOf,
@@ -181,8 +201,8 @@ func ResolveOverlay(obj metav1.Object, allowBareApp bool) *AppOverlay {
 	}
 
 	winner := signals[0]
-	// Raw-always: a bare-app-only overlay (winner at tier 8) is opt-in. Without
-	// allowBareApp, nothing at/above tier 7 means no overlay — never silent.
+	// Raw-always: a bare-app-only overlay is opt-in. Without allowBareApp,
+	// TierBareApp alone means no overlay — never silent.
 	if winner.Tier > TierAppName && !allowBareApp {
 		return nil
 	}

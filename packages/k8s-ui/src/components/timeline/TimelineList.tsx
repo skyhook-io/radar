@@ -1,11 +1,11 @@
-import { useState, useMemo, useRef, useEffect } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { PaneLoader } from '../ui/PaneLoader'
+import { SearchBox } from '../ui/SearchBox'
 import {
   AlertCircle,
   CheckCircle,
   Clock,
-  Search,
   RefreshCw,
   ChevronRight,
   Filter,
@@ -24,7 +24,6 @@ import { ResourceRefBadge } from '../ui/drawer-components'
 import type { NavigateToResource } from '../../utils/navigation'
 import { kindToPlural, refToSelectedResource, apiVersionToGroup } from '../../utils/navigation'
 import { pluralize } from '../../utils/pluralize'
-import { useRegisterShortcut } from '../../hooks/useKeyboardShortcuts'
 
 /** Format resource age (e.g., "3d", "5h", "10m") */
 function formatResourceAge(createdAt: string): string {
@@ -87,29 +86,11 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
   const [timeRange, setTimeRange] = useState<TimeRange>(initialTimeRange ?? '1h')
   const [kindFilter, setKindFilter] = useState<string>('')
   const [expandedItem, setExpandedItem] = useState<string | null>(null)
-  const searchInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     onQueryChange?.({ timeRange, kind: kindFilter || undefined })
   }, [timeRange, kindFilter, onQueryChange])
 
-  // Keyboard shortcut: / to focus search
-  useRegisterShortcut({
-    id: 'timeline-list-search',
-    keys: '/',
-    description: 'Focus search',
-    category: 'Search',
-    scope: 'timeline',
-    handler: () => searchInputRef.current?.focus(),
-  })
-  useRegisterShortcut({
-    id: 'timeline-list-escape',
-    keys: 'Escape',
-    description: 'Blur search',
-    category: 'Search',
-    scope: 'timeline',
-    handler: () => searchInputRef.current?.blur(),
-  })
 
   const [handleRefresh, isRefreshAnimating] = useRefreshAnimation(onRefresh ?? (() => {}))
 
@@ -278,17 +259,7 @@ export function TimelineList({ events, isLoading, onRefresh, onQueryChange, hasL
       {/* Toolbar */}
       <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 flex-wrap">
         {/* Search */}
-        <div className="flex-1 relative min-w-[200px]">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
-          <input
-            ref={searchInputRef}
-            type="text"
-            placeholder="Search... (press /)"
-            value={searchTerm}
-            onChange={(e) => setSearchTerm(e.target.value)}
-            className="w-full max-w-md pl-10 pr-4 py-2 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-blue-500"
-          />
-        </div>
+        <SearchBox value={searchTerm} onChange={setSearchTerm} scope="timeline" shortcutId="timeline-list-search" className="flex-1 min-w-[200px] max-w-md" />
 
         {/* Activity type filter */}
         <div className="flex items-center gap-1 bg-theme-elevated rounded-lg p-1">

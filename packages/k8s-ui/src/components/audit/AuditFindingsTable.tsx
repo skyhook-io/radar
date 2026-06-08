@@ -1,9 +1,10 @@
 import { useState, useMemo, useRef, useEffect, type Dispatch, type SetStateAction } from 'react'
-import { ShieldAlert, AlertTriangle, ChevronRight, CheckCircle2, Search, ExternalLink, MoreHorizontal, EyeOff, Layers } from 'lucide-react'
+import { ShieldAlert, AlertTriangle, ChevronRight, CheckCircle2, ExternalLink, MoreHorizontal, EyeOff, Layers } from 'lucide-react'
 import { clsx } from 'clsx'
 import type { AuditFinding } from './AuditAlerts'
 import { SEVERITY_TEXT, BP_CATEGORY_BADGE, DEFAULT_BADGE_COLOR } from '../../utils/badge-colors'
 import { EmptyState } from '../ui/EmptyState'
+import { SearchBox } from '../ui/SearchBox'
 import { FilterPill } from '../ui/FilterPill'
 import { pluralize } from '../../utils/pluralize'
 
@@ -62,7 +63,6 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
   const [expanded, setExpanded] = useState<Set<string>>(new Set())
   const [expandedNS, setExpandedNS] = useState<Set<string>>(new Set())
   const [groupByNS, setGroupByNS] = useState(false)
-  const searchInputRef = useRef<HTMLInputElement>(null)
 
   const toggleInSet = (setter: Dispatch<SetStateAction<Set<string>>>, value: string) => {
     setter(prev => {
@@ -83,18 +83,6 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
     clearChipFilters()
     setSearchTerm('')
   }
-
-  // "/" keyboard shortcut to focus search
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === '/' && !e.ctrlKey && !e.metaKey && document.activeElement?.tagName !== 'INPUT') {
-        e.preventDefault()
-        searchInputRef.current?.focus()
-      }
-    }
-    document.addEventListener('keydown', handler)
-    return () => document.removeEventListener('keydown', handler)
-  }, [])
 
   // Compute totals from whichever data source we have
   const allFindings = useMemo(() => {
@@ -242,17 +230,7 @@ export function AuditFindingsTable({ groups, findings, checks, onResourceClick, 
           <SummaryBadge label="Critical" count={dangerCount} color={SEVERITY_TEXT.error} />
           <SummaryBadge label="Warning" count={warningCount} color={SEVERITY_TEXT.warning} />
 
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
-            <input
-              ref={searchInputRef}
-              type="text"
-              placeholder="Search... (press /)"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-56 pl-10 pr-4 py-1.5 bg-theme-elevated border border-theme-border-light rounded-lg text-sm text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-skyhook-500"
-            />
-          </div>
+          <SearchBox value={searchTerm} onChange={setSearchTerm} scope="audit" shortcutId="audit-search" className="w-64" />
 
           <div className="flex-1" />
 

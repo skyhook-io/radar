@@ -174,12 +174,13 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
 
   return (
     <>
-      {/* Scaling in progress banner */}
+      {/* Scaling in progress banner — amber: replicas short of desired is an
+          attention state, not an info note (it may be a stuck rollout). */}
       {(scaledTo !== null || progressMessage) && !hasProblems && (
-        <div className="mb-4 p-3 bg-blue-500/10 border border-blue-500/30 rounded-lg">
+        <div className="mb-4 p-3 bg-amber-500/10 border border-amber-500/30 rounded-lg">
           <div className="flex items-center gap-2">
-            <Loader2 className="w-4 h-4 text-blue-400 animate-spin shrink-0" />
-            <div className="text-sm text-blue-300">
+            <Loader2 className="w-4 h-4 text-amber-500 animate-spin shrink-0" />
+            <div className="text-sm text-amber-700 dark:text-amber-300">
               {progressMessage || `Scaling to ${scaledTo} replicas...`}
             </div>
           </div>

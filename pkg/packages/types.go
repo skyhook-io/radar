@@ -49,6 +49,22 @@ const (
 	HealthUnknown   Health = "unknown"
 )
 
+// Overlay is the optional Tier-2 "application" identity ABOVE a package — the
+// grouping key the Applications fleet surface uses (see
+// radar-hub/docs/ADDONS-AND-APPLICATIONS-PLAN.md). It mirrors
+// pkg/subject.AppOverlay but with plain fields, so pkg/packages stays free of
+// pkg/subject + metav1: the caller resolves subject.ResolveOverlay (for
+// workloads) or maps a GitOps declaration's identity, then sets this.
+//
+//	Tier   — 1-9, mirrors pkg/subject.Tier (lower = higher precedence/confidence).
+//	Key    — stable grouping key, e.g. "<ns>/Application/<name>" or "<ns>/app/<name>".
+//	Confidence — "high" (tiers 1-4) | "medium" (5-8) | "low" (9).
+type Overlay struct {
+	Key        string `json:"key"`
+	Tier       int    `json:"tier"`
+	Confidence string `json:"confidence,omitempty"`
+}
+
 // HelmRelease is the Helm-side input shape. Mirrors the on-wire shape
 // of `internal/helm.HelmRelease` but lives here so pkg/packages stays
 // dependency-free of internal/.
@@ -76,6 +92,10 @@ type Workload struct {
 	// Health is the workload's aggregated runtime status. Caller decides
 	// the rule (e.g. ready/desired ratio for Deployments).
 	Health Health `json:"health"`
+	// Overlay is the resolved Tier-2 app identity for this workload (the
+	// caller runs pkg/subject.ResolveOverlay on the workload's metadata).
+	// Optional — nil when no app-overlay signal reached tier 7.
+	Overlay *Overlay `json:"overlay,omitempty"`
 }
 
 // CRD is the CRD-side input shape. We need just enough to map
@@ -115,6 +135,10 @@ type Declaration struct {
 	// reasons collapse to degraded. Suspended (spec.suspend) is not yet
 	// surfaced separately.
 	Status Health `json:"status"`
+	// Overlay is the app identity derived from the declaration's own GitOps
+	// identity (Argo Application → tier 3, Flux HelmRelease → tier 1, Flux
+	// Kustomization → tier 2). Set by the caller. Optional.
+	Overlay *Overlay `json:"overlay,omitempty"`
 }
 
 // Sources is the input struct fed to Aggregate. Every field is optional;
@@ -204,6 +228,11 @@ type PackageRow struct {
 	// itself in that case. Lets the SPA render with appropriate framing
 	// ("cert-manager.io CRDs detected") vs a real chart row.
 	FromCRDGroup string `json:"fromCRDGroup,omitempty"`
+	// Overlay is the resolved Tier-2 app identity for this package (the
+	// highest-confidence overlay across its contributing workloads /
+	// declarations — lowest Tier wins). Drives the Applications fleet
+	// surface's app grouping. Optional — nil when no app-overlay resolved.
+	Overlay *Overlay `json:"overlay,omitempty"`
 }
 
 // AddSource appends src to r.Sources if not already present and

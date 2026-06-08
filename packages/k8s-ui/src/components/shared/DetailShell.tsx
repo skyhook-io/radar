@@ -30,6 +30,8 @@ export interface DetailShellProps<TId extends string = string> {
   onTabChange: (id: TId) => void
   tabStripEnd?: ReactNode
   overlay?: ReactNode
+  /** Hide breadcrumb/identity/header actions when a host page already owns that chrome. */
+  compactHeader?: boolean
   children: ReactNode
 }
 
@@ -44,6 +46,7 @@ export function DetailShell<TId extends string = string>({
   onTabChange,
   tabStripEnd,
   overlay,
+  compactHeader = false,
   children,
 }: DetailShellProps<TId>) {
   const visibleTabs = tabs.filter((t) => !t.hidden)
@@ -52,15 +55,19 @@ export function DetailShell<TId extends string = string>({
     <div className="flex flex-col h-full w-full bg-theme-surface">
       {/* Header */}
       <div className="shrink-0 border-b border-theme-border bg-theme-surface">
-        {breadcrumb && <div className="px-6 pt-2.5">{breadcrumb}</div>}
-        <div className={clsx('px-6 flex items-start gap-4', breadcrumb ? 'pb-3 pt-1.5' : 'py-3')}>
-          {nav}
-          <div className="flex-1 min-w-0">{identity}</div>
-          {headerActions}
-        </div>
+        {!compactHeader && (
+          <>
+            {breadcrumb && <div className="px-6 pt-2.5">{breadcrumb}</div>}
+            <div className={clsx('px-6 flex items-start gap-4', breadcrumb ? 'pb-3 pt-1.5' : 'py-3')}>
+              {nav}
+              <div className="flex-1 min-w-0">{identity}</div>
+              {headerActions}
+            </div>
+          </>
+        )}
 
         {/* Tabs (left) + scope controls / actions (right) */}
-        <div className="px-6 flex items-center border-t border-theme-border">
+        <div className={clsx('flex items-center', compactHeader ? 'px-0' : 'border-t border-theme-border px-6')}>
           <div className="flex gap-1" role="tablist">
             {visibleTabs.map((t) => (
               <DetailShellTabButton key={t.id} active={activeTab === t.id} onClick={() => onTabChange(t.id)}>

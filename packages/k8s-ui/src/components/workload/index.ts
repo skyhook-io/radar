@@ -1,2 +1,2 @@
-export { WorkloadView } from './WorkloadView'
+export { WorkloadView, type WorkloadTabType } from './WorkloadView'
 export { ResourceDetailDrawer } from './ResourceDetailDrawer'

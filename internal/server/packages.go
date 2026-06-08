@@ -11,13 +11,47 @@ import (
 	"sync"
 	"time"
 
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/helm"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/subject"
 )
+
+// toPackagesOverlay maps the unified resolver's app-overlay (pkg/subject) into
+// the plain packages.Overlay carried on the wire. nil → nil (raw-always: no
+// app-overlay degrades to package/subject-only on the Applications surface).
+func toPackagesOverlay(ao *subject.AppOverlay) *packages.Overlay {
+	if ao == nil {
+		return nil
+	}
+	return &packages.Overlay{
+		Key:        ao.Winner.Key,
+		Tier:       int(ao.Winner.Tier),
+		Confidence: string(ao.Winner.Confidence),
+	}
+}
+
+// declarationOverlay derives the app-overlay for a GitOps declaration from its
+// own identity, mirroring the key format pkg/subject.ResolveOverlay produces
+// for the workloads the controller stamps — so a Helm-labeled workload and its
+// managing declaration collapse to one app. Argo App → tier 3; Flux HelmRelease
+// (has a chart) → tier 1; Flux Kustomization (no chart) → tier 2.
+func declarationOverlay(d packages.Declaration) *packages.Overlay {
+	switch strings.ToLower(d.Source) {
+	case "argocd", "argo-cd", "argo":
+		return &packages.Overlay{Key: d.Namespace + "/Application/" + d.Name, Tier: int(subject.TierArgoTrackingID), Confidence: string(subject.ConfidenceHigh)}
+	case "flux", "fluxcd":
+		if d.Chart != "" {
+			return &packages.Overlay{Key: d.Namespace + "/HelmRelease/" + d.Name, Tier: int(subject.TierFluxHelmRelease), Confidence: string(subject.ConfidenceHigh)}
+		}
+		return &packages.Overlay{Key: d.Namespace + "/Kustomization/" + d.Name, Tier: int(subject.TierFluxKustomize), Confidence: string(subject.ConfidenceHigh)}
+	}
+	return nil
+}
 
 // packagesCacheTTL bounds how often we recompute the merged package
 // list. Aggregate is cheap; the inputs (Helm secret reads, dynamic-cache
@@ -239,6 +273,12 @@ func evictOldestPackagesCacheEntry() {
 	if !first {
 		delete(packagesCache, oldestKey)
 	}
+}
+
+func clearPackagesCache() {
+	packagesCacheMu.Lock()
+	packagesCache = map[string]packagesCacheEntry{}
+	packagesCacheMu.Unlock()
 }
 
 // packagesCacheKeyFor produces a stable cache key from the requested
@@ -529,6 +569,10 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 		if lbls["helm.sh/chart"] == "" && anns["meta.helm.sh/release-name"] == "" {
 			return
 		}
+		// Resolve the Tier-2 app-overlay from the workload's metadata via the
+		// unified resolver. allowBareApp=false: a bare `app` label alone never
+		// silently groups (raw-always — see pkg/subject.ResolveOverlay).
+		meta := metav1.ObjectMeta{Namespace: ns, Name: name, Labels: lbls, Annotations: anns}
 		out = append(out, packages.Workload{
 			Kind:        kind,
 			Namespace:   ns,
@@ -536,6 +580,7 @@ func collectWorkloadInputs(cache *k8s.ResourceCache, namespaces []string) ([]pac
 			Labels:      lbls,
 			Annotations: anns,
 			Health:      health,
+			Overlay:     toPackagesOverlay(subject.ResolveOverlay(&meta, false)),
 		})
 	}
 
@@ -636,6 +681,7 @@ func collectGitOpsDeclarations(ctx context.Context, cache *k8s.ResourceCache, er
 	if items, err := cache.ListDynamicWithGroup(ctx, "Application", "", "argoproj.io"); err == nil {
 		for _, item := range items {
 			if d, ok := packages.ParseArgoApplication(item.Object); ok {
+				d.Overlay = declarationOverlay(d)
 				out = append(out, d)
 			} else {
 				log.Printf("[packages] failed to parse Argo Application %s/%s — skipping", item.GetNamespace(), item.GetName())
@@ -648,6 +694,7 @@ func collectGitOpsDeclarations(ctx context.Context, cache *k8s.ResourceCache, er
 	if items, err := cache.ListDynamicWithGroup(ctx, "HelmRelease", "", "helm.toolkit.fluxcd.io"); err == nil {
 		for _, item := range items {
 			if d, ok := packages.ParseFluxHelmRelease(item.Object); ok {
+				d.Overlay = declarationOverlay(d)
 				out = append(out, d)
 			} else {
 				log.Printf("[packages] failed to parse Flux HelmRelease %s/%s — skipping", item.GetNamespace(), item.GetName())
@@ -660,6 +707,7 @@ func collectGitOpsDeclarations(ctx context.Context, cache *k8s.ResourceCache, er
 	if items, err := cache.ListDynamicWithGroup(ctx, "Kustomization", "", "kustomize.toolkit.fluxcd.io"); err == nil {
 		for _, item := range items {
 			if d, ok := packages.ParseFluxKustomization(item.Object); ok {
+				d.Overlay = declarationOverlay(d)
 				out = append(out, d)
 			} else {
 				log.Printf("[packages] failed to parse Flux Kustomization %s/%s — skipping", item.GetNamespace(), item.GetName())

@@ -90,18 +90,21 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     setFetchError(null)
     try {
       const result = await fetchAll({ container: selectedContainer || undefined, tailLines, sinceSeconds })
+      // Older backends marshal empty results as null rather than [].
+      const resultPods = result.pods ?? []
+      const resultLogs = result.logs ?? []
 
-      setPods(result.pods)
+      setPods(resultPods)
 
-      if (!podsInitialized.current && result.pods.length > 0) {
+      if (!podsInitialized.current && resultPods.length > 0) {
         podsInitialized.current = true
-        setSelectedPods(new Set(result.pods.map(p => p.name)))
+        setSelectedPods(new Set(resultPods.map(p => p.name)))
       }
 
       const indexByPod = new Map<string, number>()
-      result.pods.forEach((pod, i) => indexByPod.set(pod.name, i))
+      resultPods.forEach((pod, i) => indexByPod.set(pod.name, i))
 
-      set(result.logs.map(log => ({
+      set(resultLogs.map(log => ({
         timestamp: log.timestamp,
         content: log.content,
         container: log.container,

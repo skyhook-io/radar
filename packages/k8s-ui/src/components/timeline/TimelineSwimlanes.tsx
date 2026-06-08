@@ -7,7 +7,6 @@ import {
   ZoomIn,
   ZoomOut,
   ChevronRight,
-  Search,
   X,
   List,
   GanttChart,
@@ -27,6 +26,7 @@ import type { TimelineEvent, Topology } from '../../types'
 import type { NavigateToResource } from '../../utils/navigation'
 import { kindToPlural, apiVersionToGroup } from '../../utils/navigation'
 import { PaneLoader } from '../ui/PaneLoader'
+import { SearchBox } from '../ui/SearchBox'
 import { pluralize } from '../../utils/pluralize'
 import { gitOpsRouteForKind } from '../../utils/gitops-route'
 import { isChangeEvent, isHistoricalEvent, isOperation, displayKind } from '../../types'
@@ -194,7 +194,6 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
     onResourceClick?.({ kind: kindToPlural(kind), namespace, name, group })
   }, [onNavigatePath, onResourceClick])
   const containerRef = useRef<HTMLDivElement>(null)
-  const searchInputRef = useRef<HTMLInputElement>(null)
   const [zoom, setZoom] = useState(1)
   const [panOffset, setPanOffset] = useState(0)
   const [selectedEvent, setSelectedEvent] = useState<TimelineEvent | null>(null)
@@ -242,22 +241,13 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
 
   // Keyboard shortcuts
   useRegisterShortcut({
-    id: 'swimlane-search',
-    keys: '/',
-    description: 'Focus search',
-    category: 'Search',
-    scope: 'timeline',
-    handler: () => searchInputRef.current?.focus(),
-  })
-  useRegisterShortcut({
     id: 'swimlane-escape',
     keys: 'Escape',
-    description: 'Close detail / blur search',
+    description: 'Close event detail',
     category: 'Timeline',
     scope: 'timeline',
     handler: () => {
       if (selectedEvent) setSelectedEvent(null)
-      else searchInputRef.current?.blur()
     },
   })
 
@@ -467,25 +457,7 @@ export function TimelineSwimlanes({ events, isLoading, onResourceClick, viewMode
         <div className="flex items-center justify-between px-4 py-2">
           <div className="flex items-center gap-4">
             {/* Search */}
-            <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
-              <input
-                ref={searchInputRef}
-                type="text"
-                value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search... (press /)"
-                className="w-80 pl-9 pr-8 py-1.5 text-sm bg-theme-elevated border border-theme-border-light rounded-lg text-theme-text-primary placeholder-theme-text-disabled focus:outline-none focus:ring-2 focus:ring-accent focus:border-transparent"
-              />
-              {searchTerm && (
-                <button
-                  onClick={() => setSearchTerm('')}
-                  className="absolute right-2 top-1/2 -translate-y-1/2 text-theme-text-tertiary hover:text-theme-text-primary"
-                >
-                  <X className="w-4 h-4" />
-                </button>
-              )}
-            </div>
+            <SearchBox value={searchTerm} onChange={setSearchTerm} scope="timeline" shortcutId="swimlane-search" className="w-80" />
             {/* Zoom controls */}
             <div className="flex items-center gap-2">
               <button

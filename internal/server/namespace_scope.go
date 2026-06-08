@@ -115,6 +115,8 @@ func (s *Server) finalizePostContextSwitch() {
 		s.rbacMemo.Invalidate()
 	}
 	k8s.InvalidateUserCapabilitiesCache()
+	clearPackagesCache()
+	clearApplicationsCache()
 	s.clearAllNamespacePreferences()
 }
 

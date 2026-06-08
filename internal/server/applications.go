@@ -1,0 +1,1248 @@
+package server
+
+import (
+	"context"
+	"errors"
+	"log"
+	"net/http"
+	"slices"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
+
+	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/pkg/packages"
+	"github.com/skyhook-io/radar/pkg/subject"
+	"github.com/skyhook-io/radar/pkg/topology"
+)
+
+// Applications is the workload-centric twin of /api/packages. Where packages
+// answers "what software is installed" (chart/GitOps-declaration centric, the
+// Add-ons surface), Applications answers "what deployable/owned software units
+// run here, what runtime class they have, and what version they run" — the unit
+// is a logical app/release grouping over concrete workloads.
+//
+// What defines an app boundary: the K8s STRUCTURAL relationship graph is the
+// spine. A workload's app is its topmost EdgeManages ancestor — the root that
+// collapses native owner chains (Pod→RS→Deployment), in-cluster GitOps managers
+// (an ArgoCD Application / Flux Kustomization / Flux HelmRelease that manages a
+// set of workloads), and generic-CRD owners. The pkg/subject Tier-2 label
+// overlay (app.kubernetes.io/part-of, Argo/Flux/Helm signals) then CONSOLIDATES
+// roots the graph can't connect — hub-spoke Argo (controller in another
+// cluster), native-Helm release annotations — with a confidence score. Roots
+// and overlay keys are unioned per workload; satellites (Services/Ingress/
+// config/scalers/PDBs) are ATTACHED to an app via the same graph but never
+// merge two apps that merely share one (the over-merge guardrail). Nothing is
+// hidden: a singleton workload with no signal is its own raw row, and add-on
+// machinery is classified with evidence rather than dropped.
+
+// applicationsResponse is the GET /api/applications body.
+type applicationsResponse struct {
+	Applications []appRow `json:"applications"`
+}
+
+const applicationsCacheTTL = 60 * time.Second
+
+var applicationsCacheMaxEntries = 256
+
+var (
+	applicationsCacheMu sync.Mutex
+	applicationsCache   = map[string]applicationsCacheEntry{}
+)
+
+type applicationsCacheEntry struct {
+	at   time.Time
+	rows []appRow
+}
+
+// appRow is one logical app in this cluster.
+type appRow struct {
+	Key           string            `json:"key"`                      // overlay key, structural-root key, or "<ns>/<kind>/<name>" raw
+	Name          string            `json:"name"`                     // display name
+	Namespace     string            `json:"namespace,omitempty"`      // the single namespace the WORKLOADS run in (residence, not the GitOps manager's home); empty when they span several — see Namespaces
+	Namespaces    []string          `json:"namespaces,omitempty"`     // all distinct workload namespaces, sorted; the unambiguous form of Namespace
+	Tier          int               `json:"tier,omitempty"`           // pkg/subject overlay tier (0 = raw, no signal)
+	Confidence    string            `json:"confidence,omitempty"`     // high | medium | low
+	Category      string            `json:"category,omitempty"`       // app | addon | mixed; classification hint, never identity
+	AddonReason   string            `json:"addonReason,omitempty"`    // add-on evidence when Category == addon/mixed
+	WorkloadClass string            `json:"workload_class,omitempty"` // service | worker | job | mixed | unknown
+	Health        string            `json:"health"`                   // worst-of across workloads
+	Versions      []string          `json:"versions,omitempty"`       // distinct image tags (the running version)
+	VersionSkew   bool              `json:"versionSkew,omitempty"`    // the SAME image runs different tags across workloads — real drift, unlike multi-image diversity
+	AppVersion    string            `json:"appVersion,omitempty"`     // app.kubernetes.io/version when all workloads agree — the "main version" of a single-chart add-on; empty for multi-chart umbrellas
+	Identity      *appIdentity      `json:"identity,omitempty"`       // app identity grouping evidence — see applications_identity.go
+	Workloads     []appWorkload     `json:"workloads"`
+	Events        []appEvent        `json:"events,omitempty"`        // recent Warning events across the app's workloads/pods
+	Relationships *appRelationships `json:"relationships,omitempty"` // structural satellites attached via topology
+}
+
+// appRelationships is the structural neighborhood of an app, derived from the
+// topology graph: what fronts it (Services/Ingress/Routes) and what supports it
+// (config, autoscalers, disruption budgets). Counts where names add no value.
+type appRelationships struct {
+	Services  []string `json:"services,omitempty"`
+	Ingresses []string `json:"ingresses,omitempty"`
+	Routes    []string `json:"routes,omitempty"`
+	Configs   int      `json:"configs,omitempty"`
+	Scalers   int      `json:"scalers,omitempty"`
+	PDBs      int      `json:"pdbs,omitempty"`
+
+	configRefs map[string]struct{}
+	scalerRefs map[string]struct{}
+	pdbRefs    map[string]struct{}
+}
+
+// appEvent is a recent k8s Warning event correlated to an app's workloads/pods
+// (the "why is it broken" feed — BackOff, FailedScheduling, FailedMount, …).
+type appEvent struct {
+	Type     string `json:"type"`
+	Reason   string `json:"reason"`
+	Message  string `json:"message,omitempty"`
+	Count    int    `json:"count"`
+	Object   string `json:"object"` // "<Kind>/<name>"
+	LastSeen string `json:"lastSeen,omitempty"`
+}
+
+// appWorkload is one concrete workload belonging to an app, with its primary
+// container image as the version anchor when the workload has a pod template.
+type appWorkload struct {
+	Kind          string `json:"kind"`
+	Namespace     string `json:"namespace"`
+	Name          string `json:"name"`
+	WorkloadClass string `json:"workload_class,omitempty"` // service | worker | job | unknown
+	Image         string `json:"image,omitempty"`          // full primary-container image ref
+	Version       string `json:"version,omitempty"`        // image tag (digest-only → empty)
+	AppVersion    string `json:"appVersion,omitempty"`     // app.kubernetes.io/version label (upstream release, e.g. v2.49.1)
+	Health        string `json:"health"`
+	Ready         int    `json:"ready"`            // ready/available replicas
+	Desired       int    `json:"desired"`          // desired replicas
+	Restarts      int    `json:"restarts"`         // total container restarts across the workload's pods
+	Reason        string `json:"reason,omitempty"` // last-terminated reason of the worst pod (CrashLoopBackOff/OOMKilled/…)
+
+	// envLabel is the explicit environment label, when the workload carries
+	// one (see envLabelOf) — app-identity resolver input, not on the wire.
+	envLabel string
+}
+
+// handleListApplications serves GET /api/applications.
+//
+//	?namespaces=a,b,c | ?namespace=a — limit to workloads in the namespace set.
+func (s *Server) handleListApplications(w http.ResponseWriter, r *http.Request) {
+	if !s.requireConnected(w) {
+		return
+	}
+	namespaces := s.parseNamespacesForUser(r)
+	resp, err := ListApplications(r.Context(), namespaces)
+	if err != nil {
+		if errors.Is(err, errResourceCacheUnavailable) {
+			s.writeError(w, http.StatusServiceUnavailable, err.Error())
+			return
+		}
+		log.Printf("[applications] ListApplications failed: %v", err)
+		s.writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	s.writeJSON(w, resp)
+}
+
+// appGraph bundles the topology graph and the primitives derived from it that
+// the collection pass needs. A nil graph (build failure / no cache) degrades
+// cleanly: every workload becomes its own structural root and carries no
+// satellites — identity then rests on the label overlay alone, raw-always.
+type appGraph struct {
+	topo     *topology.Topology
+	idx      *topology.RelationshipsIndex
+	provider topology.ResourceProvider
+	dp       topology.DynamicProvider
+	byID     map[string]topology.Node
+	byKNN    map[string]string // lower(kind)|ns|name → node ID
+}
+
+// ListApplications builds the structural topology graph, resolves each app
+// workload to its graph root + label overlay, and groups them into logical
+// apps. Add-on machinery is classified (not dropped); nothing is hidden.
+func ListApplications(ctx context.Context, namespaces []string) (*applicationsResponse, error) {
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return nil, errResourceCacheUnavailable
+	}
+	cacheKey := applicationsCacheKeyFor(namespaces)
+	applicationsCacheMu.Lock()
+	entry, hit := applicationsCache[cacheKey]
+	applicationsCacheMu.Unlock()
+	if hit && time.Since(entry.at) < applicationsCacheTTL {
+		return &applicationsResponse{Applications: entry.rows}, nil
+	}
+
+	g := buildAppGraph(cache, namespaces)
+	wls := collectAppWorkloads(cache, namespaces, g)
+	rows := groupApplications(wls)
+	resolveAppIdentities(rows, argoSourcePaths(ctx, cache), namespaceEnvLabels(cache))
+	applicationsCacheMu.Lock()
+	if len(applicationsCache) >= applicationsCacheMaxEntries {
+		evictOldestApplicationsCacheEntry()
+	}
+	applicationsCache[cacheKey] = applicationsCacheEntry{at: time.Now(), rows: rows}
+	applicationsCacheMu.Unlock()
+	return &applicationsResponse{Applications: rows}, nil
+}
+
+func evictOldestApplicationsCacheEntry() {
+	var oldestKey string
+	var oldestAt time.Time
+	first := true
+	for k, e := range applicationsCache {
+		if first || e.at.Before(oldestAt) {
+			oldestKey = k
+			oldestAt = e.at
+			first = false
+		}
+	}
+	if !first {
+		delete(applicationsCache, oldestKey)
+	}
+}
+
+func clearApplicationsCache() {
+	applicationsCacheMu.Lock()
+	applicationsCache = map[string]applicationsCacheEntry{}
+	applicationsCacheMu.Unlock()
+}
+
+func applicationsCacheKeyFor(namespaces []string) string {
+	if namespaces == nil {
+		return "*"
+	}
+	ns := append([]string(nil), namespaces...)
+	sort.Strings(ns)
+	return strings.Join(ns, ",")
+}
+
+// buildAppGraph constructs the same resources-view topology the /api/topology
+// handler builds, then indexes it for root walks and satellite lookups.
+func buildAppGraph(cache *k8s.ResourceCache, namespaces []string) *appGraph {
+	g := &appGraph{byID: map[string]topology.Node{}, byKNN: map[string]string{}}
+	provider := k8s.NewTopologyResourceProvider(cache)
+	if provider == nil {
+		return g
+	}
+	g.provider = provider
+	g.dp = k8s.NewTopologyDynamicProvider(k8s.GetDynamicResourceCache(), k8s.GetResourceDiscovery())
+
+	opts := topology.DefaultBuildOptions()
+	opts.Namespaces = namespaces
+	b := topology.NewBuilder(provider)
+	if g.dp != nil {
+		b = b.WithDynamic(g.dp)
+	}
+	topo, err := b.Build(opts)
+	if err != nil || topo == nil {
+		return g
+	}
+	g.topo = topo
+	g.idx = topology.IndexByResource(topo)
+	for _, n := range topo.Nodes {
+		g.byID[n.ID] = n
+		ns, _ := n.Data["namespace"].(string)
+		g.byKNN[knnKey(string(n.Kind), ns, n.Name)] = n.ID
+	}
+	return g
+}
+
+func knnKey(kind, ns, name string) string {
+	return strings.ToLower(kind) + "|" + ns + "|" + name
+}
+
+// isGitOpsManagerKind reports whether a node is an in-cluster GitOps manager —
+// the boundary structuralRoot stops climbing AT. Above a manager lies either a
+// source ref (GitRepository → Kustomization is an EdgeManages edge too) or a
+// parent manager (app-of-apps); climbing THROUGH one would resolve every
+// installation sharing that source/parent to the same structural root and
+// union-find would merge them all into one app. ownerRef chains — including
+// operator CRs (CNPG Cluster, Strimzi Kafka) — are not managers and keep
+// climbing to the topmost owner.
+func isGitOpsManagerKind(k topology.NodeKind) bool {
+	switch k {
+	case topology.KindApplication, topology.KindKustomization, topology.KindHelmRelease:
+		return true
+	default:
+		return false
+	}
+}
+
+// structuralRoot walks incoming EdgeManages edges from startID toward the
+// app's structural root: the lowest in-cluster GitOps manager (ArgoCD
+// Application, Flux Kustomization/HelmRelease) when one manages the workload,
+// otherwise the workload's topmost ownerRef ancestor (incl. operator CRs). It
+// stops AT the first manager — it does not climb through to the manager's
+// source ref or parent manager.
+func (g *appGraph) structuralRoot(startID string) (topology.Node, bool) {
+	cur := startID
+	top, ok := g.byID[cur]
+	if g.idx == nil {
+		return top, ok
+	}
+	visited := map[string]bool{cur: true}
+	for {
+		next := ""
+		incoming, _ := g.idx.EdgesFor(cur)
+		for _, e := range incoming {
+			if e.Type == topology.EdgeManages {
+				next = e.Source
+				break
+			}
+		}
+		if next == "" || visited[next] {
+			break
+		}
+		visited[next] = true
+		n, exists := g.byID[next]
+		if exists {
+			top = n
+			ok = true
+		}
+		cur = next
+		if exists && isGitOpsManagerKind(n.Kind) {
+			break
+		}
+	}
+	return top, ok
+}
+
+// rootOf returns the structural-root key ("<ns>/<Kind>/<name>") and root Kind
+// for a workload, falling back to the workload itself when the graph is absent.
+func (g *appGraph) rootOf(kind, ns, name string) (rootKey, rootKind string) {
+	rootKey = ns + "/" + kind + "/" + name
+	rootKind = kind
+	if g.topo == nil {
+		return
+	}
+	nodeID, found := g.byKNN[knnKey(kind, ns, name)]
+	if !found {
+		return
+	}
+	rn, ok := g.structuralRoot(nodeID)
+	if !ok {
+		return
+	}
+	rns, _ := rn.Data["namespace"].(string)
+	return rns + "/" + string(rn.Kind) + "/" + rn.Name, string(rn.Kind)
+}
+
+// relationshipsFor pulls the workload's structural satellites from the graph.
+func (g *appGraph) relationshipsFor(kind, ns, name string) *appRelationships {
+	if g.topo == nil {
+		return nil
+	}
+	rel := topology.GetRelationshipsWithIndex(kind, ns, name, g.topo, g.provider, g.dp, g.idx)
+	if rel == nil {
+		return nil
+	}
+	out := &appRelationships{Configs: len(rel.ConfigRefs), Scalers: len(rel.Scalers), PDBs: len(rel.PDBs)}
+	out.configRefs = refsSet(rel.ConfigRefs)
+	out.scalerRefs = refsSet(rel.Scalers)
+	out.pdbRefs = refsSet(rel.PDBs)
+	for _, s := range rel.Services {
+		out.Services = append(out.Services, s.Name)
+	}
+	for _, i := range rel.Ingresses {
+		out.Ingresses = append(out.Ingresses, i.Name)
+	}
+	for _, r := range rel.Routes {
+		out.Routes = append(out.Routes, r.Name)
+	}
+	if len(out.Services) == 0 && len(out.Ingresses) == 0 && len(out.Routes) == 0 &&
+		out.Configs == 0 && out.Scalers == 0 && out.PDBs == 0 {
+		return nil
+	}
+	return out
+}
+
+// appWorkloadInput is the pre-grouping shape: one workload plus the signals
+// that decide which app it belongs to (structural root + label overlay) and how
+// it is classified.
+type appWorkloadInput struct {
+	wl       appWorkload
+	overlay  *subject.AppOverlay
+	events   []appEvent
+	rels     *appRelationships
+	rootKey  string
+	rootKind string
+	addon    bool
+	addonWhy string
+}
+
+// collectAppWorkloads walks Deployments/StatefulSets/DaemonSets plus
+// Jobs/CronJobs, captures the primary container image + runtime health, resolves
+// each to its structural root and label overlay, and classifies add-on
+// machinery. Pods and Warning events are indexed once per namespace and joined,
+// not re-listed per workload.
+func collectAppWorkloads(cache *k8s.ResourceCache, namespaces []string, g *appGraph) []appWorkloadInput {
+	var out []appWorkloadInput
+
+	podsByNS := indexPodsByNamespace(cache, namespaces)
+	eventsByObj := indexWarningEventsByObject(cache, namespaces)
+
+	add := func(kind, ns, name string, lbls, anns map[string]string, image string, health packages.Health, ready, desired int, selector *metav1.LabelSelector) {
+		pods := podsForSelector(podsByNS[ns], selector)
+		restarts, reason := podsRestarts(pods)
+		meta := metav1.ObjectMeta{Namespace: ns, Name: name, Labels: lbls, Annotations: anns}
+		rootKey, rootKind := g.rootOf(kind, ns, name)
+		rels := g.relationshipsFor(kind, ns, name)
+		addon, why := packages.ClassifyAddon(lbls["helm.sh/chart"], lbls["app.kubernetes.io/name"], lbls["app.kubernetes.io/part-of"], name, lbls["addonmanager.kubernetes.io/mode"], image)
+		out = append(out, appWorkloadInput{
+			wl: appWorkload{
+				Kind:          kind,
+				Namespace:     ns,
+				Name:          name,
+				WorkloadClass: classifyWorkload(kind, rels),
+				Image:         image,
+				Version:       imageTag(image),
+				AppVersion:    lbls["app.kubernetes.io/version"],
+				Health:        string(health),
+				Ready:         ready,
+				Desired:       desired,
+				Restarts:      restarts,
+				Reason:        reason,
+				envLabel:      envLabelOf(lbls),
+			},
+			overlay:  subject.ResolveOverlay(&meta, false),
+			events:   eventsForWorkload(eventsByObj[ns], kind, name, pods),
+			rels:     rels,
+			rootKey:  rootKey,
+			rootKind: rootKind,
+			addon:    addon,
+			addonWhy: why,
+		})
+	}
+
+	forEachNamespace := func(fn func(ns string)) {
+		if namespaces == nil {
+			fn("")
+			return
+		}
+		for _, ns := range namespaces {
+			fn(ns)
+		}
+	}
+
+	if depLister := cache.Deployments(); depLister != nil {
+		forEachNamespace(func(ns string) {
+			var items []*appsv1.Deployment
+			if ns == "" {
+				items, _ = depLister.List(labels.Everything())
+			} else {
+				items, _ = depLister.Deployments(ns).List(labels.Everything())
+			}
+			for _, d := range items {
+				add("Deployment", d.Namespace, d.Name, d.Labels, d.Annotations,
+					primaryImage(d.Spec.Template.Spec.Containers),
+					deploymentHealth(int(d.Status.Replicas), int(d.Status.AvailableReplicas)),
+					int(d.Status.AvailableReplicas), int(d.Status.Replicas), d.Spec.Selector)
+			}
+		})
+	}
+	if dsLister := cache.DaemonSets(); dsLister != nil {
+		forEachNamespace(func(ns string) {
+			var items []*appsv1.DaemonSet
+			if ns == "" {
+				items, _ = dsLister.List(labels.Everything())
+			} else {
+				items, _ = dsLister.DaemonSets(ns).List(labels.Everything())
+			}
+			for _, d := range items {
+				add("DaemonSet", d.Namespace, d.Name, d.Labels, d.Annotations,
+					primaryImage(d.Spec.Template.Spec.Containers),
+					daemonsetHealth(int(d.Status.DesiredNumberScheduled), int(d.Status.NumberReady)),
+					int(d.Status.NumberReady), int(d.Status.DesiredNumberScheduled), d.Spec.Selector)
+			}
+		})
+	}
+	if ssLister := cache.StatefulSets(); ssLister != nil {
+		forEachNamespace(func(ns string) {
+			var items []*appsv1.StatefulSet
+			if ns == "" {
+				items, _ = ssLister.List(labels.Everything())
+			} else {
+				items, _ = ssLister.StatefulSets(ns).List(labels.Everything())
+			}
+			for _, d := range items {
+				add("StatefulSet", d.Namespace, d.Name, d.Labels, d.Annotations,
+					primaryImage(d.Spec.Template.Spec.Containers),
+					statefulsetHealth(int(d.Status.Replicas), int(d.Status.ReadyReplicas)),
+					int(d.Status.ReadyReplicas), int(d.Status.Replicas), d.Spec.Selector)
+			}
+		})
+	}
+	if jobLister := cache.Jobs(); jobLister != nil {
+		forEachNamespace(func(ns string) {
+			var items []*batchv1.Job
+			if ns == "" {
+				items, _ = jobLister.List(labels.Everything())
+			} else {
+				items, _ = jobLister.Jobs(ns).List(labels.Everything())
+			}
+			for _, j := range items {
+				if ownedByCronJob(j) {
+					continue
+				}
+				add("Job", j.Namespace, j.Name, j.Labels, j.Annotations,
+					primaryImage(j.Spec.Template.Spec.Containers),
+					jobHealth(j),
+					int(j.Status.Succeeded), jobDesired(j), j.Spec.Selector)
+			}
+		})
+	}
+	if cjLister := cache.CronJobs(); cjLister != nil {
+		forEachNamespace(func(ns string) {
+			var items []*batchv1.CronJob
+			if ns == "" {
+				items, _ = cjLister.List(labels.Everything())
+			} else {
+				items, _ = cjLister.CronJobs(ns).List(labels.Everything())
+			}
+			for _, cj := range items {
+				add("CronJob", cj.Namespace, cj.Name, cj.Labels, cj.Annotations,
+					primaryImage(cj.Spec.JobTemplate.Spec.Template.Spec.Containers),
+					cronJobHealth(cj),
+					0, 0, nil)
+			}
+		})
+	}
+	return out
+}
+
+// --- grouping ------------------------------------------------------------
+
+// groupApplications partitions workloads into logical apps. Each workload
+// contributes atoms — its structural-root key, its overlay key, and a canonical
+// ArgoCD key (so tracking-id and instance label modes collapse) — that are
+// union-found together. Workloads sharing any atom (transitively) are one app.
+// Satellites are attached but never used to merge: two apps that share a Service
+// stay two apps.
+func groupApplications(inputs []appWorkloadInput) []appRow {
+	d := newDSU()
+	argoAppNamespaces := argoApplicationNamespaces(inputs)
+	for _, in := range inputs {
+		atoms := inputAtoms(in, argoAppNamespaces)
+		for i := 1; i < len(atoms); i++ {
+			d.union(atoms[0], atoms[i])
+		}
+	}
+
+	rows := map[string]*appRow{}
+	order := []string{}
+	members := map[string][]appWorkloadInput{}
+	for _, in := range inputs {
+		comp := d.find("S:" + in.rootKey)
+		if _, ok := members[comp]; !ok {
+			order = append(order, comp)
+		}
+		members[comp] = append(members[comp], in)
+	}
+
+	for _, comp := range order {
+		ins := members[comp]
+		r := &appRow{}
+		identifyApp(r, ins)
+		appVers := map[string]struct{}{}
+		labeled := 0
+		nss := map[string]struct{}{}
+		tagsByRepo := map[string]map[string]struct{}{}
+		for _, in := range ins {
+			r.Workloads = append(r.Workloads, in.wl)
+			r.Events = append(r.Events, in.events...)
+			r.Health = string(worstAppHealth(packages.Health(r.Health), packages.Health(in.wl.Health)))
+			if v := in.wl.Version; v != "" && !slices.Contains(r.Versions, v) {
+				r.Versions = append(r.Versions, v)
+			}
+			if av := in.wl.AppVersion; av != "" {
+				appVers[av] = struct{}{}
+				labeled++
+			}
+			if in.wl.Namespace != "" {
+				nss[in.wl.Namespace] = struct{}{}
+			}
+			if repo, tag := imageRepo(in.wl.Image), in.wl.Version; repo != "" && tag != "" {
+				if tagsByRepo[repo] == nil {
+					tagsByRepo[repo] = map[string]struct{}{}
+				}
+				tagsByRepo[repo][tag] = struct{}{}
+			}
+			mergeRelationships(r, in.rels)
+		}
+		// The app lives where its WORKLOADS run — a Flux HelmRelease in
+		// flux-system deploying into demo is a demo app, not a flux-system one
+		// (the manager's home is provenance, not residence; it also must not
+		// trip the system-namespace filter). This deliberately overrides the
+		// provenance-key namespace identifyApp set. Multiple namespaces →
+		// Namespace empty, Namespaces carries the full list.
+		if len(nss) > 0 {
+			r.Namespaces = make([]string, 0, len(nss))
+			for ns := range nss {
+				r.Namespaces = append(r.Namespaces, ns)
+			}
+			sort.Strings(r.Namespaces)
+			if len(r.Namespaces) == 1 {
+				r.Namespace = r.Namespaces[0]
+			} else {
+				r.Namespace = ""
+			}
+		}
+		// Version skew means the SAME image runs different tags across the
+		// app's workloads — real drift. Different components shipping
+		// different images at different versions is normal, not skew.
+		for _, tags := range tagsByRepo {
+			if len(tags) > 1 {
+				r.VersionSkew = true
+				break
+			}
+		}
+		// A single upstream version is the app's "main version" only when EVERY
+		// workload declares it and they agree (a single-chart add-on). One labeled
+		// workload among unlabeled ones, or a multi-chart umbrella that disagrees,
+		// leaves it empty — the UI falls back to per-workload image tags.
+		if len(appVers) == 1 && labeled == len(ins) {
+			for av := range appVers {
+				r.AppVersion = av
+			}
+		}
+		finalizeRelationships(r)
+		sort.Strings(r.Versions)
+		sort.SliceStable(r.Events, func(i, j int) bool { return r.Events[i].LastSeen > r.Events[j].LastSeen })
+		if len(r.Events) > 12 {
+			r.Events = r.Events[:12]
+		}
+		rows[comp] = r
+	}
+
+	out := make([]appRow, 0, len(order))
+	for _, comp := range order {
+		out = append(out, *rows[comp])
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].Key < out[j].Key
+	})
+	return out
+}
+
+// inputAtoms returns the union-find atoms for a workload. The structural-root
+// atom is always present; overlay and canonical-Argo atoms consolidate roots
+// the graph can't connect.
+func inputAtoms(in appWorkloadInput, argoAppNamespaces map[string]map[string]bool) []string {
+	atoms := []string{"S:" + in.rootKey}
+	atoms = append(atoms, argoCanonicalAtoms(in.rootKind, in.rootKey, argoAppNamespaces)...)
+	if in.overlay != nil {
+		atoms = append(atoms, "O:"+in.overlay.Winner.Key)
+		atoms = append(atoms, argoCanonicalAtoms("Application", in.overlay.Winner.Key, argoAppNamespaces)...)
+	}
+	return atoms
+}
+
+// identifyApp sets a row's identity (key/name/namespace/tier/confidence) and
+// add-on classification from its member workloads. A label overlay wins (it
+// carries an explicit tier + confidence); otherwise the structural root — and
+// when that root is a GitOps manager, its kind synthesizes the tier so the
+// surface still attributes provenance (Argo/Flux) for unlabeled in-cluster apps.
+func identifyApp(r *appRow, ins []appWorkloadInput) {
+	var best *subject.Signal
+	for i := range ins {
+		if ins[i].overlay == nil {
+			continue
+		}
+		w := ins[i].overlay.Winner
+		if best == nil || w.Tier < best.Tier || (w.Tier == best.Tier && w.Key < best.Key) {
+			sig := w
+			best = &sig
+		}
+	}
+	if best != nil {
+		r.Key = best.Key
+		r.Name = appNameFromKey(best.Key)
+		r.Namespace = namespaceFromKey(best.Key)
+		r.Tier = int(best.Tier)
+		r.Confidence = string(best.Confidence)
+	} else {
+		root := pickRoot(ins)
+		r.Key = root.rootKey
+		r.Name = appNameFromKey(root.rootKey)
+		r.Namespace = namespaceFromKey(root.rootKey)
+		if t, c, ok := managerTier(root.rootKind); ok {
+			r.Tier = t
+			r.Confidence = c
+		}
+	}
+
+	r.Category, r.AddonReason = classifyAppCategory(ins)
+	r.WorkloadClass = classifyAppWorkloads(ins)
+}
+
+// pickRoot prefers a GitOps-manager root over a raw workload root for identity.
+func pickRoot(ins []appWorkloadInput) appWorkloadInput {
+	for _, in := range ins {
+		if _, _, ok := managerTier(in.rootKind); ok {
+			return in
+		}
+	}
+	return ins[0]
+}
+
+// managerTier maps a structural manager-root kind to the overlay tier it stands
+// in for, so an in-cluster GitOps-managed app without labels still attributes.
+func managerTier(kind string) (tier int, confidence string, ok bool) {
+	switch kind {
+	case string(topology.KindHelmRelease):
+		return int(subject.TierFluxHelmRelease), string(subject.ConfidenceHigh), true
+	case string(topology.KindKustomization):
+		return int(subject.TierFluxKustomize), string(subject.ConfidenceHigh), true
+	case string(topology.KindApplication):
+		return int(subject.TierArgoTrackingID), string(subject.ConfidenceHigh), true
+	}
+	return 0, "", false
+}
+
+func argoApplicationNamespaces(inputs []appWorkloadInput) map[string]map[string]bool {
+	out := map[string]map[string]bool{}
+	add := func(kind, key string) {
+		if kind != string(topology.KindApplication) {
+			return
+		}
+		const marker = "/Application/"
+		i := strings.Index(key, marker)
+		if i < 0 {
+			return
+		}
+		ns := key[:i]
+		name := key[i+len(marker):]
+		if ns == "" || name == "" || strings.Contains(name, "/") {
+			return
+		}
+		if out[name] == nil {
+			out[name] = map[string]bool{}
+		}
+		out[name][ns] = true
+	}
+	for _, in := range inputs {
+		add(in.rootKind, in.rootKey)
+		if in.overlay != nil {
+			add("Application", in.overlay.Winner.Key)
+		}
+	}
+	return out
+}
+
+// argoCanonicalAtoms extracts tracking-mode-independent atoms from an ArgoCD
+// Application key. ResolveOverlay emits "<ns>/Application/<name>" for tracking-id
+// (tier 3) but "/Application/<name>" (empty ns) for the instance label (tier 4);
+// the in-cluster Application node's structural key is "<argo-ns>/Application/<name>".
+// Namespace-qualified atoms keep distinct same-name Applications separate. The
+// name-only bridge is emitted only when this result set has at most one concrete
+// namespace for that Argo name, so tier-3 and tier-4 tracking modes can still
+// collapse without mixing separate controller namespaces.
+func argoCanonicalAtoms(kind, key string, argoAppNamespaces map[string]map[string]bool) []string {
+	if kind != string(topology.KindApplication) {
+		return nil
+	}
+	const marker = "/Application/"
+	i := strings.Index(key, marker)
+	if i < 0 {
+		return nil
+	}
+	ns := key[:i]
+	name := key[i+len(marker):]
+	if name == "" || strings.Contains(name, "/") {
+		return nil
+	}
+	namespaces := argoAppNamespaces[name]
+	ambiguous := len(namespaces) > 1
+	atoms := []string{}
+	if ns != "" {
+		atoms = append(atoms, "A:application:"+ns+"/"+name)
+	}
+	if !ambiguous {
+		atoms = append(atoms, "A:application:"+name)
+	}
+	return atoms
+}
+
+func mergeRelationships(r *appRow, rel *appRelationships) {
+	if rel == nil {
+		return
+	}
+	if r.Relationships == nil {
+		r.Relationships = &appRelationships{}
+	}
+	agg := r.Relationships
+	agg.Services = append(agg.Services, rel.Services...)
+	agg.Ingresses = append(agg.Ingresses, rel.Ingresses...)
+	agg.Routes = append(agg.Routes, rel.Routes...)
+	agg.configRefs = mergeRefSets(agg.configRefs, rel.configRefs)
+	agg.scalerRefs = mergeRefSets(agg.scalerRefs, rel.scalerRefs)
+	agg.pdbRefs = mergeRefSets(agg.pdbRefs, rel.pdbRefs)
+	if len(rel.configRefs) == 0 {
+		agg.Configs += rel.Configs
+	}
+	if len(rel.scalerRefs) == 0 {
+		agg.Scalers += rel.Scalers
+	}
+	if len(rel.pdbRefs) == 0 {
+		agg.PDBs += rel.PDBs
+	}
+}
+
+func finalizeRelationships(r *appRow) {
+	if r.Relationships == nil {
+		return
+	}
+	r.Relationships.Services = dedupSorted(r.Relationships.Services, 20)
+	r.Relationships.Ingresses = dedupSorted(r.Relationships.Ingresses, 20)
+	r.Relationships.Routes = dedupSorted(r.Relationships.Routes, 20)
+	if len(r.Relationships.configRefs) > 0 {
+		r.Relationships.Configs = len(r.Relationships.configRefs)
+	}
+	if len(r.Relationships.scalerRefs) > 0 {
+		r.Relationships.Scalers = len(r.Relationships.scalerRefs)
+	}
+	if len(r.Relationships.pdbRefs) > 0 {
+		r.Relationships.PDBs = len(r.Relationships.pdbRefs)
+	}
+}
+
+func refsSet(refs []topology.ResourceRef) map[string]struct{} {
+	if len(refs) == 0 {
+		return nil
+	}
+	out := make(map[string]struct{}, len(refs))
+	for _, r := range refs {
+		out[refKey(r)] = struct{}{}
+	}
+	return out
+}
+
+func mergeRefSets(dst, src map[string]struct{}) map[string]struct{} {
+	if len(src) == 0 {
+		return dst
+	}
+	if dst == nil {
+		dst = map[string]struct{}{}
+	}
+	for k := range src {
+		dst[k] = struct{}{}
+	}
+	return dst
+}
+
+func refKey(r topology.ResourceRef) string {
+	return r.Group + "/" + r.Kind + "/" + r.Namespace + "/" + r.Name
+}
+
+func classifyWorkload(kind string, rels *appRelationships) string {
+	switch kind {
+	case "Job", "CronJob":
+		return "job"
+	case "Deployment", "StatefulSet", "DaemonSet":
+		if rels != nil && (len(rels.Services) > 0 || len(rels.Ingresses) > 0 || len(rels.Routes) > 0) {
+			return "service"
+		}
+		return "worker"
+	default:
+		return "unknown"
+	}
+}
+
+func classifyAppWorkloads(ins []appWorkloadInput) string {
+	classes := map[string]bool{}
+	for _, in := range ins {
+		switch in.wl.WorkloadClass {
+		case "service", "worker", "job":
+			classes[in.wl.WorkloadClass] = true
+		}
+		// Unclassifiable members (e.g. a bare Pod) don't poison a known class.
+	}
+	if len(classes) == 0 {
+		return "unknown"
+	}
+	if classes["service"] && !classes["job"] {
+		// A deployable unit with an API Deployment and a background worker is
+		// still operated primarily as a service.
+		return "service"
+	}
+	if len(classes) == 1 {
+		for c := range classes {
+			return c
+		}
+	}
+	// A real composition (e.g. a service plus its scheduled jobs). The UI
+	// derives the breakdown from the per-workload classes; "unknown" would
+	// throw away what classifyWorkload confidently determined.
+	return "mixed"
+}
+
+func classifyAppCategory(ins []appWorkloadInput) (category, reason string) {
+	addonCount := 0
+	reasons := []string{}
+	for _, in := range ins {
+		if !in.addon {
+			continue
+		}
+		addonCount++
+		if in.addonWhy != "" && !slices.Contains(reasons, in.addonWhy) {
+			reasons = append(reasons, in.addonWhy)
+		}
+	}
+	if addonCount == 0 {
+		return "app", ""
+	}
+	reason = strings.Join(reasons, "; ")
+	if addonCount == len(ins) {
+		return "addon", reason
+	}
+	if reason != "" {
+		reason = "mixed add-on evidence: " + reason
+	}
+	return "mixed", reason
+}
+
+// --- small helpers --------------------------------------------------------
+
+// dsu is a string union-find for partitioning workloads by shared atoms.
+type dsu struct{ parent map[string]string }
+
+func newDSU() *dsu { return &dsu{parent: map[string]string{}} }
+
+func (d *dsu) find(x string) string {
+	p, ok := d.parent[x]
+	if !ok {
+		d.parent[x] = x
+		return x
+	}
+	if p != x {
+		d.parent[x] = d.find(p)
+	}
+	return d.parent[x]
+}
+
+func (d *dsu) union(a, b string) {
+	ra, rb := d.find(a), d.find(b)
+	if ra != rb {
+		d.parent[ra] = rb
+	}
+}
+
+func dedupSorted(in []string, cap int) []string {
+	if len(in) == 0 {
+		return nil
+	}
+	seen := map[string]bool{}
+	out := make([]string, 0, len(in))
+	for _, s := range in {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	sort.Strings(out)
+	if len(out) > cap {
+		out = out[:cap]
+	}
+	return out
+}
+
+// indexPodsByNamespace lists pods once per namespace and buckets them. Each
+// workload still scans its namespace bucket by selector; the important bit is
+// avoiding repeated lister/cache reads.
+func indexPodsByNamespace(cache *k8s.ResourceCache, namespaces []string) map[string][]*corev1.Pod {
+	out := map[string][]*corev1.Pod{}
+	lister := cache.Pods()
+	if lister == nil {
+		return out
+	}
+	add := func(ns string) {
+		var pods []*corev1.Pod
+		if ns == "" {
+			pods, _ = lister.List(labels.Everything())
+		} else {
+			pods, _ = lister.Pods(ns).List(labels.Everything())
+		}
+		for _, p := range pods {
+			out[p.Namespace] = append(out[p.Namespace], p)
+		}
+	}
+	if namespaces == nil {
+		add("")
+	} else {
+		for _, ns := range namespaces {
+			add(ns)
+		}
+	}
+	return out
+}
+
+// indexWarningEventsByObject lists events once per namespace and indexes the
+// Warnings by involvedObject name, so each workload joins its events in O(1)
+// instead of re-scanning the whole namespace event stream.
+func indexWarningEventsByObject(cache *k8s.ResourceCache, namespaces []string) map[string]map[string][]*corev1.Event {
+	out := map[string]map[string][]*corev1.Event{}
+	lister := cache.Events()
+	if lister == nil {
+		return out
+	}
+	add := func(ns string) {
+		var evs []*corev1.Event
+		if ns == "" {
+			evs, _ = lister.List(labels.Everything())
+		} else {
+			evs, _ = lister.Events(ns).List(labels.Everything())
+		}
+		for _, e := range evs {
+			if e.Type != "Warning" {
+				continue
+			}
+			m := out[e.Namespace]
+			if m == nil {
+				m = map[string][]*corev1.Event{}
+				out[e.Namespace] = m
+			}
+			key := e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name
+			m[key] = append(m[key], e)
+		}
+	}
+	if namespaces == nil {
+		add("")
+	} else {
+		for _, ns := range namespaces {
+			add(ns)
+		}
+	}
+	return out
+}
+
+// podsForSelector filters an already-listed namespace pod set by a workload's
+// selector — no extra API/cache calls.
+func podsForSelector(pods []*corev1.Pod, selector *metav1.LabelSelector) []*corev1.Pod {
+	if selector == nil || len(pods) == 0 {
+		return nil
+	}
+	sel, err := metav1.LabelSelectorAsSelector(selector)
+	if err != nil {
+		return nil
+	}
+	var out []*corev1.Pod
+	for _, p := range pods {
+		if sel.Matches(labels.Set(p.Labels)) {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// primaryImage returns the first container's image (the conventional "the app"
+// container — mirrors pkg/ai/context/summary.go's first-container choice).
+func primaryImage(containers []corev1.Container) string {
+	if len(containers) > 0 {
+		return containers[0].Image
+	}
+	return ""
+}
+
+// podsRestarts sums container restarts across a workload's pods and returns the
+// last-terminated reason of the worst (most-restarting) pod — the crash signal
+// (CrashLoopBackOff / OOMKilled / Error).
+func podsRestarts(pods []*corev1.Pod) (int, string) {
+	total := 0
+	var worst int32 = -1
+	reason := ""
+	for _, p := range pods {
+		rc, r := k8s.PodRestartContext(p)
+		total += int(rc)
+		if rc > worst {
+			worst = rc
+			reason = r
+		}
+	}
+	return total, reason
+}
+
+// eventsForWorkload joins a workload's Warning events from the per-namespace
+// index (the workload object + its pods), deduped by (object, reason) with
+// summed counts — the "why is it broken" feed (FailedScheduling, ImagePullBackOff,
+// FailedMount, …) that restarts alone miss.
+func eventsForWorkload(byObject map[string][]*corev1.Event, workloadKind, workloadName string, pods []*corev1.Pod) []appEvent {
+	if byObject == nil {
+		return nil
+	}
+	names := make([]string, 0, len(pods)+1)
+	names = append(names, workloadKind+"/"+workloadName)
+	for _, p := range pods {
+		names = append(names, "Pod/"+p.Name)
+	}
+	byKey := map[string]*appEvent{}
+	order := []string{}
+	for _, n := range names {
+		for _, e := range byObject[n] {
+			key := e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name + "/" + e.Reason
+			c := int(e.Count)
+			if c < 1 {
+				c = 1
+			}
+			if a, ok := byKey[key]; ok {
+				a.Count += c
+				if ts := e.LastTimestamp.Format(time.RFC3339); ts > a.LastSeen {
+					a.LastSeen = ts
+					a.Message = e.Message
+				}
+				continue
+			}
+			byKey[key] = &appEvent{
+				Type: e.Type, Reason: e.Reason, Message: e.Message, Count: c,
+				Object:   e.InvolvedObject.Kind + "/" + e.InvolvedObject.Name,
+				LastSeen: e.LastTimestamp.Format(time.RFC3339),
+			}
+			order = append(order, key)
+		}
+	}
+	out := make([]appEvent, 0, len(order))
+	for _, k := range order {
+		out = append(out, *byKey[k])
+	}
+	return out
+}
+
+// imageTag extracts the tag from an image ref. Digest-pinned refs (@sha256:…)
+// and untagged refs (implicit :latest) return "" — no false version.
+func imageTag(image string) string {
+	if image == "" {
+		return ""
+	}
+	if at := strings.Index(image, "@"); at >= 0 {
+		image = image[:at]
+	}
+	slash := strings.LastIndex(image, "/")
+	colon := strings.LastIndex(image, ":")
+	if colon > slash {
+		return image[colon+1:]
+	}
+	return ""
+}
+
+// imageRepo is the image ref without its tag/digest — the unit version skew is
+// measured across: two workloads running the same repo at different tags.
+func imageRepo(image string) string {
+	if image == "" {
+		return ""
+	}
+	if at := strings.Index(image, "@"); at >= 0 {
+		image = image[:at]
+	}
+	slash := strings.LastIndex(image, "/")
+	colon := strings.LastIndex(image, ":")
+	if colon > slash {
+		return image[:colon]
+	}
+	return image
+}
+
+func ownedByCronJob(j *batchv1.Job) bool {
+	for _, owner := range j.OwnerReferences {
+		if owner.Kind == "CronJob" {
+			return true
+		}
+	}
+	return false
+}
+
+func jobDesired(j *batchv1.Job) int {
+	if j.Spec.Completions != nil && *j.Spec.Completions > 0 {
+		return int(*j.Spec.Completions)
+	}
+	return 1
+}
+
+func jobHealth(j *batchv1.Job) packages.Health {
+	for _, c := range j.Status.Conditions {
+		if c.Type == batchv1.JobFailed && c.Status == corev1.ConditionTrue {
+			return packages.HealthUnhealthy
+		}
+		if c.Type == batchv1.JobComplete && c.Status == corev1.ConditionTrue {
+			return packages.HealthHealthy
+		}
+	}
+	if int(j.Status.Succeeded) >= jobDesired(j) {
+		return packages.HealthHealthy
+	}
+	if j.Status.Failed > 0 && j.Status.Active == 0 && j.Status.Succeeded == 0 {
+		return packages.HealthUnhealthy
+	}
+	if j.Status.Active > 0 {
+		return packages.HealthHealthy
+	}
+	return packages.HealthUnknown
+}
+
+func cronJobHealth(cj *batchv1.CronJob) packages.Health {
+	if cj == nil {
+		return packages.HealthUnknown
+	}
+	if cj.Spec.Suspend != nil && *cj.Spec.Suspend {
+		return packages.HealthUnknown
+	}
+	if cj.Status.LastScheduleTime == nil {
+		return packages.HealthUnknown
+	}
+	return packages.HealthHealthy
+}
+
+func appNameFromKey(key string) string {
+	if i := strings.LastIndex(key, "/"); i >= 0 && i < len(key)-1 {
+		return key[i+1:]
+	}
+	return key
+}
+
+func namespaceFromKey(key string) string {
+	if i := strings.Index(key, "/"); i > 0 {
+		return key[:i]
+	}
+	return ""
+}
+
+// worstAppHealth merges two health values (local copy of pkg/packages's
+// unexported worseHealth): unhealthy > degraded > unknown > healthy; "" defers
+// to the other side.
+func worstAppHealth(a, b packages.Health) packages.Health {
+	if a == "" {
+		return b
+	}
+	if b == "" {
+		return a
+	}
+	if appHealthRank(a) >= appHealthRank(b) {
+		return a
+	}
+	return b
+}
+
+func appHealthRank(h packages.Health) int {
+	switch h {
+	case packages.HealthUnhealthy:
+		return 4
+	case packages.HealthDegraded:
+		return 3
+	case packages.HealthUnknown:
+		return 2
+	case packages.HealthHealthy:
+		return 1
+	}
+	return 2
+}

@@ -53,6 +53,10 @@ export * from './components/issues'
 // Cluster switcher (shared trigger+dropdown for OSS Radar and Radar Hub)
 export * from './components/cluster-switcher'
 
+// Applications (shared host-agnostic list + detail shell for the deployable-
+// software surface; OSS renders single-cluster, Cloud adds the fleet layer)
+export * from './components/applications'
+
 // Compare (ResourceCompareView, CompareResourcePicker, normalize utilities)
 export * from './components/compare'
 

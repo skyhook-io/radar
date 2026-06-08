@@ -259,3 +259,14 @@ export function formatBytes(bytes: number): string {
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return `${parseFloat((bytes / Math.pow(k, i)).toFixed(1))} ${sizes[i]}`
 }
+
+/** Middle-ellipsis for long identifiers (image tags, pod names): keeps the
+ *  start and the differentiating suffix. Returns the input when it fits. */
+export function midTruncate(s: string, max = 24): string {
+  if (s.length <= max) return s
+  if (max <= 1) return '…'.slice(0, Math.max(0, max))
+  if (max <= 3) return `${s.slice(0, max - 1)}…`
+  const tail = Math.min(10, Math.floor(max / 2) - 1)
+  const head = max - tail - 1
+  return `${s.slice(0, head)}…${s.slice(-tail)}`
+}

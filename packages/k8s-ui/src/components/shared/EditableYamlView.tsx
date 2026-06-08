@@ -66,19 +66,27 @@ function formatSaveError(error: string): { summary: string; details?: string } {
     const errorPart = parts[1]?.trim() || ''
 
     if (errorPart.includes('Forbidden:')) {
-      const forbiddenMatch = errorPart.match(/([^:]+):\s*Forbidden:\s*([^.{]+)/)
-      if (forbiddenMatch) {
+      const forbiddenAt = errorPart.indexOf(': Forbidden:')
+      if (forbiddenAt > 0) {
+        const target = errorPart.slice(0, forbiddenAt).trim()
+        const messageStart = forbiddenAt + ': Forbidden:'.length
+        const dotAt = errorPart.indexOf('.', messageStart)
+        const braceAt = errorPart.indexOf('{', messageStart)
+        const endCandidates = [dotAt, braceAt].filter((i) => i >= 0)
+        const messageEnd = endCandidates.length ? Math.min(...endCandidates) : errorPart.length
+        const message = errorPart.slice(messageStart, messageEnd).trim()
         return {
-          summary: `Cannot update ${forbiddenMatch[1]}: ${forbiddenMatch[2].trim()}`,
+          summary: `Cannot update ${target}: ${message}`,
           details: error.length > 200 ? error : undefined
         }
       }
     }
 
-    const summaryMatch = errorPart.match(/^([^{]+)/)
-    if (summaryMatch) {
+    const braceAt = errorPart.indexOf('{')
+    const summary = (braceAt >= 0 ? errorPart.slice(0, braceAt) : errorPart).trim()
+    if (summary) {
       return {
-        summary: summaryMatch[1].trim(),
+        summary,
         details: error.length > 200 ? error : undefined
       }
     }
@@ -111,6 +119,8 @@ interface EditableYamlViewProps {
   data: any
   onCopy: (text: string) => void
   copied: boolean
+  /** Hide edit affordances when the host surface is read-only. */
+  readOnly?: boolean
   /** Called after a successful save so the parent can refetch */
   onSaved?: () => void
   /** Save handler — injected by the platform wrapper */
@@ -128,13 +138,13 @@ interface EditableYamlViewProps {
   onDownload?: (content: string, mime: string, filename: string) => void
 }
 
-export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSave, isSaving, saveError, onDuplicate, onDownload }: EditableYamlViewProps) {
+export function EditableYamlView({ resource, data, onCopy, copied, readOnly = false, onSaved, onSave, isSaving, saveError, onDuplicate, onDownload }: EditableYamlViewProps) {
   const draftKey = `radar_yaml_draft:${resource.kind}/${resource.namespace}/${resource.name}`
 
   // Restore draft from sessionStorage (e.g., after session-expiry redirect).
   // All sessionStorage calls are wrapped in try-catch — storage can throw
   // QuotaExceededError or be blocked by browser security policies.
-  const savedDraft = useRef(safeSessionGet(draftKey))
+  const savedDraft = useRef(readOnly ? null : safeSessionGet(draftKey))
   const [isEditing, setIsEditing] = useState(savedDraft.current !== null)
   const [editedYaml, setEditedYaml] = useState(savedDraft.current ?? '')
   const [yamlErrors, setYamlErrors] = useState<string[]>([])
@@ -153,12 +163,19 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
 
   // Autosave draft to sessionStorage while editing (best-effort)
   useEffect(() => {
+    if (readOnly) {
+      setIsEditing(false)
+      setEditedYaml('')
+      setYamlErrors([])
+      safeSessionRemove(draftKey)
+      return
+    }
     if (isEditing && editedYaml) {
       safeSessionSet(draftKey, editedYaml)
     } else {
       safeSessionRemove(draftKey)
     }
-  }, [isEditing, editedYaml, draftKey])
+  }, [isEditing, editedYaml, draftKey, readOnly])
 
   const handleDownload = useCallback(() => {
     const yaml = resourceToYaml(data)
@@ -170,10 +187,11 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
   }, [data, resource.kind, resource.name, onDownload])
 
   const handleStartEdit = useCallback(() => {
+    if (readOnly) return
     setEditedYaml(resourceToYaml(data))
     setYamlErrors([])
     setIsEditing(true)
-  }, [data])
+  }, [data, readOnly])
 
   const handleCancelEdit = useCallback(() => {
     setIsEditing(false)
@@ -345,13 +363,15 @@ export function EditableYamlView({ resource, data, onCopy, copied, onSaved, onSa
       <div className="flex items-center justify-between mb-2">
         <span className="text-sm font-medium text-theme-text-secondary">YAML</span>
         <div className="flex items-center gap-2">
-          <button
-            onClick={handleStartEdit}
-            className="flex items-center gap-1 px-2 py-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-theme-elevated rounded"
-          >
-            <Pencil className="w-3.5 h-3.5" />
-            Edit
-          </button>
+          {!readOnly && (
+            <button
+              onClick={handleStartEdit}
+              className="flex items-center gap-1 px-2 py-1 text-xs text-blue-400 hover:text-blue-300 hover:bg-theme-elevated rounded"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+              Edit
+            </button>
+          )}
           <button
             onClick={() => onCopy(yamlContent)}
             className="flex items-center gap-1 px-2 py-1 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded"

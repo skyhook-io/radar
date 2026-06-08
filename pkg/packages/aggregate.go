@@ -113,6 +113,7 @@ func Aggregate(s Sources) []PackageRow {
 			ReleaseName:      releaseName,
 			ReleaseNamespace: releaseNs,
 		})
+		r.mergeOverlay(w.Overlay)
 	}
 
 	// 3. GitOps declarations (sources A / F) — declared installs, may
@@ -152,6 +153,7 @@ func Aggregate(s Sources) []PackageRow {
 			DeclarationName:      d.Name,
 			DeclarationNamespace: d.Namespace,
 		})
+		r.mergeOverlay(d.Overlay)
 	}
 
 	// 4. CRD registrations (source C). Two cases:
@@ -295,6 +297,19 @@ func splitChart(s string) (name, version string) {
 		}
 	}
 	return s, ""
+}
+
+// mergeOverlay keeps the highest-confidence app-overlay across a row's
+// contributing workloads/declarations — lowest Tier wins (tier 1 Flux
+// HelmRelease beats tier 7 app-name). Nil candidate is a no-op; first non-nil
+// sets it. Deterministic: ties keep the first-seen (caller iteration order).
+func (r *PackageRow) mergeOverlay(o *Overlay) {
+	if o == nil {
+		return
+	}
+	if r.Overlay == nil || o.Tier < r.Overlay.Tier {
+		r.Overlay = o
+	}
 }
 
 // worseHealth returns the worse of two Health values using the order:

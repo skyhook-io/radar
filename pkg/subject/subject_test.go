@@ -222,15 +222,41 @@ func TestResolveOverlay_ArgoInstanceBeatsHelm(t *testing.T) {
 }
 
 func TestResolveOverlay_HelmBeatsLabelTiers(t *testing.T) {
-	// Helm release (tier 5) ranks above the app.kubernetes.io label tiers (6-7).
+	// Helm release (tier 5) ranks above the app.kubernetes.io label tiers (7-8).
 	ov := ResolveOverlay(obj("ns", "x",
 		map[string]string{appNameLabel: "web", partOfLabel: "store"},
 		map[string]string{helmReleaseNameAnno: "web"}), false)
 	if ov == nil || ov.Winner.Tier != TierHelmRelease {
 		t.Fatalf("helm must beat labels: got %+v", ov)
 	}
-	if len(ov.Conflicts) != 2 { // part-of (6) + name (7) retained
+	if len(ov.Conflicts) != 2 { // part-of (7) + name (8) retained
 		t.Errorf("label tiers must be retained as conflicts: %+v", ov.Conflicts)
+	}
+}
+
+func TestResolveOverlay_InstanceTierDisambiguatesInstallations(t *testing.T) {
+	// app.kubernetes.io/instance is Argo's default tracking label and Helm's
+	// install-identity label. It must rank above the semantic name/part-of tiers
+	// (so two releases of one chart — identical app.kubernetes.io/name — split on
+	// instance) but below the explicit Helm-release annotation.
+	ov := ResolveOverlay(obj("ns", "x",
+		map[string]string{appInstanceLabel: "grafana-prod", appNameLabel: "grafana", partOfLabel: "platform"}, nil), false)
+	if ov == nil || ov.Winner.Tier != TierInstance {
+		t.Fatalf("instance must win over name/part-of: got %+v", ov)
+	}
+	if ov.Winner.Key != "ns/app/grafana-prod" || ov.Winner.Confidence != ConfidenceMedium {
+		t.Errorf("instance winner key/confidence = %q/%q, want ns/app/grafana-prod/medium", ov.Winner.Key, ov.Winner.Confidence)
+	}
+	if len(ov.Conflicts) != 2 { // name + part-of retained
+		t.Errorf("name + part-of must be retained as conflicts: %+v", ov.Conflicts)
+	}
+
+	// The explicit Helm-release annotation still outranks the instance label.
+	ov2 := ResolveOverlay(obj("ns", "x",
+		map[string]string{appInstanceLabel: "grafana-prod"},
+		map[string]string{helmReleaseNameAnno: "grafana-prod", helmReleaseNSAnno: "ns"}), false)
+	if ov2 == nil || ov2.Winner.Tier != TierHelmRelease {
+		t.Fatalf("Helm-release annotation must beat the instance label: got %+v", ov2)
 	}
 }
 
@@ -271,7 +297,7 @@ func TestParseArgoTrackingID(t *testing.T) {
 }
 
 // TestConfidenceForTier pins every tier→confidence band, including the boundary
-// tiers (Argo-instance #4 / Helm #5 = high/medium edge, name #7 / bare-app #8 =
+// tiers (Argo-instance #4 / Helm #5 = high/medium edge, name #8 / bare-app #9 =
 // medium/low edge) that the overlay spot-checks don't cover — an off-by-one in
 // the range checks would silently mislabel trust.
 func TestConfidenceForTier(t *testing.T) {
@@ -284,6 +310,7 @@ func TestConfidenceForTier(t *testing.T) {
 		{TierArgoTrackingID, ConfidenceHigh},
 		{TierArgoInstance, ConfidenceHigh},
 		{TierHelmRelease, ConfidenceMedium},
+		{TierInstance, ConfidenceMedium},
 		{TierPartOf, ConfidenceMedium},
 		{TierAppName, ConfidenceMedium},
 		{TierBareApp, ConfidenceLow},
