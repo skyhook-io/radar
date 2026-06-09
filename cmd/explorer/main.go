@@ -20,6 +20,7 @@ import (
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/server"
 	"golang.org/x/net/http/httpguts"
 	_ "k8s.io/client-go/plugin/pkg/client/auth" // Register all auth provider plugins (OIDC, GCP, Azure, etc.)
 	"k8s.io/klog/v2"
@@ -76,6 +77,7 @@ func main() {
 	flag.Var(promHeadersFromEnv, "prometheus-header-from-env", "HTTP header to send with Prometheus requests, sourced from an env var, e.g. 'Authorization=PROMETHEUS_TOKEN' (repeatable).")
 	// MCP server
 	noMCP := flag.Bool("no-mcp", !fileCfg.MCPEnabledOr(true), "Disable MCP (Model Context Protocol) server for AI tools")
+	mcpCatalogOnly := flag.Bool("mcp-catalog-only", false, "Start only the MCP endpoint for registry/inspector catalog introspection; skips Kubernetes initialization")
 	// Auth flags
 	authMode := flag.String("auth-mode", "none", "Authentication mode: none, proxy, or oidc")
 	authSecret := flag.String("auth-secret", "", "HMAC secret key for session cookies (auto-generated if empty)")
@@ -160,9 +162,22 @@ func main() {
 	if err != nil {
 		log.Fatalf("Invalid --timeline-max-size %q: %v", *timelineMaxSize, err)
 	}
+	noMCPFlagSet := false
+	flag.Visit(func(f *flag.Flag) {
+		if f.Name == "no-mcp" {
+			noMCPFlagSet = true
+		}
+	})
+	if *mcpCatalogOnly && noMCPFlagSet && *noMCP {
+		log.Fatalf("--mcp-catalog-only cannot be combined with --no-mcp")
+	}
 	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(promHeaders.value(), promHeadersFromEnv.value())
 	if err != nil {
 		log.Fatalf("Invalid Prometheus header configuration: %v", err)
+	}
+	mcpEnabled := !*noMCP
+	if *mcpCatalogOnly {
+		mcpEnabled = true
 	}
 
 	cfg := app.AppConfig{
@@ -188,7 +203,7 @@ func main() {
 		PrometheusURL:            *prometheusURL,
 		PrometheusHeaders:        resolvedPrometheusHeaders,
 		PrometheusHeadersFromEnv: promHeadersFromEnv.value(),
-		MCPEnabled:               !*noMCP,
+		MCPEnabled:               mcpEnabled,
 		Version:                  version,
 		AuthConfig: auth.Config{
 			Mode:                      *authMode,
@@ -215,6 +230,15 @@ func main() {
 	// Set global flags
 	app.SetGlobals(cfg)
 
+	if *mcpCatalogOnly {
+		log.Printf("MCP catalog-only mode enabled: skipping Kubernetes initialization")
+		cfg.NoBrowser = true
+		srv := app.CreateServer(cfg)
+		_, rootCancel := startServer(srv, startupStart)
+		defer rootCancel()
+		select {}
+	}
+
 	// Initialize K8s client (local only — parses kubeconfig, no network)
 	t := time.Now()
 	if err := app.InitializeK8s(cfg); err != nil {
@@ -233,39 +257,8 @@ func main() {
 	srv := app.CreateServer(cfg)
 	k8s.LogTiming(" Server created: %v", time.Since(t))
 
-	// Root context cancelled on SIGINT/SIGTERM. Long-running background
-	// workers (cloud tunnel, etc.) observe this to shut down cleanly before
-	// the process exits.
-	rootCtx, rootCancel := context.WithCancel(context.Background())
+	rootCtx, rootCancel := startServer(srv, startupStart)
 	defer rootCancel()
-
-	// Handle shutdown signals
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
-
-	go func() {
-		<-sigCh
-		rootCancel()
-		app.Shutdown(srv)
-		os.Exit(0)
-	}()
-
-	// Start server in background — wait for it to actually bind the port
-	ready := make(chan struct{})
-	go func() {
-		if err := srv.StartWithReady(ready); err != nil {
-			// "use of closed network connection" is expected when the listener
-			// is closed during graceful shutdown — not an actual error.
-			if !errors.Is(err, net.ErrClosed) {
-				log.Fatalf("Server error: %v", err)
-			}
-		}
-	}()
-	<-ready
-	k8s.LogTiming(" Server listening: %v (since start)", time.Since(startupStart))
-
-	// Write port file so MCP clients can discover the running server
-	app.WriteMCPPortFile(srv.ActualPort())
 
 	// Open browser — server is confirmed ready to accept connections
 	if !cfg.NoBrowser {
@@ -322,6 +315,43 @@ func main() {
 
 	// Block forever (server is running in background)
 	select {}
+}
+
+func startServer(srv *server.Server, startupStart time.Time) (context.Context, context.CancelFunc) {
+	// Root context cancelled on SIGINT/SIGTERM. Long-running background
+	// workers (cloud tunnel, etc.) observe this to shut down cleanly before
+	// the process exits.
+	rootCtx, rootCancel := context.WithCancel(context.Background())
+
+	// Handle shutdown signals
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-sigCh
+		rootCancel()
+		app.Shutdown(srv)
+		os.Exit(0)
+	}()
+
+	// Start server in background — wait for it to actually bind the port
+	ready := make(chan struct{})
+	go func() {
+		if err := srv.StartWithReady(ready); err != nil {
+			// "use of closed network connection" is expected when the listener
+			// is closed during graceful shutdown — not an actual error.
+			if !errors.Is(err, net.ErrClosed) {
+				log.Fatalf("Server error: %v", err)
+			}
+		}
+	}()
+	<-ready
+	k8s.LogTiming(" Server listening: %v (since start)", time.Since(startupStart))
+
+	// Write port file so MCP clients can discover the running server
+	app.WriteMCPPortFile(srv.ActualPort())
+
+	return rootCtx, rootCancel
 }
 
 func parseCSV(s string) []string {

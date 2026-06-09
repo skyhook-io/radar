@@ -37,6 +37,16 @@ http://localhost:9280/mcp
 
 The port matches your `--port` flag (default 9280). The MCP server uses HTTP transport with JSON-RPC.
 
+## Catalog Introspection
+
+MCP registries and inspectors can start Radar without a Kubernetes cluster when they only need the tool and resource catalog:
+
+```bash
+radar --mcp-catalog-only --no-browser
+```
+
+This mode skips Kubernetes initialization and starts the `/mcp` endpoint for schema introspection. Cluster-backed tool calls still require a normal Radar process connected to Kubernetes.
+
 ## Setup Instructions
 
 Connect your AI tool to Radar's MCP server. Radar must be running first (`radar` or `kubectl radar`).
