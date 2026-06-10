@@ -24,6 +24,13 @@ export const ISSUE_SEVERITY_RANK: Record<IssueSeverity, number> = {
   warning: 1,
 };
 
+const ISSUE_SOURCE_RANK: Record<string, number> = {
+  scheduling: 4,
+  missing_ref: 3,
+  condition: 2,
+  problem: 1,
+};
+
 export function isIssueSeverity(s: string): s is IssueSeverity {
   return s === 'critical' || s === 'warning';
 }
@@ -209,15 +216,18 @@ export function memberRef(issue: Issue, member: IssueResourceRef): IssueResource
 
 /**
  * compareIssues is the queue's stable sort order (extracted from IssuesView so
- * it can be unit-tested). Severity first (critical before warning), then ONSET
- * — first_seen DESC, deliberately NOT last_seen: last_seen bumps to compose-time
- * on every poll, so sorting by it would reshuffle same-severity rows on each
- * refetch. The remaining keys (cluster → namespace → name → id) are a fully
- * deterministic tiebreak so the order never churns under auto-refresh.
+ * it can be unit-tested). Severity first (critical before warning), then
+ * direct-blocker source priority, then ONSET — first_seen DESC, deliberately
+ * NOT last_seen: last_seen bumps to compose-time on every poll, so sorting by
+ * it would reshuffle same-severity rows on each refetch. The remaining keys
+ * (cluster → namespace → name → id) are a fully deterministic tiebreak so the
+ * order never churns under auto-refresh.
  */
 export function compareIssues(a: Issue, b: Issue): number {
   const r = ISSUE_SEVERITY_RANK[b.severity] - ISSUE_SEVERITY_RANK[a.severity];
   if (r !== 0) return r;
+  const sr = (ISSUE_SOURCE_RANK[b.source] ?? 0) - (ISSUE_SOURCE_RANK[a.source] ?? 0);
+  if (sr !== 0) return sr;
   const fa = a.first_seen ?? '';
   const fb = b.first_seen ?? '';
   if (fa !== fb) return fb.localeCompare(fa);

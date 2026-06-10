@@ -119,6 +119,149 @@ func TestDetectAdmissionProblems_FailedCreateCrossCheck(t *testing.T) {
 	}
 }
 
+func TestDetectAdmissionProblems_ReplicaFailureConditionFallback(t *testing.T) {
+	defer ResetTestState()
+	nowT := metav1.Now()
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "search", Namespace: "prod"},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr32(3)},
+		Status: appsv1.DeploymentStatus{
+			Replicas: 1,
+			Conditions: []appsv1.DeploymentCondition{{
+				Type:               appsv1.DeploymentReplicaFailure,
+				Status:             corev1.ConditionTrue,
+				Reason:             "FailedCreate",
+				Message:            `pods "search-x" is forbidden: exceeded quota: memory-limit-quota, requested: limits.memory=1Gi, used: limits.memory=1Gi, limited: limits.memory=1Gi`,
+				LastTransitionTime: nowT,
+			}},
+		},
+	}
+	if err := InitTestResourceCache(fake.NewClientset(deploy)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	problems := DetectAdmissionProblems(GetResourceCache(), "prod")
+	if !findProblem(problems, "Deployment", "prod", "search", "QuotaExceeded") {
+		t.Fatalf("expected Deployment quota condition fallback, got %+v", problems)
+	}
+}
+
+func TestDetectAdmissionProblems_ReplicaFailureConditionFallbackForBlockedRollout(t *testing.T) {
+	defer ResetTestState()
+	nowT := metav1.Now()
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "search", Namespace: "prod"},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr32(3)},
+		Status: appsv1.DeploymentStatus{
+			Replicas:        3,
+			UpdatedReplicas: 1,
+			Conditions: []appsv1.DeploymentCondition{{
+				Type:               appsv1.DeploymentReplicaFailure,
+				Status:             corev1.ConditionTrue,
+				Reason:             "FailedCreate",
+				Message:            `pods "search-x" is forbidden: exceeded quota: memory-limit-quota, requested: limits.memory=1Gi, used: limits.memory=1Gi, limited: limits.memory=1Gi`,
+				LastTransitionTime: nowT,
+			}},
+		},
+	}
+	if err := InitTestResourceCache(fake.NewClientset(deploy)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	problems := DetectAdmissionProblems(GetResourceCache(), "prod")
+	if !findProblem(problems, "Deployment", "prod", "search", "QuotaExceeded") {
+		t.Fatalf("expected Deployment quota condition fallback for blocked rollout, got %+v", problems)
+	}
+}
+
+func TestDetectAdmissionProblems_ConditionFallbackDoesNotDuplicateReplicaSetEvent(t *testing.T) {
+	defer ResetTestState()
+	nowT := metav1.Now()
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "search", Namespace: "prod"},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr32(3)},
+		Status: appsv1.DeploymentStatus{
+			Replicas: 1,
+			Conditions: []appsv1.DeploymentCondition{{
+				Type:               appsv1.DeploymentReplicaFailure,
+				Status:             corev1.ConditionTrue,
+				Reason:             "FailedCreate",
+				Message:            `pods "search-x" is forbidden: exceeded quota: memory-limit-quota, requested: limits.memory=1Gi, used: limits.memory=1Gi, limited: limits.memory=1Gi`,
+				LastTransitionTime: nowT,
+			}},
+		},
+	}
+	rs := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "search-abc123", Namespace: "prod"},
+		Spec:       appsv1.ReplicaSetSpec{Replicas: ptr32(3)},
+		Status:     appsv1.ReplicaSetStatus{Replicas: 1},
+	}
+	evt := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "quota-event", Namespace: "prod"},
+		InvolvedObject: corev1.ObjectReference{Kind: "ReplicaSet", Namespace: "prod", Name: "search-abc123"},
+		Reason:         "FailedCreate",
+		Type:           corev1.EventTypeWarning,
+		Message:        `Error creating: pods "search-x" is forbidden: exceeded quota: memory-limit-quota, requested: limits.memory=1Gi, used: limits.memory=1Gi, limited: limits.memory=1Gi`,
+		LastTimestamp:  nowT,
+	}
+	if err := InitTestResourceCache(fake.NewClientset(deploy, rs, evt)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	problems := DetectAdmissionProblems(GetResourceCache(), "prod")
+	if !findProblem(problems, "ReplicaSet", "prod", "search-abc123", "QuotaExceeded") {
+		t.Fatalf("expected ReplicaSet event problem, got %+v", problems)
+	}
+	for _, p := range problems {
+		if p.Kind == "Deployment" && p.Name == "search" {
+			t.Fatalf("Deployment condition duplicated ReplicaSet event: %+v", problems)
+		}
+	}
+}
+
+func TestDetectAdmissionProblems_ConditionFallbackPrefersReplicaSet(t *testing.T) {
+	defer ResetTestState()
+	nowT := metav1.Now()
+	message := `pods "search-x" is forbidden: exceeded quota: memory-limit-quota, requested: limits.memory=1Gi, used: limits.memory=1Gi, limited: limits.memory=1Gi`
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "search", Namespace: "prod"},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr32(3)},
+		Status: appsv1.DeploymentStatus{
+			Replicas: 1,
+			Conditions: []appsv1.DeploymentCondition{{
+				Type:               appsv1.DeploymentReplicaFailure,
+				Status:             corev1.ConditionTrue,
+				Reason:             "FailedCreate",
+				Message:            message,
+				LastTransitionTime: nowT,
+			}},
+		},
+	}
+	rs := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "search-abc123", Namespace: "prod"},
+		Spec:       appsv1.ReplicaSetSpec{Replicas: ptr32(3)},
+		Status: appsv1.ReplicaSetStatus{
+			Replicas: 1,
+			Conditions: []appsv1.ReplicaSetCondition{{
+				Type:               appsv1.ReplicaSetReplicaFailure,
+				Status:             corev1.ConditionTrue,
+				Reason:             "FailedCreate",
+				Message:            message,
+				LastTransitionTime: nowT,
+			}},
+		},
+	}
+	if err := InitTestResourceCache(fake.NewClientset(deploy, rs)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	problems := DetectAdmissionProblems(GetResourceCache(), "prod")
+	if !findProblem(problems, "ReplicaSet", "prod", "search-abc123", "QuotaExceeded") {
+		t.Fatalf("expected ReplicaSet condition problem, got %+v", problems)
+	}
+	for _, p := range problems {
+		if p.Kind == "Deployment" && p.Name == "search" {
+			t.Fatalf("Deployment condition duplicated ReplicaSet condition: %+v", problems)
+		}
+	}
+}
+
 // A SchedulingGated pod has PodScheduled=False but reason=SchedulingGated —
 // the scheduler hasn't tried yet because the pod carries scheduling gates.
 // That's an intentional not-yet-scheduled state, not a placement failure, so

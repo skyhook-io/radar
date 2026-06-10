@@ -1222,6 +1222,30 @@ func TestCompose_SeveritySortedDescending(t *testing.T) {
 	}
 }
 
+func TestCompose_DirectBlockersSortBeforeGenericProblems(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{Kind: "Pod", Namespace: "ns", Name: "crashy", Severity: "critical", Reason: "CrashLoopBackOff"},
+		},
+		missingRefs: []k8s.Detection{
+			{Kind: "Pod", Namespace: "ns", Name: "missing-config", Severity: "critical", Reason: "Missing ConfigMap"},
+		},
+		scheduling: []k8s.Detection{
+			{Kind: "ReplicaSet", Namespace: "ns", Name: "quota-blocked", Severity: "critical", Reason: "QuotaExceeded"},
+		},
+	}
+	out := Compose(p, Filters{})
+	if len(out) != 3 {
+		t.Fatalf("got %d issues: %+v", len(out), out)
+	}
+	if out[0].Source != SourceScheduling || out[0].Reason != "QuotaExceeded" {
+		t.Fatalf("active scheduling/admission blocker should sort first at same severity, got %+v", out[0])
+	}
+	if out[1].Source != SourceMissingRef {
+		t.Fatalf("missing ref should sort before generic problem at same severity, got %+v", out)
+	}
+}
+
 func TestCompose_SeverityFilter(t *testing.T) {
 	p := &fakeProvider{
 		problems: []k8s.Detection{

@@ -28,6 +28,13 @@ describe('compareIssues', () => {
     expect([older, newer].sort(compareIssues).map((i) => i.id)).toEqual(['n', 'o'])
   })
 
+  it('orders direct startup blockers before generic problem rows at same severity', () => {
+    const generic = mk({ id: 'generic', source: 'problem', first_seen: '2026-05-01T00:00:00Z' })
+    const blocker = mk({ id: 'blocker', source: 'scheduling', first_seen: '2026-01-01T00:00:00Z' })
+    const missing = mk({ id: 'missing', source: 'missing_ref', first_seen: '2026-03-01T00:00:00Z' })
+    expect([generic, blocker, missing].sort(compareIssues).map((i) => i.id)).toEqual(['blocker', 'missing', 'generic'])
+  })
+
   it('does NOT reshuffle same-severity rows when only last_seen changes (anti-churn)', () => {
     // Two same-severity rows, same first_seen — order is the deterministic name tiebreak.
     const a = mk({ id: 'id-a', name: 'a', first_seen: '2026-01-01T00:00:00Z', last_seen: '2026-05-01T00:00:00Z' })

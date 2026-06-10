@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/labels"
@@ -756,6 +757,11 @@ func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection
 			DurationSeconds: int64(ageDur.Seconds()),
 		})
 	}
+	seen := make(map[string]bool, len(problems))
+	for _, p := range problems {
+		seen[admissionProblemKey(p.Kind, p.Namespace, p.Name)] = true
+	}
+	problems = append(problems, detectAdmissionConditionProblems(cache, namespace, seen)...)
 	return problems
 }
 
@@ -851,6 +857,108 @@ func schedDesiredReplicas(r *int32) int32 {
 		return 1
 	}
 	return *r
+}
+
+func detectAdmissionConditionProblems(cache *ResourceCache, namespace string, seen map[string]bool) []Detection {
+	var out []Detection
+	now := time.Now()
+
+	if l := cache.ReplicaSets(); l != nil {
+		var items []*appsv1.ReplicaSet
+		if namespace != "" {
+			items, _ = l.ReplicaSets(namespace).List(labels.Everything())
+		} else {
+			items, _ = l.List(labels.Everything())
+		}
+		for _, rs := range items {
+			key := admissionProblemKey("ReplicaSet", rs.Namespace, rs.Name)
+			if seen[key] || rs.Status.Replicas >= schedDesiredReplicas(rs.Spec.Replicas) {
+				continue
+			}
+			for _, c := range rs.Status.Conditions {
+				if c.Type != appsv1.ReplicaSetReplicaFailure || c.Status != corev1.ConditionTrue {
+					continue
+				}
+				if p, ok := admissionConditionProblem("ReplicaSet", rs.Namespace, rs.Name, c.Message, c.LastTransitionTime.Time, now); ok {
+					out = append(out, p)
+					seen[key] = true
+				}
+			}
+		}
+	}
+
+	if l := cache.Deployments(); l != nil {
+		var items []*appsv1.Deployment
+		if namespace != "" {
+			items, _ = l.Deployments(namespace).List(labels.Everything())
+		} else {
+			items, _ = l.List(labels.Everything())
+		}
+		for _, d := range items {
+			if !deploymentNeedsPodCreation(d) {
+				continue
+			}
+			if hasSeenReplicaSetForDeployment(seen, d.Namespace, d.Name) {
+				continue
+			}
+			for _, c := range d.Status.Conditions {
+				if c.Type != appsv1.DeploymentReplicaFailure || c.Status != corev1.ConditionTrue {
+					continue
+				}
+				if p, ok := admissionConditionProblem("Deployment", d.Namespace, d.Name, c.Message, c.LastTransitionTime.Time, now); ok {
+					key := admissionProblemKey(p.Kind, p.Namespace, p.Name)
+					if !seen[key] {
+						out = append(out, p)
+						seen[key] = true
+					}
+				}
+			}
+		}
+	}
+
+	return out
+}
+
+func deploymentNeedsPodCreation(d *appsv1.Deployment) bool {
+	desired := schedDesiredReplicas(d.Spec.Replicas)
+	return desired > 0 && (d.Status.Replicas < desired || d.Status.UpdatedReplicas < desired)
+}
+
+func admissionConditionProblem(kind, namespace, name, message string, firstSeen, now time.Time) (Detection, bool) {
+	reason, ok := classifyAdmissionFailure(message)
+	if !ok {
+		return Detection{}, false
+	}
+	if firstSeen.IsZero() {
+		firstSeen = now
+	}
+	ageDur := now.Sub(firstSeen)
+	return Detection{
+		Kind:            kind,
+		Namespace:       namespace,
+		Name:            name,
+		Severity:        "critical",
+		Reason:          reason,
+		Message:         "pod creation blocked: " + strings.TrimSpace(message),
+		Age:             FormatAge(ageDur),
+		AgeSeconds:      int64(ageDur.Seconds()),
+		Duration:        FormatAge(ageDur),
+		DurationSeconds: int64(ageDur.Seconds()),
+	}, true
+}
+
+func admissionProblemKey(kind, namespace, name string) string {
+	return kind + "/" + namespace + "/" + name
+}
+
+func hasSeenReplicaSetForDeployment(seen map[string]bool, namespace, deployment string) bool {
+	prefix := "ReplicaSet/" + namespace + "/" + deployment + "-"
+	for key := range seen {
+		if suffix, ok := strings.CutPrefix(key, prefix); ok && suffix != "" && !strings.Contains(suffix, "-") {
+			return true
+		}
+	}
+	return false
 }
 
 // classifyAdmissionFailure maps a FailedCreate event message to a reason.

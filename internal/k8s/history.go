@@ -917,11 +917,15 @@ func sensitivePath(path string) bool {
 
 func sensitivePathSegment(segment string) bool {
 	segment = strings.ToLower(segment)
+	compact := strings.NewReplacer("-", "", "_", "", ".", "", "/", "").Replace(segment)
 	return strings.Contains(segment, "password") || strings.Contains(segment, "passwd") ||
 		strings.Contains(segment, "token") || strings.Contains(segment, "secret") ||
+		strings.Contains(segment, "credential") ||
 		strings.Contains(segment, "api_key") || strings.Contains(segment, "apikey") ||
 		strings.Contains(segment, "accesskey") || strings.Contains(segment, "privatekey") ||
-		strings.Contains(segment, "private_key")
+		strings.Contains(segment, "private_key") ||
+		strings.Contains(compact, "apikey") || strings.Contains(compact, "accesskey") ||
+		strings.Contains(compact, "privatekey") || strings.Contains(compact, "clientsecret")
 }
 
 func truncateConfigScalar(value string, max int) string {
@@ -2395,6 +2399,14 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].envFrom", name), OldValue: oldEnvFrom, NewValue: newEnvFrom})
 			summary = append(summary, fmt.Sprintf("envFrom(%s) changed", name))
 		}
+		if oldC.ImagePullPolicy != newC.ImagePullPolicy {
+			changes = append(changes, FieldChange{
+				Path:     fmt.Sprintf("spec.template.spec.containers[%s].imagePullPolicy", name),
+				OldValue: string(oldC.ImagePullPolicy),
+				NewValue: string(newC.ImagePullPolicy),
+			})
+			summary = append(summary, fmt.Sprintf("imagePullPolicy(%s): %s→%s", name, oldC.ImagePullPolicy, newC.ImagePullPolicy))
+		}
 		for _, probeName := range []string{"readinessProbe", "livenessProbe", "startupProbe"} {
 			oldProbe := normalizedProbe(probeForName(oldC, probeName))
 			newProbe := normalizedProbe(probeForName(newC, probeName))
@@ -2404,11 +2416,11 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 			}
 		}
 		if !equalStringSlices(oldC.Command, newC.Command) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].command", name), OldValue: oldC.Command, NewValue: newC.Command})
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].command", name), OldValue: commandArgDisplayValues(oldC.Command), NewValue: commandArgDisplayValues(newC.Command)})
 			summary = append(summary, fmt.Sprintf("command(%s) changed", name))
 		}
 		if !equalStringSlices(oldC.Args, newC.Args) {
-			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].args", name), OldValue: oldC.Args, NewValue: newC.Args})
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].args", name), OldValue: commandArgDisplayValues(oldC.Args), NewValue: commandArgDisplayValues(newC.Args)})
 			summary = append(summary, fmt.Sprintf("args(%s) changed", name))
 		}
 	}
@@ -2573,6 +2585,52 @@ func valueOrNil(v string, ok bool) any {
 }
 
 func envNameLooksSecret(name string) bool {
+	return sensitivePathSegment(name)
+}
+
+func commandArgDisplayValues(values []string) []string {
+	out := make([]string, len(values))
+	redactNext := false
+	for i, value := range values {
+		if redactNext {
+			out[i] = "[REDACTED]"
+			redactNext = false
+			continue
+		}
+		out[i], redactNext = commandArgDisplayValue(value)
+	}
+	return out
+}
+
+func commandArgDisplayValue(value string) (string, bool) {
+	trimmed := strings.TrimSpace(value)
+	if trimmed == "" {
+		return value, false
+	}
+	if prefix, ok := splitInlineSecretArg(trimmed); ok {
+		return prefix + "[REDACTED]", false
+	}
+	if commandArgNameLooksSecret(trimmed) {
+		return trimmed, true
+	}
+	return truncateConfigScalar(aicontext.RedactSecrets(value), 200), false
+}
+
+func splitInlineSecretArg(value string) (string, bool) {
+	for _, sep := range []string{"=", ":"} {
+		if before, _, ok := strings.Cut(value, sep); ok && commandArgNameLooksSecret(before) {
+			return before + sep, true
+		}
+	}
+	return "", false
+}
+
+func commandArgNameLooksSecret(value string) bool {
+	name := strings.Trim(strings.TrimSpace(value), "\"'")
+	name = strings.TrimLeft(name, "-")
+	if name == "key" {
+		return true
+	}
 	return sensitivePathSegment(name)
 }
 

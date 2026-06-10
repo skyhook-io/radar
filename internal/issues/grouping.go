@@ -278,18 +278,22 @@ func sortRefs(refs []Ref) {
 	})
 }
 
-// lessIssue is the canonical issue sort: severity desc, then ONSET (first_seen
-// desc) — deliberately NOT last_seen, which bumps to compose-time on every poll
-// and would reshuffle same-severity rows on each refetch. Then namespace, name,
-// and the stable id as a total tiebreak. This is byte-for-byte the order the
-// shared UI comparator (k8s-ui issues/types.ts:compareIssues) produces for a
-// single cluster — the UI's only extra key is `cluster`, which it sorts on for
-// fleet (multi-cluster) views and which is constant here. So /api/issues, MCP,
-// and the single-cluster UI return one identical queue. (id is the final
-// tiebreak — two rows can share subject+ns+name and differ only by cause.)
+// lessIssue is the canonical issue sort: severity desc, direct-blocker source
+// priority, then ONSET (first_seen desc) — deliberately NOT last_seen, which
+// bumps to compose-time on every poll and would reshuffle same-severity rows on
+// each refetch. Then namespace, name, and the stable id as a total tiebreak.
+// This is byte-for-byte the order the shared UI comparator (k8s-ui
+// issues/types.ts:compareIssues) produces for a single cluster — the UI's only
+// extra key is `cluster`, which it sorts on for fleet (multi-cluster) views and
+// which is constant here. So /api/issues, MCP, and the single-cluster UI return
+// one identical queue. (id is the final tiebreak — two rows can share
+// subject+ns+name and differ only by cause.)
 func lessIssue(a, b Issue) bool {
 	if a.Severity != b.Severity {
 		return SeverityRank(a.Severity) > SeverityRank(b.Severity)
+	}
+	if issueSourceRank(a.Source) != issueSourceRank(b.Source) {
+		return issueSourceRank(a.Source) > issueSourceRank(b.Source)
 	}
 	if !a.FirstSeen.Equal(b.FirstSeen) {
 		return a.FirstSeen.After(b.FirstSeen)
@@ -301,4 +305,18 @@ func lessIssue(a, b Issue) bool {
 		return a.Name < b.Name
 	}
 	return a.ID < b.ID
+}
+
+func issueSourceRank(s Source) int {
+	switch s {
+	case SourceScheduling:
+		return 4 // active bind/admission/post-bind blockers explain why work cannot run
+	case SourceMissingRef:
+		return 3 // direct references to absent objects are usually root-cause shaped
+	case SourceCondition:
+		return 2
+	case SourceProblem:
+		return 1
+	}
+	return 0
 }
