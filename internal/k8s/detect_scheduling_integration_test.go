@@ -119,6 +119,49 @@ func TestDetectAdmissionProblems_FailedCreateCrossCheck(t *testing.T) {
 	}
 }
 
+func TestDetectAdmissionProblems_FailedCreateDeploymentBlockedRollout(t *testing.T) {
+	defer ResetTestState()
+	nowT := metav1.Now()
+	quotaMsg := `Error creating: pods "x" is forbidden: exceeded quota: mem-quota, used: requests.memory=2Gi, limited: requests.memory=2Gi`
+	deploy := func(name string, updatedReplicas int32) *appsv1.Deployment {
+		return &appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "prod"},
+			Spec:       appsv1.DeploymentSpec{Replicas: ptr32(3)},
+			Status: appsv1.DeploymentStatus{
+				Replicas:        3, // old ReplicaSet still satisfies total replicas
+				UpdatedReplicas: updatedReplicas,
+			},
+		}
+	}
+	evt := func(name, deployName string) *corev1.Event {
+		return &corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: name, Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "Deployment", Namespace: "prod", Name: deployName},
+			Reason:         "FailedCreate",
+			Type:           corev1.EventTypeWarning,
+			Message:        quotaMsg,
+			LastTimestamp:  nowT,
+		}
+	}
+	if err := InitTestResourceCache(fake.NewClientset(
+		deploy("rollout-blocked", 1),
+		deploy("rollout-complete", 3),
+		evt("e-rollout-blocked", "rollout-blocked"),
+		evt("e-rollout-complete", "rollout-complete"),
+	)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	problems := DetectAdmissionProblems(GetResourceCache(), "prod")
+	if !findProblem(problems, "Deployment", "prod", "rollout-blocked", "QuotaExceeded") {
+		t.Fatalf("blocked rolling update should surface Deployment admission issue, got %+v", problems)
+	}
+	for _, p := range problems {
+		if p.Name == "rollout-complete" {
+			t.Fatalf("completed rollout with lingering event must not surface admission issue: %+v", p)
+		}
+	}
+}
+
 func TestDetectAdmissionProblems_ReplicaFailureConditionFallback(t *testing.T) {
 	defer ResetTestState()
 	nowT := metav1.Now()

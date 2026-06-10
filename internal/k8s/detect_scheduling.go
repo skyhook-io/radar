@@ -787,11 +787,12 @@ func eventFirstTime(e *corev1.Event) time.Time {
 // A recovered workload has its replicas, so its lingering event is skipped.
 // Unknown kinds / unreadable listers default to true — never drop genuine coverage.
 func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReference) bool {
-	// "Blocked" means the controller still can't CREATE its pods — measured by
-	// created-count (Status.Replicas / CurrentNumberScheduled) below desired,
+	// "Blocked" means the controller still can't CREATE the pods it needs,
 	// NOT readiness. A workload whose pods were created but stay not-ready for
 	// another reason (e.g. unschedulable after a quota was raised) has its pods
-	// and is no longer admission-blocked.
+	// and is no longer admission-blocked. Deployments also need the updated
+	// replica count checked so rolling updates blocked on new-pod creation do
+	// not get masked by old replicas.
 	switch obj.Kind {
 	case "ReplicaSet":
 		if l := cache.ReplicaSets(); l != nil {
@@ -807,7 +808,7 @@ func admissionTargetStillBlocked(cache *ResourceCache, obj corev1.ObjectReferenc
 		if l := cache.Deployments(); l != nil {
 			d, err := l.Deployments(obj.Namespace).Get(obj.Name)
 			if err == nil {
-				return d.Status.Replicas < schedDesiredReplicas(d.Spec.Replicas)
+				return deploymentNeedsPodCreation(d)
 			}
 			if apierrors.IsNotFound(err) {
 				return false
