@@ -136,7 +136,7 @@ jobs:
           fi
 
       - name: Intall helmfile
-        uses: helmfile/helmfile-action@v2.2.0
+        uses: helmfile/helmfile-action@v2.4.5
         with:
           helmfile-auto-init: 'true'
           helm-plugins: >
