@@ -3280,6 +3280,40 @@ func (s *Server) writeError(w http.ResponseWriter, status int, message string) {
 	}
 }
 
+// writeErrorCode is writeError plus a stable machine-readable `error_code`
+// the SPA branches on (e.g. cloud_role_insufficient → "your role can't do
+// this" instead of a generic auth failure).
+func (s *Server) writeErrorCode(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	if err := json.NewEncoder(w).Encode(map[string]string{"error": message, "error_code": code}); err != nil {
+		log.Printf("Failed to encode error response: %v", err)
+	}
+}
+
+// requireCloudRole gates a mutating handler on the caller's Cloud role tier,
+// mirroring internal/helm's gate. Returns true if the request should proceed.
+//
+// Callers with no Cloud role (OSS, OIDC, or running outside Cloud's tunnel)
+// bypass the gate — radar OSS keeps using only K8s RBAC for authz, so the
+// single-user laptop case is never 403'd out of its own config. The gate is
+// strictly additive for Cloud-attributed callers: when their tier is below
+// `min`, returns 403 with error_code=cloud_role_insufficient.
+func (s *Server) requireCloudRole(w http.ResponseWriter, r *http.Request, min auth.CloudRole, opName string) bool {
+	role := auth.CloudRoleFromContext(r.Context())
+	if role.AtLeast(min) {
+		return true
+	}
+	username := "unknown"
+	if u := auth.UserFromContext(r.Context()); u != nil {
+		username = u.Username
+	}
+	log.Printf("[settings] Cloud role %q denied %s for user %q (need at least %q): %q", role, opName, username, min, r.URL.Path)
+	s.writeErrorCode(w, http.StatusForbidden, auth.ErrCodeCloudRoleInsufficient,
+		"Your Radar Cloud role ("+role.String()+") cannot "+opName+". Requires "+string(min)+" or higher.")
+	return false
+}
+
 // requireConnected returns false and writes a 503 error if not connected to cluster.
 // Use at the start of handlers that require an active cluster connection.
 func (s *Server) requireConnected(w http.ResponseWriter) bool {
@@ -3575,6 +3609,9 @@ func (s *Server) handleGetConfig(w http.ResponseWriter, r *http.Request) {
 // PrometheusHeaders are preserved from the on-disk file: the GET response redacts them,
 // so a UI round-trip would otherwise silently wipe the user's auth headers.
 func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify Radar configuration") {
+		return
+	}
 	var updated config.Config
 	if err := json.NewDecoder(r.Body).Decode(&updated); err != nil {
 		s.writeError(w, http.StatusBadRequest, "invalid request body")

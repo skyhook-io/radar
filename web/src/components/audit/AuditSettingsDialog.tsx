@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
-import { X, Plus, Trash2 } from 'lucide-react'
+import { X, Plus, Trash2, Lock } from 'lucide-react'
 import { clsx } from 'clsx'
-import { useAuditSettings, useUpdateAuditSettings, useAudit } from '../../api/client'
+import { useAuditSettings, useUpdateAuditSettings, useAudit, useCloudRole } from '../../api/client'
 import type { CheckMeta } from '@skyhook-io/k8s-ui'
 import { validateRFC1123Label, type ValidationResult } from '@skyhook-io/k8s-ui/utils/validators'
 
@@ -14,6 +14,11 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
   const { data: settings } = useAuditSettings()
   const { data: auditData } = useAudit(namespaces)
   const updateSettings = useUpdateAuditSettings()
+  // Audit policy is cluster-shared, so writes are owner-gated (enforced
+  // server-side too). Non-owners get a read-only view. Non-Cloud callers
+  // have no role and pass.
+  const { canAtLeast } = useCloudRole()
+  const canEdit = canAtLeast('owner')
   const [ignoredNs, setIgnoredNs] = useState<string[]>([])
   const [disabledChecks, setDisabledChecks] = useState<string[]>([])
   const [newNs, setNewNs] = useState('')
@@ -75,6 +80,15 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
         </div>
 
         <div className="px-5 py-4 overflow-y-auto flex-1">
+          {!canEdit && (
+            <div className="mb-4 rounded-lg border border-theme-border bg-theme-elevated/50 p-3 flex items-start gap-2.5">
+              <Lock className="w-3.5 h-3.5 mt-0.5 shrink-0 text-theme-text-tertiary" />
+              <p className="text-xs text-theme-text-tertiary">
+                Audit policy is shared across everyone using this Radar instance, so editing
+                is limited to owners. You can review the current settings here.
+              </p>
+            </div>
+          )}
           {/* Ignored Namespaces */}
           <div className="mb-6">
             <label className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider">
@@ -90,7 +104,8 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
                   <span className="text-sm text-theme-text-primary">{ns}</span>
                   <button
                     onClick={() => setIgnoredNs(ignoredNs.filter(n => n !== ns))}
-                    className="p-1 rounded hover:bg-theme-hover text-theme-text-tertiary hover:text-red-400 transition-colors"
+                    disabled={!canEdit}
+                    className="p-1 rounded hover:bg-theme-hover text-theme-text-tertiary hover:text-red-400 transition-colors disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-theme-text-tertiary"
                   >
                     <Trash2 className="w-3.5 h-3.5" />
                   </button>
@@ -108,6 +123,7 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
                 onChange={e => setNewNs(e.target.value)}
                 onKeyDown={e => { if (e.key === 'Enter') addNamespace() }}
                 placeholder="Add namespace..."
+                disabled={!canEdit}
                 aria-invalid={newNsError ? true : undefined}
                 aria-describedby="new-ns-help"
                 className={clsx(
@@ -119,7 +135,7 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
               />
               <button
                 onClick={addNamespace}
-                disabled={!canAddNamespace}
+                disabled={!canEdit || !canAddNamespace}
                 className="px-3 py-1.5 text-sm btn-brand rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <Plus className="w-4 h-4" />
@@ -155,7 +171,8 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
                       type="checkbox"
                       checked={!disabled}
                       onChange={() => toggleCheck(check.id)}
-                      className="w-4 h-4 rounded border-theme-border text-skyhook-500 focus:ring-skyhook-500"
+                      disabled={!canEdit}
+                      className="w-4 h-4 rounded border-theme-border text-skyhook-500 focus:ring-skyhook-500 disabled:opacity-40 disabled:cursor-not-allowed"
                     />
                     <div className="flex-1 min-w-0">
                       <span className="text-sm text-theme-text-primary">{check.title}</span>
@@ -181,14 +198,16 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
             // text — otherwise the user clicks Save expecting their
             // entry to be included and it's silently dropped.
             disabled={
-              updateSettings.isPending || newNsError !== null || newNsDuplicate
+              !canEdit || updateSettings.isPending || newNsError !== null || newNsDuplicate
             }
             title={
-              newNsError
-                ? 'Fix or clear the pending namespace input before saving'
-                : newNsDuplicate
-                  ? 'Clear the duplicate pending input before saving'
-                  : undefined
+              !canEdit
+                ? 'Audit settings can only be changed by owners'
+                : newNsError
+                  ? 'Fix or clear the pending namespace input before saving'
+                  : newNsDuplicate
+                    ? 'Clear the duplicate pending input before saving'
+                    : undefined
             }
             className="px-4 py-1.5 text-sm btn-brand rounded-lg disabled:opacity-50 disabled:cursor-not-allowed"
           >

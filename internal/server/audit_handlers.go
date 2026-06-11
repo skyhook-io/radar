@@ -11,6 +11,7 @@ import (
 	"github.com/go-chi/chi/v5"
 
 	"github.com/skyhook-io/radar/internal/audit"
+	"github.com/skyhook-io/radar/internal/auth"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/settings"
 	bp "github.com/skyhook-io/radar/pkg/audit"
@@ -192,6 +193,9 @@ func (s *Server) handleGetAuditSettings(w http.ResponseWriter, r *http.Request) 
 // handlePutAuditSettings updates the audit configuration.
 // PUT /api/settings/audit
 func (s *Server) handlePutAuditSettings(w http.ResponseWriter, r *http.Request) {
+	if !s.requireCloudRole(w, r, auth.RoleOwner, "modify audit settings") {
+		return
+	}
 	var cfg settings.AuditConfig
 	if err := json.NewDecoder(r.Body).Decode(&cfg); err != nil {
 		s.writeError(w, http.StatusBadRequest, "Invalid JSON: "+err.Error())

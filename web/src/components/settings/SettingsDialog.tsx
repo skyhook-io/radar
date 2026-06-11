@@ -1,10 +1,11 @@
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef, useCallback, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
-import { Settings, X, RotateCcw, Loader2, Copy, Check, Pin, Shield } from 'lucide-react'
+import { Settings, X, RotateCcw, Loader2, Copy, Check, Pin, Shield, Lock } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
+import { useCloudRole } from '../../api/client'
 
 interface Config {
   kubeconfig?: string
@@ -34,6 +35,13 @@ interface SettingsDialogProps {
 export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
+  // Radar configuration (kubeconfig, port, integrations…) is host-level and
+  // affects every user of this instance, so it's gated to owners. Personal
+  // sections (My permissions) stay visible to everyone. Non-Cloud callers
+  // (OSS, OIDC, kubectl plugin) have no role and pass — single-user laptops
+  // are never locked out of their own config. Backend enforces this too.
+  const { canAtLeast } = useCloudRole()
+  const canEditConfig = canAtLeast('owner')
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
   const [editedConfig, setEditedConfig] = useState<Config>({})
   const [saving, setSaving] = useState(false)
@@ -169,33 +177,55 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
             </div>
           )}
           {onShowMyPermissions && (
-            <div className="mb-4 rounded-md border border-theme-border bg-theme-elevated/50 p-3">
-              <div className="flex items-center justify-between gap-3">
-                <div className="min-w-0">
-                  <h3 className="text-sm font-medium text-theme-text-primary">My permissions</h3>
-                  <p className="mt-0.5 text-xs text-theme-text-tertiary">
-                    View what your current identity can do in this cluster.
-                  </p>
+            <div className="mb-5">
+              <SectionLabel>Personal</SectionLabel>
+              <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="min-w-0">
+                    <h3 className="text-sm font-medium text-theme-text-primary">My permissions</h3>
+                    <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                      View what your current identity can do in this cluster.
+                    </p>
+                  </div>
+                  <button
+                    onClick={onShowMyPermissions}
+                    className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover rounded-md transition-colors"
+                  >
+                    <Shield className="w-3.5 h-3.5" />
+                    Open
+                  </button>
                 </div>
-                <button
-                  onClick={onShowMyPermissions}
-                  className="shrink-0 flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-hover rounded-md transition-colors"
-                >
-                  <Shield className="w-3.5 h-3.5" />
-                  Open
-                </button>
               </div>
             </div>
           )}
-          <StartupConfigTab
-            config={editedConfig}
-            effectiveConfig={configData?.effective}
-            isDesktop={isDesktop}
-            onChange={updateConfigField}
-          />
+
+          <SectionLabel>Radar configuration</SectionLabel>
+          {canEditConfig ? (
+            <StartupConfigTab
+              config={editedConfig}
+              effectiveConfig={configData?.effective}
+              isDesktop={isDesktop}
+              onChange={updateConfigField}
+            />
+          ) : (
+            <div className="rounded-md border border-theme-border bg-theme-elevated/50 p-4 flex items-start gap-3">
+              <Lock className="w-4 h-4 mt-0.5 shrink-0 text-theme-text-tertiary" />
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-theme-text-primary">Owner access required</p>
+                <p className="mt-0.5 text-xs text-theme-text-tertiary">
+                  These settings (kubeconfig, server port, timeline, integrations) affect
+                  every user of this Radar instance, so they're limited to owners. Ask an
+                  owner if you need a change here.
+                </p>
+              </div>
+            </div>
+          )}
         </div>
 
-        {/* Footer */}
+        {/* Footer — only the owner-gated config section is editable, so hide
+            the save controls entirely for non-owners (personal sections save
+            themselves). */}
+        {canEditConfig && (
         <div className="flex items-center justify-between gap-3 p-4 border-t border-theme-border shrink-0">
             <div className="flex items-center gap-2">
               <button
@@ -225,9 +255,20 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
               Save
             </button>
           </div>
+        )}
       </div>
     </div>,
     document.body
+  )
+}
+
+// -- Section label ------------------------------------------------------------
+
+function SectionLabel({ children }: { children: ReactNode }) {
+  return (
+    <h3 className="text-xs font-medium text-theme-text-secondary uppercase tracking-wider mb-2">
+      {children}
+    </h3>
   )
 }
 
