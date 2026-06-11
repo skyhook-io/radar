@@ -1,8 +1,11 @@
 package k8s
 
 import (
+	"reflect"
 	"sync"
 	"time"
+
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 )
 
 // Delete+recreate under the same name (kubectl replace --force, delete &&
@@ -130,4 +133,28 @@ func resetRecreateStash() {
 	recreateStashMu.Lock()
 	defer recreateStashMu.Unlock()
 	recreateStash = map[string]recreateEntry{}
+}
+
+// stripStatusForRecreateDiff returns a copy of obj with .status zeroed so the
+// recreate diff covers desired state only. Shallow copy: the differs only
+// read, never mutate, so sharing spec internals is safe.
+func stripStatusForRecreateDiff(obj any) any {
+	if obj == nil {
+		return nil
+	}
+	if u, ok := obj.(*unstructured.Unstructured); ok {
+		c := u.DeepCopy()
+		delete(c.Object, "status")
+		return c
+	}
+	v := reflect.ValueOf(obj)
+	if v.Kind() != reflect.Ptr || v.IsNil() {
+		return obj
+	}
+	c := reflect.New(v.Elem().Type())
+	c.Elem().Set(v.Elem())
+	if f := c.Elem().FieldByName("Status"); f.IsValid() && f.CanSet() {
+		f.Set(reflect.Zero(f.Type()))
+	}
+	return c.Interface()
 }

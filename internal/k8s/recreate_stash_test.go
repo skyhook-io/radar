@@ -183,3 +183,39 @@ func TestRecreateStash_CapEviction(t *testing.T) {
 		t.Fatal("newest entry was evicted; eviction must drop oldest first")
 	}
 }
+
+// A spec-identical recreate (namespace re-apply) must NOT join: status resets
+// across recreates are tautological, and a status-only "recreated with
+// changes" entry reads as a config change that never happened.
+func TestRecreateJoin_SpecIdenticalRecreate_NoJoin(t *testing.T) {
+	prev := initialSyncComplete
+	initialSyncComplete = true
+	defer func() { initialSyncComplete = prev }()
+	resetRecreateStash()
+	defer resetRecreateStash()
+
+	timeline.ResetStore()
+	defer timeline.ResetStore()
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 100}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+
+	oldDep := testDeployment("uid-1", "nginx:1.0", time.Now().Add(-time.Hour))
+	oldDep.Status = appsv1.DeploymentStatus{ReadyReplicas: 1, AvailableReplicas: 1}
+	recordToTimelineStore("Deployment", "shop", "web", "uid-1", "delete", nil, oldDep)
+
+	newDep := testDeployment("uid-2", "nginx:1.0", time.Now()) // same spec, fresh status
+	recordToTimelineStore("Deployment", "shop", "web", "uid-2", "add", nil, newDep)
+
+	events, err := timeline.GetStore().Query(context.Background(), timeline.QueryOptions{
+		Kinds: []string{"Deployment"}, EventTypes: []timeline.EventType{timeline.EventTypeAdd},
+	})
+	if err != nil {
+		t.Fatalf("Query: %v", err)
+	}
+	for _, e := range events {
+		if e.Reason == timeline.ReasonRecreated {
+			t.Fatalf("spec-identical recreate must not join (status-only diff): %+v", e.Diff)
+		}
+	}
+}
