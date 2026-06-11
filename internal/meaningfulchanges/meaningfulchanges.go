@@ -8,8 +8,8 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
-	"k8s.io/apimachinery/pkg/labels"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/labels"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -20,13 +20,13 @@ const (
 	DefaultSince      = time.Hour
 	DefaultLimit      = 20
 	DefaultFieldLimit = 10
-	IssueChangesLimit      = 5
+	IssueChangesLimit = 5
 	ResourceLimit     = 3
 	maxCandidateLimit = 100
 )
 
 const (
-	ChangesReasonNoCriticalIssues                           = "no_critical_issues"
+	ChangesReasonNoCriticalIssues             = "no_critical_issues"
 	ChangesReasonAllCriticalStartedAtCreation = "all_critical_issues_started_at_resource_creation"
 )
 
@@ -268,6 +268,7 @@ func queryLifecycleCandidates(ctx context.Context, store timeline.EventStore, q 
 	opts := timeline.QueryOptions{
 		Namespaces:       q.Namespaces,
 		Kinds:            compactKinds(kinds),
+		Names:            compactNames(q.Name),
 		Since:            time.Now().Add(-q.Since),
 		Sources:          []timeline.EventSource{timeline.SourceInformer},
 		EventTypes:       []timeline.EventType{timeline.EventTypeAdd, timeline.EventTypeDelete},
@@ -283,6 +284,7 @@ func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, ki
 	opts := timeline.QueryOptions{
 		Namespaces: q.Namespaces,
 		Kinds:      compactKinds(kinds),
+		Names:      compactNames(q.Name),
 		Since:      time.Now().Add(-q.Since),
 		Sources:    []timeline.EventSource{timeline.SourceInformer},
 		// Changes are root-cause evidence for the CURRENT cluster — the
@@ -531,6 +533,14 @@ func compactKinds(kinds []string) []string {
 		out = append(out, kind)
 	}
 	return out
+}
+
+func compactNames(name string) []string {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil
+	}
+	return []string{name}
 }
 
 // coalesceRecreatePairs drops delete events whose resource was subsequently

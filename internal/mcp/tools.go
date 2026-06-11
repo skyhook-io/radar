@@ -2485,8 +2485,8 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 		filters.Filter = f
 	}
 	out, stats := issues.ComposeWithStats(provider, filters)
-	// Shared response shape (issues.ListResponse) — identical to /api/issues so
-	// HTTP and MCP can't drift.
+	// Shared base response shape (issues.ListResponse), then MCP-specific
+	// enrichments below.
 	resp := issues.NewListResponse(out, stats)
 	resp.ClusterContext = provider.ClusterContextForIssues(allowedNamespaces, func(group, resource string) bool {
 		return canReadInNamespace(ctx, group, resource, "kube-system", "list")

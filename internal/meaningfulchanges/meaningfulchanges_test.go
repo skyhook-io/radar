@@ -184,6 +184,62 @@ func TestRecentLifecycleEventSurvivesUpdateChurn(t *testing.T) {
 	}
 }
 
+// Per-resource lookups must apply the resource name before store limits are
+// applied. Otherwise a busy namespace with many newer lifecycle events for the
+// same kind can hide this resource's delete and make per-issue correlation emit
+// a false no_recent_changes marker.
+func TestRecentForResourceLifecycleEventSurvivesLifecycleChurn(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 1000}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	now := time.Now()
+
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID:             "target-delete",
+		Timestamp:      now.Add(-10 * time.Minute),
+		Source:         timeline.SourceInformer,
+		ClusterContext: k8s.ActiveClusterContext(),
+		Kind:           "Service",
+		Namespace:      "shop",
+		Name:           "user-service",
+		EventType:      timeline.EventTypeDelete,
+	}); err != nil {
+		t.Fatalf("append target delete: %v", err)
+	}
+
+	// More than both candidate caps for a named query (100) and lifecycle query
+	// (50). Without a store-level name filter, the target delete is not fetched
+	// and RecentForResource returns no changes.
+	for i := 0; i < 120; i++ {
+		if err := store.Append(context.Background(), timeline.TimelineEvent{
+			ID:             fmt.Sprintf("other-delete-%d", i),
+			Timestamp:      now.Add(-time.Duration(120-i) * time.Second),
+			Source:         timeline.SourceInformer,
+			ClusterContext: k8s.ActiveClusterContext(),
+			Kind:           "Service",
+			Namespace:      "shop",
+			Name:           fmt.Sprintf("other-service-%d", i),
+			EventType:      timeline.EventTypeDelete,
+		}); err != nil {
+			t.Fatalf("append lifecycle churn %d: %v", i, err)
+		}
+	}
+
+	changes, err := RecentForResource(context.Background(), "Service", "shop", "user-service", time.Hour, ResourceLimit, DefaultFieldLimit)
+	if err != nil {
+		t.Fatalf("RecentForResource: %v", err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("changes = %+v, want exactly the target delete", changes)
+	}
+	if c := changes[0]; c.Kind != "Service" || c.Name != "user-service" || c.ChangeType != "delete" {
+		t.Fatalf("unexpected change: %+v", c)
+	}
+}
+
 // A recreate (delete + ReasonRecreated add carrying the cross-recreate diff)
 // must surface as exactly ONE entry — the diff-bearing add, classified
 // spec_config — with the paired delete coalesced away. Entry count strictly

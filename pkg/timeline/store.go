@@ -51,6 +51,7 @@ type QueryOptions struct {
 	// Filters
 	Namespaces []string      // Filter by namespaces (empty = all)
 	Kinds      []string      // Filter by resource kinds (empty = all)
+	Names      []string      // Filter by resource names (empty = all)
 	Since      time.Time     // Filter events after this time
 	Until      time.Time     // Filter events before this time
 	Sources    []EventSource // Filter by event source (empty = all)

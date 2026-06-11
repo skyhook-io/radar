@@ -119,18 +119,12 @@ func (m *MemoryStore) Query(ctx context.Context, opts QueryOptions) ([]TimelineE
 func (m *MemoryStore) QueryGrouped(ctx context.Context, opts QueryOptions) (*TimelineResponse, error) {
 	startTime := time.Now()
 
-	// First get all matching events
-	events, err := m.Query(ctx, QueryOptions{
-		Namespaces:       opts.Namespaces,
-		Kinds:            opts.Kinds,
-		Since:            opts.Since,
-		Until:            opts.Until,
-		Sources:          opts.Sources,
-		FilterPreset:     opts.FilterPreset,
-		Limit:            opts.Limit * 10, // Get more events for grouping
-		IncludeManaged:   opts.IncludeManaged,
-		IncludeK8sEvents: opts.IncludeK8sEvents,
-	})
+	// First get all matching events, with a higher limit for grouping. Copy the
+	// full option struct so new filters can't drift between Query and grouped
+	// queries.
+	queryOpts := opts
+	queryOpts.Limit = opts.Limit * 10
+	events, err := m.Query(ctx, queryOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -314,6 +308,13 @@ func (m *MemoryStore) matchesFilters(event *TimelineEvent, opts QueryOptions, cf
 
 	if len(opts.Kinds) > 0 {
 		found := slices.Contains(opts.Kinds, event.Kind)
+		if !found {
+			return false
+		}
+	}
+
+	if len(opts.Names) > 0 {
+		found := slices.Contains(opts.Names, event.Name)
 		if !found {
 			return false
 		}

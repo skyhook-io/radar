@@ -107,6 +107,34 @@ func TestSQLiteStore_AppendBatch(t *testing.T) {
 	}
 }
 
+func TestSQLiteStore_Query_Names(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	events := []TimelineEvent{
+		{ID: "name-1", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "deploy-1", EventType: EventTypeAdd, Source: SourceInformer},
+		{ID: "name-2", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "deploy-2", EventType: EventTypeAdd, Source: SourceInformer},
+		{ID: "name-3", Timestamp: time.Now(), Kind: "Service", Namespace: "default", Name: "deploy-1", EventType: EventTypeAdd, Source: SourceInformer},
+	}
+	if err := store.AppendBatch(ctx, events); err != nil {
+		t.Fatalf("AppendBatch failed: %v", err)
+	}
+
+	result, err := store.Query(ctx, QueryOptions{Names: []string{"deploy-1"}, Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("Expected 2 deploy-1 events, got %d", len(result))
+	}
+	for _, e := range result {
+		if e.Name != "deploy-1" {
+			t.Errorf("Expected name 'deploy-1', got %q", e.Name)
+		}
+	}
+}
+
 func TestSQLiteStore_Query_FilterPreset(t *testing.T) {
 	store, cleanup := createTestSQLiteStore(t)
 	defer cleanup()

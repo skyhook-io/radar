@@ -67,11 +67,11 @@ type ComposeStats struct {
 	TotalMatched int
 }
 
-// ListResponse is the canonical /api/issues + MCP `issues` response shape. HTTP
-// and MCP both build from NewListResponse so the contract can't drift between
-// them (and the hub mirrors one shape). Visibility and NarrowHint are set by the
-// caller — visibility is server-side RBAC data; NarrowHint is the MCP steering
-// string for a capped result.
+// ListResponse is the canonical base /api/issues + MCP `issues` response shape.
+// HTTP and MCP both build from NewListResponse so the shared fields can't drift
+// between them (and the hub mirrors one shape). Callers may add
+// surface-specific fields such as Visibility, MCP NarrowHint, or MCP per-issue
+// correlation markers.
 type ListResponse = issuesapi.Response
 
 // NewListResponse fills the shared fields from a Compose result. out==nil
