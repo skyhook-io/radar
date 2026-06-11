@@ -1,5 +1,5 @@
 import { useState, useCallback } from 'react'
-import { useAudit, useAuditSettings, useUpdateAuditSettings } from '../../api/client'
+import { useAudit, useAuditSettings, useUpdateAuditSettings, useCloudRole } from '../../api/client'
 import type { SelectedResource } from '../../types'
 import { ChecksView, PaneLoader, type CheckResourceRef } from '@skyhook-io/k8s-ui'
 import { ArrowLeft, ClipboardCheck, Settings } from 'lucide-react'
@@ -21,6 +21,11 @@ export function AuditView({ namespaces, onBack, onNavigateToResource }: AuditVie
   const { data, isLoading, error } = useAudit(namespaces)
   const { data: auditSettings } = useAuditSettings()
   const updateSettings = useUpdateAuditSettings()
+  // Audit policy is owner-gated (enforced server-side). Withhold the inline
+  // hide affordances from non-owners so they don't click into a 403 — the
+  // hide menus render only when these callbacks are passed.
+  const { canAtLeast } = useCloudRole()
+  const canEdit = canAtLeast('owner')
   const [showSettings, setShowSettings] = useState(false)
 
   const ignoredCount = auditSettings?.ignoredNamespaces?.length ?? 0
@@ -105,8 +110,8 @@ export function AuditView({ namespaces, onBack, onNavigateToResource }: AuditVie
         catalog={data.checks ?? {}}
         anyData
         onResourceClick={onResourceClick}
-        onHideCheck={hideCheck}
-        onHideCategory={hideCategory}
+        onHideCheck={canEdit ? hideCheck : undefined}
+        onHideCategory={canEdit ? hideCategory : undefined}
       />
 
       {showSettings && <AuditSettingsDialog namespaces={namespaces} onClose={() => setShowSettings(false)} />}
