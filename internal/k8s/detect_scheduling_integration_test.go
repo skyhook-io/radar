@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/skyhook-io/radar/pkg/k8score"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -13,6 +14,8 @@ import (
 )
 
 func ptr32(i int32) *int32 { return &i }
+
+func boolPtr(v bool) *bool { return &v }
 
 // Exercises the bind-time detector end-to-end: a Pending pod the scheduler
 // rejected on arch, with the node-fit resolver naming the offending label.
@@ -188,6 +191,43 @@ func TestDetectAdmissionProblems_ReplicaFailureConditionFallback(t *testing.T) {
 	}
 }
 
+func TestDetectAdmissionProblems_ReplicaFailureConditionFallbackWithoutEvents(t *testing.T) {
+	nowT := metav1.Now()
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "search", Namespace: "prod"},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr32(3)},
+		Status: appsv1.DeploymentStatus{
+			Replicas: 1,
+			Conditions: []appsv1.DeploymentCondition{{
+				Type:               appsv1.DeploymentReplicaFailure,
+				Status:             corev1.ConditionTrue,
+				Reason:             "FailedCreate",
+				Message:            `pods "search-x" is forbidden: exceeded quota: memory-limit-quota, requested: limits.memory=1Gi, used: limits.memory=1Gi, limited: limits.memory=1Gi`,
+				LastTransitionTime: nowT,
+			}},
+		},
+	}
+	core, err := k8score.NewResourceCache(k8score.CacheConfig{
+		Client: fake.NewClientset(deploy),
+		ResourceTypes: map[string]bool{
+			"deployments": true,
+		},
+		DeferredTypes: map[string]bool{},
+	})
+	if err != nil {
+		t.Fatalf("NewResourceCache: %v", err)
+	}
+	t.Cleanup(core.Stop)
+	cache := &ResourceCache{ResourceCache: core}
+	if cache.Events() != nil {
+		t.Fatal("test setup expected Events lister to be unavailable")
+	}
+	problems := DetectAdmissionProblems(cache, "prod")
+	if !findProblem(problems, "Deployment", "prod", "search", "QuotaExceeded") {
+		t.Fatalf("expected condition fallback without Events lister, got %+v", problems)
+	}
+}
+
 func TestDetectAdmissionProblems_ReplicaFailureConditionFallbackForBlockedRollout(t *testing.T) {
 	defer ResetTestState()
 	nowT := metav1.Now()
@@ -212,6 +252,60 @@ func TestDetectAdmissionProblems_ReplicaFailureConditionFallbackForBlockedRollou
 	problems := DetectAdmissionProblems(GetResourceCache(), "prod")
 	if !findProblem(problems, "Deployment", "prod", "search", "QuotaExceeded") {
 		t.Fatalf("expected Deployment quota condition fallback for blocked rollout, got %+v", problems)
+	}
+}
+
+func TestDetectAdmissionProblems_DeploymentEventSuppressesReplicaSetCondition(t *testing.T) {
+	defer ResetTestState()
+	nowT := metav1.Now()
+	message := `pods "search-x" is forbidden: exceeded quota: memory-limit-quota, requested: limits.memory=1Gi, used: limits.memory=1Gi, limited: limits.memory=1Gi`
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "search", Namespace: "prod"},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr32(3)},
+		Status:     appsv1.DeploymentStatus{Replicas: 1, UpdatedReplicas: 1},
+	}
+	rs := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "search-abc123",
+			Namespace: "prod",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       "search",
+				Controller: boolPtr(true),
+			}},
+		},
+		Spec: appsv1.ReplicaSetSpec{Replicas: ptr32(3)},
+		Status: appsv1.ReplicaSetStatus{
+			Replicas: 1,
+			Conditions: []appsv1.ReplicaSetCondition{{
+				Type:               appsv1.ReplicaSetReplicaFailure,
+				Status:             corev1.ConditionTrue,
+				Reason:             "FailedCreate",
+				Message:            message,
+				LastTransitionTime: nowT,
+			}},
+		},
+	}
+	evt := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "quota-event", Namespace: "prod"},
+		InvolvedObject: corev1.ObjectReference{Kind: "Deployment", Namespace: "prod", Name: "search"},
+		Reason:         "FailedCreate",
+		Type:           corev1.EventTypeWarning,
+		Message:        `Error creating: ` + message,
+		LastTimestamp:  nowT,
+	}
+	if err := InitTestResourceCache(fake.NewClientset(deploy, rs, evt)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	problems := DetectAdmissionProblems(GetResourceCache(), "prod")
+	if !findProblem(problems, "Deployment", "prod", "search", "QuotaExceeded") {
+		t.Fatalf("expected Deployment event problem, got %+v", problems)
+	}
+	for _, p := range problems {
+		if p.Kind == "ReplicaSet" && p.Name == "search-abc123" {
+			t.Fatalf("ReplicaSet condition duplicated Deployment event problem: %+v", problems)
+		}
 	}
 }
 
@@ -256,6 +350,47 @@ func TestDetectAdmissionProblems_ConditionFallbackDoesNotDuplicateReplicaSetEven
 		if p.Kind == "Deployment" && p.Name == "search" {
 			t.Fatalf("Deployment condition duplicated ReplicaSet event: %+v", problems)
 		}
+	}
+}
+
+func TestDetectAdmissionProblems_ReplicaSetConditionFallbackDedupe(t *testing.T) {
+	defer ResetTestState()
+	nowT := metav1.Now()
+	rs := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "search-abc123", Namespace: "prod"},
+		Spec:       appsv1.ReplicaSetSpec{Replicas: ptr32(3)},
+		Status: appsv1.ReplicaSetStatus{
+			Replicas: 1,
+			Conditions: []appsv1.ReplicaSetCondition{
+				{
+					Type:               appsv1.ReplicaSetReplicaFailure,
+					Status:             corev1.ConditionTrue,
+					Reason:             "FailedCreate",
+					Message:            `pods "search-x" is forbidden: exceeded quota: memory-limit-quota, requested: limits.memory=1Gi, used: limits.memory=1Gi, limited: limits.memory=1Gi`,
+					LastTransitionTime: nowT,
+				},
+				{
+					Type:               appsv1.ReplicaSetReplicaFailure,
+					Status:             corev1.ConditionTrue,
+					Reason:             "FailedCreate",
+					Message:            `pods "search-y" is forbidden: exceeded quota: memory-limit-quota, requested: limits.memory=1Gi, used: limits.memory=1Gi, limited: limits.memory=1Gi`,
+					LastTransitionTime: nowT,
+				},
+			},
+		},
+	}
+	if err := InitTestResourceCache(fake.NewClientset(rs)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	problems := DetectAdmissionProblems(GetResourceCache(), "prod")
+	rows := 0
+	for _, p := range problems {
+		if p.Kind == "ReplicaSet" && p.Name == "search-abc123" {
+			rows++
+		}
+	}
+	if rows != 1 {
+		t.Fatalf("expected one ReplicaSet condition problem, got %d: %+v", rows, problems)
 	}
 }
 

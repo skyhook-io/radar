@@ -688,7 +688,7 @@ func DetectAdmissionProblems(cache *ResourceCache, namespace string) []Detection
 
 func detectAdmissionFailures(cache *ResourceCache, namespace string) []Detection {
 	if cache.Events() == nil {
-		return nil
+		return detectAdmissionConditionProblems(cache, namespace, map[string]bool{})
 	}
 	var events []*corev1.Event
 	if namespace != "" {
@@ -863,6 +863,9 @@ func schedDesiredReplicas(r *int32) int32 {
 func detectAdmissionConditionProblems(cache *ResourceCache, namespace string, seen map[string]bool) []Detection {
 	var out []Detection
 	now := time.Now()
+	if seen == nil {
+		seen = map[string]bool{}
+	}
 
 	if l := cache.ReplicaSets(); l != nil {
 		var items []*appsv1.ReplicaSet
@@ -873,7 +876,7 @@ func detectAdmissionConditionProblems(cache *ResourceCache, namespace string, se
 		}
 		for _, rs := range items {
 			key := admissionProblemKey("ReplicaSet", rs.Namespace, rs.Name)
-			if seen[key] || rs.Status.Replicas >= schedDesiredReplicas(rs.Spec.Replicas) {
+			if seen[key] || hasSeenDeploymentForReplicaSet(seen, rs) || rs.Status.Replicas >= schedDesiredReplicas(rs.Spec.Replicas) {
 				continue
 			}
 			for _, c := range rs.Status.Conditions {
@@ -883,6 +886,7 @@ func detectAdmissionConditionProblems(cache *ResourceCache, namespace string, se
 				if p, ok := admissionConditionProblem("ReplicaSet", rs.Namespace, rs.Name, c.Message, c.LastTransitionTime.Time, now); ok {
 					out = append(out, p)
 					seen[key] = true
+					break
 				}
 			}
 		}
@@ -960,6 +964,17 @@ func hasSeenReplicaSetForDeployment(seen map[string]bool, namespace, deployment 
 		}
 	}
 	return false
+}
+
+func hasSeenDeploymentForReplicaSet(seen map[string]bool, rs *appsv1.ReplicaSet) bool {
+	if rs == nil {
+		return false
+	}
+	owner := controllerOwnerRef(rs.OwnerReferences)
+	if owner == nil || owner.Kind != "Deployment" || owner.Name == "" {
+		return false
+	}
+	return seen[admissionProblemKey("Deployment", rs.Namespace, owner.Name)]
 }
 
 // classifyAdmissionFailure maps a FailedCreate event message to a reason.
