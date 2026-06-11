@@ -701,6 +701,14 @@ export function formatKindName(kind: string): string {
   return kind
 }
 
+// Resolve the display label for a kind chip. The fetched resource's `dataKind`
+// is the authoritative PascalCase kind and is correct for every CRD; prefer it.
+// Before data loads, fall back to deriving from the URL plural — which is only
+// reliable for the core kinds in formatKindName's map.
+export function displayKindName(urlPlural: string, dataKind?: string): string {
+  return dataKind || formatKindName(urlPlural)
+}
+
 // Type for copy handler
 export type CopyHandler = (text: string, key: string) => void
 

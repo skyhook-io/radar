@@ -23,7 +23,7 @@ import { ForceDeleteConfirmDialog, type CascadeDependent } from '../ui/ForceDele
 import { ConfirmDialog } from '../ui/ConfirmDialog'
 import { DialogPortal } from '../ui/DialogPortal'
 import type { SelectedResource, WorkloadRevision } from '../../types'
-import { formatKindName } from '../ui/drawer-components'
+import { displayKindName } from '../ui/drawer-components'
 import { getDefaultContainerName } from '../resources/resource-utils'
 
 // ============================================================================
@@ -517,20 +517,20 @@ export function ResourceActionsBar({
           <Tooltip
             content={
               onCompareTo && onCompareAcrossClusters
-                ? `Compare ${formatKindName(resource.kind).toLowerCase()}`
+                ? `Compare ${displayKindName(resource.kind, data?.kind).toLowerCase()}`
                 : onCompareAcrossClusters
                   ? `Compare across clusters`
-                  : `Compare to another ${formatKindName(resource.kind).toLowerCase()}`
+                  : `Compare to another ${displayKindName(resource.kind, data?.kind).toLowerCase()}`
             }
           >
             <button
               onClick={onCompareTo ?? onCompareAcrossClusters}
               aria-label={
                 onCompareTo && onCompareAcrossClusters
-                  ? `Compare ${formatKindName(resource.kind).toLowerCase()}`
+                  ? `Compare ${displayKindName(resource.kind, data?.kind).toLowerCase()}`
                   : onCompareAcrossClusters
                     ? `Compare across clusters`
-                    : `Compare to another ${formatKindName(resource.kind).toLowerCase()}`
+                    : `Compare to another ${displayKindName(resource.kind, data?.kind).toLowerCase()}`
               }
               className="p-1.5 text-theme-text-secondary border border-theme-border-light rounded-lg hover:text-theme-text-primary hover:bg-theme-elevated transition-colors flex items-center"
             >
@@ -577,7 +577,7 @@ export function ResourceActionsBar({
         onClose={() => setShowDeleteConfirm(false)}
         onConfirm={handleDeleteConfirm}
         resourceName={resource.name}
-        resourceKind={formatKindName(resource.kind)}
+        resourceKind={displayKindName(resource.kind, data?.kind)}
         namespaceName={resource.namespace}
         isLoading={isDeleting ?? false}
         cascadeDependents={cascadeDependents}

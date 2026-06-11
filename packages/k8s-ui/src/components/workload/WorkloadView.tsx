@@ -51,7 +51,7 @@ import { EditableYamlView, SaveSuccessAnimation } from '../shared/EditableYamlVi
 import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from '../shared/ResourceRendererDispatch'
 import { DetailShell, type DetailShellTab } from '../shared/DetailShell'
 import { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/ManagedByChip'
-import { getKindColorOutline, formatKindName } from '../ui/drawer-components'
+import { getKindColorOutline, displayKindName } from '../ui/drawer-components'
 import { midTruncate } from '../../utils/format'
 
 export type WorkloadTabType = 'overview' | 'topology' | 'timeline' | 'logs' | 'metrics' | 'yaml'
@@ -555,7 +555,7 @@ export function WorkloadView({
           <div className="flex items-center justify-between px-4 pt-3 pb-2">
             <div className="flex items-center gap-2 flex-wrap">
               <span className={clsx('badge', getKindColorOutline(apiKind))}>
-                {formatKindName(apiKind)}
+                {displayKindName(apiKind, resource?.kind)}
               </span>
               {status && (
                 <span className={clsx('badge', status.color)}>
@@ -706,7 +706,7 @@ export function WorkloadView({
           </div>
           <div className="flex items-center gap-3 text-sm text-theme-text-secondary">
             <span className={clsx('badge', getKindColorOutline(apiKind))}>
-              {formatKindName(apiKind)}
+              {displayKindName(apiKind, resource?.kind)}
             </span>
             {status && (
               <span className={clsx('badge', status.color)}>
@@ -860,7 +860,7 @@ export function WorkloadView({
                       )}
                     >
                       <span className="truncate text-xs font-medium text-theme-text-primary">{midTruncate(o.name, 26)}</span>
-                      <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{formatKindName(o.kind)}</span>
+                      <span className="text-[10px] uppercase tracking-wide text-theme-text-tertiary">{o.kind}</span>
                     </button>
                   )
                 })}
