@@ -55,6 +55,10 @@ func attachIssueChangeCorrelation(ctx context.Context, resp *issues.ListResponse
 		if err != nil {
 			continue // marker omitted = unknown, never a false "no changes"
 		}
+		// The marker's contract is spec/config evidence: status churn on a
+		// failing workload is the SYMPTOM, not a change that could explain it
+		// — including it would make every failing issue read as "correlated".
+		changes = filterSpecConfigChanges(changes)
 		if len(changes) == 0 {
 			iss.NoRecentChanges = &issuesapi.NoRecentChangesMarker{
 				WindowSeconds: int(meaningfulchanges.DefaultSince.Seconds()),
@@ -66,6 +70,16 @@ func attachIssueChangeCorrelation(ctx context.Context, resp *issues.ListResponse
 		}
 		iss.CorrelatedChanges = changes
 	}
+}
+
+func filterSpecConfigChanges(changes []issuesapi.RecentChange) []issuesapi.RecentChange {
+	out := changes[:0]
+	for _, c := range changes {
+		if c.ChangeCategory == "spec_config" || c.ChangeCategory == "lifecycle" {
+			out = append(out, c)
+		}
+	}
+	return out
 }
 
 func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue) ([]issuesapi.RecentChange, error) {

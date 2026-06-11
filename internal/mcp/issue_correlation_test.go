@@ -43,6 +43,17 @@ func TestAttachIssueChangeCorrelation_Markers(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("append: %v", err)
 	}
+	// Status churn on the chronic workload — the SYMPTOM, not a change; it
+	// must not count as correlation evidence.
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "quiet-status", Timestamp: time.Now().Add(-2 * time.Minute),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Deployment", Namespace: "shop", Name: "quiet",
+		EventType: timeline.EventTypeUpdate,
+		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "status.readyReplicas", OldValue: int32(1), NewValue: int32(0)}}, Summary: "ready: 1→0"},
+	}); err != nil {
+		t.Fatalf("append quiet status: %v", err)
+	}
 
 	resp := issues.ListResponse{Issues: []issuesapi.Issue{
 		criticalIssue("Deployment", "web"),
@@ -61,7 +72,7 @@ func TestAttachIssueChangeCorrelation_Markers(t *testing.T) {
 	}
 	quiet := resp.Issues[1]
 	if quiet.NoRecentChanges == nil || quiet.NoRecentChanges.WindowSeconds != 3600 {
-		t.Fatalf("quiet should carry no_recent_changes{3600}, got %+v", quiet.NoRecentChanges)
+		t.Fatalf("quiet should carry no_recent_changes{3600} despite status churn, got %+v (correlated=%+v)", quiet.NoRecentChanges, quiet.CorrelatedChanges)
 	}
 	if warn := resp.Issues[2]; warn.NoRecentChanges != nil || len(warn.CorrelatedChanges) != 0 {
 		t.Fatalf("warning issues must not be correlated: %+v", warn)
