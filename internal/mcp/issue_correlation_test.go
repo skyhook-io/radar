@@ -19,7 +19,24 @@ func initCorrelationStore(t *testing.T) timeline.EventStore {
 	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 200}); err != nil {
 		t.Fatalf("InitStore: %v", err)
 	}
+	// Backdate observation past the full window: a fresh store has watched
+	// for ~0s and correlation correctly refuses to claim anything.
+	timeline.SetObservationStartForTest(time.Now().Add(-2 * time.Hour))
 	return timeline.GetStore()
+}
+
+// A store that has only just started observing must emit NO markers — in
+// either direction — rather than claim an hour-long window it never watched.
+func TestAttachIssueChangeCorrelation_SkipsOnShortObservation(t *testing.T) {
+	initCorrelationStore(t)
+	timeline.SetObservationStartForTest(time.Now().Add(-90 * time.Second))
+
+	resp := issues.ListResponse{Issues: []issuesapi.Issue{criticalIssue("Deployment", "web")}}
+	attachIssueChangeCorrelation(context.Background(), &resp)
+
+	if resp.Issues[0].NoRecentChanges != nil || len(resp.Issues[0].CorrelatedChanges) > 0 {
+		t.Fatalf("90s-old store must not claim anything: %+v", resp.Issues[0])
+	}
 }
 
 func criticalIssue(kind, name string) issuesapi.Issue {

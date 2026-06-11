@@ -3,10 +3,12 @@ package mcp
 import (
 	"context"
 	"strings"
+	"time"
 
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/meaningfulchanges"
+	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
 
@@ -29,11 +31,39 @@ const (
 	correlationFieldLimit = 5
 )
 
+// correlationMinObservation is the least watch time that justifies a "no
+// recent changes" claim. Below it (fresh start, recent restart) the marker is
+// omitted entirely — a 90-second-old store asserting anything about the past
+// hour would be fiction.
+const correlationMinObservation = 5 * time.Minute
+
+// correlationWindow returns the truthful claim window: the default lookback
+// clamped to how long this process's store has actually been observing.
+// Returns 0 when observation is too short to claim anything.
+func correlationWindow() time.Duration {
+	window := meaningfulchanges.DefaultSince
+	start := timeline.ObservationStart()
+	if start.IsZero() {
+		return 0
+	}
+	if observed := time.Since(start); observed < window {
+		window = observed
+	}
+	if window < correlationMinObservation {
+		return 0
+	}
+	return window
+}
+
 // attachIssueChangeCorrelation fills CorrelatedChanges / NoRecentChanges on
 // critical issues. Single-namespace responses only — cross-namespace listings
 // are inventory sweeps where per-issue timeline lookups would multiply cost
 // without a triage question on the table.
 func attachIssueChangeCorrelation(ctx context.Context, resp *issues.ListResponse) {
+	window := correlationWindow()
+	if window == 0 {
+		return // not enough observation to claim anything, in either direction
+	}
 	checked := 0
 	for i := range resp.Issues {
 		iss := &resp.Issues[i]
@@ -51,7 +81,7 @@ func attachIssueChangeCorrelation(ctx context.Context, resp *issues.ListResponse
 		}
 		checked++
 
-		changes, err := correlationChangesForIssue(ctx, iss)
+		changes, err := correlationChangesForIssue(ctx, iss, window)
 		if err != nil {
 			continue // marker omitted = unknown, never a false "no changes"
 		}
@@ -61,7 +91,7 @@ func attachIssueChangeCorrelation(ctx context.Context, resp *issues.ListResponse
 		changes = filterSpecConfigChanges(changes)
 		if len(changes) == 0 {
 			iss.NoRecentChanges = &issuesapi.NoRecentChangesMarker{
-				WindowSeconds: int(meaningfulchanges.DefaultSince.Seconds()),
+				WindowSeconds: int(window.Seconds()),
 			}
 			continue
 		}
@@ -82,19 +112,19 @@ func filterSpecConfigChanges(changes []issuesapi.RecentChange) []issuesapi.Recen
 	return out
 }
 
-func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue) ([]issuesapi.RecentChange, error) {
+func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration) ([]issuesapi.RecentChange, error) {
 	if meaningfulchanges.WorkloadKind(iss.Kind) {
 		// Workload subjects also correlate against their directly referenced
 		// ConfigMaps; obj==nil degrades to workload-only changes.
 		obj := workloadObjectFromCache(iss.Kind, iss.Namespace, iss.Name)
 		return meaningfulchanges.RecentForWorkloadAndConfigMaps(
 			ctx, obj, iss.Kind, iss.Namespace, iss.Name,
-			meaningfulchanges.DefaultSince, correlationChangeCap, correlationFieldLimit,
+			window, correlationChangeCap, correlationFieldLimit,
 		)
 	}
 	return meaningfulchanges.RecentForResource(
 		ctx, iss.Kind, iss.Namespace, iss.Name,
-		meaningfulchanges.DefaultSince, correlationChangeCap, correlationFieldLimit,
+		window, correlationChangeCap, correlationFieldLimit,
 	)
 }
 
