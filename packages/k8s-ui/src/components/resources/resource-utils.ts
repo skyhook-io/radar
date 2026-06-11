@@ -267,26 +267,28 @@ export function getPodProblems(pod: any): PodProblem[] {
   const initContainerStatuses = pod.status?.initContainerStatuses || []
   const conditions = pod.status?.conditions || []
   const phase = pod.status?.phase
+  const podStatusMessage = pod.status?.message || undefined
 
   // Failed or Unknown phase
   if (phase === 'Failed' && pod.status?.reason !== 'Evicted') {
-    problems.push({ severity: 'critical', message: 'Failed' })
+    problems.push({ severity: 'critical', message: 'Failed', detail: podStatusMessage })
   } else if (phase === 'Unknown') {
-    problems.push({ severity: 'high', message: 'Unknown' })
+    problems.push({ severity: 'high', message: 'Unknown', detail: podStatusMessage })
   }
 
   // Init container failures
   for (const cs of initContainerStatuses) {
     if (cs.state?.waiting?.reason && cs.state.waiting.reason !== 'PodInitializing') {
       const reason = cs.state.waiting.reason
+      const detail = cs.state.waiting.message || undefined
       if (['CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull'].includes(reason)) {
-        problems.push({ severity: 'critical', message: `Init: ${reason}` })
+        problems.push({ severity: 'critical', message: `Init: ${reason}`, detail })
       } else {
-        problems.push({ severity: 'high', message: `Init: ${reason}` })
+        problems.push({ severity: 'high', message: `Init: ${reason}`, detail })
       }
     }
     if (cs.state?.terminated?.exitCode && cs.state.terminated.exitCode !== 0) {
-      problems.push({ severity: 'high', message: `Init: Exit Code ${cs.state.terminated.exitCode}` })
+      problems.push({ severity: 'high', message: `Init: Exit Code ${cs.state.terminated.exitCode}`, detail: cs.state.terminated.message || undefined })
     }
   }
 
@@ -294,30 +296,32 @@ export function getPodProblems(pod: any): PodProblem[] {
     // Check waiting state
     if (cs.state?.waiting?.reason) {
       const reason = cs.state.waiting.reason
+      const detail = cs.state.waiting.message || undefined
       if (['CrashLoopBackOff', 'ImagePullBackOff', 'ErrImagePull'].includes(reason)) {
-        problems.push({ severity: 'critical', message: reason })
+        problems.push({ severity: 'critical', message: reason, detail })
       } else if (reason === 'CreateContainerConfigError') {
-        problems.push({ severity: 'critical', message: 'Config Error' })
+        problems.push({ severity: 'critical', message: 'Config Error', detail })
       } else if (reason === 'ContainerCannotRun') {
-        problems.push({ severity: 'critical', message: 'Cannot Run' })
+        problems.push({ severity: 'critical', message: 'Cannot Run', detail })
       } else if (reason !== 'ContainerCreating' && reason !== 'PodInitializing') {
-        problems.push({ severity: 'high', message: reason })
+        problems.push({ severity: 'high', message: reason, detail })
       }
     }
     // Check terminated state
     if (cs.state?.terminated?.reason === 'OOMKilled') {
-      problems.push({ severity: 'critical', message: 'OOMKilled' })
+      problems.push({ severity: 'critical', message: 'OOMKilled', detail: cs.state.terminated.message || undefined })
     } else if (cs.state?.terminated?.exitCode && cs.state.terminated.exitCode !== 0) {
-      problems.push({ severity: 'high', message: `Exit Code ${cs.state.terminated.exitCode}` })
+      problems.push({ severity: 'high', message: `Exit Code ${cs.state.terminated.exitCode}`, detail: cs.state.terminated.message || undefined })
     }
     // High restart count
     if (cs.restartCount > 5) {
       problems.push({ severity: 'medium', message: `${cs.restartCount} restarts` })
     }
     // Volume mount issues from last state
-    const lastMsg = cs.lastState?.terminated?.message?.toLowerCase() || ''
+    const lastMsgRaw = cs.lastState?.terminated?.message || ''
+    const lastMsg = lastMsgRaw.toLowerCase()
     if (lastMsg.includes('failed to mount') || lastMsg.includes('failedattachvolume')) {
-      problems.push({ severity: 'high', message: 'Volume Mount Failed' })
+      problems.push({ severity: 'high', message: 'Volume Mount Failed', detail: lastMsgRaw || undefined })
     }
   }
 
@@ -332,23 +336,23 @@ export function getPodProblems(pod: any): PodProblem[] {
     if (cond.type === 'ContainersReady' && cond.status === 'False') {
       const msg = (cond.message || '').toLowerCase()
       if (msg.includes('readiness')) {
-        problems.push({ severity: 'medium', message: 'Readiness Probe Failing' })
+        problems.push({ severity: 'medium', message: 'Readiness Probe Failing', detail: cond.message || undefined })
       } else if (msg.includes('liveness')) {
-        problems.push({ severity: 'high', message: 'Liveness Probe Failing' })
+        problems.push({ severity: 'high', message: 'Liveness Probe Failing', detail: cond.message || undefined })
       }
     }
     // IP allocation failures (subnet exhaustion)
     if (cond.type === 'PodReadyToStartContainers' && cond.status === 'False') {
       const msg = (cond.message || '').toLowerCase()
       if (msg.includes('failed to assign an ip') || msg.includes('pod sandbox')) {
-        problems.push({ severity: 'critical', message: 'IP Allocation Failed' })
+        problems.push({ severity: 'critical', message: 'IP Allocation Failed', detail: cond.message || undefined })
       }
     }
   }
 
   // Evicted pods
   if (phase === 'Failed' && pod.status?.reason === 'Evicted') {
-    problems.push({ severity: 'high', message: 'Evicted' })
+    problems.push({ severity: 'high', message: 'Evicted', detail: podStatusMessage })
   }
 
   // Stuck terminating (zombie pod)

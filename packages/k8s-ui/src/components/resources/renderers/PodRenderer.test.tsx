@@ -51,3 +51,28 @@ describe('PodRenderer envFrom expansion', () => {
     expect(html).not.toContain('PUBLIC_URL<!-- -->=')
   })
 })
+
+describe('PodRenderer issues banner', () => {
+  it('renders pod status messages for evicted pods', () => {
+    const html = renderToString(
+      <PodRenderer
+        data={{
+          metadata: { name: 'nginx', namespace: 'default' },
+          spec: { containers: [{ name: 'nginx', image: 'nginx:latest' }] },
+          status: {
+            phase: 'Failed',
+            reason: 'Evicted',
+            message: 'Usage of EmptyDir volume "logs-nginx" exceeds the limit "2Gi".',
+          },
+        }}
+        onCopy={() => undefined}
+        copied={null}
+      />,
+    )
+
+    expect(html).toContain('Issues Detected')
+    expect(html).toContain('Evicted')
+    expect(html).toContain('Usage of EmptyDir volume')
+    expect(html).toContain('exceeds the limit')
+  })
+})
