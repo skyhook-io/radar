@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
@@ -123,4 +124,170 @@ func findChangePath(changes []FieldChange, path string) (FieldChange, bool) {
 		}
 	}
 	return FieldChange{}, false
+}
+
+func TestDiffPodTemplateConfig_VolumesAndMounts(t *testing.T) {
+	oldSpec := corev1.PodSpec{
+		Volumes: []corev1.Volume{
+			{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "app-config"}}}},
+		},
+		Containers: []corev1.Container{{
+			Name: "app", Image: "app:v1",
+			VolumeMounts: []corev1.VolumeMount{{Name: "config", MountPath: "/etc/config", ReadOnly: true}},
+		}},
+	}
+	newSpec := corev1.PodSpec{
+		Volumes: []corev1.Volume{
+			{Name: "config", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: "app-config-v2"}}}},
+			{Name: "cache", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{}}},
+		},
+		Containers: []corev1.Container{{
+			Name: "app", Image: "app:v1",
+			VolumeMounts: []corev1.VolumeMount{{Name: "config", MountPath: "/etc/config", ReadOnly: true}, {Name: "cache", MountPath: "/cache"}},
+		}},
+	}
+
+	changes, summary := diffPodTemplateConfig(oldSpec, newSpec)
+	if !hasChangePath(changes, "spec.template.spec.volumes") {
+		t.Fatalf("expected volumes change, got %+v", changes)
+	}
+	if !hasChangePath(changes, "spec.template.spec.containers[app].volumeMounts") {
+		t.Fatalf("expected volumeMounts change, got %+v", changes)
+	}
+	joined := strings.Join(summary, "; ")
+	if !strings.Contains(joined, "volumes changed") || !strings.Contains(joined, "volumeMounts(app)") {
+		t.Fatalf("summary missing volume changes: %q", joined)
+	}
+	// Volume diffs must carry source REFERENCES, not contents.
+	for _, c := range changes {
+		if c.Path == "spec.template.spec.volumes" {
+			refs, ok := c.NewValue.([]string)
+			if !ok {
+				t.Fatalf("volumes NewValue should be []string refs, got %T", c.NewValue)
+			}
+			if want := "config:configMap/app-config-v2"; !slicesContains(refs, want) {
+				t.Fatalf("volume refs = %v, want to include %q", refs, want)
+			}
+		}
+	}
+}
+
+func TestDiffPodTemplateConfig_PortsSAandScheduling(t *testing.T) {
+	oldSpec := corev1.PodSpec{
+		ServiceAccountName: "default",
+		NodeSelector:       map[string]string{"disk": "ssd"},
+		Containers: []corev1.Container{{
+			Name: "app", Image: "app:v1",
+			Ports: []corev1.ContainerPort{{ContainerPort: 8080, Name: "http"}},
+		}},
+	}
+	newSpec := corev1.PodSpec{
+		ServiceAccountName: "app-sa",
+		NodeSelector:       map[string]string{"disk": "ssd", "zone": "us-east1-b"},
+		Tolerations:        []corev1.Toleration{{Key: "dedicated", Value: "infra", Effect: corev1.TaintEffectNoSchedule}},
+		Containers: []corev1.Container{{
+			Name: "app", Image: "app:v1",
+			Ports: []corev1.ContainerPort{{ContainerPort: 9090, Name: "http"}},
+		}},
+	}
+
+	changes, summary := diffPodTemplateConfig(oldSpec, newSpec)
+	for _, path := range []string{
+		"spec.template.spec.containers[app].ports",
+		"spec.template.spec.serviceAccountName",
+		"spec.template.spec.nodeSelector",
+		"spec.template.spec.tolerations",
+	} {
+		if !hasChangePath(changes, path) {
+			t.Fatalf("expected change at %s, got %+v", path, changes)
+		}
+	}
+	joined := strings.Join(summary, "; ")
+	if !strings.Contains(joined, "serviceAccountName: default→app-sa") {
+		t.Fatalf("summary missing serviceAccountName transition: %q", joined)
+	}
+}
+
+func TestDiffPodTemplateConfig_SecurityContextAndAffinityBooleanLevel(t *testing.T) {
+	runAsNonRoot := true
+	oldSpec := corev1.PodSpec{Containers: []corev1.Container{{Name: "app", Image: "app:v1"}}}
+	newSpec := corev1.PodSpec{
+		Affinity: &corev1.Affinity{NodeAffinity: &corev1.NodeAffinity{}},
+		Containers: []corev1.Container{{
+			Name: "app", Image: "app:v1",
+			SecurityContext: &corev1.SecurityContext{RunAsNonRoot: &runAsNonRoot},
+		}},
+	}
+
+	changes, summary := diffPodTemplateConfig(oldSpec, newSpec)
+	joined := strings.Join(summary, "; ")
+	if !strings.Contains(joined, "securityContext(app) changed") {
+		t.Fatalf("summary missing securityContext marker: %q", joined)
+	}
+	if !strings.Contains(joined, "affinity changed") {
+		t.Fatalf("summary missing affinity marker: %q", joined)
+	}
+	// Boolean-level only: values must be the "changed" marker, not the structs.
+	for _, c := range changes {
+		if c.Path == "spec.template.spec.containers[app].securityContext" || c.Path == "spec.template.spec.affinity" {
+			if c.NewValue != "changed" {
+				t.Fatalf("%s NewValue = %v, want boolean-level \"changed\" marker", c.Path, c.NewValue)
+			}
+		}
+	}
+}
+
+func slicesContains(s []string, v string) bool {
+	for _, item := range s {
+		if item == v {
+			return true
+		}
+	}
+	return false
+}
+
+func TestDiffResourceQuota_HardChanges(t *testing.T) {
+	mk := func(mem string) *corev1.ResourceQuota {
+		return &corev1.ResourceQuota{
+			Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{
+				"limits.memory": resource.MustParse(mem),
+				"pods":          resource.MustParse("20"),
+			}},
+		}
+	}
+	changes, summary := diffResourceQuota(mk("4Gi"), mk("1Gi"))
+	if len(changes) != 1 {
+		t.Fatalf("changes = %+v, want exactly the limits.memory change", changes)
+	}
+	if changes[0].Path != "spec.hard.limits.memory" {
+		t.Fatalf("path = %q", changes[0].Path)
+	}
+	if joined := strings.Join(summary, "; "); !strings.Contains(joined, "quota limits.memory: 4Gi→1Gi") {
+		t.Fatalf("summary = %q", joined)
+	}
+
+	// status.used churn must NOT produce a diff (would flood the timeline).
+	withUsed := mk("4Gi")
+	withUsed.Status.Used = corev1.ResourceList{"limits.memory": resource.MustParse("3Gi")}
+	if c, _ := diffResourceQuota(mk("4Gi"), withUsed); len(c) != 0 {
+		t.Fatalf("status.used-only update produced a diff: %+v", c)
+	}
+}
+
+func TestDiffLimitRange_ItemChanges(t *testing.T) {
+	mk := func(maxMem string) *corev1.LimitRange {
+		return &corev1.LimitRange{
+			Spec: corev1.LimitRangeSpec{Limits: []corev1.LimitRangeItem{{
+				Type: corev1.LimitTypeContainer,
+				Max:  corev1.ResourceList{"memory": resource.MustParse(maxMem)},
+			}}},
+		}
+	}
+	changes, _ := diffLimitRange(mk("1Gi"), mk("512Mi"))
+	if len(changes) != 1 || changes[0].Path != "spec.limits" {
+		t.Fatalf("changes = %+v", changes)
+	}
+	if c, _ := diffLimitRange(mk("1Gi"), mk("1Gi")); len(c) != 0 {
+		t.Fatalf("identical LimitRanges produced a diff: %+v", c)
+	}
 }

@@ -244,6 +244,11 @@ type RecentChange struct {
 	ChangeCategory string        `json:"change_category,omitempty"`
 	RankReason     string        `json:"rank_reason,omitempty"`
 	Fields         []ChangeField `json:"fields,omitempty"`
+	// ConsumedBy lists workloads that mount or reference this ConfigMap via
+	// their pod spec (volumes, envFrom, env valueFrom). Direct references
+	// only — runtime consumers reading through an intermediary service are
+	// not captured.
+	ConsumedBy []string `json:"consumed_by,omitempty"`
 }
 
 type ClusterContext struct {
@@ -336,6 +341,25 @@ type Issue struct {
 	//   "phase"           — resource Phase field (e.g. PVC Pending)
 	//   "spec"            — structural spec invariant (no timestamp required)
 	IssueTimingBasis string `json:"issue_timing_basis,omitempty"`
+	// CorrelatedChanges lists recent spec/config changes on this issue's
+	// subject (and, for workload subjects, its directly referenced
+	// ConfigMaps) within the correlation lookback window. Deterministic
+	// evidence, not a causal claim — the consumer weighs whether the change
+	// explains the issue.
+	CorrelatedChanges []RecentChange `json:"correlated_changes,omitempty"`
+	// NoRecentChanges states the lookback window contained no spec/config
+	// changes for this issue's subject — evidence the issue is NOT
+	// change-driven within that window. Omitted when correlation was not
+	// attempted (cap reached, lookup failed); absence must never be read as
+	// "no changes".
+	NoRecentChanges *NoRecentChangesMarker `json:"no_recent_changes,omitempty"`
+}
+
+// NoRecentChangesMarker carries the window so the "no changes" claim is
+// scoped: a change 61 minutes ago truthfully reads as none under a 3600s
+// window.
+type NoRecentChangesMarker struct {
+	WindowSeconds int `json:"windowSeconds"`
 }
 
 type Response struct {
@@ -349,6 +373,10 @@ type Response struct {
 	ClusterContext      *ClusterContext `json:"cluster_context,omitempty"`
 	RecentChanges       []RecentChange  `json:"recent_changes,omitempty"`
 	RecentChangesReason string          `json:"recent_changes_reason,omitempty"`
+	// CorrelationTruncated is set when per-issue change correlation skipped
+	// some critical issues (cap reached). Under truncation, an issue without
+	// correlation markers means "not checked", not "no changes".
+	CorrelationTruncated bool `json:"correlation_truncated,omitempty"`
 }
 
 type BindingType string

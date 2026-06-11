@@ -145,6 +145,9 @@ func handleGetNeighborhood(ctx context.Context, req *mcp.CallToolRequest, input 
 		return nil, nil, fmt.Errorf("resource kind is ambiguous for %s/%s/%s; provide group", input.Kind, input.Namespace, input.Name)
 	}
 	if len(sub.Nodes) == 0 {
+		if s := notFoundSuggestion(ctx, input.Kind, input.Namespace, input.Name); s != "" {
+			return nil, nil, fmt.Errorf("resource not found in topology: %s/%s/%s — %s", input.Kind, input.Namespace, input.Name, s)
+		}
 		return nil, nil, fmt.Errorf("resource not found in topology: %s/%s/%s", input.Kind, input.Namespace, input.Name)
 	}
 

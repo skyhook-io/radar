@@ -54,6 +54,7 @@ type QueryOptions struct {
 	Since      time.Time     // Filter events after this time
 	Until      time.Time     // Filter events before this time
 	Sources    []EventSource // Filter by event source (empty = all)
+	EventTypes []EventType   // Filter by event type, e.g. add/delete (empty = all)
 	// ClusterContext scopes results to one cluster's events (empty = all).
 	// Anything answering "what happened on THIS cluster" must set it: the
 	// SQLite store outlives context switches, and rows written before the

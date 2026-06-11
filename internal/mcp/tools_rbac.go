@@ -41,6 +41,7 @@ type subjectPermissionsResult struct {
 	Truncated  bool                `json:"truncated,omitempty"`
 	UsedByPods []string            `json:"usedByPods,omitempty"` // "ns/name" pairs
 	PodsTotal  int                 `json:"podsTotal,omitempty"`  // >0 when usedByPods was truncated
+	NarrowHint string              `json:"narrowHint,omitempty"`
 }
 
 type mcpSubject struct {
@@ -133,6 +134,9 @@ func handleGetSubjectPermissions(ctx context.Context, _ *mcp.CallToolRequest, in
 		Bindings:  make([]mcpBindingLite, 0, len(er.ViaBindings)),
 		FlatRules: er.Flat,
 		Truncated: er.Truncated,
+	}
+	if er.Truncated {
+		result.NarrowHint = "rule list truncated — the subject has more rules than shown; do not treat this list as the subject's complete permissions"
 	}
 
 	for _, br := range er.ViaBindings {

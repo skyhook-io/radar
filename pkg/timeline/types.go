@@ -42,6 +42,12 @@ const (
 	EventTypeWarning EventType = "Warning"
 )
 
+// ReasonRecreated marks an add event that replaced a just-deleted resource of
+// the same kind/namespace/name (different UID). Such events carry a Diff
+// against the predecessor object — the delete+add pair was a recreate, and
+// the diff shows what changed across it.
+const ReasonRecreated = "recreated"
+
 // HealthState represents the health of a resource
 type HealthState string
 

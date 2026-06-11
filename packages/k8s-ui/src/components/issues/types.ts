@@ -108,6 +108,16 @@ export interface IssueRecentChange {
   change_category?: 'spec_config' | 'lifecycle' | 'runtime_status' | string;
   rank_reason?: string;
   fields?: IssueRecentChangeField[];
+  /** Workloads that mount/reference this ConfigMap directly ("Deployment/flagd").
+   *  Direct spec references only — runtime consumers via an intermediary
+   *  service are not captured. */
+  consumed_by?: string[];
+}
+
+/** "No tracked spec/config changes in the window" — the claim is scoped by
+ *  windowSeconds so a change just outside it can't be misread as absent. */
+export interface IssueNoRecentChanges {
+  windowSeconds: number;
 }
 
 /**
@@ -185,6 +195,15 @@ export interface Issue {
   issue_timing?: 'started_at_resource_creation' | 'started_after_resource_was_healthy';
   /** The evidence that determined issue_timing (for auditability). */
   issue_timing_basis?: 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec';
+
+  /** Recent spec/config changes on this issue's subject (and, for workload
+   *  subjects, its referenced ConfigMaps) — deterministic evidence, not a
+   *  causal claim. Single-namespace responses only. */
+  correlated_changes?: IssueRecentChange[];
+  /** Explicit "no tracked changes in the window" evidence. An issue with
+   *  NEITHER correlation field was not checked (see the response-level
+   *  correlation_truncated) — absence must not be read as "no changes". */
+  no_recent_changes?: IssueNoRecentChanges;
 }
 
 /** subjectRef builds a deep-linkable ref for an issue's subject — the row's

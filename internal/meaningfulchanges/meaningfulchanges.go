@@ -8,6 +8,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	corev1 "k8s.io/api/core/v1"
 
 	"github.com/skyhook-io/radar/internal/k8s"
@@ -35,7 +36,12 @@ var (
 		"Deployment", "StatefulSet", "DaemonSet", "Service", "Ingress",
 		"HorizontalPodAutoscaler", "Application", "Kustomization", "HelmRelease",
 		"GitRepository", "OCIRepository", "HelmRepository",
+		"ResourceQuota", "LimitRange",
 	}
+	// lifecycleOnlyKinds surface ONLY their delete events (name-only — never
+	// data). A deleted Secret breaks every consumer with zero K8s symptom on
+	// the Secret itself; its updates stay out of the feed entirely.
+	lifecycleOnlyKinds = []string{"Secret"}
 )
 
 type Query struct {
@@ -60,7 +66,15 @@ func Recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, error
 		if err != nil {
 			return nil, false, err
 		}
-		changes, capped, err := rankedChanges(events, q.Name, q.Limit, q.FieldLimit)
+		// Lifecycle events (add/delete) are fetched separately so a burst of
+		// update churn can't push them out of the newest-N candidate window
+		// before ranking ever sees them. Ranking scores deletes above status
+		// churn, but it can only rank what the fetch returns.
+		lifecycleEvents, err := queryLifecycleCandidates(ctx, store, q, q.Kinds)
+		if err != nil {
+			return nil, false, err
+		}
+		changes, capped, err := rankedChanges(coalesceRecreatePairs(dedupeEvents(append(events, lifecycleEvents...))), q.Name, q.Limit, q.FieldLimit)
 		return changes, capped || len(events) >= queryLimit, err
 	}
 
@@ -73,7 +87,14 @@ func Recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, error
 	if err != nil {
 		return nil, false, err
 	}
-	changes, capped, err := rankedChanges(dedupeEvents(append(configEvents, specEvents...)), "", q.Limit, q.FieldLimit)
+	lifecycleKinds := append(append([]string{}, configKinds...), specKinds...)
+	lifecycleKinds = append(lifecycleKinds, lifecycleOnlyKinds...)
+	lifecycleEvents, err := queryLifecycleCandidates(ctx, store, q, lifecycleKinds)
+	if err != nil {
+		return nil, false, err
+	}
+	merged := coalesceRecreatePairs(dedupeEvents(append(append(configEvents, specEvents...), lifecycleEvents...)))
+	changes, capped, err := rankedChanges(merged, "", q.Limit, q.FieldLimit)
 	return changes, capped || len(configEvents) >= perQueryLimit || len(specEvents) >= perQueryLimit, err
 }
 
@@ -236,6 +257,28 @@ func candidateLimit(finalLimit int, nameFiltered bool) int {
 	return limit
 }
 
+// lifecycleCandidateLimit bounds the dedicated add/delete query. Lifecycle
+// events are rare relative to updates, so a modest window covers the lookback
+// without re-importing the churn the separate query exists to escape.
+const lifecycleCandidateLimit = 50
+
+// queryLifecycleCandidates fetches add/delete events for the given kinds in a
+// query of their own, immune to crowding by update events.
+func queryLifecycleCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string) ([]timeline.TimelineEvent, error) {
+	opts := timeline.QueryOptions{
+		Namespaces:       q.Namespaces,
+		Kinds:            compactKinds(kinds),
+		Since:            time.Now().Add(-q.Since),
+		Sources:          []timeline.EventSource{timeline.SourceInformer},
+		EventTypes:       []timeline.EventType{timeline.EventTypeAdd, timeline.EventTypeDelete},
+		ClusterContext:   k8s.ActiveClusterContext(),
+		Limit:            lifecycleCandidateLimit,
+		IncludeManaged:   false,
+		IncludeK8sEvents: false,
+	}
+	return store.Query(ctx, opts)
+}
+
 func queryCandidates(ctx context.Context, store timeline.EventStore, q Query, kinds []string, limit int) ([]timeline.TimelineEvent, error) {
 	opts := timeline.QueryOptions{
 		Namespaces: q.Namespaces,
@@ -267,7 +310,83 @@ func rankedChanges(events []timeline.TimelineEvent, name string, limit, fieldLim
 	}
 	capped := len(out) > limit
 	RankAndCap(&out, limit)
+	annotateConfigMapConsumers(out)
 	return out, capped, nil
+}
+
+// maxConsumersPerEntry bounds the consumed_by list on a ConfigMap entry.
+const maxConsumersPerEntry = 5
+
+// annotateConfigMapConsumers fills ConsumedBy on ConfigMap change entries by
+// scanning the cached workload listers for direct spec references (volumes,
+// envFrom, env valueFrom). Runs after ranking/capping, so at most one feed's
+// worth of entries triggers the scan. Direct references only: a workload that
+// reads this ConfigMap's data through an intermediary service is invisible
+// here, and ConsumedBy deliberately makes no claim about it.
+func annotateConfigMapConsumers(changes []issuesapi.RecentChange) {
+	cache := k8s.GetResourceCache()
+	if cache == nil {
+		return
+	}
+	for i := range changes {
+		if changes[i].Kind != "ConfigMap" || changes[i].Namespace == "" {
+			continue
+		}
+		changes[i].ConsumedBy = consumersOfConfigMap(cache, changes[i].Namespace, changes[i].Name)
+	}
+}
+
+func consumersOfConfigMap(cache *k8s.ResourceCache, namespace, name string) []string {
+	var out []string
+	referencesConfigMap := func(obj any) bool {
+		for _, cm := range DirectConfigMapNames(obj) {
+			if cm == name {
+				return true
+			}
+		}
+		return false
+	}
+	if lister := cache.Deployments(); lister != nil {
+		if items, err := lister.Deployments(namespace).List(labels.Everything()); err == nil {
+			for _, d := range items {
+				if referencesConfigMap(d) {
+					out = append(out, "Deployment/"+d.Name)
+				}
+			}
+		}
+	}
+	if lister := cache.StatefulSets(); lister != nil {
+		if items, err := lister.StatefulSets(namespace).List(labels.Everything()); err == nil {
+			for _, s := range items {
+				if referencesConfigMap(s) {
+					out = append(out, "StatefulSet/"+s.Name)
+				}
+			}
+		}
+	}
+	if lister := cache.DaemonSets(); lister != nil {
+		if items, err := lister.DaemonSets(namespace).List(labels.Everything()); err == nil {
+			for _, d := range items {
+				if referencesConfigMap(d) {
+					out = append(out, "DaemonSet/"+d.Name)
+				}
+			}
+		}
+	}
+	sort.Strings(out)
+	if len(out) > maxConsumersPerEntry {
+		out = out[:maxConsumersPerEntry]
+	}
+	return out
+}
+
+// TrackedKind reports whether the change feed tracks this kind's updates —
+// the gate for emitting per-issue "no recent changes" claims: asserting "no
+// changes" for a kind whose changes are never recorded would be a false
+// statement, not evidence.
+func TrackedKind(kind string) bool {
+	kind = canonicalKind(kind)
+	return isConfigKind(kind) || isSpecKind(kind)
 }
 
 func RankAndCap(changes *[]issuesapi.RecentChange, limit int) {
@@ -327,7 +446,18 @@ func classify(e timeline.TimelineEvent) (string, string) {
 		return "", ""
 	}
 	if e.EventType == timeline.EventTypeAdd || e.EventType == timeline.EventTypeDelete {
+		if isLifecycleOnlyKind(e.Kind) {
+			if e.EventType == timeline.EventTypeDelete {
+				return "lifecycle", "secret deleted (name only)"
+			}
+			return "", ""
+		}
 		if isConfigKind(e.Kind) || isSpecKind(e.Kind) {
+			// A recreate-join add carries the diff against the object it
+			// replaced — that's a desired-state change, not mere lifecycle.
+			if e.EventType == timeline.EventTypeAdd && e.Reason == timeline.ReasonRecreated && e.Diff != nil && len(e.Diff.Fields) > 0 {
+				return "spec_config", "recreated with desired-state or configuration changes"
+			}
 			return "lifecycle", "resource create/delete for config or desired state"
 		}
 		return "", ""
@@ -403,6 +533,39 @@ func compactKinds(kinds []string) []string {
 	return out
 }
 
+// coalesceRecreatePairs drops delete events whose resource was subsequently
+// recreated (a newer add event marked ReasonRecreated, which carries the diff
+// across the recreate). The synthesized add tells the whole story; keeping
+// the paired delete would present one change as two entries. True deletions —
+// no recreate add after them — always survive.
+func coalesceRecreatePairs(events []timeline.TimelineEvent) []timeline.TimelineEvent {
+	var recreates map[string]time.Time
+	for _, e := range events {
+		if e.EventType == timeline.EventTypeAdd && e.Reason == timeline.ReasonRecreated {
+			if recreates == nil {
+				recreates = map[string]time.Time{}
+			}
+			key := e.Kind + "/" + e.Namespace + "/" + e.Name
+			if ts, ok := recreates[key]; !ok || e.Timestamp.After(ts) {
+				recreates[key] = e.Timestamp
+			}
+		}
+	}
+	if recreates == nil {
+		return events
+	}
+	out := make([]timeline.TimelineEvent, 0, len(events))
+	for _, e := range events {
+		if e.EventType == timeline.EventTypeDelete {
+			if ts, ok := recreates[e.Kind+"/"+e.Namespace+"/"+e.Name]; ok && !e.Timestamp.After(ts) {
+				continue
+			}
+		}
+		out = append(out, e)
+	}
+	return out
+}
+
 func dedupeEvents(events []timeline.TimelineEvent) []timeline.TimelineEvent {
 	seen := map[string]bool{}
 	out := make([]timeline.TimelineEvent, 0, len(events))
@@ -421,6 +584,15 @@ func dedupeEvents(events []timeline.TimelineEvent) []timeline.TimelineEvent {
 }
 
 func isConfigKind(kind string) bool { return kind == "ConfigMap" }
+
+func isLifecycleOnlyKind(kind string) bool {
+	for _, item := range lifecycleOnlyKinds {
+		if kind == item {
+			return true
+		}
+	}
+	return false
+}
 
 func isSpecKind(kind string) bool {
 	for _, item := range specKinds {

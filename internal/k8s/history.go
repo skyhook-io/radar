@@ -61,6 +61,8 @@ var diffFunctions = map[string]kindDiffFunc{
 	"TCPRoute":                diffGatewayRoute,
 	"TLSRoute":                diffGatewayRoute,
 	"ReferenceGrant":          diffReferenceGrant,
+	"ResourceQuota":           diffResourceQuota,
+	"LimitRange":              diffLimitRange,
 }
 
 // ComputeDiff computes the diff between old and new objects based on kind.
@@ -620,6 +622,103 @@ func getLBAddresses(ingress []corev1.LoadBalancerIngress) []string {
 }
 
 // diffConfigMap computes diff for ConfigMap resources
+// diffResourceQuota surfaces spec.hard changes ("quota tightened/loosened") —
+// the admission-relevant signal. status.used churns with normal pod lifecycle
+// and is deliberately excluded: used-only updates drop as empty diffs.
+func diffResourceQuota(oldObj, newObj any) ([]FieldChange, []string) {
+	oldRQ, ok1 := oldObj.(*corev1.ResourceQuota)
+	newRQ, ok2 := newObj.(*corev1.ResourceQuota)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	var changes []FieldChange
+	var summary []string
+
+	keys := map[string]struct{}{}
+	for k := range oldRQ.Spec.Hard {
+		keys[string(k)] = struct{}{}
+	}
+	for k := range newRQ.Spec.Hard {
+		keys[string(k)] = struct{}{}
+	}
+	names := make([]string, 0, len(keys))
+	for k := range keys {
+		names = append(names, k)
+	}
+	sort.Strings(names)
+
+	for _, name := range names {
+		oldQ, oldOK := oldRQ.Spec.Hard[corev1.ResourceName(name)]
+		newQ, newOK := newRQ.Spec.Hard[corev1.ResourceName(name)]
+		oldVal, newVal := "", ""
+		if oldOK {
+			oldVal = oldQ.String()
+		}
+		if newOK {
+			newVal = newQ.String()
+		}
+		if oldVal == newVal {
+			continue
+		}
+		changes = append(changes, FieldChange{
+			Path:     "spec.hard." + name,
+			OldValue: valueOrNil(oldVal, oldOK),
+			NewValue: valueOrNil(newVal, newOK),
+		})
+		summary = append(summary, fmt.Sprintf("quota %s: %s→%s", name, emptyAsNone(oldVal), emptyAsNone(newVal)))
+	}
+	return changes, summary
+}
+
+// diffLimitRange surfaces spec.limits changes as compact per-item renderings.
+func diffLimitRange(oldObj, newObj any) ([]FieldChange, []string) {
+	oldLR, ok1 := oldObj.(*corev1.LimitRange)
+	newLR, ok2 := newObj.(*corev1.LimitRange)
+	if !ok1 || !ok2 {
+		return nil, nil
+	}
+
+	oldItems := limitRangeItemRefs(oldLR.Spec.Limits)
+	newItems := limitRangeItemRefs(newLR.Spec.Limits)
+	if equalStringSlices(oldItems, newItems) {
+		return nil, nil
+	}
+	return []FieldChange{{
+		Path:     "spec.limits",
+		OldValue: oldItems,
+		NewValue: newItems,
+	}}, []string{"limit ranges changed"}
+}
+
+func limitRangeItemRefs(items []corev1.LimitRangeItem) []string {
+	out := make([]string, 0, len(items))
+	for _, item := range items {
+		parts := []string{string(item.Type)}
+		appendQuantities := func(label string, list corev1.ResourceList) {
+			if len(list) == 0 {
+				return
+			}
+			keys := make([]string, 0, len(list))
+			for k := range list {
+				keys = append(keys, string(k))
+			}
+			sort.Strings(keys)
+			for _, k := range keys {
+				q := list[corev1.ResourceName(k)]
+				parts = append(parts, fmt.Sprintf("%s.%s=%s", label, k, q.String()))
+			}
+		}
+		appendQuantities("max", item.Max)
+		appendQuantities("min", item.Min)
+		appendQuantities("default", item.Default)
+		appendQuantities("defaultRequest", item.DefaultRequest)
+		out = append(out, strings.Join(parts, " "))
+	}
+	sort.Strings(out)
+	return out
+}
+
 func diffConfigMap(oldObj, newObj any) ([]FieldChange, []string) {
 	oldCM, ok1 := oldObj.(*corev1.ConfigMap)
 	newCM, ok2 := newObj.(*corev1.ConfigMap)
@@ -2423,8 +2522,139 @@ func diffPodTemplateConfig(oldSpec, newSpec corev1.PodSpec) ([]FieldChange, []st
 			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].args", name), OldValue: commandArgDisplayValues(oldC.Args), NewValue: commandArgDisplayValues(newC.Args)})
 			summary = append(summary, fmt.Sprintf("args(%s) changed", name))
 		}
+		if oldMounts, newMounts := volumeMountRefs(oldC.VolumeMounts), volumeMountRefs(newC.VolumeMounts); !equalStringSlices(oldMounts, newMounts) {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].volumeMounts", name), OldValue: oldMounts, NewValue: newMounts})
+			summary = append(summary, fmt.Sprintf("volumeMounts(%s) changed", name))
+		}
+		if oldPorts, newPorts := containerPortRefs(oldC.Ports), containerPortRefs(newC.Ports); !equalStringSlices(oldPorts, newPorts) {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].ports", name), OldValue: oldPorts, NewValue: newPorts})
+			summary = append(summary, fmt.Sprintf("ports(%s) changed", name))
+		}
+		// Boolean-level only: securityContext values (capabilities, uids,
+		// seccomp profiles) are deep structures whose exact contents rarely
+		// matter to triage — that something changed does.
+		if !reflect.DeepEqual(oldC.SecurityContext, newC.SecurityContext) {
+			changes = append(changes, FieldChange{Path: fmt.Sprintf("spec.template.spec.containers[%s].securityContext", name), OldValue: "changed", NewValue: "changed"})
+			summary = append(summary, fmt.Sprintf("securityContext(%s) changed", name))
+		}
+	}
+
+	// Pod-level fields. Volume diffs carry source references only (never
+	// contents); tolerations are summarized to compact strings; affinity is a
+	// bare "changed" marker — its tree is too large to diff usefully.
+	if oldVols, newVols := volumeSourceRefs(oldSpec.Volumes), volumeSourceRefs(newSpec.Volumes); !equalStringSlices(oldVols, newVols) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.volumes", OldValue: oldVols, NewValue: newVols})
+		summary = append(summary, "volumes changed")
+	}
+	if oldSpec.ServiceAccountName != newSpec.ServiceAccountName {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.serviceAccountName", OldValue: oldSpec.ServiceAccountName, NewValue: newSpec.ServiceAccountName})
+		summary = append(summary, fmt.Sprintf("serviceAccountName: %s→%s", emptyAsNone(oldSpec.ServiceAccountName), emptyAsNone(newSpec.ServiceAccountName)))
+	}
+	if !reflect.DeepEqual(oldSpec.NodeSelector, newSpec.NodeSelector) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.nodeSelector", OldValue: oldSpec.NodeSelector, NewValue: newSpec.NodeSelector})
+		summary = append(summary, "nodeSelector changed")
+	}
+	if oldTol, newTol := tolerationRefs(oldSpec.Tolerations), tolerationRefs(newSpec.Tolerations); !equalStringSlices(oldTol, newTol) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.tolerations", OldValue: oldTol, NewValue: newTol})
+		summary = append(summary, "tolerations changed")
+	}
+	if !reflect.DeepEqual(oldSpec.Affinity, newSpec.Affinity) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.affinity", OldValue: "changed", NewValue: "changed"})
+		summary = append(summary, "affinity changed")
+	}
+	if !reflect.DeepEqual(oldSpec.SecurityContext, newSpec.SecurityContext) {
+		changes = append(changes, FieldChange{Path: "spec.template.spec.securityContext", OldValue: "changed", NewValue: "changed"})
+		summary = append(summary, "pod securityContext changed")
 	}
 	return changes, summary
+}
+
+// volumeSourceRefs renders volumes as "name:sourceType/sourceName" references
+// — never volume contents.
+func volumeSourceRefs(vols []corev1.Volume) []string {
+	out := make([]string, 0, len(vols))
+	for _, v := range vols {
+		ref := "other"
+		switch {
+		case v.ConfigMap != nil:
+			ref = "configMap/" + v.ConfigMap.Name
+		case v.Secret != nil:
+			ref = "secret/" + v.Secret.SecretName
+		case v.PersistentVolumeClaim != nil:
+			ref = "pvc/" + v.PersistentVolumeClaim.ClaimName
+		case v.EmptyDir != nil:
+			ref = "emptyDir"
+		case v.HostPath != nil:
+			ref = "hostPath/" + v.HostPath.Path
+		case v.Projected != nil:
+			ref = "projected"
+		case v.DownwardAPI != nil:
+			ref = "downwardAPI"
+		case v.CSI != nil:
+			ref = "csi/" + v.CSI.Driver
+		}
+		out = append(out, v.Name+":"+ref)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func volumeMountRefs(mounts []corev1.VolumeMount) []string {
+	out := make([]string, 0, len(mounts))
+	for _, m := range mounts {
+		ref := m.Name + "→" + m.MountPath
+		if m.SubPath != "" {
+			ref += "/" + m.SubPath
+		}
+		if m.ReadOnly {
+			ref += "(ro)"
+		}
+		out = append(out, ref)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func containerPortRefs(ports []corev1.ContainerPort) []string {
+	out := make([]string, 0, len(ports))
+	for _, p := range ports {
+		proto := string(p.Protocol)
+		if proto == "" {
+			proto = "TCP"
+		}
+		ref := fmt.Sprintf("%d/%s", p.ContainerPort, proto)
+		if p.Name != "" {
+			ref += "(" + p.Name + ")"
+		}
+		out = append(out, ref)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func tolerationRefs(tols []corev1.Toleration) []string {
+	out := make([]string, 0, len(tols))
+	for _, t := range tols {
+		ref := t.Key
+		if t.Operator == corev1.TolerationOpExists {
+			ref += " exists"
+		} else if t.Value != "" {
+			ref += "=" + t.Value
+		}
+		if t.Effect != "" {
+			ref += ":" + string(t.Effect)
+		}
+		out = append(out, ref)
+	}
+	sort.Strings(out)
+	return out
+}
+
+func emptyAsNone(s string) string {
+	if s == "" {
+		return "(default)"
+	}
+	return s
 }
 
 func containerConfigMap(spec corev1.PodSpec) map[string]corev1.Container {

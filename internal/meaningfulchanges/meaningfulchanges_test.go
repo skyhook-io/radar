@@ -2,8 +2,14 @@ package meaningfulchanges
 
 import (
 	"context"
+	"fmt"
 	"testing"
 	"time"
+
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 
 	"github.com/skyhook-io/radar/internal/k8s"
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -111,6 +117,143 @@ func TestRecentRanksSpecConfigAboveStatusChurn(t *testing.T) {
 	}
 }
 
+// A Service delete followed by a burst of status-churn updates must still
+// surface: lifecycle events are fetched in a query of their own, so the
+// newest-N candidate window for updates cannot starve them out before
+// ranking. Repro shape: user-service delete + 81 Deployment updates
+// (missing_service, batch5).
+func TestRecentLifecycleEventSurvivesUpdateChurn(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 1000}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	now := time.Now()
+
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID:             "svc-delete",
+		Timestamp:      now.Add(-10 * time.Minute),
+		Source:         timeline.SourceInformer,
+		ClusterContext: k8s.ActiveClusterContext(),
+		Kind:           "Service",
+		Namespace:      "shop",
+		Name:           "user-service",
+		EventType:      timeline.EventTypeDelete,
+	}); err != nil {
+		t.Fatalf("append delete: %v", err)
+	}
+	// 120 newer status-churn updates — more than the candidate window
+	// (candidateLimit(20) = 80), so the delete cannot survive a single
+	// newest-first fetch.
+	for i := 0; i < 120; i++ {
+		if err := store.Append(context.Background(), timeline.TimelineEvent{
+			ID:             fmt.Sprintf("churn-%d", i),
+			Timestamp:      now.Add(-time.Duration(120-i) * time.Second),
+			Source:         timeline.SourceInformer,
+			ClusterContext: k8s.ActiveClusterContext(),
+			Kind:           "Deployment",
+			Namespace:      "shop",
+			Name:           fmt.Sprintf("web-%d", i%10),
+			EventType:      timeline.EventTypeUpdate,
+			Diff:           &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "status.readyReplicas", OldValue: int32(1), NewValue: int32(0)}}, Summary: "ready: 1→0"},
+		}); err != nil {
+			t.Fatalf("append churn %d: %v", i, err)
+		}
+	}
+
+	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	found := false
+	for _, c := range changes {
+		if c.Kind == "Service" && c.Name == "user-service" && c.ChangeType == "delete" {
+			found = true
+			if c.ChangeCategory != "lifecycle" {
+				t.Fatalf("delete category = %q, want lifecycle", c.ChangeCategory)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("Service delete starved out of ranked changes; got %d changes, first: %+v", len(changes), changes[0])
+	}
+	// The delete (lifecycle, 70) must also outrank the churn (runtime_status, 40).
+	if changes[0].ChangeType != "delete" {
+		t.Fatalf("first change = %+v, want the Service delete ranked first", changes[0])
+	}
+}
+
+// A recreate (delete + ReasonRecreated add carrying the cross-recreate diff)
+// must surface as exactly ONE entry — the diff-bearing add, classified
+// spec_config — with the paired delete coalesced away. Entry count strictly
+// reduced is the acceptance criterion.
+func TestRecentCoalescesRecreatePairs(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 100}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	now := time.Now()
+
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "dep-delete", Timestamp: now.Add(-10 * time.Second),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Deployment", Namespace: "shop", Name: "profile",
+		EventType: timeline.EventTypeDelete,
+	}); err != nil {
+		t.Fatalf("append delete: %v", err)
+	}
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "dep-recreate", Timestamp: now.Add(-8 * time.Second),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Deployment", Namespace: "shop", Name: "profile",
+		EventType: timeline.EventTypeAdd, Reason: timeline.ReasonRecreated,
+		Diff: &timeline.DiffInfo{
+			Fields:  []timeline.FieldChange{{Path: "spec.template.spec.containers(profile).command", OldValue: "[profile]", NewValue: "[geo]"}},
+			Summary: "recreated with changes: command(profile) changed",
+		},
+	}); err != nil {
+		t.Fatalf("append recreate add: %v", err)
+	}
+	// A true delete with no recreate must survive coalescing.
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "svc-true-delete", Timestamp: now.Add(-5 * time.Second),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Service", Namespace: "shop", Name: "user-service",
+		EventType: timeline.EventTypeDelete,
+	}); err != nil {
+		t.Fatalf("append true delete: %v", err)
+	}
+
+	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(changes) != 2 {
+		t.Fatalf("changes = %d entries %+v, want exactly 2 (recreate add + true delete)", len(changes), changes)
+	}
+	var recreate, trueDelete bool
+	for _, c := range changes {
+		if c.Name == "profile" {
+			if c.ChangeType != "add" {
+				t.Fatalf("profile entry = %+v, want the add (delete coalesced)", c)
+			}
+			if c.ChangeCategory != "spec_config" {
+				t.Fatalf("recreate add category = %q, want spec_config", c.ChangeCategory)
+			}
+			recreate = true
+		}
+		if c.Name == "user-service" && c.ChangeType == "delete" {
+			trueDelete = true
+		}
+	}
+	if !recreate || !trueDelete {
+		t.Fatalf("missing entries: recreate=%v trueDelete=%v in %+v", recreate, trueDelete, changes)
+	}
+}
+
 // The persistent timeline outlives context switches; Recent must never serve
 // another cluster's events as this cluster's changes.
 func TestRecentExcludesOtherClusterEvents(t *testing.T) {
@@ -135,5 +278,93 @@ func TestRecentExcludesOtherClusterEvents(t *testing.T) {
 	}
 	if len(changes) != 0 {
 		t.Fatalf("another cluster's events leaked into Recent: %+v", changes)
+	}
+}
+
+// Secret deletes surface (name-only); Secret adds and updates never do.
+func TestRecentSecretDeleteOnly(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 100}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	now := time.Now()
+
+	for _, e := range []timeline.TimelineEvent{
+		{ID: "sec-add", Timestamp: now.Add(-30 * time.Second), EventType: timeline.EventTypeAdd},
+		{ID: "sec-del", Timestamp: now.Add(-10 * time.Second), EventType: timeline.EventTypeDelete},
+	} {
+		e.Source = timeline.SourceInformer
+		e.ClusterContext = k8s.ActiveClusterContext()
+		e.Kind, e.Namespace, e.Name = "Secret", "shop", "db-credentials"
+		if err := store.Append(context.Background(), e); err != nil {
+			t.Fatalf("append %s: %v", e.ID, err)
+		}
+	}
+
+	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("changes = %+v, want exactly the Secret delete", changes)
+	}
+	c := changes[0]
+	if c.Kind != "Secret" || c.ChangeType != "delete" || c.ChangeCategory != "lifecycle" {
+		t.Fatalf("unexpected entry: %+v", c)
+	}
+	if len(c.Fields) != 0 {
+		t.Fatalf("secret delete must be name-only, got fields: %+v", c.Fields)
+	}
+}
+
+// ConfigMap change entries name the workloads that directly mount/reference
+// them — binding the config change to its consumer without a topology call.
+func TestRecentAnnotatesConfigMapConsumers(t *testing.T) {
+	client := fake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "flagd", Namespace: "shop"},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+				Volumes: []corev1.Volume{{
+					Name: "config",
+					VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "flagd-config"},
+					}},
+				}},
+				Containers: []corev1.Container{{Name: "flagd", Image: "flagd:v1"}},
+			}},
+		},
+	})
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 100}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	if err := timeline.GetStore().Append(context.Background(), timeline.TimelineEvent{
+		ID: "cm-change", Timestamp: time.Now().Add(-time.Minute),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "ConfigMap", Namespace: "shop", Name: "flagd-config",
+		EventType: timeline.EventTypeUpdate,
+		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data.flags.adHighCpu.defaultVariant", OldValue: "off", NewValue: "on"}}, Summary: "flag changed"},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("changes = %+v, want 1", changes)
+	}
+	got := changes[0].ConsumedBy
+	if len(got) != 1 || got[0] != "Deployment/flagd" {
+		t.Fatalf("consumed_by = %v, want [Deployment/flagd]", got)
 	}
 }

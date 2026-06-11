@@ -55,6 +55,9 @@ const (
 	EventTypeNormal  = pkgtimeline.EventTypeNormal
 	EventTypeWarning = pkgtimeline.EventTypeWarning
 
+	// Reason constants
+	ReasonRecreated = pkgtimeline.ReasonRecreated
+
 	// HealthState constants
 	HealthHealthy   = pkgtimeline.HealthHealthy
 	HealthDegraded  = pkgtimeline.HealthDegraded

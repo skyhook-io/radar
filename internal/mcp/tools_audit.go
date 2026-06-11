@@ -24,6 +24,7 @@ type auditToolResult struct {
 	Findings   []auditFinding `json:"findings"`
 	TotalCount int            `json:"totalCount"`
 	Truncated  bool           `json:"truncated,omitempty"`
+	NarrowHint string         `json:"narrowHint,omitempty"`
 }
 
 type auditSummary struct {
@@ -145,9 +146,14 @@ func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditIn
 
 	totalCount := len(filtered)
 	truncated := false
+	narrowHint := ""
 	if len(filtered) > limit {
 		filtered = filtered[:limit]
 		truncated = true
+		narrowHint = fmt.Sprintf(
+			"returned %d of %d findings — narrow with namespace=, category=, severity=, or raise limit",
+			limit, totalCount,
+		)
 	}
 
 	return toJSONResult(auditToolResult{
@@ -160,6 +166,7 @@ func handleGetAudit(ctx context.Context, req *mcp.CallToolRequest, input auditIn
 		Findings:   filtered,
 		TotalCount: totalCount,
 		Truncated:  truncated,
+		NarrowHint: narrowHint,
 	})
 }
 
