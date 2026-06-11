@@ -1,21 +1,20 @@
 package mcp
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
 	"strings"
 
-	"github.com/modelcontextprotocol/go-sdk/mcp"
+	mcpsdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/skyhook-io/radar/internal/version"
 )
 
-// NewHandler creates the MCP server, registers all tools and resources,
-// and returns an http.Handler to mount on chi.
-func NewHandler() http.Handler {
-	server := mcp.NewServer(
-		&mcp.Implementation{
+func newServer() *mcpsdk.Server {
+	server := mcpsdk.NewServer(
+		&mcpsdk.Implementation{
 			Name:    "radar",
 			Version: version.Current,
 		},
@@ -25,7 +24,17 @@ func NewHandler() http.Handler {
 	registerTools(server)
 	registerResources(server)
 
-	streamOpts := &mcp.StreamableHTTPOptions{Stateless: true}
+	return server
+}
+
+// RunStdio runs the MCP server over stdio.
+func RunStdio(ctx context.Context) error {
+	return newServer().Run(ctx, &mcpsdk.StdioTransport{})
+}
+
+// NewHandler creates the MCP HTTP handler to mount on chi.
+func NewHandler() http.Handler {
+	streamOpts := &mcpsdk.StreamableHTTPOptions{Stateless: true}
 	// The MCP SDK auto-enables DNS-rebinding protection (Host header must be
 	// loopback) when the server binds to a loopback address. That blocks
 	// Docker-isolated callers reaching us via host.docker.internal. Allow
@@ -35,8 +44,9 @@ func NewHandler() http.Handler {
 		log.Printf("[mcp] WARNING: DNS-rebinding Host check DISABLED via env (bench mode)")
 	}
 
-	handler := mcp.NewStreamableHTTPHandler(
-		func(r *http.Request) *mcp.Server { return server },
+	server := newServer()
+	handler := mcpsdk.NewStreamableHTTPHandler(
+		func(r *http.Request) *mcpsdk.Server { return server },
 		streamOpts,
 	)
 

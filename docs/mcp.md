@@ -47,6 +47,15 @@ radar --mcp-catalog-only --no-browser
 
 This mode skips Kubernetes initialization and starts the `/mcp` endpoint for schema introspection. Cluster-backed tool calls still require a normal Radar process connected to Kubernetes.
 
+For registries that launch MCP servers over stdio, use:
+
+```bash
+radar --mcp-catalog-stdio
+```
+
+This exposes the same tool and resource catalog over stdio without starting the HTTP UI server.
+The stdio mode is intended only for catalog introspection; normal Radar sessions use the HTTP endpoint above.
+
 ## Setup Instructions
 
 Connect your AI tool to Radar's MCP server. Radar must be running first (`radar` or `kubectl radar`).

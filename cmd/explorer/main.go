@@ -20,6 +20,7 @@ import (
 	"github.com/skyhook-io/radar/internal/cloud"
 	"github.com/skyhook-io/radar/internal/config"
 	"github.com/skyhook-io/radar/internal/k8s"
+	mcppkg "github.com/skyhook-io/radar/internal/mcp"
 	"github.com/skyhook-io/radar/internal/server"
 	"golang.org/x/net/http/httpguts"
 	_ "k8s.io/client-go/plugin/pkg/client/auth" // Register all auth provider plugins (OIDC, GCP, Azure, etc.)
@@ -77,6 +78,7 @@ func main() {
 	flag.Var(promHeadersFromEnv, "prometheus-header-from-env", "HTTP header to send with Prometheus requests, sourced from an env var, e.g. 'Authorization=PROMETHEUS_TOKEN' (repeatable).")
 	// MCP server
 	noMCP := flag.Bool("no-mcp", !fileCfg.MCPEnabledOr(true), "Disable MCP (Model Context Protocol) server for AI tools")
+	mcpCatalogStdio := flag.Bool("mcp-catalog-stdio", false, "Start only the MCP catalog over stdio for registry/inspector introspection; skips Kubernetes initialization")
 	mcpCatalogOnly := flag.Bool("mcp-catalog-only", false, "Start only the MCP endpoint for registry/inspector catalog introspection; skips Kubernetes initialization")
 	// Auth flags
 	authMode := flag.String("auth-mode", "none", "Authentication mode: none, proxy, or oidc")
@@ -171,12 +173,15 @@ func main() {
 	if *mcpCatalogOnly && noMCPFlagSet && *noMCP {
 		log.Fatalf("--mcp-catalog-only cannot be combined with --no-mcp")
 	}
+	if *mcpCatalogStdio && noMCPFlagSet && *noMCP {
+		log.Fatalf("--mcp-catalog-stdio cannot be combined with --no-mcp")
+	}
 	resolvedPrometheusHeaders, err := app.ResolvePrometheusHeaders(promHeaders.value(), promHeadersFromEnv.value())
 	if err != nil {
 		log.Fatalf("Invalid Prometheus header configuration: %v", err)
 	}
 	mcpEnabled := !*noMCP
-	if *mcpCatalogOnly {
+	if *mcpCatalogOnly || *mcpCatalogStdio {
 		mcpEnabled = true
 	}
 
@@ -229,6 +234,16 @@ func main() {
 
 	// Set global flags
 	app.SetGlobals(cfg)
+
+	if *mcpCatalogStdio {
+		log.Printf("MCP catalog stdio mode enabled: skipping Kubernetes initialization")
+		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer stop()
+		if err := mcppkg.RunStdio(ctx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Fatalf("MCP stdio server failed: %v", err)
+		}
+		return
+	}
 
 	if *mcpCatalogOnly {
 		log.Printf("MCP catalog-only mode enabled: skipping Kubernetes initialization")
