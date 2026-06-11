@@ -327,9 +327,18 @@ func TestDetectAdmissionProblems_ConditionFallbackDoesNotDuplicateReplicaSetEven
 		},
 	}
 	rs := &appsv1.ReplicaSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "search-abc123", Namespace: "prod"},
-		Spec:       appsv1.ReplicaSetSpec{Replicas: ptr32(3)},
-		Status:     appsv1.ReplicaSetStatus{Replicas: 1},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "search-abc123",
+			Namespace: "prod",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       "search",
+				Controller: boolPtr(true),
+			}},
+		},
+		Spec:   appsv1.ReplicaSetSpec{Replicas: ptr32(3)},
+		Status: appsv1.ReplicaSetStatus{Replicas: 1},
 	}
 	evt := &corev1.Event{
 		ObjectMeta:     metav1.ObjectMeta{Name: "quota-event", Namespace: "prod"},
@@ -353,12 +362,64 @@ func TestDetectAdmissionProblems_ConditionFallbackDoesNotDuplicateReplicaSetEven
 	}
 }
 
+func TestDetectAdmissionProblems_UnrelatedReplicaSetDoesNotSuppressDeploymentCondition(t *testing.T) {
+	defer ResetTestState()
+	nowT := metav1.Now()
+	message := `pods "search-x" is forbidden: exceeded quota: memory-limit-quota, requested: limits.memory=1Gi, used: limits.memory=1Gi, limited: limits.memory=1Gi`
+	deploy := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "app", Namespace: "prod"},
+		Spec:       appsv1.DeploymentSpec{Replicas: ptr32(3)},
+		Status: appsv1.DeploymentStatus{
+			Replicas: 1,
+			Conditions: []appsv1.DeploymentCondition{{
+				Type:               appsv1.DeploymentReplicaFailure,
+				Status:             corev1.ConditionTrue,
+				Reason:             "FailedCreate",
+				Message:            message,
+				LastTransitionTime: nowT,
+			}},
+		},
+	}
+	unrelatedRS := &appsv1.ReplicaSet{
+		ObjectMeta: metav1.ObjectMeta{Name: "app-backend", Namespace: "prod"},
+		Spec:       appsv1.ReplicaSetSpec{Replicas: ptr32(1)},
+		Status:     appsv1.ReplicaSetStatus{Replicas: 0},
+	}
+	evt := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "quota-event", Namespace: "prod"},
+		InvolvedObject: corev1.ObjectReference{Kind: "ReplicaSet", Namespace: "prod", Name: "app-backend"},
+		Reason:         "FailedCreate",
+		Type:           corev1.EventTypeWarning,
+		Message:        `Error creating: ` + message,
+		LastTimestamp:  nowT,
+	}
+	if err := InitTestResourceCache(fake.NewClientset(deploy, unrelatedRS, evt)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	problems := DetectAdmissionProblems(GetResourceCache(), "prod")
+	if !findProblem(problems, "ReplicaSet", "prod", "app-backend", "QuotaExceeded") {
+		t.Fatalf("expected unrelated ReplicaSet event problem, got %+v", problems)
+	}
+	if !findProblem(problems, "Deployment", "prod", "app", "QuotaExceeded") {
+		t.Fatalf("unrelated ReplicaSet must not suppress Deployment condition fallback, got %+v", problems)
+	}
+}
+
 func TestDetectAdmissionProblems_ReplicaSetConditionFallbackDedupe(t *testing.T) {
 	defer ResetTestState()
 	nowT := metav1.Now()
 	rs := &appsv1.ReplicaSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "search-abc123", Namespace: "prod"},
-		Spec:       appsv1.ReplicaSetSpec{Replicas: ptr32(3)},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "search-abc123",
+			Namespace: "prod",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       "search",
+				Controller: boolPtr(true),
+			}},
+		},
+		Spec: appsv1.ReplicaSetSpec{Replicas: ptr32(3)},
 		Status: appsv1.ReplicaSetStatus{
 			Replicas: 1,
 			Conditions: []appsv1.ReplicaSetCondition{
@@ -413,8 +474,17 @@ func TestDetectAdmissionProblems_ConditionFallbackPrefersReplicaSet(t *testing.T
 		},
 	}
 	rs := &appsv1.ReplicaSet{
-		ObjectMeta: metav1.ObjectMeta{Name: "search-abc123", Namespace: "prod"},
-		Spec:       appsv1.ReplicaSetSpec{Replicas: ptr32(3)},
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "search-abc123",
+			Namespace: "prod",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       "search",
+				Controller: boolPtr(true),
+			}},
+		},
+		Spec: appsv1.ReplicaSetSpec{Replicas: ptr32(3)},
 		Status: appsv1.ReplicaSetStatus{
 			Replicas: 1,
 			Conditions: []appsv1.ReplicaSetCondition{{

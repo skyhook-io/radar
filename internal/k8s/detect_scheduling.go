@@ -903,7 +903,7 @@ func detectAdmissionConditionProblems(cache *ResourceCache, namespace string, se
 			if !deploymentNeedsPodCreation(d) {
 				continue
 			}
-			if hasSeenReplicaSetForDeployment(seen, d.Namespace, d.Name) {
+			if hasSeenReplicaSetForDeployment(cache, seen, d.Namespace, d.Name) {
 				continue
 			}
 			for _, c := range d.Status.Conditions {
@@ -956,10 +956,17 @@ func admissionProblemKey(kind, namespace, name string) string {
 	return kind + "/" + namespace + "/" + name
 }
 
-func hasSeenReplicaSetForDeployment(seen map[string]bool, namespace, deployment string) bool {
-	prefix := "ReplicaSet/" + namespace + "/" + deployment + "-"
-	for key := range seen {
-		if suffix, ok := strings.CutPrefix(key, prefix); ok && suffix != "" && !strings.Contains(suffix, "-") {
+func hasSeenReplicaSetForDeployment(cache *ResourceCache, seen map[string]bool, namespace, deployment string) bool {
+	if cache == nil || deployment == "" {
+		return false
+	}
+	l := cache.ReplicaSets()
+	if l == nil {
+		return false
+	}
+	items, _ := l.ReplicaSets(namespace).List(labels.Everything())
+	for _, rs := range items {
+		if seen[admissionProblemKey("ReplicaSet", rs.Namespace, rs.Name)] && replicaSetOwnedByDeployment(rs, deployment) {
 			return true
 		}
 	}
@@ -967,14 +974,27 @@ func hasSeenReplicaSetForDeployment(seen map[string]bool, namespace, deployment 
 }
 
 func hasSeenDeploymentForReplicaSet(seen map[string]bool, rs *appsv1.ReplicaSet) bool {
-	if rs == nil {
+	deployment, ok := replicaSetDeploymentOwnerName(rs)
+	if !ok {
 		return false
+	}
+	return seen[admissionProblemKey("Deployment", rs.Namespace, deployment)]
+}
+
+func replicaSetOwnedByDeployment(rs *appsv1.ReplicaSet, deployment string) bool {
+	name, ok := replicaSetDeploymentOwnerName(rs)
+	return ok && name == deployment
+}
+
+func replicaSetDeploymentOwnerName(rs *appsv1.ReplicaSet) (string, bool) {
+	if rs == nil {
+		return "", false
 	}
 	owner := controllerOwnerRef(rs.OwnerReferences)
 	if owner == nil || owner.Kind != "Deployment" || owner.Name == "" {
-		return false
+		return "", false
 	}
-	return seen[admissionProblemKey("Deployment", rs.Namespace, owner.Name)]
+	return owner.Name, true
 }
 
 // classifyAdmissionFailure maps a FailedCreate event message to a reason.
