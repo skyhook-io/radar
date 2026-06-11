@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, ExternalLink, EyeOff, MoreHorizontal, Search, ShieldCheck, Wrench, X } from 'lucide-react'
 import { ClusterName, EmptyState, FilterPill } from '../ui'
-import type { CheckMeta } from '../audit'
+import type { CheckMeta, CheckReference } from '../audit'
 import { CHECK_SEVERITIES, CHECK_SEVERITY_RANK, type Check, type CheckSeverity, type EffectiveCheckFinding, type CheckResourceRef } from './types'
 import {
   SEVERITY_BADGE_CLASS,
@@ -399,10 +399,9 @@ export function CheckSeverityChip({ severity, count, active, onClick }: { severi
   )
 }
 
-export interface CheckReference {
-  label: string
-  url: string
-}
+// Re-export the audit CheckReference (single source of truth) — CheckMeta.references
+// is typed against this same shape, so the two must not drift apart.
+export type { CheckReference }
 
 export interface CheckRemediationBlockProps {
   description?: string
@@ -542,13 +541,14 @@ export function CheckCardShell({
         {renderActions?.()}
       </div>
 
-      {open && (
-        <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: '1fr' }}>
-          <div className="overflow-hidden">
-            <div className="flex flex-col gap-4 border-t border-theme-border bg-theme-base/40 px-4 py-4 pl-11">{children}</div>
-          </div>
+      {/* Kept mounted (not `open &&`) so the grid-rows transition animates the
+          collapse too, matching IssueRow; inert when closed so SR + tab skip
+          the clipped content. */}
+      <div className="grid transition-[grid-template-rows] duration-200 ease-out" style={{ gridTemplateRows: open ? '1fr' : '0fr' }}>
+        <div className="overflow-hidden" inert={!open || undefined}>
+          <div className="flex flex-col gap-4 border-t border-theme-border bg-theme-base/40 px-4 py-4 pl-11">{children}</div>
         </div>
-      )}
+      </div>
     </Container>
   )
 }
