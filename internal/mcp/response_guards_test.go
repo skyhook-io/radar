@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 
@@ -42,6 +43,33 @@ func TestTruncateLargeConfigMapData(t *testing.T) {
 	// Non-map payloads pass through.
 	if _, note := truncateLargeConfigMapData("raw"); note != "" {
 		t.Fatal("non-map payload must pass through")
+	}
+}
+
+// Many medium values can blow the total budget without any single value
+// crossing the 8KB per-value cap — the guard must tighten the cap so the
+// payload still shrinks toward the budget instead of passing through whole.
+func TestTruncateLargeConfigMapData_ManyMediumValues(t *testing.T) {
+	data := map[string]any{}
+	for i := 0; i < 10; i++ {
+		data[fmt.Sprintf("part-%d", i)] = strings.Repeat("x", 3*1024)
+	}
+	out, note := truncateLargeConfigMapData(map[string]any{"data": data})
+	if note == "" {
+		t.Fatal("30KB of medium values must trigger the guard")
+	}
+	got := out.(map[string]any)["data"].(map[string]any)
+	totalAfter := 0
+	for k, v := range got {
+		s := v.(string)
+		totalAfter += len(s)
+		if !strings.Contains(s, "[truncated by radar:") {
+			t.Fatalf("value %s not truncated: %d bytes", k, len(s))
+		}
+	}
+	// 10 values capped near totalBudget/10 plus markers — far below the raw 30KB.
+	if totalAfter > configMapGuardTotalBytes+10*200 {
+		t.Fatalf("payload still %d bytes after truncation", totalAfter)
 	}
 }
 

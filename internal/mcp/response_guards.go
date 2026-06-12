@@ -13,6 +13,10 @@ import (
 const (
 	configMapGuardTotalBytes = 16 * 1024
 	configMapGuardValueBytes = 8 * 1024
+	// configMapGuardValueFloor bounds how far the per-value cap tightens when
+	// many medium values blow the total budget — below this, values stop
+	// being readable at all.
+	configMapGuardValueFloor = 512
 )
 
 // truncateLargeConfigMapData truncates oversized values in a minified
@@ -31,11 +35,12 @@ func truncateLargeConfigMapData(resourceData any) (any, string) {
 			sections = append(sections, section)
 		}
 	}
-	total := 0
+	total, valueCount := 0, 0
 	for _, section := range sections {
 		for _, v := range section {
 			if s, ok := v.(string); ok {
 				total += len(s)
+				valueCount++
 			}
 		}
 	}
@@ -43,14 +48,23 @@ func truncateLargeConfigMapData(resourceData any) (any, string) {
 		return resourceData, ""
 	}
 
+	// A swarm of medium values can blow the total budget without any single
+	// value crossing the per-value cap — tighten the cap so the truncated
+	// total lands near the budget. The floor means a huge key count can still
+	// exceed the budget; accepted, the realistic bombs are few large values.
+	valueCap := configMapGuardValueBytes
+	if evenCap := configMapGuardTotalBytes / valueCount; evenCap < valueCap {
+		valueCap = max(evenCap, configMapGuardValueFloor)
+	}
+
 	var truncatedKeys []string
 	for _, section := range sections {
 		for k, v := range section {
 			s, ok := v.(string)
-			if !ok || len(s) <= configMapGuardValueBytes {
+			if !ok || len(s) <= valueCap {
 				continue
 			}
-			section[k] = s[:configMapGuardValueBytes] + fmt.Sprintf("\n…[truncated by radar: value is %d bytes, showing first %d]", len(s), configMapGuardValueBytes)
+			section[k] = s[:valueCap] + fmt.Sprintf("\n…[truncated by radar: value is %d bytes, showing first %d]", len(s), valueCap)
 			truncatedKeys = append(truncatedKeys, k)
 		}
 	}
@@ -59,7 +73,7 @@ func truncateLargeConfigMapData(resourceData any) (any, string) {
 	}
 	sort.Strings(truncatedKeys)
 	return resourceData, fmt.Sprintf(
-		"large ConfigMap (%d bytes total): values truncated to %dKB for keys %v",
-		total, configMapGuardValueBytes/1024, truncatedKeys,
+		"large ConfigMap (%d bytes total): values truncated to %d bytes for keys %v",
+		total, valueCap, truncatedKeys,
 	)
 }
