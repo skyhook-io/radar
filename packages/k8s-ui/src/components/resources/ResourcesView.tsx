@@ -25,6 +25,8 @@ import {
   GitCompare,
   Regex,
   ListChecks,
+  Minus,
+  Scale,
 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { ResourceBar } from '../ui/ResourceBar'
@@ -165,6 +167,8 @@ import { ConfirmDialog } from '../ui/ConfirmDialog'
 const POD_PROBLEMS = ['CrashLoopBackOff', 'ImagePullBackOff', 'OOMKilled', 'Unschedulable', 'Not Ready', 'High Restarts', 'Init Failed', 'Exit Code Error', 'Failed', 'Other'] as const
 const WORKLOAD_PROBLEMS = ['Unavailable', 'Rollout Stuck', 'Rollout In Progress'] as const
 const WORKLOAD_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets'])
+const BULK_RESTART_WORKLOAD_KINDS = new Set(['deployments', 'statefulsets', 'daemonsets', 'rollouts'])
+const BULK_SCALE_WORKLOAD_KINDS = new Set(['deployments', 'statefulsets'])
 
 // Columns to skip for auto-detected filters (high cardinality, text-like, or non-filterable)
 export const SKIP_FILTER_COLUMNS = new Set([
@@ -202,6 +206,8 @@ interface Column {
   defaultWidth?: number // default width in px (used for resizable columns)
   minWidth?: number // minimum width in px
 }
+
+type BulkResourceItem = { kind: string; group?: string; namespace: string; name: string }
 
 /**
  * Extra column injected by the parent — for example, a leading "Cluster"
@@ -1906,8 +1912,12 @@ interface ResourcesViewProps {
    */
   onClearNamespaces?: () => void
   // Bulk operations
-  onBulkDelete?: (items: Array<{ kind: string; group?: string; namespace: string; name: string }>, options?: { force?: boolean; onSuccess?: () => void }) => void
+  onBulkDelete?: (items: BulkResourceItem[], options?: { force?: boolean; onSuccess?: () => void }) => void
   isBulkDeleting?: boolean
+  onBulkRestart?: (items: BulkResourceItem[], options?: { onSuccess?: () => void }) => void
+  isBulkRestarting?: boolean
+  onBulkScale?: (items: BulkResourceItem[], replicas: number, options?: { onSuccess?: () => void }) => void
+  isBulkScaling?: boolean
 }
 
 // Default selected kind
@@ -2058,6 +2068,10 @@ export function ResourcesView({
   onClearNamespaces,
   onBulkDelete,
   isBulkDeleting = false,
+  onBulkRestart,
+  isBulkRestarting = false,
+  onBulkScale,
+  isBulkScaling = false,
 }: ResourcesViewProps) {
   const initialFilters = getInitialFiltersFromURL()
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(() => getInitialKindFromURL(basePath, defaultKind, locationPathname, locationSearch))
@@ -2077,6 +2091,10 @@ export function ResourcesView({
     onSelectedKindChange?.(selectedKind)
     setBulkMode(false)
     setCheckedResources(new Set())
+    setShowBulkDeleteConfirm(false)
+    setShowBulkRestartConfirm(false)
+    setShowBulkScaleDialog(false)
+    setBulkForceDelete(false)
   }, [selectedKind.name, selectedKind.group]) // eslint-disable-line react-hooks/exhaustive-deps
   const [searchTerm, setSearchTerm] = useState(initialFilters.search)
   const [regexMode, setRegexMode] = useState(false)
@@ -2112,12 +2130,15 @@ export function ResourcesView({
   const [ownerName, setOwnerName] = useState<string>(initialFilters.ownerName)
 
   // Multi-select state for bulk operations. Checkboxes only render while
-  // bulk mode is active — entered via the toolbar toggle — so the risky
-  // bulk-delete surface stays out of the way during normal browsing.
+  // bulk mode is active — entered via the toolbar toggle — so mutating
+  // actions stay out of the way during normal browsing.
   const [bulkMode, setBulkMode] = useState(false)
   const [checkedResources, setCheckedResources] = useState<Set<string>>(new Set())
   const [showBulkDeleteConfirm, setShowBulkDeleteConfirm] = useState(false)
+  const [showBulkRestartConfirm, setShowBulkRestartConfirm] = useState(false)
+  const [showBulkScaleDialog, setShowBulkScaleDialog] = useState(false)
   const [bulkForceDelete, setBulkForceDelete] = useState(false)
+  const [bulkScaleReplicas, setBulkScaleReplicas] = useState(0)
 
   const exitBulkMode = useCallback(() => {
     setBulkMode(false)
@@ -3652,13 +3673,44 @@ export function ResourcesView({
     return filteredResources.filter(r => checkedResources.has(getResourceKey(r)))
   }, [filteredResources, checkedResources, getResourceKey])
 
+  const checkedBulkItems = useMemo(() => {
+    return checkedItems.map(r => ({
+      kind: selectedKind.name,
+      group: selectedKind.group,
+      namespace: r.metadata?.namespace || '',
+      name: r.metadata?.name || '',
+    }))
+  }, [checkedItems, selectedKind.name, selectedKind.group])
+
+  const checkedItemDetails = useMemo(() => {
+    return checkedItems.map(r => `${r.metadata?.namespace ? r.metadata.namespace + '/' : ''}${r.metadata?.name}`).join('\n')
+  }, [checkedItems])
+
+  const selectedKindName = selectedKind.name.toLowerCase()
+  const canBulkRestartSelectedKind = onBulkRestart != null && BULK_RESTART_WORKLOAD_KINDS.has(selectedKindName)
+  const canBulkScaleSelectedKind = onBulkScale != null && BULK_SCALE_WORKLOAD_KINDS.has(selectedKindName)
+  const canBulkSelect = onBulkDelete != null || canBulkRestartSelectedKind || canBulkScaleSelectedKind
+  const isBulkMutating = isBulkDeleting || isBulkRestarting || isBulkScaling
+
+  const openBulkScaleDialog = useCallback(() => {
+    const replicas = checkedItems[0]?.spec?.replicas
+    setBulkScaleReplicas(typeof replicas === 'number' ? replicas : 0)
+    setShowBulkScaleDialog(true)
+  }, [checkedItems])
+
+  const commonBulkScaleReplicas = useMemo(() => {
+    if (checkedItems.length === 0) return null
+    const first = checkedItems[0]?.spec?.replicas ?? 0
+    return checkedItems.every(r => (r.spec?.replicas ?? 0) === first) ? first : null
+  }, [checkedItems])
+
   const allVisibleChecked = filteredResources.length > 0 && checkedItems.length === filteredResources.length
 
   const toggleCheckAll = useCallback(() => {
     setCheckedResources(allVisibleChecked ? new Set() : new Set(filteredResources.map(getResourceKey)))
   }, [allVisibleChecked, filteredResources, getResourceKey])
 
-  const isCheckboxMode = onBulkDelete != null && bulkMode
+  const isCheckboxMode = canBulkSelect && bulkMode
 
   // Filter columns by visibility
   const columns = useMemo(() => {
@@ -4330,7 +4382,7 @@ export function ResourcesView({
               </button>
             </Tooltip>
           )}
-          {onBulkDelete && (
+          {canBulkSelect && (
             <Tooltip content={bulkMode ? 'Exit bulk select mode' : 'Select multiple resources'}>
               <button
                 onClick={() => {
@@ -4358,15 +4410,41 @@ export function ResourcesView({
             <span className="text-sm font-medium text-theme-text-primary">
               {checkedItems.length} selected
             </span>
+            {canBulkRestartSelectedKind && (
+              <button
+                type="button"
+                onClick={() => setShowBulkRestartConfirm(true)}
+                disabled={checkedItems.length === 0 || isBulkMutating}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium btn-brand-muted disabled:opacity-50 disabled:pointer-events-none rounded-lg transition-colors"
+              >
+                <RefreshCw className={clsx('w-3.5 h-3.5', isBulkRestarting && 'animate-spin')} />
+                {isBulkRestarting ? 'Restarting...' : 'Restart'}
+              </button>
+            )}
+            {canBulkScaleSelectedKind && (
+              <button
+                type="button"
+                onClick={openBulkScaleDialog}
+                disabled={checkedItems.length === 0 || isBulkMutating}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-theme-elevated hover:bg-theme-hover disabled:opacity-50 disabled:pointer-events-none text-theme-text-primary border border-theme-border rounded-lg transition-colors"
+              >
+                <Scale className="w-3.5 h-3.5" />
+                {isBulkScaling ? 'Scaling...' : 'Scale'}
+              </button>
+            )}
+            {onBulkDelete && (
+              <button
+                type="button"
+                onClick={() => setShowBulkDeleteConfirm(true)}
+                disabled={checkedItems.length === 0 || isBulkMutating}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:pointer-events-none text-white rounded-lg transition-colors"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete
+              </button>
+            )}
             <button
-              onClick={() => setShowBulkDeleteConfirm(true)}
-              disabled={checkedItems.length === 0}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium bg-red-600 hover:bg-red-700 disabled:opacity-50 disabled:pointer-events-none text-white rounded-lg transition-colors"
-            >
-              <Trash2 className="w-3.5 h-3.5" />
-              Delete
-            </button>
-            <button
+              type="button"
               onClick={exitBulkMode}
               className="px-3 py-1.5 text-xs text-theme-text-secondary hover:text-theme-text-primary hover:bg-theme-elevated rounded-lg transition-colors"
             >
@@ -4724,13 +4802,7 @@ export function ResourcesView({
       open={showBulkDeleteConfirm}
       onClose={() => { setShowBulkDeleteConfirm(false); setBulkForceDelete(false) }}
       onConfirm={() => {
-        const items = checkedItems.map(r => ({
-          kind: selectedKind.name,
-          group: selectedKind.group,
-          namespace: r.metadata?.namespace || '',
-          name: r.metadata?.name || '',
-        }))
-        onBulkDelete?.(items, {
+        onBulkDelete?.(checkedBulkItems, {
           force: bulkForceDelete,
           onSuccess: () => {
             exitBulkMode()
@@ -4741,7 +4813,7 @@ export function ResourcesView({
       }}
       title={`Delete ${checkedItems.length} ${selectedKind.kind}${checkedItems.length > 1 ? 's' : ''}?`}
       message={`You are about to delete ${checkedItems.length} resource${checkedItems.length > 1 ? 's' : ''}. This action cannot be undone.`}
-      details={checkedItems.map(r => `${r.metadata?.namespace ? r.metadata.namespace + '/' : ''}${r.metadata?.name}`).join('\n')}
+      details={checkedItemDetails}
       confirmLabel={bulkForceDelete ? `Force Delete ${checkedItems.length} resource${checkedItems.length > 1 ? 's' : ''}` : `Delete ${checkedItems.length} resource${checkedItems.length > 1 ? 's' : ''}`}
       variant="danger"
       isLoading={isBulkDeleting}
@@ -4756,6 +4828,80 @@ export function ResourcesView({
         />
         <span>Force delete (strips finalizers and bypasses grace period)</span>
       </label>
+    </ConfirmDialog>
+    <ConfirmDialog
+      open={showBulkRestartConfirm}
+      onClose={() => setShowBulkRestartConfirm(false)}
+      onConfirm={() => {
+        onBulkRestart?.(checkedBulkItems, {
+          onSuccess: () => {
+            exitBulkMode()
+            setShowBulkRestartConfirm(false)
+          },
+        })
+      }}
+      title={`Restart ${checkedItems.length} ${selectedKind.kind}${checkedItems.length > 1 ? 's' : ''}?`}
+      message={`This will trigger a rolling restart for ${checkedItems.length} selected workload${checkedItems.length > 1 ? 's' : ''}.`}
+      details={checkedItemDetails}
+      confirmLabel={`Restart ${checkedItems.length} workload${checkedItems.length > 1 ? 's' : ''}`}
+      variant="warning"
+      isLoading={isBulkRestarting}
+      isClosable
+    />
+    <ConfirmDialog
+      open={showBulkScaleDialog}
+      onClose={() => setShowBulkScaleDialog(false)}
+      onConfirm={() => {
+        onBulkScale?.(checkedBulkItems, bulkScaleReplicas, {
+          onSuccess: () => {
+            exitBulkMode()
+            setShowBulkScaleDialog(false)
+          },
+        })
+      }}
+      title={`Scale ${checkedItems.length} ${selectedKind.kind}${checkedItems.length > 1 ? 's' : ''}?`}
+      message={`Set every selected workload to exactly ${bulkScaleReplicas} replica${bulkScaleReplicas === 1 ? '' : 's'}.`}
+      details={checkedItemDetails}
+      confirmLabel={`Scale to ${bulkScaleReplicas}`}
+      variant={bulkScaleReplicas === 0 ? 'danger' : 'warning'}
+      isLoading={isBulkScaling}
+      isClosable
+    >
+      <div className="space-y-3">
+        <div className="flex items-center justify-center gap-3">
+          <button
+            type="button"
+            onClick={() => setBulkScaleReplicas(Math.max(0, bulkScaleReplicas - 1))}
+            disabled={bulkScaleReplicas <= 0}
+            className="p-2 rounded-lg bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Minus className="w-5 h-5" />
+          </button>
+          <input
+            type="number"
+            min="0"
+            max="10000"
+            value={bulkScaleReplicas}
+            onChange={(e) => setBulkScaleReplicas(Math.min(10000, Math.max(0, Number.parseInt(e.target.value, 10) || 0)))}
+            className="w-24 text-center text-2xl font-semibold bg-theme-elevated border border-theme-border rounded-lg py-2 text-theme-text-primary focus:outline-none focus:border-skyhook-500"
+            autoFocus
+          />
+          <button
+            type="button"
+            onClick={() => setBulkScaleReplicas(Math.min(10000, bulkScaleReplicas + 1))}
+            disabled={bulkScaleReplicas >= 10000}
+            className="p-2 rounded-lg bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            <Plus className="w-5 h-5" />
+          </button>
+        </div>
+        <div className="text-xs text-theme-text-tertiary text-center">
+          {commonBulkScaleReplicas === null ? 'Current replicas vary across the selected workloads.' : `Current: ${commonBulkScaleReplicas} replicas`}
+        </div>
+        <p className="text-xs text-theme-text-secondary text-center">
+          All selected workloads will be set to the same replica count. Autoscalers may override it.
+        </p>
+      </div>
     </ConfirmDialog>
     </ResourcesViewDataContext.Provider>
   )

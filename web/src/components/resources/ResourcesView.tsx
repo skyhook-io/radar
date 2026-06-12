@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources } from '../../api/client'
+import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads } from '../../api/client'
 import { apiUrl, getAuthHeaders, getCredentialsMode, getBasename } from '../../api/config'
 import { useAPIResources } from '../../api/apiResources'
 import { initNavigationMap } from '@skyhook-io/k8s-ui'
@@ -148,6 +148,8 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
   // Bulk delete
   const bulkDeleteMutation = useBulkDeleteResources()
+  const bulkRestartMutation = useBulkRestartWorkloads()
+  const bulkScaleMutation = useBulkScaleWorkloads()
 
   // Navigation adapter. k8s-ui constructs paths from `basePath` (which
   // includes the router basename so they line up with window.location.pathname
@@ -230,6 +232,10 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       // Bulk operations
       onBulkDelete={(items, options) => bulkDeleteMutation.mutate({ items, force: options?.force }, { onSuccess: options?.onSuccess })}
       isBulkDeleting={bulkDeleteMutation.isPending}
+      onBulkRestart={(items, options) => bulkRestartMutation.mutate({ items }, { onSuccess: options?.onSuccess })}
+      isBulkRestarting={bulkRestartMutation.isPending}
+      onBulkScale={(items, replicas, options) => bulkScaleMutation.mutate({ items, replicas }, { onSuccess: options?.onSuccess })}
+      isBulkScaling={bulkScaleMutation.isPending}
     />
     <CreateResourceDialog
       open={createDialogOpen}

@@ -1782,6 +1782,82 @@ export function useBulkDeleteResources() {
   })
 }
 
+interface BulkWorkloadItem {
+  kind: string
+  namespace: string
+  name: string
+}
+
+export function useBulkRestartWorkloads() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ items }: { items: BulkWorkloadItem[] }) => {
+      const results = await Promise.allSettled(
+        items.map(async ({ kind, namespace, name }) => {
+          const response = await apiFetch(`${getApiBase()}/workloads/${kind}/${namespace}/${name}/restart`, {
+            method: 'POST',
+          })
+          if (!response.ok) {
+            const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+            throw new Error(error.error || `Failed to restart ${namespace}/${name}`)
+          }
+          return { kind, namespace, name }
+        })
+      )
+      const failed = results.filter(r => r.status === 'rejected')
+      if (failed.length > 0) {
+        throw new Error(`Failed to restart ${failed.length} of ${items.length} workloads`)
+      }
+      return { restarted: items.length }
+    },
+    meta: {
+      errorMessage: 'Failed to restart some workloads',
+      successMessage: 'Workloads restarting',
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['resources'] })
+      queryClient.invalidateQueries({ queryKey: ['topology'] })
+    },
+  })
+}
+
+export function useBulkScaleWorkloads() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: async ({ items, replicas }: { items: BulkWorkloadItem[]; replicas: number }) => {
+      const results = await Promise.allSettled(
+        items.map(async ({ kind, namespace, name }) => {
+          const response = await apiFetch(`${getApiBase()}/workloads/${kind}/${namespace}/${name}/scale`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ replicas }),
+          })
+          if (!response.ok) {
+            const error = await response.json().catch(() => ({ error: 'Unknown error' }))
+            throw new Error(error.error || `Failed to scale ${namespace}/${name}`)
+          }
+          return { kind, namespace, name }
+        })
+      )
+      const failed = results.filter(r => r.status === 'rejected')
+      if (failed.length > 0) {
+        throw new Error(`Failed to scale ${failed.length} of ${items.length} workloads`)
+      }
+      return { scaled: items.length, replicas }
+    },
+    meta: {
+      errorMessage: 'Failed to scale some workloads',
+      successMessage: 'Workloads scaled',
+    },
+    onSettled: () => {
+      queryClient.invalidateQueries({ queryKey: ['resources'] })
+      queryClient.invalidateQueries({ queryKey: ['topology'] })
+    },
+  })
+}
+
 // Apply (create or update) a resource from YAML
 export interface ApplyResourceResult {
   name: string
