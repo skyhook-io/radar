@@ -136,7 +136,9 @@ func TestCorrelationWindow_ClampsToObservation(t *testing.T) {
 				}
 				return
 			}
-			if got > tt.want || got < tt.want-5*time.Second {
+			// The clamped window is measured a beat after the start is set, so
+			// it can exceed want by the elapsed time between the two calls.
+			if got > tt.want+time.Second || got < tt.want-time.Second {
 				t.Fatalf("window = %v, want ~%v", got, tt.want)
 			}
 		})
