@@ -120,8 +120,7 @@ func TestRecentRanksSpecConfigAboveStatusChurn(t *testing.T) {
 // A Service delete followed by a burst of status-churn updates must still
 // surface: lifecycle events are fetched in a query of their own, so the
 // newest-N candidate window for updates cannot starve them out before
-// ranking. Repro shape: user-service delete + 81 Deployment updates
-// (missing_service, batch5).
+// ranking.
 func TestRecentLifecycleEventSurvivesUpdateChurn(t *testing.T) {
 	timeline.ResetStore()
 	t.Cleanup(timeline.ResetStore)
@@ -228,7 +227,7 @@ func TestRecentForResourceLifecycleEventSurvivesLifecycleChurn(t *testing.T) {
 		}
 	}
 
-	changes, err := RecentForResource(context.Background(), "Service", "shop", "user-service", time.Hour, ResourceLimit, DefaultFieldLimit)
+	changes, saturated, err := RecentForResource(context.Background(), "Service", "shop", "user-service", time.Hour, ResourceLimit, DefaultFieldLimit)
 	if err != nil {
 		t.Fatalf("RecentForResource: %v", err)
 	}
@@ -237,6 +236,49 @@ func TestRecentForResourceLifecycleEventSurvivesLifecycleChurn(t *testing.T) {
 	}
 	if c := changes[0]; c.Kind != "Service" || c.Name != "user-service" || c.ChangeType != "delete" {
 		t.Fatalf("unexpected change: %+v", c)
+	}
+	// The name filter applies at the store, so the churn never counts against
+	// this subject's candidate caps.
+	if saturated {
+		t.Fatal("other resources' churn must not saturate a named lookup")
+	}
+}
+
+// When the subject itself produces more events than the candidate cap, the
+// fetch may have missed older changes in the window — RecentForResource must
+// report saturation so callers never turn "saw nothing" into "nothing
+// happened".
+func TestRecentForResourceReportsSaturation(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 1000}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	now := time.Now()
+
+	for i := 0; i < maxCandidateLimit; i++ {
+		if err := store.Append(context.Background(), timeline.TimelineEvent{
+			ID:             fmt.Sprintf("self-churn-%d", i),
+			Timestamp:      now.Add(-time.Duration(i) * time.Second),
+			Source:         timeline.SourceInformer,
+			ClusterContext: k8s.ActiveClusterContext(),
+			Kind:           "Deployment",
+			Namespace:      "shop",
+			Name:           "web",
+			EventType:      timeline.EventTypeUpdate,
+			Diff:           &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "status.readyReplicas", OldValue: int32(1), NewValue: int32(0)}}, Summary: "ready: 1→0"},
+		}); err != nil {
+			t.Fatalf("append churn %d: %v", i, err)
+		}
+	}
+
+	_, saturated, err := RecentForResource(context.Background(), "Deployment", "shop", "web", time.Hour, ResourceLimit, DefaultFieldLimit)
+	if err != nil {
+		t.Fatalf("RecentForResource: %v", err)
+	}
+	if !saturated {
+		t.Fatal("a candidate fetch at its cap must report saturation")
 	}
 }
 
@@ -282,31 +324,52 @@ func TestRecentCoalescesRecreatePairs(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("append true delete: %v", err)
 	}
+	// A final delete AFTER the recreate must also survive — only the delete
+	// paired with (i.e. preceding) the recreate add is folded away.
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "dep-final-delete", Timestamp: now.Add(-3 * time.Second),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "Deployment", Namespace: "shop", Name: "profile",
+		EventType: timeline.EventTypeDelete,
+	}); err != nil {
+		t.Fatalf("append final delete: %v", err)
+	}
 
 	changes, _, err := Recent(context.Background(), Query{Namespaces: []string{"shop"}})
 	if err != nil {
 		t.Fatalf("Recent: %v", err)
 	}
-	if len(changes) != 2 {
-		t.Fatalf("changes = %d entries %+v, want exactly 2 (recreate add + true delete)", len(changes), changes)
+	if len(changes) != 3 {
+		t.Fatalf("changes = %d entries %+v, want exactly 3 (recreate add + final delete + true delete)", len(changes), changes)
 	}
-	var recreate, trueDelete bool
+	var recreate, finalDelete, trueDelete bool
 	for _, c := range changes {
-		if c.Name == "profile" {
-			if c.ChangeType != "add" {
-				t.Fatalf("profile entry = %+v, want the add (delete coalesced)", c)
-			}
+		if c.Name == "profile" && c.ChangeType == "add" {
 			if c.ChangeCategory != "spec_config" {
 				t.Fatalf("recreate add category = %q, want spec_config", c.ChangeCategory)
 			}
 			recreate = true
 		}
+		if c.Name == "profile" && c.ChangeType == "delete" {
+			finalDelete = true
+		}
 		if c.Name == "user-service" && c.ChangeType == "delete" {
 			trueDelete = true
 		}
 	}
-	if !recreate || !trueDelete {
-		t.Fatalf("missing entries: recreate=%v trueDelete=%v in %+v", recreate, trueDelete, changes)
+	if !recreate || !finalDelete || !trueDelete {
+		t.Fatalf("missing entries: recreate=%v finalDelete=%v trueDelete=%v in %+v", recreate, finalDelete, trueDelete, changes)
+	}
+}
+
+// Every kind the change feed tracks must participate in recreate-join —
+// otherwise a delete+recreate of that kind surfaces as a contentless
+// delete+add pair instead of one diff-bearing change.
+func TestFeedKindsHaveRecreateJoin(t *testing.T) {
+	for _, kind := range append(append([]string{}, configKinds...), specKinds...) {
+		if !k8s.RecreateJoinKind(kind) {
+			t.Errorf("feed kind %s missing from the recreate stash", kind)
+		}
 	}
 }
 

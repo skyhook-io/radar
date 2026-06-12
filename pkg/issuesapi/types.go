@@ -234,16 +234,27 @@ type ChangeField struct {
 	NewValue any    `json:"newValue,omitempty"`
 }
 
+// ChangeCategory classifies a RecentChange. The values drive both ranking and
+// the per-issue correlation filter — producers and consumers must share these
+// constants, not bare literals.
+type ChangeCategory string
+
+const (
+	ChangeCategorySpecConfig    ChangeCategory = "spec_config"
+	ChangeCategoryLifecycle     ChangeCategory = "lifecycle"
+	ChangeCategoryRuntimeStatus ChangeCategory = "runtime_status"
+)
+
 type RecentChange struct {
-	Kind           string        `json:"kind"`
-	Namespace      string        `json:"namespace,omitempty"`
-	Name           string        `json:"name"`
-	ChangeType     string        `json:"changeType"`
-	Summary        string        `json:"summary,omitempty"`
-	Timestamp      string        `json:"timestamp"`
-	ChangeCategory string        `json:"change_category,omitempty"`
-	RankReason     string        `json:"rank_reason,omitempty"`
-	Fields         []ChangeField `json:"fields,omitempty"`
+	Kind           string         `json:"kind"`
+	Namespace      string         `json:"namespace,omitempty"`
+	Name           string         `json:"name"`
+	ChangeType     string         `json:"changeType"`
+	Summary        string         `json:"summary,omitempty"`
+	Timestamp      string         `json:"timestamp"`
+	ChangeCategory ChangeCategory `json:"change_category,omitempty"`
+	RankReason     string         `json:"rank_reason,omitempty"`
+	Fields         []ChangeField  `json:"fields,omitempty"`
 	// ConsumedBy lists workloads that mount or reference this ConfigMap via
 	// their pod spec (volumes, envFrom, env valueFrom). Direct references
 	// only — runtime consumers reading through an intermediary service are
@@ -341,16 +352,17 @@ type Issue struct {
 	//   "phase"           — resource Phase field (e.g. PVC Pending)
 	//   "spec"            — structural spec invariant (no timestamp required)
 	IssueTimingBasis string `json:"issue_timing_basis,omitempty"`
-	// CorrelatedChanges lists recent spec/config changes on this issue's
-	// subject (and, for workload subjects, its directly referenced
-	// ConfigMaps) within the correlation lookback window. Deterministic
-	// evidence, not a causal claim — the consumer weighs whether the change
-	// explains the issue.
+	// CorrelatedChanges lists recent non-status changes (spec/config and
+	// lifecycle) on this issue's subject (and, for workload subjects, its
+	// directly referenced ConfigMaps) within the correlation lookback window.
+	// Deterministic evidence, not a causal claim — the consumer weighs
+	// whether the change explains the issue.
 	CorrelatedChanges []RecentChange `json:"correlated_changes,omitempty"`
-	// NoRecentChanges states the lookback window contained no spec/config
+	// NoRecentChanges states the lookback window contained no non-status
 	// changes for this issue's subject — evidence the issue is NOT
 	// change-driven within that window. Omitted when correlation was not
-	// attempted (cap reached, lookup failed); absence must never be read as
+	// attempted (cap reached, lookup failed) or when the candidate fetch
+	// saturated and may have missed changes; absence must never be read as
 	// "no changes".
 	NoRecentChanges *NoRecentChangesMarker `json:"no_recent_changes,omitempty"`
 }
@@ -359,7 +371,7 @@ type Issue struct {
 // scoped: a change 61 minutes ago truthfully reads as none under a 3600s
 // window.
 type NoRecentChangesMarker struct {
-	WindowSeconds int `json:"windowSeconds"`
+	WindowSeconds int `json:"window_seconds"`
 }
 
 type Response struct {

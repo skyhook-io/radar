@@ -6,8 +6,14 @@ import (
 	"testing"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	k8sfake "k8s.io/client-go/kubernetes/fake"
+
 	"github.com/skyhook-io/radar/internal/issues"
 	"github.com/skyhook-io/radar/internal/k8s"
+	"github.com/skyhook-io/radar/internal/meaningfulchanges"
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/pkg/issuesapi"
 )
@@ -99,6 +105,125 @@ func TestAttachIssueChangeCorrelation_Markers(t *testing.T) {
 	}
 	if resp.CorrelationTruncated {
 		t.Fatal("no truncation expected")
+	}
+}
+
+// The claim window clamps to actual observation time: a process restarted 30
+// minutes ago must not assert anything about the full default hour.
+func TestCorrelationWindow_ClampsToObservation(t *testing.T) {
+	initCorrelationStore(t)
+	cases := []struct {
+		name     string
+		observed time.Duration // 0 = zero observation start (no store)
+		want     time.Duration
+	}{
+		{"observed longer than default window", 2 * time.Hour, meaningfulchanges.DefaultSince},
+		{"clamped to observation time", 30 * time.Minute, 30 * time.Minute},
+		{"below minimum observation", 4 * time.Minute, 0},
+		{"zero observation start", 0, 0},
+	}
+	for _, tt := range cases {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.observed == 0 {
+				timeline.SetObservationStartForTest(time.Time{})
+			} else {
+				timeline.SetObservationStartForTest(time.Now().Add(-tt.observed))
+			}
+			got := correlationWindow()
+			if tt.want == 0 {
+				if got != 0 {
+					t.Fatalf("window = %v, want 0", got)
+				}
+				return
+			}
+			if got > tt.want || got < tt.want-5*time.Second {
+				t.Fatalf("window = %v, want ~%v", got, tt.want)
+			}
+		})
+	}
+}
+
+// When the subject's candidate fetch saturates (churn-heavy subjects can
+// exceed the newest-N window in an hour), an empty filtered result is
+// UNKNOWN: emitting no_recent_changes would steer the agent away from a real
+// change the fetch never saw.
+func TestAttachIssueChangeCorrelation_OmitsMarkerOnSaturatedFetch(t *testing.T) {
+	store := initCorrelationStore(t)
+	now := time.Now()
+	for i := 0; i < 100; i++ {
+		if err := store.Append(context.Background(), timeline.TimelineEvent{
+			ID: fmt.Sprintf("churn-%d", i), Timestamp: now.Add(-time.Duration(i) * time.Second),
+			Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+			Kind: "Deployment", Namespace: "shop", Name: "web",
+			EventType: timeline.EventTypeUpdate,
+			Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "status.readyReplicas", OldValue: int32(1), NewValue: int32(0)}}, Summary: "ready: 1→0"},
+		}); err != nil {
+			t.Fatalf("append churn %d: %v", i, err)
+		}
+	}
+
+	resp := issues.ListResponse{Issues: []issuesapi.Issue{criticalIssue("Deployment", "web")}}
+	attachIssueChangeCorrelation(context.Background(), &resp)
+
+	web := resp.Issues[0]
+	if web.NoRecentChanges != nil {
+		t.Fatalf("saturated fetch must omit the marker (unknown, not 'no changes'), got %+v", web.NoRecentChanges)
+	}
+	if len(web.CorrelatedChanges) != 0 {
+		t.Fatalf("status churn must not surface as correlated changes: %+v", web.CorrelatedChanges)
+	}
+}
+
+// A critical workload's correlation fans out to ConfigMaps its pod spec
+// references directly — the headline scenario: a config change crashes the
+// consumer, and the issue carries the ConfigMap change as evidence.
+func TestAttachIssueChangeCorrelation_WorkloadConfigMapFanout(t *testing.T) {
+	client := k8sfake.NewSimpleClientset(&appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{Name: "flagd", Namespace: "shop"},
+		Spec: appsv1.DeploymentSpec{
+			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+				Volumes: []corev1.Volume{{
+					Name: "config",
+					VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+						LocalObjectReference: corev1.LocalObjectReference{Name: "flagd-config"},
+					}},
+				}},
+				Containers: []corev1.Container{{Name: "flagd", Image: "flagd:v1"}},
+			}},
+		},
+	})
+	if err := k8s.InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	t.Cleanup(k8s.ResetTestState)
+	store := initCorrelationStore(t)
+
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID: "cm-change", Timestamp: time.Now().Add(-5 * time.Minute),
+		Source: timeline.SourceInformer, ClusterContext: k8s.ActiveClusterContext(),
+		Kind: "ConfigMap", Namespace: "shop", Name: "flagd-config",
+		EventType: timeline.EventTypeUpdate,
+		Diff:      &timeline.DiffInfo{Fields: []timeline.FieldChange{{Path: "data.flags.adHighCpu.defaultVariant", OldValue: "off", NewValue: "on"}}, Summary: "flag changed"},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	resp := issues.ListResponse{Issues: []issuesapi.Issue{criticalIssue("Deployment", "flagd")}}
+	attachIssueChangeCorrelation(context.Background(), &resp)
+
+	flagd := resp.Issues[0]
+	if len(flagd.CorrelatedChanges) != 1 {
+		t.Fatalf("correlated_changes = %+v, want exactly the ConfigMap change", flagd.CorrelatedChanges)
+	}
+	c := flagd.CorrelatedChanges[0]
+	if c.Kind != "ConfigMap" || c.Name != "flagd-config" {
+		t.Fatalf("unexpected correlated change: %+v", c)
+	}
+	if len(c.ConsumedBy) != 1 || c.ConsumedBy[0] != "Deployment/flagd" {
+		t.Fatalf("consumed_by = %v, want [Deployment/flagd]", c.ConsumedBy)
+	}
+	if flagd.NoRecentChanges != nil {
+		t.Fatalf("issue with correlated changes must not also carry no_recent_changes: %+v", flagd.NoRecentChanges)
 	}
 }
 

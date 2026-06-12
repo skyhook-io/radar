@@ -135,6 +135,42 @@ func TestSQLiteStore_Query_Names(t *testing.T) {
 	}
 }
 
+// The lifecycle candidate query (meaningfulchanges) depends on this filter:
+// a SQL-level regression here would silently re-import update churn or starve
+// deletes for sqlite-backed timelines.
+func TestSQLiteStore_Query_EventTypes(t *testing.T) {
+	store, cleanup := createTestSQLiteStore(t)
+	defer cleanup()
+
+	ctx := context.Background()
+	events := []TimelineEvent{
+		{ID: "et-add", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "deploy-1", EventType: EventTypeAdd, Source: SourceInformer, Reason: ReasonRecreated},
+		{ID: "et-update", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "deploy-1", EventType: EventTypeUpdate, Source: SourceInformer},
+		{ID: "et-delete", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "deploy-2", EventType: EventTypeDelete, Source: SourceInformer},
+	}
+	if err := store.AppendBatch(ctx, events); err != nil {
+		t.Fatalf("AppendBatch failed: %v", err)
+	}
+
+	result, err := store.Query(ctx, QueryOptions{EventTypes: []EventType{EventTypeAdd, EventTypeDelete}, Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("Expected 2 add/delete events, got %d", len(result))
+	}
+	for _, e := range result {
+		if e.EventType == EventTypeUpdate {
+			t.Errorf("update event %q leaked through the EventTypes filter", e.ID)
+		}
+		// Reason must survive the SQLite round-trip — recreate-join coalescing
+		// keys on it.
+		if e.ID == "et-add" && e.Reason != ReasonRecreated {
+			t.Errorf("Reason = %q, want %q after round-trip", e.Reason, ReasonRecreated)
+		}
+	}
+}
+
 func TestSQLiteStore_Query_FilterPreset(t *testing.T) {
 	store, cleanup := createTestSQLiteStore(t)
 	defer cleanup()

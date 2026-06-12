@@ -296,7 +296,7 @@ func handleDiagnose(ctx context.Context, _ *mcp.CallToolRequest, input diagnoseI
 			})
 		}
 	}
-	if changes, err := meaningfulchanges.RecentForWorkloadAndConfigMaps(ctx, obj, kindNorm, input.Namespace, input.Name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit); err == nil && len(changes) > 0 {
+	if changes, _, err := meaningfulchanges.RecentForWorkloadAndConfigMaps(ctx, obj, kindNorm, input.Namespace, input.Name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit); err == nil && len(changes) > 0 {
 		resp.RecentChanges = changes
 	}
 	resp.DNSContext = dnsContextForDiagnose(ctx, cache, obj, pods, resp.LogsCurrent, resp.LogsPrevious, resp.Events)

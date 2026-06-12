@@ -15,22 +15,28 @@ const (
 	configMapGuardValueBytes = 8 * 1024
 )
 
-// truncateLargeConfigMapData truncates oversized data values in a minified
-// ConfigMap payload (map[string]any with a "data" section). Returns the
-// (possibly modified) payload and a warning note ("" when nothing changed).
+// truncateLargeConfigMapData truncates oversized values in a minified
+// ConfigMap payload (map[string]any with "data" / "binaryData" sections),
+// mutating the payload in place. binaryData counts too — base64 blobs (cert
+// bundles, jars) are routinely the largest values. Returns the payload and a
+// warning note ("" when nothing changed).
 func truncateLargeConfigMapData(resourceData any) (any, string) {
 	m, ok := resourceData.(map[string]any)
 	if !ok {
 		return resourceData, ""
 	}
-	data, ok := m["data"].(map[string]any)
-	if !ok {
-		return resourceData, ""
+	var sections []map[string]any
+	for _, key := range []string{"data", "binaryData"} {
+		if section, ok := m[key].(map[string]any); ok {
+			sections = append(sections, section)
+		}
 	}
 	total := 0
-	for _, v := range data {
-		if s, ok := v.(string); ok {
-			total += len(s)
+	for _, section := range sections {
+		for _, v := range section {
+			if s, ok := v.(string); ok {
+				total += len(s)
+			}
 		}
 	}
 	if total <= configMapGuardTotalBytes {
@@ -38,13 +44,15 @@ func truncateLargeConfigMapData(resourceData any) (any, string) {
 	}
 
 	var truncatedKeys []string
-	for k, v := range data {
-		s, ok := v.(string)
-		if !ok || len(s) <= configMapGuardValueBytes {
-			continue
+	for _, section := range sections {
+		for k, v := range section {
+			s, ok := v.(string)
+			if !ok || len(s) <= configMapGuardValueBytes {
+				continue
+			}
+			section[k] = s[:configMapGuardValueBytes] + fmt.Sprintf("\n…[truncated by radar: value is %d bytes, showing first %d]", len(s), configMapGuardValueBytes)
+			truncatedKeys = append(truncatedKeys, k)
 		}
-		data[k] = s[:configMapGuardValueBytes] + fmt.Sprintf("\n…[truncated by radar: value is %d bytes, showing first %d]", len(s), configMapGuardValueBytes)
-		truncatedKeys = append(truncatedKeys, k)
 	}
 	if len(truncatedKeys) == 0 {
 		return resourceData, ""

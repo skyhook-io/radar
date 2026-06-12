@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"context"
+	"log"
 	"strings"
 	"time"
 
@@ -15,7 +16,7 @@ import (
 // Per-issue change correlation answers the first triage question — "did
 // anything change on THIS subject recently, or has it always been like
 // this?" — as deterministic per-issue facts. Radar makes no judgment call:
-// no demotion, no reordering, no causal claim. A chronic decoy issue
+// no demotion, no reordering, no causal claim. A chronic pre-existing issue
 // truthfully carries no_recent_changes; an incident workload carries the
 // correlated change refs; the consumer weighs them.
 const (
@@ -81,15 +82,22 @@ func attachIssueChangeCorrelation(ctx context.Context, resp *issues.ListResponse
 		}
 		checked++
 
-		changes, err := correlationChangesForIssue(ctx, iss, window)
+		changes, saturated, err := correlationChangesForIssue(ctx, iss, window)
 		if err != nil {
+			log.Printf("[mcp] issue change correlation failed for %s %s/%s: %v", iss.Kind, iss.Namespace, iss.Name, err)
 			continue // marker omitted = unknown, never a false "no changes"
 		}
-		// The marker's contract is spec/config evidence: status churn on a
+		// The marker's contract is non-status evidence: status churn on a
 		// failing workload is the SYMPTOM, not a change that could explain it
 		// — including it would make every failing issue read as "correlated".
 		changes = filterSpecConfigChanges(changes)
 		if len(changes) == 0 {
+			// A saturated candidate fetch may have missed older changes in
+			// the window (churn-heavy subjects overflow the newest-N query) —
+			// that's unknown, not "no changes".
+			if saturated {
+				continue
+			}
 			iss.NoRecentChanges = &issuesapi.NoRecentChangesMarker{
 				WindowSeconds: int(window.Seconds()),
 			}
@@ -105,14 +113,14 @@ func attachIssueChangeCorrelation(ctx context.Context, resp *issues.ListResponse
 func filterSpecConfigChanges(changes []issuesapi.RecentChange) []issuesapi.RecentChange {
 	out := changes[:0]
 	for _, c := range changes {
-		if c.ChangeCategory == "spec_config" || c.ChangeCategory == "lifecycle" {
+		if c.ChangeCategory == issuesapi.ChangeCategorySpecConfig || c.ChangeCategory == issuesapi.ChangeCategoryLifecycle {
 			out = append(out, c)
 		}
 	}
 	return out
 }
 
-func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration) ([]issuesapi.RecentChange, error) {
+func correlationChangesForIssue(ctx context.Context, iss *issuesapi.Issue, window time.Duration) ([]issuesapi.RecentChange, bool, error) {
 	if meaningfulchanges.WorkloadKind(iss.Kind) {
 		// Workload subjects also correlate against their directly referenced
 		// ConfigMaps; obj==nil degrades to workload-only changes.

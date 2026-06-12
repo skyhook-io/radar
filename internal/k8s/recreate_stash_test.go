@@ -10,6 +10,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/skyhook-io/radar/internal/timeline"
@@ -217,5 +218,56 @@ func TestRecreateJoin_SpecIdenticalRecreate_NoJoin(t *testing.T) {
 		if e.Reason == timeline.ReasonRecreated {
 			t.Fatalf("spec-identical recreate must not join (status-only diff): %+v", e.Diff)
 		}
+	}
+}
+
+// The recreate diff must cover desired state only, for typed and unstructured
+// objects alike — GitOps CRDs (Application, Kustomization, HelmRelease) arrive
+// unstructured, and a status leak there reintroduces status-only "recreated
+// with changes" noise.
+func TestStripStatusForRecreateDiff(t *testing.T) {
+	u := &unstructured.Unstructured{Object: map[string]any{
+		"apiVersion": "argoproj.io/v1alpha1",
+		"kind":       "Application",
+		"metadata":   map[string]any{"name": "web", "namespace": "argocd"},
+		"spec":       map[string]any{"project": "default"},
+		"status":     map[string]any{"sync": map[string]any{"status": "Synced"}},
+	}}
+	stripped, ok := stripStatusForRecreateDiff(u).(*unstructured.Unstructured)
+	if !ok {
+		t.Fatalf("unstructured input must come back unstructured, got %T", stripStatusForRecreateDiff(u))
+	}
+	if _, has := stripped.Object["status"]; has {
+		t.Fatal("status must be stripped from the unstructured copy")
+	}
+	if _, has := stripped.Object["spec"]; !has {
+		t.Fatal("spec must survive stripping")
+	}
+	if _, has := u.Object["status"]; !has {
+		t.Fatal("the original object must not be mutated")
+	}
+
+	dep := testDeployment("uid-1", "nginx:1.0", time.Now())
+	dep.Status = appsv1.DeploymentStatus{ReadyReplicas: 3}
+	strippedDep, ok := stripStatusForRecreateDiff(dep).(*appsv1.Deployment)
+	if !ok {
+		t.Fatalf("typed input must come back typed, got %T", stripStatusForRecreateDiff(dep))
+	}
+	if strippedDep.Status.ReadyReplicas != 0 {
+		t.Fatal("typed status must be zeroed in the copy")
+	}
+	if dep.Status.ReadyReplicas != 3 {
+		t.Fatal("the original typed object must not be mutated")
+	}
+	if strippedDep.Spec.Template.Spec.Containers[0].Image != "nginx:1.0" {
+		t.Fatal("typed spec must survive stripping")
+	}
+
+	if got := stripStatusForRecreateDiff(nil); got != nil {
+		t.Fatalf("nil input must return nil, got %v", got)
+	}
+	notPtr := "plain"
+	if got := stripStatusForRecreateDiff(notPtr); got != notPtr {
+		t.Fatalf("non-pointer input must pass through unchanged, got %v", got)
 	}
 }

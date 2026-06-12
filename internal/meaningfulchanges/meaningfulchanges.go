@@ -54,9 +54,20 @@ type Query struct {
 }
 
 func Recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, error) {
+	changes, outputCapped, fetchSaturated, err := recent(ctx, q)
+	return changes, outputCapped || fetchSaturated, err
+}
+
+// recent returns ranked changes plus two distinct truncation signals:
+// outputCapped (more qualifying changes existed than the requested limit) and
+// fetchSaturated (a candidate query hit its cap, so the window may contain
+// older events the fetch never saw). Negative claims ("no recent changes")
+// must key on fetchSaturated alone — output capping still observes the full
+// window and ranks spec/config changes above the churn that gets dropped.
+func recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, bool, error) {
 	store := timeline.GetStore()
 	if store == nil {
-		return nil, false, fmt.Errorf("timeline store not initialized")
+		return nil, false, false, fmt.Errorf("timeline store not initialized")
 	}
 	q = normalizeQuery(q)
 
@@ -64,7 +75,7 @@ func Recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, error
 		queryLimit := candidateLimit(q.Limit, q.Name != "")
 		events, err := queryCandidates(ctx, store, q, q.Kinds, queryLimit)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		// Lifecycle events (add/delete) are fetched separately so a burst of
 		// update churn can't push them out of the newest-N candidate window
@@ -72,34 +83,40 @@ func Recent(ctx context.Context, q Query) ([]issuesapi.RecentChange, bool, error
 		// churn, but it can only rank what the fetch returns.
 		lifecycleEvents, err := queryLifecycleCandidates(ctx, store, q, q.Kinds)
 		if err != nil {
-			return nil, false, err
+			return nil, false, false, err
 		}
 		changes, capped, err := rankedChanges(coalesceRecreatePairs(dedupeEvents(append(events, lifecycleEvents...))), q.Name, q.Limit, q.FieldLimit)
-		return changes, capped || len(events) >= queryLimit, err
+		saturated := len(events) >= queryLimit || len(lifecycleEvents) >= lifecycleCandidateLimit
+		return changes, capped, saturated, err
 	}
 
 	perQueryLimit := candidateLimit(q.Limit, false)
 	configEvents, err := queryCandidates(ctx, store, q, configKinds, perQueryLimit)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	specEvents, err := queryCandidates(ctx, store, q, specKinds, perQueryLimit)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	lifecycleKinds := append(append([]string{}, configKinds...), specKinds...)
 	lifecycleKinds = append(lifecycleKinds, lifecycleOnlyKinds...)
 	lifecycleEvents, err := queryLifecycleCandidates(ctx, store, q, lifecycleKinds)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	merged := coalesceRecreatePairs(dedupeEvents(append(append(configEvents, specEvents...), lifecycleEvents...)))
 	changes, capped, err := rankedChanges(merged, "", q.Limit, q.FieldLimit)
-	return changes, capped || len(configEvents) >= perQueryLimit || len(specEvents) >= perQueryLimit, err
+	saturated := len(configEvents) >= perQueryLimit || len(specEvents) >= perQueryLimit || len(lifecycleEvents) >= lifecycleCandidateLimit
+	return changes, capped, saturated, err
 }
 
-func RecentForResource(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, error) {
-	changes, _, err := Recent(ctx, Query{
+// RecentForResource returns the subject's ranked changes plus a saturation
+// flag: true when a candidate fetch hit its cap and the window may contain
+// changes the query never saw. Callers asserting "no recent changes" must
+// treat saturation as unknown, never as evidence of absence.
+func RecentForResource(ctx context.Context, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
+	changes, _, saturated, err := recent(ctx, Query{
 		Namespaces: []string{namespace},
 		Kinds:      []string{canonicalKind(kind)},
 		Name:       name,
@@ -107,27 +124,30 @@ func RecentForResource(ctx context.Context, kind, namespace, name string, since 
 		Limit:      limit,
 		FieldLimit: fieldLimit,
 	})
-	return changes, err
+	return changes, saturated, err
 }
 
-func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, error) {
+func RecentForWorkloadAndConfigMaps(ctx context.Context, obj any, kind, namespace, name string, since time.Duration, limit, fieldLimit int) ([]issuesapi.RecentChange, bool, error) {
 	var all []issuesapi.RecentChange
+	saturated := false
 	if isWorkloadKind(kind) {
-		changes, err := RecentForResource(ctx, kind, namespace, name, since, limit, fieldLimit)
+		changes, sat, err := RecentForResource(ctx, kind, namespace, name, since, limit, fieldLimit)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		saturated = saturated || sat
 		all = append(all, changes...)
 	}
 	for _, cm := range DirectConfigMapNames(obj) {
-		changes, err := RecentForResource(ctx, "ConfigMap", namespace, cm, since, limit, fieldLimit)
+		changes, sat, err := RecentForResource(ctx, "ConfigMap", namespace, cm, since, limit, fieldLimit)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
+		saturated = saturated || sat
 		all = append(all, changes...)
 	}
 	RankAndCap(&all, limit)
-	return all, nil
+	return all, saturated, nil
 }
 
 func ShouldAttachIssueChanges(issues []issuesapi.Issue) bool {
@@ -443,14 +463,14 @@ func fromEvent(e timeline.TimelineEvent, fieldLimit int) issuesapi.RecentChange 
 	return change
 }
 
-func classify(e timeline.TimelineEvent) (string, string) {
+func classify(e timeline.TimelineEvent) (issuesapi.ChangeCategory, string) {
 	if e.Source != timeline.SourceInformer {
 		return "", ""
 	}
 	if e.EventType == timeline.EventTypeAdd || e.EventType == timeline.EventTypeDelete {
 		if isLifecycleOnlyKind(e.Kind) {
 			if e.EventType == timeline.EventTypeDelete {
-				return "lifecycle", "secret deleted (name only)"
+				return issuesapi.ChangeCategoryLifecycle, "secret deleted (name only)"
 			}
 			return "", ""
 		}
@@ -458,9 +478,9 @@ func classify(e timeline.TimelineEvent) (string, string) {
 			// A recreate-join add carries the diff against the object it
 			// replaced — that's a desired-state change, not mere lifecycle.
 			if e.EventType == timeline.EventTypeAdd && e.Reason == timeline.ReasonRecreated && e.Diff != nil && len(e.Diff.Fields) > 0 {
-				return "spec_config", "recreated with desired-state or configuration changes"
+				return issuesapi.ChangeCategorySpecConfig, "recreated with desired-state or configuration changes"
 			}
-			return "lifecycle", "resource create/delete for config or desired state"
+			return issuesapi.ChangeCategoryLifecycle, "resource create/delete for config or desired state"
 		}
 		return "", ""
 	}
@@ -468,10 +488,10 @@ func classify(e timeline.TimelineEvent) (string, string) {
 		return "", ""
 	}
 	if hasSpecConfigField(e) {
-		return "spec_config", "desired-state or configuration field changed"
+		return issuesapi.ChangeCategorySpecConfig, "desired-state or configuration field changed"
 	}
 	if hasRuntimeStatusField(e) {
-		return "runtime_status", "status field changed"
+		return issuesapi.ChangeCategoryRuntimeStatus, "status field changed"
 	}
 	return "", ""
 }
@@ -500,11 +520,11 @@ func hasRuntimeStatusField(e timeline.TimelineEvent) bool {
 
 func score(c issuesapi.RecentChange) int {
 	switch c.ChangeCategory {
-	case "spec_config":
+	case issuesapi.ChangeCategorySpecConfig:
 		return 100
-	case "lifecycle":
+	case issuesapi.ChangeCategoryLifecycle:
 		return 70
-	case "runtime_status":
+	case issuesapi.ChangeCategoryRuntimeStatus:
 		return 40
 	default:
 		return 0

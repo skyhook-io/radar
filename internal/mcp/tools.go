@@ -310,8 +310,8 @@ func registerTools(server *mcp.Server) {
 			"not yet visible as runtime issues, or help distinguish creation-time " +
 			"baseline failures from the active incident. " +
 			"Single-namespace responses additionally correlate changes PER critical issue: " +
-			"`correlated_changes` lists recent spec/config changes on that issue's subject " +
-			"(and its referenced ConfigMaps); `no_recent_changes.windowSeconds` states the " +
+			"`correlated_changes` lists recent non-status changes on that issue's subject " +
+			"(and its referenced ConfigMaps); `no_recent_changes.window_seconds` states the " +
 			"subject had NO tracked changes in that window — strong evidence the issue is " +
 			"chronic rather than change-driven. An issue with neither marker was not " +
 			"checked (see `correlation_truncated`) — never read absence as 'no changes'. " +
@@ -937,7 +937,10 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 		// State-derived advisory warnings (deletionTimestamp, external manager,
 		// terminating namespace, workload health-condition history, PVC stuck
 		// Pending). Cheap — operates on the object we already fetched. Skipped
-		// for context=none so that mode stays a bare object for raw jq work.
+		// for context=none so that mode stays a bare object for raw jq work;
+		// the ConfigMap truncation note appended below is the one warning that
+		// survives context=none, because silent truncation would read as a
+		// complete value.
 		warnings = k8score.EnrichRuntimeObjectWarnings(rawObj)
 	}
 	if truncationNote != "" {
@@ -949,7 +952,7 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	var recentChanges []issuesapi.RecentChange
 	var changesErr string
 	if includeChanges {
-		changes, err := meaningfulchanges.RecentForResource(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit)
+		changes, _, err := meaningfulchanges.RecentForResource(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit)
 		if err != nil {
 			changesErr = err.Error()
 		} else {
@@ -958,7 +961,8 @@ func handleGetResource(ctx context.Context, req *mcp.CallToolRequest, input getR
 	}
 
 	// Three shapes:
-	//   - bare resource: no includes, context=none
+	//   - bare resource: no includes, context=none, no warnings (a truncation
+	//     warning upgrades this to {resource, warnings})
 	//   - resource + resourceContext: no includes, default context
 	//   - resource + resourceContext + extras: includes set
 	if len(includes) == 0 && resourceCtx == nil && len(warnings) == 0 && !defaultConfigMapChanges {
@@ -1085,7 +1089,7 @@ func attachResourceExtras(ctx context.Context, cache *k8s.ResourceCache, result 
 		_, hasChanges := result["recentChanges"]
 		_, hasChangesErr := result["recentChangesError"]
 		if !hasChanges && !hasChangesErr {
-			if changes, err := meaningfulchanges.RecentForResource(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit); err == nil {
+			if changes, _, err := meaningfulchanges.RecentForResource(ctx, kind, namespace, name, meaningfulchanges.DefaultSince, meaningfulchanges.ResourceLimit, meaningfulchanges.DefaultFieldLimit); err == nil {
 				result["recentChanges"] = changes
 			} else {
 				result["recentChangesError"] = err.Error()
@@ -2505,7 +2509,7 @@ func handleIssuesTool(ctx context.Context, _ *mcp.CallToolRequest, input issuesI
 		}
 	}
 	// Per-issue change correlation (single-namespace responses): each
-	// critical issue carries either its correlated spec/config changes or an
+	// critical issue carries either its correlated non-status changes or an
 	// explicit no_recent_changes marker — deterministic per-subject evidence
 	// the global recent_changes list can't bind to individual issues.
 	if len(allowedNamespaces) == 1 {

@@ -114,10 +114,10 @@ export interface IssueRecentChange {
   consumed_by?: string[];
 }
 
-/** "No tracked spec/config changes in the window" — the claim is scoped by
- *  windowSeconds so a change just outside it can't be misread as absent. */
+/** "No tracked non-status changes in the window" — the claim is scoped by
+ *  window_seconds so a change just outside it can't be misread as absent. */
 export interface IssueNoRecentChanges {
-  windowSeconds: number;
+  window_seconds: number;
 }
 
 /**
@@ -196,13 +196,14 @@ export interface Issue {
   /** The evidence that determined issue_timing (for auditability). */
   issue_timing_basis?: 'condition' | 'owner_condition' | 'pod_creation' | 'deletion' | 'phase' | 'spec';
 
-  /** Recent spec/config changes on this issue's subject (and, for workload
-   *  subjects, its referenced ConfigMaps) — deterministic evidence, not a
-   *  causal claim. Single-namespace responses only. */
+  /** Recent non-status changes (spec/config and lifecycle) on this issue's
+   *  subject (and, for workload subjects, its referenced ConfigMaps) —
+   *  deterministic evidence, not a causal claim. Populated only on
+   *  single-namespace MCP issue responses; never set on /api/issues today. */
   correlated_changes?: IssueRecentChange[];
   /** Explicit "no tracked changes in the window" evidence. An issue with
-   *  NEITHER correlation field was not checked (see the response-level
-   *  correlation_truncated) — absence must not be read as "no changes". */
+   *  NEITHER correlation field was not checked — absence must not be read as
+   *  "no changes". MCP-only, like correlated_changes. */
   no_recent_changes?: IssueNoRecentChanges;
 }
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -161,28 +162,38 @@ func InitStore(cfg StoreConfig) error {
 			globalStore = NewMemoryStore(maxSize)
 			log.Printf("Initialized in-memory event store (max %d events)", maxSize)
 		}
-		observationStart = time.Now()
+		observationStartNanos.Store(time.Now().UnixNano())
 	})
 	return initErr
 }
 
-// observationStart is when THIS process began recording events. Claims of
-// the form "no changes in the last N seconds" must clamp to it: after a
-// restart the store (in-memory always; SQLite during the downtime gap) has
-// not been watching for the full window, and asserting a longer one would be
-// a false statement.
-var observationStart time.Time
+// observationStartNanos (unix nanos; 0 = no store) is when THIS process began
+// recording events. Claims of the form "no changes in the last N seconds"
+// must clamp to it: after a restart the store (in-memory always; SQLite
+// during the downtime gap) has not been watching for the full window, and
+// asserting a longer one would be a false statement. Atomic because it is
+// written on context switch (ResetStore) while concurrent MCP request
+// goroutines read it.
+var observationStartNanos atomic.Int64
 
 // ObservationStart returns when this process's store began observing, or the
 // zero time when no store is initialized.
 func ObservationStart() time.Time {
-	return observationStart
+	nanos := observationStartNanos.Load()
+	if nanos == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, nanos)
 }
 
 // SetObservationStartForTest backdates the observation window so tests can
 // exercise claims that require a longer watch period.
 func SetObservationStartForTest(t time.Time) {
-	observationStart = t
+	if t.IsZero() {
+		observationStartNanos.Store(0)
+		return
+	}
+	observationStartNanos.Store(t.UnixNano())
 }
 
 // GetStore returns the global event store instance
@@ -202,7 +213,7 @@ func ResetStore() {
 		}
 		globalStore = nil
 	}
-	observationStart = time.Time{}
+	observationStartNanos.Store(0)
 	globalStoreOnce = sync.Once{}
 }
 

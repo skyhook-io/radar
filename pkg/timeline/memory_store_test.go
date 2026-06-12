@@ -140,6 +140,34 @@ func TestMemoryStore_Query_Names(t *testing.T) {
 	}
 }
 
+func TestMemoryStore_Query_EventTypes(t *testing.T) {
+	store := NewMemoryStore(100)
+	ctx := context.Background()
+
+	events := []TimelineEvent{
+		{ID: "et-add", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "deploy-1", EventType: EventTypeAdd, Source: SourceInformer, Reason: ReasonRecreated},
+		{ID: "et-update", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "deploy-1", EventType: EventTypeUpdate, Source: SourceInformer},
+		{ID: "et-delete", Timestamp: time.Now(), Kind: "Deployment", Namespace: "default", Name: "deploy-2", EventType: EventTypeDelete, Source: SourceInformer},
+	}
+	_ = store.AppendBatch(ctx, events)
+
+	result, err := store.Query(ctx, QueryOptions{EventTypes: []EventType{EventTypeAdd, EventTypeDelete}, Limit: 10, IncludeManaged: true})
+	if err != nil {
+		t.Fatalf("Query failed: %v", err)
+	}
+	if len(result) != 2 {
+		t.Fatalf("Expected 2 add/delete events, got %d", len(result))
+	}
+	for _, e := range result {
+		if e.EventType == EventTypeUpdate {
+			t.Errorf("update event %q leaked through the EventTypes filter", e.ID)
+		}
+		if e.ID == "et-add" && e.Reason != ReasonRecreated {
+			t.Errorf("Reason = %q, want %q", e.Reason, ReasonRecreated)
+		}
+	}
+}
+
 func TestMemoryStore_Query_Since(t *testing.T) {
 	store := NewMemoryStore(100)
 	ctx := context.Background()

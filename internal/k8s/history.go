@@ -621,7 +621,6 @@ func getLBAddresses(ingress []corev1.LoadBalancerIngress) []string {
 	return addrs
 }
 
-// diffConfigMap computes diff for ConfigMap resources
 // diffResourceQuota surfaces spec.hard changes ("quota tightened/loosened") —
 // the admission-relevant signal. status.used churns with normal pod lifecycle
 // and is deliberately excluded: used-only updates drop as empty diffs.

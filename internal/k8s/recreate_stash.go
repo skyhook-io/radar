@@ -23,11 +23,13 @@ const (
 	recreateStashCap = 2048
 )
 
-// recreateStashKinds mirrors the meaningful-changes feed kinds (config +
-// desired-state). Pods and other churn-heavy kinds are excluded: their
-// recreates use generated names, so a same-name join never fires and stashing
-// them would only burn memory. Secrets are deliberately excluded — a recreate
-// diff path for secret data needs its own redaction review first.
+// recreateStashKinds covers every kind the meaningful-changes feed tracks
+// (config + desired-state) plus CronJob, whose recreate diff enriches the
+// timeline even though the feed doesn't surface it. ReplicaSet-managed Pods
+// recreate under generated names, so a same-name join never fires for them;
+// StatefulSet Pods would join, but pod churn volume makes stashing every pod
+// too costly. Secrets are deliberately excluded — a recreate diff path for
+// secret data needs its own redaction review first.
 var recreateStashKinds = map[string]bool{
 	"ConfigMap":               true,
 	"Deployment":              true,
@@ -42,7 +44,14 @@ var recreateStashKinds = map[string]bool{
 	"Application":             true,
 	"Kustomization":           true,
 	"HelmRelease":             true,
+	"GitRepository":           true,
+	"OCIRepository":           true,
+	"HelmRepository":          true,
 }
+
+// RecreateJoinKind reports whether deletes of this kind are stashed for
+// recreate-join diffs.
+func RecreateJoinKind(kind string) bool { return recreateStashKinds[kind] }
 
 type recreateEntry struct {
 	obj       any
