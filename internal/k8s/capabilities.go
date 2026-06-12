@@ -73,29 +73,37 @@ type PermissionCheckResult struct {
 
 // Capabilities represents the features available based on RBAC permissions
 type Capabilities struct {
-	Exec          bool                 `json:"exec"`                  // Can create pods/exec (terminal feature)
-	LocalTerminal bool                 `json:"localTerminal"`         // Local terminal available (not in-cluster, not disabled)
-	Logs          bool                 `json:"logs"`                  // Can get pods/log (log viewer)
-	PortForward   bool                 `json:"portForward"`           // Can create pods/portforward
-	Secrets       bool                 `json:"secrets"`               // Can list secrets
-	SecretsUpdate bool                 `json:"secretsUpdate"`         // Can update secrets (inline editing)
-	HelmWrite     bool                 `json:"helmWrite"`             // Helm write ops (detected via secrets/create as sentinel RBAC check)
-	NodeWrite     bool                 `json:"nodeWrite"`             // Can patch nodes (cordon/uncordon/drain)
-	MCPEnabled    bool                 `json:"mcpEnabled"`            // MCP server is running
-	Deployment    DeploymentInfo       `json:"deployment"`            // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
-	AuthEnabled   bool                 `json:"authEnabled,omitempty"` // Auth is enabled on the server
-	Username      string               `json:"username,omitempty"`    // Authenticated username (when auth enabled)
-	Resources     *ResourcePermissions `json:"resources,omitempty"`   // Per-resource-type permissions
-	Visibility    *VisibilitySummary   `json:"visibility,omitempty"`  // Present when resource visibility is limited enough to make diagnostics incomplete
+	Exec           bool                     `json:"exec"`                  // Can create pods/exec (terminal feature)
+	LocalTerminal  bool                     `json:"localTerminal"`         // Local terminal available (not in-cluster, not disabled)
+	Logs           bool                     `json:"logs"`                  // Can get pods/log (log viewer)
+	PortForward    bool                     `json:"portForward"`           // Can create pods/portforward
+	Secrets        bool                     `json:"secrets"`               // Can list secrets
+	SecretsUpdate  bool                     `json:"secretsUpdate"`         // Can update secrets (inline editing)
+	HelmWrite      bool                     `json:"helmWrite"`             // Helm write ops (detected via secrets/create as sentinel RBAC check)
+	NodeWrite      bool                     `json:"nodeWrite"`             // Can patch nodes (cordon/uncordon/drain)
+	WorkloadWrites WorkloadWritePermissions `json:"workloadWrites"`        // Can patch workload kinds (restart/scale controls)
+	MCPEnabled     bool                     `json:"mcpEnabled"`            // MCP server is running
+	Deployment     DeploymentInfo           `json:"deployment"`            // How / where this Radar binary is running. Tells the UI which chrome to render or suppress (e.g. embedded mode hides the cluster headline + local-MCP card because the hub already renders both).
+	AuthEnabled    bool                     `json:"authEnabled,omitempty"` // Auth is enabled on the server
+	Username       string                   `json:"username,omitempty"`    // Authenticated username (when auth enabled)
+	Resources      *ResourcePermissions     `json:"resources,omitempty"`   // Per-resource-type permissions
+	Visibility     *VisibilitySummary       `json:"visibility,omitempty"`  // Present when resource visibility is limited enough to make diagnostics incomplete
 }
 
-// NamespaceCapabilities holds the effective exec/logs/portForward capabilities
-// for a specific namespace. When global checks deny these capabilities,
-// namespace-scoped RBAC re-checks may grant them.
+// WorkloadWritePermissions indicates which workload resources the user can patch.
+type WorkloadWritePermissions struct {
+	Deployments  bool `json:"deployments"`
+	DaemonSets   bool `json:"daemonSets"`
+	StatefulSets bool `json:"statefulSets"`
+	Rollouts     bool `json:"rollouts"`
+}
+
+// NamespaceCapabilities holds the effective capabilities for a specific namespace.
 type NamespaceCapabilities struct {
-	Exec        bool `json:"exec"`
-	Logs        bool `json:"logs"`
-	PortForward bool `json:"portForward"`
+	Exec           bool                     `json:"exec"`
+	Logs           bool                     `json:"logs"`
+	PortForward    bool                     `json:"portForward"`
+	WorkloadWrites WorkloadWritePermissions `json:"workloadWrites"`
 }
 
 // DeploymentInfo describes how / where this Radar binary is running.
@@ -208,6 +216,7 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	var hadErrors atomic.Bool
 
 	type capCheck struct {
+		group    string
 		resource string
 		verb     string
 		result   *bool
@@ -215,13 +224,17 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 
 	caps := &Capabilities{}
 	checks := []capCheck{
-		{"pods/exec", "create", &caps.Exec},
-		{"pods/log", "get", &caps.Logs},
-		{"pods/portforward", "create", &caps.PortForward},
-		{"secrets", "list", &caps.Secrets},
-		{"secrets", "update", &caps.SecretsUpdate},
-		{"secrets", "create", &caps.HelmWrite},
-		{"nodes", "patch", &caps.NodeWrite},
+		{resource: "pods/exec", verb: "create", result: &caps.Exec},
+		{resource: "pods/log", verb: "get", result: &caps.Logs},
+		{resource: "pods/portforward", verb: "create", result: &caps.PortForward},
+		{resource: "secrets", verb: "list", result: &caps.Secrets},
+		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate},
+		{resource: "secrets", verb: "create", result: &caps.HelmWrite},
+		{resource: "nodes", verb: "patch", result: &caps.NodeWrite},
+		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
+		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
+		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
+		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
 	}
 
 	var wg sync.WaitGroup
@@ -230,13 +243,13 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	for _, check := range checks {
 		go func(c capCheck) {
 			defer wg.Done()
-			allowed, apiErr := canI(checkCtx, "", "", c.resource, c.verb)
+			allowed, apiErr := canI(checkCtx, "", c.group, c.resource, c.verb)
 			if allowed {
 				*c.result = true
 				return
 			}
 			if fallbackNs != "" {
-				allowed, nsApiErr := canI(checkCtx, fallbackNs, "", c.resource, c.verb)
+				allowed, nsApiErr := canI(checkCtx, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true
 					return
@@ -311,20 +324,10 @@ func InvalidateCapabilitiesCache() {
 	nsCapMu.Unlock()
 }
 
-// CheckNamespaceCapabilities performs namespace-scoped RBAC checks for capabilities
-// that were denied by global checks (cluster-wide + effective-namespace fallback).
-// This enables lazy re-checking when a user views a resource in a specific namespace —
-// they may have namespace-scoped RoleBindings that grant exec/logs/portForward in
-// namespaces other than the kubeconfig default.
-//
-// Returns nil if no namespace-scoped re-check is needed (all capabilities already allowed).
-func CheckNamespaceCapabilities(ctx context.Context, namespace string, globalCaps *Capabilities) (*NamespaceCapabilities, error) {
+// CheckNamespaceCapabilities performs namespace-scoped RBAC checks for
+// capabilities that drive resource-level controls.
+func CheckNamespaceCapabilities(ctx context.Context, namespace string) (*NamespaceCapabilities, error) {
 	if namespace == "" {
-		return nil, nil
-	}
-
-	// If all three are already allowed globally, no need for namespace check
-	if globalCaps.Exec && globalCaps.Logs && globalCaps.PortForward {
 		return nil, nil
 	}
 
@@ -346,33 +349,27 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string, globalCap
 	checkCtx, cancel := NewOperationContext(10 * time.Second)
 	defer cancel()
 
-	result := &NamespaceCapabilities{
-		Exec:        globalCaps.Exec,
-		Logs:        globalCaps.Logs,
-		PortForward: globalCaps.PortForward,
-	}
+	result := &NamespaceCapabilities{}
 
-	// Only re-check capabilities that were denied globally
 	type capCheck struct {
+		group    string
 		resource string
 		verb     string
 		result   *bool
 	}
 
 	var checks []capCheck
-	if !globalCaps.Exec && !ForceDisableExec {
-		checks = append(checks, capCheck{"pods/exec", "create", &result.Exec})
+	if !ForceDisableExec {
+		checks = append(checks, capCheck{resource: "pods/exec", verb: "create", result: &result.Exec})
 	}
-	if !globalCaps.Logs {
-		checks = append(checks, capCheck{"pods/log", "get", &result.Logs})
-	}
-	if !globalCaps.PortForward {
-		checks = append(checks, capCheck{"pods/portforward", "create", &result.PortForward})
-	}
-
-	if len(checks) == 0 {
-		return result, nil
-	}
+	checks = append(checks,
+		capCheck{resource: "pods/log", verb: "get", result: &result.Logs},
+		capCheck{resource: "pods/portforward", verb: "create", result: &result.PortForward},
+		capCheck{group: "apps", resource: "deployments", verb: "patch", result: &result.WorkloadWrites.Deployments},
+		capCheck{group: "apps", resource: "daemonsets", verb: "patch", result: &result.WorkloadWrites.DaemonSets},
+		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets},
+		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts},
+	)
 
 	var hadErrors atomic.Bool
 	var wg sync.WaitGroup
@@ -380,7 +377,7 @@ func CheckNamespaceCapabilities(ctx context.Context, namespace string, globalCap
 	for _, check := range checks {
 		go func(c capCheck) {
 			defer wg.Done()
-			allowed, apiErr := canI(checkCtx, namespace, "", c.resource, c.verb)
+			allowed, apiErr := canI(checkCtx, namespace, c.group, c.resource, c.verb)
 			if allowed {
 				*c.result = true
 			}
@@ -448,6 +445,7 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 	defer cancel()
 
 	type capCheck struct {
+		group    string
 		resource string
 		verb     string
 		result   *bool
@@ -455,13 +453,17 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 
 	caps := &Capabilities{}
 	checks := []capCheck{
-		{"pods/exec", "create", &caps.Exec},
-		{"pods/log", "get", &caps.Logs},
-		{"pods/portforward", "create", &caps.PortForward},
-		{"secrets", "list", &caps.Secrets},
-		{"secrets", "update", &caps.SecretsUpdate},
-		{"secrets", "create", &caps.HelmWrite},
-		{"nodes", "patch", &caps.NodeWrite},
+		{resource: "pods/exec", verb: "create", result: &caps.Exec},
+		{resource: "pods/log", verb: "get", result: &caps.Logs},
+		{resource: "pods/portforward", verb: "create", result: &caps.PortForward},
+		{resource: "secrets", verb: "list", result: &caps.Secrets},
+		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate},
+		{resource: "secrets", verb: "create", result: &caps.HelmWrite},
+		{resource: "nodes", verb: "patch", result: &caps.NodeWrite},
+		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
+		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
+		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
+		{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &caps.WorkloadWrites.Rollouts},
 	}
 
 	var wg sync.WaitGroup
@@ -470,14 +472,14 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 	for _, check := range checks {
 		go func(c capCheck) {
 			defer wg.Done()
-			allowed, _ := canIAs(checkCtx, k8sClient, username, groups, "", "", c.resource, c.verb)
+			allowed, _ := canIAs(checkCtx, k8sClient, username, groups, "", c.group, c.resource, c.verb)
 			if allowed {
 				*c.result = true
 				return
 			}
 			// Try namespace-scoped fallback
 			if fallbackNs := GetEffectiveNamespace(); fallbackNs != "" {
-				allowed, _ = canIAs(checkCtx, k8sClient, username, groups, fallbackNs, "", c.resource, c.verb)
+				allowed, _ = canIAs(checkCtx, k8sClient, username, groups, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true
 				}
@@ -498,6 +500,63 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 	})
 
 	return caps, nil
+}
+
+// CheckNamespaceCapabilitiesForUser runs namespace-scoped SubjectAccessReview
+// checks as the authenticated user.
+func CheckNamespaceCapabilitiesForUser(ctx context.Context, username string, groups []string, namespace string) (*NamespaceCapabilities, error) {
+	if namespace == "" {
+		return nil, nil
+	}
+
+	k8sClient := GetClient()
+	if k8sClient == nil {
+		return nil, nil
+	}
+
+	if GetConnectionStatus().State == StateDisconnected {
+		return nil, nil
+	}
+
+	checkCtx, cancel := NewOperationContext(10 * time.Second)
+	defer cancel()
+
+	result := &NamespaceCapabilities{}
+
+	type capCheck struct {
+		group    string
+		resource string
+		verb     string
+		result   *bool
+	}
+
+	var checks []capCheck
+	if !ForceDisableExec {
+		checks = append(checks, capCheck{resource: "pods/exec", verb: "create", result: &result.Exec})
+	}
+	checks = append(checks,
+		capCheck{resource: "pods/log", verb: "get", result: &result.Logs},
+		capCheck{resource: "pods/portforward", verb: "create", result: &result.PortForward},
+		capCheck{group: "apps", resource: "deployments", verb: "patch", result: &result.WorkloadWrites.Deployments},
+		capCheck{group: "apps", resource: "daemonsets", verb: "patch", result: &result.WorkloadWrites.DaemonSets},
+		capCheck{group: "apps", resource: "statefulsets", verb: "patch", result: &result.WorkloadWrites.StatefulSets},
+		capCheck{group: "argoproj.io", resource: "rollouts", verb: "patch", result: &result.WorkloadWrites.Rollouts},
+	)
+
+	var wg sync.WaitGroup
+	wg.Add(len(checks))
+	for _, check := range checks {
+		go func(c capCheck) {
+			defer wg.Done()
+			allowed, _ := canIAs(checkCtx, k8sClient, username, groups, namespace, c.group, c.resource, c.verb)
+			if allowed {
+				*c.result = true
+			}
+		}(check)
+	}
+	wg.Wait()
+
+	return result, nil
 }
 
 // canIAs checks if a specific user can perform an action using SubjectAccessReview.

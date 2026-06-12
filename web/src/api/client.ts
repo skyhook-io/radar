@@ -717,11 +717,10 @@ export function useCapabilities() {
   })
 }
 
-// Namespace-scoped capabilities: lazy re-check for exec/logs/portForward when
-// global RBAC checks denied them. Users with namespace-scoped RoleBindings may
+// Namespace-scoped capabilities. Users with namespace-scoped RoleBindings may
 // have these permissions in specific namespaces.
-export function useNamespaceCapabilities(namespace: string | undefined, globalCaps: Capabilities) {
-  const needsCheck = namespace && (!globalCaps.exec || !globalCaps.logs || !globalCaps.portForward)
+export function useNamespaceCapabilities(namespace: string | undefined, globalCaps: Capabilities | undefined) {
+  const needsCheck = namespace && globalCaps
   return useQuery<Capabilities>({
     queryKey: ['capabilities', namespace],
     queryFn: () => fetchJSON(`/capabilities?namespace=${encodeURIComponent(namespace!)}`),

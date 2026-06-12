@@ -1115,7 +1115,8 @@ func TestSmokeCapabilitiesShape(t *testing.T) {
 	}
 
 	var body struct {
-		Resources map[string]bool `json:"resources"`
+		Resources      map[string]bool `json:"resources"`
+		WorkloadWrites map[string]bool `json:"workloadWrites"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -1139,6 +1140,22 @@ func TestSmokeCapabilitiesShape(t *testing.T) {
 			t.Errorf("capabilities.resources missing key %q for ResourcePermissions.%s — "+
 				"the handler isn't copying this field to the JSON response.",
 				tag, field.Name)
+		}
+	}
+
+	if body.WorkloadWrites == nil {
+		t.Fatal("capabilities response missing 'workloadWrites' field")
+	}
+	workloadWritesType := reflect.TypeOf(k8s.WorkloadWritePermissions{})
+	for i := 0; i < workloadWritesType.NumField(); i++ {
+		field := workloadWritesType.Field(i)
+		tag := field.Tag.Get("json")
+		if tag == "" {
+			t.Errorf("WorkloadWritePermissions.%s has no json tag", field.Name)
+			continue
+		}
+		if _, ok := body.WorkloadWrites[tag]; !ok {
+			t.Errorf("capabilities.workloadWrites missing key %q for WorkloadWritePermissions.%s", tag, field.Name)
 		}
 	}
 }

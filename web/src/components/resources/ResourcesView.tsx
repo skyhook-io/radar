@@ -1,7 +1,7 @@
 import { useState, useMemo, useCallback, useEffect } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads } from '../../api/client'
+import { ApiError, debugNamespaceLog, fetchJSON, isForbiddenError, useCapabilities, useNamespaceCapabilities, useSecretCertExpiry, useTopPodMetrics, useTopNodeMetrics, useBulkDeleteResources, useBulkRestartWorkloads, useBulkScaleWorkloads } from '../../api/client'
 import { apiUrl, getAuthHeaders, getCredentialsMode, getBasename } from '../../api/config'
 import { useAPIResources } from '../../api/apiResources'
 import { initNavigationMap } from '@skyhook-io/k8s-ui'
@@ -11,7 +11,7 @@ import {
   ResourcesView as BaseResourcesView,
   CORE_RESOURCES,
 } from '@skyhook-io/k8s-ui'
-import type { ResourceQueryResult } from '@skyhook-io/k8s-ui'
+import type { ResourceQueryResult, WorkloadWritePermissions } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { kindToPlural, type NavigateToResource } from '../../utils/navigation'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
@@ -31,9 +31,41 @@ interface ResourcesViewProps {
   onClearNamespaces?: () => void
 }
 
+type SelectedKindInfo = { name: string; kind: string; group: string } | null
+
+function canBulkRestartKind(kind: SelectedKindInfo, writes: WorkloadWritePermissions | undefined): boolean {
+  switch (kind?.name.toLowerCase()) {
+    case 'deployments':
+      return writes?.deployments === true
+    case 'daemonsets':
+      return writes?.daemonSets === true
+    case 'statefulsets':
+      return writes?.statefulSets === true
+    case 'rollouts':
+      return kind.group === 'argoproj.io' && writes?.rollouts === true
+    default:
+      return false
+  }
+}
+
+function canBulkScaleKind(kind: SelectedKindInfo, writes: WorkloadWritePermissions | undefined): boolean {
+  switch (kind?.name.toLowerCase()) {
+    case 'deployments':
+      return writes?.deployments === true
+    case 'statefulsets':
+      return writes?.statefulSets === true
+    default:
+      return false
+  }
+}
+
 export function ResourcesView({ namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange, onClearNamespaces }: ResourcesViewProps) {
   const location = useLocation()
   const navigate = useNavigate()
+
+  const { data: capabilities } = useCapabilities()
+  const namespaceForCapabilities = namespaces.length === 1 ? namespaces[0] : undefined
+  const { data: namespaceCapabilities } = useNamespaceCapabilities(namespaceForCapabilities, capabilities)
 
   // API resources discovery
   const { data: apiResources } = useAPIResources()
@@ -44,7 +76,10 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   }, [apiResources])
 
   // Track the selected kind from the k8s-ui component
-  const [selectedKind, setSelectedKind] = useState<{ name: string; kind: string; group: string } | null>(null)
+  const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(null)
+  const workloadWrites = namespaceCapabilities?.workloadWrites ?? capabilities?.workloadWrites
+  const canBulkRestartSelectedKind = useMemo(() => canBulkRestartKind(selectedKind, workloadWrites), [selectedKind, workloadWrites])
+  const canBulkScaleSelectedKind = useMemo(() => canBulkScaleKind(selectedKind, workloadWrites), [selectedKind, workloadWrites])
 
   // Lightweight resource counts for sidebar badges (~2KB instead of ~608MB)
   const namespacesParam = namespaces.join(',')
@@ -232,10 +267,10 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
       // Bulk operations
       onBulkDelete={(items, options) => bulkDeleteMutation.mutate({ items, force: options?.force }, { onSuccess: options?.onSuccess })}
       isBulkDeleting={bulkDeleteMutation.isPending}
-      onBulkRestart={(items, options) => bulkRestartMutation.mutate({ items }, { onSuccess: options?.onSuccess })}
-      isBulkRestarting={bulkRestartMutation.isPending}
-      onBulkScale={(items, replicas, options) => bulkScaleMutation.mutate({ items, replicas }, { onSuccess: options?.onSuccess })}
-      isBulkScaling={bulkScaleMutation.isPending}
+      onBulkRestart={canBulkRestartSelectedKind ? (items, options) => bulkRestartMutation.mutate({ items }, { onSuccess: options?.onSuccess }) : undefined}
+      isBulkRestarting={canBulkRestartSelectedKind && bulkRestartMutation.isPending}
+      onBulkScale={canBulkScaleSelectedKind ? (items, replicas, options) => bulkScaleMutation.mutate({ items, replicas }, { onSuccess: options?.onSuccess }) : undefined}
+      isBulkScaling={canBulkScaleSelectedKind && bulkScaleMutation.isPending}
     />
     <CreateResourceDialog
       open={createDialogOpen}
