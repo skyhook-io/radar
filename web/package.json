@@ -68,7 +68,7 @@
     "prettier": "^3.8.1",
     "react": "^19.2.6",
     "react-dom": "^19.2.6",
-    "react-router-dom": "^7.15.0",
+    "react-router-dom": "^7.17.0",
     "tailwind-merge": "^3.6.0",
     "tailwindcss": "^4.2.4",
     "typescript": "^6.0.2",
