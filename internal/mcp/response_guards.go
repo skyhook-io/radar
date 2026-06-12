@@ -69,7 +69,12 @@ func truncateLargeConfigMapData(resourceData any) (any, string) {
 		}
 	}
 	if len(truncatedKeys) == 0 {
-		return resourceData, ""
+		// Over budget but every value sits under the floor (many tiny keys) —
+		// nothing to truncate, but the size still deserves a warning.
+		return resourceData, fmt.Sprintf(
+			"large ConfigMap (%d bytes total across %d keys): values left intact (each under %d bytes)",
+			total, valueCount, valueCap,
+		)
 	}
 	sort.Strings(truncatedKeys)
 	return resourceData, fmt.Sprintf(

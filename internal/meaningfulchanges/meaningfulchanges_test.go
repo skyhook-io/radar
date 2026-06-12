@@ -3,6 +3,7 @@ package meaningfulchanges
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -359,6 +360,29 @@ func TestRecentCoalescesRecreatePairs(t *testing.T) {
 	}
 	if !recreate || !finalDelete || !trueDelete {
 		t.Fatalf("missing entries: recreate=%v finalDelete=%v trueDelete=%v in %+v", recreate, finalDelete, trueDelete, changes)
+	}
+}
+
+// The static canonicalKind fallback (cold start, partial discovery) must
+// cover every feed kind: a miss best-effort-capitalizes lowercase input
+// ("resourcequota" → "Resourcequota") which silently matches no timeline
+// events.
+func TestCanonicalKindCoversFeedKinds(t *testing.T) {
+	for _, kind := range append(append([]string{}, configKinds...), specKinds...) {
+		if got := canonicalKind(strings.ToLower(kind)); got != kind {
+			t.Errorf("canonicalKind(%q) = %q, want %q", strings.ToLower(kind), got, kind)
+		}
+	}
+	// kubectl shortnames and plurals for the kinds most recently added.
+	for in, want := range map[string]string{
+		"resourcequotas": "ResourceQuota",
+		"quota":          "ResourceQuota",
+		"limitranges":    "LimitRange",
+		"limits":         "LimitRange",
+	} {
+		if got := canonicalKind(in); got != want {
+			t.Errorf("canonicalKind(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
 

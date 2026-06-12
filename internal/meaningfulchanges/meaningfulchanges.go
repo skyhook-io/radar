@@ -683,6 +683,10 @@ func canonicalKind(kind string) string {
 		return "HelmRepository"
 	case "cronjob", "cronjobs":
 		return "CronJob"
+	case "resourcequota", "resourcequotas", "quota", "quotas":
+		return "ResourceQuota"
+	case "limitrange", "limitranges", "limits":
+		return "LimitRange"
 	case "job", "jobs":
 		return "Job"
 	case "replicaset", "replicasets", "rs":
