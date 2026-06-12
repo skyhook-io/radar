@@ -85,7 +85,6 @@
     "yaml": ">=2.0.0"
   },
   "devDependencies": {
-    "@types/diff": "^7.0.2",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "@xterm/addon-fit": "^0.11.0",
