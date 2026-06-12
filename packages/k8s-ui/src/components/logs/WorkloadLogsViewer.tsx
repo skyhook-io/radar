@@ -82,6 +82,11 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
     pods.forEach((pod, i) => m.set(pod.name, i))
     return m
   }, [pods])
+  const podColorIndexRef = useRef<Map<string, number>>(new Map())
+
+  useEffect(() => {
+    podColorIndexRef.current = podColorIndex
+  }, [podColorIndex])
 
   const podsInitialized = useRef(false)
 
@@ -94,6 +99,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       const resultPods = result.pods ?? []
       const resultLogs = result.logs ?? []
 
+      podColorIndexRef.current = new Map(resultPods.map((pod, i) => [pod.name, i]))
       setPods(resultPods)
 
       if (!podsInitialized.current && resultPods.length > 0) {
@@ -148,10 +154,12 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       {
         onConnected: (data: any) => {
           if (data?.pods) {
-            setPods(data.pods)
-            if (selectedPods.size === 0) {
-              setSelectedPods(new Set((data.pods as WorkloadPodInfo[]).map((p: WorkloadPodInfo) => p.name)))
-            }
+            const nextPods = data.pods as WorkloadPodInfo[]
+            podColorIndexRef.current = new Map(nextPods.map((pod, i) => [pod.name, i]))
+            setPods(nextPods)
+            setSelectedPods(prev => (
+              prev.size === 0 ? new Set(nextPods.map((p: WorkloadPodInfo) => p.name)) : prev
+            ))
           }
         },
         onLog: (data: any) => {
@@ -161,7 +169,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
               content: data.content || '',
               container: data.container || '',
               pod: data.pod || '',
-              podColorIndex: podColorIndex.get(data.pod || ''),
+              podColorIndex: podColorIndexRef.current.get(data.pod || ''),
             })
           }
         },
@@ -171,7 +179,8 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
             setPods(prev => {
               const existing = new Set(prev.map(p => p.name))
               const toAdd = newPods.filter(p => !existing.has(p.name))
-              return toAdd.length > 0 ? [...prev, ...toAdd] : prev
+              if (toAdd.length === 0) return prev
+              return [...prev, ...toAdd]
             })
             setSelectedPods(prev => {
               const next = new Set(prev)
@@ -191,7 +200,7 @@ export function WorkloadLogsViewer({ name, fetchAll, createStream, overrideDownl
       },
       'Workload log stream connection failed',
     )
-  }, [createStream, startStreaming, selectedContainer, sinceSeconds, append, podColorIndex, selectedPods.size, clear])
+  }, [createStream, startStreaming, selectedContainer, sinceSeconds, append, clear])
 
   const handleStopStreaming = useCallback(() => {
     userStoppedRef.current = true
