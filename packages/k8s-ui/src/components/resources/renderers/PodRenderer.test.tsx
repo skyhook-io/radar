@@ -75,4 +75,35 @@ describe('PodRenderer issues banner', () => {
     expect(html).toContain('Usage of EmptyDir volume')
     expect(html).toContain('exceeds the limit')
   })
+
+  it('wraps long issue detail text inside the banner', () => {
+    const html = renderToString(
+      <PodRenderer
+        data={{
+          metadata: { name: 'api', namespace: 'default' },
+          spec: { containers: [{ name: 'api', image: 'registry.example.com/api:missing' }] },
+          status: {
+            phase: 'Pending',
+            containerStatuses: [
+              {
+                name: 'api',
+                restartCount: 0,
+                state: {
+                  waiting: {
+                    reason: 'ImagePullBackOff',
+                    message: `Back-off pulling image "${'a'.repeat(240)}"`,
+                  },
+                },
+              },
+            ],
+          },
+        }}
+        onCopy={() => undefined}
+        copied={null}
+      />,
+    )
+
+    expect(html).toContain('ImagePullBackOff')
+    expect(html).toContain('min-w-0 break-words')
+  })
 })

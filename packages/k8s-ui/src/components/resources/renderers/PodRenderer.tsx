@@ -347,7 +347,7 @@ export function PodRenderer({
             {podProblems.map((p, i) => (
               <li key={i} className="flex items-start gap-1.5">
                 <span className={clsx('w-1.5 h-1.5 rounded-full shrink-0 mt-1', SEVERITY_DOT_COLOR[p.severity])} />
-                <span className="text-red-600 dark:text-red-400">
+                <span className="min-w-0 break-words text-red-600 dark:text-red-400">
                   {p.message}
                   {p.detail && <span className="text-theme-text-secondary">: {p.detail}</span>}
                 </span>
