@@ -21,8 +21,22 @@ func TestCatalogComplete(t *testing.T) {
 		}
 	}
 	for c := range categoryGroup {
+		if categoriesWithoutDetector[c] {
+			// Excluded on purpose (no detector) — must NOT be in the catalog.
+			if _, ok := inOrder[c]; ok {
+				t.Errorf("category %q is marked no-detector but appears in catalogOrder", c)
+			}
+			continue
+		}
 		if _, ok := inOrder[c]; !ok {
 			t.Errorf("category %q is in the group map but missing from catalogOrder/catalog", c)
+		}
+	}
+	// Every no-detector exclusion must name a real enum category (else it's a
+	// stale typo silently excluding nothing).
+	for c := range categoriesWithoutDetector {
+		if _, ok := categoryGroup[c]; !ok {
+			t.Errorf("categoriesWithoutDetector lists %q which is not a real category", c)
 		}
 	}
 }
