@@ -133,8 +133,8 @@ export function useHasLimitedAccess(): boolean {
   return Object.entries(resources).some(([kind, allowed]) => !allowed && !isOptionalKind(kind))
 }
 
-// Namespace-scoped capability hooks. Falls back to global capability values
-// while the namespace check is loading.
+// Namespace-scoped capability hooks. A concrete namespace gets its own
+// capability check; callers use global capability values until it resolves.
 export function useNamespacedCapabilities(namespace: string | undefined) {
   const globalCaps = useContext(CapabilitiesContext)
   const { data: nsCaps, error } = useNamespaceCapabilities(namespace, globalCaps)
