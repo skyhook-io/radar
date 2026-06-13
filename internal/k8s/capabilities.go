@@ -216,21 +216,22 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 	var hadErrors atomic.Bool
 
 	type capCheck struct {
-		group    string
-		resource string
-		verb     string
-		result   *bool
+		group             string
+		resource          string
+		verb              string
+		result            *bool
+		namespaceFallback bool
 	}
 
 	caps := &Capabilities{}
 	checks := []capCheck{
-		{resource: "pods/exec", verb: "create", result: &caps.Exec},
-		{resource: "pods/log", verb: "get", result: &caps.Logs},
-		{resource: "pods/portforward", verb: "create", result: &caps.PortForward},
-		{resource: "secrets", verb: "list", result: &caps.Secrets},
-		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate},
-		{resource: "secrets", verb: "create", result: &caps.HelmWrite},
-		{resource: "nodes", verb: "patch", result: &caps.NodeWrite},
+		{resource: "pods/exec", verb: "create", result: &caps.Exec, namespaceFallback: true},
+		{resource: "pods/log", verb: "get", result: &caps.Logs, namespaceFallback: true},
+		{resource: "pods/portforward", verb: "create", result: &caps.PortForward, namespaceFallback: true},
+		{resource: "secrets", verb: "list", result: &caps.Secrets, namespaceFallback: true},
+		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate, namespaceFallback: true},
+		{resource: "secrets", verb: "create", result: &caps.HelmWrite, namespaceFallback: true},
+		{resource: "nodes", verb: "patch", result: &caps.NodeWrite, namespaceFallback: true},
 		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
 		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
 		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
@@ -248,7 +249,7 @@ func CheckCapabilities(ctx context.Context) (*Capabilities, error) {
 				*c.result = true
 				return
 			}
-			if fallbackNs != "" {
+			if fallbackNs != "" && c.namespaceFallback {
 				allowed, nsApiErr := canI(checkCtx, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true
@@ -445,21 +446,22 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 	defer cancel()
 
 	type capCheck struct {
-		group    string
-		resource string
-		verb     string
-		result   *bool
+		group             string
+		resource          string
+		verb              string
+		result            *bool
+		namespaceFallback bool
 	}
 
 	caps := &Capabilities{}
 	checks := []capCheck{
-		{resource: "pods/exec", verb: "create", result: &caps.Exec},
-		{resource: "pods/log", verb: "get", result: &caps.Logs},
-		{resource: "pods/portforward", verb: "create", result: &caps.PortForward},
-		{resource: "secrets", verb: "list", result: &caps.Secrets},
-		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate},
-		{resource: "secrets", verb: "create", result: &caps.HelmWrite},
-		{resource: "nodes", verb: "patch", result: &caps.NodeWrite},
+		{resource: "pods/exec", verb: "create", result: &caps.Exec, namespaceFallback: true},
+		{resource: "pods/log", verb: "get", result: &caps.Logs, namespaceFallback: true},
+		{resource: "pods/portforward", verb: "create", result: &caps.PortForward, namespaceFallback: true},
+		{resource: "secrets", verb: "list", result: &caps.Secrets, namespaceFallback: true},
+		{resource: "secrets", verb: "update", result: &caps.SecretsUpdate, namespaceFallback: true},
+		{resource: "secrets", verb: "create", result: &caps.HelmWrite, namespaceFallback: true},
+		{resource: "nodes", verb: "patch", result: &caps.NodeWrite, namespaceFallback: true},
 		{group: "apps", resource: "deployments", verb: "patch", result: &caps.WorkloadWrites.Deployments},
 		{group: "apps", resource: "daemonsets", verb: "patch", result: &caps.WorkloadWrites.DaemonSets},
 		{group: "apps", resource: "statefulsets", verb: "patch", result: &caps.WorkloadWrites.StatefulSets},
@@ -478,7 +480,7 @@ func CheckCapabilitiesForUser(ctx context.Context, username string, groups []str
 				return
 			}
 			// Try namespace-scoped fallback
-			if fallbackNs := GetEffectiveNamespace(); fallbackNs != "" {
+			if fallbackNs := GetEffectiveNamespace(); fallbackNs != "" && c.namespaceFallback {
 				allowed, _ = canIAs(checkCtx, k8sClient, username, groups, fallbackNs, c.group, c.resource, c.verb)
 				if allowed {
 					*c.result = true

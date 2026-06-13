@@ -11,7 +11,7 @@ import {
   ResourcesView as BaseResourcesView,
   CORE_RESOURCES,
 } from '@skyhook-io/k8s-ui'
-import type { ResourceQueryResult, WorkloadWritePermissions } from '@skyhook-io/k8s-ui'
+import type { Capabilities, ResourceQueryResult, WorkloadWritePermissions } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
 import { kindToPlural, type NavigateToResource } from '../../utils/navigation'
 import { CreateResourceDialog } from '../shared/CreateResourceDialog'
@@ -59,6 +59,16 @@ function canBulkScaleKind(kind: SelectedKindInfo, writes: WorkloadWritePermissio
   }
 }
 
+function intersectWorkloadWrites(capabilities: Capabilities[] | undefined): WorkloadWritePermissions | undefined {
+  if (!capabilities || capabilities.length === 0) return undefined
+  return {
+    deployments: capabilities.every(c => c.workloadWrites?.deployments === true),
+    daemonSets: capabilities.every(c => c.workloadWrites?.daemonSets === true),
+    statefulSets: capabilities.every(c => c.workloadWrites?.statefulSets === true),
+    rollouts: capabilities.every(c => c.workloadWrites?.rollouts === true),
+  }
+}
+
 export function ResourcesView({ namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange, onClearNamespaces }: ResourcesViewProps) {
   const location = useLocation()
   const navigate = useNavigate()
@@ -66,6 +76,14 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const { data: capabilities } = useCapabilities()
   const namespaceForCapabilities = namespaces.length === 1 ? namespaces[0] : undefined
   const { data: namespaceCapabilities } = useNamespaceCapabilities(namespaceForCapabilities, capabilities)
+  const namespaceCapabilityNames = useMemo(() => namespaces.length > 1 ? [...namespaces].sort() : [], [namespaces])
+  const { data: namespaceCapabilitiesList } = useQuery<Capabilities[]>({
+    queryKey: ['capabilities', 'namespaces', namespaceCapabilityNames],
+    queryFn: () => Promise.all(namespaceCapabilityNames.map(ns => fetchJSON<Capabilities>(`/capabilities?namespace=${encodeURIComponent(ns)}`))),
+    enabled: namespaceCapabilityNames.length > 1 && capabilities != null,
+    staleTime: 60000,
+  })
+  const multiNamespaceWorkloadWrites = useMemo(() => intersectWorkloadWrites(namespaceCapabilitiesList), [namespaceCapabilitiesList])
 
   // API resources discovery
   const { data: apiResources } = useAPIResources()
@@ -77,7 +95,11 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
 
   // Track the selected kind from the k8s-ui component
   const [selectedKind, setSelectedKind] = useState<SelectedKindInfo>(null)
-  const workloadWrites = namespaceCapabilities?.workloadWrites ?? capabilities?.workloadWrites
+  const workloadWrites = namespaces.length === 0
+    ? capabilities?.workloadWrites
+    : namespaces.length === 1
+      ? namespaceCapabilities?.workloadWrites
+      : multiNamespaceWorkloadWrites
   const canBulkRestartSelectedKind = useMemo(() => canBulkRestartKind(selectedKind, workloadWrites), [selectedKind, workloadWrites])
   const canBulkScaleSelectedKind = useMemo(() => canBulkScaleKind(selectedKind, workloadWrites), [selectedKind, workloadWrites])
 
