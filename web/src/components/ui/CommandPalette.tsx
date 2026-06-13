@@ -1,13 +1,13 @@
 import { useState, useMemo, useRef, useEffect, useCallback } from 'react'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { Search, X, ChevronRight } from 'lucide-react'
-import { Home, Network, List, Clock, Package, Activity, Sun, Stethoscope, DollarSign, ShieldCheck } from 'lucide-react'
+import { Home, Network, List, Clock, AlertTriangle, Package, Boxes, Activity, Sun, Stethoscope, DollarSign, ShieldCheck } from 'lucide-react'
 import { GitBranch } from 'lucide-react'
 import { clsx } from 'clsx'
 import { useNamespaces, useContexts } from '../../api/client'
 import { CORE_RESOURCES, useAPIResources } from '../../api/apiResources'
 import { getResourceIcon } from '../../utils/resource-icons'
-type MainView = 'home' | 'topology' | 'resources' | 'timeline' | 'helm' | 'traffic' | 'cost' | 'audit' | 'gitops'
+type MainView = 'home' | 'topology' | 'resources' | 'timeline' | 'issues' | 'helm' | 'traffic' | 'cost' | 'checks' | 'gitops' | 'applications'
 
 interface CommandPaletteProps {
   onClose: () => void
@@ -149,16 +149,20 @@ export function CommandPalette({
     const result: CommandItem[] = []
 
     // Views
+    // Order + shortcuts mirror the left nav rail and App.tsx's
+    // VIEW_SHORTCUT_KEYS (g-mnemonic sequences). Keep all three in sync.
     const viewEntries: { view: MainView; label: string; icon: React.ComponentType<{ className?: string }>; shortcut: string }[] = [
-      { view: 'home', label: 'Home', icon: Home, shortcut: '1' },
-      { view: 'topology', label: 'Topology', icon: Network, shortcut: '2' },
-      { view: 'resources', label: 'Resources', icon: List, shortcut: '3' },
-      { view: 'timeline', label: 'Timeline', icon: Clock, shortcut: '4' },
-      { view: 'helm', label: 'Helm', icon: Package, shortcut: '5' },
-      { view: 'gitops', label: 'GitOps', icon: GitBranch, shortcut: '6' },
-      { view: 'traffic', label: 'Traffic', icon: Activity, shortcut: '7' },
-      { view: 'cost', label: 'Cost', icon: DollarSign, shortcut: '8' },
-      { view: 'audit', label: 'Audit', icon: ShieldCheck, shortcut: '9' },
+      { view: 'home', label: 'Home', icon: Home, shortcut: 'g h' },
+      { view: 'resources', label: 'Resources', icon: List, shortcut: 'g r' },
+      { view: 'issues', label: 'Issues', icon: AlertTriangle, shortcut: 'g i' },
+      { view: 'topology', label: 'Topology', icon: Network, shortcut: 'g t' },
+      { view: 'applications', label: 'Applications', icon: Boxes, shortcut: 'g a' },
+      { view: 'timeline', label: 'Timeline', icon: Clock, shortcut: 'g l' },
+      { view: 'traffic', label: 'Traffic', icon: Activity, shortcut: 'g f' },
+      { view: 'helm', label: 'Helm', icon: Package, shortcut: 'g m' },
+      { view: 'gitops', label: 'GitOps', icon: GitBranch, shortcut: 'g o' },
+      { view: 'checks', label: 'Checks', icon: ShieldCheck, shortcut: 'g u' },
+      { view: 'cost', label: 'Cost', icon: DollarSign, shortcut: 'g c' },
     ]
     for (const v of viewEntries) {
       result.push({

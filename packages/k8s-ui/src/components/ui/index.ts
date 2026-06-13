@@ -23,3 +23,5 @@ export { CodeViewer } from './CodeViewer'
 export { YamlEditor, YamlDiffEditor } from './YamlEditor'
 export { RowActionMenu } from './RowActionMenu'
 export type { RowActionItem } from './RowActionMenu'
+
+export { PageHeader } from './PageHeader'

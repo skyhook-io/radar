@@ -47,7 +47,7 @@ export function AuditCard({ data, onNavigate }: AuditCardProps) {
         <div className="flex items-center justify-between px-5 py-3 border-b border-theme-border/50">
           <div className="flex items-center gap-2">
             <ClipboardCheck className={clsx('w-4 h-4', accentColor)} />
-            <span className={clsx('text-xs font-semibold uppercase tracking-wider', accentColor)}>Cluster Audit</span>
+            <span className={clsx('text-xs font-semibold uppercase tracking-wider', accentColor)}>Cluster Checks</span>
             {issueCount > 0 ? (
               <span className={clsx('badge-sm', accentBg, accentColor)}>
                 {issueCount}

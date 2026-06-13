@@ -1,9 +1,19 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { User, LogOut } from 'lucide-react'
+import { clsx } from 'clsx'
 import { useAuthMe } from '../api/client'
 import { useQueryClient } from '@tanstack/react-query'
 
-export function UserMenu() {
+interface UserMenuProps {
+  // 'topbar' (default): 27px avatar, dropdown opens downward.
+  // 'rail': a rail-bottom row (avatar + username, fly-out when slim), dropdown
+  // opens UPWARD + escapes the narrow column to the right.
+  variant?: 'topbar' | 'rail'
+  /** Rail variant only: expanded (labels) vs slim (icon + fly-out). */
+  pinned?: boolean
+}
+
+export function UserMenu({ variant = 'topbar', pinned = true }: UserMenuProps = {}) {
   const { data: authMe } = useAuthMe()
   const [isOpen, setIsOpen] = useState(false)
   const menuRef = useRef<HTMLDivElement>(null)
@@ -47,18 +57,54 @@ export function UserMenu() {
     .map(s => s[0]?.toUpperCase() || '')
     .join('')
 
+  const isRail = variant === 'rail'
+  const avatar = (
+    <span className="w-7 h-7 rounded-full bg-blue-500/15 text-blue-500 flex items-center justify-center text-xs font-medium shrink-0">
+      {initials || <User className="w-3.5 h-3.5" />}
+    </span>
+  )
+
   return (
-    <div ref={menuRef} className="relative">
-      <button
-        onClick={() => setIsOpen(!isOpen)}
-        className="w-7 h-7 rounded-full bg-blue-500/15 text-blue-500 flex items-center justify-center text-xs font-medium hover:bg-blue-500/25 transition-colors"
-        title={authMe.username}
-      >
-        {initials || <User className="w-3.5 h-3.5" />}
-      </button>
+    <div ref={menuRef} className={clsx('relative', isRail && 'group/item', isRail && !pinned && 'w-10')}>
+      {isRail ? (
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          title={authMe.username}
+          className={clsx(
+            'relative flex h-9 w-full items-center rounded-md text-sm font-medium text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary transition-colors',
+            !pinned && 'max-w-10 overflow-hidden',
+          )}
+        >
+          <span className="flex w-10 shrink-0 items-center justify-center">{avatar}</span>
+          <span className={clsx('pr-3 truncate', !pinned && 'opacity-0')}>{authMe.username.split('@')[0]}</span>
+        </button>
+      ) : (
+        <button
+          onClick={() => setIsOpen(!isOpen)}
+          className="w-7 h-7 rounded-full bg-blue-500/15 text-blue-500 flex items-center justify-center text-xs font-medium hover:bg-blue-500/25 transition-colors"
+          title={authMe.username}
+        >
+          {initials || <User className="w-3.5 h-3.5" />}
+        </button>
+      )}
+
+      {/* Slim-rail fly-out label (account row, collapsed) */}
+      {isRail && !pinned && !isOpen && (
+        <span
+          aria-hidden
+          className="pointer-events-none absolute left-full top-1/2 z-50 ml-1 hidden -translate-y-1/2 whitespace-nowrap rounded-md border border-theme-border bg-theme-hover px-2.5 py-1 text-[13px] font-medium text-theme-text-primary opacity-0 shadow-lg shadow-black/30 transition-opacity duration-75 group-hover/item:block group-hover/item:opacity-100"
+        >
+          Account
+        </span>
+      )}
 
       {isOpen && (
-        <div className="absolute right-0 top-full mt-1.5 w-56 bg-theme-surface border border-theme-border rounded-lg shadow-lg z-50 py-1">
+        <div className={clsx(
+          'absolute w-56 bg-theme-surface border border-theme-border rounded-lg shadow-lg z-50 py-1',
+          // Rail: open UP (it sits at the viewport bottom) and align to the rail's
+          // left edge so a 56px slim column doesn't clip it (it extends right).
+          isRail ? 'bottom-full left-2 mb-1.5' : 'right-0 top-full mt-1.5',
+        )}>
           <div className="px-3 py-2 border-b border-theme-border">
             <p className="text-sm font-medium text-theme-text-primary truncate">{authMe.username}</p>
             {authMe.groups && authMe.groups.length > 0 && (

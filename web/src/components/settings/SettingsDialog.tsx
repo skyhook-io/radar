@@ -5,7 +5,7 @@ import { clsx } from 'clsx'
 import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
-import { useCloudRole } from '../../api/client'
+import { useCloudRole, useVersionCheck } from '../../api/client'
 import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
 import type { DeploymentMode } from '../../types'
 
@@ -38,6 +38,7 @@ interface SettingsDialogProps {
 export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsDialogProps) {
   const dialogRef = useRef<HTMLDivElement>(null)
   const { shouldRender, isOpen } = useAnimatedUnmount(open, 200)
+  const { data: versionInfo } = useVersionCheck()
   // Radar configuration (kubeconfig, port, integrations…) is host-level and
   // affects every user of this instance, so it's gated to owners. Personal
   // sections (My permissions) stay visible to everyone. Non-Cloud callers
@@ -262,6 +263,22 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
             </button>
           </div>
         )}
+
+        {/* About — muted version footer (canonical "Settings → About"). */}
+        <div className="flex items-center justify-between gap-2 px-4 py-2 border-t border-theme-border/60 text-[11px] text-theme-text-tertiary shrink-0">
+          <span>
+            Radar{versionInfo?.currentVersion ? ` v${versionInfo.currentVersion}` : ''}
+            <span className="text-theme-text-disabled"> · by Skyhook</span>
+          </span>
+          <a
+            href="https://github.com/skyhook-io/radar"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-accent-text hover:underline"
+          >
+            GitHub
+          </a>
+        </div>
       </div>
     </div>,
     document.body

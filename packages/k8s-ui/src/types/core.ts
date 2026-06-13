@@ -947,11 +947,11 @@ export interface TrafficFilters {
   timeRange: string
 }
 
-// Main view type now includes 'traffic', 'cost', 'audit', 'gitops'.
+// Main view type now includes 'traffic', 'cost', 'checks', 'gitops'.
 // Library consumers (Radar Hub) get all GitOps surfaces — the package
 // IS the public surface, so adding new top-level views must extend
 // this type rather than rely on app-local extensions.
-export type ExtendedMainView = MainView | 'traffic' | 'cost' | 'audit' | 'gitops' | 'issues'
+export type ExtendedMainView = MainView | 'traffic' | 'cost' | 'checks' | 'gitops' | 'issues'
 
 // ============================================================================
 // Image Filesystem Types

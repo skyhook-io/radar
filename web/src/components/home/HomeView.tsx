@@ -182,7 +182,7 @@ export function HomeView({ namespaces, topology, onNavigateToView, onNavigateToR
                   <BandItem>
                     <AuditCard
                       data={data.audit}
-                      onNavigate={() => onNavigateToView('audit')}
+                      onNavigate={() => onNavigateToView('checks')}
                     />
                   </BandItem>
                 )}

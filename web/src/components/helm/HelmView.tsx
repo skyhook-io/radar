@@ -2,7 +2,7 @@ import { useState, useMemo, useRef, useEffect, useCallback, forwardRef } from 'r
 import { useRefreshAnimation } from '../../hooks/useRefreshAnimation'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { Package, Search, RefreshCw, ArrowUpCircle, LayoutGrid, List, Shield, GitBranch, ChevronRight } from 'lucide-react'
-import { PaneLoader } from '@skyhook-io/k8s-ui'
+import { PaneLoader, PageHeader } from '@skyhook-io/k8s-ui'
 import { clsx } from 'clsx'
 import { useHelmReleases, useHelmBatchUpgradeInfo, isForbiddenError } from '../../api/client'
 import type { HelmRelease, SelectedHelmRelease, UpgradeInfo, ChartSource } from '../../types'
@@ -167,6 +167,14 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
     <div className="flex h-full w-full">
       {/* Main Content */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0 w-full">
+        {/* Page header — consistent across views; the tabs + search sit below. */}
+        <div className="px-4 pt-4 pb-1">
+          <PageHeader
+            icon={Package}
+            title="Helm"
+            description="Installed Helm releases and the chart catalog for this cluster."
+          />
+        </div>
         {/* Tab bar */}
         <div className="flex items-center gap-1 px-4 pt-3 border-b border-theme-border bg-theme-surface/50">
           <button
@@ -204,13 +212,9 @@ export function HelmView({ namespace, selectedRelease, onReleaseClick }: HelmVie
           <>
             {/* Releases Toolbar */}
             <div className="flex items-center gap-4 px-4 py-3 border-b border-theme-border bg-theme-surface/50 shrink-0">
-              <div className="flex items-center gap-2 text-theme-text-secondary">
-                <Package className="w-5 h-5" />
-                <span className="font-medium">Helm Releases</span>
-                {!isFullyLoaded && (
-                  <RefreshCw className="w-3.5 h-3.5 animate-spin text-theme-text-tertiary" />
-                )}
-              </div>
+              {!isFullyLoaded && (
+                <RefreshCw className="w-3.5 h-3.5 animate-spin text-theme-text-tertiary shrink-0" />
+              )}
               <div className="flex-1 relative">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-theme-text-tertiary" />
                 <input

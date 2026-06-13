@@ -1,11 +1,10 @@
 import { useIssues } from '../../api/client'
 import type { SelectedResource } from '../../types'
-import { IssuesView, PaneLoader, type IssueResourceRef } from '@skyhook-io/k8s-ui'
-import { AlertTriangle, ArrowLeft } from 'lucide-react'
+import { IssuesView, PaneLoader, PageHeader, type IssueResourceRef } from '@skyhook-io/k8s-ui'
+import { AlertTriangle } from 'lucide-react'
 
 interface IssuesPaneProps {
   namespaces: string[]
-  onBack: () => void
   onNavigateToResource: (resource: SelectedResource) => void
 }
 
@@ -14,7 +13,7 @@ interface IssuesPaneProps {
 // label and in-app (client-side) resource navigation. Classification +
 // owner-grouping come pre-computed from radar's /api/issues
 // (internal/issues.Compose → Classify → Group).
-export function IssuesPane({ namespaces, onBack, onNavigateToResource }: IssuesPaneProps) {
+export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps) {
   const { data, isLoading, error } = useIssues(namespaces)
 
   const onResourceClick = (ref: IssueResourceRef) =>
@@ -33,30 +32,18 @@ export function IssuesPane({ namespaces, onBack, onNavigateToResource }: IssuesP
   }
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 p-6 gap-6 overflow-auto">
-      <div className="flex items-center gap-4">
-        <button
-          onClick={onBack}
-          className="p-1.5 rounded-lg hover:bg-theme-hover transition-colors"
-        >
-          <ArrowLeft className="w-5 h-5 text-theme-text-secondary" />
-        </button>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <AlertTriangle className="w-5 h-5 text-theme-text-secondary" />
-            <h1 className="text-lg font-semibold text-theme-text-primary">Issues</h1>
-          </div>
-          <p className="text-sm text-theme-text-tertiary mt-1 ml-7">
-            Live cluster problems — crashes, scheduling failures, bad references — grouped by the resource they affect.
-          </p>
-        </div>
-      </div>
+    <div className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
+      <PageHeader
+        icon={AlertTriangle}
+        title="Issues"
+        description="Live cluster problems — crashes, scheduling failures, bad references — grouped by the resource they affect."
+      />
 
       {/* Visibility honesty: when RBAC reads are incomplete, an empty queue may
           mean "can't see" rather than "nothing broken" — say so up front so the
           empty state isn't mistaken for a clean bill of health. */}
       {data?.visibility?.impact && (
-        <div className="-mt-3 flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
+        <div className="flex items-start gap-2 rounded-lg border border-theme-border bg-theme-elevated px-3 py-2 text-xs text-theme-text-secondary">
           <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
           <span>Limited visibility — {data.visibility.impact} Results may be incomplete.</span>
         </div>
@@ -65,7 +52,7 @@ export function IssuesPane({ namespaces, onBack, onNavigateToResource }: IssuesP
       {/* Truncation honesty: when more issues matched than were returned, say
           so — don't present a capped list as the complete picture. */}
       {data?.total_matched != null && data.total_matched > (data.issues?.length ?? 0) && (
-        <p className="-mt-3 text-xs text-theme-text-tertiary">
+        <p className="text-xs text-theme-text-tertiary">
           Showing {data.issues?.length ?? 0} of {data.total_matched} issues (capped) — narrow by namespace to see the rest.
         </p>
       )}

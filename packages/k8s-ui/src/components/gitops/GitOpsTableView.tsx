@@ -25,6 +25,7 @@ import {
 
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { Tooltip } from '../ui/Tooltip'
+import { PageHeader } from '../ui/PageHeader'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
 import { getGitOpsResourceStatus } from './detail-helpers'
 import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
@@ -501,11 +502,33 @@ export function GitOpsTableView({
   ]
 
   return (
-    <div
-      className={`flex h-full min-w-0 flex-1 overflow-hidden bg-theme-base max-lg:flex-col ${
-        filtersSide === 'right' ? 'lg:flex-row-reverse' : ''
-      }`}
-    >
+    <div className="flex h-full min-w-0 flex-1 flex-col overflow-hidden bg-theme-base">
+      {/* Full-width header on top; the filter facet + content sit below it. */}
+      <div className="shrink-0 border-b border-theme-border bg-theme-base px-4 py-4">
+        <PageHeader
+          icon={GitBranch}
+          title="GitOps"
+          description="Applications and reconciliations with source, destination, sync, and health state."
+          actions={summaryTiles.map((tile) => (
+            <SummaryTile
+              key={tile.key}
+              label={tile.label}
+              value={tile.value}
+              tone={tile.tone}
+              active={tile.active}
+              onClick={() => {
+                clearAllFilters()
+                if (!tile.active && tile.apply) tile.apply()
+              }}
+            />
+          ))}
+        />
+      </div>
+      <div
+        className={`flex min-w-0 flex-1 overflow-hidden max-lg:flex-col ${
+          filtersSide === 'right' ? 'lg:flex-row-reverse' : ''
+        }`}
+      >
       <GitOpsFilterSidebar
         side={filtersSide}
         mode={mode}
@@ -532,32 +555,6 @@ export function GitOpsTableView({
       />
 
       <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
-        <div className="shrink-0 border-b border-theme-border bg-theme-base px-4 py-3">
-          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
-            <div className="min-w-0">
-              <h1 className="text-lg font-semibold text-theme-text-primary">GitOps</h1>
-              <p className="truncate text-sm text-theme-text-secondary">
-                Applications and reconciliations with source, destination, sync, and health state.
-              </p>
-            </div>
-            <div className="flex shrink-0 flex-wrap justify-end gap-2">
-              {summaryTiles.map((tile) => (
-                <SummaryTile
-                  key={tile.key}
-                  label={tile.label}
-                  value={tile.value}
-                  tone={tile.tone}
-                  active={tile.active}
-                  onClick={() => {
-                    clearAllFilters()
-                    if (!tile.active && tile.apply) tile.apply()
-                  }}
-                />
-              ))}
-            </div>
-          </div>
-        </div>
-
         {forbiddenSecretsClusters && forbiddenSecretsClusters.length > 0 && mode === 'applications' && (
           // Hub-only graceful-degradation note: when the user lacks `get
           // secrets` in the argocd namespace on a controller, the hub
@@ -710,6 +707,7 @@ export function GitOpsTableView({
             />
           )}
         </div>
+      </div>
       </div>
     </div>
   )

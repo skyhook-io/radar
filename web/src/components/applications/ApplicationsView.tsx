@@ -14,6 +14,7 @@ import {
   type AppIdentityInstance,
   type SelectedAppWorkload,
   type SelectedResource,
+  PageHeader,
 } from '@skyhook-io/k8s-ui'
 import { Boxes } from 'lucide-react'
 import { useApplications, useTopology } from '../../api/client'
@@ -66,11 +67,14 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
   }
 
   return (
-    <div className="flex-1 overflow-auto px-4 py-4 sm:px-6">
-      <header className="mb-4 flex flex-col gap-1">
-        <h1 className="text-xl font-semibold text-theme-text-primary">Applications</h1>
-        <p className="max-w-3xl text-sm text-theme-text-secondary">Deployable software in this cluster — your services, workers, and jobs, grouped by app/release evidence.</p>
-      </header>
+    <div className="flex-1 overflow-auto p-4">
+      <div className="mb-4">
+        <PageHeader
+          icon={Boxes}
+          title="Applications"
+          description="Deployable software in this cluster — your services, workers, and jobs, grouped by app/release evidence."
+        />
+      </div>
 
       {query.isLoading ? (
         <CenteredEmpty icon={Boxes} headline="Loading applications…" />

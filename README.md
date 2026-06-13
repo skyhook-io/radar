@@ -445,7 +445,7 @@ Radar auto-discovers any CRD in your cluster. Popular tools get [dedicated integ
 
 | Shortcut | Action |
 |----------|--------|
-| `1`–`6` | Switch view (Home, Topology, Resources, Timeline, Helm, Traffic) |
+| `g` then a letter | Switch view — `g h` Home, `g r` Resources, `g i` Issues, `g t` Topology, `g a` Applications, `g l` Timeline, `g f` Traffic, `g m` Helm, `g o` GitOps, `g u` Checks, `g c` Cost |
 | `t` | Toggle dark/light theme |
 | `?` | Show keyboard shortcuts |
 | `⌘K` | Open command palette |

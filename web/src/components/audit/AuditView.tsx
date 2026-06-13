@@ -1,13 +1,12 @@
 import { useState, useCallback } from 'react'
 import { useAudit, useAuditSettings, useUpdateAuditSettings, useCloudRole } from '../../api/client'
 import type { SelectedResource } from '../../types'
-import { ChecksView, PaneLoader, type CheckResourceRef } from '@skyhook-io/k8s-ui'
-import { ArrowLeft, ClipboardCheck, Settings } from 'lucide-react'
+import { ChecksView, PaneLoader, PageHeader, type CheckResourceRef } from '@skyhook-io/k8s-ui'
+import { ShieldCheck, Settings } from 'lucide-react'
 import { AuditSettingsDialog } from './AuditSettingsDialog'
 
 interface AuditViewProps {
   namespaces: string[]
-  onBack: () => void
   onNavigateToResource: (resource: SelectedResource) => void
 }
 
@@ -17,7 +16,7 @@ interface AuditViewProps {
 // come pre-computed from radar's /api/audit (pkg/audit.BuildChecks); local
 // ~/.radar settings are this cluster's "policy" and the row hide-menu writes to
 // them.
-export function AuditView({ namespaces, onBack, onNavigateToResource }: AuditViewProps) {
+export function AuditView({ namespaces, onNavigateToResource }: AuditViewProps) {
   const { data, isLoading, error } = useAudit(namespaces)
   const { data: auditSettings } = useAuditSettings()
   const updateSettings = useUpdateAuditSettings()
@@ -73,37 +72,26 @@ export function AuditView({ namespaces, onBack, onNavigateToResource }: AuditVie
     onNavigateToResource({ kind: ref.kind, namespace: ref.namespace, name: ref.name, group: ref.group })
 
   return (
-    <div className="flex-1 flex flex-col min-h-0 p-6 gap-6 overflow-auto">
-      {/* Header */}
-      <div className="flex items-center gap-4">
-        <button
-          onClick={onBack}
-          className="p-1.5 rounded-lg hover:bg-theme-hover transition-colors"
-        >
-          <ArrowLeft className="w-5 h-5 text-theme-text-secondary" />
-        </button>
-        <div className="flex-1">
-          <div className="flex items-center gap-2">
-            <ClipboardCheck className="w-5 h-5 text-theme-text-secondary" />
-            <h1 className="text-lg font-semibold text-theme-text-primary">Checks</h1>
-          </div>
-          <p className="text-sm text-theme-text-tertiary mt-1 ml-7">
-            Security, reliability, and efficiency best practices (NSA/CISA, CIS, Polaris, Kubescape), grouped into a remediation queue.
-          </p>
-        </div>
-        <div className="flex items-center gap-2 shrink-0">
-          {ignoredCount > 0 && (
-            <button onClick={() => setShowSettings(true)} className="text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors">{ignoredCount} {ignoredCount === 1 ? 'namespace' : 'namespaces'} hidden</button>
-          )}
-          <button
-            onClick={() => setShowSettings(true)}
-            className="p-2 rounded-lg hover:bg-theme-hover text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
-            title="Checks settings"
-          >
-            <Settings className="w-4 h-4" />
-          </button>
-        </div>
-      </div>
+    <div className="flex-1 flex flex-col min-h-0 p-4 gap-4 overflow-auto">
+      <PageHeader
+        icon={ShieldCheck}
+        title="Checks"
+        description="Security, reliability, and efficiency best practices (NSA/CISA, CIS, Polaris, Kubescape), grouped into a remediation queue."
+        actions={
+          <>
+            {ignoredCount > 0 && (
+              <button onClick={() => setShowSettings(true)} className="text-xs text-theme-text-tertiary hover:text-theme-text-secondary transition-colors">{ignoredCount} {ignoredCount === 1 ? 'namespace' : 'namespaces'} hidden</button>
+            )}
+            <button
+              onClick={() => setShowSettings(true)}
+              className="p-2 rounded-lg hover:bg-theme-hover text-theme-text-tertiary hover:text-theme-text-secondary transition-colors"
+              title="Checks settings"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
+          </>
+        }
+      />
 
       <ChecksView
         checks={data.groupedChecks ?? []}

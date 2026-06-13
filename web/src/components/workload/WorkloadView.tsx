@@ -811,7 +811,7 @@ function AuditSection({ kind, namespace, name }: { kind: string; namespace: stri
   const navigate = useNavigate()
   const { data: findings } = useResourceAudit(kind, namespace, name)
   if (!findings || findings.length === 0) return null
-  return <AuditAlerts findings={findings} onViewAll={() => navigate('/audit')} />
+  return <AuditAlerts findings={findings} onViewAll={() => navigate('/checks')} />
 }
 
 // FluxSourceConsumersSection lists the reconcilers (Kustomization, HelmRelease)

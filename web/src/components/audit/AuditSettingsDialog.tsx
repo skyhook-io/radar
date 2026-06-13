@@ -73,7 +73,7 @@ export function AuditSettingsDialog({ namespaces, onClose }: AuditSettingsDialog
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={onClose}>
       <div className="bg-theme-surface rounded-xl shadow-xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col" onClick={e => e.stopPropagation()}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-theme-border shrink-0">
-          <h2 className="text-sm font-semibold text-theme-text-primary">Audit Settings</h2>
+          <h2 className="text-sm font-semibold text-theme-text-primary">Checks Settings</h2>
           <button onClick={onClose} className="p-1 rounded-lg hover:bg-theme-hover transition-colors">
             <X className="w-4 h-4 text-theme-text-tertiary" />
           </button>

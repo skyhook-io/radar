@@ -464,7 +464,9 @@ export function ResourcesSidebar({
 
   return (
     <div className={clsx('w-56 2xl:w-72 bg-theme-surface dark:bg-theme-base border-r border-theme-border overflow-y-auto overflow-x-hidden shrink-0', className)}>
-      <div className="px-2 py-2 border-b border-theme-border">
+      {/* py-3 matches the table toolbar's vertical padding so the sidebar
+          header and the toolbar align (same band height + border line). */}
+      <div className="px-2 py-3 border-b border-theme-border">
         <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-theme-text-tertiary" />
           <input
