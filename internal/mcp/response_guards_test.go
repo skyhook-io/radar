@@ -95,6 +95,36 @@ func TestTruncateLargeConfigMapData_ManyTinyValuesWarnOnly(t *testing.T) {
 	}
 }
 
+// Values just above the truncation floor must never grow: keeping valueCap
+// bytes plus the ~60B marker can exceed a 540B original. The guard must leave
+// them intact and warn rather than enlarge the payload while claiming to cut.
+func TestTruncateLargeConfigMapData_NeverEnlarges(t *testing.T) {
+	data := map[string]any{}
+	for i := 0; i < 40; i++ {
+		data[fmt.Sprintf("near-floor-%d", i)] = strings.Repeat("x", 540) // > 512 cap, < cap+marker
+	}
+	in := map[string]any{"data": data}
+	before := 0
+	for _, v := range data {
+		before += len(v.(string))
+	}
+	out, note := truncateLargeConfigMapData(in)
+	if note == "" {
+		t.Fatal("over-budget payload must still warn")
+	}
+	after := 0
+	for k, v := range out.(map[string]any)["data"].(map[string]any) {
+		s := v.(string)
+		after += len(s)
+		if len(s) != 540 {
+			t.Fatalf("value %s changed to %d bytes — truncation enlarged or altered a near-floor value", k, len(s))
+		}
+	}
+	if after > before {
+		t.Fatalf("payload grew from %d to %d bytes", before, after)
+	}
+}
+
 // binaryData counts toward the size guard too — base64 blobs (cert bundles,
 // jars) are routinely the largest ConfigMap payloads.
 func TestTruncateLargeConfigMapData_BinaryData(t *testing.T) {

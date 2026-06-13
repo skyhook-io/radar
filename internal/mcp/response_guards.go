@@ -64,16 +64,23 @@ func truncateLargeConfigMapData(resourceData any) (any, string) {
 			if !ok || len(s) <= valueCap {
 				continue
 			}
-			section[k] = s[:valueCap] + fmt.Sprintf("\n…[truncated by radar: value is %d bytes, showing first %d]", len(s), valueCap)
+			replacement := s[:valueCap] + fmt.Sprintf("\n…[truncated by radar: value is %d bytes, showing first %d]", len(s), valueCap)
+			// Marker overhead can exceed the bytes saved for values only just
+			// over the cap — never grow a value in the name of truncating it.
+			if len(replacement) >= len(s) {
+				continue
+			}
+			section[k] = replacement
 			truncatedKeys = append(truncatedKeys, k)
 		}
 	}
 	if len(truncatedKeys) == 0 {
-		// Over budget but every value sits under the floor (many tiny keys) —
-		// nothing to truncate, but the size still deserves a warning.
+		// Over budget but no value is large enough that truncating it would
+		// shrink the payload (many small keys) — leave them intact, but the
+		// size still deserves a warning.
 		return resourceData, fmt.Sprintf(
-			"large ConfigMap (%d bytes total across %d keys): values left intact (each under %d bytes)",
-			total, valueCount, valueCap,
+			"large ConfigMap (%d bytes total across %d keys): values left intact — none large enough that truncation would reduce the payload",
+			total, valueCount,
 		)
 	}
 	sort.Strings(truncatedKeys)
