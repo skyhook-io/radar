@@ -41,7 +41,7 @@ func Classify(in classifyInput) issuesapi.Category {
 			return issuesapi.CategoryAdmissionWebhookBlocking
 		case "RBACForbidden":
 			return issuesapi.CategoryRBACForbidden
-		case "IPExhaustion", "SandboxCreationFailed":
+		case "IPExhaustion", "SandboxCreationFailed", "PostBindStartupStall":
 			// scheduled but stuck creating the sandbox — a startup-stage stall
 			return issuesapi.CategoryContainerWaiting
 		case "VolumeMultiAttach", "VolumeAttach", "VolumeMount":

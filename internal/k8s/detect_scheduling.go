@@ -485,8 +485,12 @@ func DetectSchedulingProblems(cache *ResourceCache, namespace string) []Detectio
 }
 
 func podScheduledCondition(pod *corev1.Pod) *corev1.PodCondition {
+	return podCondition(pod, corev1.PodScheduled)
+}
+
+func podCondition(pod *corev1.Pod, condType corev1.PodConditionType) *corev1.PodCondition {
 	for i := range pod.Status.Conditions {
-		if pod.Status.Conditions[i].Type == corev1.PodScheduled {
+		if pod.Status.Conditions[i].Type == condType {
 			return &pod.Status.Conditions[i]
 		}
 	}
@@ -1026,16 +1030,21 @@ func classifyAdmissionFailure(msg string) (string, bool) {
 // The pod was scheduled (a node accepted it) but the kubelet can't bring it
 // up — stuck in ContainerCreating because the CNI can't hand out an IP or the
 // CSI can't attach/mount a volume. radar otherwise treats ContainerCreating
-// as benign, so these silently sit as "Pending". The failure detail lives in
-// kubelet events (FailedCreatePodSandBox / FailedMount / FailedAttachVolume),
-// so this detector is event-driven, cross-checked against still-stuck pods so
-// a pod that recovered after a retry isn't falsely flagged.
+// as benign, so these silently sit as "Pending". The best failure detail lives
+// in kubelet events (FailedCreatePodSandBox / FailedMount / FailedAttachVolume),
+// but events expire; when no recent event remains, a narrow fallback catches
+// the CNI/sandbox shape: scheduled, old, ContainerCreating, and no Pod IP.
 
-const postBindFailureWindow = 10 * time.Minute
+const (
+	postBindFailureWindow     = 10 * time.Minute
+	postBindCriticalAfter     = 30 * time.Minute
+	podReadyToStartContainers = corev1.PodConditionType("PodReadyToStartContainers")
+)
 
 var postBindSeverity = map[string]string{
 	"IPExhaustion":          "critical",
 	"SandboxCreationFailed": "high",
+	"PostBindStartupStall":  "high",
 	"VolumeMultiAttach":     "critical",
 	"VolumeAttach":          "high",
 	"VolumeMount":           "high",
@@ -1044,7 +1053,25 @@ var postBindSeverity = map[string]string{
 // DetectPostBindProblems flags pods stuck in ContainerCreating due to CNI/IP
 // or volume failures. namespace="" scans all namespaces.
 func DetectPostBindProblems(cache *ResourceCache, namespace string) []Detection {
-	if cache == nil || cache.Events() == nil {
+	now := time.Now()
+	return detectPostBindProblems(cache, namespace, postBindStartupStallCounts(cache, []string{namespace}, now), now)
+}
+
+func DetectPostBindProblemsForNamespaces(cache *ResourceCache, namespaces []string) []Detection {
+	if len(namespaces) == 0 {
+		return DetectPostBindProblems(cache, "")
+	}
+	now := time.Now()
+	nodeStallCounts := postBindStartupStallCounts(cache, namespaces, now)
+	var out []Detection
+	for _, ns := range namespaces {
+		out = append(out, detectPostBindProblems(cache, ns, nodeStallCounts, now)...)
+	}
+	return out
+}
+
+func detectPostBindProblems(cache *ResourceCache, namespace string, nodeStallCounts map[string]int, now time.Time) []Detection {
+	if cache == nil {
 		return nil
 	}
 	stuck := stuckScheduledPods(cache, namespace)
@@ -1053,13 +1080,14 @@ func DetectPostBindProblems(cache *ResourceCache, namespace string) []Detection 
 	}
 
 	var events []*corev1.Event
-	if namespace != "" {
-		events, _ = cache.Events().Events(namespace).List(labels.Everything())
-	} else {
-		events, _ = cache.Events().List(labels.Everything())
+	if eventLister := cache.Events(); eventLister != nil {
+		if namespace != "" {
+			events, _ = eventLister.Events(namespace).List(labels.Everything())
+		} else {
+			events, _ = eventLister.List(labels.Everything())
+		}
 	}
 
-	now := time.Now()
 	// One row per stuck pod, showing the CURRENT blocker. The kubelet
 	// re-emits a post-bind event per retry and the active cause can change
 	// (NetworkNotReady → FailedMount). Informer List order is arbitrary, so
@@ -1070,6 +1098,7 @@ func DetectPostBindProblems(cache *ResourceCache, namespace string) []Detection 
 		reason string
 	}
 	latest := map[string]pbCandidate{}
+	expiredLatest := map[string]pbCandidate{}
 	var order []string
 	for _, e := range events {
 		if e.InvolvedObject.Kind != "Pod" {
@@ -1079,11 +1108,14 @@ func DetectPostBindProblems(cache *ResourceCache, namespace string) []Detection 
 		if !ok {
 			continue
 		}
-		if t := eventLastTime(e); !t.IsZero() && now.Sub(t) > postBindFailureWindow {
-			continue
-		}
 		key := e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
 		if _, isStuck := stuck[key]; !isStuck {
+			continue
+		}
+		if t := eventLastTime(e); !t.IsZero() && now.Sub(t) > postBindFailureWindow {
+			if cur, exists := expiredLatest[key]; !exists || t.After(eventLastTime(cur.ev)) {
+				expiredLatest[key] = pbCandidate{ev: e, reason: reason}
+			}
 			continue
 		}
 		if cur, exists := latest[key]; exists {
@@ -1100,11 +1132,8 @@ func DetectPostBindProblems(cache *ResourceCache, namespace string) []Detection 
 	for _, key := range order {
 		c := latest[key]
 		pod := stuck[key]
-		severity := postBindSeverity[c.reason]
-		if severity == "" {
-			severity = "high"
-		}
 		ageDur := now.Sub(pod.CreationTimestamp.Time)
+		severity := postBindProblemSeverity(c.reason, ageDur)
 		ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
 		problems = append(problems, Detection{
 			Kind:            "Pod",
@@ -1112,7 +1141,42 @@ func DetectPostBindProblems(cache *ResourceCache, namespace string) []Detection 
 			Name:            pod.Name,
 			Severity:        severity,
 			Reason:          c.reason,
-			Message:         "stuck creating: " + strings.TrimSpace(c.ev.Message),
+			Message:         postBindEventMessage(pod, c.reason, c.ev.Message, nodeStallCounts),
+			Age:             FormatAge(ageDur),
+			AgeSeconds:      int64(ageDur.Seconds()),
+			Duration:        FormatAge(ageDur),
+			DurationSeconds: int64(ageDur.Seconds()),
+			OwnerGroup:      ownerGroup,
+			OwnerKind:       ownerKind,
+			OwnerName:       ownerName,
+		})
+	}
+
+	var fallbackKeys []string
+	for key, pod := range stuck {
+		if _, hasRecentEvent := latest[key]; hasRecentEvent {
+			continue
+		}
+		if c, hasExpiredEvent := expiredLatest[key]; hasExpiredEvent && isVolumePostBindReason(c.reason) {
+			continue
+		}
+		if !isPostBindStartupStallPod(pod, now) {
+			continue
+		}
+		fallbackKeys = append(fallbackKeys, key)
+	}
+	sort.Strings(fallbackKeys)
+	for _, key := range fallbackKeys {
+		pod := stuck[key]
+		ageDur := now.Sub(pod.CreationTimestamp.Time)
+		ownerGroup, ownerKind, ownerName := podOwnerKindName(cache, pod)
+		problems = append(problems, Detection{
+			Kind:            "Pod",
+			Namespace:       pod.Namespace,
+			Name:            pod.Name,
+			Severity:        postBindProblemSeverity("PostBindStartupStall", ageDur),
+			Reason:          "PostBindStartupStall",
+			Message:         postBindFallbackMessage(pod, ageDur, nodeStallCounts),
 			Age:             FormatAge(ageDur),
 			AgeSeconds:      int64(ageDur.Seconds()),
 			Duration:        FormatAge(ageDur),
@@ -1142,6 +1206,175 @@ func stuckScheduledPods(cache *ResourceCache, namespace string) map[string]*core
 		}
 	}
 	return out
+}
+
+func postBindProblemSeverity(reason string, age time.Duration) string {
+	if (reason == "SandboxCreationFailed" || reason == "PostBindStartupStall") && age >= postBindCriticalAfter {
+		return "critical"
+	}
+	severity := postBindSeverity[reason]
+	if severity == "" {
+		return "high"
+	}
+	return severity
+}
+
+func isPostBindStartupStallPod(pod *corev1.Pod, now time.Time) bool {
+	if pod == nil || pod.Status.Phase != corev1.PodPending || pod.Spec.NodeName == "" {
+		return false
+	}
+	if cond := podScheduledCondition(pod); cond != nil && cond.Status == corev1.ConditionFalse {
+		return false
+	}
+	if pod.CreationTimestamp.IsZero() || now.Sub(pod.CreationTimestamp.Time) <= postBindFailureWindow {
+		return false
+	}
+	if podHasStatusIP(pod) {
+		return false
+	}
+	for i := range pod.Status.ContainerStatuses {
+		if w := pod.Status.ContainerStatuses[i].State.Waiting; w != nil && w.Reason == "ContainerCreating" {
+			return true
+		}
+	}
+	return false
+}
+
+func podHasStatusIP(pod *corev1.Pod) bool {
+	if pod.Status.PodIP != "" {
+		return true
+	}
+	for _, ip := range pod.Status.PodIPs {
+		if ip.IP != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func postBindStartupStallCounts(cache *ResourceCache, namespaces []string, now time.Time) map[string]int {
+	counts := map[string]int{}
+	if len(namespaces) == 0 {
+		namespaces = []string{""}
+	}
+	suppressed := expiredVolumePostBindPodKeys(cache, namespaces, now)
+	seen := map[string]bool{}
+	for _, namespace := range namespaces {
+		for _, pods := range listPodsByNamespace(cache, namespace) {
+			for _, pod := range pods {
+				key := pod.Namespace + "/" + pod.Name
+				if seen[key] {
+					continue
+				}
+				seen[key] = true
+				if suppressed[key] {
+					continue
+				}
+				if !isPostBindStartupStallPod(pod, now) {
+					continue
+				}
+				counts[pod.Spec.NodeName]++
+			}
+		}
+	}
+	return counts
+}
+
+func expiredVolumePostBindPodKeys(cache *ResourceCache, namespaces []string, now time.Time) map[string]bool {
+	out := map[string]bool{}
+	if cache == nil {
+		return out
+	}
+	eventLister := cache.Events()
+	if eventLister == nil {
+		return out
+	}
+	if len(namespaces) == 0 {
+		namespaces = []string{""}
+	}
+	latestTime := map[string]time.Time{}
+	latestReason := map[string]string{}
+	for _, namespace := range namespaces {
+		var events []*corev1.Event
+		if namespace != "" {
+			events, _ = eventLister.Events(namespace).List(labels.Everything())
+		} else {
+			events, _ = eventLister.List(labels.Everything())
+		}
+		for _, e := range events {
+			if e.InvolvedObject.Kind != "Pod" {
+				continue
+			}
+			reason, ok := classifyPostBindFailure(e.Reason, e.Message)
+			if !ok {
+				continue
+			}
+			t := eventLastTime(e)
+			if t.IsZero() || now.Sub(t) <= postBindFailureWindow {
+				continue
+			}
+			key := e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
+			if cur, exists := latestTime[key]; !exists || t.After(cur) {
+				latestTime[key] = t
+				latestReason[key] = reason
+			}
+		}
+	}
+	for key, reason := range latestReason {
+		if isVolumePostBindReason(reason) {
+			out[key] = true
+		}
+	}
+	return out
+}
+
+func postBindEventMessage(pod *corev1.Pod, reason, eventMessage string, nodeStallCounts map[string]int) string {
+	msg := "stuck creating"
+	if pod.Spec.NodeName != "" {
+		msg += " on node " + pod.Spec.NodeName
+	}
+	if eventMessage = strings.TrimSpace(eventMessage); eventMessage != "" {
+		msg += ": " + eventMessage
+	}
+	return appendPostBindNodeCorrelation(msg, pod, reason, nodeStallCounts)
+}
+
+func postBindFallbackMessage(pod *corev1.Pod, age time.Duration, nodeStallCounts map[string]int) string {
+	parts := []string{fmt.Sprintf("container is ContainerCreating with no Pod IP after %s", FormatAge(age))}
+	if cond := podCondition(pod, podReadyToStartContainers); cond != nil && cond.Status == corev1.ConditionFalse {
+		parts = append(parts, "PodReadyToStartContainers=False")
+	}
+	msg := fmt.Sprintf("stuck before container start on node %s: %s; no matching recent kubelet event found; check kubelet, container runtime, and CNI on that node",
+		pod.Spec.NodeName, strings.Join(parts, "; "))
+	return appendPostBindNodeCorrelation(msg, pod, "PostBindStartupStall", nodeStallCounts)
+}
+
+func appendPostBindNodeCorrelation(msg string, pod *corev1.Pod, reason string, nodeStallCounts map[string]int) string {
+	if !isNetworkPostBindReason(reason) || pod.Spec.NodeName == "" {
+		return msg
+	}
+	if count := nodeStallCounts[pod.Spec.NodeName]; count > 1 {
+		return fmt.Sprintf("%s; same node has %d visible pods stuck before container start", msg, count)
+	}
+	return msg
+}
+
+func isNetworkPostBindReason(reason string) bool {
+	switch reason {
+	case "IPExhaustion", "SandboxCreationFailed", "PostBindStartupStall":
+		return true
+	default:
+		return false
+	}
+}
+
+func isVolumePostBindReason(reason string) bool {
+	switch reason {
+	case "VolumeMultiAttach", "VolumeAttach", "VolumeMount":
+		return true
+	default:
+		return false
+	}
 }
 
 // classifyPostBindFailure maps a kubelet event (reason + message) to a

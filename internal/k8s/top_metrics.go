@@ -481,6 +481,20 @@ func topOwnerForPodResolved(cache *ResourceCache, pod *corev1.Pod) *TopOwnerInfo
 			}
 		}
 	}
+	if ref.Kind == "Job" && cache != nil {
+		if jl := cache.Jobs(); jl != nil {
+			if job, err := jl.Jobs(pod.Namespace).Get(ref.Name); err == nil && job != nil {
+				if owner := controllerOwnerRef(job.OwnerReferences); owner != nil {
+					return &TopOwnerInfo{
+						Group: schema.FromAPIVersionAndKind(owner.APIVersion, owner.Kind).Group,
+						Kind:  owner.Kind,
+						Name:  owner.Name,
+					}
+				}
+				return &TopOwnerInfo{Group: "batch", Kind: "Job", Name: ref.Name}
+			}
+		}
+	}
 	return topOwnerForPod(pod)
 }
 

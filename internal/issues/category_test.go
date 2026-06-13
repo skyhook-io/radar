@@ -21,6 +21,7 @@ func TestClassify(t *testing.T) {
 		{"rbac forbidden", classifyInput{Source: SourceScheduling, Kind: "Deployment", Reason: "RBACForbidden"}, issuesapi.CategoryRBACForbidden},
 		{"ip exhaustion is startup stall", classifyInput{Source: SourceScheduling, Kind: "Pod", Reason: "IPExhaustion"}, issuesapi.CategoryContainerWaiting},
 		{"sandbox failed is startup stall", classifyInput{Source: SourceScheduling, Kind: "Pod", Reason: "SandboxCreationFailed"}, issuesapi.CategoryContainerWaiting},
+		{"eventless post-bind startup stall", classifyInput{Source: SourceScheduling, Kind: "Pod", Reason: "PostBindStartupStall"}, issuesapi.CategoryContainerWaiting},
 		{"volume multiattach", classifyInput{Source: SourceScheduling, Kind: "Pod", Reason: "VolumeMultiAttach"}, issuesapi.CategoryVolumeMountFailed},
 		{"volume mount", classifyInput{Source: SourceScheduling, Kind: "Pod", Reason: "VolumeMount"}, issuesapi.CategoryVolumeMountFailed},
 		{"terminating pod", classifyInput{Source: SourceProblem, Kind: "Pod", Reason: "Terminating stuck"}, issuesapi.CategoryTerminationStuck},

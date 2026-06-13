@@ -64,4 +64,64 @@ describe('getPodProblems', () => {
       }),
     ).toContainEqual({ severity: 'critical', message: 'ImagePullBackOff', detail })
   })
+
+  it('infers sandbox startup stalls only for scheduled pods and follows backend severity gates', () => {
+    expect(
+      getPodProblems({
+        metadata: { creationTimestamp: new Date(Date.now() - 20 * 60 * 1000).toISOString() },
+        spec: { nodeName: 'worker-1' },
+        status: {
+          phase: 'Pending',
+          containerStatuses: [
+            {
+              name: 'api',
+              restartCount: 0,
+              state: { waiting: { reason: 'ContainerCreating' } },
+            },
+          ],
+        },
+      }),
+    ).toContainEqual({ severity: 'high', message: 'Sandbox Startup Stalled' })
+
+    expect(
+      getPodProblems({
+        metadata: { creationTimestamp: new Date(Date.now() - 45 * 60 * 1000).toISOString() },
+        spec: { nodeName: 'worker-1' },
+        status: {
+          phase: 'Pending',
+          containerStatuses: [
+            {
+              name: 'api',
+              restartCount: 0,
+              state: { waiting: { reason: 'ContainerCreating' } },
+            },
+          ],
+        },
+      }),
+    ).toContainEqual({ severity: 'critical', message: 'Sandbox Startup Stalled' })
+
+    expect(
+      getPodProblems({
+        metadata: { creationTimestamp: new Date(Date.now() - 45 * 60 * 1000).toISOString() },
+        spec: { nodeName: 'worker-1' },
+        status: {
+          phase: 'Pending',
+          conditions: [
+            {
+              type: 'PodScheduled',
+              status: 'False',
+              reason: 'Unschedulable',
+            },
+          ],
+          containerStatuses: [
+            {
+              name: 'api',
+              restartCount: 0,
+              state: { waiting: { reason: 'ContainerCreating' } },
+            },
+          ],
+        },
+      }),
+    ).not.toContainEqual(expect.objectContaining({ message: 'Sandbox Startup Stalled' }))
+  })
 })

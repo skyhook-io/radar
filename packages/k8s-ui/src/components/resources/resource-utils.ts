@@ -268,6 +268,17 @@ export function getPodProblems(pod: any): PodProblem[] {
   const conditions = pod.status?.conditions || []
   const phase = pod.status?.phase
   const podStatusMessage = pod.status?.message || undefined
+  const hasPodIP = Boolean(pod.status?.podIP || pod.status?.podIPs?.some((ip: any) => ip?.ip))
+  const hasScheduledNode = Boolean(pod.spec?.nodeName)
+  const hasUnschedulableCondition = conditions.some((cond: any) => cond.type === 'PodScheduled' && cond.status === 'False')
+  const hasContainerCreating = containerStatuses.some((cs: any) => cs.state?.waiting?.reason === 'ContainerCreating')
+  const createdAtMs = pod.metadata?.creationTimestamp ? new Date(pod.metadata.creationTimestamp).getTime() : NaN
+  const podAgeMs = Number.isFinite(createdAtMs) ? Date.now() - createdAtMs : 0
+  const sandboxStartupStallAgeMs = 10 * 60 * 1000
+  const sandboxStartupStallCriticalAgeMs = 30 * 60 * 1000
+  const inferredSandboxStartupStall = phase === 'Pending' && hasScheduledNode && !hasUnschedulableCondition && hasContainerCreating && !hasPodIP && podAgeMs > sandboxStartupStallAgeMs
+  const inferredSandboxStartupStallSeverity: PodProblem['severity'] = podAgeMs >= sandboxStartupStallCriticalAgeMs ? 'critical' : 'high'
+  let hasSandboxStartupStallProblem = false
 
   // Failed or Unknown phase
   if (phase === 'Failed' && pod.status?.reason !== 'Evicted') {
@@ -344,10 +355,16 @@ export function getPodProblems(pod: any): PodProblem[] {
     // IP allocation failures (subnet exhaustion)
     if (cond.type === 'PodReadyToStartContainers' && cond.status === 'False') {
       const msg = (cond.message || '').toLowerCase()
-      if (msg.includes('failed to assign an ip') || msg.includes('pod sandbox')) {
+      if (msg.includes('failed to assign an ip')) {
         problems.push({ severity: 'critical', message: 'IP Allocation Failed', detail: cond.message || undefined })
+      } else if (msg.includes('pod sandbox')) {
+        problems.push({ severity: 'critical', message: 'Sandbox Startup Stalled', detail: cond.message || undefined })
+        hasSandboxStartupStallProblem = true
       }
     }
+  }
+  if (inferredSandboxStartupStall && !hasSandboxStartupStallProblem) {
+    problems.push({ severity: inferredSandboxStartupStallSeverity, message: 'Sandbox Startup Stalled' })
   }
 
   // Evicted pods

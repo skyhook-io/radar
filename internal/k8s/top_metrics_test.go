@@ -3,8 +3,10 @@ package k8s
 import (
 	"testing"
 
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/kubernetes/fake"
 )
 
 func TestNormalizeTopMetricsOptions(t *testing.T) {
@@ -91,5 +93,68 @@ func TestTopOwnerForPodIgnoresNonControllerOwnerRefs(t *testing.T) {
 	}
 	if owner := topOwnerForPodResolved(nil, pod); owner != nil {
 		t.Fatalf("topOwnerForPodResolved = %+v, want nil for non-controller ownerRef", owner)
+	}
+}
+
+func TestTopOwnerForPodResolvedCollapsesJobToCronJob(t *testing.T) {
+	defer ResetTestState()
+	controller := true
+	job := &batchv1.Job{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "calico-token-refresh-123",
+			Namespace: "kube-system",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "batch/v1",
+				Kind:       "CronJob",
+				Name:       "calico-token-refresh",
+				Controller: &controller,
+			}},
+		},
+	}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "calico-token-refresh-123-abc",
+			Namespace: "kube-system",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "batch/v1",
+				Kind:       "Job",
+				Name:       "calico-token-refresh-123",
+				Controller: &controller,
+			}},
+		},
+	}
+	if err := InitTestResourceCache(fake.NewClientset(job)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	owner := topOwnerForPodResolved(GetResourceCache(), pod)
+	if owner == nil || owner.Group != "batch" || owner.Kind != "CronJob" || owner.Name != "calico-token-refresh" {
+		t.Fatalf("owner = %+v, want batch/CronJob/calico-token-refresh", owner)
+	}
+}
+
+func TestTopOwnerForPodResolvedKeepsStandaloneJob(t *testing.T) {
+	defer ResetTestState()
+	controller := true
+	job := &batchv1.Job{ObjectMeta: metav1.ObjectMeta{Name: "manual", Namespace: "prod"}}
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "manual-abc",
+			Namespace: "prod",
+			OwnerReferences: []metav1.OwnerReference{{
+				APIVersion: "batch/v1",
+				Kind:       "Job",
+				Name:       "manual",
+				Controller: &controller,
+			}},
+		},
+	}
+	if err := InitTestResourceCache(fake.NewClientset(job)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+
+	owner := topOwnerForPodResolved(GetResourceCache(), pod)
+	if owner == nil || owner.Group != "batch" || owner.Kind != "Job" || owner.Name != "manual" {
+		t.Fatalf("owner = %+v, want batch/Job/manual", owner)
 	}
 }

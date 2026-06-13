@@ -94,17 +94,20 @@ func (p *CacheProvider) DetectScheduling(namespaces []string) []k8s.Detection {
 	detect := func(ns string) []k8s.Detection {
 		out := k8s.DetectSchedulingProblems(p.cache, ns)
 		out = append(out, k8s.DetectAdmissionProblems(p.cache, ns)...)
-		out = append(out, k8s.DetectPostBindProblems(p.cache, ns)...)
 		return out
 	}
 	if len(namespaces) == 0 {
-		return detect("")
+		out := detect("")
+		out = append(out, k8s.DetectPostBindProblems(p.cache, "")...)
+		return out
 	}
 	perNs := make([][]k8s.Detection, 0, len(namespaces))
 	for _, ns := range namespaces {
 		perNs = append(perNs, detect(ns))
 	}
-	return flattenNamespacedProblems(perNs)
+	out := flattenNamespacedProblems(perNs)
+	out = append(out, k8s.DetectPostBindProblemsForNamespaces(p.cache, namespaces)...)
+	return out
 }
 
 func (p *CacheProvider) DetectCAPIProblems(namespaces []string) []k8s.Detection {

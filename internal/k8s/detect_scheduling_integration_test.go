@@ -589,6 +589,125 @@ func TestDetectPostBindProblems_LatestEventWins(t *testing.T) {
 	}
 }
 
+func TestDetectPostBindProblems_EventlessCNIStartupStall(t *testing.T) {
+	defer ResetTestState()
+	old := time.Now().Add(-45 * time.Minute)
+	stuck := postBindContainerCreatingPod("prod", "valkey", "worker-2", old)
+	sameNode := postBindContainerCreatingPod("kube-system", "calico-token-refresh", "worker-2", old)
+	slowImagePull := postBindContainerCreatingPod("prod", "image-pull", "worker-2", old)
+	slowImagePull.Status.PodIP = "10.1.2.3"
+	fresh := postBindContainerCreatingPod("prod", "fresh", "worker-2", time.Now().Add(-5*time.Minute))
+	unscheduled := postBindContainerCreatingPod("prod", "unscheduled", "worker-2", old)
+	unscheduled.Status.Conditions = append(unscheduled.Status.Conditions, corev1.PodCondition{
+		Type:   corev1.PodScheduled,
+		Status: corev1.ConditionFalse,
+		Reason: corev1.PodReasonUnschedulable,
+	})
+	initializing := postBindContainerCreatingPod("prod", "initializing", "worker-2", old)
+	initializing.Status.ContainerStatuses[0].State.Waiting.Reason = "PodInitializing"
+
+	if err := InitTestResourceCache(fake.NewClientset(stuck, sameNode, slowImagePull, fresh, unscheduled, initializing)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	scoped := DetectPostBindProblems(GetResourceCache(), "prod")
+	if len(scoped) != 1 || strings.Contains(scoped[0].Message, "same node has 2 visible pods") {
+		t.Fatalf("single-namespace detector should not count kube-system pods, got %+v", scoped)
+	}
+	problems := DetectPostBindProblemsForNamespaces(GetResourceCache(), []string{"prod", "kube-system"})
+
+	var got *Detection
+	for i := range problems {
+		p := &problems[i]
+		switch p.Name {
+		case "valkey":
+			got = p
+		case "image-pull", "fresh", "unscheduled", "initializing":
+			t.Fatalf("pod %s should not be reported as eventless CNI startup stall: %+v", p.Name, problems)
+		}
+	}
+	if got == nil {
+		t.Fatalf("expected PostBindStartupStall for valkey, got %+v", problems)
+	}
+	if got.Reason != "PostBindStartupStall" || got.Severity != "critical" {
+		t.Fatalf("got reason/severity %s/%s, want PostBindStartupStall/critical: %+v", got.Reason, got.Severity, got)
+	}
+	for _, want := range []string{"worker-2", "no matching recent kubelet event", "same node has 2 visible pods"} {
+		if !strings.Contains(got.Message, want) {
+			t.Errorf("message %q missing %q", got.Message, want)
+		}
+	}
+}
+
+func TestDetectPostBindProblems_ExpiredVolumeEventSuppressesFallback(t *testing.T) {
+	defer ResetTestState()
+	old := time.Now().Add(-45 * time.Minute)
+	networkPod := postBindContainerCreatingPod("prod", "network", "worker-1", old)
+	volumePod := postBindContainerCreatingPod("prod", "web", "worker-1", old)
+	event := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "mount", Namespace: "prod"},
+		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "web"},
+		Reason:         "FailedMount",
+		Type:           corev1.EventTypeWarning,
+		Message:        "Unable to attach or mount volumes: timed out waiting for the condition",
+		LastTimestamp:  metav1.NewTime(time.Now().Add(-30 * time.Minute)),
+	}
+	if err := InitTestResourceCache(fake.NewClientset(networkPod, volumePod, event)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	problems := DetectPostBindProblems(GetResourceCache(), "prod")
+
+	for _, p := range problems {
+		if p.Name == "web" {
+			t.Fatalf("expired storage event must not be relabeled as an eventless CNI/runtime stall: %+v", problems)
+		}
+		if p.Name == "network" && strings.Contains(p.Message, "same node has 2 visible pods") {
+			t.Fatalf("expired storage event must not inflate same-node CNI/runtime correlation: %+v", problems)
+		}
+	}
+}
+
+func TestDetectPostBindProblems_RecentSandboxEventSuppressesFallback(t *testing.T) {
+	defer ResetTestState()
+	pod := postBindContainerCreatingPod("prod", "web", "worker-1", time.Now().Add(-45*time.Minute))
+	event := &corev1.Event{
+		ObjectMeta:     metav1.ObjectMeta{Name: "sandbox", Namespace: "prod"},
+		InvolvedObject: corev1.ObjectReference{Kind: "Pod", Namespace: "prod", Name: "web"},
+		Reason:         "FailedCreatePodSandBox",
+		Type:           corev1.EventTypeWarning,
+		Message:        "failed to create pod sandbox: network is not ready",
+		LastTimestamp:  metav1.Now(),
+	}
+	if err := InitTestResourceCache(fake.NewClientset(pod, event)); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	problems := DetectPostBindProblems(GetResourceCache(), "prod")
+
+	if len(problems) != 1 {
+		t.Fatalf("expected one event-backed post-bind row, got %+v", problems)
+	}
+	if problems[0].Reason != "SandboxCreationFailed" || problems[0].Severity != "critical" {
+		t.Fatalf("got reason/severity %s/%s, want SandboxCreationFailed/critical: %+v", problems[0].Reason, problems[0].Severity, problems[0])
+	}
+}
+
+func postBindContainerCreatingPod(namespace, name, node string, created time.Time) *corev1.Pod {
+	return &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace, CreationTimestamp: metav1.NewTime(created)},
+		Spec:       corev1.PodSpec{NodeName: node, Containers: []corev1.Container{{Name: "main", Image: "example/app:latest"}}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			Conditions: []corev1.PodCondition{{
+				Type:   podReadyToStartContainers,
+				Status: corev1.ConditionFalse,
+			}},
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name:  "main",
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "ContainerCreating"}},
+			}},
+		},
+	}
+}
+
 // Exercises the cross-check for Job + DaemonSet, whose created-count signals
 // differ from the replica kinds: a Job that created no pod and a partially
 // scheduled DaemonSet are still blocked; a terminally-failed Job (Failed>0) and
