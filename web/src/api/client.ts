@@ -1787,11 +1787,31 @@ interface BulkWorkloadItem {
   name: string
 }
 
+interface BulkWorkloadMutationResult {
+  requested: number
+  succeeded: number
+  failedMessages: string[]
+}
+
+function failedBulkWorkloadMessages(results: PromiseSettledResult<unknown>[]): string[] {
+  return results.flatMap(r => r.status === 'rejected'
+    ? [r.reason instanceof Error ? r.reason.message : String(r.reason)]
+    : []
+  )
+}
+
+function bulkWorkloadFailureMessage(action: string, failed: number, total: number, messages: string[]): string {
+  return `Failed to ${action} ${failed} of ${total} workloads:\n${messages.join('\n')}`
+}
+
 export function useBulkRestartWorkloads() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ items }: { items: BulkWorkloadItem[] }) => {
+    mutationFn: async ({ items }: { items: BulkWorkloadItem[] }): Promise<BulkWorkloadMutationResult> => {
+      if (items.length === 0) {
+        return { requested: 0, succeeded: 0, failedMessages: [] }
+      }
       const results = await Promise.allSettled(
         items.map(async ({ kind, namespace, name }) => {
           const response = await apiFetch(`${getApiBase()}/workloads/${kind}/${namespace}/${name}/restart`, {
@@ -1804,18 +1824,24 @@ export function useBulkRestartWorkloads() {
           return { kind, namespace, name }
         })
       )
-      const failedMessages = results.flatMap(r => r.status === 'rejected'
-        ? [r.reason instanceof Error ? r.reason.message : String(r.reason)]
-        : []
-      )
-      if (failedMessages.length > 0) {
-        throw new Error(`Failed to restart ${failedMessages.length} of ${items.length} workloads:\n${failedMessages.join('\n')}`)
+      const failedMessages = failedBulkWorkloadMessages(results)
+      if (failedMessages.length === items.length) {
+        throw new Error(bulkWorkloadFailureMessage('restart', failedMessages.length, items.length, failedMessages))
       }
-      return { restarted: items.length }
+      return { requested: items.length, succeeded: items.length - failedMessages.length, failedMessages }
     },
     meta: {
       errorMessage: 'Failed to restart some workloads',
-      successMessage: 'Workloads restarting',
+    },
+    onSuccess: (result) => {
+      if (result.failedMessages.length > 0) {
+        showApiError(
+          `Restarted ${result.succeeded} of ${result.requested} workloads`,
+          result.failedMessages.join('\n'),
+        )
+      } else {
+        showApiSuccess('Workloads restarting')
+      }
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['resources'] })
@@ -1828,7 +1854,10 @@ export function useBulkScaleWorkloads() {
   const queryClient = useQueryClient()
 
   return useMutation({
-    mutationFn: async ({ items, replicas }: { items: BulkWorkloadItem[]; replicas: number }) => {
+    mutationFn: async ({ items, replicas }: { items: BulkWorkloadItem[]; replicas: number }): Promise<BulkWorkloadMutationResult> => {
+      if (items.length === 0) {
+        return { requested: 0, succeeded: 0, failedMessages: [] }
+      }
       const results = await Promise.allSettled(
         items.map(async ({ kind, namespace, name }) => {
           const response = await apiFetch(`${getApiBase()}/workloads/${kind}/${namespace}/${name}/scale`, {
@@ -1843,18 +1872,24 @@ export function useBulkScaleWorkloads() {
           return { kind, namespace, name }
         })
       )
-      const failedMessages = results.flatMap(r => r.status === 'rejected'
-        ? [r.reason instanceof Error ? r.reason.message : String(r.reason)]
-        : []
-      )
-      if (failedMessages.length > 0) {
-        throw new Error(`Failed to scale ${failedMessages.length} of ${items.length} workloads:\n${failedMessages.join('\n')}`)
+      const failedMessages = failedBulkWorkloadMessages(results)
+      if (failedMessages.length === items.length) {
+        throw new Error(bulkWorkloadFailureMessage('scale', failedMessages.length, items.length, failedMessages))
       }
-      return { scaled: items.length, replicas }
+      return { requested: items.length, succeeded: items.length - failedMessages.length, failedMessages }
     },
     meta: {
       errorMessage: 'Failed to scale some workloads',
-      successMessage: 'Workloads scaled',
+    },
+    onSuccess: (result) => {
+      if (result.failedMessages.length > 0) {
+        showApiError(
+          `Scaled ${result.succeeded} of ${result.requested} workloads`,
+          result.failedMessages.join('\n'),
+        )
+      } else {
+        showApiSuccess('Workloads scaled')
+      }
     },
     onSettled: () => {
       queryClient.invalidateQueries({ queryKey: ['resources'] })

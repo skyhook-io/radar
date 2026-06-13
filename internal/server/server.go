@@ -786,6 +786,10 @@ func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
 	if checkErrored {
 		return global || namespaced
 	}
+	// A clean namespace result is authoritative: global may have come from
+	// the effective-namespace fallback and must not bleed into a different
+	// namespace. On API errors, keep any existing grant so transient SAR
+	// failures do not revoke controls.
 	return namespaced
 }
 
