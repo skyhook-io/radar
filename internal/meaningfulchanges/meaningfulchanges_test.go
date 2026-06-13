@@ -119,6 +119,46 @@ func TestRecentRanksSpecConfigAboveStatusChurn(t *testing.T) {
 	}
 }
 
+// A webhook config UPDATE must reach the feed classified as spec_config. The
+// differ emits top-level webhooks[...] paths (webhook configs have no spec.),
+// so without isWebhookConfigKind in hasSpecConfigField, classify would return
+// "" and rankedChanges would drop the change — silently no-op'ing the feature
+// for its main case. Cluster-scoped (namespace==""), so query cluster-wide.
+func TestRecentSurfacesWebhookConfigUpdate(t *testing.T) {
+	timeline.ResetStore()
+	t.Cleanup(timeline.ResetStore)
+	if err := timeline.InitStore(timeline.StoreConfig{Type: timeline.StoreTypeMemory, MaxSize: 10}); err != nil {
+		t.Fatalf("InitStore: %v", err)
+	}
+	store := timeline.GetStore()
+	if err := store.Append(context.Background(), timeline.TimelineEvent{
+		ID:             "wh-update",
+		Timestamp:      time.Now(),
+		Source:         timeline.SourceInformer,
+		ClusterContext: k8s.ActiveClusterContext(),
+		Kind:           "MutatingWebhookConfiguration",
+		Name:           "pod-policy",
+		EventType:      timeline.EventTypeUpdate,
+		Diff: &timeline.DiffInfo{
+			Fields:  []timeline.FieldChange{{Path: "webhooks[pod-policy.k8s.io]", OldValue: "failurePolicy=Ignore", NewValue: "failurePolicy=Fail"}},
+			Summary: "webhook pod-policy.k8s.io changed",
+		},
+	}); err != nil {
+		t.Fatalf("append: %v", err)
+	}
+
+	changes, _, err := Recent(context.Background(), Query{Limit: 5})
+	if err != nil {
+		t.Fatalf("Recent: %v", err)
+	}
+	if len(changes) != 1 {
+		t.Fatalf("changes = %d, want the webhook update: %+v", len(changes), changes)
+	}
+	if changes[0].Kind != "MutatingWebhookConfiguration" || changes[0].ChangeCategory != issuesapi.ChangeCategorySpecConfig {
+		t.Fatalf("webhook update misclassified: %+v", changes[0])
+	}
+}
+
 // A Service delete followed by a burst of status-churn updates must still
 // surface: lifecycle events are fetched in a query of their own, so the
 // newest-N candidate window for updates cannot starve them out before

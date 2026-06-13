@@ -38,6 +38,10 @@ var (
 		"HorizontalPodAutoscaler", "Application", "Kustomization", "HelmRelease",
 		"GitRepository", "OCIRepository", "HelmRepository",
 		"ResourceQuota", "LimitRange",
+		// Cluster-scoped (namespace==""), so they surface in a cluster-wide
+		// get_changes, not in a single-namespace query — correct, since one
+		// webhook config gates admission across all namespaces.
+		"MutatingWebhookConfiguration", "ValidatingWebhookConfiguration",
 	}
 	// lifecycleOnlyKinds surface ONLY their delete events (name-only — never
 	// data). A deleted Secret breaks every consumer with zero K8s symptom on
@@ -516,7 +520,10 @@ func classify(e timeline.TimelineEvent) (issuesapi.ChangeCategory, string) {
 }
 
 func hasSpecConfigField(e timeline.TimelineEvent) bool {
-	if isConfigKind(e.Kind) {
+	// ConfigMap data and admission webhook configs hold their configuration at
+	// the top level (data / webhooks[]), not under spec. — the path-prefix
+	// heuristic below would drop their (curated, status-free) diffs entirely.
+	if isConfigKind(e.Kind) || isWebhookConfigKind(e.Kind) {
 		return true
 	}
 	for _, f := range e.Diff.Fields {
@@ -634,6 +641,13 @@ func dedupeEvents(events []timeline.TimelineEvent) []timeline.TimelineEvent {
 
 func isConfigKind(kind string) bool { return kind == "ConfigMap" }
 
+// isWebhookConfigKind reports admission webhook configuration kinds. Their
+// config lives at top-level webhooks[] with no status subresource, so every
+// tracked diff is a configuration change.
+func isWebhookConfigKind(kind string) bool {
+	return kind == "MutatingWebhookConfiguration" || kind == "ValidatingWebhookConfiguration"
+}
+
 func isLifecycleOnlyKind(kind string) bool {
 	for _, item := range lifecycleOnlyKinds {
 		if kind == item {
@@ -722,6 +736,10 @@ func canonicalKind(kind string) string {
 		return "NetworkPolicy"
 	case "poddisruptionbudget", "poddisruptionbudgets", "pdb":
 		return "PodDisruptionBudget"
+	case "mutatingwebhookconfiguration", "mutatingwebhookconfigurations":
+		return "MutatingWebhookConfiguration"
+	case "validatingwebhookconfiguration", "validatingwebhookconfigurations":
+		return "ValidatingWebhookConfiguration"
 	case "httproute", "httproutes":
 		return "HTTPRoute"
 	case "grpcroute", "grpcroutes":

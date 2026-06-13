@@ -47,6 +47,10 @@ var recreateStashKinds = map[string]bool{
 	"GitRepository":           true,
 	"OCIRepository":           true,
 	"HelmRepository":          true,
+	// Operators frequently delete+recreate webhook configs (cert rotation,
+	// re-registration); the join reconstructs the cross-recreate spec diff.
+	"MutatingWebhookConfiguration":   true,
+	"ValidatingWebhookConfiguration": true,
 }
 
 // RecreateJoinKind reports whether deletes of this kind are stashed for

@@ -2409,8 +2409,27 @@ func (s *Server) handleChanges(w http.ResponseWriter, r *http.Request) {
 		s.writeError(w, http.StatusInternalServerError, err.Error())
 		return
 	}
+	events = s.filterChangesByClusterScopedRBAC(r, events)
 
 	s.writeJSON(w, events)
+}
+
+// filterChangesByClusterScopedRBAC drops timeline events for cluster-scoped
+// kinds the user lacks RBAC to read. Namespace-restricted users never reach
+// cluster-scoped events (namespace IN(...) excludes namespace==""), but a
+// cluster-wide user with no per-kind RBAC for, say, admission webhook configs
+// (now tracked) would otherwise see them here — a side channel around the SAR
+// that gates every other read. canRead memoizes per request, so the per-event
+// check is cheap and only fires for cluster-scoped kinds.
+func (s *Server) filterChangesByClusterScopedRBAC(r *http.Request, events []timeline.TimelineEvent) []timeline.TimelineEvent {
+	filtered := events[:0]
+	for _, e := range events {
+		if clusterScoped, group, resource := k8s.ClassifyKindScope(e.Kind, ""); clusterScoped && !s.canRead(r, group, resource, "", "list") {
+			continue
+		}
+		filtered = append(filtered, e)
+	}
+	return filtered
 }
 
 // handleChangeChildren returns child resource changes for a given parent workload

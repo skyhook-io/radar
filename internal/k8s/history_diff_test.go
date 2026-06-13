@@ -1,12 +1,14 @@
 package k8s
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/util/intstr"
 )
 
@@ -289,5 +291,105 @@ func TestDiffLimitRange_ItemChanges(t *testing.T) {
 	}
 	if c, _ := diffLimitRange(mk("1Gi"), mk("1Gi")); len(c) != 0 {
 		t.Fatalf("identical LimitRanges produced a diff: %+v", c)
+	}
+}
+
+func TestDiffAdmissionWebhookConfiguration(t *testing.T) {
+	// caBundle bytes are a long base64 blob; the differ must show its LENGTH,
+	// never the bytes, and a rotation must register as a change.
+	const caV1 = "QUJDREVGR0hJSktMTU5PUFFSU1RVVldYWVowMTIzNDU2Nzg5"         // 48 chars
+	const caV2 = "WllYV1ZVVFNSUVBPTk1MS0pJSEdGRURDQkE5ODc2NTQzMjEwemFiY2Q=" // 56 chars
+
+	mk := func(failurePolicy, ca string) *unstructured.Unstructured {
+		return &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "admissionregistration.k8s.io/v1",
+			"kind":       "ValidatingWebhookConfiguration",
+			"metadata":   map[string]any{"name": "pod-policy"},
+			"webhooks": []any{map[string]any{
+				"name":          "pod-policy.validation.k8s.io",
+				"failurePolicy": failurePolicy,
+				"sideEffects":   "None",
+				"clientConfig": map[string]any{
+					"caBundle": ca,
+					"service": map[string]any{
+						"namespace": "policy-system", "name": "pod-policy-webhook", "path": "/validate",
+					},
+				},
+				"rules": []any{map[string]any{
+					"operations": []any{"CREATE", "UPDATE"},
+					"resources":  []any{"pods"},
+				}},
+			}},
+		}}
+	}
+
+	// A caBundle rotation (the tls_mismatch fault class) registers as a change.
+	changes, summary := diffAdmissionWebhookConfiguration(mk("Fail", caV1), mk("Fail", caV2))
+	if len(changes) != 1 || changes[0].Path != "webhooks[pod-policy.validation.k8s.io]" {
+		t.Fatalf("caBundle rotation: changes = %+v", changes)
+	}
+	if !strings.Contains(strings.Join(summary, "; "), "changed") {
+		t.Fatalf("caBundle rotation: summary = %q", summary)
+	}
+	// SECURITY: the cert bytes must never appear — only a digest.
+	rendered := fmt.Sprintf("%v", changes)
+	if strings.Contains(rendered, caV1) || strings.Contains(rendered, caV2) {
+		t.Fatalf("caBundle bytes leaked into the diff: %s", rendered)
+	}
+	if !strings.Contains(rendered, "caBundle=sha256:") {
+		t.Fatalf("caBundle digest missing from diff: %s", rendered)
+	}
+
+	// A same-LENGTH rotation (different CA, identical base64 length) must still
+	// register — a length-only signal would miss it.
+	caSameLenA := strings.Repeat("A", 64)
+	caSameLenB := strings.Repeat("B", 64)
+	if c, _ := diffAdmissionWebhookConfiguration(mk("Fail", caSameLenA), mk("Fail", caSameLenB)); len(c) != 1 {
+		t.Fatalf("same-length caBundle rotation must register a change, got %+v", c)
+	}
+
+	// failurePolicy Ignore→Fail (turns a soft webhook into a hard gate).
+	if c, s := diffAdmissionWebhookConfiguration(mk("Ignore", caV1), mk("Fail", caV1)); len(c) != 1 || !strings.Contains(strings.Join(s, ";"), "changed") {
+		t.Fatalf("failurePolicy flip: changes=%+v summary=%v", c, s)
+	}
+
+	// Identical configs produce no diff (no timeline spam on no-op resyncs).
+	if c, _ := diffAdmissionWebhookConfiguration(mk("Fail", caV1), mk("Fail", caV1)); len(c) != 0 {
+		t.Fatalf("identical webhook configs produced a diff: %+v", c)
+	}
+
+	// A webhook appearing is its own add entry.
+	empty := &unstructured.Unstructured{Object: map[string]any{"webhooks": []any{}}}
+	c, s := diffAdmissionWebhookConfiguration(empty, mk("Fail", caV1))
+	if len(c) != 1 || !strings.Contains(strings.Join(s, ";"), "added") {
+		t.Fatalf("webhook add: changes=%+v summary=%v", c, s)
+	}
+}
+
+// A namespaceSelector re-scoping (match-everything → match prod) re-targets the
+// webhook's blast radius and MUST register — otherwise the selector-only update
+// diffs empty and recordToTimelineStore drops it silently.
+func TestDiffAdmissionWebhookConfiguration_SelectorRescope(t *testing.T) {
+	mk := func(withSelector bool) *unstructured.Unstructured {
+		hook := map[string]any{
+			"name":         "pod-policy.validation.k8s.io",
+			"clientConfig": map[string]any{"caBundle": "QUJD"},
+		}
+		if withSelector {
+			hook["namespaceSelector"] = map[string]any{
+				"matchLabels": map[string]any{"env": "prod"},
+			}
+		}
+		return &unstructured.Unstructured{Object: map[string]any{"webhooks": []any{hook}}}
+	}
+	changes, summary := diffAdmissionWebhookConfiguration(mk(false), mk(true))
+	if len(changes) != 1 {
+		t.Fatalf("selector rescope must register a change, got %+v", changes)
+	}
+	if rendered := fmt.Sprintf("%v", changes); !strings.Contains(rendered, "env=prod") {
+		t.Fatalf("new selector missing from diff: %s", rendered)
+	}
+	if !strings.Contains(strings.Join(summary, ";"), "changed") {
+		t.Fatalf("selector rescope summary = %v", summary)
 	}
 }

@@ -1,6 +1,8 @@
 package k8s
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -36,33 +38,35 @@ type kindDiffFunc func(oldObj, newObj any) ([]FieldChange, []string)
 // status field a user would care about, because for kinds in this map,
 // recordToTimelineStore drops update events when the diff is empty.
 var diffFunctions = map[string]kindDiffFunc{
-	"Deployment":              diffDeployment,
-	"Pod":                     diffPod,
-	"Service":                 diffService,
-	"ConfigMap":               diffConfigMap,
-	"Ingress":                 diffIngress,
-	"ReplicaSet":              diffReplicaSet,
-	"DaemonSet":               diffDaemonSet,
-	"StatefulSet":             diffStatefulSet,
-	"HorizontalPodAutoscaler": diffHPA,
-	"Job":                     diffJob,
-	"Node":                    diffNode,
-	"PersistentVolumeClaim":   diffPVC,
-	"Application":             diffApplication,
-	"Kustomization":           diffKustomization,
-	"HelmRelease":             diffFluxHelmRelease,
-	"GitRepository":           func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "GitRepository") },
-	"OCIRepository":           func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "OCIRepository") },
-	"HelmRepository":          func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "HelmRepository") },
-	"Gateway":                 diffGateway,
-	"GatewayClass":            diffGatewayClass,
-	"HTTPRoute":               diffGatewayRoute,
-	"GRPCRoute":               diffGatewayRoute,
-	"TCPRoute":                diffGatewayRoute,
-	"TLSRoute":                diffGatewayRoute,
-	"ReferenceGrant":          diffReferenceGrant,
-	"ResourceQuota":           diffResourceQuota,
-	"LimitRange":              diffLimitRange,
+	"Deployment":                     diffDeployment,
+	"Pod":                            diffPod,
+	"Service":                        diffService,
+	"ConfigMap":                      diffConfigMap,
+	"Ingress":                        diffIngress,
+	"ReplicaSet":                     diffReplicaSet,
+	"DaemonSet":                      diffDaemonSet,
+	"StatefulSet":                    diffStatefulSet,
+	"HorizontalPodAutoscaler":        diffHPA,
+	"Job":                            diffJob,
+	"Node":                           diffNode,
+	"PersistentVolumeClaim":          diffPVC,
+	"Application":                    diffApplication,
+	"Kustomization":                  diffKustomization,
+	"HelmRelease":                    diffFluxHelmRelease,
+	"GitRepository":                  func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "GitRepository") },
+	"OCIRepository":                  func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "OCIRepository") },
+	"HelmRepository":                 func(o, n any) ([]FieldChange, []string) { return diffFluxSource(o, n, "HelmRepository") },
+	"Gateway":                        diffGateway,
+	"GatewayClass":                   diffGatewayClass,
+	"HTTPRoute":                      diffGatewayRoute,
+	"GRPCRoute":                      diffGatewayRoute,
+	"TCPRoute":                       diffGatewayRoute,
+	"TLSRoute":                       diffGatewayRoute,
+	"ReferenceGrant":                 diffReferenceGrant,
+	"ResourceQuota":                  diffResourceQuota,
+	"LimitRange":                     diffLimitRange,
+	"MutatingWebhookConfiguration":   diffAdmissionWebhookConfiguration,
+	"ValidatingWebhookConfiguration": diffAdmissionWebhookConfiguration,
 }
 
 // ComputeDiff computes the diff between old and new objects based on kind.
@@ -716,6 +720,196 @@ func limitRangeItemRefs(items []corev1.LimitRangeItem) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// diffAdmissionWebhookConfiguration surfaces changes to Mutating/Validating
+// webhook configurations — high-blast-radius cluster objects that gate or
+// silently rewrite admission for every matching resource. Per-webhook it
+// tracks failurePolicy, the backend (service ref or url), the CA bundle
+// presence/size, the operation/resource rules, and sideEffects. The caBundle
+// bytes are NEVER emitted — only its length, so a cert rotation shows as a
+// size change without leaking the cert. Keyed by webhook name so a webhook
+// added / removed / changed are distinct entries.
+func diffAdmissionWebhookConfiguration(oldObj, newObj any) ([]FieldChange, []string) {
+	oldU, newU, ok := unstructuredPair(oldObj, newObj)
+	if !ok {
+		warnUnstructuredAssertFailed("AdmissionWebhookConfiguration", oldObj)
+		return nil, nil
+	}
+
+	oldHooks := indexWebhooksByName(oldU)
+	newHooks := indexWebhooksByName(newU)
+
+	names := map[string]struct{}{}
+	for n := range oldHooks {
+		names[n] = struct{}{}
+	}
+	for n := range newHooks {
+		names[n] = struct{}{}
+	}
+	sorted := make([]string, 0, len(names))
+	for n := range names {
+		sorted = append(sorted, n)
+	}
+	sort.Strings(sorted)
+
+	var changes []FieldChange
+	var summary []string
+	for _, name := range sorted {
+		oldS, oldOK := oldHooks[name]
+		newS, newOK := newHooks[name]
+		if oldOK && newOK && oldS == newS {
+			continue
+		}
+		changes = append(changes, FieldChange{
+			Path:     "webhooks[" + name + "]",
+			OldValue: valueOrNil(oldS, oldOK),
+			NewValue: valueOrNil(newS, newOK),
+		})
+		switch {
+		case !oldOK:
+			summary = append(summary, "webhook "+name+" added")
+		case !newOK:
+			summary = append(summary, "webhook "+name+" removed")
+		default:
+			summary = append(summary, "webhook "+name+" changed")
+		}
+	}
+	return changes, summary
+}
+
+// indexWebhooksByName maps each webhook's name to a compact, comparable summary
+// of the fields that matter for diagnosis. Unnamed entries are skipped.
+func indexWebhooksByName(u *unstructured.Unstructured) map[string]string {
+	out := map[string]string{}
+	hooks, _, _ := unstructured.NestedSlice(u.Object, "webhooks")
+	for _, h := range hooks {
+		hm, ok := h.(map[string]any)
+		if !ok {
+			continue
+		}
+		name, _, _ := unstructured.NestedString(hm, "name")
+		if name == "" {
+			continue
+		}
+		out[name] = webhookSummary(hm)
+	}
+	return out
+}
+
+func webhookSummary(hm map[string]any) string {
+	var parts []string
+	if fp, ok, _ := unstructured.NestedString(hm, "failurePolicy"); ok {
+		parts = append(parts, "failurePolicy="+fp)
+	}
+	// Backend: a Service ref or a raw URL — both decide where admission calls go.
+	if svcName, ok, _ := unstructured.NestedString(hm, "clientConfig", "service", "name"); ok {
+		svcNS, _, _ := unstructured.NestedString(hm, "clientConfig", "service", "namespace")
+		backend := "service=" + svcNS + "/" + svcName
+		if port, ok, _ := unstructured.NestedInt64(hm, "clientConfig", "service", "port"); ok && port != 0 {
+			backend += fmt.Sprintf(":%d", port)
+		}
+		if path, ok, _ := unstructured.NestedString(hm, "clientConfig", "service", "path"); ok && path != "" {
+			backend += path
+		}
+		parts = append(parts, backend)
+	} else if url, ok, _ := unstructured.NestedString(hm, "clientConfig", "url"); ok {
+		parts = append(parts, "url="+url)
+	}
+	// CA bundle: a short non-reversible digest, NEVER the bytes. The digest (not
+	// length) catches a same-length cert rotation — the expired_tls/tls_mismatch
+	// fault class. The bundle is a public CA cert, so the digest leaks nothing.
+	if ca, ok, _ := unstructured.NestedString(hm, "clientConfig", "caBundle"); ok && ca != "" {
+		sum := sha256.Sum256([]byte(ca))
+		parts = append(parts, "caBundle=sha256:"+hex.EncodeToString(sum[:])[:12])
+	} else {
+		parts = append(parts, "caBundle=none")
+	}
+	if se, ok, _ := unstructured.NestedString(hm, "sideEffects"); ok {
+		parts = append(parts, "sideEffects="+se)
+	}
+	// matchPolicy/timeoutSeconds/reinvocationPolicy each change how/when the
+	// webhook fires; the drop-empty contract means an omitted field that changes
+	// alone would vanish from the feed, so summarize them.
+	if mp, ok, _ := unstructured.NestedString(hm, "matchPolicy"); ok {
+		parts = append(parts, "matchPolicy="+mp)
+	}
+	if to, ok, _ := unstructured.NestedInt64(hm, "timeoutSeconds"); ok {
+		parts = append(parts, fmt.Sprintf("timeoutSeconds=%d", to))
+	}
+	if rp, ok, _ := unstructured.NestedString(hm, "reinvocationPolicy"); ok {
+		parts = append(parts, "reinvocationPolicy="+rp)
+	}
+	// Selectors are the webhook's blast radius — a re-scoping change (e.g. now
+	// matching the prod namespace) must register. Without these, a selector-only
+	// update would diff empty and recordToTimelineStore would silently drop it.
+	if ns := webhookSelectorSummary(hm, "namespaceSelector"); ns != "" {
+		parts = append(parts, "namespaceSelector={"+ns+"}")
+	}
+	if objSel := webhookSelectorSummary(hm, "objectSelector"); objSel != "" {
+		parts = append(parts, "objectSelector={"+objSel+"}")
+	}
+	parts = append(parts, "rules="+webhookRulesSummary(hm))
+	return strings.Join(parts, " ")
+}
+
+// webhookSelectorSummary renders a namespaceSelector/objectSelector compactly as
+// sorted matchLabels + matchExpressions. Empty (match-everything) selector → "".
+func webhookSelectorSummary(hm map[string]any, field string) string {
+	matchLabels, _, _ := unstructured.NestedStringMap(hm, field, "matchLabels")
+	exprs, _, _ := unstructured.NestedSlice(hm, field, "matchExpressions")
+	if len(matchLabels) == 0 && len(exprs) == 0 {
+		return ""
+	}
+	keys := make([]string, 0, len(matchLabels))
+	for k := range matchLabels {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	parts := make([]string, 0, len(keys)+len(exprs))
+	for _, k := range keys {
+		parts = append(parts, k+"="+matchLabels[k])
+	}
+	exprStrs := make([]string, 0, len(exprs))
+	for _, e := range exprs {
+		em, ok := e.(map[string]any)
+		if !ok {
+			continue
+		}
+		key, _, _ := unstructured.NestedString(em, "key")
+		op, _, _ := unstructured.NestedString(em, "operator")
+		vals, _, _ := unstructured.NestedStringSlice(em, "values")
+		exprStrs = append(exprStrs, key+" "+op+" ["+strings.Join(vals, ",")+"]")
+	}
+	sort.Strings(exprStrs)
+	parts = append(parts, exprStrs...)
+	return strings.Join(parts, ",")
+}
+
+func webhookRulesSummary(hm map[string]any) string {
+	rules, _, _ := unstructured.NestedSlice(hm, "rules")
+	var out []string
+	for _, r := range rules {
+		rm, ok := r.(map[string]any)
+		if !ok {
+			continue
+		}
+		ops, _, _ := unstructured.NestedStringSlice(rm, "operations")
+		groups, _, _ := unstructured.NestedStringSlice(rm, "apiGroups")
+		versions, _, _ := unstructured.NestedStringSlice(rm, "apiVersions")
+		res, _, _ := unstructured.NestedStringSlice(rm, "resources")
+		// apiGroups/apiVersions/scope are part of the rule's match set — two
+		// rules differing only in apiGroup target different resources, so the
+		// full tuple must round-trip (resources alone would conflate them).
+		entry := strings.Join(ops, "/") + ":" +
+			strings.Join(groups, ",") + "/" + strings.Join(versions, ",") + "/" + strings.Join(res, ",")
+		if scope, ok, _ := unstructured.NestedString(rm, "scope"); ok && scope != "" {
+			entry += "[" + scope + "]"
+		}
+		out = append(out, entry)
+	}
+	sort.Strings(out)
+	return strings.Join(out, ";")
 }
 
 func diffConfigMap(oldObj, newObj any) ([]FieldChange, []string) {
