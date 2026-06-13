@@ -8,6 +8,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 
@@ -395,6 +396,24 @@ func consumersOfConfigMap(cache *k8s.ResourceCache, namespace, name string) []st
 			}
 		}
 	}
+	if lister := cache.Jobs(); lister != nil {
+		if items, err := lister.Jobs(namespace).List(labels.Everything()); err == nil {
+			for _, j := range items {
+				if referencesConfigMap(j) {
+					out = append(out, "Job/"+j.Name)
+				}
+			}
+		}
+	}
+	if lister := cache.CronJobs(); lister != nil {
+		if items, err := lister.CronJobs(namespace).List(labels.Everything()); err == nil {
+			for _, cj := range items {
+				if referencesConfigMap(cj) {
+					out = append(out, "CronJob/"+cj.Name)
+				}
+			}
+		}
+	}
 	sort.Strings(out)
 	if len(out) > maxConsumersPerEntry {
 		out = out[:maxConsumersPerEntry]
@@ -734,6 +753,10 @@ func podSpecForObject(obj any) (corev1.PodSpec, bool) {
 		return o.Spec.Template.Spec, true
 	case *appsv1.DaemonSet:
 		return o.Spec.Template.Spec, true
+	case *batchv1.Job:
+		return o.Spec.Template.Spec, true
+	case *batchv1.CronJob:
+		return o.Spec.JobTemplate.Spec.Template.Spec, true
 	default:
 		return corev1.PodSpec{}, false
 	}

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes/fake"
@@ -464,21 +465,37 @@ func TestRecentSecretDeleteOnly(t *testing.T) {
 
 // ConfigMap change entries name the workloads that directly mount/reference
 // them — binding the config change to its consumer without a topology call.
+// Jobs and CronJobs count: a migration/load-gen Job is often the only
+// consumer of a config-script ConfigMap.
 func TestRecentAnnotatesConfigMapConsumers(t *testing.T) {
-	client := fake.NewSimpleClientset(&appsv1.Deployment{
-		ObjectMeta: metav1.ObjectMeta{Name: "flagd", Namespace: "shop"},
-		Spec: appsv1.DeploymentSpec{
-			Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
-				Volumes: []corev1.Volume{{
-					Name: "config",
-					VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
-						LocalObjectReference: corev1.LocalObjectReference{Name: "flagd-config"},
+	client := fake.NewSimpleClientset(
+		&appsv1.Deployment{
+			ObjectMeta: metav1.ObjectMeta{Name: "flagd", Namespace: "shop"},
+			Spec: appsv1.DeploymentSpec{
+				Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+					Volumes: []corev1.Volume{{
+						Name: "config",
+						VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{
+							LocalObjectReference: corev1.LocalObjectReference{Name: "flagd-config"},
+						}},
+					}},
+					Containers: []corev1.Container{{Name: "flagd", Image: "flagd:v1"}},
+				}},
+			},
+		},
+		&batchv1.Job{
+			ObjectMeta: metav1.ObjectMeta{Name: "seed", Namespace: "shop"},
+			Spec: batchv1.JobSpec{
+				Template: corev1.PodTemplateSpec{Spec: corev1.PodSpec{
+					Containers: []corev1.Container{{
+						Name:    "seed",
+						Image:   "seed:v1",
+						EnvFrom: []corev1.EnvFromSource{{ConfigMapRef: &corev1.ConfigMapEnvSource{LocalObjectReference: corev1.LocalObjectReference{Name: "flagd-config"}}}},
 					}},
 				}},
-				Containers: []corev1.Container{{Name: "flagd", Image: "flagd:v1"}},
-			}},
+			},
 		},
-	})
+	)
 	if err := k8s.InitTestResourceCache(client); err != nil {
 		t.Fatalf("InitTestResourceCache: %v", err)
 	}
@@ -507,7 +524,7 @@ func TestRecentAnnotatesConfigMapConsumers(t *testing.T) {
 		t.Fatalf("changes = %+v, want 1", changes)
 	}
 	got := changes[0].ConsumedBy
-	if len(got) != 1 || got[0] != "Deployment/flagd" {
-		t.Fatalf("consumed_by = %v, want [Deployment/flagd]", got)
+	if len(got) != 2 || got[0] != "Deployment/flagd" || got[1] != "Job/seed" {
+		t.Fatalf("consumed_by = %v, want [Deployment/flagd Job/seed]", got)
 	}
 }
