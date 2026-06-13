@@ -8,8 +8,11 @@ import { initNavigationMap } from '@skyhook-io/k8s-ui'
 import { usePinnedKinds } from '../../hooks/useFavorites'
 import { useOpenLogs, useOpenWorkloadLogs } from '../dock'
 import {
+  canBulkRestartKind,
+  canBulkScaleKind,
   ResourcesView as BaseResourcesView,
   CORE_RESOURCES,
+  intersectWorkloadWrites,
 } from '@skyhook-io/k8s-ui'
 import type { Capabilities, ResourceQueryResult, WorkloadWritePermissions } from '@skyhook-io/k8s-ui'
 import type { SelectedResource } from '../../types'
@@ -33,40 +36,11 @@ interface ResourcesViewProps {
 
 type SelectedKindInfo = { name: string; kind: string; group: string } | null
 
-function canBulkRestartKind(kind: SelectedKindInfo, writes: WorkloadWritePermissions | undefined): boolean {
-  switch (kind?.name.toLowerCase()) {
-    case 'deployments':
-      return writes?.deployments === true
-    case 'daemonsets':
-      return writes?.daemonSets === true
-    case 'statefulsets':
-      return writes?.statefulSets === true
-    case 'rollouts':
-      return kind.group === 'argoproj.io' && writes?.rollouts === true
-    default:
-      return false
-  }
-}
-
-function canBulkScaleKind(kind: SelectedKindInfo, writes: WorkloadWritePermissions | undefined): boolean {
-  switch (kind?.name.toLowerCase()) {
-    case 'deployments':
-      return writes?.deployments === true
-    case 'statefulsets':
-      return writes?.statefulSets === true
-    default:
-      return false
-  }
-}
-
-function intersectWorkloadWrites(capabilities: Capabilities[] | undefined): WorkloadWritePermissions | undefined {
-  if (!capabilities || capabilities.length === 0) return undefined
-  return {
-    deployments: capabilities.every(c => c.workloadWrites?.deployments === true),
-    daemonSets: capabilities.every(c => c.workloadWrites?.daemonSets === true),
-    statefulSets: capabilities.every(c => c.workloadWrites?.statefulSets === true),
-    rollouts: capabilities.every(c => c.workloadWrites?.rollouts === true),
-  }
+const deniedWorkloadWrites: WorkloadWritePermissions = {
+  deployments: false,
+  daemonSets: false,
+  statefulSets: false,
+  rollouts: false,
 }
 
 export function ResourcesView({ namespaces, selectedResource, onResourceClick, onResourceClickYaml, onKindChange, onClearNamespaces }: ResourcesViewProps) {
@@ -77,9 +51,23 @@ export function ResourcesView({ namespaces, selectedResource, onResourceClick, o
   const namespaceForCapabilities = namespaces.length === 1 ? namespaces[0] : undefined
   const { data: namespaceCapabilities } = useNamespaceCapabilities(namespaceForCapabilities, capabilities)
   const namespaceCapabilityNames = useMemo(() => namespaces.length > 1 ? [...namespaces].sort() : [], [namespaces])
-  const { data: namespaceCapabilitiesList } = useQuery<Capabilities[]>({
+  const { data: namespaceCapabilitiesList } = useQuery<Array<Pick<Capabilities, 'workloadWrites'>>>({
     queryKey: ['capabilities', 'namespaces', namespaceCapabilityNames],
-    queryFn: () => Promise.all(namespaceCapabilityNames.map(ns => fetchJSON<Capabilities>(`/capabilities?namespace=${encodeURIComponent(ns)}`))),
+    queryFn: async () => {
+      const results = await Promise.allSettled(
+        namespaceCapabilityNames.map(async ns => ({
+          namespace: ns,
+          capabilities: await fetchJSON<Capabilities>(`/capabilities?namespace=${encodeURIComponent(ns)}`),
+        }))
+      )
+      return results.map((result, index) => {
+        if (result.status === 'fulfilled') {
+          return { workloadWrites: result.value.capabilities.workloadWrites }
+        }
+        console.warn(`Failed to fetch namespace capabilities for ${namespaceCapabilityNames[index]}, withholding workload writes:`, result.reason)
+        return { workloadWrites: deniedWorkloadWrites }
+      })
+    },
     enabled: namespaceCapabilityNames.length > 1 && capabilities != null,
     staleTime: 60000,
   })

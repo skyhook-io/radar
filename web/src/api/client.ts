@@ -1799,14 +1799,17 @@ export function useBulkRestartWorkloads() {
           })
           if (!response.ok) {
             const error = await response.json().catch(() => ({ error: 'Unknown error' }))
-            throw new Error(error.error || `Failed to restart ${namespace}/${name}`)
+            throw new Error(`${namespace}/${name}: ${error.error || `HTTP ${response.status}`}`)
           }
           return { kind, namespace, name }
         })
       )
-      const failed = results.filter(r => r.status === 'rejected')
-      if (failed.length > 0) {
-        throw new Error(`Failed to restart ${failed.length} of ${items.length} workloads`)
+      const failedMessages = results.flatMap(r => r.status === 'rejected'
+        ? [r.reason instanceof Error ? r.reason.message : String(r.reason)]
+        : []
+      )
+      if (failedMessages.length > 0) {
+        throw new Error(`Failed to restart ${failedMessages.length} of ${items.length} workloads:\n${failedMessages.join('\n')}`)
       }
       return { restarted: items.length }
     },
@@ -1835,14 +1838,17 @@ export function useBulkScaleWorkloads() {
           })
           if (!response.ok) {
             const error = await response.json().catch(() => ({ error: 'Unknown error' }))
-            throw new Error(error.error || `Failed to scale ${namespace}/${name}`)
+            throw new Error(`${namespace}/${name}: ${error.error || `HTTP ${response.status}`}`)
           }
           return { kind, namespace, name }
         })
       )
-      const failed = results.filter(r => r.status === 'rejected')
-      if (failed.length > 0) {
-        throw new Error(`Failed to scale ${failed.length} of ${items.length} workloads`)
+      const failedMessages = results.flatMap(r => r.status === 'rejected'
+        ? [r.reason instanceof Error ? r.reason.message : String(r.reason)]
+        : []
+      )
+      if (failedMessages.length > 0) {
+        throw new Error(`Failed to scale ${failedMessages.length} of ${items.length} workloads:\n${failedMessages.join('\n')}`)
       }
       return { scaled: items.length, replicas }
     },

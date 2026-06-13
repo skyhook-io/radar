@@ -742,10 +742,7 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			log.Printf("[capabilities] namespace-scoped check for %q failed: %v", ns, err)
 		} else if nsCaps != nil {
-			caps.Exec = nsCaps.Exec
-			caps.Logs = nsCaps.Logs
-			caps.PortForward = nsCaps.PortForward
-			caps.WorkloadWrites = nsCaps.WorkloadWrites
+			mergeNamespaceCapabilities(caps, nsCaps)
 		}
 	}
 
@@ -773,6 +770,23 @@ func (s *Server) handleCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 
 	s.writeJSON(w, caps)
+}
+
+func mergeNamespaceCapabilities(caps *k8s.Capabilities, nsCaps *k8s.NamespaceCapabilities) {
+	caps.Exec = mergeNamespaceCapability(caps.Exec, nsCaps.Exec, nsCaps.Errors.Exec)
+	caps.Logs = mergeNamespaceCapability(caps.Logs, nsCaps.Logs, nsCaps.Errors.Logs)
+	caps.PortForward = mergeNamespaceCapability(caps.PortForward, nsCaps.PortForward, nsCaps.Errors.PortForward)
+	caps.WorkloadWrites.Deployments = mergeNamespaceCapability(caps.WorkloadWrites.Deployments, nsCaps.WorkloadWrites.Deployments, nsCaps.Errors.WorkloadWrites.Deployments)
+	caps.WorkloadWrites.DaemonSets = mergeNamespaceCapability(caps.WorkloadWrites.DaemonSets, nsCaps.WorkloadWrites.DaemonSets, nsCaps.Errors.WorkloadWrites.DaemonSets)
+	caps.WorkloadWrites.StatefulSets = mergeNamespaceCapability(caps.WorkloadWrites.StatefulSets, nsCaps.WorkloadWrites.StatefulSets, nsCaps.Errors.WorkloadWrites.StatefulSets)
+	caps.WorkloadWrites.Rollouts = mergeNamespaceCapability(caps.WorkloadWrites.Rollouts, nsCaps.WorkloadWrites.Rollouts, nsCaps.Errors.WorkloadWrites.Rollouts)
+}
+
+func mergeNamespaceCapability(global, namespaced, checkErrored bool) bool {
+	if checkErrored {
+		return global || namespaced
+	}
+	return namespaced
 }
 
 // parseNamespacesForUser parses namespace query params and filters by user permissions.
