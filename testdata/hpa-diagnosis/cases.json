@@ -1,0 +1,308 @@
+[
+  {
+    "name": "stable",
+    "expectedState": "ok",
+    "expectedReasons": [],
+    "expectedSummary": "HPA is within configured bounds",
+    "expectedTableState": "ok",
+    "hpa": {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": { "name": "web", "namespace": "default", "generation": 1 },
+      "spec": {
+        "scaleTargetRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "web" },
+        "minReplicas": 2,
+        "maxReplicas": 10,
+        "metrics": [
+          { "type": "Resource", "resource": { "name": "cpu", "target": { "type": "Utilization", "averageUtilization": 70 } } }
+        ]
+      },
+      "status": {
+        "observedGeneration": 1,
+        "currentReplicas": 4,
+        "desiredReplicas": 4,
+        "currentMetrics": [
+          { "type": "Resource", "resource": { "name": "cpu", "current": { "averageUtilization": 55 } } }
+        ],
+        "conditions": [
+          { "type": "AbleToScale", "status": "True", "reason": "SucceededGetScale" },
+          { "type": "ScalingActive", "status": "True", "reason": "ValidMetricFound" },
+          { "type": "ScalingLimited", "status": "False", "reason": "DesiredWithinRange" }
+        ]
+      }
+    }
+  },
+  {
+    "name": "maxed",
+    "expectedState": "limited_max",
+    "expectedReasons": ["limited_max"],
+    "expectedSummary": "HPA wants more replicas but is capped at maxReplicas=10",
+    "expectedTableState": "limited_max",
+    "hpa": {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": { "name": "web", "namespace": "default", "generation": 1 },
+      "spec": {
+        "scaleTargetRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "web" },
+        "minReplicas": 2,
+        "maxReplicas": 10
+      },
+      "status": {
+        "observedGeneration": 1,
+        "currentReplicas": 10,
+        "desiredReplicas": 10,
+        "conditions": [
+          { "type": "ScalingLimited", "status": "True", "reason": "TooManyReplicas", "message": "the desired replica count is more than the maximum replica count" }
+        ]
+      }
+    }
+  },
+  {
+    "name": "at max without limit condition",
+    "expectedState": "ok",
+    "expectedReasons": [],
+    "expectedSummary": "HPA is within configured bounds",
+    "expectedTableState": "ok",
+    "hpa": {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": { "name": "web", "namespace": "default", "generation": 1 },
+      "spec": {
+        "scaleTargetRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "web" },
+        "minReplicas": 2,
+        "maxReplicas": 10
+      },
+      "status": {
+        "observedGeneration": 1,
+        "currentReplicas": 10,
+        "desiredReplicas": 10
+      }
+    }
+  },
+  {
+    "name": "metrics unavailable",
+    "expectedState": "metrics_unavailable",
+    "expectedReasons": ["metrics_unavailable"],
+    "expectedSummary": "Add CPU requests to the target pods so HPA can compute replicas",
+    "expectedTableState": "metrics_unavailable",
+    "hpa": {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": { "name": "api", "namespace": "default", "generation": 1 },
+      "spec": {
+        "scaleTargetRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "api" },
+        "minReplicas": 2,
+        "maxReplicas": 10,
+        "metrics": [
+          { "type": "Resource", "resource": { "name": "cpu", "target": { "type": "Utilization", "averageUtilization": 80 } } }
+        ]
+      },
+      "status": {
+        "observedGeneration": 1,
+        "currentReplicas": 3,
+        "desiredReplicas": 3,
+        "conditions": [
+          { "type": "ScalingActive", "status": "False", "reason": "FailedGetResourceMetric", "message": "missing request for cpu" }
+        ]
+      }
+    }
+  },
+  {
+    "name": "partial metrics missing",
+    "expectedState": "metrics_incomplete",
+    "expectedReasons": ["missing_current_metric"],
+    "expectedSummary": "HPA is missing current metric values for memory",
+    "expectedTableState": "ok",
+    "hpa": {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": { "name": "api", "namespace": "default", "generation": 1 },
+      "spec": {
+        "scaleTargetRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "api" },
+        "minReplicas": 2,
+        "maxReplicas": 10,
+        "metrics": [
+          { "type": "Resource", "resource": { "name": "cpu", "target": { "type": "Utilization", "averageUtilization": 80 } } },
+          { "type": "Resource", "resource": { "name": "memory", "target": { "type": "Utilization", "averageUtilization": 70 } } }
+        ]
+      },
+      "status": {
+        "observedGeneration": 1,
+        "currentReplicas": 3,
+        "desiredReplicas": 3,
+        "currentMetrics": [
+          { "type": "Resource", "resource": { "name": "cpu", "current": { "averageUtilization": 65 } } }
+        ]
+      }
+    }
+  },
+  {
+    "name": "unable to scale",
+    "expectedState": "unable_to_scale",
+    "expectedReasons": ["unable_to_scale"],
+    "expectedSummary": "HPA cannot read or update the target scale",
+    "expectedTableState": "unable_to_scale",
+    "hpa": {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": { "name": "api", "namespace": "default", "generation": 1 },
+      "spec": {
+        "scaleTargetRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "api" },
+        "minReplicas": 2,
+        "maxReplicas": 10
+      },
+      "status": {
+        "observedGeneration": 1,
+        "currentReplicas": 3,
+        "desiredReplicas": 3,
+        "conditions": [
+          { "type": "AbleToScale", "status": "False", "reason": "FailedGetScale", "message": "deployments/scale.apps \"api\" not found" }
+        ]
+      }
+    }
+  },
+  {
+    "name": "scaling disabled at zero replicas",
+    "expectedState": "disabled",
+    "expectedReasons": ["scaling_disabled"],
+    "expectedSummary": "HPA scaling is disabled because the target has zero replicas",
+    "expectedTableState": "disabled",
+    "hpa": {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": { "name": "paused", "namespace": "default", "generation": 1 },
+      "spec": {
+        "scaleTargetRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "paused" },
+        "minReplicas": 1,
+        "maxReplicas": 10,
+        "metrics": [
+          { "type": "Resource", "resource": { "name": "cpu", "target": { "type": "Utilization", "averageUtilization": 70 } } }
+        ]
+      },
+      "status": {
+        "observedGeneration": 1,
+        "currentReplicas": 0,
+        "desiredReplicas": 0,
+        "conditions": [
+          { "type": "ScalingActive", "status": "False", "reason": "ScalingDisabled", "message": "scaling is disabled since the replica count of the target is zero" }
+        ]
+      }
+    }
+  },
+  {
+    "name": "pinned replicas",
+    "expectedState": "pinned",
+    "expectedReasons": ["pinned"],
+    "expectedSummary": "HPA is configured for a fixed replica count of 5",
+    "expectedTableState": "pinned",
+    "hpa": {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": { "name": "fixed", "namespace": "default", "generation": 1 },
+      "spec": {
+        "scaleTargetRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "fixed" },
+        "minReplicas": 5,
+        "maxReplicas": 5
+      },
+      "status": {
+        "observedGeneration": 1,
+        "currentReplicas": 5,
+        "desiredReplicas": 5
+      }
+    }
+  },
+  {
+    "name": "scaling up",
+    "expectedState": "scaling_up",
+    "expectedReasons": ["scaling_up"],
+    "expectedSummary": "Scaling up from 4 to 8 replicas",
+    "expectedTableState": "scaling_up",
+    "hpa": {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": { "name": "worker", "namespace": "default", "generation": 1 },
+      "spec": {
+        "scaleTargetRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "worker" },
+        "minReplicas": 1,
+        "maxReplicas": 20
+      },
+      "status": {
+        "observedGeneration": 1,
+        "currentReplicas": 4,
+        "desiredReplicas": 8
+      }
+    }
+  },
+  {
+    "name": "stale status",
+    "expectedState": "stale",
+    "expectedReasons": ["stale_status"],
+    "expectedSummary": "HPA has not observed the latest spec generation yet",
+    "expectedTableState": "ok",
+    "hpa": {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": { "name": "web", "namespace": "default", "generation": 3 },
+      "spec": {
+        "scaleTargetRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "web" },
+        "minReplicas": 2,
+        "maxReplicas": 10
+      },
+      "status": {
+        "observedGeneration": 2,
+        "currentReplicas": 4,
+        "desiredReplicas": 4
+      }
+    }
+  },
+  {
+    "name": "min limited",
+    "expectedState": "limited_min",
+    "expectedReasons": ["limited_min"],
+    "expectedSummary": "HPA is holding at minReplicas=2",
+    "expectedTableState": "ok",
+    "hpa": {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": { "name": "idle", "namespace": "default", "generation": 1 },
+      "spec": {
+        "scaleTargetRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "idle" },
+        "minReplicas": 2,
+        "maxReplicas": 10
+      },
+      "status": {
+        "observedGeneration": 1,
+        "currentReplicas": 2,
+        "desiredReplicas": 2,
+        "conditions": [
+          { "type": "ScalingLimited", "status": "True", "reason": "TooFewReplicas", "message": "the desired replica count is less than the minimum replica count" }
+        ]
+      }
+    }
+  },
+  {
+    "name": "scale down stabilized",
+    "expectedState": "stabilized",
+    "expectedReasons": ["scale_down_stabilized"],
+    "expectedSummary": "HPA is holding replicas during scale-down stabilization",
+    "expectedTableState": "ok",
+    "hpa": {
+      "apiVersion": "autoscaling/v2",
+      "kind": "HorizontalPodAutoscaler",
+      "metadata": { "name": "web", "namespace": "default", "generation": 1 },
+      "spec": {
+        "scaleTargetRef": { "apiVersion": "apps/v1", "kind": "Deployment", "name": "web" },
+        "minReplicas": 2,
+        "maxReplicas": 10
+      },
+      "status": {
+        "observedGeneration": 1,
+        "currentReplicas": 5,
+        "desiredReplicas": 5,
+        "conditions": [
+          { "type": "ScalingLimited", "status": "True", "reason": "ScaleDownStabilized", "message": "recent recommendations were higher than current one" }
+        ]
+      }
+    }
+  }
+]

@@ -14,6 +14,7 @@ import { getResourceClaimStatus as _getResourceClaimStatus, getResourceClaimDevi
 import { getNvidiaClusterPolicyStatus as _getNvidiaClusterPolicyStatus, getNvidiaClusterPolicyEnabledComponents as _getNvidiaClusterPolicyEnabledComponents, getNvidiaDriverStatus as _getNvidiaDriverStatus } from './resource-utils-nvidia'
 import { getBackupStatus as _getBackupStatus, getRestoreStatus as _getRestoreStatus, getScheduleStatus as _getScheduleStatus, getBSLStatus as _getBSLStatus } from './resource-utils-velero'
 import { getExternalSecretStatus as _getExternalSecretStatus, getClusterExternalSecretStatus as _getClusterExternalSecretStatus, getSecretStoreStatus as _getSecretStoreStatus, getClusterSecretStoreStatus as _getClusterSecretStoreStatus, getSecretStoreProviderType as _getSecretStoreProviderType } from './resource-utils-eso'
+import { getHPATableState, hpaStatusFromState } from './resource-utils-hpa'
 
 // ============================================================================
 // STATUS & HEALTH UTILITIES
@@ -939,16 +940,7 @@ export function getCronJobLastRun(cj: any): string | null {
 // ============================================================================
 
 export function getHPAStatus(hpa: any): StatusBadge {
-  const current = hpa.status?.currentReplicas || 0
-  const desired = hpa.status?.desiredReplicas || 0
-
-  if (current === desired) {
-    return { text: 'Stable', color: healthColors.healthy, level: 'healthy' }
-  }
-  if (current < desired) {
-    return { text: 'Scaling Up', color: healthColors.degraded, level: 'degraded' }
-  }
-  return { text: 'Scaling Down', color: healthColors.degraded, level: 'degraded' }
+  return hpaStatusFromState(getHPATableState(hpa), healthColors)
 }
 
 export function getHPAReplicas(hpa: any): { current: number; min: number; max: number } {

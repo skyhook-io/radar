@@ -7,14 +7,15 @@ import (
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
-	corev1 "k8s.io/api/core/v1"
+
+	"github.com/skyhook-io/radar/pkg/hpadiag"
 )
 
 // HPAProblem describes a detected issue with an HPA.
 type HPAProblem struct {
 	Name      string
 	Namespace string
-	Problem   string // "maxed"
+	Problem   string // "maxed" or "cannot-scale"
 	Reason    string
 }
 
@@ -29,40 +30,51 @@ type HPAProblem struct {
 func DetectHPAProblems(hpas []*autoscalingv2.HorizontalPodAutoscaler) []HPAProblem {
 	var problems []HPAProblem
 	for _, hpa := range hpas {
-		// "maxed" — at replica ceiling and wanting more.
-		if hpa.Spec.MaxReplicas > 0 && hpa.Status.CurrentReplicas >= hpa.Spec.MaxReplicas && hpa.Status.DesiredReplicas >= hpa.Spec.MaxReplicas {
+		diagnosis := hpadiag.Analyze(hpa)
+		if diagnosis == nil {
+			continue
+		}
+
+		if reason, ok := firstHPAReason(diagnosis, hpadiag.ReasonLimitedMax); ok {
 			problems = append(problems, HPAProblem{
 				Name:      hpa.Name,
 				Namespace: hpa.Namespace,
 				Problem:   "maxed",
-				Reason:    fmt.Sprintf("%d/%d replicas (wants %d)", hpa.Status.CurrentReplicas, hpa.Spec.MaxReplicas, hpa.Status.DesiredReplicas),
+				Reason:    reasonText(reason),
 			})
 		}
-		// "cannot scale" — the autoscaler controller reports it can't get
-		// metrics or scale calls are failing. Emitted as a separate problem
-		// so the maxed-check above isn't masked by an unrelated metrics
-		// outage on the same HPA.
-		for _, cond := range hpa.Status.Conditions {
-			if cond.Type == autoscalingv2.ScalingActive && cond.Status == corev1.ConditionFalse {
-				reason := cond.Reason
-				if reason == "" {
-					reason = "ScalingActive=False"
-				}
-				msg := cond.Message
-				if msg == "" {
-					msg = "HPA controller reports it cannot scale this workload"
-				}
-				problems = append(problems, HPAProblem{
-					Name:      hpa.Name,
-					Namespace: hpa.Namespace,
-					Problem:   "cannot-scale",
-					Reason:    fmt.Sprintf("%s: %s", reason, msg),
-				})
-				break
-			}
+
+		if reason, ok := firstHPAReason(diagnosis, hpadiag.ReasonUnableToScale, hpadiag.ReasonMetricsUnavailable); ok {
+			problems = append(problems, HPAProblem{
+				Name:      hpa.Name,
+				Namespace: hpa.Namespace,
+				Problem:   "cannot-scale",
+				Reason:    reasonText(reason),
+			})
 		}
 	}
 	return problems
+}
+
+func firstHPAReason(diagnosis *hpadiag.Diagnosis, ids ...hpadiag.ReasonID) (hpadiag.Reason, bool) {
+	for _, id := range ids {
+		for _, reason := range diagnosis.Reasons {
+			if reason.ID == id {
+				return reason, true
+			}
+		}
+	}
+	return hpadiag.Reason{}, false
+}
+
+func reasonText(reason hpadiag.Reason) string {
+	if reason.ConditionReason != "" && reason.Message != "" {
+		return reason.ConditionReason + ": " + reason.Message
+	}
+	if reason.Message != "" {
+		return reason.Message
+	}
+	return string(reason.ID)
 }
 
 // CronJobProblem describes a detected issue with a CronJob.

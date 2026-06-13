@@ -1,4 +1,5 @@
 export * from './resource-utils'
+export * from './resource-utils-hpa'
 export * from './resource-utils-argo'
 export * from './resource-utils-certmanager'
 export * from './resource-utils-cnpg'

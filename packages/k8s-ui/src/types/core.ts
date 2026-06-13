@@ -462,11 +462,63 @@ export interface SecretCertificateInfo {
   certificates: CertificateInfo[]
 }
 
+export type HPADiagnosisState =
+  | 'ok'
+  | 'scaling_up'
+  | 'scaling_down'
+  | 'limited_max'
+  | 'limited_min'
+  | 'metrics_unavailable'
+  | 'metrics_incomplete'
+  | 'unable_to_scale'
+  | 'disabled'
+  | 'pinned'
+  | 'stale'
+  | 'stabilized'
+  | 'unknown'
+
+export interface HPADiagnosis {
+  state: HPADiagnosisState
+  summary: string
+  target: {
+    apiVersion?: string
+    kind?: string
+    name?: string
+  }
+  bounds: {
+    min: number
+    max: number
+    current: number
+    desired: number
+    observedGeneration?: number
+    generation?: number
+  }
+  metrics?: HPAMetricSummary[]
+  reasons?: HPAReasonSummary[]
+}
+
+export interface HPAReasonSummary {
+  id: string
+  message: string
+  detail?: string
+  conditionType?: string
+  conditionReason?: string
+}
+
+export interface HPAMetricSummary {
+  type: string
+  name: string
+  current?: string
+  target?: string
+  status: string
+}
+
 // Resource with computed relationships and optional certificate info (API response wrapper)
 export interface ResourceWithRelationships<T = unknown> {
   resource: T
   relationships?: Relationships
   certificateInfo?: SecretCertificateInfo
+  hpaDiagnosis?: HPADiagnosis
 }
 
 // API Resource (from discovery endpoint)

@@ -21,6 +21,7 @@ import (
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -42,6 +43,7 @@ import (
 	"github.com/skyhook-io/radar/internal/timeline"
 	"github.com/skyhook-io/radar/internal/updater"
 	"github.com/skyhook-io/radar/internal/version"
+	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/perfstats"
 	"github.com/skyhook-io/radar/pkg/rbac"
 	topology "github.com/skyhook-io/radar/pkg/topology"
@@ -1587,6 +1589,14 @@ func setTypeMeta(resource any) {
 	k8s.SetTypeMeta(resource)
 }
 
+func hpaDiagnosisFor(resource any) *hpadiag.Diagnosis {
+	hpa, ok := resource.(*autoscalingv2.HorizontalPodAutoscaler)
+	if !ok {
+		return nil
+	}
+	return hpadiag.Analyze(hpa)
+}
+
 // preflightResourceGet runs the per-user RBAC gates that must pass before any
 // single-resource GET fetch. Mirrors the kind/scope-aware logic used by both
 // the REST handler (handleGetResource) and the AI handler (handleAIGetResource)
@@ -1726,6 +1736,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, topology.ResourceWithRelationships{
 			Resource:      resource,
 			Relationships: relationships,
+			HPADiagnosis:  hpaDiagnosisFor(resource),
 		})
 		return
 	}
@@ -1941,6 +1952,7 @@ func (s *Server) handleGetResource(w http.ResponseWriter, r *http.Request) {
 	response := topology.ResourceWithRelationships{
 		Resource:      resource,
 		Relationships: relationships,
+		HPADiagnosis:  hpaDiagnosisFor(resource),
 	}
 
 	// Enrich TLS secrets with parsed certificate info

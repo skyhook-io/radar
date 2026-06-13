@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/resourcecontext"
 )
 
@@ -447,8 +448,13 @@ func summarizeHPA(hpa *autoscalingv2.HorizontalPodAutoscaler) *ResourceSummary {
 		s.MinReplicas = hpa.Spec.MinReplicas
 	}
 
-	if hpa.Spec.MaxReplicas > 0 && hpa.Status.CurrentReplicas >= hpa.Spec.MaxReplicas && hpa.Status.DesiredReplicas >= hpa.Spec.MaxReplicas {
-		s.Issue = "maxed"
+	if diagnosis := hpadiag.Analyze(hpa); diagnosis != nil {
+		switch diagnosis.State {
+		case hpadiag.StateLimitedMax:
+			s.Issue = "maxed"
+		case hpadiag.StateMetricsUnavailable, hpadiag.StateUnableToScale:
+			s.Issue = diagnosis.Summary
+		}
 	}
 
 	return s

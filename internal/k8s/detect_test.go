@@ -66,8 +66,8 @@ func TestDetectProblems_PopulatesGroup(t *testing.T) {
 				NumberUnavailable: 2,
 			},
 		},
-		// HPA at its replica ceiling — DetectHPAProblems flags
-		// "maxed" when current and desired both hit MaxReplicas.
+		// HPA capped by maxReplicas — DetectHPAProblems flags
+		// "maxed" when the controller reports TooManyReplicas.
 		// The wrapper sets Group="autoscaling".
 		&autoscalingv2.HorizontalPodAutoscaler{
 			ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "prod"},
@@ -78,6 +78,9 @@ func TestDetectProblems_PopulatesGroup(t *testing.T) {
 			Status: autoscalingv2.HorizontalPodAutoscalerStatus{
 				CurrentReplicas: 10,
 				DesiredReplicas: 10,
+				Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+					{Type: autoscalingv2.ScalingLimited, Status: corev1.ConditionTrue, Reason: "TooManyReplicas", Message: "the desired replica count is more than the maximum replica count"},
+				},
 			},
 		},
 		// Job stuck Active>0 for >1h with no completions.

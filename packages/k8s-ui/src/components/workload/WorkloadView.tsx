@@ -22,7 +22,7 @@ import {
   BarChart3,
   Network,
 } from 'lucide-react'
-import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode } from '../../types'
+import type { TimelineEvent, ResourceRef, Relationships, SelectedResource, ResolvedEnvFrom, Topology, TopologyNode, HPADiagnosis } from '../../types'
 import type { GitOpsStatus } from '../../types/gitops'
 import type { NavigateToResource } from '../../utils/navigation'
 import { refToSelectedResource, pluralToKind, kindToPlural, apiVersionToGroup } from '../../utils/navigation'
@@ -49,6 +49,7 @@ import {
 import { ResourceActionsBar } from '../shared/ResourceActionsBar'
 import { EditableYamlView, SaveSuccessAnimation } from '../shared/EditableYamlView'
 import { ResourceRendererDispatch, getResourceStatus, type RendererOverrides } from '../shared/ResourceRendererDispatch'
+import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
 import { DetailShell, type DetailShellTab } from '../shared/DetailShell'
 import { HelmManagedByChip, ManagedByChip, type HelmOwnerRef } from '../shared/ManagedByChip'
 import { getKindColorOutline, displayKindName } from '../ui/drawer-components'
@@ -105,6 +106,10 @@ interface WorkloadViewProps {
   relationships?: Relationships
   /** TLS certificate info for secrets */
   certificateInfo?: any
+  /** HPA diagnosis for HorizontalPodAutoscaler detail responses */
+  hpaDiagnosis?: HPADiagnosis
+  /** Compact diagnosis for autoscalers controlling this workload */
+  scalerDiagnostics?: ScalerDiagnosis[]
   /** Whether the resource is loading */
   isLoading?: boolean
   /** Fetch error for the resource (preserves status + message so the
@@ -244,6 +249,8 @@ export function WorkloadView({
   resource,
   relationships,
   certificateInfo,
+  hpaDiagnosis,
+  scalerDiagnostics,
   isLoading: resourceLoading = false,
   resourceError,
   refetch: refetchProp,
@@ -651,6 +658,8 @@ export function WorkloadView({
                 data={resource}
                 relationships={relationships}
                 certificateInfo={certificateInfo}
+                hpaDiagnosis={hpaDiagnosis}
+                scalerDiagnostics={scalerDiagnostics}
                 onCopy={copyToClipboard}
                 copied={copied}
                 onNavigate={onNavigateToResource ? (ref) => onNavigateToResource(refToSelectedResource(ref)) : undefined}
@@ -774,6 +783,8 @@ export function WorkloadView({
               resource={resource}
               selectedResource={selectedResource}
               relationships={relationships}
+              hpaDiagnosis={hpaDiagnosis}
+              scalerDiagnostics={scalerDiagnostics}
               isLoading={resourceLoading}
               error={resourceError}
               onNavigate={onNavigateToResource}
@@ -1305,6 +1316,8 @@ function InfoTab({
   resource,
   selectedResource,
   relationships,
+  hpaDiagnosis,
+  scalerDiagnostics,
   isLoading,
   error,
   onNavigate,
@@ -1326,6 +1339,8 @@ function InfoTab({
   resource: any
   selectedResource: SelectedResource
   relationships?: Relationships
+  hpaDiagnosis?: HPADiagnosis
+  scalerDiagnostics?: ScalerDiagnosis[]
   isLoading: boolean
   error?: unknown
   onNavigate?: NavigateToResource
@@ -1354,6 +1369,8 @@ function InfoTab({
         resource={selectedResource}
         data={resource}
         relationships={relationships}
+        hpaDiagnosis={hpaDiagnosis}
+        scalerDiagnostics={scalerDiagnostics}
         onCopy={onCopy}
         copied={copied}
         onNavigate={onNavigate ? (ref) => onNavigate(refToSelectedResource(ref)) : undefined}

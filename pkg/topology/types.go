@@ -12,6 +12,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 
+	"github.com/skyhook-io/radar/pkg/hpadiag"
 	k8score "github.com/skyhook-io/radar/pkg/k8score"
 )
 
@@ -358,6 +359,7 @@ type ResourceWithRelationships struct {
 	Resource        any                    `json:"resource"`
 	Relationships   *Relationships         `json:"relationships,omitempty"`
 	CertificateInfo *SecretCertificateInfo `json:"certificateInfo,omitempty"`
+	HPADiagnosis    *hpadiag.Diagnosis     `json:"hpaDiagnosis,omitempty"`
 }
 
 // ResourceStatus holds computed status for a resource.

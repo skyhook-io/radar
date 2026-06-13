@@ -270,6 +270,7 @@ export function WorkloadView({
   const resource = resourceResponse?.resource
   const relationships = resourceResponse?.relationships
   const certificateInfo = resourceResponse?.certificateInfo
+  const hpaDiagnosis = resourceResponse?.hpaDiagnosis
   const relationshipGitopsOwner = useMemo(() => gitOpsOwnerFromRelationships(relationships), [relationships])
   const inheritedGitOpsLookupRef = useMemo(
     () => findInheritedGitOpsLookupRef(relationships, relationshipGitopsOwner, { kind: kindProp, namespace, name, group: rest.group }),
@@ -478,6 +479,7 @@ export function WorkloadView({
       resource={resource}
       relationships={relationships}
       certificateInfo={certificateInfo}
+      hpaDiagnosis={hpaDiagnosis}
       isLoading={resourceLoading}
       resourceError={resourceError}
       refetch={refetchResource}

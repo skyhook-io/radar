@@ -46,6 +46,7 @@ type ResourceContext struct {
 	PVCSummary      *PVCSummary      `json:"pvcSummary,omitempty"`
 	JobSummary      *JobSummary      `json:"jobSummary,omitempty"`
 	CronJobSummary  *CronJobSummary  `json:"cronJobSummary,omitempty"`
+	HPASummary      *HPASummary      `json:"hpaSummary,omitempty"`
 	IssueSummary    *IssueSummary    `json:"issueSummary,omitempty"`
 	AuditSummary    *AuditSummary    `json:"auditSummary,omitempty"`
 	PolicySummary   *PolicySummary   `json:"policySummary,omitempty"`
@@ -288,6 +289,38 @@ type CronJobSummary struct {
 	ActiveJobs         []ContextRef `json:"activeJobs,omitempty"`
 	LastScheduleTime   string       `json:"lastScheduleTime,omitempty"`
 	LastSuccessfulTime string       `json:"lastSuccessfulTime,omitempty"`
+}
+
+type HPASummary struct {
+	State   string             `json:"state"`
+	Summary string             `json:"summary"`
+	Target  *ContextRef        `json:"target,omitempty"`
+	Bounds  *HPAReplicaBounds  `json:"bounds,omitempty"`
+	Metrics []HPAMetricSummary `json:"metrics,omitempty"`
+	Reasons []HPAReasonSummary `json:"reasons,omitempty"`
+}
+
+type HPAReplicaBounds struct {
+	Min                int32 `json:"min"`
+	Max                int32 `json:"max"`
+	Current            int32 `json:"current"`
+	Desired            int32 `json:"desired"`
+	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
+	Generation         int64 `json:"generation,omitempty"`
+}
+
+type HPAReasonSummary struct {
+	ID      string `json:"id"`
+	Message string `json:"message"`
+	Detail  string `json:"detail,omitempty"`
+}
+
+type HPAMetricSummary struct {
+	Type    string `json:"type"`
+	Name    string `json:"name"`
+	Current string `json:"current,omitempty"`
+	Target  string `json:"target,omitempty"`
+	Status  string `json:"status"`
 }
 
 // IssueSummary is a rollup of internal issue-engine findings scoped to

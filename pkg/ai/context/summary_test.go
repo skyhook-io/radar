@@ -579,7 +579,13 @@ func TestSummary_HPAIssue(t *testing.T) {
 					MaxReplicas:    10,
 					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "web"},
 				},
-				Status: autoscalingv2.HorizontalPodAutoscalerStatus{CurrentReplicas: 10, DesiredReplicas: 10},
+				Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+					CurrentReplicas: 10,
+					DesiredReplicas: 10,
+					Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+						{Type: autoscalingv2.ScalingLimited, Status: corev1.ConditionTrue, Reason: "TooManyReplicas", Message: "the desired replica count is more than the maximum replica count"},
+					},
+				},
 			},
 			wantIssue: "maxed",
 		},
@@ -592,6 +598,42 @@ func TestSummary_HPAIssue(t *testing.T) {
 					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "web"},
 				},
 				Status: autoscalingv2.HorizontalPodAutoscalerStatus{CurrentReplicas: 5, DesiredReplicas: 5},
+			},
+			wantIssue: "",
+		},
+		{
+			name: "metrics unavailable",
+			hpa: &autoscalingv2.HorizontalPodAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: "default"},
+				Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+					MaxReplicas:    10,
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "web"},
+				},
+				Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+					CurrentReplicas: 5,
+					DesiredReplicas: 5,
+					Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+						{Type: autoscalingv2.ScalingActive, Status: corev1.ConditionFalse, Reason: "FailedGetResourceMetric"},
+					},
+				},
+			},
+			wantIssue: "HPA cannot compute replicas because required metrics are unavailable",
+		},
+		{
+			name: "scaling disabled is not an issue",
+			hpa: &autoscalingv2.HorizontalPodAutoscaler{
+				ObjectMeta: metav1.ObjectMeta{Name: "paused", Namespace: "default"},
+				Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+					MaxReplicas:    10,
+					ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{Kind: "Deployment", Name: "paused"},
+				},
+				Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+					CurrentReplicas: 0,
+					DesiredReplicas: 0,
+					Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+						{Type: autoscalingv2.ScalingActive, Status: corev1.ConditionFalse, Reason: "ScalingDisabled"},
+					},
+				},
 			},
 			wantIssue: "",
 		},

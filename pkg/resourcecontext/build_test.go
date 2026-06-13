@@ -794,7 +794,19 @@ func TestBuild_NilObj(t *testing.T) {
 
 func TestBuild_HPA_Identity(t *testing.T) {
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{
-		ObjectMeta: metav1.ObjectMeta{Name: "web-hpa", Namespace: "prod"},
+		ObjectMeta: metav1.ObjectMeta{Name: "web-hpa", Namespace: "prod", Generation: 1},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "web"},
+			MaxReplicas:    10,
+		},
+		Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+			ObservedGeneration: ptrInt64(1),
+			CurrentReplicas:    10,
+			DesiredReplicas:    10,
+			Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+				{Type: autoscalingv2.ScalingLimited, Status: corev1.ConditionTrue, Reason: "TooManyReplicas", Message: "the desired replica count is more than the maximum replica count"},
+			},
+		},
 	}
 	rc := Build(context.Background(), hpa, Options{Tier: TierBasic, AccessChecker: allowAllChecker{}})
 	if rc == nil {
@@ -802,6 +814,15 @@ func TestBuild_HPA_Identity(t *testing.T) {
 	}
 	if rc.Tier != TierBasic {
 		t.Errorf("Tier: got %q want %q", rc.Tier, TierBasic)
+	}
+	if rc.HPASummary == nil {
+		t.Fatal("Build returned no HPA summary")
+	}
+	if rc.HPASummary.State != "limited_max" {
+		t.Fatalf("HPA state = %q, want limited_max", rc.HPASummary.State)
+	}
+	if rc.HPASummary.Target == nil || rc.HPASummary.Target.Kind != "Deployment" || rc.HPASummary.Target.Group != "apps" {
+		t.Fatalf("target = %+v", rc.HPASummary.Target)
 	}
 }
 
@@ -1094,6 +1115,8 @@ func TestBuild_SecretReferencedByCapsAndSkipsOwnedPods(t *testing.T) {
 // ---------------------------------------------------------------------------
 
 func ptrBool(b bool) *bool { return &b }
+
+func ptrInt64(v int64) *int64 { return &v }
 
 func stringSlicesEqual(a, b []string) bool {
 	if len(a) != len(b) {

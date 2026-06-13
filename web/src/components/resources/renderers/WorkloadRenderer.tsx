@@ -1,9 +1,11 @@
 import { WorkloadRenderer as BaseWorkloadRenderer } from '@skyhook-io/k8s-ui/components/resources/renderers/WorkloadRenderer'
 import { useNavigate } from 'react-router-dom'
-import { useScaleWorkload } from '../../../api/client'
+import { useScaleWorkload, fetchJSON } from '../../../api/client'
 import { useRBACSubject } from '../../../api/rbac'
-import { useQueryClient } from '@tanstack/react-query'
-import type { Relationships, ResourceRef } from '../../../types'
+import { useQueries, useQueryClient } from '@tanstack/react-query'
+import { kindToPlural } from '@skyhook-io/k8s-ui/utils/navigation'
+import type { Relationships, ResourceRef, ResourceWithRelationships } from '../../../types'
+import type { ScalerDiagnosis } from '@skyhook-io/k8s-ui/components/resources/renderers/WorkloadRenderer'
 
 // Map plural lowercase kind to singular PascalCase for ownerReferences matching
 function getOwnerKind(kind: string): string {
@@ -40,6 +42,34 @@ export function WorkloadRenderer({ kind, data, onNavigate, scaleBlockedBy }: Wor
   const { data: rbacData, isLoading: rbacLoading, error: rbacError } = useRBACSubject(
     'ServiceAccount', namespace, saName, !!namespace,
   )
+  const hpaRefs = (scaleBlockedBy ?? []).filter(ref => {
+    const refKind = ref.kind.toLowerCase()
+    return refKind === 'horizontalpodautoscaler' || refKind === 'hpa'
+  })
+  const hpaQueries = useQueries({
+    queries: hpaRefs.map(ref => ({
+      queryKey: ['resource', kindToPlural(ref.kind), ref.namespace, ref.name, ref.group],
+      queryFn: () => {
+        const ns = ref.namespace || '_'
+        const params = new URLSearchParams()
+        if (ref.group) params.set('group', ref.group)
+        const query = params.toString()
+        return fetchJSON<ResourceWithRelationships<any>>(`/resources/${kindToPlural(ref.kind)}/${ns}/${ref.name}${query ? `?${query}` : ''}`)
+      },
+      enabled: Boolean(ref.kind && ref.name),
+      staleTime: 10000,
+      retry: false,
+    })),
+  })
+  const scalerDiagnostics: ScalerDiagnosis[] = hpaRefs.map((ref, index) => {
+    const query = hpaQueries[index]
+    return {
+      ref,
+      diagnosis: query.data?.hpaDiagnosis,
+      loading: query.isLoading,
+      error: query.isError ? (query.error instanceof Error ? query.error.message : 'Failed to fetch HPA') : undefined,
+    }
+  })
 
   return (
     <BaseWorkloadRenderer
@@ -51,6 +81,7 @@ export function WorkloadRenderer({ kind, data, onNavigate, scaleBlockedBy }: Wor
       rbacLoading={rbacLoading}
       rbacError={rbacError as Error | null}
       scaleBlockedBy={scaleBlockedBy}
+      scalerDiagnostics={scalerDiagnostics}
       onScale={async (replicas) => {
         await scaleMutation.mutateAsync({
           kind,

@@ -12,6 +12,7 @@ import (
 	"testing"
 
 	appsv1 "k8s.io/api/apps/v1"
+	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
@@ -105,6 +106,22 @@ func TestMain(m *testing.M) {
 			Status: appsv1.DeploymentStatus{
 				Replicas:      1,
 				ReadyReplicas: 1,
+			},
+		},
+		&autoscalingv2.HorizontalPodAutoscaler{
+			ObjectMeta: metav1.ObjectMeta{Name: "nginx-hpa", Namespace: "default", Generation: 1},
+			Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+				ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: "nginx"},
+				MinReplicas:    &replicas,
+				MaxReplicas:    2,
+			},
+			Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+				ObservedGeneration: ptrInt64(1),
+				CurrentReplicas:    2,
+				DesiredReplicas:    2,
+				Conditions: []autoscalingv2.HorizontalPodAutoscalerCondition{
+					{Type: autoscalingv2.ScalingLimited, Status: corev1.ConditionTrue, Reason: "TooManyReplicas", Message: "the desired replica count is more than the maximum replica count"},
+				},
 			},
 		},
 		&appsv1.ReplicaSet{
@@ -548,6 +565,30 @@ func TestSmokeGetDeployment(t *testing.T) {
 	}
 }
 
+func TestSmokeGetHPAIncludesDiagnosis(t *testing.T) {
+	resp, err := http.Get(testServer.URL + "/api/resources/hpas/default/nginx-hpa")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("expected 200, got %d", resp.StatusCode)
+	}
+
+	var body map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	diagnosis, ok := body["hpaDiagnosis"].(map[string]any)
+	if !ok {
+		t.Fatalf("missing hpaDiagnosis in response: %+v", body)
+	}
+	if diagnosis["state"] != "limited_max" {
+		t.Fatalf("hpaDiagnosis.state = %v, want limited_max", diagnosis["state"])
+	}
+}
+
 func TestSmokeGetResourceNotFound(t *testing.T) {
 	resp, err := http.Get(testServer.URL + "/api/resources/deployments/default/nonexistent")
 	if err != nil {
@@ -576,6 +617,8 @@ func TestSmokeEvents(t *testing.T) {
 }
 
 func boolPtr(b bool) *bool { return &b }
+
+func ptrInt64(v int64) *int64 { return &v }
 
 // --- Helpers ---
 

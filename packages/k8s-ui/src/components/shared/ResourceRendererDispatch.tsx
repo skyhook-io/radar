@@ -226,10 +226,11 @@ import {
   isComposite,
   isClaim,
 } from '../resources/resource-utils-crossplane'
-import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo, ResolvedEnvFrom, TimelineEvent } from '../../types'
+import type { SelectedResource, Relationships, ResourceRef, SecretCertificateInfo, ResolvedEnvFrom, TimelineEvent, HPADiagnosis } from '../../types'
 import type { CopyHandler } from '../ui/drawer-components'
 import { AlertBanner } from '../ui/drawer-components'
 import { replicaScalers } from '../../utils/replica-scalers'
+import type { ScalerDiagnosis } from '../resources/renderers/WorkloadRenderer'
 
 /**
  * Override map letting each platform consumer swap in its own renderer components.
@@ -258,6 +259,7 @@ export interface RendererOverrides {
     onNavigate?: (ref: ResourceRef) => void
     relationships?: Relationships
     scaleBlockedBy?: ResourceRef[]
+    scalerDiagnostics?: ScalerDiagnosis[]
   }>
   // Optional override for Crossplane Composite / Claim — host wraps the
   // package renderer to fan out per-composed-ref status fetches via React Query.
@@ -297,6 +299,7 @@ export interface RendererOverrides {
   HPARenderer?: React.ComponentType<{
     data: any
     onNavigate?: (ref: ResourceRef) => void
+    hpaDiagnosis?: HPADiagnosis
   }>
   // PVC: host wraps the base renderer to add a kubelet-derived usage gauge
   // when Prometheus is scraping kubelet endpoints.
@@ -376,6 +379,8 @@ interface ResourceRendererDispatchProps {
   data: any
   relationships?: Relationships
   certificateInfo?: SecretCertificateInfo
+  hpaDiagnosis?: HPADiagnosis
+  scalerDiagnostics?: ScalerDiagnosis[]
   onCopy: (text: string, key: string) => void
   copied: string | null
   onNavigate?: (ref: ResourceRef) => void
@@ -417,6 +422,8 @@ export function ResourceRendererDispatch({
   data,
   relationships,
   certificateInfo,
+  hpaDiagnosis,
+  scalerDiagnostics,
   onCopy,
   copied,
   onNavigate,
@@ -503,6 +510,7 @@ export function ResourceRendererDispatch({
             onNavigate={onNavigate}
             relationships={relationships}
             scaleBlockedBy={scaleBlockedBy}
+            scalerDiagnostics={scalerDiagnostics}
           />
         )}
         {kind === 'replicasets' && <ReplicaSetRenderer data={data} />}
@@ -513,7 +521,7 @@ export function ResourceRendererDispatch({
         {kind === 'secrets' && <SecretRenderer data={data} certificateInfo={certificateInfo} resourceData={data} onSaveSecretValue={onSaveSecretValue} isSaving={isSavingSecret} />}
         {kind === 'jobs' && <JobRenderer data={data} />}
         {kind === 'cronjobs' && <CronJobRenderer data={data} onNavigate={onNavigate} />}
-        {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPAComp data={data} onNavigate={onNavigate} />}
+        {(kind === 'hpas' || kind === 'horizontalpodautoscalers') && <HPAComp data={data} onNavigate={onNavigate} hpaDiagnosis={hpaDiagnosis} />}
         {kind === 'nodes' && <NodeComp data={data} relationships={relationships} />}
         {kind === 'persistentvolumeclaims' && <PVCComp data={data} onNavigate={onNavigate} />}
         {kind === 'rollouts' && <RolloutRenderer data={data} />}

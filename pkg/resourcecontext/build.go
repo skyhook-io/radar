@@ -18,6 +18,7 @@ import (
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
 
+	"github.com/skyhook-io/radar/pkg/hpadiag"
 	"github.com/skyhook-io/radar/pkg/topology"
 )
 
@@ -270,6 +271,7 @@ func Build(ctx context.Context, obj runtime.Object, opts Options) *ResourceConte
 	rc.PVCSummary = buildPVCSummary(obj)
 	rc.JobSummary = buildJobSummary(obj)
 	rc.CronJobSummary = buildCronJobSummary(ctx, obj, opts.AccessChecker, omitted)
+	rc.HPASummary = buildHPASummary(obj)
 	rc.StatusSummary = buildStatusSummary(obj)
 
 	// 4. Pre-computed summaries — pass-through.
@@ -1126,6 +1128,52 @@ func buildCronJobSummary(ctx context.Context, obj runtime.Object, ac RefAccessCh
 		})
 	}
 	out.ActiveJobs = filterRefs(ctx, ac, active, "cronJobSummary.activeJobs", omitted)
+	return out
+}
+
+func buildHPASummary(obj runtime.Object) *HPASummary {
+	hpa, ok := obj.(*autoscalingv2.HorizontalPodAutoscaler)
+	if !ok || hpa == nil {
+		return nil
+	}
+	diagnosis := hpadiag.Analyze(hpa)
+	if diagnosis == nil {
+		return nil
+	}
+	out := &HPASummary{
+		State:   string(diagnosis.State),
+		Summary: diagnosis.Summary,
+		Target: &ContextRef{
+			Kind:      diagnosis.Target.Kind,
+			Group:     groupFromAPIVersion(diagnosis.Target.APIVersion),
+			Namespace: hpa.Namespace,
+			Name:      diagnosis.Target.Name,
+		},
+		Bounds: &HPAReplicaBounds{
+			Min:                diagnosis.Bounds.Min,
+			Max:                diagnosis.Bounds.Max,
+			Current:            diagnosis.Bounds.Current,
+			Desired:            diagnosis.Bounds.Desired,
+			ObservedGeneration: diagnosis.Bounds.ObservedGeneration,
+			Generation:         diagnosis.Bounds.Generation,
+		},
+	}
+	for _, metric := range diagnosis.Metrics {
+		out.Metrics = append(out.Metrics, HPAMetricSummary{
+			Type:    metric.Type,
+			Name:    metric.Name,
+			Current: metric.Current,
+			Target:  metric.Target,
+			Status:  metric.Status,
+		})
+	}
+	for _, reason := range diagnosis.Reasons {
+		out.Reasons = append(out.Reasons, HPAReasonSummary{
+			ID:      string(reason.ID),
+			Message: reason.Message,
+			Detail:  reason.Detail,
+		})
+	}
 	return out
 }
 

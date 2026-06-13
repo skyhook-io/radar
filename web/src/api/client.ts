@@ -928,6 +928,7 @@ export function useResource<T>(kind: string, namespace: string, name: string, gr
     data: query.data?.resource,
     relationships: query.data?.relationships,
     certificateInfo: query.data?.certificateInfo,
+    hpaDiagnosis: query.data?.hpaDiagnosis,
   }
 }
 
