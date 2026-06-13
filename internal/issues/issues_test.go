@@ -178,6 +178,66 @@ func TestCompose_GroupedKindFilterMatchesSubject(t *testing.T) {
 	}
 }
 
+func TestCompose_GroupedDiagnosisRequiresEveryMemberToAgree(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{
+				Kind: "Pod", Namespace: "ns", Name: "web-a", Severity: "critical", Reason: "CrashLoopBackOff",
+				OwnerKind: "Deployment", OwnerName: "web",
+				Cause: "command not found", Action: "fix the container command",
+			},
+			{Kind: "Pod", Namespace: "ns", Name: "web-b", Severity: "critical", Reason: "CrashLoopBackOff", OwnerKind: "Deployment", OwnerName: "web"},
+		},
+	}
+	out := Compose(p, Filters{Grouped: true})
+	if len(out) != 1 {
+		t.Fatalf("got %d issues, want 1: %+v", len(out), out)
+	}
+	if out[0].Cause != "" || out[0].Action != "" {
+		t.Fatalf("mixed parsed/unparsed rollup must omit diagnosis, got cause=%q action=%q", out[0].Cause, out[0].Action)
+	}
+}
+
+func TestCompose_GroupedDiagnosisKeepsIdenticalMemberDiagnosis(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{
+			{
+				Kind: "Pod", Namespace: "ns", Name: "web-a", Severity: "critical", Reason: "CrashLoopBackOff",
+				OwnerKind: "Deployment", OwnerName: "web",
+				Cause: "command not found", Action: "fix the container command",
+			},
+			{
+				Kind: "Pod", Namespace: "ns", Name: "web-b", Severity: "critical", Reason: "CrashLoopBackOff",
+				OwnerKind: "Deployment", OwnerName: "web",
+				Cause: "command not found", Action: "fix the container command",
+			},
+		},
+	}
+	out := Compose(p, Filters{Grouped: true})
+	if len(out) != 1 {
+		t.Fatalf("got %d issues, want 1: %+v", len(out), out)
+	}
+	if out[0].Cause != "command not found" || out[0].Action != "fix the container command" {
+		t.Fatalf("identical member diagnosis should be promoted, got cause=%q action=%q", out[0].Cause, out[0].Action)
+	}
+}
+
+func TestCompose_GroupedSingleIssueKeepsDiagnosis(t *testing.T) {
+	p := &fakeProvider{
+		problems: []k8s.Detection{{
+			Kind: "Pod", Namespace: "ns", Name: "standalone", Severity: "critical", Reason: "CrashLoopBackOff",
+			Cause: "command not found", Action: "fix the container command",
+		}},
+	}
+	out := Compose(p, Filters{Grouped: true})
+	if len(out) != 1 {
+		t.Fatalf("got %d issues, want 1: %+v", len(out), out)
+	}
+	if out[0].Cause == "" || out[0].Action == "" {
+		t.Fatalf("single-resource issue should keep diagnosis, got %+v", out[0])
+	}
+}
+
 func TestCompose_DropsInfoSeverityFromQueue(t *testing.T) {
 	// info-severity problems are inert/posture (deprecated-RBAC residue,
 	// singleton-StatefulSet headless-DNS trivia) — excluded from the live issue
@@ -342,7 +402,11 @@ func TestCompose_PVCPendingDedupesOverMissingStorageClass(t *testing.T) {
 	// One incident, one row: the missing-ref row names the cause and wins.
 	p := &fakeProvider{
 		problems: []k8s.Detection{
-			{Kind: "PersistentVolumeClaim", Namespace: "ns", Name: "stuck-pvc", Severity: "high", Reason: "Pending", IssueTiming: "started_at_resource_creation", IssueTimingBasis: "phase"},
+			{
+				Kind: "PersistentVolumeClaim", Namespace: "ns", Name: "stuck-pvc", Severity: "high", Reason: "Pending",
+				Cause: "Storage provisioner failed to create a volume.", Action: "Check the CSI controller logs.",
+				IssueTiming: "started_at_resource_creation", IssueTimingBasis: "phase",
+			},
 		},
 		missingRefs: []k8s.Detection{
 			{Kind: "PersistentVolumeClaim", Namespace: "ns", Name: "stuck-pvc", Severity: "critical", Reason: "Missing StorageClass", Fingerprint: "Missing StorageClass|abc", IssueTiming: "started_at_resource_creation", IssueTimingBasis: "phase"},
@@ -360,6 +424,9 @@ func TestCompose_PVCPendingDedupesOverMissingStorageClass(t *testing.T) {
 	}
 	if pvcRows[0].Reason != "Missing StorageClass" {
 		t.Errorf("the cause-naming missing-ref row must win, got reason %q", pvcRows[0].Reason)
+	}
+	if pvcRows[0].Source != SourceMissingRef {
+		t.Errorf("missing-ref row must win over enriched phase row, got source %q", pvcRows[0].Source)
 	}
 	if pvcRows[0].IssueTiming != "started_at_resource_creation" || pvcRows[0].IssueTimingBasis != "phase" {
 		t.Errorf("surviving row must keep at-creation/phase timing, got (%q, %q)", pvcRows[0].IssueTiming, pvcRows[0].IssueTimingBasis)

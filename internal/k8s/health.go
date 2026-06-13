@@ -1,6 +1,7 @@
 package k8s
 
 import (
+	"fmt"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -30,6 +31,8 @@ const initContainerStalledReason = "InitContainerStalled"
 // highRestartThreshold is the cumulative per-container RestartCount above which
 // a still-unhealthy container is treated as actively thrashing.
 const highRestartThreshold = 3
+
+const shortCrashRunWindow = 10 * time.Second
 
 // isStableCrashLoop reports whether a container is in an ACTIVE crashloop: it
 // has restarted with a crash-class last termination (CrashLoopBackOff / generic
@@ -323,6 +326,119 @@ func PodRestartContext(pod *corev1.Pod) (restartCount int32, lastTerminatedReaso
 	walk(pod.Status.ContainerStatuses)
 	walk(pod.Status.InitContainerStatuses)
 	return restartCount, lastTerminatedReason
+}
+
+type crashLoopCandidate struct {
+	status     corev1.ContainerStatus
+	init       bool
+	index      int
+	stateRank  int
+	finishedAt time.Time
+}
+
+func podCrashLoopDiagnosis(pod *corev1.Pod, now time.Time) (cause, action string) {
+	candidate, ok := activeCrashLoopCandidate(pod, now)
+	if !ok {
+		return "", ""
+	}
+	term := candidate.status.LastTerminationState.Terminated
+	if term == nil || term.ExitCode == 0 || term.Reason == "OOMKilled" {
+		return "", ""
+	}
+
+	ref := fmt.Sprintf("container %q", candidate.status.Name)
+	if candidate.init {
+		ref = fmt.Sprintf("init container %q", candidate.status.Name)
+	}
+	run := shortRunContext(term)
+
+	switch term.ExitCode {
+	case 127:
+		return fmt.Sprintf("%s exited with code 127: command not found.%s", ref, run),
+			"Check the image entrypoint and pod command/args; verify the binary exists in the image."
+	case 126:
+		return fmt.Sprintf("%s exited with code 126: command found but not executable.%s", ref, run),
+			"Check executable permissions, the shebang/interpreter, and the pod command/args."
+	case 139:
+		return fmt.Sprintf("%s exited with code 139: segmentation fault.%s", ref, run),
+			"Inspect previous container logs and recent image/code changes; check native libraries or unsafe code for a segfault."
+	case 137:
+		return fmt.Sprintf("%s exited with code 137, but Kubernetes did not report OOMKilled.%s", ref, run),
+			"Check node pressure, process-level SIGKILLs, and memory limits; inspect previous container logs for shutdown context."
+	default:
+		return fmt.Sprintf("%s is crashlooping after exit code %d.%s", ref, term.ExitCode, run),
+			"Inspect previous container logs for this container and verify the pod command, args, config, and dependencies."
+	}
+}
+
+func activeCrashLoopCandidate(pod *corev1.Pod, now time.Time) (crashLoopCandidate, bool) {
+	var best crashLoopCandidate
+	have := false
+	consider := func(cs corev1.ContainerStatus, init bool, index int, readyTrusted bool) {
+		if !isStableCrashLoop(&cs, now, readyTrusted) {
+			return
+		}
+		c := crashLoopCandidate{
+			status:    cs,
+			init:      init,
+			index:     index,
+			stateRank: crashLoopStateRank(cs),
+		}
+		if t := cs.LastTerminationState.Terminated; t != nil {
+			c.finishedAt = t.FinishedAt.Time
+		}
+		if !have || betterCrashLoopCandidate(c, best) {
+			best, have = c, true
+		}
+	}
+	for i := range pod.Status.InitContainerStatuses {
+		consider(pod.Status.InitContainerStatuses[i], true, i, false)
+	}
+	for i := range pod.Status.ContainerStatuses {
+		cs := pod.Status.ContainerStatuses[i]
+		consider(cs, false, i, containerHasReadinessProbe(pod.Spec.Containers, cs.Name))
+	}
+	return best, have
+}
+
+func crashLoopStateRank(cs corev1.ContainerStatus) int {
+	if cs.State.Waiting != nil {
+		return 0
+	}
+	if cs.State.Terminated != nil {
+		return 1
+	}
+	if cs.State.Running != nil {
+		return 2
+	}
+	return 3
+}
+
+func betterCrashLoopCandidate(cand, cur crashLoopCandidate) bool {
+	if cand.stateRank != cur.stateRank {
+		return cand.stateRank < cur.stateRank
+	}
+	if !cand.finishedAt.Equal(cur.finishedAt) {
+		return cand.finishedAt.After(cur.finishedAt)
+	}
+	if cand.init != cur.init {
+		return cand.init
+	}
+	if cand.status.Name != cur.status.Name {
+		return cand.status.Name < cur.status.Name
+	}
+	return cand.index < cur.index
+}
+
+func shortRunContext(term *corev1.ContainerStateTerminated) string {
+	if term == nil || term.StartedAt.IsZero() || term.FinishedAt.IsZero() {
+		return ""
+	}
+	runDuration := term.FinishedAt.Time.Sub(term.StartedAt.Time)
+	if runDuration <= 0 || runDuration >= shortCrashRunWindow {
+		return ""
+	}
+	return fmt.Sprintf(" It ran for %s before exiting.", FormatAge(runDuration))
 }
 
 // PodProblemReason returns a short reason string for a problematic pod.

@@ -153,8 +153,8 @@ export interface Issue {
 
   reason: string;
   message?: string;
-  /** Parsed domain diagnosis (today GitOps controller errors): plain-English
-   *  cause, suggested next step, and an optional structured one-click fix.
+  /** Parsed domain diagnosis: plain-English cause, suggested next step, and
+   *  an optional structured one-click fix.
    *  Server-emitted (omitempty); empty for issues without a parser. */
   cause?: string;
   action?: string;

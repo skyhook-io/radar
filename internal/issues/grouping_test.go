@@ -85,12 +85,9 @@ func TestGroupIssues_CarriesAgreedDiagnosis(t *testing.T) {
 	}
 }
 
-// TestGroupIssues_CarriesLoneDiagnosis pins the "no opinion ≠ disagreement"
-// rule: when one member of a group has a parsed diagnosis and another has none,
-// the lone diagnosis still carries (a blank member is not treated as a
-// conflict). A naive "omit whenever any member lacks a diagnosis" would strip
-// the cause off every mixed workload+GitOps rollup.
-func TestGroupIssues_CarriesLoneDiagnosis(t *testing.T) {
+// TestGroupIssues_OmitsLoneDiagnosis pins that a workload rollup only carries
+// diagnosis when the diagnosis applies to every folded member.
+func TestGroupIssues_OmitsLoneDiagnosis(t *testing.T) {
 	dep := Ref{Group: "apps", Kind: "Deployment", Namespace: "ns", Name: "web"}
 	t0 := time.Unix(1000, 0)
 	a := flatPod("web-a", "CrashLoopBackOff", SeverityCritical, dep, t0, t0)
@@ -100,8 +97,8 @@ func TestGroupIssues_CarriesLoneDiagnosis(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("want 1 grouped row, got %d", len(got))
 	}
-	if got[0].Cause != a.Cause {
-		t.Errorf("lone diagnosis should carry; got cause %q, want %q", got[0].Cause, a.Cause)
+	if got[0].Cause != "" {
+		t.Errorf("lone member diagnosis must not carry to grouped row, got cause %q", got[0].Cause)
 	}
 }
 

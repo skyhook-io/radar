@@ -88,12 +88,11 @@ type Detection struct {
 	// Basis values: "condition" | "owner_condition" | "pod_creation" | "deletion" | "phase" | "spec".
 	IssueTiming      string
 	IssueTimingBasis string
-	// Cause / Action / Remediation* carry parsed domain diagnosis (today only
-	// GitOps controller errors, via pkg/gitops/diagnose) so the issues stream
-	// surfaces the same plain-English cause + next-step the GitOps detail page
-	// shows. Empty for detectors without a parser. RemediationKind names a
-	// structured one-click fix (e.g. "create-namespace") and RemediationTarget
-	// the resource it acts on.
+	// Cause / Action / Remediation* carry parsed domain diagnosis so the issues
+	// stream can surface a plain-English cause + next step when a detector has
+	// enough evidence. Empty for detectors without a parser. RemediationKind
+	// names a structured one-click fix (e.g. "create-namespace") and
+	// RemediationTarget the resource it acts on.
 	Cause             string
 	Action            string
 	RemediationKind   string
@@ -345,6 +344,7 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 
 	podsByNamespace := listPodsByNamespace(cache, namespace)
 	probeFailures := latestProbeFailures(cache, namespace, now)
+	pvcPendingFailures := latestPVCPendingFailures(cache, namespace)
 
 	// Pod problems: high-signal container waiting/terminated states, old
 	// Pending pods, and restart-heavy pods. These are useful direct pointers
@@ -391,6 +391,12 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				reason = init.reason
 				message = init.message
 				fingerprint = init.fingerprint
+			}
+			var cause, action string
+			if reason == crashLoopReason {
+				cause, action = podCrashLoopDiagnosis(pod, now)
+			} else if c, a := imagePullDiagnosis(reason, message); c != "" {
+				cause, action = c, a
 			}
 			// IssueTiming: classify whether this pod has been failing since the Deployment
 			// was first created (started_at_resource_creation) or broke after a period of
@@ -500,6 +506,8 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 				OwnerName:            ownerName,
 				IssueTiming:          podIssueTiming.IssueTiming,
 				IssueTimingBasis:     podIssueTiming.Basis,
+				Cause:                cause,
+				Action:               action,
 			})
 		}
 	}
@@ -905,17 +913,26 @@ func DetectProblems(cache *ResourceCache, namespace string) []Detection {
 					continue
 				}
 				if ageDur > 5*time.Minute {
+					message := "PVC is unbound — no volume has been provisioned"
+					var cause, action string
+					if failure, ok := pvcPendingFailures[pvc.Namespace+"/"+pvc.Name]; ok {
+						message = failure.message
+						cause = failure.cause
+						action = failure.action
+					}
 					problems = append(problems, Detection{
 						Kind:            "PersistentVolumeClaim",
 						Namespace:       pvc.Namespace,
 						Name:            pvc.Name,
 						Severity:        "high",
 						Reason:          "Pending",
-						Message:         "PVC is unbound — no volume has been provisioned",
+						Message:         message,
 						Age:             FormatAge(ageDur),
 						AgeSeconds:      int64(ageDur.Seconds()),
 						Duration:        FormatAge(ageDur),
 						DurationSeconds: int64(ageDur.Seconds()),
+						Cause:           cause,
+						Action:          action,
 						// Phase=Pending since creation means the PVC has never been bound —
 						// present since creation (wrong StorageClass, missing or failing provisioner).
 						IssueTiming:      "started_at_resource_creation",
@@ -1060,6 +1077,13 @@ type probeFailure struct {
 	at      time.Time
 }
 
+type pvcPendingFailure struct {
+	message string
+	cause   string
+	action  string
+	at      time.Time
+}
+
 type podSpecificProblem struct {
 	reason      string
 	message     string
@@ -1167,6 +1191,145 @@ func initContainerSpecSummary(pod *corev1.Pod, name string) string {
 		return strings.Join(parts, ", ")
 	}
 	return ""
+}
+
+func imagePullDiagnosis(reason, message string) (cause, action string) {
+	if !isImagePullReason(reason) {
+		return "", ""
+	}
+	ref := imageRefFromMessage(message)
+	lower := strings.ToLower(message)
+
+	switch {
+	case reason == "InvalidImageName" || strings.Contains(lower, "invalid reference format"):
+		return imageCause("Image reference is invalid", ref),
+			"Fix the image reference in the pod spec; check registry, repository, tag, and digest syntax."
+	case containsAny(lower, "unauthorized", "forbidden", "denied", "authentication required", "pull access denied") ||
+		containsStatusCode(lower, "401") || containsStatusCode(lower, "403"):
+		return imageCause("Not authorized to pull image", ref),
+			"Check imagePullSecrets, the pod service account, and registry permissions for this namespace."
+	case containsAny(lower, "toomanyrequests", "too many requests", "rate limit"):
+		return imageCause("Registry rate-limited", ref),
+			"Use an authenticated pull secret, reduce pull frequency, or mirror/cache the image."
+	case containsAny(lower, "no such host", "i/o timeout", "timeout", "connection refused", "dial tcp"):
+		return imageCause("Registry unreachable", ref),
+			"Check node egress, DNS, proxy/firewall rules, and the registry endpoint."
+	case containsAny(lower, "not found", "manifest unknown", "no such image", "no such manifest"):
+		return imageCause("Image not found", ref),
+			"Verify the repository and tag, then update the image reference or publish the missing image."
+	default:
+		return "", ""
+	}
+}
+
+func isImagePullReason(reason string) bool {
+	switch reason {
+	case "ImagePullBackOff", "ErrImagePull", "InvalidImageName", "ImageInspectError":
+		return true
+	default:
+		return false
+	}
+}
+
+func imageRefFromMessage(message string) string {
+	const marker = `image "`
+	start := strings.Index(message, marker)
+	if start < 0 {
+		return ""
+	}
+	rest := message[start+len(marker):]
+	end := strings.Index(rest, `"`)
+	if end < 0 {
+		return ""
+	}
+	return rest[:end]
+}
+
+func imageCause(base, ref string) string {
+	if ref == "" {
+		return base
+	}
+	return base + ": " + ref
+}
+
+func containsAny(s string, needles ...string) bool {
+	for _, needle := range needles {
+		if strings.Contains(s, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+func containsStatusCode(s, code string) bool {
+	for start := strings.Index(s, code); start >= 0; {
+		end := start + len(code)
+		beforeOK := start == 0 || !isASCIIAlnum(s[start-1])
+		afterOK := end == len(s) || !isASCIIAlnum(s[end])
+		if beforeOK && afterOK {
+			return true
+		}
+		next := strings.Index(s[end:], code)
+		if next < 0 {
+			return false
+		}
+		start = end + next
+	}
+	return false
+}
+
+func isASCIIAlnum(b byte) bool {
+	return (b >= '0' && b <= '9') || (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
+func latestPVCPendingFailures(cache *ResourceCache, namespace string) map[string]pvcPendingFailure {
+	out := map[string]pvcPendingFailure{}
+	if cache == nil || cache.Events() == nil {
+		return out
+	}
+	var events []*corev1.Event
+	if namespace != "" {
+		events, _ = cache.Events().Events(namespace).List(labels.Everything())
+	} else {
+		events, _ = cache.Events().List(labels.Everything())
+	}
+	for _, e := range events {
+		if e.Type != corev1.EventTypeWarning || e.InvolvedObject.Kind != "PersistentVolumeClaim" {
+			continue
+		}
+		failure, ok := pvcPendingFailureFromEvent(e)
+		if !ok {
+			continue
+		}
+		if failure.at.IsZero() {
+			continue
+		}
+		key := e.InvolvedObject.Namespace + "/" + e.InvolvedObject.Name
+		if cur, exists := out[key]; exists && !failure.at.After(cur.at) {
+			continue
+		}
+		out[key] = failure
+	}
+	return out
+}
+
+func pvcPendingFailureFromEvent(e *corev1.Event) (pvcPendingFailure, bool) {
+	message := strings.TrimSpace(e.Message)
+	if message == "" {
+		message = e.Reason
+	}
+	f := pvcPendingFailure{message: message, at: eventLastTime(e)}
+	switch e.Reason {
+	case "ProvisioningFailed":
+		f.cause = "Storage provisioner failed to create a volume."
+		f.action = "Check the StorageClass/provisioner and CSI controller events or logs; fix the provisioner error, quota, credentials, or backend volume settings."
+	case "FailedBinding":
+		f.cause = "PVC could not bind to a PersistentVolume."
+		f.action = "Check matching PersistentVolumes, StorageClass topology and volumeBindingMode, and any consuming pod scheduling constraints."
+	default:
+		return pvcPendingFailure{}, false
+	}
+	return f, true
 }
 
 func latestProbeFailures(cache *ResourceCache, namespace string, now time.Time) map[string]probeFailure {

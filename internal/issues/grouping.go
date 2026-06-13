@@ -125,11 +125,10 @@ func foldGroup(members []Issue) Issue {
 		LastSeen:             rep.LastSeen,
 	}
 	// A parsed diagnosis (cause/action/remediation) describes ONE resource's
-	// failure. Carry it onto the grouped row only when every member that has
-	// one agrees: a single-member group (a GitOps Application is its own
-	// subject) always carries it, but a workload rollup whose members fail for
-	// different reasons (OOMKilled vs ImagePullBackOff) must not present one
-	// member's cause as the whole group's.
+	// failure. Carry it onto the grouped row only when it is true for the
+	// entire group: a single-member group carries its own diagnosis, but a
+	// workload rollup omits diagnosis unless every folded member has the same
+	// tuple.
 	if dg, ok := agreedDiagnosis(members); ok {
 		g.Cause = dg.Cause
 		g.Action = dg.Action
@@ -195,21 +194,21 @@ func foldGroup(members []Issue) Issue {
 }
 
 // agreedDiagnosis returns the parsed diagnosis shared by a group's members, or
-// ok=false when members carry conflicting diagnoses. Members with no parsed
-// diagnosis (the common case for workload problems today) are ignored — they
-// don't count as disagreement. The full (cause, action, remediation) tuple
-// must match across every member that has one, so a mixed-cause rollup omits
-// the diagnosis rather than misattributing one member's fix to the group.
+// ok=false when members carry conflicting or incomplete diagnoses. The full
+// (cause, action, remediation) tuple must match across every member in a
+// multi-resource group, so a mixed rollup omits diagnosis rather than
+// misattributing one member's fix to the group.
 func agreedDiagnosis(members []Issue) (Issue, bool) {
 	var picked Issue
-	have := false
+	if len(members) == 0 {
+		return Issue{}, false
+	}
 	for _, m := range members {
-		if m.Cause == "" && m.Action == "" && m.RemediationKind == "" && m.RemediationTarget == "" &&
-			m.OperationRetryCount == 0 && !m.Stuck {
-			continue
+		if !hasDiagnosis(m) {
+			return Issue{}, false
 		}
-		if !have {
-			picked, have = m, true
+		if !hasDiagnosis(picked) {
+			picked = m
 			continue
 		}
 		if m.Cause != picked.Cause || m.Action != picked.Action ||
@@ -218,7 +217,12 @@ func agreedDiagnosis(members []Issue) (Issue, bool) {
 			return Issue{}, false
 		}
 	}
-	return picked, have
+	return picked, true
+}
+
+func hasDiagnosis(i Issue) bool {
+	return i.Cause != "" || i.Action != "" || i.RemediationKind != "" || i.RemediationTarget != "" ||
+		i.OperationRetryCount != 0 || i.Stuck
 }
 
 // betterRepresentative reports whether cand should replace cur as a group's

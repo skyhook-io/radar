@@ -10,6 +10,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	policyv1 "k8s.io/api/policy/v1"
+	storagev1 "k8s.io/api/storage/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -790,10 +791,15 @@ func TestDetectProblems_OperationalSignals(t *testing.T) {
 			Status: corev1.PodStatus{
 				Phase: corev1.PodRunning,
 				ContainerStatuses: []corev1.ContainerStatus{{
-					Name: "app",
+					Name:         "app",
+					RestartCount: 3,
 					State: corev1.ContainerState{
 						Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
 					},
+					LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						Reason: "Error", ExitCode: 127,
+						StartedAt: metav1.NewTime(now.Add(-3 * time.Second)), FinishedAt: metav1.NewTime(now.Add(-2 * time.Second)),
+					}},
 				}},
 			},
 		},
@@ -887,6 +893,9 @@ func TestDetectProblems_OperationalSignals(t *testing.T) {
 	}
 
 	assertProblem(t, problems, "Pod", "crashy", "CrashLoopBackOff", "critical")
+	if got, ok := lookupProblem(problems, "Pod", "crashy", "CrashLoopBackOff"); !ok || !strings.Contains(got.Cause, "code 127") || !strings.Contains(got.Action, "command/args") {
+		t.Fatalf("crashy diagnosis = %+v, want exit-code cause/action", got)
+	}
 	// "Selector matches no pods" is warning, not critical — could be a
 	// deliberately scaled-to-zero workload. The "0/N selected pods ready"
 	// case below stays critical (workload exists, routing is actually
@@ -896,6 +905,128 @@ func TestDetectProblems_OperationalSignals(t *testing.T) {
 	assertProblem(t, problems, "Service", "api", "Unresolved named targetPort: http", "high")
 	assertProblem(t, problems, "PersistentVolumeClaim", "data", "Lost", "critical")
 	assertProblem(t, problems, "Job", "migrate", "BackoffLimitExceeded", "critical")
+}
+
+func TestImagePullDiagnosis(t *testing.T) {
+	cases := []struct {
+		name      string
+		reason    string
+		message   string
+		wantCause string
+		wantAct   string
+	}{
+		{
+			name:      "not found",
+			reason:    "ImagePullBackOff",
+			message:   `Back-off pulling image "reg.io/team/api:v2": failed to resolve reference "reg.io/team/api:v2": not found`,
+			wantCause: "Image not found: reg.io/team/api:v2",
+			wantAct:   "repository and tag",
+		},
+		{
+			name:      "auth wins over not found",
+			reason:    "ErrImagePull",
+			message:   `failed to pull image "priv.io/app:v1": not found: authentication required`,
+			wantCause: "Not authorized to pull image: priv.io/app:v1",
+			wantAct:   "imagePullSecrets",
+		},
+		{
+			name:      "registry unreachable",
+			reason:    "ImagePullBackOff",
+			message:   `failed to pull image "reg.io/app:v1": dial tcp: lookup reg.io: no such host`,
+			wantCause: "Registry unreachable: reg.io/app:v1",
+			wantAct:   "DNS",
+		},
+		{
+			name:      "rate limited",
+			reason:    "ImagePullBackOff",
+			message:   `toomanyrequests: rate limit exceeded for image "reg.io/app:v1"`,
+			wantCause: "Registry rate-limited: reg.io/app:v1",
+			wantAct:   "authenticated",
+		},
+		{
+			name:      "invalid reference",
+			reason:    "InvalidImageName",
+			message:   `Failed to apply default image tag "bad image": invalid reference format`,
+			wantCause: "Image reference is invalid",
+			wantAct:   "syntax",
+		},
+		{
+			name:    "unknown shape",
+			reason:  "ImagePullBackOff",
+			message: `some novel kubelet error for image "reg.io/app:v1"`,
+		},
+		{
+			name:    "non image pull reason",
+			reason:  "CrashLoopBackOff",
+			message: `not found`,
+		},
+		{
+			name:    "status code not embedded in tag",
+			reason:  "ImagePullBackOff",
+			message: `failed to pull image "reg.io/app:v401": unexpected response`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cause, action := imagePullDiagnosis(tc.reason, tc.message)
+			if cause != tc.wantCause {
+				t.Fatalf("cause = %q, want %q", cause, tc.wantCause)
+			}
+			if tc.wantAct == "" {
+				if action != "" {
+					t.Fatalf("action = %q, want empty", action)
+				}
+				return
+			}
+			if !strings.Contains(action, tc.wantAct) {
+				t.Fatalf("action = %q, want substring %q", action, tc.wantAct)
+			}
+		})
+	}
+}
+
+func TestDetectProblems_ImagePullDiagnosis(t *testing.T) {
+	defer ResetTestState()
+
+	old := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+	client := fake.NewClientset(&corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{Name: "private", Namespace: "prod", CreationTimestamp: old},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodPending,
+			ContainerStatuses: []corev1.ContainerStatus{{
+				Name: "app",
+				State: corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{
+					Reason:  "ImagePullBackOff",
+					Message: `failed to pull image "priv.io/app:v1": denied: requested access to the resource is denied`,
+				}},
+			}},
+		},
+	})
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "prod")
+		if hasProblem(problems, "Pod", "private", "ImagePullBackOff") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	got, ok := lookupProblem(problems, "Pod", "private", "ImagePullBackOff")
+	if !ok {
+		t.Fatalf("missing image pull problem: %+v", problems)
+	}
+	if got.Cause != "Not authorized to pull image: priv.io/app:v1" || !strings.Contains(got.Action, "imagePullSecrets") {
+		t.Fatalf("image pull diagnosis = %+v, want auth cause/action", got)
+	}
+	if !strings.Contains(got.Message, "requested access") {
+		t.Fatalf("raw kubelet message should be preserved, got %q", got.Message)
+	}
 }
 
 func TestDetectProblems_ProbeFailures(t *testing.T) {
@@ -1298,6 +1429,112 @@ func TestDetectProblems_NetworkAndStorageState(t *testing.T) {
 		t.Fatalf("FileSystemResizePending is in-progress, not a resize failure: %+v", problems)
 	}
 	assertProblem(t, problems, "PersistentVolume", "pv-bad", "Failed", "critical")
+}
+
+func TestDetectProblems_PVCPendingWarningEventDiagnosis(t *testing.T) {
+	defer ResetTestState()
+
+	now := time.Now()
+	old := metav1.NewTime(now.Add(-10 * time.Minute))
+	recent := metav1.NewTime(now.Add(-1 * time.Minute))
+	client := fake.NewClientset(
+		&corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "slow", Namespace: "prod", CreationTimestamp: old},
+			Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+		},
+		&corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "normal-only", Namespace: "prod", CreationTimestamp: old},
+			Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "slow.1", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "slow"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "ProvisioningFailed",
+			Message:        "failed to provision volume with StorageClass fast: rpc error: quota exceeded",
+			LastTimestamp:  recent,
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "normal-only.1", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "normal-only"},
+			Type:           corev1.EventTypeNormal,
+			Reason:         "ExternalProvisioning",
+			Message:        "waiting for a volume to be created by the external provisioner",
+			LastTimestamp:  recent,
+		},
+	)
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	deadline := time.Now().Add(2 * time.Second)
+	var problems []Detection
+	for time.Now().Before(deadline) {
+		problems = DetectProblems(cache, "prod")
+		if hasProblem(problems, "PersistentVolumeClaim", "slow", "Pending") &&
+			hasProblem(problems, "PersistentVolumeClaim", "normal-only", "Pending") {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	slow, ok := lookupProblem(problems, "PersistentVolumeClaim", "slow", "Pending")
+	if !ok {
+		t.Fatalf("missing slow PVC problem: %+v", problems)
+	}
+	if slow.Cause != "Storage provisioner failed to create a volume." || !strings.Contains(slow.Action, "CSI controller") {
+		t.Fatalf("slow PVC diagnosis = %+v, want provisioner cause/action", slow)
+	}
+	if !strings.Contains(slow.Message, "quota exceeded") {
+		t.Fatalf("slow PVC message = %q, want raw event detail", slow.Message)
+	}
+
+	normal, ok := lookupProblem(problems, "PersistentVolumeClaim", "normal-only", "Pending")
+	if !ok {
+		t.Fatalf("missing normal-only PVC problem: %+v", problems)
+	}
+	if normal.Cause != "" || normal.Action != "" || normal.Message != "PVC is unbound — no volume has been provisioned" {
+		t.Fatalf("normal ExternalProvisioning event should not diagnose PVC, got %+v", normal)
+	}
+}
+
+func TestDetectProblems_PVCPendingWaitForFirstConsumerStillSuppressed(t *testing.T) {
+	defer ResetTestState()
+
+	now := time.Now()
+	old := metav1.NewTime(now.Add(-10 * time.Minute))
+	mode := storagev1.VolumeBindingWaitForFirstConsumer
+	scName := "late-bind"
+	storageClass := &storagev1.StorageClass{
+		ObjectMeta:        metav1.ObjectMeta{Name: "late-bind"},
+		VolumeBindingMode: &mode,
+	}
+	client := fake.NewClientset(
+		storageClass,
+		&corev1.PersistentVolumeClaim{
+			ObjectMeta: metav1.ObjectMeta{Name: "awaiting-consumer", Namespace: "prod", CreationTimestamp: old},
+			Spec:       corev1.PersistentVolumeClaimSpec{StorageClassName: &scName},
+			Status:     corev1.PersistentVolumeClaimStatus{Phase: corev1.ClaimPending},
+		},
+		&corev1.Event{
+			ObjectMeta:     metav1.ObjectMeta{Name: "awaiting-consumer.1", Namespace: "prod"},
+			InvolvedObject: corev1.ObjectReference{Kind: "PersistentVolumeClaim", Namespace: "prod", Name: "awaiting-consumer"},
+			Type:           corev1.EventTypeWarning,
+			Reason:         "FailedBinding",
+			Message:        "waiting for first consumer to be created before binding",
+			LastTimestamp:  metav1.NewTime(now.Add(-1 * time.Minute)),
+		},
+	)
+
+	if err := InitTestResourceCache(client); err != nil {
+		t.Fatalf("InitTestResourceCache: %v", err)
+	}
+	cache := GetResourceCache()
+	time.Sleep(50 * time.Millisecond)
+	if problems := DetectProblems(cache, "prod"); hasProblem(problems, "PersistentVolumeClaim", "awaiting-consumer", "Pending") {
+		t.Fatalf("WaitForFirstConsumer PVC should stay suppressed despite Warning event: %+v", problems)
+	}
 }
 
 func TestDetectProblems_TerminatingResources(t *testing.T) {

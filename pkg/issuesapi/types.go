@@ -295,11 +295,11 @@ type Issue struct {
 	Name          string        `json:"name"`
 	Reason        string        `json:"reason"`
 	Message       string        `json:"message,omitempty"`
-	// Cause / Action / Remediation* carry parsed domain diagnosis (today GitOps
-	// controller errors). They give the Issues page + MCP the same plain-English
-	// cause + next-step the GitOps detail page shows. All optional — empty for
-	// issues without a parser. RemediationKind names a structured one-click fix
-	// (e.g. "create-namespace"); RemediationTarget is the resource it acts on.
+	// Cause / Action / Remediation* carry parsed domain diagnosis. They give the
+	// Issues page + MCP a plain-English cause + next step when a detector has
+	// enough evidence. All optional — empty for issues without a parser.
+	// RemediationKind names a structured one-click fix (e.g. "create-namespace");
+	// RemediationTarget is the resource it acts on.
 	Cause             string `json:"cause,omitempty"`
 	Action            string `json:"action,omitempty"`
 	RemediationKind   string `json:"remediation_kind,omitempty"`

@@ -271,11 +271,9 @@ function Diagnosis({ issue }: { issue: Issue }) {
           .join(' · ')
       : null;
   const { headline, detail } = issueMessageParts(issue);
-  // When the issue carries a parsed plain-English cause (GitOps controller
-  // errors), lead with it — the raw controller message is long and buries the
-  // useful part, and the detector reason ("OperationFailed") just repeats the
-  // category chip. The raw message is kept below as de-emphasized detail.
-  const rawMessage = [headline, detail].filter(Boolean).join(' ');
+  // When the issue carries a parsed plain-English cause, lead with it. The raw
+  // detector message is kept below as de-emphasized detail.
+  const rawMessage = issue.cause ? issue.message ?? '' : [headline, detail].filter(Boolean).join(' ');
   return (
     <section className="flex flex-col gap-1">
       <h4 className="text-[11px] font-semibold uppercase tracking-wide text-theme-text-tertiary">What's wrong</h4>
@@ -310,7 +308,7 @@ function Diagnosis({ issue }: { issue: Issue }) {
           {issue.operation_retry_count ? ` · retried ${issue.operation_retry_count}×` : ''}
         </p>
       ) : null}
-      {/* Raw controller message, de-emphasized — shown below the parsed cause so
+      {/* Raw detector message, de-emphasized — shown below the parsed cause so
           the precise error (URLs, resource names) is available without leading. */}
       {issue.cause && rawMessage ? (
         <p className="break-words font-mono text-[11px] leading-relaxed text-theme-text-tertiary">{rawMessage}</p>

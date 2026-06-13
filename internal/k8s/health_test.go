@@ -1,10 +1,12 @@
 package k8s
 
 import (
-	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"strings"
 	"testing"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 func TestClassifyPodHealth(t *testing.T) {
@@ -543,6 +545,84 @@ func TestClassifyNodeHealth(t *testing.T) {
 				t.Errorf("Pressures = %v, want %d pressures", got.Pressures, tt.wantPressures)
 			}
 		})
+	}
+}
+
+func TestPodCrashLoopDiagnosisUsesActiveCrashCandidate(t *testing.T) {
+	now := time.Now()
+	started := metav1.NewTime(now.Add(-3 * time.Second))
+	finished := metav1.NewTime(now.Add(-2 * time.Second))
+	newerFinished := metav1.NewTime(now.Add(-1 * time.Second))
+	pod := &corev1.Pod{
+		Spec: corev1.PodSpec{Containers: []corev1.Container{
+			{Name: "app"},
+			{Name: "sidecar"},
+		}},
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:         "sidecar",
+					RestartCount: 0,
+					LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						Reason: "Error", ExitCode: 139, FinishedAt: newerFinished,
+					}},
+				},
+				{
+					Name:         "app",
+					RestartCount: 2,
+					State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-1 * time.Second))}},
+					LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						Reason: "Error", ExitCode: 127, StartedAt: started, FinishedAt: finished,
+					}},
+				},
+			},
+		},
+	}
+
+	cause, action := podCrashLoopDiagnosis(pod, now)
+	if !strings.Contains(cause, `container "app"`) || !strings.Contains(cause, "code 127") || !strings.Contains(cause, "before exiting") {
+		t.Fatalf("cause = %q, want app exit-code diagnosis with short-run context", cause)
+	}
+	if strings.Contains(cause, "sidecar") || strings.Contains(cause, "139") {
+		t.Fatalf("cause used unrelated newer termination: %q", cause)
+	}
+	if !strings.Contains(action, "command/args") {
+		t.Fatalf("action = %q, want command/args guidance", action)
+	}
+}
+
+func TestPodCrashLoopDiagnosisOrdersMultipleCandidates(t *testing.T) {
+	now := time.Now()
+	older := metav1.NewTime(now.Add(-30 * time.Second))
+	newer := metav1.NewTime(now.Add(-20 * time.Second))
+	pod := &corev1.Pod{
+		Status: corev1.PodStatus{
+			Phase: corev1.PodRunning,
+			ContainerStatuses: []corev1.ContainerStatus{
+				{
+					Name:         "running-newer",
+					RestartCount: 2,
+					State:        corev1.ContainerState{Running: &corev1.ContainerStateRunning{StartedAt: metav1.NewTime(now.Add(-1 * time.Second))}},
+					LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						Reason: "Error", ExitCode: 139, FinishedAt: newer,
+					}},
+				},
+				{
+					Name:         "waiting-older",
+					RestartCount: 2,
+					State:        corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+					LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						Reason: "Error", ExitCode: 126, FinishedAt: older,
+					}},
+				},
+			},
+		},
+	}
+
+	cause, _ := podCrashLoopDiagnosis(pod, now)
+	if !strings.Contains(cause, `container "waiting-older"`) || !strings.Contains(cause, "code 126") {
+		t.Fatalf("cause = %q, want current waiting crashloop to win over newer running tick", cause)
 	}
 }
 
