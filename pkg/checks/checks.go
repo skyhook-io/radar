@@ -80,12 +80,18 @@ const SourceRadarBuiltin = "radar_builtin"
 // CheckMeta is a check's static definition (catalog entry). pkg/audit aliases
 // this type so the audit engine's registry and this package share one shape.
 type CheckMeta struct {
-	ID          string      `json:"id"`
-	Title       string      `json:"title"`
-	Description string      `json:"description"`
-	Remediation string      `json:"remediation"`
-	Frameworks  []string    `json:"frameworks,omitempty"`
-	References  []Reference `json:"references,omitempty"`
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Category string `json:"category,omitempty"` // Security|Reliability|Efficiency — the bucket findings emit under
+	// DefaultSeverity is the Checks-ladder level (MapSeverity of the detector's
+	// raw severity) a finding carries with no org override — its common/base
+	// case for checks that ramp or split by context. May be empty for catalogs
+	// from a Radar predating the field; consumers fall back to "Default".
+	DefaultSeverity string      `json:"defaultSeverity,omitempty"`
+	Description     string      `json:"description"`
+	Remediation     string      `json:"remediation"`
+	Frameworks      []string    `json:"frameworks,omitempty"`
+	References      []Reference `json:"references,omitempty"`
 }
 
 // Reference is an authoritative link for a check (Kubernetes docs, CIS,
