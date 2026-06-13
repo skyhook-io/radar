@@ -438,7 +438,7 @@ func shortRunContext(term *corev1.ContainerStateTerminated) string {
 	if runDuration <= 0 || runDuration >= shortCrashRunWindow {
 		return ""
 	}
-	return fmt.Sprintf(" It ran for %s before exiting.", FormatAge(runDuration))
+	return " It exited within seconds of starting."
 }
 
 // PodProblemReason returns a short reason string for a problematic pod.

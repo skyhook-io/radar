@@ -1207,7 +1207,7 @@ func imagePullDiagnosis(reason, message string) (cause, action string) {
 	case containsAny(lower, "unauthorized", "forbidden", "denied", "authentication required", "pull access denied") ||
 		containsStatusCode(lower, "401") || containsStatusCode(lower, "403"):
 		return imageCause("Not authorized to pull image", ref),
-			"Check imagePullSecrets, the pod service account, and registry permissions for this namespace."
+			"Check imagePullSecrets, the pod service account, registry permissions for this namespace, and whether the repository/tag exists."
 	case containsAny(lower, "toomanyrequests", "too many requests", "rate limit"):
 		return imageCause("Registry rate-limited", ref),
 			"Use an authenticated pull secret, reduce pull frequency, or mirror/cache the image."

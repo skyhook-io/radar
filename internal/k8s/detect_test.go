@@ -913,42 +913,42 @@ func TestImagePullDiagnosis(t *testing.T) {
 		reason    string
 		message   string
 		wantCause string
-		wantAct   string
+		wantActs  []string
 	}{
 		{
 			name:      "not found",
 			reason:    "ImagePullBackOff",
 			message:   `Back-off pulling image "reg.io/team/api:v2": failed to resolve reference "reg.io/team/api:v2": not found`,
 			wantCause: "Image not found: reg.io/team/api:v2",
-			wantAct:   "repository and tag",
+			wantActs:  []string{"repository and tag"},
 		},
 		{
 			name:      "auth wins over not found",
 			reason:    "ErrImagePull",
 			message:   `failed to pull image "priv.io/app:v1": not found: authentication required`,
 			wantCause: "Not authorized to pull image: priv.io/app:v1",
-			wantAct:   "imagePullSecrets",
+			wantActs:  []string{"imagePullSecrets", "repository/tag"},
 		},
 		{
 			name:      "registry unreachable",
 			reason:    "ImagePullBackOff",
 			message:   `failed to pull image "reg.io/app:v1": dial tcp: lookup reg.io: no such host`,
 			wantCause: "Registry unreachable: reg.io/app:v1",
-			wantAct:   "DNS",
+			wantActs:  []string{"DNS"},
 		},
 		{
 			name:      "rate limited",
 			reason:    "ImagePullBackOff",
 			message:   `toomanyrequests: rate limit exceeded for image "reg.io/app:v1"`,
 			wantCause: "Registry rate-limited: reg.io/app:v1",
-			wantAct:   "authenticated",
+			wantActs:  []string{"authenticated"},
 		},
 		{
 			name:      "invalid reference",
 			reason:    "InvalidImageName",
 			message:   `Failed to apply default image tag "bad image": invalid reference format`,
 			wantCause: "Image reference is invalid",
-			wantAct:   "syntax",
+			wantActs:  []string{"syntax"},
 		},
 		{
 			name:    "unknown shape",
@@ -972,14 +972,16 @@ func TestImagePullDiagnosis(t *testing.T) {
 			if cause != tc.wantCause {
 				t.Fatalf("cause = %q, want %q", cause, tc.wantCause)
 			}
-			if tc.wantAct == "" {
+			if len(tc.wantActs) == 0 {
 				if action != "" {
 					t.Fatalf("action = %q, want empty", action)
 				}
 				return
 			}
-			if !strings.Contains(action, tc.wantAct) {
-				t.Fatalf("action = %q, want substring %q", action, tc.wantAct)
+			for _, wantAct := range tc.wantActs {
+				if !strings.Contains(action, wantAct) {
+					t.Fatalf("action = %q, want substring %q", action, wantAct)
+				}
 			}
 		})
 	}

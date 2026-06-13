@@ -581,7 +581,7 @@ func TestPodCrashLoopDiagnosisUsesActiveCrashCandidate(t *testing.T) {
 	}
 
 	cause, action := podCrashLoopDiagnosis(pod, now)
-	if !strings.Contains(cause, `container "app"`) || !strings.Contains(cause, "code 127") || !strings.Contains(cause, "before exiting") {
+	if !strings.Contains(cause, `container "app"`) || !strings.Contains(cause, "code 127") || !strings.Contains(cause, "within seconds") {
 		t.Fatalf("cause = %q, want app exit-code diagnosis with short-run context", cause)
 	}
 	if strings.Contains(cause, "sidecar") || strings.Contains(cause, "139") {
@@ -589,6 +589,40 @@ func TestPodCrashLoopDiagnosisUsesActiveCrashCandidate(t *testing.T) {
 	}
 	if !strings.Contains(action, "command/args") {
 		t.Fatalf("action = %q, want command/args guidance", action)
+	}
+}
+
+func TestPodCrashLoopDiagnosisShortRunContextStableAcrossReplicas(t *testing.T) {
+	now := time.Now()
+	mkPod := func(name string, runFor time.Duration) *corev1.Pod {
+		finished := metav1.NewTime(now.Add(-1 * time.Second))
+		started := metav1.NewTime(finished.Time.Add(-runFor))
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{Name: name},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				ContainerStatuses: []corev1.ContainerStatus{{
+					Name:         "app",
+					RestartCount: 2,
+					State:        corev1.ContainerState{Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"}},
+					LastTerminationState: corev1.ContainerState{Terminated: &corev1.ContainerStateTerminated{
+						Reason: "Error", ExitCode: 139, StartedAt: started, FinishedAt: finished,
+					}},
+				}},
+			},
+		}
+	}
+
+	fastCause, fastAction := podCrashLoopDiagnosis(mkPod("web-a", 2*time.Second), now)
+	slowerCause, slowerAction := podCrashLoopDiagnosis(mkPod("web-b", 4*time.Second), now)
+	if fastCause == "" || fastCause != slowerCause {
+		t.Fatalf("short-run crash causes should be identical across replicas, got %q vs %q", fastCause, slowerCause)
+	}
+	if fastAction != slowerAction {
+		t.Fatalf("short-run crash actions should be identical across replicas, got %q vs %q", fastAction, slowerAction)
+	}
+	if strings.Contains(fastCause, "2s") || strings.Contains(slowerCause, "4s") {
+		t.Fatalf("short-run cause should not include per-replica duration: %q / %q", fastCause, slowerCause)
 	}
 }
 
