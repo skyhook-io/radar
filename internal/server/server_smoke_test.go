@@ -1040,7 +1040,7 @@ func TestSmokeGetConfig(t *testing.T) {
 func TestSmokePutConfig(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 
-	resp := put(t, "/api/config", `{"kubeconfig":"/tmp/test-kube","port":9999,"namespace":"staging"}`)
+	resp := put(t, "/api/config", `{"kubeconfig":"/tmp/test-kube","port":9999,"namespace":"staging","browser":"Safari"}`)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
@@ -1055,6 +1055,9 @@ func TestSmokePutConfig(t *testing.T) {
 	if saved["port"] != float64(9999) {
 		t.Errorf("port = %v, want 9999", saved["port"])
 	}
+	if saved["browser"] != "Safari" {
+		t.Errorf("browser = %v, want Safari", saved["browser"])
+	}
 
 	// Verify persisted via GET
 	var got map[string]any
@@ -1062,6 +1065,9 @@ func TestSmokePutConfig(t *testing.T) {
 	file, _ := got["file"].(map[string]any)
 	if file["kubeconfig"] != "/tmp/test-kube" {
 		t.Errorf("persisted kubeconfig = %v", file["kubeconfig"])
+	}
+	if file["browser"] != "Safari" {
+		t.Errorf("persisted browser = %v", file["browser"])
 	}
 }
 

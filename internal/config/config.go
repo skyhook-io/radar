@@ -19,6 +19,7 @@ type Config struct {
 	Namespace         string   `json:"namespace,omitempty"`
 	Port              int      `json:"port,omitempty"`
 	NoBrowser         bool     `json:"noBrowser,omitempty"`
+	Browser           string   `json:"browser,omitempty"`
 	TimelineStorage   string   `json:"timelineStorage,omitempty"`
 	TimelineDBPath    string   `json:"timelineDbPath,omitempty"`
 	TimelineRetention string   `json:"timelineRetention,omitempty"` // Go duration (e.g. "168h" for 7d); "0" disables age cleanup

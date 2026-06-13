@@ -23,10 +23,12 @@ spec:
     Usage:
       kubectl radar              # Opens browser UI on http://localhost:9280
       kubectl radar --namespace default  # Filter to specific namespace
+      kubectl radar --browser firefox    # Open with a specific browser
+      kubectl radar --browser "Google Chrome" # macOS app name
       kubectl radar --no-browser # Start server without opening browser
   caveats: |
     This plugin opens a web UI in your browser by default.
-    Use --no-browser to start the server without opening a browser.
+    Use --browser to choose a browser or --no-browser to start the server without opening one.
   platforms:
   - bin: kubectl-radar
     uri: https://github.com/skyhook-io/radar/releases/download/v0.6.5/radar_0.6.5_darwin_arm64.tar.gz

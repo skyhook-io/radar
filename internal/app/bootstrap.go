@@ -31,6 +31,7 @@ type AppConfig struct {
 	Namespace                string
 	Port                     int
 	NoBrowser                bool
+	Browser                  string
 	DevMode                  bool
 	HistoryLimit             int
 	DebugEvents              bool
@@ -167,6 +168,7 @@ func CreateServer(cfg AppConfig) *server.Server {
 		Namespace:                cfg.Namespace,
 		Port:                     cfg.Port,
 		NoBrowser:                cfg.NoBrowser,
+		Browser:                  cfg.Browser,
 		TimelineStorage:          cfg.TimelineStorage,
 		TimelineDBPath:           cfg.TimelineDBPath,
 		TimelineMaxSize:          fmt.Sprintf("%d", cfg.TimelineMaxSizeBytes),

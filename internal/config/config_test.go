@@ -34,6 +34,7 @@ func TestSaveAndLoad(t *testing.T) {
 		Namespace:       "prod",
 		Port:            9999,
 		NoBrowser:       true,
+		Browser:         "firefox",
 		TimelineStorage: "sqlite",
 		HistoryLimit:    5000,
 		PrometheusURL:   "http://prom:9090",
@@ -72,6 +73,9 @@ func TestSaveAndLoad(t *testing.T) {
 	}
 	if got.NoBrowser != want.NoBrowser {
 		t.Errorf("NoBrowser = %v, want %v", got.NoBrowser, want.NoBrowser)
+	}
+	if got.Browser != want.Browser {
+		t.Errorf("Browser = %q, want %q", got.Browser, want.Browser)
 	}
 	if got.TimelineStorage != want.TimelineStorage {
 		t.Errorf("TimelineStorage = %q, want %q", got.TimelineStorage, want.TimelineStorage)

@@ -6,6 +6,8 @@ import { useAnimatedUnmount } from '../../hooks/useAnimatedUnmount'
 import { TRANSITION_BACKDROP, TRANSITION_PANEL } from '../../utils/animation'
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../../api/config'
 import { useCloudRole } from '../../api/client'
+import { useCapabilitiesContext } from '../../contexts/CapabilitiesContext'
+import type { DeploymentMode } from '../../types'
 
 interface Config {
   kubeconfig?: string
@@ -13,6 +15,7 @@ interface Config {
   namespace?: string
   port?: number
   noBrowser?: boolean
+  browser?: string
   timelineStorage?: 'memory' | 'sqlite'
   timelineDbPath?: string
   historyLimit?: number
@@ -41,6 +44,7 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
   // (OSS, OIDC, kubectl plugin) have no role and pass — single-user laptops
   // are never locked out of their own config. Backend enforces this too.
   const { canAtLeast } = useCloudRole()
+  const capabilities = useCapabilitiesContext()
   const canEditConfig = canAtLeast('owner')
   const [configData, setConfigData] = useState<ConfigResponse | null>(null)
   const [editedConfig, setEditedConfig] = useState<Config>({})
@@ -130,6 +134,7 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
   if (!shouldRender) return null
 
   const isDesktop = configData?.isDesktop ?? false
+  const deploymentMode = capabilities.deployment?.mode ?? 'local'
 
   return createPortal(
     <div className="fixed inset-0 z-50 flex items-center justify-center">
@@ -205,6 +210,7 @@ export function SettingsDialog({ open, onClose, onShowMyPermissions }: SettingsD
               config={editedConfig}
               effectiveConfig={configData?.effective}
               isDesktop={isDesktop}
+              deploymentMode={deploymentMode}
               onChange={updateConfigField}
             />
           ) : (
@@ -278,13 +284,16 @@ function StartupConfigTab({
   config,
   effectiveConfig,
   isDesktop,
+  deploymentMode,
   onChange,
 }: {
   config: Config
   effectiveConfig?: Config
   isDesktop: boolean
+  deploymentMode: DeploymentMode
   onChange: <K extends keyof Config>(field: K, value: Config[K]) => void
 }) {
+  const showBrowserLaunchControls = !isDesktop && deploymentMode === 'local'
   return (
     <div className="space-y-4">
       <p className="text-xs text-theme-text-tertiary">
@@ -332,12 +341,23 @@ function StartupConfigTab({
         onChange={(v) => onChange('port', v)}
       />
 
-      {!isDesktop && (
-        <ConfigToggle
-          label="Open browser on start"
-          value={!(config.noBrowser ?? false)}
-          onChange={(v) => onChange('noBrowser', !v ? true : undefined)}
-        />
+      {showBrowserLaunchControls && (
+        <>
+          <ConfigToggle
+            label="Open browser on start"
+            value={!(config.noBrowser ?? false)}
+            onChange={(v) => onChange('noBrowser', !v ? true : undefined)}
+          />
+
+          <ConfigField
+            label="Browser"
+            help="Browser for automatic launch; macOS app names are supported"
+            value={config.browser ?? ''}
+            effectiveValue={effectiveConfig?.browser}
+            placeholder="System default"
+            onChange={(v) => onChange('browser', v || undefined)}
+          />
+        </>
       )}
 
       <div className="border-t border-theme-border pt-4 mt-4">

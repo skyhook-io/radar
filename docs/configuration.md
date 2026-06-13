@@ -17,6 +17,7 @@ Persistent defaults for CLI flags. CLI flags always override these values. Manag
   "namespace": "",
   "port": 9280,
   "noBrowser": false,
+  "browser": "",
   "timelineStorage": "memory",
   "timelineDbPath": "~/.radar/timeline.db",
   "timelineMaxSize": "0",
@@ -37,6 +38,7 @@ All fields are optional — omitted fields use built-in defaults.
 | `namespace` | Initial namespace filter |
 | `port` | Server port (default 9280) |
 | `noBrowser` | Don't auto-open browser |
+| `browser` | Browser for automatic launch (same as `--browser`; on macOS, app names like `Google Chrome` are supported) |
 | `timelineStorage` | `memory` or `sqlite` |
 | `timelineDbPath` | Path to SQLite database |
 | `timelineMaxSize` | Max SQLite DB + WAL size before pruning oldest events (`0` disables) |

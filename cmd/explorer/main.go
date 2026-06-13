@@ -51,6 +51,7 @@ func main() {
 	namespace := flag.String("namespace", fileCfg.Namespace, "Initial namespace filter (empty = all namespaces)")
 	port := flag.Int("port", fileCfg.PortOr(9280), "Server port")
 	noBrowser := flag.Bool("no-browser", fileCfg.NoBrowser, "Don't auto-open browser")
+	browser := flag.String("browser", fileCfg.Browser, "Browser to use when opening the UI (default: OS default browser; macOS app names supported)")
 	devMode := flag.Bool("dev", false, "Development mode (serve frontend from filesystem)")
 	showVersion := flag.Bool("version", false, "Show version and exit")
 	historyLimit := flag.Int("history-limit", fileCfg.HistoryLimitOr(10000), "Maximum number of events to retain in timeline")
@@ -191,6 +192,7 @@ func main() {
 		Namespace:                *namespace,
 		Port:                     *port,
 		NoBrowser:                *noBrowser,
+		Browser:                  *browser,
 		DevMode:                  *devMode,
 		HistoryLimit:             *historyLimit,
 		DebugEvents:              *debugEvents,
@@ -281,7 +283,7 @@ func main() {
 		if cfg.Namespace != "" {
 			url += fmt.Sprintf("?namespace=%s", cfg.Namespace)
 		}
-		go app.OpenBrowser(url)
+		go app.OpenBrowser(url, cfg.Browser)
 	}
 
 	// Now initialize cluster connection and caches (browser will see progress via SSE)
