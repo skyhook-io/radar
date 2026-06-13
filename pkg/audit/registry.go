@@ -340,13 +340,11 @@ var (
 	sevMedium = string(checks.SeverityMedium)
 )
 
-// nonMediumDefault lists checks whose detector default maps above Medium (raw
-// severity "danger" → High). Everything else defaults to Medium. A few checks
-// pick the level per finding (sensitiveHostPath splits sensitive vs ordinary
-// paths; stuck*/crossplane ramp by age) — we surface their common/base case,
-// which is Medium. Mirror pkg/audit/checks.go emission when adding or re-ranking
-// a check (TestRegistryDefaultSeverity guards the values).
+// nonMediumDefault lists the checks shown as High; everything else defaults to
+// Medium. Mirror pkg/audit/checks.go emission when adding or re-ranking a check
+// (TestRegistryDefaultSeverity guards the values).
 var nonMediumDefault = map[string]string{
+	// Always emit danger → High.
 	"privileged":            sevHigh,
 	"privilegeEscalation":   sevHigh,
 	"dangerousCapabilities": sevHigh,
@@ -355,6 +353,15 @@ var nonMediumDefault = map[string]string{
 	"hostIPC":               sevHigh,
 	"imageTagLatest":        sevHigh,
 	"deprecatedAPIVersion":  sevHigh,
+	// Context-dependent — emit warning OR danger (sensitiveHostPath: a full
+	// host-root mount is danger, sensitive prefixes warning; stuck*/crossplane
+	// ramp warning→danger past ~30min). Surfaced as High (their worst case) so
+	// the settings catalog doesn't UNDER-call them — under-calling severity is
+	// the dangerous error on a posture surface. The queue still shows each
+	// finding's exact severity.
+	"sensitiveHostPath": sevHigh,
+	"stuckTerminating":  sevHigh,
+	"crossplaneStuck":   sevHigh,
 }
 
 // Stamp DefaultSeverity onto the catalog so the Hub's Checks settings can show
