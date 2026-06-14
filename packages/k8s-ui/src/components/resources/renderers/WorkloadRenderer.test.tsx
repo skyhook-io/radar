@@ -61,7 +61,9 @@ describe('WorkloadRenderer', () => {
       />,
     )
 
-    expect(html.indexOf('Maxed')).toBeLessThan(html.indexOf('HPA wants more replicas'))
+    expect(html.indexOf('Maxed')).toBeLessThan(html.indexOf('Wants more; capped at maxReplicas=5'))
+    expect(html).toContain('Wants more; capped at maxReplicas=5')
+    expect(html).not.toContain('HPA wants more replicas but is capped at maxReplicas=5')
     expect(html).toContain('px-2 py-1.5')
   })
 })

@@ -120,6 +120,13 @@ function formatScalerLabel(ref: ResourceRef): string {
   return `${ref.kind} ${prefix}${ref.name}`
 }
 
+function compactHPASummary(diagnosis: HPADiagnosis): string {
+  if (diagnosis.state === 'limited_max') {
+    return `Wants more; capped at maxReplicas=${diagnosis.bounds.max}`
+  }
+  return diagnosis.summary
+}
+
 export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, isScalePending, scaleBlockedBy, scalerDiagnostics, onRequestRefresh, rbacData, rbacLoading, rbacError }: WorkloadRendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
@@ -409,9 +416,9 @@ function ScalerDiagnosisRow({ entry }: { entry: ScalerDiagnosis }) {
   }
   if (!entry.diagnosis) return null
   return (
-    <div className="flex min-w-0 flex-wrap items-center gap-1.5 rounded border border-theme-border bg-theme-surface px-2 py-1.5">
-      <Badge severity={badgeSeverityForHPA(entry.diagnosis)} size="sm">{hpaStateLabel(entry.diagnosis.state)}</Badge>
-      <span className="min-w-0 text-xs text-theme-text-secondary">{entry.diagnosis.summary}</span>
+    <div className="rounded border border-theme-border bg-theme-surface px-2 py-1.5 text-xs leading-6 text-theme-text-secondary">
+      <Badge severity={badgeSeverityForHPA(entry.diagnosis)} size="sm" className="mr-1.5 align-middle">{hpaStateLabel(entry.diagnosis.state)}</Badge>
+      {compactHPASummary(entry.diagnosis)}
     </div>
   )
 }
