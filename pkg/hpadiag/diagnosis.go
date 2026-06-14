@@ -234,8 +234,6 @@ func chooseState(d *Diagnosis) State {
 		return StateMetricsUnavailable
 	case d.hasReason(ReasonLimitedMax):
 		return StateLimitedMax
-	case d.hasReason(ReasonStaleStatus):
-		return StateStale
 	case d.hasReason(ReasonScalingDisabled):
 		return StateDisabled
 	case d.hasReason(ReasonPinned):
@@ -250,6 +248,8 @@ func chooseState(d *Diagnosis) State {
 		return StateLimitedMin
 	case d.hasReason(ReasonMissingCurrentMetric):
 		return StateMetricsIncomplete
+	case d.hasReason(ReasonStaleStatus):
+		return StateStale
 	default:
 		return StateOK
 	}

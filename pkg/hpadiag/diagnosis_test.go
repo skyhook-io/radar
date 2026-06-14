@@ -9,6 +9,7 @@ import (
 
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
 type fixtureCase struct {
@@ -95,6 +96,42 @@ func TestAnalyzeSkipsEmptyStatusOnlyMetric(t *testing.T) {
 	metric := got.Metrics[0]
 	if metric.Name != "cpu" || metric.Status != "missing" {
 		t.Fatalf("metric = %+v, want missing cpu metric only", metric)
+	}
+}
+
+func TestAnalyzePrefersScalingOverStaleStatus(t *testing.T) {
+	observedGeneration := int64(2)
+	hpa := &autoscalingv2.HorizontalPodAutoscaler{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:       "worker",
+			Namespace:  "default",
+			Generation: 3,
+		},
+		Spec: autoscalingv2.HorizontalPodAutoscalerSpec{
+			MaxReplicas: 10,
+			ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{
+				APIVersion: "apps/v1",
+				Kind:       "Deployment",
+				Name:       "worker",
+			},
+		},
+		Status: autoscalingv2.HorizontalPodAutoscalerStatus{
+			ObservedGeneration: &observedGeneration,
+			CurrentReplicas:    2,
+			DesiredReplicas:    5,
+		},
+	}
+
+	got := Analyze(hpa)
+	if got.State != StateScalingUp {
+		t.Fatalf("state = %q, want %q; diagnosis=%+v", got.State, StateScalingUp, got)
+	}
+	if got.Summary != "Scaling up from 2 to 5 replicas" {
+		t.Fatalf("summary = %q", got.Summary)
+	}
+	wantReasons := []ReasonID{ReasonStaleStatus, ReasonScalingUp}
+	if gotReasons := reasonIDs(got); !reflect.DeepEqual(gotReasons, wantReasons) {
+		t.Fatalf("reasons = %v, want %v; diagnosis=%+v", gotReasons, wantReasons, got)
 	}
 }
 

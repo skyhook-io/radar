@@ -40,7 +40,7 @@ func DetectHPAProblems(hpas []*autoscalingv2.HorizontalPodAutoscaler) []HPAProbl
 				Name:      hpa.Name,
 				Namespace: hpa.Namespace,
 				Problem:   "maxed",
-				Reason:    reasonText(reason),
+				Reason:    maxedReasonText(diagnosis, reason),
 			})
 		}
 
@@ -75,6 +75,20 @@ func reasonText(reason hpadiag.Reason) string {
 		return reason.Message
 	}
 	return string(reason.ID)
+}
+
+func maxedReasonText(diagnosis *hpadiag.Diagnosis, reason hpadiag.Reason) string {
+	if diagnosis == nil || diagnosis.Bounds.Max <= 0 {
+		return reasonText(reason)
+	}
+	text := fmt.Sprintf("%d/%d replicas", diagnosis.Bounds.Current, diagnosis.Bounds.Max)
+	if diagnosis.Bounds.Desired > 0 {
+		text += fmt.Sprintf(" (wants %d)", diagnosis.Bounds.Desired)
+	}
+	if detail := reasonText(reason); detail != "" {
+		return text + ": " + detail
+	}
+	return text
 }
 
 // CronJobProblem describes a detected issue with a CronJob.

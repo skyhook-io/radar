@@ -1,12 +1,14 @@
 package k8s
 
 import (
+	"strings"
+	"testing"
+	"time"
+
 	autoscalingv2 "k8s.io/api/autoscaling/v2"
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"testing"
-	"time"
 )
 
 func TestDetectHPAProblems(t *testing.T) {
@@ -15,6 +17,7 @@ func TestDetectHPAProblems(t *testing.T) {
 		hpas        []*autoscalingv2.HorizontalPodAutoscaler
 		wantCount   int
 		wantProblem string
+		wantReason  string
 	}{
 		{
 			name: "maxed HPA",
@@ -33,6 +36,7 @@ func TestDetectHPAProblems(t *testing.T) {
 			},
 			wantCount:   1,
 			wantProblem: "maxed",
+			wantReason:  "10/10 replicas (wants 10): TooManyReplicas: the desired replica count is more than the maximum replica count",
 		},
 		{
 			name: "at max without controller limit condition is not maxed",
@@ -197,6 +201,9 @@ func TestDetectHPAProblems(t *testing.T) {
 				if problems[0].Problem != tt.wantProblem {
 					t.Errorf("problem = %q, want %q", problems[0].Problem, tt.wantProblem)
 				}
+			}
+			if tt.wantReason != "" && len(problems) > 0 && !strings.Contains(problems[0].Reason, tt.wantReason) {
+				t.Errorf("reason = %q, want to contain %q", problems[0].Reason, tt.wantReason)
 			}
 		})
 	}
