@@ -166,7 +166,7 @@ export function Property({ label, value, copyable, onCopy, copied }: PropertyPro
   return (
     <div className="flex items-start gap-2 text-sm">
       <span className="text-theme-text-tertiary w-40 shrink-0">{label}</span>
-      <span className="text-theme-text-primary break-all flex-1">{displayValue}</span>
+      <span className={clsx('text-theme-text-primary flex-1 min-w-0', isReactElement(value) ? 'break-normal' : 'break-all')}>{displayValue}</span>
       {copyable && onCopy && !isReactElement(value) && (
         <button
           onClick={() => onCopy(strValue, labelKey)}
@@ -872,36 +872,50 @@ function RelationshipGroup({ label, refs, onNavigate }: RelationshipGroupProps) 
 export interface ResourceRefBadgeProps {
   resourceRef: ResourceRef
   onClick?: (ref: ResourceRef) => void
+  wrapAtSeparator?: boolean
 }
 
 /** Reusable chip/badge for showing a related resource with click-to-navigate */
-export function ResourceRefBadge({ resourceRef, onClick }: ResourceRefBadgeProps) {
+export function ResourceRefBadge({ resourceRef, onClick, wrapAtSeparator }: ResourceRefBadgeProps) {
   const kindClass = getKindColor(resourceRef.kind)
   const kindName = formatKindForRef(resourceRef.kind)
+  const content = wrapAtSeparator ? (
+    <>
+      <span className="shrink-0 opacity-60">{kindName}/</span>
+      <span className="min-w-0 max-w-full whitespace-normal break-normal text-left leading-tight">{resourceRef.name}</span>
+    </>
+  ) : (
+    <>
+      <span className="opacity-60">{kindName}/</span>
+      {resourceRef.name}
+    </>
+  )
+  const layoutClass = wrapAtSeparator
+    ? 'badge max-w-full min-w-0 flex-wrap items-center whitespace-normal text-left leading-tight'
+    : 'badge'
 
   if (onClick) {
     return (
       <button
         onClick={() => onClick(resourceRef)}
         className={clsx(
-          'badge hover:brightness-[0.92] dark:hover:brightness-125 transition-[filter]',
+          layoutClass,
+          'hover:brightness-[0.92] dark:hover:brightness-125 transition-[filter]',
           kindClass
         )}
         title={`${resourceRef.kind}: ${resourceRef.namespace}/${resourceRef.name}`}
       >
-        <span className="opacity-60">{kindName}/</span>
-        {resourceRef.name}
+        {content}
       </button>
     )
   }
 
   return (
     <span
-      className={clsx('badge', kindClass)}
+      className={clsx(layoutClass, kindClass)}
       title={`${resourceRef.kind}: ${resourceRef.namespace}/${resourceRef.name}`}
     >
-      <span className="opacity-60">{kindName}/</span>
-      {resourceRef.name}
+      {content}
     </span>
   )
 }
@@ -946,6 +960,7 @@ function formatKindForRef(kind: string): string {
     job: 'job',
     cronjob: 'cj',
     hpa: 'hpa',
+    horizontalpodautoscaler: 'hpa',
   }
   return shortNames[k] || k
 }

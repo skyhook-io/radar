@@ -124,6 +124,19 @@ function compactHPASummary(diagnosis: HPADiagnosis): string {
   if (diagnosis.state === 'limited_max') {
     return `Wants more; capped at maxReplicas=${diagnosis.bounds.max}`
   }
+  if (diagnosis.state === 'pinned') {
+    return `Fixed at ${diagnosis.bounds.current} replicas`
+  }
+  if (diagnosis.state === 'metrics_unavailable' || diagnosis.state === 'metrics_incomplete') {
+    const missingMetric = diagnosis.metrics?.find((metric) => metric.status !== 'ok')
+    if (missingMetric?.type === 'Resource' && missingMetric.name) {
+      return `Add ${missingMetric.name} requests; HPA cannot compute replicas`
+    }
+    if (missingMetric?.name) {
+      return `${missingMetric.name} metric unavailable; HPA cannot compute replicas`
+    }
+    return 'Metrics unavailable; HPA cannot compute replicas'
+  }
   return diagnosis.summary
 }
 
@@ -243,7 +256,7 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
                   value={
                     <div className="flex flex-wrap gap-1">
                       {scaleBlockedBy.map((ref) => (
-                        <ResourceRefBadge key={`${ref.kind}/${ref.namespace}/${ref.name}`} resourceRef={ref} onClick={onNavigate} />
+                        <ResourceRefBadge key={`${ref.kind}/${ref.namespace}/${ref.name}`} resourceRef={ref} onClick={onNavigate} wrapAtSeparator />
                       ))}
                       {scalerDiagnostics && scalerDiagnostics.length > 0 && (
                         <div className="mt-1 w-full space-y-1">
@@ -416,9 +429,9 @@ function ScalerDiagnosisRow({ entry }: { entry: ScalerDiagnosis }) {
   }
   if (!entry.diagnosis) return null
   return (
-    <div className="rounded border border-theme-border bg-theme-surface px-2 py-1.5 text-xs leading-6 text-theme-text-secondary">
+    <div className="rounded border border-theme-border bg-theme-surface px-2 py-1.5 text-xs leading-6 text-theme-text-secondary whitespace-normal break-normal">
       <Badge severity={badgeSeverityForHPA(entry.diagnosis)} size="sm" className="mr-1.5 align-middle">{hpaStateLabel(entry.diagnosis.state)}</Badge>
-      {compactHPASummary(entry.diagnosis)}
+      <span className="align-middle whitespace-normal break-normal">{compactHPASummary(entry.diagnosis)}</span>
     </div>
   )
 }

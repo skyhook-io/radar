@@ -38,6 +38,8 @@ describe('WorkloadRenderer', () => {
     expect(html).toContain('Controlled by')
     expect(html).toContain('HorizontalPodAutoscaler prod/api')
     expect(html).toContain('ScaledObject prod/api-queue')
+    expect(html).toContain('flex-wrap')
+    expect(html).toContain('hpa<!-- -->/')
   })
 
   it('renders compact HPA diagnosis inline with the state badge first', () => {
@@ -65,5 +67,58 @@ describe('WorkloadRenderer', () => {
     expect(html).toContain('Wants more; capped at maxReplicas=5')
     expect(html).not.toContain('HPA wants more replicas but is capped at maxReplicas=5')
     expect(html).toContain('px-2 py-1.5')
+  })
+
+  it('uses compact missing-metrics copy in workload autoscaler context', () => {
+    const html = renderToString(
+      <WorkloadRenderer
+        kind="deployments"
+        data={deployment}
+        onScale={async () => {}}
+        scaleBlockedBy={[{ kind: 'HorizontalPodAutoscaler', namespace: 'prod', name: 'api' }]}
+        scalerDiagnostics={[
+          {
+            ref: { kind: 'HorizontalPodAutoscaler', namespace: 'prod', name: 'api' },
+            diagnosis: {
+              state: 'metrics_unavailable',
+              summary: 'Add memory requests to the target pods so HPA can compute replicas',
+              target: { kind: 'Deployment', name: 'api' },
+              bounds: { min: 2, max: 10, current: 3, desired: 3 },
+              metrics: [{ type: 'Resource', name: 'memory', status: 'missing' }],
+            },
+          },
+        ]}
+      />,
+    )
+
+    expect(html).toContain('Metrics unavailable')
+    expect(html).toContain('Add memory requests; HPA cannot compute replicas')
+    expect(html).not.toContain('Add memory requests to the target pods')
+  })
+
+  it('uses compact pinned copy in workload autoscaler context', () => {
+    const html = renderToString(
+      <WorkloadRenderer
+        kind="deployments"
+        data={deployment}
+        onScale={async () => {}}
+        scaleBlockedBy={[{ kind: 'HorizontalPodAutoscaler', namespace: 'prod', name: 'api' }]}
+        scalerDiagnostics={[
+          {
+            ref: { kind: 'HorizontalPodAutoscaler', namespace: 'prod', name: 'api' },
+            diagnosis: {
+              state: 'pinned',
+              summary: 'HPA is configured for a fixed replica count of 3',
+              target: { kind: 'Deployment', name: 'api' },
+              bounds: { min: 3, max: 3, current: 3, desired: 3 },
+            },
+          },
+        ]}
+      />,
+    )
+
+    expect(html).toContain('Pinned')
+    expect(html).toContain('Fixed at 3 replicas')
+    expect(html).not.toContain('fixed replica count')
   })
 })
