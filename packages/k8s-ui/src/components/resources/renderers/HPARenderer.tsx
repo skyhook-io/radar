@@ -45,6 +45,14 @@ function hpaConditionTone(condition: any): ConditionTone | undefined {
   return 'warning'
 }
 
+function formatReasonID(id: string): string {
+  return id.replace(/_/g, ' ')
+}
+
+function isReasonMessageRedundant(state: HPADiagnosisState, reason: NonNullable<HPADiagnosis['reasons']>[number]): boolean {
+  return state === 'limited_max' && reason.id === 'limited_max'
+}
+
 export function HPARenderer({ data, onNavigate, hpaDiagnosis, extraSections }: HPARendererProps) {
   const status = data.status || {}
   const spec = data.spec || {}
@@ -68,13 +76,16 @@ export function HPARenderer({ data, onNavigate, hpaDiagnosis, extraSections }: H
               <div className="space-y-2">
                 {hpaDiagnosis.reasons.map((reason) => (
                   <div key={`${reason.id}-${reason.message}`} className="rounded border border-theme-border bg-theme-surface p-2">
-                    <div className="text-xs font-medium text-theme-text-primary">{reason.message}</div>
-                    <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-theme-text-tertiary">
-                      <span>{reason.id.replace(/_/g, ' ')}</span>
-                      {reason.conditionType && <span>{reason.conditionType}</span>}
-                      {reason.conditionReason && <span>{reason.conditionReason}</span>}
-                      {reason.detail && <span>{reason.detail}</span>}
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-medium text-theme-text-primary">Evidence</span>
+                      <span className="text-theme-text-tertiary">{formatReasonID(reason.id)}</span>
+                      {reason.conditionType && <span className="text-theme-text-tertiary">{reason.conditionType}</span>}
+                      {reason.conditionReason && <span className="text-theme-text-tertiary">{reason.conditionReason}</span>}
+                      {reason.detail && <span className="text-theme-text-tertiary">{reason.detail}</span>}
                     </div>
+                    {!isReasonMessageRedundant(hpaDiagnosis.state, reason) && (
+                      <div className="mt-1 text-xs text-theme-text-secondary">{reason.message}</div>
+                    )}
                   </div>
                 ))}
               </div>

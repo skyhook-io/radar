@@ -39,4 +39,29 @@ describe('WorkloadRenderer', () => {
     expect(html).toContain('HorizontalPodAutoscaler prod/api')
     expect(html).toContain('ScaledObject prod/api-queue')
   })
+
+  it('renders compact HPA diagnosis inline with the state badge first', () => {
+    const html = renderToString(
+      <WorkloadRenderer
+        kind="deployments"
+        data={deployment}
+        onScale={async () => {}}
+        scaleBlockedBy={[{ kind: 'HorizontalPodAutoscaler', namespace: 'prod', name: 'api' }]}
+        scalerDiagnostics={[
+          {
+            ref: { kind: 'HorizontalPodAutoscaler', namespace: 'prod', name: 'api' },
+            diagnosis: {
+              state: 'limited_max',
+              summary: 'HPA wants more replicas but is capped at maxReplicas=5',
+              target: { kind: 'Deployment', name: 'api' },
+              bounds: { min: 2, max: 5, current: 5, desired: 5 },
+            },
+          },
+        ]}
+      />,
+    )
+
+    expect(html.indexOf('Maxed')).toBeLessThan(html.indexOf('HPA wants more replicas'))
+    expect(html).toContain('px-2 py-1.5')
+  })
 })

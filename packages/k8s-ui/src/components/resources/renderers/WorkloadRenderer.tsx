@@ -239,7 +239,7 @@ export function WorkloadRenderer({ kind, data, onNavigate, onViewPods, onScale, 
                         <ResourceRefBadge key={`${ref.kind}/${ref.namespace}/${ref.name}`} resourceRef={ref} onClick={onNavigate} />
                       ))}
                       {scalerDiagnostics && scalerDiagnostics.length > 0 && (
-                        <div className="mt-2 w-full space-y-1">
+                        <div className="mt-1 w-full space-y-1">
                           {scalerDiagnostics.map((entry) => (
                             <ScalerDiagnosisRow key={`${entry.ref.kind}/${entry.ref.namespace}/${entry.ref.name}`} entry={entry} />
                           ))}
@@ -409,11 +409,9 @@ function ScalerDiagnosisRow({ entry }: { entry: ScalerDiagnosis }) {
   }
   if (!entry.diagnosis) return null
   return (
-    <div className="rounded border border-theme-border bg-theme-surface p-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-xs text-theme-text-secondary">{entry.diagnosis.summary}</span>
-        <Badge severity={badgeSeverityForHPA(entry.diagnosis)} size="sm">{hpaStateLabel(entry.diagnosis.state)}</Badge>
-      </div>
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5 rounded border border-theme-border bg-theme-surface px-2 py-1.5">
+      <Badge severity={badgeSeverityForHPA(entry.diagnosis)} size="sm">{hpaStateLabel(entry.diagnosis.state)}</Badge>
+      <span className="min-w-0 text-xs text-theme-text-secondary">{entry.diagnosis.summary}</span>
     </div>
   )
 }

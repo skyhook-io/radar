@@ -60,4 +60,32 @@ describe('HPARenderer', () => {
     expect(html).toContain('text-amber-600')
     expect(html).not.toContain('failing')
   })
+
+  it('does not repeat max-limited controller text as a second diagnosis headline', () => {
+    const html = renderToString(
+      <HPARenderer
+        data={baseHPA}
+        hpaDiagnosis={{
+          state: 'limited_max',
+          summary: 'HPA wants more replicas but is capped at maxReplicas=10',
+          target: { kind: 'Deployment', name: 'api' },
+          bounds: { min: 1, max: 10, current: 10, desired: 10 },
+          reasons: [
+            {
+              id: 'limited_max',
+              message: 'the desired replica count is more than the maximum replica count',
+              conditionType: 'ScalingLimited',
+              conditionReason: 'TooManyReplicas',
+            },
+          ],
+        }}
+      />,
+    )
+
+    expect(html).toContain('HPA wants more replicas but is capped at maxReplicas=10')
+    expect(html).toContain('Evidence')
+    expect(html).toContain('ScalingLimited')
+    expect(html).toContain('TooManyReplicas')
+    expect(html).not.toContain('the desired replica count is more than the maximum replica count')
+  })
 })
