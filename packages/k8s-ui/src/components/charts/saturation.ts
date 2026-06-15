@@ -20,6 +20,7 @@ export function computeSaturation(
   let peak = 0
   for (const s of series) {
     for (const dp of s.dataPoints) {
+      if (dp.value == null) continue
       if (dp.value > peak) peak = dp.value
     }
   }

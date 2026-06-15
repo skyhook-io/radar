@@ -4,14 +4,15 @@
 
 export interface TimeSeriesPoint {
   timestamp: number
-  value: number
+  value?: number | null
 }
 
 export interface TimeSeries {
   labels: Record<string, string>
-  /** Expected to be sorted ascending by timestamp and finite-valued. The
-   *  chart's path math and saturation peak scans assume this; passing
-   *  unsorted or NaN samples will produce garbage rendering, not crashes. */
+  /** Sorted ascending by timestamp. Each point's `value` is either finite or
+   *  null/absent (a gap). Consumers must skip gap points in arithmetic and
+   *  break the line/area path across them rather than bridging or dropping to
+   *  0. */
   dataPoints: TimeSeriesPoint[]
 }
 

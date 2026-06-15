@@ -7,6 +7,16 @@ const series = (values: number[]): TimeSeries => ({
   dataPoints: values.map((value, i) => ({ timestamp: i, value })),
 })
 
+// Builds a series where `undefined` entries are GAPS — the wire shape omits
+// the `value` key entirely, so we construct points without it rather than
+// setting `value: undefined`.
+const gappedSeries = (values: (number | undefined)[]): TimeSeries => ({
+  labels: { pod: 'p' },
+  dataPoints: values.map((value, i) =>
+    value === undefined ? { timestamp: i } : { timestamp: i, value },
+  ),
+})
+
 const refRequest: ReferenceLine = { value: 100, label: 'request 100', kind: 'request' }
 const refLimit: ReferenceLine = { value: 200, label: 'limit 200', kind: 'limit' }
 
@@ -56,5 +66,29 @@ describe('computeSaturation', () => {
   it('ignores zero-valued samples but uses positive ones for peak', () => {
     const result = computeSaturation([series([0, 0, 50, 0])], [refLimit])
     expect(result?.ratio).toBeCloseTo(0.25)
+  })
+
+  it('skips undefined (gap) samples in the peak scan', () => {
+    // The undefined sample (300) is a gap, not the peak — it must not count.
+    const result = computeSaturation(
+      [gappedSeries([10, undefined, 50, undefined])],
+      [refLimit],
+    )
+    expect(result?.ratio).toBeCloseTo(0.25)
+  })
+
+  it('returns undefined when every sample is a gap', () => {
+    expect(
+      computeSaturation([gappedSeries([undefined, undefined, undefined])], [refLimit]),
+    ).toBeUndefined()
+  })
+
+  it('returns undefined when gaps span multiple series with no finite sample', () => {
+    expect(
+      computeSaturation(
+        [gappedSeries([undefined]), gappedSeries([undefined, undefined])],
+        [refLimit],
+      ),
+    ).toBeUndefined()
   })
 })

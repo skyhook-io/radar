@@ -8,7 +8,11 @@
 // separate step that constructs a Transport.
 package prom
 
-import "encoding/json"
+import (
+	"encoding/json"
+	"math"
+	"strconv"
+)
 
 // ServiceInfo describes a Prometheus-compatible service discovered in the
 // cluster. Used by discovery helpers and returned in Status.
@@ -43,10 +47,26 @@ type Series struct {
 	DataPoints []DataPoint       `json:"dataPoints"`
 }
 
-// DataPoint is a single (timestamp, value) pair.
+// DataPoint is a single timestamped float sample.
 type DataPoint struct {
 	Timestamp int64   `json:"timestamp"`
 	Value     float64 `json:"value"`
+}
+
+// MarshalJSON emits a non-finite sample as an explicit null (not a fabricated 0)
+// so consumers read it as a deliberate gap and skip it. Prometheus returns
+// NaN/±Inf for ordinary expressions (0/0 error ratios, histogram_quantile on
+// empty buckets, divide-by-zero) and encoding/json rejects those outright
+// ("json: unsupported value: NaN"), which would otherwise fail the whole query
+// response.
+func (d DataPoint) MarshalJSON() ([]byte, error) {
+	if math.IsNaN(d.Value) || math.IsInf(d.Value, 0) {
+		return []byte(`{"timestamp":` + strconv.FormatInt(d.Timestamp, 10) + `,"value":null}`), nil
+	}
+	// plain strips the MarshalJSON method so the finite path keeps stdlib's
+	// exact float formatting (no recursion).
+	type plain DataPoint
+	return json.Marshal(plain(d))
 }
 
 // promResponse is the raw shape returned by Prometheus HTTP API

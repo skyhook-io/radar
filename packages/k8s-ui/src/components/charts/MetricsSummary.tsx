@@ -13,14 +13,23 @@ export function MetricsSummary({ series, unit, currentColorClass }: {
     const allValues: number[] = []
     for (const s of series) {
       for (const dp of s.dataPoints) {
+        if (dp.value == null) continue
         allValues.push(dp.value)
       }
     }
     if (allValues.length === 0) return null
 
-    // Current = sum of each series' most recent data point (matches
-    // operator mental model of "total across pods right now").
-    const lastValues = series.map(s => s.dataPoints[s.dataPoints.length - 1]?.value ?? 0)
+    // Current = sum of each series' most recent finite data point (matches
+    // operator mental model of "total across pods right now"). A trailing gap
+    // is skipped — we walk back to the last real sample rather than treating
+    // the gap as 0, which would understate the current total.
+    const lastValues = series.map(s => {
+      for (let i = s.dataPoints.length - 1; i >= 0; i--) {
+        const v = s.dataPoints[i].value
+        if (v != null) return v
+      }
+      return 0
+    })
     const current = lastValues.reduce((a, b) => a + b, 0)
     const max = Math.max(...allValues)
     const avg = allValues.reduce((a, b) => a + b, 0) / allValues.length

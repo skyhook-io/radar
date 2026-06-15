@@ -361,6 +361,44 @@ func registerTools(server *mcp.Server) {
 		Annotations: readOnly,
 	}, logToolCall("get_subject_permissions", handleGetSubjectPermissions))
 
+	// --- Prometheus tools (read-only) ---
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "query_prometheus",
+		Description: "Use when the question needs metric VALUES or history: CPU/memory over time, " +
+			"request rates, error ratios, saturation, restarts trend, 'was there a spike?'. Executes " +
+			"PromQL against the cluster's Prometheus (auto-discovered or configured in Radar; also " +
+			"works with PromQL-compatible backends: Thanos, VictoriaMetrics, Mimir). " +
+			"type=instant returns current values; type=range returns time series for a window " +
+			"(since=1h default). For live top-N snapshots prefer top_resources; for metric/label " +
+			"NAME discovery use discover_metrics first — do not guess metric names. " +
+			"High-cardinality queries must be wrapped in topk(5, ...): oversized results return a " +
+			"summary with a suggested rewrite instead of data.",
+		Annotations: readOnly,
+	}, logToolCall("query_prometheus", handleQueryPrometheus))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "discover_metrics",
+		Description: "Use BEFORE query_prometheus when unsure of exact metric or label names. " +
+			"Lists metric names matching a selector (match={__name__=~\"node_cpu.*\"}) with their " +
+			"type (counter vs gauge — counters need rate()) and help text, or values of one label " +
+			"(label=namespace). Returns up to limit values from the last hour of active series; " +
+			"truncated=true means narrow the match. Never answer about metric values from this " +
+			"tool — names prove existence, not magnitude.",
+		Annotations: readOnly,
+	}, logToolCall("discover_metrics", handleDiscoverMetrics))
+
+	mcp.AddTool(server, &mcp.Tool{
+		Name: "get_prometheus_rules",
+		Description: "List Prometheus alerting and recording rules with their PromQL definitions, " +
+			"state (firing/pending/inactive), labels, annotations, and active alert instances. " +
+			"When investigating a firing alert, ALWAYS fetch its rule definition here FIRST, then " +
+			"run its query with query_prometheus to see the actual values. state=firing shows " +
+			"everything currently alerting. Filters are substring matches; results cap at limit " +
+			"(default 50) with truncated=true — narrow rather than paging.",
+		Annotations: readOnly,
+	}, logToolCall("get_prometheus_rules", handleGetPrometheusRules))
+
 	mcp.AddTool(server, &mcp.Tool{
 		Name: "get_workload_logs",
 		Description: "Get aggregated logs from all pods of a workload (Deployment, StatefulSet, " +

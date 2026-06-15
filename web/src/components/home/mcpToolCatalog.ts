@@ -202,6 +202,40 @@ export const MCP_TOOL_CATALOG: MCPToolInfo[] = [
     ],
   },
   {
+    name: 'query_prometheus',
+    desc: "Run PromQL against the cluster's Prometheus (auto-discovered or configured; works with Thanos, VictoriaMetrics, Mimir). Instant queries return current values; range queries return time-series history with automatic step adjustment. Oversized results return a cardinality summary with a suggested topk rewrite instead of raw data.",
+    params: [
+      { arg: 'query', required: true, desc: 'PromQL query to execute' },
+      { arg: 'type', desc: 'instant (default) or range' },
+      { arg: 'since', desc: 'range lookback, e.g. 30m, 1h, 24h, 7d (default 1h)' },
+      { arg: 'start', desc: 'range RFC3339 start time; overrides since' },
+      { arg: 'end', desc: 'range RFC3339 end time (default now)' },
+      { arg: 'step', desc: 'range resolution, e.g. 30s, 5m (auto-calculated when omitted)' },
+      { arg: 'max_points', desc: 'max data points per series (default 300, max 600)' },
+      { arg: 'timeout', desc: 'query timeout in seconds (default 30, max 180)' },
+    ],
+  },
+  {
+    name: 'discover_metrics',
+    desc: 'Discover exact Prometheus metric names (with type and help text) or values of one label before writing PromQL. Lists active series from the last hour; flags truncation so the selector can be narrowed.',
+    params: [
+      { arg: 'match', desc: 'PromQL series selector filter, e.g. {__name__=~"node_cpu.*"}; required when label is empty' },
+      { arg: 'label', desc: 'discover values of this label instead of metric names, e.g. namespace, pod' },
+      { arg: 'limit', desc: 'max values returned (default 100, max 500)' },
+    ],
+  },
+  {
+    name: 'get_prometheus_rules',
+    desc: 'List Prometheus alerting and recording rules with their PromQL definitions, state (firing/pending/inactive), and active alert instances. The starting point for alert investigation: fetch the rule, then query its expression.',
+    params: [
+      { arg: 'type', desc: 'alert or record (omit for both)' },
+      { arg: 'name', desc: 'substring filter on rule name' },
+      { arg: 'group', desc: 'substring filter on rule group name' },
+      { arg: 'state', desc: 'alerting rules only: firing, pending, or inactive' },
+      { arg: 'limit', desc: 'max rules returned (default 50, max 200)' },
+    ],
+  },
+  {
     name: 'get_workload_logs',
     desc: 'Aggregated, filtered logs across all pods of a workload (Deployment, StatefulSet, or DaemonSet) — collected concurrently, filtered for errors/warnings, and deduplicated.',
     params: [

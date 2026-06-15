@@ -86,8 +86,13 @@ interface FlatPoint { timestamp: number; value: number }
 
 function extractFirstSeries(series: PrometheusSeries[]): FlatPoint[] | null {
   for (const s of series) {
-    if (s.dataPoints.length > 0) {
-      return s.dataPoints.map(dp => ({ timestamp: dp.timestamp, value: dp.value }))
+    // Drop gap points (null/undefined value) so the line never plots NaN or a
+    // false 0. Replica-count series realistically never gap, so the survivors
+    // are joined into one continuous line (this bridges a gap, if one occurred —
+    // unlike AreaChart, which breaks the path)
+    const finite = s.dataPoints.filter((dp): dp is FlatPoint => dp.value != null)
+    if (finite.length > 0) {
+      return finite.map(dp => ({ timestamp: dp.timestamp, value: dp.value }))
     }
   }
   return null

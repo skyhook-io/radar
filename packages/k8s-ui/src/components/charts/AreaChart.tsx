@@ -26,7 +26,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines }: {
       for (const dp of s.dataPoints) {
         if (dp.timestamp < minTs) minTs = dp.timestamp
         if (dp.timestamp > maxTs) maxTs = dp.timestamp
-        if (dp.value > maxVal) maxVal = dp.value
+        if (dp.value != null && dp.value > maxVal) maxVal = dp.value
       }
     }
 
@@ -96,23 +96,53 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines }: {
 
   const paths = useMemo(() => {
     if (!chartData) return []
-    return chartData.series.map((s, seriesIdx) => {
-      if (s.dataPoints.length < 2) return null
-      const points = s.dataPoints.map(dp => ({ x: toX(dp.timestamp), y: toY(dp.value) }))
+    const segments: {
+      linePath: string
+      areaPath: string
+      strokeColor: string
+      areaFillColor: string
+      key: string
+    }[] = []
 
-      const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
-      const areaPath = linePath +
-        ` L${points[points.length - 1].x},${marginTop + plotHeight}` +
-        ` L${points[0].x},${marginTop + plotHeight} Z`
+    chartData.series.forEach((s, seriesIdx) => {
+      const strokeColor = multiSeries ? seriesColor(seriesIdx, color) : color
+      const areaFillColor = multiSeries ? seriesFill(seriesIdx, fillColor) : fillColor
 
-      return {
-        linePath,
-        areaPath,
-        strokeColor: multiSeries ? seriesColor(seriesIdx, color) : color,
-        areaFillColor: multiSeries ? seriesFill(seriesIdx, fillColor) : fillColor,
-        key: seriesIdx,
+      // Split the series into contiguous runs of finite points. A gap
+      // (value === undefined) breaks the path so the line/area visibly stops
+      // rather than bridging across missing data or dropping to y=0. Each run
+      // becomes its own path segment; a run needs >=2 points to render a line.
+      let run: { x: number; y: number }[] = []
+      let runIdx = 0
+      const flush = () => {
+        if (run.length >= 2) {
+          const linePath = run.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x},${p.y}`).join(' ')
+          const areaPath = linePath +
+            ` L${run[run.length - 1].x},${marginTop + plotHeight}` +
+            ` L${run[0].x},${marginTop + plotHeight} Z`
+          segments.push({
+            linePath,
+            areaPath,
+            strokeColor,
+            areaFillColor,
+            key: `${seriesIdx}-${runIdx}`,
+          })
+        }
+        run = []
+        runIdx++
       }
-    }).filter(Boolean)
+
+      for (const dp of s.dataPoints) {
+        if (dp.value == null) {
+          flush()
+          continue
+        }
+        run.push({ x: toX(dp.timestamp), y: toY(dp.value) })
+      }
+      flush()
+    })
+
+    return segments
   }, [chartData])
 
   // Hover: only emit a tooltip row when the hovered timestamp lies within
@@ -127,7 +157,7 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines }: {
 
     const validSeries = chartData.series
       .map((s, i) => ({ s, i }))
-      .filter(({ s }) => s.dataPoints.length >= 2)
+      .filter(({ s }) => s.dataPoints.filter(dp => dp.value != null).length >= 2)
 
     const fullLabels = validSeries.map(({ s, i }) =>
       s.labels.pod || s.labels.instance || s.labels.node || `series-${i}`
@@ -145,15 +175,19 @@ export function AreaChart({ series, color, fillColor, unit, referenceLines }: {
       if (ts < seriesMin - tolerance || ts > seriesMax + tolerance) {
         return null
       }
-      let closest = dps[0]
+      // Only snap to finite points — a gap (undefined value) has no value to
+      // show and would render NaN in the tooltip / a dot at y=NaN.
+      let closest: { timestamp: number; value: number } | null = null
       let closestDist = Infinity
       for (const dp of dps) {
+        if (dp.value == null) continue
         const dist = Math.abs(dp.timestamp - ts)
         if (dist < closestDist) {
           closestDist = dist
-          closest = dp
+          closest = { timestamp: dp.timestamp, value: dp.value }
         }
       }
+      if (!closest) return null
       return {
         label: shortLabels[vi],
         fullLabel: fullLabels[vi],

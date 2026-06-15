@@ -32,7 +32,7 @@ type Client struct {
 	// Discovery state
 	discovered       bool
 	discoveryService *prom.ServiceInfo // discovered service info for port-forward
-	manualURL        string       // --prometheus-url override
+	manualURL        string            // --prometheus-url override
 	headers          map[string]string
 
 	// K8s clients for discovery
@@ -42,6 +42,9 @@ type Client struct {
 
 	// Shared HTTP client used when constructing the underlying pkg/prom.Client.
 	httpClient *http.Client
+
+	// Dedicated HTTP client for the MCP path
+	mcpHTTPClient *http.Client
 }
 
 // Global client instance
@@ -56,11 +59,21 @@ func Initialize(client kubernetes.Interface, config *rest.Config, contextName st
 	defer clientMu.Unlock()
 
 	globalClient = &Client{
-		k8sClient:   client,
-		k8sConfig:   config,
-		contextName: contextName,
-		httpClient:  &http.Client{Timeout: 10 * time.Second},
+		k8sClient:     client,
+		k8sConfig:     config,
+		contextName:   contextName,
+		httpClient:    &http.Client{Timeout: 10 * time.Second},
+		mcpHTTPClient: newMCPHTTPClient(),
 	}
+}
+
+// newMCPHTTPClient builds the HTTP client backing the MCP-only prom.Client.
+// Its 200s timeout is a hang backstop, not a query budget: the MCP handlers
+// enforce their own per-call ctx deadline (30s default, model-raisable to
+// 180s), which must win so the timeout error the model sees is ours. The
+// backstop only has to clear the largest per-call budget: 180s + 20s margin.
+func newMCPHTTPClient() *http.Client {
+	return &http.Client{Timeout: 200 * time.Second}
 }
 
 // SetManualURL sets the --prometheus-url override on the global client.
@@ -139,12 +152,13 @@ func Reinitialize(client kubernetes.Interface, config *rest.Config, contextName 
 	}
 
 	globalClient = &Client{
-		k8sClient:   client,
-		k8sConfig:   config,
-		contextName: contextName,
-		manualURL:   manualURL,
-		headers:     headers,
-		httpClient:  &http.Client{Timeout: 10 * time.Second},
+		k8sClient:     client,
+		k8sConfig:     config,
+		contextName:   contextName,
+		manualURL:     manualURL,
+		headers:       headers,
+		httpClient:    &http.Client{Timeout: 10 * time.Second},
+		mcpHTTPClient: newMCPHTTPClient(),
 	}
 }
 
@@ -240,6 +254,24 @@ func (c *Client) getPromClient() *prom.Client {
 	tr.Headers = copyHeaders(c.headers)
 	c.prom = prom.NewClient(tr)
 	return c.prom
+}
+
+// PromForMCP returns a prom.Client backed by the MCP-only http.Client, whose
+// 200s socket backstop accommodates the MCP path's model-settable per-query
+// timeout (up to 180s). The shared Prom() client keeps a 10s backstop that
+// bounds REST/opencost callers. Built per call from the current discovery
+// state (not cached), so it can never serve a stale endpoint after a reconnect
+// or context switch; the underlying mcpHTTPClient connection pool is reused.
+// Returns nil if discovery has not run.
+func (c *Client) PromForMCP() *prom.Client {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	if c.baseURL == "" {
+		return nil
+	}
+	tr := prom.NewHTTPTransport(c.baseURL, c.basePath, c.mcpHTTPClient)
+	tr.Headers = copyHeaders(c.headers)
+	return prom.NewClient(tr)
 }
 
 // probe checks if a Prometheus endpoint at `addr` is reachable and has at

@@ -94,6 +94,14 @@ function collectRestartEvents(series: PrometheusSeries[] | undefined): RestartEv
     // window — and use the increase as the marker's restart count.
     let prev: number | null = null
     for (const dp of s.dataPoints) {
+      // Skip gap samples and drop the previous reference, so the next finite
+      // sample isn't diffed across the gap — a delta across a gap is
+      // meaningless and could fabricate a restart count. We compare only
+      // consecutive finite samples.
+      if (dp.value == null) {
+        prev = null
+        continue
+      }
       if (prev !== null) {
         // Only count positive deltas — restarts that entered the rolling 1h
         // window during the chart range. The first sample's value covers
