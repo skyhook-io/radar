@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { createPortal } from 'react-dom'
 import { ChevronDown, ChevronRight, ExternalLink, EyeOff, MoreHorizontal, Search, ShieldCheck, Wrench, X } from 'lucide-react'
-import { ClusterName, EmptyState, FilterPill } from '../ui'
+import { ClusterName, EmptyState, FilterPill, DistributionBar, DistributionLegendChip } from '../ui'
 import type { CheckMeta, CheckReference } from '../audit'
 import { CHECK_SEVERITIES, CHECK_SEVERITY_RANK, type Check, type CheckSeverity, type EffectiveCheckFinding, type CheckResourceRef } from './types'
 import {
@@ -367,35 +367,24 @@ export function ChecksView({ checks, catalog, anyData, resourceHref, onResourceC
 }
 
 export function CheckSeverityBar({ totals }: { totals: Record<CheckSeverity, number> }) {
-  const sum = CHECK_SEVERITIES.reduce((n, s) => n + totals[s], 0)
   return (
-    <div className="flex h-1.5 overflow-hidden rounded-full bg-theme-elevated" role="img" aria-label="Severity distribution">
-      {sum === 0
-        ? null
-        : CHECK_SEVERITIES.map((s) =>
-            totals[s] > 0 ? (
-              <div key={s} className={`${SEVERITY_FILL_CLASS[s]} transition-[width] duration-500 ease-out`} style={{ width: `${(totals[s] / sum) * 100}%` }} />
-            ) : null,
-          )}
-    </div>
+    <DistributionBar
+      ariaLabel="Severity distribution"
+      segments={CHECK_SEVERITIES.map((s) => ({ key: s, count: totals[s], fillClass: SEVERITY_FILL_CLASS[s] }))}
+    />
   )
 }
 
 export function CheckSeverityChip({ severity, count, active, onClick }: { severity: CheckSeverity; count: number; active: boolean; onClick: () => void }) {
   return (
-    <button
-      type="button"
+    <DistributionLegendChip
+      label={SEVERITY_LABEL[severity]}
+      count={count}
+      fillClass={SEVERITY_FILL_CLASS[severity]}
+      textClass={SEVERITY_TEXT_CLASS[severity]}
+      active={active}
       onClick={onClick}
-      aria-pressed={active}
-      className={[
-        'group inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors',
-        active ? 'border-theme-border bg-theme-elevated text-theme-text-primary' : 'border-transparent text-theme-text-secondary hover:bg-theme-hover/60',
-      ].join(' ')}
-    >
-      <span className={`h-2 w-2 rounded-full ${SEVERITY_FILL_CLASS[severity]} ${count === 0 ? 'opacity-30' : ''}`} />
-      <span className={`font-semibold tabular-nums ${count > 0 ? SEVERITY_TEXT_CLASS[severity] : 'text-theme-text-tertiary'}`}>{count}</span>
-      <span>{SEVERITY_LABEL[severity]}</span>
-    </button>
+    />
   )
 }
 

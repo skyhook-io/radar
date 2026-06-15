@@ -9,6 +9,7 @@ import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
 import { Facet, type FacetTone } from '../ui/Facet'
 import { SortableTh, TH_CLASS } from '../ui/SortableTh'
+import { DistributionBar } from '../ui/DistributionBar'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { pluralize } from '../../utils/pluralize'
 import {
@@ -344,11 +345,11 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
             </>
           }
         />
-        {total > 0 && (
-          <div className="mt-3 flex h-1.5 w-full overflow-hidden rounded-full bg-theme-hover" title="Health distribution">
-            {HEALTH_ORDER.map((h) => (counts.health[h] ? <span key={h} className={HEALTH_META[h].bar} style={{ width: `${(counts.health[h] / total) * 100}%` }} title={`${HEALTH_META[h].label} ${counts.health[h]}`} /> : null))}
-          </div>
-        )}
+        <DistributionBar
+          className="mt-3"
+          ariaLabel="Health distribution"
+          segments={HEALTH_ORDER.map((h) => ({ key: h, count: counts.health[h] ?? 0, fillClass: HEALTH_META[h].bar }))}
+        />
       </div>
 
       {/* Body: filter sidebar | content (toolbar + table). */}
@@ -438,10 +439,12 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
                     >
                       <td className="py-2.5 pl-3 pr-2">
                         <span className="flex items-center gap-2">
-                          <ChevronRight className={clsx('h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform', r.expanded && 'rotate-90')} aria-hidden />
+                          {/* Left status stripe (worst-child health) — the row status
+                              gutter shared with the GitOps table. */}
                           <Tooltip content={HEALTH_META[r.health].label} delay={150}>
-                            <span className="inline-flex"><StatusDot tone={mapHealthToTone(r.health)} /></span>
+                            <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[r.health].bar)} />
                           </Tooltip>
+                          <ChevronRight className={clsx('h-3.5 w-3.5 shrink-0 text-theme-text-tertiary transition-transform', r.expanded && 'rotate-90')} aria-hidden />
                           <span className="truncate font-semibold text-theme-text-primary">{r.label}</span>
                           <Tooltip
                             content={<AppIdentityTooltip identityKey={r.label} members={r.members.map((m) => ({ name: m.row.name, env: m.row.identity!.env, confidence: m.row.identity!.confidence, evidence: m.row.identity!.evidence }))} />}
@@ -518,7 +521,7 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
                       <td className={clsx('py-2.5 pr-2', r.child ? 'pl-10' : 'pl-3')}>
                         <span className="flex items-center gap-2">
                           <Tooltip content={HEALTH_META[e.health].label} delay={150}>
-                            <span className="inline-flex"><StatusDot tone={mapHealthToTone(e.health)} /></span>
+                            <span className={clsx('h-8 w-1 shrink-0 rounded-full', HEALTH_META[e.health].bar)} />
                           </Tooltip>
                           <span className="truncate font-medium text-theme-text-primary">{e.row.name}</span>
                           <ProvenanceBadge tier={e.row.tier} appKey={e.row.key} confidence={e.row.confidence} />

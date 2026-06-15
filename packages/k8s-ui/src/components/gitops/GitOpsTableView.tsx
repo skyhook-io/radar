@@ -29,6 +29,7 @@ import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
 import { FacetSection, FacetButton } from '../ui/Facet'
 import { SortableTh, TH_CLASS, type SortDir } from '../ui/SortableTh'
+import { DistributionBar } from '../ui/DistributionBar'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
 import { getGitOpsResourceStatus } from './detail-helpers'
 import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
@@ -1026,25 +1027,16 @@ function StatusDistribution({ rows }: { rows: GitOpsRow[] }) {
   // the bar — sync state is visible elsewhere (the OutOfSync summary
   // tile, the Sync column, the filter rail).
   const summary = summarizeGitOpsRows(rows)
-  const total = rows.length || 1
-  const segments = [
-    { key: 'healthy', value: summary.healthy, className: 'bg-emerald-500' },
-    { key: 'progressing', value: summary.progressing, className: 'bg-sky-500' },
-    { key: 'degraded', value: summary.degraded, className: 'bg-red-500' },
-    { key: 'unknown', value: Math.max(0, rows.length - summary.healthy - summary.progressing - summary.degraded), className: 'bg-theme-text-tertiary/40' },
-  ].filter((segment) => segment.value > 0)
   return (
-    <div className="h-2 overflow-hidden rounded-full bg-theme-elevated">
-      <div className="flex h-full w-full">
-        {segments.map((segment) => (
-          <div
-            key={segment.key}
-            className={segment.className}
-            style={{ width: `${Math.max(1, (segment.value / total) * 100)}%` }}
-          />
-        ))}
-      </div>
-    </div>
+    <DistributionBar
+      ariaLabel="Health distribution"
+      segments={[
+        { key: 'healthy', count: summary.healthy, fillClass: 'bg-emerald-500' },
+        { key: 'progressing', count: summary.progressing, fillClass: 'bg-sky-500' },
+        { key: 'degraded', count: summary.degraded, fillClass: 'bg-red-500' },
+        { key: 'unknown', count: Math.max(0, rows.length - summary.healthy - summary.progressing - summary.degraded), fillClass: 'bg-theme-text-tertiary/40' },
+      ]}
+    />
   )
 }
 
