@@ -1,12 +1,9 @@
 import type { CheckSeverity } from './types'
+import { BADGE_SEVERITY_COLORS as sev } from '../ui/Badge'
 
-// The visual language for the 4-tier Checks severity ladder. Pale-pastel tints
-// with hand-rolled dark variants (no theme token covers these). One hue per
-// tier: red=critical, orange=high, amber=medium, slate=low — read the queue's
-// left rail top-to-bottom and severity is obvious without reading a word.
-//
-// Class strings are literal so each consuming app's Tailwind @source scan emits
-// them.
+// The visual language for the 4-tier Checks severity ladder. One hue per tier:
+// red=critical, orange=high, amber=medium, neutral=low — read the queue's left
+// rail top-to-bottom and severity is obvious without reading a word.
 
 export const SEVERITY_LABEL: Record<CheckSeverity, string> = {
   critical: 'Critical',
@@ -16,11 +13,13 @@ export const SEVERITY_LABEL: Record<CheckSeverity, string> = {
 }
 
 // Pill badge — the loud, explicit severity signal on rows + drawer header.
+// Uses the canonical Badge severity tones (ln) so the queue's severity pills
+// read identically to status badges everywhere else (rendered with `badge-sm`).
 export const SEVERITY_BADGE_CLASS: Record<CheckSeverity, string> = {
-  critical: 'bg-red-50 text-red-700 ring-1 ring-red-200 dark:bg-red-950/50 dark:text-red-300 dark:ring-red-900',
-  high: 'bg-orange-50 text-orange-700 ring-1 ring-orange-200 dark:bg-orange-950/50 dark:text-orange-300 dark:ring-orange-900',
-  medium: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:ring-amber-900',
-  low: 'bg-slate-100 text-slate-600 ring-1 ring-slate-200 dark:bg-slate-800/60 dark:text-slate-300 dark:ring-slate-700',
+  critical: sev.error,
+  high: sev.alert,
+  medium: sev.warning,
+  low: sev.neutral,
 }
 
 // Solid fill — dots + the proportional distribution bar segments.

@@ -1,23 +1,20 @@
 import type { IssueSeverity } from './types';
+import { BADGE_SEVERITY_COLORS as sev } from '../ui/Badge';
 
-// Visual language for the 2-tier Issues severity, deliberately reusing the
-// SAME class strings as the Checks queue (components/checks/severity.ts):
-// critical = red (= Checks `critical`), warning = amber (= Checks `medium`).
-// Issues and Checks are different severity axes, but the queues must read as
-// one product — sharing the exact hues makes the rails/pills pixel-identical.
-//
-// Class strings are literal so each consuming app's Tailwind @source scan emits
-// them.
+// Visual language for the 2-tier Issues severity. critical = red, warning =
+// amber. Issues and Checks are different severity axes but must read as one
+// product — both pull from the canonical Badge severity tones (ln), so their
+// pills match each other and every status badge elsewhere.
 
 export const ISSUE_SEVERITY_LABEL: Record<IssueSeverity, string> = {
   critical: 'Critical',
   warning: 'Warning',
 };
 
-// Pill badge — the loud, explicit severity signal on a row.
+// Pill badge — the loud, explicit severity signal on a row (rendered with `badge-sm`).
 export const ISSUE_SEVERITY_BADGE_CLASS: Record<IssueSeverity, string> = {
-  critical: 'bg-red-50 text-red-700 ring-1 ring-red-200 dark:bg-red-950/50 dark:text-red-300 dark:ring-red-900',
-  warning: 'bg-amber-50 text-amber-700 ring-1 ring-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:ring-amber-900',
+  critical: sev.error,
+  warning: sev.warning,
 };
 
 // Solid fill — dots + the proportional distribution bar segments.
