@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
-import { ChevronRight, ChevronUp, ChevronDown, Layers, Info, Boxes } from 'lucide-react'
+import { ChevronRight, ChevronUp, ChevronDown, Layers, Boxes, HeartPulse, Shapes, Globe, Tag } from 'lucide-react'
 import { clsx } from 'clsx'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
@@ -7,6 +7,7 @@ import { EmptyState } from '../ui/EmptyState'
 import { SearchBox } from '../ui/SearchBox'
 import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
+import { Facet, type FacetTone } from '../ui/Facet'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { pluralize } from '../../utils/pluralize'
 import {
@@ -130,42 +131,13 @@ function searchTextForEntry(e: AppEntry): string {
     .toLowerCase()
 }
 
-export function Facet<T extends string>({ title, info, options, selected, onToggle }: { title: string; info?: React.ReactNode; options: { value: T; label: string; count: number; tone?: string; tooltip?: string }[]; selected: Set<T>; onToggle: (v: T) => void }) {
-  const visible = options.filter((o) => o.count > 0)
-  if (visible.length === 0) return null
-  return (
-    <div className="flex flex-col gap-1">
-      <div className="flex items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-theme-text-tertiary">
-        {title}
-        {info && (
-          <Tooltip content={info} delay={150} position="right">
-            <Info className="h-3 w-3 cursor-default text-theme-text-tertiary/70 hover:text-theme-text-secondary" aria-label={`About ${title}`} />
-          </Tooltip>
-        )}
-      </div>
-      {visible.map((o) => {
-        const on = selected.has(o.value)
-        const button = (
-          <button
-            key={o.value}
-            type="button"
-            onClick={() => onToggle(o.value)}
-            className={`flex w-full items-center justify-between gap-2 rounded px-2 py-1 text-left text-xs ${on ? 'selection selection-ring text-theme-text-primary' : 'text-theme-text-secondary hover:bg-theme-hover'}`}
-          >
-            <span className={`truncate ${o.tone ?? ''}`}>{o.label}</span>
-            <span className="font-mono tabular-nums text-theme-text-tertiary">{o.count}</span>
-          </button>
-        )
-        return o.tooltip ? (
-          <Tooltip key={o.value} content={o.tooltip} delay={300} position="right" wrapperClassName="w-full">
-            {button}
-          </Tooltip>
-        ) : (
-          button
-        )
-      })}
-    </div>
-  )
+// Availability is the one status facet — map app health onto the shared facet
+// tone so its dots read red/amber/green/grey like the GitOps sync+health facets.
+const HEALTH_TONE: Record<AppHealth, FacetTone> = {
+  unhealthy: 'error',
+  degraded: 'warning',
+  healthy: 'success',
+  unknown: 'neutral',
 }
 
 // Sortable columns. `health` is the implicit default (worst-first then name);
@@ -401,17 +373,17 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
               <button type="button" onClick={clearAllFilters} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">Clear</button>
             )}
           </div>
-          <div className="flex flex-1 flex-col gap-4 overflow-y-auto p-3">
-            <Facet title="Availability" options={HEALTH_ORDER.map((h) => ({ value: h, label: HEALTH_META[h].label, count: counts.health[h] ?? 0, tone: HEALTH_META[h].text }))} selected={fHealth} onToggle={(v) => toggle(fHealth, setFHealth, v)} />
-            <Facet title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => toggle(fClass, setFClass, v)} />
-            <Facet title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => toggle(fType, setFType, v)} />
-            <Facet title="Environment" info={<EnvHint />} options={envOptions} selected={fEnv} onToggle={(v) => toggle(fEnv, setFEnv, v)} />
-            <Facet title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0 }))} selected={fSource} onToggle={(v) => toggle(fSource, setFSource, v)} />
+          <div className="flex-1 overflow-y-auto">
+            <Facet icon={HeartPulse} title="Availability" options={HEALTH_ORDER.map((h) => ({ value: h, label: HEALTH_META[h].label, count: counts.health[h] ?? 0, tone: HEALTH_TONE[h] }))} selected={fHealth} onToggle={(v) => toggle(fHealth, setFHealth, v)} />
+            <Facet icon={Layers} title="Class" options={CLASS_ORDER.map((c) => ({ value: c, label: CLASS_META[c].label, count: counts.workloadClass[c] ?? 0 }))} selected={fClass} onToggle={(v) => toggle(fClass, setFClass, v)} />
+            <Facet icon={Shapes} title="Type" options={CATEGORY_ORDER.map((c) => ({ value: c, label: CATEGORY_META[c].label, count: counts.category[c] ?? 0, tooltip: CATEGORY_META[c].tooltip }))} selected={fType} onToggle={(v) => toggle(fType, setFType, v)} />
+            <Facet icon={Globe} title="Environment" info={<EnvHint />} options={envOptions} selected={fEnv} onToggle={(v) => toggle(fEnv, setFEnv, v)} />
+            <Facet icon={Tag} title="Source" options={SOURCE_ORDER.map((s) => ({ value: s, label: SOURCE_META[s].label, count: counts.source[s] ?? 0 }))} selected={fSource} onToggle={(v) => toggle(fSource, setFSource, v)} />
             {systemCount > 0 && (
-              <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-xs text-theme-text-secondary hover:bg-theme-hover">
+              <label className="flex cursor-pointer items-center gap-2 border-b border-theme-border px-3 py-2 text-[11px] text-theme-text-secondary hover:bg-theme-hover">
                 <input type="checkbox" checked={showSystem} onChange={(e) => setShowSystem(e.target.checked)} className="accent-skyhook-500" />
                 <span>Show system namespaces</span>
-                <span className="ml-auto font-mono tabular-nums text-theme-text-tertiary">{systemCount}</span>
+                <span className="ml-auto tabular-nums text-theme-text-tertiary">{systemCount}</span>
               </label>
             )}
           </div>

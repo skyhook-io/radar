@@ -27,6 +27,7 @@ import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { Tooltip } from '../ui/Tooltip'
 import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
+import { FacetSection, FacetButton } from '../ui/Facet'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
 import { getGitOpsResourceStatus } from './detail-helpers'
 import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
@@ -891,62 +892,14 @@ function GitOpsFilterSidebar({
   )
 }
 
-// Exported so consumers can build their own GitOps-flavored filter rails
-// (e.g. OSS's GitOpsGraphFilterRail in the detail view's Topology tab,
-// or hub-web's destination filter sub-bar) without re-implementing the
-// section/facet/toggle primitives. The styles stay in lockstep with the
-// main table's filter sidebar — change once, both surfaces follow.
-export function GitOpsFilterSection({ icon: Icon, title, children }: { icon: ComponentType<{ className?: string }>; title: string; children: ReactNode }) {
-  return (
-    <section className="border-b border-theme-border px-3 py-2">
-      <div className="mb-1.5 flex items-center gap-2">
-        <Icon className="h-3.5 w-3.5 text-theme-text-tertiary" />
-        <span className="text-[10px] font-medium uppercase tracking-wider text-theme-text-tertiary">{title}</span>
-      </div>
-      <div className="space-y-0.5">{children}</div>
-    </section>
-  )
-}
+// GitOps's filter rail is built from the shared faceted-filter primitives
+// (ui/Facet). These aliases keep the existing GitOps* import surface
+// (GitOpsGraphFilterRail imports them from here) while the look + behavior live
+// in one place — change the facet once, every rail follows.
+export const GitOpsFilterSection = FacetSection
+export const GitOpsFacetButton = FacetButton
 
-// Exported alongside GitOpsFilterSection — same reuse motivation. OSS's
-// GitOpsGraphFilterRail (detail view Topology tab) imports it.
-export function GitOpsFacetButton({
-  label,
-  count,
-  active,
-  tone = 'neutral',
-  onClick,
-}: {
-  label: string
-  count: number
-  active: boolean
-  tone?: 'neutral' | 'success' | 'warning' | 'error' | 'info'
-  onClick: () => void
-}) {
-  const dot = {
-    neutral: 'bg-theme-text-tertiary',
-    success: 'bg-emerald-500',
-    warning: 'bg-amber-500',
-    error: 'bg-red-500',
-    info: 'bg-sky-500',
-  }[tone]
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex w-full items-center gap-2 rounded px-2 py-1 text-left text-[11px] transition-colors ${
-        active ? 'bg-blue-500/15 text-blue-500' : 'text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
-      }`}
-    >
-      <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
-      <span className="min-w-0 flex-1 truncate font-medium">{label}</span>
-      {count > 0 && <span className="tabular-nums text-theme-text-tertiary">{count}</span>}
-    </button>
-  )
-}
-
-// Exported alongside GitOpsFilterSection / GitOpsFacetButton for the same
-// reuse story.
+// A view-mode toggle (table/tiles) — not a facet; stays local.
 export function GitOpsIconToggle({ active, label, icon: Icon, onClick }: { active: boolean; label: string; icon: ComponentType<{ className?: string }>; onClick: () => void }) {
   return (
     <Tooltip content={label}>
