@@ -2723,6 +2723,19 @@ export function ResourcesView({
       handler: () => handleSort('status'),
     },
     {
+      id: 'resources-bulk-select',
+      keys: 'b',
+      description: 'Toggle bulk select',
+      category: 'Table',
+      scope: 'resources',
+      handler: () => {
+        if (bulkMode) { exitBulkMode(); return }
+        if (!canBulkSelect) return
+        exitCompareMode()
+        setBulkMode(true)
+      },
+    },
+    {
       id: 'resources-clear-highlight',
       keys: 'Escape',
       description: 'Clear highlight / blur search',
