@@ -28,6 +28,7 @@ import { Tooltip } from '../ui/Tooltip'
 import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
 import { FacetSection, FacetButton } from '../ui/Facet'
+import { SortableTh, TH_CLASS, type SortDir } from '../ui/SortableTh'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
 import { getGitOpsResourceStatus } from './detail-helpers'
 import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
@@ -274,7 +275,13 @@ export function GitOpsTableView({
   const [automationFilter, setAutomationFilter] = useState<'all' | 'auto' | 'manual' | 'suspended'>('all')
   const [lifecycleFilter, setLifecycleFilter] = useState<'all' | 'terminating' | 'active'>('all')
   const [reconcilingOnly, setReconcilingOnly] = useState(false)
-  const [sortKey, setSortKey] = useState<SortKey>('health')
+  const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'health', dir: 'asc' })
+  // Clicking a column sorts by it (starting at the column's natural direction —
+  // e.g. last-sync newest-first); clicking the active column reverses.
+  const onSort = useCallback(
+    (key: SortKey) => setSort((prev) => (prev.key === key ? { key, dir: prev.dir === 'asc' ? 'desc' : 'asc' } : { key, dir: SORT_DEFAULT_DIR[key] })),
+    [],
+  )
 
   const hasLocalFilters =
     !!search ||
@@ -373,8 +380,8 @@ export function GitOpsTableView({
       }
       return true
     })
-    return [...rows].sort((a, b) => compareRows(a, b, sortKey))
-  }, [allRows, automationFilter, healthFilters, labelFilters, lifecycleFilter, mode, namespaceFilters, projectFilters, search, sortKey, syncFilters, destinationFilter, reconcilingOnly])
+    return [...rows].sort((a, b) => compareRows(a, b, sort.key) * (sort.dir === 'asc' ? 1 : -1))
+  }, [allRows, automationFilter, healthFilters, labelFilters, lifecycleFilter, mode, namespaceFilters, projectFilters, search, sort, syncFilters, destinationFilter, reconcilingOnly])
 
   const terminatingCount = useMemo(() => allRows.filter((row) => row.terminating).length, [allRows])
 
@@ -586,17 +593,8 @@ export function GitOpsTableView({
                 Showing {filteredRows.length} of {allRows.length}
               </span>
             )}
-            <select
-              value={sortKey}
-              onChange={(e) => setSortKey(e.target.value as SortKey)}
-              className="h-8 rounded-md border border-theme-border bg-theme-base px-2 text-xs text-theme-text-primary focus:outline-none focus:ring-1 focus:ring-blue-500/50"
-            >
-              <option value="health">Sort: health</option>
-              <option value="sync">Sort: sync</option>
-              <option value="lastSync">Sort: last sync</option>
-              <option value="project">Sort: project</option>
-              <option value="name">Sort: name</option>
-            </select>
+            {/* Sorting is via the clickable column headers (Resources-table
+                pattern) — no separate sort control. */}
             {labels.length > 0 && (
               <LabelsDropdown
                 labels={labels}
@@ -698,6 +696,8 @@ export function GitOpsTableView({
           ) : (
             <GitOpsTable
               rows={filteredRows}
+              sort={sort}
+              onSort={onSort}
               onOpen={onRowClick}
               hrefFor={rowHrefFor}
               onDestinationClick={onDestinationClick}
@@ -1050,6 +1050,8 @@ function StatusDistribution({ rows }: { rows: GitOpsRow[] }) {
 
 function GitOpsTable({
   rows,
+  sort,
+  onSort,
   onOpen,
   hrefFor,
   onDestinationClick,
@@ -1058,6 +1060,8 @@ function GitOpsTable({
   pendingRowActions,
 }: {
   rows: GitOpsRow[]
+  sort: { key: SortKey; dir: SortDir }
+  onSort: (key: SortKey) => void
   onOpen: (row: GitOpsRow, event?: ReactMouseEvent) => void
   hrefFor?: (row: GitOpsRow) => string
   onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp) => void
@@ -1069,18 +1073,18 @@ function GitOpsTable({
   return (
     <table className="w-full min-w-[1040px] table-fixed border-separate border-spacing-0 text-sm">
       <thead className="sticky top-0 z-10 bg-theme-surface">
-        <tr className="text-left text-[11px] uppercase tracking-wide text-theme-text-tertiary">
-          <TableHead className={showActions ? 'w-[16%]' : 'w-[22%]'}>Application</TableHead>
-          <TableHead className="w-[9%]">Project</TableHead>
-          <TableHead className="w-[9%]">Sync</TableHead>
-          <TableHead className="w-[9%]">Health</TableHead>
-          <TableHead className="w-[20%]">Source</TableHead>
-          <TableHead className="w-[14%]">Destination</TableHead>
-          <TableHead className="w-[10%]">Last Sync</TableHead>
+        <tr>
+          <SortableTh label="Application" sortKey="name" activeKey={sort.key} direction={sort.dir} onSort={onSort} className={showActions ? 'w-[16%]' : 'w-[22%]'} />
+          <SortableTh label="Project" sortKey="project" activeKey={sort.key} direction={sort.dir} onSort={onSort} className="w-[9%]" />
+          <SortableTh label="Sync" sortKey="sync" activeKey={sort.key} direction={sort.dir} onSort={onSort} className="w-[9%]" />
+          <SortableTh label="Health" sortKey="health" activeKey={sort.key} direction={sort.dir} onSort={onSort} className="w-[9%]" />
+          <th className={clsx(TH_CLASS, 'w-[20%]')}>Source</th>
+          <th className={clsx(TH_CLASS, 'w-[14%]')}>Destination</th>
+          <SortableTh label="Last Sync" sortKey="lastSync" activeKey={sort.key} direction={sort.dir} onSort={onSort} className="w-[10%]" />
           {showActions && (
-            <TableHead className="w-[6%] text-right">
+            <th className={clsx(TH_CLASS, 'w-[6%] text-right')}>
               <span className="sr-only">Actions</span>
-            </TableHead>
+            </th>
           )}
         </tr>
       </thead>
@@ -1412,10 +1416,6 @@ function GitOpsTile({
   )
 }
 
-function TableHead({ children, className = '' }: { children: ReactNode; className?: string }) {
-  return <th className={`border-b border-theme-border px-3 py-2 font-medium ${className}`}>{children}</th>
-}
-
 // DestinationCell renders line 1 of the Destination column. Three modes:
 //   - No fleet stamp (single-cluster OSS): show the raw `row.destination`
 //     string from the Argo/Flux spec (typically `https://kubernetes.default.svc`
@@ -1551,10 +1551,17 @@ export function summarizeGitOpsRows(rows: GitOpsRow[]) {
   )
 }
 
+// Natural direction per column, used the first time a column is clicked: the
+// urgency-ordered facets default ascending (most-urgent first); recency defaults
+// to newest-first.
+const SORT_DEFAULT_DIR: Record<SortKey, SortDir> = { name: 'asc', health: 'asc', sync: 'asc', lastSync: 'desc', project: 'asc' }
+
+// Ascending comparator per column (the caller flips it for descending). health
+// ascends worst→best (urgencyRank 0 = broken); lastSync ascends oldest→newest.
 function compareRows(a: GitOpsRow, b: GitOpsRow, sortKey: SortKey) {
   if (sortKey === 'health') return urgencyRank(a) - urgencyRank(b) || a.name.localeCompare(b.name)
   if (sortKey === 'sync') return syncRank(a.sync) - syncRank(b.sync) || a.name.localeCompare(b.name)
-  if (sortKey === 'lastSync') return (Date.parse(b.lastSync || b.createdAt) || 0) - (Date.parse(a.lastSync || a.createdAt) || 0)
+  if (sortKey === 'lastSync') return (Date.parse(a.lastSync || a.createdAt) || 0) - (Date.parse(b.lastSync || b.createdAt) || 0)
   if (sortKey === 'project') return a.project.localeCompare(b.project) || a.name.localeCompare(b.name)
   return a.name.localeCompare(b.name)
 }

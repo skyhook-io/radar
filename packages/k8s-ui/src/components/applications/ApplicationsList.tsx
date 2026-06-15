@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useRef, useCallback } from 'react'
-import { ChevronRight, ChevronUp, ChevronDown, Layers, Boxes, HeartPulse, Shapes, Globe, Tag } from 'lucide-react'
+import { ChevronRight, Layers, Boxes, HeartPulse, Shapes, Globe, Tag } from 'lucide-react'
 import { clsx } from 'clsx'
 import { StatusDot, mapHealthToTone } from '../ui/status-tone'
 import { Tooltip } from '../ui/Tooltip'
@@ -8,6 +8,7 @@ import { SearchBox } from '../ui/SearchBox'
 import { PageHeader } from '../ui/PageHeader'
 import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
 import { Facet, type FacetTone } from '../ui/Facet'
+import { SortableTh, TH_CLASS } from '../ui/SortableTh'
 import { useRegisterShortcuts } from '../../hooks/useKeyboardShortcuts'
 import { pluralize } from '../../utils/pluralize'
 import {
@@ -159,19 +160,6 @@ function compareEntries(a: AppEntry, b: AppEntry, key: SortKey): number {
       return (a.versions[0] ?? '').localeCompare(b.versions[0] ?? '')
     }
   }
-}
-
-function SortHeader({ label, sortKey, sort, onSort, className }: { label: string; sortKey: SortKey; sort: { key: SortKey; dir: SortDir } | null; onSort: (k: SortKey) => void; className?: string }) {
-  const active = sort?.key === sortKey
-  const ariaSort = active ? (sort!.dir === 'asc' ? 'ascending' : 'descending') : 'none'
-  return (
-    <th aria-sort={ariaSort} className={clsx('px-2 py-2 text-left text-[10px] font-medium uppercase tracking-wide cursor-pointer select-none text-theme-text-tertiary hover:text-theme-text-primary', className)} onClick={() => onSort(sortKey)}>
-      <span className="inline-flex items-center gap-1">
-        {label}
-        {active ? (sort!.dir === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />) : <span className="w-3" />}
-      </span>
-    </th>
-  )
 }
 
 export interface ApplicationsListProps {
@@ -408,19 +396,8 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
                 if (visibleRows.length > 0) setHighlightedIndex(0)
               }}
             />
-            <label className="ml-auto flex shrink-0 items-center gap-1.5 text-xs text-theme-text-tertiary">
-              <span>Sort</span>
-              <select
-                value={sort ? sort.key : 'status'}
-                onChange={(e) => { const v = e.target.value; if (v === 'status') setSort(null); else setSort({ key: v as SortKey, dir: 'asc' }) }}
-                className="rounded-md border border-theme-border bg-theme-base px-2 py-1 text-xs text-theme-text-secondary"
-              >
-                <option value="status">Status</option>
-                <option value="name">Name</option>
-                <option value="ready">Ready</option>
-                <option value="version">Version</option>
-              </select>
-            </label>
+            {/* Sorting is via the clickable column headers (Resources-table
+                pattern) — no separate sort control. */}
           </div>
 
           <div className="min-w-0 flex-1 overflow-auto p-4">
@@ -435,15 +412,15 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
             <div className="overflow-hidden rounded-md border border-theme-border">
               <table className="w-full text-left text-sm">
                 <thead>
-                  <tr className="border-b border-theme-border bg-theme-base">
-                    <SortHeader label="Application" sortKey="name" sort={sort} onSort={onSort} className="pl-3 pr-2" />
-                    <th className="px-2 py-2 text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary">Namespace</th>
-                    <th className="px-2 py-2 text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary">Env</th>
-                    <th className="px-2 py-2 text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary">Class</th>
-                    <SortHeader label="Ready" sortKey="ready" sort={sort} onSort={onSort} />
-                    <SortHeader label="Version" sortKey="version" sort={sort} onSort={onSort} />
-                    <th className="px-2 py-2 text-[10px] font-medium uppercase tracking-wide text-theme-text-tertiary">Workloads</th>
-                    <th className="w-8" />
+                  <tr className="bg-theme-base">
+                    <SortableTh label="Application" sortKey="name" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} />
+                    <th className={TH_CLASS}>Namespace</th>
+                    <th className={TH_CLASS}>Env</th>
+                    <th className={TH_CLASS}>Class</th>
+                    <SortableTh label="Ready" sortKey="ready" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} />
+                    <SortableTh label="Version" sortKey="version" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} />
+                    <th className={TH_CLASS}>Workloads</th>
+                    <th className={clsx(TH_CLASS, 'w-8')} />
                   </tr>
                 </thead>
                 <tbody>
