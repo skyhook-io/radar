@@ -1209,6 +1209,59 @@ func TestDynamicResourceCache_ListEmptyNamespaceDoesNotUnion(t *testing.T) {
 	}
 }
 
+// Mirror of ListEmptyNamespaceDoesNotUnion for namespace-scoped mode: when Radar
+// connects with a namespace-restricted identity (NamespaceFallback set),
+// cluster-wide list is denied so a GVR's only informers are per-namespace. An
+// all-namespaces read — List(gvr, "") and Count(gvr, nil) — MUST union them, or
+// namespaced CRDs show 0 in the UI despite synced per-namespace informers. The
+// NamespaceFallback gate is what keeps the no-union contract intact for a
+// cluster-wide cache (the sibling test) while fixing the namespace-scoped case.
+func TestDynamicResourceCache_ListEmptyNamespaceUnionsWhenNamespaceScoped(t *testing.T) {
+	const nsA, nsB = "team-a", "team-b"
+	gvr := schema.GroupVersionResource{Group: "example.com", Version: "v1", Resource: "widgets"}
+	dyn := fakeDynamicForListAccess(t, map[schema.GroupVersionResource]string{
+		gvr: "WidgetList",
+	}, func(_ schema.GroupVersionResource, namespace string) bool {
+		return namespace == nsA || namespace == nsB // namespaced only, never cluster-wide
+	})
+	for _, ns := range []string{nsA, nsB} {
+		obj := &unstructured.Unstructured{Object: map[string]any{
+			"apiVersion": "example.com/v1",
+			"kind":       "Widget",
+			"metadata":   map[string]any{"name": "w-" + ns, "namespace": ns},
+		}}
+		if _, err := dyn.Resource(gvr).Namespace(ns).Create(context.Background(), obj, metav1.CreateOptions{}); err != nil {
+			t.Fatalf("seed %s: %v", ns, err)
+		}
+	}
+
+	d, err := NewDynamicResourceCache(DynamicCacheConfig{DynamicClient: dyn, NamespaceFallback: nsA})
+	if err != nil {
+		t.Fatalf("NewDynamicResourceCache failed: %v", err)
+	}
+	for _, ns := range []string{nsA, nsB} {
+		if _, err := d.ListBlocking(gvr, ns, 2*time.Second); err != nil {
+			t.Fatalf("ListBlocking(%q) failed: %v", ns, err)
+		}
+	}
+
+	got, err := d.List(gvr, "")
+	if err != nil {
+		t.Fatalf("List(gvr, \"\") failed: %v", err)
+	}
+	if len(got) != 2 {
+		t.Errorf("List(gvr, \"\") = %d objects, want 2 (union of per-namespace informers in namespace-scoped mode)", len(got))
+	}
+
+	n, err := d.Count(gvr, nil)
+	if err != nil {
+		t.Fatalf("Count(gvr, nil) failed: %v", err)
+	}
+	if n != 2 {
+		t.Errorf("Count(gvr, nil) = %d, want 2", n)
+	}
+}
+
 // ListWatched is the internal "scan what's already cached" path: it unions
 // every watched scope so namespace-restricted callers (audit, PolicyReport
 // indexing) don't silently drop namespace-scoped contents the way List(gvr,

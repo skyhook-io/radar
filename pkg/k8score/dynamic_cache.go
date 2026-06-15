@@ -608,13 +608,30 @@ func (d *DynamicResourceCache) readEntries(gvr schema.GroupVersionResource, ns s
 	if e, ok := d.informers[informerKey{gvr: gvr}]; ok {
 		return []*informerEntry{e}
 	}
-	if ns == "" {
+	if ns != "" {
+		if e, ok := d.informers[informerKey{gvr: gvr, ns: ns}]; ok {
+			return []*informerEntry{e}
+		}
 		return nil
 	}
-	if e, ok := d.informers[informerKey{gvr: gvr, ns: ns}]; ok {
-		return []*informerEntry{e}
+	// ns == "" ("all namespaces") with no cluster-wide informer. When Radar
+	// connects with a namespace-restricted identity (NamespaceFallback set),
+	// cluster-wide list was denied so the only informers for this GVR are
+	// per-namespace — union them, otherwise an all-namespaces read returns
+	// nothing even though the per-namespace informers are synced. A cluster-wide
+	// cache (NamespaceFallback == "") stays empty here, preserving the
+	// deterministic cluster-wide-only contract that keeps incidental
+	// per-namespace informers from leaking across users.
+	if d.config.NamespaceFallback == "" {
+		return nil
 	}
-	return nil
+	var out []*informerEntry
+	for k, e := range d.informers {
+		if k.gvr == gvr {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // indexerItems gathers raw store objects from the given entries, filtered to
@@ -704,7 +721,29 @@ func (d *DynamicResourceCache) Count(gvr schema.GroupVersionResource, namespaces
 	}
 
 	if len(namespaces) == 0 {
-		return 0, fmt.Errorf("informer not found or not synced for %v", gvr)
+		// No cluster-wide informer. In namespace-scoped mode (NamespaceFallback
+		// set) union the per-namespace informers so Count agrees with
+		// readEntries on an all-namespaces read; a cluster-wide cache keeps the
+		// strict cluster-wide-only contract and errors.
+		if d.config.NamespaceFallback == "" {
+			return 0, fmt.Errorf("informer not found or not synced for %v", gvr)
+		}
+		total := 0
+		found := false
+		for k, e := range d.informers {
+			if k.gvr != gvr {
+				continue
+			}
+			if !e.synced {
+				return 0, fmt.Errorf("informer not found or not synced for %v", gvr)
+			}
+			found = true
+			total += len(e.informer.GetIndexer().List())
+		}
+		if !found {
+			return 0, fmt.Errorf("informer not found or not synced for %v", gvr)
+		}
+		return total, nil
 	}
 
 	total := 0
