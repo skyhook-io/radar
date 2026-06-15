@@ -14,7 +14,6 @@ import {
   type AppIdentityInstance,
   type SelectedAppWorkload,
   type SelectedResource,
-  PageHeader,
 } from '@skyhook-io/k8s-ui'
 import { Boxes } from 'lucide-react'
 import { useApplications, useTopology } from '../../api/client'
@@ -66,26 +65,15 @@ export function ApplicationsView({ namespaces, onOpenResource }: ApplicationsVie
     return <AppDetailRoute app={selected} apps={apps} onBack={() => selectApp(null)} onOpenResource={onOpenResource} />
   }
 
+  // The header + status + filters + table chassis lives inside ApplicationsList
+  // (mirroring GitOpsTableView), so the wrapper only owns data states here. The
+  // empty-cluster case is handled inside the chassis so its header still shows.
   return (
-    <div className="flex-1 overflow-auto p-4">
-      <div className="mb-4">
-        <PageHeader
-          icon={Boxes}
-          title="Applications"
-          description="Deployable software in this cluster — your services, workers, and jobs, grouped by app/release evidence."
-        />
-      </div>
-
+    <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       {query.isLoading ? (
         <CenteredEmpty icon={Boxes} headline="Loading applications…" />
       ) : query.error ? (
         <CenteredEmpty tone="filtered" icon={Boxes} headline="Failed to load applications" body={(query.error as Error).message} />
-      ) : apps.length === 0 ? (
-        <CenteredEmpty
-          icon={Boxes}
-          headline="No applications detected yet"
-          body="Deploy services, workers, or jobs to this cluster to see them grouped by app."
-        />
       ) : (
         <ApplicationsList apps={apps} onSelect={selectApp} />
       )}

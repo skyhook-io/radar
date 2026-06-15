@@ -26,6 +26,7 @@ import {
 import { HealthStatusBadge, SyncStatusBadge } from './GitOpsStatusBadge'
 import { Tooltip } from '../ui/Tooltip'
 import { PageHeader } from '../ui/PageHeader'
+import { SummaryTile, type SummaryTone } from '../ui/SummaryTile'
 import { RowActionMenu, type RowActionItem } from '../ui/RowActionMenu'
 import { getGitOpsResourceStatus } from './detail-helpers'
 import { isArgoSuspendedByRadar } from '../resources/resource-utils-argo'
@@ -141,8 +142,6 @@ export interface GitOpsRow {
 }
 
 export type DestinationFilter = 'all' | 'this-cluster' | 'cross-cluster' | 'unmatched'
-
-type SummaryTone = 'neutral' | 'warning' | 'error' | 'info'
 
 interface SummaryTileSpec {
   key: string
@@ -1456,57 +1455,6 @@ function GitOpsTile({
   return (
     <button type="button" onClick={() => onOpen(row)} className={tileClass}>
       {body}
-    </button>
-  )
-}
-
-function SummaryTile({
-  label,
-  value,
-  tone = 'neutral',
-  onClick,
-  active = false,
-}: {
-  label: string
-  value: number
-  tone?: SummaryTone
-  onClick?: () => void
-  active?: boolean
-}) {
-  const toneClass = {
-    neutral: 'text-theme-text-primary',
-    warning: 'text-amber-600 dark:text-amber-300',
-    error: 'text-red-600 dark:text-red-300',
-    info: 'text-sky-600 dark:text-sky-300',
-  }[tone]
-  const activeBorderClass = {
-    neutral: 'border-skyhook-500',
-    warning: 'border-amber-500',
-    error: 'border-red-500',
-    info: 'border-sky-500',
-  }[tone]
-  const value$ = <div className={`text-sm font-semibold ${toneClass}`}>{value}</div>
-  const label$ = <div className="text-xs text-theme-text-tertiary">{label}</div>
-  if (!onClick) {
-    return (
-      <div className="rounded-md border border-theme-border bg-theme-base px-3 py-2">
-        {value$}
-        {label$}
-      </div>
-    )
-  }
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      aria-pressed={active}
-      className={clsx(
-        'cursor-pointer rounded-md border bg-theme-base px-3 py-2 text-left transition-colors hover:bg-theme-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-skyhook-500',
-        active ? activeBorderClass : 'border-theme-border',
-      )}
-    >
-      {value$}
-      {label$}
     </button>
   )
 }

@@ -25,3 +25,5 @@ export { RowActionMenu } from './RowActionMenu'
 export type { RowActionItem } from './RowActionMenu'
 
 export { PageHeader } from './PageHeader'
+export { SummaryTile } from './SummaryTile'
+export type { SummaryTone } from './SummaryTile'
