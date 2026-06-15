@@ -400,19 +400,20 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
                 pattern) — no separate sort control. */}
           </div>
 
-          <div className="min-w-0 flex-1 overflow-auto p-4">
+          <div className="min-w-0 flex-1 overflow-auto bg-theme-base">
           {entries.length === 0 ? (
-            <EmptyState
-              tone="filtered"
-              variant="card"
-              headline={total === 0 ? 'No applications detected yet' : 'No applications match the filters'}
-              body={total === 0 ? 'Deploy services, workers, or jobs to this cluster to see them grouped by app.' : 'Clear the filters above.'}
-            />
+            <div className="p-4">
+              <EmptyState
+                tone="filtered"
+                variant="card"
+                headline={total === 0 ? 'No applications detected yet' : 'No applications match the filters'}
+                body={total === 0 ? 'Deploy services, workers, or jobs to this cluster to see them grouped by app.' : 'Clear the filters above.'}
+              />
+            </div>
           ) : (
-            <div className="overflow-hidden rounded-md border border-theme-border">
               <table className="w-full text-left text-sm">
-                <thead>
-                  <tr className="bg-theme-base">
+                <thead className="sticky top-0 z-10 bg-theme-base">
+                  <tr>
                     <SortableTh label="Application" sortKey="name" activeKey={sort?.key ?? null} direction={sort?.dir ?? 'asc'} onSort={onSort} />
                     <th className={TH_CLASS}>Namespace</th>
                     <th className={TH_CLASS}>Env</th>
@@ -567,7 +568,6 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
                   ))(r.entry))}
                 </tbody>
               </table>
-            </div>
           )}
           </div>
         </div>
