@@ -5,16 +5,16 @@ import {
   IssuesView,
   PaneLoader,
   PageHeader,
-  DistributionBar,
-  DistributionLegendChip,
+  SummaryTile,
   ISSUE_SEVERITIES,
   ISSUE_SEVERITY_LABEL,
-  ISSUE_SEVERITY_FILL_CLASS,
-  ISSUE_SEVERITY_TEXT_CLASS,
   type IssueResourceRef,
   type IssueSeverity,
+  type SummaryTone,
 } from '@skyhook-io/k8s-ui'
 import { AlertTriangle } from 'lucide-react'
+
+const SEVERITY_TONE: Record<IssueSeverity, SummaryTone> = { critical: 'error', warning: 'warning' }
 
 interface IssuesPaneProps {
   namespaces: string[]
@@ -26,9 +26,9 @@ interface IssuesPaneProps {
 // label and in-app (client-side) resource navigation. Classification +
 // owner-grouping come pre-computed from radar's /api/issues
 // (internal/issues.Compose → Classify → Group). Filtering is the host's job
-// (IssuesView is a pure list); single-cluster gets a light severity filter
-// fused with the rollup (the same count + bar + clickable-legend pattern as the
-// Checks queue) rather than Hub's fleet facet sidebar.
+// (IssuesView is a pure list); single-cluster gets a light severity filter via
+// the header status tiles (clickable → filter), matching the Applications /
+// GitOps header-tile pattern rather than Hub's fleet facet sidebar.
 export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps) {
   const { data, isLoading, error } = useIssues(namespaces)
   const [severityFilter, setSeverityFilter] = useState<Set<IssueSeverity>>(new Set())
@@ -69,40 +69,26 @@ export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps
         icon={AlertTriangle}
         title="Issues"
         description="Live cluster problems — crashes, scheduling failures, bad references — grouped by the resource they affect."
-      />
-
-      {/* Rollup + light severity filter — count, the shared distribution bar,
-          and a clickable severity legend that doubles as the filter (the Checks
-          queue pattern). Hidden when there's nothing to summarize. */}
-      {allIssues.length > 0 && (
-        <div className="flex flex-col gap-2.5">
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <div className="flex items-baseline gap-2">
-              <span className="text-lg font-semibold text-theme-text-primary tabular-nums">{allIssues.length}</span>
-              <span className="text-sm text-theme-text-tertiary">{allIssues.length === 1 ? 'issue' : 'issues'}</span>
-            </div>
-            <div className="flex flex-wrap items-center gap-1">
+        actions={
+          allIssues.length > 0 ? (
+            <>
+              <SummaryTile label={allIssues.length === 1 ? 'issue' : 'issues'} value={allIssues.length} />
               {ISSUE_SEVERITIES.map((s) =>
                 totals[s] > 0 || severityFilter.has(s) ? (
-                  <DistributionLegendChip
+                  <SummaryTile
                     key={s}
                     label={ISSUE_SEVERITY_LABEL[s]}
-                    count={totals[s]}
-                    fillClass={ISSUE_SEVERITY_FILL_CLASS[s]}
-                    textClass={ISSUE_SEVERITY_TEXT_CLASS[s]}
+                    value={totals[s]}
+                    tone={SEVERITY_TONE[s]}
                     active={severityFilter.has(s)}
                     onClick={() => toggleSeverity(s)}
                   />
                 ) : null,
               )}
-            </div>
-          </div>
-          <DistributionBar
-            ariaLabel="Severity distribution"
-            segments={ISSUE_SEVERITIES.map((s) => ({ key: s, count: totals[s], fillClass: ISSUE_SEVERITY_FILL_CLASS[s] }))}
-          />
-        </div>
-      )}
+            </>
+          ) : undefined
+        }
+      />
 
       {/* Visibility honesty: when RBAC reads are incomplete, an empty queue may
           mean "can't see" rather than "nothing broken" — say so up front so the
