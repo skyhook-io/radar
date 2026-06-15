@@ -31,25 +31,28 @@ export function SortableTh<K extends string>({
   className?: string
 }) {
   const active = activeKey === sortKey
+  // Sort lives on a real <button> (keyboard-focusable, Enter/Space native) while
+  // aria-sort stays on the <th> — accessible sorting, not a mouse-only header.
   return (
     <th
       aria-sort={active ? (direction === 'asc' ? 'ascending' : 'descending') : 'none'}
-      onClick={() => onSort(sortKey)}
-      className={clsx(
-        TH_CLASS,
-        'cursor-pointer select-none hover:text-theme-text-primary',
-        align === 'right' && 'text-right',
-        className,
-      )}
+      className={clsx(TH_CLASS, align === 'right' && 'text-right', className)}
     >
-      <span className={clsx('inline-flex items-center gap-1', align === 'right' && 'justify-end')}>
+      <button
+        type="button"
+        onClick={() => onSort(sortKey)}
+        className={clsx(
+          'inline-flex items-center gap-1 select-none hover:text-theme-text-primary focus-visible:outline-none focus-visible:text-theme-text-primary',
+          align === 'right' && 'w-full justify-end',
+        )}
+      >
         {label}
         {active ? (
           direction === 'asc' ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />
         ) : (
           <span className="w-3" />
         )}
-      </span>
+      </button>
     </th>
   )
 }

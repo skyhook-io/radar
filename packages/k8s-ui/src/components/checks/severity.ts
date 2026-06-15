@@ -13,8 +13,9 @@ export const SEVERITY_LABEL: Record<CheckSeverity, string> = {
 }
 
 // Pill badge — the loud, explicit severity signal on rows + drawer header.
-// Uses the canonical Badge severity tones (ln) so the queue's severity pills
-// read identically to status badges everywhere else (rendered with `badge-sm`).
+// Uses the canonical Badge severity tones (BADGE_SEVERITY_COLORS) so the queue's
+// severity pills read identically to status badges everywhere else (rendered
+// with `badge-sm`).
 export const SEVERITY_BADGE_CLASS: Record<CheckSeverity, string> = {
   critical: sev.error,
   high: sev.alert,

@@ -122,9 +122,25 @@ export function IssuesPane({ namespaces, onNavigateToResource }: IssuesPaneProps
         </p>
       )}
 
-      {/* anyData = the query resolved, i.e. the cluster is reachable; an empty
-          list then means "nothing broken" rather than "not connected". */}
-      <IssuesView issues={shown} anyData={!!data} onResourceClick={onResourceClick} />
+      {/* Filtered-empty is NOT the healthy empty state: when a severity filter
+          hides every row but issues still exist, say "no matches" rather than
+          letting IssuesView render its "nothing broken" terminal state. */}
+      {severityFilter.size > 0 && allIssues.length > 0 && shown.length === 0 ? (
+        <div className="flex flex-col items-center gap-2 py-12 text-center text-sm text-theme-text-secondary">
+          <p>No issues match the selected severity.</p>
+          <button
+            type="button"
+            onClick={() => setSeverityFilter(new Set())}
+            className="text-xs text-skyhook-600 hover:text-skyhook-500 dark:text-skyhook-400"
+          >
+            Clear filter
+          </button>
+        </div>
+      ) : (
+        /* anyData = the query resolved, i.e. the cluster is reachable; an empty
+           list then means "nothing broken" rather than "not connected". */
+        <IssuesView issues={shown} anyData={!!data} onResourceClick={onResourceClick} />
+      )}
     </div>
   )
 }

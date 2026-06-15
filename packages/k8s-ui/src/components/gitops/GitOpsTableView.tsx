@@ -594,8 +594,23 @@ export function GitOpsTableView({
                 Showing {filteredRows.length} of {allRows.length}
               </span>
             )}
-            {/* Sorting is via the clickable column headers (Resources-table
-                pattern) — no separate sort control. */}
+            {/* Table mode sorts via clickable column headers (Resources-table
+                pattern); tile mode has no headers, so it keeps a compact sort
+                control wired to the same sort state. */}
+            {viewMode === 'tiles' && (
+              <select
+                value={sort.key}
+                onChange={(e) => { const k = e.target.value as SortKey; setSort({ key: k, dir: SORT_DEFAULT_DIR[k] }) }}
+                aria-label="Sort"
+                className="h-8 rounded-md border border-theme-border bg-theme-base px-2 text-xs text-theme-text-primary focus:outline-none focus:ring-1 focus:ring-skyhook-500/50"
+              >
+                <option value="health">Sort: health</option>
+                <option value="sync">Sort: sync</option>
+                <option value="lastSync">Sort: last sync</option>
+                <option value="project">Sort: project</option>
+                <option value="name">Sort: name</option>
+              </select>
+            )}
             {labels.length > 0 && (
               <LabelsDropdown
                 labels={labels}

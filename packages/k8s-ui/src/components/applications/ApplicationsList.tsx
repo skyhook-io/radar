@@ -314,7 +314,9 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
       <SummaryTile key={h} label={HEALTH_META[h].label} value={counts.health[h]} tone={tone} active={fHealth.has(h)} onClick={() => toggle(fHealth, setFHealth, h)} />
     ) : null
 
-  const anyFilterActive = !!(textFilter || fHealth.size || fClass.size || fType.size || fSource.size || fEnv.size)
+  // showSystem lives in the Filters rail, so Clear resets it too (and its
+  // non-default ON state counts as an active filter that surfaces the button).
+  const anyFilterActive = !!(textFilter || fHealth.size || fClass.size || fType.size || fSource.size || fEnv.size || showSystem)
   const clearAllFilters = () => {
     setTextFilter('')
     setFHealth(new Set())
@@ -322,6 +324,7 @@ export function ApplicationsList({ apps, onSelect }: ApplicationsListProps) {
     setFType(new Set())
     setFSource(new Set())
     setFEnv(new Set())
+    setShowSystem(false)
   }
 
   return (

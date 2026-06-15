@@ -3,8 +3,9 @@ import { BADGE_SEVERITY_COLORS as sev } from '../ui/Badge';
 
 // Visual language for the 2-tier Issues severity. critical = red, warning =
 // amber. Issues and Checks are different severity axes but must read as one
-// product — both pull from the canonical Badge severity tones (ln), so their
-// pills match each other and every status badge elsewhere.
+// product — both pull from the canonical Badge severity tones
+// (BADGE_SEVERITY_COLORS), so their pills match each other and every status
+// badge elsewhere.
 
 export const ISSUE_SEVERITY_LABEL: Record<IssueSeverity, string> = {
   critical: 'Critical',
