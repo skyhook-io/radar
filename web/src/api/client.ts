@@ -734,15 +734,19 @@ const SEARCH_MIN_QUERY = 2
 // health/issueCount per hit (rich rows). React Query's AbortSignal cancels
 // overlapping scans on a new query. keepPreviousData avoids flicker while the
 // next query resolves.
-export function useSearch(query: string, opts?: { limit?: number; context?: 'summary' | 'none'; enabled?: boolean }) {
+export function useSearch(query: string, opts?: { limit?: number; context?: 'summary' | 'none'; enabled?: boolean; globalNs?: boolean }) {
   const trimmed = query.trim()
   const enabled = (opts?.enabled ?? true) && trimmed.length >= SEARCH_MIN_QUERY
   const limit = opts?.limit ?? 20
   const context = opts?.context ?? 'summary'
+  // globalNs makes search ignore the per-user namespace-switcher pick and scan
+  // the user's full RBAC ceiling (scope then comes only from the query's `ns:`
+  // tokens). The omnibar opts in so ⌘K is a genuinely global lookup.
+  const globalNs = opts?.globalNs ?? false
   return useQuery<SearchResult>({
-    queryKey: ['search', trimmed, limit, context],
+    queryKey: ['search', trimmed, limit, context, globalNs],
     queryFn: ({ signal }) =>
-      fetchJSON<SearchResult>(`/search?q=${encodeURIComponent(trimmed)}&limit=${limit}&include=none&context=${context}`, signal),
+      fetchJSON<SearchResult>(`/search?q=${encodeURIComponent(trimmed)}&limit=${limit}&include=none&context=${context}${globalNs ? '&globalNs=1' : ''}`, signal),
     enabled,
     staleTime: 2000,
     placeholderData: (prev) => prev, // keepPreviousData

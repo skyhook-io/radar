@@ -1,10 +1,14 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
 import { createPortal } from 'react-dom'
-import { Search, CornerDownLeft, Loader2 } from 'lucide-react'
+import { Search, CornerDownLeft, Loader2, AlertTriangle } from 'lucide-react'
 import { clsx } from 'clsx'
+import { SearchPillInput, type SearchModifier } from '@skyhook-io/k8s-ui'
 import { getResourceIcon } from '../../utils/resource-icons'
-import { useSearch, type SearchHit, type SearchMatchedField } from '../../api/client'
+import { useSearch, useNamespaceScope, type SearchHit, type SearchMatchedField } from '../../api/client'
+import { useAPIResources } from '../../api/apiResources'
+import { loadRecentResources, recordRecentResource } from '../../hooks/useRecentResources'
 import { useCommandItems, bestScore, type CommandItem, type CommandItemCallbacks } from './command-items'
+import { SearchSyntaxHelp } from './SearchSyntaxHelp'
 
 // Health → dot color (summaryContext.health is the same vocabulary as the rest
 // of Radar). Kept local + tiny to avoid pulling the full status-tone system.
@@ -68,22 +72,29 @@ interface OmnibarProps extends CommandItemCallbacks {
 }
 
 type Row =
-  | { id: string; kind: 'resource'; hit: SearchHit }
+  | { id: string; kind: 'resource'; hit: SearchHit; recent?: boolean }
   | { id: string; kind: 'command'; command: CommandItem }
 
 const COMMAND_CATEGORY_ORDER = ['Views', 'Resource Kinds', 'Namespaces', 'Contexts', 'Actions']
 const PAGE = 8
 const STRONG_KIND = 100 // exact (150) or prefix (100) kind-name match
 
+function pillsToQuery(pills: SearchModifier[]): string {
+  return pills.map((p) => `${p.key}:${p.value}`).join(' ')
+}
+
 // The standalone omnibar: a persistent top-center search box that IS the ⌘K
-// surface. Typing runs the live resource search (/api/search) alongside the
-// command-palette items; resources lead, commands follow. ⌘K focuses it.
+// surface. Typing runs the live, GLOBAL resource search (/api/search) alongside
+// the command-palette items; modifiers (ns:, kind:, …) become removable pills.
+// Resources lead, commands follow. ⌘K focuses it.
 export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   { onOpenResource, ...callbacks },
   ref,
 ) {
-  const [query, setQuery] = useState('')
+  const [text, setText] = useState('')
+  const [pills, setPills] = useState<SearchModifier[]>([])
   const [open, setOpen] = useState(false)
+  const [suggesting, setSuggesting] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const panelRef = useRef<HTMLDivElement>(null)
@@ -97,32 +108,60 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
 
   useImperativeHandle(ref, () => ({ focus: () => { inputRef.current?.focus(); inputRef.current?.select() } }), [])
 
-  const trimmed = query.trim()
+  const { data: nsScope } = useNamespaceScope()
+  const { data: apiResources } = useAPIResources()
+  // ns + kind are the bounded, knowable modifier value sets worth autocompleting.
+  const modifierOptions = useMemo(() => ({
+    ns: nsScope?.accessibleNamespaces ?? [],
+    kind: apiResources ? [...new Set(apiResources.filter((r) => r.verbs?.includes('list')).map((r) => r.kind))].sort() : [],
+  }), [nsScope, apiResources])
+
+  // Reflect the current view scope as an editable `ns:` pill on open, so a
+  // deliberately broad ⌘K search shows (and lets you remove) the namespace it's
+  // narrowed to instead of silently scoping. Seeded once per open, only from a
+  // truly empty launcher state.
+  const actives = nsScope?.actives
+  const seededRef = useRef(false)
+  useEffect(() => {
+    if (!open) { seededRef.current = false; return }
+    if (seededRef.current || actives === undefined) return
+    seededRef.current = true
+    if (pills.length === 0 && text === '' && actives.length > 0) {
+      setPills(actives.map((ns) => ({ key: 'ns', value: ns })))
+    }
+  }, [open, actives, pills.length, text])
+
+  const freeText = text.trim()
+  const queryString = useMemo(() => [pillsToQuery(pills), freeText].filter(Boolean).join(' '), [pills, freeText])
+  const searchActive = queryString.length >= 2
   // Small debounce: /api/search is a local in-memory index, so this exists only
   // to coalesce fast keystrokes (less list reshuffle), not to cut network cost —
   // kept under the ~100-150ms "feels instant" threshold. keepPreviousData +
   // AbortSignal (see useSearch) handle the smoothness; commands aren't debounced.
-  const debounced = useDebounced(trimmed, 120)
-  // The hits in `searchData` are for `debounced`; while the user keeps typing,
-  // `debounced` lags `trimmed`. We never ACT on stale rows because selection +
-  // Enter are keyed to the row id currently rendered (see selectedId), and the
-  // row set is rebuilt from the current data each render.
-  const { data: searchData, isFetching, isPlaceholderData } = useSearch(debounced, { enabled: open })
+  const debounced = useDebounced(queryString, 120)
+  // globalNs: ⌘K searches the user's full RBAC ceiling; scope comes only from
+  // `ns:` pills, never the silent view filter.
+  const { data: searchData, isFetching, isPlaceholderData, isError } = useSearch(debounced, { enabled: open, globalNs: true })
 
   const commandItems = useCommandItems(callbacks)
 
-  // All commands scored once. Empty query → Views + Actions (launcher default).
+  // Commands score against the FREE text only — modifiers live in pills, so the
+  // launcher never sees "ns:" polluting a "go to topology" match. Empty + no
+  // pills → Views + Actions (launcher default); with pills but no text the user
+  // is browsing a scope, so suppress the command default.
   const scoredCommands = useMemo(() => {
-    if (!trimmed) return commandItems.filter((i) => i.category === 'Views' || i.category === 'Actions').map((item) => ({ item, score: 1 }))
-    return commandItems.map((item) => ({ item, score: bestScore(item, trimmed) })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score)
-  }, [commandItems, trimmed])
+    if (!freeText) {
+      return pills.length ? [] : commandItems.filter((i) => i.category === 'Views' || i.category === 'Actions').map((item) => ({ item, score: 1 }))
+    }
+    return commandItems.map((item) => ({ item, score: bestScore(item, freeText) })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score)
+  }, [commandItems, freeText, pills.length])
 
   // Kinds whose NAME strongly matches (exact 150 / prefix 100) lead ABOVE the
   // resource instances: "⌘K → deployment → Deployments list" is a navigation
   // flow the instance hits otherwise bury.
   const leadingKinds = useMemo<CommandItem[]>(
-    () => (trimmed.length < 2 ? [] : scoredCommands.filter((x) => x.item.category === 'Resource Kinds' && x.score >= STRONG_KIND).slice(0, 5).map((x) => x.item)),
-    [scoredCommands, trimmed],
+    () => (freeText.length < 2 ? [] : scoredCommands.filter((x) => x.item.category === 'Resource Kinds' && x.score >= STRONG_KIND).slice(0, 5).map((x) => x.item)),
+    [scoredCommands, freeText],
   )
   const leadingIds = useMemo(() => new Set(leadingKinds.map((i) => i.id)), [leadingKinds])
 
@@ -131,9 +170,20 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     return hits.map((hit) => ({ id: `res:${hit.kind}:${hit.group || ''}:${hit.namespace || ''}:${hit.name}`, kind: 'resource' as const, hit }))
   }, [searchData])
 
+  // Launcher recents: only in the truly-empty state (no text, no pills). Read
+  // fresh from localStorage each open.
+  const recentRows = useMemo<Row[]>(() => {
+    if (!open || freeText || pills.length > 0) return []
+    return loadRecentResources().map((r) => ({
+      id: `recent:${r.kind}:${r.group || ''}:${r.namespace || ''}:${r.name}`,
+      kind: 'resource' as const,
+      recent: true,
+      hit: { score: 0, kind: r.kind, group: r.group, namespace: r.namespace, name: r.name } as SearchHit,
+    }))
+  }, [open, freeText, pills.length])
+
   // Remaining matched commands (leading kinds removed so they don't repeat),
-  // grouped by their real category in a fixed order — rendered under their own
-  // headers (Resource Kinds, Views, Namespaces, …), not a single "Commands" bucket.
+  // grouped by their real category in a fixed order.
   const commandGroups = useMemo(() => {
     const rest = scoredCommands.filter((x) => !leadingIds.has(x.item.id)).slice(0, 8).map((x) => x.item)
     const byCat = new Map<string, CommandItem[]>()
@@ -143,33 +193,25 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
 
   const toCmdRow = (c: CommandItem): Row => ({ id: `cmd:${c.id}`, kind: 'command', command: c })
 
-  // Plain query tokens for highlighting command labels (commands are scored
-  // client-side, so there's no server `matched`). Strip `key:` modifier prefixes
-  // so `ns:argocd` highlights "argocd".
-  const queryTokens = useMemo(
-    () => trimmed.split(/\s+/).map((t) => { const c = t.indexOf(':'); return c >= 0 ? t.slice(c + 1) : t }).filter(Boolean),
-    [trimmed],
-  )
+  // Free-text tokens for highlighting command labels (commands are scored
+  // client-side, so there's no server `matched`).
+  const queryTokens = useMemo(() => freeText.split(/\s+/).filter(Boolean), [freeText])
 
-  // Ordered, id-stable list (render order == keyboard model): leading kinds,
-  // then resources (only when the section is shown, trimmed >= 2), then the
-  // remaining command groups.
+  // Ordered, id-stable list (render order == keyboard model): recents (launcher
+  // only), then leading kinds, then resources (when searchActive), then commands.
   const rows = useMemo<Row[]>(() => {
     const cmds: Row[] = commandGroups.flatMap((g) => g.items.map(toCmdRow))
-    if (trimmed.length < 2) return cmds
-    return [...leadingKinds.map(toCmdRow), ...resourceRows, ...cmds]
+    if (!freeText && pills.length === 0) return [...recentRows, ...cmds]
+    return [...leadingKinds.map(toCmdRow), ...(searchActive ? resourceRows : []), ...cmds]
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leadingKinds, resourceRows, commandGroups, trimmed])
+  }, [recentRows, leadingKinds, resourceRows, commandGroups, freeText, pills.length, searchActive])
 
   // Selection tracked by stable id (not array index) so Enter can never fire a
-  // stale row when the set shifts. Behaviour: the selection auto-follows the TOP
-  // result (so when async resource hits land above the commands, the leading
-  // resource is selected — what the user expects after typing) UNTIL they
-  // arrow-key, after which it sticks to its id. A new query re-enables
-  // auto-follow.
+  // stale row when the set shifts. Auto-follows the TOP result until the user
+  // arrow-keys; a new query re-enables auto-follow.
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const userMovedRef = useRef(false)
-  useEffect(() => { userMovedRef.current = false }, [trimmed])
+  useEffect(() => { userMovedRef.current = false }, [queryString])
   const rowsKey = rows.map((r) => r.id).join('|')
   useEffect(() => {
     setSelectedId((cur) => {
@@ -194,10 +236,16 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   }
 
   const execute = useCallback((row: Row) => {
-    if (row.kind === 'command') row.command.action()
-    else onOpenResource(row.hit)
+    if (row.kind === 'command') {
+      row.command.action()
+    } else {
+      const h = row.hit
+      recordRecentResource({ kind: h.kind, group: h.group, namespace: h.namespace, name: h.name })
+      onOpenResource(h)
+    }
     setOpen(false)
-    setQuery('')
+    setText('')
+    setPills([])
     inputRef.current?.blur()
   }, [onOpenResource])
 
@@ -205,8 +253,10 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   // hasn't fired, the data is React Query placeholder from a prior query, or
   // results for this query haven't landed. Swallow Enter so it can't open a
   // stale hit or a command standing in for an imminent resource.
-  const resourcesStale = trimmed.length >= 2 && (debounced !== trimmed || isPlaceholderData || (resourceRows.length === 0 && isFetching))
+  const resourcesStale = searchActive && (debounced !== queryString || isPlaceholderData || (resourceRows.length === 0 && isFetching))
 
+  // Forwarded from SearchPillInput for keys it doesn't consume (it owns Space →
+  // pill, Backspace → pop pill, and suggestion nav).
   const handleKeyDown = useCallback((e: React.KeyboardEvent) => {
     if (e.key === 'Escape') { e.preventDefault(); setOpen(false); inputRef.current?.blur(); return }
     if (e.key === 'ArrowDown') { e.preventDefault(); moveSelection(1) }
@@ -256,36 +306,43 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   const mac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac')
   const total = searchData?.total ?? 0
   const totalMatched = searchData?.total_matched ?? 0
-  const showResourceSection = trimmed.length >= 2
-  const dropdownOpen = open && (rows.length > 0 || showResourceSection)
+  const hasNsPill = pills.some((p) => p.key === 'ns')
+  const dropdownOpen = open && !suggesting && (rows.length > 0 || searchActive)
+
+  const clearNsPills = () => { setPills((prev) => prev.filter((p) => p.key !== 'ns')); inputRef.current?.focus() }
 
   return (
     <div ref={containerRef} className="relative w-full max-w-md">
-      <div className="flex items-center gap-2 h-8 px-2.5 rounded-md bg-theme-elevated border border-transparent focus-within:border-theme-border focus-within:bg-theme-surface transition-colors">
-        <Search className="w-3.5 h-3.5 shrink-0 text-theme-text-tertiary" />
-        <input
-          ref={inputRef}
-          type="text"
-          value={query}
-          onChange={(e) => { setQuery(e.target.value); setOpen(true) }}
-          onFocus={() => setOpen(true)}
-          onKeyDown={handleKeyDown}
-          placeholder="Search resources & commands…"
-          aria-label="Search resources and commands"
-          className="flex-1 min-w-0 bg-transparent text-sm text-theme-text-primary placeholder-theme-text-tertiary outline-none"
-        />
-        {!query && (
-          <kbd className="shrink-0 text-[10px] text-theme-text-tertiary bg-theme-surface px-1 py-0.5 rounded border border-theme-border-light">
-            {mac ? '⌘' : 'Ctrl+'}K
-          </kbd>
-        )}
-      </div>
+      <SearchPillInput
+        className="min-h-8 px-2.5 rounded-md bg-theme-elevated border border-transparent focus-within:border-theme-border focus-within:bg-theme-surface transition-colors"
+        text={text}
+        pills={pills}
+        onChange={({ text: t, pills: p }) => { setText(t); setPills(p); setOpen(true) }}
+        onKeyDown={handleKeyDown}
+        onFocus={() => setOpen(true)}
+        onSuggestingChange={setSuggesting}
+        modifierOptions={modifierOptions}
+        placeholder="Search resources & commands…"
+        aria-label="Search resources and commands"
+        inputRef={inputRef}
+        leftSlot={<Search className="w-3.5 h-3.5 shrink-0 text-theme-text-tertiary" />}
+        rightSlot={
+          <div className="flex items-center gap-1.5 shrink-0">
+            <SearchSyntaxHelp />
+            {!text && pills.length === 0 && (
+              <kbd className="text-[10px] text-theme-text-tertiary bg-theme-surface px-1 py-0.5 rounded border border-theme-border-light">
+                {mac ? '⌘' : 'Ctrl+'}K
+              </kbd>
+            )}
+          </div>
+        }
+      />
 
       {dropdownOpen && anchor && createPortal(
         <>
           {/* Dim + blur the busy dashboard behind so results read as a focused
               search surface (Spotlight/Linear pattern), not a weak float. Starts
-              at the input's bottom edge so the search box + top bar stay crisp. */}
+              at the header's bottom edge so the search box + top bar stay crisp. */}
           <div
             className="fixed left-0 right-0 bottom-0 z-[120] bg-black/25 dark:bg-black/55 backdrop-blur-[2px]"
             style={{ top: anchor.top }}
@@ -297,6 +354,16 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
             className="z-[121] dialog shadow-theme-lg overflow-hidden"
           >
           <div ref={listRef} className="max-h-[60vh] overflow-y-auto py-1">
+            {/* Recently viewed — launcher state only. */}
+            {recentRows.length > 0 && (
+              <div>
+                <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-theme-text-tertiary">Recently viewed</div>
+                {recentRows.map((row) => row.kind === 'resource' && (
+                  <ResourceRow key={row.id} hit={row.hit} selected={row.id === selectedId} onSelect={() => selectRow(row.id)} onActivate={() => execute(row)} />
+                ))}
+              </div>
+            )}
+
             {/* Leading kinds — strong kind-name matches lead so ⌘K navigation
                 to a kind isn't buried under instance hits. */}
             {leadingKinds.length > 0 && (
@@ -310,19 +377,31 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
             )}
 
             {/* Resources section */}
-            {showResourceSection && (
+            {searchActive && (
               <>
                 <div className="flex items-center justify-between px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-theme-text-tertiary">
                   <span>Resources</span>
                   {isFetching && <Loader2 className="w-3 h-3 animate-spin" />}
-                  {!isFetching && totalMatched > total && <span className="normal-case font-normal">showing {total} of {totalMatched}</span>}
+                  {!isFetching && !isError && totalMatched > total && <span className="normal-case font-normal">showing {total} of {totalMatched}</span>}
                 </div>
-                {resourceRows.length === 0 && !isFetching && (
-                  <div className="px-3 py-2 text-xs text-theme-text-tertiary">No resources match “{trimmed}”.</div>
+                {isError ? (
+                  <div className="flex items-center gap-2 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                    <AlertTriangle className="w-3.5 h-3.5 shrink-0" /> Search is unavailable right now.
+                  </div>
+                ) : resourceRows.length === 0 && !isFetching ? (
+                  <div className="px-3 py-2 text-xs text-theme-text-tertiary">
+                    No resources match{freeText ? <> “{freeText}”</> : ''}.
+                    {hasNsPill && (
+                      <button onMouseDown={(e) => { e.preventDefault(); clearNsPills() }} className="ml-1.5 text-[var(--color-brand)] hover:underline">
+                        Search all namespaces
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  resourceRows.map((row) => row.kind === 'resource' && (
+                    <ResourceRow key={row.id} hit={row.hit} selected={row.id === selectedId} onSelect={() => selectRow(row.id)} onActivate={() => execute(row)} />
+                  ))
                 )}
-                {resourceRows.map((row) => row.kind === 'resource' && (
-                  <ResourceRow key={row.id} hit={row.hit} selected={row.id === selectedId} onSelect={() => selectRow(row.id)} onActivate={() => execute(row)} />
-                ))}
               </>
             )}
 
