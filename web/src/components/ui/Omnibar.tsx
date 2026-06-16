@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom'
 import { Search, CornerDownLeft, Loader2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { getResourceIcon } from '../../utils/resource-icons'
-import { useSearch, type SearchHit } from '../../api/client'
+import { useSearch, type SearchHit, type SearchMatchedField } from '../../api/client'
 import { useCommandItems, bestScore, type CommandItem, type CommandItemCallbacks } from './command-items'
 
 // Health → dot color (summaryContext.health is the same vocabulary as the rest
@@ -16,6 +16,37 @@ function healthDot(health?: string): string | null {
     case 'unknown': return 'bg-theme-text-tertiary'
     default: return null
   }
+}
+
+function escapeRe(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+// Wrap matched substrings in a brand-tinted, bold run so the user can see WHY a
+// result matched — including when the match is on the namespace/kind, not the
+// name. Longest tokens first so "staging" wins over a stray "s".
+function highlight(text: string, tokens: string[]): React.ReactNode {
+  const toks = [...new Set(tokens.filter(Boolean))].sort((a, b) => b.length - a.length)
+  if (!toks.length || !text) return text
+  const re = new RegExp(`(${toks.map(escapeRe).join('|')})`, 'ig')
+  const parts: React.ReactNode[] = []
+  let last = 0
+  for (const m of text.matchAll(re)) {
+    const i = m.index ?? 0
+    if (i > last) parts.push(text.slice(last, i))
+    parts.push(<mark key={i} className="bg-transparent font-semibold text-[var(--color-brand)]">{m[0]}</mark>)
+    last = i + m[0].length
+  }
+  if (!parts.length) return text
+  if (last < text.length) parts.push(text.slice(last))
+  return parts
+}
+
+// The query tokens that the search engine recorded as landing on a given field
+// (site), so each displayed field highlights only what actually matched it.
+function tokensForSite(matched: SearchMatchedField[] | undefined, ...sites: string[]): string[] {
+  if (!matched) return []
+  return matched.filter((m) => sites.includes(m.site)).map((m) => m.token)
 }
 
 function useDebounced<T>(value: T, ms: number): T {
@@ -108,6 +139,14 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
 
   const toCmdRow = (c: CommandItem): Row => ({ id: `cmd:${c.id}`, kind: 'command', command: c })
 
+  // Plain query tokens for highlighting command labels (commands are scored
+  // client-side, so there's no server `matched`). Strip `key:` modifier prefixes
+  // so `ns:argocd` highlights "argocd".
+  const queryTokens = useMemo(
+    () => trimmed.split(/\s+/).map((t) => { const c = t.indexOf(':'); return c >= 0 ? t.slice(c + 1) : t }).filter(Boolean),
+    [trimmed],
+  )
+
   // Ordered, id-stable list (render order == keyboard model): leading kinds,
   // then resources (only when the section is shown, trimmed >= 2), then the
   // remaining command groups.
@@ -141,6 +180,14 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     setSelectedId(rows[Math.min(Math.max(selectedIndex + delta, 0), rows.length - 1)]?.id ?? null)
   }
   const selectRow = (id: string) => { userMovedRef.current = true; setSelectedId(id) }
+  // Page by a full screenful of visible rows (minus one for context overlap),
+  // measured from the scroll container — a fixed count feels short on tall lists.
+  const pageStep = () => {
+    const list = listRef.current
+    const rowH = (list?.querySelector('button') as HTMLElement | null)?.offsetHeight
+    if (!list || !rowH) return PAGE
+    return Math.max(1, Math.floor(list.clientHeight / rowH) - 1)
+  }
 
   const execute = useCallback((row: Row) => {
     if (row.kind === 'command') row.command.action()
@@ -160,8 +207,8 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     if (e.key === 'Escape') { e.preventDefault(); setOpen(false); inputRef.current?.blur(); return }
     if (e.key === 'ArrowDown') { e.preventDefault(); moveSelection(1) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); moveSelection(-1) }
-    else if (e.key === 'PageDown') { e.preventDefault(); moveSelection(PAGE) }
-    else if (e.key === 'PageUp') { e.preventDefault(); moveSelection(-PAGE) }
+    else if (e.key === 'PageDown') { e.preventDefault(); moveSelection(pageStep()) }
+    else if (e.key === 'PageUp') { e.preventDefault(); moveSelection(-pageStep()) }
     else if (e.key === 'Home') { e.preventDefault(); moveSelection(-rows.length) }
     else if (e.key === 'End') { e.preventDefault(); moveSelection(rows.length) }
     else if (e.key === 'Enter') { e.preventDefault(); if (resourcesStale) return; const row = rows[selectedIndex]; if (row) execute(row) }
@@ -253,7 +300,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
                 <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-theme-text-tertiary">Resource Kinds</div>
                 {leadingKinds.map((item) => {
                   const id = `cmd:${item.id}`
-                  return <CommandRow key={id} item={item} selected={id === selectedId} onSelect={() => selectRow(id)} onActivate={() => execute(toCmdRow(item))} />
+                  return <CommandRow key={id} item={item} tokens={queryTokens} selected={id === selectedId} onSelect={() => selectRow(id)} onActivate={() => execute(toCmdRow(item))} />
                 })}
               </div>
             )}
@@ -281,7 +328,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
                 <div className="px-3 py-1 mt-1 text-[10px] font-semibold uppercase tracking-wider text-theme-text-tertiary">{group.category}</div>
                 {group.items.map((item) => {
                   const id = `cmd:${item.id}`
-                  return <CommandRow key={id} item={item} selected={id === selectedId} onSelect={() => selectRow(id)} onActivate={() => execute({ id, kind: 'command', command: item })} />
+                  return <CommandRow key={id} item={item} tokens={queryTokens} selected={id === selectedId} onSelect={() => selectRow(id)} onActivate={() => execute({ id, kind: 'command', command: item })} />
                 })}
               </div>
             ))}
@@ -315,16 +362,19 @@ function ResourceRow({ hit, selected, onSelect, onActivate }: { hit: SearchHit; 
       className={clsx('w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors', selected ? 'selection' : 'hover:bg-theme-elevated/40')}
     >
       <Icon className="w-4 h-4 shrink-0 text-theme-text-tertiary" />
-      <span className="min-w-0 truncate text-sm text-theme-text-primary">{hit.name}</span>
+      <span className="min-w-0 truncate text-sm text-theme-text-primary">{highlight(hit.name, tokensForSite(hit.matched, 'name'))}</span>
       {dot && <span className={clsx('h-1.5 w-1.5 rounded-full shrink-0', dot)} />}
-      <span className="shrink-0 max-w-[45%] truncate text-xs text-theme-text-tertiary">{hit.kind}{hit.namespace ? ` · ${hit.namespace}` : ''}</span>
+      <span className="shrink-0 max-w-[45%] truncate text-xs text-theme-text-tertiary">
+        {highlight(hit.kind, tokensForSite(hit.matched, 'kind'))}
+        {hit.namespace ? <> · {highlight(hit.namespace, tokensForSite(hit.matched, 'namespace'))}</> : ''}
+      </span>
       {contentOnly && <span className="shrink-0 text-[10px] text-theme-text-tertiary italic">in spec</span>}
       {issues > 0 && <span className="ml-auto shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-400">{issues} issue{issues === 1 ? '' : 's'}</span>}
     </button>
   )
 }
 
-function CommandRow({ item, selected, onSelect, onActivate }: { item: CommandItem; selected: boolean; onSelect: () => void; onActivate: () => void }) {
+function CommandRow({ item, tokens, selected, onSelect, onActivate }: { item: CommandItem; tokens: string[]; selected: boolean; onSelect: () => void; onActivate: () => void }) {
   const Icon = item.icon
   return (
     <button
@@ -334,8 +384,8 @@ function CommandRow({ item, selected, onSelect, onActivate }: { item: CommandIte
       className={clsx('w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors', selected ? 'selection' : 'hover:bg-theme-elevated/40')}
     >
       {Icon ? <Icon className="w-4 h-4 shrink-0 text-theme-text-tertiary" /> : <span className="w-4 shrink-0" />}
-      <span className="min-w-0 truncate text-sm text-theme-text-primary">{item.label}</span>
-      {item.sublabel && <span className="shrink-0 max-w-[45%] truncate text-xs text-theme-text-tertiary">{item.sublabel}</span>}
+      <span className="min-w-0 truncate text-sm text-theme-text-primary">{highlight(item.label, tokens)}</span>
+      {item.sublabel && <span className="shrink-0 max-w-[45%] truncate text-xs text-theme-text-tertiary">{highlight(item.sublabel, tokens)}</span>}
       {item.shortcut && <kbd className="ml-auto shrink-0 text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded border border-theme-border-light">{item.shortcut}</kbd>}
     </button>
   )
