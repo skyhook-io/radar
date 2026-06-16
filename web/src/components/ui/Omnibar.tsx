@@ -75,7 +75,7 @@ type Row =
   | { id: string; kind: 'resource'; hit: SearchHit; recent?: boolean }
   | { id: string; kind: 'command'; command: CommandItem }
 
-const COMMAND_CATEGORY_ORDER = ['Views', 'Resource Kinds', 'Namespaces', 'Contexts', 'Actions']
+const COMMAND_CATEGORY_ORDER = ['Views', 'Resource Kinds', 'Namespaces', 'Clusters', 'Actions']
 const PAGE = 8
 const STRONG_KIND = 100 // exact (150) or prefix (100) kind-name match
 
@@ -338,16 +338,19 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
         }
       />
 
-      {dropdownOpen && anchor && createPortal(
+      {open && anchor && (dropdownOpen || suggesting) && createPortal(
         <>
           {/* Dim + blur the busy dashboard behind so results read as a focused
               search surface (Spotlight/Linear pattern), not a weak float. Starts
-              at the header's bottom edge so the search box + top bar stay crisp. */}
+              at the header's bottom edge so the search box + top bar stay crisp.
+              Tied to `open`, NOT the results panel, so completing a modifier (the
+              panel briefly yields to the autocomplete) doesn't strobe the dim. */}
           <div
             className="fixed left-0 right-0 bottom-0 z-[120] bg-black/25 dark:bg-black/55 backdrop-blur-[2px]"
             style={{ top: anchor.top }}
             onClick={() => { setOpen(false); inputRef.current?.blur() }}
           />
+          {dropdownOpen && (
           <div
             ref={panelRef}
             style={{ position: 'fixed', top: anchor.top + 8, left: anchor.centerX, transform: 'translateX(-50%)', width: 640, maxWidth: 'calc(100vw - 2rem)' }}
@@ -423,6 +426,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
             <span>esc close</span>
           </div>
           </div>
+          )}
         </>,
         document.body,
       )}

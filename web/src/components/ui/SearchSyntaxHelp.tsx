@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react'
+import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { HelpCircle } from 'lucide-react'
 import { clsx } from 'clsx'
@@ -12,14 +12,24 @@ const OPERATORS: { syntax: string; desc: string }[] = [
   { syntax: 'redis cache', desc: 'multiple terms — all must match' },
 ]
 
-// A small "?" affordance that reveals the search query syntax. Self-contained:
-// owns its popover, portaled to <body> and anchored to the button so the
-// header's stacking context can't trap it.
+// A "?" affordance that reveals the search query syntax on HOVER (a transient
+// reference tooltip, not a second click-to-open panel stacked over the results).
+// Self-contained + portaled to <body> so the header's stacking context can't
+// trap it; a short close grace lets the pointer travel onto the card.
 export function SearchSyntaxHelp() {
   const [open, setOpen] = useState(false)
   const btnRef = useRef<HTMLButtonElement>(null)
   const popRef = useRef<HTMLDivElement>(null)
+  const closeTimer = useRef<ReturnType<typeof setTimeout>>(undefined)
   const [anchor, setAnchor] = useState<{ right: number; top: number } | null>(null)
+
+  const show = useCallback(() => { clearTimeout(closeTimer.current); setOpen(true) }, [])
+  const scheduleHide = useCallback(() => {
+    clearTimeout(closeTimer.current)
+    closeTimer.current = setTimeout(() => setOpen(false), 120)
+  }, [])
+
+  useEffect(() => () => clearTimeout(closeTimer.current), [])
 
   useEffect(() => {
     if (!open) { setAnchor(null); return }
@@ -28,17 +38,11 @@ export function SearchSyntaxHelp() {
       if (el) { const r = el.getBoundingClientRect(); setAnchor({ right: window.innerWidth - r.right, top: r.bottom + 6 }) }
     }
     update()
-    const onDown = (e: MouseEvent) => {
-      const t = e.target as Node
-      if (!btnRef.current?.contains(t) && !popRef.current?.contains(t)) setOpen(false)
-    }
     window.addEventListener('resize', update)
     window.addEventListener('scroll', update, true)
-    document.addEventListener('mousedown', onDown)
     return () => {
       window.removeEventListener('resize', update)
       window.removeEventListener('scroll', update, true)
-      document.removeEventListener('mousedown', onDown)
     }
   }, [open])
 
@@ -49,14 +53,18 @@ export function SearchSyntaxHelp() {
         type="button"
         tabIndex={-1}
         aria-label="Search syntax help"
-        onMouseDown={(e) => { e.preventDefault(); e.stopPropagation(); setOpen((o) => !o) }}
-        className={clsx('shrink-0 rounded p-0.5 transition-colors', open ? 'text-theme-text-primary' : 'text-theme-text-tertiary hover:text-theme-text-secondary')}
+        onMouseEnter={show}
+        onMouseLeave={scheduleHide}
+        onMouseDown={(e) => e.preventDefault()}
+        className={clsx('shrink-0 rounded p-0.5 cursor-help transition-colors', open ? 'text-theme-text-secondary' : 'text-theme-text-tertiary hover:text-theme-text-secondary')}
       >
         <HelpCircle className="w-3.5 h-3.5" />
       </button>
       {open && anchor && createPortal(
         <div
           ref={popRef}
+          onMouseEnter={show}
+          onMouseLeave={scheduleHide}
           onMouseDown={(e) => e.stopPropagation()}
           style={{ position: 'fixed', top: anchor.top, right: anchor.right, width: 280 }}
           className="z-[130] dialog shadow-theme-lg p-3"
