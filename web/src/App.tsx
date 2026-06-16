@@ -181,14 +181,14 @@ function AppInner() {
   // Standalone Radar gets the left nav rail; embedded hosts (Radar Hub) own
   // the left chrome via their own fleet rail and keep Radar's top-bar pills.
   const showNavRail = !navCustomization.embedded
-  // Force the slim rail on narrow windows: a pinned 192px rail needs viewport
-  // ≥992 to keep content above its ~800px floor (collapsed needs only ≥856).
-  // Below 992 we render collapsed regardless of the pin preference — a
+  // Force the slim rail on narrow windows: a pinned 176px rail needs viewport
+  // ≥976 to keep content above its ~800px floor (collapsed needs only ≥856).
+  // Below 976 we render collapsed regardless of the pin preference — a
   // temporary responsive override that does NOT touch the persisted value, so
   // the user's pinned state returns when they widen again. Fly-out labels cover
   // the collapsed state, so the manual toggle is hidden here rather than left
   // inert (expanding would just re-breach the floor).
-  const railForcedSlim = useMediaQuery('(max-width: 991px)')
+  const railForcedSlim = useMediaQuery('(max-width: 975px)')
   const navRailEffectivePinned = navRailPinned && !railForcedSlim
 
   // Auth check — detect if auth is enabled but user is not authenticated
@@ -1200,12 +1200,12 @@ function AppInner() {
   return (
     <PortForwardProvider>
     {/* Preserve the ~800px content floor: the rail is a fixed-width sibling, so
-        the outer minimum must include it (192px pinned / 56px collapsed) or the
+        the outer minimum must include it (176px pinned / 56px collapsed) or the
         content column (min-w-0, shrinkable) would fall below the old desktop
         floor at small windows. Embedded mode has no rail → plain 800. */}
     <div
       className="relative flex h-screen bg-theme-base"
-      style={{ minWidth: 800 + (showNavRail ? (navRailEffectivePinned ? 192 : 56) : 0) }}
+      style={{ minWidth: 800 + (showNavRail ? (navRailEffectivePinned ? 176 : 56) : 0) }}
     >
       {showNavRail && (
         <PrimaryNavRail

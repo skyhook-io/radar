@@ -76,10 +76,10 @@ export function PrimaryNavRail({ activeView, onNavigate, pinned, onTogglePinned,
       aria-label="Primary navigation"
       className={clsx(
         'shrink-0 flex flex-col bg-theme-surface border-r border-theme-border h-full transition-[width] duration-200 ease-[cubic-bezier(0.16,1,0.3,1)]',
-        // w-48 (192px): OSS labels are short (longest is "Applications"), so the
+        // w-44 (176px): OSS labels are short (longest is "Applications"), so the
         // rail is trimmer than Radar Cloud's w-60 (which carries long cluster
         // names). Keep in sync with the minWidth content-floor calc in App.tsx.
-        pinned ? 'w-48' : 'w-14',
+        pinned ? 'w-44' : 'w-14',
       )}
     >
       <BrandRow pinned={pinned} onNavigate={onNavigate} />
