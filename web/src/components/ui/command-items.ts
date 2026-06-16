@@ -110,7 +110,9 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
       if (seenKinds.has(kindKey)) continue
       seenKinds.add(kindKey)
       result.push({
-        id: `kind-${r.name}-${r.group}`, label: r.kind, sublabel: r.group || 'core', category: 'Resource Kinds',
+        // Group shown only when it disambiguates (CRDs) — "core" is noise on
+        // built-in kinds. priorityBonus still nudges core/well-known above CRDs.
+        id: `kind-${r.name}-${r.group}`, label: r.kind, sublabel: r.group || undefined, category: 'Resource Kinds',
         icon: getResourceIcon(r.kind), action: () => cb.onNavigateKind(r.name, r.group),
         searchTerms: [r.name, r.kind], priorityBonus: groupPriorityBonus(r.group),
       })

@@ -39,6 +39,9 @@ type Row =
   | { id: string; kind: 'resource'; hit: SearchHit }
   | { id: string; kind: 'command'; command: CommandItem }
 
+const COMMAND_CATEGORY_ORDER = ['Views', 'Resource Kinds', 'Namespaces', 'Contexts', 'Actions']
+const PAGE = 8
+
 // The standalone omnibar: a persistent top-center search box that IS the ⌘K
 // surface. Typing runs the live resource search (/api/search) alongside the
 // command-palette items; resources lead, commands follow. ⌘K focuses it.
@@ -81,14 +84,22 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     return hits.map((hit) => ({ id: `res:${hit.kind}:${hit.group || ''}:${hit.namespace || ''}:${hit.name}`, kind: 'resource' as const, hit }))
   }, [searchData])
 
-  // Ordered, id-stable list. Resources lead, but ONLY when the resource section
-  // is actually rendered (trimmed >= 2) — so the keyboard model never contains a
-  // row that isn't visible (e.g. stale hits lingering after shrinking to 1
-  // char). render condition and `rows` use the same gate.
+  // Matched commands grouped by their real category in a fixed order — rendered
+  // under their own headers (Resource Kinds, Views, Namespaces, …) rather than a
+  // single misleading "Commands" bucket.
+  const commandGroups = useMemo(() => {
+    const byCat = new Map<string, CommandItem[]>()
+    for (const c of matchedCommands) { const l = byCat.get(c.category) ?? []; l.push(c); byCat.set(c.category, l) }
+    return COMMAND_CATEGORY_ORDER.filter((cat) => byCat.has(cat)).map((cat) => ({ category: cat, items: byCat.get(cat)! }))
+  }, [matchedCommands])
+
+  // Ordered, id-stable list (render order == keyboard model). Resources lead,
+  // but ONLY when the resource section is actually rendered (trimmed >= 2) — so
+  // the keyboard model never contains a row that isn't visible.
   const rows = useMemo<Row[]>(() => {
-    const cmds: Row[] = matchedCommands.map((c) => ({ id: `cmd:${c.id}`, kind: 'command' as const, command: c }))
+    const cmds: Row[] = commandGroups.flatMap((g) => g.items.map((c) => ({ id: `cmd:${c.id}`, kind: 'command' as const, command: c })))
     return trimmed.length >= 2 ? [...resourceRows, ...cmds] : cmds
-  }, [resourceRows, matchedCommands, trimmed])
+  }, [resourceRows, commandGroups, trimmed])
 
   // Selection tracked by stable id (not array index) so Enter can never fire a
   // stale row when the set shifts. Behaviour: the selection auto-follows the TOP
@@ -132,6 +143,10 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     if (e.key === 'Escape') { e.preventDefault(); setOpen(false); inputRef.current?.blur(); return }
     if (e.key === 'ArrowDown') { e.preventDefault(); moveSelection(1) }
     else if (e.key === 'ArrowUp') { e.preventDefault(); moveSelection(-1) }
+    else if (e.key === 'PageDown') { e.preventDefault(); moveSelection(PAGE) }
+    else if (e.key === 'PageUp') { e.preventDefault(); moveSelection(-PAGE) }
+    else if (e.key === 'Home') { e.preventDefault(); moveSelection(-rows.length) }
+    else if (e.key === 'End') { e.preventDefault(); moveSelection(rows.length) }
     else if (e.key === 'Enter') { e.preventDefault(); if (resourcesStale) return; const row = rows[selectedIndex]; if (row) execute(row) }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rows, selectedIndex, execute, resourcesStale])
@@ -197,19 +212,21 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
               </>
             )}
 
-            {/* Commands section */}
-            {matchedCommands.length > 0 && (
-              <>
-                <div className="px-3 py-1 mt-1 text-[10px] font-semibold uppercase tracking-wider text-theme-text-tertiary">{trimmed ? 'Commands' : 'Jump to'}</div>
-                {rows.filter((r) => r.kind === 'command').map((row) => row.kind === 'command' && (
-                  <CommandRow key={row.id} item={row.command} selected={row.id === selectedId} onSelect={() => selectRow(row.id)} onActivate={() => execute(row)} />
-                ))}
-              </>
-            )}
+            {/* Command groups, each under its real category header. */}
+            {commandGroups.map((group) => (
+              <div key={group.category}>
+                <div className="px-3 py-1 mt-1 text-[10px] font-semibold uppercase tracking-wider text-theme-text-tertiary">{group.category}</div>
+                {group.items.map((item) => {
+                  const id = `cmd:${item.id}`
+                  return <CommandRow key={id} item={item} selected={id === selectedId} onSelect={() => selectRow(id)} onActivate={() => execute({ id, kind: 'command', command: item })} />
+                })}
+              </div>
+            ))}
           </div>
           <div className="flex items-center gap-3 px-3 py-1.5 border-t border-theme-border text-[11px] text-theme-text-tertiary">
             <span className="flex items-center gap-1"><CornerDownLeft className="w-3 h-3" /> open</span>
             <span>↑↓ navigate</span>
+            <span>⇞⇟ page</span>
             <span>esc close</span>
           </div>
         </div>
