@@ -1,4 +1,5 @@
 import { useState, useMemo, useRef, useEffect, useCallback, forwardRef, useImperativeHandle } from 'react'
+import { createPortal } from 'react-dom'
 import { Search, CornerDownLeft, Loader2 } from 'lucide-react'
 import { clsx } from 'clsx'
 import { getResourceIcon } from '../../utils/resource-icons'
@@ -41,6 +42,7 @@ type Row =
 
 const COMMAND_CATEGORY_ORDER = ['Views', 'Resource Kinds', 'Namespaces', 'Contexts', 'Actions']
 const PAGE = 8
+const STRONG_KIND = 100 // exact (150) or prefix (100) kind-name match
 
 // The standalone omnibar: a persistent top-center search box that IS the ⌘K
 // surface. Typing runs the live resource search (/api/search) alongside the
@@ -53,7 +55,14 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   const [open, setOpen] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
   const listRef = useRef<HTMLDivElement>(null)
+  // The dropdown is portaled to <body> (so the header's stacking context can't
+  // trap the dim overlay). `centerX` aligns the panel under the input; `top` is
+  // the HEADER's bottom (not the input's) so the dim starts cleanly below the
+  // whole top bar — the input is shorter than the bar, so anchoring to it would
+  // slice the dim through the taller right-side controls.
+  const [anchor, setAnchor] = useState<{ centerX: number; top: number } | null>(null)
 
   useImperativeHandle(ref, () => ({ focus: () => { inputRef.current?.focus(); inputRef.current?.select() } }), [])
 
@@ -67,39 +76,47 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
 
   const commandItems = useCommandItems(callbacks)
 
-  // Matched commands: empty query → Views + Actions (the launcher default);
-  // with a query → top client-ranked matches (kept small so resources lead).
-  const matchedCommands = useMemo<CommandItem[]>(() => {
-    if (!trimmed) return commandItems.filter((i) => i.category === 'Views' || i.category === 'Actions')
-    return commandItems
-      .map((item) => ({ item, score: bestScore(item, trimmed) + (item.category === 'Resource Kinds' && item.sublabel === 'core' ? 10 : 0) }))
-      .filter(({ score }) => score > 0)
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 8)
-      .map(({ item }) => item)
+  // All commands scored once. Empty query → Views + Actions (launcher default).
+  const scoredCommands = useMemo(() => {
+    if (!trimmed) return commandItems.filter((i) => i.category === 'Views' || i.category === 'Actions').map((item) => ({ item, score: 1 }))
+    return commandItems.map((item) => ({ item, score: bestScore(item, trimmed) })).filter((x) => x.score > 0).sort((a, b) => b.score - a.score)
   }, [commandItems, trimmed])
+
+  // Kinds whose NAME strongly matches (exact 150 / prefix 100) lead ABOVE the
+  // resource instances: "⌘K → deployment → Deployments list" is a navigation
+  // flow the instance hits otherwise bury.
+  const leadingKinds = useMemo<CommandItem[]>(
+    () => (trimmed.length < 2 ? [] : scoredCommands.filter((x) => x.item.category === 'Resource Kinds' && x.score >= STRONG_KIND).slice(0, 5).map((x) => x.item)),
+    [scoredCommands, trimmed],
+  )
+  const leadingIds = useMemo(() => new Set(leadingKinds.map((i) => i.id)), [leadingKinds])
 
   const resourceRows = useMemo<Row[]>(() => {
     const hits = searchData?.hits ?? []
     return hits.map((hit) => ({ id: `res:${hit.kind}:${hit.group || ''}:${hit.namespace || ''}:${hit.name}`, kind: 'resource' as const, hit }))
   }, [searchData])
 
-  // Matched commands grouped by their real category in a fixed order — rendered
-  // under their own headers (Resource Kinds, Views, Namespaces, …) rather than a
-  // single misleading "Commands" bucket.
+  // Remaining matched commands (leading kinds removed so they don't repeat),
+  // grouped by their real category in a fixed order — rendered under their own
+  // headers (Resource Kinds, Views, Namespaces, …), not a single "Commands" bucket.
   const commandGroups = useMemo(() => {
+    const rest = scoredCommands.filter((x) => !leadingIds.has(x.item.id)).slice(0, 8).map((x) => x.item)
     const byCat = new Map<string, CommandItem[]>()
-    for (const c of matchedCommands) { const l = byCat.get(c.category) ?? []; l.push(c); byCat.set(c.category, l) }
+    for (const c of rest) { const l = byCat.get(c.category) ?? []; l.push(c); byCat.set(c.category, l) }
     return COMMAND_CATEGORY_ORDER.filter((cat) => byCat.has(cat)).map((cat) => ({ category: cat, items: byCat.get(cat)! }))
-  }, [matchedCommands])
+  }, [scoredCommands, leadingIds])
 
-  // Ordered, id-stable list (render order == keyboard model). Resources lead,
-  // but ONLY when the resource section is actually rendered (trimmed >= 2) — so
-  // the keyboard model never contains a row that isn't visible.
+  const toCmdRow = (c: CommandItem): Row => ({ id: `cmd:${c.id}`, kind: 'command', command: c })
+
+  // Ordered, id-stable list (render order == keyboard model): leading kinds,
+  // then resources (only when the section is shown, trimmed >= 2), then the
+  // remaining command groups.
   const rows = useMemo<Row[]>(() => {
-    const cmds: Row[] = commandGroups.flatMap((g) => g.items.map((c) => ({ id: `cmd:${c.id}`, kind: 'command' as const, command: c })))
-    return trimmed.length >= 2 ? [...resourceRows, ...cmds] : cmds
-  }, [resourceRows, commandGroups, trimmed])
+    const cmds: Row[] = commandGroups.flatMap((g) => g.items.map(toCmdRow))
+    if (trimmed.length < 2) return cmds
+    return [...leadingKinds.map(toCmdRow), ...resourceRows, ...cmds]
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leadingKinds, resourceRows, commandGroups, trimmed])
 
   // Selection tracked by stable id (not array index) so Enter can never fire a
   // stale row when the set shifts. Behaviour: the selection auto-follows the TOP
@@ -156,12 +173,33 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
     listRef.current?.querySelector('[data-selected="true"]')?.scrollIntoView({ block: 'nearest' })
   }, [selectedId])
 
-  // Close on outside click.
+  // Close on outside click — the panel is portaled out of the container, so it
+  // must be excluded explicitly or clicking a row would count as "outside".
   useEffect(() => {
     if (!open) return
-    const onDown = (e: MouseEvent) => { if (!containerRef.current?.contains(e.target as Node)) setOpen(false) }
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as Node
+      if (!containerRef.current?.contains(t) && !panelRef.current?.contains(t)) setOpen(false)
+    }
     document.addEventListener('mousedown', onDown)
     return () => document.removeEventListener('mousedown', onDown)
+  }, [open])
+
+  // Track the input's position so the portaled panel stays anchored under it
+  // through scroll / resize / layout shifts.
+  useEffect(() => {
+    if (!open) { setAnchor(null); return }
+    const update = () => {
+      const el = containerRef.current
+      if (!el) return
+      const r = el.getBoundingClientRect()
+      const header = el.closest('header')
+      setAnchor({ centerX: r.left + r.width / 2, top: header ? header.getBoundingClientRect().bottom : r.bottom })
+    }
+    update()
+    window.addEventListener('resize', update)
+    window.addEventListener('scroll', update, true)
+    return () => { window.removeEventListener('resize', update); window.removeEventListener('scroll', update, true) }
   }, [open])
 
   const mac = typeof navigator !== 'undefined' && navigator.platform.includes('Mac')
@@ -192,9 +230,34 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
         )}
       </div>
 
-      {dropdownOpen && (
-        <div className="absolute left-0 right-0 top-full mt-1.5 z-[90] dialog overflow-hidden">
+      {dropdownOpen && anchor && createPortal(
+        <>
+          {/* Dim + blur the busy dashboard behind so results read as a focused
+              search surface (Spotlight/Linear pattern), not a weak float. Starts
+              at the input's bottom edge so the search box + top bar stay crisp. */}
+          <div
+            className="fixed left-0 right-0 bottom-0 z-[120] bg-black/25 dark:bg-black/55 backdrop-blur-[2px]"
+            style={{ top: anchor.top }}
+            onClick={() => { setOpen(false); inputRef.current?.blur() }}
+          />
+          <div
+            ref={panelRef}
+            style={{ position: 'fixed', top: anchor.top + 8, left: anchor.centerX, transform: 'translateX(-50%)', width: 640, maxWidth: 'calc(100vw - 2rem)' }}
+            className="z-[121] dialog shadow-theme-lg overflow-hidden"
+          >
           <div ref={listRef} className="max-h-[60vh] overflow-y-auto py-1">
+            {/* Leading kinds — strong kind-name matches lead so ⌘K navigation
+                to a kind isn't buried under instance hits. */}
+            {leadingKinds.length > 0 && (
+              <div>
+                <div className="px-3 py-1 text-[10px] font-semibold uppercase tracking-wider text-theme-text-tertiary">Resource Kinds</div>
+                {leadingKinds.map((item) => {
+                  const id = `cmd:${item.id}`
+                  return <CommandRow key={id} item={item} selected={id === selectedId} onSelect={() => selectRow(id)} onActivate={() => execute(toCmdRow(item))} />
+                })}
+              </div>
+            )}
+
             {/* Resources section */}
             {showResourceSection && (
               <>
@@ -229,7 +292,9 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
             <span>⇞⇟ page</span>
             <span>esc close</span>
           </div>
-        </div>
+          </div>
+        </>,
+        document.body,
       )}
     </div>
   )
@@ -250,9 +315,9 @@ function ResourceRow({ hit, selected, onSelect, onActivate }: { hit: SearchHit; 
       className={clsx('w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors', selected ? 'selection' : 'hover:bg-theme-elevated/40')}
     >
       <Icon className="w-4 h-4 shrink-0 text-theme-text-tertiary" />
-      <span className="text-sm text-theme-text-primary truncate">{hit.name}</span>
+      <span className="min-w-0 truncate text-sm text-theme-text-primary">{hit.name}</span>
       {dot && <span className={clsx('h-1.5 w-1.5 rounded-full shrink-0', dot)} />}
-      <span className="text-xs text-theme-text-tertiary truncate">{hit.kind}{hit.namespace ? ` · ${hit.namespace}` : ''}</span>
+      <span className="shrink-0 max-w-[45%] truncate text-xs text-theme-text-tertiary">{hit.kind}{hit.namespace ? ` · ${hit.namespace}` : ''}</span>
       {contentOnly && <span className="shrink-0 text-[10px] text-theme-text-tertiary italic">in spec</span>}
       {issues > 0 && <span className="ml-auto shrink-0 text-[10px] font-medium text-amber-600 dark:text-amber-400">{issues} issue{issues === 1 ? '' : 's'}</span>}
     </button>
@@ -269,8 +334,8 @@ function CommandRow({ item, selected, onSelect, onActivate }: { item: CommandIte
       className={clsx('w-full flex items-center gap-2.5 px-3 py-1.5 text-left transition-colors', selected ? 'selection' : 'hover:bg-theme-elevated/40')}
     >
       {Icon ? <Icon className="w-4 h-4 shrink-0 text-theme-text-tertiary" /> : <span className="w-4 shrink-0" />}
-      <span className="text-sm text-theme-text-primary truncate">{item.label}</span>
-      {item.sublabel && <span className="text-xs text-theme-text-tertiary truncate">{item.sublabel}</span>}
+      <span className="min-w-0 truncate text-sm text-theme-text-primary">{item.label}</span>
+      {item.sublabel && <span className="shrink-0 max-w-[45%] truncate text-xs text-theme-text-tertiary">{item.sublabel}</span>}
       {item.shortcut && <kbd className="ml-auto shrink-0 text-[10px] text-theme-text-tertiary bg-theme-elevated px-1 py-0.5 rounded border border-theme-border-light">{item.shortcut}</kbd>}
     </button>
   )
