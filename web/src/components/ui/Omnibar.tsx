@@ -98,7 +98,11 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   useImperativeHandle(ref, () => ({ focus: () => { inputRef.current?.focus(); inputRef.current?.select() } }), [])
 
   const trimmed = query.trim()
-  const debounced = useDebounced(trimmed, 200)
+  // Small debounce: /api/search is a local in-memory index, so this exists only
+  // to coalesce fast keystrokes (less list reshuffle), not to cut network cost —
+  // kept under the ~100-150ms "feels instant" threshold. keepPreviousData +
+  // AbortSignal (see useSearch) handle the smoothness; commands aren't debounced.
+  const debounced = useDebounced(trimmed, 120)
   // The hits in `searchData` are for `debounced`; while the user keeps typing,
   // `debounced` lags `trimmed`. We never ACT on stale rows because selection +
   // Enter are keyed to the row id currently rendered (see selectedId), and the
