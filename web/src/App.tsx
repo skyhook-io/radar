@@ -7,6 +7,8 @@ import { useNavigate, useLocation, useSearchParams, useNavigationType, Navigatio
 import { HomeView } from './components/home/HomeView'
 import { DebugOverlay } from './components/DebugOverlay'
 import { TopologyGraph, TopologySearch, TopologyFilterSidebar, TopologyControls, gitOpsRouteForKind, gitOpsRouteForResource } from '@skyhook-io/k8s-ui'
+import { initNavigationMap } from '@skyhook-io/k8s-ui/utils/navigation'
+import { useAPIResources } from './api/apiResources'
 import { TimelineView } from './components/timeline/TimelineView'
 import { ResourcesView } from './components/resources/ResourcesView'
 import { serializeColumnFilters } from './components/resources/resource-utils'
@@ -53,7 +55,8 @@ import { LargeClusterNamespacePicker } from './components/shared/LargeClusterNam
 import { SettingsDialog } from './components/settings/SettingsDialog'
 import { MyPermissionsDialog } from './components/settings/MyPermissionsDialog'
 import type { TopologyNode, GroupingMode, MainView, SelectedResource, SelectedHelmRelease, NodeKind, TopologyMode, Topology, K8sEvent } from './types'
-import { kindToPlural, openExternal, apiVersionToGroup, buildWorkloadPath } from './utils/navigation'
+import { kindToPlural, openExternal, apiVersionToGroup, buildWorkloadPath, searchHitToSelectedResource } from './utils/navigation'
+import { Omnibar, type OmnibarHandle } from './components/ui/Omnibar'
 import type { ContextSwitcherHandle } from './components/ContextSwitcher'
 
 // All possible node kinds (core + GitOps)
@@ -466,6 +469,14 @@ function AppInner() {
 
   // Refs for dropdown components to trigger them via shortcuts
   const namespaceSwitcherRef = useRef<NamespaceSwitcherHandle>(null)
+  const omnibarRef = useRef<OmnibarHandle>(null)
+
+  // Initialize the kind→plural discovery map app-wide (not just on ResourcesView
+  // mount) so the omnibar can open a CRD hit with an irregular plural from any
+  // view — kindToPlural would otherwise English-guess the route before a
+  // resources view has run n().
+  const { data: navApiResources } = useAPIResources()
+  useEffect(() => { if (navApiResources) initNavigationMap(navApiResources) }, [navApiResources])
   const contextSwitcherRef = useRef<ContextSwitcherHandle>(null)
 
   // View switching keyboard shortcuts
@@ -530,11 +541,12 @@ function AppInner() {
     {
       id: 'command-palette',
       keys: 'Cmd+k',
-      description: 'Open command palette',
+      description: 'Search resources & commands',
       category: 'General' as const,
       scope: 'global' as const,
       allowInInputs: true,
-      handler: () => setShowCommandPalette(true),
+      // Standalone focuses the top-center omnibar; embedded opens the modal.
+      handler: () => { if (showNavRail) omnibarRef.current?.focus(); else setShowCommandPalette(true) },
     },
     {
       id: 'diagnostics',
@@ -1330,6 +1342,29 @@ function AppInner() {
         </div>
         )}
 
+        {/* Center: omnibar — standalone search + command surface (the ⌘K entry).
+            Fills the space the pill bar left; embedded keeps the pills + modal. */}
+        {showNavRail && (
+          <div className="hidden md:block md:absolute md:left-1/2 md:-translate-x-1/2 w-full max-w-md px-2">
+            <Omnibar
+              ref={omnibarRef}
+              onNavigateView={(view) => setMainView(view)}
+              onNavigateKind={(kind, group) => {
+                const params = new URLSearchParams(searchParams)
+                params.delete('kind')
+                if (group) params.set('apiGroup', group); else params.delete('apiGroup')
+                params.delete('resource')
+                navigate({ pathname: `/resources/${kind}`, search: params.toString() })
+              }}
+              onSwitchContext={(name) => switchContext.mutate({ name }, { onSettled: () => setNamespaces([]) })}
+              onSetNamespaces={(ns) => { setNamespaces(ns); setActiveNamespace.mutate({ namespaces: ns }) }}
+              onToggleTheme={toggleTheme}
+              onShowDiagnostics={() => setShowDiagnostics(true)}
+              onOpenResource={(hit) => navigateToResourceList(searchHitToSelectedResource(hit))}
+            />
+          </div>
+        )}
+
         {/* Right: Controls */}
         <div className="flex items-center gap-3 shrink-0">
           <NamespaceSwitcher
@@ -1339,7 +1374,9 @@ function AppInner() {
           />
 
 
-          {/* Command palette trigger */}
+          {/* Command palette trigger — embedded only; standalone has the
+              top-center omnibar (which is the ⌘K surface). */}
+          {!showNavRail && (
           <button
             onClick={() => setShowCommandPalette(true)}
             className="hidden lg:flex items-center gap-2 h-7 px-2.5 rounded-md bg-theme-elevated hover:bg-theme-hover text-theme-text-secondary hover:text-theme-text-primary transition-colors"
@@ -1349,6 +1386,7 @@ function AppInner() {
               {typeof navigator !== 'undefined' && navigator.platform.includes('Mac') ? '⌘' : 'Ctrl+'}K
             </kbd>
           </button>
+          )}
 
           {/* GitHub star — hidden in embedded mode (not OSS-distribution chrome). */}
           {!navCustomization.embedded && (

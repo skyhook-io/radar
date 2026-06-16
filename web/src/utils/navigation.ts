@@ -1,6 +1,17 @@
 import { apiUrl, getAuthHeaders, getCredentialsMode } from '../api/config'
 import { kindToPlural } from '@skyhook-io/k8s-ui/utils/navigation'
 import type { SelectedResource } from '@skyhook-io/k8s-ui/types/core'
+import type { SearchHit } from '../api/client'
+
+/**
+ * Map a resource-search Hit to a SelectedResource. Hit.kind is the singular
+ * Kind (e.g. "Deployment"); downstream openers pluralize. `group` is carried so
+ * CRD/core collisions disambiguate (Service vs Knative Service), and the
+ * namespace defaults to '' for cluster-scoped hits (Node/Namespace/PV).
+ */
+export function searchHitToSelectedResource(hit: SearchHit): SelectedResource {
+  return { kind: hit.kind, namespace: hit.namespace ?? '', name: hit.name, group: hit.group || undefined }
+}
 
 // Re-export shared navigation utilities from @skyhook-io/k8s-ui.
 export { kindToPlural, pluralToKind, refToSelectedResource, apiVersionToGroup } from '@skyhook-io/k8s-ui/utils/navigation'
