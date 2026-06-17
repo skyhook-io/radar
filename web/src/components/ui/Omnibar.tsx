@@ -323,7 +323,7 @@ export const Omnibar = forwardRef<OmnibarHandle, OmnibarProps>(function Omnibar(
   const clearNsPills = () => { setPills((prev) => prev.filter((p) => p.key !== 'ns')); inputRef.current?.focus() }
 
   return (
-    <div ref={containerRef} className="relative w-full max-w-md">
+    <div ref={containerRef} className="relative w-full max-w-xl">
       <SearchPillInput
         className="min-h-8 px-2.5 rounded-md bg-theme-elevated border border-transparent focus-within:border-theme-border focus-within:bg-theme-surface transition-colors"
         text={text}

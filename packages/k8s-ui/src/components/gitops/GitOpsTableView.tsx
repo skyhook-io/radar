@@ -533,8 +533,8 @@ export function GitOpsTableView({
         />
       </div>
       <div
-        className={`flex min-w-0 flex-1 overflow-hidden max-lg:flex-col ${
-          filtersSide === 'right' ? 'lg:flex-row-reverse' : ''
+        className={`flex min-w-0 flex-1 overflow-hidden max-sm:flex-col ${
+          filtersSide === 'right' ? 'sm:flex-row-reverse' : ''
         }`}
       >
       <GitOpsFilterSidebar
@@ -783,8 +783,8 @@ function GitOpsFilterSidebar({
 }) {
   return (
     <aside
-      className={`flex w-72 shrink-0 flex-col overflow-hidden border-theme-border bg-theme-surface/90 max-lg:max-h-72 max-lg:w-full max-lg:border-b ${
-        side === 'right' ? 'border-l max-lg:border-l-0' : 'border-r max-lg:border-r-0'
+      className={`flex w-72 shrink-0 flex-col overflow-hidden border-theme-border bg-theme-surface/90 max-sm:max-h-72 max-sm:w-full max-sm:border-b ${
+        side === 'right' ? 'border-l max-sm:border-l-0' : 'border-r max-sm:border-r-0'
       }`}
     >
       <div className="flex items-center justify-between border-b border-theme-border px-3 py-2">

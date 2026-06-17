@@ -1345,7 +1345,7 @@ function AppInner() {
         {/* Center: omnibar — standalone search + command surface (the ⌘K entry).
             Fills the space the pill bar left; embedded keeps the pills + modal. */}
         {showNavRail && (
-          <div className="hidden md:block md:absolute md:left-1/2 md:-translate-x-1/2 w-full max-w-md px-2">
+          <div className="hidden md:flex flex-1 justify-center min-w-0 px-3">
             <Omnibar
               ref={omnibarRef}
               onNavigateView={(view) => setMainView(view)}
