@@ -297,7 +297,6 @@ export function GitOpsTableView({
     })
   }, [])
   const [lifecycleFilter, setLifecycleFilter] = useState<'all' | 'terminating' | 'active'>('all')
-  const [reconcilingOnly, setReconcilingOnly] = useState(false)
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'urgency', dir: 'asc' })
   // Shared refresh feedback (spin ≥400ms → checkmark) so clicking Refresh gives
   // the same visual confirmation as every other view, even when the refetch is
@@ -367,6 +366,20 @@ export function GitOpsTableView({
     manual: allRows.filter((row) => !row.autoSync).length,
     suspended: allRows.filter((row) => row.suspended).length,
   }), [allRows])
+  // The Destination column earns its width only when destinations actually vary
+  // — in single-cluster OSS every row is the same in-cluster API server, so the
+  // column is dead weight. Show it when any row is cross-cluster (Hub) or when
+  // destinations differ; hide when they all collapse to the in-cluster default.
+  const showDestination = useMemo(() => {
+    // Fleet/Hub mode owns the Destination column outright (it's the multi-cluster
+    // product surface — the destination filter + cross-cluster matching live here).
+    if (onDestinationFilterChange) return true
+    if (allRows.some((r) => r._destination && r._destination.match !== 'in_cluster')) return true
+    const dests = new Set(allRows.map((r) => r.destination).filter(Boolean))
+    if (dests.size > 1) return true
+    const only = [...dests][0] ?? ''
+    return !!only && !/kubernetes\.default\.svc/i.test(only)
+  }, [allRows, onDestinationFilterChange])
   const labels = useMemo(() => countLabels(allRows), [allRows])
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -401,7 +414,6 @@ export function GitOpsTableView({
       )) return false
       if (lifecycleFilter === 'terminating' && !row.terminating) return false
       if (lifecycleFilter === 'active' && row.terminating) return false
-      if (reconcilingOnly && row.sync !== 'Reconciling' && row.health !== 'Progressing') return false
       if (destinationFilter && destinationFilter !== 'all') {
         const match = row._destination?.match
         if (destinationFilter === 'this-cluster' && match !== 'in_cluster') return false
@@ -415,7 +427,7 @@ export function GitOpsTableView({
       return true
     })
     return [...rows].sort((a, b) => compareRows(a, b, sort.key) * (sort.dir === 'asc' ? 1 : -1))
-  }, [allRows, automationFilters, healthFilters, labelFilters, lifecycleFilter, mode, namespaceFilters, projectFilters, search, sort, syncFilters, destinationFilter, reconcilingOnly])
+  }, [allRows, automationFilters, healthFilters, labelFilters, lifecycleFilter, mode, namespaceFilters, projectFilters, search, sort, syncFilters, destinationFilter])
 
   const terminatingCount = useMemo(() => allRows.filter((row) => row.terminating).length, [allRows])
 
@@ -428,14 +440,13 @@ export function GitOpsTableView({
     setLabelFilters(new Set())
     setAutomationFilters(new Set())
     setLifecycleFilter('all')
-    setReconcilingOnly(false)
     onClearNamespaces?.()
     onDestinationFilterChange?.('all')
   }, [onClearNamespaces, onDestinationFilterChange])
 
   const noOtherFiltersActive = useCallback(
     (
-      exclude: 'sync' | 'health' | 'automation' | 'destination' | 'reconciling' | null = null,
+      exclude: 'sync' | 'health' | 'automation' | 'destination' | null = null,
     ) => {
       if (search !== '') return false
       if (exclude !== 'sync' && syncFilters.size > 0) return false
@@ -446,7 +457,6 @@ export function GitOpsTableView({
       if (exclude !== 'automation' && automationFilters.size > 0) return false
       if (lifecycleFilter !== 'all') return false
       if (exclude !== 'destination' && destinationFilter && destinationFilter !== 'all') return false
-      if (exclude !== 'reconciling' && reconcilingOnly) return false
       return true
     },
     [
@@ -459,7 +469,6 @@ export function GitOpsTableView({
       automationFilters,
       lifecycleFilter,
       destinationFilter,
-      reconcilingOnly,
     ],
   )
 
@@ -486,6 +495,10 @@ export function GitOpsTableView({
 
   const showCrossClusterTile = typeof crossClusterCount === 'number' && mode === 'applications'
 
+  // Header tiles ARE the matching facet — clicking one toggles the same filter
+  // the sidebar facet does (and the sidebar reflects it), so there's one source
+  // of truth. 'active' tracks facet membership (composes with other filters),
+  // not sole-filter, so a tile lights whenever its value is part of the filter.
   const summaryTiles: SummaryTileSpec[] = [
     {
       key: 'total',
@@ -493,40 +506,39 @@ export function GitOpsTableView({
       value: allRows.length,
       tone: 'neutral',
       active: noOtherFiltersActive(),
+      apply: clearAllFilters,
     },
     {
       key: 'outOfSync',
       label: 'Out of sync',
       value: statusSummary.outOfSync,
       tone: 'warning',
-      active:
-        syncFilters.size === 1 && syncFilters.has('OutOfSync') && noOtherFiltersActive('sync'),
-      apply: () => setSyncFilters(new Set(['OutOfSync'])),
+      active: syncFilters.has('OutOfSync'),
+      apply: () => toggleSet(syncFilters, setSyncFilters, 'OutOfSync'),
     },
     {
       key: 'degraded',
       label: 'Degraded',
       value: statusSummary.degraded,
       tone: 'error',
-      active:
-        healthFilters.size === 1 && healthFilters.has('Degraded') && noOtherFiltersActive('health'),
-      apply: () => setHealthFilters(new Set(['Degraded'])),
+      active: healthFilters.has('Degraded'),
+      apply: () => toggleSet(healthFilters, setHealthFilters, 'Degraded'),
     },
     {
       key: 'suspended',
       label: 'Suspended',
       value: statusSummary.suspended,
       tone: 'warning',
-      active: automationFilters.size === 1 && automationFilters.has('suspended') && noOtherFiltersActive('automation'),
-      apply: () => setAutomationFilters(new Set(['suspended'])),
+      active: automationFilters.has('suspended'),
+      apply: () => toggleAutomation('suspended'),
     },
     {
       key: 'reconciling',
       label: 'Reconciling',
-      value: statusSummary.reconciling,
+      value: syncCounts.get('Reconciling') ?? 0,
       tone: 'info',
-      active: reconcilingOnly && noOtherFiltersActive('reconciling'),
-      apply: () => setReconcilingOnly(true),
+      active: syncFilters.has('Reconciling'),
+      apply: () => toggleSet(syncFilters, setSyncFilters, 'Reconciling'),
     },
     ...(showCrossClusterTile
       ? [
@@ -741,6 +753,7 @@ export function GitOpsTableView({
               onSort={onSort}
               onOpen={onRowClick}
               hrefFor={rowHrefFor}
+              showDestination={showDestination}
               onDestinationClick={onDestinationClick}
               destinationHrefFor={destinationHrefFor}
               onRowAction={onRowAction}
@@ -858,7 +871,7 @@ function GitOpsFilterSidebar({
           <GitOpsFacetButton label="Unknown" count={healthCounts.get('Unknown') ?? 0} active={healthFilters.has('Unknown')} onClick={() => onToggleHealth('Unknown')} />
         </GitOpsFilterSection>
 
-        <GitOpsFilterSection icon={CircleDot} title="Automation">
+        <GitOpsFilterSection icon={CircleDot} title="Automation (Sync policy)">
           <GitOpsFacetButton label="Auto-sync" count={automationCounts.auto} active={automationFilters.has('auto')} onClick={() => onToggleAutomation('auto')} />
           <GitOpsFacetButton label="Manual" count={automationCounts.manual} active={automationFilters.has('manual')} onClick={() => onToggleAutomation('manual')} />
           <GitOpsFacetButton label="Suspended" count={automationCounts.suspended} active={automationFilters.has('suspended')} tone="warning" onClick={() => onToggleAutomation('suspended')} />
@@ -1135,6 +1148,7 @@ function GitOpsTable({
   onSort,
   onOpen,
   hrefFor,
+  showDestination = true,
   onDestinationClick,
   destinationHrefFor,
   onRowAction,
@@ -1145,6 +1159,7 @@ function GitOpsTable({
   onSort: (key: SortKey) => void
   onOpen: (row: GitOpsRow, event?: ReactMouseEvent) => void
   hrefFor?: (row: GitOpsRow) => string
+  showDestination?: boolean
   onDestinationClick?: (row: GitOpsRow, destination: FleetDestinationStamp) => void
   destinationHrefFor?: (row: GitOpsRow, destination: FleetDestinationStamp) => string
   onRowAction?: (row: GitOpsRow, action: GitOpsRowAction) => void
@@ -1159,8 +1174,8 @@ function GitOpsTable({
           <SortableTh label="Project" sortKey="project" activeKey={sort.key} direction={sort.dir} onSort={onSort} className="w-[9%]" />
           <SortableTh label="Sync" sortKey="sync" activeKey={sort.key} direction={sort.dir} onSort={onSort} className="w-[9%]" />
           <SortableTh label="Health" sortKey="health" activeKey={sort.key} direction={sort.dir} onSort={onSort} className="w-[9%]" />
-          <th className={clsx(TH_CLASS, 'w-[20%]')}>Source</th>
-          <th className={clsx(TH_CLASS, 'w-[14%]')}>Destination</th>
+          <th className={clsx(TH_CLASS, showDestination ? 'w-[20%]' : 'w-[28%]')}>Source</th>
+          {showDestination && <th className={clsx(TH_CLASS, 'w-[14%]')}>Destination</th>}
           <SortableTh label="Last Sync" sortKey="lastSync" activeKey={sort.key} direction={sort.dir} onSort={onSort} className="w-[10%]" />
           {showActions && (
             <th className={clsx(TH_CLASS, 'w-[6%] text-right')}>
@@ -1234,10 +1249,12 @@ function GitOpsTable({
                 <div className="truncate text-theme-text-primary">{row.repository || row.chart || '-'}</div>
                 <div className="truncate text-xs text-theme-text-tertiary">{[row.targetRevision, row.path || row.chart].filter(Boolean).join(' · ') || '-'}</div>
               </TableCell>
-              <TableCell>
-                <DestinationCell row={row} onDestinationClick={onDestinationClick} destinationHrefFor={destinationHrefFor} />
-                <div className="truncate text-xs text-theme-text-tertiary">{row.destinationNamespace || row.namespace || '-'}</div>
-              </TableCell>
+              {showDestination && (
+                <TableCell>
+                  <DestinationCell row={row} onDestinationClick={onDestinationClick} destinationHrefFor={destinationHrefFor} />
+                  <div className="truncate text-xs text-theme-text-tertiary">{row.destinationNamespace || row.namespace || '-'}</div>
+                </TableCell>
+              )}
               <TableCell>
                 {row.terminating
                   ? <span className="text-orange-400/80">Pending {formatRelativeAge(row.terminationStartedAt ?? '') || 'now'}</span>
