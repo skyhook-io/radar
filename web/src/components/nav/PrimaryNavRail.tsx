@@ -160,7 +160,9 @@ function BrandRow({ pinned, onNavigate }: { pinned: boolean; onNavigate: (view: 
       onClick={() => onNavigate('home')}
       aria-label="Radar — go to home"
       title="Home"
-      className="flex h-[49px] w-full items-center border-b border-theme-border/50 shrink-0 transition-opacity hover:opacity-80"
+      // Height matches the top bar header (App.tsx — items-center + py-2 = 51px)
+      // so the rail's brand divider and the header's bottom border form one line.
+      className="flex h-[51px] w-full items-center border-b border-theme-border/50 shrink-0 transition-opacity hover:opacity-80"
     >
       <span className="flex w-14 shrink-0 items-center justify-center">
         <span className="relative w-7 h-7 rounded-lg overflow-hidden bg-emerald-500/10 border border-emerald-500/20">
