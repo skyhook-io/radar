@@ -64,6 +64,11 @@ import { parseContextName } from '../../utils/context-name'
 // ----- Types -----------------------------------------------------------------
 
 export type GitOpsMode = 'applications' | 'sources' | 'projects' | 'alerts'
+// Resource categories with an implemented view. Sources/Projects/Alerts are
+// still stubbed ("queued"), so only `applications` ships today — which is why
+// the Scope switcher stays hidden until a second category lands. A one-option
+// switcher is just noise (an always-selected pill that can't be changed).
+const AVAILABLE_MODES: GitOpsMode[] = ['applications']
 export type GitOpsViewMode = 'table' | 'tiles'
 export type SortKey = 'name' | 'health' | 'sync' | 'lastSync' | 'project'
 
@@ -273,7 +278,18 @@ export function GitOpsTableView({
   const [labelFilters, setLabelFilters] = useState<Set<string>>(new Set())
   const [showLabelsDropdown, setShowLabelsDropdown] = useState(false)
   const [labelSearch, setLabelSearch] = useState('')
-  const [automationFilter, setAutomationFilter] = useState<'all' | 'auto' | 'manual' | 'suspended'>('all')
+  // Auto-sync / Manual / Suspended are INDEPENDENT row attributes (a Flux app can
+  // be auto-reconciling AND suspended), so this is a multi-select facet like Sync
+  // and Health — not the old single-select that conflated the mode (auto vs
+  // manual) with the orthogonal suspended state.
+  const [automationFilters, setAutomationFilters] = useState<Set<'auto' | 'manual' | 'suspended'>>(new Set())
+  const toggleAutomation = useCallback((value: 'auto' | 'manual' | 'suspended') => {
+    setAutomationFilters((prev) => {
+      const next = new Set(prev)
+      next.has(value) ? next.delete(value) : next.add(value)
+      return next
+    })
+  }, [])
   const [lifecycleFilter, setLifecycleFilter] = useState<'all' | 'terminating' | 'active'>('all')
   const [reconcilingOnly, setReconcilingOnly] = useState(false)
   const [sort, setSort] = useState<{ key: SortKey; dir: SortDir }>({ key: 'health', dir: 'asc' })
@@ -291,7 +307,7 @@ export function GitOpsTableView({
     projectFilters.size > 0 ||
     namespaceFilters.size > 0 ||
     labelFilters.size > 0 ||
-    automationFilter !== 'all' ||
+    automationFilters.size > 0 ||
     lifecycleFilter !== 'all'
   const hasGlobalNamespaceFilter = !!onClearNamespaces && (globalNamespaces?.length ?? 0) > 0
   const hasAnyFilter = hasLocalFilters || hasGlobalNamespaceFilter
@@ -336,6 +352,11 @@ export function GitOpsTableView({
   )
   const syncCounts = useMemo(() => countMap(allRows.map((row) => row.sync)), [allRows])
   const healthCounts = useMemo(() => countMap(allRows.map((row) => row.health)), [allRows])
+  const automationCounts = useMemo(() => ({
+    auto: allRows.filter((row) => row.autoSync).length,
+    manual: allRows.filter((row) => !row.autoSync).length,
+    suspended: allRows.filter((row) => row.suspended).length,
+  }), [allRows])
   const labels = useMemo(() => countLabels(allRows), [allRows])
   const filteredRows = useMemo(() => {
     const q = search.trim().toLowerCase()
@@ -363,9 +384,11 @@ export function GitOpsTableView({
       if (projectFilters.size > 0 && !projectFilters.has(row.project || '(none)')) return false
       if (namespaceFilters.size > 0 && !namespaceFilters.has(row.namespace || '(cluster)')) return false
       if (activeLabels.length > 0 && !activeLabels.every(({ key, value }) => row.labels[key] === value)) return false
-      if (automationFilter === 'auto' && !row.autoSync) return false
-      if (automationFilter === 'manual' && row.autoSync) return false
-      if (automationFilter === 'suspended' && !row.suspended) return false
+      if (automationFilters.size > 0 && !(
+        (automationFilters.has('auto') && row.autoSync) ||
+        (automationFilters.has('manual') && !row.autoSync) ||
+        (automationFilters.has('suspended') && row.suspended)
+      )) return false
       if (lifecycleFilter === 'terminating' && !row.terminating) return false
       if (lifecycleFilter === 'active' && row.terminating) return false
       if (reconcilingOnly && row.sync !== 'Reconciling' && row.health !== 'Progressing') return false
@@ -382,7 +405,7 @@ export function GitOpsTableView({
       return true
     })
     return [...rows].sort((a, b) => compareRows(a, b, sort.key) * (sort.dir === 'asc' ? 1 : -1))
-  }, [allRows, automationFilter, healthFilters, labelFilters, lifecycleFilter, mode, namespaceFilters, projectFilters, search, sort, syncFilters, destinationFilter, reconcilingOnly])
+  }, [allRows, automationFilters, healthFilters, labelFilters, lifecycleFilter, mode, namespaceFilters, projectFilters, search, sort, syncFilters, destinationFilter, reconcilingOnly])
 
   const terminatingCount = useMemo(() => allRows.filter((row) => row.terminating).length, [allRows])
 
@@ -393,7 +416,7 @@ export function GitOpsTableView({
     setProjectFilters(new Set())
     setNamespaceFilters(new Set())
     setLabelFilters(new Set())
-    setAutomationFilter('all')
+    setAutomationFilters(new Set())
     setLifecycleFilter('all')
     setReconcilingOnly(false)
     onClearNamespaces?.()
@@ -410,7 +433,7 @@ export function GitOpsTableView({
       if (projectFilters.size > 0) return false
       if (namespaceFilters.size > 0) return false
       if (labelFilters.size > 0) return false
-      if (exclude !== 'automation' && automationFilter !== 'all') return false
+      if (exclude !== 'automation' && automationFilters.size > 0) return false
       if (lifecycleFilter !== 'all') return false
       if (exclude !== 'destination' && destinationFilter && destinationFilter !== 'all') return false
       if (exclude !== 'reconciling' && reconcilingOnly) return false
@@ -423,7 +446,7 @@ export function GitOpsTableView({
       projectFilters,
       namespaceFilters,
       labelFilters,
-      automationFilter,
+      automationFilters,
       lifecycleFilter,
       destinationFilter,
       reconcilingOnly,
@@ -484,8 +507,8 @@ export function GitOpsTableView({
       label: 'Suspended',
       value: statusSummary.suspended,
       tone: 'warning',
-      active: automationFilter === 'suspended' && noOtherFiltersActive('automation'),
-      apply: () => setAutomationFilter('suspended'),
+      active: automationFilters.size === 1 && automationFilters.has('suspended') && noOtherFiltersActive('automation'),
+      apply: () => setAutomationFilters(new Set(['suspended'])),
     },
     {
       key: 'reconciling',
@@ -548,8 +571,9 @@ export function GitOpsTableView({
         healthCounts={healthCounts}
         healthFilters={healthFilters}
         onToggleHealth={(value) => toggleSet(healthFilters, setHealthFilters, value)}
-        automationFilter={automationFilter}
-        onAutomationFilterChange={setAutomationFilter}
+        automationFilters={automationFilters}
+        automationCounts={automationCounts}
+        onToggleAutomation={toggleAutomation}
         lifecycleFilter={lifecycleFilter}
         onLifecycleFilterChange={setLifecycleFilter}
         terminatingCount={terminatingCount}
@@ -745,8 +769,9 @@ function GitOpsFilterSidebar({
   healthCounts,
   healthFilters,
   onToggleHealth,
-  automationFilter,
-  onAutomationFilterChange,
+  automationFilters,
+  automationCounts,
+  onToggleAutomation,
   lifecycleFilter,
   onLifecycleFilterChange,
   terminatingCount,
@@ -768,8 +793,9 @@ function GitOpsFilterSidebar({
   healthCounts: Map<string, number>
   healthFilters: Set<string>
   onToggleHealth: (value: string) => void
-  automationFilter: 'all' | 'auto' | 'manual' | 'suspended'
-  onAutomationFilterChange: (value: 'all' | 'auto' | 'manual' | 'suspended') => void
+  automationFilters: Set<'auto' | 'manual' | 'suspended'>
+  automationCounts: { auto: number; manual: number; suspended: number }
+  onToggleAutomation: (value: 'auto' | 'manual' | 'suspended') => void
   lifecycleFilter: 'all' | 'terminating' | 'active'
   onLifecycleFilterChange: (value: 'all' | 'terminating' | 'active') => void
   terminatingCount: number
@@ -788,15 +814,16 @@ function GitOpsFilterSidebar({
       }`}
     >
       <div className="flex items-center justify-between border-b border-theme-border px-3 py-2">
-        <span className="text-sm font-medium text-theme-text-secondary">GitOps Filters</span>
+        <span className="text-sm font-medium text-theme-text-secondary">Filters</span>
         <button type="button" onClick={onClear} className="text-[10px] font-medium text-blue-500 hover:text-blue-400">
           Clear
         </button>
       </div>
       <div className="flex-1 overflow-y-auto">
+        {AVAILABLE_MODES.length > 1 && (
         <GitOpsFilterSection icon={GitBranch} title="Scope">
           <div className="grid grid-cols-2 gap-1">
-            {(['applications'] as GitOpsMode[]).map((item) => (
+            {AVAILABLE_MODES.map((item) => (
               <button
                 key={item}
                 type="button"
@@ -813,6 +840,7 @@ function GitOpsFilterSidebar({
             ))}
           </div>
         </GitOpsFilterSection>
+        )}
 
         <GitOpsFilterSection icon={CheckCircle2} title="Sync">
           <GitOpsFacetButton label="Synced" count={syncCounts.get('Synced') ?? 0} active={syncFilters.has('Synced')} tone="success" onClick={() => onToggleSync('Synced')} />
@@ -830,27 +858,9 @@ function GitOpsFilterSidebar({
         </GitOpsFilterSection>
 
         <GitOpsFilterSection icon={CircleDot} title="Automation">
-          <div className="grid grid-cols-2 gap-1">
-            {([
-              ['all', 'All'],
-              ['auto', 'Auto-sync'],
-              ['manual', 'Manual'],
-              ['suspended', 'Suspended'],
-            ] as const).map(([value, label]) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => onAutomationFilterChange(value)}
-                className={`rounded-md px-2 py-1.5 text-[11px] font-medium transition-colors ${
-                  automationFilter === value
-                    ? 'bg-skyhook-500 text-white'
-                    : 'bg-theme-elevated text-theme-text-secondary hover:bg-theme-hover hover:text-theme-text-primary'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
+          <GitOpsFacetButton label="Auto-sync" count={automationCounts.auto} active={automationFilters.has('auto')} onClick={() => onToggleAutomation('auto')} />
+          <GitOpsFacetButton label="Manual" count={automationCounts.manual} active={automationFilters.has('manual')} onClick={() => onToggleAutomation('manual')} />
+          <GitOpsFacetButton label="Suspended" count={automationCounts.suspended} active={automationFilters.has('suspended')} tone="warning" onClick={() => onToggleAutomation('suspended')} />
         </GitOpsFilterSection>
 
         {terminatingCount > 0 && (
