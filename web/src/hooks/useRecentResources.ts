@@ -16,8 +16,10 @@ const MAX = 7
 // Partition by the current cluster/context: a resource is identified by
 // (kind, ns, name) WITHIN a cluster, so a global store would surface the prior
 // cluster's names after a context switch and open ns/name in the wrong cluster.
+// An UNKNOWN context (key still loading) is a hard no-op — no shared fallback
+// bucket — so a recent is never read or written against an indeterminate cluster.
 function storageKey(contextKey: string): string {
-  return `${KEY}::${contextKey || 'default'}`
+  return `${KEY}::${contextKey}`
 }
 
 function keyOf(r: RecentResource): string {
@@ -25,6 +27,7 @@ function keyOf(r: RecentResource): string {
 }
 
 export function loadRecentResources(contextKey: string): RecentResource[] {
+  if (!contextKey) return []
   try {
     const raw = localStorage.getItem(storageKey(contextKey))
     if (raw) return JSON.parse(raw)
@@ -35,7 +38,7 @@ export function loadRecentResources(contextKey: string): RecentResource[] {
 }
 
 export function recordRecentResource(r: RecentResource, contextKey: string): void {
-  if (!r.name || !r.kind) return
+  if (!r.name || !r.kind || !contextKey) return
   try {
     const k = keyOf(r)
     const next = [r, ...loadRecentResources(contextKey).filter((x) => keyOf(x) !== k)].slice(0, MAX)

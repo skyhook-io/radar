@@ -133,21 +133,21 @@ export function useCommandItems(cb: CommandItemCallbacks): CommandItem[] {
       // (e.g. EKS ARN) when the context name is already friendly — fall back to
       // it. Count display names so genuine duplicates (same cluster name from
       // different kubeconfig sources) stay distinguishable; unique ones stay clean.
-      const labelCount = new Map<string, number>()
       const parsedCtx = contexts.map((ctx) => {
         const parsed = parseContextName(stripSourceSuffix(ctx.name, ctx.source))
         const fromCluster = ctx.cluster ? parseContextName(ctx.cluster) : null
-        labelCount.set(parsed.clusterName, (labelCount.get(parsed.clusterName) ?? 0) + 1)
-        return {
-          ctx,
-          clusterName: parsed.clusterName,
-          account: parsed.account,
-          meta: [parsed.provider ?? fromCluster?.provider, parsed.region ?? fromCluster?.region].filter(Boolean).join(' · '),
-        }
+        const meta = [parsed.provider ?? fromCluster?.provider, parsed.region ?? fromCluster?.region].filter(Boolean).join(' · ')
+        return { ctx, clusterName: parsed.clusterName, account: parsed.account, base: ctx.isCurrent ? 'current' : meta }
       })
-      for (const { ctx, clusterName, account, meta } of parsedCtx) {
-        const disambig = (labelCount.get(clusterName) ?? 0) > 1 ? (ctx.source || ctx.name) : ''
-        const sub = [ctx.isCurrent ? 'current' : meta, disambig].filter(Boolean).join(' · ')
+      // Disambiguate on the FINAL visible (label, sublabel) pair, not just the
+      // cluster name — same name + same provider/region from the same kubeconfig
+      // file would otherwise render identically while switching different
+      // contexts. Collisions fall back to the raw context name (unique by id).
+      const pairCount = new Map<string, number>()
+      for (const p of parsedCtx) pairCount.set(`${p.clusterName}\x00${p.base}`, (pairCount.get(`${p.clusterName}\x00${p.base}`) ?? 0) + 1)
+      for (const { ctx, clusterName, account, base } of parsedCtx) {
+        const collides = (pairCount.get(`${clusterName}\x00${base}`) ?? 0) > 1
+        const sub = [base, collides ? ctx.name : ''].filter(Boolean).join(' · ')
         result.push({
           id: `context-${ctx.name}`,
           label: clusterName,
